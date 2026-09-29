@@ -27,8 +27,10 @@ This page covers the Perplexity **provider** setup. For the Perplexity **tool** 
 
 ```bash
 openclaw plugins install @openclaw/perplexity-plugin
-openclaw gateway restart
 ```
+
+Installation applies to a running Gateway automatically; otherwise it takes effect
+on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 
 ## Getting started
 
@@ -108,6 +110,13 @@ Native-only filters return a descriptive error on the chat-completions path.
     (prefix `sk-or-`) instead of a native Perplexity key. OpenClaw detects the
     key and switches to the Sonar transport automatically. Useful if you already
     have OpenRouter billing set up and want to consolidate providers there.
+  </Accordion>
+
+  <Accordion title="Integration header">
+    Requests to the Perplexity API (`api.perplexity.ai`) identify OpenClaw with
+    `X-Pplx-Integration: openclaw/<version>`. Searches routed through OpenRouter
+    send OpenRouter's app-attribution headers instead. A custom proxy `baseUrl`
+    gets neither.
   </Accordion>
 </AccordionGroup>
 

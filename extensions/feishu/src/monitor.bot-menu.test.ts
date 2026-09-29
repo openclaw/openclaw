@@ -1,4 +1,5 @@
 // Feishu tests cover monitor.bot menu plugin behavior.
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
@@ -13,6 +14,7 @@ const sendCardFeishuMock = vi.hoisted(() =>
 const getMessageFeishuMock = vi.hoisted(() => vi.fn());
 
 const originalStateDir = process.env.OPENCLAW_STATE_DIR;
+const pendingTasks = new Set<Promise<void>>();
 
 vi.mock("./bot.js", () => {
   return {
@@ -50,8 +52,14 @@ async function registerHandlers(params: { runtime?: RuntimeEnv } = {}) {
     runtime,
     chatHistories: new Map(),
     fireAndForget: true,
+    trackTask: (task) => {
+      pendingTasks.add(task);
+      void task.then(
+        () => pendingTasks.delete(task),
+        () => pendingTasks.delete(task),
+      );
+    },
     getBotOpenId: () => "ou_bot",
-    getBotName: () => "Bot",
   });
 }
 
@@ -75,7 +83,11 @@ describe("Feishu bot menu handler", () => {
     process.env.OPENCLAW_STATE_DIR = `/tmp/openclaw-feishu-bot-menu-test-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    while (pendingTasks.size > 0) {
+      await Promise.allSettled(pendingTasks);
+    }
+    await closeOpenClawStateDatabaseAsync();
     if (originalStateDir === undefined) {
       delete process.env.OPENCLAW_STATE_DIR;
       return;
@@ -124,12 +136,14 @@ describe("Feishu bot menu handler", () => {
       settled = true;
     });
 
-    await vi.waitFor(() => {
-      expect(settled).toBe(true);
-    });
-
-    resolveSend?.();
-    await pending;
+    try {
+      await vi.waitFor(() => {
+        expect(settled).toBe(true);
+      });
+    } finally {
+      resolveSend?.();
+      await pending;
+    }
   });
 
   it("falls back to the legacy /menu synthetic message path for unrelated bot menu keys", async () => {
@@ -162,7 +176,7 @@ describe("Feishu bot menu handler", () => {
   });
 
   it("reopens replay for explicit retryable fallback failures", async () => {
-    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() } as RuntimeEnv;
+    const runtime = createRuntimeSpies() as RuntimeEnv;
     const onBotMenu = await registerHandlers({ runtime });
     sendCardFeishuMock
       .mockImplementationOnce(async () => {

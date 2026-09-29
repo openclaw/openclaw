@@ -48,6 +48,10 @@
       "types": "./dist/src/plugin-sdk/config-runtime.d.ts",
       "default": "./src/config-runtime.ts"
     },
+    "./control-ui-link-reader": {
+      "types": "./dist/src/plugin-sdk/control-ui-link-reader.d.ts",
+      "default": "./src/control-ui-link-reader.ts"
+    },
     "./core": {
       "types": "./dist/src/plugin-sdk/core.d.ts",
       "default": "./src/core.ts"
@@ -63,6 +67,10 @@
     "./delivery-queue-runtime": {
       "types": "./dist/src/plugin-sdk/delivery-queue-runtime.d.ts",
       "default": "./src/delivery-queue-runtime.ts"
+    },
+    "./embedding-provider-runtime-contract": {
+      "types": "./dist/src/plugin-sdk/embedding-provider-runtime-contract.d.ts",
+      "default": "./src/embedding-provider-runtime-contract.ts"
     },
     "./error-runtime": {
       "types": "./dist/src/plugin-sdk/error-runtime.d.ts",
@@ -227,6 +235,10 @@
     "./video-generation": {
       "types": "./dist/src/plugin-sdk/video-generation.d.ts",
       "default": "./src/video-generation.ts"
+    },
+    "./websocket-runtime": {
+      "types": "./dist/src/plugin-sdk/websocket-runtime.d.ts",
+      "default": "./src/websocket-runtime.ts"
     }
   }
 }

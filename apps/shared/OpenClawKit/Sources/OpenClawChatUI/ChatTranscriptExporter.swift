@@ -21,7 +21,7 @@ public enum ChatTranscriptExporter {
                 let heading = "### \(self.displayRole(message.role)) — \(timestamp)"
                 let body = self.body(for: message)
                 sections.append([heading, body].filter { !$0.isEmpty }.joined(separator: "\n\n"))
-            case .message:
+            case .message, .completedWork:
                 continue
             case let .systemNotice(notice):
                 let timestamp = self.timestamp(notice.timestamp, formatter: timestampFormatter)
@@ -45,21 +45,8 @@ public enum ChatTranscriptExporter {
 
     private static func sanitizedFileStem(_ value: String) -> String? {
         let forbidden = CharacterSet(charactersIn: "/\\:*?\"<>|").union(.controlCharacters)
-        var segments: [String] = []
-        var current = ""
-
-        for scalar in value.unicodeScalars {
-            if forbidden.contains(scalar) {
-                segments.append(current)
-                current = ""
-            } else {
-                current.unicodeScalars.append(scalar)
-            }
-        }
-        segments.append(current)
-
         let edgeCharacters = CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: ".-"))
-        let stem = segments
+        let stem = value.components(separatedBy: forbidden)
             .map { segment in
                 segment
                     .split(whereSeparator: { $0.isWhitespace })
@@ -96,14 +83,14 @@ public enum ChatTranscriptExporter {
         if !self.attachments(in: message).isEmpty {
             return true
         }
-        let text = self.visibleText(in: message)
+        let text = ChatMessageVisibleText.visibleText(in: message)
         guard !text.isEmpty else { return false }
         return role == "user" || AssistantTextParser.hasVisibleContent(in: text)
     }
 
     private static func body(for message: OpenClawChatMessage) -> String {
         var parts: [String] = []
-        let text = self.visibleText(in: message)
+        let text = ChatMessageVisibleText.visibleText(in: message)
         if !text.isEmpty {
             parts.append(text)
         }
@@ -124,10 +111,6 @@ public enum ChatTranscriptExporter {
         case .reset:
             return "[\(divider.label) — \(divider.description ?? "")]"
         }
-    }
-
-    private static func visibleText(in message: OpenClawChatMessage) -> String {
-        ChatMessageVisibleText.visibleText(in: message)
     }
 
     private static func attachments(in message: OpenClawChatMessage) -> [OpenClawChatMessageContent] {

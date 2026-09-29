@@ -2,13 +2,17 @@ import type { GitHubPublicationPublisher } from "../../packages/gateway-protocol
 import {
   matchesPreparedGitHubPublicationIdentity,
   prepareGitHubPublicationIdentity,
+  prepareGitHubPublicationOptionsIdentity,
   type PreparedGitHubPublicationIdentity,
 } from "../agents/github-tool-identity.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { readGitHubPublicationSessionLifecycle } from "../state/github-publication-session-lifecycles.js";
-import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
+import {
+  getSessionRepositoryWorkspaceStore,
+  type PreparedRepositoryWorkspace,
+} from "../state/session-repository-workspaces.js";
 import { requestCurrentGitHubOAuthRefresh } from "./github-oauth-lifecycle.js";
 import {
   GitHubPublicationWorkspaceChangedError,
@@ -62,6 +66,16 @@ export async function prepareCurrentGitHubPublicationIdentity(
   });
 }
 
+export async function prepareCurrentGitHubPublicationOptionsIdentity(agentId: string) {
+  await requestCurrentGitHubOAuthRefresh(agentId);
+  const snapshot = publicationConfigSnapshot();
+  return await prepareGitHubPublicationOptionsIdentity({
+    config: snapshot.config,
+    sourceConfig: snapshot.sourceConfig,
+    agentId,
+  });
+}
+
 export function matchesCurrentGitHubPublicationIdentity(params: {
   agentId: string;
   identity: PreparedGitHubPublicationIdentity;
@@ -72,7 +86,7 @@ export function matchesCurrentGitHubPublicationIdentity(params: {
   });
 }
 
-type PublicationSessionIdentity = {
+export type PublicationSessionIdentity = {
   sessionId: string;
   sessionKey: string;
   agentId: string;
@@ -111,7 +125,7 @@ function readPublicationWorktreeOwner(
     worktree.branch !== entry.worktree.branch ||
     worktree.repoRoot !== entry.worktree.repoRoot
   ) {
-    throw new Error("GitHub publication session worktree owner changed.");
+    throw new GitHubPublicationSessionChangedError();
   }
   if (
     expected &&
@@ -132,21 +146,43 @@ export function resolveGitHubPublicationWorktreeOwner(
   return readPublicationWorktreeOwner(readPublicationSessionOwner(params), params.expected);
 }
 
-export function resolveGitHubPublicationWorkspaceOwner(params: PublicationSessionIdentity) {
+function resolveGitHubPublicationWorkspaceOwner(
+  params: PublicationSessionIdentity,
+  prepared: PreparedRepositoryWorkspace | undefined,
+) {
   const loaded = readPublicationSessionOwner(params);
   const workspaceId = loaded.entry.repositoryWorkspaceId;
   if (!workspaceId) {
     return { kind: "worktree" as const, ...readPublicationWorktreeOwner(loaded) };
   }
-  const workspace = getSessionRepositoryWorkspaceStore().get(workspaceId);
+  const workspace = prepared?.current();
   if (
     !workspace ||
+    workspace.workspaceId !== workspaceId ||
     workspace.agentId !== params.agentId ||
     workspace.sessionKey !== params.sessionKey
   ) {
     throw new Error("GitHub publication session repository owner changed.");
   }
   return { kind: "repository" as const, loaded, workspace };
+}
+
+export async function prepareGitHubPublicationWorkspaceOwner(params: PublicationSessionIdentity) {
+  const loaded = readPublicationSessionOwner(params);
+  const workspaceId = loaded.entry.repositoryWorkspaceId;
+  const identity = { ...params, lifecycleRevision: loaded.entry.lifecycleRevision ?? null };
+  const prepared = workspaceId
+    ? await getSessionRepositoryWorkspaceStore().prepare(workspaceId)
+    : undefined;
+  const current = () => {
+    const owner = resolveGitHubPublicationWorkspaceOwner(identity, prepared);
+    if (owner.loaded.entry.repositoryWorkspaceId !== workspaceId) {
+      throw new GitHubPublicationSessionChangedError();
+    }
+    return owner;
+  };
+  current();
+  return current;
 }
 
 export function sameGitHubPublicationWorkspace(
@@ -207,13 +243,17 @@ export async function prepareGitHubPublicationAvailability(params: {
     if (params.assertCurrent?.() === false) {
       return false;
     }
-    const initial = resolveGitHubPublicationWorkspaceOwner(params);
+    const current = await prepareGitHubPublicationWorkspaceOwner(params);
+    const initial = current();
+    if (params.assertCurrent?.() === false) {
+      return false;
+    }
     const identity = await prepareCurrentGitHubPublicationIdentity(params.agentId);
     if (params.assertCurrent?.() === false) {
       return false;
     }
     return (
-      sameGitHubPublicationWorkspace(initial, resolveGitHubPublicationWorkspaceOwner(params)) &&
+      sameGitHubPublicationWorkspace(initial, current()) &&
       matchesCurrentGitHubPublicationIdentity({ agentId: params.agentId, identity })
     );
   } catch {

@@ -120,11 +120,7 @@ function buildStoredConversationReference(params: {
   };
 }
 
-export function assembleMSTeamsInboundFacts(params: {
-  entry: MSTeamsDebounceEntry;
-  mediaMaxBytes: number;
-}) {
-  const { entry, mediaMaxBytes } = params;
+export function assembleMSTeamsInboundFacts(entry: MSTeamsDebounceEntry) {
   const activity = entry.context.activity;
   const conversation = activity.conversation;
   const rawConversationId = conversation?.id ?? "";
@@ -136,10 +132,7 @@ export function assembleMSTeamsInboundFacts(params: {
   const threadId = isChannel
     ? (conversationMessageId ?? activity.replyToId ?? undefined)
     : undefined;
-  const advertisedMedia = resolveMSTeamsAdvertisedMedia(entry.attachments, {
-    maxInlineBytes: mediaMaxBytes,
-    maxInlineTotalBytes: mediaMaxBytes,
-  });
+  const advertisedMedia = resolveMSTeamsAdvertisedMedia(entry.attachments);
 
   return {
     ...entry,
@@ -164,6 +157,8 @@ export function assembleMSTeamsInboundFacts(params: {
     teamId,
     graphChannelId: activity.channelData?.channel?.id?.trim() || conversationId,
     threadId,
+    // Pending history must follow the channel thread through recording, reads, and cleanup.
+    historyKey: threadId ? `${conversationId}:thread:${threadId}` : conversationId,
     conversationRef: buildStoredConversationReference({
       activity,
       conversationId,

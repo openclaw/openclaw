@@ -18,7 +18,9 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import {
   isCompatibleSingletonRewrite,
   isCompleteToolGroup,
+  isSameUserTurn,
   projectReplayPayload,
+  userText,
   type AttemptTranscriptMessage as TranscriptMessage,
 } from "./attempt-transcript-replay.js";
 import type { AttemptParamsLike } from "./attempt-types.js";
@@ -663,50 +665,4 @@ function isCurrentJournalIdentity(
   return (
     key === `${params.attempt.runId}:user` || key.startsWith(`copilot-sdk:${params.sdkSessionId}:`)
   );
-}
-
-function isSameUserTurn(
-  candidate: AgentMessage | undefined,
-  current: Extract<AgentMessage, { role: "user" }> | undefined,
-  currentRunUserKey: string,
-): boolean {
-  if (candidate?.role !== "user" || !current) {
-    return false;
-  }
-  if (candidate === current) {
-    return true;
-  }
-  const candidateKey = (candidate as { idempotencyKey?: unknown }).idempotencyKey;
-  const currentKey = (current as { idempotencyKey?: unknown }).idempotencyKey;
-  if (typeof candidateKey === "string" || typeof currentKey === "string") {
-    if (typeof candidateKey === "string" && typeof currentKey === "string") {
-      return candidateKey === currentKey;
-    }
-    if (
-      typeof candidateKey !== "string" ||
-      typeof currentKey === "string" ||
-      (!candidateKey.startsWith("copilot:") && candidateKey !== currentRunUserKey)
-    ) {
-      return false;
-    }
-  }
-  // The embedded-runner boundary identifies the active user as the last user
-  // and stamps it with this recorder timestamp; historical turns are ineligible.
-  return (
-    candidate.timestamp === current.timestamp &&
-    userText(candidate.content) === userText(current.content)
-  );
-}
-
-function userText(content: unknown): string {
-  if (typeof content === "string") {
-    return content;
-  }
-  if (Array.isArray(content) && content.length === 1) {
-    const part = content[0] as { text?: unknown; type?: unknown };
-    if (part?.type === "text" && typeof part.text === "string") {
-      return part.text;
-    }
-  }
-  return JSON.stringify(content) ?? "";
 }

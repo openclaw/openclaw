@@ -7,6 +7,7 @@ import {
   isPathInside,
 } from "openclaw/plugin-sdk/file-access-runtime";
 import { extractErrorCode } from "openclaw/plugin-sdk/security-runtime";
+import { toRepoPath } from "./cli-paths.js";
 import {
   mergeQaEvidenceSummaries,
   validateQaEvidenceSummaryJson,
@@ -86,7 +87,15 @@ function resolveQaProfileEvidenceSelection(profile: string) {
   if (executionSelection.selectedScenarios.length === 0) {
     throw new Error(`QA profile ${profile} does not select any executable scenarios.`);
   }
-  return { executionSelection, liveAdapterFactories, membership };
+  if (!scorecardReport.taxonomy) {
+    throw new Error("QA profile evidence requires a taxonomy identity.");
+  }
+  return {
+    executionSelection,
+    liveAdapterFactories,
+    membership,
+    taxonomyIdentity: scorecardReport.taxonomy.identity,
+  };
 }
 
 function estimateQaProfileScenarioCost(scenario: QaSeedScenarioWithSource) {
@@ -199,11 +208,17 @@ export function createQaProfileEvidenceShardPlan(
   profile: string,
   shardCount = DEFAULT_QA_PROFILE_SHARD_COUNT,
 ): QaProfileEvidenceShardPlan {
+  return buildQaProfileEvidenceShardPlan(shardCount, resolveQaProfileEvidenceSelection(profile));
+}
+
+function buildQaProfileEvidenceShardPlan(
+  shardCount: number,
+  selection: ReturnType<typeof resolveQaProfileEvidenceSelection>,
+): QaProfileEvidenceShardPlan {
   if (!Number.isInteger(shardCount) || shardCount < 1 || shardCount > MAX_QA_PROFILE_SHARD_COUNT) {
     throw new Error(`QA profile shard count must be between 1 and ${MAX_QA_PROFILE_SHARD_COUNT}.`);
   }
-  const { executionSelection, liveAdapterFactories, membership } =
-    resolveQaProfileEvidenceSelection(profile);
+  const { executionSelection, liveAdapterFactories, membership } = selection;
   const categoryIdsByScenarioRef = new Map<string, string[]>();
   for (const category of membership.categories) {
     for (const scenarioRef of category.scenarioRefs) {
@@ -269,10 +284,6 @@ function shardSignature(scenarioIds: readonly string[]) {
   return scenarioIds.toSorted().join("\u0000");
 }
 
-function toPublishedPath(filePath: string) {
-  return filePath.split(path.sep).join("/");
-}
-
 async function resolveChildArtifactPath(params: {
   artifactPath: string;
   evidencePath: string;
@@ -314,7 +325,7 @@ async function resolveChildArtifactPath(params: {
       );
     }
     if ((await fs.stat(realCandidate)).isFile()) {
-      return toPublishedPath(path.relative(params.payloadRoot, candidate));
+      return toRepoPath(path.relative(params.payloadRoot, candidate));
     }
     return undefined;
   };
@@ -361,7 +372,12 @@ export async function aggregateQaProfileEvidenceShards(params: {
   const outputPath = path.resolve(params.outputPath);
   const aggregateRoot = path.dirname(outputPath);
   const canonicalAggregateRoot = await canonicalPathFromExistingAncestor(aggregateRoot);
-  const shardPlan = createQaProfileEvidenceShardPlan(params.profile, params.shardCount);
+  const selection = resolveQaProfileEvidenceSelection(params.profile);
+  const { executionSelection, membership, taxonomyIdentity } = selection;
+  const shardPlan = buildQaProfileEvidenceShardPlan(
+    params.shardCount ?? DEFAULT_QA_PROFILE_SHARD_COUNT,
+    selection,
+  );
   if (params.evidencePaths.length !== shardPlan.shards.length) {
     throw new Error(
       `QA profile ${params.profile} requires ${shardPlan.shards.length} shard evidence files, received ${params.evidencePaths.length}.`,
@@ -390,6 +406,15 @@ export async function aggregateQaProfileEvidenceShards(params: {
       );
     }
     const childPlan = qaProfileEvidencePlan.attest(summary.profilePlan).plan;
+    if (
+      !childPlan.taxonomyIdentity ||
+      childPlan.taxonomyIdentity.version !== taxonomyIdentity.version ||
+      childPlan.taxonomyIdentity.sha256 !== taxonomyIdentity.sha256
+    ) {
+      throw new Error(
+        `QA shard evidence ${evidencePath} has a missing or mismatched semantic taxonomy identity.`,
+      );
+    }
     const shard = expectedShardBySignature.get(shardSignature(childPlan.selected));
     if (!shard || seenShardIds.has(shard.id)) {
       throw new Error(`QA shard evidence ${evidencePath} does not match one unique planned shard.`);
@@ -413,20 +438,26 @@ export async function aggregateQaProfileEvidenceShards(params: {
 
     const rebasedSummary = structuredClone(summary);
     const resolvedArtifacts = new Map<string, string>();
-    for (const entry of rebasedSummary.entries) {
-      for (const artifact of entry.execution?.artifacts ?? []) {
-        let relativePath = resolvedArtifacts.get(artifact.path);
-        if (!relativePath) {
-          relativePath = await resolveChildArtifactPath({
-            artifactPath: artifact.path,
-            evidencePath,
-            payloadRoot,
-            shardId: shard.id,
-          });
-          resolvedArtifacts.set(artifact.path, relativePath);
-        }
-        artifact.path = `shards/${shard.id}/${relativePath}`;
+    const artifacts = [
+      ...rebasedSummary.entries.flatMap((entry) => entry.execution?.artifacts ?? []),
+      ...(rebasedSummary.schemaVersion === 3
+        ? rebasedSummary.occurrences.flatMap((occurrence) =>
+            occurrence.receipts.map((receipt) => receipt.artifact),
+          )
+        : []),
+    ];
+    for (const artifact of artifacts) {
+      let relativePath = resolvedArtifacts.get(artifact.path);
+      if (!relativePath) {
+        relativePath = await resolveChildArtifactPath({
+          artifactPath: artifact.path,
+          evidencePath,
+          payloadRoot,
+          shardId: shard.id,
+        });
+        resolvedArtifacts.set(artifact.path, relativePath);
       }
+      artifact.path = `shards/${shard.id}/${relativePath}`;
     }
     seenShardIds.add(shard.id);
     summaries.push(rebasedSummary);
@@ -435,6 +466,20 @@ export async function aggregateQaProfileEvidenceShards(params: {
     observedCells.push(...childPlan.observedCells);
   }
 
+  const profilePlan = qaProfileEvidencePlan.build({
+    profile: membership.profile.id,
+    taxonomyIdentity,
+    membershipScenarios: membership.selectedScenarios,
+    selectedScenarios: executionSelection.selectedScenarios,
+    excludedScenarios: executionSelection.excludedScenarios,
+    expectedCells,
+    observedCells,
+    proofRequirements: membership.profile.proofRequirements,
+  });
+  const merged = mergeQaEvidenceSummaries({
+    evidenceSummaries: summaries,
+    generatedAt: params.generatedAt,
+  });
   await fs.mkdir(path.join(aggregateRoot, "shards"), { recursive: true });
   for (const payload of payloads) {
     await fs.cp(payload.source, payload.destination, {
@@ -444,19 +489,6 @@ export async function aggregateQaProfileEvidenceShards(params: {
     });
   }
 
-  const { executionSelection, membership } = resolveQaProfileEvidenceSelection(params.profile);
-  const profilePlan = qaProfileEvidencePlan.build({
-    profile: membership.profile.id,
-    membershipScenarios: membership.selectedScenarios,
-    selectedScenarios: executionSelection.selectedScenarios,
-    excludedScenarios: executionSelection.excludedScenarios,
-    expectedCells,
-    observedCells,
-  });
-  const merged = mergeQaEvidenceSummaries({
-    evidenceSummaries: summaries,
-    generatedAt: params.generatedAt,
-  });
   await fs.writeFile(outputPath, `${JSON.stringify(merged, null, 2)}\n`, "utf8");
   await attachQaProfileScorecardEvidenceToFile({
     evidencePath: outputPath,

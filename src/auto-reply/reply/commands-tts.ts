@@ -60,7 +60,6 @@ type TtsAttemptDetail = NonNullable<
 type TtsCommandParams = Parameters<CommandHandler>[0];
 
 function parseTtsCommand(normalized: string): ParsedTtsCommand | null {
-  // Accept `/tts` and `/tts <action> [args]` as a single control surface.
   const rest = matchCommandPrefix(normalized, "/tts");
   if (rest === null) {
     return null;
@@ -90,7 +89,6 @@ function formatAttemptDetails(attempts: TtsAttemptDetail[] | undefined): string 
 }
 
 function ttsUsage(): ReplyPayload {
-  // Keep usage in one place so help/validation stays consistent.
   return {
     text:
       `🔊 **TTS (Text-to-Speech) Help**\n\n` +
@@ -133,14 +131,7 @@ async function buildTtsAudioReply(params: {
   agentId?: string;
 }): Promise<{ reply: ReplyPayload } | { error: string }> {
   const start = Date.now();
-  const result = await textToSpeech({
-    text: params.text,
-    cfg: params.cfg,
-    channel: params.channel,
-    accountId: params.accountId,
-    prefsPath: params.prefsPath,
-    agentId: params.agentId,
-  });
+  const result = await textToSpeech(params);
 
   if (result.success && result.audioPath) {
     setLastTtsAttempt({
@@ -301,22 +292,19 @@ function handleTtsStatusAction(
       if (last.fallbackFrom && last.provider && last.fallbackFrom !== last.provider) {
         lines.push(`Fallback: ${last.fallbackFrom} -> ${last.provider}`);
       }
-      if (last.attemptedProviders && last.attemptedProviders.length > 1) {
-        lines.push(`Attempts: ${last.attemptedProviders.join(" -> ")}`);
-      }
-      const details = formatAttemptDetails(last.attempts);
-      if (details) {
-        lines.push(`Attempt details: ${details}`);
-      }
-      lines.push(`Latency: ${last.latencyMs ?? 0}ms`);
     } else if (last.error) {
       lines.push(`Error: ${last.error}`);
-      if (last.attemptedProviders && last.attemptedProviders.length > 0) {
+    }
+    if (last.success || last.error) {
+      if (last.attemptedProviders && last.attemptedProviders.length > (last.success ? 1 : 0)) {
         lines.push(`Attempts: ${last.attemptedProviders.join(" -> ")}`);
       }
       const details = formatAttemptDetails(last.attempts);
       if (details) {
         lines.push(`Attempt details: ${details}`);
+      }
+      if (last.success) {
+        lines.push(`Latency: ${last.latencyMs ?? 0}ms`);
       }
     }
   }

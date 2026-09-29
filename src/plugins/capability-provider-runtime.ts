@@ -1,4 +1,3 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import * as talk from "../config/talk.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -23,7 +22,7 @@ import {
   loadManifestContractSnapshot,
 } from "./manifest-contract-eligibility.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
-import { normalizeCapabilityProviderId } from "./provider-registry-shared.js";
+import { findCapabilityProviderEntry } from "./provider-registry-shared.js";
 import type { PluginRegistry } from "./registry-types.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
 import {
@@ -45,6 +44,28 @@ type CapabilityProviderRegistryKey =
 
 export type CapabilityProviderFor<K extends CapabilityProviderRegistryKey> =
   PluginRegistry[K][number]["provider"];
+type CapabilityProviderProjector<K extends CapabilityProviderRegistryKey> = (
+  provider: CapabilityProviderFor<K>,
+  pluginId: string,
+) => CapabilityProviderFor<K>;
+type SelectedCapabilityRegistry<K extends CapabilityProviderRegistryKey> = (
+  registry: PluginRegistry | undefined,
+) => CapabilityProviderProjector<K> | void;
+
+function projectCapabilityProviderEntries<K extends CapabilityProviderRegistryKey>(
+  entries: PluginRegistry[K],
+  project: CapabilityProviderProjector<K> | void,
+): PluginRegistry[K] {
+  if (!project) {
+    return entries;
+  }
+  // The projector preserves the selected capability family and every registration field.
+  return entries.map((entry) => ({
+    ...entry,
+    provider: project(entry.provider, entry.pluginId),
+  })) as PluginRegistry[K];
+}
+
 type CapabilityPluginResolution = {
   runtimePluginIds: string[];
   bundledCompatPluginIds: string[];
@@ -67,7 +88,7 @@ function shouldSkipCapabilityResolution(params: {
 }
 
 /** Loads the manifest snapshot used to resolve capability-provider ownership. */
-export function loadCapabilityManifestSnapshot(params: {
+function loadCapabilityManifestSnapshot(params: {
   cfg?: OpenClawConfig;
   workspaceDir?: string;
   pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "index" | "plugins">;
@@ -181,45 +202,6 @@ function resolveCapabilityLoadContext(
     : undefined;
 }
 
-function findProviderById<K extends CapabilityProviderRegistryKey>(
-  entries: PluginRegistry[K],
-  providerId: string,
-): CapabilityProviderFor<K> | undefined {
-  const normalizedProviderId = normalizeCapabilityProviderId(providerId);
-  if (!normalizedProviderId) {
-    return undefined;
-  }
-  for (const entry of entries) {
-    const provider: unknown = entry.provider;
-    if (!isRecord(provider)) {
-      continue;
-    }
-    if (
-      typeof provider.id === "string" &&
-      normalizeCapabilityProviderId(provider.id) === normalizedProviderId
-    ) {
-      return entry.provider as CapabilityProviderFor<K>;
-    }
-  }
-  for (const entry of entries) {
-    const provider: unknown = entry.provider;
-    if (!isRecord(provider)) {
-      continue;
-    }
-    const aliases = Array.isArray(provider.aliases) ? provider.aliases : [];
-    if (
-      aliases.some(
-        (alias) =>
-          typeof alias === "string" &&
-          normalizeCapabilityProviderId(alias) === normalizedProviderId,
-      )
-    ) {
-      return entry.provider as CapabilityProviderFor<K>;
-    }
-  }
-  return undefined;
-}
-
 function mergeCapabilityProviderEntries<K extends CapabilityProviderRegistryKey>(
   left: PluginRegistry[K],
   right: PluginRegistry[K],
@@ -246,10 +228,7 @@ function addObjectKeys(target: Set<string>, value: unknown): void {
     return;
   }
   for (const key of Object.keys(value)) {
-    const normalized = key.trim().toLowerCase();
-    if (normalized) {
-      target.add(normalized);
-    }
+    addStringValue(target, key);
   }
 }
 
@@ -330,39 +309,28 @@ function shouldScopeCapabilityLoadToRequestedProviders(
   );
 }
 
-function removeActiveProviderIds(requested: Set<string>, entries: readonly unknown[]): void {
-  for (const entry of entries as Array<{ provider: { id?: unknown; aliases?: unknown } }>) {
-    const provider = entry.provider as { id?: unknown; aliases?: unknown };
-    if (typeof provider.id === "string") {
-      requested.delete(provider.id.toLowerCase());
-    }
-    if (Array.isArray(provider.aliases)) {
-      for (const alias of provider.aliases) {
-        if (typeof alias === "string") {
-          requested.delete(alias.toLowerCase());
-        }
+function* capabilityProviderIds(provider: { id?: unknown; aliases?: unknown }) {
+  if (typeof provider.id === "string") {
+    yield provider.id.toLowerCase();
+  }
+  if (Array.isArray(provider.aliases)) {
+    for (const alias of provider.aliases) {
+      if (typeof alias === "string") {
+        yield alias.toLowerCase();
       }
     }
   }
 }
 
-function filterLoadedProvidersForRequestedConfig<K extends CapabilityProviderRegistryKey>(params: {
-  key: K;
-  requested: Set<string>;
-  entries: PluginRegistry[K];
-}): PluginRegistry[K] {
-  return params.entries.filter((entry) => {
-    const provider = entry.provider as { id?: unknown; aliases?: unknown };
-    if (typeof provider.id === "string" && params.requested.has(provider.id.toLowerCase())) {
-      return true;
+function removeActiveProviderIds(
+  requested: Set<string>,
+  entries: PluginRegistry[CapabilityProviderRegistryKey],
+): void {
+  for (const { provider } of entries) {
+    for (const id of capabilityProviderIds(provider)) {
+      requested.delete(id);
     }
-    if (Array.isArray(provider.aliases)) {
-      return provider.aliases.some(
-        (alias) => typeof alias === "string" && params.requested.has(alias.toLowerCase()),
-      );
-    }
-    return false;
-  }) as PluginRegistry[K];
+  }
 }
 
 function filterPolicyAllowedCapabilityProviders<K extends CapabilityProviderRegistryKey>(params: {
@@ -401,13 +369,9 @@ function prepareCapabilityProviderLoad<K extends CapabilityProviderRegistryKey>(
     loadOptions: PluginLoadOptions;
     requested?: Set<string>;
   },
-  onSelectedRegistry?: (registry: PluginRegistry | undefined) => void,
+  onSelectedRegistry?: SelectedCapabilityRegistry<K>,
 ) {
   const allowedPluginIds = new Set(params.loadOptions.onlyPluginIds);
-  const filterAllowedEntries = (registry: PluginRegistry | undefined): PluginRegistry[K] =>
-    (registry?.[params.key] ?? []).filter((entry) =>
-      allowedPluginIds.has(entry.pluginId),
-    ) as PluginRegistry[K];
   const scopedRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
   const loadedRegistry = scopedRegistry
     ? registryContainsRuntimePluginIds(scopedRegistry, params.loadOptions.onlyPluginIds)
@@ -419,11 +383,19 @@ function prepareCapabilityProviderLoad<K extends CapabilityProviderRegistryKey>(
         workspaceDir: params.loadOptions.workspaceDir,
         requiredPluginIds: params.loadOptions.onlyPluginIds,
       });
-  onSelectedRegistry?.(loadedRegistry);
+  const loadedProject = onSelectedRegistry?.(loadedRegistry);
+  const filterAllowedEntries = (registry: PluginRegistry | undefined): PluginRegistry[K] => {
+    const project = registry === loadedRegistry ? loadedProject : onSelectedRegistry?.(registry);
+    const entries = (registry?.[params.key] ?? []).filter((entry) =>
+      allowedPluginIds.has(entry.pluginId),
+    ) as PluginRegistry[K];
+    return projectCapabilityProviderEntries(entries, project);
+  };
   const catalogFamily = shouldScopeCapabilityLoadToRequestedProviders(params.key)
     ? params.key
     : undefined;
   return {
+    loadOptions: params.loadOptions,
     loadedRegistry,
     resolveLoadOptions: () => ({
       ...params.loadOptions,
@@ -465,19 +437,16 @@ function prepareCapabilityProviderLoad<K extends CapabilityProviderRegistryKey>(
 }
 
 function loadCapabilityProviderEntries<K extends CapabilityProviderRegistryKey>(
-  params: Parameters<typeof prepareCapabilityProviderLoad<K>>[0],
-  onSelectedRegistry?: (registry: PluginRegistry | undefined) => void,
+  load: ReturnType<typeof prepareCapabilityProviderLoad<K>>,
 ): PluginRegistry[K] {
-  const load = prepareCapabilityProviderLoad(params, onSelectedRegistry);
   const registry = load.loadedRegistry ?? resolveRuntimePluginRegistry(load.resolveLoadOptions());
-  onSelectedRegistry?.(registry);
   const { entries, pluginIds } = load.fallback(registry);
   if (pluginIds.length === 0) {
     return entries;
   }
   const captured = load.filterAllowedEntries(
     loadBundledCapabilityRuntimeRegistry({
-      ...params.loadOptions,
+      ...load.loadOptions,
       pluginIds,
     }),
   );
@@ -486,32 +455,56 @@ function loadCapabilityProviderEntries<K extends CapabilityProviderRegistryKey>(
 
 export function resolvePluginCapabilityProvider<K extends CapabilityProviderRegistryKey>(
   params: { key: K; providerId: string; cfg?: OpenClawConfig },
-  onSelectedRegistry?: (registry: PluginRegistry | undefined) => void,
+  onSelectedRegistry?: SelectedCapabilityRegistry<K>,
 ): CapabilityProviderFor<K> | undefined {
   const resolution = preparePluginCapabilityProviderLookup(params, onSelectedRegistry);
   return resolution.resolve(
-    resolution.load ? loadCapabilityProviderEntries(resolution.load, onSelectedRegistry) : [],
+    resolution.load ? loadCapabilityProviderEntries(resolution.prepareLoad()) : [],
   );
 }
 
 export function preparePluginCapabilityProviderLookup<K extends CapabilityProviderRegistryKey>(
   params: { key: K; providerId: string; cfg?: OpenClawConfig },
-  onSelectedRegistry?: (registry: PluginRegistry | undefined) => void,
+  onSelectedRegistry?: SelectedCapabilityRegistry<K>,
 ) {
   if (shouldSkipCapabilityResolution(params)) {
     return { load: undefined, resolve: (_entries: PluginRegistry[K]) => undefined };
   }
 
+  // A targeted lookup retains only the canonical/alias winner, never competing providers.
+  const projections = new WeakMap<object, () => CapabilityProviderFor<K>>();
+  const selectRegistry: SelectedCapabilityRegistry<K> | undefined =
+    onSelectedRegistry &&
+    ((registry) => {
+      const project = onSelectedRegistry(registry);
+      return project
+        ? (provider, pluginId) => {
+            projections.set(provider, () => project(provider, pluginId));
+            return provider;
+          }
+        : undefined;
+    });
+  const selectProvider = (entries: PluginRegistry[K]) => {
+    const provider = findCapabilityProviderEntry<PluginRegistry[K][number]>(
+      entries,
+      params.providerId,
+    )?.provider;
+    return provider ? (projections.get(provider)?.() ?? provider) : undefined;
+  };
+
   const activeRegistry =
     getPluginRuntimeGatewayRequestScope()?.pluginRegistry ?? getLoadedRuntimePluginRegistry();
-  onSelectedRegistry?.(activeRegistry);
-  const activeProviders = filterPolicyAllowedCapabilityProviders({
-    entries: activeRegistry?.[params.key] ?? [],
-    registry: activeRegistry,
-    cfg: params.cfg,
-    key: params.key,
-  });
-  const activeProvider = findProviderById(activeProviders, params.providerId);
+  const project = selectRegistry?.(activeRegistry);
+  const activeProviders = projectCapabilityProviderEntries(
+    filterPolicyAllowedCapabilityProviders({
+      entries: activeRegistry?.[params.key] ?? [],
+      registry: activeRegistry,
+      cfg: params.cfg,
+      key: params.key,
+    }),
+    project,
+  );
+  const activeProvider = selectProvider(activeProviders);
   if (activeProvider) {
     return { load: undefined, resolve: (_entries: PluginRegistry[K]) => activeProvider };
   }
@@ -554,8 +547,8 @@ export function preparePluginCapabilityProviderLookup<K extends CapabilityProvid
   };
   return {
     load,
-    prepareLoad: () => prepareCapabilityProviderLoad(load, onSelectedRegistry),
-    resolve: (entries: PluginRegistry[K]) => findProviderById(entries, params.providerId),
+    prepareLoad: () => prepareCapabilityProviderLoad(load, selectRegistry),
+    resolve: selectProvider,
   };
 }
 
@@ -565,7 +558,7 @@ export function preparePluginCapabilityProviderResolution<K extends CapabilityPr
     cfg?: OpenClawConfig;
     additionalProviderIds?: readonly string[];
   },
-  onSelectedRegistry?: (registry: PluginRegistry | undefined) => void,
+  onSelectedRegistry?: SelectedCapabilityRegistry<K>,
 ) {
   if (shouldSkipCapabilityResolution(params)) {
     return {
@@ -576,13 +569,16 @@ export function preparePluginCapabilityProviderResolution<K extends CapabilityPr
 
   const activeRegistry =
     getPluginRuntimeGatewayRequestScope()?.pluginRegistry ?? getLoadedRuntimePluginRegistry();
-  onSelectedRegistry?.(activeRegistry);
-  const activeProviders = filterPolicyAllowedCapabilityProviders({
-    entries: activeRegistry?.[params.key] ?? [],
-    registry: activeRegistry,
-    cfg: params.cfg,
-    key: params.key,
-  });
+  const project = onSelectedRegistry?.(activeRegistry);
+  const activeProviders = projectCapabilityProviderEntries(
+    filterPolicyAllowedCapabilityProviders({
+      entries: activeRegistry?.[params.key] ?? [],
+      registry: activeRegistry,
+      cfg: params.cfg,
+      key: params.key,
+    }),
+    project,
+  );
   const requested =
     collectRequestedCapabilityProviderIds({
       key: params.key,
@@ -654,11 +650,14 @@ export function preparePluginCapabilityProviderResolution<K extends CapabilityPr
       const loadedProviderFilter =
         activeProviders.length > 0 ? requestedProviders : requestedProviderFilter;
       const requestedLoadedProviders = loadedProviderFilter
-        ? filterLoadedProvidersForRequestedConfig({
-            key: params.key,
-            requested: loadedProviderFilter,
-            entries: loadedProviders,
-          })
+        ? (loadedProviders.filter(({ provider }) => {
+            for (const id of capabilityProviderIds(provider)) {
+              if (loadedProviderFilter.has(id)) {
+                return true;
+              }
+            }
+            return false;
+          }) as PluginRegistry[K])
         : loadedProviders;
       return mergeCapabilityProviderEntries(activeProviders, requestedLoadedProviders).map(
         (entry) => entry.provider as CapabilityProviderFor<K>,
@@ -669,11 +668,11 @@ export function preparePluginCapabilityProviderResolution<K extends CapabilityPr
 
 export function resolvePluginCapabilityProviders<K extends CapabilityProviderRegistryKey>(
   params: { key: K; cfg?: OpenClawConfig; additionalProviderIds?: readonly string[] },
-  onSelectedRegistry?: (registry: PluginRegistry | undefined) => void,
+  onSelectedRegistry?: SelectedCapabilityRegistry<K>,
 ): CapabilityProviderFor<K>[] {
   const resolution = preparePluginCapabilityProviderResolution(params, onSelectedRegistry);
   return resolution.resolve(
-    resolution.load ? loadCapabilityProviderEntries(resolution.load, onSelectedRegistry) : [],
+    resolution.load ? loadCapabilityProviderEntries(resolution.prepareLoad()) : [],
   );
 }
 

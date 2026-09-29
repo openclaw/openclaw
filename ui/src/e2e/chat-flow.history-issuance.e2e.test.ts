@@ -51,7 +51,12 @@ suite.define(() => {
         node.style.animationName = "none";
         void getComputedStyle(node).animationName;
         node.style.animationName = "";
-        const animation = node.getAnimations()[0];
+        const animation = node
+          .getAnimations()
+          .find(
+            (entry) =>
+              entry instanceof CSSAnimation && entry.animationName === "chat-skeleton-reveal",
+          );
         if (!animation) {
           throw new Error("The loading skeleton has no reveal animation");
         }
@@ -79,37 +84,60 @@ suite.define(() => {
           () =>
             new Promise<{ delay: number; previousVisible: boolean }>((resolve) => {
               const started = performance.now();
-              let animationStart: number | undefined;
+              let revealAnimation: Animation | undefined;
               let previousVisible = false;
+              const findRevealAnimation = (skeleton: Element | null) =>
+                skeleton
+                  ?.getAnimations()
+                  .find(
+                    (entry) =>
+                      entry instanceof CSSAnimation &&
+                      entry.animationName === "chat-skeleton-reveal",
+                  );
+              // A concurrent reduced-motion transition can precede the reveal.
+              // Retain the reveal clock before getAnimations() drops its finished effect.
+              const observer = new MutationObserver(() => {
+                const skeleton = document.querySelector(
+                  ".chat-pane-cache__pane--visible .chat-thread openclaw-panel-loading-skeleton",
+                );
+                revealAnimation ??= findRevealAnimation(skeleton);
+                if (revealAnimation) {
+                  observer.disconnect();
+                }
+              });
+              observer.observe(document.body, {
+                childList: true,
+                subtree: true,
+                attributes: true,
+                attributeFilter: ["class"],
+              });
               const sample = () => {
                 const skeleton = document.querySelector(
                   ".chat-pane-cache__pane--visible .chat-thread openclaw-panel-loading-skeleton",
                 );
                 if (skeleton) {
-                  const startTime = skeleton.getAnimations()[0]?.startTime;
-                  if (typeof startTime === "number") {
-                    animationStart = startTime;
-                  }
+                  revealAnimation ??= findRevealAnimation(skeleton);
                   previousVisible ||= [...document.querySelectorAll("openclaw-chat-pane")].some(
                     (pane) =>
                       getComputedStyle(pane).opacity !== "0" &&
                       pane.getAttribute("aria-hidden") === "false" &&
                       pane.textContent.includes("Previous conversation."),
                   );
-                  if (getComputedStyle(skeleton).visibility === "visible") {
-                    // Use the animation clock: the first sampled frame may arrive late on CI.
-                    const now = document.timeline.currentTime;
+                  const currentTime = revealAnimation?.currentTime;
+                  if (
+                    getComputedStyle(skeleton).visibility === "visible" &&
+                    typeof currentTime === "number"
+                  ) {
+                    observer.disconnect();
                     resolve({
-                      delay:
-                        typeof now === "number" && animationStart !== undefined
-                          ? now - animationStart
-                          : 0,
+                      delay: currentTime,
                       previousVisible,
                     });
                     return;
                   }
                 }
                 if (performance.now() - started > 3_000) {
+                  observer.disconnect();
                   resolve({ delay: -1, previousVisible });
                   return;
                 }
@@ -191,8 +219,11 @@ suite.define(() => {
         },
       });
       const referencePath = `chat/main/${reference === "named" ? "canonical-history" : "old-name-12345678"}`;
-      const canonicalPath = new URL("chat/main/canonical-history-12345678", suite.server.baseUrl)
-        .pathname;
+      const canonicalId = reference === "named" ? "1234567890abcdef1234567890abcdef" : "12345678";
+      const canonicalPath = new URL(
+        `chat/main/canonical-history-${canonicalId}`,
+        suite.server.baseUrl,
+      ).pathname;
       try {
         await page.goto(`${suite.server.baseUrl}chat/main`, { waitUntil: "domcontentloaded" });
         await page
@@ -234,9 +265,7 @@ suite.define(() => {
           sessionKey,
         );
         expect(await gateway.getRequests("chat.startup")).toHaveLength(initialStartups + 1);
-        expect(await gateway.getRequests("sessions.resolve")).toHaveLength(
-          reference === "named" ? 1 : 0,
-        );
+        expect(await gateway.getRequests("sessions.resolve")).toHaveLength(1);
         await captureHistoryIssuanceProof(page, `canonical-${reference}-history`);
       } finally {
         await suite.closeBrowserContext(context);

@@ -2,16 +2,27 @@ import { isSessionProfileDependentMethod } from "../session-method-policy.js";
 
 const PROFILE_DEPENDENT_CORE_METHODS = new Set([
   "agent.wait",
+  // The first UI interaction may arrive before post-hello identity hydration.
+  "presence.activity",
   // Wait for post-hello identity enrichment so an identified caller does not
   // cache a shared-only catalog before their personal accounts are available.
   "models.list",
+  "presence.query",
+  "webSearch.status",
+  "webSearch.test",
   // talk.config projects the caller's profile accent; without this gate a
   // client asking during the post-hello GitHub identity sync window would get
   // the gateway-wide accent instead. Profile-less clients pass through.
   "talk.config",
+  // Voice catalogs authorize participation in the call's chat.
+  "talk.voice.get",
   "ui.command",
   "users.linkAuthProfile",
   "users.linkEmail",
+  "users.merge",
+  "users.linkChannelIdentity",
+  "users.unlinkChannelIdentity",
+  "users.listChannelIdentities",
   "users.listAuthLinks",
   "users.listModelAccounts",
   "users.selectModelAccount",
@@ -36,11 +47,11 @@ const PROFILE_DEPENDENT_CORE_PREFIXES = [
   "session.",
   "sessions.",
   "taskSuggestions.",
-  "tasks.",
   "terminal.",
   "transcripts.",
   "users.authConnect.",
   "users.prefs.",
+  "themes.",
   "users.github.",
   "skills.library.",
 ] as const;

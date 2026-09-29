@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   captureAgentLifecycleBinding: vi.fn(),
   matchesAgentLifecycleBinding: vi.fn(),
   prepareGitHubReadIdentity: vi.fn(),
+  prepareGitPack: vi.fn(),
 }));
 vi.mock("../../agents/agent-lifecycle-registry.js", () => ({
   captureAgentLifecycleBinding: mocks.captureAgentLifecycleBinding,
@@ -20,6 +21,9 @@ vi.mock("../../secrets/runtime-state.js", () => ({
 }));
 vi.mock("../github-oauth-lifecycle.js", () => ({
   requestCurrentGitHubOAuthRefresh: async () => {},
+}));
+vi.mock("./repository-git-pack.js", () => ({
+  prepareRepositoryWorkerGitPack: mocks.prepareGitPack,
 }));
 
 import { prepareRepositoryWorkerProjectSource } from "./repository-project-admission.js";
@@ -38,16 +42,6 @@ const initial = {
   assertCurrent: () => {},
 };
 
-async function preparePublicRepository(
-  params: Parameters<typeof prepareRepositoryWorkerProjectSource>[0],
-) {
-  const admitted = await prepareRepositoryWorkerProjectSource(params);
-  if (!admitted) {
-    throw new Error("Public fixture was classified as private");
-  }
-  return admitted;
-}
-
 describe("repository project admission", () => {
   let selection: PreparedGitHubSourceReadIdentity["selection"];
   let token: string | undefined;
@@ -58,6 +52,15 @@ describe("repository project admission", () => {
   let truncated: boolean;
   let unavailable: boolean;
   let fetchImpl: ReturnType<typeof vi.fn<typeof fetch>>;
+  const repositoryNode = () => ({
+    __typename: "Repository",
+    node_id: repositoryId,
+    clone_url: repositoryUrl.replace(/\.git$/u, ""),
+    private: privateRepository,
+    object: { __typename: "Commit", sha: commit, tree: { sha: rootTree } },
+  });
+  const requestPaths = () =>
+    fetchImpl.mock.calls.map(([input]) => new URL(new Request(input).url).pathname);
 
   beforeEach(() => {
     selection = { source: "system-configured", profileId: `ghp_${"1".repeat(32)}`, accountId: 1 };
@@ -69,6 +72,7 @@ describe("repository project admission", () => {
     truncated = false;
     unavailable = false;
     mocks.captureAgentLifecycleBinding.mockReset().mockReturnValue(agent);
+    mocks.prepareGitPack.mockReset().mockResolvedValue("/synthetic/source.pack");
     mocks.matchesAgentLifecycleBinding.mockReset().mockReturnValue(true);
     mocks.prepareGitHubReadIdentity.mockReset().mockImplementation(async ({ assertActive }) => {
       assertActive();
@@ -95,7 +99,12 @@ describe("repository project admission", () => {
     fetchImpl = vi.fn<typeof fetch>(async (input) => {
       const url = new URL(new Request(input).url);
       let value: unknown;
-      if (url.pathname === "/repos/acme/project") {
+      if (url.pathname === "/graphql") {
+        if (unavailable) {
+          return new Response(null, { status: 404 });
+        }
+        value = { data: { node: repositoryNode() } };
+      } else if (url.pathname === "/repos/acme/project") {
         if (unavailable) {
           return new Response(null, { status: 404 });
         }
@@ -133,7 +142,7 @@ describe("repository project admission", () => {
   it.each([undefined, "HEAD", "tags/v1", "refs/tags/v1", "feature/ready"])(
     "pins %s through the commit resolver and records executable recipe identity without credentials",
     async (ref) => {
-      const result = await preparePublicRepository({
+      const result = await prepareRepositoryWorkerProjectSource({
         ...initial,
         repository: { ...initial.repository, ref },
       });
@@ -161,12 +170,12 @@ describe("repository project admission", () => {
   );
 
   it("refills from the pinned descriptor and accepts credential rotation for the same source owner", async () => {
-    const result = await preparePublicRepository(initial);
+    const result = await prepareRepositoryWorkerProjectSource(initial);
     token = "rotated-synthetic-token";
     await expect(result.revalidate()).resolves.toBeUndefined();
     expect(result).not.toHaveProperty("readGitToken");
     fetchImpl.mockClear();
-    const restored = await preparePublicRepository({
+    const restored = await prepareRepositoryWorkerProjectSource({
       namespace: initial.namespace,
       getConfig: initial.getConfig,
       assertCurrent: initial.assertCurrent,
@@ -179,15 +188,208 @@ describe("repository project admission", () => {
     ).toBe(true);
   });
 
+  it("uses seven reads across discovery, pinned admission, and post-binding revalidation", async () => {
+    const admitted = await prepareRepositoryWorkerProjectSource({
+      ...initial,
+      knownRecipe: (project) => ({ project, setupRecipe: recipe }),
+    });
+    const restored = await prepareRepositoryWorkerProjectSource({
+      namespace: initial.namespace,
+      getConfig: initial.getConfig,
+      assertCurrent: initial.assertCurrent,
+      expected: admitted.project,
+      knownRecipe: (project) => ({ project, setupRecipe: recipe }),
+    });
+    await restored.revalidate();
+    expect(restored.project).toEqual(admitted.project);
+    expect(requestPaths()).toEqual([
+      "/repos/acme/project",
+      "/repos/acme/project/commits/heads%2Fmain",
+      "/repos/acme/project",
+      "/graphql",
+      "/repos/acme/project",
+      "/graphql",
+      "/repos/acme/project",
+    ]);
+    for (const [requestInput, init] of fetchImpl.mock.calls.filter(([input]) =>
+      new Request(input).url.endsWith("/graphql"),
+    )) {
+      const request = new Request(requestInput, init);
+      expect(request.method).toBe("POST");
+      expect(request.headers.get("content-type")).toBe("application/json");
+      expect(request.headers.get("authorization")).toBe(`Bearer ${token}`);
+      const body = await request.json();
+      expect(body.variables).toEqual({ repositoryId, commit });
+      expect(body.query).toMatch(
+        /node\(id: \$repositoryId\)[\s\S]*on Repository[\s\S]*object\(oid: \$commit\)/u,
+      );
+      expect(body.query).not.toMatch(/repository\(owner:/u);
+    }
+  });
+
+  it.each(["refill", "revalidate"] as const)(
+    "rejects invalid GraphQL repository/object metadata during %s without a REST fallback",
+    async (phase) => {
+      const admitted = await prepareRepositoryWorkerProjectSource(initial);
+      const node = repositoryNode();
+      const responses = [
+        {},
+        { data: null },
+        { data: { node: null } },
+        { data: { node: { ...node, __typename: "User" } } },
+        { data: { node: { ...node, node_id: "R_replaced_project" } } },
+        { data: { node: { ...node, clone_url: "https://github.com/acme/another" } } },
+        { data: { node: { ...node, private: undefined } } },
+        { data: { node: { ...node, private: true } } },
+        { data: { node: { ...node, object: null } } },
+        { data: { node: { ...node, object: { ...node.object, __typename: "Tree" } } } },
+        { data: { node: { ...node, object: { ...node.object, sha: "e".repeat(40) } } } },
+        { data: { node: { ...node, object: { ...node.object, tree: null } } } },
+        { data: { node: { ...node, object: { ...node.object, tree: { sha: "invalid" } } } } },
+        { data: { node }, errors: [{ type: "FORBIDDEN" }] },
+        { data: { node }, errors: [{ type: "INTERNAL", message: "private-diagnostic" }] },
+        { data: { node }, errors: {} },
+        { errors: [{ type: "FORBIDDEN" }, { type: "INTERNAL" }] },
+      ];
+      for (const response of responses) {
+        fetchImpl.mockClear().mockResolvedValueOnce(new Response(JSON.stringify(response)));
+        const pending =
+          phase === "revalidate"
+            ? admitted.revalidate()
+            : prepareRepositoryWorkerProjectSource({
+                namespace: initial.namespace,
+                getConfig: initial.getConfig,
+                assertCurrent: initial.assertCurrent,
+                expected: admitted.project,
+                knownRecipe: (project) => ({ project, setupRecipe: recipe }),
+              });
+        await expect(pending).rejects.toThrow();
+        expect(requestPaths()).toEqual(["/graphql"]);
+      }
+    },
+  );
+
+  it.each(["repository", "visibility", "access"] as const)(
+    "rejects %s changes after the immutable-node read",
+    async (change) => {
+      const admitted = await prepareRepositoryWorkerProjectSource(initial);
+      const response = { data: { node: repositoryNode() } };
+      fetchImpl.mockClear().mockImplementationOnce(async () => {
+        if (change === "repository") {
+          repositoryId = "R_recreated_project";
+        }
+        if (change === "visibility") {
+          privateRepository = true;
+        }
+        if (change === "access") {
+          unavailable = true;
+        }
+        return new Response(JSON.stringify(response));
+      });
+      await expect(admitted.revalidate()).rejects.toThrow();
+      expect(requestPaths()).toEqual(["/graphql", "/repos/acme/project"]);
+    },
+  );
+
+  it.each(["http forbidden", "forbidden", "insufficient scopes"] as const)(
+    "preserves the complete REST fence for a public token with %s GraphQL access",
+    async (refusal) => {
+      const admitted = await prepareRepositoryWorkerProjectSource(initial);
+      fetchImpl.mockClear().mockResolvedValueOnce(
+        refusal === "http forbidden"
+          ? new Response(
+              JSON.stringify({ message: "Resource not accessible by personal access token" }),
+              { status: 403 },
+            )
+          : new Response(
+              JSON.stringify({
+                data: null,
+                errors: [{ type: refusal === "forbidden" ? "FORBIDDEN" : "INSUFFICIENT_SCOPES" }],
+              }),
+            ),
+      );
+      await expect(admitted.revalidate()).resolves.toBeUndefined();
+      expect(requestPaths()).toEqual([
+        "/graphql",
+        "/repos/acme/project",
+        `/repos/acme/project/git/commits/${commit}`,
+        "/repos/acme/project",
+      ]);
+    },
+  );
+
+  it.each(["agent", "identity", "credential", "caller"] as const)(
+    "rejects %s revocation after successful or refused GraphQL reads without falling back",
+    async (revoked) => {
+      const admitted = await prepareRepositoryWorkerProjectSource(initial);
+      const originalToken = token;
+      for (const status of [200, 403]) {
+        selected = true;
+        token = originalToken;
+        mocks.matchesAgentLifecycleBinding.mockReturnValue(true);
+        const controller = new AbortController();
+        fetchImpl.mockClear().mockImplementationOnce(async () => {
+          if (revoked === "agent") {
+            mocks.matchesAgentLifecycleBinding.mockReturnValue(false);
+          }
+          if (revoked === "identity") {
+            selected = false;
+          }
+          if (revoked === "credential") {
+            token = "replaced-credential";
+          }
+          if (revoked === "caller") {
+            controller.abort();
+          }
+          return new Response(
+            JSON.stringify(
+              status === 403
+                ? { message: "Resource not accessible by personal access token" }
+                : { data: { node: repositoryNode() } },
+            ),
+            { status },
+          );
+        });
+        await expect(admitted.revalidate(controller.signal)).rejects.toThrow();
+        expect(requestPaths()).toEqual(["/graphql"]);
+      }
+    },
+  );
+
+  it.each<{ label: string; status: number; body?: string; headers?: Record<string, string> }>([
+    { label: "authentication", status: 401, body: "{}" },
+    { label: "missing endpoint", status: 404, body: "{}" },
+    { label: "upstream failure", status: 500, body: "{}" },
+    { label: "malformed JSON", status: 200, body: "{" },
+    { label: "ambiguous forbidden", status: 403, body: "{}" },
+    { label: "empty forbidden", status: 403 },
+    {
+      label: "quota at HTTP 403",
+      status: 403,
+      headers: { "x-ratelimit-remaining": "42" },
+      body: JSON.stringify({ errors: [{ type: "RATE_LIMITED" }] }),
+    },
+    { label: "quota", status: 200, body: JSON.stringify({ errors: [{ type: "RATE_LIMITED" }] }) },
+    { label: "redirect", status: 307, headers: { location: "https://api.github.com/graphql" } },
+  ])(
+    "does not reinterpret $label as unavailable GraphQL capability",
+    async ({ status, body, headers }) => {
+      const admitted = await prepareRepositoryWorkerProjectSource(initial);
+      fetchImpl.mockClear().mockResolvedValueOnce(new Response(body, { status, headers }));
+      await expect(admitted.revalidate()).rejects.toThrow();
+      expect(requestPaths()).toEqual(["/graphql"]);
+    },
+  );
+
   it.each([undefined, recipe])(
     "reuses an exact known recipe %s without Git tree reads",
     async (setupRecipe) => {
       recipeMode = setupRecipe ? "100755" : "100644";
-      const admitted = await preparePublicRepository(initial);
+      const admitted = await prepareRepositoryWorkerProjectSource(initial);
       expect(admitted.setupRecipe).toBe(setupRecipe);
       fetchImpl.mockClear();
       const knownRecipe = vi.fn(() => ({ project: admitted.project, setupRecipe }));
-      const result = await preparePublicRepository({ ...initial, knownRecipe });
+      const result = await prepareRepositoryWorkerProjectSource({ ...initial, knownRecipe });
       expect(result.project).toEqual(admitted.project);
       expect(result.setupRecipe).toBe(setupRecipe);
       expect(knownRecipe).toHaveBeenCalledExactlyOnceWith(admitted.project);
@@ -202,7 +404,7 @@ describe("repository project admission", () => {
   );
 
   it("discovers the recipe normally when the owner has no matching immutable facts", async () => {
-    const result = await preparePublicRepository({
+    const result = await prepareRepositoryWorkerProjectSource({
       ...initial,
       knownRecipe: () => undefined,
     });
@@ -215,7 +417,7 @@ describe("repository project admission", () => {
   it.each(["commit", "repository", "identity"] as const)(
     "rejects old recipe facts after %s changes",
     async (changed) => {
-      const admitted = await preparePublicRepository(initial);
+      const admitted = await prepareRepositoryWorkerProjectSource(initial);
       const original = fetchImpl.getMockImplementation()!;
       if (changed === "commit") {
         fetchImpl.mockImplementation(async (...args) => {
@@ -270,7 +472,7 @@ describe("repository project admission", () => {
   });
 
   it("still rejects access loss after a known recipe hit", async () => {
-    const admitted = await preparePublicRepository(initial);
+    const admitted = await prepareRepositoryWorkerProjectSource(initial);
     fetchImpl.mockClear();
     await expect(
       prepareRepositoryWorkerProjectSource({
@@ -289,7 +491,7 @@ describe("repository project admission", () => {
 
   it.each(["100644", "120000", "160000"])("does not authorize setup from mode %s", async (mode) => {
     recipeMode = mode;
-    expect((await preparePublicRepository(initial)).setupRecipe).toBeUndefined();
+    expect((await prepareRepositoryWorkerProjectSource(initial)).setupRecipe).toBeUndefined();
   });
 
   it("rejects incomplete trees rather than interpreting a missing recipe as no setup", async () => {
@@ -315,7 +517,7 @@ describe("repository project admission", () => {
   });
 
   it("refuses changed or inaccessible repository instances on a prepared hit", async () => {
-    const result = await preparePublicRepository(initial);
+    const result = await prepareRepositoryWorkerProjectSource(initial);
     repositoryId = "R_recreated_project";
     await expect(result.revalidate()).rejects.toThrow("identity changed");
     repositoryId = "R_fixture_project";
@@ -328,19 +530,79 @@ describe("repository project admission", () => {
     );
   });
 
-  it("leaves an initially verified private repository on the supported cold path", async () => {
-    privateRepository = true;
-    await expect(prepareRepositoryWorkerProjectSource(initial)).resolves.toBeUndefined();
-    expect(fetchImpl).toHaveBeenCalledOnce();
-    expect(new Headers(fetchImpl.mock.calls[0]?.[1]?.headers).get("Authorization")).toBe(
-      `Bearer ${token}`,
+  it("admits private source with a separate key and retains credentials only in the pack producer", async () => {
+    const publicSource = await prepareRepositoryWorkerProjectSource(initial);
+    expect(publicSource.project.key).toBe(
+      "5f3a252d4721416c63de96e5736650e1b83d356e31df48b7442ec4d60ea17189",
     );
+    expect(publicSource.prepareGitPack).toBeUndefined();
+    privateRepository = true;
+    const admitted = await prepareRepositoryWorkerProjectSource(initial);
+    expect(admitted).toBeDefined();
+    expect(admitted.project.key).not.toBe(publicSource.project.key);
+    expect(admitted.project.source).toEqual(publicSource.project.source);
+    expect(JSON.stringify(admitted)).not.toContain(token);
+    const storedProject = JSON.stringify(admitted.project);
+    const reopened = await prepareRepositoryWorkerProjectSource({
+      namespace: initial.namespace,
+      getConfig: initial.getConfig,
+      assertCurrent: initial.assertCurrent,
+      expected: JSON.parse(storedProject),
+    });
+    expect(reopened.project).toEqual(admitted.project);
+    token = "rotated-synthetic-token";
+    const signal = new AbortController().signal;
+    await expect(reopened.prepareGitPack!({ temporaryRoot: "/synthetic", signal })).resolves.toBe(
+      "/synthetic/source.pack",
+    );
+    expect(mocks.prepareGitPack).toHaveBeenCalledExactlyOnceWith({
+      url: repositoryUrl,
+      baseCommit: commit,
+      token,
+      temporaryRoot: "/synthetic",
+      signal,
+      assertCurrent: expect.any(Function),
+    });
   });
+
+  it.each(["caller", "account", "visibility", "during fetch"] as const)(
+    "rejects private pack preparation after %s authority changes",
+    async (change) => {
+      privateRepository = true;
+      const caller = new AbortController();
+      const admitted = await prepareRepositoryWorkerProjectSource({
+        ...initial,
+        signal: caller.signal,
+      });
+      if (change === "caller") {
+        caller.abort();
+      }
+      if (change === "account") {
+        selected = false;
+      }
+      if (change === "visibility") {
+        privateRepository = false;
+      }
+      if (change === "during fetch") {
+        mocks.prepareGitPack.mockImplementationOnce(async () => {
+          selected = false;
+          return "/synthetic/source.pack";
+        });
+      }
+      await expect(
+        admitted.prepareGitPack!({
+          temporaryRoot: "/synthetic",
+          signal: new AbortController().signal,
+        }),
+      ).rejects.toThrow();
+      expect(mocks.prepareGitPack).toHaveBeenCalledTimes(change === "during fetch" ? 1 : 0);
+    },
+  );
 
   it.each(["refill", "revalidate"] as const)(
     "rejects public-to-private visibility drift during %s",
     async (phase) => {
-      const admitted = await preparePublicRepository(initial);
+      const admitted = await prepareRepositoryWorkerProjectSource(initial);
       expect(admitted.project.source).not.toHaveProperty("private");
       privateRepository = true;
       const changed =
@@ -372,10 +634,10 @@ describe("repository project admission", () => {
   });
 
   it("separates anonymous scope and does not accept a private response without identity", async () => {
-    const authenticated = await preparePublicRepository(initial);
+    const authenticated = await prepareRepositoryWorkerProjectSource(initial);
     token = undefined;
     selection = { source: "anonymous" };
-    const anonymous = await preparePublicRepository(initial);
+    const anonymous = await prepareRepositoryWorkerProjectSource(initial);
     expect(anonymous.project.key).not.toBe(authenticated.project.key);
     expect(anonymous.project.source.owner.identity).toEqual({ source: "anonymous" });
     privateRepository = true;
@@ -385,7 +647,7 @@ describe("repository project admission", () => {
   it("fences owner replacement while allowing a completed admission's caller to close", async () => {
     let active = true;
     const controller = new AbortController();
-    const result = await preparePublicRepository({
+    const result = await prepareRepositoryWorkerProjectSource({
       ...initial,
       signal: controller.signal,
       assertCurrent: () => {
@@ -430,7 +692,7 @@ describe("repository project admission", () => {
   it.each(["initial", "refill", "revalidate"] as const)(
     "cancels a pending %s HTTP read",
     async (phase) => {
-      const admitted = await preparePublicRepository(initial);
+      const admitted = await prepareRepositoryWorkerProjectSource(initial);
       const controller = new AbortController();
       const started = createDeferred();
       fetchImpl.mockImplementationOnce(async (_input, init) => {
@@ -466,7 +728,7 @@ describe("repository project admission", () => {
   );
 
   it("rejects mixed local/remote descriptors and unexpected persisted owner fields", async () => {
-    const { project } = await preparePublicRepository(initial);
+    const { project } = await prepareRepositoryWorkerProjectSource(initial);
     expect(readRepositoryWorkerProjectSnapshot({ ...project, preparation: {} })).toEqual(project);
     expect(() => readRepositoryWorkerProjectSnapshot({ ...project, root: "/local" })).toThrow(
       "invalid repository",

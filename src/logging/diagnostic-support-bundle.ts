@@ -1,10 +1,8 @@
-// Diagnostic support bundle helpers collect logs and metadata for support exports.
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { writeExternalFileWithinRoot } from "../infra/fs-safe.js";
 import { isPathInside } from "../infra/path-guards.js";
 
-// File builders and writers for redacted diagnostic support bundles.
 export type DiagnosticSupportBundleFile = {
   path: string;
   mediaType: string;
@@ -17,10 +15,6 @@ export type DiagnosticSupportBundleContent = {
   mediaType: string;
   bytes: number;
 };
-
-function supportBundleByteLength(content: string): number {
-  return Buffer.byteLength(content, "utf8");
-}
 
 /** Creates a JSON support-bundle file with a safe relative path. */
 export function jsonSupportBundleFile(
@@ -65,7 +59,7 @@ export function supportBundleContents(
   return files.map((file) => ({
     path: file.path,
     mediaType: file.mediaType,
-    bytes: supportBundleByteLength(file.content),
+    bytes: Buffer.byteLength(file.content, "utf8"),
   }));
 }
 

@@ -1,33 +1,21 @@
-// Media Understanding Common tests cover format behavior.
 import { describe, expect, it } from "vitest";
 import { formatMediaUnderstandingBody } from "./format.js";
+import type { MediaUnderstandingOutput } from "./types.js";
+
+function output(
+  kind: MediaUnderstandingOutput["kind"],
+  text: string,
+  attachmentIndex = 0,
+  provider = "groq",
+): MediaUnderstandingOutput {
+  return { kind, text, attachmentIndex, provider };
+}
 
 describe("formatMediaUnderstandingBody", () => {
-  it("formats a transcript without user text", () => {
-    const body = formatMediaUnderstandingBody({
-      outputs: [
-        {
-          kind: "audio.transcription",
-          attachmentIndex: 0,
-          text: "hello world",
-          provider: "groq",
-        },
-      ],
-    });
-    expect(body).toBe("[Audio]\nTranscript:\nhello world");
-  });
-
   it("includes user text when body is meaningful", () => {
     const body = formatMediaUnderstandingBody({
       body: "caption here",
-      outputs: [
-        {
-          kind: "audio.transcription",
-          attachmentIndex: 0,
-          text: "transcribed",
-          provider: "groq",
-        },
-      ],
+      outputs: [output("audio.transcription", "transcribed")],
     });
     expect(body).toBe("[Audio]\nUser text:\ncaption here\nTranscript:\ntranscribed");
   });
@@ -36,18 +24,8 @@ describe("formatMediaUnderstandingBody", () => {
     const body = formatMediaUnderstandingBody({
       body: "caption here",
       outputs: [
-        {
-          kind: "audio.transcription",
-          attachmentIndex: 0,
-          text: "audio text",
-          provider: "groq",
-        },
-        {
-          kind: "video.description",
-          attachmentIndex: 1,
-          text: "video text",
-          provider: "google",
-        },
+        output("audio.transcription", "audio text"),
+        output("video.description", "video text", 1, "google"),
       ],
     });
     expect(body).toBe(
@@ -61,14 +39,7 @@ describe("formatMediaUnderstandingBody", () => {
 
   it("formats image outputs", () => {
     const body = formatMediaUnderstandingBody({
-      outputs: [
-        {
-          kind: "image.description",
-          attachmentIndex: 0,
-          text: "a cat",
-          provider: "openai",
-        },
-      ],
+      outputs: [output("image.description", "a cat", 0, "openai")],
     });
     expect(body).toBe("[Image]\nDescription:\na cat");
   });
@@ -76,18 +47,8 @@ describe("formatMediaUnderstandingBody", () => {
   it("labels audio transcripts by their attachment order", () => {
     const body = formatMediaUnderstandingBody({
       outputs: [
-        {
-          kind: "audio.transcription",
-          attachmentIndex: 0,
-          text: "first clip was silent",
-          provider: "openclaw",
-        },
-        {
-          kind: "audio.transcription",
-          attachmentIndex: 1,
-          text: "second clip has speech",
-          provider: "groq",
-        },
+        output("audio.transcription", "first clip was silent", 0, "openclaw"),
+        output("audio.transcription", "second clip has speech", 1),
       ],
     });
     expect(body).toBe(

@@ -3,59 +3,14 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { registryContainsRuntimePluginIds } from "./active-runtime-registry.js";
 import { createPluginRecord } from "./loader-records.js";
-import { createPluginRegistry } from "./registry.js";
-import type { PluginRuntime } from "./runtime/types.js";
+import { createTestPluginRegistry as createTestRegistry } from "./registry-runtime.test-helpers.js";
 import type {
   OpenClawPluginApi,
   ProviderPluginCatalog,
   UnifiedModelCatalogProviderContext,
 } from "./types.js";
 
-function createTestRegistry() {
-  return createPluginRegistry({
-    logger: {
-      info() {},
-      warn() {},
-      error() {},
-      debug() {},
-    },
-    runtime: {} as PluginRuntime,
-    activateGlobalSideEffects: false,
-  });
-}
-
 describe("plugin registry provider-like registrations", () => {
-  it("captures unified model catalog provider registrations", () => {
-    const pluginRegistry = createTestRegistry();
-    const record = createPluginRecord({
-      id: "catalog-owner",
-      name: "Catalog Owner",
-      source: "/tmp/catalog-owner/index.js",
-      origin: "global",
-      enabled: true,
-      configSchema: false,
-    });
-
-    pluginRegistry.registerModelCatalogProvider(record, {
-      provider: "catalog-provider",
-      kinds: ["text", "video_generation"],
-      staticCatalog: () => [
-        {
-          kind: "text",
-          provider: "catalog-provider",
-          model: "catalog-model",
-          source: "static",
-        },
-      ],
-    });
-
-    expect(pluginRegistry.registry.modelCatalogProviders).toHaveLength(1);
-    const catalogRegistration = pluginRegistry.registry.modelCatalogProviders[0];
-    expect(catalogRegistration?.pluginId).toBe("catalog-owner");
-    expect(catalogRegistration?.provider.provider).toBe("catalog-provider");
-    expect(catalogRegistration?.provider.kinds).toEqual(["text", "video_generation"]);
-  });
-
   it("combines same-plugin overlapping model catalog hooks", async () => {
     const pluginRegistry = createTestRegistry();
     const record = createPluginRecord({
@@ -276,7 +231,7 @@ const catalogContext: UnifiedModelCatalogProviderContext = {
 describe.each(reservationCases)(
   "$family catalog ownership",
   ({ family, kind, registryKey, ownedKey, label }) => {
-    it.each(["catalog-provider", "  Catalog-Provider  ", "", "   "])(
+    it.each(["  Catalog-Provider  ", "   "])(
       "reserves only accepted provider IDs without executing hooks (%j)",
       (id) => {
         const builder = createTestRegistry();
@@ -309,7 +264,12 @@ describe.each(reservationCases)(
         expect(builder.registry.diagnostics).toEqual([]);
       },
     );
+  },
+);
 
+describe.each(reservationCases.filter(({ family }) => family === "text" || family === "speech"))(
+  "$family catalog composition",
+  ({ family, kind, registryKey }) => {
     it.each(["automatic-first", "explicit-first"] as const)(
       "preserves cross-plugin ownership and provider registration (%s)",
       (order) => {

@@ -1,5 +1,5 @@
 import type { AgentEventPayload } from "../../../infra/agent-events.js";
-import { runWithGatewayIndependentRootWorkAdmission } from "../../../process/gateway-work-admission.js";
+import { runWithGatewayIndependentRootWorkContinuation } from "../../../process/gateway-work-admission.js";
 import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../../agent-run-terminal-outcome.js";
 import { normalizeAgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
 import { classifySubagentTerminalOutcome } from "../subagent-terminal-outcome.js";
@@ -9,10 +9,8 @@ import {
   SUBAGENT_ENDED_REASON_KILLED,
 } from "./subagent-lifecycle-events.js";
 import { createPendingLifecycleScheduler } from "./subagent-registry-pending-lifecycle.js";
-import {
-  markSubagentRunPausedAfterYield,
-  preserveSubagentRunForRestart,
-} from "./subagent-registry-run-manager.js";
+import { preserveSubagentRunForRestart } from "./subagent-registry-run-manager.js";
+import { markSubagentRunPausedAfterYield } from "./subagent-registry-run-pause.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 
 export function createSubagentRegistryListener(config: {
@@ -55,8 +53,9 @@ export function createSubagentRegistryListener(config: {
           if (phase === "end" && typeof evt.sessionKey === "string") {
             const sessionKey = evt.sessionKey;
             // A replacement generation can finish after its predecessor row is
-            // terminal. Keep capture + persistence inside the suspension fence.
-            await runWithGatewayIndependentRootWorkAdmission(async () => {
+            // terminal. Retain its admitted work through capture + persistence,
+            // even if restart or suspension has since closed admission.
+            await runWithGatewayIndependentRootWorkContinuation(async () => {
               await refreshFrozenResultFromSession(sessionKey);
             }, "subagents:result-refresh");
           }
@@ -81,35 +80,75 @@ export function createSubagentRegistryListener(config: {
         const endedAt = typeof evt.data?.endedAt === "number" ? evt.data.endedAt : Date.now();
         const startedAt = typeof evt.data?.startedAt === "number" ? evt.data.startedAt : undefined;
         const terminalReply = normalizeAgentRunTerminalReplySnapshot(evt.data?.terminalReply);
-        // sessions_yield ends the turn by aborting the run signal, so a yielded
-        // terminal can also look aborted. An explicit yield is authoritative — pause,
-        // don't kill — else the tracking task settles `cancelled` with a false notice (#92448).
-        if (evt.data?.yielded === true) {
-          // Drop any grace timer from an earlier aborted/error terminal so it can't
-          // later fire and settle this now-paused run with a false notice.
-          pendingLifecycle.clear(evt.runId);
-          if (
-            markSubagentRunPausedAfterYield({
-              entry,
-              endedAt,
-              startedAt: startedAt ?? entry.execution.startedAt,
-            })
-          ) {
-            persist(entry.runId);
-          }
-          return;
-        }
         const terminalOutcome = buildAgentRunTerminalOutcomeFromLifecycleEvent({
           phase,
           data: evt.data,
           startedAt,
           endedAt,
         });
+        const complete = (
+          outcome: SubagentCompletionRequest["outcome"],
+          reason: SubagentCompletionRequest["reason"],
+          source: string,
+        ) =>
+          completeSubagentRunWithRecovery(
+            {
+              runId: evt.runId,
+              endedAt,
+              outcome,
+              reason,
+              sendFarewell: true,
+              accountId: entry.requesterOrigin?.accountId,
+              triggerCleanup: true,
+              startedAt,
+              terminalReply,
+            },
+            source,
+          );
+        // sessions_yield ends the turn by aborting the run signal, so a yielded
+        // terminal can also look aborted. An explicit yield is authoritative — pause,
+        // don't kill — else the tracking task settles `cancelled` with a false notice (#92448).
+        // Match the wait observer for collectors: an outer timeout or blocked
+        // outcome can coexist with yield metadata and must not become success.
+        // Ordinary yielded continuations retain their existing pause contract.
+        if (
+          evt.data?.yielded === true &&
+          (entry.collect !== true ||
+            (terminalOutcome.status !== "timeout" && terminalOutcome.reason !== "blocked"))
+        ) {
+          // Drop any grace timer from an earlier aborted/error terminal so it can't
+          // later fire and settle this now-paused run with a false notice.
+          pendingLifecycle.clear(evt.runId);
+          if (entry.collect !== true) {
+            if (
+              markSubagentRunPausedAfterYield({
+                entry,
+                endedAt,
+                startedAt: startedAt ?? entry.execution.startedAt,
+              })
+            ) {
+              persist(entry.runId);
+            }
+            return;
+          }
+          // A collector result is read by an explicit wait and never delivered by
+          // a requester continuation, so nothing can resume a parked collector and
+          // its waiter blocks for good. The attempt's own terminal is the only
+          // result this run will ever have: settle it as the ordinary success it
+          // is, which freezes the collector completion the waiter reads.
+          await complete(
+            { status: "ok" },
+            SUBAGENT_ENDED_REASON_COMPLETE,
+            "lifecycle-collector-yield-event",
+          );
+          return;
+        }
         if (preserveSubagentRunForRestart({ entry, terminal: terminalOutcome, persist })) {
           pendingLifecycle.clear(evt.runId);
           return;
         }
         const classification = classifySubagentTerminalOutcome(terminalOutcome);
+        const pendingTerminal = { runId: evt.runId, endedAt, startedAt, terminalReply };
         if (
           classification === "cancellation" &&
           evt.data?.aborted === true &&
@@ -117,29 +156,16 @@ export function createSubagentRegistryListener(config: {
           evt.data.status === undefined &&
           evt.data.timeoutPhase === undefined
         ) {
-          pendingLifecycle.scheduleCancellation({
-            runId: evt.runId,
-            endedAt,
-            startedAt,
-            terminalReply,
-          });
+          pendingLifecycle.scheduleCancellation(pendingTerminal);
           return;
         }
         if (classification === "timeout") {
-          pendingLifecycle.scheduleTimeout({
-            runId: evt.runId,
-            endedAt,
-            startedAt,
-            terminalReply,
-          });
+          pendingLifecycle.scheduleTimeout(pendingTerminal);
           return;
         }
         if (phase === "error" && classification === "failure") {
           pendingLifecycle.scheduleError({
-            runId: evt.runId,
-            endedAt,
-            startedAt,
-            terminalReply,
+            ...pendingTerminal,
             error: terminalOutcome.error,
           });
           return;
@@ -147,38 +173,18 @@ export function createSubagentRegistryListener(config: {
         if (classification !== "success") {
           const cancelled = classification === "cancellation";
           pendingLifecycle.clear(evt.runId);
-          await completeSubagentRunWithRecovery(
+          await complete(
             {
-              runId: evt.runId,
-              endedAt,
-              outcome: {
-                status: "error" as const,
-                error: cancelled ? "subagent run terminated" : terminalOutcome.error,
-              },
-              reason: cancelled ? SUBAGENT_ENDED_REASON_KILLED : SUBAGENT_ENDED_REASON_ERROR,
-              sendFarewell: true,
-              accountId: entry.requesterOrigin?.accountId,
-              triggerCleanup: true,
-              startedAt,
-              terminalReply,
+              status: "error",
+              error: cancelled ? "subagent run terminated" : terminalOutcome.error,
             },
+            cancelled ? SUBAGENT_ENDED_REASON_KILLED : SUBAGENT_ENDED_REASON_ERROR,
             cancelled ? "lifecycle-killed-event" : `lifecycle-${terminalOutcome.reason}-event`,
           );
           return;
         }
         pendingLifecycle.clear(evt.runId);
-        const completionParams = {
-          runId: evt.runId,
-          endedAt,
-          outcome: { status: "ok" as const },
-          reason: SUBAGENT_ENDED_REASON_COMPLETE,
-          sendFarewell: true,
-          accountId: entry.requesterOrigin?.accountId,
-          triggerCleanup: true,
-          startedAt,
-          terminalReply,
-        };
-        await completeSubagentRunWithRecovery(completionParams, "lifecycle-ok-event");
+        await complete({ status: "ok" }, SUBAGENT_ENDED_REASON_COMPLETE, "lifecycle-ok-event");
       })().catch((err: unknown) => {
         warn("lifecycle event handler failed", { err, runId: evt.runId });
       });

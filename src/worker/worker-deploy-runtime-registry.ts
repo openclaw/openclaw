@@ -1,9 +1,9 @@
-let highlightJs: unknown;
+let loadHighlightJs: (() => unknown) | undefined;
 
-export function setWorkerDeployHighlightJs(next: unknown): void {
-  highlightJs = next;
+export function setWorkerDeployHighlightJsLoader(next: () => unknown): void {
+  loadHighlightJs = next;
 }
 
 export function getWorkerDeployHighlightJs(): unknown {
-  return highlightJs;
+  return loadHighlightJs?.();
 }

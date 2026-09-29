@@ -90,19 +90,7 @@ function formatStatusAndCode(value: unknown): string | undefined {
 }
 
 function stringifyUnknown(value: unknown): string {
-  if (value === null) {
-    return "null";
-  }
-  if (value === undefined) {
-    return "undefined";
-  }
-  if (
-    typeof value === "string" ||
-    typeof value === "number" ||
-    typeof value === "boolean" ||
-    typeof value === "bigint" ||
-    typeof value === "symbol"
-  ) {
+  if (value === null || (typeof value !== "object" && typeof value !== "function")) {
     return String(value);
   }
   try {
@@ -118,6 +106,22 @@ function stringifyUnknown(value: unknown): string {
   } catch {
     return "Unknown error";
   }
+}
+
+export function readErrorCauses(current: Record<string, unknown>): unknown[] {
+  if (!isErrorObject(current)) {
+    return [];
+  }
+  const cause = readProperty(current, "cause");
+  const errors = isAggregateErrorObject(current) ? readProperty(current, "errors") : undefined;
+  // Downlevel await-using emits a named Error; both failure fields exist even for nullish throws.
+  const suppressed =
+    readErrorText(current, "name") === "SuppressedError"
+      ? [readProperty(current, "error"), readProperty(current, "suppressed")].map((failure) =>
+          failure == null ? String(failure) : failure,
+        )
+      : [];
+  return [cause || undefined, ...(Array.isArray(errors) ? errors : []), ...suppressed];
 }
 
 /** Formats unknown errors with cause/aggregate details, structured codes, and secret redaction. */
@@ -150,21 +154,7 @@ export function formatErrorMessage(value: unknown, options: FormatErrorMessageOp
         appendCauseMessage(String(code));
       }
     }
-    const causes = collectErrorGraphCandidates(value, (current) => {
-      if (!isErrorObject(current)) {
-        return [];
-      }
-      const cause = readProperty(current, "cause");
-      const errors = isAggregateErrorObject(current) ? readProperty(current, "errors") : undefined;
-      // Downlevel await-using emits a named Error; both failure fields exist even for nullish throws.
-      const suppressed =
-        readErrorText(current, "name") === "SuppressedError"
-          ? [readProperty(current, "error"), readProperty(current, "suppressed")].map((failure) =>
-              failure == null ? String(failure) : failure,
-            )
-          : [];
-      return [cause || undefined, ...(Array.isArray(errors) ? errors : []), ...suppressed];
-    });
+    const causes = collectErrorGraphCandidates(value, readErrorCauses);
     for (const cause of causes.slice(1)) {
       if (isErrorObject(cause)) {
         appendCauseErrorMessage(readErrorText(cause, "message"));
@@ -346,6 +336,7 @@ export function collectNestedErrorCandidates(err: unknown): unknown[] {
       readProperty(current, "reason"),
       readProperty(current, "original"),
       readProperty(current, "error"),
+      readProperty(current, "suppressed"),
       readProperty(current, "data"),
     ];
     const errors = readProperty(current, "errors");

@@ -1,20 +1,34 @@
 import { formatErrorMessage } from "../../infra/errors.js";
+import { verifyPackageUpdateRecovery } from "../../infra/update-global.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
 import {
   loadUpdateRecovery,
   UpdateRecoveryRequiredError,
 } from "../../infra/update-run-recovery.js";
+import { readCurrentGitUpdateRecovery } from "../../infra/update-runner-git-recovery.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import type { UpdateCommandOptions } from "./shared.js";
+import type { MutableUpdateExecutionParams } from "./update-command-execution.types.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import { UpdateCommandPendingRecoveryFailure } from "./update-command-result.js";
 
-export class UpdateCommandRecoveryPendingError extends Error {
-  override name = "UpdateCommandRecoveryPendingError";
+export function readOriginalUpdateRecovery(
+  params: Pick<MutableUpdateExecutionParams, "installKind" | "root">,
+  timeoutMs: number,
+) {
+  return params.installKind === "git"
+    ? readCurrentGitUpdateRecovery(params.root, timeoutMs)
+    : verifyPackageUpdateRecovery(params.root);
 }
 
 /** Refuse retained recovery before any package-only effects or diagnostic writes. */
 export function assertUpdateCommandRecovery(opts: UpdateCommandOptions): void {
   opts.run?.executorFence?.assertCurrent();
+  assertUpdateCommandRecoveryState(opts);
+}
+
+export function assertUpdateCommandRecoveryState(opts: UpdateCommandOptions): void {
   if (opts.recovery) {
     throw new UpdateCommandRecoveryPendingError(
       "Full-state checkpoint recovery is deferred; retained state was left unchanged.",
@@ -49,11 +63,12 @@ export async function assertUpdateCommandPackageFinalization(
         "Full-state checkpoint recovery is deferred; retained state was left unchanged.",
       );
     }
-    await assertUpdateRecoveryAdmission({
-      env: params.ownedManagedUpdateEnv ?? params.opts.run?.env,
-    });
+    const env = params.ownedManagedUpdateEnv ?? params.opts.run?.env;
+    // Keep the first target stable if selectors change during admission.
+    const targetPath = resolveOpenClawStateSqlitePath(env);
+    await assertUpdateRecoveryAdmission({ env, path: targetPath });
     assertCurrent();
-    if (run) {
+    if (run && resolveOpenClawStateSqlitePath(run.env) !== targetPath) {
       await assertUpdateRecoveryAdmission({ env: run.env });
       assertCurrent();
     }

@@ -62,7 +62,7 @@ read_when:
     openclaw models status
     ```
 
-    Copilot tokens resolve in this order: `OPENCLAW_GITHUB_TOKEN`, then `COPILOT_GITHUB_TOKEN`, then `GH_TOKEN`, then `GITHUB_TOKEN`.
+    Copilot activates only with an explicit `models.providers.github-copilot` entry, a saved Copilot auth profile, or `COPILOT_GITHUB_TOKEN`. Generic `GH_TOKEN` and `GITHUB_TOKEN` variables do not enable or authenticate Copilot. Run `openclaw models auth login --provider github-copilot` to sign in.
 
     See [/concepts/model-providers](/concepts/model-providers) and [/environment](/help/environment).
 

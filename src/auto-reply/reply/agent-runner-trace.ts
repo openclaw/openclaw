@@ -1,8 +1,13 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import {
+  asFiniteNumber,
+  asPositiveFiniteNumber,
+} from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { EmbeddedAgentRunMeta } from "../../agents/embedded-agent-runner/types.js";
 import { deriveContextPromptTokens, type NormalizedUsage } from "../../agents/usage.js";
-import { readLatestSessionUsageFromTranscriptAsync } from "../../gateway/session-transcript-readers.js";
+import { readLatestSessionUsageFromTranscriptAsync } from "../../gateway/session-transcript-usage.js";
 import { formatTokenCount } from "../../utils/token-format.js";
 import type { ReplyPayload } from "../types.js";
 import { INBOUND_CONTEXT_MARKER } from "./inbound-context-marker.js";
@@ -21,25 +26,21 @@ function escapeTraceFence(value: string): string {
   return value.replace(/^~~~/gm, "\\~~~");
 }
 
-function hasTraceUsageFields(usage: TraceUsageView | undefined): boolean {
-  if (!usage) {
-    return false;
-  }
-  return ["input", "output", "cacheRead", "cacheWrite", "total"].some((key) => {
-    const value = usage[key as keyof typeof usage];
-    return typeof value === "number" && Number.isFinite(value);
-  });
-}
-
 function formatTraceUsageLine(label: string, value: number | undefined): string {
-  return `${label}=${typeof value === "number" && Number.isFinite(value) ? `${value.toLocaleString()} tok (${formatTokenCount(value)})` : "n/a"}`;
+  const finite = asFiniteNumber(value);
+  return `${label}=${finite !== undefined ? `${finite.toLocaleString()} tok (${formatTokenCount(finite)})` : "n/a"}`;
 }
 
 function formatUsageTraceBlock(
   title: string,
   usage: TraceUsageView | undefined,
 ): string | undefined {
-  if (!hasTraceUsageFields(usage)) {
+  if (
+    !usage ||
+    [usage.input, usage.output, usage.cacheRead, usage.cacheWrite, usage.total].every(
+      (value) => asFiniteNumber(value) === undefined,
+    )
+  ) {
     return undefined;
   }
   return `🔎 ${title}:\n~~~text\n${[
@@ -51,49 +52,6 @@ function formatUsageTraceBlock(
   ].join("\n")}\n~~~`;
 }
 
-type TraceAttemptView = {
-  provider: string;
-  model: string;
-  result: string;
-  reason?: string;
-  stage?: string;
-  elapsedMs?: number;
-  status?: number;
-};
-
-type TraceExecutionView = {
-  winnerProvider?: string;
-  winnerModel?: string;
-  attempts?: TraceAttemptView[];
-  fallbackUsed?: boolean;
-  runner?: "embedded" | "cli";
-};
-
-export type TracePromptSegmentView = {
-  key: string;
-  chars: number;
-};
-
-export type TraceToolSummaryView = {
-  calls: number;
-  tools: string[];
-  failures?: number;
-  totalToolTimeMs?: number;
-};
-
-export type TraceCompletionView = {
-  finishReason?: string;
-  stopReason?: string;
-  refusal?: boolean;
-};
-
-export type TraceContextManagementView = {
-  sessionCompactions?: number;
-  lastTurnCompactions?: number;
-  preflightCompactionApplied?: boolean;
-  postCompactionContextInjected?: boolean;
-};
-
 function formatTraceScalar(value: string | number | boolean | undefined): string | undefined {
   if (typeof value === "boolean") {
     return value ? "yes" : "no";
@@ -101,8 +59,7 @@ function formatTraceScalar(value: string | number | boolean | undefined): string
   if (typeof value === "number") {
     return Number.isFinite(value) ? value.toLocaleString() : undefined;
   }
-  const trimmed = normalizeOptionalString(value);
-  return trimmed ?? undefined;
+  return normalizeOptionalString(value);
 }
 
 function formatKeyValueTraceBlock(
@@ -120,7 +77,7 @@ function formatKeyValueTraceBlock(
 }
 
 function formatExecutionResultTraceBlock(
-  executionTrace: TraceExecutionView | undefined,
+  executionTrace: EmbeddedAgentRunMeta["executionTrace"],
 ): string | undefined {
   if (!executionTrace?.winnerProvider && !executionTrace?.winnerModel) {
     return undefined;
@@ -139,7 +96,7 @@ function formatExecutionResultTraceBlock(
 }
 
 function formatFallbackChainTraceBlock(
-  executionTrace: TraceExecutionView | undefined,
+  executionTrace: EmbeddedAgentRunMeta["executionTrace"],
 ): string | undefined {
   const attempts = executionTrace?.attempts ?? [];
   if (attempts.length <= 1) {
@@ -183,7 +140,7 @@ function resolveMetadataSegmentKey(label: string): string {
 
 export function derivePromptSegments(
   prompt: string | undefined,
-): TracePromptSegmentView[] | undefined {
+): EmbeddedAgentRunMeta["promptSegments"] {
   const text = prompt ?? "";
   if (!text.trim()) {
     return undefined;
@@ -264,7 +221,7 @@ export function derivePromptSegments(
 }
 
 function formatPromptSegmentsTraceBlock(
-  segments: TracePromptSegmentView[] | undefined,
+  segments: EmbeddedAgentRunMeta["promptSegments"],
   totalPromptText: string | undefined,
 ): string | undefined {
   if (!segments?.length && !totalPromptText?.length) {
@@ -280,7 +237,7 @@ function formatPromptSegmentsTraceBlock(
 }
 
 function formatToolSummaryTraceBlock(
-  toolSummary: TraceToolSummaryView | undefined,
+  toolSummary: EmbeddedAgentRunMeta["toolSummary"],
 ): string | undefined {
   if (!toolSummary || toolSummary.calls <= 0) {
     return undefined;
@@ -290,33 +247,6 @@ function formatToolSummaryTraceBlock(
     ["tools", toolSummary.tools.length > 0 ? toolSummary.tools.join(", ") : undefined],
     ["failures", toolSummary.failures],
     ["totalToolTimeMs", toolSummary.totalToolTimeMs],
-  ]);
-}
-
-function formatCompletionTraceBlock(
-  completion: TraceCompletionView | undefined,
-): string | undefined {
-  if (!completion) {
-    return undefined;
-  }
-  return formatKeyValueTraceBlock("Completion", [
-    ["finishReason", completion.finishReason],
-    ["stopReason", completion.stopReason],
-    ["refusal", completion.refusal],
-  ]);
-}
-
-function formatContextManagementTraceBlock(
-  contextManagement: TraceContextManagementView | undefined,
-): string | undefined {
-  if (!contextManagement) {
-    return undefined;
-  }
-  return formatKeyValueTraceBlock("Context Management", [
-    ["sessionCompactions", contextManagement.sessionCompactions],
-    ["lastTurnCompactions", contextManagement.lastTurnCompactions],
-    ["preflightCompactionApplied", contextManagement.preflightCompactionApplied],
-    ["postCompactionContextInjected", contextManagement.postCompactionContextInjected],
   ]);
 }
 
@@ -364,36 +294,27 @@ function formatRequestContextTraceBlock(params: {
   contextLimit?: number;
   promptTokens?: number;
 }): string | undefined {
-  const limit = params.contextLimit;
-  const used = params.promptTokens;
+  const limit = asFiniteNumber(params.contextLimit);
+  const used = asFiniteNumber(params.promptTokens);
   if (
-    (typeof limit !== "number" || !Number.isFinite(limit) || limit <= 0) &&
-    (typeof used !== "number" || !Number.isFinite(used) || used <= 0) &&
+    (limit === undefined || limit <= 0) &&
+    (used === undefined || used <= 0) &&
     !params.provider &&
     !params.model
   ) {
     return undefined;
   }
   const headroom =
-    typeof limit === "number" &&
-    Number.isFinite(limit) &&
-    typeof used === "number" &&
-    Number.isFinite(used)
-      ? Math.max(0, limit - used)
-      : undefined;
+    limit !== undefined && used !== undefined ? Math.max(0, limit - used) : undefined;
   const percent =
-    typeof limit === "number" &&
-    Number.isFinite(limit) &&
-    limit > 0 &&
-    typeof used === "number" &&
-    Number.isFinite(used)
+    limit !== undefined && limit > 0 && used !== undefined
       ? Math.round((used / limit) * 100)
       : undefined;
   return `🔎 Context Window (Last Model Request):\n~~~text\n${[
     `provider=${params.provider ?? "n/a"}`,
     `model=${params.model ?? "n/a"}`,
-    `used=${typeof used === "number" && Number.isFinite(used) ? `${used.toLocaleString()} tok (${formatTokenCount(used)})` : "n/a"}`,
-    `limit=${typeof limit === "number" && Number.isFinite(limit) ? `${limit.toLocaleString()} tok (${formatTokenCount(limit)})` : "n/a"}`,
+    formatTraceUsageLine("used", used),
+    formatTraceUsageLine("limit", limit),
     `headroom=${typeof headroom === "number" ? `${headroom.toLocaleString()} tok (${formatTokenCount(headroom)})` : "n/a"}`,
     `usage=${typeof percent === "number" ? `${percent}%` : "n/a"}`,
   ].join("\n")}\n~~~`;
@@ -403,33 +324,16 @@ function formatSummaryPromptValue(params: {
   contextLimit?: number;
   promptTokens?: number;
 }): string | undefined {
-  const used = params.promptTokens;
-  const limit = params.contextLimit;
-  if (
-    typeof used !== "number" ||
-    !Number.isFinite(used) ||
-    used <= 0 ||
-    typeof limit !== "number" ||
-    !Number.isFinite(limit) ||
-    limit <= 0
-  ) {
-    return undefined;
-  }
-  return `${formatTokenCount(used)}/${formatTokenCount(limit)}`;
+  const used = asPositiveFiniteNumber(params.promptTokens);
+  const limit = asPositiveFiniteNumber(params.contextLimit);
+  return used !== undefined && limit !== undefined
+    ? `${formatTokenCount(used)}/${formatTokenCount(limit)}`
+    : undefined;
 }
 
-function formatRawTraceSummaryLine(params: {
-  executionTrace?: TraceExecutionView;
-  completion?: TraceCompletionView;
-  contextLimit?: number;
-  promptTokens?: number;
-  usage?: TraceUsageView;
-  toolSummary?: TraceToolSummaryView;
-  contextManagement?: TraceContextManagementView;
-  requestShaping?: {
-    thinking?: string;
-  };
-}): string | undefined {
+function formatRawTraceSummaryLine(
+  params: Parameters<typeof buildInlineRawTracePayload>[0],
+): string | undefined {
   const thinking = normalizeOptionalString(params.requestShaping?.thinking);
   const fields = [
     params.executionTrace?.winnerModel
@@ -475,31 +379,27 @@ function formatRawTraceSummaryLine(params: {
   return fields.length > 0 ? `Summary: ${fields.join(" ")}` : undefined;
 }
 
-export function buildInlineRawTracePayload(params: {
-  rawUserText?: string;
-  rawAssistantText?: string;
-  sessionUsage?: TraceUsageView;
-  usage?: TraceUsageView;
-  lastCallUsage?: TraceUsageView;
-  provider?: string;
-  model?: string;
-  contextLimit?: number;
-  promptTokens?: number;
-  executionTrace?: TraceExecutionView;
-  requestShaping?: {
-    authMode?: string;
-    thinking?: string;
-    reasoning?: string;
-    verbose?: string;
-    trace?: string;
-    fallbackEligible?: boolean;
-    blockStreaming?: string;
-  };
-  promptSegments?: TracePromptSegmentView[];
-  toolSummary?: TraceToolSummaryView;
-  completion?: TraceCompletionView;
-  contextManagement?: TraceContextManagementView;
-}): ReplyPayload {
+export function buildInlineRawTracePayload(
+  params: Pick<
+    EmbeddedAgentRunMeta,
+    | "executionTrace"
+    | "requestShaping"
+    | "promptSegments"
+    | "toolSummary"
+    | "completion"
+    | "contextManagement"
+  > & {
+    rawUserText?: string;
+    rawAssistantText?: string;
+    sessionUsage?: TraceUsageView;
+    usage?: TraceUsageView;
+    lastCallUsage?: TraceUsageView;
+    provider?: string;
+    model?: string;
+    contextLimit?: number;
+    promptTokens?: number;
+  },
+): ReplyPayload {
   const resolvedPromptTokens = deriveContextPromptTokens({
     lastCallUsage: params.lastCallUsage,
     promptTokens: params.promptTokens,
@@ -530,8 +430,17 @@ export function buildInlineRawTracePayload(params: {
     ]),
     formatPromptSegmentsTraceBlock(params.promptSegments, params.rawUserText),
     formatToolSummaryTraceBlock(params.toolSummary),
-    formatCompletionTraceBlock(params.completion),
-    formatContextManagementTraceBlock(params.contextManagement),
+    formatKeyValueTraceBlock("Completion", [
+      ["finishReason", params.completion?.finishReason],
+      ["stopReason", params.completion?.stopReason],
+      ["refusal", params.completion?.refusal],
+    ]),
+    formatKeyValueTraceBlock("Context Management", [
+      ["sessionCompactions", params.contextManagement?.sessionCompactions],
+      ["lastTurnCompactions", params.contextManagement?.lastTurnCompactions],
+      ["preflightCompactionApplied", params.contextManagement?.preflightCompactionApplied],
+      ["postCompactionContextInjected", params.contextManagement?.postCompactionContextInjected],
+    ]),
   ].filter((value): value is string => Boolean(value));
   return {
     text: [
@@ -539,14 +448,8 @@ export function buildInlineRawTracePayload(params: {
       formatRawTraceBlock("Model Input (User Role)", params.rawUserText),
       formatRawTraceBlock("Model Output (Assistant Role)", params.rawAssistantText),
       formatRawTraceSummaryLine({
-        executionTrace: params.executionTrace,
-        completion: params.completion,
-        contextLimit: params.contextLimit,
+        ...params,
         promptTokens: resolvedPromptTokens,
-        usage: params.usage,
-        toolSummary: params.toolSummary,
-        contextManagement: params.contextManagement,
-        requestShaping: params.requestShaping,
       }),
     ].join("\n\n\n"),
   };

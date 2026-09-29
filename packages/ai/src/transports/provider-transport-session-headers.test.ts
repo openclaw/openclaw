@@ -9,6 +9,7 @@ import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import { streamSimpleGoogle } from "../providers/google.js";
 import { registerBuiltInApiProviders } from "../providers/register-builtins.js";
 import type { Model } from "../types.js";
+import { createAnthropicMessagesTransportStreamFn } from "./anthropic-transport-stream.js";
 import {
   createAzureOpenAIResponsesTransportStreamFn,
   createOpenAIResponsesTransportStreamFn,
@@ -41,6 +42,101 @@ function requireSynchronousStream(
 afterEach(() => {
   configureAiTransportHost(initialHost);
   vi.unstubAllGlobals();
+});
+
+describe("managed Anthropic session affinity headers at fetch egress", () => {
+  it.each<{
+    name: string;
+    sendSessionAffinityHeaders?: boolean;
+    cacheRetention?: "none" | "short";
+    sessionId?: string;
+    modelHeaders?: Record<string, string>;
+    headers?: Record<string, string>;
+    expected: string | null;
+  }>([
+    {
+      name: "proxy opt-in",
+      sendSessionAffinityHeaders: true,
+      sessionId: "conversation-a",
+      expected: "conversation-a",
+    },
+    {
+      name: "disabled caching",
+      sendSessionAffinityHeaders: true,
+      cacheRetention: "none",
+      sessionId: "conversation-a",
+      expected: null,
+    },
+    {
+      name: "proxy opt-out",
+      sendSessionAffinityHeaders: false,
+      sessionId: "conversation-a",
+      expected: null,
+    },
+    {
+      name: "no opt-in",
+      sessionId: "conversation-a",
+      expected: null,
+    },
+    {
+      name: "missing conversation identity",
+      sendSessionAffinityHeaders: true,
+      expected: null,
+    },
+    {
+      name: "model header precedence",
+      sendSessionAffinityHeaders: true,
+      sessionId: "conversation-a",
+      modelHeaders: { "X-Session-Affinity": "model-session" },
+      expected: "model-session",
+    },
+    {
+      name: "stream header precedence",
+      sendSessionAffinityHeaders: true,
+      sessionId: "conversation-a",
+      modelHeaders: { "X-Session-Affinity": "model-session" },
+      headers: { "x-session-affinity": "stream-session" },
+      expected: "stream-session",
+    },
+  ])("honors $name", async (testCase) => {
+    const requests: Request[] = [];
+    const captureFetch: typeof fetch = async (input, init) => {
+      requests.push(new Request(input, init));
+      return new Response(JSON.stringify({ error: { message: "request captured" } }), {
+        status: 400,
+        headers: { "content-type": "application/json" },
+      });
+    };
+    configureAiTransportHost({ ...initialHost, buildModelFetch: () => captureFetch });
+
+    const stream = await createAnthropicMessagesTransportStreamFn()(
+      {
+        id: "test-model",
+        name: "Test model",
+        api: "anthropic-messages",
+        provider: "anthropic-proxy",
+        baseUrl: "https://messages-proxy.example.test",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128_000,
+        maxTokens: 128,
+        headers: testCase.modelHeaders,
+        compat: { sendSessionAffinityHeaders: testCase.sendSessionAffinityHeaders },
+      },
+      { messages: [{ role: "user", content: "hello", timestamp: 1 }] },
+      {
+        apiKey: "test-key",
+        sessionId: testCase.sessionId,
+        cacheRetention: testCase.cacheRetention,
+        headers: testCase.headers,
+      },
+    );
+    await stream.result();
+
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.headers.get("x-session-affinity")).toBe(testCase.expected);
+  });
 });
 
 describe("managed OpenCode conversation headers at fetch egress", () => {
@@ -150,7 +246,10 @@ describe("managed OpenCode conversation headers at fetch egress", () => {
         plugin: {
           ...initialHost.plugin,
           resolveTransportTurnState: ({ context }) => ({
-            headers: { "x-opencode-session": context.turnId },
+            headers: {
+              "x-opencode-session": context.turnId,
+              "x-provider-route": "route-a",
+            },
           }),
         },
       });
@@ -197,6 +296,7 @@ describe("managed OpenCode conversation headers at fetch egress", () => {
         } else {
           expect(sessionHeader).toBe(testCase.expected);
         }
+        expect(requests[0]?.headers.get("x-provider-route")).toBe("route-a");
       }
     },
   );
@@ -220,13 +320,16 @@ describe("managed OpenCode conversation headers at fetch egress", () => {
           ...initialHost.plugin,
           resolveProviderStream: () => undefined,
           resolveTransportTurnState: ({ context }) => ({
-            headers: { "x-opencode-session": context.turnId },
+            headers: {
+              "x-opencode-session": context.turnId,
+              "x-provider-route": "route-a",
+            },
           }),
         },
       });
       const apiRegistry = createApiRegistry();
       registerBuiltInApiProviders(apiRegistry);
-      const sourceModel = {
+      const baseModel = {
         id: "test-model",
         name: "Test model",
         api,
@@ -238,22 +341,42 @@ describe("managed OpenCode conversation headers at fetch egress", () => {
         contextWindow: 128_000,
         maxTokens: 128,
       } satisfies Model;
-      const model = prepareModelForSimpleCompletion({ apiRegistry, model: sourceModel });
 
-      expect(model.api).toBe(api);
-      const provider = apiRegistry.getApiProvider(model.api);
-      if (!provider) {
-        throw new Error(`No provider registered for ${api}`);
+      for (const testCase of [
+        { expected: "generated" },
+        { modelHeaders: { "X-OpenCode-Session": "model-session" }, expected: "model-session" },
+        { headers: { "x-opencode-session": "stream-session" }, expected: "stream-session" },
+      ] as const) {
+        const sourceModel = {
+          ...baseModel,
+          headers: "modelHeaders" in testCase ? testCase.modelHeaders : undefined,
+        };
+        const model = prepareModelForSimpleCompletion({ apiRegistry, model: sourceModel });
+        expect(model.api).toBe(api);
+        const provider = apiRegistry.getApiProvider(model.api);
+        if (!provider) {
+          throw new Error(`No provider registered for ${api}`);
+        }
+        requests.length = 0;
+        const stream = provider.streamSimple(
+          model,
+          { messages: [{ role: "user", content: "hello", timestamp: 1 }] },
+          {
+            apiKey: "test-key",
+            headers: "headers" in testCase ? testCase.headers : undefined,
+          },
+        );
+        await stream.result();
+
+        expect(requests).toHaveLength(1);
+        const sessionHeader = requests[0]?.headers.get("x-opencode-session");
+        if (testCase.expected === "generated") {
+          expect(sessionHeader).toBeTruthy();
+        } else {
+          expect(sessionHeader).toBe(testCase.expected);
+        }
+        expect(requests[0]?.headers.get("x-provider-route")).toBe("route-a");
       }
-      const stream = provider.streamSimple(
-        model,
-        { messages: [{ role: "user", content: "hello", timestamp: 1 }] },
-        { apiKey: "test-key" },
-      );
-      await stream.result();
-
-      expect(requests).toHaveLength(1);
-      expect(requests[0]?.headers.get("x-opencode-session")).toBeTruthy();
     },
   );
 });

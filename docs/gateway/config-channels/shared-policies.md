@@ -55,7 +55,7 @@ For group/thread conversations, keys are channel-specific group IDs, topic IDs, 
         "123456789012345678": "anthropic/claude-opus-4-6",
       },
       slack: {
-        C1234567890: "openai/gpt-5.6-sol",
+        C1234567890: "openai/gpt-6-astra",
         "user:U12345": "openai/gpt-5.4-mini",
       },
       telegram: {

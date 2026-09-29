@@ -1,7 +1,8 @@
 /* @vitest-environment jsdom */
 
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../../test/helpers/promise.js";
+import { createRequireRecord } from "../../../test/helpers/record.js";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import {
   createTestSessionCapability,
@@ -10,9 +11,10 @@ import {
 import { loadChatHistory } from "../pages/chat/chat-history.ts";
 import { createTestChatPane } from "../pages/chat/chat-pane.test-support.ts";
 import { refreshPageChat } from "../pages/chat/chat-state-refresh.ts";
-import { sessionsPageListQuery } from "../pages/sessions/route.ts";
+import { buildSessionsListQuery } from "../pages/sessions/list-query.ts";
+import { activateSessionMenuValue } from "../test-helpers/app-sidebar-menu.ts";
 import "../test-helpers/app-sidebar-suite.ts";
-import { createGateway, deferred, mountSidebar } from "../test-helpers/app-sidebar.ts";
+import { createGateway, mountSidebar } from "../test-helpers/app-sidebar.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import "./app-sidebar.ts";
@@ -20,6 +22,46 @@ import "./app-sidebar.ts";
 const requireRecord = createRequireRecord("object", "expected-label");
 
 describe("sidebar routed-lineage freshness", () => {
+  it("keeps folded child failures in the parent hovercard and own failures in child cards", async () => {
+    const parent: GatewaySessionRow = {
+      key: "agent:main:failure-parent",
+      kind: "direct",
+      label: "Parent",
+    };
+    const child: GatewaySessionRow = {
+      key: "agent:main:failure-child",
+      kind: "direct",
+      label: "Validation",
+      spawnedBy: parent.key,
+      status: "failed",
+      lastRunError: "Worker disconnected",
+      updatedAt: 100,
+    };
+    const gateway = createGateway(
+      createTestGatewayClient(async (method) =>
+        method === "sessions.list" ? sessionsResult([parent, child], 100) : {},
+      ),
+    );
+    const sessions = createTestSessionCapability(gateway);
+    await sessions.refresh({ agentId: "main", force: true });
+    const { sidebar, provider } = await mountSidebar(gateway, sessions);
+    try {
+      await sidebar.updateComplete;
+      expect(sidebar.findSidebarHovercardRowByKey(parent.key)?.attention).toEqual({
+        kind: "error",
+        reason: child.lastRunError,
+        childLabel: child.label,
+      });
+      expect(sidebar.findSidebarHovercardRowByKey(child.key)?.attention).toEqual({
+        kind: "error",
+        reason: child.lastRunError,
+      });
+    } finally {
+      provider.remove();
+      sessions.dispose();
+    }
+  });
+
   it.each(["sibling", "away and back", "during publication"] as const)(
     "keeps fetched siblings after selection changes (%s)",
     async (transition) => {
@@ -155,11 +197,12 @@ describe("sidebar routed-lineage freshness", () => {
           ).toContain(second.label);
         }
         expect(sidebar.querySelector(`[data-session-key="${first.key}"]`)?.textContent).toContain(
-          first.label,
+          refreshedFirst.label,
         );
         expect(sidebar.sessionKey).toBe(returnToFirst ? first.key : second.key);
+        // Accepted child facts update existing primary members without changing selection.
         expect(sessions.state.result?.sessions.find((row) => row.key === first.key)).toMatchObject(
-          reentrant ? refreshedFirst : first,
+          refreshedFirst,
         );
         if (reentrant) {
           expect(request).toHaveBeenCalledWith("sessions.describe", { key: second.key });
@@ -246,7 +289,7 @@ describe("sidebar routed-lineage freshness", () => {
         scope: "per-sender",
         agents: [{ id: "main" }, { id: "worker" }],
       });
-      const query = sessionsPageListQuery(context, {
+      const query = buildSessionsListQuery(context, {
         deepLinkSessionKey: child.key,
         includeGlobal: true,
         includeUnknown: true,
@@ -548,14 +591,7 @@ describe("sidebar routed-lineage freshness", () => {
         await loaded;
       };
       try {
-        sidebar.querySelector<HTMLButtonElement>(".sidebar-session-sort")!.click();
-        await sidebar.updateComplete;
-        sidebar.querySelector(".sidebar-session-sort-menu")!.dispatchEvent(
-          new CustomEvent("wa-select", {
-            bubbles: true,
-            detail: { item: { value: "owner:ada" } },
-          }),
-        );
+        await activateSessionMenuValue(sidebar, "owner:ada");
         await waitForFast(() => {
           expect(sidebar.sessionOwnerFilterId).toBe(owner.id);
           expect(sidebar.sessionData.sessionsLoading).toBe(false);
@@ -764,14 +800,7 @@ describe("sidebar routed-lineage freshness", () => {
       let lineage: Promise<void> | undefined;
       let refresh: Promise<void> | undefined;
       try {
-        sidebar.querySelector<HTMLButtonElement>(".sidebar-session-sort")!.click();
-        await sidebar.updateComplete;
-        sidebar.querySelector(".sidebar-session-sort-menu")!.dispatchEvent(
-          new CustomEvent("wa-select", {
-            bubbles: true,
-            detail: { item: { value: "owner:ada" } },
-          }),
-        );
+        await activateSessionMenuValue(sidebar, "owner:ada");
         await waitForFast(() => {
           expect(sidebar.sessionOwnerFilterId).toBe(owner.id);
           expect(sidebar.sessionData.sessionsLoading).toBe(false);

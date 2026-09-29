@@ -1,13 +1,15 @@
+import { Command } from "commander";
+import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { isBrowserMachineOutput } from "../../cli-output-mode.js";
 import * as shared from "./browser-cli-shared.js";
 import { registerBrowserWebMcpCommands } from "./browser-cli-webmcp.js";
+import { registerBrowserCli } from "./browser-cli.js";
 import {
   createBrowserProgram,
   getBrowserCliRuntime,
   getBrowserCliRuntimeCapture,
 } from "./browser-cli.test-support.js";
-import { defaultRuntime } from "./core-api.js";
 
 const actualRequest = shared.callBrowserRequest;
 const request = vi.spyOn(shared, "callBrowserRequest").mockResolvedValue({ ok: true });
@@ -20,37 +22,40 @@ describe("WebMCP CLI", () => {
     request.mockReset().mockResolvedValue({ ok: true });
     getBrowserCliRuntimeCapture().resetRuntimeCapture();
   });
-  it.each(["list", "execute"])("routes %s with the selected profile and target", async (action) => {
-    const { program, browser, parentOpts } = createBrowserProgram();
-    registerBrowserWebMcpCommands(browser, parentOpts);
-    const args = [
-      "browser",
-      "--browser-profile",
-      "isolated",
-      `webmcp_${action}`,
-      "--target-id",
-      "tab-a",
-      ...(action === "execute"
-        ? ["--context-id", "doc-a", "--tool-name", "increment_counter", "--input", '{"amount":2}']
-        : []),
-    ];
-    await program.parseAsync(args, { from: "user" });
-    expect(request).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({
-        path: `/webmcp/${action}`,
-        query: { profile: "isolated" },
-        body: expect.objectContaining({
-          targetId: "tab-a",
-          ...(action === "execute"
-            ? { contextId: "doc-a", toolName: "increment_counter", input: { amount: 2 } }
-            : {}),
+  it.each(["list", "execute"])(
+    "lazily routes %s with the selected profile and target",
+    async (action) => {
+      const program = new Command().name("openclaw").enablePositionalOptions();
+      const args = [
+        "browser",
+        "--browser-profile",
+        "isolated",
+        `webmcp_${action}`,
+        "--target-id",
+        "tab-a",
+        ...(action === "execute"
+          ? ["--context-id", "doc-a", "--tool-name", "increment_counter", "--input", '{"amount":2}']
+          : []),
+      ];
+      registerBrowserCli(program, ["node", "openclaw", ...args]);
+      await program.parseAsync(args, { from: "user" });
+      expect(request).toHaveBeenCalledWith(
+        expect.objectContaining({ browserProfile: "isolated", timeout: "30000" }),
+        expect.objectContaining({
+          path: `/webmcp/${action}`,
+          query: { profile: "isolated" },
+          body: expect.objectContaining({
+            targetId: "tab-a",
+            ...(action === "execute"
+              ? { contextId: "doc-a", toolName: "increment_counter", input: { amount: 2 } }
+              : {}),
+          }),
         }),
-      }),
-      { timeoutMs: undefined },
-    );
-    expect(isBrowserMachineOutput({ argv: ["node", "openclaw", ...args] })).toBe(true);
-  });
+        { timeoutMs: 30_000 },
+      );
+      expect(isBrowserMachineOutput({ argv: ["node", "openclaw", ...args] })).toBe(true);
+    },
+  );
   it("rejects non-object JSON before sending a request", async () => {
     const { program, browser, parentOpts } = createBrowserProgram();
     registerBrowserWebMcpCommands(browser, parentOpts);

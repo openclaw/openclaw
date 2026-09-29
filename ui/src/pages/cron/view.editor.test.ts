@@ -89,7 +89,6 @@ describe("cron view editor", () => {
       option.getAttribute("data-value"),
     );
     expect(optionValues).toContain("retired-channel");
-    expect(channel.querySelector('[role="option"][data-value="telegram"] img')).not.toBeNull();
     const telegramOption = channel.querySelector<HTMLElement & { label?: string }>(
       '[role="option"][data-value="telegram"]',
     );
@@ -634,20 +633,6 @@ describe("cron view editor", () => {
     expect(onToggle).not.toHaveBeenCalled();
     expect(onClone).not.toHaveBeenCalled();
     expect(onRemove).not.toHaveBeenCalled();
-  });
-
-  it.each([true, false])("preserves task browsing for canManage=%s", (canManage) => {
-    const job = createJob("permission-job");
-    const onSelectJob = vi.fn();
-    const container = renderView({ canManage, jobs: [job], onSelectJob });
-
-    expect(Boolean(container.querySelector('[data-test-id="cron-new-task"]'))).toBe(canManage);
-    expect(Boolean(container.querySelector('[data-test-id="cron-row-run-permission-job"]'))).toBe(
-      canManage,
-    );
-    expect(Boolean(container.querySelector("wa-dropdown.cron-job-menu"))).toBe(canManage);
-    getElement(container, '[data-test-id="cron-row-permission-job"]', HTMLDivElement).click();
-    expect(onSelectJob).toHaveBeenCalledWith(job);
   });
 
   it("keeps read-only operators on browse surfaces without mutation controls", () => {

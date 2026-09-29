@@ -87,6 +87,9 @@ it("keeps Messages default and opens capture with a collapsed schema editor insi
         (button) => button.textContent?.trim() === "Save",
       ),
     ).toBe(false);
+    const advancedToggled = new Promise<void>((resolve) => {
+      advanced.addEventListener("toggle", () => resolve(), { once: true });
+    });
     page.routeData = {
       pathname: "/settings/communications",
       search: "?section=transcripts&advanced=1",
@@ -100,11 +103,17 @@ it("keeps Messages default and opens capture with a collapsed schema editor insi
     render(page.render(), container);
     await capture.updateComplete;
     expect(advanced.open).toBe(true);
-    container
-      .querySelector<HTMLElement>('wa-tab[panel="messages"]')!
-      .dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await advancedToggled;
+    const messagesTab = container.querySelector<HTMLElement>('wa-tab[panel="messages"]')!;
+    messagesTab.focus();
+    messagesTab.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     render(page.render(), container);
     expect(container.querySelector("openclaw-meeting-capture-settings")).toBeNull();
+    // Join the queued keyboard focus handoff before fixture cleanup.
+    await new Promise<void>((resolve) => {
+      window.setTimeout(resolve, 0);
+    });
+    expect(document.activeElement).toBe(messagesTab);
   } finally {
     container.remove();
     runtimeConfig.dispose();

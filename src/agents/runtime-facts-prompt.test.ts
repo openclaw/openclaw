@@ -2,6 +2,8 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as execApprovals from "../infra/exec-approvals.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
+import type { MediaGenerationOperation } from "./media-generation-activity.js";
+import * as mediaActivity from "./media-generation-activity.js";
 import { buildRuntimeFactsContext } from "./runtime-facts-prompt.js";
 
 const params = { capabilityToolNames: new Set(["exec"]), agentId: "main", cfg: {} };
@@ -9,7 +11,7 @@ afterEach(() => vi.restoreAllMocks());
 
 describe("approved executable runtime facts", () => {
   it("sorts current agent and wildcard hints, preserves paths and argument notes, and clears stale hints", () =>
-    withMockedPlatform("win32", () => {
+    withMockedPlatform("win32", async () => {
       const file: execApprovals.ExecApprovalsFile = {
         version: 1,
         agents: {
@@ -19,10 +21,10 @@ describe("approved executable runtime facts", () => {
         },
       };
       vi.spyOn(execApprovals, "loadExecApprovals").mockImplementation(() => file);
-      expect(buildRuntimeFactsContext(params)).toEqual([
+      expect(await buildRuntimeFactsContext(params)).toEqual([
         { kind: "conversation-data", text: expect.any(String) },
       ]);
-      const before = buildRuntimeFactsContext(params).at(0)?.text;
+      const before = (await buildRuntimeFactsContext(params)).at(0)?.text;
       expect(before).toContain("## Approved executables");
       expect(before).toContain(
         "exact arguments are enforced at runtime; no approval prompt needed when args match",
@@ -32,16 +34,18 @@ describe("approved executable runtime facts", () => {
       );
       expect(before).not.toContain("other.exe");
       file.agents!.main!.allowlist!.unshift({ pattern: "C:\\Tools\\b.exe" });
-      const added = buildRuntimeFactsContext(params).at(0)?.text;
+      const added = (await buildRuntimeFactsContext(params)).at(0)?.text;
       expect(added).toContain("b.exe (any arguments)");
       file.agents!.main!.allowlist!.reverse();
-      expect(buildRuntimeFactsContext(params).at(0)?.text).toBe(added);
+      expect((await buildRuntimeFactsContext(params)).at(0)?.text).toBe(added);
       file.agents = {};
-      expect(buildRuntimeFactsContext(params).at(0)?.text).toBe("## Approved executables\nnone");
+      expect((await buildRuntimeFactsContext(params)).at(0)?.text).toBe(
+        "## Approved executables\nnone",
+      );
     }));
 
   it("bounds hints and omits command approvals, global wildcards, bare names, and unsafe or oversized tokens", () =>
-    withMockedPlatform("win32", () => {
+    withMockedPlatform("win32", async () => {
       vi.spyOn(execApprovals, "loadExecApprovals").mockReturnValue({
         version: 1,
         agents: {
@@ -62,7 +66,7 @@ describe("approved executable runtime facts", () => {
         },
       });
       const facts = expectDefined(
-        buildRuntimeFactsContext(params).at(0),
+        (await buildRuntimeFactsContext(params)).at(0),
         "approved executable facts",
       ).text;
       expect(facts.match(/\(any arguments\)/g)).toHaveLength(10);
@@ -75,15 +79,15 @@ describe("approved executable runtime facts", () => {
   it.each(["linux", "darwin", "win32"] as const)(
     "gates approval reads on Windows and exec capability: %s",
     (platform) =>
-      withMockedPlatform(platform, () => {
+      withMockedPlatform(platform, async () => {
         const load = vi.spyOn(execApprovals, "loadExecApprovals").mockImplementation(() => {
           throw new Error("unavailable");
         });
         expect(
-          buildRuntimeFactsContext({ ...params, capabilityToolNames: new Set(["read"]) }),
+          await buildRuntimeFactsContext({ ...params, capabilityToolNames: new Set(["read"]) }),
         ).toEqual([]);
         expect(load).not.toHaveBeenCalled();
-        const facts = buildRuntimeFactsContext(params).at(0)?.text;
+        const facts = (await buildRuntimeFactsContext(params)).at(0)?.text;
         if (platform === "win32") {
           expect(facts).toBe("## Approved executables\nunavailable");
         } else {
@@ -92,4 +96,133 @@ describe("approved executable runtime facts", () => {
         }
       }),
   );
+});
+
+function createMediaTask(
+  overrides: Partial<MediaGenerationOperation> = {},
+): MediaGenerationOperation {
+  return {
+    taskId: "image-1",
+    taskKind: "image_generation",
+    sourceId: "image_generate:provider",
+    requesterSessionKey: "agent:main:media",
+    requesterAgentId: "main",
+    task: "Generate media",
+    status: "running",
+    createdAt: 1,
+    ...overrides,
+  };
+}
+
+describe("media task runtime facts", () => {
+  it("uses one native owner snapshot for enabled media and refreshes it next turn", async () => {
+    const read = vi.spyOn(mediaActivity, "listMediaGenerationOperations");
+    const mediaParams = {
+      ...params,
+      sessionKey: "agent:main:media",
+      capabilityToolNames: new Set(["video_generate", "image_generate", "music_generate"]),
+    };
+    read.mockReturnValue([
+      createMediaTask({
+        taskId: "video-1",
+        taskKind: "video_generation",
+        sourceId: "video_generate",
+        status: "queued",
+      }),
+      createMediaTask({ taskId: "other-agent", requesterAgentId: "other" }),
+      createMediaTask({ progressSummary: "Rendering" }),
+      createMediaTask({
+        taskId: "music-1",
+        taskKind: "music_generation",
+        sourceId: "music_generate",
+      }),
+    ]);
+    expect(await buildRuntimeFactsContext(mediaParams)).toEqual([
+      {
+        kind: "conversation-data",
+        text: [
+          "## Media Generation Tasks",
+          '- tool=image_generate; task=image-1; status=running; provider_json="provider"; progress_json="Rendering"',
+          "- tool=music_generate; task=music-1; status=running",
+          "- tool=video_generate; task=video-1; status=queued",
+        ].join("\n"),
+      },
+    ]);
+    expect(read).toHaveBeenCalledExactlyOnceWith("agent:main:media", "main");
+
+    read.mockReturnValue([]);
+    expect(await buildRuntimeFactsContext(mediaParams)).toEqual([
+      {
+        kind: "conversation-data",
+        text: [
+          "## Media Generation Tasks",
+          "- tool=image_generate; none",
+          "- tool=music_generate; none",
+          "- tool=video_generate; none",
+        ].join("\n"),
+      },
+    ]);
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    {
+      tools: ["music_generate"],
+      expected: "## Media Generation Tasks\n- tool=music_generate; task=music-1; status=running",
+    },
+    {
+      tools: ["music_generate", "video_generate"],
+      expected:
+        "## Media Generation Tasks\n- tool=music_generate; task=music-1; status=running\n- tool=video_generate; none",
+    },
+  ])("includes only enabled media sections: $tools", async ({ tools, expected }) => {
+    const read = vi.spyOn(mediaActivity, "listMediaGenerationOperations").mockReturnValue([
+      createMediaTask(),
+      createMediaTask({
+        taskId: "music-1",
+        taskKind: "music_generation",
+        sourceId: "music_generate",
+      }),
+    ]);
+    expect(
+      await buildRuntimeFactsContext({
+        ...params,
+        sessionKey: "agent:main:media",
+        capabilityToolNames: new Set(tools),
+      }),
+    ).toEqual([{ kind: "conversation-data", text: expected }]);
+    expect(read).toHaveBeenCalledExactlyOnceWith("agent:main:media", "main");
+  });
+
+  it.each([undefined, "", "   "])(
+    "keeps explicit empty media facts without session %j",
+    async (sessionKey) => {
+      const read = vi.spyOn(mediaActivity, "listMediaGenerationOperations");
+      expect(
+        await buildRuntimeFactsContext({
+          ...params,
+          sessionKey,
+          capabilityToolNames: new Set(["image_generate", "video_generate"]),
+        }),
+      ).toEqual([
+        {
+          kind: "conversation-data",
+          text: "## Media Generation Tasks\n- tool=image_generate; none\n- tool=video_generate; none",
+        },
+      ]);
+      expect(read).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not read owner tasks without an enabled media capability", async () => {
+    const read = vi.spyOn(mediaActivity, "listMediaGenerationOperations");
+    expect(
+      await buildRuntimeFactsContext({
+        ...params,
+        sessionKey: "agent:main:media",
+        capabilityToolNames: new Set(["read"]),
+      }),
+    ).toEqual([]);
+    expect(read).not.toHaveBeenCalled();
+  });
 });

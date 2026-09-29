@@ -73,6 +73,7 @@ vi.mock("../../../state/user-profiles.js", () => ({
 }));
 
 vi.mock("../../control-ui-plugin-tabs.js", () => ({
+  listControlUiLinkReaders: vi.fn(() => []),
   listControlUiPluginTabs: listControlUiPluginTabsMock,
   listControlUiPluginWidgetKinds: listControlUiPluginWidgetKindsMock,
 }));
@@ -121,6 +122,7 @@ function makeContext(role: "operator" | "node", scopes: string[]) {
     },
     configSnapshot: {},
     sendFrame: vi.fn(async () => undefined),
+    onHelloDelivered: vi.fn(),
     pendingNodePairingCleanup: {},
     releasePendingNodePairingCleanup: vi.fn(async () => undefined),
   };
@@ -456,17 +458,49 @@ describe("sendGatewayHello update detail scope", () => {
       GATEWAY_SERVER_CAPS.PROGRESS_CARD_AGENT_SCOPE,
     );
     expect(helloPayload(context)?.features.capabilities).toContain("session-scoped-chat-metadata");
+    expect(helloPayload(context)?.features.capabilities).toContain("session-scoped-model-catalog");
+    expect(helloPayload(context)?.features.capabilities).toContain("profile-binding-v1");
   });
 
-  it("reports Gateway build identity separately from configured UI source", async () => {
-    const context = makeContext("operator", ["operator.read"]);
-    context.configSnapshot = { gateway: { controlUi: { root: "/custom/ui" } } };
+  it.each([
+    { label: "default bundled UI", controlUi: undefined, source: "bundled", browserFocus: true },
+    {
+      label: "enabled bundled UI",
+      controlUi: { enabled: true },
+      source: "bundled",
+      browserFocus: true,
+    },
+    {
+      label: "disabled bundled UI",
+      controlUi: { enabled: false },
+      source: "bundled",
+      browserFocus: false,
+    },
+    {
+      label: "configured UI",
+      controlUi: { root: "/custom/ui" },
+      source: "configured",
+      browserFocus: false,
+    },
+  ])(
+    "reports Gateway build identity and browser focus support for $label",
+    async ({ controlUi, source, browserFocus }) => {
+      const context = makeContext("operator", ["operator.read"]);
+      context.configSnapshot = { gateway: { controlUi } };
 
-    await sendGatewayHello(context as never, makeState("operator", ["operator.read"]) as never, {});
+      await sendGatewayHello(
+        context as never,
+        makeState("operator", ["operator.read"]) as never,
+        {},
+      );
 
-    expect(helloPayload(context)?.server.buildId).toBe("build-a");
-    expect(helloPayload(context)?.server.controlUiBuildSource).toBe("configured");
-  });
+      expect(helloPayload(context)?.server.buildId).toBe("build-a");
+      expect(helloPayload(context)?.server.controlUiBuildSource).toBe(source);
+      expect(
+        helloPayload(context)?.features.capabilities?.includes("control-ui-browser-focus"),
+      ).toBe(browserFocus);
+    },
+  );
 
   it.each([
     [

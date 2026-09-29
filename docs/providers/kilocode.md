@@ -19,8 +19,10 @@ Kilo Gateway routes requests to many models behind a single OpenAI-compatible en
 
 ```bash
 openclaw plugins install @openclaw/kilocode-provider
-openclaw gateway restart
 ```
+
+Installation applies to a running Gateway automatically; otherwise it takes effect
+on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 
 ## Setup
 

@@ -1,5 +1,7 @@
 import { NODE_DUPLEX_INVOKE_IDLE_TIMEOUT_MS } from "../infra/node-commands.js";
 import { createNodeDuplexEndpoint } from "../infra/node-duplex-framing.js";
+import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
+import { capturePluginLifecycleAuthority } from "../plugins/registry-lifecycle.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -30,49 +32,83 @@ export async function openGatewayNodeDuplex(options: {
   if (!scope?.pluginId?.trim()) {
     throw new Error("Plugin node duplex commands require an active owning plugin identity.");
   }
-  const registrations = scope.pluginRegistry?.nodeHostCommands.filter(
+  const registry = scope.pluginRegistry;
+  const record = registry?.plugins.find((entry) => entry.id === scope.pluginId);
+  const registrations = registry?.nodeHostCommands.filter(
     (entry) => entry.command.command === params.command,
   );
   if (
+    !registry ||
+    !record ||
     registrations?.length !== 1 ||
     registrations[0]?.pluginId !== scope.pluginId ||
-    registrations[0]?.command.duplex !== true
+    (registrations[0]?.command.duplex !== true && registrations[0]?.command.duplex !== "optional")
   ) {
     throw new Error(
-      `Node command "${params.command}" must be registered exactly once by plugin "${scope.pluginId}" and declare duplex: true.`,
+      `Node command "${params.command}" must be registered exactly once by plugin "${scope.pluginId}" and declare duplex: true or "optional".`,
     );
   }
+  const isPluginCurrent = capturePluginLifecycleAuthority(registry, record, {
+    scopedRuntime: true,
+  });
   const callerIdentity = scope.client?.internal?.agentRuntimeIdentity;
   const context = getInProcessGatewayRequestContext(resolveGatewayContext);
   if (!context?.nodeRegistry) {
     throw new Error("Plugin node duplex commands require an active Gateway node registry.");
   }
+  return await openOwnedGatewayNodeDuplex({
+    params,
+    invokeNode,
+    context,
+    signal: AbortSignal.any(
+      [runtimeLifetime, getPluginInstance(record)?.lifecycle.signal, params.signal].filter(
+        (candidate): candidate is AbortSignal => candidate !== undefined,
+      ),
+    ),
+    assertCurrent() {
+      if (
+        isPluginCurrent?.() !== true ||
+        (resolveGatewayContext && resolveGatewayContext() !== context) ||
+        (callerIdentity && context.validateAgentRuntimeApprovalAuthority?.(callerIdentity) !== true)
+      ) {
+        throw new Error("Plugin Gateway runtime authority is no longer current.");
+      }
+    },
+  });
+}
+
+/** Shared framing for an already-admitted caller or service; never establishes authority. */
+export async function openOwnedGatewayNodeDuplex(options: {
+  params: Parameters<PluginRuntime["nodes"]["openDuplex"]>[0];
+  invokeNode: Parameters<typeof openGatewayNodeDuplex>[0]["invokeNode"];
+  context: GatewayRequestContext;
+  signal: AbortSignal;
+  assertCurrent: () => void;
+}): ReturnType<PluginRuntime["nodes"]["openDuplex"]> {
+  const { params, invokeNode, context } = options;
   const controller = new AbortController();
-  const signals = [controller.signal, runtimeLifetime, params.signal].filter(
-    (candidate): candidate is AbortSignal => candidate !== undefined,
-  );
-  const signal = AbortSignal.any(signals);
-  const abortError = () =>
-    signal.reason instanceof Error ? signal.reason : new Error("Node duplex invocation cancelled.");
-  if (signal.aborted) {
-    throw abortError();
-  }
+  const signal = AbortSignal.any([controller.signal, options.signal]);
   let invokeId: string | undefined;
   let framedReady = false;
   const ready = createDeferredCore();
-  const isRuntimeCurrent = () =>
-    !signal.aborted &&
-    (!resolveGatewayContext || resolveGatewayContext() === context) &&
-    (!callerIdentity || context.validateAgentRuntimeApprovalAuthority?.(callerIdentity) === true);
   const assertRuntimeCurrent = () => {
-    if (!isRuntimeCurrent()) {
-      const error = signal.aborted
-        ? abortError()
-        : new Error("Plugin Gateway runtime authority is no longer current.");
+    try {
+      signal.throwIfAborted();
+      options.assertCurrent();
+    } catch (error) {
       controller.abort(error);
       throw error;
     }
   };
+  const isRuntimeCurrent = () => {
+    try {
+      assertRuntimeCurrent();
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  assertRuntimeCurrent();
   const endpoint = createNodeDuplexEndpoint({
     requireReady: true,
     maxMessageBytes: params.maxMessageBytes,

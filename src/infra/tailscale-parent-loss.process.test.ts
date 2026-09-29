@@ -5,8 +5,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { nativeProcessTestEntrypoints } from "./native-process-runtime.test-support.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tailscaleUrl = resolveRuntimeWorkerUrl(nativeProcessTestEntrypoints.tailscale);
 const fixture = fileURLToPath(
   new URL("../../test/fixtures/tailscale-parent-loss-fixture.mjs", import.meta.url),
 );
@@ -19,9 +22,9 @@ describe.runIf(process.platform !== "win32")("Tailscale parent loss", () => {
       const children: ChildProcess[] = [];
       const claims: Array<{ pid: number; ownerPid: number; port: number }> = [];
       const start = async (port = 0) => {
-        const child = fork(fixture, ["gateway", new URL("./tailscale.ts", import.meta.url).href], {
+        const child = fork(fixture, ["gateway", tailscaleUrl.href], {
           detached: true,
-          execArgv: ["--import", "tsx"],
+          execArgv: resolveRuntimeWorkerArgv(tailscaleUrl).slice(0, -1),
           stdio: ["ignore", "ignore", "pipe", "ipc"],
           env: {
             ...process.env,

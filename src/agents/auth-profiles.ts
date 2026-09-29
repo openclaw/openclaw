@@ -10,7 +10,6 @@ export { resolveAuthProfileMetadata } from "./auth-profiles/identity.js";
 export {
   externalCliDiscoveryForConfigStatus,
   externalCliDiscoveryForProviderAuth,
-  externalCliDiscoveryForProviders,
   externalCliDiscoveryScoped,
 } from "./auth-profiles/external-cli-discovery.js";
 export {
@@ -43,7 +42,6 @@ export { buildPortableAuthProfileStoreForAgentCopy } from "./auth-profiles/porta
 export {
   clearRuntimeAuthProfileStoreSnapshot,
   getPreparedRuntimeAuthProfileStoreSnapshot,
-  getRuntimeAuthProfileStoreSnapshot,
   getRuntimeAuthProfileStoreSnapshotRevision,
   hasAuthProfileStoreSourceForProvider,
   hasAnyAuthProfileStoreSource,
@@ -59,6 +57,7 @@ export {
   loadAuthProfileStoreForSecretsRuntime,
   loadAuthProfileStoreWithoutExternalProfiles,
   loadAuthProfileStoreForRuntime,
+  loadAuthProfileStoreForRuntimeAsync,
   saveAuthProfileStore,
 } from "./auth-profiles/store-runtime.js";
 export {

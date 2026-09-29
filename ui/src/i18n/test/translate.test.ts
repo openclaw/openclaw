@@ -1,54 +1,20 @@
 // @vitest-environment node
-// Control UI tests cover translate behavior.
-import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { importFreshModule } from "../../../../src/plugin-sdk/test-helpers/import-fresh.js";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import { loadLazyLocaleTranslation, SUPPORTED_LOCALES } from "../lib/registry.ts";
 import * as translate from "../lib/translate.ts";
-import { ar } from "../locales/ar.ts";
-import { de } from "../locales/de.ts";
 import { registerLoginEnglish } from "../locales/en-login.ts";
 import { en } from "../locales/en.ts";
-import { es } from "../locales/es.ts";
-import { fa } from "../locales/fa.ts";
-import { fr } from "../locales/fr.ts";
-import { hi } from "../locales/hi.ts";
-import { id } from "../locales/id.ts";
-import { it as itLocale } from "../locales/it.ts";
-import { ja_JP } from "../locales/ja-JP.ts";
-import { ko } from "../locales/ko.ts";
-import { nl } from "../locales/nl.ts";
-import { pl } from "../locales/pl.ts";
-import { pt_BR } from "../locales/pt-BR.ts";
-import { ru } from "../locales/ru.ts";
-import { th } from "../locales/th.ts";
-import { tr } from "../locales/tr.ts";
-import { uk } from "../locales/uk.ts";
-import { vi as viLocale } from "../locales/vi.ts";
-import { zh_CN } from "../locales/zh-CN.ts";
-import { zh_TW } from "../locales/zh-TW.ts";
 
-const shippedLocales = {
-  ar,
-  de,
-  es,
-  fa,
-  fr,
-  hi,
-  id,
-  it: itLocale,
-  ja_JP,
-  ko,
-  nl,
-  pl,
-  pt_BR,
-  ru,
-  th,
-  tr,
-  uk,
-  vi: viLocale,
-  zh_CN,
-  zh_TW,
-} as const;
+const shippedLocales = new Map(
+  await Promise.all(
+    SUPPORTED_LOCALES.slice(1).map(
+      async (locale) => [locale, await loadLazyLocaleTranslation(locale)] as const,
+    ),
+  ),
+);
 let translateImportCase = 0;
 
 async function importFreshTranslate() {
@@ -89,7 +55,6 @@ describe("i18n", () => {
   beforeEach(async () => {
     vi.stubGlobal("localStorage", createStorageMock());
     vi.stubGlobal("navigator", { language: "en-US" } as Navigator);
-    localStorage.clear();
     await translate.i18n.setLocale("en");
   });
 
@@ -100,10 +65,6 @@ describe("i18n", () => {
 
   it("should return the key if translation is missing", () => {
     expect(translate.t("non.existent.key")).toBe("non.existent.key");
-  });
-
-  it("should return the correct English translation", () => {
-    expect(translate.t("common.health")).toBe("Health");
   });
 
   it("should replace parameters correctly", () => {
@@ -120,34 +81,15 @@ describe("i18n", () => {
     expect(translate.t("connection.help.copyCommandAria", {})).toBe("Copy command: {command}");
   });
 
-  it("should fallback to English if key is missing in another locale", async () => {
-    translate.i18n.registerTranslation("zh-CN", { common: {} } as never);
-    await translate.i18n.setLocale("zh-CN");
-    expect(translate.t("common.health")).toBe("Health");
-  });
-
-  it("loads translations even when setting the same locale again", async () => {
-    const internal = translate.i18n as unknown as {
-      locale: string;
-      translations: Record<string, unknown>;
-    };
-    internal.locale = "zh-CN";
-    delete internal.translations["zh-CN"];
-
-    await translate.i18n.setLocale("zh-CN");
-    expect(translate.t("common.health")).toBe(readTranslationString(zh_CN, "common.health"));
-  });
-
   it("loads saved non-English locale on startup", async () => {
-    vi.stubGlobal("localStorage", createStorageMock());
-    vi.stubGlobal("navigator", { language: "en-US" } as Navigator);
     localStorage.setItem("openclaw.i18n.locale", "zh-CN");
     const fresh = await importFreshTranslate();
     await vi.waitFor(() => {
       expect(fresh.i18n.getLocale()).toBe("zh-CN");
     });
-    expect(fresh.i18n.getLocale()).toBe("zh-CN");
-    expect(fresh.t("common.health")).toBe(readTranslationString(zh_CN, "common.health"));
+    expect(fresh.t("common.health")).toBe(
+      readTranslationString(shippedLocales.get("zh-CN"), "common.health"),
+    );
   });
 
   it("syncs canonical document locale metadata on startup", async () => {
@@ -183,29 +125,17 @@ describe("i18n", () => {
     expect(documentElement).toEqual({ lang: "de", dir: "ltr" });
   });
 
-  it.each([
-    ["zh-Hant", "zh-TW"],
-    ["zh-Hant-TW", "zh-TW"],
-    ["zh-Hant-HK", "zh-TW"],
-    ["zh-Hant-MO", "zh-TW"],
-    ["zh-MO", "zh-TW"],
-    ["ZH-hAnT-hK", "zh-TW"],
-    ["zh-Hans-HK", "zh-CN"],
-    ["ZH-hAnS-hK", "zh-CN"],
-  ] as const)(
-    "loads the %s browser language as the registered %s locale on startup",
-    async (browserLanguage, expectedLocale) => {
-      vi.stubGlobal("navigator", { language: browserLanguage } as Navigator);
-      localStorage.removeItem("openclaw.i18n.locale");
+  it("loads the browser's Chinese script preference on startup", async () => {
+    vi.stubGlobal("navigator", { language: "ZH-hAnT-CN" } as Navigator);
+    localStorage.removeItem("openclaw.i18n.locale");
 
-      const fresh = await importFreshTranslate();
+    const fresh = await importFreshTranslate();
 
-      await vi.waitFor(() => expect(fresh.i18n.getLocale()).toBe(expectedLocale));
-      expect(fresh.t("common.health")).toBe(
-        readTranslationString(expectedLocale === "zh-TW" ? zh_TW : zh_CN, "common.health"),
-      );
-    },
-  );
+    await vi.waitFor(() => expect(fresh.i18n.getLocale()).toBe("zh-TW"));
+    expect(fresh.t("common.health")).toBe(
+      readTranslationString(shippedLocales.get("zh-TW"), "common.health"),
+    );
+  });
 
   it("skips node localStorage accessors that warn without a storage file", async () => {
     vi.unstubAllGlobals();
@@ -222,55 +152,23 @@ describe("i18n", () => {
   });
 
   it("keeps the version label available in shipped locales", () => {
-    for (const [locale, value] of Object.entries(shippedLocales)) {
-      const version = (value.common as { version?: unknown }).version;
-      expect(version, locale).toBeTypeOf("string");
-      if (typeof version !== "string") {
-        throw new Error(`expected ${locale} common.version to be a string`);
-      }
-      expect(version.trim(), locale).not.toBe("");
+    for (const [locale, value] of shippedLocales) {
+      expect(readTranslationString(value, "common.version").trim(), locale).not.toBe("");
     }
   });
 
   it("keeps newly exposed locales from shipping as English fallback bundles", () => {
-    const englishHealth = (en.common as { health: string }).health;
-    for (const [locale, value] of Object.entries({
-      ar,
-      hi,
-      fa,
-      it: itLocale,
-      nl,
-      vi: viLocale,
-    })) {
-      expect((value.common as { health: string }).health, locale).not.toBe(englishHealth);
+    for (const locale of ["ar", "hi", "fa", "it", "nl", "vi"] as const) {
+      expect(readTranslationString(shippedLocales.get(locale), "common.health"), locale).not.toBe(
+        readTranslationString(en, "common.health"),
+      );
     }
   });
 
   it("keeps login failure guidance localized in shipped locale bundles", () => {
     const checkedKeys = flatten(registerLoginEnglish.catalog.login.failure, "login.failure");
     expect(checkedKeys.length).toBeGreaterThan(0);
-    for (const [locale, value] of Object.entries({
-      ar,
-      de,
-      es,
-      fa,
-      fr,
-      hi,
-      id,
-      it: itLocale,
-      ja_JP,
-      ko,
-      nl,
-      pl,
-      pt_BR,
-      ru,
-      th,
-      tr,
-      uk,
-      vi: viLocale,
-      zh_CN,
-      zh_TW,
-    })) {
+    for (const [locale, value] of shippedLocales) {
       for (const key of checkedKeys) {
         expect(readTranslationString(value, key), `${locale}:${key}`).not.toBe(
           readTranslationString(registerLoginEnglish.catalog, key),
@@ -284,7 +182,7 @@ describe("i18n", () => {
       (key) => key.startsWith("devices.pairing.") && key !== "devices.pairing.title",
     );
 
-    for (const [locale, value] of Object.entries(shippedLocales)) {
+    for (const [locale, value] of shippedLocales) {
       for (const key of checkedKeys) {
         expect(readTranslationString(value, key), `${locale}:${key}`).not.toBe(
           readTranslationString(en, key),
@@ -296,7 +194,7 @@ describe("i18n", () => {
   it("keeps the chat composer attachment action localized in shipped locale bundles", () => {
     const key = "chat.composer.addAttachment";
 
-    for (const [locale, value] of Object.entries(shippedLocales)) {
+    for (const [locale, value] of shippedLocales) {
       expect(readTranslationString(value, key), `${locale}:${key}`).not.toBe(
         readTranslationString(en, key),
       );

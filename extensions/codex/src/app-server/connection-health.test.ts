@@ -1,7 +1,11 @@
-import type { OpenClawPluginServiceContext } from "openclaw/plugin-sdk/plugin-entry";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import type {
+  OpenClawPluginService,
+  OpenClawPluginServiceContext,
+} from "openclaw/plugin-sdk/plugin-entry";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { CodexAppServerClient } from "./client.js";
 import { createCodexAppServerConnectionHealthService } from "./connection-health.js";
+import { createClientHarness } from "./test-support.js";
 
 const sharedClientMocks = vi.hoisted(() => ({
   getLeasedSharedCodexAppServerClient: vi.fn(),
@@ -10,9 +14,27 @@ const sharedClientMocks = vi.hoisted(() => ({
 
 vi.mock("./shared-client.js", () => sharedClientMocks);
 
+let runningService:
+  | { service: OpenClawPluginService; ctx: OpenClawPluginServiceContext }
+  | undefined;
+
 describe("Codex remote WebSocket connection health", () => {
-  afterEach(() => {
-    vi.clearAllMocks();
+  beforeAll(async () => {
+    // Complete lazy-module fixture preparation before measuring connection and retry behavior.
+    await Promise.all([import("./config-runtime.js"), import("./client.js")]);
+  });
+
+  afterEach(async () => {
+    try {
+      if (runningService) {
+        await runningService.service.stop?.(runningService.ctx);
+      }
+    } finally {
+      runningService = undefined;
+      sharedClientMocks.getLeasedSharedCodexAppServerClient.mockReset();
+      sharedClientMocks.releaseLeasedSharedCodexAppServerClient.mockReset();
+      vi.useRealTimers();
+    }
   });
 
   it("opens the remote app-server before the first model request", async () => {
@@ -26,7 +48,7 @@ describe("Codex remote WebSocket connection health", () => {
       getRuntimeConfig: () => ctx.config,
     });
 
-    await service.start(ctx);
+    await startService(service, ctx);
 
     await vi.waitFor(() => {
       expect(sharedClientMocks.getLeasedSharedCodexAppServerClient).toHaveBeenCalledOnce();
@@ -55,7 +77,7 @@ describe("Codex remote WebSocket connection health", () => {
       getRuntimeConfig: () => ctx.config,
     });
 
-    await service.start(ctx);
+    await startService(service, ctx);
     await vi.waitFor(() => expect(first.addCloseHandler).toHaveBeenCalledOnce());
 
     first.close();
@@ -88,7 +110,7 @@ describe("Codex remote WebSocket connection health", () => {
       getRuntimeConfig: () => ctx.config,
     });
 
-    await service.start(ctx);
+    await startService(service, ctx);
 
     await vi.waitFor(
       () => {
@@ -104,6 +126,34 @@ describe("Codex remote WebSocket connection health", () => {
     expect(sharedClientMocks.releaseLeasedSharedCodexAppServerClient).toHaveBeenCalledOnce();
   });
 
+  it("reconnects when a leased client closed before the health observer subscribed", async () => {
+    vi.useFakeTimers();
+    const first = createClientHarness();
+    first.client.close();
+    const next = createClient();
+    sharedClientMocks.getLeasedSharedCodexAppServerClient
+      .mockResolvedValueOnce(first.client)
+      .mockResolvedValueOnce(next.client);
+    const ctx = createServiceContext();
+    const service = createCodexAppServerConnectionHealthService({
+      getPluginConfig: () => ({
+        appServer: { transport: "websocket", url: "ws://127.0.0.1:39175" },
+      }),
+      getRuntimeConfig: () => ctx.config,
+    });
+
+    await startService(service, ctx);
+    await vi.advanceTimersByTimeAsync(1_250);
+
+    expect(sharedClientMocks.getLeasedSharedCodexAppServerClient).toHaveBeenCalledTimes(2);
+    expect(sharedClientMocks.releaseLeasedSharedCodexAppServerClient).toHaveBeenCalledWith(
+      first.client,
+    );
+    expect(next.addCloseHandler).toHaveBeenCalledOnce();
+    expect(first.writes).toEqual([]);
+    expect(next.request).not.toHaveBeenCalled();
+  });
+
   it.each([401, 403])("does not retry an HTTP %i authentication failure", async (statusCode) => {
     sharedClientMocks.getLeasedSharedCodexAppServerClient.mockRejectedValueOnce(
       new Error(`Unexpected server response: ${statusCode}`),
@@ -116,7 +166,7 @@ describe("Codex remote WebSocket connection health", () => {
       getRuntimeConfig: () => ctx.config,
     });
 
-    await service.start(ctx);
+    await startService(service, ctx);
 
     await vi.waitFor(() => {
       expect(ctx.logger.error).toHaveBeenCalledWith(
@@ -137,7 +187,7 @@ describe("Codex remote WebSocket connection health", () => {
       getRuntimeConfig: () => ctx.config,
     });
 
-    await service.start(ctx);
+    await startService(service, ctx);
 
     await vi.waitFor(() => {
       expect(ctx.logger.error).toHaveBeenCalledWith(
@@ -156,12 +206,17 @@ describe("Codex remote WebSocket connection health", () => {
       getRuntimeConfig: () => ctx.config,
     });
 
-    await service.start(ctx);
+    await startService(service, ctx);
     await service.stop?.(ctx);
 
     expect(sharedClientMocks.getLeasedSharedCodexAppServerClient).not.toHaveBeenCalled();
   });
 });
+
+function startService(service: OpenClawPluginService, ctx: OpenClawPluginServiceContext) {
+  runningService = { service, ctx };
+  return service.start(ctx);
+}
 
 function createClient() {
   const handlers = new Set<(client: CodexAppServerClient) => void>();
@@ -170,7 +225,11 @@ function createClient() {
     handlers.add(handler);
     return () => handlers.delete(handler);
   });
-  const client = { addCloseHandler, request } as unknown as CodexAppServerClient;
+  const client = {
+    addCloseHandler,
+    request,
+    getCloseError: () => undefined,
+  } as unknown as CodexAppServerClient;
 
   return {
     client,

@@ -34,7 +34,7 @@ topic. The triage ladder stays on this page; open the page that matches your que
     ```bash
     openclaw status
     ```
-    Fast local summary: OS + update, gateway/service reachability, agents/sessions, provider config + runtime issues (when the gateway is reachable).
+    Fast local summary: OS + update, Gateway/service reachability, agents/sessions, provider config + runtime issues (when the Gateway is reachable).
   </Step>
   <Step title="Pasteable report (safe to share)">
     ```bash
@@ -52,7 +52,7 @@ topic. The triage ladder stays on this page; open the page that matches your que
     ```bash
     openclaw status --deep
     ```
-    Live gateway health probe, including channel probes when supported (requires a reachable gateway). See [Health](/gateway/health).
+    Live Gateway health probe, including channel probes when supported (requires a reachable Gateway). See [Health](/gateway/health).
   </Step>
   <Step title="Tail the latest log">
     ```bash
@@ -77,7 +77,7 @@ topic. The triage ladder stays on this page; open the page that matches your que
     openclaw health --json
     openclaw health --verbose   # shows the target URL + config path on errors
     ```
-    Asks the running gateway for a full snapshot. See [Health](/gateway/health).
+    Asks the running Gateway for a full snapshot. See [Health](/gateway/health).
   </Step>
 </Steps>
 

@@ -5,7 +5,7 @@ import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { DockLayoutController } from "./dock-layout-controller.ts";
-import { createDockPanelLayout, type DockPanelSide } from "./dock-panel-layout.ts";
+import { createDockPanelLayout, type DockPanelPlacement } from "./dock-panel-layout.ts";
 
 function createControllerHost() {
   return {
@@ -17,7 +17,7 @@ function createControllerHost() {
   };
 }
 
-function createLayout(defaultDock: DockPanelSide) {
+function createLayout(defaultDock: Exclude<DockPanelPlacement, "main">) {
   return createDockPanelLayout({
     storageKey: `test.dock-panel.${defaultDock}`,
     minHeight: 140,
@@ -63,16 +63,6 @@ describe("createDockPanelLayout", () => {
     });
   });
 
-  it("restores a left dock without changing existing consumers", () => {
-    const layout = createLayout("right");
-    localStorage.setItem(
-      "test.dock-panel.right",
-      JSON.stringify({ open: true, dock: "left", height: 320, width: 420 }),
-    );
-
-    expect(layout.load()).toEqual({ open: true, dock: "left", height: 320, width: 420 });
-  });
-
   it("rejects docks unsupported by a consumer", () => {
     const layout = createDockPanelLayout({
       storageKey: "test.dock-panel.side-only",
@@ -114,6 +104,50 @@ describe("createDockPanelLayout", () => {
     layout.save({ open: true, dock: "main", height: 320, width: 520 });
 
     expect(layout.load()).toEqual({ open: true, dock: "main", height: 320, width: 520 });
+  });
+});
+
+describe("DockLayoutController open intent", () => {
+  it("reads saved intent once per attachment and preserves explicit choices across suppression", () => {
+    const layout = createLayout("right");
+    layout.save({ ...layout.defaults, open: true });
+    const load = vi.spyOn(layout, "load");
+    let available = false;
+    const controller = new DockLayoutController(createControllerHost(), {
+      layout,
+      reservationPrefix: "test-intent",
+      isAvailable: () => available,
+    });
+    controller.hostConnected();
+    expect(controller.open).toBe(false);
+
+    controller.setSuppressed(true);
+    available = true;
+    expect(controller.restoreOpenState()).toBe(false);
+    expect(controller.setSuppressed(false)).toBe(true);
+    expect(controller.open).toBe(true);
+
+    controller.hideWithoutPersisting();
+    expect(controller.restoreOpenState()).toBe(true);
+    controller.setOpen(false);
+    expect(controller.restoreOpenState()).toBe(false);
+    controller.setSuppressed(true);
+    expect(controller.setSuppressed(false)).toBe(false);
+    expect(controller.restoreOpenState()).toBe(false);
+    expect(load).toHaveBeenCalledOnce();
+
+    controller.setOpen(true);
+    controller.hideWithoutPersisting();
+    expect(controller.restoreOpenState()).toBe(true);
+    controller.hostDisconnected();
+
+    // A new attachment captures the saved preference afresh.
+    layout.save({ ...layout.defaults, open: false });
+    controller.hostConnected();
+    expect(controller.open).toBe(false);
+    expect(controller.restoreOpenState()).toBe(false);
+    expect(load).toHaveBeenCalledTimes(2);
+    controller.hostDisconnected();
   });
 });
 

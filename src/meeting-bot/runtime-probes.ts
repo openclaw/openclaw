@@ -137,10 +137,10 @@ export function createMeetingRuntimeProbes<
       context.hasHealthHandle(result.session.id);
     if (shouldWait && !verified()) {
       const deadline =
-        Date.now() +
+        performance.now() +
         (options.resolveSpeechTimeoutMs?.(request, context.config) ??
           options.resolveTimeoutMs(request.timeoutMs, context.config.chrome.joinTimeoutMs));
-      while (Date.now() < deadline && !verified()) {
+      while (performance.now() < deadline && !verified()) {
         await sleep(100);
         context.refreshHealth(result.session.id);
         health = result.session.chrome?.health;
@@ -208,10 +208,10 @@ export function createMeetingRuntimeProbes<
     let listenVerified = advanced();
     if (shouldWait && !listenVerified) {
       const deadline =
-        Date.now() +
+        performance.now() +
         options.resolveTimeoutMs(request.timeoutMs, context.config.chrome.joinTimeoutMs);
-      while (Date.now() < deadline) {
-        const remainingMs = deadline - Date.now();
+      while (performance.now() < deadline) {
+        const remainingMs = Math.floor(deadline - performance.now());
         if (remainingMs <= 0) {
           break;
         }
@@ -234,7 +234,7 @@ export function createMeetingRuntimeProbes<
           break;
         }
         health = result.session.chrome?.health;
-        if (Date.now() >= deadline) {
+        if (performance.now() >= deadline) {
           break;
         }
         if (advanced()) {
@@ -243,7 +243,7 @@ export function createMeetingRuntimeProbes<
         if (listenVerified || health?.manualAction) {
           break;
         }
-        const retryDelayMs = deadline - Date.now();
+        const retryDelayMs = deadline - performance.now();
         if (retryDelayMs <= 0) {
           break;
         }

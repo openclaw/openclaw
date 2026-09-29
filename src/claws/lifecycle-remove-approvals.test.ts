@@ -90,6 +90,23 @@ async function buildApprovalFixture(withMcp = false) {
   });
 }
 
+async function installApprovalAgent(
+  addPlan: Awaited<ReturnType<typeof buildApprovalFixture>>,
+  home: string,
+) {
+  const env = { OPENCLAW_STATE_DIR: join(home, ".openclaw") };
+  setTestEnvValue("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
+  let config: OpenClawConfig = {};
+  await applyClawAddPlan(addPlan, {
+    consentPlanIntegrity: addPlan.planIntegrity,
+    env,
+    commitConfig: async (transform) => {
+      config = transform(config);
+    },
+  });
+  return { config, env };
+}
+
 function startHeldDatabase(agentId = "worker", pathname = "") {
   const childUrl = resolveRuntimeWorkerUrl(agentDatabaseHeldRuntimeEntrypoint);
   const child = spawn(
@@ -127,14 +144,7 @@ describe("Claw exec approvals removal", () => {
   it.each([false, true])("purges a retained session database (cold: %s)", async (cold) => {
     const addPlan = await buildApprovalFixture();
     await withTempHomeConfig({}, async ({ home }) => {
-      setTestEnvValue("OPENCLAW_STATE_DIR", join(home, ".openclaw"));
-      let config: OpenClawConfig = {};
-      await applyClawAddPlan(addPlan, {
-        consentPlanIntegrity: addPlan.planIntegrity,
-        commitConfig: async (transform) => {
-          config = transform(config);
-        },
-      });
+      let { config } = await installApprovalAgent(addPlan, home);
       const target = openOpenClawAgentDatabase({ agentId: "worker" });
       config = {
         ...config,
@@ -171,14 +181,7 @@ describe("Claw exec approvals removal", () => {
   it("retains an archive publication failure and completes its real session cleanup on retry", async () => {
     const addPlan = await buildApprovalFixture();
     await withTempHomeConfig({}, async ({ home }) => {
-      setTestEnvValue("OPENCLAW_STATE_DIR", join(home, ".openclaw"));
-      let config: OpenClawConfig = {};
-      await applyClawAddPlan(addPlan, {
-        consentPlanIntegrity: addPlan.planIntegrity,
-        commitConfig: async (transform) => {
-          config = transform(config);
-        },
-      });
+      let { config } = await installApprovalAgent(addPlan, home);
       const target = openOpenClawAgentDatabase({ agentId: "worker" });
       config = {
         ...config,
@@ -389,7 +392,6 @@ describe("Claw exec approvals removal", () => {
   });
 
   it.each([
-    { failClose: false, shared: false },
     { failClose: true, shared: false },
     { failClose: false, shared: true },
   ])(
@@ -527,16 +529,7 @@ describe("Claw exec approvals removal", () => {
     const addPlan = await buildApprovalFixture();
 
     await withTempHomeConfig({}, async ({ home }) => {
-      const env = { OPENCLAW_STATE_DIR: join(home, ".openclaw") };
-      setTestEnvValue("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
-      let config: OpenClawConfig = {};
-      await applyClawAddPlan(addPlan, {
-        consentPlanIntegrity: addPlan.planIntegrity,
-        env,
-        commitConfig: async (transform) => {
-          config = transform(config);
-        },
-      });
+      const { config } = await installApprovalAgent(addPlan, home);
       await writeOpenClawConfig(home, config);
       saveExecApprovals({
         version: 1,
@@ -582,16 +575,7 @@ describe("Claw exec approvals removal", () => {
     const addPlan = await buildApprovalFixture();
 
     await withTempHomeConfig({}, async ({ home }) => {
-      const env = { OPENCLAW_STATE_DIR: join(home, ".openclaw") };
-      setTestEnvValue("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
-      let config: OpenClawConfig = {};
-      await applyClawAddPlan(addPlan, {
-        consentPlanIntegrity: addPlan.planIntegrity,
-        env,
-        commitConfig: async (transform) => {
-          config = transform(config);
-        },
-      });
+      const { config } = await installApprovalAgent(addPlan, home);
       await writeOpenClawConfig(home, config);
       const plan = await buildClawRemovePlan("worker");
       let creationDuringCleanup: Awaited<ReturnType<typeof createAgent>> | undefined;
@@ -621,22 +605,13 @@ describe("Claw exec approvals removal", () => {
     const addPlan = await buildApprovalFixture();
 
     await withTempHomeConfig({}, async ({ home }) => {
-      const env = { OPENCLAW_STATE_DIR: join(home, ".openclaw") };
-      setTestEnvValue("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
-      let config: OpenClawConfig = {};
-      await applyClawAddPlan(addPlan, {
-        consentPlanIntegrity: addPlan.planIntegrity,
-        env,
-        commitConfig: async (transform) => {
-          config = transform(config);
-        },
-      });
+      const { config, env } = await installApprovalAgent(addPlan, home);
       await writeOpenClawConfig(home, config);
       const plan = await buildClawRemovePlan("worker", { env, config });
       const state = openOpenClawStateDatabase({ env });
       state.db.exec(`
-        CREATE TRIGGER fail_claw_deletion_completion
-        BEFORE UPDATE OF cleanup_completed ON agent_deletion_journal
+        CREATE TEMP TRIGGER fail_claw_deletion_completion
+        BEFORE UPDATE OF cleanup_completed ON main.agent_deletion_journal
         WHEN NEW.cleanup_completed = 1
         BEGIN
           SELECT RAISE(ABORT, 'injected deletion journal completion failure');

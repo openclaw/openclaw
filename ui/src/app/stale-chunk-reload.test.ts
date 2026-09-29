@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
 import { i18n } from "../i18n/index.ts";
 import { registerControlUiReloadGuard } from "./document-reload-guard.ts";
@@ -12,21 +13,6 @@ import {
 
 const GUARD_KEY = "openclaw.controlUi.staleChunkReloadBuildId";
 const PROBE_TIMEOUT_MS = 3_000;
-
-type Deferred<T> = {
-  promise: Promise<T>;
-  resolve: (value: T) => void;
-};
-
-function deferred<T>(): Deferred<T> {
-  let resolve: (value: T) => void = () => {
-    throw new Error("deferred promise was not initialized");
-  };
-  const promise = new Promise<T>((promiseResolve) => {
-    resolve = promiseResolve;
-  });
-  return { promise, resolve };
-}
 
 function stubDocumentFetch(...responses: Response[]) {
   const fetchMock = vi.fn<typeof fetch>(async () => {

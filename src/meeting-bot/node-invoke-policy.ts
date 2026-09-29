@@ -159,14 +159,21 @@ function buildForwardParams(
   switch (action) {
     case "setup":
       return approved({ action });
+    case "stop":
     case "status": {
       const bridgeId = readNonEmptyString(params.bridgeId);
       return approved(bridgeId ? { action, bridgeId } : { action });
     }
-    case "list": {
+    case "list":
+    case "stopByUrl": {
       const forwarded: Record<string, unknown> = { action };
       const url = readNonEmptyString(params.url);
       const mode = readNonEmptyString(params.mode);
+      const exceptBridgeId =
+        action === "stopByUrl" ? readNonEmptyString(params.exceptBridgeId) : undefined;
+      if (action === "stopByUrl" && !url) {
+        return denyMissing(options, action, "url");
+      }
       if (url) {
         try {
           forwarded.url = options.normalizeUrl(url);
@@ -175,34 +182,10 @@ function buildForwardParams(
             approved: false,
             result: denied(
               options,
-              error instanceof Error ? error.message : `${options.commandName} list url`,
+              error instanceof Error ? error.message : `${options.commandName} ${action} url`,
             ),
           };
         }
-      }
-      if (mode) {
-        forwarded.mode = mode;
-      }
-      return approved(forwarded);
-    }
-    case "stopByUrl": {
-      const forwarded: Record<string, unknown> = { action };
-      const url = readNonEmptyString(params.url);
-      const mode = readNonEmptyString(params.mode);
-      const exceptBridgeId = readNonEmptyString(params.exceptBridgeId);
-      if (!url) {
-        return denyMissing(options, action, "url");
-      }
-      try {
-        forwarded.url = options.normalizeUrl(url);
-      } catch (error) {
-        return {
-          approved: false,
-          result: denied(
-            options,
-            error instanceof Error ? error.message : `${options.commandName} stopByUrl url`,
-          ),
-        };
       }
       if (mode) {
         forwarded.mode = mode;
@@ -225,24 +208,29 @@ function buildForwardParams(
       }
       return approved(forwarded);
     }
-    case "pushAudio": {
+    case "pushAudio":
+    case "clearAudio": {
       const forwarded: Record<string, unknown> = { action };
       const bridgeId = readNonEmptyString(params.bridgeId);
-      const base64 = readNonEmptyString(params.base64);
+      const base64 = action === "pushAudio" ? readNonEmptyString(params.base64) : undefined;
       if (!bridgeId) {
         return denyMissing(options, action, "bridgeId");
       }
-      if (!base64) {
-        return denyMissing(options, action, "base64");
-      }
-      if (!isMeetingAudioBase64(base64)) {
-        return {
-          approved: false,
-          result: denied(options, "base64 must be a valid audio payload"),
-        };
+      if (action === "pushAudio") {
+        if (!base64) {
+          return denyMissing(options, action, "base64");
+        }
+        if (!isMeetingAudioBase64(base64)) {
+          return {
+            approved: false,
+            result: denied(options, "base64 must be a valid audio payload"),
+          };
+        }
       }
       forwarded.bridgeId = bridgeId;
-      forwarded.base64 = base64;
+      if (base64) {
+        forwarded.base64 = base64;
+      }
       const outputGeneration = readOutputGeneration(params.outputGeneration);
       if (params.outputGeneration !== undefined && outputGeneration === undefined) {
         return {
@@ -254,28 +242,6 @@ function buildForwardParams(
         forwarded.outputGeneration = outputGeneration;
       }
       return approved(forwarded);
-    }
-    case "clearAudio": {
-      const bridgeId = readNonEmptyString(params.bridgeId);
-      if (!bridgeId) {
-        return denyMissing(options, action, "bridgeId");
-      }
-      const outputGeneration = readOutputGeneration(params.outputGeneration);
-      if (params.outputGeneration !== undefined && outputGeneration === undefined) {
-        return {
-          approved: false,
-          result: denied(options, "outputGeneration must be a non-negative safe integer"),
-        };
-      }
-      return approved({
-        action,
-        bridgeId,
-        ...(outputGeneration !== undefined ? { outputGeneration } : {}),
-      });
-    }
-    case "stop": {
-      const bridgeId = readNonEmptyString(params.bridgeId);
-      return approved(bridgeId ? { action, bridgeId } : { action });
     }
     default:
       return null;

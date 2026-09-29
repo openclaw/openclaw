@@ -22,10 +22,11 @@ import { newSessionSearch, type NewSessionTarget } from "../pages/new-session/lo
 import { selectApplicationSession } from "./agent-selection.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "./context.ts";
+import { readDeletedSessionStartup } from "./deleted-session-startup.ts";
 import { considerRouteRestore, persistRoute } from "./native-route-memory.ts";
 
 export interface ShellNavigationHost {
-  readonly context: ApplicationContext<RouteId> | undefined;
+  readonly context: ApplicationContext | undefined;
   activeSessionKey: string;
   routeState: ShellRouteState;
   lastWorkspaceLocation: ({ routeId: RouteId } & Required<ApplicationNavigationOptions>) | null;
@@ -78,7 +79,7 @@ export class ShellNavigationOwner {
     );
   }
 
-  navigate(routeId: string, options?: ApplicationNavigationOptions): void {
+  readonly navigate = (routeId: string, options?: ApplicationNavigationOptions): void => {
     const context = this.host.context;
     if (!context || !isRouteId(routeId)) {
       return;
@@ -88,7 +89,7 @@ export class ShellNavigationOwner {
       routeId,
       isSessionRouteId(routeId) ? this.chatNavigationOptions(routeId, options) : options,
     );
-  }
+  };
 
   recoverNotFoundRoute(): boolean {
     const context = this.host.context;
@@ -119,6 +120,9 @@ export class ShellNavigationOwner {
       return false;
     }
     const face = this.host.routeState.routeId === "dashboard" ? "dashboard" : "chat";
+    if (face === "chat" && readDeletedSessionStartup(context, sessionKey)) {
+      return true;
+    }
     const sessionWasDeleted = context.sessions.deletionState(sessionKey);
     // Session lists are filtered and windowed. Only a failed route for this
     // active key, or an authoritative deletion, proves it needs replacement.
@@ -201,6 +205,7 @@ export class ShellNavigationOwner {
       // in-flight navigation: it wins over the one-shot restore, and the stale
       // committed route must not be persisted over the remembered destination.
       const pendingDiffers =
+        routeContext.chatSubmissions.creation ||
         routeState.routeId !== committedRouteId ||
         (routeState.location?.pathname ?? "") !== committedPathname ||
         (routeState.location?.search ?? "") !== committedSearch;
@@ -225,6 +230,12 @@ export class ShellNavigationOwner {
           committedSessionKey !== undefined &&
           routeContext.sessions.deletionState(committedSessionKey);
         if (committedSessionDeleted) {
+          if (
+            committedRouteId === "chat" &&
+            readDeletedSessionStartup(routeContext, committedSessionKey)
+          ) {
+            return;
+          }
           // An older route can commit after deletion recovery has started.
           // Never let it persist or reselect the session we just retired.
           this.replaceChatWithCurrentSession();
@@ -237,6 +248,7 @@ export class ShellNavigationOwner {
             selection: routeContext.agentSelection,
             gateway: routeContext.gateway,
             sessionKey: committedSessionKey,
+            background: true,
           });
         }
       }

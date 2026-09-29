@@ -1,5 +1,4 @@
-// Bench Cli Startup script supports OpenClaw repository automation.
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import {
   mkdirSync,
   mkdtempSync,
@@ -14,8 +13,10 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import {
+  assertCompatibleCliStartupExecutionModes,
   assertCompatibleCliStartupMemoryMetrics,
   CLI_RUNTIME_MEMORY_METRIC,
+  type CliStartupExecutionMode,
   cliStartupMemoryMetric,
 } from "./lib/cli-startup-memory-contract.mts";
 import {
@@ -93,6 +94,7 @@ type CaseSummary = {
 
 type SuiteResult = {
   entry: string;
+  executionMode?: CliStartupExecutionMode;
   memoryMetric?: string;
   cases: Array<{
     id: string;
@@ -160,6 +162,133 @@ const TIMEOUT_KILL_GRACE_MS = resolveTimeoutKillGraceMs(process.env);
 const DEFAULT_ENTRY = "openclaw.mjs";
 const MAX_RSS_MARKER = "__OPENCLAW_MAX_RSS_KB__=";
 
+type SampleTransport = {
+  prefix: string[];
+  binary: string;
+  env: Record<string, string>;
+  cwd: string;
+};
+
+function sampleTransport(): SampleTransport | undefined {
+  const raw = process.env.OPENCLAW_BENCH_TRANSPORT_JSON;
+  if (raw === undefined) {
+    return undefined;
+  }
+  const value: unknown = JSON.parse(raw);
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Invalid benchmark transport");
+  }
+  const prefix = "prefix" in value ? value.prefix : undefined;
+  const binary = "binary" in value ? value.binary : undefined;
+  const env = "env" in value ? value.env : undefined;
+  const cwd = "cwd" in value ? value.cwd : undefined;
+  if (
+    !Array.isArray(prefix) ||
+    prefix.length === 0 ||
+    !prefix.every(
+      (part: unknown) => typeof part === "string" && part.length > 0 && !part.includes("\0"),
+    ) ||
+    typeof prefix[0] !== "string" ||
+    !path.isAbsolute(prefix[0]) ||
+    typeof binary !== "string" ||
+    !path.isAbsolute(binary) ||
+    binary.includes("\0") ||
+    !env ||
+    typeof env !== "object" ||
+    Array.isArray(env)
+  ) {
+    throw new Error("Invalid benchmark transport");
+  }
+  const fixedEnv: Record<string, string> = {};
+  for (const [key, entry] of Object.entries(env)) {
+    if (!/^[A-Z_][A-Z0-9_]*$/u.test(key) || typeof entry !== "string" || entry.includes("\0")) {
+      throw new Error("Invalid benchmark transport environment");
+    }
+    fixedEnv[key] = entry;
+  }
+  if (!fixedEnv.HOME || !path.isAbsolute(fixedEnv.HOME) || !fixedEnv.PATH) {
+    throw new Error("Benchmark transport requires fixed HOME and PATH");
+  }
+  const directory = cwd === undefined ? fixedEnv.HOME : cwd;
+  if (typeof directory !== "string" || !path.isAbsolute(directory) || directory.includes("\0")) {
+    throw new Error("Invalid benchmark transport cwd");
+  }
+  return { prefix, binary, env: fixedEnv, cwd: directory };
+}
+
+function transportedCommand(
+  transport: SampleTransport,
+  args: string[],
+  env: Record<string, string> = {},
+  timeoutMs?: number,
+): { command: string; args: string[] } {
+  return {
+    command: expectDefined(transport.prefix[0], "benchmark transport command"),
+    args: [
+      ...transport.prefix.slice(1),
+      "/usr/bin/env",
+      "-C",
+      transport.cwd,
+      "-i",
+      ...Object.entries({ ...transport.env, ...env }).map(([key, value]) => `${key}=${value}`),
+      ...(timeoutMs === undefined
+        ? []
+        : ["/usr/bin/timeout", "--signal=TERM", "--kill-after=1s", `${timeoutMs / 1000}s`]),
+      transport.binary,
+      ...args,
+    ],
+  };
+}
+
+function sampleFilesystem(
+  transport: SampleTransport,
+  operation: "create" | "prepare" | "remove",
+  root?: string,
+  config?: Record<string, unknown> | null,
+  hook?: string,
+): string {
+  // Only the SUT opens these paths. Its replies are never read as paths on the runner.
+  const launch = transportedCommand(transport, [
+    "--input-type=module",
+    "-e",
+    `import fs from "node:fs"; import os from "node:os"; import path from "node:path";
+const {operation,root,config,hook} = JSON.parse(fs.readFileSync(0,"utf8"));
+if (operation === "create") process.stdout.write(fs.mkdtempSync(path.join(os.tmpdir(),"openclaw-cli-bench-home-")));
+else if (operation === "prepare") {
+  fs.mkdirSync(path.join(root,".openclaw"),{recursive:true});
+  if (config) fs.writeFileSync(path.join(root,".openclaw/openclaw.json"),JSON.stringify(config)+"\\n");
+  fs.writeFileSync(path.join(root,"measure-rss.mjs"),hook);
+} else if (operation === "remove") fs.rmSync(root,{recursive:true,force:true});
+else throw new Error("Invalid sample filesystem operation");`,
+  ]);
+  return execFileSync(launch.command, launch.args, {
+    input: JSON.stringify({ operation, root, config, hook }),
+    encoding: "utf8",
+    timeout: 10_000,
+    maxBuffer: 64 * 1024,
+    env: { PATH: process.env.PATH },
+  });
+}
+
+function createSampleRoot(transport?: SampleTransport): string {
+  if (!transport) {
+    return mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-bench-home-"));
+  }
+  const root = sampleFilesystem(transport, "create");
+  if (!path.isAbsolute(root) || /[\0\r\n]/u.test(root)) {
+    throw new Error("Invalid SUT sample directory");
+  }
+  return root;
+}
+
+function removeSampleRoot(root: string, transport?: SampleTransport): void {
+  if (transport) {
+    sampleFilesystem(transport, "remove", root);
+  } else {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
 function resolveTimeoutKillGraceMs(env: NodeJS.ProcessEnv): number {
   const raw = env.VITEST ? env.OPENCLAW_TEST_CLI_STARTUP_TIMEOUT_KILL_GRACE_MS : undefined;
   if (!raw || !/^\d+$/u.test(raw)) {
@@ -185,239 +314,67 @@ const VALUE_FLAGS = new Set([
 ]);
 const BOOLEAN_FLAGS = new Set(["--help", "--json", "--runtime-rss"]);
 
+function responseCase(
+  id: string,
+  args: string[],
+  options: Partial<Pick<CommandCase, "presets" | "firstOutputBudgetMs" | "exitBudgetMs">> = {},
+): CommandCase {
+  return {
+    id,
+    name: args.join(" "),
+    args,
+    presets: ["response"],
+    firstOutputBudgetMs: 2_500,
+    exitBudgetMs: 6_000,
+    ...options,
+  };
+}
+
 const COMMAND_CASES: readonly CommandCase[] = [
-  {
-    id: "version",
-    name: "--version",
-    args: ["--version"],
+  responseCase("version", ["--version"], {
     presets: ["startup", "response"],
     firstOutputBudgetMs: 1_000,
     exitBudgetMs: 2_000,
-  },
-  {
-    id: "help",
-    name: "--help",
-    args: ["--help"],
+  }),
+  responseCase("help", ["--help"], {
     presets: ["startup", "response"],
     firstOutputBudgetMs: 1_000,
     exitBudgetMs: 2_000,
-  },
-  {
-    id: "onboardHelp",
-    name: "onboard --help",
-    args: ["onboard", "--help"],
-    presets: ["response"],
-    firstOutputBudgetMs: 2_500,
-    exitBudgetMs: 6_000,
-  },
-  {
-    id: "setupHelp",
-    name: "setup --help",
-    args: ["setup", "--help"],
-    presets: ["response"],
-    firstOutputBudgetMs: 2_500,
-    exitBudgetMs: 6_000,
-  },
-  {
-    id: "configureHelp",
-    name: "configure --help",
-    args: ["configure", "--help"],
-    presets: ["response"],
-    firstOutputBudgetMs: 2_500,
-    exitBudgetMs: 6_000,
-  },
-  {
-    id: "channelsAddHelp",
-    name: "channels add --help",
-    args: ["channels", "add", "--help"],
-    presets: ["response"],
-    firstOutputBudgetMs: 2_500,
-    exitBudgetMs: 6_000,
-  },
-  {
-    id: "channelsParent",
-    name: "channels",
-    args: ["channels"],
-    presets: ["response"],
-    firstOutputBudgetMs: 2_500,
-    exitBudgetMs: 6_000,
-  },
-  {
-    id: "doctorHelp",
-    name: "doctor --help",
-    args: ["doctor", "--help"],
-    presets: ["response"],
-    firstOutputBudgetMs: 2_500,
-    exitBudgetMs: 6_000,
-  },
-  {
-    id: "modelsHelp",
-    name: "models --help",
-    args: ["models", "--help"],
-    presets: ["response"],
-    firstOutputBudgetMs: 2_500,
-    exitBudgetMs: 6_000,
-  },
-  {
-    id: "pluginsHelp",
-    name: "plugins --help",
-    args: ["plugins", "--help"],
-    presets: ["response"],
-    firstOutputBudgetMs: 2_500,
-    exitBudgetMs: 6_000,
-  },
-  {
-    id: "pluginsParent",
-    name: "plugins",
-    args: ["plugins"],
-    presets: ["response"],
-    firstOutputBudgetMs: 2_500,
-    exitBudgetMs: 6_000,
-  },
-  {
-    id: "pluginsListJson",
-    name: "plugins list --json",
-    args: ["plugins", "list", "--json"],
-    presets: ["response", "real"],
-    firstOutputBudgetMs: 2_500,
-    exitBudgetMs: 6_000,
-  },
-  {
-    id: "gatewayHelp",
-    name: "gateway --help",
-    args: ["gateway", "--help"],
-    presets: ["response"],
-    firstOutputBudgetMs: 2_500,
-    exitBudgetMs: 6_000,
-  },
-  {
-    id: "agentsHelp",
-    name: "agents --help",
-    args: ["agents", "--help"],
-    presets: ["response"],
+  }),
+  responseCase("onboardHelp", ["onboard", "--help"]),
+  responseCase("setupHelp", ["setup", "--help"]),
+  responseCase("configureHelp", ["configure", "--help"]),
+  responseCase("channelsAddHelp", ["channels", "add", "--help"]),
+  responseCase("channelsParent", ["channels"]),
+  responseCase("doctorHelp", ["doctor", "--help"]),
+  responseCase("modelsHelp", ["models", "--help"]),
+  responseCase("pluginsHelp", ["plugins", "--help"]),
+  responseCase("pluginsParent", ["plugins"]),
+  responseCase("pluginsListJson", ["plugins", "list", "--json"], { presets: ["response", "real"] }),
+  responseCase("gatewayHelp", ["gateway", "--help"]),
+  responseCase("agentsHelp", ["agents", "--help"], {
     firstOutputBudgetMs: 3_500,
     exitBudgetMs: 8_000,
-  },
-  {
-    id: "sessionsHelp",
-    name: "sessions --help",
-    args: ["sessions", "--help"],
-    presets: ["response"],
-    firstOutputBudgetMs: 2_500,
-    exitBudgetMs: 6_000,
-  },
-  {
-    id: "tasksHelp",
-    name: "tasks --help",
-    args: ["tasks", "--help"],
-    presets: ["response"],
-    firstOutputBudgetMs: 2_500,
-    exitBudgetMs: 6_000,
-  },
-  {
-    id: "messageHelp",
-    name: "message --help",
-    args: ["message", "--help"],
-    presets: ["response"],
-    firstOutputBudgetMs: 2_500,
-    exitBudgetMs: 6_000,
-  },
-  {
-    id: "pairingHelp",
-    name: "pairing --help",
-    args: ["pairing", "--help"],
-    presets: ["response"],
-    firstOutputBudgetMs: 2_500,
-    exitBudgetMs: 6_000,
-  },
-  {
-    id: "authHelp",
-    name: "auth --help",
-    args: ["auth", "--help"],
-    presets: ["response"],
-    firstOutputBudgetMs: 2_500,
-    exitBudgetMs: 6_000,
-  },
-  {
-    id: "configHelp",
-    name: "config --help",
-    args: ["config", "--help"],
-    presets: ["response"],
-    firstOutputBudgetMs: 2_500,
-    exitBudgetMs: 6_000,
-  },
-  {
-    id: "secretsHelp",
-    name: "secrets --help",
-    args: ["secrets", "--help"],
-    presets: ["response"],
-    firstOutputBudgetMs: 2_500,
-    exitBudgetMs: 6_000,
-  },
-  {
-    id: "skillsHelp",
-    name: "skills --help",
-    args: ["skills", "--help"],
-    presets: ["response"],
-    firstOutputBudgetMs: 2_500,
-    exitBudgetMs: 6_000,
-  },
-  {
-    id: "nodesHelp",
-    name: "nodes --help",
-    args: ["nodes", "--help"],
-    presets: ["response"],
+  }),
+  responseCase("sessionsHelp", ["sessions", "--help"]),
+  responseCase("messageHelp", ["message", "--help"]),
+  responseCase("pairingHelp", ["pairing", "--help"]),
+  responseCase("authHelp", ["auth", "--help"]),
+  responseCase("configHelp", ["config", "--help"]),
+  responseCase("secretsHelp", ["secrets", "--help"]),
+  responseCase("skillsHelp", ["skills", "--help"]),
+  responseCase("nodesHelp", ["nodes", "--help"], {
     firstOutputBudgetMs: 3_500,
     exitBudgetMs: 8_000,
-  },
-  {
-    id: "directoryHelp",
-    name: "directory --help",
-    args: ["directory", "--help"],
-    presets: ["response"],
-    firstOutputBudgetMs: 2_500,
-    exitBudgetMs: 6_000,
-  },
-  {
-    id: "sandboxHelp",
-    name: "sandbox --help",
-    args: ["sandbox", "--help"],
-    presets: ["response"],
-    firstOutputBudgetMs: 2_500,
-    exitBudgetMs: 6_000,
-  },
-  {
-    id: "devicesParent",
-    name: "devices",
-    args: ["devices"],
-    presets: ["response"],
-    firstOutputBudgetMs: 2_500,
-    exitBudgetMs: 6_000,
-  },
-  {
-    id: "mcpParent",
-    name: "mcp",
-    args: ["mcp"],
-    presets: ["response"],
-    firstOutputBudgetMs: 2_500,
-    exitBudgetMs: 6_000,
-  },
-  {
-    id: "browserHelp",
-    name: "browser --help",
-    args: ["browser", "--help"],
-    presets: ["response"],
+  }),
+  responseCase("directoryHelp", ["directory", "--help"]),
+  responseCase("sandboxHelp", ["sandbox", "--help"]),
+  responseCase("devicesParent", ["devices"]),
+  responseCase("mcpParent", ["mcp"]),
+  responseCase("browserHelp", ["browser", "--help"], {
     firstOutputBudgetMs: 1_500,
     exitBudgetMs: 3_000,
-  },
-  {
-    id: "webhooksHelp",
-    name: "webhooks --help",
-    args: ["webhooks", "--help"],
-    presets: ["response"],
-    firstOutputBudgetMs: 2_500,
-    exitBudgetMs: 6_000,
-  },
+  }),
   {
     id: "health",
     name: "health",
@@ -446,24 +403,6 @@ const COMMAND_CASES: readonly CommandCase[] = [
     id: "sessionsJson",
     name: "sessions --json",
     args: ["sessions", "--json"],
-    presets: ["real"],
-  },
-  {
-    id: "tasksJson",
-    name: "tasks --json",
-    args: ["tasks", "--json"],
-    presets: ["real"],
-  },
-  {
-    id: "tasksListJson",
-    name: "tasks list --json",
-    args: ["tasks", "list", "--json"],
-    presets: ["real"],
-  },
-  {
-    id: "tasksAuditJson",
-    name: "tasks audit --json",
-    args: ["tasks", "audit", "--json"],
     presets: ["real"],
   },
   {
@@ -653,42 +592,23 @@ function resolveCases(options: { presets: string[]; caseIds: string[] }): Comman
   );
 }
 
-function median(values: number[]): number {
-  if (values.length === 0) {
-    return 0;
-  }
-  const sorted = [...values].toSorted((a, b) => a - b);
-  const mid = Math.floor(sorted.length / 2);
-  if (sorted.length % 2 === 0) {
-    return (
-      (expectDefined(sorted[mid - 1], "lower middle CLI benchmark sample") +
-        expectDefined(sorted[mid], "upper middle CLI benchmark sample")) /
-      2
-    );
-  }
-  return expectDefined(sorted[mid], "middle CLI benchmark sample");
-}
-
-function percentile(values: number[], p: number): number {
-  if (values.length === 0) {
-    return 0;
-  }
-  const sorted = [...values].toSorted((a, b) => a - b);
-  const index = Math.min(sorted.length - 1, Math.floor((p / 100) * sorted.length));
-  return sorted[index] ?? 0;
-}
-
 function summarizeNumbers(values: number[]): SummaryStats {
+  const sorted = values.toSorted((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
   const total = values.reduce((sum, value) => sum + value, 0);
-  const avg = values.length > 0 ? total / values.length : 0;
-  const min = values.length > 0 ? Math.min(...values) : 0;
-  const max = values.length > 0 ? Math.max(...values) : 0;
   return {
-    avg,
-    p50: median(values),
-    p95: percentile(values, 95),
-    min,
-    max,
+    avg: values.length > 0 ? total / values.length : 0,
+    p50:
+      sorted.length === 0
+        ? 0
+        : sorted.length % 2 === 0
+          ? (expectDefined(sorted[mid - 1], "lower middle CLI benchmark sample") +
+              expectDefined(sorted[mid], "upper middle CLI benchmark sample")) /
+            2
+          : expectDefined(sorted[mid], "middle CLI benchmark sample"),
+    p95: sorted[Math.min(sorted.length - 1, Math.floor(0.95 * sorted.length))] ?? 0,
+    min: values.length > 0 ? Math.min(...values) : 0,
+    max: values.length > 0 ? Math.max(...values) : 0,
   };
 }
 
@@ -954,18 +874,35 @@ async function runSample(params: {
   rssHookPath: string;
   runRoot?: string;
 }): Promise<Sample> {
-  const runRoot = params.runRoot ?? mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-bench-home-"));
+  const transport = sampleTransport();
+  const runRoot = params.runRoot ?? createSampleRoot(transport);
   const ownsRunRoot = params.runRoot == null;
   const stateDir = path.join(runRoot, ".openclaw");
   const configPath = path.join(stateDir, "openclaw.json");
   const configFixture = buildConfigFixture(params.commandCase);
-  if (configFixture) {
+  let rssHookPath = params.rssHookPath;
+  if (transport) {
+    sampleFilesystem(
+      transport,
+      "prepare",
+      runRoot,
+      configFixture,
+      readFileSync(rssHookPath, "utf8"),
+    );
+    rssHookPath = path.join(runRoot, "measure-rss.mjs");
+  } else if (configFixture) {
     mkdirSync(stateDir, { recursive: true });
     writeFileSync(configPath, `${JSON.stringify(configFixture, null, 2)}\n`, "utf8");
   }
   const nodeArgs = [
+    ...(transport
+      ? [
+          "--import",
+          `data:text/javascript,${encodeURIComponent(`process.chdir(${JSON.stringify(path.dirname(params.entry))});`)}`,
+        ]
+      : []),
     "--import",
-    nodeImportSpecifierForPath(params.rssHookPath),
+    nodeImportSpecifierForPath(rssHookPath),
     ...buildCpuOrHeapFlags({
       cpuProfDir: params.cpuProfDir,
       heapProfDir: params.heapProfDir,
@@ -989,29 +926,45 @@ async function runSample(params: {
 
   try {
     return await new Promise<Sample>((resolve) => {
-      const proc = spawn(process.execPath, nodeArgs, {
+      const sampleEnv = {
+        HOME: runRoot,
+        USERPROFILE: runRoot,
+        OPENCLAW_HOME: runRoot,
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_CONFIG_PATH: configPath,
+        OPENCLAW_HIDE_BANNER: "1",
+        NO_COLOR: "1",
+        FORCE_COLOR: "0",
+        ...(memoryDirectory
+          ? {
+              OPENCLAW_BENCH_MEMORY: JSON.stringify({
+                directory: memoryDirectory,
+                entries: memoryInvocationEntries(params.entry),
+                args: params.commandCase.args,
+              }),
+            }
+          : {}),
+      };
+      const launch = transport
+        ? transportedCommand(
+            transport,
+            nodeArgs,
+            {
+              ...sampleEnv,
+              ...(process.env.OPENCLAW_GATEWAY_TOKEN
+                ? { OPENCLAW_GATEWAY_TOKEN: process.env.OPENCLAW_GATEWAY_TOKEN }
+                : {}),
+              ...(process.env.OPENCLAW_GATEWAY_PORT
+                ? { OPENCLAW_GATEWAY_PORT: process.env.OPENCLAW_GATEWAY_PORT }
+                : {}),
+            },
+            params.timeoutMs,
+          )
+        : { command: process.execPath, args: nodeArgs };
+      const proc = spawn(launch.command, launch.args, {
         cwd: process.cwd(),
         detached: process.platform !== "win32",
-        env: {
-          ...process.env,
-          HOME: runRoot,
-          USERPROFILE: runRoot,
-          OPENCLAW_HOME: runRoot,
-          OPENCLAW_STATE_DIR: stateDir,
-          OPENCLAW_CONFIG_PATH: configPath,
-          OPENCLAW_HIDE_BANNER: "1",
-          NO_COLOR: "1",
-          FORCE_COLOR: "0",
-          ...(memoryDirectory
-            ? {
-                OPENCLAW_BENCH_MEMORY: JSON.stringify({
-                  directory: memoryDirectory,
-                  entries: memoryInvocationEntries(params.entry),
-                  args: params.commandCase.args,
-                }),
-              }
-            : {}),
-        },
+        env: transport ? { PATH: process.env.PATH } : { ...process.env, ...sampleEnv },
         stdio: ["ignore", "pipe", "pipe"],
       });
 
@@ -1112,7 +1065,7 @@ async function runSample(params: {
       rmSync(memoryDirectory, { recursive: true, force: true });
     }
     if (ownsRunRoot) {
-      rmSync(runRoot, { recursive: true, force: true });
+      removeSampleRoot(runRoot, transport);
     }
   }
 }
@@ -1179,10 +1132,9 @@ async function runCase(params: {
   const warmupSamples: Sample[] = [];
   const samples: Sample[] = [];
   const totalRuns = params.warmup + params.runs;
+  const transport = sampleTransport();
   const caseRunRoot =
-    params.commandCase.stateScope === "case"
-      ? mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-bench-home-"))
-      : undefined;
+    params.commandCase.stateScope === "case" ? createSampleRoot(transport) : undefined;
   try {
     for (let i = 0; i < totalRuns; i += 1) {
       const sample = await runSample({ ...params, runRoot: caseRunRoot });
@@ -1195,7 +1147,7 @@ async function runCase(params: {
     return { warmupSamples, samples };
   } finally {
     if (caseRunRoot) {
-      rmSync(caseRunRoot, { recursive: true, force: true });
+      removeSampleRoot(caseRunRoot, transport);
     }
   }
 }
@@ -1249,6 +1201,7 @@ function printDelta(primary: SuiteResult, secondary: SuiteResult): void {
 }
 
 function buildCaseDeltas(primary: SuiteResult, secondary: SuiteResult): CaseDelta[] {
+  assertCompatibleCliStartupExecutionModes(primary, secondary);
   assertCompatibleCliStartupMemoryMetrics(primary, secondary);
   const primaryById = new Map(primary.cases.map((commandCase) => [commandCase.id, commandCase]));
   const deltas: CaseDelta[] = [];
@@ -1326,6 +1279,7 @@ export function collectFailedSamples(result: SuiteResult): string[] {
 
 async function buildSuiteResult(params: {
   entry: string;
+  executionMode: CliStartupExecutionMode;
   options: CliOptions;
   rssHookPath: string;
 }): Promise<SuiteResult> {
@@ -1366,6 +1320,7 @@ async function buildSuiteResult(params: {
   }
   return {
     entry: params.entry,
+    executionMode: params.executionMode,
     ...(params.options.runtimeRss ? { memoryMetric: CLI_RUNTIME_MEMORY_METRIC } : {}),
     cases,
   };
@@ -1457,6 +1412,15 @@ async function main(): Promise<void> {
   }
 
   const options = parseOptions();
+  const transport = sampleTransport();
+  if (transport && options.runtimeRss) {
+    throw new Error("Cross-user runtime RSS sampling is not supported");
+  }
+  if (transport && (options.cpuProfDir || options.heapProfDir)) {
+    throw new Error(
+      "Cross-user CLI profiles must be collected through the SUT diagnostic exporter",
+    );
+  }
   if (options.compareBaseline || options.compareCandidate) {
     if (!options.compareBaseline || !options.compareCandidate) {
       throw new Error("--compare-baseline and --compare-candidate must be provided together");
@@ -1480,12 +1444,14 @@ async function main(): Promise<void> {
   try {
     const primary = await buildSuiteResult({
       entry: options.entryPrimary,
+      executionMode: transport ? "transport" : "native",
       options,
       rssHookPath,
     });
     const secondary = options.entrySecondary
       ? await buildSuiteResult({
           entry: options.entrySecondary,
+          executionMode: transport ? "transport" : "native",
           options,
           rssHookPath,
         })

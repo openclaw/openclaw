@@ -126,16 +126,20 @@ OpenClaw state lives under:
 - `~/.openclaw/` -- `openclaw.json`, channel/provider credentials, shared and per-agent SQLite auth stores, and session data.
 - `~/.openclaw/workspace/` -- the agent workspace (SOUL.md, memory, artifacts).
 
-These survive Droplet reboots. To take a portable snapshot:
+These survive Droplet reboots. To create a backup archive:
 
 ```bash
 openclaw backup create
 openclaw backup restore <archive.tar.gz> --target <fresh-directory>
 ```
 
-DigitalOcean snapshots back up the whole Droplet; `openclaw backup create` is
-portable across hosts. Restore verifies and extracts into a fresh staging
-directory; activation is a separate offline step. See [Restore a full archive](/install/backups#restore-a-full-archive)
+DigitalOcean snapshots back up the whole Droplet. OpenClaw archives can be
+transferred to another host. Absolute symbolic links keep their original target
+locations, including links to separately backed-up config or credentials.
+Review these links before activating state on another host or at another path;
+see the [backup symbolic-link caveat](/cli/backup#what-gets-backed-up).
+Restore verifies and extracts into a fresh staging directory; activation is a
+separate offline step. See [Restore a full archive](/install/backups#restore-a-full-archive)
 for the rollback warnings and activation sequence.
 
 ## 1 GB RAM tips

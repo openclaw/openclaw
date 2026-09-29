@@ -1,5 +1,6 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import http from "node:http";
+import { createRequire } from "node:module";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -11,14 +12,17 @@ import {
   Headers,
   Pool,
   ProxyAgent,
+  Response as UndiciResponse,
   setGlobalDispatcher,
 } from "undici";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   PROXY_FIXTURE_HOST as TARGET_HOST,
   PROXY_FIXTURE_PAYLOAD as PAYLOAD,
   withProxyFixture,
 } from "../../test-fixtures/proxy-fixture.js";
+import { readResponseWithLimit } from "../http-body.js";
 import { fetchWithSsrFGuard } from "./fetch-guard.js";
 import { resolveProxyFetchFromEnv } from "./proxy-fetch.js";
 import {
@@ -34,7 +38,49 @@ import {
 import * as undiciRuntime from "./undici-runtime.js";
 import { createHttp1EnvHttpProxyAgent, createHttp1ProxyAgent } from "./undici-runtime.js";
 
+// Undici exposes its deadline clock for tests; network I/O stays real.
+const undiciTimers: { tick: (delay: number) => void } = createRequire(import.meta.url)(
+  "undici/lib/util/timers.js",
+);
+
 const TARGET_URL = `https://${TARGET_HOST}/media`;
+const PAYLOAD_BYTES = Buffer.byteLength(PAYLOAD);
+
+// Bridge Undici's Node stream types to the bounded reader's DOM Response contract.
+async function readProxyPayload(response: Response | UndiciResponse): Promise<string> {
+  const reader = response.body?.getReader();
+  if (!reader) {
+    throw new Error("Expected a proxy response body");
+  }
+  const body = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const next = await reader.read();
+        if (next.done) {
+          reader.releaseLock();
+          controller.close();
+          return;
+        }
+        const chunk: unknown = next.value;
+        if (!(chunk instanceof Uint8Array)) {
+          throw new Error("Expected proxy response bytes");
+        }
+        controller.enqueue(chunk);
+      } catch (error) {
+        reader.releaseLock();
+        controller.error(error);
+      }
+    },
+    async cancel(reason) {
+      try {
+        await reader.cancel(reason);
+      } finally {
+        reader.releaseLock();
+      }
+    },
+  });
+  return (await readResponseWithLimit(new Response(body), PAYLOAD_BYTES)).toString("utf8");
+}
 
 async function fetchPayload(
   dispatcher: ReturnType<typeof createHttp1ProxyAgent>,
@@ -44,7 +90,7 @@ async function fetchPayload(
     await Promise.all([
       undiciFetch(TARGET_URL, { dispatcher, signal: AbortSignal.timeout(5_000) }).then(
         async (response) => {
-          expect(await response.text()).toBe(PAYLOAD);
+          expect(await readProxyPayload(response)).toBe(PAYLOAD);
         },
       ),
       protocolProof,
@@ -167,7 +213,7 @@ describe("SOCKS proxy protocol boundaries", () => {
           if (mode === "forward-http") {
             try {
               const response = await undiciFetch(`http://${TARGET_HOST}/media`, { dispatcher });
-              expect(await response.text()).toBe(PAYLOAD);
+              expect(await readProxyPayload(response)).toBe(PAYLOAD);
             } finally {
               await dispatcher.destroy();
             }
@@ -210,8 +256,8 @@ describe("SOCKS proxy protocol boundaries", () => {
     },
   );
 
-  // Each row owns its server, sockets, and dispatcher, so native deadline waits can overlap.
-  it.concurrent.each([
+  // The dispatchers share Undici's clock, so each handshake must settle before the next row.
+  it.each([
     { name: "fixed target", mode: "fixed", stall: "target", target: 100, proxy: 0 },
     { name: "environment target", mode: "environment", stall: "target", target: 100, proxy: 0 },
     {
@@ -326,8 +372,10 @@ describe("SOCKS proxy protocol boundaries", () => {
       const server = stall === "proxy" ? net.createServer() : http.createServer();
       const sockets = new Set<net.Socket>();
       let sawTlsHandshake = false;
+      const handshake = createDeferred();
       const observeTls = (chunk: Buffer) => {
         sawTlsHandshake = chunk[0] === 22;
+        handshake.resolve();
       };
       server.on("connection", (socket: net.Socket) => {
         sockets.add(socket);
@@ -378,13 +426,28 @@ describe("SOCKS proxy protocol boundaries", () => {
           // @ts-expect-error Undici's Node TLS intersection rejects its runtime-valid null timeout.
           dispatcher = createHttp1ProxyAgent({ ...options, uri }, budget);
         }
-        const outcome = await undiciFetch(TARGET_URL, {
+        const outcome = undiciFetch(TARGET_URL, {
           dispatcher,
           // Undici's explicit null/undefined timeout contract uses its 10-second default.
           signal: AbortSignal.timeout(defaultProxyTimeout ? 12_000 : 2_000),
         }).catch((error: unknown) => error);
+        await Promise.race([
+          handshake.promise,
+          outcome.then((result) => {
+            throw new Error("Proxy request settled before its TLS handshake", { cause: result });
+          }),
+        ]);
+        const deadlineMs = defaultProxyTimeout ? 10_000 : 100;
+        // First initialize pending FastTimers, then expire the unchanged connector deadline.
+        undiciTimers.tick(0);
+        undiciTimers.tick(deadlineMs);
         expect(sawTlsHandshake).toBe(true);
-        expect(outcome).toMatchObject({ cause: { code: "UND_ERR_CONNECT_TIMEOUT" } });
+        expect(await outcome).toMatchObject({
+          cause: {
+            code: "UND_ERR_CONNECT_TIMEOUT",
+            message: expect.stringContaining(`timeout: ${deadlineMs}ms`),
+          },
+        });
       } finally {
         for (const socket of sockets) {
           socket.destroy();
@@ -438,7 +501,7 @@ describe("SOCKS proxy protocol boundaries", () => {
             method: "GET",
             headers: { Authorization: "Bearer fixture-origin-only" },
           });
-          expect(await response.body.text()).toBe(PAYLOAD);
+          expect(await readProxyPayload(new UndiciResponse(response.body))).toBe(PAYLOAD);
           expect(connections).toEqual([`socks:${TARGET_HOST}`]);
         } finally {
           await dispatcher.destroy();
@@ -495,7 +558,7 @@ describe("SOCKS proxy protocol boundaries", () => {
       try {
         for (const url of [`http://${TARGET_HOST}/media`, TARGET_URL]) {
           const response = await undiciFetch(url, { dispatcher });
-          expect(await response.text()).toBe(PAYLOAD);
+          expect(await readProxyPayload(response)).toBe(PAYLOAD);
         }
         expect(connections).toEqual(
           (managedHop === "http" ? ["https", "socks"] : ["socks", "https"]).map(
@@ -536,10 +599,10 @@ describe("SOCKS proxy protocol boundaries", () => {
         );
         try {
           const plain = await undiciFetch(`http://${TARGET_HOST}/media`, { dispatcher });
-          expect(await plain.text()).toBe(PAYLOAD);
+          expect(await readProxyPayload(plain)).toBe(PAYLOAD);
           const protocol = tls ? waitForProxyProtocol() : undefined;
           const secure = await undiciFetch(TARGET_URL, { dispatcher });
-          expect(await secure.text()).toBe(PAYLOAD);
+          expect(await readProxyPayload(secure)).toBe(PAYLOAD);
           if (protocol) {
             expect(await protocol).toBe("http/1.1");
           }
@@ -615,7 +678,7 @@ describe("SOCKS proxy protocol boundaries", () => {
         ).rejects.toMatchObject({ cause: { code: "DEPTH_ZERO_SELF_SIGNED_CERT" } });
         expect(connections).toEqual([]);
         const response = await undiciFetch(TARGET_URL, { dispatcher });
-        expect(await response.text()).toBe(PAYLOAD);
+        expect(await readProxyPayload(response)).toBe(PAYLOAD);
         expect(connections).toEqual([`https:${TARGET_HOST}`]);
       } finally {
         await dispatcher.destroy();
@@ -640,7 +703,7 @@ describe("SOCKS proxy protocol boundaries", () => {
               dispatcher,
               signal: AbortSignal.timeout(5_000),
             });
-            expect(await response.text()).toBe(PAYLOAD);
+            expect(await readProxyPayload(response)).toBe(PAYLOAD);
             expect(connections).toEqual([]);
             expect(originRoutes).toEqual(["direct"]);
           } finally {
@@ -696,7 +759,7 @@ describe("SOCKS proxy protocol boundaries", () => {
           });
           await expect(
             undiciFetch(TARGET_URL, { dispatcher, signal: AbortSignal.timeout(5_000) }).then(
-              (second) => second.text(),
+              (second) => readProxyPayload(second),
             ),
           ).rejects.toMatchObject({ cause: { code: "UND_ERR_MAX_ORIGINS_REACHED" } });
           expect(originRoutes).toEqual(["proxy"]);
@@ -754,7 +817,7 @@ describe("SOCKS proxy protocol boundaries", () => {
           throw new Error("expected configured proxy fetch");
         }
         const response = await fetch(`http://${TARGET_HOST}/media`);
-        expect(await response.text()).toBe(PAYLOAD);
+        expect(await readProxyPayload(response)).toBe(PAYLOAD);
         expect(connections).toEqual([`socks:${TARGET_HOST}`]);
       } finally {
         setGlobalDispatcher(previous);
@@ -812,7 +875,7 @@ describe("SOCKS proxy protocol boundaries", () => {
                 path: "/media",
                 method: "GET",
               });
-              expect(await response.body.text()).toBe(PAYLOAD);
+              expect(await readProxyPayload(new UndiciResponse(response.body))).toBe(PAYLOAD);
             }
             expect(originRoutes).toEqual(routes);
             expect(intercepted).toHaveBeenCalledTimes(3);
@@ -913,7 +976,9 @@ describe("SOCKS proxy protocol boundaries", () => {
         };
         const result = await fetchWithSsrFGuard({ ...options, url: TARGET_URL });
         try {
-          expect(await result.response.text()).toBe(PAYLOAD);
+          expect(
+            (await readResponseWithLimit(result.response, PAYLOAD_BYTES)).toString("utf8"),
+          ).toBe(PAYLOAD);
         } finally {
           await result.release();
         }

@@ -1,2 +1,2 @@
-// Runtime facade for transcript file path resolution.
-export { resolveSessionTranscriptFile } from "./transcript.js";
+// Resolve routing tokens without initializing transcript storage.
+export { resolveSessionTranscriptFile } from "./transcript-file-resolve.js";

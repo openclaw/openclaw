@@ -1,4 +1,4 @@
-import { safeParseJson } from "@openclaw/normalization-core";
+import { extractBalancedJsonPrefix, safeParseJson } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import pLimit from "p-limit";
@@ -132,19 +132,6 @@ function inventoryTokens(label: string): string[] {
     .toSorted();
 }
 
-function providerSearchTokens(
-  manifest: ReturnType<typeof getOfficialExternalPluginCatalogManifest>,
-): Array<string | undefined> {
-  const tokens: Array<string | undefined> = [];
-  for (const provider of manifest?.providers ?? []) {
-    tokens.push(provider.id, provider.name);
-    for (const alias of provider.aliases ?? []) {
-      tokens.push(alias);
-    }
-  }
-  return tokens;
-}
-
 function entrySearchText(entry: OfficialExternalPluginCatalogEntry): string {
   const manifest = getOfficialExternalPluginCatalogManifest(entry);
   return [
@@ -156,7 +143,9 @@ function entrySearchText(entry: OfficialExternalPluginCatalogEntry): string {
     manifest?.plugin?.label,
     manifest?.channel?.id,
     manifest?.channel?.label,
-    ...providerSearchTokens(manifest),
+    ...(manifest?.providers ?? []).flatMap((provider) =>
+      [provider.id, provider.name].concat(provider.aliases ?? []),
+    ),
   ]
     .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
     .join(" ")
@@ -243,8 +232,8 @@ async function gatherSetupAppCandidates(params: {
   const searchLimit = pLimit(CLAWHUB_SEARCH_CONCURRENCY);
   const searchDeadline = Date.now() + CLAWHUB_SEARCH_TOTAL_BUDGET_MS;
 
-  const groups = await Promise.all(
-    normalizeInventory(params.apps).map(async (app): Promise<SetupAppCandidateGroup> => {
+  return await Promise.all(
+    params.apps.map(async (app): Promise<SetupAppCandidateGroup> => {
       const official = officialEntries.flatMap(({ entry, source }) => {
         if (!entryMatchesApp(entry, app.label)) {
           return [];
@@ -282,32 +271,23 @@ async function gatherSetupAppCandidates(params: {
       return { app, candidates: dedupeCandidates([...official, ...skills]) };
     }),
   );
-  return groups.toSorted((left, right) => compareInventory(left.app, right.app));
 }
 
 // Models routinely wrap JSON in markdown fences or prose despite "JSON only"
-// instructions; parse the outermost object instead of the raw text.
+// instructions; parse the first complete object instead of the raw text.
 function parseMatcherJson(text: string): unknown {
-  const start = text.indexOf("{");
-  const end = text.lastIndexOf("}");
-  if (start === -1 || end <= start) {
-    return null;
-  }
-  return safeParseJson(text.slice(start, end + 1)) ?? null;
+  const json = extractBalancedJsonPrefix(text, { openers: ["{"] })?.json;
+  return json ? (safeParseJson(json) ?? null) : null;
 }
 
 function buildMatcherPrompt(groups: SetupAppCandidateGroup[]): string {
-  const payload = groups.map((group) => ({
-    app: group.app,
-    candidates: group.candidates,
-  }));
   return [
     "Match installed applications to genuinely related OpenClaw plugins or skills.",
     "Reject coincidental substring, brand, or name overlaps.",
     "Use tier recommended for messaging-channel integrations; otherwise choose recommended or optional by usefulness.",
     "Give a reason of at most 12 words.",
     'Return strict JSON only: {"matches":[{"appLabel":"...","candidateId":"...","tier":"recommended|optional","reason":"..."}]}.',
-    JSON.stringify(payload),
+    JSON.stringify(groups),
   ].join("\n");
 }
 

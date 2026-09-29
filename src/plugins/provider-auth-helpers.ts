@@ -21,7 +21,7 @@ import {
 } from "../config/types.secrets.js";
 import { safeRealpathSync } from "../infra/boundary-path.js";
 import type { OAuthCredentials } from "../llm/oauth.js";
-import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
+import { getProviderEnvVarsCore } from "../secrets/provider-env-vars.js";
 import { isValidSecretRef } from "../secrets/ref-contract.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import type { SecretInputMode } from "./provider-auth-types.js";
@@ -45,7 +45,7 @@ function buildEnvSecretRef(id: string): SecretRef {
 }
 
 function resolveProviderDefaultEnvSecretRef(provider: string, config?: OpenClawConfig): SecretRef {
-  const envVars = getProviderEnvVars(provider, {
+  const envVars = getProviderEnvVarsCore(provider, {
     ...(config ? { config } : {}),
     includeUntrustedWorkspacePlugins: false,
   });
@@ -104,18 +104,10 @@ export function buildApiKeyCredential(
   metadata?: Record<string, string>;
 } {
   const secretInput = resolveApiKeySecretInput(provider, input, options);
-  if (typeof secretInput === "string") {
-    return {
-      type: "api_key",
-      provider,
-      key: secretInput,
-      ...(metadata ? { metadata } : {}),
-    };
-  }
   return {
     type: "api_key",
     provider,
-    keyRef: secretInput,
+    ...(typeof secretInput === "string" ? { key: secretInput } : { keyRef: secretInput }),
     ...(metadata ? { metadata } : {}),
   };
 }

@@ -15,6 +15,7 @@ type GatewayLockReplacementWaitResult =
 
 export async function waitForGatewayLockReplacement(params: {
   previousLockIdentity: GatewayLockIdentity;
+  env?: NodeJS.ProcessEnv;
   attempts: number;
   delayMs: number;
   waitIndefinitelyForPreviousOwner: boolean;
@@ -25,7 +26,7 @@ export async function waitForGatewayLockReplacement(params: {
   for (;;) {
     let currentLockIdentity: GatewayLockIdentity | undefined;
     try {
-      currentLockIdentity = await readActiveGatewayLockIdentity();
+      currentLockIdentity = await readActiveGatewayLockIdentity({ env: params.env });
     } catch {
       if (params.waitIndefinitelyForPreviousOwner && !previousOwnerReleased) {
         await sleep(params.delayMs);

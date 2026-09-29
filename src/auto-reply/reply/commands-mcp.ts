@@ -162,6 +162,7 @@ export const handleMcpCommand: CommandHandler = defineAuthorizedTextCommand(
       const result = await setConfiguredMcpServer({
         name: mcpCommand.name,
         server: mcpCommand.value,
+        assertCurrent: params.command.assertOwnerCurrent,
       });
       if (!result.ok) {
         return commandReply(`⚠️ ${result.error}`);
@@ -169,7 +170,10 @@ export const handleMcpCommand: CommandHandler = defineAuthorizedTextCommand(
       return commandReply(`🔌 MCP server "${mcpCommand.name}" saved to ${result.path}.`);
     }
 
-    const result = await unsetConfiguredMcpServer({ name: mcpCommand.name });
+    const result = await unsetConfiguredMcpServer({
+      name: mcpCommand.name,
+      assertCurrent: params.command.assertOwnerCurrent,
+    });
     if (!result.ok) {
       return commandReply(`⚠️ ${result.error}`);
     }

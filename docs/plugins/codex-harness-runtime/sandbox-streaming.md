@@ -19,6 +19,10 @@ polling and replay, so long-running processes cannot grow the app-server bridge
 without limit. Process exit and cleanup remain tied to the sandbox-owned
 process. Failed environment registration never falls back to host execution.
 
+Interactive commands receive a real terminal. Ctrl-C interrupts both interactive
+and noninteractive native commands. Closing the exec-server connection cancels its
+outstanding HTTP requests and waits for cleanup before releasing the sandbox lease.
+
 See [Sandboxed native execution](/plugins/codex-harness-reference#sandboxed-native-execution)
 for configuration and local-only transport restrictions.
 
@@ -40,6 +44,12 @@ a stale launch is refused. Each attempt owns an isolated Gateway app-server clie
 remote environment registration retires with that attempt. Disconnect ends the
 active attempt and its remote processes; reconnect allows only a fresh
 attempt. Normal Codex turns work, but `/btw` side questions fail closed because
-they are not yet placement-bound. The placement workspace does not confine
+they are not placement-bound. The placement workspace does not confine
 execution: process and filesystem access remain bounded only by the node's
 operating system account.
+
+A turn assigned to an active remote placement uses that execution owner, including
+for writable-sandbox checks. The Gateway still prepares source files and prompt
+attachments under its host filesystem policy; remote execution roots remain owned
+by the placement. Local sandbox allocation is reserved for turns without a remote
+placement.

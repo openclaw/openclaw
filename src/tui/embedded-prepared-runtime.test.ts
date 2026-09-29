@@ -39,9 +39,9 @@ describe("EmbeddedPreparedModelRuntimeHost", () => {
     };
     const first = await acquireAgentRunPreparedModelRuntime(input);
     expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(1);
-    first.release();
+    await first[Symbol.asyncDispose]();
     const second = await acquireAgentRunPreparedModelRuntime(input);
-    second.release();
+    await second[Symbol.asyncDispose]();
 
     expect(second.snapshot).toBe(first.snapshot);
     expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(1);

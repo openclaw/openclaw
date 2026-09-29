@@ -1,9 +1,9 @@
 // Trajectory command export helpers implement CLI export behavior.
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { pathScope } from "@openclaw/fs-safe/advanced";
 import type { SessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.js";
-import { pathExists } from "../infra/fs-safe.js";
-import { isPathInside } from "../infra/path-guards.js";
+import { root } from "../infra/fs-safe.js";
 import { exportTrajectoryBundle, resolveDefaultTrajectoryExportDir } from "./export.js";
 
 // CLI-facing trajectory export wrapper: resolves safe workspace-local paths,
@@ -18,56 +18,20 @@ export type TrajectoryCommandExportSummary = {
   files: string[];
 };
 
-async function validateExistingExportDirectory(params: {
-  dir: string;
-  label: string;
-  realWorkspace: string;
-}): Promise<string> {
-  const linkStat = await fsp.lstat(params.dir);
-  if (linkStat.isSymbolicLink() || !linkStat.isDirectory()) {
-    throw new Error(`${params.label} must be a real directory inside the workspace`);
-  }
-  const realDir = await fsp.realpath(params.dir);
-  if (!isPathInside(params.realWorkspace, realDir)) {
-    throw new Error("Trajectory exports directory must stay inside the workspace");
-  }
-  return realDir;
-}
-
-async function mkdirIfMissingThenValidate(params: {
-  dir: string;
-  label: string;
-  realWorkspace: string;
-}): Promise<string> {
-  try {
-    await fsp.mkdir(params.dir, { mode: 0o700 });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
-      throw error;
-    }
-  }
-  return await validateExistingExportDirectory(params);
-}
-
 async function resolveTrajectoryExportBaseDir(workspaceDir: string): Promise<{
   baseDir: string;
   realBase: string;
 }> {
   const workspacePath = path.resolve(workspaceDir);
   const realWorkspace = await fsp.realpath(workspacePath);
-  const stateDir = path.join(workspacePath, ".openclaw");
-  await mkdirIfMissingThenValidate({
-    dir: stateDir,
-    label: "OpenClaw state directory",
-    realWorkspace,
+  const relative = path.join(".openclaw", "trajectory-exports");
+  const prepared = await pathScope(realWorkspace, { label: "workspace" }).ensureDir(relative, {
+    mode: 0o700,
   });
-  const baseDir = path.join(stateDir, "trajectory-exports");
-  const realBase = await mkdirIfMissingThenValidate({
-    dir: baseDir,
-    label: "Trajectory exports directory",
-    realWorkspace,
-  });
-  return { baseDir: path.resolve(baseDir), realBase };
+  if (!prepared.ok) {
+    throw prepared.diagnostic ?? new Error(prepared.error);
+  }
+  return { baseDir: path.join(workspacePath, relative), realBase: prepared.path };
 }
 
 async function resolveTrajectoryCommandOutputDir(params: {
@@ -93,20 +57,8 @@ async function resolveTrajectoryCommandOutputDir(params: {
   if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
     throw new Error("Output path must stay inside the workspace trajectory exports directory");
   }
-  let existingParent = outputDir;
-  while (!(await pathExists(existingParent))) {
-    const next = path.dirname(existingParent);
-    if (next === existingParent) {
-      break;
-    }
-    existingParent = next;
-  }
-  const realExistingParent = await fsp.realpath(existingParent);
-  // Validate the first existing ancestor by realpath so a missing child cannot
-  // be smuggled through a symlinked parent outside the export root.
-  if (!isPathInside(realBase, realExistingParent)) {
-    throw new Error("Output path must stay inside the real trajectory exports directory");
-  }
+  // Prefix with `./` so normalized literal `~/...` names do not expand to HOME.
+  await (await root(realBase)).resolve(`.${path.sep}${relative}`);
   return outputDir;
 }
 
@@ -139,11 +91,6 @@ export async function exportTrajectoryForCommand(params: {
     relativePath && !relativePath.startsWith("..") && !path.isAbsolute(relativePath)
       ? relativePath
       : path.basename(bundle.outputDir);
-  const files = ["manifest.json", "events.jsonl", "session-branch.json"];
-  if (bundle.events.some((event) => event.type === "context.compiled")) {
-    files.push("system-prompt.txt", "tools.json");
-  }
-  files.push(...bundle.supplementalFiles);
   return {
     outputDir: bundle.outputDir,
     displayPath,
@@ -151,7 +98,10 @@ export async function exportTrajectoryForCommand(params: {
     eventCount: bundle.manifest.eventCount,
     runtimeEventCount: bundle.manifest.runtimeEventCount,
     transcriptEventCount: bundle.manifest.transcriptEventCount,
-    files,
+    files: [
+      ...bundle.files.filter((file) => !bundle.supplementalFiles.includes(file)),
+      ...bundle.supplementalFiles,
+    ],
   };
 }
 

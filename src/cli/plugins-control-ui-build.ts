@@ -1,6 +1,7 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { replaceFileAtomic } from "@openclaw/fs-safe/atomic";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   CONTROL_UI_PLUGIN_MAX_ASSET_BYTES,
@@ -15,13 +16,19 @@ export async function writePluginBuildManifest(
   rootDir: string,
   manifest: Record<string, unknown>,
 ): Promise<void> {
-  const temporary = path.join(rootDir, `.${PLUGIN_MANIFEST_FILENAME}.${randomUUID()}.tmp`);
-  try {
-    await fs.writeFile(temporary, `${JSON.stringify(manifest, null, 2)}\n`);
-    await fs.rename(temporary, path.join(rootDir, PLUGIN_MANIFEST_FILENAME));
-  } finally {
-    await fs.rm(temporary, { force: true });
-  }
+  const realRootDir = await fs.realpath(rootDir);
+  // Keep package directory permissions intact and retain ordinary umask-based
+  // creation for new manifests while preserving existing manifest permissions.
+  await replaceFileAtomic({
+    filePath: path.join(realRootDir, PLUGIN_MANIFEST_FILENAME),
+    content: `${JSON.stringify(manifest, null, 2)}\n`,
+    mode: 0o666 & ~process.umask(),
+    preserveExistingMode: true,
+    dirMode: (await fs.stat(realRootDir)).mode & 0o7777,
+    syncTempFile: true,
+    syncParentDir: true,
+    throwOnCleanupError: true,
+  });
 }
 
 export async function buildPluginControlUi(params: {

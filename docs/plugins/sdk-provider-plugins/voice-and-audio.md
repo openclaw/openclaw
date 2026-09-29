@@ -136,6 +136,38 @@ Register each capability inside `register(api)` alongside your existing
     An explicitly selected alias still overrides canonical config without inheriting
     settings from other aliases.
 
+    `resolveConfig` receives optional host context alongside `cfg` and `rawConfig`:
+    `agentId`, `surface` (`browser-session`, `gateway-relay`, or `bridge`),
+    `autoRespondToAudio`, and `requiredCapabilities.supportsVideoFrames`. Use this
+    context to choose account- and session-compatible defaults while preserving
+    explicit models. An omitted surface retains bridge behavior. Browser session
+    creation supplies `supportsVideoFrames: true` for camera-capable callers and
+    `false` for audio-only callers; catalog discovery leaves the requirement
+    unspecified. OpenAI selects GPT-Live by account unless the caller requires
+    video or manual responses. Talk sets `autoRespondToAudio: false`
+    when Gateway relay policy controls responses. `talk.catalog` resolves the
+    provider's discovery default for the configured Talk agent and provider
+    settings, excluding an explicit model; readiness and capabilities use the
+    effective model overrides.
+    Consumers adding a new transport without changing existing model defaults
+    can pass `useProviderDefaultModel: true` to
+    `resolveConfiguredRealtimeVoiceProvider(...)`. This fills an absent model
+    from the selected provider's `defaultModel` before surface-specific
+    resolution; explicit configured models and request overrides still win.
+    Optional `talk.catalog` inputs `provider` and `model` resolve capabilities
+    for a specific realtime launch without changing saved configuration.
+    Gateway audio consumers select the `gateway-relay` surface and use the
+    `capabilities` returned by `resolveConfiguredRealtimeVoiceProvider(...)`.
+    That result binds configuration, authentication readiness, and capabilities
+    to the same provider-normalized model. Browser callers also pass their
+    negotiated `clientControl` to resolution. Carry the resolved capabilities
+    into `resolveRealtimeVoiceSessionPolicy(...)` and the shared bridge/session
+    harness instead of reading the provider's static capability defaults.
+    Catalogs can still use `resolveRealtimeVoiceProviderCapabilities(...)`
+    when inspecting a candidate without creating a session. For example,
+    GPT-Live owns agent delegation and interruption but does not support
+    host-enforced wake-name gating, even though GA OpenAI Realtime does.
+
     ```typescript
     api.registerRealtimeVoiceProvider({
       id: "acme-ai",
@@ -171,6 +203,25 @@ Register each capability inside `register(api)` alongside your existing
     clients. Implement `handleBargeIn` when a transport can detect that a
     human is interrupting assistant playback and the provider supports
     truncating or clearing the active audio response.
+    Set `bridge.outputAudioMode: "continuous"` for streams without response
+    boundaries, such as GPT-Live. Hosts then play short audio immediately,
+    accept new audio after a provider clear, and leave interruption to the
+    provider. Omit `handleBargeIn` and report `supportsBargeIn: false` for this
+    mode; incoming audio already drives native interruption. Omission of
+    `outputAudioMode`, or `"response"`, retains response-based playback.
+    The shared session and harness reject host interruption for continuous
+    streams or `supportsBargeIn: false`, including fallback output clears.
+    Explicit session stop remains a separate operation. Transports must keep
+    participant audio available to the provider; microphone input that includes
+    injected assistant output must be isolated before enabling this behavior.
+    Shared browser-meeting adapters capture remote playback separately from
+    native virtual-microphone injection for that purpose.
+
+    Set `bridge.pacesInputAudio: true` when the provider buffers incoming PCM
+    at its sample rate and supplies silence between microphone writes. This
+    prevents transports such as Discord from appending an extra silence burst
+    at each capture boundary. GPT-Live Gateway WebRTC and WebSocket bridges
+    share that input clock; closing the bridge stops it.
     When native audio events identify an item, pass that identity alongside
     PCM as `req.onAudio(audio, { itemId })`; omit
     metadata for transports without native item IDs. If supplied,
@@ -201,6 +252,46 @@ Register each capability inside `register(api)` alongside your existing
     bridge can expose. Gateway relay sessions wait for that promise before
     confirming a final result or clearing the linked run; reject it when
     submission fails.
+    `close` may return `void` for synchronous disposal or a `Promise<void>`
+    that settles after provider finalization and resource cleanup. Stop audio,
+    tool, and delegation admission immediately. Final transcript callbacks may
+    drain until completion; consumers must await it before sealing transcript
+    queues or reporting logical session closure. Report the provider's terminal
+    reason through `onClose`, and reject the promise on cleanup failure. The
+    session facade preserves synchronous disposal. Once the provider returns
+    a promise, repeated closes return the same pending completion. Reentrant
+    close calls during the provider invocation are no-ops; terminal callbacks
+    must not wait for their own disposal.
+
+    Continuous mono PCM16/24 kHz bridges may implement
+    `setAudioOutputPort(output)` to bind a worker-owned playback sink before
+    connecting. `RealtimeVoiceAudioOutputPort` carries a transferable Node
+    `MessagePort` and a shared close fence: its first `Int32` is `0` while
+    open and permanently `1` after revocation. With this sink bound, send
+    PCM and clear events through the port instead of `onAudio` and
+    `onClearAudio`; keep transcripts, delegation, and lifecycle callbacks on
+    the host. `createRealtimeVoiceAudioPortSender` provides a bounded queue,
+    copied buffer ownership, one outstanding audio message, and ordered
+    clears. A receiver may send `{ type: "flush", marker }`; the sender replies
+    with `{ type: "flushed", marker }` only after its queued and outstanding
+    PCM has been acknowledged, including when there was no audio. A newer flush
+    marker supersedes an older pending marker. This is local sink admission,
+    not proof of audible playback or future provider silence. Consumers use it
+    to order control-plane completion behind already-submitted media.
+    The receiver acknowledges audio with `{ type: "ack" }`, checks
+    the fence before accepting audio, and closes its playback resources when
+    the port closes. Do not use this path to bypass host response or
+    wake-name admission. The sink owner revokes the fence before asynchronous
+    teardown so queued audio cannot enter a replacement call.
+
+    Bundled lazy providers use `createLazyRealtimeVoiceBridgeLifecycle` from
+    the private-local `openclaw/plugin-sdk/realtime-voice-provider` surface
+    to own loading, callback fencing, and awaited disposal. It claims a
+    generation before calling the provider factory, so synchronous callbacks
+    can close or replace a bridge before the factory returns it. Provider
+    modules retain their input queues, readiness policy, authentication, and
+    reconnect behavior; module caching stays with the lazy-runtime helpers.
+
     Set `supportsToolResultSuppression: false` when the provider cannot
     honor `options.suppressResponse`. OpenClaw then avoids suppression for
     internal forced-consult and cancellation results, and rejects direct
@@ -211,9 +302,12 @@ Register each capability inside `register(api)` alongside your existing
     The host may pass `sendUserMessage(text, { toolChoice })` while the
     response state is idle to force one named function for that response;
     later responses return to the session's configured tool choice.
-    Set `handlesInputAudioBargeIn` only when provider VAD confirms an
-    interruption by calling `onClearAudio("barge-in")`. Providers that omit
-    the flag use OpenClaw's local input-audio fallback detection.
+    Set `handlesInputAudioBargeIn` when the provider owns interruption from
+    incoming audio. Forward provider buffer-clear events through
+    `onClearAudio("barge-in")` when available; continuous providers can stop
+    speaking without a separate clear event. Hosts must not invent a local
+    interruption for those providers. Response-based providers that omit the
+    flag use OpenClaw's local input-audio fallback detection.
 
     A browser-session request's `clientControl: { owner: "gateway" }`
     records explicitly negotiated server-owned control. The request type
@@ -251,6 +345,13 @@ Register each capability inside `register(api)` alongside your existing
     providers retain their existing transcript behavior. Without the hook,
     retain the existing delegation and acknowledgment policy.
 
+    `createRealtimeVoiceBridgeSession` forwards a host `runAgentConsult` to
+    provider-owned delegation bridges and binds it to the admitted provider
+    connection. The caller supplies its existing identity and tool-policy
+    owner; Discord uses the originating speaker's normal agent route and
+    permissions. Closure or connection replacement retires that callback's
+    authority rather than transferring it to the next speaker or connection.
+
     The host binds steering authority to the actual admitted backend attempt
     after harness policy preparation. Backing agent harnesses forward the
     existing attempt fingerprint when registering their handle. Realtime voice
@@ -278,6 +379,12 @@ Register each capability inside `register(api)` alongside your existing
     are contained without task fallthrough. `onTranscript` retains its `void`
     callback contract, including assignable async handlers and close-time final
     transcript flushing.
+
+    Providers with cumulative provisional transcripts can pass
+    `{ textMode: "snapshot" }` as the fourth `onTranscript` argument. The gateway
+    relay forwards it to the browser, which replaces the provisional text in place.
+    Omit this metadata for incremental fragments. Publish one final per utterance
+    at the provider's actual completion boundary, not for every provisional snapshot.
 
     A host `runAgentConsult` rejection named `AbortError` represents
     cancellation, even when the provider's own signal is still live. Do not

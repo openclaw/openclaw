@@ -1,28 +1,9 @@
-// Defines cloud-worker provider profile configuration types.
+// Defines cloud-worker provider profile configuration types from the canonical schema.
+import type { z } from "zod";
+import type { CloudWorkersConfigSchema } from "./zod-schema.cloud-workers.js";
 
-export type CloudWorkerProfileConfig = {
-  /** Worker provider id registered by a plugin. */
-  provider: string;
-  /** Worker install method (default: bundle); npm requires a released gateway version. */
-  install?: "bundle" | "npm";
-  /** Reclaim an idle worker after this duration; omitted profiles stay running. */
-  suspendAfter?: string;
-  /** Target unassigned prepared workers per project (default: 1); zero disables reserves. */
-  readyWorkers?: number;
-  /** Provider-owned JSON settings; secret-bearing fields use SecretRef objects. */
-  settings?: Record<string, unknown>;
-};
+export type CloudWorkersConfig = NonNullable<z.input<typeof CloudWorkersConfigSchema>>;
 
-export type CloudWorkersConfig = {
-  /** Experimental Labs gate for the cloud-worker desktop observer. */
-  desktop?: boolean;
-  /** Gateway-wide limits for unassigned prepared cloud workers. */
-  preparedPool?: {
-    /** Reserve cap including preparation and unconfirmed cleanup (default: 4); zero disables reserves. */
-    maxTotal?: number;
-  };
-  /** Default worker profile names keyed by normalized repository identity. */
-  projectProfiles?: Record<string, string>;
-  /** Named opt-in worker profiles. Omit or leave empty to disable cloud workers. */
-  profiles?: Record<string, CloudWorkerProfileConfig>;
-};
+export type CloudWorkerProfileConfig = NonNullable<
+  NonNullable<CloudWorkersConfig["profiles"]>[string]
+>;

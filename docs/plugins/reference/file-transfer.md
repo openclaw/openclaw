@@ -41,6 +41,9 @@ apply. Run this command on the Gateway host in an interactive terminal:
 openclaw file-transfer approvals migrate
 ```
 
+See [File transfers](/cli/file-transfer) for the full flag surface and the
+non-interactive exit codes.
+
 For each older path, choose one outcome:
 
 - **Require exact reapproval** removes the ambiguous permission. The next use

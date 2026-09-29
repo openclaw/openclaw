@@ -9,7 +9,7 @@ import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runt
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { resolveConfiguredSecretInputString } from "openclaw/plugin-sdk/secret-input-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { LLAMA_CPP_PROVIDER_ID, resolveLlamaCppSyntheticApiKey } from "../defaults.js";
+import { LLAMA_CPP_PROVIDER_ID, LLAMA_CPP_LOCAL_AUTH_MARKER } from "../defaults.js";
 
 export function hasLlamaServerAuthorizationHeader(headers: unknown): boolean {
   const record = asOptionalRecord(headers);
@@ -28,7 +28,7 @@ export function shouldUseLlamaServerSyntheticAuth(
   const apiKey = normalizeOptionalSecretInput(providerConfig?.apiKey)?.trim();
   const hasRealApiKey =
     hasConfiguredSecretInput(providerConfig?.apiKey) &&
-    apiKey !== resolveLlamaCppSyntheticApiKey() &&
+    apiKey !== LLAMA_CPP_LOCAL_AUTH_MARKER &&
     apiKey !== CUSTOM_LOCAL_AUTH_MARKER;
   return !hasRealApiKey;
 }
@@ -50,7 +50,7 @@ export async function resolveLlamaServerProviderHeaders(params: {
       }
       continue;
     }
-    const path = `models.providers.${LLAMA_CPP_PROVIDER_ID}.headers.${name}`;
+    const path = `models.providers.${LLAMA_CPP_PROVIDER_ID}.headers[${JSON.stringify(name)}]`;
     const header = await resolveConfiguredSecretInputString({
       config: params.config,
       env: params.env ?? process.env,

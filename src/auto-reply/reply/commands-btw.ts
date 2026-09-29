@@ -14,6 +14,7 @@ import {
 import { extractBtwQuestion } from "./btw-command.js";
 import { commandReply, defineAuthorizedTextCommand } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
+import { resolveCurrentTurnImages } from "./current-turn-images.js";
 
 const BTW_USAGE = "Usage: /btw [side question]";
 
@@ -46,6 +47,13 @@ export const handleBtwCommand: CommandHandler = defineAuthorizedTextCommand(
     }
 
     try {
+      const { images } = await resolveCurrentTurnImages({
+        ctx: params.ctx,
+        cfg: params.cfg,
+        images: params.opts?.images,
+        imageOrder: params.opts?.imageOrder,
+        extractedFileImages: params.opts?.extractedFileImages,
+      });
       await params.typing?.startTypingLoop();
       const messageTo =
         params.ctx.OriginatingTo?.trim() || params.command.to || params.command.channelId;
@@ -92,6 +100,7 @@ export const handleBtwCommand: CommandHandler = defineAuthorizedTextCommand(
           provider: params.provider,
           model: params.model,
           question,
+          images,
           sessionEntry: targetSessionEntry,
           sessionStore: params.sessionStore,
           sessionKey: params.sessionKey,

@@ -20,7 +20,7 @@ Use `cloudWorkers.projectProfiles` to select a default profile from a managed se
 }
 ```
 
-In **Settings → Cloud workers → Repositories**, add, edit, or delete repository defaults by selecting a configured profile. The editor validates repository identities and refuses mappings to missing profiles.
+In **Settings → Connections → Cloud workers → Repositories**, add, edit, or delete repository defaults by selecting a configured profile. The editor validates repository identities and refuses mappings to missing profiles.
 
 An explicit `profileId` or `deviceId` in `sessions.dispatch` always wins. A target-less project-profile lookup requires `operator.admin`. Deleting a profile from the Cloud workers settings also removes project defaults that reference it. If a manually configured mapping names a profile that is not present in `cloudWorkers.profiles`, dispatch fails closed and names both the repository key and missing profile. A worktree with no `origin` or no matching mapping returns a typed `INVALID_REQUEST` without provisioning or falling back to another target.
 

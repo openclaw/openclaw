@@ -1,6 +1,5 @@
 import { buildChannelOutboundSessionRoute } from "openclaw/plugin-sdk/channel-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-// Googlechat plugin module implements targets behavior.
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveGoogleChatAccount, type ResolvedGoogleChatAccount } from "./accounts.js";
 import { findGoogleChatDirectMessage, getGoogleChatSpace } from "./api.js";
@@ -71,6 +70,7 @@ function stripMessageSuffix(target: string): string {
 async function resolveGoogleChatOutboundSpaceDetails(params: {
   account: ResolvedGoogleChatAccount;
   target: string;
+  assertDirectAdapterHandoff?: () => void;
 }): Promise<{ name: string; resource?: GoogleChatSpace }> {
   const normalized = normalizeGoogleChatTarget(params.target);
   if (!normalized) {
@@ -84,6 +84,7 @@ async function resolveGoogleChatOutboundSpaceDetails(params: {
     const dm = await findGoogleChatDirectMessage({
       account: params.account,
       userName: base,
+      assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
     });
     if (!dm?.name) {
       throw new Error(`No Google Chat DM found for ${base}`);
@@ -96,6 +97,7 @@ async function resolveGoogleChatOutboundSpaceDetails(params: {
 export async function resolveGoogleChatOutboundSpace(params: {
   account: ResolvedGoogleChatAccount;
   target: string;
+  assertDirectAdapterHandoff?: () => void;
 }): Promise<string> {
   return (await resolveGoogleChatOutboundSpaceDetails(params)).name;
 }

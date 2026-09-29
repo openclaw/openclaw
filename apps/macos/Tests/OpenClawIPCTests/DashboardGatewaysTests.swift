@@ -1,11 +1,38 @@
 import AppKit
 import Foundation
+import JavaScriptCore
 import OpenClawKit
 import Testing
 import WebKit
 @testable import OpenClaw
 
 struct DashboardGatewayCatalogTests {
+    @Test(arguments: [AppState.ConnectionMode.local, .remote, .unconfigured], [false, true])
+    func `hosted local Gateway is a separate nonpromotable remote companion`(
+        mode: AppState.ConnectionMode,
+        hosting: Bool) throws
+    {
+        let url = try #require(URL(string: "wss://saved.example"))
+        let entries = DashboardGatewayCatalog.entries(
+            mode: mode,
+            primaryRemoteURL: nil,
+            resolvedRemoteURL: nil,
+            resolvedRemoteHostLabel: "primary.example",
+            profiles: [.init(profile: .init(id: "saved", name: "Saved", url: url), canPromote: true)],
+            primaryHealth: .ok,
+            hostsLocalGateway: hosting,
+            localHealth: .error)
+        if mode == .remote, hosting {
+            #expect(entries.map(\.id) == ["primary", "local", "profile:saved"])
+            #expect(entries[1] == DashboardGatewayEntry(
+                id: "local", name: "This Mac", kind: "local", isPrimary: false, canPromote: false, health: .error))
+            #expect(DashboardGatewayTarget(bridgeID: entries[1].id) == .local)
+            #expect(DashboardGatewayTarget.local.bridgeID == "local")
+        } else {
+            #expect(!entries.contains { $0.id == "local" })
+        }
+    }
+
     @Test func `primary remote label uses the SSH host or resolved direct endpoint`() {
         let cases: [(AppState.RemoteTransport, String?, String?, String?)] = [
             (.ssh, "user@studio.local", "127.0.0.1:18789", "studio.local"),
@@ -138,20 +165,7 @@ struct DashboardGatewayCatalogTests {
 
 @MainActor
 struct DashboardGatewaysBridgeTests {
-    @Test func `parses gateway bridge requests with role based ids`() {
-        #expect(DashboardWindowController.gatewaysRequest(
-            from: ["type": "select", "id": "primary"]) == .select(.primary))
-        #expect(DashboardWindowController.gatewaysRequest(
-            from: ["type": "open-window", "id": "profile:studio"]) == .openWindow(.profile("studio")))
-        #expect(DashboardWindowController.gatewaysRequest(
-            from: ["type": "set-primary", "id": "profile:studio"]) == .setPrimary(.profile("studio")))
-        #expect(DashboardWindowController.gatewaysRequest(
-            from: ["type": "open-settings"]) == .openSettings)
-        #expect(DashboardWindowController.gatewaysRequest(
-            from: ["type": "select", "id": "https://secret.example"]) == nil)
-    }
-
-    @Test func `gateway script contains metadata and no credentials`() {
+    @Test func `gateway script publishes metadata and emits its change event`() throws {
         let snapshot = DashboardGatewaySnapshot(
             gateways: [.init(
                 id: "primary",
@@ -162,10 +176,23 @@ struct DashboardGatewaysBridgeTests {
                 health: .ok)],
             currentId: "primary")
         let script = DashboardWindowController.nativeGatewaysScriptSource(snapshot: snapshot, dispatch: true)
-        #expect(script.contains("__OPENCLAW_NATIVE_GATEWAYS__"))
-        #expect(script.contains("openclaw:native-gateways-changed"))
-        #expect(!script.contains("token"))
-        #expect(!script.contains("password"))
+        let context = try #require(JSContext())
+        context.evaluateScript("""
+        var window = globalThis;
+        var publishedEvent;
+        class CustomEvent { constructor(type) { this.type = type; } }
+        window.dispatchEvent = event => { publishedEvent = event.type; };
+        """)
+        context.evaluateScript(script)
+        #expect(context.exception == nil)
+        #expect(context.objectForKeyedSubscript("publishedEvent").toString() == "openclaw:native-gateways-changed")
+        let value = try #require(context.objectForKeyedSubscript("__OPENCLAW_NATIVE_GATEWAYS__").toDictionary())
+        #expect(value["currentId"] as? String == "primary")
+        let entries = try #require(value["gateways"] as? [[String: Any]])
+        #expect(entries.count == 1)
+        #expect(entries[0]["name"] as? String == "Local Gateway")
+        #expect(entries[0]["token"] == nil)
+        #expect(entries[0]["password"] == nil)
     }
 
     @Test func `dashboard controller retains profile TLS policy`() throws {
@@ -184,20 +211,20 @@ struct DashboardGatewaysBridgeTests {
             requestBrowserProfileImportOffer: { _ in false })
         defer { controller.closeDashboard() }
 
-        #expect(controller._testTLSParams == params)
-        #expect(DashboardWindowController.isExpectedTLSAuthority(
+        #expect(controller.tlsParams == params)
+        #expect(ControlUIDocumentHost.isExpectedTLSAuthority(
             host: "gateway.example",
             port: 0,
             dashboardURL: url))
-        #expect(DashboardWindowController.isExpectedTLSAuthority(
+        #expect(ControlUIDocumentHost.isExpectedTLSAuthority(
             host: "gateway.example",
             port: 443,
             dashboardURL: url))
-        #expect(!DashboardWindowController.isExpectedTLSAuthority(
+        #expect(!ControlUIDocumentHost.isExpectedTLSAuthority(
             host: "gateway.example",
             port: 8443,
             dashboardURL: url))
-        #expect(!DashboardWindowController.isExpectedTLSAuthority(
+        #expect(!ControlUIDocumentHost.isExpectedTLSAuthority(
             host: "other.example",
             port: 443,
             dashboardURL: url))
@@ -205,17 +232,17 @@ struct DashboardGatewaysBridgeTests {
 
     @Test func `media capture trust requires the dashboard origin`() throws {
         let url = try #require(URL(string: "https://gateway.example/control/"))
-        #expect(DashboardWindowController.isTrustedMediaCaptureOrigin(
+        #expect(ControlUIDocumentHost.isTrustedMediaCaptureOrigin(
             protocol: "https",
             host: "gateway.example",
             port: 443,
             dashboardURL: url))
-        #expect(!DashboardWindowController.isTrustedMediaCaptureOrigin(
+        #expect(!ControlUIDocumentHost.isTrustedMediaCaptureOrigin(
             protocol: "https",
             host: "other.example",
             port: 443,
             dashboardURL: url))
-        #expect(!DashboardWindowController.isTrustedMediaCaptureOrigin(
+        #expect(!ControlUIDocumentHost.isTrustedMediaCaptureOrigin(
             protocol: "http",
             host: "gateway.example",
             port: 80,
@@ -386,10 +413,13 @@ struct DashboardManagerGatewayTargetTests {
             let primaryAutosaveName = try #require(auxiliary.controller.window?.frameAutosaveName)
             #expect(primaryAutosaveName.hasPrefix("OpenClawDashboardWindow-Test-"))
             #expect(!auxiliary.controller._testUpdateBridgeAvailable)
-            #expect(auxiliary.controller.currentURL == replacementServer.url("/#token=primary-token"))
-            #expect(auxiliary.controller._testDashboardDataStore === dataStore)
-            #expect(!auxiliary.controller._testDashboardDataStore.isPersistent)
-            try auxiliary.controller.nativeBrowser.open(tabId: "mac-auxiliary", url: server.url("/reader/auxiliary"))
+            #expect(auxiliary.controller.currentURL == replacementServer.url("/"))
+            #expect(auxiliary.controller.webView.configuration.websiteDataStore === dataStore)
+            #expect(!auxiliary.controller.webView.configuration.websiteDataStore.isPersistent)
+            try auxiliary.controller.nativeBrowser.open(
+                tabId: "mac-auxiliary",
+                url: server.url("/reader/auxiliary"),
+                sessionKey: "")
             #expect(try #require(auxiliary.controller.nativeBrowser.webView(for: "mac-auxiliary"))
                 .configuration.websiteDataStore === dataStore)
 
@@ -419,11 +449,14 @@ struct DashboardManagerGatewayTargetTests {
             #expect(replacement.window === auxiliaryWindow)
             let profileAutosaveName = try #require(replacement.window?.frameAutosaveName)
             #expect(profileAutosaveName.hasPrefix("\(primaryAutosaveName)-\(studio)-"))
-            #expect(replacement._testDashboardDataStore === dataStore)
-            #expect(!replacement._testDashboardDataStore.isPersistent)
-            try replacement.nativeBrowser.open(tabId: "mac-replacement", url: server.url("/reader/replacement"))
+            #expect(replacement.webView.configuration.websiteDataStore === dataStore)
+            #expect(!replacement.webView.configuration.websiteDataStore.isPersistent)
+            try replacement.nativeBrowser.open(
+                tabId: "mac-replacement",
+                url: server.url("/reader/replacement"),
+                sessionKey: "")
             #expect(try #require(replacement.nativeBrowser.webView(for: "mac-replacement"))
-                .configuration.websiteDataStore === replacement._testDashboardDataStore)
+                .configuration.websiteDataStore === replacement.webView.configuration.websiteDataStore)
         }
     }
 
@@ -436,10 +469,9 @@ struct DashboardManagerGatewayTargetTests {
         defer { currentServer.stop() }
         let firstID = "first-\(UUID().uuidString)"
         let secondID = "second-\(UUID().uuidString)"
-        let gate = DashboardSwitchEndpointGate(
-            firstID: firstID,
-            firstURL: replacementServer.websocketURL(),
-            secondURL: currentServer.websocketURL())
+        let firstURL = replacementServer.websocketURL()
+        let secondURL = currentServer.websocketURL()
+        let gate = DashboardWindowOwnershipPresentationGate()
         let sourceURL = server.url("/#token=current")
         let controller = DashboardWindowController(
             url: sourceURL,
@@ -455,7 +487,13 @@ struct DashboardManagerGatewayTargetTests {
         let entries = DashboardGatewayTestEntries.withProfiles([firstID, secondID])
         let manager = DashboardManager._testMake(
             profileEndpointProvider: { profileID in
-                try await gate.endpoint(profileID)
+                if profileID == firstID {
+                    await gate.waitForRelease()
+                }
+                let url = profileID == firstID ? firstURL : secondURL
+                return GatewayConnection.EndpointSnapshot(
+                    config: (url: url, token: profileID, password: nil),
+                    routeAuthority: nil)
             },
             gatewayEntriesProvider: { entries })
         manager._testSetController(controller)
@@ -464,12 +502,12 @@ struct DashboardManagerGatewayTargetTests {
         let first = Task { @MainActor in
             await manager._testSwitchTarget(.profile(firstID), in: controller)
         }
-        await gate.waitUntilFirstRequested()
+        await gate.waitUntilRequested()
         let second = Task { @MainActor in
             await manager._testSwitchTarget(.profile(secondID), in: controller)
         }
         await second.value
-        await gate.releaseFirst()
+        await gate.release()
         await first.value
 
         #expect(manager._testMainTarget() == .profile(secondID))
@@ -680,9 +718,10 @@ struct DashboardManagerGatewayTargetTests {
         #expect(refreshed.allSatisfy { $0.controller.auth.token == "after" })
         #expect(refreshed.allSatisfy { instance in windows.contains { $0 === instance.controller.window } })
         for instance in refreshed {
-            let scripts = instance.controller._testUserScripts.map(\.source).joined()
-            #expect(scripts.contains("after"))
-            #expect(!scripts.contains("before"))
+            let bootstrap = try await dashboardNativeAuthSnapshot(instance.controller)
+            #expect(bootstrap["nativeConnectAuth"] as? Bool == true)
+            #expect(bootstrap["token"] == nil)
+            #expect(bootstrap["password"] == nil)
         }
     }
 
@@ -944,8 +983,7 @@ struct DashboardManagerGatewayTargetTests {
         #expect(autosaveName.hasPrefix("OpenClawDashboardWindow-Test-"))
         #expect(autosaveName.hasSuffix("-\(studio)"))
 
-        manager.openOrFocusDashboard(for: .profile(studio))
-        try await Task.sleep(for: .milliseconds(100))
+        await manager.openOrFocusDashboard(for: .profile(studio)).value
         #expect(manager._testAuxiliaryWindows().count == 1)
         #expect(manager._testAuxiliaryWindows().first?.controller.window === window)
         #expect(manager.frontmostDashboardTarget == .profile(studio))
@@ -972,6 +1010,48 @@ struct DashboardManagerGatewayTargetTests {
         #expect(otherAutosaveName.hasPrefix("OpenClawDashboardWindow-Test-"))
         #expect(otherAutosaveName.hasSuffix("-\(studio)"))
         #expect(otherAutosaveName != autosaveName)
+    }
+
+    @Test(arguments: ["dock", "menu"])
+    func `healthy browser gateway focus preserves document`(_ entry: String) async throws {
+        let url = try #require(URL(string: "https://gateway.example.invalid/"))
+        let endpointURL = try #require(URL(string: "wss://gateway.example.invalid/"))
+        let session = try GatewayBrowserSession(
+            origin: url, issuer: url, audience: "fixture", subject: "fixture",
+            token: "synthetic", expiresAt: Date().addingTimeInterval(7200))
+        let store = DashboardBrowserSessionStore(dataStore: .nonPersistent())
+        let controller = DashboardWindowController(
+            url: url,
+            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+            websiteDataStore: store.dataStore,
+            browserSessionLease: store.lease(for: session),
+            windowAutosaveName: "OpenClawDashboardWindow-Test-\(UUID().uuidString)",
+            requestBrowserProfileImportOffer: { _ in false })
+        let manager = DashboardManager._testMake(
+            automaticGatewayProfileRefreshEnabled: false,
+            profileEndpointProvider: { _ in
+                GatewayConnection.EndpointSnapshot(
+                    config: (endpointURL, nil, nil), routeAuthority: nil, browserSession: session)
+            })
+        defer { manager.close() }
+        manager._testSetController(controller)
+        manager._testSetMainTarget(.profile("studio"))
+        controller.show()
+        try controller.nativeBrowser.open(
+            tabId: "reading", url: #require(URL(string: "about:blank")), sessionKey: "fixture")
+        let tab = try #require(controller.nativeBrowser.webView(for: "reading"))
+        #expect(controller.hasCurrentBrowserSession)
+
+        if entry == "dock" {
+            try await manager.show()
+        } else {
+            await manager.openOrFocusDashboard(for: .profile("studio")).value
+        }
+
+        #expect(manager._testController() === controller)
+        #expect(controller.nativeBrowser.webView(for: "reading") === tab)
+        #expect(controller.isWindowOpen)
+        #expect(manager._testPendingGatewayAlerts().isEmpty)
     }
 
     private func withConfiguredPrimary(_ body: @MainActor () async throws -> Void) async throws {
@@ -1008,8 +1088,8 @@ extension DashboardManagerGatewayTargetTests {
             defer { state.connectionMode = previousMode }
             let gate = DashboardWindowOwnershipPresentationGate(released: true)
             let manager = DashboardManager._testMake(
-                primaryEndpointProvider: { _ in
-                    await gate.waitForRelease()
+                primaryEndpointProvider: { mode in
+                    if mode == .remote { await gate.waitForRelease() }
                     return GatewayConnection.EndpointSnapshot(
                         config: (url: server.websocketURL(), token: "primary", password: nil), routeAuthority: nil)
                 },
@@ -1033,8 +1113,14 @@ extension DashboardManagerGatewayTargetTests {
                 {"gateway":{"port":\(server.port),"auth":{"token":"primary"}}}
                 """
                 try Data(config.utf8).write(to: URL(fileURLWithPath: configPath))
-                // Only a local endpoint may open synchronously while the older remote lookup is suspended.
+                // The native-ready endpoint may supersede a suspended lookup,
+                // but configured credentials alone cannot present a fresh document.
                 state.connectionMode = .local
+                #expect(!manager.showConfiguredWindowIfPossible())
+                // A newer explicit navigation resolves the now-ready local
+                // owner independently of the suspended remote presentation.
+                await manager.show(atPath: "/chat", target: .primary)
+                #expect(manager._testController()?.auth.hasAcceptedNativeBinding == true)
                 #expect(manager.showConfiguredWindowIfPossible())
             }
             let source = try #require(manager._testController())
@@ -1208,6 +1294,7 @@ extension DashboardManagerGatewayTargetTests {
                 if let identity { return identity.connection }
                 switch target {
                 case .primary: return GatewayConnection.shared
+                case .local: return await MacGatewayConnectionFleet.shared.localConnection()
                 case let .profile(id): return await MacGatewayConnectionFleet.shared.connection(profileID: id)
                 }
             },
@@ -1320,45 +1407,6 @@ private enum DashboardGatewayTestEntries {
     }
 }
 
-private actor DashboardSwitchEndpointGate {
-    private let firstID: String
-    private let firstURL: URL
-    private let secondURL: URL
-
-    init(firstID: String, firstURL: URL, secondURL: URL) {
-        self.firstID = firstID
-        self.firstURL = firstURL
-        self.secondURL = secondURL
-    }
-
-    private var firstRequested = false
-    private var firstContinuation: CheckedContinuation<Void, Never>?
-
-    func endpoint(_ profileID: String) async throws -> GatewayConnection.EndpointSnapshot {
-        if profileID == self.firstID {
-            self.firstRequested = true
-            await withCheckedContinuation { continuation in
-                self.firstContinuation = continuation
-            }
-        }
-        let url = profileID == self.firstID ? self.firstURL : self.secondURL
-        return GatewayConnection.EndpointSnapshot(
-            config: (url: url, token: profileID, password: nil),
-            routeAuthority: nil)
-    }
-
-    func waitUntilFirstRequested() async {
-        while !self.firstRequested {
-            await Task.yield()
-        }
-    }
-
-    func releaseFirst() {
-        self.firstContinuation?.resume()
-        self.firstContinuation = nil
-    }
-}
-
 @MainActor
 private final class DashboardGatewayTestUpdater: UpdaterProviding {
     var automaticallyChecksForUpdates = false
@@ -1373,25 +1421,29 @@ private final class DashboardGatewayTestUpdater: UpdaterProviding {
 struct DashboardPrimaryGatewayAdapterTests {
     @Test(arguments: [nil, String(repeating: "a", count: 64)] as [String?])
     func `token profile promotion carries its authentication and TLS policy`(fingerprint: String?) async throws {
-        let state = AppState(preview: true)
-        let url = try #require(URL(string: "wss://studio.example:443/"))
-        var configurations: [AppState.PrimaryGatewayConfiguration] = []
-        let adapter = DashboardPrimaryGatewayAdapter(
-            state: state,
-            endpoint: { _ in
-                GatewayConnection.EndpointSnapshot(
-                    config: (url: url, token: "profile-token", password: nil),
-                    tls: DashboardGatewayTestTLS.route(fingerprint: fingerprint),
-                    routeAuthority: nil)
-            },
-            persist: { _, configuration in
-                configurations.append(configuration)
-                return true
-            })
+        let configPath = TestIsolation.tempConfigPath()
+        defer { try? FileManager.default.removeItem(atPath: configPath) }
+        try await TestIsolation.withIsolatedState(env: ["OPENCLAW_CONFIG_PATH": configPath]) {
+            let state = AppState(preview: true)
+            state._testEnableGatewayConfigSync()
+            let url = try #require(URL(string: "wss://studio.example:443/"))
+            let adapter = DashboardPrimaryGatewayAdapter(
+                state: state,
+                endpoint: { _ in
+                    GatewayConnection.EndpointSnapshot(
+                        config: (url: url, token: "profile-token", password: nil),
+                        tls: DashboardGatewayTestTLS.route(fingerprint: fingerprint),
+                        routeAuthority: nil)
+                })
 
-        try await adapter.apply(profileID: "studio")
+            try await adapter.apply(profileID: "studio")
 
-        #expect(configurations == [.init(url: url, token: "profile-token", tlsFingerprint: fingerprint)])
+            let root = OpenClawConfigFile.loadDict()
+            #expect(GatewayRemoteConfig.resolveGatewayUrl(root: root) == url)
+            #expect(GatewayRemoteConfig.resolveTokenString(root: root) == "profile-token")
+            #expect(GatewayRemoteConfig.resolvePasswordString(root: root) == nil)
+            #expect(GatewayRemoteConfig.resolveTLSFingerprint(root: root) == fingerprint)
+        }
     }
 
     @Test func `password only profile cannot be promoted`() async throws {
@@ -1408,63 +1460,16 @@ struct DashboardPrimaryGatewayAdapterTests {
             try await adapter.apply(profileID: "studio")
         }
     }
-
-    @Test func `deep link submits its direct endpoint without inherited authentication`() throws {
-        let state = AppState(preview: true)
-        state.remoteTransport = .ssh
-        state.remoteUrl = "ws://127.0.0.1:18789"
-        state.remoteToken = "stale-token"
-        state.connectionMode = .local
-        var configurations: [AppState.PrimaryGatewayConfiguration] = []
-        let adapter = DashboardPrimaryGatewayAdapter(
-            state: state,
-            persist: { _, configuration in
-                configurations.append(configuration)
-                return true
-            })
-        let link = GatewayConnectDeepLink(
-            host: "gateway.example",
-            port: 8443,
-            tls: true,
-            bootstrapToken: nil,
-            token: nil,
-            password: nil)
-
-        try adapter.apply(link: link)
-
-        #expect(try configurations == [.init(
-            url: #require(link.websocketURL),
-            token: nil,
-            tlsFingerprint: nil)])
-    }
-
-    @Test func `deep link password is rejected without mutation`() throws {
-        let state = AppState(preview: true)
-        state.remoteTransport = .ssh
-        state.remoteUrl = "wss://previous.example:443"
-        state.remoteToken = "previous-token"
-        state.connectionMode = .local
-        let adapter = DashboardPrimaryGatewayAdapter(state: state)
-        let link = GatewayConnectDeepLink(
-            host: "gateway.example",
-            port: 443,
-            tls: true,
-            bootstrapToken: nil,
-            token: "fixture-token",
-            password: "fixture-password")
-
-        #expect(throws: DashboardPrimaryGatewayError.passwordUnsupported) {
-            try adapter.apply(link: link)
-        }
-        #expect(state.remoteUrl == "wss://previous.example:443")
-        #expect(state.remoteToken == "previous-token")
-    }
 }
 
 @MainActor
 struct DashboardGatewaySetupCoordinatorTests {
-    @Test func `cancel prompts once and preserves primary state without credential disclosure`() {
-        let state = AppState(preview: true)
+    @Test func `cancel prompts once and preserves primary state without credential disclosure`() throws {
+        var persistCount = 0
+        let state = AppState(preview: true, gatewayConfigSaver: { _, _ in
+            persistCount += 1
+            return true
+        })
         state.remoteTransport = .ssh
         state.remoteUrl = "wss://previous.example:443"
         state.remoteToken = "previous-token"
@@ -1479,14 +1484,8 @@ struct DashboardGatewaySetupCoordinatorTests {
             password: nil)
         var prompts: [(String, String)] = []
         var openedSettings = 0
-        var persistCount = 0
         let coordinator = DashboardGatewaySetupCoordinator(
-            adapter: DashboardPrimaryGatewayAdapter(
-                state: state,
-                persist: { _, _ in
-                    persistCount += 1
-                    return true
-                }),
+            adapter: DashboardPrimaryGatewayAdapter(state: state),
             confirm: { title, message in
                 prompts.append((title, message))
                 return false
@@ -1497,10 +1496,11 @@ struct DashboardGatewaySetupCoordinatorTests {
         coordinator.handle(link)
 
         #expect(prompts.count == 1)
-        #expect(!prompts[0].0.contains(token))
-        #expect(!prompts[0].1.contains(token))
-        #expect(prompts[0].1.contains("unencrypted private-network connection"))
-        #expect(!prompts[0].1.localizedCaseInsensitiveContains("loopback"))
+        let prompt = try #require(prompts.first)
+        #expect(!prompt.0.contains(token))
+        #expect(!prompt.1.contains(token))
+        #expect(prompt.1.contains("unencrypted private-network connection"))
+        #expect(!prompt.1.localizedCaseInsensitiveContains("loopback"))
         #expect(state.remoteTransport == .ssh)
         #expect(state.remoteUrl == "wss://previous.example:443")
         #expect(state.remoteToken == "previous-token")
@@ -1509,39 +1509,37 @@ struct DashboardGatewaySetupCoordinatorTests {
         #expect(openedSettings == 0)
     }
 
-    @Test func `accept persists primary and opens connection settings`() throws {
-        let state = AppState(preview: true)
-        var configurations: [AppState.PrimaryGatewayConfiguration] = []
-        var openedSettings = 0
-        let adapter = DashboardPrimaryGatewayAdapter(
-            state: state,
-            persist: { _, configuration in
-                configurations.append(configuration)
-                return true
-            })
-        let coordinator = DashboardGatewaySetupCoordinator(
-            adapter: adapter,
-            confirm: { _, _ in true },
-            presentError: { _, _ in Issue.record("unexpected error") },
-            openConnectionSettings: { openedSettings += 1 })
-        let link = GatewayConnectDeepLink(
-            host: "gateway.example",
-            port: 443,
-            tls: true,
-            bootstrapToken: nil,
-            token: "fixture-token",
-            password: nil)
+    @Test func `accept persists primary and opens connection settings`() async {
+        let configPath = TestIsolation.tempConfigPath()
+        defer { try? FileManager.default.removeItem(atPath: configPath) }
+        await TestIsolation.withIsolatedState(env: ["OPENCLAW_CONFIG_PATH": configPath]) {
+            let state = AppState(preview: true)
+            state._testEnableGatewayConfigSync()
+            var openedSettings = 0
+            let coordinator = DashboardGatewaySetupCoordinator(
+                adapter: DashboardPrimaryGatewayAdapter(state: state),
+                confirm: { _, _ in true },
+                presentError: { _, _ in Issue.record("unexpected error") },
+                openConnectionSettings: { openedSettings += 1 })
+            let link = GatewayConnectDeepLink(
+                host: "gateway.example",
+                port: 443,
+                tls: true,
+                bootstrapToken: nil,
+                token: "fixture-token",
+                password: nil)
 
-        coordinator.handle(link)
+            coordinator.handle(link)
 
-        #expect(try configurations == [.init(
-            url: #require(link.websocketURL),
-            token: "fixture-token",
-            tlsFingerprint: nil)])
-        #expect(openedSettings == 1)
+            let root = OpenClawConfigFile.loadDict()
+            #expect(GatewayRemoteConfig.resolveGatewayUrl(root: root) == link.websocketURL)
+            #expect(GatewayRemoteConfig.resolveTokenString(root: root) == "fixture-token")
+            #expect(openedSettings == 1)
+        }
     }
 
-    @Test func `password route visibly rejects before prompting or mutation`() {
+    @Test(arguments: [false, true])
+    func `invalid or expired setup rejects before prompting or mutation`(expired: Bool) throws {
         let state = AppState(preview: true)
         state.remoteUrl = "wss://previous.example:443"
         var promptCount = 0
@@ -1554,22 +1552,75 @@ struct DashboardGatewaySetupCoordinatorTests {
             },
             presentError: { errors.append(($0, $1)) },
             openConnectionSettings: { Issue.record("unexpected settings open") })
-        let password = "fixture-password"
+        let token = "fixture-token"
         let link = GatewayConnectDeepLink(
             host: "gateway.example",
             port: 443,
             tls: true,
+            tlsFingerprintSha256: expired ? nil : "invalid-pin",
+            expiresAtMs: expired ? 1 : nil,
             bootstrapToken: nil,
-            token: nil,
-            password: password)
+            token: token,
+            password: nil)
 
         coordinator.handle(link)
 
         #expect(promptCount == 0)
         #expect(errors.count == 1)
-        #expect(!errors[0].0.contains(password))
-        #expect(!errors[0].1.contains(password))
+        let error = try #require(errors.first)
+        #expect(!error.0.contains(token))
+        #expect(!error.1.contains(token))
         #expect(state.remoteUrl == "wss://previous.example:443")
+    }
+
+    @Test(arguments: [false, true])
+    func `setup confirmation cannot replace a newer primary selection`(fileEdit: Bool) async {
+        let configPath = TestIsolation.tempConfigPath()
+        defer { try? FileManager.default.removeItem(atPath: configPath) }
+        await TestIsolation.withIsolatedState(env: ["OPENCLAW_CONFIG_PATH": configPath]) {
+            #expect(OpenClawConfigFile.saveDict([
+                "gateway": ["mode": "remote", "remote": [
+                    "transport": "direct", "url": "wss://previous.example:443", "token": "previous-token",
+                ]],
+            ]))
+            let state = AppState(preview: true)
+            state._testEnableGatewayConfigSync()
+            var errors: [String] = []
+            var openedSettings = 0
+            let coordinator = DashboardGatewaySetupCoordinator(
+                adapter: DashboardPrimaryGatewayAdapter(state: state),
+                confirm: { _, _ in
+                    if fileEdit {
+                        var root = OpenClawConfigFile.loadDict()
+                        var gateway = root["gateway"] as? [String: Any] ?? [:]
+                        var remote = gateway["remote"] as? [String: Any] ?? [:]
+                        remote["url"] = "wss://newer.example:443"
+                        remote["token"] = "newer-token"
+                        gateway["remote"] = remote
+                        root["gateway"] = gateway
+                        #expect(OpenClawConfigFile.saveDict(root))
+                        #expect(GatewayRemoteConfig.resolveUrlString(root: OpenClawConfigFile.loadDict()) ==
+                            "wss://newer.example:443")
+                    } else {
+                        state.remoteUrl = "wss://newer.example:443"
+                    }
+                    return true
+                },
+                presentError: { _, message in errors.append(message) },
+                openConnectionSettings: { openedSettings += 1 })
+            let link = GatewayConnectDeepLink(
+                host: "gateway.example", port: 443, tls: true,
+                bootstrapToken: nil, token: "fixture-token", password: nil)
+
+            coordinator.handle(link)
+            await state._testAwaitGatewayConfigSync()
+
+            #expect(errors.count == 1)
+            #expect(!errors.contains { $0.contains("fixture-token") })
+            #expect(openedSettings == 0)
+            let root = OpenClawConfigFile.loadDict()
+            #expect(GatewayRemoteConfig.resolveUrlString(root: root) == "wss://newer.example:443")
+        }
     }
 }
 
@@ -1582,5 +1633,35 @@ private enum DashboardGatewayTestTLS {
                 allowTOFU: fingerprint == nil,
                 storeKey: nil),
             allowsTrustedPinReplacement: true)
+    }
+}
+
+@MainActor
+struct DashboardGatewaysRequestTests {
+    @Test func `parses gateway bridge requests with role based ids`() {
+        #expect(DashboardWindowController.gatewaysRequest(
+            from: ["type": "select", "id": "primary"]) == .select(.primary))
+        #expect(DashboardWindowController.gatewaysRequest(
+            from: ["type": "open-window", "id": "profile:studio"]) == .openWindow(.profile("studio")))
+        #expect(DashboardWindowController.gatewaysRequest(
+            from: ["type": "set-primary", "id": "profile:studio"]) == .setPrimary(.profile("studio")))
+        #expect(DashboardWindowController.gatewaysRequest(
+            from: ["type": "reconnect", "id": "profile:studio"]) == .reconnect(.profile("studio")))
+        #expect(DashboardWindowController.gatewaysRequest(
+            from: ["type": "reconnect-cancel", "id": "profile:studio"]) == .reconnectCancel(.profile("studio")))
+        let attempt = UUID()
+        #expect(DashboardWindowController.gatewaysRequest(
+            from: ["type": "reconnect-browser", "id": "profile:studio", "attempt": attempt.uuidString])
+            == .reconnectBrowser(.profile("studio"), attempt))
+        #expect(DashboardWindowController.gatewaysRequest(
+            from: ["type": "reconnect-browser", "id": "profile:studio"]) == nil)
+        #expect(DashboardWindowController.gatewaysRequest(
+            from: ["type": "reconnect"]) == nil)
+        #expect(DashboardWindowController.gatewaysRequest(
+            from: ["type": "reconnect", "id": "https://secret.example"]) == nil)
+        #expect(DashboardWindowController.gatewaysRequest(
+            from: ["type": "open-settings"]) == .openSettings)
+        #expect(DashboardWindowController.gatewaysRequest(
+            from: ["type": "select", "id": "https://secret.example"]) == nil)
     }
 }

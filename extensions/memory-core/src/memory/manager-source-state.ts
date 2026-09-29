@@ -1,4 +1,3 @@
-// Memory Core plugin module implements manager source state behavior.
 import type { DatabaseSync } from "node:sqlite";
 import type { ResolvedMemorySearchConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
@@ -7,13 +6,14 @@ import {
   runWithConcurrency,
   type MemoryFileEntry,
   type MemorySource,
+  type MemoryWorkspaceFiles,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
   sqliteStringSet,
 } from "openclaw/plugin-sdk/sqlite-runtime";
+import { readMemorySourceHash } from "./manager-source-index-kernel.js";
 
 export type MemorySourceFileStateRow = {
   path: string;
@@ -39,8 +39,9 @@ export async function resolveMemorySourceFileEntries(params: {
   settings: Pick<ResolvedMemorySearchConfig, "extraPaths" | "multimodal">;
   concurrency: number;
   onSkippedSymlinkRoot?: (root: string) => void;
+  files?: MemoryWorkspaceFiles;
 }): Promise<MemoryFileEntry[]> {
-  const files = await listMemoryFiles(
+  const files = await (params.files?.listFiles ?? listMemoryFiles)(
     params.workspaceDir,
     params.settings.extraPaths,
     params.settings.multimodal,
@@ -50,7 +51,11 @@ export async function resolveMemorySourceFileEntries(params: {
     await runWithConcurrency(
       files.map(
         (file) => async () =>
-          await buildFileEntry(file, params.workspaceDir, params.settings.multimodal),
+          await (params.files?.inspectFile ?? buildFileEntry)(
+            file,
+            params.workspaceDir,
+            params.settings.multimodal,
+          ),
       ),
       params.concurrency,
     )
@@ -74,6 +79,7 @@ export async function inspectMemorySourceState(params: {
   workspaceDir: string;
   settings: Pick<ResolvedMemorySearchConfig, "extraPaths" | "multimodal">;
   concurrency: number;
+  files?: MemoryWorkspaceFiles;
 }): Promise<MemorySourceInspection> {
   const skippedRoots = new Set<string>();
   const entries = await resolveMemorySourceFileEntries({
@@ -120,12 +126,5 @@ export function resolveMemorySourceExistingHash(params: {
   if (params.existingHashes) {
     return params.existingHashes.get(params.path);
   }
-  return executeSqliteQueryTakeFirstSync(
-    params.db,
-    getNodeSqliteKysely<MemorySourceDatabase>(params.db)
-      .selectFrom("memory_index_sources")
-      .select("hash")
-      .where("path", "=", params.path)
-      .where("source", "=", params.source),
-  )?.hash;
+  return readMemorySourceHash(params.db, params.source, params.path);
 }

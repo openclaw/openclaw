@@ -213,7 +213,8 @@ final class RootSidebarModel {
         currentSessionKey: String,
         mainSessionKey: String,
         activeAgentID: String?,
-        groups: [OpenClawChatSessionGroup]) -> [ChatSessionSidebarModel.Section]
+        groups: [OpenClawChatSessionGroup],
+        sessionRoutingContract: String? = nil) -> [ChatSessionSidebarModel.Section]
     {
         ChatSessionSidebarModel.sections(
             sessions: self.sessions,
@@ -222,7 +223,8 @@ final class RootSidebarModel {
             activeAgentID: activeAgentID,
             groups: groups,
             excludesMainSession: true,
-            query: query)
+            query: query,
+            sessionRoutingContract: sessionRoutingContract)
     }
 
     func refresh(appModel: NodeAppModel) async {
@@ -321,9 +323,7 @@ final class RootSidebarModel {
                 timeoutMs: 12000)
             do {
                 _ = try await appModel.operatorSession.request(
-                    method: request.method,
-                    params: request.params,
-                    timeoutMs: request.timeoutMs,
+                    request,
                     ifCurrentRoute: route)
                 if let declaration = Self.confirmedSessionObserverDeclaration(
                     route: route,
@@ -366,10 +366,7 @@ final class RootSidebarModel {
             },
             subscribe: {
                 let request = OpenClawChatGatewayRequests.subscribeSessions(timeoutMs: 12000)
-                _ = try await appModel.operatorSession.request(
-                    method: request.method,
-                    params: request.params,
-                    timeoutMs: request.timeoutMs)
+                _ = try await appModel.operatorSession.request(request)
             },
             onEvent: { [weak self] frame in
                 await self?.handleSessionEvent(frame, appModel: appModel) ?? false
@@ -420,25 +417,19 @@ final class RootSidebarModel {
                 invalidateObserverDeclaration()
                 await declareObserverVisibility(observerVisibility())
                 failureCount = 0
+
+                for await frame in stream {
+                    guard !Task.isCancelled else { return }
+                    if await onEvent(frame) {
+                        break
+                    }
+                }
+                guard !Task.isCancelled else { return }
             } catch is CancellationError {
                 return
             } catch {
-                failureCount += 1
-                guard await self.waitForSessionEventRetry(
-                    failureCount: failureCount,
-                    retryDelays: retryDelays,
-                    sleep: sleep)
-                else { return }
-                continue
+                // Failed subscriptions and ended streams use the same retry budget.
             }
-
-            for await frame in stream {
-                guard !Task.isCancelled else { return }
-                if await onEvent(frame) {
-                    break
-                }
-            }
-            guard !Task.isCancelled else { return }
             failureCount += 1
             guard await self.waitForSessionEventRetry(
                 failureCount: failureCount,

@@ -12,6 +12,24 @@ export const NODE_WORKSPACE_EMPTY_MANIFEST_REF = `sha256:${createHash("sha256").
 export const NODE_WORKSPACE_TRANSFER_PATH = "/__openclaw__/worker-transfer/v1";
 export const NODE_WORKSPACE_TRANSFER_ERROR_CODE = "WORKSPACE_TRANSFER_FAILED";
 
+export type NodeWorkerWorkspaceTransferOperation = "download" | "upload";
+export type NodeWorkerWorkspaceTransferStage =
+  | "recover"
+  | "manifest"
+  | "base"
+  | "materialize"
+  | "verify"
+  | "replace"
+  | "capture"
+  | "snapshot"
+  | "reconcile"
+  | "acknowledgement";
+
+type NodeWorkerWorkspaceTransferErrorOptions = ErrorOptions & {
+  operation?: NodeWorkerWorkspaceTransferOperation;
+  stage?: NodeWorkerWorkspaceTransferStage;
+};
+
 const NODE_WORKSPACE_TRANSFER_INVALID_REASONS = [
   "content_length",
   "file_digest",
@@ -35,12 +53,17 @@ export function isNodeWorkspaceTransferInvalidReason(
   );
 }
 
+/** Retains private transfer context until the node boundary serializes a safe diagnostic. */
 export class NodeWorkerWorkspaceTransferError extends Error {
   readonly code = NODE_WORKSPACE_TRANSFER_ERROR_CODE;
+  readonly operation?: NodeWorkerWorkspaceTransferOperation;
+  readonly stage?: NodeWorkerWorkspaceTransferStage;
 
-  constructor(message: string, options?: ErrorOptions) {
+  constructor(message: string, options?: NodeWorkerWorkspaceTransferErrorOptions) {
     super(message, options);
     this.name = "NodeWorkerWorkspaceTransferError";
+    this.operation = options?.operation;
+    this.stage = options?.stage;
   }
 }
 

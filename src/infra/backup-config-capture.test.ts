@@ -1,3 +1,5 @@
+import { execFileSync } from "node:child_process";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import * as tar from "tar";
@@ -8,6 +10,11 @@ import { verifyBackupArchive } from "../commands/backup-verify.js";
 import { createConfigIO } from "../config/config.js";
 import { MAX_INCLUDE_DEPTH } from "../config/includes.js";
 import type { RuntimeEnv } from "../runtime.js";
+import {
+  openOpenClawStateDatabase,
+  closeOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -37,7 +44,6 @@ async function configGraph(state: OpenClawTestState) {
   const snapshot = await createConfigIO({ observe: false }).readConfigFileSnapshot();
   expect(snapshot.issues).toEqual([]);
   return {
-    includePath,
     leafPath,
     files: new Map([
       [state.configPath, root],
@@ -78,8 +84,11 @@ describe("full backup config include capture", () => {
           const raw = graph.files
             .get(state.configPath)!
             .replace('ownership: "explicit"', "defaults: { workspace: 42 }");
-          graph.files.set(state.configPath, raw);
           await fs.writeFile(state.configPath, raw);
+          await expect(
+            createBackupArchive({ output: state.path("backup.tar.gz"), includeWorkspace: false }),
+          ).rejects.toThrow(/ownership could not be resolved/i);
+          return;
         }
         if (rootLink) {
           const authoredRoot = state.path("authored-config.json5");
@@ -87,11 +96,7 @@ describe("full backup config include capture", () => {
           await fs.symlink(authoredRoot, state.configPath);
         }
         await fs.writeFile(state.statePath("ordinary.txt"), "ordinary");
-        const { archive, restoredPath } = await restore(
-          state,
-          state.path("backup.tar.gz"),
-          !invalid,
-        );
+        const { archive, restoredPath } = await restore(state, state.path("backup.tar.gz"));
         const entries: string[] = [];
         await tar.t({
           file: archive.archivePath,
@@ -116,12 +121,10 @@ describe("full backup config include capture", () => {
           configPath: restoredPath(state.configPath),
           observe: false,
         }).readConfigFileSnapshot();
-        expect(snapshot.valid).toBe(!invalid);
+        expect(snapshot.valid).toBe(true);
         expect(snapshot.includeProvenance).toBeDefined();
-        expect(snapshot.issues.map((issue) => issue.path)).toEqual(
-          invalid ? ["agents.defaults.workspace"] : [],
-        );
-        expect(archive.skipped.some(({ reason }) => reason === "unresolved")).toBe(invalid);
+        expect(snapshot.issues.map((issue) => issue.path)).toEqual([]);
+        expect(archive.skipped.some(({ reason }) => reason === "unresolved")).toBe(false);
         expect(snapshot.config.gateway?.mode).toBe("local");
       });
     },
@@ -273,7 +276,9 @@ describe("full backup config include capture", () => {
     await withOpenClawTestState({ layout: "state-only" }, async (state) => {
       const graph = await configGraph(state);
       const { DatabaseSync } = requireNodeSqlite();
-      const dbPath = state.statePath("proof.sqlite");
+      const dbPath = resolveOpenClawStateSqlitePath(state.env);
+      openOpenClawStateDatabase({ env: state.env });
+      closeOpenClawStateDatabase();
       const db = new DatabaseSync(dbPath);
       db.exec(
         "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE proof(value TEXT); INSERT INTO proof VALUES ('captured');",
@@ -311,6 +316,48 @@ describe("full backup config include capture", () => {
       }
     });
   });
+
+  it.skipIf(process.platform === "win32")(
+    "refuses a config replaced by a FIFO at open without dispatching a blocking read",
+    async () => {
+      await withOpenClawTestState({ layout: "split" }, async (state) => {
+        const graph = await configGraph(state);
+        const resolve = backupShared.resolveBackupPlanFromDisk;
+        let replaced = false;
+        let blockingOpen = false;
+        vi.spyOn(backupShared, "resolveBackupPlanFromDisk").mockImplementationOnce(
+          async (options) => {
+            const plan = await resolve(options);
+            const open = fs.open;
+            vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+              if (!replaced && args[0] === graph.leafPath) {
+                replaced = true;
+                await fs.rename(graph.leafPath, `${graph.leafPath}.original`);
+                execFileSync("mkfifo", [graph.leafPath]);
+                const flags = args[1];
+                if (typeof flags !== "number" || !(flags & fsSync.constants.O_NONBLOCK)) {
+                  blockingOpen = true;
+                  throw new Error("refusing a blocking FIFO open in the test");
+                }
+              }
+              return open(...args);
+            });
+            return plan;
+          },
+        );
+        const output = state.path("refused.tar.gz");
+        await expect(createBackupArchive({ output, includeWorkspace: false })).rejects.toThrow(
+          /required config file .*retry backup/s,
+        );
+        expect(replaced).toBe(true);
+        expect(blockingOpen).toBe(false);
+        await expect(fs.stat(output)).rejects.toMatchObject({ code: "ENOENT" });
+        expect(await fs.readFile(`${graph.leafPath}.original`, "utf8")).toBe(
+          graph.files.get(graph.leafPath),
+        );
+      });
+    },
+  );
 
   it.each(["present", "missing"])(
     "does not archive a later include-bearing root that was %s without includes at capture",

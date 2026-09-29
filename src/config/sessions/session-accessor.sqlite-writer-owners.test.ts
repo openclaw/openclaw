@@ -34,7 +34,10 @@ import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
 
 afterEach(() => vi.restoreAllMocks());
 
-function observeSlowWriters(onWarning: (operation: unknown) => void = () => {}) {
+function observeSlowWriters(
+  onWarning: (operation: unknown, fields: object) => void = () => {},
+  onPruning: (fields: object) => void = () => {},
+) {
   let clock = 0;
   // Cross the existing threshold deterministically; all storage and callback work remains real.
   vi.spyOn(performance, "now").mockImplementation(() => (clock += 1_001));
@@ -47,7 +50,10 @@ function observeSlowWriters(onWarning: (operation: unknown) => void = () => {}) 
         assert(fields && typeof fields === "object");
         const operation = "operation" in fields ? fields.operation : undefined;
         operations.push(operation);
-        onWarning(operation);
+        onWarning(operation, fields);
+      } else if (message === "slow SQLite session archive pruning") {
+        assert(fields && typeof fields === "object");
+        onPruning(fields);
       }
       return undefined;
     });
@@ -229,7 +235,7 @@ it.each(
   },
 );
 
-it("distinguishes initial, repeated, and final archive pruning from post-deletion free-page draining", async () => {
+it("records successful archive pruning stages", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const storePath = path.join(state.sessionsDir(), "sessions.json");
     const historyKey = "agent:main:writer-history";
@@ -258,7 +264,27 @@ it("distinguishes initial, repeated, and final archive pruning from post-deletio
     replaceTranscriptEventsSync({ sessionKey: archivedKey, sessionId: "capped", storePath }, [
       { type: "session", id: "capped", content: "capped payload".repeat(8_192) },
     ]);
-    const operations = observeSlowWriters();
+    const database = openOpenClawAgentDatabase(
+      toDatabaseOptions(resolveSqliteScope({ sessionKey: historyKey, storePath })),
+    );
+    const pruning: unknown[] = [];
+    const aggregates: object[] = [];
+    const writerSegments: object[] = [];
+    const pageWrites: object[] = [];
+    observeSlowWriters(
+      (operation, fields) => {
+        if (operation === "session.history.archive-prune") {
+          writerSegments.push(fields);
+        }
+        if (operation === "session.history.free-pages") {
+          pageWrites.push(fields);
+        }
+      },
+      (fields) => {
+        aggregates.push(fields);
+        pruning.push("archivePruning" in fields ? fields.archivePruning : undefined);
+      },
+    );
     try {
       expect(
         await enforceSqliteSessionHistoryDiskBudget({
@@ -267,17 +293,42 @@ it("distinguishes initial, repeated, and final archive pruning from post-deletio
           maintenance: { maxDiskBytes: 1, highWaterBytes: 0 },
         }),
       ).toMatchObject({ removedEntries: 2 });
-      expect(
-        operations.filter(
-          (label) =>
-            label === "session.history.archive-prune" || label === "session.history.free-pages",
-        ),
-      ).toEqual([
-        "session.history.archive-prune",
-        "session.history.archive-prune",
-        "session.history.archive-prune",
-        "session.history.free-pages",
+      expect(writerSegments.length).toBeGreaterThan(0);
+      expect(pageWrites.length).toBeGreaterThan(0);
+      for (const fields of [...writerSegments, ...pageWrites]) {
+        expect(fields).toMatchObject({
+          queueWaitMs: expect.any(Number),
+          writerExecutionMs: expect.any(Number),
+        });
+      }
+      for (const fields of aggregates) {
+        expect(fields).toMatchObject({ elapsedMs: expect.any(Number) });
+        expect(fields).not.toHaveProperty("queueWaitMs");
+        expect(fields).not.toHaveProperty("writerExecutionMs");
+        expect(fields).not.toHaveProperty("completionDelayMs");
+      }
+      expect(pruning).toEqual([
+        expect.objectContaining({ trigger: "initial", completed: true }),
+        expect.objectContaining({ trigger: "after-eviction", completed: true }),
+        expect.objectContaining({ trigger: "final", completed: true }),
       ]);
+      expect(pruning[0]).toMatchObject({ checkpointIncomplete: 0 });
+      for (const diagnostic of pruning) {
+        expect(diagnostic).toMatchObject({
+          checkpointCalls: expect.any(Number),
+          checkpointMs: expect.any(Number),
+          checkpointMaxMs: expect.any(Number),
+          queryMs: expect.any(Number),
+          measurementMs: expect.any(Number),
+          measurements: expect.any(Number),
+          legacyInventoryMs: expect.any(Number),
+        });
+      }
+      expect(pruning[1]).toMatchObject({
+        fileRemovalMs: expect.any(Number),
+        removedFiles: 1,
+        rowDeletionMs: expect.any(Number),
+      });
       expect(loadSessionEntry({ sessionKey: historyKey, storePath })?.sessionId).toBe("current");
       expect(loadSessionEntry({ sessionKey: archivedKey, storePath })).toBeUndefined();
       expect(
@@ -286,9 +337,6 @@ it("distinguishes initial, repeated, and final archive pruning from post-deletio
       expect(
         fs.readdirSync(state.sessionsDir()).filter((name) => name.includes(".deleted.")),
       ).toEqual([]);
-      const database = openOpenClawAgentDatabase(
-        toDatabaseOptions(resolveSqliteScope({ sessionKey: historyKey, storePath })),
-      );
       expect(database.db.prepare("PRAGMA freelist_count").get()?.freelist_count).toBe(0);
     } finally {
       vi.restoreAllMocks();
@@ -296,7 +344,7 @@ it("distinguishes initial, repeated, and final archive pruning from post-deletio
   });
 });
 
-it("coalesces automatic maintenance under its own planning and finalization labels", async () => {
+it("coalesces automatic maintenance without redundant writer admissions", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const storePath = path.join(state.sessionsDir(), "sessions.json");
     const staleKey = "agent:main:subagent:writer-stale";
@@ -320,7 +368,12 @@ it("coalesces automatic maintenance under its own planning and finalization labe
       finalized.resolve(result);
       return result;
     });
-    const operations = observeSlowWriters();
+    const reclamationKinds: unknown[] = [];
+    const operations = observeSlowWriters((_operation, fields) => {
+      if ("reclamationKind" in fields && fields.reclamationKind) {
+        reclamationKinds.push(fields.reclamationKind);
+      }
+    });
     const request = {
       activeSessionKey: activeKey,
       archiveDirectory: state.sessionsDir(),
@@ -337,10 +390,21 @@ it("coalesces automatic maintenance under its own planning and finalization labe
       kickSessionEntryMaintenanceAfterWrite(request);
       await finalized.promise;
       await yieldToEventLoop();
+      // Native commits retain admission; preparation and empty archive probes add no writer spans.
       expect(operations).toEqual([
         "session.maintenance.plan",
-        "session.maintenance.finalize",
-        "session.archive.publish-prepare",
+        "session.reclamation.retain",
+        "session.reclamation.worker-commit",
+        "session.maintenance.plan",
+        "session.reclamation.retain",
+        "session.reclamation.worker-commit",
+        "session.reclamation.retain",
+        "session.reclamation.worker-commit",
+      ]);
+      expect(reclamationKinds).toEqual([
+        "maintenance-plan",
+        "maintenance-plan",
+        "maintenance-finalize",
       ]);
       expect(loadSessionEntry({ sessionKey: staleKey, storePath })).toBeUndefined();
       expect(loadSessionEntry({ sessionKey: activeKey, storePath })?.sessionId).toBe("active");

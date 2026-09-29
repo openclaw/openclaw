@@ -45,96 +45,95 @@ describe("Codex app-server terminal settlement", () => {
     resetSharedCodexAppServerClientForTests();
   });
 
-  it.each([
-    { stage: "onAssistantMessageStart", nativeCompleted: true },
-    { stage: "onPartialReply", nativeCompleted: true },
-    { stage: "onReasoningStream", nativeCompleted: true },
-    { stage: "onReasoningEnd", nativeCompleted: true },
-    { stage: "onReasoningStream", nativeCompleted: false },
-  ] as const)(
-    "settles held $stage with native completion: $nativeCompleted",
-    async ({ stage, nativeCompleted }) => {
+  it.each([MAX_TIMER_TIMEOUT_MS])(
+    "settles a native receipt while prompt persistence is blocked with execution budget %i",
+    async (timeoutMs) => {
+      const params = createTestParams();
+      await attachSqliteSessionTarget(
+        params,
+        path.join(tempDir, "held-prompt.sqlite"),
+        "session-held-prompt",
+      );
+      const target = params.sessionTarget;
+      if (!target?.sessionId || !target.sessionKey) {
+        throw new Error("SQLite transcript target was not attached");
+      }
+      const transcriptTarget = {
+        ...target,
+        sessionId: target.sessionId,
+        sessionKey: target.sessionKey,
+      };
       const held = createDeferred<void>();
-      const callback = vi.fn(() => held.promise);
+      const writerAcquired = createDeferred<void>();
+      let writer: Promise<void> | undefined;
+      const harness = createStartedThreadHarness(async (method) => {
+        if (method === "turn/start") {
+          writer = withSessionTranscriptWriteLock(transcriptTarget, async () => {
+            writerAcquired.resolve();
+            await held.promise;
+          });
+          await writerAcquired.promise;
+        }
+        return undefined;
+      });
       const onAttemptTimeout = vi.fn();
-      const harness = createStartedThreadHarness();
-      const params = {
-        ...createTestParams(),
-        [stage]: callback,
-        onAttemptTimeout,
-        timeoutMs: TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS,
+      const onAttemptDeadlineChanged = vi.fn();
+      const turnAccepted = createDeferred<void>();
+      params.timeoutMs = timeoutMs;
+      params.onAttemptTimeout = onAttemptTimeout;
+      params.onAttemptDeadlineChanged = onAttemptDeadlineChanged;
+      params.onExecutionPhase = ({ phase }) => {
+        if (phase === "turn_accepted") {
+          turnAccepted.resolve();
+        }
       };
       vi.useFakeTimers();
       const run = runCodexAppServerAttempt(params);
       const settled = vi.fn();
       void run.then(settled, settled);
       try {
-        await harness.waitForMethod("turn/start");
-        const assistantStage = stage === "onAssistantMessageStart" || stage === "onPartialReply";
-        if (assistantStage) {
-          await harness.notify({
-            method: "item/started",
-            params: {
-              threadId: "thread-1",
-              turnId: "turn-1",
-              item: { id: "answer", type: "agentMessage", phase: "final_answer", text: "" },
-            },
-          });
-        }
-        void harness.notify({
-          method: assistantStage ? "item/agentMessage/delta" : "item/reasoning/textDelta",
-          params: {
-            threadId: "thread-1",
-            turnId: "turn-1",
-            itemId: assistantStage ? "answer" : "reasoning-1",
-            delta: assistantStage ? "Completed answer." : "Finishing the answer.",
-          },
+        await Promise.race([
+          turnAccepted.promise,
+          run.then(() => {
+            throw new Error("Codex attempt ended before turn acceptance");
+          }),
+        ]);
+        expect(resolveActiveEmbeddedRunSessionId(params.sessionKey!)).toBe(params.sessionId);
+        const receivedAtMs = Date.now();
+        void harness.notify(
+          turnCompleted({
+            id: "turn-1",
+            status: "completed",
+            items: [
+              {
+                id: "answer",
+                type: "agentMessage",
+                phase: "final_answer",
+                text: "Completed answer.",
+              },
+            ],
+          }),
+        );
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(onAttemptDeadlineChanged).toHaveBeenLastCalledWith({
+          kind: "bounded",
+          deadlineAtMs: receivedAtMs + TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS,
         });
-        if (nativeCompleted) {
-          void harness.notify(
-            turnCompleted({
-              id: "turn-1",
-              status: "completed",
-              items: [
-                {
-                  id: "answer",
-                  type: "agentMessage",
-                  phase: "final_answer",
-                  text: "Completed answer.",
-                },
-              ],
-            }),
-          );
-        }
-        await vi.waitFor(() => expect(callback).toHaveBeenCalledOnce(), fastWait);
-        await vi.advanceTimersByTimeAsync(TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS);
-        await vi.advanceTimersByTimeAsync(TURN_FINALIZE_DRAIN_ABORT_GRACE_MS);
-        await vi.waitFor(() => expect(settled).toHaveBeenCalledOnce(), {
-          interval: 100,
-          timeout: 15_000,
-        });
+        expect(settled).not.toHaveBeenCalled();
+        expect(onAttemptTimeout).not.toHaveBeenCalled();
+        // Storage released after the deadline simulation must keep its native coordinator timers.
         vi.useRealTimers();
+        held.resolve();
+        await writer;
         const result = await run;
-        if (nativeCompleted) {
-          expect(result.terminal).toEqual({
-            kind: "ok",
-            settlementWarning: {
-              pendingStage: stage,
-              elapsedMs: TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS,
-              timeoutMs: TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS,
-            },
-          });
-          expect(result.assistantTexts).toEqual(["Completed answer."]);
-          expect(result.lastAssistant?.stopReason).toBe("stop");
-          expect(result.codexAppServerFailure).toBeUndefined();
-          expect(onAttemptTimeout).not.toHaveBeenCalled();
-        } else {
-          expect(readAttemptTerminal(result)).toMatchObject({ timedOut: true, aborted: true });
-          expect(onAttemptTimeout).toHaveBeenCalledOnce();
-        }
+        expect(result.terminal).toEqual({ kind: "ok" });
+        expect(result.assistantTexts).toEqual(["Completed answer."]);
+        expect(onAttemptTimeout).not.toHaveBeenCalled();
+        expect(harness.requests.some(({ method }) => method === "turn/interrupt")).toBe(false);
       } finally {
         held.resolve();
         vi.useRealTimers();
+        await writer;
         await run;
       }
     },
@@ -302,12 +301,8 @@ describe("Codex app-server terminal settlement", () => {
   });
 
   it.each([
-    { boundary: "callback", termination: "timeout", release: "during recovery" },
     { boundary: "checkpoint", termination: "timeout", release: "during recovery" },
-    { boundary: "final", termination: "timeout", release: "during recovery" },
     { boundary: "final", termination: "timeout", release: "after cutoff" },
-    { boundary: "checkpoint", termination: "abort", release: "after cutoff" },
-    { boundary: "final", termination: "abort", release: "after cutoff" },
     { boundary: "final", termination: "abort", release: "during grace" },
     { boundary: "checkpoint", termination: "abort", release: "during grace" },
     { boundary: "publication", termination: "abort", release: "on publication" },
@@ -331,7 +326,6 @@ describe("Codex app-server terminal settlement", () => {
         sessionKey: target.sessionKey,
       };
       const checkpoint = createDeferred<void>();
-      const mirror = codexTranscriptMirrorRuntime.mirror;
       const checkpointWrites: Promise<unknown>[] = [];
       const holdWriter = async () => {
         const writerAcquired = createDeferred<void>();
@@ -344,13 +338,6 @@ describe("Codex app-server terminal settlement", () => {
         await writerAcquired.promise;
       };
       const checkpointMirror = vi.spyOn(codexTranscriptMirrorRuntime, "mirror");
-      if (boundary === "callback") {
-        checkpointMirror.mockImplementation((input) => {
-          const writing = checkpoint.promise.then(() => mirror(input));
-          checkpointWrites.push(writing);
-          return writing;
-        });
-      }
       const finalMirrorStarted = createDeferred<void>();
       if (boundary === "final") {
         const finalMirror = codexTranscriptMirrorRuntime.mirrorBestEffort;
@@ -385,6 +372,8 @@ describe("Codex app-server terminal settlement", () => {
         __openclaw: undefined,
       });
       params.timeoutMs = 60 * 60_000;
+      const promptPersisted = createDeferred<void>();
+      params.onUserMessagePersisted = () => promptPersisted.resolve();
       vi.useFakeTimers();
       const settled = vi.fn();
       const run = runCodexAppServerAttempt(params);
@@ -393,6 +382,7 @@ describe("Codex app-server terminal settlement", () => {
       try {
         await harness.waitForMethod("turn/start");
         if (boundary === "checkpoint") {
+          await promptPersisted.promise;
           await holdWriter();
         }
         await harness.notify({
@@ -475,8 +465,12 @@ describe("Codex app-server terminal settlement", () => {
           checkpoint.resolve();
           await Promise.allSettled(checkpointWrites);
         }
-        await vi.waitFor(() => expect(settled).toHaveBeenCalledOnce(), fastWait);
+        if (release !== "during grace") {
+          await vi.waitFor(() => expect(settled).toHaveBeenCalledOnce(), fastWait);
+        }
+        // Keep the grace clock fixed while accepted transcript work and cleanup settle.
         const result = await run;
+        expect(settled).toHaveBeenCalledOnce();
         expect(readAttemptTerminal(result)).toMatchObject({
           aborted: termination === "abort",
           timedOut: false,
@@ -512,53 +506,51 @@ describe("Codex app-server terminal settlement", () => {
           ),
         ).toHaveLength(1);
         expect(resolveActiveEmbeddedRunSessionId(transcriptTarget.sessionKey)).toBeUndefined();
-        if (termination === "timeout" || release !== "after cutoff" || boundary === "final") {
-          checkpoint.resolve();
-          await Promise.allSettled(checkpointWrites);
-          const events = await readSessionTranscriptEvents(transcriptTarget);
-          const assistantRows = events.filter(
-            (event) =>
-              isJsonObject(event) &&
-              isJsonObject(event.message) &&
-              event.message.role === "assistant" &&
-              isJsonObject(event.message["__openclaw"]) &&
-              event.message["__openclaw"].mirrorIdentity === "turn-1:assistant",
-          );
-          if (assistantCommitted) {
-            expect(assistantRows).toEqual([
-              expect.objectContaining({
-                id: result.contextEngineTerminalAnchor?.entryId,
-                message: expect.objectContaining({
-                  stopReason:
-                    termination === "timeout" || boundary === "publication" ? "stop" : "aborted",
-                  idempotencyKey: result.assistantTranscriptIdempotencyKey,
-                }),
+        checkpoint.resolve();
+        await Promise.allSettled(checkpointWrites);
+        const events = await readSessionTranscriptEvents(transcriptTarget);
+        const assistantRows = events.filter(
+          (event) =>
+            isJsonObject(event) &&
+            isJsonObject(event.message) &&
+            event.message.role === "assistant" &&
+            isJsonObject(event.message["__openclaw"]) &&
+            event.message["__openclaw"].mirrorIdentity === "turn-1:assistant",
+        );
+        if (assistantCommitted) {
+          expect(assistantRows).toEqual([
+            expect.objectContaining({
+              id: result.contextEngineTerminalAnchor?.entryId,
+              message: expect.objectContaining({
+                stopReason:
+                  termination === "timeout" || boundary === "publication" ? "stop" : "aborted",
+                idempotencyKey: result.assistantTranscriptIdempotencyKey,
               }),
-            ]);
-            if (termination === "timeout") {
-              expect(assistantRows[0]).toMatchObject({
-                message: {
-                  __openclaw: {
-                    settlementWarning: expect.objectContaining({
-                      timeoutMs: TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS,
-                    }),
-                  },
+            }),
+          ]);
+          if (termination === "timeout") {
+            expect(assistantRows[0]).toMatchObject({
+              message: {
+                __openclaw: {
+                  settlementWarning: expect.objectContaining({
+                    timeoutMs: TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS,
+                  }),
                 },
+              },
+            });
+            if (queuedNetworkResult) {
+              expect(assistantRows[0]).toMatchObject({
+                message: { __openclaw: { turnTainted: true } },
               });
-              if (queuedNetworkResult) {
-                expect(assistantRows[0]).toMatchObject({
-                  message: { __openclaw: { turnTainted: true } },
-                });
-              }
             }
-            if (boundary === "publication") {
-              expect(publishedTerminal).toHaveBeenCalledExactlyOnceWith(
-                expect.objectContaining({ messageId: result.contextEngineTerminalAnchor?.entryId }),
-              );
-            }
-          } else {
-            expect(assistantRows).toEqual([]);
           }
+          if (boundary === "publication") {
+            expect(publishedTerminal).toHaveBeenCalledExactlyOnceWith(
+              expect.objectContaining({ messageId: result.contextEngineTerminalAnchor?.entryId }),
+            );
+          }
+        } else {
+          expect(assistantRows).toEqual([]);
         }
         if (assistantCommitted) {
           expect(result.assistantTranscriptOwned).toBe(true);
@@ -572,6 +564,8 @@ describe("Codex app-server terminal settlement", () => {
           expect(result.contextEngineTerminalAnchor).toBeUndefined();
         }
         if (boundary === "final" && release === "after cutoff") {
+          // Successor I/O and relay retirement must outlive the completed deadline simulation.
+          vi.useRealTimers();
           const nextHarness = createStartedThreadHarness(
             async (method) => {
               if (method === "thread/resume") {

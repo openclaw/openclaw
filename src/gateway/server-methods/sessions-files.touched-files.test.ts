@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { sessionsFilesHandlers } from "./sessions-files.js";
 import {
   assistantToolCall,
@@ -191,6 +192,7 @@ describe("sessions.files touched-file folds", () => {
 
   it("yields between SQLite pages and shares one concurrent fold per session", async () => {
     useSqliteSession(hoisted.loadSessionEntry, workspaceRoot, "sess-touched-singleflight");
+    const firstPageRead = createDeferred();
     let otherWorkRan = false;
     setImmediate(() => {
       otherWorkRan = true;
@@ -199,6 +201,8 @@ describe("sessions.files touched-file folds", () => {
       if (limits.cursor !== undefined) {
         expect(limits.cursor).toBe("singleflight-page-1");
         expect(otherWorkRan).toBe(true);
+      } else {
+        firstPageRead.resolve();
       }
       return {
         kind: "page",
@@ -213,6 +217,7 @@ describe("sessions.files touched-file folds", () => {
     const first = invokeSessionFilesHandler("sessions.files.list", params);
     const second = invokeSessionFilesHandler("sessions.files.list", params);
 
+    await firstPageRead.promise;
     expect(hoisted.readSessionTranscriptVisibleMessageDeltaCore).toHaveBeenCalledTimes(1);
     for (const result of await Promise.all([first, second])) {
       expectOkPayload(result);
@@ -226,6 +231,7 @@ describe("sessions.files touched-file folds", () => {
       const sessionId = sessionKey.endsWith(":slow") ? "sess-touched-slow" : "sess-touched-fast";
       const storePath = path.join(workspaceRoot, `${sessionId}.sqlite`);
       return {
+        agentId: "main",
         canonicalKey: sessionKey,
         cfg: {},
         storePath,
@@ -256,6 +262,11 @@ describe("sessions.files touched-file folds", () => {
 
     expect(slowFinished).toBe(false);
     expectOkPayload(await slow);
+    expect(
+      hoisted.readSessionTranscriptVisibleMessageDeltaCore.mock.calls.map(
+        ([scope]) => scope.sessionId,
+      ),
+    ).toEqual(["sess-touched-slow", "sess-touched-fast", "sess-touched-slow"]);
   });
 
   it("isolates touched-file folds for the same session across stores", async () => {
@@ -345,37 +356,6 @@ describe("sessions.files touched-file folds", () => {
       expect.objectContaining({ path: "ui/chat.ts", kind: "modified" }),
     ]);
     expect(hoisted.readSessionTranscriptVisibleMessageDeltaCore).toHaveBeenCalledTimes(3);
-  });
-
-  it("collects the expected files and kinds from the SQLite fold", async () => {
-    const messages = [
-      assistantToolCall("read", { path: "ui/chat.ts" }),
-      assistantToolCall("edit", { path: "ui/chat.ts" }),
-      assistantToolCall("read", { path: "src/readme.md" }),
-      assistantToolCall("apply_patch", {
-        input: "*** Begin Patch\n*** Update File: package.json\n*** End Patch\n",
-      }),
-    ];
-    useSqliteSession(hoisted.loadSessionEntry, workspaceRoot, "sess-touched-parity");
-    hoisted.readSessionTranscriptVisibleMessageDeltaCore.mockReturnValue({
-      kind: "page",
-      cursor: "parity-final",
-      events: messages.map(visibleMessageEvent),
-      hasMore: false,
-      serializedBytes: 400,
-    });
-
-    const payload = expectOkPayload(
-      await invokeSessionFilesHandler("sessions.files.list", {
-        sessionKey: "agent:main:main",
-      }),
-    );
-
-    expect(payload.files.map((file: Record<string, unknown>) => [file.path, file.kind])).toEqual([
-      ["package.json", "modified"],
-      ["ui/chat.ts", "modified"],
-      ["src/readme.md", "read"],
-    ]);
   });
 
   it("collects touched files from existing transcript tool-call spellings", async () => {

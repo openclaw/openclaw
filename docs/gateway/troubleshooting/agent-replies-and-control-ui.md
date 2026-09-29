@@ -146,6 +146,7 @@ Related:
 
 - [Configuration](/gateway/configuration) (gateway auth modes)
 - [Control UI](/web/control-ui)
+- [Gateway protocol auth](/gateway/protocol/auth) — the wire contract behind `AUTH_TOKEN_MISMATCH` and `AUTH_SCOPE_MISMATCH`
 - [Devices](/cli/devices)
 - [Remote access](/gateway/remote)
 - [Trusted proxy auth](/gateway/trusted-proxy-auth)

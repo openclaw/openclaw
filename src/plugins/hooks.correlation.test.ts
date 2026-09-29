@@ -2,8 +2,10 @@
 import { spawnSync } from "node:child_process";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { createHookRunner } from "./hooks.js";
 import { addTestHook, TEST_PLUGIN_AGENT_CTX } from "./hooks.test-fixtures.js";
+import { pluginProcessRuntimeEntrypoints } from "./process-runtime.test-support.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRegistry } from "./registry.js";
 import type { PluginHookRegistration } from "./types.js";
@@ -77,8 +79,9 @@ describe("hook correlation fields", () => {
   });
 
   beforeAll(() => {
+    const hooksUrl = resolveRuntimeWorkerUrl(pluginProcessRuntimeEntrypoints.hooks);
     const script = `
-      import { createHookRunner } from "./src/plugins/hooks.ts";
+      import { createHookRunner } from ${JSON.stringify(hooksUrl.href)};
       const registry = {
         typedHooks: [{
           pluginId: "plugin-a",
@@ -113,13 +116,10 @@ describe("hook correlation fields", () => {
 
     const child = spawnSync(
       process.execPath,
-      ["--import", "tsx", "--input-type=module", "-e", script],
+      [...resolveRuntimeWorkerArgv(hooksUrl).slice(0, -1), "--input-type=module", "-e", script],
       {
         cwd: process.cwd(),
         encoding: "utf8",
-        // Boots tsx in a child process, so the deadline must cover compile time on a
-        // loaded machine. A tight bound kills the probe (status null) and fails the
-        // assertions below for a reason unrelated to the hook timeout under test.
         timeout: 30_000,
       },
     );

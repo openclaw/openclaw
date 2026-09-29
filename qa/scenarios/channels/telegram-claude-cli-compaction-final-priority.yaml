@@ -145,7 +145,7 @@ flow:
                     const telegram = cfg.channels.telegram.accounts?.[transport.accountId] ?? cfg.channels.telegram;
                     telegram.streaming = {
                       mode: "progress",
-                      progress: { commentary: true },
+                      progress: { commentary: true, toolProgress: true },
                     };
                     await fs.writeFile(ctx.configPath, `${JSON.stringify(cfg, null, 2)}\n`, "utf8");
                   })()

@@ -151,20 +151,28 @@ Button semantics:
   kind from the ID.
 - `action.type: "question"` identifies one choice for a live, runtime-authored
   `ask_user` question. Like `approval`, this is an OpenClaw runtime action;
-  agents and plugins must not synthesize question IDs. Telegram, Discord, and
-  Slack map it to transport-private native callbacks and resolve the choice
-  through the Gateway. When the question becomes answered, expired, or
-  cancelled, those channels edit the delivered message, remove its actions,
-  and append the terminal status. WhatsApp, Signal, and iMessage render up to
-  four single-select choices as `1️⃣` through `4️⃣` reactions. Other question
-  shapes degrade to label text, and the user can answer with a plain-text
-  reply.
+  agents and plugins must not synthesize question IDs. Telegram, Discord,
+  Slack, Mattermost, and LINE direct chats map it to transport-private native
+  callbacks and resolve the choice through the Gateway. When the question becomes answered,
+  expired, or cancelled, Telegram, Discord, and Slack edit the delivered
+  message, remove its actions, and append the terminal status. Mattermost
+  retires its prompt only on the click it accepts, so a question that ends
+  elsewhere keeps its buttons; a later click gets private feedback. Denied
+  Mattermost clicks also receive private feedback and leave the prompt unchanged.
+  LINE group and multi-person chats keep readable choices because their postbacks
+  do not include the sender identity needed to admit an answer. Unknown LINE
+  destinations also use text. LINE cannot edit a message it already delivered, so a
+  tap after the question ends receives a notice.
+  LINE draws at most four controls on one card, matching its two-to-four option
+  bound. WhatsApp, Signal, and iMessage render up to four single-select choices
+  as `1️⃣` through `4️⃣` reactions. Other question shapes degrade to label text,
+  and the user can answer with a plain-text reply.
 - `intent: "custom-input"` switches a live question to its free-text answer
   path without resolving it. Producers must also state the free-text route in
   visible text. A channel can omit this one native control while keeping
   declared-choice controls native when it cannot target a text composer safely.
-  Telegram maps it to **Other…** and Force Reply. Discord and Slack keep the
-  visible text route.
+  Telegram maps it to **Other…** and Force Reply. Discord, Slack, Mattermost,
+  and LINE keep the visible text route.
 - `action.type: "url"` opens a normal link.
 - `action.type: "web-app"` launches a channel-native web app. Set `url` for a
   URL-backed app or `widgetId` for an OpenClaw-hosted widget whose launch
@@ -439,7 +447,8 @@ const adapter: ChannelOutboundAdapter = {
   renderPresentation({ payload, presentation, ctx }) {
     return renderNativePayload(payload, presentation, ctx);
   },
-  async pinDeliveredMessage({ target, messageId, pin }) {
+  async pinDeliveredMessage({ target, messageId, pin, assertDirectAdapterHandoff }) {
+    assertDirectAdapterHandoff?.();
     await pinNativeMessage(target, messageId, { notify: pin.notify === true });
   },
 };
@@ -613,8 +622,8 @@ Current bundled renderers:
 | Telegram        | Text plus inline keyboards                | Buttons/selects require inline button capability for the target surface; otherwise text fallback is used.                                                                                               |
 | Plain channels  | Text fallback                             | Channels without a renderer still get readable output.                                                                                                                                                  |
 
-Provider-native payload compatibility is a transition affordance for existing
-reply producers. New native fields require the explicit exception review above.
+Provider-native payload compatibility is kept for existing reply producers only.
+New native fields require the explicit exception review above.
 
 ## Presentation vs InteractiveReply
 
@@ -684,7 +693,9 @@ Non-deprecated helpers worth knowing:
   data block as deterministic text for channel-specific fallback paths.
 
 The legacy `InteractiveReply*` types and conversion helpers are marked
-`@deprecated` in the SDK:
+`@deprecated` in the SDK. The compatibility registry records them as
+`message-presentation-legacy-bridges`, deprecated on 2026-07-25 with a
+`removeAfter` date of 2026-10-01:
 
 - `InteractiveReply`, `InteractiveReplyBlock`, `InteractiveReplyButton`, and
   `InteractiveReplyOption`
@@ -732,11 +743,27 @@ Semantics:
 - `pin.notify` defaults to `false`.
 - `pin.required` defaults to `false`.
 - Optional pin failures degrade and leave the sent message intact.
-- Required pin failures fail delivery.
+- Required pin failures report a partial delivery failure while preserving the
+  accepted message and its receipt.
 - Chunked messages pin the first delivered chunk, not the tail chunk.
 
 Manual `pin`, `unpin`, and `pins` message actions still exist for existing
 messages where the provider supports those operations.
+
+The `pinDeliveredMessage` context includes an optional
+`assertDirectAdapterHandoff` callback. A successful send does not keep its owner
+active indefinitely: the owner can close while the adapter prepares or waits to
+pin that message. Core checks the assertion before entering the pin hook, and
+the adapter must retain it through preparation, rate-limit queues, and retries,
+checking it synchronously immediately before each provider request. If the
+native pin helper performs those waits, forward the assertion into its existing
+request guard too.
+
+Let a submitted pin request settle even if authority closes while awaiting its
+response. Do not discard an accepted pin or repeat the message send. This
+optional context field preserves older callers that do not supply an assertion;
+it adds no configuration or pin permission and must not be serialized into a
+payload.
 
 ## Plugin author checklist
 

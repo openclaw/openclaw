@@ -33,6 +33,13 @@ Slack support covers DMs and channels via Slack app integrations. Default transp
 - [Slack events and operations](/channels/slack/events) — system events, interactions, and presence polling.
 - [Slack troubleshooting](/channels/slack/troubleshooting) — silent channels, ignored DMs, and dead transports.
 
+## Huddles
+
+Use the separate [Slack huddles plugin](/plugins/slack-huddles) to call an agent
+into an active huddle. It drives Slack in the OpenClaw Chrome profile, signed in
+as a dedicated Slack user account. Slack app and bot tokens cannot join huddles
+or read their audio.
+
 ## Where each section moved
 
 Every section heading from the previous single-page version keeps its anchor here, so an existing link such as `/channels/slack#text-streaming` still resolves. Each entry points at the page that now holds the content.
@@ -119,7 +126,7 @@ Primary reference: [Configuration reference - Slack](/gateway/config-channels#sl
 - mode/auth: `postAs`, `mode`, `botToken`, `appToken`, `userToken`, `signingSecret`, `webhookPath`, `accounts.*`
 - DM access: `dm.enabled`, `dmPolicy`, `allowFrom` (legacy: `dm.policy`, `dm.allowFrom`), `dm.groupEnabled`, `dm.groupChannels`
 - compatibility toggle: `dangerouslyAllowNameMatching` (break-glass, keep off unless needed)
-- channel access: `groupPolicy`, `channels.*`, `channels.*.users`, `channels.*.requireMention`, `implicitMentions.*`
+- channel access: `groupPolicy`, `channels.*`, `channels.*.users`, `channels.*.requireMention`, `requireMentionInBotThreads` (also per account/channel), `implicitMentions.*`
 - group introductions: `joinIntro`, `accounts.*.joinIntro` (default: `true`)
 - threading/history: `replyToMode`, `replyToModeByChatType`, `thread.*`, `historyLimit`, `dmHistoryLimit`, `dms.*.historyLimit`
 - presence wakes: `presenceEvents.mode`, `presenceEvents.prompt`, `channels.*.presenceEvents.*` (`off|auto|on`, default `off`)
@@ -134,6 +141,9 @@ Primary reference: [Configuration reference - Slack](/gateway/config-channels#sl
 <CardGroup cols={2}>
   <Card title="Pairing" icon="link" href="/channels/pairing">
     Pair a Slack user to the gateway.
+  </Card>
+  <Card title="Reactions" icon="thumbs-up" href="/tools/reactions">
+    Emoji reaction semantics for the `message` tool.
   </Card>
   <Card title="Groups" icon="users" href="/channels/groups">
     Channel and group DM behavior.

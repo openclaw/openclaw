@@ -1,18 +1,11 @@
 /** Executes an already-prepared model without importing model/auth preparation. */
-import {
-  reasoningTagTextPolicy,
-  supportsOpenAIReasoningEffort,
-} from "@openclaw/ai/internal/openai";
+import { reasoningTagTextPolicy } from "@openclaw/ai/internal/openai";
 import { defaultApiRegistry } from "@openclaw/ai/internal/runtime";
 import {
   prepareHeadersForSimpleCompletion,
   prepareModelForSimpleCompletion,
 } from "@openclaw/ai/transports";
-import {
-  resolveClaudeOpus5ModelIdentity,
-  resolveClaudeSonnet5ModelIdentity,
-} from "@openclaw/llm-core";
-import type { ThinkLevel } from "../auto-reply/thinking.js";
+import { resolveProviderThinkingLevel, type ThinkLevel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   bindModelLlmRuntime,
@@ -21,21 +14,16 @@ import {
   getModelLlmRuntime,
 } from "../llm/model-runtime-binding.js";
 import { completeSimple } from "../llm/stream.js";
-import type {
-  AssistantMessage,
-  Model,
-  ModelThinkingLevel,
-  ThinkingLevel as SimpleCompletionThinkingLevel,
-} from "../llm/types.js";
+import type { AssistantMessage, Model, SimpleStreamOptions } from "../llm/types.js";
 import type { ResolvedProviderAuth } from "./model-auth.js";
-import { isOpenAIProvider } from "./openai-routing.js";
 
 type SimpleCompletionModelOptions = {
   headers?: Record<string, string>;
   sessionId?: string;
   maxTokens?: number;
   temperature?: number;
-  reasoning?: ThinkLevel | SimpleCompletionThinkingLevel;
+  serviceTier?: SimpleStreamOptions["serviceTier"];
+  reasoning?: ThinkLevel;
   strictReasoningTags?: boolean;
   signal?: AbortSignal;
 };
@@ -68,6 +56,10 @@ export async function completeWithPreparedSimpleCompletionModel(
 }
 
 async function completePreparedModel(params: PreparedCompletionParams): Promise<AssistantMessage> {
+  // Direct SDK calls prepare transport hooks before entering the stream facade.
+  await import("./ai-transport-runtime-host.js");
+  params.assertCurrent?.();
+  params.options?.signal?.throwIfAborted();
   const runtime = getModelLlmRuntime(params.model);
   let completionModel =
     getModelCompletionTransport(params.model) ??
@@ -77,14 +69,22 @@ async function completePreparedModel(params: PreparedCompletionParams): Promise<
       apiRegistry: runtime?.registry ?? defaultApiRegistry,
       model: params.model,
       cfg: params.cfg,
+      auth: { mode: params.auth.mode, authFlow: params.auth.authFlow },
     });
   if (runtime) {
     completionModel = bindModelLlmRuntime(completionModel, runtime);
   }
   const { reasoning: rawReasoning, strictReasoningTags, ...options } = params.options ?? {};
-  const reasoning = normalizeSimpleCompletionReasoning(rawReasoning, completionModel);
-  const headers = prepareHeadersForSimpleCompletion(completionModel, options);
-  const completionOptions = {
+  const providerReasoning = resolveProviderThinkingLevel({
+    provider: params.model.provider,
+    model: params.model.id,
+    catalog: [params.model],
+    agentRuntime: "openclaw",
+    level: rawReasoning,
+  });
+  const reasoning = providerReasoning === "adaptive" ? "medium" : providerReasoning;
+  const headers = prepareHeadersForSimpleCompletion(params.model, options);
+  const completionOptions: SimpleStreamOptions = {
     ...options,
     ...(reasoning ? { reasoning } : {}),
     apiKey: params.auth.apiKey,
@@ -99,27 +99,4 @@ async function completePreparedModel(params: PreparedCompletionParams): Promise<
     completionOptions,
     params.assertCurrent,
   );
-}
-
-function normalizeSimpleCompletionReasoning(
-  reasoning: SimpleCompletionModelOptions["reasoning"],
-  model: Model,
-): ModelThinkingLevel | undefined {
-  switch (reasoning) {
-    case undefined:
-      return undefined;
-    case "off":
-      return resolveClaudeSonnet5ModelIdentity(model) || resolveClaudeOpus5ModelIdentity(model)
-        ? "off"
-        : undefined;
-    case "adaptive":
-      return "medium";
-    case "ultra":
-    case "max":
-      return isOpenAIProvider(model.provider) && supportsOpenAIReasoningEffort(model, "max")
-        ? "max"
-        : "xhigh";
-    default:
-      return reasoning;
-  }
 }

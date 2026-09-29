@@ -6,6 +6,7 @@ import path from "node:path";
 import type { Readable } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
@@ -229,40 +230,68 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
     }
   });
 
-  it.each([{ task: 1, user: "Map the run-status", assistant: "Tracing task events" }])(
-    "serves background task $task through both chat entry points",
-    async ({ task, user, assistant }) => {
+  it.each([
+    {
+      sessionKey: "agent:main:tax-research",
+      user: "Inspect this session.",
+      assistant: "The current state is available in the session controls.",
+    },
+  ])(
+    "serves preview session $sessionKey through both chat entry points",
+    async ({ sessionKey, user, assistant }) => {
       const page = await browser.newPage();
       try {
         await page.goto(new URL("/chat", fixtureServer.url).toString());
         await page.getByRole("textbox", { name: "Chat composer", exact: true }).waitFor();
-        const sessionKey = `agent:openclaw-mock:subagent:mock-task-${task}`;
+        const sampledAt = 1_790_598_431_356;
+        await page.clock.setFixedTime(sampledAt);
         const [description] = (await requestPreviewGateway(page, [
           { method: "sessions.describe", params: { key: sessionKey } },
-        ])) as Array<{ session: { sessionId: string } }>;
+        ])) as Array<{ session: { sessionId: string; snapshotAt: number } }>;
         expect(description).toMatchObject({
-          session: { key: sessionKey, sessionId: expect.any(String) },
+          session: { key: sessionKey, sessionId: expect.any(String), snapshotAt: sampledAt },
         });
-        const replies = await requestPreviewGateway(
-          page,
-          ["chat.history", "chat.startup"].map((method) => ({
-            method,
-            params: { sessionKey },
-          })),
-        );
-        for (const reply of replies) {
+        // Each projection samples its read clock, not the stored row. Advance
+        // Date without delaying timers so descriptor/history/startup cannot
+        // accidentally pass by sharing one millisecond.
+        const replies: unknown[] = [];
+        for (const [index, method] of ["chat.history", "chat.startup"].entries()) {
+          await page.clock.setFixedTime(sampledAt + index + 1);
+          const [reply] = await requestPreviewGateway(page, [{ method, params: { sessionKey } }]);
+          replies.push(reply);
+        }
+        const userMessage = expect.objectContaining({
+          role: "user",
+          content: [{ type: "text", text: expect.stringContaining(user) }],
+        });
+        const assistantMessage = expect.objectContaining({
+          role: "assistant",
+          content: [{ type: "text", text: expect.stringContaining(assistant) }],
+        });
+        for (const [index, reply] of replies.entries()) {
           expect(reply).toMatchObject({
             sessionId: description!.session.sessionId,
-            sessionInfo: description!.session,
-            messages: [
-              { role: "user", content: [{ text: expect.stringContaining(user) }] },
-              {
-                role: "assistant",
-                content: [{ text: expect.stringContaining(assistant) }],
-              },
-            ],
+            sessionInfo: { ...description!.session, snapshotAt: sampledAt + index + 1 },
+            messages: expect.arrayContaining([userMessage, assistantMessage]),
           });
+          const messages = asNullableRecord(reply)?.messages;
+          if (!Array.isArray(messages)) {
+            throw new Error("Background task history must contain messages");
+          }
+          const userIndex = messages.findIndex((message) => userMessage.asymmetricMatch(message));
+          const assistantIndex = messages.findIndex((message) =>
+            assistantMessage.asymmetricMatch(message),
+          );
+          expect(userIndex).toBeLessThan(assistantIndex);
         }
+        const history = asNullableRecord(replies[0]);
+        expect(replies[1]).toMatchObject({
+          ...history,
+          sessionInfo: {
+            ...asNullableRecord(history?.sessionInfo),
+            snapshotAt: sampledAt + 2,
+          },
+        });
       } finally {
         await page.close();
       }
@@ -343,7 +372,7 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
           avatarRequests.push(request.url());
         }
       });
-      await page.goto(`${previewOrigin}/chat/main?skillLibrary=collaborator&nav=collapsed`);
+      await page.goto(`${previewOrigin}/chat/main?skillLibrary=collaborator`);
       for (const reload of [false, true]) {
         if (reload) {
           avatarRequests.length = 0;

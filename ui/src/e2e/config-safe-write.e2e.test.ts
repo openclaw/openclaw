@@ -139,6 +139,95 @@ async function capture(page: Page, name: string, content: Locator): Promise<void
 }
 
 suite.define(() => {
+  it.each([
+    {
+      name: "authored activation and limits",
+      initialMode: { enabled: "auto", timeoutMs: 5000 },
+      expectedPatch: { executor: "quickjs" },
+    },
+    {
+      name: "inherited automatic activation",
+      initialMode: undefined,
+      expectedPatch: { enabled: "auto", executor: "quickjs" },
+    },
+  ])(
+    "saves and reloads the Code Mode executor with $name",
+    async ({ initialMode, expectedPatch }) => {
+      await suite.withPage(
+        {
+          colorScheme: "dark",
+          locale: "en-US",
+          serviceWorkers: "block",
+          viewport: { height: 1000, width: 1440 },
+        },
+        async ({ page }) => {
+          const initialConfig = initialMode ? { tools: { codeMode: initialMode } } : {};
+          const retainedMode = { enabled: "auto", ...initialMode };
+          const quickjsConfig = {
+            tools: { codeMode: { ...retainedMode, executor: "quickjs" } },
+          };
+          const gateway = await installMockGateway(page, {
+            methodResponses: {
+              "config.get": configResponse(initialConfig, "executor-node"),
+            },
+          });
+
+          expect((await page.goto(`${suite.server.baseUrl}settings/labs`))?.status()).toBe(200);
+          const executorRow = settingsRow(page, "Code Mode executor");
+          const executor = executorRow.getByRole("combobox", { name: "Code Mode executor" });
+          const enabled = settingsRow(page, "Code Mode").getByRole("switch", {
+            name: "Code Mode",
+            exact: true,
+          });
+          await expect.poll(() => executor.inputValue()).toBe("node");
+          expect(await executorRow.textContent()).toContain("not a security sandbox");
+          expect(await enabled.getAttribute("aria-checked")).toBe("true");
+          await capture(page, "code-mode-node-default.png", executor);
+
+          await gateway.deferNext("config.patch");
+          await executor.selectOption("quickjs");
+          const quickjsPatch = mutationParams(await gateway.waitForRequest("config.patch"));
+          expect(quickjsPatch.baseHash).toBe("executor-node");
+          expect(JSON.parse(String(quickjsPatch.raw))).toEqual({
+            tools: { codeMode: expectedPatch },
+          });
+          expect(await executor.isDisabled()).toBe(true);
+
+          const quickjsResponse = configResponse(quickjsConfig, "executor-quickjs");
+          await gateway.setMethodResponse("config.get", quickjsResponse);
+          await gateway.resolveDeferred("config.patch", { ok: true, ...quickjsResponse });
+          await expect.poll(() => executor.isDisabled()).toBe(false);
+          expect((await page.reload())?.status()).toBe(200);
+          await expect.poll(() => executor.inputValue()).toBe("quickjs");
+          expect(await enabled.getAttribute("aria-checked")).toBe("true");
+          await capture(page, "code-mode-quickjs-reloaded.png", executor);
+
+          const priorPatches = (await gateway.getRequests("config.patch")).length;
+          await gateway.deferNext("config.patch");
+          await executor.selectOption("node");
+          const nodePatch = mutationParams(
+            await gateway.waitForRequest("config.patch", { after: priorPatches }),
+          );
+          expect(nodePatch.baseHash).toBe("executor-quickjs");
+          expect(JSON.parse(String(nodePatch.raw))).toEqual({
+            tools: { codeMode: { executor: null } },
+          });
+
+          const nodeResponse = configResponse(
+            { tools: { codeMode: retainedMode } },
+            "executor-node-restored",
+          );
+          await gateway.setMethodResponse("config.get", nodeResponse);
+          await gateway.resolveDeferred("config.patch", { ok: true, ...nodeResponse });
+          await expect.poll(() => executor.isDisabled()).toBe(false);
+          expect((await page.reload())?.status()).toBe(200);
+          await expect.poll(() => executor.inputValue()).toBe("node");
+          expect(await enabled.getAttribute("aria-checked")).toBe("true");
+        },
+      );
+    },
+  );
+
   it("retains a Raw revert when an autosave commits after its connection closes", async () => {
     await suite.withPage(
       {
@@ -376,7 +465,7 @@ suite.define(() => {
         const codeModeRow = settingsRow(page, "Code Mode");
         const codeModeSwitch = codeModeRow.getByRole("switch", { name: "Code Mode", exact: true });
         await codeModeSwitch.waitFor();
-        await expect.poll(() => codeModeRow.textContent()).toContain("Using default: Disabled");
+        await expect.poll(() => codeModeRow.textContent()).not.toContain("Using default:");
 
         const configGetsBeforePatch = (await gateway.getRequests("config.get")).length;
         await gateway.deferNext("config.patch");
@@ -514,7 +603,7 @@ suite.define(() => {
     );
   });
 
-  it("refreshes config after reconnect and client replacement before the next save", async () => {
+  it("config.set refreshes config after reconnect and client replacement before the next save", async () => {
     await suite.withPage(
       {
         colorScheme: "dark",
@@ -580,7 +669,7 @@ suite.define(() => {
         const configGetsBeforeReplacement = (await gateway.getRequests("config.get")).length;
         const connectsBeforeReplacement = (await gateway.getRequests("connect")).length;
         await page.getByRole("textbox", { name: "Gateway URL" }).fill("ws://127.0.0.1:19999");
-        await page.getByRole("button", { name: "Connect", exact: true }).click();
+        await page.getByRole("button", { name: "Apply and reconnect", exact: true }).click();
         await expect
           .poll(async () => (await gateway.getRequests("connect")).length)
           .toBe(connectsBeforeReplacement + 1);
@@ -601,7 +690,10 @@ suite.define(() => {
           tools: {},
         });
         expect(await gateway.getRequests("config.set")).toHaveLength(setsBeforeEdit + 1);
-        await gateway.resolveDeferred("config.set", { hash: "snapshot-saved" });
+        await gateway.resolveDeferred("config.set", {
+          config: JSON.parse(String(save.raw)),
+          hash: "snapshot-saved",
+        });
         await expect
           .poll(() => page.locator("openclaw-settings-save-indicator").textContent())
           .toContain("Saved");
@@ -610,7 +702,7 @@ suite.define(() => {
     );
   });
 
-  it("keeps a dirty draft and adopts an opaque revision after an unchanged reconnect", async () => {
+  it("config.set keeps a dirty draft and adopts an opaque revision after an unchanged reconnect", async () => {
     await suite.withPage(
       {
         colorScheme: "dark",
@@ -704,7 +796,10 @@ suite.define(() => {
             "hmac-sha256:v1:opaque-next",
           ),
         );
-        await gateway.resolveDeferred("config.set", { hash: "hmac-sha256:v1:opaque-next" });
+        await gateway.resolveDeferred("config.set", {
+          config: JSON.parse(String(save.raw)),
+          hash: "hmac-sha256:v1:opaque-next",
+        });
         await expect.poll(() => endpoint.inputValue()).toBe("retained-draft");
       },
     );

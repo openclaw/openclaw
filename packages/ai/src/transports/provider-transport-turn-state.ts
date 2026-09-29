@@ -33,19 +33,35 @@ export function resolveProviderTransportTurnState(
   });
 }
 
+export function filterProviderTurnHeadersForExplicitOpencodeSession(
+  model: Pick<Model, "headers">,
+  options: Pick<StreamOptions, "headers"> | undefined,
+  turnHeaders: Record<string, string> | undefined,
+): Record<string, string> | undefined {
+  if (!turnHeaders || !hasOpencodeSessionHeader(model, options)) {
+    return turnHeaders;
+  }
+  const filtered = Object.fromEntries(
+    Object.entries(turnHeaders).filter(([name]) => name.toLowerCase() !== "x-opencode-session"),
+  );
+  return Object.keys(filtered).length > 0 ? filtered : undefined;
+}
+
 export function resolveProviderSimpleCompletionHeaders(
   model: Model,
   options?: Pick<StreamOptions, "headers" | "sessionId">,
 ) {
   const optionHeaders = resolveOpencodeSessionHeaders(model, options);
-  if (hasOpencodeSessionHeader(model, { headers: optionHeaders })) {
-    return optionHeaders;
-  }
   const turnState = resolveProviderTransportTurnState(model, {
     sessionId: options?.sessionId,
     turnId: randomUUID(),
     attempt: 1,
     transport: "stream",
   });
-  return { ...turnState?.headers, ...optionHeaders };
+  const turnHeaders = filterProviderTurnHeadersForExplicitOpencodeSession(
+    model,
+    { headers: optionHeaders },
+    turnState?.headers,
+  );
+  return { ...turnHeaders, ...optionHeaders };
 }

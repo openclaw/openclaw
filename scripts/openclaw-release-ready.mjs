@@ -126,10 +126,13 @@ export function validateReleaseButtonInputs(value) {
     version !== null && inputs.tag === `v${version.version}`,
     "Prepared release requires an exact version tag.",
   );
+  if (version.channel === "alpha" || inputs.npm_dist_tag === "alpha") {
+    throw new Error("Alpha releases are retired; use a beta prerelease instead.");
+  }
   requireValue(
     ["beta", "stable"].includes(classifyReleaseTrain(version)) &&
       inputs.npm_dist_tag !== "extended-stable",
-    "Alpha and extended-stable releases retain their existing owner workflows.",
+    "Extended-stable releases retain their existing owner workflow.",
   );
   const expectedChannel = version.channel === "stable" ? ["beta", "latest"] : [version.channel];
   requireValue(
@@ -598,9 +601,45 @@ async function main() {
       }
       // Adoption is read-only. The seal still proves each selected run's source,
       // complete package roster, producer attempt, and exact qualified bytes.
-      writeJson(requestPath, request);
-    } else {
-      writeJson(requestPath, request);
+    }
+    const { authenticateFullReleaseValidationEvidence } =
+      await import("./validate-full-release-validation-evidence.mjs");
+    await authenticateFullReleaseValidationEvidence({
+      run: api(
+        `actions/runs/${inputs.full_release_validation_run_id}/attempts/${inputs.full_release_validation_run_attempt}`,
+      ),
+      expectedRepository: REPOSITORY,
+      expectedRunId: inputs.full_release_validation_run_id,
+      expectedRunAttempt: inputs.full_release_validation_run_attempt,
+      expectedTargetSha: sourceSha,
+      expectedReleaseTag: inputs.tag,
+      expectedTrustedWorkflowFullRef: tooling.fullRef,
+      expectedTrustedWorkflowSha: tooling.sha,
+      expectedPublicationSelection: {
+        route: "prepared",
+        npmDistTag: inputs.npm_dist_tag,
+        publishOpenclawNpm: true,
+        pluginPublishScope: "all-publishable",
+        plugins: [],
+        ...(inputs.windows_node_tag
+          ? {
+              windowsNodeTag: inputs.windows_node_tag,
+              windowsNodeInstallerDigests: JSON.parse(inputs.windows_node_installer_digests ?? ""),
+            }
+          : {}),
+      },
+      verifierSourceSha: tooling.sha,
+      verifierSourceContent: readFileSync(new URL("./release-ci-summary.mjs", import.meta.url)),
+      isTrustedMainAncestor: (sha) => {
+        const comparison = api(`compare/${sha}...main`, ["--jq", "{status,merge_base_commit}"]);
+        return (
+          ["ahead", "identical"].includes(comparison.status) &&
+          comparison.merge_base_commit?.sha === sha
+        );
+      },
+    });
+    writeJson(requestPath, request);
+    if (values.request === undefined) {
       // Persist before either mutation, then after each acknowledged run. A null
       // ID means unconfirmed, never proof that a lost dispatch created no run.
       request.npmRunId = dispatch(

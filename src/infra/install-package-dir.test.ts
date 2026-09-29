@@ -85,39 +85,6 @@ async function rebindInstallBasePath(params: {
   );
 }
 
-async function withInstallBaseReboundOnRealpathCall<T>(params: {
-  installBaseDir: string;
-  preservedDir: string;
-  outsideTarget: string;
-  rebindAtCall: number;
-  run: () => Promise<T>;
-}): Promise<T> {
-  const installBasePath = normalizeComparablePath(params.installBaseDir);
-  const realRealpath = fs.realpath.bind(fs);
-  let installBaseRealpathCalls = 0;
-  const realpathSpy = vi
-    .spyOn(fs, "realpath")
-    .mockImplementation(async (...args: Parameters<typeof fs.realpath>) => {
-      const filePath = normalizeComparablePath(String(args[0]));
-      if (filePath === installBasePath) {
-        installBaseRealpathCalls += 1;
-        if (installBaseRealpathCalls === params.rebindAtCall) {
-          await rebindInstallBasePath({
-            installBaseDir: params.installBaseDir,
-            preservedDir: params.preservedDir,
-            outsideTarget: params.outsideTarget,
-          });
-        }
-      }
-      return await realRealpath(...args);
-    });
-  try {
-    return await params.run();
-  } finally {
-    realpathSpy.mockRestore();
-  }
-}
-
 async function addHardlinkedFile(filePath: string, linkPath: string): Promise<void> {
   await fs.mkdir(path.dirname(linkPath), { recursive: true });
   await fs.link(filePath, linkPath);
@@ -147,7 +114,10 @@ describe("installPackageDir", () => {
   const fixtureRootTracker = createSuiteTempRootTracker({
     prefix: "openclaw-install-package-dir-",
   });
-  async function installWithNpmResult(npmResult: SpawnResult) {
+  async function installWithNpmResult(
+    npmResult: SpawnResult | Promise<SpawnResult>,
+    activity?: import("./install-progress.js").InstallActivityObserver["activity"],
+  ) {
     await fixtureRootTracker.setup();
     const fixtureRoot = await fixtureRootTracker.make("case");
     const sourceDir = path.join(fixtureRoot, "source");
@@ -164,7 +134,7 @@ describe("installPackageDir", () => {
       }),
       "utf-8",
     );
-    vi.mocked(runCommandWithTimeout).mockResolvedValue(npmResult);
+    vi.mocked(runCommandWithTimeout).mockImplementation(() => Promise.resolve(npmResult));
 
     return await installPackageDir({
       sourceDir,
@@ -174,6 +144,7 @@ describe("installPackageDir", () => {
       copyErrorPrefix: "failed to copy plugin",
       hasDeps: true,
       depsLogMessage: "Installing deps…",
+      logger: { activity },
     });
   }
 
@@ -181,6 +152,46 @@ describe("installPackageDir", () => {
     vi.restoreAllMocks();
     await fixtureRootTracker.cleanup();
   });
+
+  it.each([0, 1])(
+    "reports dependency settlement only after npm finishes with code %s",
+    async (code) => {
+      const pending = createDeferred<SpawnResult>();
+      const events: import("../../packages/gateway-protocol/src/schema/plugins.js").PluginInstallActivity[] =
+        [];
+      const install = installWithNpmResult(pending.promise, (event) => {
+        events.push(event);
+      });
+      try {
+        await vi.waitFor(() =>
+          expect(events).toContainEqual(
+            expect.objectContaining({ stage: "dependencies", status: "started" }),
+          ),
+        );
+        expect(events.map(({ stage, status }) => [stage, status])).toEqual([
+          ["files", "started"],
+          ["files", "completed"],
+          ["dependencies", "started"],
+        ]);
+      } finally {
+        pending.resolve({
+          code,
+          stdout: "",
+          stderr: code ? "registry refused dependency" : "",
+          signal: null,
+          killed: false,
+          termination: "exit",
+        });
+        await install;
+      }
+      const result = await install;
+      expect(result.ok).toBe(code === 0);
+      expect(events.at(-1)).toEqual({ ...events[2], status: code === 0 ? "completed" : "failed" });
+      if (!result.ok) {
+        expect(result.error).toContain("registry refused dependency");
+      }
+    },
+  );
 
   it("keeps the existing install in place when staged validation fails", async () => {
     await fixtureRootTracker.setup();
@@ -332,15 +343,15 @@ describe("installPackageDir", () => {
     let backupDir = "";
     let pauseConsumed = false;
 
-    const realLstat = fs.lstat.bind(fs);
-    vi.spyOn(fs, "lstat").mockImplementation(async (...args: Parameters<typeof fs.lstat>) => {
-      const stat = await realLstat(...args);
-      if (!pauseConsumed && String(args[0]) === stageDir) {
+    const realOpendir = fs.opendir.bind(fs);
+    vi.spyOn(fs, "opendir").mockImplementation(async (...args: Parameters<typeof fs.opendir>) => {
+      const directory = await realOpendir(...args);
+      if (!pauseConsumed && backupDir && String(args[0]) === stageDir) {
         pauseConsumed = true;
         paused.resolve();
         await release.promise;
       }
-      return stat;
+      return directory;
     });
     const realRename = fs.rename.bind(fs);
     vi.spyOn(fs, "rename").mockImplementation((...args: Parameters<typeof fs.rename>) => {
@@ -379,6 +390,7 @@ describe("installPackageDir", () => {
           throw new Error("install completed before staged publication paused");
         }),
       ]);
+      expect(pauseConsumed).toBe(true);
       expect(backupDir).not.toBe("");
       await expect(fs.readFile(path.join(backupDir, "marker.txt"), "utf8")).resolves.toBe("old");
       await expectMissingPath(targetDir);
@@ -605,31 +617,38 @@ describe("installPackageDir", () => {
       await createReboundInstallFixture({ fixtureRoot });
 
     const warnings: string[] = [];
-    await withInstallBaseReboundOnRealpathCall({
-      installBaseDir,
-      preservedDir: preservedInstallRoot,
-      outsideTarget: outsideInstallRoot,
-      rebindAtCall: 4,
-      run: async () => {
-        await expect(
-          installPackageDir({
-            sourceDir,
-            targetDir,
-            mode: "install",
-            timeoutMs: 1_000,
-            copyErrorPrefix: "failed to copy plugin",
-            hasDeps: false,
-            depsLogMessage: "Installing deps…",
-            logger: { warn: (message) => warnings.push(message) },
-          }),
-        ).resolves.toEqual({
-          ok: false,
-          error: "failed to copy plugin: Error: install base directory changed during install",
+    let rebound = false;
+    const result = await installPackageDir({
+      sourceDir,
+      targetDir,
+      mode: "install",
+      timeoutMs: 1_000,
+      copyErrorPrefix: "failed to copy plugin",
+      hasDeps: false,
+      depsLogMessage: "Installing deps…",
+      logger: { warn: (message) => warnings.push(message) },
+      afterInstall: async (installedDir) => {
+        await expect(fs.readFile(path.join(installedDir, "marker.txt"), "utf8")).resolves.toBe(
+          "new",
+        );
+        await rebindInstallBasePath({
+          installBaseDir,
+          preservedDir: preservedInstallRoot,
+          outsideTarget: outsideInstallRoot,
         });
+        rebound = true;
+        return { ok: true };
       },
     });
 
+    expect(rebound).toBe(true);
+    expect((await fs.lstat(installBaseDir)).isSymbolicLink()).toBe(true);
+    expect(result).toEqual({
+      ok: false,
+      error: "failed to copy plugin: Error: install base directory changed during install",
+    });
     await expectMissingPath(path.join(outsideInstallRoot, "demo", "marker.txt"));
+    await expect(fs.readdir(outsideInstallRoot)).resolves.toEqual([]);
     expect(warnings).toContain(
       "Install base directory changed during install; aborting staged publish.",
     );
@@ -678,54 +697,6 @@ describe("installPackageDir", () => {
     await expectMissingPath(path.join(outsideInstallRoot, "demo", "marker.txt"));
     const backupRoot = path.join(preservedInstallRoot, ".openclaw-install-backups");
     await expect(fs.readdir(backupRoot)).resolves.toHaveLength(1);
-  });
-
-  it("installs peer dependencies for isolated plugin package installs", async () => {
-    await fixtureRootTracker.setup();
-    const fixtureRoot = await fixtureRootTracker.make("case");
-    const sourceDir = path.join(fixtureRoot, "source");
-    const targetDir = path.join(fixtureRoot, "plugins", "demo");
-    await fs.mkdir(sourceDir, { recursive: true });
-    await fs.writeFile(
-      path.join(sourceDir, "package.json"),
-      JSON.stringify({
-        name: "demo-plugin",
-        version: "1.0.0",
-        dependencies: {
-          zod: "^4.0.0",
-        },
-      }),
-      "utf-8",
-    );
-
-    vi.mocked(runCommandWithTimeout).mockResolvedValue({
-      stdout: "",
-      stderr: "",
-      code: 0,
-      signal: null,
-      killed: false,
-      termination: "exit",
-    });
-
-    const result = await installPackageDir({
-      sourceDir,
-      targetDir,
-      mode: "install",
-      timeoutMs: 1_000,
-      copyErrorPrefix: "failed to copy plugin",
-      hasDeps: true,
-      depsLogMessage: "Installing deps…",
-    });
-
-    expect(result).toEqual({ ok: true });
-    const installOptions = expectRunCommandCallForArgv([
-      "npm",
-      "install",
-      "--omit=dev",
-      "--loglevel=error",
-      "--ignore-scripts",
-    ]);
-    expect(installOptions.cwd).toContain(".openclaw-install-stage-");
   });
 
   it("hides the staged project .npmrc while npm install runs and restores it afterward", async () => {
@@ -829,7 +800,14 @@ describe("installPackageDir", () => {
 
     expect(result).toEqual({ ok: true });
     const installOptions = expectRunCommandCallForArgv(
-      ["npm", "install", "--omit=dev", "--loglevel=error", "--ignore-scripts"],
+      [
+        "npm",
+        "install",
+        "--omit=dev",
+        "--loglevel=error",
+        "--ignore-scripts",
+        "--workspaces=false",
+      ],
       (options) => options.env?.npm_config_global === "false",
     );
     const env = installOptions.env ?? {};
@@ -843,53 +821,92 @@ describe("installPackageDir", () => {
     expect("npm_config_prefix" in env).toBe(false);
   });
 
-  it("surfaces npm stderr when dependency install fails", async () => {
-    await fixtureRootTracker.setup();
-    const fixtureRoot = await fixtureRootTracker.make("case");
-    const sourceDir = path.join(fixtureRoot, "source");
-    const targetDir = path.join(fixtureRoot, "plugins", "demo");
-    await fs.mkdir(sourceDir, { recursive: true });
-    await fs.writeFile(
-      path.join(sourceDir, "package.json"),
-      JSON.stringify({
-        name: "demo-plugin",
-        version: "1.0.0",
-        dependencies: {
-          bad: "workspace:^",
-        },
-      }),
-      "utf-8",
-    );
+  it.each(["exit", "throw"] as const)(
+    "restores manifest bytes before cleanup and preserves the old install on npm %s failure",
+    async (failure) => {
+      await fixtureRootTracker.setup();
+      const fixtureRoot = await fixtureRootTracker.make("case");
+      const sourceDir = path.join(fixtureRoot, "source");
+      const targetDir = path.join(fixtureRoot, "plugins", "demo");
+      await fs.mkdir(sourceDir, { recursive: true });
+      await fs.writeFile(
+        path.join(sourceDir, "package.json"),
+        JSON.stringify({
+          name: "demo-plugin",
+          version: "1.0.0",
+          dependencies: {
+            bad: "workspace:^",
+          },
+          devDependencies: {
+            openclaw: "2026.6.1",
+          },
+        }),
+        "utf-8",
+      );
 
-    // Mirrors the Blacksmith repro: npm 11 preserved this stderr with
-    // `--loglevel=error`, while `--silent` returned empty output.
-    vi.mocked(runCommandWithTimeout).mockResolvedValue({
-      stdout: "",
-      stderr:
-        'npm error code EUNSUPPORTEDPROTOCOL\nnpm error Unsupported URL Type "workspace:": workspace:^\n',
-      code: 1,
-      signal: null,
-      killed: false,
-      termination: "exit",
-    });
+      const originalManifest = await fs.readFile(path.join(sourceDir, "package.json"));
+      const oldManifest = '{"name":"demo-plugin","version":"0.9.0"}\n';
+      await fs.mkdir(targetDir, { recursive: true });
+      await fs.writeFile(path.join(targetDir, "package.json"), oldManifest);
+      let stagedDir = "";
+      let restoredBeforeCleanup = false;
+      const realRm = fs.rm.bind(fs);
+      vi.spyOn(fs, "rm").mockImplementation(async (...args: Parameters<typeof fs.rm>) => {
+        if (String(args[0]) === stagedDir) {
+          expect(await fs.readFile(path.join(stagedDir, "package.json"))).toEqual(originalManifest);
+          restoredBeforeCleanup = true;
+        }
+        return await realRm(...args);
+      });
 
-    const result = await installPackageDir({
-      sourceDir,
-      targetDir,
-      mode: "install",
-      timeoutMs: 1_000,
-      copyErrorPrefix: "failed to copy plugin",
-      hasDeps: true,
-      depsLogMessage: "Installing deps…",
-    });
+      // Mirrors the Blacksmith repro: npm 11 preserved this stderr with
+      // `--loglevel=error`, while `--silent` returned empty output.
+      vi.mocked(runCommandWithTimeout).mockResolvedValue({
+        stdout: "",
+        stderr:
+          'npm error code EUNSUPPORTEDPROTOCOL\nnpm error Unsupported URL Type "workspace:": workspace:^\n',
+        code: 1,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      });
 
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error).toContain("npm install failed:");
-      expect(result.error).toContain("EUNSUPPORTEDPROTOCOL");
-      expect(result.error).toContain("workspace:");
-    }
-  });
+      if (failure === "throw") {
+        vi.mocked(runCommandWithTimeout).mockRejectedValue(new Error("npm transport failed"));
+      }
+      const result = await installPackageDir(
+        requestDeferredPackageDirInstall({
+          sourceDir,
+          targetDir,
+          mode: "update",
+          timeoutMs: 1_000,
+          copyErrorPrefix: "failed to copy plugin",
+          hasDeps: true,
+          omitOpenClawHostDependency: true,
+          depsLogMessage: "Installing deps…",
+          afterCopy: (dir: string) => {
+            stagedDir = dir;
+          },
+        }),
+      );
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error).toContain("npm install failed:");
+        expect(result.error).toContain(
+          failure === "exit" ? "EUNSUPPORTEDPROTOCOL" : "npm transport failed",
+        );
+      }
+      expect(restoredBeforeCleanup).toBe(true);
+      await expect(fs.readFile(path.join(targetDir, "package.json"), "utf8")).resolves.toBe(
+        oldManifest,
+      );
+      await expect(fs.readFile(path.join(sourceDir, "package.json"))).resolves.toEqual(
+        originalManifest,
+      );
+      await expectMissingPath(stagedDir);
+    },
+  );
 
   it.each(npmCommandFailureCases)(
     "preserves $label when npm dependency install fails",

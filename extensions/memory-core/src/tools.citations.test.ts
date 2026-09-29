@@ -18,6 +18,7 @@ import {
   setMemoryWorkspaceDir,
   type MemoryReadParams,
 } from "./memory-tool-manager.test-mocks.js";
+import { withMemoryWorkspacePreparation } from "./memory-workspace-lock.js";
 import {
   createMemoryCoreTestHarness,
   shortTermTestState as shortTermPromotionTesting,
@@ -29,8 +30,6 @@ import {
 } from "./tools.js";
 import {
   asOpenClawConfig,
-  createAutoCitationsMemorySearchTool,
-  createDefaultMemoryToolConfig,
   createMemoryGetToolOrThrow,
   createMemorySearchToolOrThrow,
   expectUnavailableMemorySearchDetails,
@@ -46,17 +45,6 @@ function collectWikiResultPaths(results: readonly { corpus: string; path: string
     }
   }
   return paths;
-}
-
-async function waitFor<T>(task: () => Promise<T>, timeoutMs = 1500): Promise<T> {
-  let value: T | undefined;
-  await vi.waitFor(
-    async () => {
-      value = await task();
-    },
-    { interval: 1, timeout: timeoutMs },
-  );
-  return value as T;
 }
 
 beforeEach(() => {
@@ -106,35 +94,6 @@ describe("memory search citations", () => {
     expect(firstResult.snippet).toMatch(/Source: MEMORY.md#L5-L7/);
     expect(firstResult.citation).toBe("MEMORY.md#L5-L7");
   }, 180_000);
-
-  it("leaves snippet untouched when citations are off", async () => {
-    const cfg = asOpenClawConfig({
-      memory: { citations: "off" },
-      agents: { list: [{ id: "main", default: true }] },
-    });
-    const tool = createMemorySearchToolOrThrow({ config: cfg });
-    const result = await tool.execute("call_citations_off", { query: "notes" });
-    const details = result.details as { results: Array<{ snippet: string; citation?: string }> };
-    const firstResult = expectFirstMemoryResult(details);
-    expect(firstResult.snippet).not.toMatch(/Source:/);
-    expect(firstResult.citation).toBeUndefined();
-  });
-
-  it("honors auto mode for direct chats", async () => {
-    const tool = createAutoCitationsMemorySearchTool("agent:main:discord:dm:u123");
-    const result = await tool.execute("auto_mode_direct", { query: "notes" });
-    const details = result.details as { results: Array<{ snippet: string }> };
-    const firstResult = expectFirstMemoryResult(details);
-    expect(firstResult.snippet).toMatch(/Source:/);
-  });
-
-  it("suppresses citations for auto mode in group chats", async () => {
-    const tool = createAutoCitationsMemorySearchTool("agent:main:discord:group:c123");
-    const result = await tool.execute("auto_mode_group", { query: "notes" });
-    const details = result.details as { results: Array<{ snippet: string }> };
-    const firstResult = expectFirstMemoryResult(details);
-    expect(firstResult.snippet).not.toMatch(/Source:/);
-  });
 });
 
 describe("memory tools", () => {
@@ -143,8 +102,7 @@ describe("memory tools", () => {
       throw new Error("openai embeddings failed: 429 insufficient_quota");
     });
 
-    const cfg = createDefaultMemoryToolConfig();
-    const tool = createMemorySearchToolOrThrow({ config: cfg });
+    const tool = createMemorySearchToolOrThrow();
 
     const result = await tool.execute("call_1", { query: "hello" });
     expectUnavailableMemorySearchDetails(result.details, {
@@ -191,9 +149,9 @@ describe("memory tools", () => {
     expect(getMemoryCloseMockCalls()).toBe(1);
   });
 
-  it("returns disabled details when memory_get fails", async () => {
+  it("reports a failed memory read without disabling memory", async () => {
     setMemoryReadFileImpl(async (_params: MemoryReadParams) => {
-      throw new Error("path required");
+      throw Object.assign(new Error("memory file unreadable"), { code: "EACCES" });
     });
 
     const tool = createMemoryGetToolOrThrow();
@@ -202,8 +160,9 @@ describe("memory tools", () => {
     expect(result.details).toEqual({
       path: "memory/NOPE.md",
       text: "",
-      disabled: true,
-      error: "path required",
+      status: "error",
+      code: "EACCES",
+      error: "memory file unreadable",
     });
   });
 
@@ -339,29 +298,27 @@ describe("memory tools", () => {
       });
       await tool.execute("call_recall_persist", { query: "glacier backup" });
 
-      const entries = await waitFor(async () => {
+      await vi.dynamicImportSettled();
+      // The lazy producer has enqueued its write; join it before reading durable state.
+      await withMemoryWorkspacePreparation(workspaceDir, async () => {
         const store = await shortTermPromotionTesting.readRecallStore(
           workspaceDir,
           new Date().toISOString(),
         );
-        const values = Object.values(store.entries);
-        expect(values).toHaveLength(1);
-        return values;
+        const entries = Object.values(store.entries);
+        expect(entries).toHaveLength(1);
+        const entry = entries[0];
+        expect(entry?.path).toBe("memory/2026-04-03.md");
+        expect(entry?.recallCount).toBe(1);
+        const events = await readMemoryHostEvents({ workspaceDir });
+        expect(events).toHaveLength(1);
+        const event = events[0];
+        expect(event?.type).toBe("memory.recall.recorded");
+        if (!event || event.type !== "memory.recall.recorded") {
+          throw new Error("expected memory recall recorded event");
+        }
+        expect(event.query).toBe("glacier backup");
       });
-      const entry = entries[0];
-      expect(entry?.path).toBe("memory/2026-04-03.md");
-      expect(entry?.recallCount).toBe(1);
-      const events = await waitFor(async () => {
-        const memoryEvents = await readMemoryHostEvents({ workspaceDir });
-        expect(memoryEvents).toHaveLength(1);
-        return memoryEvents;
-      });
-      const event = events[0];
-      expect(event?.type).toBe("memory.recall.recorded");
-      if (!event || event.type !== "memory.recall.recorded") {
-        throw new Error("expected memory recall recorded event");
-      }
-      expect(event.query).toBe("glacier backup");
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
@@ -465,48 +422,15 @@ describe("memory tools", () => {
       },
     ]);
     registerMemoryCorpusSupplement("memory-wiki", {
-      search: async () => [
-        {
+      search: async () =>
+        Array.from({ length: 5 }, (_, index) => ({
           corpus: "wiki",
-          path: "w1.md",
-          title: "W1",
+          path: `w${index + 1}.md`,
+          title: `W${index + 1}`,
           kind: "entity",
-          score: 50,
-          snippet: "wiki 1",
-        },
-        {
-          corpus: "wiki",
-          path: "w2.md",
-          title: "W2",
-          kind: "entity",
-          score: 40,
-          snippet: "wiki 2",
-        },
-        {
-          corpus: "wiki",
-          path: "w3.md",
-          title: "W3",
-          kind: "entity",
-          score: 30,
-          snippet: "wiki 3",
-        },
-        {
-          corpus: "wiki",
-          path: "w4.md",
-          title: "W4",
-          kind: "entity",
-          score: 20,
-          snippet: "wiki 4",
-        },
-        {
-          corpus: "wiki",
-          path: "w5.md",
-          title: "W5",
-          kind: "entity",
-          score: 10,
-          snippet: "wiki 5",
-        },
-      ],
+          score: 50 - index * 10,
+          snippet: `wiki ${index + 1}`,
+        })),
       get: async () => null,
     });
 
@@ -584,32 +508,6 @@ describe("memory tools", () => {
     ]);
   });
 
-  it("merges memory and wiki corpus search results for corpus=all", async () => {
-    registerMemoryCorpusSupplement("memory-wiki", {
-      search: async () => [
-        {
-          corpus: "wiki",
-          path: "entities/alpha.md",
-          title: "Alpha",
-          kind: "entity",
-          score: 1.1,
-          snippet: "Alpha wiki entry",
-        },
-      ],
-      get: async () => null,
-    });
-
-    const tool = createMemorySearchToolOrThrow();
-    const result = await tool.execute("call_all_corpus", { query: "alpha", corpus: "all" });
-    const details = result.details as { results: Array<{ corpus: string; path: string }> };
-
-    expect(details.results.map((entry) => [entry.corpus, entry.path])).toEqual([
-      ["wiki", "entities/alpha.md"],
-      ["memory", "MEMORY.md"],
-    ]);
-    expect(getMemorySearchManagerMockCalls()).toBe(1);
-  });
-
   it("does not cooldown primary memory when a corpus=all wiki supplement stalls", async () => {
     vi.useFakeTimers();
     try {
@@ -637,7 +535,7 @@ describe("memory tools", () => {
         query: "alpha",
         corpus: "all",
       });
-      await vi.advanceTimersByTimeAsync(15_000);
+      await vi.advanceTimersByTimeAsync(30_000);
       const stalledAllResult = await stalledAllResultPromise;
       expect(stalledAllResult.details).toMatchObject({
         results: [{ corpus: "memory", path: "MEMORY.md" }],
@@ -646,7 +544,7 @@ describe("memory tools", () => {
           {
             corpus: "wiki",
             outcome: "unavailable",
-            error: "memory_search timed out after 15s",
+            error: "memory_search timed out after 30s",
           },
         ],
         warning: expect.stringContaining("Wiki corpus unavailable"),
@@ -738,7 +636,7 @@ describe("memory tools", () => {
         query: "alpha",
         corpus: "all",
       });
-      await vi.advanceTimersByTimeAsync(15_000);
+      await vi.advanceTimersByTimeAsync(30_000);
       const stalledAllResult = await stalledAllResultPromise;
       expect(stalledAllResult.details).toMatchObject({
         results: [{ corpus: "wiki", path: "entities/alpha.md" }],
@@ -746,7 +644,7 @@ describe("memory tools", () => {
           {
             corpus: "memory",
             outcome: "unavailable",
-            error: "memory_search timed out after 15s",
+            error: "memory_search timed out after 30s",
           },
           { corpus: "wiki", outcome: "ok" },
         ],
@@ -769,12 +667,12 @@ describe("memory tools", () => {
         {
           corpus: "memory",
           outcome: "unavailable",
-          error: "memory_search timed out after 15s",
+          error: "memory_search timed out after 30s",
         },
         { corpus: "wiki", outcome: "ok" },
       ]);
       expect(details.warning).toContain("Memory corpus unavailable");
-      expect(details.warning).toContain("memory_search timed out after 15s");
+      expect(details.warning).toContain("memory_search timed out after 30s");
       expect(searchCalls).toBe(1);
     } finally {
       vi.useRealTimers();

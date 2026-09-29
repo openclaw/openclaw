@@ -27,6 +27,15 @@ At startup, OpenClaw does roughly this:
 7. call native `register(api)` hooks and collect registrations into the plugin registry
 8. expose the registry to commands/runtime surfaces
 
+Native plugin imports evaluate each requested SDK entry synchronously before
+linking the plugin's asynchronous module graph. This lets CommonJS bundles
+`require()` the same SDK entry during concurrent channel startup without seeing
+an unfinished ESM module. Unused SDK entries remain unloaded.
+
+Bundled channel entries and channel metadata modules use the shared cached module
+loader. It prepares SDK aliases before evaluation and owns native-to-source
+fallback; channel adapters do not retry a failed evaluation through another loader.
+
 Safety gates run **before** runtime execution. Discovery blocks a candidate
 when:
 
@@ -118,7 +127,7 @@ metadata-only while the setup module contributes other setup hooks.
 
 ### Plugin cache boundary
 
-One `PluginCache` owns plugin facts from first access until Gateway shutdown.
+One `PluginCache` owns plugin facts for a retained generation.
 CLI preflight and startup progressively fill the same cache; later access fills
 only facts not yet acquired. Its immutable metadata snapshot combines the installed index, manifests, owner maps, and available
 discovery facts from every configured agent workspace. Disabled plugins remain
@@ -127,11 +136,11 @@ plugin IDs from different workspace sources remain rejected.
 
 Runtime readers use this `PluginMetadataSnapshot`, a derived `PluginLookUpTable`,
 or an explicit manifest registry. Plugin scopes are in-memory projections;
-config changes, account changes, and run workspace changes must not trigger
+ordinary lookups, account changes, and run workspace changes do not trigger
 filesystem scanning, `stat`/`realpath` freshness polling, manifest rereads, or
-hashing. Activation and runtime service generations can change while their
-package metadata stays fixed. Account health and authentication state are not
-part of the immutable package inventory.
+hashing. Plugin lifecycle operations prepare fresh metadata in their own cache
+generation. Account health and authentication state are not part of the
+immutable package inventory.
 
 The same cache generation prepares installed-index scope lookups, compiled model
 matching patterns, parsed install-record projections, and manifest fingerprints
@@ -155,6 +164,21 @@ executed setup entries. Discovery and artifact identity retain their selected pa
 Bounded loaded-owner lookups retain the owner's artifact policy when no preference
 is specified. An explicit preference is checked; exact loader requests apply the
 full cache identity and cold-load defaults.
+
+A completed registry is cached under both its original request and its resolved
+manifest selection. Reusing those prepared manifests does not repeat plugin
+registration. Both keys share the existing bounded cache and are removed when
+the registry retires or the load cache is cleared.
+Validation, full registration, and CLI metadata loads have separate cache entries;
+validating a module cannot satisfy a later request for its registrations.
+
+Outbound channel bootstrap remembers successful and unavailable senders within
+the selected plugin cache and metadata scope. Inventory replacement or metadata
+invalidation permits a fresh attempt; repeated deliveries within the same scope
+reuse the outcome without retrying failed registration. A request-scoped channel
+owner still takes precedence over process-root bootstrap outcomes.
+Payload preparation carries the selected sender's directive policy on its handler,
+so one batch resolves its plugin once before parsing and applying channel transforms.
 
 Provider lookup uses an explicit caller workspace first, then the workspace
 recorded by its metadata snapshot, including an explicitly shared-root scope.
@@ -187,11 +211,13 @@ they do not cache trust decisions or credentials. Callers supplying a partial
 manifest view keep fresh per-call projection rather than sharing mutable metadata.
 
 Explicit install, update, registry refresh, and doctor operations use isolated
-generations of the same cache type, acquired after their lifecycle lease. They may inspect changed files and rebuild the persisted
-installed index, but cannot clear or replace the running Gateway's inventory.
-The new inventory takes effect after restart. The `plugins.refresh` RPC reports
-`restartRequired: true`; with reload disabled, it leaves the running inventory
-in place until a manual restart.
+generations of the same cache type, acquired after their lifecycle lease. They
+may inspect changed files and rebuild the persisted installed index. Live
+inventory replacement belongs to the Gateway plugin lifecycle: `plugins.refresh`
+prepares and applies a new generation, then returns its runtime receipt with
+`restartRequired: false`, including when passive config reload is disabled.
+Standalone registry or doctor repair does not itself prove the Gateway applied
+the repaired files; use [plugin Reload](/cli/plugins#reload) when needed.
 
 The shared cache owns checked file contents, parsed package and manifest data,
 bundle MCP/LSP/settings files, plugin skill paths, discovery paths, installed-index
@@ -202,8 +228,26 @@ reuse the same checked bytes rather than reopening a file at each stage.
 
 Actual code imports retain their boundary and file-identity checks before first
 execution. Consent checks use a fresh inspection after an awaited approval so
-changed artifacts cannot inherit approval for older capabilities. Failed module
-evaluation remains retryable; a successful import is shared across consumers.
+changed artifacts cannot inherit approval for older capabilities. The plugin
+cache releases failed loads, but Node retains failed native ESM evaluations for
+the process lifetime; restarting an account cannot repair that module graph.
+A successful import is shared across consumers.
+
+Document and web-content extraction select callbacks from the current metadata
+scope on each request. A shared config object does not make two inventories
+interchangeable; the plugin cache still reuses their module exports. Public
+artifact adapters carry an explicit environment through both provider selection
+and module loading, including the selected profile's bundled-discovery policy.
+When selection supplies a manifest owner, artifacts resolve from that owner's
+root and entry, preserving source overlays and retained module instances.
+
+Bundled provider policy lookups retain their resolved surface, including absence,
+in the metadata cache. Repeated model-reference canonicalization reuses that
+surface without resolving artifact candidates again. The memo follows the
+selected registry's publication version and bundled-directory selection;
+registration and unpublished registries remain uncached. A new generation or
+explicit metadata invalidation resolves the surface again, and managed surfaces
+retain their instance's admission checks.
 
 The CLI invocation owns one operation cache across config reads, output metadata,
 command ownership, nested registration, and actions. Standalone registration uses

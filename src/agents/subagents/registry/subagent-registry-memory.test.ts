@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { sessionChanges } from "../../../sessions/session-row-changes.js";
 import {
   getSubagentRunsForChildSession,
   getSubagentRunsForCollectorGroup,
@@ -24,6 +25,56 @@ afterEach(() => {
 });
 
 describe("subagent run memory indexes", () => {
+  it("retains a selected registration through its own ACK but rejects a committed replacement ABA", () => {
+    const entry = createRun("selected", "agent:main:subagent:selected");
+    subagentRuns.set(entry.runId, entry);
+    const selected = subagentRuns.captureRegistrationOwnership(entry.childSessionKey, entry);
+    const preparing = subagentRuns.captureRegistrationOwnership(entry.childSessionKey);
+    try {
+      subagentRuns.commitOwnership(entry);
+      expect(selected.assertCurrent).not.toThrow();
+      expect(preparing.assertCurrent).toThrow("owner changed");
+      const replacement = createRun(entry.runId, entry.childSessionKey);
+      subagentRuns.set(entry.runId, replacement);
+      subagentRuns.commitOwnership(replacement);
+      expect(selected.assertCurrent).toThrow("owner changed");
+      subagentRuns.delete(replacement.runId);
+      subagentRuns.confirmRetirement(replacement);
+      subagentRuns.set(entry.runId, entry);
+      subagentRuns.commitOwnership(entry);
+      expect(selected.assertCurrent).toThrow("owner changed");
+    } finally {
+      selected.release();
+      preparing.release();
+    }
+  });
+
+  it("publishes accepted ownership and retirement without exposing provisional map writes", () => {
+    const changed = vi.fn();
+    const stop = sessionChanges.subscribe(changed);
+    const entry = createRun("accepted", "agent:main:subagent:accepted");
+    try {
+      subagentRuns.set(entry.runId, entry);
+      expect(changed).not.toHaveBeenCalled();
+      subagentRuns.commitOwnership(entry);
+      expect(changed.mock.calls).toEqual([
+        [{ sessionKey: entry.childSessionKey, scope: "runtime" }],
+      ]);
+      changed.mockClear();
+      subagentRuns.delete(entry.runId);
+      expect(changed).not.toHaveBeenCalled();
+      subagentRuns.confirmRetirement(entry);
+      expect(changed.mock.calls).toEqual([
+        [{ sessionKey: entry.childSessionKey, scope: "runtime" }],
+      ]);
+      changed.mockClear();
+      subagentRuns.clear();
+      expect(changed.mock.calls).toEqual([[{ all: true, scope: "subagent-runs" }]]);
+    } finally {
+      stop();
+    }
+  });
+
   it("tracks child-session generations across replacement, deletion, and clear", () => {
     const first = createRun("run-first", "agent:main:subagent:shared");
     const second = createRun("run-second", "agent:main:subagent:shared");

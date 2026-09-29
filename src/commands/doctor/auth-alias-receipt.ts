@@ -7,7 +7,10 @@ import {
   readLegacyMigrationReceiptFromDatabase,
   recordLegacyMigrationReceipt,
 } from "../../infra/state-migrations.receipts.js";
-import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
+import {
+  runOpenClawStateWriteTransaction,
+  type OpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
 import { digestAuthProfileMigrationValue as digest } from "../doctor-auth-migration-receipts.js";
 
 const SOURCE_KEY = "auth-profile-sqlite-alias-map:v1";
@@ -140,17 +143,20 @@ export function recordAuthAliasMigration(params: {
 export function runWithAuthAliasMigrationReceipt<T>(
   expectedSha256: string | undefined,
   env: NodeJS.ProcessEnv,
-  operation: () => T,
+  operation: (database?: OpenClawStateDatabase) => T,
 ): T {
   if (expectedSha256 === undefined) {
     return operation();
   }
   return runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      if (readLegacyMigrationReceiptFromDatabase(db, SOURCE_KEY)?.sourceSha256 !== expectedSha256) {
+    (database) => {
+      if (
+        readLegacyMigrationReceiptFromDatabase(database.db, SOURCE_KEY)?.sourceSha256 !==
+        expectedSha256
+      ) {
         throw new Error("Auth alias migration receipt changed before repair; rerun Doctor.");
       }
-      return operation();
+      return operation(database);
     },
     { env },
   );

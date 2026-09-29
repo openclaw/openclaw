@@ -29,7 +29,6 @@ import {
   type ExecCommandSegment,
   type ExecSegmentSatisfiedBy,
   type ExecSecurity,
-  type SkillBinTrustEntry,
 } from "../infra/exec-approvals.js";
 import {
   planExecAuthorization,
@@ -85,7 +84,10 @@ import {
   resolvePlannedAllowlistArgv,
   resolveSystemRunExecArgv,
 } from "./invoke-system-run-allowlist.js";
-import { hardenApprovedExecutionPaths } from "./invoke-system-run-plan.js";
+import {
+  buildEnvOverrideRejectionMessage,
+  hardenApprovedExecutionPaths,
+} from "./invoke-system-run-plan.js";
 import type {
   ExecEventPayload,
   ExecFinishedResult,
@@ -124,7 +126,6 @@ type SystemRunParsePhase = {
   shellPayload: string | null;
   shellWrapperInvocation: boolean;
   commandText: string;
-  commandPreview: string | null;
   approvalPlan: import("../infra/exec-approvals.js").SystemRunApprovalPlan | null;
   agentId: string | undefined;
   sessionKey: string;
@@ -153,14 +154,7 @@ type SystemRunPolicyPhase = SystemRunParsePhase & {
   strictInlineEval: boolean;
   inlineEvalHit: InterpreterInlineEvalHit | null;
   allowlistMatches: ExecAllowlistEntry[];
-  analysisOk: boolean;
-  allowlistSatisfied: boolean;
   allowlistAuthorizationSatisfied: boolean;
-  safeBins: ReturnType<typeof resolveExecSafeBinRuntimePolicy>["safeBins"];
-  safeBinProfiles: ReturnType<typeof resolveExecSafeBinRuntimePolicy>["safeBinProfiles"];
-  trustedSafeBinDirs: ReturnType<typeof resolveExecSafeBinRuntimePolicy>["trustedSafeBinDirs"];
-  skillBins: SkillBinTrustEntry[];
-  autoAllowSkills: boolean;
   segments: ExecCommandSegment[];
   segmentSatisfiedBy: ExecSegmentSatisfiedBy[];
   authorizationPlan: ExecAuthorizationPlan | undefined;
@@ -271,6 +265,7 @@ type HandleSystemRunInvokeOptions = {
     env: Record<string, string> | undefined,
     timeoutMs: number | undefined,
     signal?: AbortSignal,
+    assertCurrent?: () => void,
   ) => Promise<RunResult>;
   runViaMacAppExecHost: (params: {
     approvals: ExecApprovalsResolved;
@@ -360,23 +355,19 @@ export { buildSystemRunApprovalPlan } from "./invoke-system-run-plan.js";
 async function parseSystemRunPhase(
   opts: HandleSystemRunInvokeOptions,
 ): Promise<SystemRunParsePhase | null> {
+  const invalid = async (message: string) => {
+    await opts.sendInvokeResult({ ok: false, error: { code: "INVALID_REQUEST", message } });
+    return null;
+  };
   const command = resolveSystemRunCommandRequest({
     command: opts.params.command,
     rawCommand: opts.params.rawCommand,
   });
   if (!command.ok) {
-    await opts.sendInvokeResult({
-      ok: false,
-      error: { code: "INVALID_REQUEST", message: command.message },
-    });
-    return null;
+    return invalid(command.message);
   }
   if (command.argv.length === 0) {
-    await opts.sendInvokeResult({
-      ok: false,
-      error: { code: "INVALID_REQUEST", message: "command required" },
-    });
-    return null;
+    return invalid("command required");
   }
 
   const shellPayload = command.shellPayload;
@@ -387,11 +378,7 @@ async function parseSystemRunPhase(
       ? null
       : normalizeSystemRunApprovalPlan(opts.params.systemRunPlan);
   if (opts.params.systemRunPlan !== undefined && !approvalPlan) {
-    await opts.sendInvokeResult({
-      ok: false,
-      error: { code: "INVALID_REQUEST", message: "systemRunPlan invalid" },
-    });
-    return null;
+    return invalid("systemRunPlan invalid");
   }
   const agentId = normalizeOptionalString(opts.params.agentId);
   const requestedSessionKey = normalizeOptionalString(opts.params.sessionKey);
@@ -405,11 +392,7 @@ async function parseSystemRunPhase(
     approvalSource !== "ask-fallback" &&
     approvalSource !== "auto-review"
   ) {
-    await opts.sendInvokeResult({
-      ok: false,
-      error: { code: "INVALID_REQUEST", message: "approvalSource invalid" },
-    });
-    return null;
+    return invalid("approvalSource invalid");
   }
   const approvalDecision = resolveExecApprovalDecision(opts.params.approvalDecision);
   const approved = opts.params.approved === true;
@@ -417,14 +400,7 @@ async function parseSystemRunPhase(
     approvalSource != null &&
     (opts.params.approved !== undefined || opts.params.approvalDecision !== undefined)
   ) {
-    await opts.sendInvokeResult({
-      ok: false,
-      error: {
-        code: "INVALID_REQUEST",
-        message: "approvalSource cannot be combined with explicit approval",
-      },
-    });
-    return null;
+    return invalid("approvalSource cannot be combined with explicit approval");
   }
   const explicitApproval = approved || approvalDecision !== null;
   const forwardedDelayedApproval = approvalSource === "auto-review" || explicitApproval;
@@ -437,31 +413,18 @@ async function parseSystemRunPhase(
       normalizeOptionalString(approvalPlan.agentId) === agentId &&
       normalizeOptionalString(approvalPlan.sessionKey) === requestedSessionKey;
     if (!planMatchesRequest) {
-      await opts.sendInvokeResult({
-        ok: false,
-        error: {
-          code: "INVALID_REQUEST",
-          message:
-            approvalSource != null
-              ? "approvalSource requires matching systemRunPlan"
-              : "explicit approval requires matching systemRunPlan",
-        },
-      });
-      return null;
+      return invalid(
+        approvalSource != null
+          ? "approvalSource requires matching systemRunPlan"
+          : "explicit approval requires matching systemRunPlan",
+      );
     }
   }
   const delayedApprovalPolicySnapshot = forwardedDelayedApproval
     ? (approvalPlan?.policySnapshot ?? null)
     : null;
   if (forwardedDelayedApproval && !delayedApprovalPolicySnapshot) {
-    await opts.sendInvokeResult({
-      ok: false,
-      error: {
-        code: "INVALID_REQUEST",
-        message: "delayed approval requires a prepared policy snapshot",
-      },
-    });
-    return null;
+    return invalid("delayed approval requires a prepared policy snapshot");
   }
   const envAssignmentKeys = extractEnvAssignmentKeysFromDispatchWrappers(command.argv);
   const envAssignmentOverrides =
@@ -475,14 +438,9 @@ async function parseSystemRunPhase(
   // `extractEnvAssignmentKeysFromDispatchWrappers` only emits keys that satisfy
   // `isEnvAssignment` and therefore portable env-key syntax by construction.
   if (envAssignmentDiagnostics.rejectedOverrideBlockedKeys.length > 0) {
-    await opts.sendInvokeResult({
-      ok: false,
-      error: {
-        code: "INVALID_REQUEST",
-        message: `SYSTEM_RUN_DENIED: command env assignment rejected (blocked env assignment keys: ${envAssignmentDiagnostics.rejectedOverrideBlockedKeys.join(", ")})`,
-      },
-    });
-    return null;
+    return invalid(
+      `SYSTEM_RUN_DENIED: command env assignment rejected (blocked env assignment keys: ${envAssignmentDiagnostics.rejectedOverrideBlockedKeys.join(", ")})`,
+    );
   }
   const envOverrideDiagnostics = inspectHostExecEnvOverrides({
     overrides: opts.params.env ?? undefined,
@@ -492,25 +450,7 @@ async function parseSystemRunPhase(
     envOverrideDiagnostics.rejectedOverrideBlockedKeys.length > 0 ||
     envOverrideDiagnostics.rejectedOverrideInvalidKeys.length > 0
   ) {
-    const details: string[] = [];
-    if (envOverrideDiagnostics.rejectedOverrideBlockedKeys.length > 0) {
-      details.push(
-        `blocked override keys: ${envOverrideDiagnostics.rejectedOverrideBlockedKeys.join(", ")}`,
-      );
-    }
-    if (envOverrideDiagnostics.rejectedOverrideInvalidKeys.length > 0) {
-      details.push(
-        `invalid non-portable override keys: ${envOverrideDiagnostics.rejectedOverrideInvalidKeys.join(", ")}`,
-      );
-    }
-    await opts.sendInvokeResult({
-      ok: false,
-      error: {
-        code: "INVALID_REQUEST",
-        message: `SYSTEM_RUN_DENIED: environment override rejected (${details.join("; ")})`,
-      },
-    });
-    return null;
+    return invalid(buildEnvOverrideRejectionMessage(envOverrideDiagnostics));
   }
   const envOverrides = sanitizeSystemRunEnvOverrides({
     overrides: opts.params.env ?? undefined,
@@ -521,7 +461,6 @@ async function parseSystemRunPhase(
     shellPayload,
     shellWrapperInvocation,
     commandText,
-    commandPreview: command.previewText,
     approvalPlan,
     agentId,
     sessionKey,
@@ -921,14 +860,7 @@ async function evaluateSystemRunPolicyPhase(
     strictInlineEval,
     inlineEvalHit,
     allowlistMatches,
-    analysisOk,
-    allowlistSatisfied,
     allowlistAuthorizationSatisfied,
-    safeBins,
-    safeBinProfiles,
-    trustedSafeBinDirs,
-    skillBins: bins,
-    autoAllowSkills,
     segments,
     segmentSatisfiedBy,
     authorizationPlan: allowlistEvaluation.authorizationPlan,
@@ -1021,20 +953,12 @@ async function executeSystemRunPhase(
     plannedAllowlistArgv: phase.plannedAllowlistArgv,
     argv: phase.argv,
     security: phase.security,
-    approvals: phase.approvals,
-    safeBins: phase.safeBins,
-    safeBinProfiles: phase.safeBinProfiles,
-    trustedSafeBinDirs: phase.trustedSafeBinDirs,
-    skillBins: phase.skillBins,
-    autoAllowSkills: phase.autoAllowSkills,
     isWindows: phase.isWindows,
     policy: phase.policy,
     shellCommand: phase.shellPayload,
     segments: phase.segments,
     segmentSatisfiedBy: phase.segmentSatisfiedBy,
     authorizationPlan: phase.authorizationPlan,
-    cwd: phase.cwd,
-    env: phase.env,
   });
   if (!execArgv) {
     await sendSystemRunDenied(opts, phase.execution, {
@@ -1137,8 +1061,11 @@ async function executeSystemRunPhase(
     requireDurableAllowlistApproval: phase.durableApprovalRequirement === "segment-allowlist",
   };
 
+  let assertCommittedAuthorization: () => void;
   try {
-    await (opts.commitExecAuthorization ?? commitExecAuthorizationLocked)({
+    assertCommittedAuthorization = await (
+      opts.commitExecAuthorization ?? commitExecAuthorizationLocked
+    )({
       agentId: phase.agentId,
       matches: phase.allowlistMatches,
       command: phase.commandText,
@@ -1167,9 +1094,41 @@ async function executeSystemRunPhase(
   if (opts.signal?.aborted) {
     return;
   }
-  const result = await (opts.signal
-    ? opts.runCommand(execArgv, phase.cwd, phase.env, phase.timeoutMs, opts.signal)
-    : opts.runCommand(execArgv, phase.cwd, phase.env, phase.timeoutMs));
+  let authorizationDenied = false;
+  const assertCurrent = () => {
+    try {
+      assertCommittedAuthorization();
+    } catch (error) {
+      authorizationDenied = true;
+      throw error;
+    }
+  };
+  let result: RunResult;
+  try {
+    assertCurrent();
+    result = await opts.runCommand(
+      execArgv,
+      phase.cwd,
+      phase.env,
+      phase.timeoutMs,
+      opts.signal,
+      assertCurrent,
+    );
+    // Some launch adapters translate spawn errors into a RunResult. A revoked
+    // authorization still belongs on the denial route, never exec.finished.
+    if (authorizationDenied) {
+      throw new Error("Exec approval changed before execution");
+    }
+  } catch (error) {
+    if (!authorizationDenied) {
+      throw error;
+    }
+    await sendSystemRunDenied(opts, phase.execution, {
+      reason: "approval-required",
+      message: "SYSTEM_RUN_DENIED: exec approval changed before execution",
+    });
+    return;
+  }
   if (opts.signal?.aborted) {
     return;
   }

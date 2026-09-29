@@ -1,7 +1,5 @@
-// Plugin Package Contract tests cover index behavior.
 import { describe, expect, it } from "vitest";
 import {
-  EXTERNAL_CODE_PLUGIN_REQUIRED_FIELD_PATHS,
   PLUGIN_CATEGORY_SLUGS,
   listMissingExternalCodePluginFieldPaths,
   normalizeExternalPluginCompatibility,
@@ -14,15 +12,26 @@ describe("@openclaw/plugin-package-contract", () => {
     expect(PLUGIN_CATEGORY_SLUGS).toEqual([
       "channels",
       "models",
+      "agent-runtimes",
       "memory",
       "context",
       "voice",
-      "media",
       "web",
-      "tools",
-      "runtime",
-      "gateway",
+      "computer-use",
+      "media",
       "security",
+      "integrations",
+      "developer-tools",
+      "infrastructure",
+      "documents-files",
+      "inbox-collaboration",
+      "productivity",
+      "scheduling",
+      "finance-payments",
+      "sales-marketing",
+      "data-analytics",
+      "agent-orchestration",
+      "research",
       "other",
     ]);
   });
@@ -80,13 +89,6 @@ describe("@openclaw/plugin-package-contract", () => {
       builtWithOpenClawVersion: "1.2.3",
       minGatewayVersion: "2026.3.24-beta.2",
     });
-  });
-
-  it("lists the required external code-plugin fields", () => {
-    expect(EXTERNAL_CODE_PLUGIN_REQUIRED_FIELD_PATHS).toEqual([
-      "openclaw.compat.pluginApi",
-      "openclaw.build.openclawVersion",
-    ]);
   });
 
   it("reports missing required fields with stable field paths", () => {

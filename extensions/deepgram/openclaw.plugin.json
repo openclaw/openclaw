@@ -1,10 +1,6 @@
 {
   "id": "deepgram",
-  "categories": [
-    "models",
-    "voice",
-    "media"
-  ],
+  "categories": ["voice"],
   "capabilityCatalogEntry": "./capability-catalog.ts",
   "activation": {
     "onStartup": false

@@ -18,6 +18,8 @@ full behavior and rationale of each numbered check, follow the links under
     - UI protocol freshness check (rebuilds Control UI when the protocol schema is newer).
     - Health check + restart prompt.
     - Problem-only skill and plugin notes; healthy inventory stays in `openclaw skills check` and `openclaw plugins list`.
+    - Runtime tool schema checks report failing MCP servers and continue with the remaining checks. If subprocess cleanup cannot be confirmed, Doctor retains the server findings and adds a cleanup diagnostic; inspect or stop the affected MCP processes before rerunning Doctor.
+    - During updates, Doctor defers MCP connections and records each enabled server with a follow-up command. Core tool schemas are still checked. Run `openclaw doctor --lint --only core/doctor/runtime-tool-schemas` after the update to inspect MCP tools.
 
   </Accordion>
   <Accordion title="Config and migrations">
@@ -36,7 +38,7 @@ full behavior and rationale of each numbered check, follow the links under
     - Retired QMD memory config and derived workspace cleanup; see [Migrating from QMD](/concepts/memory-builtin#migrating-from-qmd).
     - Legacy plugin manifest contract key migration (`speechProviders`, `realtimeTranscriptionProviders`, `realtimeVoiceProviders`, `mediaUnderstandingProviders`, `imageGenerationProviders`, `videoGenerationProviders`, `webFetchProviders`, `webSearchProviders` → `contracts`).
     - Legacy cron store migration (`jobId`, `schedule.cron`, top-level delivery/payload fields, payload `provider`, `notify: true` webhook fallback jobs).
-    - Legacy workspace `TOOLS.md` migration into the `## Tools` section of `AGENTS.md`, with the original archived under the state directory before removal.
+    - Legacy workspace `TOOLS.md` migration into the `## Tools` section of `AGENTS.md`, archiving the original before removal. On POSIX, Doctor preserves the existing destination's owner, group, and mode bits. If importing notes would add POSIX readers or ownership cannot be preserved, it keeps both files and reports a warning. These checks do not establish filesystem ACL preservation.
     - Codex CLI runtime pin repair (`agentRuntime.id: "codex-cli"` → `"codex"`) across `agents.defaults`, `agents.entries.*`, and `models.providers.*` (including per-model entries).
     - Stale plugin config cleanup when plugins are enabled; when `plugins.enabled=false`, stale plugin references are preserved as inert containment config.
 

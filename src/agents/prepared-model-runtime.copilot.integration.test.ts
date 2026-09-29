@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { loadBundledPluginPublicSurface } from "../plugin-sdk/test-helpers/public-surface-loader.js";
 import * as pluginState from "../plugin-state/plugin-state-store.js";
 import * as pluginModuleRuntime from "../plugins/loader-module-runtime.js";
 import { loadAndActivateRootPluginRegistry } from "../plugins/loader.js";
@@ -13,6 +13,7 @@ import {
 } from "../plugins/loader.test-fixtures.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
+import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 import { ensureSelectedAgentHarnessPlugin } from "./harness/runtime-plugin.js";
 import { prepareWorkspacePluginRegistries } from "./prepared-model-runtime.inbound-registry.js";
 
@@ -32,13 +33,13 @@ it("prepares an agent-local Copilot BYOK harness without replacing the active ro
   // This composition uses the checkout's source fixture, not installed plugin resolution.
   const bundledRoot = path.resolve(import.meta.dirname, "../../extensions");
   const entrypoint = path.join(bundledRoot, "copilot", "index.ts");
-  const copilotModule = await loadBundledPluginPublicSurface({
+  const copilotModule = await loadBundledPluginFacade({
     pluginId: "copilot",
     artifactBasename: "index.ts",
   });
   // Reuse Vitest's source graph at the module-loading seam. The real loader
   // still discovers and validates the entrypoint and owns registration.
-  const loadModule = vi.fn((source: string) => {
+  const loadModule = vi.fn<pluginModuleRuntime.PluginModuleLoader>((source) => {
     expect(source).toBe(entrypoint);
     return copilotModule;
   });
@@ -105,10 +106,15 @@ it("prepares an agent-local Copilot BYOK harness without replacing the active ro
       runtimePluginSelections: [selection],
     },
     metadata,
+    vi.fn(),
   );
 
   expect(runtimePluginRegistry).not.toBe(root);
-  expect(loadModule).toHaveBeenCalledWith(entrypoint);
+  expect(loadModule).toHaveBeenCalledOnce();
+  const [, owner] = expectDefined(loadModule.mock.calls[0], "Copilot module load");
+  expect(owner?.registry).toBe(runtimePluginRegistry);
+  expect(owner?.record).toBe(runtimePluginRegistry?.plugins[0]);
+  expect(owner?.rootDir).toBe(path.dirname(entrypoint));
   expect(getActivePluginRegistry()).toBe(root);
   expect(root.agentHarnesses).toEqual([]);
   expect(

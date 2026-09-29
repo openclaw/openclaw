@@ -40,6 +40,11 @@ inference feature:
 | Generic internal `agent-command` paths                              | No                                                       |
 | Sub-agent/internal helper execution                                 | No                                                       |
 
+Inter-session messages and child completion deliveries do not run Active
+Memory, even when they arrive in a visible conversation. OpenClaw uses their
+typed delivery origin to skip recall. Later human messages in that same
+conversation remain eligible under the usual targeting and session rules.
+
 Use it when the session is persistent and user-facing, the agent has
 meaningful long-term memory to search, and continuity/personalization matter
 more than raw prompt determinism: stable preferences, recurring habits,

@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
+import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { dedupeSessionStoreTargetsBySqliteTarget } from "./targets.js";
 
 describe("session store target dedupe", () => {
@@ -20,6 +21,27 @@ describe("session store target dedupe", () => {
           { agentId: "ops", storePath: path.join(aliasDir, "shared.sqlite") },
         ];
         const diagnostics: string[] = [];
+        const resolverOptions = {
+          agentId: "ops",
+          defaultAgentId: "main",
+          registeredDatabases: [{ agentId: "ops", path: path.join(realDir, "shared.sqlite") }],
+        };
+        const exactLocator = path.join(aliasDir, "shared.sqlite");
+        const customLocator = path.join(aliasDir, "shared.json");
+        expect(
+          resolveSqliteTargetFromSessionStorePath(exactLocator, resolverOptions),
+        ).toMatchObject({
+          agentId: "ops",
+          ownerSource: "database-registry",
+          path: exactLocator,
+          shared: true,
+        });
+        expect(
+          resolveSqliteTargetFromSessionStorePath(customLocator, resolverOptions),
+        ).toMatchObject({
+          path: exactLocator,
+          unsuffixedOwnerAgentId: "ops",
+        });
 
         expect(
           dedupeSessionStoreTargetsBySqliteTarget(targets, {
@@ -34,6 +56,20 @@ describe("session store target dedupe", () => {
         await fs.mkdir(otherDir);
         await fs.unlink(aliasDir);
         await fs.symlink(otherDir, aliasDir, "dir");
+        expect(
+          resolveSqliteTargetFromSessionStorePath(exactLocator, resolverOptions),
+        ).toMatchObject({
+          agentId: "main",
+          ownerSource: "configured-default",
+          path: exactLocator,
+          shared: true,
+        });
+        expect(
+          resolveSqliteTargetFromSessionStorePath(customLocator, resolverOptions),
+        ).toMatchObject({
+          path: path.join(aliasDir, "shared.ops.sqlite"),
+          unsuffixedOwnerAgentId: "main",
+        });
         expect(
           dedupeSessionStoreTargetsBySqliteTarget(targets, { defaultAgentId: "main", env }),
         ).toHaveLength(2);

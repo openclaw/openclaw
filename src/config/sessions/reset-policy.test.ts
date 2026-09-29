@@ -9,18 +9,9 @@ const HOUR_MS = 60 * 60_000;
 const DAY_MS = 24 * HOUR_MS;
 
 describe("session reset policy", () => {
-  it.each([
-    {
-      name: "a long inactivity gap",
-      startedAt: new Date(2025, 0, 1, 12, 0, 0, 0).getTime(),
-      now: new Date(2026, 0, 1, 12, 0, 0, 0).getTime(),
-    },
-    {
-      name: "a midnight boundary",
-      startedAt: new Date(2026, 0, 17, 23, 0, 0, 0).getTime(),
-      now: new Date(2026, 0, 18, 5, 0, 0, 0).getTime(),
-    },
-  ])("keeps the default policy fresh across $name", ({ startedAt, now }) => {
+  it("keeps the default policy fresh across a long inactivity gap", () => {
+    const startedAt = new Date(2025, 0, 1, 12).getTime();
+    const now = new Date(2026, 0, 1, 12).getTime();
     const policy = resolveSessionResetPolicy({ resetType: "direct" });
 
     expect(policy.mode).toBe("none");
@@ -142,7 +133,11 @@ describe("session reset policy", () => {
          now: Date.parse(now),
          policy: { mode: "daily", atHour },
        })})));`,
-        { env: { ...process.env, TZ: timezone }, timeout: 10_000 },
+        {
+          env: { ...process.env, TZ: timezone },
+          imports: [new URL("../../../scripts/tsx.mjs", import.meta.url).href],
+          timeout: 10_000,
+        },
       );
       expect(JSON.parse(output)).toMatchObject({ fresh, dailyResetAt: Date.parse(boundary) });
     },

@@ -1,6 +1,6 @@
 {
   "id": "copilot",
-  "categories": ["runtime"],
+  "categories": ["agent-runtimes"],
   "doctorContract": {
     "configRepair": true
   },
@@ -21,6 +21,14 @@
     "onStartup": false,
     "onAgentHarnesses": ["copilot"]
   },
+  "configGroups": [
+    {
+      "id": "client-pool",
+      "title": "Client pool",
+      "order": 10,
+      "properties": ["pool"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

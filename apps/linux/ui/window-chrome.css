@@ -1,0 +1,109 @@
+html.openclaw-native-desktop {
+  --openclaw-native-titlebar-height: 52px;
+  --openclaw-native-window-controls-width: 138px;
+  --openclaw-native-controls-inset: 12px;
+}
+
+html.openclaw-native-desktop[data-native-platform="macos"] {
+  --openclaw-native-window-controls-width: 0px;
+  --openclaw-native-controls-inset: 92px;
+}
+
+.openclaw-window-controls {
+  position: fixed;
+  top: 0;
+  right: 0;
+  z-index: 1000;
+  display: flex;
+  height: var(--openclaw-native-titlebar-height);
+  color: var(--text, #f6f7fb);
+}
+
+.openclaw-window-controls button {
+  display: grid;
+  place-items: center;
+  width: 46px;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  cursor: default;
+}
+
+.openclaw-window-controls button:hover {
+  background: var(--bg-hover, #272a33);
+}
+
+.openclaw-window-controls button[data-action="close"]:hover {
+  background: #c42b1c;
+  color: #fff;
+}
+
+.openclaw-window-controls button:focus-visible {
+  outline: 2px solid var(--accent, #ff5c5c);
+  outline-offset: -3px;
+}
+
+.openclaw-window-controls svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1;
+}
+
+.openclaw-window-controls .restore,
+.openclaw-window-controls[hidden],
+.openclaw-window-controls [data-maximized="true"] .maximize {
+  display: none;
+}
+
+.openclaw-window-controls [data-maximized="true"] .restore {
+  display: initial;
+}
+
+.openclaw-window-unfocused .openclaw-window-controls {
+  color: var(--muted, #a1a1aa);
+}
+
+.openclaw-window-drag-edge {
+  position: fixed;
+  /* Leave the native resize border above this passive drag strip. */
+  inset: 6px var(--openclaw-native-window-controls-width) auto var(--openclaw-native-controls-inset);
+  z-index: 60;
+  height: 6px;
+  user-select: none;
+}
+
+html.openclaw-native-desktop.openclaw-window-fullscreen {
+  --openclaw-native-window-controls-width: 0px;
+}
+
+.openclaw-window-fullscreen .openclaw-window-controls,
+.openclaw-window-fullscreen .openclaw-window-drag-edge {
+  display: none;
+}
+
+.openclaw-companion-chrome .shell {
+  padding-top: 62px;
+}
+
+.openclaw-companion-chrome .brand {
+  user-select: none;
+}
+
+.openclaw-window-error {
+  position: fixed;
+  top: 56px;
+  right: 12px;
+  z-index: 1000;
+  max-width: min(360px, 90vw);
+  padding: 12px;
+  border-radius: 8px;
+  background: var(--bg, #0e1015);
+  color: var(--text, #f6f7fb);
+  box-shadow: var(--shadow-dialog, 0 2px 12px #0004);
+  font: 13px/1.5 var(--font-body, system-ui, sans-serif);
+}

@@ -3,6 +3,7 @@ import OpenClawProtocol
 public enum OpenClawGatewayClientCapability {
     public static let agentKind = "agent-kind"
     public static let inlineWidgets = "inline-widgets"
+    public static let modelSelectionPolicy = "model-selection-policy"
     public static let usageRefreshing = "usage-refreshing"
 }
 
@@ -90,10 +91,12 @@ public enum GatewayAuthSource: String, Sendable {
 }
 
 /// Opaque binding for the exact credentials selected by one live Gateway socket.
-/// The credential itself never leaves `GatewayChannelActor`.
+/// The binding exposes no credential; HTTP adapters use the channel's separate route-checked access.
 public struct GatewayAuthBinding: Equatable, Sendable {
     public let source: GatewayAuthSource
     public let credentialFingerprint: String?
+    /// Identity signed by this socket's connect, not whichever identity is stored later.
+    public let deviceId: String?
 }
 
 extension GatewayConnectOptions {
@@ -104,7 +107,6 @@ extension GatewayConnectOptions {
     }
 
     /// Additive connect-frame fields, sent only when this node declares them.
-    /// Lives here so `GatewayChannel.sendConnect` stays within its body budget.
     func applyOptionalConnectParams(to params: inout [String: OpenClawProtocol.AnyCodable]) {
         if !self.commands.isEmpty {
             params["commands"] = OpenClawProtocol.AnyCodable(self.commands)
@@ -112,9 +114,7 @@ extension GatewayConnectOptions {
         if let computerUse = self.computerUse {
             params["computerUse"] = computerUse
         }
-        if let pathEnv = self.pathEnv?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !pathEnv.isEmpty
-        {
+        if let pathEnv = self.pathEnv?.trimmedNonEmpty {
             params["pathEnv"] = OpenClawProtocol.AnyCodable(pathEnv)
         }
         if !self.permissions.isEmpty {

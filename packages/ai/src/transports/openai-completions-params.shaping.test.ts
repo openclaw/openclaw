@@ -1,27 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { buildOpenAICompletionsParams } from "./openai-completions-params.js";
-import {
-  attachModelProviderRequestTransport,
-  makeCompletionsModel,
-} from "./openai-completions.test-support.js";
+import { makeCompletionsModel } from "./openai-completions.test-support.js";
 
 describe("openai completions params", () => {
   it("keeps OpenRouter thinking format for declared OpenRouter providers on custom proxy URLs", () => {
     const params = buildOpenAICompletionsParams(
-      attachModelProviderRequestTransport(
-        makeCompletionsModel({
-          id: "anthropic/claude-sonnet-4",
-          name: "Claude Sonnet 4",
-          provider: "openrouter",
-          baseUrl: "https://proxy.example.com/v1",
-        }),
-        {
-          proxy: {
-            mode: "explicit-proxy",
-            url: "http://proxy.internal:8443",
-          },
-        },
-      ),
+      makeCompletionsModel({
+        id: "anthropic/claude-sonnet-4",
+        name: "Claude Sonnet 4",
+        provider: "openrouter",
+        baseUrl: "https://proxy.example.com/v1",
+      }),
       {
         systemPrompt: "system",
         messages: [],
@@ -37,20 +26,12 @@ describe("openai completions params", () => {
 
   it("keeps OpenRouter thinking format for native OpenRouter hosts behind custom provider ids", () => {
     const params = buildOpenAICompletionsParams(
-      attachModelProviderRequestTransport(
-        makeCompletionsModel({
-          id: "anthropic/claude-sonnet-4",
-          name: "Claude Sonnet 4",
-          provider: "custom-openrouter",
-          baseUrl: "https://openrouter.ai/api/v1",
-        }),
-        {
-          proxy: {
-            mode: "explicit-proxy",
-            url: "http://proxy.internal:8443",
-          },
-        },
-      ),
+      makeCompletionsModel({
+        id: "anthropic/claude-sonnet-4",
+        name: "Claude Sonnet 4",
+        provider: "custom-openrouter",
+        baseUrl: "https://openrouter.ai/api/v1",
+      }),
       {
         systemPrompt: "system",
         messages: [],

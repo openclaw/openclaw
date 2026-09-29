@@ -243,7 +243,7 @@ Once DMs work, you can turn your server into a full workspace where each channel
   <Step title="Allow responses without @mention">
     By default, the agent only responds in guild channels when @mentioned. On a private server you probably want it to respond to every message.
 
-    In guild channels, normal replies post automatically by default. For shared always-on rooms, opt into `messages.groupChat.visibleReplies: "message_tool"` so the agent can lurk and only post when it decides a channel reply is useful. This works best with latest-generation, tool-reliable models such as GPT-5.6 Sol. Ambient room events stay quiet unless the tool sends. See [Ambient room events](/channels/ambient-room-events) for the full lurk-mode config.
+    In guild channels, normal replies post automatically by default. For shared always-on rooms, opt into `messages.groupChat.visibleReplies: "message_tool"` so the agent can lurk and only post when it decides a channel reply is useful. This works best with latest-generation, tool-reliable models such as GPT-6 Astra. Ambient room events stay quiet unless the tool sends. See [Ambient room events](/channels/ambient-room-events) for the full lurk-mode config.
 
     If Discord shows typing and the logs show token usage but no posted message, check whether the turn was configured as an ambient room event or opted into message-tool visible replies.
 

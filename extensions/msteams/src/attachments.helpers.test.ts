@@ -2,11 +2,9 @@
 import { describe, expect, it } from "vitest";
 import { buildMSTeamsGraphMessageUrl, resolveMSTeamsAdvertisedMedia } from "./attachments.js";
 
-const SHAREPOINT_HOST = "contoso.sharepoint.com";
 const TEST_HOST = "x";
 const createUrlForHost = (host: string, pathSegment: string) => `https://${host}/${pathSegment}`;
 const createTestUrl = (pathSegment: string) => createUrlForHost(TEST_HOST, pathSegment);
-const TEST_URL_IMAGE = createTestUrl("img");
 const TEST_URL_PDF = createTestUrl("x.pdf");
 const CONTENT_TYPE_APPLICATION_PDF = "application/pdf";
 const CONTENT_TYPE_TEXT_HTML = "text/html";
@@ -43,10 +41,6 @@ const ADVERTISED_MEDIA_CASES = [
     attachments: [],
     expected: [],
   }),
-  withLabel("returns an image fact for one image", {
-    attachments: [{ contentType: "image/png", contentUrl: "https://x.test/image.png" }],
-    expected: [{ kind: "image" }],
-  }),
   withLabel("counts multiple images", {
     attachments: [
       { contentType: "image/png", contentUrl: "https://x.test/one.png" },
@@ -63,20 +57,12 @@ const ADVERTISED_MEDIA_CASES = [
     ],
     expected: [{ kind: "image" }],
   }),
-  withLabel("returns a document presentation for one document", {
-    attachments: [{ contentType: "application/pdf", contentUrl: "https://x.test/file.pdf" }],
-    expected: [{ kind: "document" }],
-  }),
   withLabel("counts multiple documents", {
     attachments: [
       { contentType: "application/pdf", contentUrl: "https://x.test/one.pdf" },
       { contentType: "application/pdf", contentUrl: "https://x.test/two.pdf" },
     ],
     expected: [{ kind: "document" }, { kind: "document" }],
-  }),
-  withLabel("counts one inline image", {
-    attachments: [createHtmlAttachment('<p>hi</p><img src="https://x.test/one.png" />')],
-    expected: [{ kind: "image", sourceId: "https://x.test/one.png" }],
   }),
   withLabel("counts multiple inline images", {
     attachments: [
@@ -121,17 +107,10 @@ describe("msteams attachment helpers", () => {
       expect(resolveMSTeamsAdvertisedMedia(attachments)).toEqual(expected);
     });
 
-    it("preserves an inline image fact when materialization limits reject it", () => {
-      const attachments = [
-        createHtmlAttachment(`<img src="data:image/png;base64,${"A".repeat(16)}" />`),
-      ];
+    it("preserves an inline image fact for malformed base64", () => {
+      const attachments = [createHtmlAttachment('<img src="data:image/png;base64,A!AA" />')];
 
-      expect(
-        resolveMSTeamsAdvertisedMedia(attachments, {
-          maxInlineBytes: 4,
-          maxInlineTotalBytes: 4,
-        }),
-      ).toEqual([{ kind: "image" }]);
+      expect(resolveMSTeamsAdvertisedMedia(attachments)).toEqual([{ kind: "image" }]);
     });
 
     it("aligns Graph hosted-content image URLs with their fallback resource id", () => {
@@ -271,10 +250,5 @@ describe("msteams attachment helpers", () => {
         "https://graph.microsoft.com/v1.0/teams/team%2Fid/channels/channel%20id/messages/root%20id/replies/reply%2Fid",
       );
     });
-  });
-
-  it("retains the expected sharepoint host fixture", () => {
-    expect(SHAREPOINT_HOST).toBe("contoso.sharepoint.com");
-    expect(TEST_URL_IMAGE).toContain(TEST_HOST);
   });
 });

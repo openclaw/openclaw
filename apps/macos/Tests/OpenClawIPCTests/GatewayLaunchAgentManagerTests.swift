@@ -38,10 +38,9 @@ struct GatewayLaunchAgentManagerTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let executable = root.appendingPathComponent("node_modules/.bin/openclaw")
         try makeExecutableForTests(at: executable)
-        let command = await CommandResolver.openclawCommand(
+        let command = await CommandResolver.localOpenclawCommand(
             subcommand: "gateway",
             extraArgs: ["status", "--json"],
-            configRoot: ["gateway": ["mode": "local"]],
             projectRoot: root,
             profile: AppProfile(environment: ["OPENCLAW_PROFILE": "work"]))
 
@@ -189,11 +188,9 @@ struct GatewayLaunchAgentManagerTests {
             let error = GatewayLaunchAgentManager.applyAttachOnlyRuntimeOverride()
             let installError = await GatewayLaunchAgentManager.set(
                 enabled: true,
-                bundlePath: "/Applications/OpenClaw.app",
                 port: 18789)
             let uninstallError = await GatewayLaunchAgentManager.set(
                 enabled: false,
-                bundlePath: "/Applications/OpenClaw.app",
                 port: 18789)
             let kickstartError = await GatewayLaunchAgentManager.kickstart()
 
@@ -221,6 +218,44 @@ struct GatewayLaunchAgentManagerTests {
             let error = await GatewayLaunchAgentManager.kickstart()
 
             #expect(error == "Gateway daemon commands require explicit interception during tests")
+        }
+    }
+
+    @Test func `intercepted requests reserve responses before completion hooks`() async {
+        await TestIsolation.withIsolatedState {
+            let firstStarted = AsyncTestGate()
+            let finishFirst = AsyncTestGate()
+            defer {
+                finishFirst.open()
+                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
+                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
+                GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+            }
+            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+            GatewayLaunchAgentManager.setTestingDaemonStatusPayloads([
+                #"{"ok":false,"error":"first response"}"#,
+                #"{"ok":false,"error":"second response"}"#,
+            ])
+            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true) { arguments in
+                if arguments.last == "first" {
+                    firstStarted.open()
+                    await finishFirst.wait()
+                }
+            }
+            let first = Task {
+                await GatewayLaunchAgentManager.runDaemonCommand(["status", "first"])
+            }
+            await firstStarted.wait()
+            let admitted = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+            let second = await GatewayLaunchAgentManager.runDaemonCommand(["status", "second"])
+            finishFirst.open()
+
+            #expect(await first.value == "first response")
+            #expect(second == "second response")
+            #expect(admitted == [["status", "first"]])
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot() == [
+                ["status", "first"], ["status", "second"],
+            ])
         }
     }
 
@@ -261,6 +296,49 @@ struct GatewayLaunchAgentManagerTests {
             GatewayLaunchAgentManager.setTestingDaemonStatusPayload(payload)
 
             #expect(await GatewayLaunchAgentManager.kickstart() == expected)
+        }
+    }
+
+    @Test(arguments: ["load-state", "runtime"])
+    func `unknown service inspection preserves structured diagnostics`(_ scenario: String) async {
+        await TestIsolation.withIsolatedState {
+            defer {
+                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
+                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
+                GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+            }
+
+            let expected = switch scenario {
+            case "load-state": "launchctl inspection failed; run openclaw gateway status --deep"
+            default: "launchd runtime inspection failed; retry from a GUI login"
+            }
+            let payload = switch scenario {
+            case "load-state":
+                """
+                {"ok":true,"service":{"loaded":null,
+                "loadState":{"status":"unknown","detail":"\(expected)"},
+                "runtime":{"status":"unknown","detail":"Runtime status is unavailable."}}}
+                """
+            default:
+                """
+                {"ok":true,"service":{"loaded":true,
+                "loadState":{"status":"loaded"},
+                "runtime":{"status":"unknown","detail":"\(expected)"}}}
+                """
+            }
+            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
+            GatewayLaunchAgentManager.setTestingDaemonStatusPayload(payload)
+            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+
+            do {
+                _ = try await GatewayLaunchAgentManager.loadedGatewayState(port: 18789)
+                Issue.record("Expected the service inspection diagnostic")
+            } catch {
+                #expect(error.localizedDescription == expected)
+            }
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot() == [
+                ["status", "--json", "--no-probe"],
+            ])
         }
     }
 
@@ -364,5 +442,52 @@ struct GatewayLaunchAgentManagerTests {
         let snapshot = try #require(LaunchAgentPlist.snapshot(url: url))
         #expect(snapshot.port == 18789)
         #expect(snapshot.bind == nil)
+    }
+
+    @Test(arguments: [
+        ["/fixture/managed/openclaw"],
+        ["/fixture/node", "/fixture/openclaw.mjs"],
+        ["/fixture/app runtime/bun", "/fixture/openclaw.mjs"],
+        ["bun", "/fixture/openclaw.mjs"],
+    ])
+    func `all daemon actions resolve locally before the execution intercept`(
+        cliPrefix: [String]) async
+    {
+        await TestIsolation.withIsolatedState(env: ["OPENCLAW_CONFIG_PATH": TestIsolation.tempConfigPath()]) {
+            let marker = FileManager.default.temporaryDirectory
+                .appendingPathComponent("openclaw-no-disable-marker-\(UUID().uuidString)")
+            GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(marker)
+            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(
+                true, resolveCLI: { _, _ in .executable(cliPrefix) })
+            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+            GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
+            defer {
+                GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil)
+                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
+                GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
+            }
+            let actions = [
+                ["install", "--force", "--port", "51845", "--allow-unconfigured"],
+                ["uninstall"],
+                ["restart"],
+                ["status", "--json", "--no-probe"],
+            ]
+            let installError = await GatewayLaunchAgentManager.set(
+                enabled: true,
+                port: 51845,
+                allowUnconfigured: true)
+            #expect(installError == nil)
+            for action in actions.dropFirst() {
+                let error = await GatewayLaunchAgentManager.runDaemonCommand(action)
+                #expect(error == nil)
+            }
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot() == actions)
+            let prefix = cliPrefix + AppProfile.current.cliRootArguments + ["gateway"]
+            let expectedCommands = actions.map {
+                prefix + $0 + ($0.contains("--json") ? [] : ["--json"])
+            }
+            #expect(GatewayLaunchAgentManager.testingResolvedDaemonCommandsSnapshot() == expectedCommands)
+        }
     }
 }

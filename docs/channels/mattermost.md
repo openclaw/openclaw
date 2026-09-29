@@ -30,7 +30,7 @@ Details: [Plugins](/tools/plugin)
 
 <Steps>
   <Step title="Ensure plugin is available">
-    Install `@openclaw/mattermost` with the command above, then restart the Gateway if it is already running.
+    Install `@openclaw/mattermost` with the command above. Check the [application result](/plugins/manage-plugins#apply-changes-and-inspect) before continuing.
   </Step>
   <Step title="Create a Mattermost bot">
     Create a Mattermost bot account, copy the **bot token**, and add the bot to the teams and channels it should read.
@@ -171,6 +171,19 @@ Notes:
 - After the bot sends a visible reply in a channel thread, later messages in that same thread are answered without a new @mention or `onchar` prefix, so multi-turn thread conversations keep flowing. Participation is remembered for 7 days after the bot last replied in that thread and persists across gateway restarts. Threads the bot has only observed are unaffected; start a new top-level message to require an explicit mention again.
 - Set `channels.mattermost.implicitMentions.threadParticipation: false` to stop participated-thread follow-ups from bypassing mention gating. Account overrides use `channels.mattermost.accounts.<id>.implicitMentions`. Mattermost does not produce `replyToBot` or `quotedBot` facts, so those flags have no effect here.
 
+Set `channels.mattermost.requireMentionInBotThreads: false` to accept follow-ups
+without an @mention or `onchar` prefix in threads whose root post was sent by the
+receiving bot. Set it to `true` to require explicit activation there even after
+the bot has participated. Omitting it preserves the behavior above.
+
+Account settings override the channel-wide value. For an individual channel,
+`groups.<channelId>.requireMentionInBotThreads` overrides
+`groups["*"].requireMentionInBotThreads`, then the account value. OpenClaw verifies
+the root post's author and channel through Mattermost; unavailable or deleted
+roots keep the existing mention behavior. Sender and channel restrictions still
+apply, and top-level messages and threads rooted in someone else's post are
+unchanged.
+
 ## Threading and sessions
 
 Use `channels.mattermost.replyToMode` to control whether channel and group replies stay in the main channel or start a thread under the triggering post.
@@ -203,6 +216,7 @@ Notes:
 - Thread-scoped sessions use the triggering post id as the thread root.
 - `first` and `all` are equivalent because once Mattermost has a thread root, follow-up chunks and media continue in that same thread.
 - Per-chat-type overrides take precedence over `replyToMode`. Without a `direct` override, existing deployments keep flat, non-threaded DMs.
+- After a restart or session reset, thread-scoped conversations recover recent messages from Mattermost when their pending history is cold. This includes DMs with threading enabled; flat DMs are unchanged. Recovery respects sender access and context visibility, excludes the triggering message, and is bounded by `historyLimit`, a 200-post server window, and a five-second deadline. A temporary server failure does not block the new message indefinitely.
 
 ## Access control (DMs)
 
@@ -346,6 +360,7 @@ openclaw message read --channel mattermost --target channel:<channelId> --limit 
 - Direct operator calls rely on Mattermost's channel membership and `read_channel` permission. A provider 403 remains a normal, visible tool error.
 - Delegated reads of the current Mattermost conversation are allowed for the current account. Cross-channel delegated reads additionally require the destination channel ID under `channels.mattermost.groups`, a `"*"` groups entry, or `groupPolicy: "open"`. Cross-account and cross-channel DM reads fail closed.
 - History reads are disabled by default. Set `channels.mattermost.actions.messages: true` to enable them. Override the setting per account with `channels.mattermost.accounts.<id>.actions.messages`.
+- These access rules apply to both the bundled plugin and the official plugin installed through npm or ClawHub. Delegated reads require the calling run and plugin registration to remain active.
 
 ## Reactions (message tool)
 
@@ -372,6 +387,14 @@ Config:
 Send messages with clickable buttons. When a user clicks a button, the agent receives the selection and can respond.
 
 Buttons come from the semantic `presentation` payload (in normal agent replies and in `message action=send`). OpenClaw renders value buttons as Mattermost interactive buttons, keeps URL buttons visible in the message text, and downgrades select menus to readable text.
+
+The options an `ask_user` question offers are also rendered as buttons, and tapping one answers
+that question directly. The question stays answerable by typing, and an option the Gateway does
+not index stays in the prose instead: the "Other…" choice, and any prompt that asks more than one
+question or whose question is multi-select, secret, or does not offer two to four distinct options.
+Every other typed presentation action (`command`, `callback`, `approval`) stays readable text on
+Mattermost rather than becoming a button: a click here reaches the agent as a message rather than
+running the action, so a control would do something other than what it says.
 
 ```text
 message action=send channel=mattermost target=channel:<channelId> presentation={"blocks":[{"type":"buttons","buttons":[{"label":"Yes","value":"yes"},{"label":"No","value":"no"}]}]}
@@ -579,6 +602,7 @@ Account values override top-level fields; `channels.mattermost.defaultAccount` p
       - the callback is hitting the wrong gateway/account
       - Mattermost still has old commands pointing at a previous callback target
       - the gateway restarted without reactivating slash commands
+    - HTTP 429 under load: callbacks using an outgoing OAuth connection or a proxy that strips the `Authorization` header carry the command token only in the body. They share the bounded anonymous request pool and can be throttled when it is saturated. Preserve Mattermost's original `Authorization: Token` header through proxies so recognized command credentials receive separate capacity.
     - If native slash commands stop working, check logs for `mattermost: failed to register slash commands` or `mattermost: native slash commands enabled but no commands could be registered`.
     - If `callbackUrl` is omitted and logs warn that the callback resolved to a loopback URL like `http://localhost:18789/...`, that URL is probably only reachable when Mattermost runs on the same host/network namespace as OpenClaw. Set an explicit externally reachable `commands.callbackUrl` instead.
 

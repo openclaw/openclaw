@@ -73,8 +73,14 @@ export async function waitForMcpFixtureGate(filePath: string): Promise<void> {
     }
   }
   await new Promise<void>((resolve, reject) => {
+    let settled = false;
     const finish = (error?: Error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
       clearTimeout(timeout);
+      clearInterval(poll);
       watcher.close();
       if (error) {
         reject(error);
@@ -99,10 +105,13 @@ export async function waitForMcpFixtureGate(filePath: string): Promise<void> {
     });
     // watch() can throw synchronously; only a constructed watcher owns a deadline.
     const timeout = setTimeout(() => {
-      watcher.close();
-      reject(new Error(`timed out waiting for fixture gate: ${path.basename(filePath)}`));
+      finish(new Error(`timed out waiting for fixture gate: ${path.basename(filePath)}`));
     }, WAIT_TIMEOUT_MS);
     timeout.unref();
+    // oxlint-disable-next-line no-warning-comments -- remove after the upstream Bun fs.watch fix ships.
+    // TODO(bun): remove polling when Bun's fs.watch reliably reports file creation.
+    const poll = setInterval(inspect, 50);
+    poll.unref();
     watcher.once("error", finish);
     inspect();
   });

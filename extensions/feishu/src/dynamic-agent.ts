@@ -1,4 +1,3 @@
-// Feishu plugin module implements dynamic agent behavior.
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -9,15 +8,13 @@ import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
 import { resolveFeishuAccount } from "./accounts.js";
 import type { DynamicAgentCreationConfig } from "./types.js";
 
-type MaybeCreateDynamicAgentResult = {
-  created: boolean;
-  updatedCfg: OpenClawConfig;
-  agentId?: string;
-};
-
 type DynamicAgentMutationResult = {
   created: boolean;
   agentId?: string;
+};
+
+type MaybeCreateDynamicAgentResult = DynamicAgentMutationResult & {
+  updatedCfg: OpenClawConfig;
 };
 
 class DynamicAgentMutationSkipped extends Error {
@@ -45,9 +42,7 @@ function resolveDynamicAgentConfig(
   cfg: OpenClawConfig,
   accountId: string,
 ): DynamicAgentCreationConfig | undefined {
-  return resolveFeishuAccount({ cfg, accountId }).config.dynamicAgentCreation as
-    | DynamicAgentCreationConfig
-    | undefined;
+  return resolveFeishuAccount({ cfg, accountId }).config.dynamicAgentCreation;
 }
 
 function isAtDynamicAgentLimit(
@@ -208,9 +203,6 @@ export async function maybeCreateDynamicAgent(params: {
   };
 }
 
-/**
- * Resolve a path that may start with ~ to the user's home directory.
- */
 function resolveUserPath(p: string): string {
   if (p.startsWith("~/")) {
     return path.join(os.homedir(), p.slice(2));

@@ -11,7 +11,6 @@ import {
   buildPreparedModelCatalogSnapshot,
   findModelCatalogEntry,
   loadManifestModelCatalog,
-  modelSupportsDocument,
   modelSupportsVision,
 } from "./model-catalog.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
@@ -100,6 +99,46 @@ describe("prepared model catalog builder", () => {
     mocks.augmentModelCatalogWithProviderPlugins.mockReset();
     mocks.augmentModelCatalogWithProviderPlugins.mockResolvedValue([]);
   });
+
+  it.each(
+    (["static", "refreshable", "runtime"] as const).flatMap((discovery) =>
+      [false, true].map((warmCache) => ({ discovery, warmCache })),
+    ),
+  )(
+    "keeps replace publication closed to $discovery inventory (warm cache=$warmCache)",
+    async ({ discovery, warmCache }) => {
+      mocks.augmentModelCatalogWithProviderPlugins.mockResolvedValue([
+        { provider: "manifest-provider", id: "augmented-only", name: "Augmented" },
+      ]);
+      const config: OpenClawConfig = { models: { catalogRefresh: { enabled: false } } };
+      const manifest = providerManifestSnapshot({
+        provider: "manifest-provider",
+        discovery,
+        modelIds: ["manifest-only"],
+      });
+      if (warmCache) {
+        expect(loadManifestModelCatalog({ config, metadataSnapshot: manifest })).toHaveLength(1);
+      }
+      config.models = { ...config.models, mode: "replace", providers: {} };
+      expect(
+        loadManifestModelCatalog({
+          config,
+          get metadataSnapshot(): never {
+            throw new Error("replace must not resolve manifest metadata");
+          },
+        }),
+      ).toEqual([]);
+      const snapshot = await build({
+        config,
+        metadataSnapshot: manifest,
+        readOnly: false,
+        includeProviderPluginAugmentation: true,
+      });
+      expect(snapshot.entries).toEqual([]);
+      expect(snapshot.routeVariants).toEqual([]);
+      expect(mocks.augmentModelCatalogWithProviderPlugins).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(["ready", "unavailable", "auth-rejected"] as const)(
     "preserves %s provider membership without replenishing it from metadata",
@@ -229,29 +268,6 @@ describe("prepared model catalog builder", () => {
     expect(snapshot.entries.every((entry) => entry.providerOrder === undefined)).toBe(true);
   });
 
-  it("keeps account-denied runtime models out of the prepared catalog", async () => {
-    const config: OpenClawConfig = { plugins: { enabled: false } };
-    const runtimeManifest = providerManifestSnapshot({
-      provider: "openai",
-      discovery: "runtime",
-      modelIds: ["gpt-5.5", "gpt-5.6"],
-    });
-
-    const declaredManifestModels = loadManifestModelCatalog({
-      config,
-      metadataSnapshot: runtimeManifest,
-    });
-    expect(declaredManifestModels.map((entry) => entry.id)).toEqual(["gpt-5.5", "gpt-5.6"]);
-
-    const snapshot = await build({ config, metadataSnapshot: runtimeManifest });
-
-    expect(snapshot.entries).toEqual([]);
-    expect(snapshot.routeVariants).toEqual([]);
-    expect(loadManifestModelCatalog({ config, metadataSnapshot: runtimeManifest })).toBe(
-      declaredManifestModels,
-    );
-  });
-
   it("carries manifest capability metadata into the prepared catalog", async () => {
     const plugin = createPluginManifestRecordFixture({
       id: "anthropic",
@@ -297,56 +313,104 @@ describe("prepared model catalog builder", () => {
     });
   });
 
-  it("drops a base context-window default when an overlay replaces the options list", async () => {
-    const plugin = createPluginManifestRecordFixture({
-      id: "anthropic",
-      origin: "bundled",
-      providers: ["anthropic"],
-      modelCatalog: {
-        providers: {
-          anthropic: {
-            models: [
-              {
-                id: "claude-fable-5",
-                contextWindow: 1_000_000,
-                contextWindows: [
-                  { id: "200k", label: "200K", contextWindow: 200_000 },
-                  { id: "1m", label: "1M", contextWindow: 1_000_000 },
-                ],
-                contextWindowDefault: "1m",
-              },
-            ],
+  it.each([false, true])(
+    "drops stale context choices after discovery (configured: %s)",
+    async (configured) => {
+      const plugin = createPluginManifestRecordFixture({
+        id: "anthropic",
+        origin: "bundled",
+        providers: ["anthropic"],
+        modelCatalog: {
+          providers: {
+            anthropic: {
+              models: [
+                {
+                  id: "claude-fable-5",
+                  contextWindow: 1_000_000,
+                  contextWindows: [
+                    { id: "200k", label: "200K", contextWindow: 200_000 },
+                    { id: "1m", label: "1M", contextWindow: 1_000_000 },
+                  ],
+                  contextWindowDefault: "1m",
+                },
+              ],
+            },
           },
+          discovery: { anthropic: "refreshable" },
         },
-        discovery: { anthropic: "refreshable" },
-      },
-    });
-    // Live provider discovery overlays the manifest row but replaces the
-    // options list without restating a default.
-    mocks.augmentModelCatalogWithProviderPlugins.mockResolvedValueOnce([
-      {
-        id: "claude-fable-5",
-        name: "Claude Fable 5",
-        provider: "anthropic",
-        contextWindow: 200_000,
-        contextWindows: [{ id: "200k", label: "200K", contextWindow: 200_000 }],
-      },
-    ]);
-    const snapshot = await build({
-      metadataSnapshot: createPluginMetadataSnapshotFixture({ plugins: [plugin] }),
-      entries: [{ id: "claude-fable-5", name: "Claude Fable 5", provider: "anthropic" }],
-      readOnly: false,
-    });
+      });
+      // Live provider discovery overlays the manifest row but replaces the
+      // options list without restating a default.
+      mocks.augmentModelCatalogWithProviderPlugins.mockResolvedValueOnce([
+        {
+          id: "claude-fable-5",
+          name: "Claude Fable 5",
+          provider: "anthropic",
+          api: "anthropic-messages",
+          baseUrl: "https://api.anthropic.com",
+          contextWindow: 200_000,
+          contextWindows: [{ id: "200k", label: "200K", contextWindow: 200_000 }],
+        },
+      ]);
+      const snapshot = await build({
+        config: configured
+          ? {
+              plugins: { enabled: false },
+              models: {
+                providers: {
+                  anthropic: {
+                    api: "anthropic-messages",
+                    baseUrl: "https://api.anthropic.com",
+                    models: [
+                      {
+                        id: "claude-fable-5",
+                        name: "Claude Fable 5",
+                        reasoning: true,
+                        input: ["text"],
+                        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                        maxTokens: 8192,
+                      },
+                    ],
+                  },
+                },
+              },
+            }
+          : undefined,
+        metadataSnapshot: createPluginMetadataSnapshotFixture({ plugins: [plugin] }),
+        entries: [
+          {
+            id: "claude-fable-5",
+            name: "Claude Fable 5",
+            provider: "anthropic",
+            api: "anthropic-messages",
+            baseUrl: "https://api.anthropic.com",
+            contextWindows: [
+              { id: "200k", label: "200K", contextWindow: 200_000 },
+              { id: "1m", label: "1M", contextWindow: 1_000_000 },
+            ],
+            contextWindowDefault: "1m",
+          },
+        ],
+        readOnly: false,
+      });
 
-    const merged = findModelCatalogEntry(snapshot.entries, {
-      provider: "anthropic",
-      modelId: "claude-fable-5",
-    });
-    // Options + default are one normalized unit: the overlay owns both, so the
-    // base "1m" default absent from the replacement list must not leak through.
-    expect(merged?.contextWindows).toEqual([{ id: "200k", label: "200K", contextWindow: 200_000 }]);
-    expect(merged?.contextWindowDefault).toBeUndefined();
-  });
+      const merged = findModelCatalogEntry(snapshot.entries, {
+        provider: "anthropic",
+        modelId: "claude-fable-5",
+      });
+      // Options + default are one normalized unit: the overlay owns both, so the
+      // base "1m" default absent from the replacement list must not leak through.
+      expect(merged?.contextWindows).toEqual([
+        { id: "200k", label: "200K", contextWindow: 200_000 },
+      ]);
+      expect(merged?.contextWindowDefault).toBeUndefined();
+      const route = snapshot.routeVariants.find(
+        (entry) => entry.provider === "anthropic" && entry.api === "anthropic-messages",
+      );
+      expect(route?.contextWindows).toEqual(merged?.contextWindows);
+      expect(route?.contextWindowDefault).toBeUndefined();
+    },
+  );
 
   it("keeps an account's runtime-discovered model list authoritative", async () => {
     const snapshot = await build({
@@ -489,6 +553,37 @@ describe("prepared model catalog builder", () => {
     ]);
   });
 
+  it("uses an explicitly ready live catalog order across entries and route variants", async () => {
+    const manifestSnapshot = providerManifestSnapshot({
+      provider: "demo",
+      discovery: "runtime",
+      modelIds: ["first", "second"],
+    });
+    const entries = [
+      { provider: "demo", id: "second", name: "Second", api: "openai-responses" as const },
+      { provider: "demo", id: "first", name: "First", api: "openai-responses" as const },
+      { provider: "demo", id: "new", name: "New", api: "openai-responses" as const },
+    ];
+    const liveOrder = {
+      provider: "demo",
+      status: "ready" as const,
+      modelOrder: ["second", "new", "first", "absent"],
+    };
+    const snapshot = await build({
+      entries,
+      metadataSnapshot: manifestSnapshot,
+      providerOutcomes: [liveOrder],
+    });
+
+    expect(snapshot.entries.map(({ id }) => id)).toEqual(["second", "new", "first"]);
+    expect(snapshot.routeVariants.map(({ id }) => id)).toEqual(["second", "new", "first"]);
+    expect(snapshot.entries.map(({ providerOrder }) => providerOrder)).toEqual([0, 1, 2]);
+    expect(snapshot.entries).toHaveLength(entries.length);
+
+    const withoutOptIn = await build({ entries, metadataSnapshot: manifestSnapshot });
+    expect(withoutOptIn.entries.map(({ id }) => id)).toEqual(["first", "second", "new"]);
+  });
+
   it("keeps manifest rank for configured runtime models absent from the registry", async () => {
     mocks.augmentModelCatalogWithProviderPlugins.mockResolvedValueOnce([
       { id: "gpt-5.4", name: "GPT-5.4", provider: "openai" },
@@ -603,6 +698,7 @@ describe("prepared model catalog builder", () => {
     "keeps %s manifest models available without runtime account discovery",
     async (discovery) => {
       const snapshot = await build({
+        includeProviderPluginAugmentation: false,
         metadataSnapshot: providerManifestSnapshot({
           provider: "manifest-provider",
           discovery,
@@ -852,35 +948,6 @@ describe("prepared model catalog builder", () => {
     },
   );
 
-  it("keeps configured models absent from registry discovery", async () => {
-    const snapshot = await build({
-      config: {
-        plugins: { enabled: false },
-        models: {
-          providers: {
-            custom: {
-              baseUrl: "https://example.test/v1",
-              api: "openai-completions",
-              models: [
-                {
-                  id: "configured-only",
-                  name: "Configured Only",
-                  contextWindow: 8_192,
-                  maxTokens: 1_024,
-                  reasoning: false,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                },
-              ],
-            },
-          },
-        },
-      },
-    });
-
-    expect(snapshot.entries.map((entry) => entry.id)).toEqual(["configured-only"]);
-  });
-
   it("rejects the whole generation when catalog projection fails after a valid row", async () => {
     const projectionError = new Error("catalog projection failed");
     const brokenEntry = {
@@ -962,7 +1029,7 @@ describe("prepared model catalog builder", () => {
     );
   });
 
-  it("reports media capabilities from the prepared row", () => {
+  it("reports image capability from the prepared row", () => {
     const entry: ModelCatalogEntry = {
       id: "media",
       name: "Media",
@@ -970,6 +1037,5 @@ describe("prepared model catalog builder", () => {
       input: ["text", "image", "document"],
     };
     expect(modelSupportsVision(entry)).toBe(true);
-    expect(modelSupportsDocument(entry)).toBe(true);
   });
 });

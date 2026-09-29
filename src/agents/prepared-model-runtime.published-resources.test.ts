@@ -4,6 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { OpenClawSchema } from "../config/zod-schema.js";
 import {
   cleanupPluginLoaderFixturesForTest,
   resetPluginLoaderTestStateForTest,
@@ -17,15 +18,15 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getSessionMcpRequestSignal } from "./agent-bundle-mcp-request-context.js";
 import { runBtwSideQuestion } from "./btw.js";
-import {
-  acquirePublishedPreparedModelRuntime,
-  acquireReadOnlyPreparedModelRuntime,
-} from "./prepared-model-runtime.js";
+import { acquireReadOnlyPreparedModelRuntime } from "./prepared-model-runtime.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "./prepared-model-runtime.test-support.js";
 import type { PreparedModelRuntimeInput } from "./prepared-model-runtime.types.js";
 
 const selectedSource = vi.hoisted(() => {
-  const state: { input?: PreparedModelRuntimeInput } = {};
+  const state: {
+    input?: PreparedModelRuntimeInput;
+    acquisition?: { entered: () => void; completion: Promise<void> };
+  } = {};
   return state;
 });
 
@@ -37,13 +38,25 @@ vi.mock("./prepared-model-runtime.js", async (importOriginal) => {
     loadPreparedModelRuntimeSnapshot: (
       input: Parameters<typeof runtime.loadPreparedModelRuntimeSnapshot>[0],
     ) => runtime.loadPreparedModelRuntimeSnapshot(selectedSource.input ?? input),
-    acquirePublishedPreparedModelRuntime: (
+    acquirePublishedPreparedModelRuntime: async (
       input: Parameters<typeof runtime.acquirePublishedPreparedModelRuntime>[0],
-    ) => runtime.acquirePublishedPreparedModelRuntime(selectedSource.input ?? input),
+    ) => {
+      const lease = await runtime.acquirePublishedPreparedModelRuntime(
+        selectedSource.input ?? input,
+      );
+      selectedSource.acquisition?.entered();
+      await selectedSource.acquisition?.completion;
+      return lease;
+    },
   };
 });
 
-it.each(["published borrow", "BTW harness cleanup", "BTW parent close"] as const)(
+const publishedRuntimeResourceModes = [
+  "BTW parent close",
+  "BTW parent close during acquisition",
+] as const;
+
+it.each(publishedRuntimeResourceModes)(
   "retains an acquired SQLite source through %s and replacement",
   async (mode) => {
     await withOpenClawTestState({ label: "published-runtime-resources" }, async (state) => {
@@ -116,10 +129,12 @@ module.exports = {
       async runSideQuestion() {
         try {
           bridge.requestSignal.current = bridge.getRequestSignal();
-          bridge.requestSignal.current?.addEventListener("abort", () => {
+          const observeAbort = () => {
             bridge.abortRegistry.current = bridge.getRegistry();
             bridge.abortObserved.resolve();
-          }, { once: true });
+          };
+          bridge.requestSignal.current?.addEventListener("abort", observeAbort, { once: true });
+          if (bridge.requestSignal.current?.aborted) observeAbort();
           bridge.entered.resolve();
           await bridge.finish.promise;
           return { text: String(database.prepare("SELECT value FROM answer").get().value) };
@@ -136,10 +151,11 @@ module.exports = {
       );
       const config: OpenClawConfig = {
         agents: {
+          entries: { main: {} },
           defaults: {
             model: { primary: `${pluginId}/model` },
             workspace: state.workspaceDir,
-            agentRuntime: { id: pluginId },
+            models: { [`${pluginId}/model`]: { agentRuntime: { id: pluginId } } },
           },
         },
         models: {
@@ -168,6 +184,7 @@ module.exports = {
           entries: { [pluginId]: { enabled: true } },
         },
       };
+      expect(OpenClawSchema.safeParse(config).success).toBe(true);
       const input = {
         config,
         agentId: "main",
@@ -184,75 +201,82 @@ module.exports = {
           await resetPreparedModelRuntimeSnapshotsForTest();
           clearPluginMetadataLifecycleCaches();
           let first: Awaited<ReturnType<typeof acquireReadOnlyPreparedModelRuntime>> | undefined;
-          let borrower:
-            | Awaited<ReturnType<typeof acquirePublishedPreparedModelRuntime>>
-            | undefined;
           let replacement:
             | Awaited<ReturnType<typeof acquireReadOnlyPreparedModelRuntime>>
             | undefined;
           const owner = new AsyncWorkScope();
+          const acquisitionEntered = createDeferredCore();
+          const acquisitionFinish = createDeferredCore();
+          const cancellationReason = new Error("BTW parent closed");
           let sideQuestion: ReturnType<typeof runBtwSideQuestion> | undefined;
           try {
-            first = await acquireReadOnlyPreparedModelRuntime(input, undefined, "static");
+            first = await acquireReadOnlyPreparedModelRuntime(input, { catalogMode: "static" });
             expect(connections).toHaveLength(1);
             const original = expectDefined(connections[0], "original provider registration");
-            if (mode === "published borrow") {
-              const pending = acquirePublishedPreparedModelRuntime(input);
-              first.release();
-              borrower = await pending;
-              expect(borrower.snapshot).toBe(first.snapshot);
-            } else {
-              selectedSource.input = input;
-              sideQuestion = owner.track(() =>
-                runBtwSideQuestion({
-                  cfg: config,
-                  agentId: "main",
-                  agentDir: input.agentDir,
-                  provider: pluginId,
-                  model: "model",
-                  question: "What is the answer?",
-                  sessionEntry: {
-                    sessionId: "btw-native-fixture",
-                    updatedAt: 1,
-                    agentHarnessId: pluginId,
-                  },
-                  sessionKey: "agent:main:btw-native-fixture",
-                  isNewSession: false,
-                  resolvedThinkLevel: "off",
-                  resolvedReasoningLevel: "off",
-                }),
-              );
+            selectedSource.input = input;
+            if (mode === "BTW parent close during acquisition") {
+              selectedSource.acquisition = {
+                entered: acquisitionEntered.resolve,
+                completion: acquisitionFinish.promise,
+              };
+            }
+            sideQuestion = owner.track(() =>
+              runBtwSideQuestion({
+                cfg: config,
+                agentId: "main",
+                agentDir: input.agentDir,
+                provider: pluginId,
+                model: "model",
+                question: "What is the answer?",
+                sessionEntry: {
+                  sessionId: "btw-native-fixture",
+                  updatedAt: 1,
+                  agentHarnessId: pluginId,
+                },
+                sessionKey: "agent:main:btw-native-fixture",
+                isNewSession: false,
+                resolvedThinkLevel: "off",
+                resolvedReasoningLevel: "off",
+              }),
+            );
+            if (mode === "BTW parent close during acquisition") {
               await Promise.race([
-                bridge.entered.promise,
+                acquisitionEntered.promise,
                 sideQuestion.then(() => {
-                  throw new Error("BTW did not enter the acquired harness");
+                  throw new Error("BTW did not enter acquisition");
                 }),
               ]);
-              if (mode === "BTW parent close") {
-                const reason = new Error("BTW parent closed");
-                owner.beginClose(reason);
-                expect(bridge.requestSignal.current?.aborted).toBe(true);
-                expect(bridge.requestSignal.current?.reason).toBe(reason);
-              }
-              first.release();
+              owner.beginClose(cancellationReason);
+              expect(original.disposals).toBe(0);
+              acquisitionFinish.resolve();
             }
+            await Promise.race([
+              bridge.entered.promise,
+              sideQuestion.then(() => {
+                throw new Error("BTW did not enter the acquired harness");
+              }),
+            ]);
+            if (mode === "BTW parent close") {
+              owner.beginClose(cancellationReason);
+            }
+            expect(bridge.requestSignal.current?.aborted).toBe(true);
+            expect(bridge.requestSignal.current?.reason).toBe(cancellationReason);
+            await first[Symbol.asyncDispose]();
             expect(original.database.isOpen).toBe(true);
-            replacement = await acquireReadOnlyPreparedModelRuntime(input, undefined, "static");
+            replacement = await acquireReadOnlyPreparedModelRuntime(input, {
+              catalogMode: "static",
+            });
             expect(connections).toHaveLength(2);
             const successor = expectDefined(connections[1], "replacement provider registration");
             expect(original.database.prepare("SELECT value FROM answer").get()?.value).toBe(42);
-            if (mode !== "published borrow") {
-              bridge.finish.resolve();
-              await bridge.cleanupEntered.promise;
-              expect(original.database.isOpen).toBe(true);
-              bridge.cleanupFinish.resolve();
-              expect(await sideQuestion).toEqual({ text: "42" });
-              await bridge.abortObserved.promise;
-              expect(bridge.abortRegistry.current === first.snapshot.pluginRegistry).toBe(true);
-              await owner.drain();
-            } else {
-              borrower?.release();
-            }
+            bridge.finish.resolve();
+            await bridge.cleanupEntered.promise;
+            expect(original.database.isOpen).toBe(true);
+            bridge.cleanupFinish.resolve();
+            expect(await sideQuestion).toEqual({ text: "42" });
+            await bridge.abortObserved.promise;
+            expect(bridge.abortRegistry.current === first.snapshot.pluginRegistry).toBe(true);
+            await owner.drain();
             await expect.poll(() => original.disposals).toBe(1);
             expect(original.database.isOpen).toBe(false);
             expect(successor.database.isOpen).toBe(true);
@@ -262,16 +286,19 @@ module.exports = {
             } finally {
               reopened.close();
             }
-            replacement.release();
+            await replacement[Symbol.asyncDispose]();
             await expect.poll(() => successor.disposals).toBe(1);
           } finally {
+            acquisitionFinish.resolve();
             bridge.finish.resolve();
             bridge.cleanupFinish.resolve();
             await Promise.allSettled([sideQuestion, owner.drain()]);
             selectedSource.input = undefined;
-            first?.release();
-            borrower?.release();
-            replacement?.release();
+            selectedSource.acquisition = undefined;
+            await Promise.allSettled([
+              first?.[Symbol.asyncDispose](),
+              replacement?.[Symbol.asyncDispose](),
+            ]);
             await resetPreparedModelRuntimeSnapshotsForTest();
             clearPluginMetadataLifecycleCaches();
             resetPluginLoaderTestStateForTest();

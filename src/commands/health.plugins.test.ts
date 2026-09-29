@@ -9,6 +9,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import { createPluginRecord } from "../plugins/status.test-fixtures.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
+import { formatHealthChannelLines } from "./health-format.js";
 
 const testConfig: OpenClawConfig = { session: { store: "/tmp/x" } };
 const tempDirs = createTempDirTracker();
@@ -145,6 +146,14 @@ describe("collectGatewayHealthSnapshot plugin state", () => {
         error: "healthy override has an unrelated import error",
       },
     ]);
+    expect(formatHealthChannelLines(snap)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/^Plugin discord: failed - .*unrelated import error/u),
+        expect.stringMatching(
+          /^Plugin discord: unavailable - unreadable-package-json: .*permission denied/u,
+        ),
+      ]),
+    );
   });
 
   it("projects the recorded channel load failure instead of stale successful probes", async () => {
@@ -233,6 +242,9 @@ describe("collectGatewayHealthSnapshot plugin state", () => {
   it("surfaces a failed service while continuing healthy siblings", async () => {
     const credential = "synthetic-service-credential";
     const siblingStart = vi.fn();
+    const brokenStart = vi.fn().mockImplementationOnce(() => {
+      throw new Error(`listen EADDRINUSE: address already in use; password=${credential}`);
+    });
     const registry = {
       ...createTestRegistry([]),
       plugins: [
@@ -247,11 +259,10 @@ describe("collectGatewayHealthSnapshot plugin state", () => {
         {
           pluginId: "service-plugin",
           pluginName: "Service Plugin",
+          id: "broken",
           service: {
-            id: "broken",
-            start: () => {
-              throw new Error(`listen EADDRINUSE: address already in use; password=${credential}`);
-            },
+            id: " broken ",
+            start: brokenStart,
           },
           source: "test",
           origin: "workspace" as const,
@@ -259,6 +270,7 @@ describe("collectGatewayHealthSnapshot plugin state", () => {
         {
           pluginId: "service-plugin",
           pluginName: "Service Plugin",
+          id: "healthy-sibling",
           service: { id: "healthy-sibling", start: siblingStart },
           source: "test",
           origin: "workspace" as const,
@@ -294,6 +306,16 @@ describe("collectGatewayHealthSnapshot plugin state", () => {
       timeoutMs: 10,
       probe: false,
     });
-    expect(stopped.plugins?.errors).toEqual([]);
+    expect(stopped.plugins?.errors).toEqual(failed.plugins?.errors);
+
+    pluginServicesHandle = await startPluginServices({ registry, config: {} });
+    const recovered = await collectGatewayHealthSnapshot({
+      audience: "admin",
+      timeoutMs: 10,
+      probe: false,
+    });
+    expect(brokenStart).toHaveBeenCalledTimes(2);
+    expect(siblingStart).toHaveBeenCalledTimes(2);
+    expect(recovered.plugins?.errors).toEqual([]);
   });
 });

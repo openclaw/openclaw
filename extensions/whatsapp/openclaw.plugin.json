@@ -1,6 +1,6 @@
 {
   "id": "whatsapp",
-  "categories": ["channels", "tools"],
+  "categories": ["channels"],
   "doctorContract": {
     "configRepair": true,
     "stateMigrations": [{ "id": "whatsapp-legacy-state" }]
@@ -15,6 +15,14 @@
     "tools": ["whatsapp_call", "whatsapp_login"]
   },
   "channels": ["whatsapp"],
+  "configGroups": [
+    {
+      "id": "plugin-hooks",
+      "title": "Plugin hooks",
+      "order": 10,
+      "properties": ["pluginHooks"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

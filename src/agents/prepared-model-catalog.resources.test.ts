@@ -109,9 +109,10 @@ module.exports = {
           const failure = new Error("catalog projection failed");
           let first: Awaited<ReturnType<typeof acquireReadOnlyPreparedModelRuntime>> | undefined;
           let replacement: typeof first;
+          let firstRelease: Promise<void> | undefined;
           let projection: Promise<string[]> | undefined;
           try {
-            first = await acquireReadOnlyPreparedModelRuntime(input, undefined, "static");
+            first = await acquireReadOnlyPreparedModelRuntime(input, { catalogMode: "static" });
             expect(connections).toHaveLength(1);
             const original = expectDefined(connections[0], "original provider registration");
             selectedSource.input = input;
@@ -134,7 +135,8 @@ module.exports = {
               (error: unknown) => ({ error }),
             );
             if (releaseBeforeCallback) {
-              first.release();
+              firstRelease = first[Symbol.asyncDispose]();
+              void firstRelease.catch(() => {});
             }
             await Promise.race([
               entered.promise,
@@ -143,9 +145,12 @@ module.exports = {
               }),
             ]);
             if (!releaseBeforeCallback) {
-              first.release();
+              firstRelease = first[Symbol.asyncDispose]();
+              void firstRelease.catch(() => {});
             }
-            replacement = await acquireReadOnlyPreparedModelRuntime(input, undefined, "static");
+            replacement = await acquireReadOnlyPreparedModelRuntime(input, {
+              catalogMode: "static",
+            });
             expect(connections).toHaveLength(2);
             const successor = expectDefined(connections[1], "replacement provider registration");
             expect(original.database.isOpen).toBe(true);
@@ -153,6 +158,7 @@ module.exports = {
             expect(await result).toEqual(
               outcome === "reject" ? { error: failure } : { rows: ["42"] },
             );
+            await firstRelease;
             await expect.poll(() => original.disposals).toBe(1);
             expect(original.database.isOpen).toBe(false);
             expect(successor.database.isOpen).toBe(true);
@@ -162,14 +168,17 @@ module.exports = {
             } finally {
               reopened.close();
             }
-            replacement.release();
+            await replacement[Symbol.asyncDispose]();
             await expect.poll(() => successor.disposals).toBe(1);
           } finally {
             resume.resolve();
             await Promise.allSettled([projection]);
             selectedSource.input = undefined;
-            first?.release();
-            replacement?.release();
+            await Promise.all([
+              firstRelease,
+              first?.[Symbol.asyncDispose](),
+              replacement?.[Symbol.asyncDispose](),
+            ]);
             await resetPreparedModelRuntimeSnapshotsForTest();
             clearPluginMetadataLifecycleCaches();
             resetPluginLoaderTestStateForTest();

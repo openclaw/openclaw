@@ -60,15 +60,16 @@ describe("legacy workspace Doctor multi-agent migration", () => {
       await fsp.utimes(attestationPath, mtime, mtime);
       sources.push(attestationPath);
     }
-    const db = openOpenClawStateDatabase({ env: context.env }).db;
-    expect(db.prepare("SELECT COUNT(*) AS count FROM workspace_setup_state").get()).toEqual({
+    const beforeDb = openOpenClawStateDatabase({ env: context.env }).db;
+    expect(beforeDb.prepare("SELECT COUNT(*) AS count FROM workspace_setup_state").get()).toEqual({
       count: 0,
     });
-    expect(db.prepare("SELECT COUNT(*) AS count FROM migration_sources").get()).toEqual({
+    expect(beforeDb.prepare("SELECT COUNT(*) AS count FROM migration_sources").get()).toEqual({
       count: 0,
     });
 
     const result = await migrate({ ...context, cfg });
+    const db = openOpenClawStateDatabase({ env: context.env }).db;
 
     expect(result.warnings).toEqual([]);
     expect(result.changes).toHaveLength(sources.length);
@@ -101,7 +102,7 @@ describe("legacy workspace Doctor multi-agent migration", () => {
           )
           .get(identity.workspaceKey),
       ).toEqual({ filename: "AGENTS.md", sha256: HASH });
-      expect(readWorkspaceStateSnapshot(workspace)).toMatchObject({
+      expect(await readWorkspaceStateSnapshot(workspace)).toMatchObject({
         identity,
         setup: { bootstrapSeededAt: seededAt, setupCompletedAt: completedAt },
         attestation: { attestedAtMs: mtime.getTime() },

@@ -29,7 +29,7 @@ describe("AppSidebar session catalog pagination", () => {
     expect(live.ownsRequest(second.requestOwner)).toBe(true);
   });
 
-  it("keeps the stable cadence when only session recency timestamps change", async () => {
+  it("keeps the safety cadence when only session recency timestamps change", async () => {
     vi.useFakeTimers();
     try {
       const pageAt = (timestamp: number): SessionsCatalogListResult => {
@@ -47,7 +47,7 @@ describe("AppSidebar session catalog pagination", () => {
       const client = {
         request: vi.fn().mockResolvedValue(pageAt(2)),
       } as unknown as GatewayBrowserClient;
-      const refresh = vi.fn();
+      const refresh = vi.fn().mockResolvedValue(undefined);
 
       await refreshSessionCatalogsLive({
         live: new SessionCatalogLiveState(),
@@ -61,18 +61,20 @@ describe("AppSidebar session catalog pagination", () => {
         catalogs: () => catalogs,
         pageDepths: new Map(),
         connected: () => true,
+        catalogChangedEvents: true,
         applyFinal: (next) => {
           catalogs = next;
         },
+        continueRefresh: async () => {},
         applyError: (error) => {
           throw error;
         },
         refresh,
       });
 
-      await vi.advanceTimersByTimeAsync(5_000);
+      await vi.advanceTimersByTimeAsync(10 * 60_000 - 1);
       expect(refresh).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(25_000);
+      await vi.advanceTimersByTimeAsync(1);
       expect(refresh).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();

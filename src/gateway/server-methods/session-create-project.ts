@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import { err, ok, type Result } from "@openclaw/normalization-core/result";
+import { ok, type Result } from "@openclaw/normalization-core/result";
 import {
   ErrorCodes,
   errorShape,
@@ -13,18 +13,18 @@ import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { materializeProjectClone, refreshProjectClone } from "../../projects/project-clone.js";
 import { parseProjectGitUrl } from "../../projects/project-git-url.js";
 import { resolveProjectDirectory } from "../../projects/project-registry.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
-import { githubApiToken } from "../control-ui-github-api.js";
-import {
-  generateWorktreeSessionTitle,
-  hasExplicitSessionName,
-  resolveExplicitSessionName,
-} from "../dashboard-session-title.js";
+import { generateWorktreeSessionTitle } from "../dashboard-session-title.js";
+import { githubApiToken } from "../github-public-api.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import type {
   PrepareGatewaySessionLifecycle,
   PreparedGatewaySessionLifecycle,
-} from "../session-lifecycle-preparation.js";
+} from "../session-create-service.types.js";
+import { invalidSessionRequest } from "../session-request-error.js";
+import { hasExplicitSessionName, resolveExplicitSessionName } from "../session-title-state.js";
 import {
   prepareSessionWorktree,
   resolveSessionWorktreeBase,
@@ -52,11 +52,8 @@ export function resolveSessionRepositoryCreation(
   const url = normalizeSessionProjectGitUrl(params.repository.url);
   const ref = params.repository.ref?.trim();
   if (!url || (ref !== undefined && (!ref || ref.startsWith("-") || /\s|\0/u.test(ref)))) {
-    return err(
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        "Use a GitHub repository URL and a nonempty branch, tag, or commit ref.",
-      ),
+    return invalidSessionRequest(
+      "Use a GitHub repository URL and a nonempty branch, tag, or commit ref.",
     );
   }
   if (
@@ -69,19 +66,13 @@ export function resolveSessionRepositoryCreation(
     params.worktreeName ||
     params.catalogId
   ) {
-    return err(
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        "sessions.create repository cannot be combined with local workspace or catalog options.",
-      ),
+    return invalidSessionRequest(
+      "sessions.create repository cannot be combined with local workspace or catalog options.",
     );
   }
   if (hasInitialTurn) {
-    return err(
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        "Create the repository session without an initial turn, dispatch it with sessions.dispatch, then send the message with sessions.send.",
-      ),
+    return invalidSessionRequest(
+      "Create the repository session without an initial turn, dispatch it with sessions.dispatch, then send the message with sessions.send.",
     );
   }
   return ok({ url, ...(ref ? { ref } : {}) });
@@ -94,47 +85,53 @@ export function prepareSessionRepositoryWorkspace(
   const { assertCurrent } = options;
   return async (target) => {
     const store = getSessionRepositoryWorkspaceStore();
-    const existing = store.find({ agentId: target.agentId, sessionKey: target.key });
+    const source = captureOpenClawStateWorkerContext({ path: store.path });
+    const assertSourceCurrent = () => {
+      source.admission.assertCurrent();
+      assertCurrent();
+    };
+    const existing = await store.find({ agentId: target.agentId, sessionKey: target.key });
     if (
       target.entry &&
       (!target.entry.repositoryWorkspaceId ||
         target.entry.repositoryWorkspaceId !== existing?.workspaceId)
     ) {
-      return err(
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "repository source requires a new repository session",
-        ),
-      );
+      return invalidSessionRequest("repository source requires a new repository session");
     }
     if (
       existing &&
       (existing.url !== repository.url || existing.requestedRef !== (repository.ref ?? null))
     ) {
-      return err(
-        errorShape(ErrorCodes.INVALID_REQUEST, "session repository source cannot be changed"),
-      );
+      return invalidSessionRequest("session repository source cannot be changed");
     }
-    assertCurrent();
-    const workspace = store.create({
+    assertSourceCurrent();
+    const workspace = await store.create({
       agentId: target.agentId,
       sessionKey: target.key,
       url: repository.url,
       requestedRef: repository.ref,
       runSetupScript: options.runSetupScript,
-      assertCurrent,
+      assertCurrent: assertSourceCurrent,
     });
+    const withCommit: NonNullable<PreparedGatewaySessionLifecycle["withCommit"]> = (run) =>
+      runOpenClawStateWorkerOperation(source, () => run(assertSourceCurrent), {
+        assertCurrent: assertSourceCurrent,
+      });
     return ok({
       repositoryWorkspaceId: workspace.workspaceId,
+      withCommit,
       ...(!existing
         ? {
             rollback: async () => {
               // Creation still holds the session lifecycle lock. Cleanup owns only the
               // untouched row it allocated, even when the initiating caller has gone away.
+              source.admission.assertCurrent();
+              const prepared = await store.prepare(workspace.workspaceId);
               await store.delete({
                 workspaceId: workspace.workspaceId,
                 assertCurrent: () => {
-                  const current = store.get(workspace.workspaceId);
+                  source.admission.assertCurrent();
+                  const current = prepared.current();
                   if (
                     current &&
                     (current.agentId !== target.agentId ||
@@ -284,8 +281,10 @@ export async function prepareSessionWorkspace(params: {
     }
     const root = prepareSessionCreateFilesystemRoot({
       cfg,
-      enforceSandboxContainment: Boolean(project),
-      requestedProjectId: project?.id,
+      // Direct bindings still require containment. Pending managed checkouts use
+      // the saved child requirement and source custody in the preparation owner.
+      enforceSandboxContainment: !pending && Boolean(project || saved.projectId),
+      requestedProjectId: project?.id ?? saved.projectId,
       sessionCwd: directory,
       sessionKey,
       targetAgentId: agentId,
@@ -362,16 +361,24 @@ export async function prepareSessionWorkspace(params: {
       }
       // Retries inherit workspace intent, not a previous caller's setup authority.
       const result = await prepareSessionWorktree({
-        target: { ...target, key: sessionKey, entry: saved },
+        cfg,
+        target: {
+          ...target,
+          key: sessionKey,
+          entry: saved,
+          projectId: project?.id ?? saved.projectId,
+          sandboxRequired: saved.sandbox === "required",
+        },
         workspace: directory,
         name: pending.name,
         baseRef: pending.baseRef,
         checkoutCommit: pending.baseCommit,
-        label: title ?? resolveExplicitSessionName(saved) ?? pending.titleSource,
+        label: title ?? resolveExplicitSessionName(saved),
         runSetupScript: client?.connect?.scopes?.includes(ADMIN_SCOPE) === true,
         signal,
         commitGuard: assertRunOwnership,
         onProgress: (stage) => status(stage === "setup" ? "running_setup" : "creating_worktree"),
+        acceptedSource: pending.source,
       });
       if (!result.ok) {
         throw new Error(result.error.message);
@@ -380,25 +387,31 @@ export async function prepareSessionWorkspace(params: {
     }
     let bound;
     try {
-      bound = await patchSessionEntryCore(
-        target,
-        (current) => {
-          assertSavedWorkspaceIntent(current);
-          return {
-            ...(project ? { projectId: project.id } : {}),
-            sessionRoot: prepared.sessionRoot,
-            spawnedCwd: prepared.spawnedCwd,
-            ...(prepared.worktree ? { worktree: prepared.worktree } : {}),
-            pendingProjectGitUrl: undefined,
-            pendingWorktree: undefined,
-          };
-        },
-        {
-          assertCommitAllowed: assertRunOwnership,
-          requireWriteSuccess: true,
-          skipMaintenance: true,
-        },
-      );
+      const bind = async (assertSourceCurrent: () => void) =>
+        await patchSessionEntryCore(
+          target,
+          (current) => {
+            assertSourceCurrent();
+            assertSavedWorkspaceIntent(current);
+            return {
+              ...(project ? { projectId: project.id } : {}),
+              sessionRoot: prepared.sessionRoot,
+              spawnedCwd: prepared.spawnedCwd,
+              ...(prepared.worktree ? { worktree: prepared.worktree } : {}),
+              pendingProjectGitUrl: undefined,
+              pendingWorktree: undefined,
+            };
+          },
+          {
+            assertCommitAllowed: () => {
+              assertRunOwnership();
+              assertSourceCurrent();
+            },
+            requireWriteSuccess: true,
+            skipMaintenance: true,
+          },
+        );
+      bound = prepared.withCommit ? await prepared.withCommit(bind) : await bind(() => {});
       if (!bound) {
         throw new Error("Session disappeared while preparing its workspace; start a new session.");
       }

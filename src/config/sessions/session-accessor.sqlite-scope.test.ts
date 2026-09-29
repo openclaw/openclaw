@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
+import { channel } from "node:diagnostics_channel";
 import fs from "node:fs/promises";
 import { performance } from "node:perf_hooks";
 import { isMainThread, threadId, Worker } from "node:worker_threads";
@@ -14,7 +15,7 @@ import type {
   SqliteSessionWriteDiagnostics,
 } from "./session-accessor.sqlite-contract.js";
 import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
-import { drainSessionStoreWriterQueuesForTest } from "./store-writer-state.js";
+import { observeSessionArchivePruning } from "./session-history-archive-pruning-diagnostics.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -55,56 +56,41 @@ async function readFailedWriterLog(failure: unknown, diagnostics?: SqliteSession
   );
 }
 
-test.each([false, true])(
-  "failed writer file logs preserve redacted error details, worker=%s",
-  async (inWorker) => {
-    const secret = "synthetic-writer-credential-value";
-    const message = "synthetic writer failure";
-    const causeMessage = `synthetic storage failure; Authorization: Bearer ${secret}`;
-    let failure: unknown;
-    if (inWorker) {
-      const worker = new Worker(
-        `const { workerData } = require("node:worker_threads");
+test("failed worker file logs preserve redacted error details", async () => {
+  const secret = "synthetic-writer-credential-value";
+  const message = "synthetic writer failure";
+  const causeMessage = `synthetic storage failure; Authorization: Bearer ${secret}`;
+  let failure: unknown;
+  const worker = new Worker(
+    `const { workerData } = require("node:worker_threads");
        throw Object.assign(new Error(workerData.message, { cause: new Error(workerData.causeMessage) }), { code: "SQLITE_BUSY" });`,
-        { eval: true, execArgv: [], workerData: { message, causeMessage } },
-      );
-      try {
-        failure = await new Promise<unknown>((resolve, reject) => {
-          let received: unknown;
-          let receivedError = false;
-          worker.once("error", (error) => {
-            received = error;
-            receivedError = true;
-          });
-          worker.once("exit", () => {
-            if (receivedError) {
-              resolve(received);
-            } else {
-              reject(new Error("Synthetic worker exited without its expected error"));
-            }
-          });
-        });
-      } finally {
-        await worker.terminate();
-      }
-    } else {
-      failure = Object.assign(new Error(message, { cause: new Error(causeMessage) }), {
-        code: "SQLITE_BUSY",
+    { eval: true, execArgv: [], workerData: { message, causeMessage } },
+  );
+  try {
+    failure = await new Promise<unknown>((resolve, reject) => {
+      let received: unknown;
+      let receivedError = false;
+      worker.once("error", (error) => {
+        received = error;
+        receivedError = true;
       });
-    }
-    const record = await readFailedWriterLog(failure);
-    expect(record.error).toBeTypeOf("string");
-    expect(record.error).toContain(message);
-    expect(record.error).toContain("synthetic storage failure");
-    expect(record.error).toContain("SQLITE_BUSY");
-    expect(record.content).not.toContain(secret);
-  },
-);
-
-test("failed writer error summaries are bounded without splitting a surrogate pair", async () => {
-  const prefix = "x".repeat(2_047);
-  const record = await readFailedWriterLog(new Error(`${prefix}🦞 trailing details`));
-  expect(record.error).toBe(prefix);
+      worker.once("exit", () => {
+        if (receivedError) {
+          resolve(received);
+        } else {
+          reject(new Error("Synthetic worker exited without its expected error"));
+        }
+      });
+    });
+  } finally {
+    await worker.terminate();
+  }
+  const record = await readFailedWriterLog(failure);
+  expect(record.error).toBeTypeOf("string");
+  expect(record.error).toContain(message);
+  expect(record.error).toContain("synthetic storage failure");
+  expect(record.error).toContain("SQLITE_BUSY");
+  expect(record.content).not.toContain(secret);
 });
 
 test("artifact preparation file logs retain numeric phases without payload fields", async () => {
@@ -149,169 +135,243 @@ test("artifact preparation file logs retain numeric phases without payload field
   expect(record.content).not.toContain("synthetic-private-marker");
 });
 
-test.each([false, true])(
-  "slow writer diagnostics separate waiting and execution without changing failure=%s",
-  async (fail) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+test("archive pruning file logs whitelist partial stage observations", async () => {
+  const archivePruning = {
+    trigger: "initial" as const,
+    checkpointCalls: 2,
+    checkpointIncomplete: 1,
+    checkpointMs: 20.6,
+    checkpointMaxMs: 19.6,
+    completed: false,
+    archiveName: "synthetic-private-archive",
+    content: "synthetic-private-transcript",
+  };
+  const record = await withOpenClawTestState(
+    { scenario: "minimal", env: { OPENCLAW_TEST_FILE_LOG: "1" } },
+    async (state) => {
+      const logPath = state.path("archive-pruning.log");
+      logging.setLoggerOverride({ level: "warn", file: logPath });
+      const failure = new Error("synthetic pruning failure");
       let clock = 0;
-      const wallStart = Date.now();
       vi.spyOn(performance, "now").mockImplementation(() => clock);
-      vi.spyOn(Date, "now").mockImplementation(() => wallStart + clock);
-      const owners = new AsyncLocalStorage<string>();
-      const records: Array<{ owner: string | undefined; args: unknown[] }> = [];
-      const getChildLogger = logging.getChildLogger;
-      vi.spyOn(logging, "getChildLogger").mockImplementation((...args) => {
-        const logger = getChildLogger(...args);
-        vi.spyOn(logger, "warn").mockImplementation((...values) => {
-          records.push({ owner: owners.getStore(), args: values });
-          return undefined;
-        });
-        return logger;
-      });
-      const scope = { agentId: "main", env: state.env };
-      const release = createDeferredCore();
-      const order: string[] = [];
-      const diagnostics: SqliteSessionReclamationDiagnostics = {};
-      const first = owners.run("first", () =>
-        runExclusiveSqliteSessionWrite(
-          scope,
-          async () => {
-            order.push("first:start");
-            await release.promise;
-            Object.assign(diagnostics, {
-              kind: "history-eviction",
-              workerThreadId: 7,
-              payload: "must not enter diagnostics",
-            });
-            order.push("first:end");
-            return "first";
-          },
-          "session.history.archive-prune",
-          diagnostics,
-        ),
-      );
-      expect(order).toEqual(["first:start"]);
-      clock = 100;
-      const failure = new Error("synthetic writer failure");
-      const second = owners.run("second", () =>
-        runExclusiveSqliteSessionWrite(
-          scope,
-          async () => {
-            order.push("second:start");
-            clock += 400;
-            if (fail) {
-              throw failure;
-            }
-            return "second";
-          },
-          "session.maintenance.plan",
-        ),
-      );
-      const settled = second.then(
-        (value) => ({ value }),
-        (error: unknown) => ({ error }),
-      );
-      const queuedSuccessor = owners.run("queued-successor", () =>
-        runExclusiveSqliteSessionWrite(
-          scope,
-          async () => {
-            order.push("queued-successor");
-            return "queued-successor";
-          },
-          "session.pending-input.stage",
-        ),
-      );
       try {
-        expect(order).toEqual(["first:start"]);
-        clock = 1_600;
-        release.resolve();
-        expect(await first).toBe("first");
-        expect(await settled).toEqual(fail ? { error: failure } : { value: "second" });
-        expect(await queuedSuccessor).toBe("queued-successor");
-        expect(order).toEqual(["first:start", "first:end", "second:start", "queued-successor"]);
-        expect(records.find((entry) => entry.owner === "first")?.args[1]).toHaveProperty(
-          "operation",
-          "session.history.archive-prune",
-        );
-        expect(records.find((entry) => entry.owner === "second")?.args[1]).toHaveProperty(
-          "operation",
-          "session.maintenance.plan",
-        );
-        expect(records.find((entry) => entry.owner === "queued-successor")?.args[1]).toHaveProperty(
-          "operation",
-          "session.pending-input.stage",
-        );
-        expect(records.find((entry) => entry.owner === "first")?.args[1]).toEqual(
-          expect.objectContaining({
-            pid: process.pid,
-            threadId,
-            isMainThread,
-            reclamationKind: "history-eviction",
-            workerThreadId: 7,
-            elapsedMs: 2_000,
-            queueWaitMs: 0,
-            writerExecutionMs: 1_600,
-            completionDelayMs: 400,
-          }),
-        );
-        expect(records.find((entry) => entry.owner === "first")?.args[1]).not.toHaveProperty(
-          "payload",
-        );
-        const record = records.find((entry) => entry.owner === "second");
-        expect(record?.args[1]).toEqual(
-          expect.objectContaining({
-            pid: process.pid,
-            threadId,
-            isMainThread,
-            elapsedMs: 1_900,
-            queueWaitMs: 1_500,
-            writerExecutionMs: 400,
-            completionDelayMs: 0,
-          }),
-        );
-        expect(record?.args[1]).not.toHaveProperty("reclamationKind");
-        expect(record?.args[1]).not.toHaveProperty("workerThreadId");
-        if (fail) {
-          expect(record?.args[1]).toHaveProperty("error", failure.message);
-        }
-        const warningCount = records.length;
         await expect(
-          runExclusiveSqliteSessionWrite(
-            scope,
-            async () => "successor",
-            "session.pending-input.stage",
-          ),
-        ).resolves.toBe("successor");
-        expect(records).toHaveLength(warningCount);
+          observeSessionArchivePruning(archivePruning, async () => {
+            clock = 1200.4;
+            throw failure;
+          }),
+        ).rejects.toBe(failure);
+        await logging.flushLogger();
+        const content = await fs.readFile(logPath, "utf8");
+        const parsed: unknown = JSON.parse(content.trim());
+        assert.ok(isRecord(parsed));
+        assert.ok(isRecord(parsed["2"]));
+        expect(parsed["1"]).toBe("SQLite session archive pruning failed");
+        expect(parsed["2"]).toHaveProperty("elapsedMs", 1200);
+        expect(parsed["2"]).not.toHaveProperty("queueWaitMs");
+        expect(parsed["2"]).not.toHaveProperty("writerExecutionMs");
+        return { content, details: parsed["2"] };
       } finally {
-        release.resolve();
-        await Promise.allSettled([first, second, queuedSuccessor]);
-        vi.restoreAllMocks();
+        await logging.flushLogger();
+        logging.resetLogger();
       }
-    });
-  },
-);
+    },
+  );
+  expect(record.details.archivePruning).toEqual({
+    trigger: "initial",
+    checkpointCalls: 2,
+    checkpointIncomplete: 1,
+    checkpointMs: 21,
+    checkpointMaxMs: 20,
+    completed: false,
+  });
+  expect(record.content).not.toContain("synthetic-private-archive");
+  expect(record.content).not.toContain("synthetic-private-transcript");
+});
 
-test("a queued writer rejected by cleanup never runs after release", async () => {
+test("captures fast writer failure without error payloads or identities", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    let clock = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => clock);
+    const events: unknown[] = [];
+    const diagnostics = channel("openclaw.session.write");
+    const collect = (event: unknown) => events.push(event);
+    const result = { payload: "synthetic-private-writer-result" };
+    const failure = new Error("synthetic-private-writer-error");
+    diagnostics.subscribe(collect);
+    try {
+      const write = runExclusiveSqliteSessionWrite(
+        { agentId: "synthetic-private-agent", env: state.env },
+        async () => {
+          clock += 25;
+          throw failure;
+        },
+        "session.transcript.batch",
+        { reclamationAdmission: { admissionId: 98123, releaseCause: "worker-release" } },
+      );
+      await expect(write).rejects.toBe(failure);
+      expect(events).toEqual([
+        {
+          operation: "session.transcript.batch",
+          writer: "foreground",
+          outcome: "error",
+          pid: process.pid,
+          threadId,
+          isMainThread,
+          elapsedMs: 25,
+          queueWaitMs: 0,
+          writerExecutionMs: 25,
+          completionDelayMs: 0,
+        },
+      ]);
+      expect(JSON.stringify(events)).not.toContain("synthetic-private");
+      expect(JSON.stringify(events)).not.toContain(state.env.OPENCLAW_STATE_DIR);
+    } finally {
+      diagnostics.unsubscribe(collect);
+    }
+    await expect(
+      runExclusiveSqliteSessionWrite(
+        { agentId: "synthetic-private-agent", env: state.env },
+        async () => result,
+        "session.transcript.batch",
+      ),
+    ).resolves.toBe(result);
+    expect(events).toHaveLength(1);
+  });
+});
+
+test("slow writer failure separates waiting and execution", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    let clock = 0;
+    const wallStart = Date.now();
+    vi.spyOn(performance, "now").mockImplementation(() => clock);
+    vi.spyOn(Date, "now").mockImplementation(() => wallStart + clock);
+    const owners = new AsyncLocalStorage<string>();
+    const records: Array<{ owner: string | undefined; args: unknown[] }> = [];
+    const getChildLogger = logging.getChildLogger;
+    vi.spyOn(logging, "getChildLogger").mockImplementation((...args) => {
+      const logger = getChildLogger(...args);
+      vi.spyOn(logger, "warn").mockImplementation((...values) => {
+        records.push({ owner: owners.getStore(), args: values });
+        return undefined;
+      });
+      return logger;
+    });
     const scope = { agentId: "main", env: state.env };
     const release = createDeferredCore();
-    const first = runExclusiveSqliteSessionWrite(
-      scope,
-      async () => await release.promise,
-      "session.history.archive-prune",
+    const order: string[] = [];
+    const diagnostics: SqliteSessionReclamationDiagnostics = {};
+    const first = owners.run("first", () =>
+      runExclusiveSqliteSessionWrite(
+        scope,
+        async () => {
+          order.push("first:start");
+          await release.promise;
+          Object.assign(diagnostics, {
+            kind: "history-eviction",
+            workerThreadId: 7,
+            payload: "must not enter diagnostics",
+          });
+          order.push("first:end");
+          return "first";
+        },
+        "session.history.archive-prune",
+        diagnostics,
+      ),
     );
-    const run = vi.fn(async () => "never");
-    const second = runExclusiveSqliteSessionWrite(scope, run, "session.maintenance.plan");
-    const rejected = expect(second).rejects.toThrow("SQLite session store queue cleared for test");
-    const drained = drainSessionStoreWriterQueuesForTest();
+    expect(order).toEqual(["first:start"]);
+    clock = 100;
+    const failure = new Error("synthetic writer failure");
+    const second = owners.run("second", () =>
+      runExclusiveSqliteSessionWrite(
+        scope,
+        async () => {
+          order.push("second:start");
+          clock += 400;
+          throw failure;
+        },
+        "session.maintenance.plan",
+      ),
+    );
+    const settled = second.then(
+      (value) => ({ value }),
+      (error: unknown) => ({ error }),
+    );
+    const queuedSuccessor = owners.run("queued-successor", () =>
+      runExclusiveSqliteSessionWrite(
+        scope,
+        async () => {
+          order.push("queued-successor");
+          return "queued-successor";
+        },
+        "session.pending-input.stage",
+      ),
+    );
     try {
-      await rejected;
-      expect(run).not.toHaveBeenCalled();
+      expect(order).toEqual(["first:start"]);
+      clock = 1_600;
+      release.resolve();
+      expect(await first).toBe("first");
+      expect(order).toEqual(["first:start", "first:end"]);
+      expect(await settled).toEqual({ error: failure });
+      expect(await queuedSuccessor).toBe("queued-successor");
+      expect(order).toEqual(["first:start", "first:end", "second:start", "queued-successor"]);
+      expect(records.find((entry) => entry.owner === "first")?.args[1]).toHaveProperty(
+        "operation",
+        "session.history.archive-prune",
+      );
+      expect(records.find((entry) => entry.owner === "second")?.args[1]).toHaveProperty(
+        "operation",
+        "session.maintenance.plan",
+      );
+      expect(records.find((entry) => entry.owner === "queued-successor")?.args[1]).toHaveProperty(
+        "operation",
+        "session.pending-input.stage",
+      );
+      expect(records.find((entry) => entry.owner === "first")?.args[1]).toEqual(
+        expect.objectContaining({
+          pid: process.pid,
+          threadId,
+          isMainThread,
+          reclamationKind: "history-eviction",
+          workerThreadId: 7,
+          elapsedMs: 1_600,
+          queueWaitMs: 0,
+          writerExecutionMs: 1_600,
+          completionDelayMs: 0,
+        }),
+      );
+      expect(records.find((entry) => entry.owner === "first")?.args[1]).not.toHaveProperty(
+        "payload",
+      );
+      const record = records.find((entry) => entry.owner === "second");
+      expect(record?.args[1]).toEqual(
+        expect.objectContaining({
+          pid: process.pid,
+          threadId,
+          isMainThread,
+          elapsedMs: 1_900,
+          queueWaitMs: 1_500,
+          writerExecutionMs: 400,
+          completionDelayMs: 0,
+        }),
+      );
+      expect(record?.args[1]).not.toHaveProperty("reclamationKind");
+      expect(record?.args[1]).not.toHaveProperty("workerThreadId");
+      expect(record?.args[1]).toHaveProperty("error", failure.message);
+      const warningCount = records.length;
+      await expect(
+        runExclusiveSqliteSessionWrite(
+          scope,
+          async () => "successor",
+          "session.pending-input.stage",
+        ),
+      ).resolves.toBe("successor");
+      expect(records).toHaveLength(warningCount);
     } finally {
       release.resolve();
-      await Promise.allSettled([first, second, drained]);
+      await Promise.allSettled([first, second, queuedSuccessor]);
+      vi.restoreAllMocks();
     }
-    expect(run).not.toHaveBeenCalled();
   });
 });

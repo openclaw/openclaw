@@ -1,7 +1,12 @@
 // Control UI tests cover plugin catalog browsing and lifecycle mutations.
-import { mkdir, rm } from "node:fs/promises";
 import path from "node:path";
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
+import {
+  chromium,
+  type Browser,
+  type BrowserContext,
+  type BrowserContextOptions,
+  type Page,
+} from "playwright";
 import { describe } from "vitest";
 import type { PluginsSearchResult } from "../../../../packages/gateway-protocol/src/schema/plugins.ts";
 import { PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/version.js";
@@ -12,6 +17,7 @@ import type {
   PluginMutationResult,
   PluginsInspectResult,
 } from "../../lib/plugins/index.ts";
+import { createControlUiE2eArtifactDir } from "../../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -23,7 +29,6 @@ import {
   discoveryCategories,
   discoveryResult,
   finalDiscoveryPageItems,
-  featuredResult,
   localOnlyDiscoveryPlugin,
   matrixDiscoveryPlugin,
   secondDiscoveryPageItems,
@@ -33,10 +38,14 @@ const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
 const updateScreenshots = process.env.OPENCLAW_UPDATE_E2E_SCREENSHOTS === "1";
-const artifactDir = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/plugins");
+const artifacts = new WeakMap<Page, string>();
+const mobileViewport = { height: 852, width: 393 };
 const desktopViewport = { height: 1000, width: 1440 };
 const pluginMethods = [
-  "gateway.restart.request",
+  "plugins.reload",
+  "plugins.uiDescriptors",
+  "plugins.controlUi.list",
+  "plugins.controlUi.report",
   "plugins.list",
   "plugins.inspect",
   "plugins.search",
@@ -157,15 +166,46 @@ const calendarSearchResponse = {
 const uninstallResult = {
   ok: true,
   pluginId: "calendar-plus",
-  restartRequired: true,
+  restartRequired: false,
   removed: ["config entry", "install record", "directory"],
 };
 
 const installResult = {
   ok: true,
   plugin: calendarPlugin,
-  restartRequired: true,
+  restartRequired: false,
 } satisfies PluginMutationResult;
+
+const installPolicyWarning = {
+  installPolicyCode: "install_policy_warning_acknowledgement_required",
+  targetName: "@openclaw/lobster",
+  targetType: "plugin",
+  requestMode: "install",
+  reason: "ClawScan found issues to review.",
+  findings: [
+    {
+      ruleId: "semgrep-finding",
+      severity: "warn",
+      message: "Semgrep found a risky command.",
+      file: "index.ts",
+      line: 12,
+    },
+  ],
+};
+
+const changedInstallPolicyWarning = {
+  ...installPolicyWarning,
+  reason: "ClawScan returned a changed warning after the fresh check.",
+  findings: [
+    {
+      ruleId: "dependency-finding",
+      severity: "critical",
+      message: "The freshly checked warning changed and requires review.",
+      file: "package-lock.json",
+      line: 24,
+    },
+  ],
+};
 
 const enableWorkboardResult = {
   ok: true,
@@ -235,7 +275,10 @@ const calendarInspection = {
 } satisfies PluginsInspectResult;
 
 const matrixDetail = {
-  plugin: matrixDiscoveryPlugin,
+  plugin: {
+    ...matrixDiscoveryPlugin,
+    catalog: { ...matrixDiscoveryPlugin.catalog, latestVersion: "2.1.0" },
+  },
   detail: {
     origin: "clawhub",
     packageName: "matrix",
@@ -284,10 +327,36 @@ const matrixDetail = {
     security: {
       status: "clean",
       verdict: "benign",
+      auditUrl: "https://clawhub.ai/openclaw/plugins/matrix/security-audit",
       summary: "Capabilities match the stated purpose.",
       guidance: "Review the access token before enabling.",
       checkedAt: 1_780_000_000_000,
     },
+  },
+} satisfies PluginDiscoveryDetailResult;
+
+const calendarDiscoveryPlugin = {
+  ...matrixDiscoveryPlugin,
+  id: "ch_Y2FsZW5kYXItcGx1cw",
+  catalog: {
+    ...matrixDiscoveryPlugin.catalog,
+    name: calendarPlugin.name,
+    summary: calendarPlugin.description,
+    official: false,
+    author: "calendar-author",
+  },
+};
+
+const calendarDetail = {
+  plugin: calendarDiscoveryPlugin,
+  detail: {
+    origin: "clawhub",
+    packageName: "calendar-plus",
+    topics: [],
+    configuration: [],
+    mcpServers: [],
+    skills: [],
+    versions: [],
   },
 } satisfies PluginDiscoveryDetailResult;
 
@@ -383,17 +452,11 @@ const localCalendarDisabled = {
   removable: false,
 } satisfies PluginCatalogItem;
 
-const localCalendarEnabled = {
-  ...localCalendarDisabled,
-  enabled: true,
-  state: "enabled",
-} satisfies PluginCatalogItem;
-
 let browser: Browser;
 let server: ControlUiE2eServer;
 
-function inventory(plugins: PluginCatalogItem[]): PluginListResult {
-  return { plugins, diagnostics: [], mutationAllowed: true };
+function inventory(plugins: PluginCatalogItem[], generation = 0): PluginListResult {
+  return { plugins, diagnostics: [], mutationAllowed: true, generation };
 }
 
 function configSnapshot(isWorkboardEnabled: boolean) {
@@ -439,29 +502,62 @@ function readOnlyConnectResponse() {
   };
 }
 
-async function captureScreenshot(page: Page, name: string): Promise<void> {
+export function enabledWorkboardCapabilities() {
+  return {
+    ok: true,
+    generation: 1,
+    descriptors: [],
+    methods: pluginMethods,
+    controlUiWidgetKinds: [],
+    pluginSurfaceUrls: {},
+    controlUiTabs: [
+      {
+        group: "control",
+        icon: "kanban",
+        id: "workboard",
+        label: workboardEnabled.name,
+        placement: "route:workboard",
+        pluginId: "workboard",
+      },
+    ],
+  };
+}
+
+async function captureScreenshot(
+  page: Page,
+  name: string,
+  target: "content" | "viewport" = "content",
+): Promise<void> {
   if (!updateScreenshots) {
     return;
   }
-  await mkdir(artifactDir, { recursive: true });
-  await page.locator(".content").screenshot({
+  let artifactDir = artifacts.get(page);
+  if (!artifactDir) {
+    artifactDir = createControlUiE2eArtifactDir("plugins");
+    artifacts.set(page, artifactDir);
+  }
+  await (target === "viewport" ? page : page.locator(".content")).screenshot({
     animations: "disabled",
     caret: "hide",
     path: path.join(artifactDir, name),
   });
 }
 
-async function newContext(viewport = desktopViewport): Promise<BrowserContext> {
+async function newContext(
+  viewport = desktopViewport,
+  options: Pick<BrowserContextOptions, "hasTouch" | "recordVideo"> = {},
+): Promise<BrowserContext> {
   return browser.newContext({
     locale: "en-US",
     serviceWorkers: "block",
     viewport,
+    ...options,
   });
 }
 
 function pluginMethodResponses() {
   return {
-    "gateway.restart.request": { ok: true, status: "scheduled" },
+    "plugins.controlUi.list": { revision: "empty", plugins: [], diagnostics: [] },
     "config.get": configSnapshot(false),
     "plugins.list": initialInventory,
     "plugins.inspect": {
@@ -481,11 +577,6 @@ function pluginMethodResponses() {
     },
     "plugins.catalog.browse": {
       cases: [
-        { match: { intent: "featured", pageSize: 8 }, response: featuredResult },
-        {
-          match: { intent: "trending", pageSize: 8 },
-          response: { items: discoveryResult.items.slice(0, 8) },
-        },
         {
           match: { intent: "all", cursor: "catalog-page-2", pageSize: 100 },
           response: {
@@ -516,6 +607,7 @@ function pluginMethodResponses() {
     "plugins.catalog.get": {
       cases: [
         { match: { id: matrixDiscoveryPlugin.id }, response: matrixDetail },
+        { match: { id: calendarDiscoveryPlugin.id }, response: calendarDetail },
         { match: { id: localOnlyDiscoveryPlugin.id }, response: localOnlyDetail },
       ],
     },
@@ -556,10 +648,6 @@ export async function setupPluginsE2e(): Promise<void> {
       `Playwright Chromium is not installed at ${chromiumExecutablePath}. Run \`pnpm --dir ui exec playwright install chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
     );
   }
-  if (updateScreenshots) {
-    await rm(artifactDir, { force: true, recursive: true });
-    await mkdir(artifactDir, { recursive: true });
-  }
   server = await startControlUiE2eServer();
   browser = await chromium.launch({ executablePath: chromiumExecutablePath });
 }
@@ -570,6 +658,16 @@ export async function teardownPluginsE2e(): Promise<void> {
 }
 
 export {
+  remoteIconPlugin,
+  calendarDiscoveryPlugin,
+  calendarInspection,
+  calendarPlugin,
+  changedInstallPolicyWarning,
+  configSnapshot,
+  installPolicyWarning,
+  mobileViewport,
+  workboardDisabled,
+  workboardEnabled,
   captureScreenshot,
   describeControlUiE2e,
   discoveryResult,
@@ -577,7 +675,6 @@ export {
   installMockGateway,
   inventory,
   localCalendarDisabled,
-  localCalendarEnabled,
   localOnlyDiscoveryPlugin,
   matrixConfigSchema,
   matrixDiscoveryPlugin,

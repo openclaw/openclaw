@@ -1,6 +1,6 @@
 {
   "id": "senseaudio",
-  "categories": ["media"],
+  "categories": ["voice"],
   "activation": {
     "onStartup": false
   },

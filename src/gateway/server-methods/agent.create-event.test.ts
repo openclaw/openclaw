@@ -44,7 +44,7 @@ vi.mock("../../commands/agent.js", () => ({
 
 vi.mock("../../agents/prepared-model-runtime.js", () => ({
   acquireAgentRunPreparedModelRuntime: vi.fn(async () => ({
-    release: vi.fn(),
+    [Symbol.asyncDispose]: vi.fn(async () => {}),
     snapshot: {},
   })),
   loadPublishedGatewayReplyDispatchRuntime: vi.fn(async ({ agentId }: { agentId: string }) => ({
@@ -58,10 +58,6 @@ vi.mock("../../agents/prepared-model-runtime.js", () => ({
 
 vi.mock("../../runtime.js", () => ({
   defaultRuntime: {},
-}));
-
-vi.mock("../../tasks/detached-task-runtime.js", () => ({
-  createRunningTaskRun: vi.fn(),
 }));
 
 import { agentHandlers } from "./agent.js";
@@ -127,7 +123,7 @@ describe("agent handler session create events", () => {
     const responseCall = firstMockCall(respond) as
       | [boolean, { status?: string; runId?: string }, unknown, { runId?: string }]
       | undefined;
-    expect(responseCall?.[0]).toBe(true);
+    expect(responseCall?.[0], JSON.stringify(responseCall)).toBe(true);
     expect(responseCall?.[1]?.status).toBe("accepted");
     expect(responseCall?.[1]?.runId).toBe("idem-agent-create-event");
     expect(responseCall?.[2]).toBeUndefined();
@@ -149,7 +145,6 @@ describe("agent handler session create events", () => {
         expect(call?.[3]).toEqual({
           agentId: "main",
           dropIfSlow: true,
-          sessionKeys: ["agent:main:subagent:create-test"],
         });
       },
       { timeout: 2_000, interval: 5 },

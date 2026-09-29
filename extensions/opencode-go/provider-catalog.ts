@@ -1,19 +1,15 @@
 import type { ModelCatalogEntry } from "openclaw/plugin-sdk/agent-runtime";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import {
-  buildLiveModelProviderConfig,
+  createUpstreamProviderCatalog,
   fetchLiveProviderModelIds,
-  getCachedUpstreamProviderCatalog,
   listProviderCatalogSnapshotEntries,
-  projectProviderCatalogSnapshotRows,
-  projectUpstreamProviderCatalogSnapshot,
   type LiveModelCatalogFetchGuard,
   type ProviderCatalogSnapshot,
   type ProjectedUpstreamProviderCatalogModel as OpencodeGoModelDefinition,
-  type UpstreamProviderCatalog,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import { normalizeBaseUrl } from "openclaw/plugin-sdk/provider-http";
 import { normalizeModelCompat } from "openclaw/plugin-sdk/provider-model-shared";
-import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 const PROVIDER_ID = "opencode-go";
@@ -53,43 +49,26 @@ const OPENCODE_GO_SEED_CATALOG: ProviderCatalogSnapshot = new Map(
     ];
   }),
 );
-let opencodeGoCatalog = OPENCODE_GO_SEED_CATALOG;
+const opencodeGoCatalog = createUpstreamProviderCatalog({
+  providerId: PROVIDER_ID,
+  seed: OPENCODE_GO_SEED_CATALOG,
+  providerConfig: { api: "openai-completions", baseUrl: OPENCODE_GO_OPENAI_BASE_URL },
+  metadataEndpoint: OPENCODE_UPSTREAM_CATALOG_ENDPOINT,
+  modelsEndpoint: OPENCODE_GO_MODELS_ENDPOINT,
+  anthropicBaseUrl: OPENCODE_GO_ANTHROPIC_BASE_URL,
+  timeoutMs: OPENCODE_GO_MODELS_TIMEOUT_MS,
+  ttlMs: OPENCODE_GO_MODELS_CACHE_TTL_MS,
+  auditContext: "opencode-go-model-discovery",
+  isStaticEntryActive: (entry) => !entry?.status,
+  decorateModel: (model) =>
+    model.api === "anthropic-messages" && model.id.startsWith("qwen")
+      ? { ...model, compat: { ...model.compat, thinkingFormat: "qwen" } }
+      : model,
+});
 
-function listStaticOpencodeGoModels(): OpencodeGoModelDefinition[] {
-  return [...OPENCODE_GO_SEED_CATALOG.values()]
-    .filter(({ model }) => !opencodeGoCatalog.get(model.id)?.status)
-    .map(({ model }) => model);
-}
-
-function cacheUpstreamOpencodeGoModels(catalog: UpstreamProviderCatalog): void {
-  opencodeGoCatalog = projectUpstreamProviderCatalogSnapshot({
-    providerId: PROVIDER_ID,
-    provider: catalog,
-    seed: OPENCODE_GO_SEED_CATALOG,
-    anthropicBaseUrl: OPENCODE_GO_ANTHROPIC_BASE_URL,
-    defaultBaseUrl: OPENCODE_GO_OPENAI_BASE_URL,
-    decorateModel: (model) =>
-      model.api === "anthropic-messages" && model.id.startsWith("qwen")
-        ? { ...model, compat: { ...model.compat, thinkingFormat: "qwen" } }
-        : model,
-  });
-}
-
-type FetchOpencodeGoLiveModelIdsParams = {
-  apiKey?: string;
-  discoveryApiKey?: string;
-  fetchGuard?: LiveModelCatalogFetchGuard;
-  signal?: AbortSignal;
-};
-
-export function buildStaticOpencodeGoProviderConfig(apiKey?: string): ModelProviderConfig {
-  return {
-    api: "openai-completions",
-    baseUrl: OPENCODE_GO_OPENAI_BASE_URL,
-    ...(apiKey ? { apiKey } : {}),
-    models: listStaticOpencodeGoModels(),
-  };
-}
+export const { buildStaticProvider: buildStaticOpencodeGoProviderConfig } = opencodeGoCatalog;
+export const buildOpencodeGoLiveProviderConfig =
+  opencodeGoCatalog.buildLiveProvider.bind(opencodeGoCatalog);
 
 export async function resolveOpencodeGoStarterModel(params: {
   apiKey: string;
@@ -110,47 +89,8 @@ export async function resolveOpencodeGoStarterModel(params: {
   return liveModelIds.includes(preferredModelId) ? params.preferredModelRef : undefined;
 }
 
-export async function buildOpencodeGoLiveProviderConfig(
-  params: FetchOpencodeGoLiveModelIdsParams = {},
-): Promise<ModelProviderConfig> {
-  if (!params.apiKey && !params.discoveryApiKey) {
-    return buildStaticOpencodeGoProviderConfig();
-  }
-  try {
-    const upstream = await getCachedUpstreamProviderCatalog({
-      endpoint: OPENCODE_UPSTREAM_CATALOG_ENDPOINT,
-      providerId: PROVIDER_ID,
-      fetchGuard: params.fetchGuard,
-      signal: params.signal,
-    });
-    if (upstream) {
-      cacheUpstreamOpencodeGoModels(upstream);
-    }
-  } catch {
-    // Keep the trusted offline seed usable when upstream metadata is unavailable.
-  }
-  return await buildLiveModelProviderConfig({
-    discoveryMode: "strict",
-    providerId: PROVIDER_ID,
-    endpoint: OPENCODE_GO_MODELS_ENDPOINT,
-    providerConfig: {
-      api: "openai-completions",
-      baseUrl: OPENCODE_GO_OPENAI_BASE_URL,
-    },
-    models: listStaticOpencodeGoModels(),
-    apiKey: params.apiKey,
-    discoveryApiKey: params.discoveryApiKey,
-    fetchGuard: params.fetchGuard,
-    signal: params.signal,
-    timeoutMs: OPENCODE_GO_MODELS_TIMEOUT_MS,
-    ttlMs: OPENCODE_GO_MODELS_CACHE_TTL_MS,
-    auditContext: "opencode-go-model-discovery",
-    projectRows: (rows) => projectProviderCatalogSnapshotRows(rows, opencodeGoCatalog),
-  });
-}
-
 export function listOpencodeGoModelCatalogEntries(): ModelCatalogEntry[] {
-  return listProviderCatalogSnapshotEntries(opencodeGoCatalog);
+  return listProviderCatalogSnapshotEntries(opencodeGoCatalog.getSnapshot());
 }
 
 export function resolveOpencodeGoModel(modelId: string): ProviderRuntimeModel | undefined {
@@ -186,10 +126,6 @@ export function normalizeOpencodeGoResolvedModel(
       supportsReasoningEffort: false,
     },
   };
-}
-
-function normalizeBaseUrl(baseUrl: string | undefined): string {
-  return (baseUrl ?? "").trim().replace(/\/+$/, "");
 }
 
 export function normalizeOpencodeGoBaseUrl(params: {

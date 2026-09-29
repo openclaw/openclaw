@@ -19,10 +19,10 @@ export type DaemonStatusOptions = {
 export type DaemonInstallOptions = {
   port?: string | number;
   runtime?: string;
+  runtimePath?: string;
   token?: string;
   wrapper?: string;
-  /** Private updater IPC handoff before native service load. */
-  deferActivation?: boolean;
+  allowUnconfigured?: boolean;
   force?: boolean;
   json?: boolean;
 };

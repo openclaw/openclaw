@@ -1,6 +1,6 @@
 {
   "id": "memory-wiki",
-  "categories": ["memory", "tools"],
+  "categories": ["memory"],
   "doctorContract": {
     "configRepair": true,
     "stateMigrations": [
@@ -64,6 +64,44 @@
       "help": "Append a compact compiled wiki digest snapshot to memory prompt sections for context engines and legacy prompt assembly."
     }
   },
+  "configGroups": [
+    {
+      "id": "wiki-vault",
+      "title": "Wiki vault",
+      "order": 10,
+      "properties": ["vaultMode", "vault"]
+    },
+    {
+      "id": "obsidian",
+      "title": "Obsidian",
+      "order": 20,
+      "properties": ["obsidian"]
+    },
+    {
+      "id": "memory-sources",
+      "title": "Memory sources",
+      "order": 30,
+      "properties": ["bridge", "unsafeLocal"]
+    },
+    {
+      "id": "ingestion",
+      "title": "Ingestion",
+      "order": 40,
+      "properties": ["ingest"]
+    },
+    {
+      "id": "search-and-context",
+      "title": "Search and context",
+      "order": 50,
+      "properties": ["search", "context"]
+    },
+    {
+      "id": "page-rendering",
+      "title": "Page rendering",
+      "order": 60,
+      "properties": ["render"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

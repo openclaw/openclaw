@@ -163,31 +163,28 @@ describe("anthropic provider policy public artifact", () => {
     expect(profile?.defaultLevel).toBe("off");
   });
 
-  it.each(["claude-fable-5", "claude-fable-5-1", "claude-mythos-5"])(
-    "exposes the mandatory-adaptive %s thinking profile",
-    (modelId) => {
+  it.each([
+    ["claude-opus-5-5", "medium"],
+    ["claude-fable-5", "medium"],
+    ["claude-fable-5-1", "medium"],
+    ["claude-mythos-5", "high"],
+  ])(
+    "exposes only native efforts for the mandatory-adaptive %s thinking profile",
+    (modelId, defaultLevel) => {
       const profile = resolveThinkingProfile({
         provider: "anthropic",
         modelId,
       });
 
       expect(profile).toEqual({
-        levels: [
-          { id: "minimal" },
-          { id: "low" },
-          { id: "medium" },
-          { id: "high" },
-          { id: "xhigh" },
-          { id: "adaptive" },
-          { id: "max" },
-        ],
-        defaultLevel: "high",
+        levels: [{ id: "low" }, { id: "medium" }, { id: "high" }, { id: "xhigh" }, { id: "max" }],
+        defaultLevel,
         preserveWhenCatalogReasoningFalse: true,
       });
     },
   );
 
-  it.each(["claude-fable-5", "claude-fable-5-1"])(
+  it.each(["claude-opus-5-5", "claude-sonnet-5-5", "claude-fable-5", "claude-fable-5-1"])(
     "keeps the %s thinking profile identical across API and CLI routes",
     (modelId) => {
       expect(resolveThinkingProfile({ provider: "claude-cli", modelId })).toEqual(
@@ -195,6 +192,52 @@ describe("anthropic provider policy public artifact", () => {
       );
     },
   );
+
+  it("preserves separate effort controls for Opus 5 and Opus 5.5 deployments", () => {
+    const profile = resolveThinkingProfile({ provider: "anthropic", modelId: "claude-opus-5" });
+    expect(profile?.defaultLevel).toBe("high");
+    expect(levelIds(profile?.levels)).toContain("off");
+
+    const deploymentProfile = resolveThinkingProfile({
+      provider: "anthropic",
+      modelId: "deployment",
+      params: { canonicalModelId: "claude-opus-5-5" },
+    });
+    expect(deploymentProfile?.defaultLevel).toBe("medium");
+    expect(levelIds(deploymentProfile?.levels)).not.toContain("off");
+  });
+
+  it("preserves separate effort controls for Sonnet 5 and Sonnet 5.5 deployments", () => {
+    const profile = resolveThinkingProfile({ provider: "anthropic", modelId: "claude-sonnet-5" });
+    expect(profile?.defaultLevel).toBe("high");
+    expect(levelIds(profile?.levels)).toEqual([
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "adaptive",
+      "max",
+    ]);
+
+    const deploymentProfile = resolveThinkingProfile({
+      provider: "anthropic",
+      modelId: "deployment",
+      params: { canonicalModelId: "claude-sonnet-5-5" },
+    });
+    expect(deploymentProfile).toEqual({
+      levels: [
+        { id: "off" },
+        { id: "low" },
+        { id: "medium" },
+        { id: "high" },
+        { id: "xhigh" },
+        { id: "max" },
+      ],
+      defaultLevel: "high",
+    });
+  });
 
   it("keeps direct-only Mythos thinking disabled on the CLI route", () => {
     expect(resolveThinkingProfile({ provider: "claude-cli", modelId: "claude-mythos-5" })).toEqual({

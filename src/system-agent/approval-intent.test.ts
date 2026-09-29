@@ -88,7 +88,7 @@ function completionDeps(replyText: string, binding: SystemAgentVerifiedInference
     >(
       async () =>
         ({
-          release: () => {},
+          [Symbol.asyncDispose]: async () => {},
           model: {},
           auth: { profileId: route.authProfileId },
           sourceAuthFingerprint: binding.auth.authFingerprint,
@@ -194,7 +194,7 @@ describe("classifySystemAgentApprovalIntent", () => {
     const binding = requireSharedVerifiedInference();
     const deps = completionDeps("approve", binding);
     deps.acquireSimpleCompletionModelForAgent.mockResolvedValueOnce({
-      release: () => {},
+      [Symbol.asyncDispose]: async () => {},
       model: {},
       auth: { profileId: "openai:p1" },
       selection: {
@@ -218,7 +218,7 @@ describe("classifySystemAgentApprovalIntent", () => {
     const binding = requireSharedVerifiedInference();
     const deps = completionDeps("approve", binding);
     deps.acquireSimpleCompletionModelForAgent.mockResolvedValueOnce({
-      release: () => {},
+      [Symbol.asyncDispose]: async () => {},
       model: {},
       auth: { profileId: "openai:p2" },
       sourceAuthFingerprint: "different-p2-owner",

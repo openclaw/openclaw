@@ -12,7 +12,8 @@ describe("config issue format", () => {
     expect(
       formatConfigIssueLine(
         {
-          path: "agents.list[3].tools.profile",
+          path: "agents.list.3.tools.profile",
+          pathSegments: ["agents", "list", 3, "tools", "profile"],
           message: 'Invalid input, got: "none"',
           line: 247,
           sourceFile: "openclaw.json",
@@ -36,11 +37,18 @@ describe("config issue format", () => {
         [
           { path: "", message: "first" },
           { path: "channels.signal.dmPolicy", message: "second" },
+          { path: "foo.bar", pathSegments: ["foo.bar"], message: "literal" },
+          { path: "foo.bar", pathSegments: ["foo", "bar"], message: "nested" },
         ],
         "×",
         { normalizeRoot: true },
       ),
-    ).toEqual(["× <root>: first", "× channels.signal.dmPolicy: second"]);
+    ).toEqual([
+      "× <root>: first",
+      "× channels.signal.dmPolicy: second",
+      '× ["foo.bar"]: literal',
+      "× foo.bar: nested",
+    ]);
   });
 
   it("sanitizes control characters and ANSI sequences in formatted lines", () => {
@@ -72,16 +80,16 @@ describe("config issue format", () => {
   it("normalizes issue collections for machine output", () => {
     const issues = normalizeConfigIssues([
       {
-        path: "update.channel",
-        pathSegments: ["update", "channel"],
+        path: "models.fixture/model.v1.alias",
+        pathSegments: ["models", "fixture/model.v1", "alias"],
         message: "invalid",
         allowedValues: [],
         allowedValuesHiddenCount: 2,
       },
     ]);
 
-    expect(issues).toEqual([{ path: "update.channel", message: "invalid" }]);
-    expect(issues[0]?.pathSegments).toEqual(["update", "channel"]);
+    expect(issues).toEqual([{ path: "models.fixture/model.v1.alias", message: "invalid" }]);
+    expect(issues[0]?.pathSegments).toEqual(["models", "fixture/model.v1", "alias"]);
     expect(JSON.stringify(issues)).not.toContain("pathSegments");
   });
 });

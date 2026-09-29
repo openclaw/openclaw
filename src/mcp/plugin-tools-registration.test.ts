@@ -3,40 +3,39 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { createCompiledSdkHost } from "../plugins/compiled-sdk-host.test-support.js";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import {
+  areDiagnosticsEnabledForProcess,
+  onDiagnosticEvent,
+  setDiagnosticsEnabledForProcess,
+  waitForDiagnosticEventsDrained,
+} from "../infra/diagnostic-events.js";
+import * as schedulerModule from "../infra/gateway-scheduler.js";
+import {
+  logWebhookReceived,
+  startDiagnosticHeartbeat,
+  stopDiagnosticHeartbeat,
+} from "../plugin-sdk/logging-core.js";
+import { resolvePluginProviders } from "../plugin-sdk/provider-catalog-runtime.js";
 import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
-import { mcpProviderCatalogEntrypoint } from "../plugins/loader-sdk-bridge-artifacts.test-support.js";
 import {
   cleanupPluginLoaderFixturesForTest,
   resetPluginLoaderTestStateForTest,
   useNoBundledPlugins,
   writePlugin,
 } from "../plugins/loader.test-fixtures.js";
-import { getPluginModuleLoaderStats } from "../plugins/plugin-module-loader-cache.js";
 import { markPluginRegistryActive } from "../plugins/registry-lifecycle.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { acquireStandalonePluginToolRegistry } from "../plugins/tools.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import { createCodexSupervisionToolsMcpServer } from "./codex-supervision-tools-serve.js";
 import { createToolsMcpServer, serveRegisteredToolsMcpServer } from "./tools-stdio-server.js";
 
 let sequence = 0;
-const sdkHostDirs = createTempDirTracker();
-let sdkHost: string | undefined;
-let beforeLoad: ReturnType<typeof getPluginModuleLoaderStats>;
-beforeAll(() => {
-  sdkHost = createCompiledSdkHost(mcpProviderCatalogEntrypoint, (prefix) =>
-    sdkHostDirs.make(prefix),
-  );
-});
-beforeEach(() => {
-  if (sdkHost) {
-    vi.stubEnv("OPENCLAW_DEV_SOURCE_ROOT", sdkHost);
-  }
-  beforeLoad = getPluginModuleLoaderStats();
-});
 function nativePlugin(options: { failDisposal?: boolean; abortSdk?: boolean } = {}) {
   useNoBundledPlugins();
   const key = `__mcp_registration_native_${sequence++}`;
@@ -51,20 +50,23 @@ function nativePlugin(options: { failDisposal?: boolean; abortSdk?: boolean } = 
     abortReason?: unknown;
     abortFailure?: unknown;
     abortRead?: unknown;
+    resolvePluginProviders: typeof resolvePluginProviders;
   } = {
     disposals: 0,
     factories: 0,
     aborted: createDeferredCore(),
     started: createDeferredCore(),
     finish: createDeferredCore(),
+    // This scope fixture shares its host SDK; the stdio fixture covers native SDK imports.
+    resolvePluginProviders,
   };
   Object.defineProperty(globalThis, key, { value: state, configurable: true });
   const plugin = writePlugin({
     id: "mcp-native",
     body: `const { DatabaseSync } = require("node:sqlite");
-const { resolvePluginProviders } = require("openclaw/plugin-sdk/provider-catalog-runtime");
 module.exports = { id: "mcp-native", register(api) {
   const state = globalThis[${JSON.stringify(key)}];
+  const { resolvePluginProviders } = state;
   const db = state.database = new DatabaseSync(":memory:");
   api.lifecycle.registerRuntimeLifecycle({ id: "native", dispose() {
     state.disposals++;
@@ -135,21 +137,11 @@ module.exports = { id: "mcp-native", register(api) {
 }
 
 afterEach(() => {
-  try {
-    if (sdkHost) {
-      const afterLoad = getPluginModuleLoaderStats();
-      expect(afterLoad.nativeHits).toBeGreaterThan(beforeLoad.nativeHits);
-      expect(afterLoad.sourceTransformForced).toBe(beforeLoad.sourceTransformForced);
-      expect(afterLoad.sourceTransformFallbacks).toBe(beforeLoad.sourceTransformFallbacks);
-    }
-  } finally {
-    vi.restoreAllMocks();
-    resetPluginLoaderTestStateForTest();
-    vi.unstubAllEnvs();
-  }
+  vi.restoreAllMocks();
+  resetPluginLoaderTestStateForTest();
+  vi.unstubAllEnvs();
 });
 afterAll(cleanupPluginLoaderFixturesForTest);
-afterAll(sdkHostDirs.cleanup);
 
 function causes(error: unknown): unknown[] {
   if (error instanceof AggregateError) {
@@ -192,22 +184,61 @@ describe("MCP serving registration ownership", () => {
     }
   });
 
-  it("releases the native registration when supervision tool validation fails before connection", async () => {
-    const fixture = nativePlugin();
-    try {
-      await expect(
+  it.each(["standalone", "borrowed"] as const)(
+    "releases registrations and only its owned scheduler after validation fails (%s)",
+    async (ownership) => {
+      const fixture = nativePlugin();
+      const clock = createGatewaySchedulerClock(Date.now());
+      const scheduler = createTestGatewayScheduler(clock.clock);
+      const host = ownership === "borrowed" ? new LegacyPluginSdkResourceHost() : undefined;
+      host?.bindScheduler(scheduler);
+      const constructor = vi
+        .spyOn(schedulerModule, "GatewayScheduler")
+        .mockImplementation(function () {
+          return scheduler;
+        });
+      const previouslyEnabled = areDiagnosticsEnabledForProcess();
+      const heartbeats: string[] = [];
+      const unsubscribe = onDiagnosticEvent((event) => {
+        if (event.type === "diagnostic.heartbeat") {
+          heartbeats.push(event.type);
+        }
+      });
+      const serve = () =>
         serveRegisteredToolsMcpServer({
-          acquireRegistry: fixture.acquire,
+          acquireRegistry: async () => {
+            startDiagnosticHeartbeat({}, { sampleLiveness: () => null });
+            logWebhookReceived({ channel: "test" });
+            await clock.advanceBy(30_000);
+            await waitForDiagnosticEventsDrained();
+            expect(heartbeats).toHaveLength(1);
+            return fixture.acquire();
+          },
           createServer: (tools) => createCodexSupervisionToolsMcpServer({ tools }),
-        }),
-      ).rejects.toThrow("Install or update @openclaw/codex");
-      expect(fixture.state.factories).toBe(1);
-      expect(fixture.state.database?.isOpen).toBe(false);
-      expect(fixture.state.disposals).toBe(1);
-    } finally {
-      fixture.cleanup();
-    }
-  });
+        });
+      try {
+        setDiagnosticsEnabledForProcess(true);
+        await expect(host ? host.run(serve) : serve()).rejects.toThrow(
+          "Install or update @openclaw/codex",
+        );
+        expect(fixture.state.factories).toBe(1);
+        expect(fixture.state.database?.isOpen).toBe(false);
+        expect(fixture.state.disposals).toBe(1);
+        expect(scheduler.signal.aborted).toBe(ownership === "standalone");
+        expect(scheduler.nextWakeAtMs).toBe(
+          ownership === "standalone" ? null : clock.clock.now() + 30_000,
+        );
+      } finally {
+        stopDiagnosticHeartbeat();
+        unsubscribe();
+        await host?.close();
+        await scheduler.stop();
+        constructor.mockRestore();
+        setDiagnosticsEnabledForProcess(previouslyEnabled);
+        fixture.cleanup();
+      }
+    },
+  );
 
   it("does not revive an acquired view when the same registry objects are reactivated", async () => {
     const fixture = nativePlugin();

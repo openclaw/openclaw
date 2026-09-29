@@ -83,6 +83,8 @@ Minimal config:
 
 Multi-account support: use `channels.signal.accounts` with per-account config and optional `name`. Each named account owns its `transport`; it does not inherit the top-level transport. The top-level transport belongs only to the implicit `default` account. See [Multi-account channels](/gateway/config-channels#multi-account-all-channels) for the shared pattern.
 
+Account keys use the normalized IDs shown by status. For example, `Work Phone` with its own `account` number runs as `work-phone` and uses its authored settings without running Doctor. If multiple keys normalize to the same ID, the exact key wins and Doctor reports the collision. Deletion refuses to remove that account if another stored key would then select a different identity; the error names both keys so you can resolve the collision first. Legacy aliases without their own number keep their existing inherited behavior. Doctor can clean up unambiguous keys, but refuses to rename an alias when that would activate previously ignored settings.
+
 Omitted account `dmPolicy` and `groupPolicy` inherit the channel root; explicit account policies win. If neither scope sets them, DMs use `pairing` and groups use `allowlist`.
 
 ## What it is
@@ -133,13 +135,9 @@ signal-cli -a +<BOT_PHONE_NUMBER> register --captcha '<SIGNALCAPTCHA_URL>'
 signal-cli -a +<BOT_PHONE_NUMBER> verify <VERIFICATION_CODE>
 ```
 
-4. Configure OpenClaw, restart the gateway, verify the channel:
+4. Configure OpenClaw and verify the channel. Config changes follow [hot reload](/gateway/configuration/hot-reload); start the Gateway if it is offline. Restart it if you changed the service's `PATH` to find `signal-cli`.
 
 ```bash
-# If you run the gateway as a user systemd service:
-systemctl --user restart openclaw-gateway.service
-
-# Then verify:
 openclaw doctor
 openclaw channels status --probe
 ```
@@ -247,6 +245,52 @@ Operational notes:
 - Set `kind: "container"` for the bbernhard REST API and `kind: "external-native"` for native `signal-cli` JSON-RPC/SSE.
 - Container attachment downloads honor the same media byte limits as native mode. Oversized responses are rejected before being fully buffered when the server sends `Content-Length`, and while streaming otherwise.
 
+## Opt-in private UNIX socket
+
+On POSIX systems, a managed native daemon can use a UNIX socket instead of an
+HTTP listener. This is useful on shared hosts where other OS users must not
+control the Signal daemon. Configure `transport.socketPath` with an absolute
+path (at most 103 UTF-8 bytes, without `.` or `..` path segments):
+
+```json5
+{
+  channels: {
+    signal: {
+      enabled: true,
+      account: "+15555550123",
+      transport: {
+        kind: "managed-native",
+        socketPath: "/home/user/.local/state/signal-private/daemon.sock",
+      },
+    },
+  },
+}
+```
+
+The socket's immediate directory must belong to the Gateway OS user and have
+mode `0700` (no group or other access). OpenClaw creates that directory if it
+is missing and its parent already exists; it does not repair permissions on
+existing directories. Symlink paths are rejected. On macOS, OpenClaw also
+inspects ACLs beyond the BSD mode bits and rejects access-granting ACL entries
+for non-owners, including inheritable entries. On Linux, POSIX ACLs are not
+inspected; operators should select a parent hierarchy with no access-granting
+ACLs. Use a distinct socket path for each account. Windows is not supported for
+this opt-in.
+
+`socketPath` is only valid with `kind: "managed-native"` and cannot be combined
+with `url`, `httpHost`, or `httpPort`. Omit `receiveMode` or set it to `"manual"`;
+OpenClaw manages receive subscriptions over the socket. Socket connection or
+permission failures stop this transport; there is no HTTP fallback.
+
+Existing managed HTTP defaults, external native daemons, and container setups
+are unchanged. **Opting out leaves the existing HTTP exposure unchanged:** a
+loopback bind does not prevent another local OS user from reaching an
+unauthenticated daemon. The private directory separates OS users, not processes
+running as the same user or administrators. `signal-cli` does not authorize a
+connecting peer's UID, so this isolation guarantee depends on filesystem
+authorization. Signal sender pairing and allowlists remain separate
+message-access controls.
+
 ## Access control (DMs + groups)
 
 DMs:
@@ -300,6 +344,7 @@ Allowed group messages that do not mention the bot stay silent and are kept only
 - Inbound messages are normalized into the shared channel envelope.
 - Replies always route back to the same number or group.
 - Replies to inbound messages include native Signal quote metadata when the backend accepts the inbound timestamp and author; if quote metadata is missing or rejected, OpenClaw sends the reply as a normal message.
+- Canceling the originating delivery stops subsequent send attempts, including attachments still being prepared and native-quote fallback. A request already submitted to Signal is allowed to finish, and its accepted result is preserved; cancellation does not recall that message.
 - Configure native quote use with `channels.signal.replyToMode = off | first | all | batched`, or `channels.signal.replyToModeByChatType.direct/group` for per-chat-type overrides. Account-level values under `channels.signal.accounts.<id>` take precedence.
 
 ## Media + limits
@@ -514,5 +559,6 @@ Related global options:
 - [Pairing](/channels/pairing) - DM authentication and pairing flow
 - [Groups](/channels/groups) - group chat behavior and mention gating
 - [Channel routing](/channels/channel-routing) - session routing for messages
+- [Reactions](/tools/reactions) - emoji reaction semantics for the `message` tool
 - [RPC adapters](/reference/rpc) - the signal-cli JSON-RPC-over-HTTP daemon pattern behind this channel
 - [Security](/gateway/security) - access model and hardening

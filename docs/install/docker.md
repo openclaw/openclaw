@@ -44,7 +44,7 @@ Hosting multiple users? See [Multi-tenant hosting](/gateway/multi-tenant-hosting
     ./scripts/docker/setup.sh
     ```
 
-    Use `ghcr.io/openclaw/openclaw` or `openclaw/openclaw` and avoid unofficial mirrors, which don't share OpenClaw's release timing or retention policy. Version-specific tags include releases such as `2026.9.3` and prereleases such as `2026.9.1-beta.1`. Stable releases move `latest` and `main`; trailing-month Gateway releases move only `extended-stable`. Variants include `slim`, `main-slim`, `extended-stable-slim`, `latest-browser`, `main-browser`, and `extended-stable-browser`. The default images bundle the `codex` and `diagnostics-otel` plugins. A `-browser` variant also ships with Chromium baked in, useful for the [sandboxed browser](/gateway/sandboxing#sandboxed-browser) tool without a first-run Playwright install.
+    Use `ghcr.io/openclaw/openclaw` or `openclaw/openclaw` and avoid unofficial mirrors, which don't share OpenClaw's release timing or retention policy. Version-specific tags include releases such as `2026.9.3` and prereleases such as `2026.9.1-beta.1`. Stable releases move `latest` and `main`; trailing-month Gateway releases move only `extended-stable`. Variants include `slim`, `main-slim`, `extended-stable-slim`, `latest-browser`, `main-browser`, and `extended-stable-browser`. The default images bundle the `codex` and `diagnostics-otel` plugins. A `-browser` variant also ships with Chromium baked in for the [Gateway-controlled browser](/install/docker#using-the-control-ui-browser). The agent sandbox browser uses a separate image.
 
   </Step>
 
@@ -105,6 +105,70 @@ Hosting multiple users? See [Multi-tenant hosting](/gateway/multi-tenant-hosting
   </Step>
 </Steps>
 
+### Using the Control UI browser
+
+The [Control UI Browser panel](/web/control-ui/panels#browser-panel) displays a
+browser controlled by the Gateway. It is separate from the browser on your laptop
+or phone that opens the dashboard. For a local managed browser with a Docker
+Gateway, Chromium must be available **inside the Gateway container**.
+
+For a new installation, use the official browser-equipped image with the normal
+Compose setup; no custom Dockerfile is needed:
+
+```bash
+export OPENCLAW_IMAGE="ghcr.io/openclaw/openclaw:latest-browser"
+./scripts/docker/setup.sh
+```
+
+For a pinned deployment, choose a release's `-browser` tag instead of the moving
+`latest-browser` tag. For an existing Compose installation, change `OPENCLAW_IMAGE`
+in its `.env` to the browser variant, then pull and recreate the Gateway using
+the same Compose files and overlays as your current deployment:
+
+```bash
+docker compose pull openclaw-gateway openclaw-cli
+docker compose up -d openclaw-gateway
+```
+
+Keep your existing volumes, ports, and other settings. Do not rerun setup with an
+empty shell environment to change only the image: setup rewrites `.env` from the
+current shell and defaults.
+
+An existing home volume or bind mount covering `/home/node/.cache/ms-playwright`
+can hide the image's bundled Chromium. If browser discovery still fails after the
+image switch, check those mounts. Preserve the data, then either provision
+Chromium in the mounted home or adjust the mounts to leave the image's browser
+cache visible; recreating the container does not refresh a populated home volume.
+
+For a new installation from a local source build, bake Chromium into the image:
+
+```bash
+OPENCLAW_IMAGE=openclaw:local OPENCLAW_INSTALL_BROWSER=1 ./scripts/docker/setup.sh
+```
+
+This build-time option installs Chromium and Xvfb; setting it on
+an already-built container does not install a browser.
+
+The image supplies Chromium, not a replacement for your browser configuration:
+
+- Keep browser control enabled (`browser.enabled`). Use a local managed profile
+  such as `openclaw` for the container's Chromium, not an extension, attach-only,
+  or remote-CDP profile intended for another browser.
+- OpenClaw auto-detects the image's Playwright-managed Chromium on Linux. An
+  explicit `browser.executablePath` or profile executable path must point to a
+  binary inside the container; a path from your laptop will not work there.
+- A headless container needs headless browser operation. Check explicit
+  `browser.headless`, profile headless settings, and `OPENCLAW_BROWSER_HEADLESS`
+  overrides if startup reports a missing display. See [Browser configuration](/tools/browser-control).
+- Connect with `operator.admin` access to a Gateway advertising `browser.request`.
+  Open **+ → Browser** in the Chat side panel, navigate to a page, and confirm that
+  its snapshot loads and navigation works. Loading the dashboard alone does not
+  verify that Chromium can start.
+
+This is not the separate [sandboxed browser](/gateway/sandboxing#sandboxed-browser)
+container used by sandboxed agent sessions. Selecting a Gateway `-browser` image
+does not build or configure that sandbox image.
+
 ### Headless bootstrap
 
 For an unattended container host, put provider, Gateway, and channel credentials in the Compose `.env` file so both the one-shot bootstrap container and the long-running Gateway receive the same values:
@@ -164,12 +228,62 @@ Run `docker compose` from the repo root. If you enabled `OPENCLAW_EXTRA_MOUNTS` 
 ### Upgrading container images
 
 When you replace the OpenClaw image but keep the same mounted state/config, the
-new Gateway runs startup-safe upgrade migrations and plugin convergence before
-readiness. Routine image upgrades should not require a separate
-`openclaw doctor --fix` pass.
+image entrypoint runs `openclaw doctor --fix --non-interactive` under exclusive
+maintenance ownership before starting the Gateway. This covers the default image
+command and Compose's foreground Gateway command, including its selected profile.
+Routine image upgrades do not require a separate Doctor pass.
 
-If startup cannot complete those repairs safely, the Gateway exits instead of
-reporting healthy. With a restart policy, Docker, Podman, or Kubernetes may show
+On older Linux hosts such as Synology DSM, an unavailable `openat2` syscall can
+make older images report that another Gateway owns even an empty state volume.
+Current images use the guarded filesystem fallback; keep native filesystem
+checks enabled. Doctor reports the underlying lock failure and recovery action
+instead of treating every acquisition error as an active Gateway. Permission
+errors require a writable state mount for the container user. If the filesystem
+cannot provide exclusive file creation for state ownership, stop OpenClaw, back
+up its state, and move the state volume to a local filesystem that supports it.
+Ordinary database transactions use SQLite locking on that volume. Do not delete
+state or lock files to bypass ownership.
+
+Other CLI commands and help pass through unchanged. If you replace the image's
+entrypoint, run Doctor against the same mounted state/config before launching the
+Gateway; a custom entrypoint bypasses this activation step.
+
+This includes agent database schema upgrades, shared-state audit migrations, and
+legacy workspace setup imports. Before advancing database schemas, Doctor saves
+verified SQLite copies beside the originals as
+`<database>.pre-startup-migration-<id>.bak`. The shared database and affected agent
+databases use the same backup ID. Config backups and retired workspace-file
+archives follow the normal Doctor repair rules. Keep these files with your
+pre-upgrade backup; a rollback must restore the matching state as well as the old
+image. See [rollback](/install/updating#rollback).
+
+On FUSE filesystems such as Unraid's `shfs`, a missing native no-replace rename
+does not require an operator step. The migration owner publishes a complete,
+exclusive hardlink, syncs it before removing the old name, and can recover an
+interrupted source/claim pair without replacing another file. This preserves the
+source inode and exact bytes. The filesystem must support same-directory hardlinks
+and directory synchronization when native no-replace rename is unavailable.
+
+Readiness remains false while the default or system agent database is refused,
+and the readiness response includes the admission reason. A refused optional
+agent remains isolated while healthy agents can serve requests.
+
+Missing or drifted canonical SQLite indexes are rebuilt by the schema migration
+owner before session startup completes. Repair warnings identify the agent,
+database path, rebuilt indexes, and elapsed time. Current-schema shape refusal
+reports list all affected databases in stable path order. Missing required tables,
+incompatible columns, and other changes that cannot be reconstructed safely still require Doctor; startup
+does not recreate a missing data table as an empty one.
+
+Startup exits with code `78` when required state cannot be migrated safely:
+for example, source identities conflict, data is unreadable, another writer owns
+the state, or the filesystem provides no safe, durable way to publish a claim.
+The retained source, claim, and backups are recovery inputs; do not delete them to
+silence the error. If the filesystem lacks the required primitives, stop the
+Gateway and expose the same data through its native backing filesystem before
+retrying (for example, an Unraid pool path instead of the `shfs` share).
+
+With a restart policy, Docker, Podman, or Kubernetes may show
 the Gateway container restarting. Keep the mounted state volume, then run the
 same image once with `openclaw doctor --fix` as the container command, using the
 same state/config mounts the Gateway uses:

@@ -87,8 +87,9 @@ suite.define(() => {
       );
     }
     const dashboard = await owner.cli(["dashboard", "--json"]);
-    expect(dashboard.code, dashboard.stderr).toBe(0);
-    const issued = new URL((JSON.parse(dashboard.stdout) as { browserUrl: string }).browserUrl);
+    const handoff: { browserUrl: string; reason?: string } = JSON.parse(dashboard.stdout);
+    expect(dashboard.code, handoff.reason ?? dashboard.stderr).toBe(0);
+    const issued = new URL(handoff.browserUrl);
     const url = new URL(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "chat"));
     url.hash = issued.hash;
     await suite.withPage(

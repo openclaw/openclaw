@@ -108,9 +108,10 @@ const video = await api.runtime.mediaUnderstanding.describeVideoFile({
   cfg: api.config,
 });
 
+// receiptImageBuffer is your own image bytes, not an SDK-provided value.
 const extraction = await api.runtime.mediaUnderstanding.extractStructuredWithModel({
   provider: "codex",
-  model: "gpt-5.6-sol",
+  model: "gpt-6-astra",
   input: [
     {
       type: "image",

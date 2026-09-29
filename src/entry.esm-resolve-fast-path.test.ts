@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../test/helpers/temp-dir.js";
 import { installDistEsmResolveFastPath } from "./entry.esm-resolve-fast-path.js";
+import { resolveTestNodeExecPath } from "./test-utils/node-process.js";
 
 type ResolveHook = (
   specifier: string,
@@ -262,7 +263,7 @@ ${registerSource}
           ? [entryPath, ...argv]
           : [nodeOption, hookUrl, entryPath, ...argv];
 
-        const result = spawnSync(process.execPath, nodeArgs, {
+        const result = spawnSync(resolveTestNodeExecPath(), nodeArgs, {
           encoding: "utf8",
           env: {
             ...process.env,

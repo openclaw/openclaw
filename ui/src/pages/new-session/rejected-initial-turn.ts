@@ -15,6 +15,8 @@ export function retainRejectedInitialTurn(options: {
   message: string;
   mentions?: readonly HumanMention[];
   sessionKey: string;
+  sessionId?: string;
+  retryAfter?: Promise<boolean>;
 }): boolean {
   const gateway = options.context.gateway.snapshot;
   const rejectedItem = {
@@ -29,6 +31,7 @@ export function retainRejectedInitialTurn(options: {
     sendError: options.error,
     sendState: "failed" as const,
     sessionKey: options.sessionKey,
+    sessionId: options.sessionId,
     agentId: normalizeAgentId(options.agentId),
   };
   // The rejected turn already has a server-created destination; never resolve
@@ -47,14 +50,13 @@ export function retainRejectedInitialTurn(options: {
     admission,
     rejectedItem,
   );
-  if (persisted) {
-    return false;
+  if (!persisted || options.retryAfter) {
+    // The pane owns delivery, including volatile payloads that cannot fit in storage.
+    prepareInitialTurnHandoff(
+      options.sessionKey,
+      { ...rejectedItem, sendRunId: generateUUID() },
+      options.retryAfter,
+    );
   }
-  // The server already created this key. A volatile handoff prevents retry
-  // from creating a duplicate when large attachments exceed browser storage.
-  prepareInitialTurnHandoff(options.sessionKey, {
-    ...rejectedItem,
-    sendRunId: generateUUID(),
-  });
-  return true;
+  return !persisted;
 }

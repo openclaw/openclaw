@@ -115,4 +115,32 @@ describe("private capture marker admission", () => {
     );
     expect(replaced).toBe(true);
   });
+  it.each(["hop/../raw.txt", "hop/../../hop/../raw.txt"])(
+    "assertNotUpdateCapturePath resolves target components in order: %s",
+    (target) => {
+      const privateDir = path.join(root, "private");
+      fs.mkdirSync(path.join(privateDir, "child"), { recursive: true });
+      fs.writeFileSync(path.join(privateDir, markerName), markerContent);
+      fs.writeFileSync(path.join(privateDir, "raw.txt"), "private bytes");
+      fs.symlinkSync(
+        path.join(privateDir, "child"),
+        path.join(root, "hop"),
+        process.platform === "win32" ? "junction" : "dir",
+      );
+      const alias = path.join(root, "alias");
+      fs.symlinkSync(target, alias);
+      expect(() => assertNotUpdateCapturePath(alias, stateDir)).toThrow(
+        "Private update captures are excluded",
+      );
+    },
+  );
+  it("assertNotUpdateCapturePath preserves an unresolved target with a trailing directory separator", () => {
+    const privateDir = path.join(root, "private");
+    fs.mkdirSync(privateDir);
+    fs.writeFileSync(path.join(privateDir, markerName), markerContent);
+    fs.writeFileSync(path.join(privateDir, "raw.txt"), "private bytes");
+    const alias = path.join(root, "alias");
+    fs.symlinkSync("private/raw.txt/", alias);
+    expect(() => assertNotUpdateCapturePath(alias, stateDir)).not.toThrow();
+  });
 });

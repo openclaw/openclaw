@@ -27,7 +27,7 @@ export function normalizeScpRemoteHost(value: string | null | undefined): string
   if (hasControlOrWhitespace(trimmed)) {
     return undefined;
   }
-  if (trimmed.startsWith("-") || trimmed.includes("/") || trimmed.includes("\\")) {
+  if (trimmed.startsWith("-")) {
     return undefined;
   }
 
@@ -48,13 +48,7 @@ export function normalizeScpRemoteHost(value: string | null | undefined): string
     }
   }
 
-  if (!host || host.startsWith("-") || host.includes("@")) {
-    return undefined;
-  }
-  if (host.includes(":") && !BRACKETED_IPV6.test(host)) {
-    return undefined;
-  }
-  if (!SSH_TOKEN.test(host) && !BRACKETED_IPV6.test(host)) {
+  if (host.startsWith("-") || (!SSH_TOKEN.test(host) && !BRACKETED_IPV6.test(host))) {
     return undefined;
   }
 

@@ -19,6 +19,25 @@ export type AssistantTextSnapshot = {
   };
 };
 
+type AssistantTextMerge = AssistantTextSnapshot & {
+  /** Present only when this merge proves an append to its input snapshot. */
+  appendedText?: string;
+};
+
+/** Append provenance is usable only while the wire still matches the merge base. */
+export function resolveAssistantTextStreamDelta(
+  previous: AssistantTextSnapshot,
+  merged: AssistantTextMerge,
+  streamed: AssistantTextSnapshot,
+): string | undefined {
+  if (previous === streamed && merged.appendedText !== undefined) {
+    return merged.appendedText;
+  }
+  return merged.text.startsWith(streamed.text)
+    ? merged.text.slice(streamed.text.length)
+    : undefined;
+}
+
 /** A text-bearing empty result clears output; a missing text payload does not. */
 export function resolveAssistantResultText(result: unknown): string | undefined {
   const payloads = asOptionalObjectRecord(result)?.payloads;
@@ -88,7 +107,7 @@ export function mergeAssistantText(
   previous: AssistantTextSnapshot,
   input: AssistantTextInput,
   unkeyed: "live" | "append-only",
-): AssistantTextSnapshot {
+): AssistantTextMerge {
   let scope = previous.scope;
   if (!input.itemId) {
     scope = undefined;
@@ -104,6 +123,16 @@ export function mergeAssistantText(
   }
   let text: string;
   if (scope) {
+    // After two provider characters, appends cannot change leading-newline
+    // padding. Avoid slicing and rebuilding the growing item on every delta.
+    if (
+      input.text === undefined &&
+      scope === previous.scope &&
+      previous.text.length - scope.prefix.length - scope.separatorLength >= 2
+    ) {
+      const appendedText = input.delta ?? "";
+      return { text: previous.text + appendedText, scope, appendedText };
+    }
     // Inserted padding is not provider text. Keep it out of later item deltas
     // so a matching cumulative snapshot cannot retract a streamed newline.
     const itemText =
@@ -123,14 +152,19 @@ export function mergeAssistantText(
     scope.separatorLength = itemText ? Math.max(0, scope.boundaryNewlines - leadingNewlines) : 0;
     text = scope.prefix + "\n".repeat(scope.separatorLength) + itemText;
   } else if (input.text === undefined) {
-    text = previous.text + (input.delta ?? "");
+    const appendedText = input.delta ?? "";
+    return { text: previous.text + appendedText, scope, appendedText };
   } else if (unkeyed === "append-only") {
     // Legacy HTTP snapshots recover held prefixes; non-prefix input remains
     // incremental unless its producer explicitly marks a replacement.
-    text =
-      input.replace || input.text.startsWith(previous.text)
-        ? input.text
-        : previous.text + (input.delta ?? input.text);
+    if (input.replace) {
+      return { text: input.text, scope };
+    }
+    if (input.text.startsWith(previous.text)) {
+      return { text: input.text, scope, appendedText: input.text.slice(previous.text.length) };
+    }
+    const appendedText = input.delta ?? input.text;
+    return { text: previous.text + appendedText, scope, appendedText };
   } else if (
     previous.text &&
     input.text.length > previous.text.length &&

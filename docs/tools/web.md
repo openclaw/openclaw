@@ -31,6 +31,9 @@ xAI Responses.
     details.
   </Step>
   <Step title="Configure">
+    Open **Settings → Search** in the Control UI to choose a provider, configure
+    its credentials, and test a search. Or use the CLI:
+
     ```bash
     openclaw configure --section web
     ```
@@ -59,6 +62,32 @@ xAI Responses.
 
   </Step>
 </Steps>
+
+## Search settings
+
+**Settings → Search** separates whether search is enabled from whether a provider
+is configured and working. Choose an agent and model to see the effective search
+route: native search, a managed provider, disabled, or unavailable. For an external
+harness, the page identifies that harness and explains that its search capability
+is determined when a turn starts.
+
+- **Automatic** uses supported native search for the model connection, or the
+  managed provider selected by credential auto-detection.
+- Selecting a managed provider makes that provider available through OpenClaw's
+  `web_search`, including for open-weight models. Provider credentials and options
+  reuse the plugin settings, including compatible custom endpoints and SearXNG
+  instance URLs.
+- **Configured** means credential or setup information is present. It does not
+  prove that the provider accepts the credential or is reachable.
+- **Test search** runs a query through the named managed provider and shows
+  results or an error with latency. It uses the provider's normal account limits
+  and billing. A provider test checks that service; it does not prove an external
+  harness used it. Native search runs inside its model or harness; **Test in chat**
+  opens an unsent chat with the displayed agent and model selected. Ask it to
+  search to verify that route.
+
+Provider setup and search testing require Gateway administrator access. Changes
+use the existing configuration owner; there is no separate search credential store.
 
 ## Choosing a provider
 
@@ -234,6 +263,11 @@ Configured endpoint providers after that:
 
 11. **SearXNG** -- `SEARXNG_BASE_URL` or `plugins.entries.searxng.config.webSearch.baseUrl` (order 200)
 
+If an auto-detected provider fails, OpenClaw tries the next eligible provider.
+If all attempts fail, it reports the first provider's error to help you diagnose
+the primary failure. An explicitly selected provider does not use automatic
+fallback.
+
 Key-free providers such as **Parallel Search (Free)**, **DuckDuckGo**,
 **Ollama Web Search**, and **Codex Hosted Search** never win auto-detection,
 even though they have an internal order value. They are used only when you
@@ -270,7 +304,16 @@ OpenAI plugin and does not apply to OpenAI-compatible proxy base URLs or Azure
 routes. Set `tools.web.search.provider` to another provider such as `brave` to
 keep the managed `web_search` tool for OpenAI models, or set
 `tools.web.search.enabled: false` to disable both managed search and native
-OpenAI search.
+OpenAI search. The same route selection applies to ordinary tool calls,
+Tool Search, and Code Mode; hosted search does not leave a second managed
+`web_search` callable hidden in the catalog. If plugin policy disables or excludes
+the OpenAI provider plugin, the managed search route stays available.
+
+Managed provider failures return the selected provider's identity and a safe,
+actionable diagnostic. Authentication failures identify the HTTP status and
+ask you to check credentials or select another provider. Upstream response
+bodies are not included in model-facing diagnostics. Automatic selection may
+try another configured provider; explicit provider choices never fall back.
 
 ## Native Codex web search
 
@@ -313,7 +356,8 @@ the existing binding for later resume.
 Direct OpenAI ChatGPT Responses traffic can also use OpenAI's hosted
 `web_search` tool. That separate path remains opt-in through
 `tools.web.search.openaiCodex.enabled: true` and only applies to eligible
-`openai/*` models using `api: "openai-chatgpt-responses"`.
+`openai/*` models using `api: "openai-chatgpt-responses"`. An explicitly selected
+managed search provider takes precedence on this transport too.
 
 ```json5
 {
@@ -350,6 +394,26 @@ same `tools.web.search.openaiCodex` restrictions shown above. Authenticate the
 Codex app-server first with `openclaw models auth login --provider openai`.
 The parent agent can use any model or runtime; only the bounded search worker
 runs through Codex.
+
+## CLI harness search
+
+OpenClaw's Claude Code, Codex CLI, and Gemini CLI adapters disable their native
+search tool when `tools.web.search.provider` selects a managed provider. The
+selected provider remains available through OpenClaw's MCP connection, subject
+to the normal tool policy. If that connection or provider is unavailable, the
+adapter does not silently restore native search.
+
+Omit `tools.web.search.provider` to leave native search available. Automatic
+selection is represented by an omitted provider, not the strings `"auto"` or
+`"openai"`; configured provider IDs must be declared by a search plugin.
+`tools.web.search.enabled: false` disables search even when a session has a
+stale enable override. Changing the native search setting updates the CLI
+session fingerprint so a resumed process cannot keep the old search policy.
+Turning search off for a session also removes it from OpenClaw's MCP tool list
+and invocation grant, while leaving unrelated tools available.
+
+Other external harnesses own their native tool behavior; configuring OpenClaw's
+managed provider does not establish that a third-party harness uses it.
 
 ## Network safety
 

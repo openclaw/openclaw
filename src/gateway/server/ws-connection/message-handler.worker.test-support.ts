@@ -12,6 +12,7 @@ import {
   WORKER_COMPUTER_PROTOCOL_FEATURE,
   WORKER_LIVE_EVENT_PROTOCOL_FEATURE,
   WORKER_PORTAL_PROTOCOL_FEATURE,
+  WORKER_PRESENCE_PROTOCOL_FEATURE,
   WORKER_SESSION_TOOLS_PROTOCOL_FEATURE,
   type WorkerSessionToolResult,
   type WorkerTranscriptCommitErrorReason,
@@ -29,6 +30,7 @@ import { GatewayConnectionWork } from "../../server-connection-work.js";
 import type { WorkerConnectionIdentity } from "../../worker-environments/connection-identity.js";
 import { createGatewayWsTestSocket } from "../ws-connection.test-helpers.js";
 import type { GatewayWsClient } from "../ws-types.js";
+import type { GatewayWsMessageHandlerParams } from "./message-handler-types.js";
 import { attachWorkerWsMessageHandler, type WorkerConnectionService } from "./worker-connection.js";
 
 export const CREDENTIAL = ["worker", "credential", "fixture"].join("-");
@@ -41,6 +43,7 @@ export const HANDSHAKE = {
     WORKER_LIVE_EVENT_PROTOCOL_FEATURE,
     WORKER_SESSION_TOOLS_PROTOCOL_FEATURE,
     WORKER_PORTAL_PROTOCOL_FEATURE,
+    WORKER_PRESENCE_PROTOCOL_FEATURE,
     WORKER_INFERENCE_PROTOCOL_FEATURE,
     WORKER_COMPUTER_PROTOCOL_FEATURE,
   ],
@@ -201,7 +204,7 @@ export function attachHarness(
         : { ok: true as const, result: { ackedSeq: LIVE_EVENT.seq } },
     ),
     startInference: vi.fn(
-      (
+      async (
         _identity: WorkerConnectionIdentity,
         _request: WorkerInferenceStartParams,
         sink: InferenceSink,
@@ -213,7 +216,7 @@ export function attachHarness(
         };
       },
     ),
-    cancelInference: vi.fn(() => ({
+    cancelInference: vi.fn(async () => ({
       ok: true as const,
       result: { status: "cancelled" as const },
     })),
@@ -240,6 +243,13 @@ export function attachHarness(
   const setLastFrameMeta = vi.fn();
   const advanceHandshakePhase = vi.fn();
   const connectionWork = new GatewayConnectionWork();
+  const sendResponse = vi.fn<GatewayWsMessageHandlerParams["send"]>((frame) => {
+    responses.push(frame);
+    if (options.closeDuringHello) {
+      close();
+    }
+    return { kind: "sent" };
+  });
   const cleanup = attachWorkerWsMessageHandler({
     socket: socket as unknown as WebSocket,
     connectionWork,
@@ -249,12 +259,7 @@ export function attachHarness(
     publicAdmission: options.omitPublicAdmission
       ? undefined
       : { clientIp: "203.0.113.10", rateLimiter: options.rateLimiter },
-    send: (frame) => {
-      responses.push(frame);
-      if (options.closeDuringHello) {
-        close();
-      }
-    },
+    send: sendResponse,
     close,
     isClosed: () => closed,
     clearHandshakeTimer: vi.fn(),
@@ -281,6 +286,7 @@ export function attachHarness(
     logGateway,
     logWsControl,
     responses,
+    sendResponse,
     service,
     setClient,
     setCloseCause,

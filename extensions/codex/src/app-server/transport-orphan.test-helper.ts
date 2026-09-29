@@ -1,34 +1,41 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 
+export type OrphanFixtureStart = {
+  kind: "start";
+  stateDir: string;
+  env: NodeJS.ProcessEnv;
+} & ({ mode: "fixture" } | { mode: "native"; command: string; cwd: string });
+export type OrphanFixtureRequest = OrphanFixtureStart | { kind: "close"; child: number };
+export type OrphanFixtureTree = { parent: number; child: number; descendant: number };
+
 const fixture = fileURLToPath(import.meta.url);
-if (process.argv[2] === "child") {
-  const descendant = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
-    detached: true,
-    stdio: "ignore",
-  });
-  process.stdout.write(`${JSON.stringify({ child: process.pid, descendant: descendant.pid })}\n`);
-  process.stdin.resume();
-  setInterval(() => {}, 1000);
-} else {
+const children = new Map<number, ChildProcessWithoutNullStreams>();
+async function startTree(request: OrphanFixtureStart): Promise<OrphanFixtureTree> {
   const { createStdioTransport } = await import("./transport-stdio.js");
-  if (process.argv[2] === "native") {
-    const command = process.argv[4]!;
-    const cwd = process.argv[5]!;
-    const child = await createStdioTransport(
-      {
-        transport: "stdio",
-        command,
-        args: ["app-server", "--listen", "stdio://"],
-        cwd,
-        headers: {},
-      },
-      process.env,
-    );
-    child.stderr.pipe(process.stderr);
+  const native = request.mode === "native";
+  const child = await createStdioTransport(
+    {
+      transport: "stdio",
+      command: request.mode === "native" ? request.command : process.execPath,
+      args: native ? ["app-server", "--listen", "stdio://"] : ["--import", "tsx", fixture, "child"],
+      cwd: request.mode === "native" ? request.cwd : undefined,
+      headers: {},
+    },
+    request.env,
+  );
+  children.set(child.pid!, child);
+  child.stderr.pipe(process.stderr);
+  return await new Promise<OrphanFixtureTree>((resolve, reject) => {
+    child.once("error", reject);
+    child.once("exit", () => reject(new Error("Fixture child exited before readiness")));
     const send = (message: object) => child.stdin.write(`${JSON.stringify(message)}\n`);
     createInterface({ input: child.stdout }).on("line", (line) => {
+      if (!native) {
+        resolve({ parent: process.pid, ...JSON.parse(line) });
+        return;
+      }
       // SAFETY: The pinned native test binary emits Codex JSON-RPC envelopes on stdout.
       const message = JSON.parse(line) as {
         id?: number;
@@ -37,9 +44,8 @@ if (process.argv[2] === "child") {
         params: { deltaBase64: string };
       };
       if (message.error) {
-        throw new Error(JSON.stringify(message.error));
-      }
-      if (message.id === 1) {
+        reject(new Error(JSON.stringify(message.error)));
+      } else if (message.id === 1) {
         send({ method: "initialized", params: {} });
         send({
           id: 2,
@@ -54,7 +60,7 @@ if (process.argv[2] === "child") {
             streamStdoutStderr: true,
             disableTimeout: true,
             sandboxPolicy: { type: "dangerFullAccess" },
-            cwd,
+            cwd: request.mode === "native" ? request.cwd : undefined,
           },
         });
       } else if (message.method === "command/exec/outputDelta") {
@@ -62,33 +68,57 @@ if (process.argv[2] === "child") {
           Buffer.from(message.params.deltaBase64, "base64").toString().trim(),
         );
         if (Number.isSafeInteger(descendant) && descendant > 0) {
-          process.stdout.write(
-            `${JSON.stringify({ parent: process.pid, child: child.pid, descendant })}\n`,
-          );
+          resolve({ parent: process.pid, child: child.pid!, descendant });
         }
       }
     });
-    send({
-      id: 1,
-      method: "initialize",
-      params: {
-        clientInfo: { name: "openclaw_orphan_test", version: "1.0.0" },
-        capabilities: { experimentalApi: true },
-      },
+    if (native) {
+      send({
+        id: 1,
+        method: "initialize",
+        params: {
+          clientInfo: { name: "openclaw_orphan_test", version: "1.0.0" },
+          capabilities: { experimentalApi: true },
+        },
+      });
+    }
+  });
+}
+
+if (process.argv[2] === "child") {
+  const descendant = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+    detached: true,
+    stdio: "ignore",
+  });
+  process.stdout.write(`${JSON.stringify({ child: process.pid, descendant: descendant.pid })}\n`);
+  process.stdin.resume();
+  setInterval(() => {}, 1000);
+} else {
+  let pending = Promise.resolve();
+  process.on("message", (request: OrphanFixtureRequest) => {
+    pending = pending.then(async () => {
+      try {
+        if (request.kind === "close") {
+          const child = children.get(request.child);
+          if (!child) {
+            throw new Error("Unknown fixture child");
+          }
+          const { closeCodexAppServerTransportAndWait } = await import("./transport.js");
+          const closed = await closeCodexAppServerTransportAndWait(child);
+          if (!closed.exited) {
+            throw new Error("Fixture child did not exit");
+          }
+          children.delete(request.child);
+          process.send!("closed");
+        } else {
+          // Registration captures each store's environment; starts must remain serial.
+          process.env.OPENCLAW_STATE_DIR = request.stateDir;
+          process.env.PATH = request.env.PATH;
+          process.send!(await startTree(request));
+        }
+      } catch (error) {
+        process.send!({ error: error instanceof Error ? error.message : String(error) });
+      }
     });
-  } else {
-    const child = await createStdioTransport({
-      transport: "stdio",
-      command: process.execPath,
-      args: ["--import", "tsx", fixture, "child"],
-      headers: {},
-    });
-    child.stderr.pipe(process.stderr);
-    createInterface({ input: child.stdout }).once("line", (line) => {
-      process.stdout.write(`${JSON.stringify({ parent: process.pid, ...JSON.parse(line) })}\n`);
-    });
-    child.once("error", (error) => {
-      throw error;
-    });
-  }
+  });
 }

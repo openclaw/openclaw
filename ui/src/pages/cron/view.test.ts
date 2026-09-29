@@ -8,6 +8,30 @@ import {
 } from "./view.test-support.ts";
 
 describe("cron view list pane", () => {
+  it("identifies the agent on each job in a mixed-agent list", async () => {
+    const container = renderView({
+      jobs: [
+        createJob("home", { agentId: "main" }),
+        createJob("research", { agentId: "research" }),
+      ],
+    });
+    document.body.append(container);
+    try {
+      await Promise.all(
+        [...container.querySelectorAll("openclaw-agent-row-chip")].map(
+          (chip) => chip.updateComplete,
+        ),
+      );
+      expect(
+        [...container.querySelectorAll(".cron-table__row .agent-row-chip")].map((chip) =>
+          chip.getAttribute("data-agent-id"),
+        ),
+      ).toEqual(["main", "research"]);
+    } finally {
+      container.remove();
+    }
+  });
+
   it("combines status filters and run history in one tab row", () => {
     const onJobsFiltersChange = vi.fn();
     const onListTabChange = vi.fn();
@@ -178,56 +202,6 @@ describe("cron view list pane", () => {
     ).toEqual(["Failing A", "Failing B", "Healthy A", "Healthy B"]);
   });
 
-  it("keeps inline row actions from selecting the row", () => {
-    const onSelectJob = vi.fn();
-    const onRun = vi.fn();
-    const onToggle = vi.fn();
-    const job = createJob("job-1");
-    const container = renderView({ jobs: [job], onSelectJob, onRun, onToggle });
-
-    getElement(container, '[data-test-id="cron-row-run-job-1"]', HTMLButtonElement).click();
-    expect(onRun).toHaveBeenCalledWith(job, "force");
-
-    const toggle = getElement(container, '[data-test-id="cron-row-toggle-job-1"]', HTMLSpanElement);
-    const toggleInput = getElement(toggle, "wa-switch", HTMLElement) as HTMLElement & {
-      checked: boolean;
-    };
-    expect(toggleInput.checked).toBe(true);
-    toggleInput.checked = false;
-    toggleInput.dispatchEvent(new Event("change", { bubbles: true }));
-    expect(onToggle).toHaveBeenCalledWith(job, false);
-
-    const runIfDue = Array.from(
-      container.querySelectorAll(".cron-table__row .cron-job-menu__item"),
-    ).find((item) => item.textContent?.trim() === "Run if due") as HTMLButtonElement;
-    runIfDue
-      .closest("wa-dropdown")
-      ?.dispatchEvent(new CustomEvent("wa-select", { detail: { item: runIfDue }, bubbles: true }));
-    expect(onRun).toHaveBeenCalledWith(job, "due");
-    expect(onSelectJob).not.toHaveBeenCalled();
-  });
-
-  it("gives row actions job-specific accessible names", () => {
-    const jobs = [
-      createJob("job-a", { name: "Daily backup", enabled: true }),
-      createJob("job-b", { name: "Weekly report", enabled: false }),
-    ];
-    const container = renderView({ jobs, canManage: true });
-    const labels = jobs.map((job) => {
-      const row = getElement(container, `[data-test-id="cron-row-${job.id}"]`, HTMLDivElement);
-      return [
-        getElement(row, ".cron-row-run", HTMLButtonElement).getAttribute("aria-label"),
-        getElement(row, ".cron-job-menu__trigger", HTMLButtonElement).getAttribute("aria-label"),
-        getElement(row, "wa-switch", HTMLElement).textContent?.trim(),
-      ];
-    });
-
-    expect(labels).toEqual([
-      ["Run now: Daily backup", "More actions for Daily backup", "Pause: Daily backup"],
-      ["Run now: Weekly report", "More actions for Weekly report", "Resume: Weekly report"],
-    ]);
-  });
-
   it("opens the create panel from the New task button and suggestions", () => {
     const onOpenCreate = vi.fn();
     const container = renderView({ onOpenCreate });
@@ -376,22 +350,7 @@ describe("cron view list pane", () => {
     expect(on.querySelector('[data-test-id="cron-scheduler-banner"]')).toBeNull();
   });
 
-  it("switches between tasks and run history via the list tabs", () => {
-    const onListTabChange = vi.fn();
-    const tasks = renderView({ onListTabChange });
-    expect(tasks.querySelector(".cron-table")).not.toBeNull();
-    expect(tasks.querySelector(".cron-activity")).toBeNull();
-    tasks
-      .querySelector('[data-test-id="cron-list-tab-activity"]')
-      ?.dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true }));
-    expect(onListTabChange).toHaveBeenCalledWith("activity");
-
-    const activity = renderView({ listTab: "activity" });
-    expect(activity.querySelector(".cron-table")).toBeNull();
-    expect(activity.querySelector(".cron-activity")).not.toBeNull();
-  });
-
-  it("renders shared manual list tabs with active state and selection", () => {
+  it("switches the default inventory and history panels through accessible manual tabs", () => {
     const onListTabChange = vi.fn();
     const container = renderView({ onListTabChange });
     document.body.append(container);
@@ -399,14 +358,19 @@ describe("cron view list pane", () => {
     const tasks = getElement(container, '[data-test-id="cron-tab-all"]', HTMLElement);
     const activity = getElement(container, '[data-test-id="cron-list-tab-activity"]', HTMLElement);
 
+    expect(container.querySelector(".cron-table")).not.toBeNull();
+    expect(container.querySelector(".cron-activity")).toBeNull();
     expect(group.getAttribute("activation")).toBe("manual");
     expect(tasks.getAttribute("aria-selected")).toBe("true");
     expect(activity.getAttribute("aria-selected")).toBe("false");
     activity.dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true }));
-
     expect(onListTabChange).toHaveBeenCalledWith("activity");
     expect(activity.getAttribute("aria-controls")).toBe("cron-list-panel");
     container.remove();
+
+    const history = renderView({ listTab: "activity" });
+    expect(history.querySelector(".cron-table")).toBeNull();
+    expect(history.querySelector(".cron-activity")).not.toBeNull();
   });
 });
 

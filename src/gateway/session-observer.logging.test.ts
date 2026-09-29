@@ -67,6 +67,9 @@ describe("session observer JSON diagnostics", () => {
         runId: "run-1",
         error: `${kind} failed`,
       });
+      if (kind === "model") {
+        expect(diagnostic.consecutiveFailures).toBe(2);
+      }
     } finally {
       harness.observer.dispose();
       loggingState.rawConsole = previousConsole;

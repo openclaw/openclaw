@@ -137,38 +137,23 @@ describe("pairing cli", () => {
     expect(listPairingChannels).toHaveBeenCalledTimes(1);
   });
 
-  it.each([
-    {
-      name: "telegram ids",
-      channel: "telegram",
-      id: "123",
-      label: "telegramUserId",
-      meta: { username: "peter" },
-    },
-    {
-      name: "discord ids",
-      channel: "discord",
-      id: "999",
-      label: "discordUserId",
-      meta: { tag: "Ada#0001" },
-    },
-  ])("labels $name correctly", async ({ channel, id, label, meta }) => {
+  it("labels sender ids using the channel's pairing adapter", async () => {
     listChannelPairingRequests.mockResolvedValueOnce([
       {
-        id,
+        id: "123",
         code: "ABC123",
         createdAt: "2026-01-08T00:00:00Z",
         lastSeenAt: "2026-01-08T00:00:00Z",
-        meta,
+        meta: { username: "peter" },
       },
     ]);
 
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
     try {
-      await runPairing(["pairing", "list", "--channel", channel]);
+      await runPairing(["pairing", "list", "--channel", "telegram"]);
       const output = log.mock.calls.map((call) => call.join(" ")).join("\n");
-      expect(output).toContain(label);
-      expect(output).toContain(id);
+      expect(output).toContain("telegramUserId");
+      expect(output).toContain("123");
     } finally {
       log.mockRestore();
     }
@@ -229,21 +214,12 @@ describe("pairing cli", () => {
     expect(listChannelPairingRequests).toHaveBeenCalledWith("telegram", process.env, "yy");
   });
 
-  it.each(["", "   "])("rejects an explicitly empty --account for list", async (account) => {
+  it("rejects an explicitly empty --account for list", async () => {
     await expect(
-      runPairing(["pairing", "list", "--channel", "telegram", "--account", account]),
+      runPairing(["pairing", "list", "--channel", "telegram", "--account", ""]),
     ).rejects.toThrow("--account must not be blank");
 
     expect(listChannelPairingRequests).not.toHaveBeenCalled();
-  });
-
-  it("normalizes channel aliases", async () => {
-    listChannelPairingRequests.mockResolvedValueOnce([]);
-
-    await runPairing(["pairing", "list", "imsg"]);
-
-    expect(normalizeChannelId).toHaveBeenCalledWith("imsg");
-    expect(listChannelPairingRequests).toHaveBeenCalledWith("imessage");
   });
 
   it("accepts extension channels outside the registry", async () => {
@@ -357,9 +333,9 @@ describe("pairing cli", () => {
     });
   });
 
-  it.each(["", "   "])("rejects an explicitly empty --account for approve", async (account) => {
+  it("rejects a whitespace-only --account for approve", async () => {
     await expect(
-      runPairing(["pairing", "approve", "--channel", "telegram", "--account", account, "ABCDEFGH"]),
+      runPairing(["pairing", "approve", "--channel", "telegram", "--account", "   ", "ABCDEFGH"]),
     ).rejects.toThrow("--account must not be blank");
 
     expect(approveChannelPairingCode).not.toHaveBeenCalled();

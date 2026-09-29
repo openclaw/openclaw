@@ -62,7 +62,7 @@ export function createWorkerPlacementIdleSweep(options: {
         }
         const environment = options.environments.get(placement.environmentId);
         const suspendAfter = environment && profiles[environment.profileId]?.suspendAfter;
-        if (!suspendAfter) {
+        if (!environment || !suspendAfter) {
           continue;
         }
         // Placement activation and every turn-claim admission/release durably refresh this fact.
@@ -87,6 +87,8 @@ export function createWorkerPlacementIdleSweep(options: {
           const beforeDrain = () => {
             const current = options.placements.get(placement.sessionId);
             if (
+              options.getConfig().cloudWorkers?.profiles?.[environment.profileId]?.suspendAfter !==
+                suspendAfter ||
               hasSessionWork?.() ||
               current?.state !== "active" ||
               current.generation !== placement.generation ||

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { root as fsRoot } from "../infra/fs-safe.js";
-import { GITHUB_PUBLICATION_CONFIG_GUARD_JS } from "./github-publication-base.js";
+import { GITHUB_PUBLICATION_CONFIG_GUARD } from "./github-publication-base.js";
 import {
   MAX_RECONCILIATION_ENTRIES,
   MAX_RECONCILIATION_FILE_BYTES,
@@ -62,7 +62,7 @@ const relativeOutput = path.relative(path.resolve(cwd), path.resolve(output));
 if (!relativeOutput.startsWith(".." + path.sep) && !path.isAbsolute(relativeOutput)) {
   throw Error("Publication snapshot output must be outside the workspace");
 }
-${GITHUB_PUBLICATION_CONFIG_GUARD_JS}
+${GITHUB_PUBLICATION_CONFIG_GUARD.script}
 if (text(["for-each-ref", "--count=1", "--format=%(refname)", "refs/replace"])) {
   throw Error("Publication snapshot has unsupported Git replacement metadata");
 }
@@ -77,13 +77,16 @@ const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-publication-in
 try {
   const index = path.resolve(cwd, text(["rev-parse", "--git-path", "index"]));
   env.GIT_INDEX_FILE = path.join(temporary, "index");
-  // Keep explicitly staged ignored paths and cached removals; normalize only the copy.
+  // Keep explicitly staged ignored paths and cached removals; stage changes only in the copy.
+  const indexStat = fs.statSync(index, { bigint: true });
   fs.copyFileSync(index, env.GIT_INDEX_FILE);
+  // A newer copy timestamp hides racy-clean edits. Round down so lost precision only adds reads.
+  const indexTimestamp = Number(indexStat.mtimeNs / 1_000_000_000n);
+  fs.utimesSync(env.GIT_INDEX_FILE, indexTimestamp, indexTimestamp);
   // Unresolved merge stages cannot define an accepted tree.
   git(["write-tree"]);
+  // Ordinary staging preserves unchanged blobs; renormalization would rewrite unrelated CRLF files.
   git(["add", "-A"]);
-  // Normalize after removals, retaining intent-to-add paths and ignoring copied stat caches.
-  git(["add", "--renormalize", "-u"]);
   const workspaceTree = text(["write-tree"]);
   const baseTree = text(["rev-parse", baseCommit + "^{tree}"]);
   const attributes = git(["ls-tree", "-r", "-z", "--full-tree", workspaceTree]);
@@ -129,7 +132,7 @@ try {
 } finally { fs.rmSync(temporary, { recursive: true, force: true }); }
 `;
 
-function parseGitHubRepositoryPublicationSnapshot(
+export function parseGitHubRepositoryPublicationSnapshot(
   raw: string,
   digest: string,
 ): GitHubRepositoryPublicationSnapshot {

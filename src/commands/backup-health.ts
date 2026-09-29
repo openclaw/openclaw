@@ -1,36 +1,13 @@
 import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import {
-  readLatestBackupRun,
-  readLatestSuccessfulBackupRun,
-  type BackupRunRecord,
-} from "../state/backup-run-records.js";
-import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
+import { readBackupRunFreshness, type BackupRunFreshness } from "../state/backup-run-records.js";
 
 // Backups older than two weeks no longer provide a useful routine recovery point.
 const BACKUP_STALE_AFTER_MS = 14 * 24 * 60 * 60 * 1_000;
 
-type BackupFreshness = {
-  latest?: BackupRunRecord;
-  latestOk?: BackupRunRecord;
-};
-
-/** Read backup freshness without creating or repairing an absent state database. */
-export function readBackupFreshness(env: NodeJS.ProcessEnv): BackupFreshness {
-  return (
-    withExistingOpenClawStateDatabaseReadOnly(
-      ({ db }) => ({
-        latest: readLatestBackupRun(db),
-        latestOk: readLatestSuccessfulBackupRun(db),
-      }),
-      { env },
-    ) ?? {}
-  );
-}
-
 /** Format the compact status overview value for the latest backup attempt. */
 export function buildBackupStatusValue(params: {
-  freshness: BackupFreshness;
+  freshness: BackupRunFreshness;
   now?: number;
   formatTimeAgo: (ageMs: number) => string;
 }): string {
@@ -46,7 +23,7 @@ export function buildBackupStatusValue(params: {
 
 /** Build the informational Doctor hint for missing or stale successful backups. */
 function buildBackupDoctorHint(params: {
-  freshness: BackupFreshness;
+  freshness: BackupRunFreshness;
   now?: number;
 }): string | null {
   const latestOk = params.freshness.latestOk;
@@ -71,8 +48,8 @@ function buildBackupDoctorHint(params: {
 }
 
 /** Emit the non-repairing backup freshness hint when it applies. */
-export function noteBackupDoctorHint(env: NodeJS.ProcessEnv): void {
-  const hint = buildBackupDoctorHint({ freshness: readBackupFreshness(env) });
+export async function noteBackupDoctorHint(env: NodeJS.ProcessEnv): Promise<void> {
+  const hint = buildBackupDoctorHint({ freshness: await readBackupRunFreshness(env) });
   if (hint) {
     note(hint, "Backups");
   }

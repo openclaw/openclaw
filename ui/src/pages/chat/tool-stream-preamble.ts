@@ -1,9 +1,11 @@
 import { readAssistantStreamSegmentIdentity } from "@openclaw/gateway-client/browser";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { isCompleteAgentPreamble } from "../../../../src/agents/agent-activity-presentation.js";
 import { stripInlineDirectiveTagsForDelivery } from "../../../../src/utils/directive-tags.js";
 import { reconcileChatRunStartup } from "./chat-run-startup.ts";
 import { retireCommentaryStream } from "./stream-segment-pruning.ts";
 import type { AgentEventPayload, ToolStreamHost } from "./tool-stream-contract.ts";
-import { resolveAcceptedSession } from "./tool-stream-status.ts";
+import { acceptsToolStreamSession } from "./tool-stream-status.ts";
 
 function readPreambleProgressEvent(
   payload: AgentEventPayload,
@@ -15,13 +17,7 @@ function readPreambleProgressEvent(
   if (data.kind !== "preamble") {
     return null;
   }
-  const rawItemId =
-    typeof data.itemId === "string" && data.itemId.trim()
-      ? data.itemId
-      : typeof data.id === "string" && data.id.trim()
-        ? data.id
-        : null;
-  const itemId = rawItemId?.trim();
+  const itemId = normalizeOptionalString(data.itemId) ?? normalizeOptionalString(data.id);
   const progressText = normalizePreambleProgressText(data.progressText);
   if (!progressText && !itemId) {
     return null;
@@ -46,9 +42,17 @@ export function handlePreambleProgress(host: ToolStreamHost, payload: AgentEvent
   if (!progress) {
     return false;
   }
+  if (
+    !isCompleteAgentPreamble({
+      phase: typeof payload.data.phase === "string" ? payload.data.phase : undefined,
+      progressText: progress.text,
+    })
+  ) {
+    return true;
+  }
   // Preambles belong to the visible run; a sibling run must never replace,
   // clear, or persist its commentary into this transcript.
-  if (!resolveAcceptedSession(host, payload, { allowSessionScopedWhenIdle: true }).accepted) {
+  if (!acceptsToolStreamSession(host, payload)) {
     return true;
   }
   if (progress.text) {
@@ -61,13 +65,12 @@ export function handlePreambleProgress(host: ToolStreamHost, payload: AgentEvent
     : -1;
   const existing = host.chatStreamSegments[existingIndex];
   const handoff =
-    progress.itemId && progress.text && (!existing || existing.pendingStreamText)
+    progress.itemId && progress.text
       ? retireCommentaryStream(host, {
           runId: payload.runId,
           itemId: progress.itemId,
           text: progress.text,
           timestamp: payload.ts,
-          pendingStreamText: existing?.pendingStreamText,
         })
       : null;
   progress.text = handoff?.text ?? progress.text;
@@ -77,15 +80,8 @@ export function handlePreambleProgress(host: ToolStreamHost, payload: AgentEvent
       const identity = readAssistantStreamSegmentIdentity(message);
       return identity?.itemId === progress.itemId && identity?.runId === payload.runId;
     });
-  if (persisted) {
-    // A history snapshot or delayed live event can follow the durable row.
-    // Its exact run/item owner already renders the commentary.
-    host.chatStreamSegments = host.chatStreamSegments.filter(
-      (segment) => segment.itemId !== progress.itemId || segment.runId !== payload.runId,
-    );
-    return true;
-  }
-  if (progress.itemId && !progress.text.trim()) {
+  if (persisted || (progress.itemId && !progress.text.trim())) {
+    // Durable or empty commentary retires only its matching keyed live copy.
     host.chatStreamSegments = host.chatStreamSegments.filter(
       (segment) => segment.itemId !== progress.itemId || segment.runId !== payload.runId,
     );
@@ -96,7 +92,6 @@ export function handlePreambleProgress(host: ToolStreamHost, payload: AgentEvent
       segment === existing
         ? {
             ...segment,
-            pendingStreamText: handoff?.pendingStreamText,
             text:
               segment.text.replace(/\s+/gu, " ").trim() === progress.text
                 ? segment.text
@@ -117,7 +112,6 @@ export function handlePreambleProgress(host: ToolStreamHost, payload: AgentEvent
       ts: payload.ts,
       runId: payload.runId,
       ...(progress.itemId ? { itemId: progress.itemId } : {}),
-      ...(handoff?.pendingStreamText ? { pendingStreamText: handoff.pendingStreamText } : {}),
     },
   ];
   return true;

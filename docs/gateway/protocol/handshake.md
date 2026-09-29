@@ -128,14 +128,19 @@ Validating before send:
 `pluginSurfaceUrls` is optional and maps plugin surface names (e.g.
 `canvas`) to scoped hosted URLs; it may expire, so nodes call
 `node.pluginSurface.refresh` with `{ "surface": "canvas" }` for a fresh entry.
+The Control UI uses `plugin.surface.refresh` only when the hello's granted scopes
+satisfy `operator.read` (including `operator.write` and `operator.admin`). A
+`FORBIDDEN` response stops automatic renewal retries for the current lease;
+reconnecting evaluates the new hello's grants.
 The deprecated `canvasHostUrl` / `canvasCapability` / `node.canvas.capability.refresh`
 path is not supported; use plugin surfaces.
 The `sessions.observer.ask` method was removed; use `sessions.companion.ask`.
 The snapshot's optional `appliedConfigHash` is the resolved source-config revision
 accepted by the active Gateway runtime. Clients can compare it with
 `config.get.configRevisionHash` to determine whether a newer saved config still
-needs a restart. `config.get.hash` remains the raw root-file revision used by
-config write conflict guards.
+needs a restart. `config.get.hash` is the opaque authored revision used by config
+write conflict guards. It covers root-file bytes and the captured identities and
+content of included files.
 
 The snapshot's optional `controlUiIdentityUrl` advertises the active Gateway's
 HTTPS dashboard URL when it uses trusted-proxy or Tailscale Serve identity.
@@ -251,6 +256,8 @@ Operator clients may advertise optional capabilities in `connect.params.caps`:
 
 - `tool-events`: accepts structured tool lifecycle events.
 - `inline-widgets`: can render hosted inline widget tool results.
+- `chat-only-assistant-text`: renders assistant text from `chat` and omits the
+  redundant assistant-text `agent` stream. See [event families](/gateway/protocol/rpc-bootstrap-and-events#common-event-families).
 
 Client capabilities describe the connected client, not authorization. Agent tools may declare required capabilities; the Gateway omits those tools unless every requirement appears in the originating client's `caps`. Channel-originated runs have no Gateway client capabilities, so capability-gated tools are unavailable even when tool policy explicitly allows them.
 

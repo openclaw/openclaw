@@ -1,11 +1,13 @@
 /**
  * Test harness mocks for embedded-run overflow compaction coverage.
  */
+
 import { matchesContextOverflowMessage } from "@openclaw/ai/internal/runtime";
 import { type Mock, vi } from "vitest";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { ContextEngine, ContextEngineSessionTarget } from "../../context-engine/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { makeEmptyPluginMetadataOwners } from "../../plugins/current-plugin-metadata.test-support.js";
 import type {
   PluginHookBeforeAgentFinalizeEvent,
   PluginHookBeforeAgentFinalizeResult,
@@ -98,17 +100,7 @@ const emptyPluginMetadataSnapshot: PluginMetadataSnapshot = {
   byPluginId: new Map(),
   normalizePluginId: (pluginId: string) => pluginId,
   declaredProviderOwners: new Map(),
-  owners: {
-    channels: new Map(),
-    channelConfigs: new Map(),
-    providers: new Map(),
-    modelCatalogProviders: new Map(),
-    cliBackends: new Map(),
-    setupProviders: new Map(),
-    commandAliases: new Map(),
-    contracts: new Map(),
-    modelIdNormalizationPolicies: new Map(),
-  },
+  owners: makeEmptyPluginMetadataOwners(),
   metrics: {
     registrySnapshotMs: 0,
     manifestRegistryMs: 0,
@@ -128,6 +120,7 @@ type MockAgentDiscoveryStores = {
 
 type MockResolveModelResult = MockAgentDiscoveryStores & {
   model: MockResolvedModel;
+  logicalRef: { provider: string; model: string };
   error: null;
 };
 
@@ -209,7 +202,7 @@ export const mockedAcquireAgentRunPreparedModelRuntime = vi.fn(
         metadataSnapshot: { ...emptyPluginMetadataSnapshot, workspaceDir: input.workspaceDir },
         createStores: () => ({ authStorage: {}, modelRegistry: {} }),
       },
-      release: vi.fn(),
+      [Symbol.asyncDispose]: vi.fn(async () => {}),
     };
   },
 );
@@ -237,6 +230,7 @@ function createMockResolvedModel(
   )?.models?.providers?.[provider];
   const usesOpenAITransport = provider === "openai" || provider === "codex";
   return {
+    logicalRef: { provider, model: modelId },
     model: {
       id: modelId,
       provider,
@@ -968,6 +962,8 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
   }));
 
   vi.doMock("../prepared-model-runtime.js", () => ({
+    // Standalone runner fixtures have no configured Gateway publication.
+    loadPublishedGatewayReplyDispatchRuntime: vi.fn(async () => undefined),
     activateStandalonePreparedModelRuntime: vi.fn(async () => {}),
     acquireAgentRunPreparedModelRuntime: mockedAcquireAgentRunPreparedModelRuntime,
     acquireReadOnlyPreparedModelRuntime: mockedAcquireAgentRunPreparedModelRuntime,

@@ -349,11 +349,95 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
     ).toBe(true);
   });
 
+  it("adopts a newer producer attempt without replacing its original dispatch", async () => {
+    const test = fixture();
+    await test.artifact(
+      `${DISPATCH_ID}-dispatch`,
+      "dispatch.json",
+      {
+        request: artifactRequest(),
+        runId: "81",
+        runAttempt: "1",
+      },
+      true,
+    );
+    test.api(
+      "actions/runs/81",
+      workflowRun({ run_attempt: 2, status: "completed", conclusion: "success" }),
+    );
+    const result = test.run("resolve", { GITHUB_RUN_ATTEMPT: "2" });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.outputs).toMatchObject({
+      run_id: "81",
+      run_attempt: "2",
+      dispatch_id: DISPATCH_ID,
+    });
+  });
+
+  it.each(["contents retry", "receipt retry", "replacement preparation failed"] as const)(
+    "collects failed-job recovery with carried-forward npm bytes: %s",
+    async (outcome) => {
+      const test = fixture();
+      const current = workflowRun({ run_attempt: 2, status: "completed", conclusion: "success" });
+      test.api("actions/runs/81", current);
+      test.api(
+        "actions/runs/81/attempts/1",
+        workflowRun({ status: "completed", conclusion: "failure" }),
+      );
+      test.api("actions/runs/81/attempts/2", current);
+      if (outcome === "contents retry") {
+        test.qualified.producer.runAttempt = "2";
+        test.qualified.artifact.runAttempt = "2";
+        test.jobs[1]!.run_attempt = 2;
+        test.outputs.qualified_preflight_bundle_json = JSON.stringify(test.qualified);
+      }
+      test.api("actions/runs/81/attempts/1/jobs?per_page=100&page=1", {
+        total_count: outcome === "contents retry" ? 1 : 2,
+        jobs: outcome === "contents retry" ? [test.jobs[0]] : test.jobs,
+      });
+      test.api("actions/runs/81/attempts/2/jobs?per_page=100&page=1", {
+        total_count: 1,
+        jobs:
+          outcome === "receipt retry"
+            ? [{ ...test.jobs[0], id: 990, name: "Seal artifact producer receipt", run_attempt: 2 }]
+            : outcome === "contents retry"
+              ? [test.jobs[1]]
+              : [{ ...test.jobs[0], id: 999, run_attempt: 2, conclusion: "failure" }],
+      });
+      await test.artifact(
+        "openclaw-npm-package-descriptor-81-1",
+        "prepared-npm-bundle.json",
+        test.raw,
+      );
+      const raw = test.run("wait", { ARTIFACT_OUTPUT: "raw", ARTIFACT_RUN_ATTEMPT: "2" });
+      if (outcome === "replacement preparation failed") {
+        expectRejected(raw, "Successful npm preparation was replaced");
+        return;
+      }
+      expect(raw.status, raw.stderr).toBe(0);
+      expect(JSON.parse(raw.outputs.prepared_bundle_json!)).toEqual(test.raw);
+      const sealed = test.run("receipt", {
+        GITHUB_RUN_ID: "81",
+        GITHUB_RUN_ATTEMPT: "2",
+        ARTIFACT_OUTPUTS_JSON: JSON.stringify(test.outputs),
+      });
+      expect(sealed.status, sealed.stderr).toBe(0);
+      await test.artifact(
+        "full-release-artifact-receipt-81-2",
+        "artifact-receipt.json",
+        JSON.parse(readFileSync(join(sealed.outputs.directory!, "artifact-receipt.json"), "utf8")),
+      );
+      const receipt = test.run("wait", { ARTIFACT_OUTPUT: "receipt", ARTIFACT_RUN_ATTEMPT: "2" });
+      expect(receipt.status, receipt.stderr).toBe(0);
+      expect(receipt.outputs).toEqual(test.outputs);
+    },
+  );
+
   it.each([
     "missing record",
     "changed request",
     "record names another producer",
-    "another producer attempt",
+    "producer attempt regressed",
     "missing producer",
   ] as const)("refuses retry reuse with %s", async (failure) => {
     const test = fixture();
@@ -373,15 +457,17 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
     } else {
       await test.artifact(`${DISPATCH_ID}-dispatch`, "dispatch.json", record, true);
     }
-    if (failure === "another producer attempt") {
-      test.api("actions/runs/81", workflowRun({ run_attempt: 2 }));
+    if (failure === "producer attempt regressed") {
+      record.runAttempt = "2";
+      await test.artifact(`${DISPATCH_ID}-dispatch`, "dispatch.json", record, true);
+      test.api("actions/runs/81", workflowRun({ run_attempt: 1 }));
     }
     if (failure === "missing producer") {
       test.api("actions/runs/81", { fixtureError: "HTTP 404: producer missing" });
     }
     const result = test.run("resolve", { GITHUB_RUN_ATTEMPT: "2", ARTIFACT_RUN_ID: "99" });
     const message =
-      failure === "another producer attempt"
+      failure === "producer attempt regressed"
         ? "producer run identity changed"
         : failure === "missing producer"
           ? "HTTP 404: producer missing"

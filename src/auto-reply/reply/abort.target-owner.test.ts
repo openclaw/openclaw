@@ -1,5 +1,5 @@
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, onTestFinished } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   loadSessionEntry,
@@ -12,6 +12,7 @@ import {
   patchSessionEntry,
 } from "../../plugin-sdk/session-store-runtime.js";
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { tryFastAbortFromMessage } from "./abort.js";
 import { handleStopCommand } from "./commands-session-abort.js";
 import type { HandleCommandsParams } from "./commands-types.js";
@@ -93,8 +94,11 @@ describe.each(["fast", "command"] as const)("%s Stop current owner", (pathKind) 
     const state = await setupStop();
     const { getOrCreateSessionMcpRuntime } =
       await import("../../agents/agent-bundle-mcp-manager.test-support.js");
-    const { getSessionMcpRuntimeManagerForTesting } =
+    const { getSessionMcpRuntimeManagerForTesting, setSessionMcpRuntimeScheduler } =
       await import("../../agents/agent-bundle-mcp-manager-api.js");
+    const scheduler = createTestGatewayScheduler();
+    onTestFinished(() => scheduler.stop());
+    await setSessionMcpRuntimeScheduler(scheduler);
     const manager = getSessionMcpRuntimeManagerForTesting();
     try {
       await getOrCreateSessionMcpRuntime({
@@ -280,8 +284,26 @@ describe.each(["fast", "command"] as const)("%s Stop current owner", (pathKind) 
       resetTriggered: false,
     });
     operation.attachBackend({ kind: "embedded", cancel: () => {}, isStreaming: () => true });
+    const aborted = createDeferred();
+    const onAbort = () => aborted.resolve();
+    operation.abortSignal.addEventListener("abort", onAbort, { once: true });
     const stopping =
       pathKind === "fast" ? tryFastAbortFromMessage(state) : handleStopCommand(state.params, true);
+    onTestFinished(async () => {
+      operation.abortSignal.removeEventListener("abort", onAbort);
+      release.resolve();
+      await Promise.allSettled([writer, stopping]);
+      operation.complete();
+    });
+    void stopping.then(
+      () => {
+        if (!operation.abortSignal.aborted) {
+          aborted.reject(new Error("Stop completed without aborting the active operation"));
+        }
+      },
+      (error: unknown) => aborted.reject(error),
+    );
+    await aborted.promise;
     expect(operation.abortSignal.aborted).toBe(true);
     release.resolve();
     await writer;
@@ -292,7 +314,6 @@ describe.each(["fast", "command"] as const)("%s Stop current owner", (pathKind) 
     expect(loadSessionEntry({ storePath: state.storePath, sessionKey })?.abortedLastRun).toBe(
       false,
     );
-    operation.complete();
   });
 
   it("completes cancellation when its own abort releases the live publisher", async () => {

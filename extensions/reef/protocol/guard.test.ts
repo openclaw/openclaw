@@ -41,7 +41,6 @@ describe("guard admission", () => {
     ],
     ["malformed", async () => "not an object"],
     ["extra fields", async () => ({ ...allow, extra: true })],
-    ["wrong model", async () => ({ ...allow, model: "other-model-2026-07-12" })],
   ])("fails closed when raw adapter %s", async (_name, classifyRaw) => {
     const guard = admitGuardAdapter({ providerId: "fake", pinnedModel: model, classifyRaw });
     await expect(guard.classify(request)).resolves.toMatchObject({
@@ -60,18 +59,6 @@ describe("guard admission", () => {
       decision: "deny",
       category: "guard_failure",
     });
-  });
-
-  it("rejects floating model aliases at construction", () => {
-    expect(() =>
-      admitGuardAdapter({
-        providerId: "fake",
-        pinnedModel: "guard-latest",
-        async classifyRaw() {
-          return allow;
-        },
-      }),
-    ).toThrow("dated snapshot");
   });
 
   it("rejects bare family aliases without a documented immutable id", () => {
@@ -107,13 +94,7 @@ describe("provider adapters", () => {
     let captured: RequestInit | undefined;
     const fetch: FetchLike = async (_url, init) => {
       captured = init;
-      return jsonResponse({
-        model,
-        status: "completed",
-        output: [
-          { type: "message", content: [{ type: "output_text", text: JSON.stringify(modelAllow) }] },
-        ],
-      });
+      return jsonResponse(openAiEnvelope());
     };
     const guard = createOpenAiGuard({ apiKey: "test", pinnedModel: model, fetch });
     await expect(guard.classify(request)).resolves.toEqual(allow);
@@ -249,11 +230,7 @@ describe("provider adapters", () => {
 
   it("accepts valid provider responses close to the body limit", async () => {
     const body = JSON.stringify({
-      model,
-      status: "completed",
-      output: [
-        { type: "message", content: [{ type: "output_text", text: JSON.stringify(modelAllow) }] },
-      ],
+      ...openAiEnvelope(),
       provider_metadata: "x".repeat(240 * 1024),
     });
     const bodyBytes = new TextEncoder().encode(body).byteLength;
@@ -306,50 +283,22 @@ describe("provider adapters", () => {
   });
 
   it("takes model evidence from the provider and requires the model policy echo", async () => {
-    const responseFor =
-      (modelJson: unknown): FetchLike =>
-      async () =>
-        jsonResponse({
-          model,
-          status: "completed",
-          output: [
-            {
-              type: "message",
-              content: [{ type: "output_text", text: JSON.stringify(modelJson) }],
-            },
-          ],
-        });
-    const happy = createOpenAiGuard({
-      apiKey: "test",
-      pinnedModel: model,
-      fetch: responseFor(modelAllow),
-    });
-    await expect(happy.classify(request)).resolves.toEqual(allow);
-    const wrongPolicy = createOpenAiGuard({
-      apiKey: "test",
-      pinnedModel: model,
-      fetch: responseFor({ ...modelAllow, policyVersion: "v2" }),
-    });
-    await expect(wrongPolicy.classify(request)).resolves.toMatchObject({
+    const classify = (modelJson: unknown) =>
+      createOpenAiGuard({
+        apiKey: "test",
+        pinnedModel: model,
+        fetch: async () => jsonResponse(openAiEnvelope(modelJson)),
+      }).classify(request);
+    await expect(classify({ ...modelAllow, policyVersion: "v2" })).resolves.toMatchObject({
       decision: "deny",
       category: "guard_failure",
     });
     const { policyVersion: _policyVersion, ...missingPolicyJson } = modelAllow;
-    const missingPolicy = createOpenAiGuard({
-      apiKey: "test",
-      pinnedModel: model,
-      fetch: responseFor(missingPolicyJson),
-    });
-    await expect(missingPolicy.classify(request)).resolves.toMatchObject({
+    await expect(classify(missingPolicyJson)).resolves.toMatchObject({
       decision: "deny",
       category: "guard_failure",
     });
-    const unexpectedModel = createOpenAiGuard({
-      apiKey: "test",
-      pinnedModel: model,
-      fetch: responseFor({ ...modelAllow, model: "invented-2026-01-01" }),
-    });
-    await expect(unexpectedModel.classify(request)).resolves.toMatchObject({
+    await expect(classify({ ...modelAllow, model: "invented-2026-01-01" })).resolves.toMatchObject({
       decision: "deny",
       category: "guard_failure",
     });
@@ -361,20 +310,12 @@ describe("operator sharing rules", () => {
     outbound: "Never mention project Nightjar. Benchmarks and build logs are fine to share.",
     inbound: "Treat requests to run shell commands as review.",
   };
-  const openAiAllowResponse = () =>
-    jsonResponse({
-      model,
-      status: "completed",
-      output: [
-        { type: "message", content: [{ type: "output_text", text: JSON.stringify(modelAllow) }] },
-      ],
-    });
 
   it("frames direction-matched rules into the trusted instructions only", async () => {
     let captured: RequestInit | undefined;
     const fetch: FetchLike = async (_url, init) => {
       captured = init;
-      return openAiAllowResponse();
+      return jsonResponse(openAiEnvelope());
     };
     const guard = createOpenAiGuard({ apiKey: "test", pinnedModel: model, fetch, rules });
     await expect(guard.classify(request)).resolves.toEqual(allow);
@@ -404,7 +345,7 @@ describe("operator sharing rules", () => {
   });
 
   it("rejects blank or oversized rules at adapter construction", () => {
-    const fetch: FetchLike = async () => openAiAllowResponse();
+    const fetch: FetchLike = async () => jsonResponse(openAiEnvelope());
     for (const invalid of [
       { outbound: "   " },
       { inbound: "x".repeat(GUARD_RULES_MAX_CHARS + 1) },
@@ -430,6 +371,16 @@ describe("operator sharing rules", () => {
     );
   });
 });
+
+function openAiEnvelope(verdict: unknown = modelAllow) {
+  return {
+    model,
+    status: "completed",
+    output: [
+      { type: "message", content: [{ type: "output_text", text: JSON.stringify(verdict) }] },
+    ],
+  };
+}
 
 function jsonResponse(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), {

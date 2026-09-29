@@ -45,6 +45,55 @@ describe("resolveOpenAiCompatModelOverride", () => {
       .mockResolvedValue([{ id: "gpt-5.4", name: "GPT 5.4", provider: "openai" }]);
   });
 
+  it("keeps provider-wildcard grants separate from a colliding default provider", async () => {
+    loadConfigMock.mockReturnValue({
+      agents: {
+        ownership: "explicit",
+        list: [{ id: "main" }],
+        defaults: { model: { primary: "Reader" }, modelPolicy: { allow: ["custom/*"] } },
+      },
+      models: {
+        providers: {
+          "custom/team": {
+            api: "openai-completions",
+            baseUrl: "https://fixture.invalid/v1",
+            models: [
+              {
+                id: "Reader",
+                name: "Reader",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                maxTokens: 4096,
+              },
+            ],
+          },
+        },
+      },
+    } satisfies OpenClawConfig);
+    loadGatewayModelCatalogMock.mockResolvedValue([
+      { provider: "custom", id: "team/Reader", name: "Allowed model" },
+      { provider: "custom/team", id: "Reader", name: "Other provider default" },
+    ]);
+
+    await expect(
+      resolveOpenAiCompatModelOverride({
+        req: createReq({ "x-openclaw-model": "Reader" }),
+        agentId: "main",
+        model: "openclaw",
+      }),
+    ).resolves.toEqual({
+      errorMessage: "Model 'custom/team/Reader' is not allowed for agent 'main'.",
+    });
+    await expect(
+      resolveOpenAiCompatModelOverride({
+        req: createReq({ "x-openclaw-model": "custom/team/Reader" }),
+        agentId: "main",
+        model: "openclaw",
+      }),
+    ).resolves.toEqual({ modelOverride: "custom/team/Reader" });
+  });
+
   it("rejects CLI model overrides outside the configured allowlist", async () => {
     await expect(
       resolveOpenAiCompatModelOverride({
@@ -57,7 +106,8 @@ describe("resolveOpenAiCompatModelOverride", () => {
     });
   });
 
-  it.each(["main", "beta"])("reads the prepared catalog for selected agent %s", async (agentId) => {
+  it("reads the prepared catalog for the selected non-default agent", async () => {
+    const agentId = "beta";
     await expect(
       resolveOpenAiCompatModelOverride({
         req: createReq({ "x-openclaw-model": "openai/gpt-5.4" }),

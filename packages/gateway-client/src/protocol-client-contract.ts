@@ -1,7 +1,24 @@
 // Wire-client contract types shared by GatewayProtocolClient and its adapters.
 import type { ErrorShape, EventFrame, HelloOk } from "@openclaw/gateway-protocol";
+import type { GatewayClientMode, GatewayClientName } from "@openclaw/gateway-protocol/client-info";
 import type { GatewayProtocolRequestTiming } from "./pending-request.js";
 import type { GatewayProtocolRequestError } from "./protocol-request.js";
+
+export type GatewayClientCloseInfo = {
+  phase: "pre-hello" | "post-hello";
+  socketOpened: boolean;
+  transportValidated: boolean;
+  connectRequestSent?: boolean;
+  transientPreHelloCleanClose: boolean;
+  connectError?: Error;
+};
+
+export type GatewayClientConnectionMetadata = {
+  clientName?: GatewayClientName;
+  hasDeviceIdentity: boolean;
+  mode?: GatewayClientMode;
+  preauthHandshakeTimeoutMs?: number;
+};
 
 export type GatewayProtocolSocket = {
   isOpen: () => boolean;
@@ -14,7 +31,11 @@ export type GatewayProtocolSocketHandlers = {
   close: (code: number, reason: string) => void;
   error: (error: Error) => void;
 };
-type GatewayProtocolConnectContext<TPlan> = {
+export type GatewayProtocolConnectAuthority = {
+  signal: AbortSignal;
+  assertCurrent: () => void;
+};
+type GatewayProtocolConnectContext<TPlan> = GatewayProtocolConnectAuthority & {
   generation: number;
   nonce: string | null;
   challengeTs: number | null | undefined;
@@ -66,25 +87,29 @@ export type GatewayProtocolClientOptions<TPlan> = {
   createRequestError?: (error: Partial<ErrorShape>) => GatewayProtocolRequestError;
   createRequestTimeoutError?: (method: string, timeoutMs: number, requestSent: boolean) => Error;
   createRequestAbortError?: (method: string) => Error;
-  buildConnectPlan: (params: {
-    nonce: string | null;
-    challengeTs: number | null | undefined;
-    generation: number;
-  }) => TPlan | Promise<TPlan>;
+  buildConnectPlan: (
+    params: GatewayProtocolConnectAuthority & {
+      nonce: string | null;
+      challengeTs: number | null | undefined;
+      serverCapabilities: readonly string[];
+      generation: number;
+    },
+  ) => TPlan | Promise<TPlan>;
   buildConnectParams: (plan: TPlan) => unknown;
   onConnectPlanError?: (error: Error) => GatewayProtocolConnectDecision;
-  onConnectHello?: (hello: HelloOk, context: GatewayProtocolConnectContext<TPlan>) => void;
+  onConnectHello?: (hello: HelloOk, context: GatewayProtocolConnectContext<TPlan>) => unknown;
   onHello?: (hello: HelloOk) => void;
   onConnectFailure?: (
     error: GatewayProtocolRequestError,
     context: GatewayProtocolConnectContext<TPlan>,
-  ) => GatewayProtocolConnectDecision;
+  ) => GatewayProtocolConnectDecision | Promise<GatewayProtocolConnectDecision>;
   resolveClose: (context: GatewayProtocolCloseContext) => GatewayProtocolCloseDecision;
   onClose?: (context: GatewayProtocolCloseContext, decision: GatewayProtocolCloseDecision) => void;
   notifyStoppedClose?: boolean;
   onConnectError?: (error: Error) => void;
   onSocketFactoryError?: (error: Error) => void;
   onReconnectStopped?: (error: Error) => void;
+  onReconnectScheduled?: (delayMs: number, signal: AbortSignal) => void;
   onParseError?: (error: unknown) => void;
   onEvent?: (event: EventFrame) => void;
   onGap?: (info: { expected: number; received: number }) => void;

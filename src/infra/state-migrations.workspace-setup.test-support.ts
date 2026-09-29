@@ -59,7 +59,7 @@ export function useWorkspaceMigrationTestFixture() {
 
   async function migrate(context: Parameters<typeof detect>[0]) {
     return await migrateLegacyWorkspaceState({
-      detected: detect(context),
+      detected: await detect(context),
       env: context.env,
       stateDir: context.stateDir,
     });

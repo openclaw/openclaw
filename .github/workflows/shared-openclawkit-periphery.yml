@@ -63,6 +63,7 @@ jobs:
               "apps/shared/OpenClawKit/",
               ".github/workflows/shared-openclawkit-periphery.yml",
               "scripts/install-periphery.sh",
+              "scripts/lib/swift-toolchain.sh",
               "scripts/periphery-intersection.mjs",
               "scripts/ios-configure-signing.sh",
               "scripts/ios-write-swift-filelist.mjs",
@@ -79,7 +80,7 @@ jobs:
     name: Scan shared kit from iOS
     needs: scope
     if: ${{ needs.scope.outputs.should-scan == 'true' }}
-    runs-on: macos-26
+    runs-on: xcode-27
     timeout-minutes: 45
     steps:
       - name: Checkout
@@ -93,19 +94,8 @@ jobs:
       - name: Verify Xcode
         run: |
           set -euo pipefail
-          for xcode_app in /Applications/Xcode_26.6.app /Applications/Xcode-26.6.0.app; do
-            if [ -d "$xcode_app/Contents/Developer" ]; then
-              sudo xcode-select -s "$xcode_app/Contents/Developer"
-              break
-            fi
-          done
-          xcodebuild -version
-          xcode_version="$(xcodebuild -version | awk 'NR == 1 { print $2 }')"
-          if [[ "$xcode_version" != 26.6* ]]; then
-            echo "error: expected Xcode 26.6, got $xcode_version" >&2
-            exit 1
-          fi
-          swift --version
+          source scripts/lib/swift-toolchain.sh
+          select_xcode_toolchain
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -184,7 +174,7 @@ jobs:
     name: Scan shared kit from macOS
     needs: scope
     if: ${{ needs.scope.outputs.should-scan == 'true' }}
-    runs-on: macos-26
+    runs-on: xcode-27
     timeout-minutes: 45
     steps:
       - name: Checkout
@@ -198,25 +188,26 @@ jobs:
       - name: Verify Xcode
         run: |
           set -euo pipefail
-          for xcode_app in /Applications/Xcode_26.6.app /Applications/Xcode-26.6.0.app; do
-            if [ -d "$xcode_app/Contents/Developer" ]; then
-              sudo xcode-select -s "$xcode_app/Contents/Developer"
-              break
-            fi
-          done
-          xcodebuild -version
-          xcode_version="$(xcodebuild -version | awk 'NR == 1 { print $2 }')"
-          if [[ "$xcode_version" != 26.6* ]]; then
-            echo "error: expected Xcode 26.6, got $xcode_version" >&2
-            exit 1
-          fi
-          swift --version
+          source scripts/lib/swift-toolchain.sh
+          select_xcode_toolchain
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
           cache-mode: restore
           install-bun: "false"
+          install-deps: "false"
+
+      - name: Install Mermaid renderer dependencies
+        env:
+          CI: "true"
+        run: >-
+          pnpm install --frozen-lockfile --prefer-offline --optional
+          --filter '@openclaw/mermaid-renderer...'
+          --config.ignore-scripts=false
+          --config.engine-strict=false
+          --config.enable-pre-post-scripts=true
+          --config.side-effects-cache=true
 
       - name: Prepare Apple Mermaid assets
         run: node scripts/prepare-apple-mermaid.mjs
@@ -285,6 +276,12 @@ jobs:
         with:
           name: shared-periphery-macos-${{ github.run_id }}
           path: ${{ runner.temp }}/shared-periphery-macos
+
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.21.0"
+          package-manager-cache: false
 
       - name: Intersect exact Swift identities
         run: |

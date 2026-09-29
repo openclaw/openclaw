@@ -1,11 +1,10 @@
-import {
-  definePluginEntry,
-  type OpenClawConfig,
-  type ProviderCatalogContext,
-} from "openclaw/plugin-sdk/plugin-entry";
+import { definePluginEntry, type ProviderCatalogContext } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import { buildOpenAICompatibleLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   applyStepFunPlanConfig,
   applyStepFunPlanConfigCn,
@@ -28,11 +27,29 @@ import {
 type StepFunRegion = "cn" | "intl";
 type StepFunSurface = "standard" | "plan";
 
+const STEPFUN_SURFACES = {
+  standard: {
+    providerId: STEPFUN_PROVIDER_ID,
+    label: "StepFun",
+    authLabel: "StepFun Standard",
+    defaultModel: STEPFUN_DEFAULT_MODEL_REF,
+    baseUrls: { cn: STEPFUN_STANDARD_CN_BASE_URL, intl: STEPFUN_STANDARD_INTL_BASE_URL },
+    buildProvider: buildStepFunProvider,
+    applyConfig: { cn: applyStepFunStandardConfigCn, intl: applyStepFunStandardConfig },
+  },
+  plan: {
+    providerId: STEPFUN_PLAN_PROVIDER_ID,
+    label: "StepFun Step Plan",
+    authLabel: "StepFun Step Plan",
+    defaultModel: STEPFUN_PLAN_DEFAULT_MODEL_REF,
+    baseUrls: { cn: STEPFUN_PLAN_CN_BASE_URL, intl: STEPFUN_PLAN_INTL_BASE_URL },
+    buildProvider: buildStepFunPlanProvider,
+    applyConfig: { cn: applyStepFunPlanConfigCn, intl: applyStepFunPlanConfig },
+  },
+};
+
 function trimExplicitBaseUrl(ctx: ProviderCatalogContext, providerId: string): string | undefined {
-  const explicitProvider = ctx.config.models?.providers?.[providerId];
-  const baseUrl =
-    typeof explicitProvider?.baseUrl === "string" ? explicitProvider.baseUrl.trim() : "";
-  return baseUrl || undefined;
+  return normalizeOptionalString(ctx.config.models?.providers?.[providerId]?.baseUrl);
 }
 
 function inferRegionFromBaseUrl(baseUrl: string | undefined): StepFunRegion | undefined {
@@ -66,28 +83,6 @@ function inferRegionFromProfileId(profileId: string | undefined): StepFunRegion 
   return undefined;
 }
 
-function inferRegionFromEnv(env: NodeJS.ProcessEnv): StepFunRegion | undefined {
-  // Shared env-only setup needs one stable fallback region.
-  if (env.STEPFUN_API_KEY?.trim()) {
-    return "intl";
-  }
-  return undefined;
-}
-
-function inferRegionFromExplicitBaseUrls(ctx: ProviderCatalogContext): StepFunRegion | undefined {
-  return (
-    inferRegionFromBaseUrl(trimExplicitBaseUrl(ctx, STEPFUN_PROVIDER_ID)) ??
-    inferRegionFromBaseUrl(trimExplicitBaseUrl(ctx, STEPFUN_PLAN_PROVIDER_ID))
-  );
-}
-
-function resolveDefaultBaseUrl(surface: StepFunSurface, region: StepFunRegion): string {
-  if (surface === "plan") {
-    return region === "cn" ? STEPFUN_PLAN_CN_BASE_URL : STEPFUN_PLAN_INTL_BASE_URL;
-  }
-  return region === "cn" ? STEPFUN_STANDARD_CN_BASE_URL : STEPFUN_STANDARD_INTL_BASE_URL;
-}
-
 async function resolveStepFunCatalog(
   ctx: ProviderCatalogContext,
   params: { providerId: string; surface: StepFunSurface },
@@ -102,14 +97,14 @@ async function resolveStepFunCatalog(
   const explicitBaseUrl = trimExplicitBaseUrl(ctx, params.providerId);
   const region =
     inferRegionFromBaseUrl(explicitBaseUrl) ??
-    inferRegionFromExplicitBaseUrls(ctx) ??
-    inferRegionFromProfileId(auth.profileId) ??
-    inferRegionFromEnv(ctx.env);
+    inferRegionFromBaseUrl(trimExplicitBaseUrl(ctx, STEPFUN_PROVIDER_ID)) ??
+    inferRegionFromBaseUrl(trimExplicitBaseUrl(ctx, STEPFUN_PLAN_PROVIDER_ID)) ??
+    inferRegionFromProfileId(auth.profileId);
   // Keep discovery working for legacy/manual auth profiles that resolved a
   // key but do not encode region in the profile id.
-  const baseUrl = explicitBaseUrl ?? resolveDefaultBaseUrl(params.surface, region ?? "intl");
-  const providerConfig =
-    params.surface === "plan" ? buildStepFunPlanProvider(baseUrl) : buildStepFunProvider(baseUrl);
+  const provider = STEPFUN_SURFACES[params.surface];
+  const baseUrl = explicitBaseUrl ?? provider.baseUrls[region ?? "intl"];
+  const providerConfig = provider.buildProvider(baseUrl);
   return await buildOpenAICompatibleLiveProviderCatalog({
     discoveryMode: "strict",
     providerId: params.providerId,
@@ -120,44 +115,30 @@ async function resolveStepFunCatalog(
   });
 }
 
-function resolveProfileIds(region: StepFunRegion): [string, string] {
-  return region === "cn"
-    ? ["stepfun:cn", "stepfun-plan:cn"]
-    : ["stepfun:intl", "stepfun-plan:intl"];
-}
-
-function createStepFunApiKeyMethod(params: {
-  providerId: string;
-  methodId: string;
-  label: string;
-  hint: string;
-  region: StepFunRegion;
-  promptMessage: string;
-  defaultModel: string;
-  choiceId: string;
-  choiceLabel: string;
-  choiceHint: string;
-  applyConfig: (cfg: OpenClawConfig) => OpenClawConfig;
-}) {
+function createStepFunApiKeyMethod(surface: StepFunSurface, region: StepFunRegion) {
+  const provider = STEPFUN_SURFACES[surface];
+  const methodId = `${surface}-api-key-${region}`;
+  const label = `${provider.authLabel} API key (${region === "cn" ? "China" : "Global/Intl"})`;
+  const hint = `Endpoint: ${provider.baseUrls[region].replace(/^https:\/\//u, "")}`;
   return createProviderApiKeyAuthMethod({
-    providerId: params.providerId,
-    methodId: params.methodId,
-    label: params.label,
-    hint: params.hint,
+    providerId: provider.providerId,
+    methodId,
+    label,
+    hint,
     optionKey: "stepfunApiKey",
     flagName: "--stepfun-api-key",
     envVar: "STEPFUN_API_KEY",
-    promptMessage: params.promptMessage,
-    profileIds: resolveProfileIds(params.region),
+    promptMessage: `Enter StepFun API key for ${region === "cn" ? "China" : "global"} endpoints`,
+    profileIds: [`stepfun:${region}`, `stepfun-plan:${region}`],
     allowProfile: false,
-    defaultModel: params.defaultModel,
+    defaultModel: provider.defaultModel,
     preserveExistingPrimary: true,
     expectedProviders: [STEPFUN_PROVIDER_ID, STEPFUN_PLAN_PROVIDER_ID],
-    applyConfig: params.applyConfig,
+    applyConfig: provider.applyConfig[region],
     wizard: {
-      choiceId: params.choiceId,
-      choiceLabel: params.choiceLabel,
-      choiceHint: params.choiceHint,
+      choiceId: `stepfun-${methodId}`,
+      choiceLabel: label,
+      choiceHint: hint,
       groupId: "stepfun",
       groupLabel: "StepFun",
       groupHint: "Standard / Step Plan (China / Global)",
@@ -170,98 +151,24 @@ export default definePluginEntry({
   name: "StepFun",
   description: "Bundled StepFun standard and Step Plan provider plugin",
   register(api) {
-    api.registerProvider({
-      id: STEPFUN_PROVIDER_ID,
-      label: "StepFun",
-      docsPath: "/providers/stepfun",
-      envVars: ["STEPFUN_API_KEY"],
-      auth: [
-        createStepFunApiKeyMethod({
-          providerId: STEPFUN_PROVIDER_ID,
-          methodId: "standard-api-key-cn",
-          label: "StepFun Standard API key (China)",
-          hint: "Endpoint: api.stepfun.com/v1",
-          region: "cn",
-          promptMessage: "Enter StepFun API key for China endpoints",
-          defaultModel: STEPFUN_DEFAULT_MODEL_REF,
-          choiceId: "stepfun-standard-api-key-cn",
-          choiceLabel: "StepFun Standard API key (China)",
-          choiceHint: "Endpoint: api.stepfun.com/v1",
-          applyConfig: applyStepFunStandardConfigCn,
-        }),
-        createStepFunApiKeyMethod({
-          providerId: STEPFUN_PROVIDER_ID,
-          methodId: "standard-api-key-intl",
-          label: "StepFun Standard API key (Global/Intl)",
-          hint: "Endpoint: api.stepfun.ai/v1",
-          region: "intl",
-          promptMessage: "Enter StepFun API key for global endpoints",
-          defaultModel: STEPFUN_DEFAULT_MODEL_REF,
-          choiceId: "stepfun-standard-api-key-intl",
-          choiceLabel: "StepFun Standard API key (Global/Intl)",
-          choiceHint: "Endpoint: api.stepfun.ai/v1",
-          applyConfig: applyStepFunStandardConfig,
-        }),
-      ],
-      catalog: {
-        order: "paired",
-        run: async (ctx) =>
-          resolveStepFunCatalog(ctx, {
-            providerId: STEPFUN_PROVIDER_ID,
-            surface: "standard",
-          }),
-      },
-      staticCatalog: {
-        order: "paired",
-        run: async () => ({ provider: buildStepFunProvider() }),
-      },
-    });
-
-    api.registerProvider({
-      id: STEPFUN_PLAN_PROVIDER_ID,
-      label: "StepFun Step Plan",
-      docsPath: "/providers/stepfun",
-      envVars: ["STEPFUN_API_KEY"],
-      auth: [
-        createStepFunApiKeyMethod({
-          providerId: STEPFUN_PLAN_PROVIDER_ID,
-          methodId: "plan-api-key-cn",
-          label: "StepFun Step Plan API key (China)",
-          hint: "Endpoint: api.stepfun.com/step_plan/v1",
-          region: "cn",
-          promptMessage: "Enter StepFun API key for China endpoints",
-          defaultModel: STEPFUN_PLAN_DEFAULT_MODEL_REF,
-          choiceId: "stepfun-plan-api-key-cn",
-          choiceLabel: "StepFun Step Plan API key (China)",
-          choiceHint: "Endpoint: api.stepfun.com/step_plan/v1",
-          applyConfig: applyStepFunPlanConfigCn,
-        }),
-        createStepFunApiKeyMethod({
-          providerId: STEPFUN_PLAN_PROVIDER_ID,
-          methodId: "plan-api-key-intl",
-          label: "StepFun Step Plan API key (Global/Intl)",
-          hint: "Endpoint: api.stepfun.ai/step_plan/v1",
-          region: "intl",
-          promptMessage: "Enter StepFun API key for global endpoints",
-          defaultModel: STEPFUN_PLAN_DEFAULT_MODEL_REF,
-          choiceId: "stepfun-plan-api-key-intl",
-          choiceLabel: "StepFun Step Plan API key (Global/Intl)",
-          choiceHint: "Endpoint: api.stepfun.ai/step_plan/v1",
-          applyConfig: applyStepFunPlanConfig,
-        }),
-      ],
-      catalog: {
-        order: "paired",
-        run: async (ctx) =>
-          resolveStepFunCatalog(ctx, {
-            providerId: STEPFUN_PLAN_PROVIDER_ID,
-            surface: "plan",
-          }),
-      },
-      staticCatalog: {
-        order: "paired",
-        run: async () => ({ provider: buildStepFunPlanProvider() }),
-      },
-    });
+    for (const surface of ["standard", "plan"] as const) {
+      const provider = STEPFUN_SURFACES[surface];
+      api.registerProvider({
+        id: provider.providerId,
+        label: provider.label,
+        docsPath: "/providers/stepfun",
+        envVars: ["STEPFUN_API_KEY"],
+        auth: (["cn", "intl"] as const).map((region) => createStepFunApiKeyMethod(surface, region)),
+        catalog: {
+          order: "paired",
+          run: async (ctx) =>
+            resolveStepFunCatalog(ctx, { providerId: provider.providerId, surface }),
+        },
+        staticCatalog: {
+          order: "paired",
+          run: async () => ({ provider: provider.buildProvider() }),
+        },
+      });
+    }
   },
 });

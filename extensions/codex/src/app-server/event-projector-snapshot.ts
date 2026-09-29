@@ -20,6 +20,7 @@ export function buildCodexMessagesSnapshot(params: {
   commentaryMessages: ReadonlyArray<{ itemId: string; message: AssistantMessage }>;
   assistantMessages?: ReadonlyArray<{ itemId: string; message: AssistantMessage }>;
   toolMessages: readonly AgentMessage[];
+  steeringMessages?: readonly AgentMessage[];
   lastAssistant: AssistantMessage | undefined;
   turnTainted?: boolean;
 }): AgentMessage[] {
@@ -48,6 +49,7 @@ export function buildCodexMessagesSnapshot(params: {
       attachCodexMirrorIdentity(message, `${params.turnId}:assistant:${itemId}`),
     ),
     ...params.toolMessages,
+    ...(params.steeringMessages ?? []),
   ].toSorted(
     (left, right) =>
       (asDateTimestampMs(left.timestamp) ?? 0) - (asDateTimestampMs(right.timestamp) ?? 0),
@@ -63,6 +65,7 @@ export function buildCodexMessagesSnapshot(params: {
   return messages.map((message) =>
     projectAgentHarnessTranscriptMessageForDisplay({
       hidden: params.runParams.trigger === "memory",
+      inputProvenance: params.runParams.inputProvenance,
       message: applyCodexTranscriptTaint(message, taint),
     }),
   );

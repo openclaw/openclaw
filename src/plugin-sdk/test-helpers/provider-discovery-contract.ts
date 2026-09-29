@@ -333,7 +333,7 @@ export function describeGithubCopilotProviderDiscoveryContract(params: {
         runCatalog(state, {
           provider: state.githubCopilotProvider!,
           env: {
-            GITHUB_TOKEN: "github-env-token",
+            COPILOT_GITHUB_TOKEN: "github-env-token",
           } as NodeJS.ProcessEnv,
           resolveProviderApiKey: () => ({ apiKey: undefined }),
         }),
@@ -350,7 +350,7 @@ export function describeGithubCopilotProviderDiscoveryContract(params: {
       );
       expect(copilotCall.githubToken).toBe("github-env-token");
       const env = requireRecord(copilotCall.env, "copilot token env");
-      expect(env.GITHUB_TOKEN).toBe("github-env-token");
+      expect(env.COPILOT_GITHUB_TOKEN).toBe("github-env-token");
     });
   });
 }

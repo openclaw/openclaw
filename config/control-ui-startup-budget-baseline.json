@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 352531,
-  "reason": "Plugin discovery shell adds the canonical /plugins workspace route and navigation metadata; measured 352531 B startup gzip on Linux-equivalent local build. Fixed 358400 B cap retained.",
-  "updatedAt": "2026-09-09"
+  "startupJsGzipBytes": 371771,
+  "reason": "Approved by @steipete for PR #158567 on 2026-09-27: measured startup bundle 371,771 B after main reconciliation and canonical boot-module regeneration, +1,015 B (0.27%) over the previous baseline. Paired baseline and cap retain the 512 B growth and 64 B build-variance allowances, yielding a 372,347 B enforcement limit.",
+  "updatedAt": "2026-09-27"
 }

@@ -2,39 +2,75 @@
 import {
   callGateway,
   GatewayLocalBackendSharedAuthUnavailableError,
+  isGatewayClientRequestError,
   isImplicitLocalGatewayTarget,
 } from "../../gateway/call.js";
 import { isGatewayTransportError } from "../../gateway/transport-error.js";
 import type { RuntimeEnv } from "../../runtime.js";
 
-type GatewayAuthRefreshResponse = { unavailable?: unknown };
+export type ModelAuthRefreshOperation = "login" | "logout" | "update";
+export type ModelAuthRefreshOutcome = "refreshed" | "gateway-rejected" | "gateway-unreachable";
+
+export async function refreshProviderAuthAfterLogin(params: {
+  agentId: string;
+  refreshAfterLogin?: (agentId: string) => Promise<void>;
+  runtime: RuntimeEnv;
+  signal?: AbortSignal;
+  assertCurrent?: () => void;
+}): Promise<ModelAuthRefreshOutcome> {
+  if (!params.refreshAfterLogin) {
+    return refreshRunningGatewayAuthState(params.agentId, "login", params.runtime);
+  }
+  try {
+    await params.refreshAfterLogin(params.agentId);
+    return "refreshed";
+  } catch {
+    params.signal?.throwIfAborted();
+    params.assertCurrent?.();
+    return "gateway-rejected";
+  }
+}
 
 export async function refreshRunningGatewayAuthState(
   agentId: string | undefined,
+  operation: ModelAuthRefreshOperation,
   runtime: Pick<RuntimeEnv, "error">,
-): Promise<void> {
+): Promise<ModelAuthRefreshOutcome> {
   let gatewayConnected = false;
   let localTarget: boolean | undefined;
   try {
     localTarget = await isImplicitLocalGatewayTarget({});
-    const result = await callGateway<GatewayAuthRefreshResponse>({
-      method: "models.authStatus",
-      params: { refresh: true, ...(agentId ? { agentId } : {}) },
+    const result = await callGateway<{ refreshed: boolean }>({
+      method: "models.authRefresh",
+      params: { operation, ...(agentId ? { agentId } : {}) },
       timeoutMs: 3000,
       requireLocalBackendSharedAuth: true,
       onHelloOk: () => {
         gatewayConnected = true;
       },
     });
-    if (!result.unavailable) {
-      return;
+    if (result.refreshed) {
+      return "refreshed";
     }
   } catch (error) {
+    if (
+      isGatewayClientRequestError(error) &&
+      error.gatewayCode === "INVALID_REQUEST" &&
+      error.message === "unknown method: models.authRefresh"
+    ) {
+      // Legacy status refresh cannot acknowledge publication, so restart guidance still applies.
+      await callGateway({
+        method: "models.authStatus",
+        params: { refresh: true, ...(agentId ? { agentId } : {}) },
+        timeoutMs: 3000,
+        requireLocalBackendSharedAuth: true,
+      }).catch(() => undefined);
+    }
     if (error instanceof GatewayLocalBackendSharedAuthUnavailableError && localTarget === false) {
       runtime.error(
         "Warning: Model auth changes were saved on this host, but the configured Gateway does not share this auth state. Run the auth command on the Gateway host (the far end of any SSH tunnel).",
       );
-      return;
+      return "gateway-rejected";
     }
     if (
       localTarget === true &&
@@ -44,7 +80,7 @@ export async function refreshRunningGatewayAuthState(
       error.code === undefined &&
       error.reason?.includes("ECONNREFUSED")
     ) {
-      return;
+      return "gateway-unreachable";
     }
   }
   runtime.error(
@@ -52,4 +88,5 @@ export async function refreshRunningGatewayAuthState(
       ? `Warning: Model auth changes were saved, but the ${gatewayConnected ? "running" : "local"} Gateway could not refresh them. Run \`openclaw gateway restart\` to apply the saved changes.`
       : "Warning: Model auth changes were saved, but the configured Gateway could not be identified or refreshed. Apply the auth change on the Gateway host, or restart it there.",
   );
+  return gatewayConnected ? "gateway-rejected" : "gateway-unreachable";
 }

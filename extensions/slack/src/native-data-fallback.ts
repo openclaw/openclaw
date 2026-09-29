@@ -11,6 +11,7 @@ import {
   SLACK_MALFORMED_NATIVE_DATA_FALLBACK,
   stripSlackNativeDataBlocks,
 } from "./native-data-blocks.js";
+import { truncateSlackText } from "./truncate.js";
 
 const SLACK_SECTION_PLAIN_TEXT_MAX = 3_000;
 const SLACK_EMPTY_BLOCK_FALLBACK = "Shared a Block Kit message";
@@ -87,7 +88,13 @@ function buildOrderedFallbackBlocks(params: {
       }
       continue;
     }
-    const text = renderSlackBlockFallbackText(block, { nativeDataFormat: "plain" });
+    const text = truncateSlackText(
+      renderSlackBlockFallbackText(block, {
+        nativeDataFormat: "plain",
+        includeSelectOptions: true,
+      }) ?? "",
+      SLACK_MESSAGE_TEXT_HARD_LIMIT,
+    );
     entries.push({ block, ...(text ? { text } : {}) });
   }
   return entries;
@@ -119,11 +126,8 @@ function buildOrderedBlockMessages(entries: readonly OrderedFallbackBlock[], tex
     }
     const freshSeparator = text && entry.text && !entry.continuesText ? "\n\n" : "";
     const freshText = entry.text ? `${text}${freshSeparator}${entry.text}` : text;
-    // A valid native section can have ten 2,000-character fields. Keep it intact
-    // even when its accessibility text exceeds the preferred batching limit.
-    if (freshText.length > SLACK_MESSAGE_TEXT_HARD_LIMIT) {
-      throw new Error("One Slack fallback block exceeds the message text hard limit.");
-    }
+    // Native controls are indivisible. Their derived summary is bounded above;
+    // authored fallback sections are split before they enter this batch.
     blocks.push(entry.block);
     text = freshText;
   }
@@ -163,7 +167,7 @@ export function buildSlackNativeDataDeliveryPlan(params: {
           textLimit,
         );
   return {
-    accessibilityText,
+    accessibilityText: truncateSlackText(accessibilityText, SLACK_MESSAGE_TEXT_HARD_LIMIT),
     fallbackMessages,
     skipOriginalBlocks: accessibilityText.length > SLACK_MESSAGE_TEXT_HARD_LIMIT,
   };

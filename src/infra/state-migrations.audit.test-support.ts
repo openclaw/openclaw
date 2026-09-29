@@ -3,8 +3,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { vi } from "vitest";
 import { listConfigAuditRecordsForTests } from "../config/io.audit.test-support.js";
+import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import { listSystemAgentAuditEntriesForTests } from "../system-agent/audit.test-support.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
+import * as fsSafe from "./fs-safe.js";
 import { detectLegacyAuditLogs, migrateLegacyAuditLogs } from "./state-migrations.audit-logs.js";
 
 const AUDIT_SCRUB_PATTERN = Buffer.from(" \t".repeat(16));
@@ -121,9 +123,13 @@ export class AuditMigrationFixture {
 export const withAuditMigrationFixture = (
   run: (fixture: AuditMigrationFixture) => Promise<void>,
 ): Promise<void> =>
-  withTestDir({ prefix: "openclaw-audit-migration-" }, (stateDir) =>
-    run(new AuditMigrationFixture(stateDir)),
-  );
+  withTestDir({ prefix: "openclaw-audit-migration-" }, async (stateDir) => {
+    try {
+      await run(new AuditMigrationFixture(stateDir));
+    } finally {
+      resetPluginStateStoreForTests();
+    }
+  });
 
 export function buildAuditScrubbedContent(length: number): Buffer {
   return Buffer.from(" \t".repeat(Math.ceil(length / 2))).subarray(0, length);
@@ -170,32 +176,55 @@ async function fileHandlePrototype<T>(
   return prototype;
 }
 
-export async function failChmodCall(
+export function failArchiveHardening(
   fixture: AuditMigrationFixture,
-  probeName: string,
-  callNumber: number,
+  archivePath: string,
   message: string,
 ) {
-  const prototype = await fileHandlePrototype<{ chmod(mode: number): Promise<void> }>(
-    fixture,
-    probeName,
-  );
-  const original = Reflect.get(prototype, "chmod") as typeof prototype.chmod;
-  let calls = 0;
-  return vi.spyOn(prototype, "chmod").mockImplementation(function (
-    this: typeof prototype,
-    mode: number,
-  ) {
-    calls += 1;
-    if (calls === callNumber) {
-      return Promise.reject(new Error(message));
+  const openRoot = fsSafe.root;
+  const restorers: Array<() => void> = [];
+  let armed = true;
+  const rootSpy = vi.spyOn(fsSafe, "root").mockImplementation(async (rootPath, defaults) => {
+    const root = await openRoot(rootPath, defaults);
+    if (rootPath === fixture.stateDir) {
+      const openWritable = root.openWritable.bind(root);
+      const openSpy = vi
+        .spyOn(root, "openWritable")
+        .mockImplementation(async (relativePath, options) => {
+          const opened = await openWritable(relativePath, options);
+          // Publication uses a backend-dependent chmod path; fail the explicit hardening only.
+          if (
+            armed &&
+            options?.writeMode === "update" &&
+            path.resolve(rootPath, relativePath) === archivePath
+          ) {
+            armed = false;
+            const chmodSpy = vi
+              .spyOn(opened.handle, "chmod")
+              .mockRejectedValueOnce(new Error(message));
+            restorers.push(() => chmodSpy.mockRestore());
+          }
+          return opened;
+        });
+      restorers.push(() => openSpy.mockRestore());
     }
-    return original.call(this, mode);
+    return root;
   });
+  return {
+    mockRestore() {
+      for (const restore of restorers.toReversed()) {
+        restore();
+      }
+      rootSpy.mockRestore();
+    },
+  };
 }
 
 export async function failSecondScrubWrite(fixture: AuditMigrationFixture) {
+  // The source inode becomes the raw archive; sibling publication writes must succeed.
+  const sourceIdentity = await fs.stat(fixture.config.source, { bigint: true });
   const prototype = await fileHandlePrototype<{
+    stat(options: { bigint: true }): Promise<{ dev: bigint; ino: bigint }>;
     write(
       buffer: Uint8Array,
       offset: number,
@@ -212,6 +241,10 @@ export async function failSecondScrubWrite(fixture: AuditMigrationFixture) {
     length: number,
     position: number | null,
   ) {
+    const identity = await this.stat({ bigint: true });
+    if (identity.dev !== sourceIdentity.dev || identity.ino !== sourceIdentity.ino) {
+      return await original.call(this, buffer, offset, length, position);
+    }
     calls += 1;
     if (calls === 1) {
       return await original.call(

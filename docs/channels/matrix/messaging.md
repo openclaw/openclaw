@@ -65,7 +65,7 @@ The full config accepts `{ mode, chunkMode, block, preview, progress }`:
 - `progress.labels`: candidates used only when `label` is `"auto"` or unset.
 - `progress.maxLines`: max rolling progress lines kept in the draft; older lines are trimmed past this.
 - `progress.maxLineChars`: max characters per compact progress line before truncation.
-- `progress.toolProgress`: when `true`, live tool/progress activity appears in the draft. The default `false` keeps the draft to its headline, commentary, plan milestones, and approval or failure lines.
+- `progress.toolProgress`: when `true`, live tool/progress activity, including tool failures, appears in the draft. The default `false` keeps the draft to its headline, commentary, plan milestones, and approval requests. Intermediate tool failures and nonzero command exits are hidden; terminal task errors still use normal error delivery.
 
 | `streaming.mode`  | Behavior                                                                                                                                                                                                                                                                                     |
 | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

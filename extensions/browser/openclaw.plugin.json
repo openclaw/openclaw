@@ -1,6 +1,7 @@
 {
   "id": "browser",
-  "categories": ["tools"],
+  "uiCapabilities": ["widget"],
+  "categories": ["web"],
   "cliCommands": [
     {
       "name": "browser",

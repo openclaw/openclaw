@@ -1,7 +1,7 @@
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   appendTranscriptMessage,
   loadTranscriptEventsSync,
@@ -13,11 +13,32 @@ import {
   deferOpenClawAgentPostCommitPublication,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { rewriteTranscriptEntriesInSessionManager } from "../embedded-agent-runner/transcript-rewrite.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import { SessionManager } from "./session-manager.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = createTempDirTracker();
+
+afterEach(async () => {
+  // Reconcile workers can otherwise retain the shared state lock into later tests.
+  const stateDirs = [...tempDirs.dirs];
+  const errors: unknown[] = [];
+  for (const stateDir of stateDirs) {
+    try {
+      await cleanupSessionStateForTest({ stateDir });
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  if (errors.length === 1) {
+    throw errors[0];
+  }
+  if (errors.length > 1) {
+    throw new AggregateError(errors, "Session fixture cleanup failed");
+  }
+  tempDirs.cleanup();
+});
 
 it("publishes the rewritten view before commit observers append", async () => {
   const dir = tempDirs.make("openclaw-rewrite-observer-");
@@ -46,7 +67,7 @@ it("publishes the rewritten view before commit observers append", async () => {
   database.db.exec(
     "CREATE TRIGGER append_from_observer AFTER INSERT ON transcript_events WHEN json_extract(NEW.event_json, '$.message.content') = 'replacement' BEGIN SELECT queue_observer_append(); END;",
   );
-  rewriteTranscriptEntriesInSessionManager({
+  await rewriteTranscriptEntriesInSessionManager({
     sessionManager: manager,
     replacements: [
       { entryId: first, message: { role: "user", content: "replacement", timestamp: 1 } },
@@ -123,10 +144,10 @@ it("does not certify stale navigation with a post-commit replacement version", a
         { entryId: kept, message: { role: "user", content: "replacement", timestamp: 3 } },
       ],
     });
-  expect(rewrite).toThrow("Session transcript changed");
+  await expect(rewrite()).rejects.toThrow("Session transcript changed");
   expect(loadTranscriptEventsSync(scope)).toEqual(committed);
   manager.reloadPersistedTranscript();
-  expect(rewrite().changed).toBe(true);
+  expect((await rewrite()).changed).toBe(true);
   expect(SessionManager.open(scope).getBranch()).toMatchObject([
     { message: { content: "first" } },
     { message: { content: "second" } },
@@ -156,7 +177,7 @@ it.each(["compaction", "reset"] as const)(
     full.appendMessage({ role: "user", content: "last", timestamp: 3 });
     const manager = SessionManager.openBounded(scope, { maxEvents: 10, maxBytes: 16384 });
     expect(manager.getBoundaryCount()).toBe(1);
-    rewriteTranscriptEntriesInSessionManager({
+    await rewriteTranscriptEntriesInSessionManager({
       sessionManager: manager,
       replacements: [
         { entryId: first, message: { role: "user", content: "rewritten", timestamp: 1 } },

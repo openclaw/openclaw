@@ -1,6 +1,6 @@
 {
   "id": "tavily",
-  "categories": ["web", "tools"],
+  "categories": ["web"],
   "activation": {
     "onStartup": false
   },
@@ -40,6 +40,14 @@
     "webSearchProviders": ["tavily"],
     "tools": ["tavily_search", "tavily_extract"]
   },
+  "configGroups": [
+    {
+      "id": "web-search",
+      "title": "Web search",
+      "order": 10,
+      "properties": ["webSearch"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

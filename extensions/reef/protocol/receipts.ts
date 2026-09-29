@@ -1,5 +1,5 @@
 import { ed25519 } from "@noble/curves/ed25519.js";
-import { appendAudit, type AuditEntry, type AuditStore } from "./audit.js";
+import type { AuditEntry, AuditStore } from "./audit.js";
 import { canonicalBytes } from "./canonical.js";
 import { base64, fromBase64, fromBase64url } from "./encoding.js";
 
@@ -58,7 +58,7 @@ export async function confirmDelivery(
   ) {
     throw new InvalidDeliveryReceiptError();
   }
-  return appendAudit(audit, "confirm_delivery", {
+  return audit.appendEvent("confirm_delivery", {
     receipt,
     status: receipt.status,
     ...(receipt.category ? { category: receipt.category } : {}),

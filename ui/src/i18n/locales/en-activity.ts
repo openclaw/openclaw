@@ -5,6 +5,28 @@ import { en } from "./en.ts";
 // diagnostic inspector does not tax every Control UI startup.
 const enActivity = {
   activity: {
+    images: {
+      failed: "Couldn't load images",
+      older: "Older images",
+      incomplete: "Images too large to preview here",
+    },
+    pulse: {
+      sessions: "sessions",
+      started: "started",
+      people: "people",
+      running: "running now",
+      hour: "{hour} · {count} sessions",
+      description: "{count} sessions today; peak hour {hour}",
+    },
+    git: {
+      pullRequest: "{repository} pull request #{number}: {title} ({state})",
+      branchDiff: "{branch}: changes against the default branch, including uncommitted work",
+      stale: "Git status may be out of date",
+      open: "Open",
+      draft: "Draft",
+      merged: "Merged",
+      closed: "Closed",
+    },
     title: "Activity",
     visibleCount: "{visible} of {total}",
     search: "Search",
@@ -17,7 +39,7 @@ const enActivity = {
     expandAll: "Expand all",
     collapseAll: "Collapse all",
     clear: "Clear",
-    empty: "No activity yet.",
+    empty: "No activity yet. Only activity received while this view is open appears here.",
     emptyFiltered: "No activity matches these filters.",
     argumentHiddenOne: "1 argument hidden",
     argumentsHidden: "{count} arguments hidden",

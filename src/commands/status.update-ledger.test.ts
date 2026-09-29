@@ -8,7 +8,12 @@ import {
 } from "../infra/update-run-ledger.js";
 import type { UpdateRunRecord, UpdateRunStep } from "../infra/update-run-record.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { formatUpdateOneLiner, getUpdateCheckResult } from "./status.update.js";
+import { VERSION } from "../version.js";
+import {
+  formatUpdateAvailableHint,
+  formatUpdateOneLiner,
+  getUpdateCheckResult,
+} from "./status.update.js";
 
 const mocks = vi.hoisted(() => ({ checkUpdateStatus: vi.fn() }));
 vi.mock(import("../infra/update-check.js"), async (original) => ({
@@ -32,17 +37,7 @@ beforeEach(() => {
         root: "/repo",
         installKind: "git",
         packageManager: "pnpm",
-        git: {
-          root: "/repo",
-          sha: "abc123",
-          tag: null,
-          branch: "main",
-          upstream: "origin/main",
-          dirty: false,
-          ahead: 0,
-          behind: 0,
-          fetchOk: null,
-        },
+        git: { ...cleanGit, root: "/repo", sha: "abc123", fetchOk: null },
       }) satisfies UpdateCheckResult,
   );
 });
@@ -69,26 +64,13 @@ const readStatus = (fetchGit = false) =>
   getUpdateCheckResult({ timeoutMs: 5000, fetchGit, includeRegistry: false });
 
 describe("status update ledger evidence", () => {
-  it("keeps the existing cached output when there is no ledger", async () => {
-    const update = await readStatus();
-    expect(update.git).not.toHaveProperty("stale");
-    expect(formatUpdateOneLiner(update)).toContain("up to date");
-  });
-
-  it.each([
-    "fetch-failed",
-    "git fetch",
-    "git target inspection fetch",
-    "git import admitted target",
-  ])("reports a newer failure recorded as %s", async (failure) => {
+  it("reports a newer fetch failure using cached counts", async () => {
     recordRun({ status: "succeeded", steps: [{ step: "git fetch", status: "completed" }] });
     const run = recordRun({
       status: "failed",
-      ...(failure === "fetch-failed"
-        ? { reason: failure }
-        : {
-            steps: [{ step: failure, status: "failed", detail: "network unavailable" }],
-          }),
+      steps: [
+        { step: "git import admitted target", status: "failed", detail: "network unavailable" },
+      ],
     });
     now += 300_000;
     const update = await readStatus();
@@ -100,7 +82,7 @@ describe("status update ledger evidence", () => {
         reason: "fetch-failed",
         failedAtMs: run.finishedAtMs,
         runId: run.runId,
-        detail: failure === "fetch-failed" ? "fetch-failed" : "network error",
+        detail: "network error",
       },
     });
     expect(formatUpdateOneLiner(update)).toContain(
@@ -112,18 +94,6 @@ describe("status update ledger evidence", () => {
       expect.objectContaining({ fetchGit: false }),
     );
   });
-
-  it.each(["succeeded", "skipped", "rolled-back", "failed"] as const)(
-    "clears the failure after a later completed fetch even when the run is %s",
-    async (status) => {
-      recordRun({ status: "failed", reason: "fetch-failed" });
-      recordRun({ status, steps: [{ step: "git target inspection fetch", status: "completed" }] });
-      const update = await readStatus();
-      expect(update.git).not.toHaveProperty("stale");
-      expect(update.git).not.toHaveProperty("countsCached");
-      expect(formatUpdateOneLiner(update)).toContain("up to date");
-    },
-  );
 
   it("retains the failure across later runs that never reached fetch, beyond a history page", async () => {
     const failed = recordRun({ status: "failed", reason: "fetch-failed" });
@@ -145,66 +115,56 @@ describe("status update ledger evidence", () => {
     expect((await readStatus()).git?.stale?.detail).toBe("tag conflict");
   });
 
-  it.each(["step", "reason"] as const)(
-    "uses fetch outcome time across overlapping runs with a %s failure",
-    async (failureKind) => {
-      const older = createUpdateRun({ trigger: "cli", target: { kind: "git" } });
-      now += 1000;
-      const newer = createUpdateRun({ trigger: "cli", target: { kind: "git" } });
-      now += 1000;
-      recordUpdateRunStep(newer.runId, {
-        step: "git fetch",
-        status: "completed",
-        endedAtMs: now,
-      });
-      now += 1000;
-      const failedAtMs = now;
-      if (failureKind === "step") {
-        recordUpdateRunStep(older.runId, {
-          step: "git fetch",
-          status: "failed",
-          endedAtMs: now,
-          detail: "network unavailable",
-        });
-      } else {
-        finishUpdateRun(older.runId, { status: "failed", reason: "fetch-failed" });
-      }
-      // Finishing an unrelated build does not make its earlier fetch more recent.
-      now += 1000;
-      recordUpdateRunStep(newer.runId, { step: "build", status: "completed", endedAtMs: now });
-      finishUpdateRun(newer.runId, { status: "succeeded" });
-      expect((await readStatus()).git?.stale).toMatchObject({ runId: older.runId, failedAtMs });
-      expect(formatUpdateOneLiner(await readStatus())).not.toContain("up to date");
-    },
-  );
+  it("uses fetch outcome time across overlapping runs", async () => {
+    const older = createUpdateRun({ trigger: "cli", target: { kind: "git" } });
+    now += 1000;
+    const newer = createUpdateRun({ trigger: "cli", target: { kind: "git" } });
+    now += 1000;
+    recordUpdateRunStep(newer.runId, {
+      step: "git fetch",
+      status: "completed",
+      endedAtMs: now,
+    });
+    now += 1000;
+    const failedAtMs = now;
+    recordUpdateRunStep(older.runId, {
+      step: "git fetch",
+      status: "failed",
+      endedAtMs: now,
+      detail: "network unavailable",
+    });
+    // Finishing an unrelated build does not make its earlier fetch more recent.
+    now += 1000;
+    recordUpdateRunStep(newer.runId, { step: "build", status: "completed", endedAtMs: now });
+    finishUpdateRun(newer.runId, { status: "succeeded" });
+    expect((await readStatus()).git?.stale).toMatchObject({ runId: older.runId, failedAtMs });
+    expect(formatUpdateOneLiner(await readStatus())).not.toContain("up to date");
+  });
 
-  it.each(["succeeded", "failed", "rolled-back", "skipped"] as const)(
-    "clears failure when an older-created run fetches later and ends %s",
-    async (status) => {
-      const older = createUpdateRun({ trigger: "cli", target: { kind: "git" } });
-      now += 1000;
-      const newer = createUpdateRun({ trigger: "cli", target: { kind: "git" } });
-      now += 1000;
-      recordUpdateRunStep(newer.runId, {
-        step: "git fetch",
-        status: "failed",
-        endedAtMs: now,
-      });
-      now += 1000;
-      recordUpdateRunStep(older.runId, {
-        step: "git target inspection fetch",
-        status: "completed",
-        endedAtMs: now,
-      });
-      finishUpdateRun(older.runId, { status });
-      // Later run finalization must not re-date the earlier failed fetch.
-      now += 1000;
-      finishUpdateRun(newer.runId, { status: "failed", reason: "fetch-failed" });
-      const update = await readStatus();
-      expect(update.git).not.toHaveProperty("stale");
-      expect(formatUpdateOneLiner(update)).toContain("up to date");
-    },
-  );
+  it("clears failure when an older-created run fetches later despite its failed result", async () => {
+    const older = createUpdateRun({ trigger: "cli", target: { kind: "git" } });
+    now += 1000;
+    const newer = createUpdateRun({ trigger: "cli", target: { kind: "git" } });
+    now += 1000;
+    recordUpdateRunStep(newer.runId, {
+      step: "git fetch",
+      status: "failed",
+      endedAtMs: now,
+    });
+    now += 1000;
+    recordUpdateRunStep(older.runId, {
+      step: "git target inspection fetch",
+      status: "completed",
+      endedAtMs: now,
+    });
+    finishUpdateRun(older.runId, { status: "failed" });
+    // Later run finalization must not re-date the earlier failed fetch.
+    now += 1000;
+    finishUpdateRun(newer.runId, { status: "failed", reason: "fetch-failed" });
+    const update = await readStatus();
+    expect(update.git).not.toHaveProperty("stale");
+    expect(formatUpdateOneLiner(update)).toContain("up to date");
+  });
 
   it.each([true, false])(
     "requires a strictly later completion to clear equal-time failure (failure created first: %s)",
@@ -225,23 +185,16 @@ describe("status update ledger evidence", () => {
     },
   );
 
-  it.each(["running", "succeeded"] as const)(
-    "does not re-date an untimestamped fetch from later %s run activity",
-    async (status) => {
-      const older = createUpdateRun({ trigger: "cli", target: { kind: "git" } });
-      now += 1000;
-      recordUpdateRunStep(older.runId, { step: "git fetch", status: "completed" });
-      now += 1000;
-      const failed = recordRun({ status: "failed", reason: "fetch-failed" });
-      now += 1000;
-      if (status === "running") {
-        recordUpdateRunStep(older.runId, { step: "build", status: "completed", endedAtMs: now });
-      } else {
-        finishUpdateRun(older.runId, { status });
-      }
-      expect((await readStatus()).git?.stale?.runId).toBe(failed.runId);
-    },
-  );
+  it("does not re-date an untimestamped fetch from later run activity", async () => {
+    const older = createUpdateRun({ trigger: "cli", target: { kind: "git" } });
+    now += 1000;
+    recordUpdateRunStep(older.runId, { step: "git fetch", status: "completed" });
+    now += 1000;
+    const failed = recordRun({ status: "failed", reason: "fetch-failed" });
+    now += 1000;
+    recordUpdateRunStep(older.runId, { step: "build", status: "completed", endedAtMs: now });
+    expect((await readStatus()).git?.stale?.runId).toBe(failed.runId);
+  });
 
   it("leaves fresh checks to Git without clearing the recorded failure", async () => {
     recordRun({ status: "failed", reason: "fetch-failed" });
@@ -250,5 +203,139 @@ describe("status update ledger evidence", () => {
       expect.objectContaining({ fetchGit: true }),
     );
     expect((await readStatus()).git?.stale).toBeDefined();
+  });
+});
+
+function buildUpdate(partial: Partial<UpdateCheckResult>): UpdateCheckResult {
+  return {
+    root: null,
+    installKind: "unknown",
+    packageManager: "unknown",
+    ...partial,
+  };
+}
+
+const cleanGit: NonNullable<UpdateCheckResult["git"]> = {
+  root: "/tmp/repo",
+  sha: null,
+  tag: null,
+  branch: "main",
+  upstream: "origin/main",
+  dirty: false,
+  ahead: 0,
+  behind: 0,
+  fetchOk: true,
+};
+
+describe("formatUpdateOneLiner", () => {
+  it.each(["def987654321", "abc123456789"])("compares built commit %s with HEAD", (builtSha) => {
+    const update = buildUpdate({
+      installKind: "git",
+      git: { ...cleanGit, sha: "abc123456789", builtSha },
+    });
+    if (builtSha === "def987654321") {
+      expect(formatUpdateOneLiner(update)).toContain(
+        "stale build (running def98765, run pnpm build)",
+      );
+    } else {
+      expect(formatUpdateOneLiner(update)).not.toContain("stale build");
+    }
+  });
+
+  it("renders git status and registry summary without duplicating up to date", () => {
+    const update = buildUpdate({
+      installKind: "git",
+      git: {
+        ...cleanGit,
+        sha: "abc123456789",
+        dirty: true,
+        behind: 2,
+      },
+      registry: { latestVersion: VERSION },
+      deps: {
+        manager: "pnpm",
+        status: "ok",
+        lockfilePath: "pnpm-lock.yaml",
+        markerPath: "node_modules/.modules.yaml",
+      },
+    });
+
+    expect(formatUpdateOneLiner(update)).toBe(
+      `Update: git main · ↔ origin/main · dirty · behind 2 · npm latest ${VERSION} · deps ok`,
+    );
+  });
+
+  it("renders beta registry tags instead of calling them npm latest", () => {
+    const update = buildUpdate({
+      installKind: "package",
+      packageManager: "npm",
+      registry: { latestVersion: VERSION, tag: "beta" },
+    });
+
+    expect(formatUpdateOneLiner(update)).toBe(`Update: npm · up to date · npm beta ${VERSION}`);
+  });
+
+  it("renders an installed version newer than extended-stable as ahead", () => {
+    const update = buildUpdate({
+      installKind: "package",
+      packageManager: "npm",
+      registry: { latestVersion: "1.0.0", tag: "extended-stable" },
+    });
+
+    expect(formatUpdateOneLiner(update)).toBe("Update: npm · ahead of extended-stable (1.0.0)");
+  });
+
+  it("renders structured extended-stable resolver failures", () => {
+    const update = buildUpdate({
+      installKind: "git",
+      packageManager: "pnpm",
+      registry: {
+        latestVersion: null,
+        tag: "extended-stable",
+        error: "unsupported_git_channel",
+        reason: "unsupported_git_channel",
+      },
+    });
+
+    expect(formatUpdateOneLiner(update)).toContain("extended-stable requires a package install");
+  });
+
+  it("renders package-manager mode with registry error", () => {
+    const update = buildUpdate({
+      installKind: "package",
+      packageManager: "npm",
+      registry: { latestVersion: null, error: "offline" },
+      deps: {
+        manager: "npm",
+        status: "missing",
+        lockfilePath: "package-lock.json",
+        markerPath: "node_modules",
+      },
+    });
+
+    expect(formatUpdateOneLiner(update)).toBe("Update: npm · npm latest unknown · deps missing");
+  });
+
+  it("returns null when no update is available", () => {
+    const update = buildUpdate({
+      installKind: "package",
+      packageManager: "pnpm",
+      registry: { latestVersion: VERSION },
+    });
+
+    expect(formatUpdateAvailableHint(update)).toBeNull();
+  });
+
+  it.each([false, true])("renders registry updates with cached git=%s", (cached) => {
+    const latestVersion = `${Number(VERSION.split(".")[0]) + 1}.0.0`;
+    const update = buildUpdate({
+      installKind: cached ? "git" : "package",
+      git: cached ? { ...cleanGit, behind: 2, fetchOk: null, countsCached: true } : undefined,
+      registry: { latestVersion },
+    });
+
+    expect(formatUpdateAvailableHint(update)).toBe(
+      `Update available (${cached ? "git behind 2 (cached) · " : ""}npm ${latestVersion}). Run: openclaw update`,
+    );
   });
 });

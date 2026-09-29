@@ -47,6 +47,7 @@ const unavailableStorage = {};
 // Admit one navigation before either path can replace the guard or reload.
 let inFlightDocumentProbe: Promise<boolean> | null = null;
 
+// These browser errors identify failed assets, not whether the deployed build changed.
 export function isStaleChunkImportError(error: unknown): boolean {
   return error instanceof Error && MODULE_IMPORT_ERROR_PATTERN.test(error.message);
 }

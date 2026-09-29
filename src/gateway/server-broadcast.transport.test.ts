@@ -1,10 +1,8 @@
-import { getEventListeners, once } from "node:events";
-import type { AddressInfo } from "node:net";
-import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
-import { describe, expect, it, vi } from "vitest";
-import { WebSocket, WebSocketServer } from "ws";
+import { EventEmitter, getEventListeners } from "node:events";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { WebSocket } from "ws";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
-import { WS_COMPRESSION_THRESHOLD_BYTES } from "./server-constants.js";
+import { MAX_BUFFERED_BYTES, WEBSOCKET_CLOSE_GRACE_MS } from "./server-constants.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { TerminalOutputController } from "./terminal/output-flow-control.js";
@@ -33,22 +31,22 @@ function clientFor(connId: string, socket: WebSocket): GatewayWsClient {
 function controlledPeer(connId: string) {
   const callbacks: Array<(error?: Error) => void> = [];
   const frames: Array<{ seq: number; payload: unknown }> = [];
-  const socket: {
-    readyState: WebSocket["readyState"];
-    bufferedAmount: number;
-    close: ReturnType<typeof vi.fn>;
-    terminate: ReturnType<typeof vi.fn>;
-    send: ReturnType<typeof vi.fn<(wire: string, callback: (error?: Error) => void) => void>>;
-  } = {
-    readyState: WebSocket.OPEN,
+  const socket = Object.assign(new EventEmitter(), {
+    readyState: WebSocket.OPEN as WebSocket["readyState"],
     bufferedAmount: 0,
     close: vi.fn(),
     terminate: vi.fn(),
-    send: vi.fn((wire: string, callback: (error?: Error) => void) => {
-      frames.push(JSON.parse(wire));
-      callbacks.push(callback);
-    }),
-  };
+    send: vi.fn(
+      (
+        wire: string | Buffer,
+        options: { binary: false } | ((error?: Error) => void),
+        callback?: (error?: Error) => void,
+      ) => {
+        frames.push(JSON.parse(String(wire)));
+        callbacks.push(typeof options === "function" ? options : callback!);
+      },
+    ),
+  });
   return { client: clientFor(connId, socket as unknown as WebSocket), socket, callbacks, frames };
 }
 
@@ -58,73 +56,93 @@ const liveText = (group: AbortSignal) => ({
 });
 
 describe("broadcast transport retirement", () => {
-  it("settles a compressed queue failure once while healthy peers keep ordered delivery", async () => {
-    const server = new WebSocketServer({
-      host: "127.0.0.1",
-      port: 0,
-      perMessageDeflate: {
-        serverNoContextTakeover: true,
-        clientNoContextTakeover: true,
-        threshold: WS_COMPRESSION_THRESHOLD_BYTES,
-      },
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("shares encoded plugin events only after scope filtering and preserves recipient sequences", () => {
+    const read = controlledPeer("read");
+    const write = controlledPeer("write");
+    const admin = controlledPeer("admin");
+    write.client.connect.scopes = ["operator.write"];
+    admin.client.connect.scopes = ["operator.admin"];
+    const { broadcastPluginEvent } = createGatewayBroadcaster({
+      clients: new GatewayClientRegistry([read.client, write.client, admin.client]),
     });
-    await once(server, "listening");
-    const peers: WebSocket[] = [];
-    try {
-      const connect = async () => {
-        const accepted = once(server, "connection");
-        const peer = new WebSocket(`ws://127.0.0.1:${(server.address() as AddressInfo).port}`);
-        peers.push(peer);
-        await once(peer, "open");
-        const [socket] = (await accepted) as [WebSocket];
-        expect(socket.extensions).toBe("permessage-deflate");
-        return { peer, socket };
-      };
-      const broken = await connect();
-      const healthy = await connect();
-      const clients = new GatewayClientRegistry([
-        clientFor("compressed-broken", broken.socket),
-        clientFor("compressed-healthy", healthy.socket),
+    const payload = { text: "synthetic 🦞 update" };
+
+    broadcastPluginEvent("plugin.fixture.changed", payload, "operator.write");
+
+    expect(read.frames).toEqual([]);
+    for (const peer of [write, admin]) {
+      expect(peer.frames).toEqual([
+        { type: "event", event: "plugin.fixture.changed", payload, seq: 1 },
       ]);
-      const { broadcast, getBufferedAmount } = createGatewayBroadcaster({ clients });
-      const received: Array<{ seq: number; payload: { index: number } }> = [];
-      healthy.peer.on("message", (data) => received.push(JSON.parse(rawDataToString(data))));
-      const owner = new AbortController();
-      sendError.mockClear();
-      const terminate = vi.spyOn(broken.socket, "terminate");
-      const payload = "x".repeat(WS_COMPRESSION_THRESHOLD_BYTES * 2);
-      for (let index = 0; index < 165; index += 1) {
-        broadcast("skills.changed", { index, payload });
-      }
-      broadcast("chat", { text: "pending" }, { liveText: liveText(owner.signal) });
-      expect(getEventListeners(owner.signal, "abort")).toHaveLength(2);
-      const closed = once(broken.peer, "close");
-      broken.socket.terminate();
-      await closed;
-      await vi.waitFor(() => expect(received).toHaveLength(166));
-      expect(received.map(({ seq }) => seq)).toEqual(
-        Array.from({ length: 166 }, (_, index) => index + 1),
-      );
-      expect(received.slice(0, 165).map(({ payload: value }) => value.index)).toEqual(
-        Array.from({ length: 165 }, (_, index) => index),
-      );
-      expect(sendError).toHaveBeenCalledExactlyOnceWith(
-        expect.stringContaining("The socket was closed while data was being compressed"),
-        { event: "skills.changed" },
-      );
-      expect(terminate).toHaveBeenCalledTimes(2); // External close and one delivery retirement.
-      expect(getEventListeners(owner.signal, "abort")).toHaveLength(0);
-      expect(broken.socket.bufferedAmount).toBeGreaterThan(0);
-      expect(getBufferedAmount("compressed-broken")).toBeUndefined();
-    } finally {
-      peers.forEach((peer) => peer.terminate());
-      for (const socket of server.clients) {
-        socket.terminate();
-      }
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
+      expect(peer.socket.send.mock.calls[0]?.[1]).toEqual({ binary: false });
     }
+    const first = write.socket.send.mock.calls[0]![0];
+    expect(Buffer.isBuffer(first)).toBe(true);
+    expect(admin.socket.send.mock.calls[0]![0]).toBe(first);
+
+    broadcastPluginEvent("plugin.fixture.changed", payload, "operator.read");
+    expect(read.frames.at(-1)?.seq).toBe(1);
+    expect(write.frames.at(-1)?.seq).toBe(2);
+    expect(admin.frames.at(-1)?.seq).toBe(2);
+    expect(write.socket.send.mock.calls[1]![0]).not.toBe(first);
+    expect(admin.socket.send.mock.calls[1]![0]).toBe(write.socket.send.mock.calls[1]![0]);
+  });
+
+  it("terminates only the slow socket captured before replacement", () => {
+    vi.useFakeTimers();
+    const retired = controlledPeer("replacement");
+    const replacement = controlledPeer("replacement");
+    retired.socket.bufferedAmount = MAX_BUFFERED_BYTES + 1;
+    const { broadcast } = createGatewayBroadcaster({
+      clients: new GatewayClientRegistry([retired.client]),
+    });
+
+    broadcast("tick", {});
+    expect(retired.socket.close).toHaveBeenCalledExactlyOnceWith(1008, "slow consumer");
+    expect(retired.socket.terminate).not.toHaveBeenCalled();
+
+    retired.client.socket = replacement.client.socket;
+    vi.advanceTimersByTime(WEBSOCKET_CLOSE_GRACE_MS);
+    vi.advanceTimersByTime(WEBSOCKET_CLOSE_GRACE_MS);
+
+    expect(retired.socket.terminate).toHaveBeenCalledOnce();
+    expect(replacement.socket.terminate).not.toHaveBeenCalled();
+  });
+
+  it("cancels the slow-consumer fallback after the socket closes", () => {
+    vi.useFakeTimers();
+    const retired = controlledPeer("closed");
+    retired.socket.bufferedAmount = MAX_BUFFERED_BYTES + 1;
+    const { broadcast } = createGatewayBroadcaster({
+      clients: new GatewayClientRegistry([retired.client]),
+    });
+
+    broadcast("tick", {});
+    retired.socket.emit("close", 1008, Buffer.from("slow consumer"));
+    vi.advanceTimersByTime(WEBSOCKET_CLOSE_GRACE_MS);
+
+    expect(retired.socket.terminate).not.toHaveBeenCalled();
+  });
+
+  it("terminates immediately when a slow-consumer close cannot be queued", () => {
+    vi.useFakeTimers();
+    const retired = controlledPeer("close-failed");
+    retired.socket.bufferedAmount = MAX_BUFFERED_BYTES + 1;
+    retired.socket.close.mockImplementationOnce(() => {
+      throw new Error("close unavailable");
+    });
+    const { broadcast } = createGatewayBroadcaster({
+      clients: new GatewayClientRegistry([retired.client]),
+    });
+
+    broadcast("tick", {});
+
+    expect(retired.socket.terminate).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("keeps failed delivery terminal through late callbacks and permits a replacement socket", () => {
@@ -212,12 +230,12 @@ describe("broadcast transport retirement", () => {
       broadcast("tick", {});
       broadcast("chat", { text: "pending" }, { liveText: liveText(owner.signal) });
       sendError.mockClear();
-      peer.socket.send.mockImplementationOnce((_wire, callback) => {
+      peer.socket.send.mockImplementationOnce((_wire, options, callback) => {
         const error = new Error("flush failed");
         if (failure === "throw") {
           throw error;
         }
-        callback(error);
+        (typeof options === "function" ? options : callback!)(error);
       });
 
       broadcast("chat", { text: "terminal" }, { liveText: { group: owner.signal } });

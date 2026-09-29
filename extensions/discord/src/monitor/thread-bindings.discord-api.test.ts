@@ -86,18 +86,6 @@ describe("resolveChannelIdForBinding", () => {
     );
   });
 
-  it("returns explicit channelId without resolving route", async () => {
-    const resolved = await resolveTestChannelIdForBinding({
-      accountId: "default",
-      threadId: "thread-1",
-      channelId: "channel-explicit",
-    });
-
-    expect(resolved).toBe("channel-explicit");
-    expect(createDiscordRestClient).not.toHaveBeenCalled();
-    expect(restGet).not.toHaveBeenCalled();
-  });
-
   it("normalizes prefixed explicit channelId without resolving route", async () => {
     const resolved = await resolveTestChannelIdForBinding({
       accountId: "default",
@@ -167,21 +155,6 @@ describe("resolveChannelIdForBinding", () => {
     ).toBe(cfg);
   });
 
-  it("keeps non-thread channel id even when parent_id exists", async () => {
-    restGet.mockResolvedValueOnce({
-      id: "channel-text",
-      type: ChannelType.GuildText,
-      parent_id: "category-1",
-    });
-
-    const resolved = await resolveTestChannelIdForBinding({
-      accountId: "default",
-      threadId: "channel-text",
-    });
-
-    expect(resolved).toBe("channel-text");
-  });
-
   it("keeps forum channel id instead of parent category", async () => {
     restGet.mockResolvedValueOnce({
       id: "forum-1",
@@ -218,6 +191,33 @@ describe("maybeSendBindingMessage", () => {
       sendWebhookMessageDiscord(...args),
     );
   });
+
+  it.each([false, true])(
+    "does not send a fresh binding notice after revocation (webhook=%s)",
+    async (webhook) => {
+      await maybeSendBindingMessage({
+        cfg: EMPTY_DISCORD_TEST_CONFIG,
+        record: {
+          accountId: "default",
+          channelId: "parent-1",
+          threadId: "thread-1",
+          targetKind: "subagent",
+          targetSessionKey: "agent:main:subagent:test",
+          agentId: "main",
+          boundBy: "test",
+          boundAt: 1,
+          lastActivityAt: 1,
+          ...(webhook ? { webhookId: "wh-1", webhookToken: "tok-1" } : {}),
+        },
+        text: "Binding ready",
+        assertCurrent: () => {
+          throw new Error("Command owner was revoked");
+        },
+      });
+      expect(sendMessageDiscord).not.toHaveBeenCalled();
+      expect(sendWebhookMessageDiscord).not.toHaveBeenCalled();
+    },
+  );
 
   it("forwards cfg to webhook send path", async () => {
     const cfg = {

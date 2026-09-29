@@ -17,6 +17,7 @@ vi.mock("../tools/gateway.js", () => ({ callGatewayTool: vi.fn() }));
 const mockCallGatewayTool = vi.mocked(callGatewayTool);
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllEnvs();
   closePluginTestAdmissions();
   mockCallGatewayTool.mockReset();
@@ -30,6 +31,9 @@ describe("native Bash execution policy", () => {
   ] as const)(
     "applies %s/%s to native Bash with configured PATH",
     async (security, ask, behavior) => {
+      // This matrix checks policy, not elapsed time. Keep filesystem I/O real
+      // while the run clock stays fixed; watchdog expiry has separate coverage.
+      vi.useFakeTimers({ toFake: ["Date"] });
       const dir = makeExecApprovalsTempDir();
       vi.stubEnv("OPENCLAW_STATE_DIR", dir);
       const binary = makeExecutable(dir, "gog");
@@ -39,7 +43,7 @@ describe("native Bash execution policy", () => {
         nativeTools: ["Bash"],
       });
       let decision: CliBackendToolPermissionResult | undefined;
-      await runPlugin(context, async function* (execution) {
+      const runExit = await runPlugin(context, async function* (execution) {
         decision = await execution.requestToolPermission({
           toolName: "Bash",
           toolInput: { command: "gog calendar list" },
@@ -47,7 +51,8 @@ describe("native Bash execution policy", () => {
         });
         yield SUCCESS_RESULT;
       });
-      expect(decision?.behavior).toBe(behavior);
+      expect(decision?.behavior, JSON.stringify({ decision, runExit })).toBe(behavior);
+      expect(runExit).toMatchObject({ reason: "exit", exitCode: 0, timedOut: false });
       expect(mockCallGatewayTool).not.toHaveBeenCalled();
       if (decision?.behavior === "allow") {
         expect(decision.updatedInput?.command).toContain(binary);

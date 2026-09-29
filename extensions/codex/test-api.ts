@@ -13,6 +13,7 @@ import {
   resolveCodexAppServerRuntimeOptions,
   type CodexPluginConfig,
 } from "./src/app-server/config.js";
+import { joinPresentSections } from "./src/app-server/developer-instruction-sections.js";
 import { filterCodexDynamicTools } from "./src/app-server/dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge } from "./src/app-server/dynamic-tools.js";
 import {
@@ -29,6 +30,7 @@ import {
 import { buildCodexParentLocalInstructions } from "./src/app-server/turn-params.js";
 
 export { CODEX_APP_SERVER_VERSION } from "./src/app-server/version.js";
+export { createCodexDynamicToolBridge };
 
 /** Keeps host integration tests on the plugin's test boundary without exposing runtime internals. */
 export async function createCodexSessionInitializationFixtureForTest(params: {
@@ -40,6 +42,16 @@ export async function createCodexSessionInitializationFixtureForTest(params: {
     await import("./src/app-server/session-initialization.test-support.js");
   return await createCodexSessionInitializationFixture(params);
 }
+
+// Host finalizer fixtures opt into Vitest hooks without affecting snapshot consumers.
+export const loadCodexSettledFinalizerTestFixture = () =>
+  import("./src/app-server/settled-turn-finalizer.test-support.js");
+
+export const loadCodexNativeSubagentMonitorTestFixture = () =>
+  import("./src/app-server/native-subagent-monitor.test-support.js");
+
+export const loadCodexAbortTranscriptTestFixture = () =>
+  import("./src/app-server/transcript-abort.test-support.js");
 
 type CodexHarnessPromptSnapshot = {
   developerInstructions: string;
@@ -114,10 +126,6 @@ export function buildCodexHarnessPromptSnapshot(params: {
       ),
     }),
   };
-}
-
-function joinPresentSections(...sections: Array<string | undefined>): string {
-  return sections.filter((section): section is string => Boolean(section?.trim())).join("\n\n");
 }
 
 /** Converts harness tools into Codex dynamic-tool specs for prompt snapshot tests. */

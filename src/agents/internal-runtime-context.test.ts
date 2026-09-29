@@ -12,7 +12,6 @@ import {
   INTERNAL_RUNTIME_CONTEXT_END,
   OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
   OPENCLAW_RUNTIME_CONTEXT_NOTICE,
-  OPENCLAW_RUNTIME_EVENT_HEADER,
   relocateCurrentRuntimeContextCarrierToTail,
   stripInternalRuntimeContext,
 } from "./internal-runtime-context.js";
@@ -126,7 +125,7 @@ describe("internal runtime context codec", () => {
       "previous current turn",
       "OpenClaw runtime context for the immediately preceding user message.",
     ],
-    ["runtime event", OPENCLAW_RUNTIME_EVENT_HEADER],
+    ["runtime event", "OpenClaw runtime event."],
   ])("detects and strips the %s prompt preface", (_name, header) => {
     const preface = [header, OPENCLAW_RUNTIME_CONTEXT_NOTICE].join("\n");
     const input = [
@@ -158,6 +157,17 @@ describe("internal runtime context codec", () => {
       ...(delimiters
         ? [INTERNAL_RUNTIME_CONTEXT_BEGIN, "private metadata", INTERNAL_RUNTIME_CONTEXT_END, ""]
         : []),
+      "Visible reply",
+    ].join("\n");
+
+    expect(stripInternalRuntimeContext(input)).toBe("Visible reply");
+  });
+
+  it("strips a whitespace-wrapped runtime event preface", () => {
+    const input = [
+      "OpenClaw\n runtime event.",
+      OPENCLAW_RUNTIME_CONTEXT_NOTICE,
+      "",
       "Visible reply",
     ].join("\n");
 

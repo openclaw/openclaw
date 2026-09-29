@@ -42,7 +42,6 @@ internal class TalkAudioPlayer(
     }
   }
 
-  /** Resolves playback mode from the metadata carried with a talk.speak response. */
   internal fun resolvePlaybackMode(audio: TalkSpeakAudio): TalkPlaybackMode =
     resolvePlaybackMode(
       outputFormat = audio.outputFormat,
@@ -51,7 +50,6 @@ internal class TalkAudioPlayer(
     )
 
   companion object {
-    /** Chooses PCM streaming or MediaPlayer-backed playback from provider metadata. */
     internal fun resolvePlaybackMode(
       outputFormat: String?,
       mimeType: String?,
@@ -155,15 +153,10 @@ internal class TalkAudioPlayer(
         val totalFrames = bytes.size / 2
         track.play()
         while (track.playState == AudioTrack.PLAYSTATE_PLAYING) {
-          if (track.playbackHeadPosition >= totalFrames) {
-            finished.complete(Unit)
-            break
-          }
+          if (track.playbackHeadPosition >= totalFrames) break
           delay(20)
         }
-        if (!finished.isCompleted) {
-          finished.complete(Unit)
-        }
+        finished.complete(Unit)
         finished.await()
       } finally {
         clear(playback)

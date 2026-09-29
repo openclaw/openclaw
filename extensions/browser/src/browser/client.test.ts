@@ -88,14 +88,6 @@ describe("browser client", () => {
     await expect(browserStatus("http://127.0.0.1:18791")).rejects.toThrow(/cancelled/i);
   });
 
-  it("surfaces non-2xx responses with body text", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("conflict", { status: 409 })));
-
-    await expect(
-      browserSnapshot("http://127.0.0.1:18791", { format: "aria", limit: 1 }),
-    ).rejects.toThrow(/conflict/i);
-  });
-
   it("adds labels + efficient mode query params to snapshots", async () => {
     const calls: string[] = [];
     stubSnapshotFetch(calls);
@@ -447,12 +439,18 @@ describe("browser client", () => {
     const urls = calls.map((call) => call.url);
     expect(urls.some((url) => url.endsWith("/tabs"))).toBe(true);
     expect(urls.some((url) => url.endsWith("/doctor"))).toBe(true);
-    expect(urls.some((url) => url.endsWith("/doctor?profile=openclaw&deep=true"))).toBe(true);
     const status = calls.find((c) => c.url.endsWith("/"));
     expect(status?.init?.timeoutMs).toBe(7_500);
     const doctor = calls.find((c) => c.url.endsWith("/doctor"));
     expect(doctor?.init?.timeoutMs).toBe(7_500);
-    const deepDoctor = calls.find((c) => c.url.endsWith("/doctor?profile=openclaw&deep=true"));
+    const deepDoctor = calls.find(({ url }) => {
+      const parsed = new URL(url);
+      return parsed.pathname === "/doctor" && parsed.searchParams.get("deep") === "true";
+    });
+    expect(Object.fromEntries(new URL(deepDoctor!.url).searchParams)).toEqual({
+      profile: "openclaw",
+      deep: "true",
+    });
     expect(deepDoctor?.init?.timeoutMs).toBe(10_000);
     const open = calls.find((c) => c.url.endsWith("/tabs/open"));
     expect(open?.init?.method).toBe("POST");

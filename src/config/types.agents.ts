@@ -1,81 +1,32 @@
 import type { z } from "zod";
 // Defines agent routing, model, and runtime configuration types.
-import type { ChatType } from "../channels/chat-type.js";
 import type {
   AgentContextLimitsConfig,
   AgentDefaultsConfig,
   AgentModelEntryConfig,
 } from "./types.agent-defaults.js";
 import type { AgentSandboxConfig } from "./types.agents-shared.js";
-import type { DmScope, GroupScope, HumanDelayConfig, IdentityConfig } from "./types.base.js";
+import type { HumanDelayConfig, IdentityConfig } from "./types.base.js";
 import type { MemorySearchConfig } from "./types.memory.js";
 import type { GroupChatConfig } from "./types.messages.js";
 import type { SkillsLimitsConfig } from "./types.skills.js";
 import type { AgentToolsConfig } from "./types.tools.js";
 import type { TtsConfig } from "./types.tts.js";
 import type { AgentEntryBaseSchema } from "./zod-schema.agent-entry-base.js";
+import type { BindingsSchema } from "./zod-schema.agents.js";
+type SchemaAgentBinding = NonNullable<z.input<typeof BindingsSchema>>[number];
 
-export type AgentRuntimeAcpConfig = {
-  /** ACP harness adapter id (for example codex, claude). */
-  agent?: string;
-  /** Optional ACP backend override for this agent runtime. */
-  backend?: string;
-  /** Optional ACP session mode override. */
-  mode?: "persistent" | "oneshot";
-  /** Optional runtime working directory override. */
-  cwd?: string;
-};
+export type AgentRuntimeAcpConfig = NonNullable<
+  Extract<AgentRuntimeConfig, { type: "acp" }>["acp"]
+>;
 
-export type AgentRuntimeConfig =
-  | {
-      type: "embedded";
-    }
-  | {
-      type: "acp";
-      acp?: AgentRuntimeAcpConfig;
-    };
+export type AgentRuntimeConfig = NonNullable<z.input<typeof AgentEntryBaseSchema>["runtime"]>;
 
-export type AgentBindingMatch = {
-  channel: string;
-  /**
-   * Channel account to match.
-   * - Omitted/empty: matches only the channel default account.
-   * - "*": matches every account on the channel.
-   * - Any other string: matches that specific account id.
-   */
-  accountId?: string;
-  peer?: { kind: ChatType; id: string };
-  guildId?: string;
-  teamId?: string;
-  /** Discord role IDs used for role-based routing. */
-  roles?: string[];
-};
+export type AgentBindingMatch = AgentRouteBinding["match"];
 
-export type AgentRouteBinding = {
-  /** Missing type is interpreted as route for backward compatibility. */
-  type?: "route";
-  agentId: string;
-  comment?: string;
-  match: AgentBindingMatch;
-  session?: {
-    /** Optional session scoping override for conversations matched by this binding. */
-    dmScope?: DmScope;
-    groupScope?: GroupScope;
-  };
-};
+export type AgentRouteBinding = Extract<SchemaAgentBinding, { type?: "route" }>;
 
-export type AgentAcpBinding = {
-  type: "acp";
-  agentId: string;
-  comment?: string;
-  match: AgentBindingMatch;
-  acp?: {
-    mode?: "persistent" | "oneshot";
-    label?: string;
-    cwd?: string;
-    backend?: string;
-  };
-};
+export type AgentAcpBinding = Extract<SchemaAgentBinding, { type: "acp" }>;
 
 export type AgentBinding = AgentRouteBinding | AgentAcpBinding;
 

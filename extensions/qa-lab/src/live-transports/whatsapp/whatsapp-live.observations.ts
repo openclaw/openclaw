@@ -1,15 +1,14 @@
-// QA Lab WhatsApp observed-message matching and diagnostics.
 import type { WhatsAppQaDriverObservedMessage } from "@openclaw/whatsapp/api.js";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import type {
-  WhatsAppObservedMessage,
   WhatsAppQaDriverQuotedMessageKey,
   WhatsAppQaMessageScenarioContext,
   WhatsAppQaMessageScenarioRun,
   WhatsAppQaObservedMessagesContext,
 } from "./whatsapp-live.contracts.js";
 
-export function messageMatches(message: WhatsAppObservedMessage, matchText: string | RegExp) {
+export function messageMatches(message: { text: string }, matchText: string | RegExp) {
   return typeof matchText === "string"
     ? message.text.includes(matchText)
     : matchText.test(message.text);
@@ -127,9 +126,7 @@ export async function waitForWhatsAppSutReactionSequenceToTrigger(
         `timed out waiting for WhatsApp status reaction sequence ${params.emojis.join(" -> ")}`,
       );
     }
-    await new Promise((resolve) => {
-      setTimeout(resolve, 250);
-    });
+    await sleep(250);
   }
   return matched;
 }
@@ -141,7 +138,6 @@ export async function waitForScenarioObservedMessage(
       label: string;
       match: (message: WhatsAppQaDriverObservedMessage) => boolean;
     }>;
-    expectedSender?: (message: WhatsAppQaDriverObservedMessage) => boolean;
     match: (message: WhatsAppQaDriverObservedMessage) => boolean;
     observedAfter?: Date;
     timeoutMs?: number;
@@ -153,14 +149,12 @@ export async function waitForScenarioObservedMessage(
       observedAfter: params.observedAfter,
       timeoutMs: params.timeoutMs ?? 45_000,
       match: (candidate) =>
-        (params.expectedSender?.(candidate) ??
-          isWhatsAppScenarioSutMessage(candidate, {
-            observedAfter: params.observedAfter ?? new Date(0),
-            sutPhoneE164: context.sutPhoneE164,
-            target: context.target,
-            targetKind: context.targetKind,
-          })) &&
-        params.match(candidate),
+        isWhatsAppScenarioSutMessage(candidate, {
+          observedAfter: params.observedAfter ?? new Date(0),
+          sutPhoneE164: context.sutPhoneE164,
+          target: context.target,
+          targetKind: context.targetKind,
+        }) && params.match(candidate),
     });
   } catch (error) {
     if (/\btimed out waiting for WhatsApp QA driver message\b/iu.test(formatErrorMessage(error))) {

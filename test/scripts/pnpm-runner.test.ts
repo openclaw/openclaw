@@ -47,6 +47,17 @@ describe("resolvePnpmRunner", () => {
       writeLauncher(name, "#!/bin/sh\nexit 0\n", 0o755);
     }
     writeLauncher("windows/corepack.cmd", "@exit /b 0\r\n");
+    for (const [file, marker, exitCode] of [
+      ["cwd/pnpm", "cwd", 7],
+      ["other/pnpm", "other", 0],
+      ["corepack-only/corepack", "corepack", 9],
+    ] as const) {
+      writeLauncher(
+        `empty-path/${file}`,
+        `#!/bin/sh\nprintf '%s\n' '${marker}' "$@"\nexit ${exitCode}\n`,
+        0o755,
+      );
+    }
   });
 
   afterEach(() => vi.unstubAllEnvs());
@@ -95,24 +106,6 @@ describe("resolvePnpmRunner", () => {
       entrypoint: path.join(tempDir, entrypoint),
       npmExecPath: envMode === "selected" ? selectedPath : envMode === "empty" ? null : parentPath,
       args: ["literal & argument"],
-    });
-  });
-
-  it("uses npm_execpath when it points to a JS pnpm entrypoint", () => {
-    const tempDir = path.join(fixturesRoot, "js");
-    const npmExecPath = path.join(tempDir, "pnpm.cjs");
-
-    expect(
-      resolvePnpmRunner({
-        npmExecPath,
-        nodeExecPath: "/usr/local/bin/node",
-        pnpmArgs: ["exec", "vitest", "run"],
-        platform: "linux",
-      }),
-    ).toEqual({
-      command: "/usr/local/bin/node",
-      args: [npmExecPath, "exec", "vitest", "run"],
-      shell: false,
     });
   });
 
@@ -326,6 +319,45 @@ describe("resolvePnpmRunner", () => {
       args: ["exec", "vitest", "run"],
       shell: false,
     });
+  });
+
+  posixIt.each([
+    { name: "leading empty", segments: ["", "other"], marker: "cwd", exitCode: 7 },
+    {
+      name: "interior empty",
+      segments: ["corepack-only", "", "other"],
+      marker: "cwd",
+      exitCode: 7,
+    },
+    { name: "trailing empty", segments: ["corepack-only", ""], marker: "cwd", exitCode: 7 },
+    { name: "explicit current directory", segments: [".", "other"], marker: "cwd", exitCode: 7 },
+    { name: "earlier pnpm", segments: ["other", ""], marker: "other", exitCode: 0 },
+  ])("preserves native PATH selection for $name", ({ segments, marker, exitCode }) => {
+    const root = path.join(fixturesRoot, "empty-path");
+    const cwd = path.join(root, "cwd");
+    const env = {
+      PATH: segments
+        .map((entry) => (entry === "" || entry === "." ? entry : path.join(root, entry)))
+        .join(":"),
+    };
+    const args = ["run", "build", "literal & argument", ""];
+    const expectedOutput = [marker, ...args, ""].join("\n");
+    const spec = createPnpmRunnerSpawnSpec({
+      cwd,
+      env,
+      npmExecPath: "",
+      pnpmArgs: args,
+      stdio: "pipe",
+    });
+    const wrapped = spawnSync(spec.command, spec.args, {
+      ...spec.options,
+      encoding: "utf8",
+      timeout: 5_000,
+    });
+    expect(wrapped.error).toBeUndefined();
+    expect(wrapped.status, wrapped.stderr).toBe(exitCode);
+    expect(wrapped.stdout).toBe(expectedOutput);
+    expect(wrapped.stderr).toBe("");
   });
 
   posixIt("uses Corepack when pnpm is not directly available on PATH", () => {

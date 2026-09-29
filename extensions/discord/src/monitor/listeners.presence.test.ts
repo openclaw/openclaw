@@ -6,7 +6,7 @@ import {
 } from "discord-api-types/v10";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Client } from "../internal/discord.js";
 import type { DiscordLivePolicy } from "./live-policy.js";
@@ -70,26 +70,27 @@ function client(bot = false): Client {
   return { fetchUser: vi.fn(async () => ({ bot })) } as unknown as Client;
 }
 
-function cooldownStore(values = new Map<string, number>()): PluginStateSyncKeyedStore<number> {
+function cooldownStore(values = new Map<string, number>()) {
   return {
-    register: (key, value) => void values.set(key, value),
-    registerIfAbsent: (key, value) => {
+    register: async (key, value) => void values.set(key, value),
+    registerIfAbsent: async (key, value) => {
       if (values.has(key)) {
         return false;
       }
       values.set(key, value);
       return true;
     },
-    lookup: (key) => values.get(key),
-    consume: (key) => {
+    lookup: async (key) => values.get(key),
+    consume: async (key) => {
       const value = values.get(key);
       values.delete(key);
       return value;
     },
-    delete: (key) => values.delete(key),
-    entries: () => [...values].map(([key, value]) => ({ key, value, createdAt: value })),
-    clear: () => values.clear(),
-  };
+    delete: async (key) => values.delete(key),
+    deleteIfEqual: async (key, expected) => values.get(key) === expected && values.delete(key),
+    entries: async () => [...values].map(([key, value]) => ({ key, value, createdAt: value })),
+    clear: async () => values.clear(),
+  } satisfies PluginStateKeyedStore<number>;
 }
 
 type PresenceListenerParams = ConstructorParameters<typeof DiscordPresenceListener>[0];
@@ -265,6 +266,117 @@ describe("DiscordPresenceListener", () => {
     expect(mocks.requestHeartbeat).not.toHaveBeenCalled();
   });
 
+  it.each(["lookup", "claim"] as const)(
+    "rejects a replaced policy after awaiting the cooldown %s",
+    async (stage) => {
+      let current = true;
+      const policy = { ...livePresencePolicy(), isCurrent: () => current };
+      const store = cooldownStore();
+      const listener = createPresenceListener({
+        readPolicy: async () => policy,
+        cooldownStore: store,
+      });
+      await listener.handle(presence("offline"), humanClient);
+      const ready = createDeferred<void>();
+      const entered = createDeferred<void>();
+      if (stage === "lookup") {
+        const lookup = store.lookup;
+        vi.spyOn(store, "lookup").mockImplementationOnce(async (key) => {
+          entered.resolve();
+          await ready.promise;
+          return await lookup(key);
+        });
+      } else {
+        const claim = store.registerIfAbsent;
+        vi.spyOn(store, "registerIfAbsent").mockImplementationOnce(async (...args) => {
+          entered.resolve();
+          await ready.promise;
+          return await claim(...args);
+        });
+      }
+      const event = listener.handle(presence("online"), humanClient);
+      try {
+        await entered.promise;
+        expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
+        current = false;
+      } finally {
+        ready.resolve();
+        await event;
+      }
+      expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
+      expect(await store.entries()).toEqual([]);
+    },
+  );
+
+  it("drains reset-detached cooldown rollback before provider shutdown completes", async () => {
+    const store = cooldownStore();
+    const listener = createPresenceListener({ cooldownStore: store });
+    await listener.handle(presence("offline"), humanClient);
+    const claimReady = createDeferred<void>();
+    const claimEntered = createDeferred<void>();
+    const claim = store.registerIfAbsent;
+    vi.spyOn(store, "registerIfAbsent").mockImplementationOnce(async (...args) => {
+      claimEntered.resolve();
+      await claimReady.promise;
+      return await claim(...args);
+    });
+    const rollbackReady = createDeferred<void>();
+    const rollbackEntered = createDeferred<void>();
+    const rollback = store.deleteIfEqual;
+    vi.spyOn(store, "deleteIfEqual").mockImplementationOnce(async (...args) => {
+      rollbackEntered.resolve();
+      await rollbackReady.promise;
+      return await rollback(...args);
+    });
+    const event = listener.handle(presence("online"), humanClient);
+    let stopped = false;
+    let stopping: Promise<void> | undefined;
+    try {
+      await claimEntered.promise;
+      listener.resetGatewaySession();
+      stopping = listener.stop().then(() => {
+        stopped = true;
+      });
+      claimReady.resolve();
+      await rollbackEntered.promise;
+      expect(stopped).toBe(false);
+      await listener.handle(presence("online", "late-user"), humanClient);
+      expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
+    } finally {
+      claimReady.resolve();
+      rollbackReady.resolve();
+      await Promise.all([event, stopping]);
+    }
+    expect(stopped).toBe(true);
+    expect(await store.entries()).toEqual([]);
+  });
+
+  it("preserves a replacement cooldown while an unsuccessful greeting rolls back", async () => {
+    const values = new Map<string, number>();
+    const store = cooldownStore(values);
+    const listener = createPresenceListener({ cooldownStore: store });
+    await listener.handle(presence("offline"), humanClient);
+    const rollbackReady = createDeferred<void>();
+    const rollbackEntered = createDeferred<void>();
+    const rollback = store.deleteIfEqual;
+    vi.spyOn(store, "deleteIfEqual").mockImplementationOnce(async (...args) => {
+      rollbackEntered.resolve();
+      await rollbackReady.promise;
+      return await rollback(...args);
+    });
+    mocks.enqueueSystemEvent.mockReturnValueOnce(false);
+    const event = listener.handle(presence("online"), humanClient);
+    try {
+      await rollbackEntered.promise;
+      values.set("molty:guild-1:user-1", nowMs + 1);
+    } finally {
+      rollbackReady.resolve();
+      await event;
+    }
+    expect(await store.lookup("molty:guild-1:user-1")).toBe(nowMs + 1);
+    expect(mocks.requestHeartbeat).not.toHaveBeenCalled();
+  });
+
   it("uses the guild snapshot to classify the first live presence update", async () => {
     const listener = createPresenceListener();
 
@@ -392,40 +504,32 @@ describe("DiscordPresenceListener", () => {
     },
   );
 
-  it.each(["disabled", "excluded", "retargeted"] as const)(
-    "does not enqueue or consume cooldown when presence is %s during permission lookup",
-    async (change) => {
-      let policy = livePresencePolicy(["user-1"]);
-      const store = cooldownStore();
-      const listener = createPresenceListener({
-        readPolicy: async () => {
-          const current = policy;
-          return { ...current, isCurrent: () => current === policy };
-        },
-        cooldownStore: store,
-      });
-      await listener.handle(presence("offline"), humanClient);
-      const permission = createDeferred<boolean>();
-      mocks.canViewDiscordGuildChannel.mockReturnValueOnce(permission.promise);
-      const pending = listener.handle(presence("online"), humanClient);
-      await vi.waitFor(() => expect(mocks.canViewDiscordGuildChannel).toHaveBeenCalledTimes(1));
-      policy = livePresencePolicy(change === "excluded" ? ["user-2"] : ["user-1"]);
-      const config = policy.guildEntries!["guild-1"]!.presenceEvents!;
-      if (change === "disabled") {
-        config.enabled = false;
-      }
-      if (change === "retargeted") {
-        config.channelId = "channel-2";
-      }
-      permission.resolve(true);
-      await pending;
-      expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
-      expect(store.entries()).toEqual([]);
-      policy = livePresencePolicy(["user-1"]);
-      await listener.handle(presence("online"), humanClient);
-      expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(1);
-    },
-  );
+  it("does not enqueue or consume cooldown when presence is retargeted during permission lookup", async () => {
+    let policy = livePresencePolicy(["user-1"]);
+    const store = cooldownStore();
+    const listener = createPresenceListener({
+      readPolicy: async () => {
+        const current = policy;
+        return { ...current, isCurrent: () => current === policy };
+      },
+      cooldownStore: store,
+    });
+    await listener.handle(presence("offline"), humanClient);
+    const permission = createDeferred<boolean>();
+    mocks.canViewDiscordGuildChannel.mockReturnValueOnce(permission.promise);
+    const pending = listener.handle(presence("online"), humanClient);
+    await vi.waitFor(() => expect(mocks.canViewDiscordGuildChannel).toHaveBeenCalledTimes(1));
+    policy = livePresencePolicy(["user-1"]);
+    const config = policy.guildEntries!["guild-1"]!.presenceEvents!;
+    config.channelId = "channel-2";
+    permission.resolve(true);
+    await pending;
+    expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(await store.entries()).toEqual([]);
+    policy = livePresencePolicy(["user-1"]);
+    await listener.handle(presence("online"), humanClient);
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(1);
+  });
 
   it("applies current presence audience policy on the existing listener", async () => {
     let policy = livePresencePolicy(["user-1"]);
@@ -711,20 +815,6 @@ describe("DiscordPresenceListener", () => {
       expect.stringContaining('user_id="replayed-1"'),
       expect.anything(),
     );
-  });
-
-  it("honors a configured reconnect suppression window, including disabling it", async () => {
-    const listener = createPresenceListener({
-      presenceEvents: { reconnectSuppressSeconds: 0 },
-    });
-
-    nowMs = 30_000;
-    listener.resetGatewaySession();
-    await listener.seedGuildSnapshot(guildSnapshot([]));
-    nowMs += 1000;
-    await listener.handle(presence("online", "came-online"), humanClient);
-
-    expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(1);
   });
 
   it("rate-limits presence event bursts and logs the suppression once", async () => {

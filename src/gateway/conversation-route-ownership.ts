@@ -10,6 +10,7 @@ import { listRouteBindings } from "../config/bindings.js";
 import { getConversationDeliveryOperation } from "../config/sessions/conversation-delivery-store.js";
 import {
   resolveConversation,
+  runConversationDatabaseWrite,
   type ConversationRecord,
   type ConversationRegistryScope,
 } from "../config/sessions/conversation-registry.js";
@@ -212,39 +213,23 @@ export function resolveConversationRouteEligibilityForAgent(params: {
   const hasObservedContext = Boolean(
     params.conversation.routeContextObserved || params.conversation.routeContext,
   );
-  const pluginOwner = resolvePluginRouteOwner(params.config, params.conversation);
-  if (pluginOwner) {
-    if (pluginOwner.kind === "unavailable") {
-      return "unavailable";
+  let owner = resolvePluginRouteOwner(params.config, params.conversation);
+  if (!owner) {
+    const route = resolveConfiguredRouteOwner(
+      params.config,
+      params.conversation,
+      params.conversation.routeContext,
+    );
+    if (!route) {
+      return "denied";
     }
-    return pluginOwner.agentId === requestedAgentId &&
-      !(
-        !hasObservedContext &&
-        pluginOwner.agentId &&
-        hasUnrecordedContextualBinding({
-          config: params.config,
-          conversation: params.conversation,
-          resolvedAgentId: pluginOwner.agentId,
-        })
-      )
-      ? "eligible"
-      : "denied";
+    owner = resolveGenericRouteOwner({
+      config: params.config,
+      conversation: params.conversation,
+      route,
+      ...(params.conversation.routeContext ? { context: params.conversation.routeContext } : {}),
+    });
   }
-
-  const route = resolveConfiguredRouteOwner(
-    params.config,
-    params.conversation,
-    params.conversation.routeContext,
-  );
-  if (!route) {
-    return "denied";
-  }
-  const owner = resolveGenericRouteOwner({
-    config: params.config,
-    conversation: params.conversation,
-    route,
-    ...(params.conversation.routeContext ? { context: params.conversation.routeContext } : {}),
-  });
   if (owner.kind === "unavailable") {
     return "unavailable";
   }
@@ -281,8 +266,6 @@ export function assertConversationRouteEligibleForAgent(params: {
   );
 }
 
-type ResolveConversation = typeof resolveConversation;
-
 export function assertConversationDeliveryAttemptAuthorized(params: {
   config: OpenClawConfig;
   agentId: string;
@@ -291,12 +274,8 @@ export function assertConversationDeliveryAttemptAuthorized(params: {
   expectedSessionId?: string;
   expectedSessionKey?: string;
   scope: ConversationRegistryScope;
-  resolveConversation?: ResolveConversation;
 }): void {
-  const conversation = (params.resolveConversation ?? resolveConversation)(
-    params.scope,
-    params.conversationRef,
-  );
+  const conversation = resolveConversation(params.scope, params.conversationRef);
   if (
     !conversation ||
     resolveConversationRouteFingerprint(conversation) !== params.expectedRouteFingerprint ||
@@ -326,29 +305,28 @@ export function assertConversationDeliveryAttemptAuthorized(params: {
   );
 }
 
-export function assertQueuedConversationDeliveryAttemptAuthorized(params: {
-  config: OpenClawConfig;
-  agentId: string;
-  operationId: string;
-  storePath?: string;
-  routeFingerprint: string;
-}): void {
-  const scope = {
-    agentId: params.agentId,
-    ...(params.storePath ? { storePath: params.storePath } : {}),
-  };
-  const operation = getConversationDeliveryOperation(scope, params.operationId);
-  if (!operation) {
-    throw new PlatformMessageNotDispatchedError(
-      `Conversation delivery operation no longer exists: ${params.operationId}`,
-      { cause: undefined, retryable: false },
-    );
-  }
-  assertConversationDeliveryAttemptAuthorized({
-    config: params.config,
-    agentId: params.agentId,
-    conversationRef: operation.conversationRef,
-    expectedRouteFingerprint: params.routeFingerprint,
-    scope,
+export async function assertQueuedConversationDeliveryAttemptAuthorized(
+  params: {
+    readCurrentConfig: () => OpenClawConfig;
+    operationId: string;
+    routeFingerprint: string;
+  },
+  capturedScope: ConversationRegistryScope,
+): Promise<void> {
+  await runConversationDatabaseWrite(capturedScope, (writeScope) => {
+    const operation = getConversationDeliveryOperation(writeScope, params.operationId);
+    if (!operation) {
+      throw new PlatformMessageNotDispatchedError(
+        `Conversation delivery operation no longer exists: ${params.operationId}`,
+        { cause: undefined, retryable: false },
+      );
+    }
+    assertConversationDeliveryAttemptAuthorized({
+      config: params.readCurrentConfig(),
+      agentId: writeScope.agentId,
+      conversationRef: operation.conversationRef,
+      expectedRouteFingerprint: params.routeFingerprint,
+      scope: writeScope,
+    });
   });
 }

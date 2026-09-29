@@ -20,7 +20,10 @@ import {
   plainGhAuthenticatedEnv,
   resolvePlainGhBin,
 } from "../../scripts/lib/plain-gh.mjs";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+
+const testNodeExecPath = resolveTestNodeExecPath();
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const commandDirs = useAutoCleanupTempDirTracker(afterAll);
@@ -38,8 +41,10 @@ beforeAll(() => {
   commands = makeCommandFixture();
 });
 
-function makeCommandFixture() {
-  const root = commandDirs.make("plain-gh-commands-");
+function makeCommandFixture(parent?: string) {
+  const root = commandDirs.make("plain-gh-commands-", parent);
+  // Both extensionless command routes use CommonJS, independent of the temp parent.
+  writeFileSync(path.join(root, "package.json"), '{"type":"commonjs"}\n');
   const home = path.join(root, "home");
   const protectedBin = path.join(home, "bin");
   const secondBin = path.join(root, "second");
@@ -55,7 +60,7 @@ function makeCommandFixture() {
     const gh = path.join(dir, "gh");
     writeFileSync(
       gh,
-      `#!${process.execPath}
+      `#!${testNodeExecPath}
 const fs = require("node:fs");
 const env = process.env;
 const argv = process.argv.slice(2);
@@ -83,10 +88,10 @@ if (argv[0] === "auth" && argv[1] === "token") {
   return { home, protectedBin, secondBin, toolsBin };
 }
 
-function makeFixture() {
+function makeFixture(fixtureCommands = commands) {
   const root = tempDirs.make("plain-gh-");
   // Share executable files only; environments and outputs stay private to each test.
-  const { home, protectedBin, secondBin, toolsBin } = commands;
+  const { home, protectedBin, secondBin, toolsBin } = fixtureCommands;
   const calls = path.join(root, "calls.jsonl");
   writeFileSync(calls, "");
   const env: NodeJS.ProcessEnv = {
@@ -129,6 +134,51 @@ function runGh(engine: (typeof engines)[number], env: NodeJS.ProcessEnv, cwd?: s
 }
 
 describe.each(engines)("%s plain gh execution", (engine) => {
+  it.each([false, true])(
+    "runs CommonJS command fixtures below an ESM parent with explicit override=%s",
+    (explicit) => {
+      const parent = commandDirs.make("plain-gh-esm-");
+      const parentPackage = path.join(parent, "package.json");
+      writeFileSync(parentPackage, '{"type":"module"}\n');
+      const fixture = makeFixture(makeCommandFixture(parent));
+      fixture.env.OPENCLAW_GH_BIN = explicit ? fixture.override : undefined;
+      const before = { ...fixture.env };
+      const result = JSON.parse(runGh(engine, fixture.env));
+      expect(result).toMatchObject({
+        route: explicit ? "second" : "protected",
+        argv: ["--version"],
+        override: explicit ? fixture.override : null,
+        colors: {
+          NO_COLOR: "1",
+          FORCE_COLOR: "0",
+          CLICOLOR: "0",
+          CLICOLOR_FORCE: "0",
+          COLORTERM: null,
+          GH_FORCE_TTY: null,
+        },
+      });
+      expect(result.tokens).toEqual(explicit ? { GH_TOKEN: "fixture-token" } : {});
+      expect(fixture.calls()).toEqual([
+        ...(explicit
+          ? [
+              {
+                route: "protected",
+                argv: ["auth", "token"],
+                override: engine === "shell" ? "" : null,
+              },
+            ]
+          : []),
+        {
+          route: explicit ? "second" : "protected",
+          argv: ["--version"],
+          override: explicit ? fixture.override : null,
+        },
+      ]);
+      expect(fixture.env).toEqual(before);
+      expect(JSON.parse(readFileSync(parentPackage, "utf8"))).toEqual({ type: "module" });
+    },
+  );
+
   it.each([undefined, ""])(
     "keeps HOME/bin first on PATH with override %j and does not extract credentials",
     (override) => {
@@ -227,7 +277,7 @@ describe.each(engines)("%s plain gh execution", (engine) => {
       const output =
         engine === "Node"
           ? execFileSync(
-              process.execPath,
+              testNodeExecPath,
               [
                 "--input-type=module",
                 "-e",

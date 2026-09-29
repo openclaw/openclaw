@@ -1,0 +1,107 @@
+.link-hovercard {
+  position: fixed;
+  inset: auto;
+  z-index: 1990;
+  width: min(360px, calc(100vw - 24px));
+  max-height: calc(100dvh - 24px);
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  color: var(--text);
+  font-family: var(--font-body);
+  background: var(--card);
+  border: 1px solid var(--overlay-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--overlay-shadow);
+  pointer-events: auto;
+}
+
+.link-hovercard__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 14px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.link-hovercard__identity {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 7px;
+}
+
+.link-hovercard__identity span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.link-hovercard__identity img,
+.link-hovercard__identity svg {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  object-fit: contain;
+}
+
+a.link-hovercard__open {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.link-hovercard__open svg {
+  width: 13px;
+  height: 13px;
+}
+
+.link-hovercard__open:hover {
+  color: var(--text);
+}
+
+.link-hovercard__open:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: var(--radius-sm);
+}
+
+.link-hovercard__image {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1.91;
+  object-fit: contain;
+  background: var(--bg);
+}
+
+.link-hovercard__body {
+  padding: 13px 14px 15px;
+  overflow-wrap: anywhere;
+}
+
+.link-hovercard__title {
+  display: -webkit-box;
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.4;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+
+.link-hovercard__description {
+  display: -webkit-box;
+  overflow: hidden;
+  margin: 7px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}

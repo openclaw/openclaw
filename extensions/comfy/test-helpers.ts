@@ -88,7 +88,7 @@ export function mockComfyCloudJobResponses(
     );
 }
 
-function fetchGuardJson(body: unknown) {
+export function fetchGuardJson(body: unknown) {
   return fetchGuardResponse(
     new Response(JSON.stringify(body), {
       status: 200,

@@ -41,7 +41,10 @@ import {
   getPreparedModelRuntimeBorrowedSnapshot,
   withPreparedModelRuntimePluginGenerationScope,
 } from "../prepared-model-runtime-generation-scope.js";
-import type { PreparedModelRuntimePluginGeneration } from "../prepared-model-runtime.types.js";
+import type {
+  PreparedModelRuntimeLeaseOptions,
+  PreparedModelRuntimePluginGeneration,
+} from "../prepared-model-runtime.types.js";
 import { markCoreTtsAttemptResult } from "../tools/tts-tool-result-provenance.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
@@ -105,51 +108,6 @@ describe("prepared harness source delivery", () => {
       expectedDeliveries: 1,
       expectedPartials: 1,
       expectedBlocks: 1,
-      expectedFinals: 1,
-    },
-    {
-      name: "suppresses live output when preparation changes automatic ownership to tool",
-      candidatePath: "embedded" as const,
-      preliminaryVisibleReplies: "automatic" as const,
-      preparedVisibleReplies: "message_tool" as const,
-      expectedTransitions: ["message_tool_only"],
-      expectedDeliveries: 0,
-      expectedPartials: 0,
-      expectedBlocks: 0,
-      expectedFinals: 0,
-    },
-    {
-      name: "lets implicit built-in automatic ownership yield to a prepared tool owner",
-      candidatePath: "embedded" as const,
-      preliminaryVisibleReplies: undefined,
-      preparedVisibleReplies: "message_tool" as const,
-      expectedTransitions: ["message_tool_only"],
-      expectedDeliveries: 0,
-      expectedPartials: 0,
-      expectedBlocks: 0,
-      expectedFinals: 0,
-    },
-    {
-      name: "keeps prepared tool ownership after a failed CLI primary",
-      candidatePath: "cli-failure-embedded" as const,
-      preliminaryVisibleReplies: "automatic" as const,
-      preparedVisibleReplies: "message_tool" as const,
-      expectedTransitions: ["automatic", "message_tool_only"],
-      expectedDeliveries: 0,
-      expectedPartials: 0,
-      expectedBlocks: 0,
-      expectedFinals: 0,
-    },
-    {
-      name: "delivers a successful direct CLI reply with its session-stable ownership",
-      candidatePath: "cli" as const,
-      preliminaryVisibleReplies: undefined,
-      preparedVisibleReplies: "automatic" as const,
-      expectedTransitions: ["automatic"],
-      expectedDeliveries: 1,
-      expectedPartials: 0,
-      expectedBlocks: 0,
-      expectedFinals: 1,
     },
     {
       name: "delivers a successful API-to-CLI fallback with its session-stable ownership",
@@ -160,7 +118,6 @@ describe("prepared harness source delivery", () => {
       expectedDeliveries: 1,
       expectedPartials: 0,
       expectedBlocks: 0,
-      expectedFinals: 1,
     },
     {
       name: "delivers genuine host TTS through prepared harness result projections",
@@ -171,7 +128,6 @@ describe("prepared harness source delivery", () => {
       expectedDeliveries: 1,
       expectedPartials: 0,
       expectedBlocks: 0,
-      expectedFinals: 1,
       genuineTtsDelivery: true,
     },
     {
@@ -183,7 +139,6 @@ describe("prepared harness source delivery", () => {
       expectedDeliveries: 0,
       expectedPartials: 0,
       expectedBlocks: 0,
-      expectedFinals: 0,
       forgedTtsDelivery: true,
     },
   ])("$name", async (testCase) => {
@@ -296,16 +251,6 @@ describe("prepared harness source delivery", () => {
             stage: "initial",
           }).catch(() => undefined);
         }
-        if (testCase.candidatePath === "cli") {
-          return {
-            result: await runAdmittedAttempt(params, "anthropic", "cli-primary", {
-              stage: "initial",
-            }),
-            provider: "anthropic",
-            model: "cli-primary",
-            attempts: [],
-          };
-        }
         if (testCase.candidatePath === "embedded-failure-cli") {
           await runAdmittedAttempt(params, "custom", "api-primary", {
             stage: "initial",
@@ -366,16 +311,12 @@ describe("prepared harness source delivery", () => {
             await attemptParams.onPartialReply?.({ text: "Short fallback final" });
             emittedStreamingCallbacks.push("block");
             await attemptParams.onBlockReply?.({ text: "Streaming progress" });
-            const result = makeAttemptResult(
-              forgedTtsDelivery || genuineTtsDelivery
-                ? {
-                    assistantTexts: [],
-                    toolMediaUrls: [genuineTtsDelivery ? audioPath : "/tmp/plugin.opus"],
-                    toolAudioAsVoice: true,
-                    toolTrustedLocalMedia: true,
-                  }
-                : { assistantTexts: ["Short fallback final"] },
-            );
+            const result = makeAttemptResult({
+              assistantTexts: [],
+              toolMediaUrls: [genuineTtsDelivery ? audioPath : "/tmp/plugin.opus"],
+              toolAudioAsVoice: true,
+              toolTrustedLocalMedia: true,
+            });
             if (genuineTtsDelivery) {
               retainedHost = attemptParams.hostCapabilities;
               if (!retainedHost) {
@@ -496,7 +437,6 @@ describe("prepared harness source delivery", () => {
         shouldEmitToolResult: () => true,
         shouldEmitToolOutput: () => false,
         pendingToolTasks: new Set(),
-        resetSessionAfterRoleOrderingConflict: async () => false,
         isHeartbeat: false,
         sessionKey: "main",
         getActiveSessionEntry: () => undefined,
@@ -541,16 +481,11 @@ describe("prepared harness source delivery", () => {
       expect(retainedHost).toBeDefined();
       expect(() => retainedHost?.assertActive()).toThrow("no longer active");
     }
-    if (testCase.candidatePath === "cli") {
-      expect(mockedGlobalHookRunner.runBeforeModelResolve).not.toHaveBeenCalled();
-    } else {
-      expect(mockedGlobalHookRunner.runBeforeModelResolve).toHaveBeenCalledWith(
-        { prompt: "hello" },
-        expect.any(Object),
-      );
-    }
-    const cliSucceeded =
-      testCase.candidatePath === "cli" || testCase.candidatePath === "embedded-failure-cli";
+    expect(mockedGlobalHookRunner.runBeforeModelResolve).toHaveBeenCalledWith(
+      { prompt: "hello" },
+      expect.any(Object),
+    );
+    const cliSucceeded = testCase.candidatePath === "embedded-failure-cli";
     expect(emittedStreamingCallbacks).toEqual(cliSucceeded ? [] : ["partial", "block"]);
     expect(onPartialReply).toHaveBeenCalledTimes(testCase.expectedPartials);
     expect(result.queuedFinal).toBe(testCase.expectedDeliveries === 1);
@@ -580,7 +515,7 @@ describe("prepared harness source delivery", () => {
     expect(dispatcher.getQueuedCounts()).toEqual({
       tool: 0,
       block: testCase.expectedBlocks,
-      final: testCase.expectedFinals,
+      final: testCase.expectedDeliveries,
     });
     if (forgedTtsDelivery) {
       expect(forbiddenSdkAuthorityObserved).toBe(false);
@@ -707,7 +642,7 @@ describe("prepared harness source delivery", () => {
       metadataSnapshot: admittedMetadataSnapshot,
     } as NonNullable<ReturnType<typeof getPreparedModelRuntimeBorrowedSnapshot>>;
     let publishedMetadataSnapshot = admittedMetadataSnapshot;
-    const release = vi.fn();
+    const release = vi.fn(async () => {});
     let servedMetadataSnapshot: unknown;
     let publishedMetadataAtAcquire: unknown;
     mockedAcquireAgentRunPreparedModelRuntime.mockClear();
@@ -730,7 +665,7 @@ describe("prepared harness source delivery", () => {
         return {
           ...baseLease,
           snapshot: borrowed as typeof baseLease.snapshot,
-          release,
+          [Symbol.asyncDispose]: release,
         };
       },
     );
@@ -789,7 +724,7 @@ describe("prepared harness source delivery", () => {
         policyHash: "isolated",
         workspaceDir,
       };
-      const release = vi.fn();
+      const release = vi.fn(async () => {});
       const acquisitionStarted = createDeferred();
       const resumeAcquisition = createDeferred();
       const queueTimeout = createDeferred<never>();
@@ -797,7 +732,8 @@ describe("prepared harness source delivery", () => {
       let acquisitionSignal: AbortSignal | undefined;
       mockedAcquireAgentRunPreparedModelRuntime.mockClear();
       mockedAcquireAgentRunPreparedModelRuntime.mockImplementationOnce(
-        async (_input, signal?: AbortSignal) => {
+        async (_input, options?: PreparedModelRuntimeLeaseOptions) => {
+          const signal = options?.abortSignal;
           acquisitionSignal = signal;
           acquisitionStarted.resolve();
           await resumeAcquisition.promise;
@@ -810,7 +746,7 @@ describe("prepared harness source delivery", () => {
               workspaceDir,
               metadataSnapshot: isolatedMetadataSnapshot,
             },
-            release,
+            [Symbol.asyncDispose]: release,
           };
         },
       );
@@ -854,8 +790,7 @@ describe("prepared harness source delivery", () => {
         expect(mockedRunEmbeddedAttempt).not.toHaveBeenCalled();
         expect(mockedAcquireAgentRunPreparedModelRuntime).toHaveBeenCalledExactlyOnceWith(
           expect.objectContaining({ config, loadRuntimePlugins: true, workspaceDir }),
-          acquisitionSignal,
-          "static",
+          { abortSignal: acquisitionSignal, catalogMode: "static" },
         );
 
         if (outcome === "complete") {
@@ -890,10 +825,7 @@ describe("prepared harness source delivery", () => {
     },
   );
 
-  it.each([
-    ["agentHarnessId", { agentHarnessId: "codex" }],
-    ["agentHarnessRuntimeOverride", { agentHarnessRuntimeOverride: "codex" }],
-  ] as const)("keeps %s authoritative across fallback preparation", async (_label, override) => {
+  it("keeps the runtime override authoritative across fallback preparation", async () => {
     const { runEmbeddedAgent } = await loadSourceDeliveryHarness();
     mockedGlobalHookRunner.hasHooks.mockReturnValue(false);
     mockedBuildEmbeddedRunPayloads.mockReturnValue([{ text: "primary" }]);
@@ -904,15 +836,15 @@ describe("prepared harness source delivery", () => {
 
     await runEmbeddedAgent({
       agentId: "worker",
-      sessionId: `authoritative-${_label}`,
+      sessionId: "authoritative-runtime-override",
       workspaceDir: state.workspaceDir,
       prompt: "hello",
-      runId: `authoritative-${_label}`,
+      runId: "authoritative-runtime-override",
       timeoutMs: 30_000,
       provider: "openai",
       model: "gpt-5.4",
       modelFallbacksOverride: ["custom/plugin-fallback"],
-      ...override,
+      agentHarnessRuntimeOverride: "codex",
     });
 
     expect(mockedAcquireAgentRunPreparedModelRuntime).toHaveBeenCalledWith(

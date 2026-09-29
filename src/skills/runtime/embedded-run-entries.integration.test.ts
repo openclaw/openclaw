@@ -39,7 +39,7 @@ async function resolveBundledDiffsSkillEntries(config?: OpenClawConfig) {
   const { bundledPluginsDir, workspaceDir } = await setupBundledDiffsPlugin();
   process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
 
-  return resolveEmbeddedRunSkillEntries({ workspaceDir, ...(config ? { config } : {}) });
+  return await resolveEmbeddedRunSkillEntries({ workspaceDir, ...(config ? { config } : {}) });
 }
 
 afterEach(() => {
@@ -64,16 +64,18 @@ describe("resolveEmbeddedRunSkillEntries (integration)", () => {
       });
     }
     const skillNames = ["fallback-agent", "fallback-shared", "fallback-execution"];
-    const snapshot = resolveReusableWorkspaceSkillSnapshot({
-      workspaceDir: agentWorkspaceDir,
-      executionWorkspaceDir,
-      config: {},
-      skillFilter: skillNames,
-      watch: false,
-      snapshotVersion: 1,
-    }).snapshot;
+    const snapshot = (
+      await resolveReusableWorkspaceSkillSnapshot({
+        workspaceDir: agentWorkspaceDir,
+        executionWorkspaceDir,
+        config: {},
+        skillFilter: skillNames,
+        watch: false,
+        snapshotVersion: 1,
+      })
+    ).snapshot;
 
-    const fallback = resolveEmbeddedRunSkillEntries({
+    const fallback = await resolveEmbeddedRunSkillEntries({
       workspaceDir: agentWorkspaceDir,
       executionWorkspaceDir,
       config: {},
@@ -112,21 +114,23 @@ describe("resolveEmbeddedRunSkillEntries (integration)", () => {
       skills: { limits: { maxSkillsInPrompt: 1 } },
       agents: { defaults: { skills: [agentSkillName, executionSkillName] } },
     };
-    const snapshotPrompt = resolveReusableWorkspaceSkillSnapshot({
-      workspaceDir: agentWorkspaceDir,
-      executionWorkspaceDir,
-      config,
-      skillFilter: [agentSkillName, executionSkillName],
-      watch: false,
-      snapshotVersion: 1,
-    }).snapshot.prompt;
-    const fallback = resolveEmbeddedRunSkillEntries({
+    const snapshotPrompt = (
+      await resolveReusableWorkspaceSkillSnapshot({
+        workspaceDir: agentWorkspaceDir,
+        executionWorkspaceDir,
+        config,
+        skillFilter: [agentSkillName, executionSkillName],
+        watch: false,
+        snapshotVersion: 1,
+      })
+    ).snapshot.prompt;
+    const fallback = await resolveEmbeddedRunSkillEntries({
       workspaceDir: agentWorkspaceDir,
       executionWorkspaceDir,
       config,
       agentId: "main",
     });
-    const fallbackPrompt = resolveSkillsPrompt({
+    const fallbackPrompt = await resolveSkillsPrompt({
       entries: fallback.skillEntries,
       workspaceDir: agentWorkspaceDir,
       config,

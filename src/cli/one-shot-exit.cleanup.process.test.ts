@@ -55,11 +55,11 @@ it.concurrent.for([
         } finally {
           await runCliDisposer("native-write", async () => {
             // The referenced timer is the actual cleanup, beyond its reporting grace.
-            await delay(6_000);
+            await delay(150);
             database.exec("INSERT INTO observations VALUES (99)");
             database.close();
             disposals++;
-          });
+          }, undefined, 100);
           returnedBeforeCleanup = database.isOpen && disposals === 0;
         }
       },
@@ -110,7 +110,7 @@ it.concurrent.for([
       expect(child?.signalCode).toBeNull();
       expect(result.status).toBe(exitCode);
       expect(JSON.parse(result.stdout)).toEqual({ mode, outcome: "recorded" });
-      expect(result.stderr).toContain("CLI cleanup timed out: native-write after 5000ms");
+      expect(result.stderr).toContain("CLI cleanup timed out: native-write after 100ms");
       expect(JSON.parse(fs.readFileSync(exitPath, "utf8"))).toEqual({
         code: exitCode,
         disposals: disposed ? 1 : 0,

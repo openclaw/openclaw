@@ -7,6 +7,7 @@ import ai.openclaw.app.systemagent.SystemAgentChatMessage
 import ai.openclaw.app.systemagent.SystemAgentChatQuestion
 import ai.openclaw.app.systemagent.SystemAgentChatQuestionOption
 import ai.openclaw.app.systemagent.SystemAgentChatState
+import ai.openclaw.app.ui.design.ClawIcons
 import ai.openclaw.app.ui.design.ClawPanel
 import ai.openclaw.app.ui.design.ClawPlainIconButton
 import ai.openclaw.app.ui.design.ClawPrimaryButton
@@ -30,7 +31,6 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Icon
@@ -92,7 +92,7 @@ internal fun SystemAgentSettingsScreen(
           modifier = Modifier.weight(1f),
         )
         Icon(
-          imageVector = Icons.Default.Bolt,
+          imageVector = ClawIcons.OpenClaw,
           contentDescription = null,
           tint = ClawTheme.colors.primary,
           modifier = Modifier.size(24.dp),
@@ -147,7 +147,7 @@ private fun SystemAgentAccessGate(state: SystemAgentChatState) {
       verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
       Icon(
-        imageVector = if (state.access == SystemAgentChatAccess.Disconnected) Icons.Default.Lock else Icons.Default.Bolt,
+        imageVector = if (state.access == SystemAgentChatAccess.Disconnected) Icons.Default.Lock else ClawIcons.OpenClaw,
         contentDescription = null,
         tint = ClawTheme.colors.warning,
         modifier = Modifier.size(42.dp),

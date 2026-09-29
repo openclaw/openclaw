@@ -404,7 +404,9 @@ async function migrateLegacyMemoryHostEventSource(params: {
     const checkpointCapacity = checkpointValue ? 0 : 1;
     if (
       checkpointCapacity > 0 &&
-      (await checkpointStore.entries()).length >= MAX_MEMORY_HOST_EVENT_MIGRATION_CHECKPOINTS
+      (checkpointStore.count
+        ? await checkpointStore.count()
+        : (await checkpointStore.entries()).length) >= MAX_MEMORY_HOST_EVENT_MIGRATION_CHECKPOINTS
     ) {
       // Checkpoints use reject-new and never expire while their raw archives remain.
       // Stop before import/archive once durable processed-generation capacity is full.

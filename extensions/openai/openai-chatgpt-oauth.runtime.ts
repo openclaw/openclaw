@@ -1,4 +1,3 @@
-// Openai plugin module implements openai chatgpt oauth behavior.
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
@@ -62,10 +61,6 @@ function settleAfterDelay(params: {
   });
 }
 
-function waitForeverForPromptInput(): Promise<string> {
-  return new Promise<string>(() => {});
-}
-
 function createOpenAICodexOAuthError(
   code: OpenAICodexOAuthFailureCode,
   message: string,
@@ -102,7 +97,7 @@ function createManualCodeInputHandler(params: {
   stopProgress: (message?: string) => void;
   waitForLoginToSettle: Promise<void>;
   hasBrowserAuthStarted: () => boolean;
-}): (() => Promise<string>) | undefined {
+}): () => Promise<string> {
   let manualFallbackPromise: Promise<string> | undefined;
   const promptForManualCode = () => params.onPrompt({ message: manualInputPromptMessage });
   const switchToManualEntry = async (progressMessage: string, logMessage?: string) => {
@@ -128,7 +123,7 @@ function createManualCodeInputHandler(params: {
         waitForLoginToSettle: params.waitForLoginToSettle,
       });
       if (outcome === "settled") {
-        return await waitForeverForPromptInput();
+        return await new Promise<string>(() => {});
       }
     }
     return await switchToManualEntry(
@@ -216,13 +211,11 @@ export async function loginOpenAICodexOAuth(params: {
       manualPromptMessage: manualInputPromptMessage,
       manualPromptSignal: manualPromptAbort.signal,
     });
-    const onAuth = async (event: Parameters<typeof baseOnAuth>[0]) => {
-      browserAuthStarted = true;
-      await baseOnAuth(event);
-    };
-
     const creds = await loginOpenAICodex({
-      onAuth,
+      onAuth: async (event) => {
+        browserAuthStarted = true;
+        await baseOnAuth(event);
+      },
       onPrompt,
       originator: openAICodexOAuthOriginator,
       onManualCodeInput:
@@ -236,7 +229,7 @@ export async function loginOpenAICodexOAuth(params: {
           waitForLoginToSettle,
           hasBrowserAuthStarted: () => browserAuthStarted,
         }),
-      onProgress: (msg: string) => updateProgress(msg),
+      onProgress: updateProgress,
       signal: params.signal,
       assertCurrent: params.assertCurrent,
     });

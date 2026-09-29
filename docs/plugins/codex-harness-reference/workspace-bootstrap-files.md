@@ -15,8 +15,13 @@ How `AGENTS.md`, persona, skills, and memory files reach a native Codex turn. Pa
 The full generic developer policy, including a `before_prompt_build.systemPrompt`
 replacement, remains native session configuration for compaction and native-child
 inheritance. Ordinary persistent cold or changed-configuration resumes require an
-uninterrupted managed local stdio process owner and observed native unload before OpenClaw injects the full
-current policy. Merely sending `developerInstructions` on `thread/resume` does not
+uninterrupted app-server client and observed native unload before OpenClaw injects
+the full current policy. OpenClaw must be the sole lifecycle owner of the native
+conversation, including when its app-server runs remotely. Independent clients
+that can reload the same conversation during the handoff are outside this contract;
+observed unload does not reserve the conversation against a competing resume.
+Local and remote transports use the same conversation ID through unsubscribe and
+resume. Merely sending `developerInstructions` on `thread/resume` does not
 refresh the model-visible policy on stock Codex. Explicit `systemPrompt: ""` sends
 a withdrawal, not a fallback to older instructions.
 
@@ -38,12 +43,16 @@ For OpenClaw workspace parity, local tool notes live in the `## Tools` section
 of `AGENTS.md` and normally ride Codex's native project-doc discovery. The
 Codex harness forwards the other bootstrap files as developer instructions:
 
-- On the managed bundled stdio app-server, `SOUL.md`, `IDENTITY.md`, and
+- On managed direct stdio app-servers, including Desktop executables launched
+  by OpenClaw for Computer Use, `SOUL.md`, `IDENTITY.md`, and
   `USER.md` are added to **parent-only model request instructions**. The
   private relay leaves native base/catalog instructions and history intact,
   so newly delivered persona and user-profile context are not automatically
   inherited by native Codex subagents.
 - The compact loaded OpenClaw skills list uses the same parent-local layer.
+- The selected memory plugin's prompt builder receives the complete available
+  tool set, including deferred plugin tools. Its guidance uses the same
+  parent-local layer independently of `MEMORY.md` file routing.
 - Heartbeat turns receive generic initiative guidance through collaboration
   mode. Monitor cron scratch is appended to the heartbeat prompt instead of
   injected as workspace context.
@@ -70,13 +79,43 @@ the Gateway's HTTP(S) proxy and TLS configuration. Native login, token refresh,
 backend routing, and approval-reviewer checks stay native-owned. It rejects oversized
 prepared context instead of truncating it (256 KiB maximum); model request bodies
 and WebSocket frames are bounded at 32 MiB. Reduce bootstrap/skills budgets or
-attached context when those limits are exceeded.
+attached context when those limits are exceeded. The relay validates each native request
+and its current parent registration before forwarding. Requests that need no
+parent-local instructions keep their native JSON bytes, including existing zstd
+compression on HTTP. Requests with parent-local instructions still receive the
+same bounded instruction injection.
 
-Custom commands, Desktop attachments, external Unix/WebSocket connections,
+Desktop executable selection and Computer Use permissions stay unchanged. The
+relay belongs to the direct stdio process OpenClaw starts, not to the Desktop
+application's other conversations.
+
+Custom commands, Desktop proxy attachments, external Unix/WebSocket connections,
 non-OpenAI native providers, custom upstream endpoints, unsupported native account
 modes, locked upstream configuration, and native `features.respect_system_proxy` profiles keep the legacy
-collaboration carrier, which model-owned catalog instructions
-can replace. A warning and unverified persona accounting identify that the
+collaboration carrier for persona and memory guidance, which model-owned catalog
+instructions can replace. A warning and unverified persona accounting identify that the
 workaround is not active. OpenClaw does not reroute or shut down those sessions.
 Previously embedded persona, conversation text, and explicit task handoffs are
 not removed from existing histories or full-history forks.
+
+### Skill catalogs without a managed relay
+
+On connections without a managed inference relay, the eligible OpenClaw skill
+catalog uses thread developer instructions instead of the replaceable
+collaboration carrier. Native children can inherit this fallback catalog.
+Managed connections keep their existing parent-only request-local catalog;
+skill changes do not resume their threads or write catalog history.
+
+For the fallback, a changed catalog cold-resumes the same persistent thread.
+A live incognito thread receives the complete current catalog through an
+injected developer message without changing its immutable generic policy.
+After automatic compaction, OpenClaw re-delivers edited or withdrawn catalogs.
+The immediate continuation can still use the creation-time catalog; restoration
+is guaranteed only for the following request. Standalone compaction invalidates
+the recorded delivery so the next turn refreshes it, including after a failed
+restore.
+
+Lightweight cron turns omit skills. On fallback connections sharing a thread
+with ordinary turns, that omission withdraws the thread-level catalog until the
+next ordinary turn. On managed connections it only omits the current request's
+catalog; it does not change native thread state.

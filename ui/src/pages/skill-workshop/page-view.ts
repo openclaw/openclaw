@@ -3,6 +3,7 @@ import { pathForRoute } from "../../app-route-paths.ts";
 import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
+import { registerSkillWorkshopEnglish } from "../../i18n/locales/en-skill-workshop.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import {
   filterSkillWorkshopProposals,
@@ -14,12 +15,13 @@ import { canCallWorkshopAdminMethod, resolveWorkshopAccess } from "./access.ts";
 import { renderSkillWorkshopHeaderControls, setSkillWorkshopMode } from "./header-controls.ts";
 import type { SkillWorkshopRenderContext } from "./page-types.ts";
 import {
-  runSkillWorkshopLifecycleAction,
   selectSkillWorkshopInstalledSkill,
   selectSkillWorkshopProposal,
   type SkillWorkshopState,
 } from "./proposals.ts";
 import { renderSkillWorkshop } from "./view.ts";
+
+registerSkillWorkshopEnglish();
 
 export function renderSkillWorkshopPage(
   state: SkillWorkshopState,
@@ -30,6 +32,7 @@ export function renderSkillWorkshopPage(
     context,
     revisionRecoveryActive,
     workshopAgentName,
+    onLifecycleAction,
     onEvaluate,
     onRevisionSubmit,
     selfLearning,
@@ -206,9 +209,7 @@ export function renderSkillWorkshopPage(
                 ) {
                   return;
                 }
-                void runSkillWorkshopLifecycleAction(state, context, "apply", decision).finally(
-                  requestUpdate,
-                );
+                onLifecycleAction("apply", decision);
                 requestUpdate();
               },
               onEvaluate: (key) => {
@@ -239,9 +240,7 @@ export function renderSkillWorkshopPage(
                 ) {
                   return;
                 }
-                void runSkillWorkshopLifecycleAction(state, context, "reject", decision).finally(
-                  requestUpdate,
-                );
+                onLifecycleAction("reject", decision);
                 requestUpdate();
               },
               onRevisionDraftChange: (draft) => {

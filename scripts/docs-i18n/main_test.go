@@ -65,6 +65,22 @@ func (errorTranslator) TranslateRaw(context.Context, string, string, string) (st
 
 func (errorTranslator) Close() {}
 
+func TestProcessFileRejectsFailedHTMLTranslation(t *testing.T) {
+	docsRoot := t.TempDir()
+	sourcePath := filepath.Join(docsRoot, "page.md")
+	if err := os.WriteFile(sourcePath, []byte("<div>Translate this text.</div>\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tm := &TranslationMemory{entries: map[string]TMEntry{}}
+	_, _, err := processFile(context.Background(), errorTranslator{}, tm, docsRoot, sourcePath, "en", "de")
+	if err == nil || err.Error() != "codex exec failed: exit status 1" {
+		t.Fatalf("expected HTML translation failure, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(docsRoot, "de", "page.md")); !os.IsNotExist(err) {
+		t.Fatalf("failed translation wrote an output page: %v", err)
+	}
+}
+
 type partialFailTranslator struct{}
 
 func (partialFailTranslator) Translate(_ context.Context, text, _, _ string) (string, error) {
@@ -733,10 +749,7 @@ func TestTranslateSnippetDoesNotCacheFallbackToSource(t *testing.T) {
 	tm := &TranslationMemory{entries: map[string]TMEntry{}}
 	source := "Gateway"
 
-	translated, err := translateSnippet(context.Background(), invalidFrontmatterTranslator{}, tm, "gateway/index.md:frontmatter:title", source, "en", "zh-CN")
-	if err != nil {
-		t.Fatalf("translateSnippet returned error: %v", err)
-	}
+	translated := translateSnippet(context.Background(), invalidFrontmatterTranslator{}, tm, "gateway/index.md:frontmatter:title", source, "en", "zh-CN")
 	if translated != source {
 		t.Fatalf("expected fallback to source text, got %q", translated)
 	}
@@ -753,10 +766,7 @@ func TestTranslateSnippetRejectsTranscriptArtifact(t *testing.T) {
 	tm := &TranslationMemory{entries: map[string]TMEntry{}}
 	source := "Working with reactions across channels"
 
-	translated, err := translateSnippet(context.Background(), transcriptFrontmatterTranslator{}, tm, "tools/reactions.md:frontmatter:read_when:0", source, "en", "th")
-	if err != nil {
-		t.Fatalf("translateSnippet returned error: %v", err)
-	}
+	translated := translateSnippet(context.Background(), transcriptFrontmatterTranslator{}, tm, "tools/reactions.md:frontmatter:read_when:0", source, "en", "th")
 	if translated != source {
 		t.Fatalf("expected fallback to source text, got %q", translated)
 	}
@@ -773,10 +783,7 @@ func TestTranslateSnippetFallsBackWhenFrontmatterTranslatorFails(t *testing.T) {
 	tm := &TranslationMemory{entries: map[string]TMEntry{}}
 	source := "LINE Messaging API plugin setup, config, and usage"
 
-	translated, err := translateSnippet(context.Background(), errorTranslator{}, tm, "channels/line.md:frontmatter:summary", source, "en", "zh-CN")
-	if err != nil {
-		t.Fatalf("translateSnippet returned error: %v", err)
-	}
+	translated := translateSnippet(context.Background(), errorTranslator{}, tm, "channels/line.md:frontmatter:summary", source, "en", "zh-CN")
 	if translated != source {
 		t.Fatalf("expected fallback to source text, got %q", translated)
 	}
@@ -794,10 +801,7 @@ func TestTranslateSnippetCachesDocumentSourcePath(t *testing.T) {
 	source := "Gateway"
 	segmentID := "gateway/index.md:frontmatter:title"
 
-	translated, err := translateSnippet(context.Background(), fakeDocsTranslator{}, tm, segmentID, source, "en", "zh-CN")
-	if err != nil {
-		t.Fatalf("translateSnippet returned error: %v", err)
-	}
+	translated := translateSnippet(context.Background(), fakeDocsTranslator{}, tm, segmentID, source, "en", "zh-CN")
 	if translated != source {
 		t.Fatalf("unexpected translation %q", translated)
 	}

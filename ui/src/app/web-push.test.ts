@@ -6,7 +6,7 @@ import type { WebPushNotificationPreferences } from "../../../packages/gateway-p
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { renderNotificationsSection } from "../pages/config/notifications-section.ts";
-import type { ConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
+import { createConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
 import type { ApplicationGateway, ApplicationGatewaySnapshot } from "./gateway.ts";
 import { createWebPushCapability } from "./web-push.ts";
 
@@ -101,7 +101,6 @@ function notificationPreferences(approvalRequested: boolean): WebPushNotificatio
       agentQuestion: false,
       humanMentioned: false,
       scheduledTaskFailed: false,
-      backgroundTaskFailed: false,
     },
     detailLevel: "private",
     quietHours: { enabled: false, startMinute: 1_320, endMinute: 420, timeZone: "UTC" },
@@ -214,15 +213,8 @@ describe("web push Gateway reconciliation", () => {
   });
 
   it("schedules initial reconciliation through the connection bootstrap coordinator", async () => {
-    const coordinatorRuns: string[] = [];
-    const coordinator = {
-      reset: () => {},
-      run: async (key, task) => {
-        coordinatorRuns.push(key);
-        await task();
-      },
-      synchronize: () => {},
-    } satisfies ConnectionBootstrapCoordinator;
+    const coordinator = createConnectionBootstrapCoordinator();
+    const run = vi.spyOn(coordinator, "run");
     const harness = gatewayHarness();
     const connection = gatewayClient(Promise.resolve(encodedVapidKey([4, 1, 2, 3])));
     const capability = createWebPushCapability(harness.gateway, {
@@ -230,7 +222,11 @@ describe("web push Gateway reconciliation", () => {
     });
 
     harness.connect(connection.client);
-    await vi.waitFor(() => expect(coordinatorRuns).toEqual(["web-push-reconcile"]));
+    await vi.waitFor(() =>
+      expect(run).toHaveBeenCalledExactlyOnceWith("web-push-reconcile", expect.any(Function)),
+    );
+    expect(connection.request).not.toHaveBeenCalled();
+    coordinator.synchronize({ client: connection.client, connected: true });
     await vi.waitFor(() =>
       expect(connection.request).toHaveBeenCalledWith(
         "push.web.subscribe",
@@ -239,6 +235,7 @@ describe("web push Gateway reconciliation", () => {
     );
 
     capability.dispose();
+    coordinator.reset();
   });
 
   it("serializes rapid preference edits without dropping the latest full object", async () => {
@@ -292,7 +289,7 @@ describe("web push Gateway reconciliation", () => {
     capability.dispose();
   });
 
-  it("refreshes matching defaults without publishing a stale invalidation", async () => {
+  it("refreshes routed canonical profile defaults without publishing a stale invalidation", async () => {
     const initial = notificationPreferences(true);
     const stale = { ...notificationPreferences(true), detailLevel: "detailed" as const };
     const latest = notificationPreferences(false);
@@ -325,14 +322,14 @@ describe("web push Gateway reconciliation", () => {
     harness.emit({
       type: "event",
       event: "users.prefs.changed",
-      payload: { profileId: "other-profile", keys: ["notifications.web.v1"] },
+      payload: { profileId: "canonical-profile", keys: ["ui.theme"] },
     });
     expect(preferenceRead).toBe(1);
 
     const invalidation = {
       type: "event" as const,
       event: "users.prefs.changed",
-      payload: { profileId: "profile-owner", keys: ["notifications.web.v1"] },
+      payload: { profileId: "canonical-profile", keys: ["notifications.web.v1"] },
     };
     harness.emit(invalidation);
     await vi.waitFor(() => expect(preferenceRead).toBe(2));

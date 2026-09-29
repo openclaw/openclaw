@@ -1,4 +1,3 @@
-/** Runtime provider selection and tool construction for the `web_fetch` tool. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveRuntimeConfigCacheKey } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.js";
@@ -22,13 +21,7 @@ import {
   resolveWebProviderConfig,
 } from "../web/provider-runtime-shared.js";
 
-// Runtime provider selection for the web_fetch tool. It resolves config,
-// credentials, runtime metadata, and sandbox-safe bundled provider scopes.
-type WebFetchConfig = NonNullable<OpenClawConfig["tools"]>["web"] extends infer Web
-  ? Web extends { fetch?: infer Fetch }
-    ? Fetch
-    : undefined
-  : undefined;
+type WebFetchConfig = NonNullable<NonNullable<OpenClawConfig["tools"]>["web"]>["fetch"];
 
 type ResolveWebFetchDefinitionParams = {
   config?: OpenClawConfig;
@@ -47,7 +40,7 @@ type WebFetchProviderCacheEntry = {
   providers: PluginWebFetchProviderEntry[];
 };
 
-let webFetchProviderCache = new WeakMap<OpenClawConfig, WebFetchProviderCacheEntry>();
+const webFetchProviderCache = new WeakMap<OpenClawConfig, WebFetchProviderCacheEntry>();
 
 function resolveFetchConfig(config: OpenClawConfig | undefined): WebFetchConfig | undefined {
   return resolveWebProviderConfig(config, "fetch") as NonNullable<WebFetchConfig> | undefined;
@@ -75,27 +68,6 @@ function hasEntryCredential(
     resolveEnvValue: ({ provider: currentProvider }) =>
       readWebProviderEnvValue(currentProvider.envVars),
   });
-}
-
-function hasAutoDetectCredential(
-  provider: Pick<
-    PluginWebFetchProviderEntry,
-    | "envVars"
-    | "getConfiguredCredentialFallback"
-    | "getConfiguredCredentialValue"
-    | "requiresCredential"
-  >,
-  config: OpenClawConfig | undefined,
-  fetch: WebFetchConfig | undefined,
-): boolean {
-  return hasEntryCredential(
-    {
-      ...provider,
-      requiresCredential: true,
-    },
-    config,
-    fetch,
-  );
 }
 
 /** Reports whether a web_fetch provider has usable credentials. */
@@ -135,7 +107,9 @@ function resolveAutoWebFetchProviderId(params: {
 
   for (const provider of params.providers) {
     if (!providerRequiresCredential(provider)) {
-      if (!hasAutoDetectCredential(provider, params.config, params.fetch)) {
+      if (
+        !hasEntryCredential({ ...provider, requiresCredential: true }, params.config, params.fetch)
+      ) {
         continue;
       }
       logVerbose(
@@ -201,10 +175,6 @@ function resolveCachedWebFetchProviders(params: {
     });
   }
   return loaded;
-}
-
-export function clearWebFetchRuntimeCachesForTest(): void {
-  webFetchProviderCache = new WeakMap();
 }
 
 function resolveWebFetchProvidersForOptions(

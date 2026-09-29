@@ -17,7 +17,7 @@ const CODE_MODE_EXEC_TOOL_KIND = "code_mode_exec";
 /** Hook metadata kind type for Code Mode exec tools. */
 type CodeModeExecToolKind = typeof CODE_MODE_EXEC_TOOL_KIND;
 /** Source language accepted by the Code Mode exec tool. */
-type CodeModeExecToolInputKind = "javascript" | "typescript";
+type CodeModeExecToolInputKind = "javascript";
 /** Metadata attached to before-tool-call events for Code Mode exec. */
 type CodeModeExecHookMetadata = {
   toolKind: CodeModeExecToolKind;
@@ -101,20 +101,17 @@ export function isCodeModeExecTool(tool: AnyAgentTool): boolean {
   );
 }
 
+export function isCodeModeExecToolKind(toolKind: unknown): boolean {
+  return toolKind === CODE_MODE_EXEC_TOOL_KIND;
+}
+
 export function resolveCodeModeExecToolInputKind(
   params: unknown,
 ): CodeModeExecToolInputKind | undefined {
   if (!isPlainObject(params)) {
     return undefined;
   }
-  const language = params.language;
-  if (language === undefined || language === "javascript") {
-    return "javascript";
-  }
-  if (language === "typescript") {
-    return "typescript";
-  }
-  return undefined;
+  return params.language === undefined && params.typecheck === undefined ? "javascript" : undefined;
 }
 
 function normalizeCodeModeExecParams(params: unknown): unknown {

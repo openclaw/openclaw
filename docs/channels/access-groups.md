@@ -198,5 +198,6 @@ Run `openclaw doctor` after editing access-control config. It catches many inval
 
 ## Related
 
+- [Groups](/channels/groups) — group chat behavior and mention gating
 - [Pairing](/channels/pairing) — the separate DM pairing flow for channel senders
 - [Channels overview](/channels) — the channels these groups apply to

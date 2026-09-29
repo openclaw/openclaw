@@ -8,11 +8,15 @@ import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginInstallRecord } from "../../src/config/types.plugins.js";
 import { checkClawHubPackageTrust } from "../../src/infra/clawhub-install-trust.js";
+import { createPluginCache, withPluginCache } from "../../src/plugins/plugin-cache.js";
+import { bindPluginInstanceModuleLoader } from "../../src/plugins/plugin-instance-module-loader.js";
+import { PluginInstance } from "../../src/plugins/plugin-instance.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { writePluginInspectFixture } from "./plugin-inspect.test-support.js";
 
 const SCRIPT_PATH = path.resolve("scripts/e2e/lib/clawhub-fixture-server.cjs");
 const PACKAGE_NAME = "@openclaw/kitchen-sink";
+const PLUGINS_PACKAGE_NAME = "@openclaw/plugin-e2e-fixture";
 const PACKAGE_PATH = `/api/v1/packages/${encodeURIComponent(PACKAGE_NAME)}`;
 const KITCHEN_SINK_VERSION = "0.2.5";
 type FixtureServerChild = ChildProcessByStdio<null, Readable, Readable>;
@@ -119,26 +123,30 @@ function runNoRequestsAssertion(baseUrl?: string, cwd = process.cwd(), env = pro
 
 describe("ClawHub fixture server", () => {
   it.each([
-    ["plugins", "0.1.0"],
-    ["kitchen-sink-plugin", KITCHEN_SINK_VERSION],
-    ["catalog-search", "0.1.0"],
-  ])("serves an accepted install audit for the %s profile", async (profile, version) => {
-    const { baseUrl } = await startFixtureServer(profile);
-    const auditMessages: string[] = [];
-    const trust = await checkClawHubPackageTrust({
-      subject: { kind: "plugin", packageName: PACKAGE_NAME },
-      version,
-      baseUrl,
-      mode: "update",
-      logger: { info: (message) => auditMessages.push(message) },
-    });
+    ["plugins", "0.1.0", PLUGINS_PACKAGE_NAME],
+    ["kitchen-sink-plugin", KITCHEN_SINK_VERSION, PACKAGE_NAME],
+    ["catalog-search", "0.1.0", PACKAGE_NAME],
+  ])(
+    "serves an accepted install audit for the %s profile",
+    async (profile, version, packageName) => {
+      const { baseUrl } = await startFixtureServer(profile);
+      const auditMessages: string[] = [];
+      const trust = await checkClawHubPackageTrust({
+        subject: { kind: "plugin", packageName },
+        version,
+        baseUrl,
+        mode: "update",
+        logger: { info: (message) => auditMessages.push(message) },
+      });
 
-    expect(trust.ok).toBe(true);
-    expect(auditMessages).toHaveLength(1);
-    expect(auditMessages[0]).toContain("Outcome: Safe");
-    expect(auditMessages[0]).toContain("No security concerns found in the fixture release.");
-    expect(auditMessages[0]).toContain(`${baseUrl}${PACKAGE_PATH}/versions/${version}/security`);
-  });
+      expect(trust.ok).toBe(true);
+      expect(auditMessages).toHaveLength(1);
+      expect(auditMessages[0]).toContain("Outcome: Safe");
+      expect(auditMessages[0]).toContain("No security concerns found in the fixture release.");
+      const packagePath = `/api/v1/packages/${encodeURIComponent(packageName)}`;
+      expect(auditMessages[0]).toContain(`${baseUrl}${packagePath}/versions/${version}/security`);
+    },
+  );
 
   it("serves package metadata and npm-pack artifacts for kitchen-sink fixtures", async () => {
     const { baseUrl } = await startFixtureServer("kitchen-sink-plugin");
@@ -181,6 +189,107 @@ describe("ClawHub fixture server", () => {
     const methodResponse = await fetch(`${baseUrl}${PACKAGE_PATH}`, { method: "POST" });
     expect(methodResponse.status).toBe(405);
   });
+
+  it.each(["local", "parent-fallback"] as const)(
+    "loads the captured kitchen-sink artifact with a %s dependency",
+    async (dependencyPlacement) => {
+      const { baseUrl } = await startFixtureServer("kitchen-sink-plugin");
+      const response = await fetch(
+        `${baseUrl}${PACKAGE_PATH}/versions/${KITCHEN_SINK_VERSION}/artifact/download`,
+      );
+      expect(response.status).toBe(200);
+      const root = tempDirs.make("kitchen-sink-captured-dependency-");
+      const archive = path.join(root, "fixture.tgz");
+      writeFileSync(archive, Buffer.from(await response.arrayBuffer()));
+      execFileSync("tar", ["-xzf", archive, "-C", root]);
+      const writeFixtureFile = (relative: string, content: string) => {
+        const file = path.join(root, relative);
+        mkdirSync(path.dirname(file), { recursive: true });
+        writeFileSync(file, content);
+      };
+      const dependencyManifest = '{"name":"is-number","version":"7.0.0","main":"index.js"}';
+      // Only local fixture files: accidentally borrowing the parent's dependency must fail.
+      writeFixtureFile("node_modules/is-number/package.json", dependencyManifest);
+      writeFixtureFile(
+        "node_modules/is-number/index.js",
+        'throw new Error("host dependency fallback executed");',
+      );
+      if (dependencyPlacement === "local") {
+        writeFixtureFile("package/node_modules/is-number/package.json", dependencyManifest);
+        writeFixtureFile(
+          "package/node_modules/is-number/index.js",
+          "module.exports = value => value === 42;",
+        );
+      }
+      // Keep the real generated plugin and instance loader; only the SDK entry factory is inert.
+      const host = path.join(root, "sdk-host");
+      writeFixtureFile(
+        "sdk-host/package.json",
+        JSON.stringify({
+          name: "openclaw",
+          type: "module",
+          bin: { openclaw: "./openclaw.mjs" },
+          exports: { "./plugin-sdk/plugin-entry": "./dist/plugin-sdk/plugin-entry.js" },
+        }),
+      );
+      writeFixtureFile("sdk-host/openclaw.mjs", "export {};\n");
+      writeFixtureFile(
+        "sdk-host/dist/plugin-sdk/plugin-entry.js",
+        "export const definePluginEntry = entry => entry;\n",
+      );
+      mkdirSync(path.join(host, "src"));
+      mkdirSync(path.join(host, "extensions"));
+      const pluginRoot = path.join(root, "package");
+      const source = path.join(pluginRoot, "index.js");
+      expect(JSON.parse(readFileSync(path.join(pluginRoot, "package.json"), "utf8"))).toMatchObject(
+        {
+          version: KITCHEN_SINK_VERSION,
+          dependencies: { "is-number": "7.0.0" },
+        },
+      );
+      const instance = new PluginInstance("openclaw-kitchen-sink-fixture");
+      try {
+        withPluginCache(createPluginCache(), () =>
+          bindPluginInstanceModuleLoader({
+            instance,
+            origin: "config",
+            source,
+            rootDir: pluginRoot,
+            devSourceRoot: host,
+          }),
+        );
+        if (dependencyPlacement === "parent-fallback") {
+          expect(() => instance.loadModule(source)).toThrow("host dependency fallback executed");
+          return;
+        }
+        // Captured bytes must survive changes to the installed dependency.
+        writeFixtureFile(
+          "package/node_modules/is-number/index.js",
+          'throw new Error("uncaptured dependency executed");',
+        );
+        const api = {
+          registerProvider: vi.fn<(provider: { id: string }) => void>(),
+          registerContextEngine: vi.fn<(id: string) => void>(),
+          registerChannel: vi.fn<(channel: { plugin: { id: string } }) => void>(),
+        };
+        const loaded = instance.loadModule(source) as {
+          default: { register: (registration: typeof api) => void };
+        };
+        loaded.default.register(api);
+        expect(api.registerProvider.mock.calls.map(([provider]) => provider.id)).toEqual([
+          "kitchen-sink-provider",
+        ]);
+        expect(api.registerContextEngine.mock.calls.map(([id]) => id)).toEqual([
+          "openclaw-kitchen-sink-fixture",
+        ]);
+        expect(api.registerChannel.mock.calls.map(([channel]) => channel.plugin.id)).toEqual([
+          "kitchen-sink-channel",
+        ]);
+      } finally {
+        await instance.dispose();
+      }
+    },
+  );
 
   it("rejects missing startup arguments before binding a fixture server", () => {
     const result = spawnSync(process.execPath, [SCRIPT_PATH], {

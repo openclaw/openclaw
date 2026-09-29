@@ -1,44 +1,13 @@
 import { safeParseJsonRecord } from "@openclaw/normalization-core";
-import { readTranscriptRawDelta } from "./session-accessor.sqlite-delta.js";
-import { resolveSessionKeyBySessionId as resolveTranscriptSessionKeyBySessionId } from "./session-accessor.sqlite-entry.js";
-import { publishTranscriptUpdate } from "./session-accessor.sqlite-events.js";
-import {
-  findTranscriptEvent,
-  hasSessionTranscriptMessage,
-  inspectTranscriptEventsSync,
-  loadLatestAssistantText as readLatestTranscriptAssistantText,
-  loadTranscriptEventRowsAfterSeqSync,
-  loadTranscriptEvents,
-  loadTranscriptEventsSync,
-  loadTranscriptHeaderSync,
-  loadTranscriptTailEventsSync,
-  readTranscriptMutationAtSync,
-  readTranscriptStatsBatchReadOnlySync,
-  readTranscriptStatsSync,
-  validatePreparedAssistantAppendSync,
-  readTranscriptEventAtSeqSync,
-  readTranscriptIdentityByEventId,
-} from "./session-accessor.sqlite-read.js";
-import {
-  loadTranscriptSuffixEventsBoundedSync,
-  readPreviousIndexedTranscriptEventSync,
-} from "./session-accessor.sqlite-suffix-read.js";
-import { rewriteTranscriptMessageAtAnchor } from "./session-accessor.sqlite-transcript-message-rewrite.js";
-import {
-  appendTranscriptEvent,
-  appendTranscriptEventSync,
-  appendTranscriptMessage,
-  appendTranscriptMessageSync,
-  persistCompactionBoundaryWithSessionEntrySync,
-  replaceTranscriptEvents,
-  replaceTranscriptEventsSync,
-  replaceSessionWithBranchedTranscript,
-  replaceTranscriptSuffixEventsSync,
-  rewriteTranscriptEventRowsExact,
-  trimTranscriptForManualCompact,
-  withTranscriptWriteLock,
-  withTranscriptWriteTransaction,
-} from "./session-accessor.sqlite-transcript-write.js";
+import "./session-accessor.sqlite-compaction.js";
+import "./session-accessor.sqlite-delta.js";
+import "./session-accessor.sqlite-entry.js";
+import "./session-accessor.sqlite-events.js";
+import "./session-accessor.sqlite-metadata-read.js";
+import { readTranscriptStatsSync } from "./session-accessor.sqlite-read.js";
+import "./session-accessor.sqlite-suffix-read.js";
+import "./session-accessor.sqlite-transcript-message-rewrite.js";
+import { trimTranscriptForManualCompact } from "./session-accessor.sqlite-transcript-write.js";
 import type {
   SessionTranscriptRuntimeScope,
   SessionTranscriptManualTrimResult,
@@ -48,43 +17,52 @@ import {
   scanSessionTranscriptTree,
   selectSessionTranscriptTreePathNodes,
 } from "./transcript-tree.js";
-
-// Persisted transcripts have one SQLite owner. Re-export its canonical operations directly.
+export { persistCompactionBoundaryWithSessionEntrySync } from "./session-accessor.sqlite-compaction.js";
+export { readTranscriptRawDelta } from "./session-accessor.sqlite-delta.js";
+export { resolveSessionKeyBySessionId as resolveTranscriptSessionKeyBySessionId } from "./session-accessor.sqlite-entry.js";
+export { publishTranscriptUpdate } from "./session-accessor.sqlite-events.js";
+export {
+  hasSessionTranscriptEventsSync,
+  readTranscriptMutationAtSync,
+  readTranscriptMutationStateSync,
+} from "./session-accessor.sqlite-metadata-read.js";
+export {
+  hasSessionTranscriptMessage,
+  inspectTranscriptEventsSync,
+  loadLatestAssistantText as readLatestTranscriptAssistantText,
+  loadTranscriptEventRowsAfterSeqSync,
+  loadTranscriptEvents,
+  loadTranscriptEventsSync,
+  loadTranscriptHeaderSync,
+  readTranscriptExportSnapshotReadOnlySync,
+  readTranscriptStatsBatchReadOnlySync,
+  readTranscriptStatsSync,
+  validatePreparedAssistantAppendSync,
+  readTranscriptEventAtSeqSync,
+  readTranscriptIdentityByEventId,
+} from "./session-accessor.sqlite-read.js";
+export {
+  loadTranscriptSuffixEventsBoundedSync,
+  readPreviousIndexedTranscriptEventSync,
+} from "./session-accessor.sqlite-suffix-read.js";
+export {
+  rewriteAssistantTranscriptMessageForRun,
+  rewriteTranscriptMessageAtAnchor,
+} from "./session-accessor.sqlite-transcript-message-rewrite.js";
 export {
   appendTranscriptEvent,
   appendTranscriptEventSync,
   appendTranscriptMessage,
   appendTranscriptMessageSync,
-  findTranscriptEvent,
-  hasSessionTranscriptMessage,
-  inspectTranscriptEventsSync,
-  loadTranscriptEventRowsAfterSeqSync,
-  loadTranscriptEvents,
-  loadTranscriptEventsSync,
-  loadTranscriptHeaderSync,
-  loadTranscriptTailEventsSync,
-  loadTranscriptSuffixEventsBoundedSync,
-  persistCompactionBoundaryWithSessionEntrySync,
-  publishTranscriptUpdate,
-  readLatestTranscriptAssistantText,
-  readTranscriptEventAtSeqSync,
-  readPreviousIndexedTranscriptEventSync,
-  readTranscriptIdentityByEventId,
-  readTranscriptRawDelta,
-  readTranscriptMutationAtSync,
-  readTranscriptStatsBatchReadOnlySync,
-  readTranscriptStatsSync,
-  validatePreparedAssistantAppendSync,
   replaceTranscriptEvents,
   replaceTranscriptEventsSync,
   replaceSessionWithBranchedTranscript,
   replaceTranscriptSuffixEventsSync,
   rewriteTranscriptEventRowsExact,
-  rewriteTranscriptMessageAtAnchor,
-  resolveTranscriptSessionKeyBySessionId,
   withTranscriptWriteLock,
   withTranscriptWriteTransaction,
-};
+} from "./session-accessor.sqlite-transcript-write.js";
+
 export { emitSessionTranscriptUpdate as emitTranscriptUpdate } from "../../sessions/transcript-events.js";
 
 /**
@@ -223,3 +201,5 @@ function normalizeManualCompactTranscriptLines(
   }
   return [JSON.stringify(header), ...normalizedRecords.map((record) => JSON.stringify(record))];
 }
+
+export { findTranscriptEvent } from "./session-transcript-match.js";

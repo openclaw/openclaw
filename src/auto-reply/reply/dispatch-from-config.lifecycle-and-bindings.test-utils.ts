@@ -5,7 +5,6 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { waitForAbortSignal } from "../../infra/abort-signal.js";
-import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import { registerPluginCommand } from "../../plugins/commands.js";
 import type { PluginTargetedInboundClaimOutcome } from "../../plugins/hooks.test-fixtures.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -20,6 +19,7 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import type { RuntimeMsgContext as MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { createPluginBindingRecord } from "./conversation-binding.test-fixtures.js";
 import { shouldBypassPluginOwnedBindingForCommand } from "./dispatch-from-config.plugin-binding.js";
 import {
   createDispatcher,
@@ -28,6 +28,8 @@ import {
   hookMocks,
   internalHookMocks,
   messageAuditMocks,
+  mockPluginBinding,
+  mockPluginBindingClaim,
   mocks,
   runtimePluginMocks,
   sessionBindingMocks,
@@ -53,6 +55,37 @@ import {
 import { withDispatchProcessedOutcomeSink } from "./dispatch-processed-outcome.js";
 import { finalizeInboundContextForSdk } from "./inbound-context.js";
 import { buildTestCtx } from "./test-ctx.js";
+
+function mockPendingPluginClaim(params: {
+  bindingId: string;
+  targetSessionKey: string;
+  conversationId: string;
+}) {
+  setNoAbort();
+  hookMocks.runner.hasHooks.mockImplementation(
+    ((hookName?: string) => hookName === "inbound_claim") as () => boolean,
+  );
+  hookMocks.registry.plugins = [{ id: "test-plugin", status: "loaded" }];
+  let resolveClaim: ((outcome: PluginTargetedInboundClaimOutcome) => void) | undefined;
+  hookMocks.runner.runInboundClaimForPluginOutcome.mockImplementationOnce(
+    async () =>
+      await new Promise<PluginTargetedInboundClaimOutcome>((resolve) => {
+        resolveClaim = resolve;
+      }),
+  );
+  mockPluginBinding({
+    bindingId: params.bindingId,
+    targetSessionKey: params.targetSessionKey,
+    conversation: {
+      channel: "discord",
+      accountId: "default",
+      conversationId: params.conversationId,
+    },
+    pluginId: "test-plugin",
+    pluginRoot: "/tmp/test-plugin",
+  });
+  return (outcome: PluginTargetedInboundClaimOutcome) => resolveClaim?.(outcome);
+}
 
 beforeAll(globalBeforeAll0);
 
@@ -749,38 +782,23 @@ describe("dispatchReplyFromConfig", () => {
         },
       ]),
     );
-    hookMocks.runner.hasHooks.mockImplementation(
-      ((hookName?: string) =>
-        hookName === "inbound_claim" || hookName === "message_received") as () => boolean,
-    );
-    hookMocks.registry.plugins = [{ id: "openclaw-codex-app-server", status: "loaded" }];
-    hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
-      status: "handled",
-      result: { handled: true },
-    });
-    sessionBindingMocks.resolveByConversation.mockReturnValue({
+    mockPluginBindingClaim();
+    mockPluginBinding({
       bindingId: "binding-1",
       targetSessionKey: "plugin-binding:codex:abc123",
-      targetKind: "session",
       conversation: {
         channel: "discord",
         accountId: "default",
         conversationId: "channel:1481858418548412579",
       },
-      status: "active",
-      boundAt: 1710000000000,
-      metadata: {
-        pluginBindingOwner: "plugin",
-        pluginId: "openclaw-codex-app-server",
-        pluginRoot: "/Users/huntharo/github/openclaw-app-server",
-        data: {
-          kind: "codex-app-server-session",
-          version: 1,
-          sessionFile: "/tmp/session.jsonl",
-          workspaceDir: "/workspace/openclaw",
-        },
+      pluginRoot: "/Users/huntharo/github/openclaw-app-server",
+      data: {
+        kind: "codex-app-server-session",
+        version: 1,
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/workspace/openclaw",
       },
-    } satisfies SessionBindingRecord);
+    });
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
@@ -872,31 +890,18 @@ describe("dispatchReplyFromConfig", () => {
         },
       ]),
     );
-    hookMocks.runner.hasHooks.mockImplementation(
-      ((hookName?: string) => hookName === "inbound_claim") as () => boolean,
-    );
-    hookMocks.registry.plugins = [{ id: "test-plugin", status: "loaded" }];
-    hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
-      status: "handled",
-      result: { handled: true },
-    });
-    sessionBindingMocks.resolveByConversation.mockReturnValue({
+    mockPluginBindingClaim(undefined, { pluginId: "test-plugin", receiveMessages: false });
+    mockPluginBinding({
       bindingId: "binding-null-rejection",
       targetSessionKey: "plugin-binding:test:null-rejection",
-      targetKind: "session",
       conversation: {
         channel: "discord",
         accountId: "default",
         conversationId: "channel:null-rejection",
       },
-      status: "active",
-      boundAt: 1710000000000,
-      metadata: {
-        pluginBindingOwner: "plugin",
-        pluginId: "test-plugin",
-        pluginRoot: "/plugins/test-plugin",
-      },
-    } satisfies SessionBindingRecord);
+      pluginId: "test-plugin",
+      pluginRoot: "/plugins/test-plugin",
+    });
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
       Provider: "discord",
@@ -942,31 +947,18 @@ describe("dispatchReplyFromConfig", () => {
 
   it("looks up plugin bindings with the canonical conversation target", async () => {
     setNoAbort();
-    hookMocks.runner.hasHooks.mockImplementation(
-      ((hookName?: string) => hookName === "inbound_claim") as () => boolean,
-    );
-    hookMocks.registry.plugins = [{ id: "codex", status: "loaded" }];
-    hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
-      status: "handled",
-      result: { handled: true },
-    });
-    const binding = {
+    mockPluginBindingClaim(undefined, { pluginId: "codex", receiveMessages: false });
+    const binding = createPluginBindingRecord({
       bindingId: "binding-slack-user",
       targetSessionKey: "plugin-binding:codex:slack-user",
-      targetKind: "session",
       conversation: {
         channel: "slack",
         accountId: "default",
         conversationId: "user:U123",
       },
-      status: "active",
-      boundAt: 1710000000000,
-      metadata: {
-        pluginBindingOwner: "plugin",
-        pluginId: "codex",
-        pluginRoot: "/tmp/codex",
-      },
-    } satisfies SessionBindingRecord;
+      pluginId: "codex",
+      pluginRoot: "/tmp/codex",
+    });
     sessionBindingMocks.resolveByConversation.mockImplementation((conversation) =>
       conversation.conversationId === "user:U123" ? binding : null,
     );
@@ -1007,29 +999,24 @@ describe("dispatchReplyFromConfig", () => {
     "retains cancelled plugin media staging until cleanup settles with %s",
     async (ownership) => {
       setNoAbort();
-      hookMocks.runner.hasHooks.mockImplementation((hookName) => hookName === "inbound_claim");
-      hookMocks.registry.plugins = [{ id: "test-plugin", status: "loaded" }];
-      hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
-        status: "handled",
-        result: { handled: true, reply: { text: "must not send" } },
-      });
-      sessionBindingMocks.resolveByConversation.mockReturnValue({
+      mockPluginBindingClaim(
+        {
+          status: "handled",
+          result: { handled: true, reply: { text: "must not send" } },
+        },
+        { pluginId: "test-plugin", receiveMessages: false },
+      );
+      mockPluginBinding({
         bindingId: "binding-staging-cancellation",
         targetSessionKey: "plugin-binding:test:staging-cancellation",
-        targetKind: "session",
         conversation: {
           channel: "imessage",
           accountId: "default",
           conversationId: "chat:staging-cancellation",
         },
-        status: "active",
-        boundAt: 1710000000000,
-        metadata: {
-          pluginBindingOwner: "plugin",
-          pluginId: "test-plugin",
-          pluginRoot: "/tmp/test-plugin",
-        },
-      } satisfies SessionBindingRecord);
+        pluginId: "test-plugin",
+        pluginRoot: "/tmp/test-plugin",
+      });
       const sessionKey = "agent:main:imessage:direct:staging-cancellation";
       const sessionId = "staging-cancellation-session";
       sessionStoreMocks.currentEntry = { sessionId, updatedAt: Date.now() };
@@ -1166,35 +1153,11 @@ describe("dispatchReplyFromConfig", () => {
   );
 
   it("holds session lifecycle mutation until an interrupted plugin claim exits", async () => {
-    setNoAbort();
-    hookMocks.runner.hasHooks.mockImplementation(
-      ((hookName?: string) => hookName === "inbound_claim") as () => boolean,
-    );
-    hookMocks.registry.plugins = [{ id: "test-plugin", status: "loaded" }];
-    let resolveClaim: ((outcome: PluginTargetedInboundClaimOutcome) => void) | undefined;
-    hookMocks.runner.runInboundClaimForPluginOutcome.mockImplementationOnce(
-      async () =>
-        await new Promise<PluginTargetedInboundClaimOutcome>((resolve) => {
-          resolveClaim = resolve;
-        }),
-    );
-    sessionBindingMocks.resolveByConversation.mockReturnValue({
+    const resolveClaim = mockPendingPluginClaim({
       bindingId: "binding-lifecycle-race",
       targetSessionKey: "plugin-binding:test:race",
-      targetKind: "session",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:lifecycle-race",
-      },
-      status: "active",
-      boundAt: 1710000000000,
-      metadata: {
-        pluginBindingOwner: "plugin",
-        pluginId: "test-plugin",
-        pluginRoot: "/tmp/test-plugin",
-      },
-    } satisfies SessionBindingRecord);
+      conversationId: "channel:lifecycle-race",
+    });
     const sessionKey = "agent:main:discord:channel:lifecycle-race";
     const sessionId = "plugin-lifecycle-session";
     sessionStoreMocks.currentEntry = { sessionId, updatedAt: Date.now() };
@@ -1256,35 +1219,11 @@ describe("dispatchReplyFromConfig", () => {
   });
 
   it("holds a lifecycle lease for plugin claims behind an active reply operation", async () => {
-    setNoAbort();
-    hookMocks.runner.hasHooks.mockImplementation(
-      ((hookName?: string) => hookName === "inbound_claim") as () => boolean,
-    );
-    hookMocks.registry.plugins = [{ id: "test-plugin", status: "loaded" }];
-    let resolveClaim: ((outcome: PluginTargetedInboundClaimOutcome) => void) | undefined;
-    hookMocks.runner.runInboundClaimForPluginOutcome.mockImplementationOnce(
-      async () =>
-        await new Promise<PluginTargetedInboundClaimOutcome>((resolve) => {
-          resolveClaim = resolve;
-        }),
-    );
-    sessionBindingMocks.resolveByConversation.mockReturnValue({
+    const resolveClaim = mockPendingPluginClaim({
       bindingId: "binding-active-lifecycle-race",
       targetSessionKey: "plugin-binding:test:active-race",
-      targetKind: "session",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:active-lifecycle-race",
-      },
-      status: "active",
-      boundAt: 1710000000000,
-      metadata: {
-        pluginBindingOwner: "plugin",
-        pluginId: "test-plugin",
-        pluginRoot: "/tmp/test-plugin",
-      },
-    } satisfies SessionBindingRecord);
+      conversationId: "channel:active-lifecycle-race",
+    });
     const sessionKey = "agent:main:discord:channel:active-lifecycle-race";
     const sessionId = "plugin-active-lifecycle-session";
     sessionStoreMocks.currentEntry = { sessionId, updatedAt: Date.now() };
@@ -1355,35 +1294,11 @@ describe("dispatchReplyFromConfig", () => {
   });
 
   it("does not abort the active owner when its in-band mutation interrupts borrowed work", async () => {
-    setNoAbort();
-    hookMocks.runner.hasHooks.mockImplementation(
-      ((hookName?: string) => hookName === "inbound_claim") as () => boolean,
-    );
-    hookMocks.registry.plugins = [{ id: "test-plugin", status: "loaded" }];
-    let resolveClaim: ((outcome: PluginTargetedInboundClaimOutcome) => void) | undefined;
-    hookMocks.runner.runInboundClaimForPluginOutcome.mockImplementationOnce(
-      async () =>
-        await new Promise<PluginTargetedInboundClaimOutcome>((resolve) => {
-          resolveClaim = resolve;
-        }),
-    );
-    sessionBindingMocks.resolveByConversation.mockReturnValue({
+    const resolveClaim = mockPendingPluginClaim({
       bindingId: "binding-owner-mutation-race",
       targetSessionKey: "plugin-binding:test:owner-mutation-race",
-      targetKind: "session",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:owner-mutation-race",
-      },
-      status: "active",
-      boundAt: 1710000000000,
-      metadata: {
-        pluginBindingOwner: "plugin",
-        pluginId: "test-plugin",
-        pluginRoot: "/tmp/test-plugin",
-      },
-    } satisfies SessionBindingRecord);
+      conversationId: "channel:owner-mutation-race",
+    });
     const sessionKey = "agent:main:discord:channel:owner-mutation-race";
     const sessionId = "owner-mutation-session";
     sessionStoreMocks.currentEntry = { sessionId, updatedAt: Date.now() };
@@ -1456,29 +1371,23 @@ describe("dispatchReplyFromConfig", () => {
 
   it("completes an owned reply operation interrupted during a plugin fallback notice", async () => {
     setNoAbort();
-    hookMocks.runner.hasHooks.mockImplementation(
-      ((hookName?: string) => hookName === "inbound_claim") as () => boolean,
+    mockPluginBindingClaim(
+      {
+        status: "missing_plugin",
+      },
+      { pluginLoaded: false, receiveMessages: false },
     );
-    hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
-      status: "missing_plugin",
-    });
-    sessionBindingMocks.resolveByConversation.mockReturnValue({
+    mockPluginBinding({
       bindingId: "binding-interrupted-fallback",
       targetSessionKey: "plugin-binding:test:interrupted-fallback",
-      targetKind: "session",
       conversation: {
         channel: "discord",
         accountId: "default",
         conversationId: "channel:interrupted-fallback",
       },
-      status: "active",
-      boundAt: 1710000000000,
-      metadata: {
-        pluginBindingOwner: "plugin",
-        pluginId: "missing-plugin",
-        pluginRoot: "/tmp/missing-plugin",
-      },
-    } satisfies SessionBindingRecord);
+      pluginId: "missing-plugin",
+      pluginRoot: "/tmp/missing-plugin",
+    });
     const sessionKey = "agent:main:discord:channel:interrupted-fallback";
     const sessionId = "interrupted-fallback-session";
     sessionStoreMocks.currentEntry = { sessionId, updatedAt: Date.now() };
@@ -1601,29 +1510,22 @@ describe("dispatchReplyFromConfig", () => {
         return { status: "handled", result: { handled: true } };
       },
     );
-    sessionBindingMocks.resolveByConversation.mockReturnValue({
+    mockPluginBinding({
       bindingId: "binding-imessage-codex-media",
       targetSessionKey: "plugin-binding:codex:imessage",
-      targetKind: "session",
       conversation: {
         channel: "imessage",
         accountId: "default",
         conversationId: "chat:abc",
       },
-      status: "active",
-      boundAt: 1710000000000,
-      metadata: {
-        pluginBindingOwner: "plugin",
-        pluginId: "openclaw-codex-app-server",
-        pluginRoot: "/plugins/openclaw-codex-app-server",
-        data: {
-          kind: "codex-app-server-session",
-          version: 1,
-          sessionFile: "/tmp/session.jsonl",
-          workspaceDir: "/workspace/openclaw",
-        },
+      pluginRoot: "/plugins/openclaw-codex-app-server",
+      data: {
+        kind: "codex-app-server-session",
+        version: 1,
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/workspace/openclaw",
       },
-    } satisfies SessionBindingRecord);
+    });
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
@@ -1831,15 +1733,7 @@ describe("dispatchReplyFromConfig", () => {
         },
       ]),
     );
-    hookMocks.runner.hasHooks.mockImplementation(
-      ((hookName?: string) =>
-        hookName === "inbound_claim" || hookName === "message_received") as () => boolean,
-    );
-    hookMocks.registry.plugins = [{ id: "openclaw-codex-app-server", status: "loaded" }];
-    hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
-      status: "handled",
-      result: { handled: true },
-    });
+    mockPluginBindingClaim();
     sessionBindingMocks.resolveByConversation.mockImplementation(
       (ref: {
         channel: string;
@@ -1850,24 +1744,17 @@ describe("dispatchReplyFromConfig", () => {
         ref.channel === "discord" &&
         ref.accountId === "default" &&
         ref.conversationId === "1510164477642014740"
-          ? ({
+          ? createPluginBindingRecord({
               bindingId: "binding-discord-thread",
               targetSessionKey: "plugin-binding:codex:thread",
-              targetKind: "session",
               conversation: {
                 channel: "discord",
                 accountId: "default",
                 conversationId: "1510164477642014740",
                 parentConversationId: "channel:1510164477642014999",
               },
-              status: "active",
-              boundAt: 1710000000000,
-              metadata: {
-                pluginBindingOwner: "plugin",
-                pluginId: "openclaw-codex-app-server",
-                pluginRoot: "/plugins/openclaw-codex-app-server",
-              },
-            } satisfies SessionBindingRecord)
+              pluginRoot: "/plugins/openclaw-codex-app-server",
+            })
           : null,
     );
     const dispatcher = createDispatcher();
@@ -1924,38 +1811,26 @@ describe("dispatchReplyFromConfig", () => {
 
   it("does not run plugin-owned binding delivery when the caller already aborted", async () => {
     setNoAbort();
-    hookMocks.runner.hasHooks.mockImplementation(
-      ((hookName?: string) =>
-        hookName === "inbound_claim" || hookName === "message_received") as () => boolean,
-    );
-    hookMocks.registry.plugins = [{ id: "openclaw-codex-app-server", status: "loaded" }];
-    hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
+    mockPluginBindingClaim({
       status: "handled",
       result: { handled: true, reply: { text: "should not send" } },
     });
-    sessionBindingMocks.resolveByConversation.mockReturnValue({
+    mockPluginBinding({
       bindingId: "binding-aborted-1",
       targetSessionKey: "plugin-binding:codex:abc123",
-      targetKind: "session",
       conversation: {
         channel: "discord",
         accountId: "default",
         conversationId: "channel:1481858418548412579",
       },
-      status: "active",
-      boundAt: 1710000000000,
-      metadata: {
-        pluginBindingOwner: "plugin",
-        pluginId: "openclaw-codex-app-server",
-        pluginRoot: "/workspace/openclaw-app-server",
-        data: {
-          kind: "codex-app-server-session",
-          version: 1,
-          sessionFile: "/tmp/session.jsonl",
-          workspaceDir: "/workspace/openclaw",
-        },
+      pluginRoot: "/workspace/openclaw-app-server",
+      data: {
+        kind: "codex-app-server-session",
+        version: 1,
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/workspace/openclaw",
       },
-    } satisfies SessionBindingRecord);
+    });
     const abortController = new AbortController();
     abortController.abort();
     const cfg = emptyConfig;
@@ -2014,39 +1889,24 @@ describe("dispatchReplyFromConfig", () => {
         { allowReservedCommandNames: true },
       ),
     ).toEqual({ ok: true });
-    hookMocks.runner.hasHooks.mockImplementation(
-      ((hookName?: string) =>
-        hookName === "inbound_claim" || hookName === "message_received") as () => boolean,
-    );
-    hookMocks.registry.plugins = [{ id: "openclaw-codex-app-server", status: "loaded" }];
-    hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
-      status: "handled",
-      result: { handled: true },
-    });
-    sessionBindingMocks.resolveByConversation.mockReturnValue({
+    mockPluginBindingClaim();
+    mockPluginBinding({
       bindingId: "binding-command-escape-1",
       targetSessionKey: "plugin-binding:codex:abc123",
-      targetKind: "session",
       conversation: {
         channel: "discord",
         accountId: "default",
         conversationId: "channel:1481858418548412579",
       },
-      status: "active",
-      boundAt: 1710000000000,
-      metadata: {
-        pluginBindingOwner: "plugin",
-        pluginId: "openclaw-codex-app-server",
-        pluginRoot: "/Users/huntharo/github/openclaw-app-server",
-        detachHint: "/codex detach",
-        data: {
-          kind: "codex-app-server-session",
-          version: 1,
-          sessionFile: "/tmp/session.jsonl",
-          workspaceDir: "/workspace/openclaw",
-        },
+      pluginRoot: "/Users/huntharo/github/openclaw-app-server",
+      detachHint: "/codex detach",
+      data: {
+        kind: "codex-app-server-session",
+        version: 1,
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/workspace/openclaw",
       },
-    } satisfies SessionBindingRecord);
+    });
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
@@ -2094,32 +1954,17 @@ describe("dispatchReplyFromConfig", () => {
 
   it("keeps authorized unknown slash text in a plugin-owned binding routed to the bound plugin", async () => {
     setNoAbort();
-    hookMocks.runner.hasHooks.mockImplementation(
-      ((hookName?: string) =>
-        hookName === "inbound_claim" || hookName === "message_received") as () => boolean,
-    );
-    hookMocks.registry.plugins = [{ id: "openclaw-codex-app-server", status: "loaded" }];
-    hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
-      status: "handled",
-      result: { handled: true },
-    });
-    sessionBindingMocks.resolveByConversation.mockReturnValue({
+    mockPluginBindingClaim();
+    mockPluginBinding({
       bindingId: "binding-command-unknown-slash",
       targetSessionKey: "plugin-binding:codex:abc123",
-      targetKind: "session",
       conversation: {
         channel: "discord",
         accountId: "default",
         conversationId: "channel:1481858418548412579",
       },
-      status: "active",
-      boundAt: 1710000000000,
-      metadata: {
-        pluginBindingOwner: "plugin",
-        pluginId: "openclaw-codex-app-server",
-        pluginRoot: "/Users/huntharo/github/openclaw-app-server",
-      },
-    } satisfies SessionBindingRecord);
+      pluginRoot: "/Users/huntharo/github/openclaw-app-server",
+    });
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({

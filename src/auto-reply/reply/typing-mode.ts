@@ -17,9 +17,6 @@ type TypingModeContext = {
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
 };
 
-/** Group chats default to message-triggered typing to avoid noisy indicators. */
-const DEFAULT_GROUP_TYPING_MODE: TypingMode = "message";
-
 /** Resolves the effective typing mode for the current auto-reply turn. */
 export function resolveTypingMode({
   configured,
@@ -48,7 +45,8 @@ export function resolveTypingMode({
   if (!isGroupChat || wasMentioned) {
     return "instant";
   }
-  return DEFAULT_GROUP_TYPING_MODE;
+  // Group chats wait for visible text to avoid noisy indicators.
+  return "message";
 }
 
 /** Event-driven typing signaler used by streaming reply dispatch. */
@@ -80,6 +78,16 @@ export function createTypingSignaler(params: {
   const disabled = isHeartbeat || mode === "never";
   let hasRenderableText = false;
 
+  const refreshTyping = async (allowStart: boolean) => {
+    if (!typing.isActive()) {
+      if (!allowStart) {
+        return;
+      }
+      await typing.startTypingLoop();
+    }
+    typing.refreshTypingTtl();
+  };
+
   const isRenderableText = (text?: string): boolean => {
     const trimmed = normalizeOptionalString(text);
     if (!trimmed) {
@@ -96,20 +104,14 @@ export function createTypingSignaler(params: {
   };
 
   const signalMessageStart = async () => {
-    if (disabled || !shouldStartOnMessageStart) {
-      return;
-    }
-    if (!hasRenderableText) {
+    if (disabled || !shouldStartOnMessageStart || !hasRenderableText) {
       return;
     }
     await typing.startTypingLoop();
   };
 
   const signalTextDelta = async (text?: string) => {
-    if (disabled) {
-      return;
-    }
-    if (!isRenderableText(text)) {
+    if (disabled || !isRenderableText(text)) {
       return;
     }
     hasRenderableText = true;
@@ -118,10 +120,7 @@ export function createTypingSignaler(params: {
       return;
     }
     if (shouldStartOnReasoning) {
-      if (!typing.isActive()) {
-        await typing.startTypingLoop();
-      }
-      typing.refreshTypingTtl();
+      await refreshTyping(true);
     }
   };
 
@@ -139,28 +138,15 @@ export function createTypingSignaler(params: {
     if (disabled) {
       return;
     }
-    if (!typing.isActive()) {
-      // In message mode, only start typing on tool calls after renderable text
-      // has been confirmed.
-      if (shouldStartOnMessageStart && !hasRenderableText) {
-        return;
-      }
-      await typing.startTypingLoop();
-      typing.refreshTypingTtl();
-      return;
-    }
-    // Keep typing indicator alive during tool execution.
-    typing.refreshTypingTtl();
+    // Message mode may refresh active typing, but cannot start it before visible text.
+    await refreshTyping(!shouldStartOnMessageStart || hasRenderableText);
   };
 
   const signalExecutionActivity = async () => {
     if (disabled) {
       return;
     }
-    if (!typing.isActive()) {
-      await typing.startTypingLoop();
-    }
-    typing.refreshTypingTtl();
+    await refreshTyping(true);
   };
 
   return {

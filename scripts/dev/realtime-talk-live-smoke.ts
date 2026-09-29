@@ -9,7 +9,6 @@ import {
   previewForDevToolLog,
   redactJsonValueForDevToolLog,
 } from "../lib/dev-tooling-safety.ts";
-import { toErrorObject as toLintErrorObject } from "../lib/error-format.mts";
 
 const OPENAI_REALTIME_MODEL =
   process.env.OPENCLAW_REALTIME_OPENAI_MODEL?.trim() || "gpt-realtime-2.1";
@@ -218,7 +217,7 @@ function transcriptIncludesMarker(transcripts: string[], marker: string): boolea
 }
 
 function resolveGatewayRelayModulePath(repoRoot = process.cwd()): string {
-  return `/@fs/${repoRoot.replaceAll("\\", "/")}/ui/src/pages/chat/realtime-talk-gateway-relay.ts`;
+  return `/@fs/${repoRoot.replaceAll("\\", "/")}/ui/src/pages/chat/talk/gateway-relay.ts`;
 }
 
 async function sendPcmAudioInChunks(
@@ -397,7 +396,7 @@ async function smokeOpenAIBackendBridge(apiKey: string): Promise<SmokeResult> {
       details: { model: OPENAI_REALTIME_MODEL, error: shortError(error) },
     };
   } finally {
-    bridge.close();
+    await bridge.close();
   }
 }
 
@@ -531,8 +530,7 @@ async function smokeOpenAIAudioRoundtrip(apiKey: string, cycleCount: number): Pr
         throw error;
       } finally {
         closed = true;
-        bridge.close();
-        bridge.close();
+        await Promise.all([bridge.close(), bridge.close()]);
         bridgeRef.current = undefined;
         await delay(100);
       }
@@ -972,7 +970,18 @@ async function smokeGoogleLiveBrowserWs(browser: Browser, apiKey: string): Promi
               }
             })().catch((error: unknown) => {
               window.clearTimeout(timeout);
-              reject(toLintErrorObject(error, "Non-Error rejection"));
+              // This callback is serialized into the browser without module imports.
+              if (error instanceof Error) {
+                reject(error);
+              } else if (typeof error === "string") {
+                reject(new Error(error));
+              } else {
+                const failure = new Error("Non-Error rejection", { cause: error });
+                if ((typeof error === "object" && error !== null) || typeof error === "function") {
+                  Object.assign(failure, error);
+                }
+                reject(failure);
+              }
             });
           });
           ws.addEventListener("error", () => {

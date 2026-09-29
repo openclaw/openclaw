@@ -50,7 +50,8 @@ authenticated remote gateway, follow its login flow with
 `openshell gateway login <gateway-name>`.
 
 The OpenClaw Gateway service must see the same OpenShell CLI, gateway
-registration, credentials, and workspace selection as these preflight commands.
+registration, credentials, and OpenShell workspace selection as these preflight
+commands.
 A shell-only `PATH` or `OPENSHELL_WORKSPACE` setting does not automatically
 reach a background service.
 
@@ -144,17 +145,17 @@ next exec, and the sandbox behaves close to the Docker backend.
 Tradeoff: upload + download cost on every exec turn.
 
 External editors and other Gateway processes do not participate in that lock.
-Avoid changing the host workspace while a mirrored command is running, because
+Avoid changing the local workspace while a mirrored command is running, because
 its download can replace those external edits.
 
 ### remote
 
-`mode: "remote"` makes the **OpenShell workspace canonical**:
+`mode: "remote"` makes the **remote workspace canonical**:
 
 - On first use after sandbox creation, OpenClaw seeds the remote workspace
   from local once. If the Gateway restarts before that first use, the next use
-  detects the still-empty remote workspace and seeds it. A workspace that
-  already holds content is never re-seeded.
+  detects the still-empty remote workspace and seeds it. A remote workspace
+  that already holds content is never re-seeded.
 - After that, `exec`, `read`, `write`, `edit`, and `apply_patch` operate
   directly on the remote workspace. OpenClaw does **not** sync remote changes
   back to local.
@@ -224,8 +225,8 @@ the OpenShell CLI's `OPENSHELL_SANDBOX_POLICY` environment variable. When
 neither is set, OpenShell uses its normal policy selection and defaults.
 
 `providers` names existing OpenShell credential providers in the selected
-workspace. With `autoProviders: true`, OpenShell may create missing providers
-from credentials already available to the Gateway process. With
+OpenShell workspace. With `autoProviders: true`, OpenShell may create missing
+providers from credentials already available to the Gateway process. With
 `autoProviders: false`, create required providers first and verify them with
 `openshell --workspace <workspace-name> provider list`. Keep API keys in
 OpenShell providers rather than adding them to sandbox environment variables.
@@ -235,7 +236,8 @@ lowercase alphanumeric characters or single hyphens, with no leading,
 trailing, or consecutive hyphen. Create it first with
 `openshell workspace create --name <name>`. OpenShell rejects sandbox
 operations when the selected workspace does not exist or is being deleted.
-Set it to `"default"` to override an ambient non-default Workspace explicitly.
+Set it to `"default"` to override an ambient non-default OpenShell workspace
+explicitly.
 
 The setting applies to every OpenShell sandbox managed by this plugin instance.
 It cannot select different OpenShell workspaces per OpenClaw agent or session.
@@ -414,8 +416,8 @@ configured workspace or delete the registry entry to hide the failure.
 
 The mirror-mode filesystem bridge pins the local workspace root and rechecks
 canonical paths (via realpath) before every read, write, mkdir, remove, and
-rename, rejecting mid-path symlinks. A symlink swap or remounted workspace
-cannot redirect file access outside the mirrored tree.
+rename, rejecting mid-path symlinks. A symlink swap or a remounted local
+workspace cannot redirect file access outside the mirrored tree.
 
 Workspace synchronization excludes `.git`, `hooks`, and `git-hooks` in both
 directions. Repository credentials, history, and trusted hook code remain on
@@ -525,7 +527,7 @@ openclaw logs --follow
   Inspect a running sandbox with
   `openshell sandbox get <sandbox-name> --policy-only`. Docker network settings
   do not change OpenShell policy.
-- **Provider creation fails:** Inspect the selected workspace with
+- **Provider creation fails:** Inspect the selected OpenShell workspace with
   `openshell provider list`, then create or refresh the required provider using
   OpenShell's documented credential flow. If `autoProviders` is disabled,
   required providers must already exist.

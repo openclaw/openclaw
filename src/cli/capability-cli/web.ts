@@ -1,30 +1,11 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
-import { resolveAgentDir } from "../../agents/agent-scope.js";
-import { getRuntimeConfig } from "../../config/config.js";
 import { defaultRuntime } from "../../runtime.js";
-import {
-  isWebFetchProviderConfigured,
-  listWebFetchProviders,
-  resolveWebFetchDefinition,
-} from "../../web-fetch/runtime.js";
-import {
-  isWebSearchProviderConfigured,
-  listWebSearchProviders,
-  runWebSearch,
-} from "../../web-search/runtime.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
-import {
-  getCapabilityWebFetchCommandSecretTargets,
-  getCapabilityWebSearchCommandSecretTargets,
-} from "../command-secret-targets.js";
+import { exitCliAfterOutput } from "../one-shot-exit.js";
 import type { CapabilityEnvelope } from "./metadata.js";
 import { emitJsonOrText, formatEnvelopeForText } from "./output.js";
-import {
-  parseOptionalPositiveInteger,
-  registerLocalProvidersCommand,
-  resolveLocalCapabilityRuntimeConfig,
-} from "./shared.js";
+import { registerLocalProvidersCommand } from "./providers-command.js";
 
 function describeWebResultFailure(result: Record<string, unknown>): string | undefined {
   const statusCode =
@@ -50,6 +31,11 @@ function describeWebResultFailure(result: Record<string, unknown>): string | und
 }
 
 async function runWebSearchCommand(params: { query: string; provider?: string; limit?: number }) {
+  const { getRuntimeConfig } = await import("../../config/config.js");
+  const { getCapabilityWebSearchCommandSecretTargets } =
+    await import("../command-secret-targets.js");
+  const { resolveLocalCapabilityRuntimeConfig } = await import("./shared.js");
+  const { runWebSearch } = await import("../../web-search/runtime.js");
   const rawConfig = getRuntimeConfig();
   const scopedTargets = getCapabilityWebSearchCommandSecretTargets(rawConfig, {
     providerId: params.provider,
@@ -81,6 +67,11 @@ async function runWebSearchCommand(params: { query: string; provider?: string; l
 }
 
 async function runWebFetchCommand(params: { url: string; provider?: string; format?: string }) {
+  const { getRuntimeConfig } = await import("../../config/config.js");
+  const { getCapabilityWebFetchCommandSecretTargets } =
+    await import("../command-secret-targets.js");
+  const { resolveLocalCapabilityRuntimeConfig } = await import("./shared.js");
+  const { resolveWebFetchDefinition } = await import("../../web-fetch/runtime.js");
   const rawConfig = getRuntimeConfig();
   const scopedTargets = getCapabilityWebFetchCommandSecretTargets(rawConfig, {
     providerId: params.provider,
@@ -124,19 +115,18 @@ export function registerWebCapabilityCommands(capability: Command): void {
     .option("--limit <n>", "Result limit")
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
-      let failed = false;
       await runCommandWithRuntime(defaultRuntime, async () => {
+        const { parseOptionalPositiveInteger } = await import("./shared.js");
         const result = await runWebSearchCommand({
           query: String(opts.query),
           provider: opts.provider as string | undefined,
           limit: parseOptionalPositiveInteger(opts.limit, "--limit"),
         });
-        failed = !result.ok;
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
+        if (!result.ok) {
+          exitCliAfterOutput(defaultRuntime, 1);
+        }
       });
-      if (failed) {
-        defaultRuntime.exit(1);
-      }
     });
 
   web
@@ -147,25 +137,28 @@ export function registerWebCapabilityCommands(capability: Command): void {
     .option("--format <format>", "Format hint")
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
-      let failed = false;
       await runCommandWithRuntime(defaultRuntime, async () => {
         const result = await runWebFetchCommand({
           url: String(opts.url),
           provider: opts.provider as string | undefined,
           format: opts.format as string | undefined,
         });
-        failed = !result.ok;
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
+        if (!result.ok) {
+          exitCliAfterOutput(defaultRuntime, 1);
+        }
       });
-      if (failed) {
-        defaultRuntime.exit(1);
-      }
     });
 
   registerLocalProvidersCommand(
     web,
     "List web providers",
-    (cfg, agentId) => {
+    async (cfg, agentId) => {
+      const { resolveAgentDir } = await import("../../agents/agent-scope.js");
+      const { isWebFetchProviderConfigured, listWebFetchProviders } =
+        await import("../../web-fetch/runtime.js");
+      const { isWebSearchProviderConfigured, listWebSearchProviders } =
+        await import("../../web-search/runtime.js");
       const agentDir = resolveAgentDir(cfg, agentId);
       const selectedSearchProvider =
         typeof cfg.tools?.web?.search?.provider === "string"

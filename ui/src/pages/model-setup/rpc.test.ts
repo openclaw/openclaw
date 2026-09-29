@@ -3,7 +3,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { GatewayBrowserClient } from "../../api/gateway.ts";
 import * as deviceIdentity from "../../lib/nodes/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import { verifyModelSetup } from "./rpc.ts";
+import { createModelSetupVerifyTask } from "./rpc.ts";
 
 type RequestFrame = { id: string; method: string; params?: unknown };
 const sockets: VerificationSocket[] = [];
@@ -50,9 +50,14 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-it.each(["reply", "abort", "deadline"] as const)(
-  "keeps verification through a healthy slow model response while preserving %s settlement",
-  async (outcome) => {
+it.each([
+  { outcome: "reply", modelTarget: undefined },
+  { outcome: "reply", modelTarget: "utility" },
+  { outcome: "abort", modelTarget: "utility" },
+  { outcome: "deadline", modelTarget: undefined },
+] as const)(
+  "keeps verification through a healthy slow model response while preserving $outcome settlement for target $modelTarget",
+  async ({ outcome, modelTarget }) => {
     const client = new GatewayBrowserClient({ url: "ws://localhost", token: "test-token" });
     try {
       client.start();
@@ -79,15 +84,23 @@ it.each(["reply", "abort", "deadline"] as const)(
           policy: { tickIntervalMs: 10_000 },
         },
       });
-      const abort = new AbortController();
+      const task = createModelSetupVerifyTask({
+        addController: () => undefined,
+        removeController: () => undefined,
+        requestUpdate: () => undefined,
+        updateComplete: Promise.resolve(true),
+      });
       const settled = vi.fn();
-      const verification = verifyModelSetup(client, "main", abort.signal);
+      void task.run([client, "main", modelTarget]);
+      const verification = task.taskComplete;
       void verification.then(settled, settled);
       const request = socket.sent.at(-1)!;
       expect(request).toMatchObject({
         method: "openclaw.setup.verify",
-        params: { agentId: "main" },
       });
+      expect(request.params).toEqual(
+        modelTarget ? { agentId: "main", modelTarget: "utility" } : { agentId: "main" },
+      );
       let tick = 0;
       const advanceHealthy = async (durationMs: number) => {
         for (let remaining = durationMs; remaining > 0; remaining -= 5_000) {
@@ -101,17 +114,25 @@ it.each(["reply", "abort", "deadline"] as const)(
       expect(settled).not.toHaveBeenCalled();
       const result = { ok: true, modelRef: "provider/local-model", latencyMs: 45_000 };
       if (outcome === "abort") {
-        abort.abort();
-        await expect(verification).rejects.toThrow("aborted");
+        task.abort();
+        await expect(verification).resolves.toEqual({
+          client,
+          error: expect.objectContaining({ message: expect.stringContaining("aborted") }),
+        });
       } else if (outcome === "deadline") {
         await advanceHealthy(105_000);
-        await expect(verification).rejects.toThrow("timed out");
+        await expect(verification).resolves.toEqual({
+          client,
+          error: expect.objectContaining({ message: expect.stringContaining("timed out") }),
+        });
       }
       socket.receive({ type: "res", id: request.id, ok: true, payload: result });
       if (outcome === "reply") {
-        await expect(verification).resolves.toEqual(result);
+        await expect(verification).resolves.toEqual({ client, value: result });
       }
+      await vi.advanceTimersByTimeAsync(0);
       expect(settled).toHaveBeenCalledOnce();
+      expect(task.value).toEqual(settled.mock.calls[0]?.[0]);
     } finally {
       client.stop();
     }

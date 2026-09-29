@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto";
 import type { ActionResult } from "@trycua/cua-driver";
-import { asOptionalRecord as record } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalRecord as record,
+  readStringField,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   ClickButton,
-  EscalationReason,
   ScrollDirection,
   type CuaDriverSession,
   type CuaToolResult,
@@ -152,11 +154,7 @@ function normalizeMcpToolResult(tool: string, raw: unknown): CuaToolResult {
   );
   const structured = record(value.structuredContent);
   const errorCode =
-    typeof structured?.code === "string"
-      ? structured.code
-      : typeof record(structured?.refusal)?.code === "string"
-        ? (record(structured?.refusal)?.code as string)
-        : undefined;
+    readStringField(structured, "code") ?? readStringField(record(structured?.refusal), "code");
   const isError = value.isError === true;
   return {
     text: text.join("\n"),
@@ -227,6 +225,7 @@ function sessionState(value: CuaToolResult): import("@trycua/cua-driver").Sessio
       ["window", "desktop"],
       "effective scope",
     ),
+    desktopCaptureAuthorized: structured.desktop_capture_authorized === true,
     desktopUnlocked: structured.desktop_unlocked === true,
     ...(typeof structured.escalation_reason === "string"
       ? {
@@ -280,7 +279,7 @@ class McpCuaDriverSession implements CuaDriverSession {
     return await this.sessionTool("get_cursor_position", {}, signal);
   }
 
-  async escalateScope(_reason: EscalationReason, signal?: AbortSignal) {
+  async getSessionState(signal?: AbortSignal) {
     const result = await this.sessionTool("get_session_state", {}, signal);
     return sessionState(result);
   }

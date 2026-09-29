@@ -13,8 +13,10 @@ import {
   sidebarSessionOrder,
   waitForChatScrollIdle,
 } from "./chat-flow.test-support.ts";
+import { watchNavigationFollowIntent } from "./chat-navigation-follow.test-support.ts";
 import { dockChatSidePanel, openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
+import { chooseSidebarMenuOption, closeSidebarMenu } from "./sidebar-session-menu.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 const rosterMatch = { includeGlobal: true };
@@ -89,10 +91,13 @@ suite.define(() => {
           ),
         )
         .toEqual([true, true]);
+      // Loading is published before foreground subscription admission and RPC dispatch.
+      await gateway.waitForRequest("chat.startup");
       expect(await gateway.getRequests("chat.startup")).toHaveLength(1);
 
       await gateway.resolveDeferred("chat.startup");
       await expect.poll(() => page.getByText("Shared cold startup proof.").count()).toBe(2);
+      expect(await gateway.getRequests("chat.startup")).toHaveLength(1);
     } finally {
       await suite.closeBrowserContext(context);
     }
@@ -176,9 +181,11 @@ suite.define(() => {
         page.locator(
           `.sidebar-recent-session[data-session-key="${sessionKey}"] a.sidebar-recent-session__link`,
         );
+      const finishFirstVisit = await watchNavigationFollowIntent(page, sessionB);
       await sessionLink(sessionB).click();
       await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionB));
       await waitForChatScrollIdle(page);
+      await finishFirstVisit(false);
       expect(await gateway.getRequests("agent.identity.get")).toHaveLength(
         initialIdentityRequestCount,
       );
@@ -189,6 +196,7 @@ suite.define(() => {
       expect(firstVisitDistance).toBeLessThanOrEqual(8);
 
       const historyRequestsBeforeReturn = (await gateway.getRequests("chat.history")).length;
+      const finishReadingReturn = await watchNavigationFollowIntent(page, sessionA);
       await sessionLink(sessionA).click();
       await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionA));
       await waitForChatScrollIdle(page);
@@ -209,8 +217,10 @@ suite.define(() => {
         JSON.stringify({ restoredAnchor, storedAnchor }),
       ).toBeLessThanOrEqual(2);
       expect(restored.distanceFromBottom).toBeGreaterThan(8);
+      await finishReadingReturn(true);
 
       const historyRequestsBeforeEndReturn = (await gateway.getRequests("chat.history")).length;
+      const finishEndReturn = await watchNavigationFollowIntent(page, sessionB);
       await sessionLink(sessionB).click();
       await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionB));
       await waitForChatScrollIdle(page);
@@ -222,6 +232,7 @@ suite.define(() => {
         return transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight;
       });
       expect(endAnchoredDistance).toBeLessThanOrEqual(8);
+      await finishEndReturn(false);
     } finally {
       await suite.closeBrowserContext(context);
     }
@@ -691,8 +702,8 @@ suite.define(() => {
       await composer.fill("");
 
       // The background hydrate must not take the shared sessions loading
-      // flag, which would disable New session for the whole request.
-      const newThread = page.getByRole("link", { name: "New session" }).first();
+      // flag, which would disable New conversation for the whole request.
+      const newThread = page.getByRole("link", { name: "New conversation" }).first();
       expect(await newThread.isEnabled()).toBe(true);
 
       await gateway.resolveDeferred("sessions.list");
@@ -776,16 +787,18 @@ suite.define(() => {
 
       const filterAndSort = page.getByRole("button", { name: "Filter & sort" });
       await filterAndSort.click();
-      await page.getByRole("menuitemradio", { name: "Last updated" }).click();
+      await chooseSidebarMenuOption(page, "Sort by", "Last updated");
+      await closeSidebarMenu(page);
       await expect.poll(() => sidebarSessionOrder(page)).toEqual(updatedOrder);
 
       await filterAndSort.click();
-      await page.getByRole("menuitemradio", { name: "Created" }).click();
+      await chooseSidebarMenuOption(page, "Sort by", "Created");
+      await closeSidebarMenu(page);
       await expect.poll(() => sidebarSessionOrder(page)).toEqual(createdOrder);
 
       await filterAndSort.click();
       await page.getByRole("main").click();
-      await expect.poll(() => page.getByRole("menuitemradio", { name: "Created" }).count()).toBe(0);
+      await expect.poll(() => page.locator(".sidebar-session-sort-menu").count()).toBe(0);
     } finally {
       await suite.closeBrowserContext(context);
     }

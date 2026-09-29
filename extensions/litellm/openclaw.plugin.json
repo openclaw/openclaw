@@ -1,6 +1,6 @@
 {
   "id": "litellm",
-  "categories": ["models", "media"],
+  "categories": ["models"],
   "activation": {
     "onStartup": false
   },

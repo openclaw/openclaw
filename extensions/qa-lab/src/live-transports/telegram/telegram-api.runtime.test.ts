@@ -55,6 +55,26 @@ describe("Telegram QA API boundary", () => {
     });
   });
 
+  it("omits apiRoot for a production Bot API qualification", () => {
+    const config = buildTelegramQaConfig(
+      {},
+      {
+        groupId: "-10042",
+        sutAccountId: "sut",
+        sutToken: "secret-token",
+        testerUserId: "100",
+        additionalTesterUserIds: ["101"],
+        enableDirectMessages: true,
+      },
+    );
+
+    expect(config.channels?.telegram?.accounts?.sut).not.toHaveProperty("apiRoot");
+    expect(config.channels?.telegram?.accounts?.sut).toMatchObject({
+      allowFrom: ["100", "101"],
+      groups: { "-10042": { allowFrom: ["100", "101"] } },
+    });
+  });
+
   it("waits for the selected Telegram account to connect", async () => {
     const call = vi
       .fn()

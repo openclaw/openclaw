@@ -70,7 +70,7 @@ const BROWSER_SNAPSHOT_REFS = ["role", "aria"] as const;
 
 const BROWSER_IMAGE_TYPES = ["png", "jpeg"] as const;
 
-const TAB_REFERENCE_DESCRIPTION = "Prefer suggestedTargetId/tabId/label; raw CDP targetId.";
+const TAB_REFERENCE_DESCRIPTION = "Prefer suggestedTargetId/tabId/label; CDP id.";
 
 // NOTE: Using a flattened object schema instead of Type.Union([Type.Object(...), ...])
 // because Claude API on Vertex AI rejects nested anyOf schemas as invalid JSON Schema.
@@ -79,6 +79,7 @@ export type BrowserToolCapabilities = {
   actions: readonly (typeof BROWSER_TOOL_ACTIONS)[number][];
   actKinds: readonly (typeof BROWSER_ACT_KINDS)[number][];
   tabBound: boolean;
+  supportsNativeSnapshots?: boolean;
 };
 
 export function resolveBrowserToolCapabilities(params?: {
@@ -91,7 +92,16 @@ export function resolveBrowserToolCapabilities(params?: {
     Partial<
       Pick<
         BrowserProfileCapabilities,
-        "supportsRequests" | "supportsErrors" | "supportsPageText" | "supportsEmulation"
+        | "supportsRequests"
+        | "supportsErrors"
+        | "supportsPageText"
+        | "supportsEmulation"
+        | "supportsScreenshots"
+        | "supportsVisualActions"
+        | "supportsUploads"
+        | "supportsDialogs"
+        | "supportsConsole"
+        | "supportsNativeSnapshots"
       >
     >;
 }): BrowserToolCapabilities {
@@ -106,15 +116,26 @@ export function resolveBrowserToolCapabilities(params?: {
         (profileCapabilities?.supportsErrors !== false || action !== "errors") &&
         (profileCapabilities?.supportsPageText !== false || action !== "text") &&
         (profileCapabilities?.supportsEmulation !== false || action !== "emulate") &&
+        (profileCapabilities?.supportsScreenshots !== false || action !== "screenshot") &&
+        (profileCapabilities?.supportsUploads !== false || action !== "upload") &&
+        (profileCapabilities?.supportsDialogs !== false || action !== "dialog") &&
+        (profileCapabilities?.supportsConsole !== false || action !== "console") &&
         (profileCapabilities?.supportsDownloads !== false ||
           (action !== "download" && action !== "waitfordownload")),
     ),
     actKinds: BROWSER_ACT_KINDS.filter(
       (kind) =>
         (evaluateEnabled || kind !== "evaluate") &&
-        (profileCapabilities?.supportsBatchActions !== false || kind !== "batch"),
+        (profileCapabilities?.supportsBatchActions !== false || kind !== "batch") &&
+        (profileCapabilities?.supportsVisualActions !== false ||
+          (kind !== "clickCoords" &&
+            kind !== "drag" &&
+            kind !== "resize" &&
+            kind !== "hover" &&
+            kind !== "scrollIntoView")),
     ),
     tabBound: params?.tabBound === true,
+    supportsNativeSnapshots: profileCapabilities?.supportsNativeSnapshots !== false,
   };
 }
 
@@ -123,12 +144,12 @@ function createBrowserActProperties(capabilities: BrowserToolCapabilities) {
   return {
     // Common fields
     targetId: Type.Optional(Type.String({ description: TAB_REFERENCE_DESCRIPTION })),
-    ref: Type.Optional(Type.String({ description: "snapshot ref" })),
+    ref: Type.Optional(Type.String({ description: "snapshot" })),
     // batch - permissive children keep the provider schema flat; runtime validates each action.
     actions: Type.Optional(
       Type.Array(
         Type.Object({}, { additionalProperties: true }),
-        supportsBatch ? { description: "batch actions" } : {},
+        supportsBatch ? { description: "batch" } : {},
       ),
     ),
     stopOnError: Type.Optional(Type.Boolean(supportsBatch ? { description: "default true" } : {})),
@@ -136,8 +157,9 @@ function createBrowserActProperties(capabilities: BrowserToolCapabilities) {
     doubleClick: Type.Optional(Type.Boolean({ description: "click/clickCoords" })),
     button: Type.Optional(Type.String()),
     modifiers: Type.Optional(Type.Array(Type.String())),
-    x: optionalFiniteNumberSchema(),
-    y: optionalFiniteNumberSchema(),
+    ...(capabilities.actKinds.includes("clickCoords")
+      ? { x: optionalFiniteNumberSchema(), y: optionalFiniteNumberSchema() }
+      : {}),
     // type
     text: Type.Optional(Type.String()),
     submit: Type.Optional(Type.Boolean()),
@@ -150,18 +172,25 @@ function createBrowserActProperties(capabilities: BrowserToolCapabilities) {
     ),
     delayMs: optionalNonNegativeIntegerSchema(),
     // drag
-    startRef: Type.Optional(Type.String()),
-    endRef: Type.Optional(Type.String()),
+    ...(capabilities.actKinds.includes("drag")
+      ? { startRef: Type.Optional(Type.String()), endRef: Type.Optional(Type.String()) }
+      : {}),
     // select
     values: Type.Optional(Type.Array(Type.String())),
     // fill - use permissive array of objects
     fields: Type.Optional(Type.Array(Type.Object({}, { additionalProperties: true }))),
     // resize
-    width: optionalPositiveIntegerSchema({ maximum: ACT_MAX_VIEWPORT_DIMENSION }),
-    height: optionalPositiveIntegerSchema({ maximum: ACT_MAX_VIEWPORT_DIMENSION }),
+    ...(capabilities.actKinds.includes("resize")
+      ? {
+          width: optionalPositiveIntegerSchema({ maximum: ACT_MAX_VIEWPORT_DIMENSION }),
+          height: optionalPositiveIntegerSchema({ maximum: ACT_MAX_VIEWPORT_DIMENSION }),
+        }
+      : {}),
     // wait
     timeMs: optionalNonNegativeIntegerSchema(),
-    selector: Type.Optional(Type.String()),
+    ...(capabilities.supportsNativeSnapshots !== false
+      ? { selector: Type.Optional(Type.String()) }
+      : {}),
     url: Type.Optional(Type.String()),
     loadState: Type.Optional(Type.String()),
     textGone: Type.Optional(Type.String()),
@@ -178,7 +207,7 @@ function createBrowserActProperties(capabilities: BrowserToolCapabilities) {
 export function createBrowserToolSchema(capabilities: BrowserToolCapabilities) {
   const actProperties = createBrowserActProperties(capabilities);
   const actKindDescription = capabilities.actKinds.includes("batch")
-    ? "act; batch=actions"
+    ? "batch=actions"
     : "Act kind.";
   const BrowserActSchema = Type.Object({
     kind: stringEnum(capabilities.actKinds, { description: actKindDescription }),
@@ -186,14 +215,28 @@ export function createBrowserToolSchema(capabilities: BrowserToolCapabilities) {
   });
   return Type.Object({
     action: stringEnum(capabilities.actions),
-    contextId: Type.Optional(Type.String()),
-    toolName: Type.Optional(Type.String()),
-    input: Type.Optional(Type.Object({}, { additionalProperties: true })),
+    ...(capabilities.actions.includes("webmcp_execute")
+      ? {
+          contextId: Type.Optional(Type.String()),
+          toolName: Type.Optional(Type.String()),
+          input: Type.Optional(Type.Object({}, { additionalProperties: true })),
+        }
+      : {}),
     target: optionalStringEnum(BROWSER_TARGETS),
+    ...(!capabilities.tabBound
+      ? {
+          dashboard: Type.Optional(
+            Type.String({
+              pattern: "^[a-z0-9][a-z0-9._-]{0,63}$",
+              description: "widget name",
+            }),
+          ),
+        }
+      : {}),
     node: Type.Optional(Type.String()),
     profile: Type.Optional(
       Type.String({
-        description: capabilities.tabBound ? "Run-bound profile." : "Omit for default.",
+        description: capabilities.tabBound ? "Run-bound browser profile." : "default",
       }),
     ),
     browser: Type.Optional(Type.String()),
@@ -205,35 +248,58 @@ export function createBrowserToolSchema(capabilities: BrowserToolCapabilities) {
     limit: optionalPositiveIntegerSchema(),
     maxChars: optionalNonNegativeIntegerSchema(),
     mode: optionalStringEnum(BROWSER_SNAPSHOT_MODES),
-    snapshotFormat: optionalStringEnum(BROWSER_SNAPSHOT_FORMATS),
-    refs: optionalStringEnum(BROWSER_SNAPSHOT_REFS),
+    snapshotFormat: optionalStringEnum(
+      capabilities.supportsNativeSnapshots === false ? (["ai"] as const) : BROWSER_SNAPSHOT_FORMATS,
+    ),
+    refs: optionalStringEnum(
+      capabilities.supportsNativeSnapshots === false ? (["aria"] as const) : BROWSER_SNAPSHOT_REFS,
+    ),
     interactive: Type.Optional(Type.Boolean()),
     compact: Type.Optional(Type.Boolean()),
     depth: optionalNonNegativeIntegerSchema(),
-    frame: Type.Optional(Type.String()),
-    labels: Type.Optional(Type.Boolean({ description: "snapshot labels" })),
+    ...(capabilities.supportsNativeSnapshots !== false
+      ? { frame: Type.Optional(Type.String()) }
+      : {}),
+    ...(capabilities.actions.includes("screenshot")
+      ? {
+          labels: Type.Optional(Type.Boolean({ description: "snapshot/screenshot" })),
+          fullPage: Type.Optional(Type.Boolean()),
+          element: Type.Optional(Type.String()),
+          type: optionalStringEnum(BROWSER_IMAGE_TYPES),
+        }
+      : {}),
     urls: Type.Optional(Type.Boolean()),
-    fullPage: Type.Optional(Type.Boolean()),
-    path: Type.Optional(Type.String()),
-    element: Type.Optional(Type.String()),
-    type: optionalStringEnum(BROWSER_IMAGE_TYPES),
+    ...(capabilities.actions.some((action) =>
+      ["screenshot", "pdf", "download", "waitfordownload"].includes(action),
+    )
+      ? { path: Type.Optional(Type.String()) }
+      : {}),
     level: Type.Optional(Type.String()),
     filter: Type.Optional(Type.String()),
     clear: Type.Optional(Type.Boolean()),
     query: Type.Optional(Type.String()),
-    device: Type.Optional(Type.String()),
-    colorScheme: optionalStringEnum(["dark", "light", "no-preference", "none"] as const),
-    timezoneId: Type.Optional(Type.String()),
-    locale: Type.Optional(Type.String()),
-    paths: Type.Optional(Type.Array(Type.String())),
-    inputRef: Type.Optional(Type.String()),
-    dialogId: Type.Optional(Type.String()),
-    accept: Type.Optional(Type.Boolean()),
-    promptText: Type.Optional(Type.String()),
+    ...(capabilities.actions.includes("emulate")
+      ? {
+          device: Type.Optional(Type.String()),
+          colorScheme: optionalStringEnum(["dark", "light", "no-preference", "none"] as const),
+          timezoneId: Type.Optional(Type.String()),
+          locale: Type.Optional(Type.String()),
+        }
+      : {}),
+    ...(capabilities.actions.includes("upload")
+      ? { paths: Type.Optional(Type.Array(Type.String())), inputRef: Type.Optional(Type.String()) }
+      : {}),
+    ...(capabilities.actions.includes("dialog")
+      ? {
+          dialogId: Type.Optional(Type.String()),
+          accept: Type.Optional(Type.Boolean()),
+          promptText: Type.Optional(Type.String()),
+        }
+      : {}),
     // Legacy flattened act params (preferred: request={...})
     kind: Type.Optional(stringEnum(capabilities.actKinds, { description: actKindDescription })),
     ...actProperties,
-    request: Type.Optional({ ...BrowserActSchema, description: "act" }),
+    request: Type.Optional(BrowserActSchema),
   });
 }
 
@@ -275,6 +341,7 @@ export const BrowserToolOutputSchema = Type.Object(
           {
             suggestedTargetId: Type.Optional(Type.String()),
             tabId: Type.Optional(Type.String()),
+            webExtensionTabId: Type.Optional(Type.Integer({ minimum: 0 })),
             label: Type.Optional(Type.String()),
             targetId: Type.Optional(Type.String()),
             title: Type.Optional(Type.String()),

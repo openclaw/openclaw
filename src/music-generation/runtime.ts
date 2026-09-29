@@ -19,7 +19,7 @@ import {
   buildCapabilityProviderIndex,
   normalizeCapabilityProviderId,
 } from "../plugins/provider-registry-shared.js";
-import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
+import { getProviderEnvVarsCore } from "../secrets/provider-env-vars.js";
 import { resolveMusicGenerationOverrides } from "./normalization.js";
 import type { GenerateMusicParams, GenerateMusicRuntimeResult } from "./runtime-types.js";
 import type { MusicGenerationResult } from "./types.js";
@@ -37,8 +37,8 @@ const log = createSubsystemLogger("music-generation");
 type MusicGenerationRuntimeDeps = {
   getProvider?: typeof getMusicGenerationProvider;
   listProviders?: typeof listMusicGenerationProviders;
-  getProviderEnvVars?: typeof getProviderEnvVars;
-  log?: Pick<typeof log, "debug">;
+  getProviderEnvVars?: typeof getProviderEnvVarsCore;
+  log?: Pick<typeof log, "debug" | "warn">;
 };
 
 /** List runtime-visible music generation providers for a config snapshot. */
@@ -110,7 +110,9 @@ async function runMusicGeneration(
     getProvider: (providerId) => getProvider(providerId, params.cfg),
     includeSkipFailureDetails: true,
     onFailure: (attempt) => {
-      logger.debug(`music-generation candidate failed: ${attempt.provider}/${attempt.model}`);
+      logger.warn(
+        `music-generation candidate failed: ${attempt.provider}/${attempt.model}: ${attempt.error}`,
+      );
     },
     prepareCandidate(candidate, provider) {
       const referenceImageError = resolveReferenceImageCapabilityError({

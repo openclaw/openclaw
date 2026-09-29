@@ -10,7 +10,7 @@ import type { SilentReplyConversationType } from "../../shared/silent-reply-poli
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import type { ElevatedLevel } from "../thinking.js";
-import type { ExecOverrides } from "./get-reply-run.types.js";
+import type { ReplyExecOverrides } from "./get-reply-exec-overrides.js";
 
 const EPOCH_MILLISECONDS_THRESHOLD = 1_000_000_000_000;
 
@@ -170,7 +170,7 @@ export function resolvePromptSilentReplyConversationType(params: {
 }
 
 export function buildExecOverridePromptHint(params: {
-  execOverrides?: ExecOverrides;
+  execOverrides?: ReplyExecOverrides;
   elevatedLevel: ElevatedLevel;
   fullAccessAvailable?: boolean;
   fullAccessBlockedReason?: EmbeddedFullAccessBlockedReason;
@@ -221,17 +221,9 @@ export async function prewarmReplyRunRuntimes(): Promise<void> {
   ]);
 }
 
-export function loadEmbeddedAgentRuntime() {
-  return embeddedAgentRuntimeLoader.load();
-}
-
-export function loadAgentRunnerRuntime() {
-  return agentRunnerRuntimeLoader.load();
-}
-
-export function loadSessionUpdatesRuntime() {
-  return sessionUpdatesRuntimeLoader.load();
-}
+export const loadEmbeddedAgentRuntime = embeddedAgentRuntimeLoader.load;
+export const loadAgentRunnerRuntime = agentRunnerRuntimeLoader.load;
+export const loadSessionUpdatesRuntime = sessionUpdatesRuntimeLoader.load;
 
 export function hasInboundHistoryBody(ctx: TemplateContext): boolean {
   return (
@@ -244,6 +236,6 @@ export function hasReplyTargetContext(ctx: MsgContext | TemplateContext): boolea
   if (normalizeOptionalString(ctx.ReplyToBody)) {
     return true;
   }
-  const replyChain = (ctx as { ReplyChain?: unknown }).ReplyChain;
+  const replyChain = ctx.ReplyChain;
   return Array.isArray(replyChain) && replyChain.length > 0;
 }

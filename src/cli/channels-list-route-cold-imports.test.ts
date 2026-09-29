@@ -113,6 +113,7 @@ throw new Error("JSON inventory must not execute setup");`,
     const expected = {
       chat: {
         "cold-channel": {
+          label: "Cold Channel",
           accounts,
           installed: true,
           origin: "configured",

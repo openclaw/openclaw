@@ -1,8 +1,13 @@
-// Migrate Hermes plugin module implements secrets behavior.
 import {
   loadAuthProfileStoreWithoutExternalProfiles,
   resolveAuthStorePathForDisplay,
 } from "openclaw/plugin-sdk/agent-runtime";
+import {
+  markMigrationItemConflict,
+  markMigrationItemError,
+  markMigrationItemSkipped,
+} from "openclaw/plugin-sdk/migration";
+import type { PlannedMigrationTargets } from "openclaw/plugin-sdk/migration-runtime";
 import type { MigrationItem, MigrationProviderContext } from "openclaw/plugin-sdk/plugin-entry";
 import { updateAuthProfileStoreWithLock } from "openclaw/plugin-sdk/provider-auth";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -20,19 +25,11 @@ import {
   HERMES_REASON_AUTH_PROFILE_WRITE_FAILED,
   HERMES_REASON_MISSING_SECRET_METADATA,
   HERMES_REASON_SECRET_NO_LONGER_PRESENT,
-  hermesItemConflict,
-  hermesItemError,
-  hermesItemSkipped,
   readHermesSecretDetails,
 } from "./items.js";
 import { normalizeHermesProviderId } from "./model.js";
-import {
-  SECRET_MAPPINGS,
-  type SecretCredentialMode,
-  type SecretMapping,
-} from "./secret-mappings.js";
+import { SECRET_MAPPINGS, type SecretCredentialMode } from "./secret-mappings.js";
 import type { HermesSource } from "./source.js";
-import type { PlannedTargets } from "./targets.js";
 
 type SecretCandidate = {
   id: string;
@@ -62,10 +59,6 @@ function secretAuthProfileConfig(details: {
     mode: details.mode ?? "api_key",
     displayName: "Hermes import",
   };
-}
-
-function secretMode(mapping: SecretMapping): SecretCredentialMode {
-  return mapping.mode ?? "api_key";
 }
 
 function buildEnvSecretCandidates(params: {
@@ -112,7 +105,7 @@ function buildEnvSecretCandidates(params: {
         envVar: mapping.envVar,
         provider,
         profileId: provider === mapping.provider ? mapping.profileId : `${provider}:hermes-import`,
-        mode: secretMode(mapping),
+        mode: mapping.mode ?? "api_key",
       },
     ];
   });
@@ -139,53 +132,32 @@ async function buildOpenCodeSecretCandidates(
     return [];
   }
   const auth = await readAuthJson(authPath);
-  const opencode = isRecord(auth.opencode) ? auth.opencode : {};
-  const opencodeGo = isRecord(auth["opencode-go"]) ? auth["opencode-go"] : {};
-  const githubCopilot = isRecord(auth["github-copilot"]) ? auth["github-copilot"] : {};
-  const githubCopilotEnterpriseUrl = normalizeOptionalString(githubCopilot.enterpriseUrl);
   const candidates: SecretCandidate[] = [];
-  if (normalizeOptionalString(opencode.key)) {
+  for (const [provider, secretField, mode, profileId] of [
+    ["opencode", "key", "api_key", "opencode:hermes-import"],
+    ["opencode-go", "key", "api_key", "opencode-go:hermes-import"],
+    ["github-copilot", "refresh", "token", "github-copilot:github"],
+  ] as const) {
+    const entry = auth[provider];
+    if (!isRecord(entry) || !normalizeOptionalString(entry[secretField])) {
+      continue;
+    }
+    // OpenClaw's Copilot token profile cannot preserve OpenCode enterprise routing yet.
+    if (provider === "github-copilot" && normalizeOptionalString(entry.enterpriseUrl)) {
+      continue;
+    }
     candidates.push({
-      id: "secret:opencode:opencode-auth-json",
+      id: `secret:${provider}:opencode-auth-json`,
       source: authPath,
-      provider: "opencode",
-      profileId: "opencode:hermes-import",
-      mode: "api_key",
+      provider,
+      profileId,
+      mode,
       sourceKind: "opencode-auth-json",
-      sourceProvider: "opencode",
-      secretField: "key",
-    });
-  }
-  if (normalizeOptionalString(opencodeGo.key)) {
-    candidates.push({
-      id: "secret:opencode-go:opencode-auth-json",
-      source: authPath,
-      provider: "opencode-go",
-      profileId: "opencode-go:hermes-import",
-      mode: "api_key",
-      sourceKind: "opencode-auth-json",
-      sourceProvider: "opencode-go",
-      secretField: "key",
-    });
-  }
-  // OpenClaw's Copilot token profile cannot preserve OpenCode enterprise routing yet.
-  if (normalizeOptionalString(githubCopilot.refresh) && !githubCopilotEnterpriseUrl) {
-    candidates.push({
-      id: "secret:github-copilot:opencode-auth-json",
-      source: authPath,
-      provider: "github-copilot",
-      profileId: "github-copilot:github",
-      mode: "token",
-      sourceKind: "opencode-auth-json",
-      sourceProvider: "github-copilot",
-      secretField: "refresh",
+      sourceProvider: provider,
+      secretField,
     });
   }
   return candidates;
-}
-
-function normalizeHermesPoolProvider(provider: string): string {
-  return normalizeHermesProviderId(provider);
 }
 
 async function buildHermesPoolSecretCandidates(
@@ -226,7 +198,7 @@ async function buildHermesPoolSecretCandidates(
       ) {
         continue;
       }
-      const provider = normalizeHermesPoolProvider(sourceProvider);
+      const provider = normalizeHermesProviderId(sourceProvider);
       const profileSuffix = sanitizeName(sourceCredentialId);
       if (!provider || !profileSuffix) {
         continue;
@@ -290,7 +262,7 @@ export async function buildSecretItems(params: {
   config: Record<string, unknown>;
   ctx: MigrationProviderContext;
   source: HermesSource;
-  targets: PlannedTargets;
+  targets: PlannedMigrationTargets;
 }): Promise<MigrationItem[]> {
   const env = parseEnv(await readText(params.source.envPath));
   const store = loadAuthProfileStoreWithoutExternalProfiles(params.targets.agentDir);
@@ -347,7 +319,7 @@ export async function buildSecretItems(params: {
 export async function applySecretItem(
   ctx: MigrationProviderContext,
   item: MigrationItem,
-  targets: PlannedTargets,
+  targets: PlannedMigrationTargets,
 ): Promise<MigrationItem> {
   if (item.status !== "planned") {
     return item;
@@ -355,15 +327,15 @@ export async function applySecretItem(
   const details = readHermesSecretDetails(item);
   const source = item.source;
   if (!details || !source) {
-    return hermesItemError(item, HERMES_REASON_MISSING_SECRET_METADATA);
+    return markMigrationItemError(item, HERMES_REASON_MISSING_SECRET_METADATA);
   }
   const key = await readSecretCandidateValue(details, source);
   if (!key) {
-    return hermesItemSkipped(item, HERMES_REASON_SECRET_NO_LONGER_PRESENT);
+    return markMigrationItemSkipped(item, HERMES_REASON_SECRET_NO_LONGER_PRESENT);
   }
   const configProfile = secretAuthProfileConfig(details);
   if (hasCurrentAuthProfileConfigConflict(ctx, configProfile)) {
-    return hermesItemConflict(item, HERMES_REASON_AUTH_PROFILE_EXISTS);
+    return markMigrationItemConflict(item, HERMES_REASON_AUTH_PROFILE_EXISTS);
   }
   let conflicted = false;
   let wrote = false;
@@ -394,20 +366,20 @@ export async function applySecretItem(
     },
   });
   if (conflicted) {
-    return hermesItemConflict(item, HERMES_REASON_AUTH_PROFILE_EXISTS);
+    return markMigrationItemConflict(item, HERMES_REASON_AUTH_PROFILE_EXISTS);
   }
   if (!store?.profiles[details.profileId]) {
-    return hermesItemError(item, HERMES_REASON_AUTH_PROFILE_WRITE_FAILED);
+    return markMigrationItemError(item, HERMES_REASON_AUTH_PROFILE_WRITE_FAILED);
   }
   if (!wrote && !ctx.overwrite) {
-    return hermesItemConflict(item, HERMES_REASON_AUTH_PROFILE_EXISTS);
+    return markMigrationItemConflict(item, HERMES_REASON_AUTH_PROFILE_EXISTS);
   }
   const configResult = await applyAuthProfileConfigWithConflictCheck({
     ctx,
     profile: configProfile,
   });
   if (configResult === "conflict") {
-    return hermesItemConflict(item, HERMES_REASON_AUTH_PROFILE_EXISTS);
+    return markMigrationItemConflict(item, HERMES_REASON_AUTH_PROFILE_EXISTS);
   }
   return {
     ...item,

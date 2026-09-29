@@ -67,6 +67,7 @@ describe("spawnLspServerProcess Windows .cmd shim handling", () => {
   ])("$name", async ({ configEnv, sanitizedEnv, program, expectedArgv }) => {
     sanitizeHostExecEnvMock.mockReturnValue(sanitizedEnv);
     resolveWindowsSpawnProgramMock.mockReturnValue(program);
+    const abortSignal = new AbortController().signal;
 
     await expect(
       spawnLspServerProcess(
@@ -76,10 +77,13 @@ describe("spawnLspServerProcess Windows .cmd shim handling", () => {
           ...(configEnv ? { env: configEnv } : {}),
         },
         {
-          resolveWindowsSpawnProgram: resolveWindowsSpawnProgramMock,
-          materializeWindowsSpawnProgram,
-          sanitizeHostExecEnv: sanitizeHostExecEnvMock,
-          spawn: spawnMock,
+          abortSignal,
+          dependencies: {
+            resolveWindowsSpawnProgram: resolveWindowsSpawnProgramMock,
+            materializeWindowsSpawnProgram,
+            sanitizeHostExecEnv: sanitizeHostExecEnvMock,
+            spawn: spawnMock,
+          },
         },
       ),
     ).rejects.toThrow("stop after spawn");
@@ -97,6 +101,7 @@ describe("spawnLspServerProcess Windows .cmd shim handling", () => {
       env: sanitizedEnv,
       exactEnv: true,
       cwd: undefined,
+      abortSignal,
       ...(program.shell ? { windowsShell: true } : {}),
     });
   });
@@ -113,10 +118,12 @@ describe("spawnLspServerProcess Windows .cmd shim handling", () => {
             args: ["--stdio", "two words", "%LSP_ARGUMENT%", "echo ready & exit /b"],
           },
           {
-            sanitizeHostExecEnv: sanitizeHostExecEnvMock,
-            resolveWindowsSpawnProgram,
-            materializeWindowsSpawnProgram,
-            spawn: createOwnedStdioProcess,
+            dependencies: {
+              sanitizeHostExecEnv: sanitizeHostExecEnvMock,
+              resolveWindowsSpawnProgram,
+              materializeWindowsSpawnProgram,
+              spawn: createOwnedStdioProcess,
+            },
           },
         ),
       ),

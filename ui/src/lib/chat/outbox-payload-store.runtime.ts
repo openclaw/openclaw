@@ -7,6 +7,7 @@ import {
   requestResult,
   transactionComplete,
 } from "./control-ui-database.runtime.ts";
+import { readChatSelectionAnnotation } from "./selection-annotation.ts";
 
 const STORE_NAME = "outboxPayloads";
 const MAX_PAYLOAD_BYTES = 25 * 1024 * 1024;
@@ -130,14 +131,18 @@ export async function readOutboxPayload(
         !isRecord(entry) ||
         !(entry.blob instanceof Blob) ||
         typeof entry.mimeType !== "string" ||
+        (entry.origin !== undefined && entry.origin !== "paste" && entry.origin !== "file") ||
         (entry.fileName !== undefined && typeof entry.fileName !== "string") ||
         (entry.sizeBytes !== undefined && entry.sizeBytes !== entry.blob.size)
       ) {
         return { status: "failed", reason: "missing" };
       }
+      const selectionAnnotation = readChatSelectionAnnotation(entry.selectionAnnotation);
       attachments.push({
         blob: entry.blob,
         mimeType: entry.mimeType,
+        ...(entry.origin ? { origin: entry.origin } : {}),
+        ...(selectionAnnotation ? { selectionAnnotation } : {}),
         ...(typeof entry.fileName === "string" ? { fileName: entry.fileName } : {}),
         ...(typeof entry.sizeBytes === "number" ? { sizeBytes: entry.sizeBytes } : {}),
       });

@@ -285,7 +285,7 @@ describe("matrix directory", () => {
     ).toEqual([
       {
         checkId: "channels.matrix.groups.open",
-        severity: "critical",
+        severity: "warn",
         title: "Matrix security warning",
         detail:
           'Matrix rooms: groupPolicy="open" allows any room to trigger (mention-gated). Set channels.matrix.groupPolicy="allowlist" + channels.matrix.groups (and optionally channels.matrix.groupAllowFrom) to restrict rooms.',
@@ -325,7 +325,7 @@ describe("matrix directory", () => {
     ).toEqual([
       {
         checkId: "channels.matrix.groups.open",
-        severity: "critical",
+        severity: "warn",
         title: "Matrix security warning",
         detail:
           'Matrix rooms: groupPolicy="open" allows any room to trigger (mention-gated). Set channels.matrix.accounts.assistant.groupPolicy="allowlist" + channels.matrix.accounts.assistant.groups (and optionally channels.matrix.accounts.assistant.groupAllowFrom) to restrict rooms.',
@@ -494,6 +494,7 @@ describe("matrix directory", () => {
               accounts: {
                 ops: {
                   homeserver: "https://ops.inline.example.org",
+                  proxy: "http://127.0.0.1:7890",
                   userId: "@ops:inline.example.org",
                   accessToken: "ops-inline-token",
                   password: "ops-inline-password", // pragma: allowlist secret
@@ -520,6 +521,7 @@ describe("matrix directory", () => {
         expect(opsAccount?.enabled).toBe(true);
         expect(opsAccount?.encryption).toBe(true);
         expect(opsAccount?.homeserver).toBeUndefined();
+        expect(opsAccount?.proxy).toBeUndefined();
         expect(opsAccount?.userId).toBeUndefined();
         expect(opsAccount?.accessToken).toBeUndefined();
         expect(opsAccount?.password).toBeUndefined();

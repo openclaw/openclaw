@@ -16,15 +16,27 @@ openclaw-assistant-panel {
 }
 
 .assistant-panel--bottom {
-  right: calc(var(--oc-terminal-reserve-right, 0px) + var(--oc-browser-reserve-right, 0px));
-  bottom: calc(var(--oc-terminal-reserve-bottom, 0px) + var(--oc-browser-reserve-bottom, 0px));
+  right: calc(
+    var(--oc-terminal-reserve-right, 0px) + var(--oc-browser-reserve-right, 0px) +
+      var(--oc-link-reader-reserve-right, 0px)
+  );
+  bottom: calc(
+    var(--oc-terminal-reserve-bottom, 0px) + var(--oc-browser-reserve-bottom, 0px) +
+      var(--oc-link-reader-reserve-bottom, 0px)
+  );
   left: var(--shell-nav-width, 0);
 }
 
 .assistant-panel--right {
   top: var(--shell-topbar-height, 0);
-  right: calc(var(--oc-terminal-reserve-right, 0px) + var(--oc-browser-reserve-right, 0px));
-  bottom: calc(var(--oc-terminal-reserve-bottom, 0px) + var(--oc-browser-reserve-bottom, 0px));
+  right: calc(
+    var(--oc-terminal-reserve-right, 0px) + var(--oc-browser-reserve-right, 0px) +
+      var(--oc-link-reader-reserve-right, 0px)
+  );
+  bottom: calc(
+    var(--oc-terminal-reserve-bottom, 0px) + var(--oc-browser-reserve-bottom, 0px) +
+      var(--oc-link-reader-reserve-bottom, 0px)
+  );
 }
 
 .assistant-panel-resizer {
@@ -46,47 +58,24 @@ openclaw-assistant-panel {
   left: 0;
 }
 
-.assistant-panel-title,
-.assistant-panel-actions {
+.assistant-panel-title {
   display: flex;
   align-items: center;
-}
-
-.assistant-panel-title {
   min-width: 0;
   gap: 7px;
   color: var(--text-strong);
   font-size: 12px;
 }
 
-.assistant-panel-actions {
-  gap: var(--rail-header-action-gap);
+.assistant-panel-title openclaw-mascot {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  flex: none;
 }
 
 .assistant-panel-icon {
   flex: 0 0 auto;
-}
-
-.assistant-panel > openclaw-custodian-surface,
-.assistant-panel > openclaw-home-session {
-  display: flex;
-  min-height: 0;
-  flex: 1 1 0;
-}
-
-.assistant-panel .custodian-surface {
-  width: 100%;
-  min-height: 0;
-  padding: 0 12px 12px;
-}
-
-.assistant-panel .custodian__messages {
-  padding-block: 16px;
-}
-
-.assistant-panel .custodian__option-card {
-  margin-right: 0;
-  margin-left: 42px;
 }
 
 @media (max-width: 640px) {
@@ -113,42 +102,75 @@ openclaw-assistant-panel {
   font-weight: 600;
 }
 
-.assistant-panel > openclaw-home-session {
-  flex-direction: column;
-  min-width: 0;
+.assistant-panel[hidden] {
+  display: none;
 }
 
-openclaw-home-session > openclaw-chat-pane {
+.assistant-panel-loading {
   display: flex;
   min-width: 0;
   min-height: 0;
   flex: 1;
-}
-
-.assistant-panel-context {
-  display: flex;
-  align-items: flex-start;
-  gap: 4px;
-  padding: 0 12px 8px;
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.assistant-panel-context details {
-  min-width: 0;
-  flex: 1;
-}
-
-.assistant-panel-context summary {
   overflow: hidden;
-  padding-block: 6px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
-.assistant-panel-context pre {
-  max-height: 160px;
-  overflow: auto;
-  overflow-wrap: anywhere;
-  white-space: pre-wrap;
+.assistant-panel-loading__content {
+  display: flex;
+  width: 100%;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 24px;
+  padding: 10px 16px 16px;
+  animation: fade-in 160ms ease-out 180ms both;
+}
+
+.assistant-panel-loading__lines span,
+.assistant-panel-loading__composer {
+  background: var(--bg-accent);
+}
+
+.assistant-panel-loading__messages {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 32px;
+  overflow: hidden;
+  padding-top: 6px;
+}
+
+.assistant-panel-loading__message--reply {
+  align-self: flex-end;
+  width: 62%;
+}
+
+.assistant-panel-loading__lines {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding-top: 6px;
+}
+
+.assistant-panel-loading__lines span {
+  width: 92%;
+  height: 9px;
+  flex: 0 0 auto;
+  border-radius: 4px;
+}
+
+.assistant-panel-loading__lines span:last-child {
+  width: 62%;
+}
+
+.assistant-panel-loading__composer {
+  min-height: 86px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .assistant-panel-loading__content {
+    animation-duration: 0s;
+  }
 }

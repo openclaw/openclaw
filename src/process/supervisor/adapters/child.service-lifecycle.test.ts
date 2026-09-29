@@ -1,46 +1,28 @@
 import { spawn } from "node:child_process";
-import { readFileSync } from "node:fs";
 import { symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as realDelay } from "node:timers/promises";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { waitForPidFile } from "../../../../test/helpers/process-wait.js";
 import { createDeferred, withTestTimeout } from "../../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { killPidIfAlive } from "../../../test-utils/process-tree.js";
+import { mockProcessPlatform } from "../../../test-utils/vitest-spies.js";
+import * as relayIntegration from "../../spawn-broker/relay-integration.js";
 import { createProcessSupervisor } from "../supervisor.js";
 import { createChildAdapter } from "./child.js";
+import {
+  describeSpawnTransports,
+  isAlive,
+  serviceChildHostTransportPrelude,
+  waitFor,
+} from "./child.service-lifecycle.test-support.js";
+import { readyChildAdapter } from "./child.test-support.js";
+
+const startChildAdapter = readyChildAdapter(createChildAdapter);
 
 const activePids = new Set<number>();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-function isAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "EPERM";
-  }
-  if (process.platform !== "linux") {
-    return true;
-  }
-  try {
-    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
-    // kill(pid, 0) also succeeds for a terminated process awaiting reaping.
-    return stat.charAt(stat.lastIndexOf(")") + 2) !== "Z";
-  } catch {
-    return false;
-  }
-}
-
-async function waitFor(predicate: () => boolean, timeoutMs = 5_000): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (!predicate()) {
-    if (Date.now() >= deadline) {
-      throw new Error("timed out waiting for process state");
-    }
-    await realDelay(20);
-  }
-}
 
 function parsePidPair(output: string): [number, number] {
   const match = /(\d+)\s+(\d+)/u.exec(output);
@@ -78,7 +60,7 @@ function createRetainedDescendantFixture() {
       descendant.unref();
     `,
     readPid,
-    releaseAndJoin: async (waitForExtinction: () => Promise<void>) => {
+    releaseAndJoin: async <T>(waitForExtinction: () => Promise<T>) => {
       await writeFile(releasePath, "", "utf8");
       // Read again on failure paths where readiness was not observed before cleanup.
       const pid = await readPid();
@@ -91,7 +73,7 @@ function createRetainedDescendantFixture() {
   };
 }
 
-async function expectPending(promise: Promise<void>) {
+async function expectPending<T>(promise: Promise<T>) {
   const settled = await Promise.race([
     promise.then(() => true),
     new Promise<false>((resolve) => {
@@ -115,7 +97,7 @@ afterEach(async () => {
   activePids.clear();
 });
 
-describe.skipIf(process.platform === "win32")("POSIX child invocation identity", () => {
+describeSpawnTransports("POSIX child invocation identity", () => {
   it.each(["direct", "service-managed"] as const)(
     "preserves caller-selected argv0 through the %s path",
     async (mode) => {
@@ -143,10 +125,10 @@ describe.skipIf(process.platform === "win32")("POSIX child invocation identity",
   );
 });
 
-describe.skipIf(process.platform === "win32")("service-managed child lifecycle", () => {
+describeSpawnTransports("service-managed child lifecycle", () => {
   it("cancels the complete admitted command group before settling", async () => {
     process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
-    const adapter = await createChildAdapter({
+    const adapter = await startChildAdapter({
       argv: [
         "/bin/sh",
         "-c",
@@ -201,6 +183,8 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
       activePids.add(descendantPid);
       expect(isAlive(rootPid) && isAlive(descendantPid)).toBe(true);
       await vi.advanceTimersByTimeAsync(100);
+      // Deadline decisions wait one timer turn for pending child exit notifications.
+      await vi.advanceTimersToNextTimerAsync();
       const exit = await run.wait();
       expect(exit.reason).toBe(timing.reason);
       expect(parsePidPair(exit.stdout)).toEqual([rootPid, descendantPid]);
@@ -247,6 +231,8 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
       activePids.add(startedPid);
       expect(isAlive(startedPid)).toBe(true);
       await vi.advanceTimersByTimeAsync(500);
+      // Let the deferred construction deadline decide before awaiting startup settlement.
+      await vi.advanceTimersToNextTimerAsync();
       const run = await pendingRun;
       await expect(run.wait()).resolves.toMatchObject({
         reason: "overall-timeout",
@@ -271,7 +257,7 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
   it("settles the root result while retaining descendant cleanup ownership", async () => {
     process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
     const fixture = createRetainedDescendantFixture();
-    const adapter = await createChildAdapter({
+    const adapter = await startChildAdapter({
       argv: [process.execPath, "-e", fixture.rootScript],
       stdinMode: "pipe-closed",
     });
@@ -297,7 +283,7 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
   it("flushes forwarded output before exposing the root result", async () => {
     process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
     const outputBytes = 8 * 1024 * 1024;
-    const adapter = await createChildAdapter({
+    const adapter = await startChildAdapter({
       argv: [process.execPath, "-e", `process.stdout.write(Buffer.alloc(${outputBytes}, 120))`],
       stdinMode: "pipe-closed",
     });
@@ -312,7 +298,7 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
 
   it("retains output emitted before adapter listeners subscribe", async () => {
     process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
-    const adapter = await createChildAdapter({
+    const adapter = await startChildAdapter({
       argv: [
         process.execPath,
         "-e",
@@ -321,7 +307,7 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
       stdinMode: "pipe-closed",
     });
     await new Promise<void>((resolve) => {
-      setTimeout(resolve, 100);
+      adapter.onExit!(() => resolve());
     });
 
     let stdout = "";
@@ -341,7 +327,7 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
   it("preserves an exited root result when cleanup races forwarded output", async () => {
     process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
     const outputBytes = 8 * 1024 * 1024;
-    const adapter = await createChildAdapter({
+    const adapter = await startChildAdapter({
       argv: [
         "/bin/sh",
         "-c",
@@ -365,7 +351,7 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
 
   it("drains backpressured output before closing after cancellation at root exit", async () => {
     const outputBytes = 256 * 1024;
-    const adapter = await createChildAdapter({
+    const adapter = await startChildAdapter({
       ownProcessTree: true,
       argv: [
         process.execPath,
@@ -414,7 +400,7 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
 
   it("revalidates and escalates when the group ignores SIGTERM", async () => {
     process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
-    const adapter = await createChildAdapter({
+    const adapter = await startChildAdapter({
       argv: [
         "/bin/sh",
         "-c",
@@ -432,8 +418,8 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
     activePids.add(descendantPid);
 
     adapter.kill("SIGTERM");
-    await expect(adapter.wait()).rejects.toThrow("cleanup identity lost");
-    await expect(adapter.waitForExtinction?.()).rejects.toThrow("cleanup identity lost");
+    await expect(adapter.wait()).resolves.toMatchObject({ code: null });
+    await expect(adapter.waitForExtinction!()).resolves.toBeUndefined();
     await waitFor(() => !isAlive(rootPid) && !isAlive(descendantPid));
   });
 
@@ -468,7 +454,7 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
       `,
       "utf8",
     );
-    const adapter = await createChildAdapter({
+    const adapter = await startChildAdapter({
       argv: [process.execPath, rootPath],
       stdinMode: "pipe-closed",
     });
@@ -521,7 +507,7 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
       `,
       "utf8",
     );
-    const adapter = await createChildAdapter({
+    const adapter = await startChildAdapter({
       argv: [process.execPath, rootPath],
       stdinMode: "pipe-closed",
     });
@@ -640,7 +626,7 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
       `,
       "utf8",
     );
-    const adapter = await createChildAdapter({
+    const adapter = await startChildAdapter({
       argv: [process.execPath, rootPath],
       stdinMode: "pipe-closed",
     });
@@ -663,13 +649,22 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
       adapter.kill("SIGKILL");
     }
     await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
-    await expect(adapter.waitForExtinction?.()).rejects.toThrow("cleanup identity lost");
+    await expect(adapter.waitForExtinction!()).resolves.toBeUndefined();
     await waitFor(() => !isAlive(rootPid) && !isAlive(descendantPid));
   });
 
-  it("keeps cleanup uncertain when an escaped group retains the lineage descriptor", async () => {
-    const descendantScript = `process.send("ready"); setInterval(() => {}, 1000);`;
-    const rootScript = `
+  it.each(
+    (["SIGTERM", "SIGKILL"] as const).flatMap((signal) =>
+      (process.platform === "linux" && !process.versions.bun
+        ? ["process-group", "linux-subreaper"]
+        : ["process-group"]
+      ).map((ownership) => ({ signal, ownership })),
+    ),
+  )(
+    "uses $ownership custody after $signal when an escaped descendant retains lineage",
+    async ({ signal, ownership }) => {
+      const descendantScript = `process.send("ready"); setInterval(() => {}, 1000);`;
+      const rootScript = `
       const { spawn } = require("node:child_process");
       const child = spawn(process.execPath, ["-e", ${JSON.stringify(descendantScript)}], {
         detached: true,
@@ -682,30 +677,84 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
         });
       });
     `;
-    const adapter = await createChildAdapter({
-      ownProcessTree: true,
-      argv: [process.execPath, "-e", rootScript],
-      stdinMode: "pipe-closed",
-    });
-    let output = "";
-    adapter.onStdout((chunk) => {
-      output += chunk;
-    });
-    await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
-    const [rootPid, descendantPid] = parsePidPair(output);
-    activePids.add(rootPid);
-    activePids.add(descendantPid);
-    adapter.kill("SIGTERM");
-    await expect(adapter.waitForExtinction?.()).rejects.toThrow("cleanup identity lost");
-    expect(isAlive(descendantPid)).toBe(true);
-    killPidIfAlive(descendantPid);
-    await waitFor(() => !isAlive(descendantPid));
-    adapter.dispose();
-  });
+      const relayExited = createDeferred();
+      const spawnRelay = relayIntegration.spawnServiceChildRelay;
+      const observeRelay = vi
+        .spyOn(relayIntegration, "spawnServiceChildRelay")
+        .mockImplementation((params) => {
+          const relay = spawnRelay(params);
+          relay.child.once("exit", () => relayExited.resolve());
+          return relay;
+        });
+      // Select the retained POSIX group contract only for its escape-limit case.
+      const groupPlatform =
+        ownership === "process-group" ? mockProcessPlatform("darwin") : undefined;
+      let adapter: Awaited<ReturnType<typeof startChildAdapter>>;
+      try {
+        adapter = await startChildAdapter({
+          ownProcessTree: true,
+          argv: [process.execPath, "-e", rootScript],
+          stdinMode: "pipe-closed",
+        });
+      } finally {
+        observeRelay.mockRestore();
+        groupPlatform?.mockRestore();
+      }
+      let output = "";
+      adapter.onStdout((chunk) => {
+        output += chunk;
+      });
+      await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
+      const [rootPid, descendantPid] = parsePidPair(output);
+      activePids.add(rootPid);
+      activePids.add(descendantPid);
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        const extinction = adapter.waitForExtinction!();
+        let settled = false;
+        void extinction.then(
+          () => {
+            settled = true;
+          },
+          () => {
+            settled = true;
+          },
+        );
+        adapter.kill(signal);
+        // Real relay exit follows the closing acknowledgement; its host deadline is now armed.
+        await relayExited.promise;
+        if (ownership === "linux-subreaper") {
+          // Kernel adoption, unlike PGID membership, retains an escaped child.
+          await expect(extinction).resolves.toBeUndefined();
+          expect(isAlive(descendantPid)).toBe(false);
+          await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
+          return;
+        }
+        expect(isAlive(descendantPid)).toBe(true);
+        expect(settled).toBe(false);
+        await vi.advanceTimersByTimeAsync(4_999);
+        expect(settled).toBe(false);
+        await vi.advanceTimersByTimeAsync(1);
+        await expect(extinction).rejects.toThrow(
+          "service child cleanup did not complete before its hard deadline",
+        );
+        await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
+        expect(isAlive(descendantPid)).toBe(true);
+      } finally {
+        vi.useRealTimers();
+        killPidIfAlive(descendantPid);
+        try {
+          await waitFor(() => !isAlive(descendantPid));
+        } finally {
+          adapter.dispose();
+        }
+      }
+    },
+  );
 
   it("preserves split UTF-8 sequences on service stdout and stderr", async () => {
     process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
-    const adapter = await createChildAdapter({
+    const adapter = await startChildAdapter({
       argv: [
         process.execPath,
         "-e",
@@ -788,7 +837,7 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
     process.on("unhandledRejection", onUnhandled);
     try {
       await expect(
-        createChildAdapter({
+        startChildAdapter({
           argv: ["/definitely/not/a/real-command"],
           exactEnv: true,
           stdinMode: "pipe-closed",
@@ -813,7 +862,7 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
       if (mode === "service") {
         process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
       }
-      const adapter = await createChildAdapter({
+      const adapter = await startChildAdapter({
         argv: [
           process.execPath,
           "-e",
@@ -844,7 +893,7 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
 
   it("preserves a root result when the command drops its lineage descriptor early", async () => {
     process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
-    const adapter = await createChildAdapter({
+    const adapter = await startChildAdapter({
       argv: ["/bin/sh", "-c", `exec 3>&-; printf "%s\\n" "$$"; sleep 0.25`],
       stdinMode: "pipe-closed",
     });
@@ -869,16 +918,29 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
       scriptPath,
       `
         process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
+        ${serviceChildHostTransportPrelude()}
         const { createChildAdapter } = await import(${JSON.stringify(childModuleUrl)});
-        const adapter = await createChildAdapter({
-          argv: ["/bin/sh", "-c", "sleep 0.05; kill -KILL $PPID; sleep 0.05"],
-          stdinMode: "pipe-closed",
+        const { adapter, ready } = await withTransport(() => createChildAdapter({
+          argv: ["/bin/sh", "-c", "read -r trigger; kill -KILL $PPID"],
+          stdinMode: "pipe-open",
+        }));
+        await ready;
+        const identityLost = new Promise((resolve) => {
+          adapter.onError((error, source) => {
+            if (source === "process") resolve(error);
+          });
         });
-        await new Promise((resolve) => setTimeout(resolve, 200));
+        adapter.stdin.write("trigger\\n");
+        adapter.stdin.end();
+        const observedError = await identityLost;
+        await new Promise((resolve) => setImmediate(resolve));
         try {
           await adapter.wait();
           process.exit(2);
-        } catch {
+        } catch (error) {
+          if (error !== observedError || !error.message.includes("cleanup identity lost")) {
+            throw error;
+          }
           process.exit(0);
         }
       `,
@@ -908,11 +970,13 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
       scriptPath,
       `
         process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
+        ${serviceChildHostTransportPrelude()}
         const { createChildAdapter } = await import(${JSON.stringify(childModuleUrl)});
-        const adapter = await createChildAdapter({
+        const { adapter, ready } = await withTransport(() => createChildAdapter({
           argv: ["/bin/sh", "-c", 'sleep 60 >/dev/null 2>&1 & child=$!; printf "%s %s\\\\n" "$$" "$child"; wait'],
           stdinMode: "pipe-closed",
-        });
+        }));
+        await ready;
         let output = "";
         adapter.onStdout((chunk) => { output += chunk; });
         while (!/^\\d+ \\d+/u.test(output)) {

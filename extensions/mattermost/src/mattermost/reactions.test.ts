@@ -1,10 +1,9 @@
-// Mattermost tests cover reactions plugin behavior.
+import { requestUrl } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { addMattermostReaction, removeMattermostReaction } from "./reactions.js";
 import {
   createMattermostReactionFetchMock,
   createMattermostTestConfig,
-  requestUrl,
 } from "./reactions.test-helpers.js";
 
 describe("mattermost reactions", () => {
@@ -21,16 +20,6 @@ describe("mattermost reactions", () => {
 
   async function addReactionWithFetch(fetchMock: typeof fetch) {
     return addMattermostReaction({
-      cfg: createMattermostTestConfig(cacheKey),
-      postId: "POST1",
-      emojiName: "thumbsup",
-      conversationReadOrigin: "direct-operator",
-      fetchImpl: fetchMock,
-    });
-  }
-
-  async function removeReactionWithFetch(fetchMock: typeof fetch) {
-    return removeMattermostReaction({
       cfg: createMattermostTestConfig(cacheKey),
       postId: "POST1",
       emojiName: "thumbsup",
@@ -331,19 +320,6 @@ describe("mattermost reactions", () => {
     ]);
   });
 
-  it("adds reactions by calling /users/me then POST /reactions", async () => {
-    const fetchMock = createMattermostReactionFetchMock({
-      mode: "add",
-      postId: "POST1",
-      emojiName: "thumbsup",
-    });
-
-    const result = await addReactionWithFetch(fetchMock);
-
-    expect(result).toEqual({ ok: true });
-    expect(fetchMock).toHaveBeenCalled();
-  });
-
   it("returns a Result error when add reaction API call fails", async () => {
     const fetchMock = createMattermostReactionFetchMock({
       mode: "add",
@@ -361,17 +337,33 @@ describe("mattermost reactions", () => {
     }
   });
 
-  it("removes reactions by calling /users/me then DELETE /users/:id/posts/:postId/reactions/:emoji", async () => {
-    const fetchMock = createMattermostReactionFetchMock({
-      mode: "remove",
-      postId: "POST1",
-      emojiName: "thumbsup",
+  it("reports an accepted removal as success when its 200 body cannot be read", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (url, init) => {
+      if (requestUrl(url).endsWith("/api/v4/users/me")) {
+        return Response.json({ id: "BOT123" });
+      }
+      expect(init?.method).toBe("DELETE");
+      const body = new ReadableStream<Uint8Array>({
+        pull() {
+          throw new TypeError("terminated");
+        },
+      });
+      return new Response(body, { status: 200, headers: { "content-type": "application/json" } });
     });
 
-    const result = await removeReactionWithFetch(fetchMock);
+    const result = await removeMattermostReaction({
+      cfg: createMattermostTestConfig(cacheKey),
+      postId: "POST1",
+      emojiName: "thumbsup",
+      conversationReadOrigin: "direct-operator",
+      fetchImpl: fetchMock,
+    });
 
     expect(result).toEqual({ ok: true });
-    expect(fetchMock).toHaveBeenCalled();
+    expect(fetchMock.mock.calls.map((call) => requestUrl(call[0]))).toEqual([
+      expect.stringMatching(/\/api\/v4\/users\/me$/),
+      expect.stringMatching(/\/api\/v4\/users\/BOT123\/posts\/POST1\/reactions\/thumbsup$/),
+    ]);
   });
 
   it("caches the bot user id across reaction mutations", async () => {

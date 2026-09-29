@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { withWebMcpOutcome } from "../browser/webmcp-outcome.js";
 import {
   BROWSER_TAB_REFERENCE_HELP,
@@ -8,7 +9,6 @@ import {
   runBrowserCliCommand,
   type BrowserParentOpts,
 } from "./browser-cli-shared.js";
-import { defaultRuntime } from "./core-api.js";
 
 export function registerBrowserWebMcpCommands(
   browser: Command,

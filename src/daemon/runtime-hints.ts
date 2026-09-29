@@ -1,11 +1,14 @@
 /** Builds platform-specific log and start hints for daemon status output. */
+import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { resolveGatewaySystemdServiceName, resolveGatewayWindowsTaskName } from "./constants.js";
 import { resolveGatewayRestartLogPath, resolveGatewaySupervisorLogPaths } from "./restart-logs.js";
+import type { GatewayServiceRuntime } from "./service-runtime.js";
 
 export function buildPlatformRuntimeLogHints(params: {
   platform?: NodeJS.Platform;
   env?: NodeJS.ProcessEnv;
   systemdServiceName: string;
+  systemd?: GatewayServiceRuntime["systemd"];
   windowsTaskName: string;
 }): string[] {
   const platform = params.platform ?? process.platform;
@@ -19,8 +22,10 @@ export function buildPlatformRuntimeLogHints(params: {
     ];
   }
   if (platform === "linux") {
+    const scope = params.systemd?.scope === "system" ? "--system" : "--user";
+    const unit = params.systemd?.unit ?? `${params.systemdServiceName}.service`;
     return [
-      `Logs: journalctl --user -u ${params.systemdServiceName}.service -n 200 --no-pager`,
+      `Logs: journalctl ${scope} -u ${quoteCliArg(unit)} -n 200 --no-pager`,
       `Restart attempts: ${resolveGatewayRestartLogPath(env)}`,
     ];
   }
@@ -40,6 +45,7 @@ export function buildGatewayRuntimeRecoveryHints(params: {
   logFile?: string | null;
   platform?: NodeJS.Platform;
   env: NodeJS.ProcessEnv;
+  systemd?: GatewayServiceRuntime["systemd"];
 }): string[] {
   const hints =
     params.kind === "gui-session"
@@ -58,6 +64,7 @@ export function buildGatewayRuntimeRecoveryHints(params: {
         platform: params.platform,
         env: params.env,
         systemdServiceName: resolveGatewaySystemdServiceName(params.env.OPENCLAW_PROFILE),
+        systemd: params.systemd,
         windowsTaskName: resolveGatewayWindowsTaskName(params.env.OPENCLAW_PROFILE),
       }),
     );

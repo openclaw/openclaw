@@ -195,43 +195,6 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
     expect(lifecycleEvents).toEqual(["agent_end", "agent_end", "agent_settled"]);
   });
 
-  it("publishes settlement when deferred bash persistence fails", async () => {
-    let finishResponse: (() => void) | undefined;
-    streamMocks.streamSimple.mockImplementation((activeModel: Model) => {
-      const stream = createAssistantMessageEventStream();
-      finishResponse = () => {
-        const message = createAssistant(activeModel, [{ type: "text", text: "finished" }]);
-        stream.push({ type: "done", reason: "stop", message });
-        stream.end();
-      };
-      return stream;
-    });
-    const { session, sessionManager } = await createTestSession();
-    const settled = vi.fn();
-    session.subscribe((event) => {
-      if (event.type === "agent_end") {
-        vi.spyOn(sessionManager, "appendMessage").mockImplementation(() => {
-          throw new Error("deferred bash persistence failed");
-        });
-      } else if (event.type === "agent_settled") {
-        settled();
-      }
-    });
-
-    const prompt = session.prompt("run until the response is released");
-    await vi.waitFor(() => expect(finishResponse).toBeTypeOf("function"));
-    session.recordBashResult("printf done", {
-      output: "done",
-      exitCode: 0,
-      cancelled: false,
-      truncated: false,
-    });
-    finishResponse?.();
-
-    await expect(prompt).rejects.toThrow("deferred bash persistence failed");
-    expect(settled).toHaveBeenCalledOnce();
-  });
-
   it("does not settle an active run when a concurrent prompt loses admission", async () => {
     let releaseFirst!: () => void;
     let releaseSecond!: () => void;
@@ -604,40 +567,58 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
     expect(scenario.messages(session)).toEqual([""]);
   });
 
-  it("cancels only an uncommitted steering confirmation after an aborted turn", async () => {
-    const { executeTool, requests, tool } = mockAbortableQueuedRun();
-    const { session } = await createTestSession({ customTools: [tool] });
-    const prompt = session.prompt("wait for operator cancellation");
-    await vi.waitFor(() => expect(requests).toHaveLength(1));
+  it.each([true, false])(
+    "cancels only an uncommitted steer after an aborted turn (wait: %s)",
+    async (waitForTranscriptCommit) => {
+      const { executeTool, requests, tool } = mockAbortableQueuedRun();
+      const { session } = await createTestSession({ customTools: [tool] });
+      const prompt = session.prompt("wait for operator cancellation");
+      await vi.waitFor(() => expect(requests).toHaveLength(1));
 
-    await session.steer("keep unrelated steering");
-    await session.followUp("keep unrelated follow-up");
-    const delivery = steerActiveSessionWithOptionalDeliveryWait(
-      session,
-      "cancel only this steering",
-      { deliveryTimeoutMs: 10_000, waitForTranscriptCommit: true },
-    ).then(
-      () => "committed",
-      (error: unknown) => (error instanceof Error ? error.message : String(error)),
-    );
-    await vi.waitFor(() =>
-      expect(session.getSteeringMessages()).toEqual([
-        "keep unrelated steering",
+      await session.steer("keep unrelated steering");
+      await session.followUp("keep unrelated follow-up");
+      const delivery = steerActiveSessionWithOptionalDeliveryWait(
+        session,
         "cancel only this steering",
-      ]),
-    );
+        { deliveryTimeoutMs: 10_000, waitForTranscriptCommit },
+      ).then(
+        () => (waitForTranscriptCommit ? "committed" : "admitted"),
+        (error: unknown) => (error instanceof Error ? error.message : String(error)),
+      );
+      await vi.waitFor(() =>
+        expect(session.getSteeringMessages()).toEqual([
+          "keep unrelated steering",
+          "cancel only this steering",
+        ]),
+      );
 
-    await Promise.all([session.abort(), prompt]);
+      if (!waitForTranscriptCommit) {
+        await expect(delivery).resolves.toBe("admitted");
+      }
+      await Promise.all([session.abort(), prompt]);
 
-    await expect(delivery).resolves.toBe(
-      "active session ended before queued steering message was committed to the transcript",
-    );
-    expect(requests).toHaveLength(1);
-    expect(executeTool).not.toHaveBeenCalled();
-    expect(session.getSteeringMessages()).toEqual(["keep unrelated steering"]);
-    expect(session.getFollowUpMessages()).toEqual(["keep unrelated follow-up"]);
-    expect(session.agent.hasQueuedMessages()).toBe(true);
-  });
+      await expect(delivery).resolves.toBe(
+        waitForTranscriptCommit
+          ? "active session ended before queued steering message was committed to the transcript"
+          : "admitted",
+      );
+      expect(requests).toHaveLength(1);
+      expect(executeTool).not.toHaveBeenCalled();
+      expect(session.getSteeringMessages()).toEqual(["keep unrelated steering"]);
+      expect(session.getFollowUpMessages()).toEqual(["keep unrelated follow-up"]);
+      expect(session.agent.hasQueuedMessages()).toBe(true);
+      const nextRequests: Context[] = [];
+      streamMocks.streamSimple.mockImplementation((model: Model, context: Context) => {
+        nextRequests.push(context);
+        return createAssistantResultStream(
+          createAssistant(model, [{ type: "text", text: "next answer" }]),
+        );
+      });
+      await session.prompt("new legitimate turn");
+      expect(nextRequests.length).toBeGreaterThan(0);
+      expect(JSON.stringify(nextRequests)).not.toContain("cancel only this steering");
+    },
+  );
 
   it("cancels a steering confirmation after the runtime drains it", async () => {
     const requests: Context[] = [];
@@ -920,7 +901,6 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
     const abortRetry = vi.spyOn(session, "abortRetry");
     const abortCompaction = vi.spyOn(session, "abortCompaction");
     const abortBranchSummary = vi.spyOn(session, "abortBranchSummary");
-    const abortBash = vi.spyOn(session, "abortBash");
     const abortAgent = vi.spyOn(session.agent, "abort");
     abortRetry.mockImplementationOnce(() => {
       throw new Error("retry abort failed");
@@ -935,7 +915,6 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
     expect(abortRetry).toHaveBeenCalledOnce();
     expect(abortCompaction).toHaveBeenCalledOnce();
     expect(abortBranchSummary).toHaveBeenCalledOnce();
-    expect(abortBash).toHaveBeenCalledOnce();
     expect(abortAgent).toHaveBeenCalledOnce();
   });
 

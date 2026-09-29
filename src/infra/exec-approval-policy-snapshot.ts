@@ -13,19 +13,8 @@ export type ExecApprovalPolicySnapshot = {
   allowlistRules: readonly ExecApprovalPolicyRule[];
 };
 
-const utf8Encoder = new TextEncoder();
-
 function compareUtf8(left: string, right: string): number {
-  const leftBytes = utf8Encoder.encode(left);
-  const rightBytes = utf8Encoder.encode(right);
-  const sharedLength = Math.min(leftBytes.length, rightBytes.length);
-  for (let index = 0; index < sharedLength; index += 1) {
-    const difference = (leftBytes[index] ?? 0) - (rightBytes[index] ?? 0);
-    if (difference !== 0) {
-      return difference;
-    }
-  }
-  return leftBytes.length - rightBytes.length;
+  return Buffer.compare(Buffer.from(left, "utf8"), Buffer.from(right, "utf8"));
 }
 
 function compareOptionalUtf8(left: string | undefined, right: string | undefined): number {
@@ -50,7 +39,8 @@ function compareExecApprovalPolicyRules(
   );
 }
 
-function buildExecApprovalPolicyRuleKey(rule: ExecApprovalPolicyRule): string {
+export function buildExecApprovalPolicyRuleKey(rule: ExecApprovalPolicyRule): string {
+  // A JSON tuple preserves exact regex bytes without delimiter collisions.
   return JSON.stringify([rule.pattern, rule.argPattern ?? null, rule.source ?? null]);
 }
 

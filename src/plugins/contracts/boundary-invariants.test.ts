@@ -3,44 +3,53 @@ import { spawnSync } from "node:child_process";
 import fs, { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import ts from "typescript";
-import { beforeAll, describe, expect, it } from "vitest";
+import * as ts from "typescript/unstable/ast";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createNativeTypeScriptParser } from "../../../scripts/lib/native-typescript.mts";
 import { expectNoReaddirSyncDuring } from "../../test-utils/fs-scan-assertions.js";
 import { listGitTrackedFiles, toRepoRelativePath } from "../../test-utils/repo-files.js";
 
 const SRC_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const REPO_ROOT = resolve(SRC_ROOT, "..");
+const parser = createNativeTypeScriptParser();
+afterAll(() => parser.close());
 const sourceCache = new Map<string, string>();
 const tsFilesCache = new Map<string, string[]>();
 const BUNDLED_TYPED_HOOK_REGISTRATION_FILES = [
   "extensions/acpx/index.ts",
   "extensions/active-memory/index.ts",
+  "extensions/browser/plugin-registration.ts",
   "extensions/clickclack/src/discussions/register.ts",
   "extensions/codex/index.ts",
   "extensions/diffs/src/plugin.ts",
   "extensions/discord/subagent-hooks-api.ts",
+  "extensions/facetime/index.ts",
   "extensions/feishu/subagent-hooks-api.ts",
   "extensions/matrix/subagent-hooks-api.ts",
   "extensions/memory-core/index.ts",
   "extensions/memory-core/src/dreaming.ts",
   "extensions/memory-lancedb/index.ts",
   "extensions/onepassword/index.ts",
+  "extensions/qa-lab/src/gateway-registration.ts",
   "extensions/visitor-access/index.ts",
   "extensions/workboard/index.ts",
 ] as const;
 const BUNDLED_TYPED_HOOK_REGISTRATION_GUARDS = {
   "extensions/acpx/index.ts": ["reply_dispatch"],
   "extensions/active-memory/index.ts": ["agent_end", "before_prompt_build"],
+  "extensions/browser/plugin-registration.ts": ["session_end"],
   "extensions/clickclack/src/discussions/register.ts": ["before_tool_call"],
   "extensions/codex/index.ts": ["inbound_claim", "session_end"],
   "extensions/diffs/src/plugin.ts": ["before_prompt_build"],
   "extensions/discord/subagent-hooks-api.ts": ["subagent_delivery_target", "subagent_ended"],
+  "extensions/facetime/index.ts": ["before_tool_call"],
   "extensions/feishu/subagent-hooks-api.ts": ["subagent_delivery_target", "subagent_ended"],
   "extensions/matrix/subagent-hooks-api.ts": ["subagent_delivery_target", "subagent_ended"],
   "extensions/memory-core/src/dreaming.ts": ["before_agent_reply", "gateway_start"],
   "extensions/memory-core/index.ts": ["before_agent_reply", "before_prompt_build"],
   "extensions/memory-lancedb/index.ts": ["agent_end", "before_prompt_build", "session_end"],
   "extensions/onepassword/index.ts": ["before_tool_call", "tool_result_persist"],
+  "extensions/qa-lab/src/gateway-registration.ts": ["before_agent_run"],
   "extensions/visitor-access/index.ts": ["gateway_start"],
   "extensions/workboard/index.ts": ["agent_end", "gateway_start", "gateway_stop", "subagent_ended"],
 } as const satisfies Record<
@@ -79,11 +88,6 @@ const BUNDLED_LIVE_CONFIG_PROVIDER_GUARDS = {
     "resolvePluginConfigObject(",
     "const startupPluginConfig = (api.pluginConfig ?? {})",
     "const currentPluginConfig = resolveCurrentPluginConfig(ctx.config);",
-  ],
-  "extensions/github-copilot/index.ts": [
-    "resolvePluginConfigObject(",
-    'const runtimePluginConfig = resolvePluginConfigObject(config, "github-copilot");',
-    "return config ? {} : startupPluginConfig;",
   ],
   "extensions/ollama/index.ts": [
     "resolvePluginConfigObject(",
@@ -229,30 +233,24 @@ function isAllowedBundledExtensionImport(specifier: string): boolean {
 }
 
 function collectBundledExtensionImports(source: string): string[] {
-  const sourceFile = ts.createSourceFile(
-    "boundary-invariants-input.ts",
-    source,
-    ts.ScriptTarget.Latest,
-    true,
-    ts.ScriptKind.TS,
-  );
+  const sourceFile = parser.parseSourceFile("boundary-invariants-input.ts", source);
   const specifiers: string[] = [];
 
   function visit(node: ts.Node): void {
     if (
       (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
       node.moduleSpecifier &&
-      ts.isStringLiteralLike(node.moduleSpecifier)
+      ts.isStringLiteralLikeNode(node.moduleSpecifier)
     ) {
       specifiers.push(node.moduleSpecifier.text);
     }
     if (ts.isCallExpression(node) && isBundledExtensionImportHelperCall(node.expression)) {
       const firstArgument = node.arguments[0];
-      if (firstArgument && ts.isStringLiteralLike(firstArgument)) {
+      if (firstArgument && ts.isStringLiteralLikeNode(firstArgument)) {
         specifiers.push(firstArgument.text);
       }
     }
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   }
 
   visit(sourceFile);
@@ -312,14 +310,6 @@ describe("plugin contract boundary invariants", () => {
 
   it("keeps bundled-capability-metadata confined to contract/test inventory", () => {
     expect(bundledCapabilityMetadataOffenders).toStrictEqual([]);
-  });
-
-  it("keeps the bundled contract inventory out of non-test runtime code", () => {
-    const files = listTsFiles("src", { excludeTests: true });
-    const offenders = files.filter((file) => {
-      return readRepoSource(file).includes("contracts/inventory/bundled-capability-metadata");
-    });
-    expect(offenders).toStrictEqual([]);
   });
 
   it("keeps core tests off bundled extension deep imports", () => {

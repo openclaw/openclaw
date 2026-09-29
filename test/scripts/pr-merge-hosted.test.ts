@@ -33,7 +33,7 @@ describePosix("native hosted merge handoff", () => {
     f.git(f.worktree, "add", "CHANGELOG.md");
     f.git(f.worktree, "commit", "-qm", "docs: unrelated changelog-only checkout");
     writeFileSync(
-      join(f.worktree, "scripts/verify-pr-hosted-gates.mjs"),
+      join(f.worktree, "scripts/verify-pr-hosted-gates.mts"),
       "throw new Error('PR helper executed');\n",
     );
   });
@@ -142,7 +142,9 @@ describePosix("native hosted merge handoff", () => {
         preparedGates.replace("hosted_exact_or_recent_parent", mode),
       );
       const before = f.events().length;
-      const result = f.shell("merge_verify 42 || exit 1");
+      const result = f.shell(
+        `merge_verify 42 '{"replacementHead":"","autoMergeRequested":false,"observation":null,"qualifiedRefusal":false}' || exit 1`,
+      );
       expect(result.status, result.stdout + result.stderr).toBe(0);
       const events = f.events().slice(before);
       const watched = events.findIndex((event) => event.kind === "ci-watched");
@@ -161,7 +163,11 @@ describePosix("native hosted merge handoff", () => {
     const mergeCalls = f
       .events()
       .filter(
-        (event) => event.kind === "gh" && event.args?.[0] === "pr" && event.args[1] === "merge",
+        (event) =>
+          event.kind === "gh" &&
+          event.args?.[0] === "api" &&
+          event.args.includes("graphql") &&
+          event.args.includes("--input"),
       );
     expect(mergeCalls).toHaveLength(1);
     const events = f.events().slice(before);
@@ -171,27 +177,30 @@ describePosix("native hosted merge handoff", () => {
     expect(reviewReads).toHaveLength(2);
     expect(reviewReads[1]?.index).toBeLessThan(
       events.findIndex(
-        (event) => event.kind === "gh" && event.args?.[0] === "pr" && event.args[1] === "merge",
+        (event) =>
+          event.kind === "gh" &&
+          event.args?.[0] === "api" &&
+          event.args.includes("graphql") &&
+          event.args.includes("--input"),
       ),
     );
-    expect(mergeCalls[0]?.args).toEqual([
-      "pr",
-      "merge",
-      "42",
-      "--repo",
-      "https://github.com/fixture/repo",
-      "--squash",
-      "--match-head-commit",
-      f.head,
-      "--body-file",
-      expect.any(String),
-    ]);
+    expect(
+      events.some(
+        (event) => event.kind === "gh" && event.args?.[0] === "pr" && event.args[1] === "merge",
+      ),
+    ).toBe(false);
     expect(f.git(f.origin, "log", "-1", "--format=%B", "main")).toBe(
       "Fixture squash\n\nReviewed fixture body",
     );
     expect(
       JSON.parse(f.git(f.canonical, "show", "refs/openclaw/pr-merge-outcomes/42:outcome.json")),
-    ).toMatchObject({ head: f.head, route: "immediate", phase: "complete" });
+    ).toMatchObject({ head: f.head, route: "immediate", phase: "commented" });
+    // The deliberately modified PR helper is unfinished local work, not disposable proof.
+    expect(existsSync(f.worktree)).toBe(true);
+    expect(readFileSync(join(f.worktree, "scripts/verify-pr-hosted-gates.mts"), "utf8")).toBe(
+      "throw new Error('PR helper executed');\n",
+    );
+    expect(result.stdout + result.stderr).toContain("worktree has local changes or is locked");
     expect(
       f
         .events()
@@ -204,5 +213,191 @@ describePosix("native hosted merge handoff", () => {
             ),
         ),
     ).toBe(false);
+  });
+});
+
+describePosix("native pending GitHub merge handoff", () => {
+  let f: ReturnType<typeof createMainRefreshFixture>;
+  let pendingGates: string;
+
+  beforeAll(() => {
+    f = createMainRefreshFixture(tempDirs.make("openclaw-pr-merge-pending-"));
+    delete f.env.OPENCLAW_TESTBOX;
+    f.env.OPENCLAW_PR_GATES_REMOTE = "github";
+    f.configure({
+      hostedCi: "missing",
+      requiredChecks: "pending",
+      metadata: { ...f.metadata, mergeStateStatus: "BLOCKED" },
+    });
+    const prepare = f.run("prepare-run");
+    expect(prepare.status, prepare.stdout + prepare.stderr).toBe(0);
+    pendingGates = readFileSync(join(f.local, "gates.env"), "utf8");
+  });
+
+  beforeEach(() => {
+    f.configure({ requiredChecks: "pending", requiredCheckRows: undefined });
+    writeFileSync(join(f.local, "gates.env"), pendingGates);
+  });
+
+  it.each([
+    "missing auto request",
+    "different gate head",
+    "replacement recovery",
+    "REST transport",
+    "missing required gate",
+    "failed required check",
+  ] as const)("rejects %s before pending admission", (fault) => {
+    const verification = {
+      replacementHead: fault === "replacement recovery" ? f.head : "",
+      autoMergeRequested: fault !== "missing auto request",
+      observation: null,
+      qualifiedRefusal: false,
+    };
+    let command = `merge_verify 42 '${JSON.stringify(verification)}'`;
+    if (fault === "different gate head") {
+      writeFileSync(
+        join(f.local, "gates.env"),
+        `${pendingGates}\nHOSTED_GATES_TARGET_HEAD_SHA=${f.sameTreeHead}\n`,
+      );
+    } else if (fault === "REST transport") {
+      command = `MERGE_TRANSPORT=rest ${command}`;
+    } else if (fault === "missing required gate" || fault === "failed required check") {
+      f.configure({
+        requiredChecks: fault === "missing required gate" ? "missing-gate" : "fail",
+      });
+      command = "merge_run 42 true";
+    }
+    const before = f.events().length;
+    const result = f.shell(`${command} || exit 1`);
+    const output = result.stdout + result.stderr;
+    expect(result.status, output).toBe(1);
+    expect(output).toContain(
+      fault === "missing required gate"
+        ? "require the enforced openclaw/ci-gate context"
+        : fault === "failed required check"
+          ? "Required checks are failing; fix them before requesting auto-merge"
+          : "require --auto-merge at the exact prepared head",
+    );
+    const events = f.events().slice(before);
+    expect(
+      events.some((event) => event.kind === "ci-watched" || event.kind === "hosted-gate"),
+    ).toBe(false);
+    expect(
+      events.some(
+        (event) => event.kind === "gh" && event.args?.[0] === "pr" && event.args[1] === "merge",
+      ),
+    ).toBe(false);
+    expect(
+      f.git(
+        f.canonical,
+        "for-each-ref",
+        "--format=%(refname)",
+        "refs/openclaw/pr-merge-outcomes/42",
+      ),
+    ).toBe("");
+  });
+
+  it.each(["pending", "pass"] as const)(
+    "admits a skipped draft gate beside the current %s gate",
+    (bucket) => {
+      f.configure({
+        requiredChecks: bucket,
+        requiredCheckRows: [
+          { name: "openclaw/ci-gate", bucket: "skipping", state: "SKIPPED" },
+          { name: "openclaw/ci-gate", bucket, state: bucket === "pass" ? "SUCCESS" : "PENDING" },
+        ],
+      });
+      const result = f.shell(
+        `merge_verify 42 '{"replacementHead":"","autoMergeRequested":true,"observation":null,"qualifiedRefusal":false}' || exit 1`,
+      );
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+    },
+  );
+
+  it.each([
+    ["skipped only", [{ name: "openclaw/ci-gate", bucket: "skipping", state: "SKIPPED" }]],
+    [
+      "unmatched skipped gate",
+      [
+        { name: "openclaw/ci-gate", bucket: "pending", state: "PENDING" },
+        { name: "independent required check", bucket: "skipping", state: "SKIPPED" },
+      ],
+    ],
+    [
+      "failed current gate",
+      [
+        { name: "openclaw/ci-gate", bucket: "skipping", state: "SKIPPED" },
+        { name: "openclaw/ci-gate", bucket: "fail", state: "FAILURE" },
+      ],
+    ],
+  ])("rejects %s before auto-merge dispatch", (_name, requiredCheckRows) => {
+    f.configure({ requiredCheckRows });
+    const before = f.events().length;
+    const result = f.shell("merge_run 42 true || exit 1");
+    expect(result.status, result.stdout + result.stderr).toBe(1);
+    expect(result.stdout + result.stderr).toContain("Required checks are failing");
+    expect(
+      f
+        .events()
+        .slice(before)
+        .some((event) => event.kind === "gh" && event.args?.[1] === "merge"),
+    ).toBe(false);
+  });
+
+  it("submits one exact-head auto request and returns pending without polling or cleanup", () => {
+    const before = f.events().length;
+    const result = f.run(["merge-run", "42", "--auto-merge"]);
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toContain("AUTO/QUEUE PENDING for PR #42; not merged");
+    const events = f.events().slice(before);
+    const pullReads = events.filter(
+      (event) => event.kind === "gh" && event.args?.includes("repos/fixture/repo/pulls/42"),
+    );
+    const expectedRead = [
+      "api",
+      "--hostname",
+      "github.com",
+      "repos/fixture/repo/pulls/42",
+      "-H",
+      "Cache-Control: max-age=0",
+    ];
+    expect(pullReads.map((event) => event.args)).toEqual([expectedRead, expectedRead]);
+    const mergeCalls = events.filter(
+      (event) => event.kind === "gh" && event.args?.[0] === "pr" && event.args[1] === "merge",
+    );
+    expect(mergeCalls).toHaveLength(1);
+    expect(mergeCalls[0]?.args).toEqual([
+      "pr",
+      "merge",
+      "42",
+      "--repo",
+      "https://github.com/fixture/repo",
+      "--squash",
+      "--auto",
+      "--match-head-commit",
+      f.head,
+      "--body-file",
+      expect.any(String),
+      "--subject",
+      "Fixture merge headline",
+    ]);
+    expect(events.filter((event) => event.kind === "required-checks")).toHaveLength(1);
+    expect(
+      events.some((event) => ["ci-watched", "hosted-gate", "leased-cleanup"].includes(event.kind)),
+    ).toBe(false);
+    const afterDispatch = events.slice(events.indexOf(mergeCalls[0]!) + 1);
+    expect(
+      afterDispatch.filter(
+        (event) =>
+          event.kind === "gh" && event.args?.some((arg) => arg.includes("ref(qualifiedName:")),
+      ),
+    ).toHaveLength(2);
+    expect(events.some((event) => event.kind === "gh" && event.args?.includes("POST"))).toBe(false);
+    expect(
+      JSON.parse(f.git(f.canonical, "show", "refs/openclaw/pr-merge-outcomes/42:outcome.json")),
+    ).toMatchObject({ head: f.head, route: "auto", phase: "intent", accepted: true, landed: null });
+    expect(f.git(f.origin, "rev-parse", "main")).toBe(f.main);
+    expect(f.git(f.origin, "rev-parse", "topic")).toBe(f.head);
+    expect(existsSync(f.worktree)).toBe(true);
   });
 });

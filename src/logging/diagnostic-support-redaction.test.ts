@@ -2,6 +2,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  redactPublicSupportDiagnosticLine,
   redactSupportString,
   redactTextForSupport,
   sanitizeSupportConfigValue,
@@ -42,6 +43,61 @@ function fakeRepeatedToken(chars: readonly string[], length = 40): string {
 
 describe("diagnostic support redaction", () => {
   const tempDir = path.join(os.tmpdir(), "openclaw-support-redaction-test");
+
+  it.each([
+    "EACCES",
+    "EPERM",
+    "ENOTEMPTY",
+    "EEXIST",
+    "ETARGET",
+    "E404",
+    "ENOTFOUND",
+    "ECONNRESET",
+    "ETIMEDOUT",
+    "EOTP",
+    "E401",
+    "E403",
+    "ENOSPC",
+    "EINTEGRITY",
+  ])("keeps the npm error code %s without publishing its log", (code) => {
+    expect(
+      redactPublicSupportDiagnosticLine(
+        `npm warn private-package\nnpm ERR! code ${code}\nnpm ERR! log /private/example/npm.log at private-host.example`,
+        { env: {}, stateDir: tempDir },
+      ),
+    ).toBe(code);
+  });
+
+  it("keeps a closed cause from later npm stderr lines", () => {
+    expect(
+      redactPublicSupportDiagnosticLine(
+        "npm ERR! code EACCES\nnpm ERR! EACCES: permission denied, mkdir '/private/example/cache'\nnpm ERR! private-host.example",
+        { env: {}, stateDir: tempDir },
+      ),
+    ).toBe("EACCES; Permission denied");
+  });
+
+  it.each([
+    "ERR_PNPM_PRIVATE_CUSTOMER",
+    "ERR_OSSL_PRIVATE_CUSTOMER",
+    "EPRIVATE_CUSTOMER",
+    "EOTP_PRIVATE_CUSTOMER",
+  ])("does not allow arbitrary npm error identifiers (%s)", (code) => {
+    expect(
+      redactPublicSupportDiagnosticLine(`npm ERR! code ${code}`, { env: {}, stateDir: tempDir }),
+    ).toBe("[redacted-diagnostic]");
+  });
+
+  it.each(["", " private-customer-text"])(
+    "recognizes only the fixed npm layout refusal (%s)",
+    (suffix) => {
+      const message =
+        "The npm global install layout cannot stage a candidate. Reinstall with npm into its default global layout, then retry the update.";
+      expect(
+        redactPublicSupportDiagnosticLine(message + suffix, { env: {}, stateDir: tempDir }),
+      ).toBe(suffix ? "[redacted-diagnostic]" : message);
+    },
+  );
 
   it("redacts numeric private fields in support snapshots and config", () => {
     const redaction = {
@@ -161,6 +217,9 @@ describe("diagnostic support redaction", () => {
       ["event $OPENCLAW_STATE_DIR1", "event <redacted-matrix-event>"],
       ["event $PREFIX_OPENCLAW_STATE_DIR", "event <redacted-matrix-event>"],
       ["notify @support_bot now", "notify <redacted-handle> now"],
+      ["notify @openclaw now", "notify <redacted-handle> now"],
+      ["package @private_team/codex", "package <redacted-handle>/codex"],
+      ["package @openclaw_private/codex", "package <redacted-handle>/codex"],
       ["phone 15555551212", "phone <redacted-id>"],
       [
         `config password = ${["support", "password", "1234567890"].join("-")}`,
@@ -190,6 +249,27 @@ describe("diagnostic support redaction", () => {
       expect(redactTextForSupport(input)).toBe(expected);
     }
   });
+
+  it.each(["@openclaw/codex", "@openclaw/codex@latest", "@openclaw/codex@2026.9.3"])(
+    "preserves install guidance for %s beside private diagnostics across support handoffs",
+    (packageSpec) => {
+      const redaction = { env: {}, stateDir: tempDir };
+      const command = `openclaw plugins install ${packageSpec}`;
+      const input =
+        `Unable to resolve Codex doctor health API: install the official Codex plugin with ${command}\n` +
+        `Config: ${tempDir}/openclaw.json; contact @support_bot or alice@example.com\n` +
+        "Endpoint: https://gateway.example/ws?token=synthetic-secret&ok=1";
+      const expected =
+        `Unable to resolve Codex doctor health API: install the official Codex plugin with ${command}\n` +
+        "Config: $OPENCLAW_STATE_DIR/openclaw.json; contact <redacted-handle> or <redacted-email>\n" +
+        "Endpoint: https://gateway.example/ws?token=<redacted>&ok=1";
+
+      const sanitized = redactSupportString(input, redaction);
+
+      expect(sanitized).toBe(expected);
+      expect(redactSupportString(sanitized, redaction)).toBe(expected);
+    },
+  );
 
   it("preserves canonical state path markers across repeated support handoffs", () => {
     const redaction = { env: {}, stateDir: tempDir };
@@ -275,4 +355,29 @@ describe("diagnostic support redaction", () => {
     expect(serialized).toContain("--awsSecretAccessKey");
     expect(serialized).toContain("~\\\\AppData\\\\Local\\\\openclaw\\\\gateway-service.json");
   });
+});
+
+it("preserves exact typed lease guidance without widening maintenance prose", () => {
+  const context = { env: {}, stateDir: "/synthetic/state" };
+  const guidance =
+    "Doctor could not enter maintenance. An agent database is in use. Stop other OpenClaw processes using this state, then retry the update.";
+  expect(redactPublicSupportDiagnosticLine(guidance, context)).toBe(guidance);
+  for (const input of [
+    guidance + " /private/state.db token=fixture-only-token alice@example.invalid",
+    "Doctor could not enter maintenance. OpenClawAgentDatabaseLeaseActiveError: private message",
+  ]) {
+    for (const prefix of ["", "DoctorMaintenanceRefusalError: "]) {
+      expect(redactPublicSupportDiagnosticLine(`${prefix}${input}`, context)).toBe(
+        `${prefix}Doctor could not enter maintenance.`,
+      );
+    }
+  }
+  expect(
+    redactPublicSupportDiagnosticLine(
+      "Error: Doctor could not enter maintenance. Error: The update parent owns Gateway activation. /private/state.db",
+      context,
+    ),
+  ).toBe(
+    "Error: Doctor could not enter maintenance. Error: The update parent owns Gateway activation.",
+  );
 });

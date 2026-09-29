@@ -7,6 +7,8 @@ import {
 } from "./current-plugin-metadata-state.js";
 import { discoverOpenClawPlugins, type PluginDiscoveryResult } from "./discovery.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
+import { resolveInstalledPluginIndexStorePath } from "./installed-plugin-index-store-path.js";
+import { resolvePluginTrust } from "./installed-plugin-record-match.js";
 import type { PluginPackageChannel, PluginPackageInstall } from "./manifest.js";
 import { resolvePluginMetadataEnvFingerprint } from "./plugin-metadata-env.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
@@ -19,6 +21,7 @@ export type PluginChannelCatalogEntry = {
   rootDir: string;
   channel: PluginPackageChannel;
   install?: PluginPackageInstall;
+  trustedOfficialInstall?: boolean;
 };
 
 type ChannelCatalogParams = {
@@ -42,8 +45,9 @@ export function listChannelCatalogEntries(
   // The discovery owner retains each scope and its raw shadows. A validated
   // Gateway-wide manifest union loses both workspace scope and trust alternatives.
   let discovery = params.discovery;
+  const installRecords =
+    params.installRecords ?? (discovery ? undefined : resolveInstallRecords(params));
   if (!discovery) {
-    const installRecords = resolveInstallRecords(params);
     discovery = discoverOpenClawPlugins({
       workspaceDir: params.workspaceDir,
       env: params.env,
@@ -67,9 +71,21 @@ export function listChannelCatalogEntries(
     if (!pluginId) {
       return [];
     }
+    // Caller-supplied discovery and install records belong to the same metadata generation.
+    // Never reload the ledger behind an already prepared discovery snapshot.
+    const trusted =
+      installRecords &&
+      resolvePluginTrust({
+        pluginId,
+        candidate,
+        installRecords,
+        env: params.env ?? process.env,
+        registryPath: resolveInstalledPluginIndexStorePath({ env: params.env }),
+      }).reason === "trusted-official";
     return [
       {
         pluginId,
+        ...(trusted ? { trustedOfficialInstall: true } : {}),
         origin: candidate.origin,
         packageName: candidate.packageName,
         workspaceDir: candidate.workspaceDir,

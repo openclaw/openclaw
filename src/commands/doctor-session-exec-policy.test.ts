@@ -121,8 +121,6 @@ describe("doctor legacy session exec policy", () => {
     await noteSessionTranscriptHealth({
       cfg: { ...cfg, plugins: { enabled: false } },
       env: state.env,
-      sessionDirs: [],
-      sessionSqlite: true,
       shouldRepair: true,
     });
     closeOpenClawAgentDatabasesForTest();
@@ -214,8 +212,6 @@ describe("doctor legacy session exec policy", () => {
       noteSessionTranscriptHealth({
         cfg: { plugins: { enabled: false } },
         env,
-        sessionDirs: [],
-        sessionSqlite: true,
         shouldRepair,
       });
     const read = () => listSessionEntriesCore({ agentId: "main", env });

@@ -1,8 +1,9 @@
 import type { RouteLocation } from "@openclaw/uirouter";
 import { describe, expect, it, vi } from "vitest";
 import { CONTROL_UI_BASE_PATH_ATTRIBUTE } from "../../../src/gateway/control-ui-contract.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import { routeIdFromPath, type RouteId } from "../app-routes.ts";
+import { routeIdFromPath } from "../app-routes.ts";
 import {
   isDefaultChatLanding,
   startModelSetupFirstRunRedirectAfterLocation,
@@ -19,14 +20,6 @@ import { normalizeLegacyTerminalViewLocation } from "./startup-settings.ts";
 // performance assertion, so these waits must not inherit vi.waitFor's 1s default:
 // under a loaded CI runner that budget expires before startup reaches the step.
 const STARTUP_STEP_WAIT = { timeout: 15_000 };
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
-}
 
 describe("normalizeLegacyTerminalViewLocation", () => {
   it.each([
@@ -62,6 +55,51 @@ describe("normalizeLegacyTerminalViewLocation", () => {
 });
 
 describe("bootstrapApplication", () => {
+  it.each([false, true])(
+    "owns native health reporting across startup and stop (early stop: %s)",
+    async (stopEarly) => {
+      const previousUrl = window.location.href;
+      const previousSettings = loadSettings();
+      window.history.replaceState({}, "", "/focus/terminal");
+      const postMessage = vi.fn();
+      vi.stubGlobal("webkit", { messageHandlers: { openclawGateways: { postMessage } } });
+      const changed = vi.fn();
+      window.addEventListener("openclaw:native-gateway-health-changed", changed);
+      const runtime = bootstrapApplication();
+      const startGateway = vi.spyOn(runtime.context.gateway, "start").mockImplementation(() => {
+        expect(Reflect.get(window, "__OPENCLAW_NATIVE_GATEWAY_HEALTH__")).toEqual({
+          gatewayUrl: runtime.context.gateway.connection.gatewayUrl,
+          health: "unknown",
+        });
+      });
+      try {
+        const starting = runtime.start();
+        if (stopEarly) {
+          runtime.stop();
+        }
+        await starting;
+        expect(startGateway).toHaveBeenCalledTimes(stopEarly ? 0 : 1);
+        expect(changed).toHaveBeenCalledTimes(stopEarly ? 0 : 1);
+        // The shared Linux bridge must not receive a Mac-only action.
+        expect(postMessage).not.toHaveBeenCalled();
+        runtime.stop();
+        if (!stopEarly) {
+          expect(Reflect.get(window, "__OPENCLAW_NATIVE_GATEWAY_HEALTH__")).toMatchObject({
+            health: "unknown",
+          });
+        }
+      } finally {
+        runtime.stop();
+        startGateway.mockRestore();
+        window.removeEventListener("openclaw:native-gateway-health-changed", changed);
+        Reflect.deleteProperty(window, "__OPENCLAW_NATIVE_GATEWAY_HEALTH__");
+        vi.unstubAllGlobals();
+        window.history.replaceState({}, "", previousUrl);
+        saveSettings(previousSettings);
+      }
+    },
+  );
+
   it("starts native notifications before Gateway use and preserves synchronous permission requests", async () => {
     const previousUrl = window.location.href;
     const previousSettings = loadSettings();
@@ -192,7 +230,7 @@ describe("bootstrapApplication", () => {
         hello: { snapshot: { sessionDefaults: { mainKey: "main" } } },
       },
       subscribe: vi.fn(() => () => undefined),
-    } as unknown as ApplicationContext<RouteId>["gateway"];
+    } as unknown as ApplicationContext["gateway"];
     const canonicalLocation = await resolveInitialApplicationLocation({
       location: initialLocation,
       basePath: "",
@@ -207,7 +245,7 @@ describe("bootstrapApplication", () => {
     });
 
     await startModelSetupFirstRunRedirectAfterLocation({
-      context: { gateway } as unknown as ApplicationContext<RouteId>,
+      context: { gateway } as unknown as ApplicationContext,
       enabled: false,
       history: { location: () => currentLocation, replace },
       initialLocationReady: Promise.resolve(canonicalLocation),
@@ -221,10 +259,8 @@ describe("bootstrapApplication", () => {
   });
 
   it("starts the first-run redirect after installing the persisted session location", async () => {
-    let resolveInitialLocation: (location: RouteLocation) => void = () => undefined;
-    const initialLocationReady = new Promise<RouteLocation>((resolve) => {
-      resolveInitialLocation = resolve;
-    });
+    const { promise: initialLocationReady, resolve: resolveInitialLocation } =
+      createDeferred<RouteLocation>();
     let currentLocation: RouteLocation = { pathname: "/", search: "", hash: "" };
     const replaceLocation = vi.fn((location: RouteLocation) => {
       currentLocation = location;
@@ -236,7 +272,7 @@ describe("bootstrapApplication", () => {
       setupComplete: false,
     });
     const client = { request } as unknown as GatewayBrowserClient;
-    type GatewayListener = Parameters<ApplicationContext<RouteId>["gateway"]["subscribe"]>[0];
+    type GatewayListener = Parameters<ApplicationContext["gateway"]["subscribe"]>[0];
     let listener: GatewayListener | null = null;
     const subscribe = vi.fn((next: GatewayListener) => {
       listener = next;
@@ -258,7 +294,7 @@ describe("bootstrapApplication", () => {
         subscribe: () => () => undefined,
       },
       replace: replaceRoute,
-    } as unknown as ApplicationContext<RouteId>;
+    } as unknown as ApplicationContext;
     const canonicalLocation = { pathname: "/chat/main", search: "", hash: "" };
 
     const redirectReady = startModelSetupFirstRunRedirectAfterLocation({
@@ -300,7 +336,7 @@ describe("bootstrapApplication", () => {
     const installLocation = vi.fn();
 
     await startModelSetupFirstRunRedirectAfterLocation({
-      context: {} as ApplicationContext<RouteId>,
+      context: {} as ApplicationContext,
       enabled: false,
       history: { location: () => currentLocation, replace: vi.fn() },
       initialLocationReady: Promise.resolve({ pathname: "/chat/main", search: "", hash: "" }),
@@ -728,7 +764,7 @@ describe("bootstrapApplication", () => {
       lastActiveSessionKey: "agent:main:main",
     });
     window.history.replaceState({}, "", "/chat?session=agent%3Aresearch%3Aworkspace");
-    type GatewayListener = Parameters<ApplicationContext<RouteId>["gateway"]["subscribe"]>[0];
+    type GatewayListener = Parameters<ApplicationContext["gateway"]["subscribe"]>[0];
     const activeSubscriptions = new Set<GatewayListener>();
     const createGateway = gatewayStore.createApplicationGateway;
     const gatewayFactory = vi
@@ -798,7 +834,7 @@ describe("bootstrapApplication", () => {
     });
     window.history.replaceState({}, "", "/settings/appearance");
     const runtime = bootstrapApplication();
-    const routerStarted = deferred<void>();
+    const routerStarted = createDeferred();
     const routerStart = vi.spyOn(runtime.router, "start").mockReturnValue(routerStarted.promise);
     const routerStop = vi.spyOn(runtime.router, "stop");
 

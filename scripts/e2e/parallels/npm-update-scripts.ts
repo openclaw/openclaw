@@ -16,7 +16,7 @@ import {
   modelProviderConfigBatchJson,
   resolveParallelsModelTimeoutSeconds,
 } from "./provider-auth.ts";
-import { posixStopGatewayScript } from "./smoke-common.ts";
+import { posixAgentTurnScript, posixStopGatewayScript } from "./smoke-common.ts";
 import type { Platform, ProviderAuth } from "./types.ts";
 
 interface NpmUpdateScriptInput {
@@ -98,6 +98,36 @@ function posixPrintLogTailFunction(): string {
 }`;
 }
 
+function posixWaitForGatewayScript(command: string): string {
+  return String.raw`wait_for_gateway() {
+  deadline=$((SECONDS + 240))
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    if ${command} gateway status --deep --require-rpc --timeout 15000; then
+      return
+    fi
+    if ! kill -0 "$gateway_pid" 2>/dev/null; then
+      if wait "$gateway_pid"; then gateway_exit_status=0; else gateway_exit_status=$?; fi
+      if [ "$gateway_exit_status" -le 128 ] && [ "$gateway_restart_count" -eq 0 ]; then
+        if tail -c +"$((gateway_launch_log_offset + 1))" "$gateway_log" 2>/dev/null | grep -F -- ${shellQuote(startupMigrationRestartPrefix)} >/dev/null; then
+          gateway_restart_count=1
+          echo "gateway exited after startup migration convergence refusal; restarting once"
+          start_openclaw_gateway
+          continue
+        fi
+      fi
+      print_log_tail "$gateway_log" >&2
+      echo "gateway exited before becoming ready after update (exit $gateway_exit_status)" >&2
+      if [ "$gateway_exit_status" -eq 0 ]; then exit 1; fi
+      exit "$gateway_exit_status"
+    fi
+    sleep 2
+  done
+  print_log_tail "$gateway_log" >&2
+  echo "gateway did not become ready after update" >&2
+  exit 1
+}`;
+}
+
 function posixAssertAgentOkScript(
   command: string,
   input: NpmUpdateScriptInput,
@@ -109,41 +139,12 @@ function posixAssertAgentOkScript(
     modelId: input.auth.modelId,
   })}
 ${posixCodexPlatformPackageRepairFunction()}
-agent_ok=false
-for attempt in 1 2; do
-  session_id=${shellQuote(sessionId)}
-  if [ "$attempt" -gt 1 ]; then session_id=${shellQuote(`${sessionId}-retry`)}"-$attempt"; fi
-  rm -f "$HOME/.openclaw/agents/main/sessions/$session_id.jsonl"
-  output_file="$(mktemp)"
-  set +e
-  OPENCLAW_ALLOW_ROOT="\${OPENCLAW_ALLOW_ROOT:-}" with_provider_api_key ${command} agent --local --agent main --session-id "$session_id" --message 'Reply with exact ASCII text OK only.' --thinking off --timeout ${resolveParallelsModelTimeoutSeconds(platform)} --json >"$output_file" 2>&1
-  rc=$?
-  set -e
-  print_log_tail "$output_file"
-  if [ "$rc" -ne 0 ]; then
-    if [ "$attempt" -lt 2 ] && repair_missing_codex_platform_package "$output_file"; then
-      rm -f "$output_file"
-      echo "agent turn attempt $attempt hit a missing Codex platform package; retrying"
-      continue
-    fi
-    rm -f "$output_file"
-    exit "$rc"
-  fi
-  if grep -Eq '"finalAssistant(Raw|Visible)Text"[[:space:]]*:[[:space:]]*"OK"' "$output_file"; then
-    agent_ok=true
-    rm -f "$output_file"
-    break
-  fi
-  rm -f "$output_file"
-  if [ "$attempt" -lt 2 ]; then
-    echo "agent turn attempt $attempt finished without OK response; retrying"
-    sleep 3
-  fi
-done
-if [ "$agent_ok" != true ]; then
-  echo "openclaw agent finished without OK response" >&2
-  exit 1
-fi`;
+${posixAgentTurnScript({
+  command: `OPENCLAW_ALLOW_ROOT="\${OPENCLAW_ALLOW_ROOT:-}" with_provider_api_key ${command} agent --local --agent main --session-id "$session_id" --message 'Reply with exact ASCII text OK only.' --thinking off --timeout ${resolveParallelsModelTimeoutSeconds(platform)} --json`,
+  sessionIdExpression: shellQuote(sessionId),
+  retrySessionIdExpression: `${shellQuote(`${sessionId}-retry`)}"-$attempt"`,
+  printOutput: "print_log_tail",
+})}`;
 }
 
 function windowsUpdateWithScopedEnv(input: NpmUpdateScriptInput): string {
@@ -317,33 +318,7 @@ start_openclaw_gateway() {
   gateway_pid=$!
   sleep 1
 }
-wait_for_gateway() {
-  deadline=$((SECONDS + 240))
-  while [ "$SECONDS" -lt "$deadline" ]; do
-    if "$OPENCLAW_BIN" gateway status --deep --require-rpc --timeout 15000; then
-      return
-    fi
-    if ! kill -0 "$gateway_pid" 2>/dev/null; then
-      if wait "$gateway_pid"; then gateway_exit_status=0; else gateway_exit_status=$?; fi
-      if [ "$gateway_exit_status" -le 128 ] && [ "$gateway_restart_count" -eq 0 ]; then
-        if tail -c +"$((gateway_launch_log_offset + 1))" "$gateway_log" 2>/dev/null | grep -F -- ${shellQuote(startupMigrationRestartPrefix)} >/dev/null; then
-          gateway_restart_count=1
-          echo "gateway exited after startup migration convergence refusal; restarting once"
-          start_openclaw_gateway
-          continue
-        fi
-      fi
-      print_log_tail "$gateway_log" >&2
-      echo "gateway exited before becoming ready after update (exit $gateway_exit_status)" >&2
-      if [ "$gateway_exit_status" -eq 0 ]; then exit 1; fi
-      exit "$gateway_exit_status"
-    fi
-    sleep 2
-  done
-  print_log_tail "$gateway_log" >&2
-  echo "gateway did not become ready after update" >&2
-  exit 1
-}
+${posixWaitForGatewayScript(macosOpenClawCommand)}
 scrub_future_plugin_entries
 stop_openclaw_gateway_processes
 ${posixNpmRegistryEnv(input.npmRegistry)}OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1 "$OPENCLAW_BIN" update --tag ${shellQuote(input.updateTarget)} --yes --json --no-restart
@@ -480,33 +455,7 @@ start_openclaw_gateway() {
   )} >/dev/null 2>&1 < /dev/null &
   gateway_pid=$!
 }
-wait_for_gateway() {
-  deadline=$((SECONDS + 240))
-  while [ "$SECONDS" -lt "$deadline" ]; do
-    if openclaw gateway status --deep --require-rpc --timeout 15000; then
-      return
-    fi
-    if ! kill -0 "$gateway_pid" 2>/dev/null; then
-      if wait "$gateway_pid"; then gateway_exit_status=0; else gateway_exit_status=$?; fi
-      if [ "$gateway_exit_status" -le 128 ] && [ "$gateway_restart_count" -eq 0 ]; then
-        if tail -c +"$((gateway_launch_log_offset + 1))" "$gateway_log" 2>/dev/null | grep -F -- ${shellQuote(startupMigrationRestartPrefix)} >/dev/null; then
-          gateway_restart_count=1
-          echo "gateway exited after startup migration convergence refusal; restarting once"
-          start_openclaw_gateway
-          continue
-        fi
-      fi
-      print_log_tail "$gateway_log" >&2
-      echo "gateway exited before becoming ready after update (exit $gateway_exit_status)" >&2
-      if [ "$gateway_exit_status" -eq 0 ]; then exit 1; fi
-      exit "$gateway_exit_status"
-    fi
-    sleep 2
-  done
-  print_log_tail "$gateway_log" >&2
-  echo "gateway did not become ready after update" >&2
-  exit 1
-}
+${posixWaitForGatewayScript("openclaw")}
 scrub_future_plugin_entries
 stop_openclaw_gateway_processes
 ${posixNpmRegistryEnv(input.npmRegistry)}OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1 openclaw update --tag ${shellQuote(input.updateTarget)} --yes --json --no-restart

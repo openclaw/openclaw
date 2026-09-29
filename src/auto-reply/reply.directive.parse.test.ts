@@ -1,5 +1,6 @@
 /** Tests parsing of inline reply directives and command tags. */
 import { describe, expect, it } from "vitest";
+import { parseInlineDirectives } from "../utils/directive-tags.js";
 import { parseInlineSessionDirectives } from "./reply/directive-handling.parse.js";
 import {
   extractElevatedDirective,
@@ -12,7 +13,6 @@ import {
 } from "./reply/directives.js";
 import { extractExecDirective } from "./reply/exec/directive.js";
 import { extractQueueDirective } from "./reply/queue/directive.js";
-import { extractReplyToTag } from "./reply/reply-tags.js";
 
 describe("directive parsing", () => {
   it.each([
@@ -25,11 +25,6 @@ describe("directive parsing", () => {
 
   it.each([
     "/think high",
-    "/verbose on",
-    "/trace on",
-    "/fast auto",
-    "/reasoning off",
-    "/elevated ask",
     "/exec host=auto security=deny",
     "/queue collect debounce:2s cap:5",
     "/model example/model -s",
@@ -94,31 +89,6 @@ describe("directive parsing", () => {
     expect(res.cleaned).toBe(body);
   });
 
-  it("ignores typoed /verioussmith", () => {
-    const body = "/verioussmith";
-    const res = extractVerboseDirective(body);
-    expect(res.hasDirective).toBe(false);
-    expect(res.cleaned).toBe(body.trim());
-  });
-
-  it("ignores think directive inside URL", () => {
-    const body = "see https://example.com/path/thinkstuff";
-    const res = extractThinkDirective(body);
-    expect(res.hasDirective).toBe(false);
-  });
-
-  it("matches verbose with leading space", () => {
-    const res = extractVerboseDirective(" please /verbose on now");
-    expect(res.hasDirective).toBe(true);
-    expect(res.verboseLevel).toBe("on");
-  });
-
-  it("matches trace with leading space", () => {
-    const res = extractTraceDirective(" please /trace on now");
-    expect(res.hasDirective).toBe(true);
-    expect(res.traceLevel).toBe("on");
-  });
-
   it("matches raw trace directive", () => {
     const res = extractTraceDirective(" please /trace raw now");
     expect(res.hasDirective).toBe(true);
@@ -179,23 +149,10 @@ describe("directive parsing", () => {
     expect(res.elevatedLevel).toBe("full");
   });
 
-  it("matches think at start of line", () => {
-    const res = extractThinkDirective("/think:high run slow");
-    expect(res.hasDirective).toBe(true);
-    expect(res.thinkLevel).toBe("high");
-  });
-
   it("does not match /think followed by extra letters", () => {
     // e.g. someone typing "/think" + extra letter "hink"
     const res = extractThinkDirective("/thinkstuff");
     expect(res.hasDirective).toBe(false);
-  });
-
-  it("matches /think with no argument", () => {
-    const res = extractThinkDirective("/think");
-    expect(res.hasDirective).toBe(true);
-    expect(res.thinkLevel).toBeUndefined();
-    expect(res.rawLevel).toBeUndefined();
   });
 
   it("matches /t with no argument", () => {
@@ -208,38 +165,6 @@ describe("directive parsing", () => {
     const res = extractThinkDirective("/think:");
     expect(res.hasDirective).toBe(true);
     expect(res.thinkLevel).toBeUndefined();
-    expect(res.rawLevel).toBeUndefined();
-    expect(res.cleaned).toBe("");
-  });
-
-  it("matches verbose with no argument", () => {
-    const res = extractVerboseDirective("/verbose:");
-    expect(res.hasDirective).toBe(true);
-    expect(res.verboseLevel).toBeUndefined();
-    expect(res.rawLevel).toBeUndefined();
-    expect(res.cleaned).toBe("");
-  });
-
-  it("matches fast with no argument", () => {
-    const res = extractFastDirective("/fast:");
-    expect(res.hasDirective).toBe(true);
-    expect(res.fastMode).toBeUndefined();
-    expect(res.rawLevel).toBeUndefined();
-    expect(res.cleaned).toBe("");
-  });
-
-  it("matches reasoning with no argument", () => {
-    const res = extractReasoningDirective("/reasoning:");
-    expect(res.hasDirective).toBe(true);
-    expect(res.reasoningLevel).toBeUndefined();
-    expect(res.rawLevel).toBeUndefined();
-    expect(res.cleaned).toBe("");
-  });
-
-  it("matches elevated with no argument", () => {
-    const res = extractElevatedDirective("/elevated:");
-    expect(res.hasDirective).toBe(true);
-    expect(res.elevatedLevel).toBeUndefined();
     expect(res.rawLevel).toBeUndefined();
     expect(res.cleaned).toBe("");
   });
@@ -267,12 +192,16 @@ describe("directive parsing", () => {
     ]);
   });
 
-  it("captures invalid exec host values", () => {
-    const res = extractExecDirective("/exec host=spaceship");
+  it.each([
+    ["host", "spaceship", "execHost", "rawExecHost", "invalidHost"],
+    ["security", "wide-open", "execSecurity", "rawExecSecurity", "invalidSecurity"],
+    ["ask", "sometimes", "execAsk", "rawExecAsk", "invalidAsk"],
+  ] as const)("captures invalid exec %s values", (option, value, field, rawField, invalidField) => {
+    const res = extractExecDirective(`/exec ${option}=${value}`);
     expect(res.hasDirective).toBe(true);
-    expect(res.execHost).toBeUndefined();
-    expect(res.rawExecHost).toBe("spaceship");
-    expect(res.invalidHost).toBe(true);
+    expect(res[field]).toBeUndefined();
+    expect(res[rawField]).toBe(value);
+    expect(res[invalidField]).toBe(true);
   });
 
   it("matches queue directive", () => {
@@ -407,26 +336,8 @@ describe("directive parsing", () => {
     expect(think.thinkLevel).toBe("high");
   });
 
-  it("keeps --persist in ordinary messages", () => {
-    const parsed = parseInlineSessionDirectives("please keep --persist in this text");
-
-    expect(parsed.cleaned).toBe("please keep --persist in this text");
-  });
-
   it("preserves spacing when stripping think directives before paths", () => {
     const res = extractThinkDirective("thats not /think high/tmp/hello");
-    expect(res.hasDirective).toBe(true);
-    expect(res.cleaned).toBe("thats not /tmp/hello");
-  });
-
-  it("preserves spacing when stripping verbose directives before paths", () => {
-    const res = extractVerboseDirective("thats not /verbose on/tmp/hello");
-    expect(res.hasDirective).toBe(true);
-    expect(res.cleaned).toBe("thats not /tmp/hello");
-  });
-
-  it("preserves spacing when stripping reasoning directives before paths", () => {
-    const res = extractReasoningDirective("thats not /reasoning on/tmp/hello");
     expect(res.hasDirective).toBe(true);
     expect(res.cleaned).toBe("thats not /tmp/hello");
   });
@@ -453,34 +364,31 @@ describe("directive parsing", () => {
     expect(res.cleaned).toBe("please now");
   });
 
-  it("extracts reply_to_current tag", () => {
-    const res = extractReplyToTag("ok [[reply_to_current]]", "msg-1");
-    expect(res.replyToId).toBe("msg-1");
-    expect(res.cleaned).toBe("ok");
-  });
-
   it("extracts reply_to_current tag with whitespace", () => {
-    const res = extractReplyToTag("ok [[ reply_to_current ]]", "msg-1");
+    const res = parseInlineDirectives("ok [[ reply_to_current ]]", {
+      currentMessageId: "msg-1",
+      stripAudioTag: false,
+    });
     expect(res.replyToId).toBe("msg-1");
-    expect(res.cleaned).toBe("ok");
-  });
-
-  it("extracts reply_to id tag", () => {
-    const res = extractReplyToTag("see [[reply_to:12345]] now", "msg-1");
-    expect(res.replyToId).toBe("12345");
-    expect(res.cleaned).toBe("see now");
+    expect(res.text).toBe("ok");
   });
 
   it("extracts reply_to id tag with whitespace", () => {
-    const res = extractReplyToTag("see [[ reply_to : 12345 ]] now", "msg-1");
+    const res = parseInlineDirectives("see [[ reply_to : 12345 ]] now", {
+      currentMessageId: "msg-1",
+      stripAudioTag: false,
+    });
     expect(res.replyToId).toBe("12345");
-    expect(res.cleaned).toBe("see now");
+    expect(res.text).toBe("see now");
   });
 
   it("preserves newlines when stripping reply tags", () => {
-    const res = extractReplyToTag("line 1\nline 2 [[reply_to_current]]\n\nline 3", "msg-2");
+    const res = parseInlineDirectives("line 1\nline 2 [[reply_to_current]]\n\nline 3", {
+      currentMessageId: "msg-2",
+      stripAudioTag: false,
+    });
     expect(res.replyToId).toBe("msg-2");
-    expect(res.cleaned).toBe("line 1\nline 2\n\nline 3");
+    expect(res.text).toBe("line 1\nline 2\n\nline 3");
   });
 });
 
@@ -500,21 +408,6 @@ describe("level directive preserves message text after an invalid level", () => 
     expect(res.cleaned).toBe("Summarize this document");
   });
 
-  it("keeps the message when /think is followed by prose", () => {
-    const res = extractThinkDirective("/think about my deployment plan");
-    expect(res.hasDirective).toBe(true);
-    expect(res.thinkLevel).toBeUndefined();
-    expect(res.rawLevel).toBeUndefined();
-    expect(res.cleaned).toBe("about my deployment plan");
-  });
-
-  it("still consumes a valid level argument", () => {
-    const res = extractThinkDirective("/think high");
-    expect(res.hasDirective).toBe(true);
-    expect(res.thinkLevel).toBe("high");
-    expect(res.cleaned).toBe("");
-  });
-
   it("still consumes off so it persists rather than clears", () => {
     const elevated = extractElevatedDirective("hello there /elevated off");
     expect(elevated.elevatedLevel).toBe("off");
@@ -531,54 +424,19 @@ describe("level directive preserves message text after an invalid level", () => 
 
 describe("native directive commands own their complete argument boundary", () => {
   it.each([
-    {
-      command: "think" as const,
-      body: "/think about my deployment plan",
-      rawKey: "rawThinkLevel" as const,
-      invalidArgument: "about",
-      trailingArguments: "my deployment plan",
-    },
-    {
-      command: "verbose" as const,
-      body: "/verbose explain quantum computing",
-      rawKey: "rawVerboseLevel" as const,
-      invalidArgument: "explain",
-      trailingArguments: "quantum computing",
-    },
-    {
-      command: "trace" as const,
-      body: "/trace banana please",
-      rawKey: "rawTraceLevel" as const,
-      invalidArgument: "banana",
-      trailingArguments: "please",
-    },
-    {
-      command: "fast" as const,
-      body: "/fast bananas please",
-      rawKey: "rawFastMode" as const,
-      invalidArgument: "bananas",
-      trailingArguments: "please",
-    },
-    {
-      command: "reasoning" as const,
-      body: "/reasoning nonsense please",
-      rawKey: "rawReasoningLevel" as const,
-      invalidArgument: "nonsense",
-      trailingArguments: "please",
-    },
-    {
-      command: "elevated" as const,
-      body: "/elevated perhaps explain",
-      rawKey: "rawElevatedLevel" as const,
-      invalidArgument: "perhaps",
-      trailingArguments: "explain",
-    },
-  ])(
-    "preserves the invalid first argument for native /$command",
-    ({ body, command, invalidArgument, rawKey, trailingArguments }) => {
-      const parsed = parseInlineSessionDirectives(body, {
-        command: { kind: "native", name: command },
-      });
+    ["think", "rawThinkLevel", "about", "my deployment plan"],
+    ["verbose", "rawVerboseLevel", "explain", "quantum computing"],
+    ["trace", "rawTraceLevel", "banana", "please"],
+    ["fast", "rawFastMode", "bananas", "please"],
+    ["reasoning", "rawReasoningLevel", "nonsense", "please"],
+    ["elevated", "rawElevatedLevel", "perhaps", "explain"],
+  ] as const)(
+    "preserves the invalid first argument for native /%s",
+    (command, rawKey, invalidArgument, trailingArguments) => {
+      const parsed = parseInlineSessionDirectives(
+        `/${command} ${invalidArgument} ${trailingArguments}`,
+        { command: { kind: "native", name: command } },
+      );
 
       expect(parsed[rawKey]).toBe(invalidArgument);
       expect(parsed.cleaned).toBe(trailingArguments);

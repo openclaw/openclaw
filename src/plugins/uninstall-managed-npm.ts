@@ -1,10 +1,10 @@
+import { resolveNpmCommand } from "../infra/npm-command.js";
 import { syncManagedNpmRootPeerDependencies } from "../infra/npm-managed-root.js";
 import { createSafeNpmInstallEnv } from "../infra/safe-package-install.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { isNpmAliasOverrideCompatibilityError } from "./install-managed-npm-state.js";
 
 const MANAGED_NPM_PEER_CLEANUP_ARGS = [
-  "npm",
   "install",
   "--omit=dev",
   "--omit=peer",
@@ -20,8 +20,12 @@ export async function pruneManagedNpmPeerDependenciesAfterUninstall(params: {
   packageName: string;
   managedOverrides: Record<string, unknown>;
   runCommand?: typeof runCommandWithTimeout;
+  beforePersistentApply?: () => void;
 }): Promise<string | undefined> {
-  const command = params.runCommand ?? runCommandWithTimeout;
+  const command: typeof runCommandWithTimeout = (...args) => {
+    params.beforePersistentApply?.();
+    return (params.runCommand ?? runCommandWithTimeout)(...args);
+  };
   const commandOptions = {
     cwd: params.npmRoot,
     timeoutMs: 300_000,
@@ -39,17 +43,18 @@ export async function pruneManagedNpmPeerDependenciesAfterUninstall(params: {
       managedOverrides: params.managedOverrides,
       omitNpmAliasOverrides,
       runCommand: command,
+      beforePersistentApply: params.beforePersistentApply,
     });
 
   if (!(await syncPeerDependencies())) {
     return undefined;
   }
 
-  let cleanup = await command([...MANAGED_NPM_PEER_CLEANUP_ARGS], commandOptions);
+  let cleanup = await command(resolveNpmCommand(MANAGED_NPM_PEER_CLEANUP_ARGS), commandOptions);
   if (cleanup.code !== 0 && isNpmAliasOverrideCompatibilityError(cleanup)) {
     omitNpmAliasOverrides = true;
     await syncPeerDependencies();
-    cleanup = await command([...MANAGED_NPM_PEER_CLEANUP_ARGS], commandOptions);
+    cleanup = await command(resolveNpmCommand(MANAGED_NPM_PEER_CLEANUP_ARGS), commandOptions);
   }
 
   if (cleanup.code === 0) {

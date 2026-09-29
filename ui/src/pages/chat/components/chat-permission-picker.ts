@@ -2,8 +2,11 @@ import { html, nothing } from "lit";
 import type { SessionPermissionMode } from "../../../../../packages/gateway-protocol/src/index.js";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerModelControlsEnglish } from "../../../i18n/locales/en-model-controls.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../../lib/external-link.ts";
 import { restorePointerOpenedChatComposerTrigger } from "./chat-picker-overlay.ts";
+
+registerModelControlsEnglish();
 
 const PERMISSION_MODES_DOCS_URL = "https://docs.openclaw.ai/gateway/permission-modes";
 const PERMISSION_MODES = ["read-only", "guarded", "workspace", "full"] as const;
@@ -64,30 +67,18 @@ function modeLabel(
       : t("chat.permissionControls.default");
 }
 
-function modeIcon(mode: SessionPermissionMode | null): unknown {
-  switch (mode) {
-    case "read-only":
-      return icons.shieldEllipsis;
-    case "guarded":
-      return icons.shieldLock;
-    case "workspace":
-      return icons.shieldCog;
-    case "full":
-      return icons.shieldAlert;
-    default:
-      return icons.shieldCheck;
-  }
-}
-
-function isPermissionMode(value: string | undefined): value is SessionPermissionMode {
-  return value !== undefined && PERMISSION_MODES.some((mode) => mode === value);
-}
+const PERMISSION_ICONS = {
+  "read-only": icons.shieldEllipsis,
+  guarded: icons.shieldLock,
+  workspace: icons.shieldCog,
+  full: icons.shieldAlert,
+};
 
 function permissionSelection(value: string | undefined): PermissionSelection | undefined {
   if (value === DEFAULT_PERMISSION_VALUE) {
     return null;
   }
-  return isPermissionMode(value) ? value : undefined;
+  return PERMISSION_MODES.find((mode) => mode === value);
 }
 
 export function renderChatPermissionPicker(params: ChatPermissionPickerProps) {
@@ -131,7 +122,7 @@ export function renderChatPermissionPicker(params: ChatPermissionPickerProps) {
         ?disabled=${disabled}
       >
         <span class="chat-controls__permission-icon" aria-hidden="true"
-          >${modeIcon(params.mode ?? null)}</span
+          >${params.mode ? PERMISSION_ICONS[params.mode] : icons.shieldCheck}</span
         >
         <span
           class="chat-controls__inline-select-label ${
@@ -141,16 +132,17 @@ export function renderChatPermissionPicker(params: ChatPermissionPickerProps) {
           ${label}
         </span>
       </button>
-      <div class="chat-controls__popover-title chat-controls__permission-heading">
+      <wa-dropdown-item
+        class="chat-controls__popover-title chat-controls__permission-heading"
+        href=${PERMISSION_MODES_DOCS_URL}
+        target=${EXTERNAL_LINK_TARGET}
+        rel=${buildExternalLinkRel()}
+      >
         <span>${t("chat.permissionControls.label")}</span>
-        <a
-          class="chat-controls__permission-learn-more learn-more-link"
-          href=${PERMISSION_MODES_DOCS_URL}
-          target=${EXTERNAL_LINK_TARGET}
-          rel=${buildExternalLinkRel()}
-          >${t("common.learnMore")}</a
+        <span slot="details" class="chat-controls__permission-learn-more learn-more-link"
+          >${t("common.learnMore")}</span
         >
-      </div>
+      </wa-dropdown-item>
       ${PERMISSION_OPTIONS.map((mode, index) => {
         const value = mode ?? DEFAULT_PERMISSION_VALUE;
         const selected = (params.mode ?? null) === mode;
@@ -174,7 +166,7 @@ export function renderChatPermissionPicker(params: ChatPermissionPickerProps) {
             ?disabled=${disabled || locked}
           >
             <span slot="icon" class="chat-controls__permission-option-icon" aria-hidden="true"
-              >${modeIcon(mode)}</span
+              >${mode ? PERMISSION_ICONS[mode] : icons.shieldCheck}</span
             >
             <span class="chat-controls__permission-option-copy">
               <span class="chat-controls__permission-option-title">

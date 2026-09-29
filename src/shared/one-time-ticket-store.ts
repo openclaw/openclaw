@@ -5,8 +5,8 @@ export type OneTimeTicketStore<T> = {
     payload: T,
     opts?: { ttlMs?: number; nowMs?: number; revokeSignal?: AbortSignal },
   ): { token: string; expiresAtMs: number };
-  /** Single use: validates the token shape, deletes the entry, returns the payload only if unexpired. */
-  consume(token: string, nowMs?: number): T | undefined;
+  /** Single use; a rejected owner check leaves an unexpired ticket available to its owner. */
+  consume(token: string, nowMs?: number, accept?: (payload: T) => boolean): T | undefined;
   /** Drops a ticket without redeeming or expiring it (no `onExpire`). */
   delete(token: string): boolean;
   clear(): void;
@@ -16,7 +16,7 @@ export type OneTimeTicketStore<T> = {
 export function createOneTimeTicketStore<T>(opts: {
   ttlMs: number;
   now?: () => number;
-  /** Called when an unconsumed ticket expires through its timer or clear(). */
+  /** Called when an unconsumed ticket expires through its timer, consume() or clear(). */
   onExpire?: (payload: T, token: string) => void;
 }): OneTimeTicketStore<T> {
   const now = opts.now ?? (() => Date.now());
@@ -63,13 +63,28 @@ export function createOneTimeTicketStore<T>(opts: {
       }
       return { token, expiresAtMs };
     },
-    consume(token, nowMs = now()) {
+    consume(token, nowMs, accept) {
+      const currentTimeMs = nowMs ?? now();
       const normalized = token.trim();
       if (!/^[a-f0-9]{48}$/u.test(normalized)) {
         return undefined;
       }
+      if (accept) {
+        const pending = entries.get(normalized);
+        if (
+          pending &&
+          pending.expiresAtMs > currentTimeMs &&
+          (!accept(pending.payload) || entries.get(normalized) !== pending)
+        ) {
+          return undefined;
+        }
+      }
       const entry = remove(normalized);
-      return entry && entry.expiresAtMs > nowMs ? entry.payload : undefined;
+      if (entry && entry.expiresAtMs <= currentTimeMs) {
+        opts.onExpire?.(entry.payload, normalized);
+        return undefined;
+      }
+      return entry?.payload;
     },
     delete(token) {
       return remove(token) !== undefined;

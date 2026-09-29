@@ -1,5 +1,6 @@
 import { html, render } from "lit";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { subscribeNativeOverlayOcclusion } from "../lib/native-overlay-occlusion.ts";
 import "@awesome.me/webawesome/dist/styles/themes/default.css";
 import { renderComposerLibraryMenu } from "../pages/chat/components/chat-composer-library-menu.ts";
 import { renderChatComposerPlusMenu } from "../pages/chat/components/chat-composer-plus-menu.ts";
@@ -25,8 +26,10 @@ const originalTheme = document.documentElement.getAttribute("data-theme");
 const originalThemeMode = document.documentElement.getAttribute("data-theme-mode");
 const originalClasses = document.documentElement.className;
 
-afterEach(() => {
+afterEach(async () => {
   document.body.replaceChildren();
+  await Promise.resolve();
+  vi.unstubAllGlobals();
   if (originalTheme === null) {
     document.documentElement.removeAttribute("data-theme");
   } else {
@@ -101,6 +104,21 @@ describe.skipIf(!hasPopoverApi)("sidebar menu stacking", () => {
 
   it("paints a plain menu hosted in openclaw-menu-surface above the resizer divider", async () => {
     await useDesktopViewport();
+    vi.stubGlobal("webkit", { messageHandlers: { openclawBrowser: { postMessage: vi.fn() } } });
+    const nearby: boolean[] = [];
+    const distant: boolean[] = [];
+    onTestFinished(
+      subscribeNativeOverlayOcclusion(
+        (occluded) => nearby.push(occluded),
+        () => new DOMRect(300, 100, 200, 400),
+      ),
+    );
+    onTestFinished(
+      subscribeNativeOverlayOcclusion(
+        (occluded) => distant.push(occluded),
+        () => new DOMRect(900, 100, 300, 400),
+      ),
+    );
     const { nav, divider } = mountShell();
     const surface = document.createElement("openclaw-menu-surface");
     const menu = createSortMenu();
@@ -111,6 +129,13 @@ describe.skipIf(!hasPopoverApi)("sidebar menu stacking", () => {
     const hit = hitTestOnDivider(menu, divider);
     expect(hit).not.toBeNull();
     expect(menu.contains(hit)).toBe(true);
+    expect(surface.getBoundingClientRect().width).toBe(0);
+    menu.style.left = "250px";
+    await expect.poll(() => nearby).toEqual([false, true]);
+    expect(distant).toEqual([false]);
+    menu.style.left = "850px";
+    await expect.poll(() => nearby).toEqual([false, true, false]);
+    await expect.poll(() => distant).toEqual([false, true]);
   });
 
   it("paints a Web Awesome dropdown above the divider through its own popover", async () => {
@@ -344,7 +369,7 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
   );
 
   it.each(["dark", "light"] as const)(
-    "reaches browser-card shadow menus in %s mode",
+    "matches session menu geometry and theme inside browser-card shadow roots in %s mode",
     async (theme) => {
       await useDesktopViewport();
       const highlight = useTheme(theme);
@@ -363,10 +388,31 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
       await page
         .elementLocator(card.shadowRoot!.querySelector<HTMLElement>('[slot="trigger"]')!)
         .click();
-      await hoverBackground(
-        card.shadowRoot!.querySelector<HTMLElement>('[value="copy-url"]')!,
-        highlight,
-      );
+      const item = card.shadowRoot!.querySelector<HTMLElement>('[value="copy-url"]')!;
+      const reference = document.createElement("wa-dropdown");
+      reference.className = "session-menu";
+      const referenceItem = document.createElement("wa-dropdown-item");
+      referenceItem.className = "session-menu__item";
+      referenceItem.textContent = "Reference action";
+      reference.append(referenceItem);
+      document.body.append(reference);
+      await reference.updateComplete;
+      await referenceItem.updateComplete;
+      const menu = card
+        .shadowRoot!.querySelector("wa-dropdown")!
+        .shadowRoot!.querySelector<HTMLElement>('[part="menu"]')!;
+      const referenceMenu = reference.shadowRoot!.querySelector<HTMLElement>('[part="menu"]')!;
+      for (const property of ["background-color", "border-radius", "padding", "box-shadow"]) {
+        expect(getComputedStyle(menu).getPropertyValue(property)).toBe(
+          getComputedStyle(referenceMenu).getPropertyValue(property),
+        );
+      }
+      for (const property of ["min-height", "padding", "font-size", "color"]) {
+        expect(getComputedStyle(item).getPropertyValue(property)).toBe(
+          getComputedStyle(referenceItem).getPropertyValue(property),
+        );
+      }
+      await hoverBackground(item, highlight);
     },
   );
 
@@ -377,19 +423,25 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
       const highlight = useTheme(theme);
       const host = document.createElement("div");
       document.body.append(host);
-      render(
-        renderComposerMenuOption({
-          id: "hover-command",
-          active: false,
-          select: () => {},
-          hover: () => {},
-          icon: "",
-          name: "/help",
-          description: "Show commands",
-        }),
-        host,
-      );
-      await hoverBackground(host.querySelector<HTMLElement>('[role="option"]')!, highlight);
+      const renderOption = (active: boolean) => {
+        render(
+          renderComposerMenuOption({
+            id: "hover-command",
+            active,
+            select: () => {},
+            hover: () => renderOption(true),
+            icon: "",
+            name: "/help",
+            description: "Show commands",
+          }),
+          host,
+        );
+      };
+      renderOption(false);
+      const option = host.querySelector<HTMLElement>('[role="option"]')!;
+      await hoverBackground(option, highlight);
+      expect(option.getAttribute("aria-selected")).toBe("true");
+      expect(getComputedStyle(option).cursor).toBe("pointer");
     },
   );
 

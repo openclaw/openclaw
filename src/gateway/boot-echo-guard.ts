@@ -1,14 +1,5 @@
-// Boot-run echo guard: tracks the active boot prompt per session key so that
-// downstream user-visible delivery paths (currently the message tool) can
-// suppress fallback-model echoes that copy substantial portions of the boot
-// prompt without preserving the internal-runtime-context delimiters.
-//
-// The marker-based strip in `stripInternalRuntimeContext` only catches
-// echoes that include the delimiter lines verbatim. A model that paraphrases
-// out the wrapper but reproduces a long contiguous chunk of the BOOT.md
-// content would slip past the marker strip and reach the user. This module
-// adds a defense-in-depth substantial-echo check using the active boot prompt
-// as the comparison source. Refs #53732.
+// Suppress substantial boot-prompt echoes even when the model omits the
+// internal-runtime-context delimiters that normally keep BOOT.md private.
 
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 
@@ -57,9 +48,6 @@ export function setBootEchoContextForSession(sessionKey: string, bootPrompt: str
     return;
   }
   const normalizedBootPrompt = normalizeEchoComparisonText(bootPrompt);
-  if (normalizedBootPrompt.length >= MIN_ECHO_CHARS) {
-    getBootPromptChunks(normalizedBootPrompt, MIN_ECHO_CHARS);
-  }
   bootContextBySessionKey.set(sessionKey, { bootPrompt, normalizedBootPrompt });
 }
 
@@ -81,21 +69,18 @@ export function getBootEchoContextForSession(sessionKey: string | undefined): st
   return bootContextBySessionKey.get(sessionKey)?.bootPrompt;
 }
 
-/**
- * Returns true if `outboundText` contains a contiguous substring of
- * `bootPrompt` of at least `minLen` characters, ignoring leading/trailing
- * whitespace on the boot prompt itself. Short boot prompts (< minLen chars)
- * never trigger to avoid suppressing legitimate short BOOT.md-directed
- * sends like a literal "good morning".
- */
+// Short prompts never suppress legitimate BOOT.md-directed sends such as "good morning".
 function containsSubstantialBootEcho(
   outboundText: string,
   bootPrompt: string,
   minLen: number = MIN_ECHO_CHARS,
 ): boolean {
   const haystack = normalizeEchoComparisonText(outboundText ?? "");
+  if (haystack.length < minLen) {
+    return false;
+  }
   const needle = normalizeEchoComparisonText(bootPrompt ?? "");
-  if (haystack.length < minLen || needle.length < minLen) {
+  if (needle.length < minLen) {
     return false;
   }
   const bootChunks = getBootPromptChunks(needle, minLen);
@@ -110,12 +95,7 @@ function containsSubstantialBootEcho(
   return false;
 }
 
-/**
- * Removes any user-supplied outbound text that substantially echoes the
- * active boot prompt. Returns an empty string when an echo is detected so
- * the caller can either drop the send entirely or treat the outbound text
- * as empty. The boot prompt itself is unchanged.
- */
+/** Empty output lets the delivery owner discard substantial boot-prompt echoes. */
 export function stripBootEchoFromOutboundText(
   outboundText: string,
   bootPrompt: string | undefined,

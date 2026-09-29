@@ -9,8 +9,10 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import { PluginRegistryInspectionResources } from "../../plugins/registry-inspection-resources.js";
+import { retireInspectionInstances } from "../../plugins/registry-inspection.test-support.js";
 import { createPluginRegistry } from "../../plugins/registry.js";
 import { setActivePluginRegistry, resetPluginRuntimeStateForTest } from "../../plugins/runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
@@ -47,25 +49,22 @@ vi.mock("../prepared-model-runtime.js", async (importOriginal) => {
           loadRuntimePlugins: true,
           runtimePluginSelections: [{ provider, modelId: "model", agentId: "main" }],
         },
-        options?.abortSignal,
-        "static",
+        { abortSignal: options?.abortSignal, catalogMode: "static" },
       );
     },
   };
 });
 
-it.each([
+it.for([
   { mode: "timeout", factory: "none", deferred: false },
   { mode: "caller-abort", factory: "none", deferred: false },
   { mode: "success-tail", factory: "none", deferred: false },
-  { mode: "factory-service", factory: "service", deferred: false },
   { mode: "factory-signal", factory: "signal", deferred: false },
   { mode: "operation-signal", factory: "service", deferred: false },
-  { mode: "deferred-factory-service", factory: "service", deferred: true },
   { mode: "deferred-factory-signal", factory: "signal", deferred: true },
 ] as const)(
   "retains $mode resources through disposal without retaining write authority",
-  async ({ mode, factory, deferred }) => {
+  async ({ mode, factory, deferred }, { signal }) => {
     const state = await createOpenClawTestState({
       prefix: "openclaw-foreground-compaction-",
       layout: "split",
@@ -156,6 +155,7 @@ it.each([
       const entryBefore = structuredClone(loadSessionEntryReadOnly(target));
       const transcriptBefore = loadTranscriptEventsSync(target);
       const entered = createDeferredCore();
+      const maintenanceFinished = createDeferredCore();
       const resume = createDeferredCore();
       const disposalEntered = createDeferredCore();
       const cleanupTailEntered = createDeferredCore();
@@ -186,7 +186,7 @@ it.each([
         logger: { info() {}, warn() {}, error() {}, debug() {} },
         activateGlobalSideEffects: false,
       });
-      const source = new PluginRegistryInspectionResources();
+      const source = new PluginRegistryInspectionResources(retireInspectionInstances);
       source.attach(donor.registry);
       const record = createPluginRecord({
         id: pluginId,
@@ -237,6 +237,8 @@ it.each([
               selectedRegistry = getPluginRuntimeGatewayRequestScope();
               entered.resolve();
               await resume.promise;
+              expect.soft(disposalCalls).toBe(0);
+              maintenanceFinished.resolve();
               return { changed: false, bytesFreed: 0, rewrittenEntries: 0 };
             },
             compact(params) {
@@ -312,29 +314,35 @@ it.each([
       try {
         expect(getAsyncWorkSignal()).toBeUndefined();
         const start = () =>
-          compactEmbeddedAgentSession({
-            ...target,
-            sessionTarget: target,
-            sessionFile: target.sessionKey,
-            workspaceDir: state.workspaceDir,
-            agentDir: state.agentDir(),
-            config,
-            provider: pluginId,
-            model: "model",
-            trigger: deferred ? "budget" : "manual",
-            ...(deferred ? { deferOwningContextEngineCompaction: true } : {}),
-            abortSignal: caller.signal,
-            enqueue: async (task) => await task(),
-          });
+          compactEmbeddedAgentSession(
+            {
+              ...target,
+              sessionTarget: target,
+              sessionFile: target.sessionKey,
+              workspaceDir: state.workspaceDir,
+              agentDir: state.agentDir(),
+              config,
+              provider: pluginId,
+              model: "model",
+              trigger: deferred ? "budget" : "manual",
+              ...(deferred ? { deferOwningContextEngineCompaction: true } : {}),
+              abortSignal: caller.signal,
+              enqueue: async (task) => await task(),
+            },
+            { sourceAuthority: { assertActive: () => {}, operatorAuthority: undefined } },
+          );
         const completion = parent ? parent.run(start) : start();
         pending = completion;
         if (deferred) {
           await completion;
-          await withTestTimeout(
-            entered.promise,
-            5_000,
-            "Deferred factory never entered maintenance",
+          const maintenanceResult = await racePromiseWithAbortSignal(
+            Promise.race([
+              entered.promise.then(() => "started"),
+              waitForDeferredTurnMaintenanceForSession(target.sessionKey).then(() => "settled"),
+            ]),
+            signal,
           );
+          expect(maintenanceResult).toBe("started");
         } else {
           await Promise.race([
             entered.promise,
@@ -377,14 +385,14 @@ it.each([
           expect.soft(workSignal?.aborted ?? false).toBe(false);
         }
         resume.resolve();
+        if (deferred) {
+          // The admitted maintenance operation must finish before resource disposal.
+          await racePromiseWithAbortSignal(maintenanceFinished.promise, signal);
+        }
         if (factory === "none") {
           await Promise.allSettled(work.slice(0, 1));
         }
-        await withTestTimeout(
-          disposalEntered.promise,
-          1_000,
-          "Factory service prevented disposal from starting",
-        );
+        await racePromiseWithAbortSignal(disposalEntered.promise, signal);
         await withTestTimeout(
           cleanupTailEntered.promise,
           1_000,

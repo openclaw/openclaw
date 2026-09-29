@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getChromeMcpModule } from "../chrome-mcp.runtime.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import type { BrowserRouteContext } from "../server-context.js";
@@ -6,7 +7,6 @@ import {
   browserNavigationPolicyForProfile,
   readBody,
   resolveProfileContext,
-  resolveTargetIdFromBody,
   withRouteTabContext,
 } from "./agent.shared.js";
 import type { BrowserRouteRegistrar } from "./types.js";
@@ -47,7 +47,7 @@ export function registerBrowserWebMcpRoutes(app: BrowserRouteRegistrar, ctx: Bro
         res,
         ctx,
         profileCtx,
-        targetId: resolveTargetIdFromBody(body),
+        targetId: normalizeOptionalString(body.targetId),
         enforceCurrentUrlAllowed: true,
         run: async ({ tab, signal }) => {
           const params = {

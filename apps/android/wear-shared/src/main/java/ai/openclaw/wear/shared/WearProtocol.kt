@@ -71,10 +71,12 @@ object WearProtocol {
 enum class WearProxyCapability(
   val wireValue: String,
 ) {
+  ReplyText(wireValue = "reply-text"),
   AgentControls(wireValue = "agent-controls"),
   GatewayControls(wireValue = "gateway-controls"),
   ModelControls(wireValue = "model-controls"),
   ModelCatalogSearch(wireValue = "model-catalog-search"),
+  SessionScopedModelCatalog(wireValue = "session-scoped-model-catalog"),
   SessionSelectionLookup(wireValue = "session-selection-lookup"),
   SessionSearchPagination(wireValue = "session-search-pagination"),
   AgentPulse(wireValue = "agent-pulse"),
@@ -126,6 +128,9 @@ enum class WearRpcMethod {
 
   @SerialName("gateway.disconnect")
   GatewayDisconnect,
+
+  @SerialName("reply.text")
+  ReplyText,
 
   @SerialName("chat.history")
   ChatHistory,

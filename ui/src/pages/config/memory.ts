@@ -1,7 +1,6 @@
 // Memory destination shell and its merged Settings surface.
 import { html, nothing, type TemplateResult } from "lit";
-import "../../components/agent-select-registration.ts";
-import type { AgentSelectOption } from "../../components/agent-select.ts";
+import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
 import { renderHubTabs } from "../../components/hub-tabs.ts";
 import {
   renderLearnMoreLink,
@@ -15,6 +14,8 @@ import {
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { registerMemoryImportEnglish } from "../../i18n/locales/en-memory-import.ts";
+import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
+import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import type { PluginCatalogItem } from "../../lib/plugins/index.ts";
 import {
   selectedEngineId,
@@ -22,6 +23,10 @@ import {
   type MemoryEngineSelection,
   type MemoryTab,
 } from "./memory-schema.ts";
+
+registerSettingsEnglish();
+
+registerPluginManagementEnglish();
 
 registerMemoryImportEnglish();
 
@@ -183,9 +188,6 @@ type MemoryViewProps = {
   editor: TemplateResult;
   /** Global dreaming controls, sharing runtimeConfig with the editor above. */
   dreamingSettings: TemplateResult;
-  agentId: string | null;
-  agents: readonly AgentSelectOption[];
-  onAgentChange: (agentId: string | null) => void;
 };
 
 const MEMORY_PANEL_ID = "memory-settings-panel";
@@ -375,12 +377,12 @@ function renderAddonsSection(props: MemoryViewProps) {
 
 function renderSettingsTab(props: MemoryViewProps) {
   return html`
-    <div class="settings-page">
+    <div class="settings-page" ${shellLayoutTraits({ settingsPage: true })}>
       ${renderEngineSection(props)} ${renderAddonsSection(props)}
       <p class="settings-page__intro">${t("memoryPage.search.intro")}</p>
     </div>
     ${props.editor}
-    <div class="settings-page">
+    <div class="settings-page" ${shellLayoutTraits({ settingsPage: true })}>
       ${props.dreamingSettings}
       ${renderSettingsSection(
         { title: t("memoryPage.import.title"), description: t("memoryPage.import.description") },
@@ -400,8 +402,11 @@ function renderSettingsTab(props: MemoryViewProps) {
 
 export function renderMemory(props: MemoryViewProps) {
   return html`
-    <section class="memory-page">
-      <section class="content-header content-header--settings content-header--page hub-page-header">
+    <section class="memory-page" ${shellLayoutTraits({ memoryPage: true })}>
+      <section
+        class="content-header content-header--settings content-header--page hub-page-header"
+        ${shellLayoutTraits({ toolbarHeader: true })}
+      >
         <div class="hub-page-header__title">
           <div class="page-title">${t("tabs.memory")}</div>
           <div class="page-subtitle">
@@ -422,25 +427,6 @@ export function renderMemory(props: MemoryViewProps) {
             panelId: MEMORY_PANEL_ID,
             onSelect: (tab) => props.onTabChange(tab),
           })}
-        </div>
-        <div class="hub-page-header__actions">
-          ${
-            props.activeTab === "settings" || props.agents.length <= 1
-              ? nothing
-              : html`
-                  <div class="agent-scope-control">
-                    <span class="agent-scope-control__label"
-                      >${t("memoryPage.dreaming.agentScope.rowTitle")}</span
-                    >
-                    <openclaw-agent-select
-                      .options=${props.agents}
-                      .value=${props.agentId ?? ""}
-                      .accessibleLabel=${t("memoryPage.dreaming.agentScope.rowTitle")}
-                      .onSelect=${(value: string) => props.onAgentChange(value || null)}
-                    ></openclaw-agent-select>
-                  </div>
-                `
-          }
         </div>
       </section>
       <div id=${MEMORY_PANEL_ID} class="memory-page__panel" role="tabpanel">

@@ -1,12 +1,12 @@
-import { type GenerateContentParameters, GoogleGenAI } from "@google/genai";
+import { GoogleGenAI } from "@google/genai";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.js";
-// Google provider adapts Gemini streams and tools to the agent runtime.
 import { createAssistantOutput } from "../transports/assistant-output.js";
 import { resolveOpencodeSessionHeaders } from "../transports/session-affinity.js";
 import { mergeTransportHeaders } from "../transports/transport-stream-shared.js";
 import type { Context, Model, SimpleStreamOptions, StreamFunction } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
+import { requireApiKey } from "../utils/required-api-key.js";
 import {
   buildGoogleGenerateContentParams,
   buildGoogleSimpleThinking,
@@ -17,7 +17,6 @@ import { buildBaseOptions } from "./simple-options.js";
 
 type GoogleOptions = GoogleProviderOptions;
 
-// Counter for generating unique tool call IDs
 let toolCallCounter = 0;
 
 export const streamGoogle: StreamFunction<"google-generative-ai", GoogleOptions> = (
@@ -37,7 +36,7 @@ export const streamGoogle: StreamFunction<"google-generative-ai", GoogleOptions>
       const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
       return createClient(model, apiKey, resolveOpencodeSessionHeaders(model, options));
     },
-    buildParams: () => buildParams(model, context, options),
+    buildParams: () => buildGoogleGenerateContentParams(model, context, options),
     nextToolCallId: (name) => `${name}_${Date.now()}_${++toolCallCounter}`,
   });
 
@@ -49,18 +48,11 @@ export const streamSimpleGoogle: StreamFunction<"google-generative-ai", SimpleSt
   context: Context,
   options?: SimpleStreamOptions,
 ) => {
-  const apiKey = options?.apiKey || getEnvApiKey(model.provider);
-  if (!apiKey) {
-    throw new Error(`No API key for provider: ${model.provider}`);
-  }
-
+  const apiKey = requireApiKey(model.provider, options?.apiKey);
   const base = buildBaseOptions(model, options, apiKey);
   return streamGoogle(model, context, {
     ...base,
-    thinking: buildGoogleSimpleThinking(model, options, {
-      includeGemma4ThinkingLevel: true,
-      useFlashLiteBudgets: true,
-    }),
+    thinking: buildGoogleSimpleThinking(model, options),
   } satisfies GoogleOptions);
 };
 
@@ -87,12 +79,4 @@ function createClient(
     apiKey: resolvedApiKey,
     httpOptions: Object.keys(httpOptions).length > 0 ? httpOptions : undefined,
   });
-}
-
-function buildParams(
-  model: Model<"google-generative-ai">,
-  context: Context,
-  options: GoogleOptions = {},
-): GenerateContentParameters {
-  return buildGoogleGenerateContentParams(model, context, options);
 }

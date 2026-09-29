@@ -1,10 +1,11 @@
 {
   "id": "groq",
-  "categories": ["models", "media"],
+  "categories": ["models"],
   "activation": {
     "onStartup": false
   },
   "enabledByDefault": true,
+  "providerCatalogEntry": "./provider-discovery.ts",
   "providers": ["groq"],
   "providerEndpoints": [
     {

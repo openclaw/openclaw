@@ -76,8 +76,8 @@ const ROUTES = new Set([
   "clawhub-token-bootstrap",
   "clawhub-readback",
 ]);
-const NPM_TAGS = new Set(["latest", "alpha", "beta", "extended-stable"]);
-const CLAWHUB_TAGS = new Set(["latest", "alpha", "beta"]);
+const NPM_TAGS = new Set(["latest", "beta", "extended-stable"]);
+const CLAWHUB_TAGS = new Set(["latest", "beta"]);
 const META_PACKAGE = "@openclaw/meta-provider";
 const META_PACKAGE_DIR = "extensions/meta";
 
@@ -623,6 +623,13 @@ export function inspectPackageTarballBytes(inputBytes, options = {}) {
 }
 
 export function validatePluginPackageManifest(params, packageManifest) {
+  if (
+    params.route !== "npm-readback" &&
+    params.route !== "clawhub-readback" &&
+    (params.version?.includes("-alpha.") || packageManifest.version?.includes("-alpha."))
+  ) {
+    throw new Error("Alpha releases are retired; use a beta prerelease instead.");
+  }
   if (packageManifest.name !== params.packageName || packageManifest.version !== params.version) {
     throw new Error(
       `Packed plugin identity ${String(packageManifest.name)}@${String(packageManifest.version)} does not match ${params.packageName}@${params.version}.`,
@@ -699,11 +706,20 @@ function normalizePublicationParams(params) {
     throw new Error(`${route} must not carry npm publisher-policy controls.`);
   }
   const publishTag = assertString(params.publishTag, "publish tag");
+  const historicalReadback = route === "npm-readback" || route === "clawhub-readback";
+  const alphaVersion = version.includes("-alpha.");
+  if (!historicalReadback && (alphaVersion || publishTag === "alpha")) {
+    throw new Error("Alpha releases are retired; use a beta prerelease instead.");
+  }
   const allowedTags = route.startsWith("npm-") ? NPM_TAGS : CLAWHUB_TAGS;
-  if (!allowedTags.has(publishTag)) {
+  if (!allowedTags.has(publishTag) && !(historicalReadback && publishTag === "alpha")) {
     throw new Error(`Unsupported ${route} publish tag: ${publishTag}`);
   }
-  if (route.startsWith("npm-")) {
+  if (historicalReadback && alphaVersion) {
+    if (publishTag !== "alpha") {
+      throw new Error("Historical alpha readback requires the alpha tag.");
+    }
+  } else if (route.startsWith("npm-")) {
     const override = publishTag === "extended-stable" ? publishTag : undefined;
     const publishPlan = resolveNpmPublishPlan(version, undefined, override);
     if (publishPlan.publishTag !== publishTag) {
@@ -712,11 +728,7 @@ function normalizePublicationParams(params) {
       );
     }
   } else {
-    const expectedTag = version.includes("-alpha.")
-      ? "alpha"
-      : version.includes("-beta.")
-        ? "beta"
-        : "latest";
+    const expectedTag = version.includes("-beta.") ? "beta" : "latest";
     if (publishTag !== expectedTag) {
       throw new Error(
         `${packageName}@${version}: ClawHub publish tag ${publishTag} must be ${expectedTag}.`,
@@ -1133,6 +1145,18 @@ export function verifyPluginPublicationArtifact(params) {
   if (!statSync(outputPath).isFile()) {
     throw new Error(`Verified plugin tarball was not written: ${outputPath}`);
   }
+  if (params.verificationOutput) {
+    if (!normalized.sourcePackageJsonSha256) {
+      throw new Error("A publication qualification receipt requires the exact source manifest.");
+    }
+    // Carry the consumed tuple, including retained producer attempts. Parent
+    // verification must not rediscover a different artifact or trust local paths.
+    writeFileSync(
+      params.verificationOutput,
+      `${JSON.stringify({ ...normalized, ...expectedBinding })}\n`,
+      { flag: "wx", mode: 0o600 },
+    );
+  }
   return {
     artifactDigest: expectedArtifactDigest,
     artifactId,
@@ -1251,6 +1275,7 @@ export function main(argv = process.argv.slice(2)) {
     workflowRunMetadataPath: values.workflowRunMetadata,
     runStatePolicy: values.runStatePolicy,
     workflowSha: values.workflowSha,
+    verificationOutput: values.verificationOutput,
   });
   if (values.githubOutput) {
     appendGithubOutput(values.githubOutput, {

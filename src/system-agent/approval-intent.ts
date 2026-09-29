@@ -166,7 +166,7 @@ export async function classifySystemAgentApprovalIntent(
         callerResult.resolve("other");
       } finally {
         await work.drain();
-        prepared.release();
+        await prepared[Symbol.asyncDispose]();
       }
     }).catch(() => callerResult.resolve("other"));
     return await callerResult.promise;

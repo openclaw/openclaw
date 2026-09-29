@@ -5,12 +5,71 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { resolveExecutablePath } from "../infra/executable-path.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { mergeProcessEnv, resolveEnvironmentValue } from "../infra/process-env.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { runCommandBuffered } from "../process/exec.js";
+import { getOrCreatePromise } from "../shared/lazy-promise.js";
 
 const GITHUB_IDENTITY_COMMAND_TIMEOUT_MS = 15_000;
 export const GITHUB_IDENTITY_OUTPUT_LIMIT_BYTES = 32 * 1024;
+
+// Read/options only: host gh login/logout/switch detection can lag by 60 seconds,
+// matching credential verification. Publication and environment tokens stay live.
+const NATIVE_GITHUB_TOKEN_TTL_MS = 60_000;
+let nativeTokens = new Map<string, { token: string; expiresAt: number }>();
+const pendingNativeTokens = new Map<string, Promise<string | undefined>>();
+
+export function clearNativeGitHubTokenCache(): void {
+  // In-flight reads keep their old map and cannot repopulate the cleared cache.
+  nativeTokens = new Map();
+  pendingNativeTokens.clear();
+}
+
+export async function readCachedNativeGitHubToken(
+  env: NodeJS.ProcessEnv,
+  requireAbsentProof = false,
+): Promise<string | undefined> {
+  const effectiveEnv = mergeProcessEnv([process.env, env]);
+  const token =
+    resolveEnvironmentValue(effectiveEnv, "GH_TOKEN") ||
+    resolveEnvironmentValue(effectiveEnv, "GITHUB_TOKEN");
+  if (token) {
+    return normalizeGitHubToken(token);
+  }
+  // Include the complete command context: operators can provide gh wrappers,
+  // and relative config/executable paths depend on the current directory.
+  const key = createHash("sha256")
+    .update(
+      JSON.stringify([
+        process.cwd(),
+        Object.entries(effectiveEnv).toSorted(([left], [right]) => left.localeCompare(right)),
+        requireAbsentProof,
+      ]),
+    )
+    .digest("hex");
+  const cache = nativeTokens;
+  const cached = cache.get(key);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.token;
+  }
+  cache.delete(key);
+  return getOrCreatePromise(
+    pendingNativeTokens,
+    key,
+    async () => {
+      const current = await readNativeGitHubToken(env, requireAbsentProof);
+      // Failures and anonymous absence proofs remain live, so unreadable native
+      // configuration cannot be hidden by a previously absent account.
+      if (current !== undefined) {
+        cache.set(key, { token: current, expiresAt: Date.now() + NATIVE_GITHUB_TOKEN_TTL_MS });
+        pruneMapToMaxSize(cache, 32);
+      }
+      return current;
+    },
+    { evictOnSettled: true },
+  );
+}
 
 export async function runGitHubIdentityCommand(
   argv: string[],
@@ -165,11 +224,29 @@ export type GitHubIdentityPreparation = {
   agentId: string;
   env?: NodeJS.ProcessEnv;
 };
+/** Release admission after starting the operation, before its asynchronous result settles. */
+export type GitHubReadIdentityStarter = <T>(start: () => T) => Promise<Awaited<T>>;
+
 export type GitHubReadIdentityPreparation = GitHubIdentityPreparation & {
   getCurrentConfig: () => OpenClawConfig;
   assertActive: () => void;
+  startActive?: GitHubReadIdentityStarter;
   refresh: () => Promise<void>;
 };
+
+/** The caller's owner admits the operation; selection is checked inside that admission. */
+export function startGitHubIdentityOperation<T>(
+  operation: () => T,
+  authority: { assertCurrent?: () => void; startCurrent?: GitHubReadIdentityStarter },
+): T | Promise<Awaited<T>> {
+  authority.assertCurrent?.();
+  return authority.startCurrent
+    ? authority.startCurrent(() => {
+        authority.assertCurrent?.();
+        return operation();
+      })
+    : operation();
+}
 
 export class GitHubIdentityError extends Error {
   constructor(readonly reason: "unavailable" | "changed" | "rate_limited" | "unverified") {
@@ -194,6 +271,7 @@ type GitHubReadAuthority = {
   cacheScope: string;
   assertSelected: () => void;
   revalidate: () => Promise<void>;
+  start: GitHubReadIdentityStarter;
 };
 export type PreparedGitHubReadIdentity = GitHubReadAuthority & {
   token: string;
@@ -206,13 +284,24 @@ export type PreparedGitHubSourceReadIdentity =
 export function createGitHubReadIdentity(
   params: {
     assertSelected: () => void;
+    startActive?: GitHubReadIdentityStarter;
     readToken: () => Promise<string | undefined>;
   } & (
     | { token: string; selection: GitHubReadIdentitySelection }
     | { token: undefined; selection: Readonly<{ source: "anonymous" }> }
   ),
 ): PreparedGitHubSourceReadIdentity {
-  const { token, selection, assertSelected, readToken } = params;
+  const { token, selection, assertSelected, startActive, readToken } = params;
+  const caller = { assertCurrent: assertSelected, startCurrent: startActive };
+  const start = async <T>(operation: () => T): Promise<Awaited<T>> => {
+    const current = await startGitHubIdentityOperation(readToken, caller);
+    return await startGitHubIdentityOperation(() => {
+      if (current !== token) {
+        throw new GitHubIdentityError("changed");
+      }
+      return operation();
+    }, caller);
+  };
   const authority: GitHubReadAuthority = {
     cacheScope:
       selection.source === "anonymous"
@@ -223,14 +312,8 @@ export function createGitHubReadIdentity(
             )
             .digest("hex"),
     assertSelected,
-    revalidate: async () => {
-      assertSelected();
-      const current = await readToken();
-      assertSelected();
-      if (current !== token) {
-        throw new GitHubIdentityError("changed");
-      }
-    },
+    revalidate: () => start(() => undefined),
+    start,
   };
   // Durable selection excludes credentials; the in-process result cache still
   // separates rotations, and later native sign-in closes anonymous authority.

@@ -1,3 +1,5 @@
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
+import { expectDefined } from "@openclaw/normalization-core";
 import { Type, type Static } from "typebox";
 import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/session-store-owner.js";
@@ -5,11 +7,8 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createAbortError } from "../../infra/abort-signal.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveSubagentCompletionResultText } from "../subagents/completion/subagent-completion-result.js";
-import {
-  onSubagentRegistryPersisted,
-  SUBAGENT_RUNS_READ_CACHE_TTL_MS,
-} from "../subagents/registry/subagent-registry-state.js";
-import { getSubagentRunsByRunIds } from "../subagents/registry/subagent-registry.js";
+import { onSubagentRegistryPersisted } from "../subagents/registry/subagent-registry-state.js";
+import { prepareSubagentRunsByRunIds } from "../subagents/registry/subagent-registry.js";
 import type { SubagentRunRecord } from "../subagents/registry/subagent-registry.types.js";
 import { markCollectorReaderTool } from "../subagents/swarm/swarm-collector-capability.js";
 import { resolveSwarmConfig } from "../subagents/swarm/swarm-config.js";
@@ -141,64 +140,20 @@ export async function waitForCollectorCompletion(params: {
   config?: OpenClawConfig;
   signal?: AbortSignal;
 }): Promise<CollectorCompletionResult> {
-  const readCompletion = (): CollectorCompletionResult | undefined => {
-    const state = readWaitState(
-      [params.runId],
-      params.currentSessionKeys,
-      params.currentAgentId,
-      params.config,
-    );
-    const error = state.errors?.[0];
-    if (error) {
-      throw new ToolInputError(`agents.run ${error.error}: ${error.runId}`);
-    }
-    return state.completed[0];
-  };
-  const immediate = readCompletion();
-  if (immediate) {
-    return immediate;
-  }
-  if (params.signal?.aborted) {
-    throw new ToolInputError("agents.run wait aborted.");
-  }
-  return await new Promise<CollectorCompletionResult>((resolve, reject) => {
-    let settled = false;
-    const finish = (result: CollectorCompletionResult | Error) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      unsubscribe();
-      params.signal?.removeEventListener("abort", onAbort);
-      if (result instanceof Error) {
-        reject(result);
-      } else {
-        resolve(result);
-      }
-    };
-    const check = () => {
-      try {
-        const completion = readCompletion();
-        if (completion) {
-          finish(completion);
-        }
-      } catch (error) {
-        finish(error instanceof Error ? error : new Error(String(error)));
-      }
-    };
-    const onAbort = () => finish(new ToolInputError("agents.run wait aborted."));
-    const unsubscribe = onSubagentRegistryPersisted(check);
-    params.signal?.addEventListener("abort", onAbort, { once: true });
-    // Close the read/subscribe race if completion persisted between both operations.
-    if (params.signal?.aborted) {
-      onAbort();
-    } else {
-      check();
-    }
+  const state = await waitForCollector({
+    ...params,
+    ids: [params.runId],
+    abortError: () => new ToolInputError("agents.run wait aborted."),
   });
+  const error = state.errors?.[0];
+  if (error) {
+    throw new ToolInputError(`agents.run ${error.error}: ${error.runId}`);
+  }
+  return expectDefined(state.completed[0], "collector completion");
 }
 
 function readWaitState(
+  entries: ReadonlyMap<string, SubagentRunRecord>,
   ids: readonly string[],
   currentSessionKeys: ReadonlySet<string>,
   currentAgentId?: string,
@@ -211,9 +166,8 @@ function readWaitState(
     inputIndex: number;
   }> = [];
   const pending: string[] = [];
-  const snapshot = getSubagentRunsByRunIds(ids);
   for (const [inputIndex, runId] of ids.entries()) {
-    const entry = snapshot.entries.get(runId);
+    const entry = entries.get(runId);
     if (!entry?.collect) {
       errors.push({ runId, error: "not_found" });
       continue;
@@ -249,50 +203,88 @@ async function waitForCollector(params: {
   currentSessionKeys: ReadonlySet<string>;
   currentAgentId?: string;
   config?: OpenClawConfig;
-  timeoutMs: number;
+  timeoutMs?: number;
   signal?: AbortSignal;
+  abortError: () => Error;
 }) {
-  const deadline = performance.now() + params.timeoutMs;
-  for (;;) {
+  const deadline =
+    params.timeoutMs === undefined ? undefined : performance.now() + params.timeoutMs;
+  let changed: boolean;
+  let resume: (() => void) | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const wake = () => {
+    changed = true;
+    resume?.();
+  };
+  const assertNotAborted = () => {
     if (params.signal?.aborted) {
-      throw createAbortError("agents_wait aborted.");
+      throw params.abortError();
     }
-    // Recovery can replace a registry row while preserving its stable swarm id.
-    // Re-resolve ownership and completion on every wake instead of retaining old objects.
-    const state = readWaitState(
-      params.ids,
-      params.currentSessionKeys,
-      params.currentAgentId,
-      params.config,
-    );
-    if (state.completed.length > 0 || state.pending.length === 0 || performance.now() >= deadline) {
-      return state;
-    }
-    await new Promise<void>((resolve, reject) => {
-      const finish = (error?: Error) => {
-        clearTimeout(timer);
-        unsubscribe();
-        params.signal?.removeEventListener("abort", onAbort);
-        if (error) {
-          reject(error);
-          return;
+  };
+  // Cover the worker read as well as the parked wait; publications during either need a reread.
+  const unsubscribe = onSubagentRegistryPersisted(wake);
+  params.signal?.addEventListener("abort", wake, { once: true });
+  try {
+    for (;;) {
+      assertNotAborted();
+      changed = false;
+      let read: { ready: true; value: ReturnType<typeof readWaitState> } | { ready: false };
+      let callbackAbort: Error | undefined;
+      try {
+        const prepared = await prepareSubagentRunsByRunIds(params.ids);
+        read = prepared.consume((entries) => {
+          if (params.signal?.aborted) {
+            callbackAbort = params.abortError();
+            throw callbackAbort;
+          }
+          return readWaitState(
+            entries,
+            params.ids,
+            params.currentSessionKeys,
+            params.currentAgentId,
+            params.config,
+          );
+        });
+      } catch (error) {
+        if (params.signal?.aborted && error !== callbackAbort) {
+          const aborted = params.abortError();
+          aborted.cause = error;
+          throw aborted;
         }
-        resolve();
-      };
-      const onAbort = () => finish(createAbortError("agents_wait aborted."));
-      // Local writes wake immediately; polling still observes other processes at
-      // the registry's persisted-read cache cadence.
-      const timer = setTimeout(
-        finish,
-        Math.min(SUBAGENT_RUNS_READ_CACHE_TTL_MS, Math.max(0, deadline - performance.now())),
-      );
-      const unsubscribe = onSubagentRegistryPersisted(() => finish());
-      params.signal?.addEventListener("abort", onAbort, { once: true });
-      // Abort can race listener registration; never turn that cancellation into a successful poll.
-      if (params.signal?.aborted) {
-        onAbort();
+        throw error;
       }
-    });
+      // Join the read before releasing listeners, even when cancellation wins.
+      assertNotAborted();
+      if (!read.ready) {
+        await yieldToEventLoop();
+        continue;
+      }
+      const state = read.value;
+      if (
+        state.completed.length > 0 ||
+        state.pending.length === 0 ||
+        (deadline !== undefined && performance.now() >= deadline)
+      ) {
+        return state;
+      }
+      if (changed) {
+        await yieldToEventLoop();
+        continue;
+      }
+      await new Promise<void>((resolve) => {
+        resume = resolve;
+        if (deadline !== undefined) {
+          timer = setTimeout(resolve, Math.max(0, deadline - performance.now()));
+        }
+      });
+      clearTimeout(timer);
+      timer = undefined;
+      resume = undefined;
+    }
+  } finally {
+    clearTimeout(timer);
+    unsubscribe();
+    params.signal?.removeEventListener("abort", wake);
   }
 }
 
@@ -336,6 +328,7 @@ export function createAgentsWaitTool(opts: {
         config: opts.config,
         timeoutMs: timeoutSeconds * 1_000,
         signal,
+        abortError: () => createAbortError("agents_wait aborted."),
       });
       const noAuthorizedTargets =
         result.completed.length === 0 &&

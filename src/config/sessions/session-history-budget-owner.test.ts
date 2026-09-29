@@ -7,13 +7,19 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import * as queue from "../../shared/store-writer-queue.js";
+import { closeCachedOpenClawAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
+import { clearOpenClawAgentDatabaseValidationCache } from "../../state/openclaw-agent-db-validation-cache.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
+  getOpenClawAgentDatabaseIfOpen,
   openOpenClawAgentDatabase,
   resolveIncognitoOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import {
   createOpenClawTestState,
@@ -25,7 +31,11 @@ import { appendTranscriptMessage, resetSessionEntryLifecycle } from "./session-a
 import * as archiveStore from "./session-accessor.sqlite-archive-store.js";
 import * as archives from "./session-accessor.sqlite-archive.js";
 import { patchSessionEntryCore, replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
-import * as reclamation from "./session-accessor.sqlite-reclamation.js";
+import * as reclamation from "./session-accessor.sqlite-reclamation-run.js";
+import {
+  joinSessionHistoryBudgetSweeps,
+  type SessionHistoryBudgetQueueObservation,
+} from "./session-history-budget.test-support.js";
 import * as entryEviction from "./session-history-entry-eviction.runtime.js";
 import {
   enforceSqliteSessionHistoryDiskBudget,
@@ -50,6 +60,7 @@ afterEach(async () => {
   vi.restoreAllMocks();
   await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   workerChannel.unsubscribe(trackWorker);
   // Archive/reclamation promises above already joined their Workers; the measurement pool is idle.
@@ -70,14 +81,7 @@ function readRow(databasePath: string, sql: string, ...values: SQLInputValue[]) 
   }
 }
 
-type QueueObservation = {
-  mock: {
-    calls: Array<Parameters<typeof queue.runQueuedStoreWrite>>;
-    results: Array<{ type: string; value: unknown }>;
-  };
-};
-
-function observeFirstSweep(spy: QueueObservation) {
+function observeFirstSweep(spy: SessionHistoryBudgetQueueObservation) {
   const index = spy.mock.calls.findIndex(
     ([params]) => params.label === "enforceSqliteSessionHistoryDiskBudget",
   );
@@ -88,31 +92,6 @@ function observeFirstSweep(spy: QueueObservation) {
   const pending: Promise<unknown> = outcome.value;
   work.push(pending);
   return pending;
-}
-
-async function joinSeedSweeps(spy: QueueObservation): Promise<void> {
-  let joined = 0;
-  for (;;) {
-    const pending = spy.mock.calls.flatMap(([params], index) => {
-      const outcome = spy.mock.results[index];
-      return params.label === "enforceSqliteSessionHistoryDiskBudget" &&
-        outcome?.type === "return" &&
-        outcome.value instanceof Promise
-        ? [outcome.value as Promise<unknown>]
-        : [];
-    });
-    if (joined === pending.length) {
-      return;
-    }
-    const next = pending.slice(joined);
-    joined = pending.length;
-    work.push(...next);
-    await Promise.all(next);
-    // A settled seed sweep may enqueue its existing pending-force continuation.
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-  }
 }
 
 it.each([
@@ -185,7 +164,7 @@ it.each([
       );
     }
     // Join seed-triggered real default-budget work; do not use a warn/no-retention drain.
-    await joinSeedSweeps(queueSpy);
+    await joinSessionHistoryBudgetSweeps(queueSpy, work);
     queueSpy.mockClear();
     const target = resolveSqliteTargetFromSessionStorePath(storePath, { agentId, env: state.env });
     const databasePath = target.path;
@@ -219,9 +198,18 @@ it.each([
               sessionKey,
             ),
           ).toEqual({ current_session_id: originalId });
-          // The pass has warmed A while pruning. Clear it before the REAL lazy
-          // loader so a missing scope handoff cannot hide behind its cached handle.
-          closeOpenClawAgentDatabasesForTest(state.root);
+          // Evict the host handle before the lazy loader without revoking this active sweep's workers.
+          const databaseOptions = {
+            agentId: target.agentId ?? "main",
+            path: databasePath,
+            env: state.env,
+          };
+          const cached = getOpenClawAgentDatabaseIfOpen(databaseOptions);
+          if (cached) {
+            closeCachedOpenClawAgentDatabase(cached, { eviction: true });
+          }
+          clearOpenClawAgentDatabaseValidationCache(state.root);
+          expect(getOpenClawAgentDatabaseIfOpen(databaseOptions)).toBeUndefined();
         }
         return await deleteEntry(...args);
       },

@@ -1,40 +1,39 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import ts from "typescript";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { typeCheckSources } from "../../../test/helpers/typescript.js";
+import * as stateReads from "../../state/openclaw-state-db-readonly.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { applyCodeModeCatalog } from "../code-mode.js";
 import {
   createCodeModeHarness,
   resetCodeModeTestState,
   runUntilCompleted,
 } from "../code-mode.test-support.js";
+import { createSubagentRunRecord } from "../subagent-test-fixtures.test-helpers.js";
+import type { PreparedSubagentRunsRead } from "../subagents/registry/subagent-registry-read-snapshot.js";
+import { saveSubagentRegistryToSqlite } from "../subagents/registry/subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "../subagents/registry/subagent-registry.types.js";
 
 const records = new Map<string, SubagentRunRecord>();
-const registryEvents = vi.hoisted(() => ({ listeners: new Set<() => void>() }));
+type ReadRuns = (runIds: readonly string[]) => Promise<PreparedSubagentRunsRead>;
+const registryEvents = vi.hoisted(() => ({
+  listeners: new Set<() => void>(),
+  read: vi.fn<ReadRuns>(),
+  subscribe: vi.fn<(listener: () => void) => () => void>(),
+}));
 
 vi.mock("../subagents/registry/subagent-registry.js", () => ({
-  getSubagentRunsByRunIds: (runIds: readonly string[]) => ({
-    entries: new Map(
-      runIds.flatMap((runId) => {
-        const entry =
-          records.get(runId) ??
-          [...records.values()].find((candidate) => candidate.swarmRunId === runId);
-        return entry ? [[runId, entry] as const] : [];
-      }),
-    ),
-  }),
+  prepareSubagentRunsByRunIds: registryEvents.read,
 }));
 
 vi.mock("../subagents/registry/subagent-registry-state.js", () => ({
-  SUBAGENT_RUNS_READ_CACHE_TTL_MS: 500,
-  onSubagentRegistryPersisted: (listener: () => void) => {
-    registryEvents.listeners.add(listener);
-    return () => registryEvents.listeners.delete(listener);
-  },
+  onSubagentRegistryPersisted: registryEvents.subscribe,
 }));
 
 import { isToolResultError } from "../tool-result-error.js";
 import { createAgentsWaitTool, waitForCollectorCompletion } from "./agents-wait-tool.js";
+import { collectorRun } from "./agents-wait-tool.test-support.js";
 
 function createMainSessionWaitTool() {
   return createAgentsWaitTool({
@@ -44,26 +43,35 @@ function createMainSessionWaitTool() {
   });
 }
 
-function collectorRun(
-  runId: string,
-  requesterSessionKey: string,
-  completion?: SubagentRunRecord["collectorCompletion"],
-): SubagentRunRecord {
+function waitAtBoundary(boundary: "tool" | "bridge", runId: string, signal?: AbortSignal) {
+  return boundary === "tool"
+    ? createMainSessionWaitTool()
+        .execute("wait", { ids: [runId], timeoutSeconds: 1 }, signal)
+        .then((result) => result.details)
+    : waitForCollectorCompletion({
+        runId,
+        currentSessionKeys: new Set(["agent:main:main"]),
+        currentAgentId: "main",
+        signal,
+      });
+}
+
+function selectRuns(runIds: readonly string[]): Map<string, SubagentRunRecord> {
+  return new Map(
+    runIds.flatMap((runId) => {
+      const entry =
+        records.get(runId) ??
+        [...records.values()].find((candidate) => candidate.swarmRunId === runId);
+      return entry ? [[runId, entry] as const] : [];
+    }),
+  );
+}
+
+function preparedRuns(
+  read: () => ReadonlyMap<string, SubagentRunRecord>,
+): PreparedSubagentRunsRead {
   return {
-    runId,
-    childSessionKey: `agent:worker:subagent:${runId}`,
-    controllerSessionKey: requesterSessionKey,
-    requesterSessionKey,
-    requesterDisplayKey: requesterSessionKey,
-    task: runId,
-    cleanup: "keep",
-    createdAt: Date.now(),
-    execution: { status: completion ? "terminal" : "running" },
-    collect: true,
-    swarmRequesterSessionKey: requesterSessionKey,
-    groupId: "group",
-    completion: { required: false, resultText: completion ? `result-${runId}` : undefined },
-    collectorCompletion: completion,
+    consume: (consume) => ({ ready: true, value: consume(read()) }),
   };
 }
 
@@ -71,6 +79,13 @@ describe("agents_wait", () => {
   beforeEach(() => {
     records.clear();
     registryEvents.listeners.clear();
+    registryEvents.subscribe.mockReset().mockImplementation((listener) => {
+      registryEvents.listeners.add(listener);
+      return () => registryEvents.listeners.delete(listener);
+    });
+    registryEvents.read
+      .mockReset()
+      .mockImplementation(async (runIds) => preparedRuns(() => selectRuns(runIds)));
   });
 
   it("composes real collector outputs through discovery, describe, and generated declarations", async () => {
@@ -114,36 +129,23 @@ describe("agents_wait", () => {
     // Consume the intact guest declaration, with opaque collector-specific output.
     expect(file.content).not.toContain("truncated: true");
     const fileName = "/collector-consumer.ts";
-    const source = ts.createSourceFile(
-      fileName,
+    const source =
       file.content +
-        "\n" +
-        [
-          "async function consume() {",
-          'const result = await agents_wait({ids:["ready"]});',
-          "const ids: string[] = result.completed.map(item => item.runId);",
-          "// @ts-expect-error No invented builds field.",
-          "result.builds.map(item => item.id);",
-          "// @ts-expect-error Collector structured output is unknown without its own schema.",
-          "result.completed[0].structured.answer;",
-          "return ids;",
-          "}",
-          "// @ts-expect-error Required ids stay required.",
-          "agents_wait({});",
-        ].join("\n"),
-      ts.ScriptTarget.ESNext,
-      true,
-    );
-    const options = { noEmit: true, strict: true, types: [], target: ts.ScriptTarget.ESNext };
-    const host = ts.createCompilerHost(options);
-    const original = host.getSourceFile.bind(host);
-    host.getSourceFile = (name, ...args) => (name === fileName ? source : original(name, ...args));
-    const program = ts.createProgram([fileName], options, host);
-    expect(
-      ts
-        .getPreEmitDiagnostics(program)
-        .map((diagnostic) => ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n")),
-    ).toEqual([]);
+      "\n" +
+      [
+        "async function consume() {",
+        'const result = await agents_wait({ids:["ready"]});',
+        "const ids: string[] = result.completed.map(item => item.runId);",
+        "// @ts-expect-error No invented builds field.",
+        "result.builds.map(item => item.id);",
+        "// @ts-expect-error Collector structured output is unknown without its own schema.",
+        "result.completed[0].structured.answer;",
+        "return ids;",
+        "}",
+        "// @ts-expect-error Required ids stay required.",
+        "agents_wait({});",
+      ].join("\n");
+    expect(typeCheckSources({ [fileName]: source })).toEqual([]);
   });
 
   it("settles a parked collector bridge from a registry write event", async () => {
@@ -186,25 +188,36 @@ describe("agents_wait", () => {
     ).resolves.toMatchObject({ result: "retained collector result" });
   });
 
-  it("rejects when abort wins the listener-registration race", async () => {
-    const entry = collectorRun("abort-race", "agent:main:main");
-    records.set(entry.runId, entry);
-    const controller = new AbortController();
-    const originalAddEventListener = controller.signal.addEventListener.bind(controller.signal);
-    vi.spyOn(controller.signal, "addEventListener").mockImplementation((...args) => {
-      controller.abort();
-      originalAddEventListener(...args);
-    });
+  it.each(["before completed read", "listener registration"] as const)(
+    "rejects the bridge when abort wins at %s",
+    async (timing) => {
+      const entry = collectorRun(
+        "abort-race",
+        "agent:main:main",
+        timing === "before completed read" ? { status: "done" } : undefined,
+      );
+      records.set(entry.runId, entry);
+      const controller = new AbortController();
+      if (timing === "before completed read") {
+        controller.abort();
+      } else {
+        const originalAddEventListener = controller.signal.addEventListener.bind(controller.signal);
+        vi.spyOn(controller.signal, "addEventListener").mockImplementation((...args) => {
+          controller.abort();
+          originalAddEventListener(...args);
+        });
+      }
 
-    await expect(
-      waitForCollectorCompletion({
-        runId: entry.runId,
-        currentSessionKeys: new Set(["agent:main:main"]),
-        signal: controller.signal,
-      }),
-    ).rejects.toThrow("agents.run wait aborted");
-    expect(registryEvents.listeners.size).toBe(0);
-  });
+      await expect(
+        waitForCollectorCompletion({
+          runId: entry.runId,
+          currentSessionKeys: new Set(["agent:main:main"]),
+          signal: controller.signal,
+        }),
+      ).rejects.toThrow("agents.run wait aborted");
+      expect(registryEvents.listeners.size).toBe(0);
+    },
+  );
 
   it("returns the first completed child and leaves siblings pending", async () => {
     records.set("one", collectorRun("one", "agent:main:main"));
@@ -220,6 +233,9 @@ describe("agents_wait", () => {
         status: "done",
         structured: { winner: 2 },
       };
+      for (const listener of registryEvents.listeners) {
+        listener();
+      }
     }, 5);
 
     const result = await tool.execute("call", { ids: ["one", "two"], timeoutSeconds: 1 });
@@ -237,12 +253,21 @@ describe("agents_wait", () => {
     });
   });
 
-  it("wakes from a local completion without waiting for the next poll", async () => {
+  it("parks without reading until a registry mutation wakes it", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
     const entry = collectorRun("local-wake", "agent:main:main");
     records.set(entry.runId, entry);
     const controller = new AbortController();
     const tool = createMainSessionWaitTool();
+    const reads = vi.spyOn(records, "get");
+    const initialRead = createDeferred();
+    registryEvents.read.mockImplementationOnce(async (runIds) =>
+      preparedRuns(() => {
+        const selected = selectRuns(runIds);
+        initialRead.resolve();
+        return selected;
+      }),
+    );
     let result: unknown;
     const waiting = tool
       .execute("call", { ids: [entry.runId], timeoutSeconds: 1 }, controller.signal)
@@ -250,7 +275,10 @@ describe("agents_wait", () => {
         result = value.details;
       });
     try {
-      await vi.advanceTimersByTimeAsync(10);
+      await initialRead.promise;
+      const initialReads = reads.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(750);
+      expect(reads).toHaveBeenCalledTimes(initialReads);
       entry.collectorCompletion = { status: "done" };
       for (const listener of registryEvents.listeners) {
         listener();
@@ -260,6 +288,7 @@ describe("agents_wait", () => {
       expect(registryEvents.listeners.size).toBe(0);
       expect(vi.getTimerCount()).toBe(0);
     } finally {
+      reads.mockRestore();
       controller.abort();
       await waiting.catch(() => {});
       vi.useRealTimers();
@@ -445,6 +474,89 @@ describe("agents_wait", () => {
     });
   });
 
+  it.each(["tool", "bridge"] as const)(
+    "rechecks a persisted %s completion after ownership changes at read settlement",
+    async (boundary) => {
+      const state = await vi.importActual<
+        typeof import("../subagents/registry/subagent-registry-state.js")
+      >("../subagents/registry/subagent-registry-state.js");
+      await withOpenClawTestState(
+        { scenario: "minimal", env: { OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" } },
+        async () => {
+          state.clearSubagentRunsReadCacheForTest();
+          const entry = createSubagentRunRecord({
+            ...collectorRun("persisted-owner-change", "agent:main:main", { status: "done" }),
+            generation: 1,
+            delivery: { status: "not_required" },
+          });
+          saveSubagentRegistryToSqlite(new Map([[entry.runId, entry]]));
+          const replacement = createSubagentRunRecord({
+            ...collectorRun(entry.runId, "agent:other:main", { status: "done" }),
+            generation: 2,
+            delivery: { status: "not_required" },
+          });
+          registryEvents.subscribe.mockImplementation(state.onSubagentRegistryPersisted);
+          let publication: Promise<void> | undefined;
+          registryEvents.read.mockImplementation(async (runIds) => {
+            const prepared = await state.prepareSubagentRunsSnapshotForRunIds(new Map(), runIds);
+            publication ??= Promise.resolve().then(() => {
+              state.persistSubagentRunsToDiskOrThrow(new Map([[replacement.runId, replacement]]), [
+                replacement.runId,
+              ]);
+            });
+            void publication.catch(() => {});
+            return prepared;
+          });
+          const reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+          const abort = new AbortController();
+          const waiting =
+            boundary === "tool"
+              ? createMainSessionWaitTool()
+                  .execute("wait", { ids: [entry.runId], timeoutSeconds: 0 }, abort.signal)
+                  .then((result) => result.details)
+              : waitForCollectorCompletion({
+                  runId: entry.runId,
+                  currentSessionKeys: new Set(["agent:main:main"]),
+                  currentAgentId: "main",
+                  signal: abort.signal,
+                });
+          const observed = waiting.then(
+            (value) => ({ value }),
+            (error: unknown) => ({ error }),
+          );
+          try {
+            const result = await observed;
+            await publication;
+            expect(reads.mock.calls.some(([, command]) => command.type === "subagents.runs")).toBe(
+              true,
+            );
+            expect(result).toEqual(
+              boundary === "tool"
+                ? {
+                    value: {
+                      completed: [],
+                      pending: [],
+                      errors: [{ runId: entry.runId, error: "not_owner" }],
+                      success: false,
+                    },
+                  }
+                : {
+                    error: expect.objectContaining({
+                      message: `agents.run not_owner: ${entry.runId}`,
+                    }),
+                  },
+            );
+          } finally {
+            abort.abort();
+            await Promise.allSettled([waiting, publication]);
+            reads.mockRestore();
+            state.clearSubagentRunsReadCacheForTest();
+          }
+        },
+      );
+    },
+  );
+
   it("re-resolves a collector replaced while waiting", async () => {
     const pending = collectorRun("old-gateway-run", "agent:main:main");
     pending.swarmRunId = "collector-run";
@@ -455,6 +567,9 @@ describe("agents_wait", () => {
       const completed = collectorRun("new-gateway-run", "agent:main:main", { status: "done" });
       completed.swarmRunId = "collector-run";
       records.set(completed.runId, completed);
+      for (const listener of registryEvents.listeners) {
+        listener();
+      }
     }, 5);
 
     const result = await tool.execute("call", { ids: ["collector-run"], timeoutSeconds: 1 });
@@ -462,6 +577,309 @@ describe("agents_wait", () => {
       completed: [{ runId: "collector-run", status: "done" }],
       pending: [],
     });
+  });
+
+  it.each([
+    ["tool", "completed"],
+    ["bridge", "completed"],
+    ["tool", "foreign"],
+    ["bridge", "foreign"],
+  ] as const)(
+    "coalesces publications during pending %s reads before returning a %s replacement",
+    async (boundary, replacement) => {
+      const runId = "collector-run";
+      const previous = collectorRun("previous", "agent:main:main");
+      previous.swarmRunId = runId;
+      records.set(previous.runId, previous);
+      const firstRead = createDeferred();
+      const secondRead = createDeferred();
+      const secondStarted = createDeferred();
+      registryEvents.read
+        .mockImplementationOnce(async (runIds) => {
+          await firstRead.promise;
+          return preparedRuns(() => selectRuns(runIds));
+        })
+        .mockImplementationOnce(async (runIds) => {
+          secondStarted.resolve();
+          await secondRead.promise;
+          return preparedRuns(() => selectRuns(runIds));
+        });
+      const controller = new AbortController();
+      const observed = waitAtBoundary(boundary, runId, controller.signal).then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      try {
+        expect(registryEvents.listeners.size).toBe(1);
+        for (let publication = 0; publication < 3; publication += 1) {
+          for (const listener of registryEvents.listeners) {
+            listener();
+          }
+        }
+        expect(registryEvents.read).toHaveBeenCalledTimes(1);
+        firstRead.resolve();
+        await Promise.race([
+          secondStarted.promise,
+          observed.then(() => {
+            throw new Error("Wait returned before checking the publication during its read.");
+          }),
+        ]);
+        const current = collectorRun(
+          "replacement",
+          replacement === "foreign" ? "agent:other:main" : "agent:main:main",
+          { status: "done" },
+        );
+        current.swarmRunId = runId;
+        records.delete(previous.runId);
+        records.set(current.runId, current);
+        for (let publication = 0; publication < 3; publication += 1) {
+          for (const listener of registryEvents.listeners) {
+            listener();
+          }
+        }
+        expect(registryEvents.read).toHaveBeenCalledTimes(2);
+        secondRead.resolve();
+        const result = await observed;
+        if (replacement === "foreign") {
+          expect(result).toEqual(
+            boundary === "tool"
+              ? {
+                  value: {
+                    completed: [],
+                    pending: [],
+                    errors: [{ runId, error: "not_owner" }],
+                    success: false,
+                  },
+                }
+              : { error: expect.objectContaining({ message: `agents.run not_owner: ${runId}` }) },
+          );
+        } else {
+          const completed = {
+            runId,
+            result: "result-replacement",
+            sessionKey: current.childSessionKey,
+          };
+          expect(result).toMatchObject({
+            value: boundary === "tool" ? { completed: [completed], pending: [] } : completed,
+          });
+        }
+        expect(registryEvents.read).toHaveBeenCalledTimes(2);
+        expect(registryEvents.listeners.size).toBe(0);
+      } finally {
+        controller.abort();
+        firstRead.resolve();
+        secondRead.resolve();
+        await observed;
+      }
+    },
+  );
+
+  it.each(["tool", "bridge"] as const)(
+    "keeps a current %s completion after unrelated publications during its read",
+    async (boundary) => {
+      const entry = collectorRun("current-read", "agent:main:main", { status: "done" });
+      const read = createDeferred();
+      registryEvents.read.mockImplementationOnce(async () => {
+        await read.promise;
+        return preparedRuns(() => new Map([[entry.runId, entry]]));
+      });
+      const controller = new AbortController();
+      const waiting = waitAtBoundary(boundary, entry.runId, controller.signal);
+      try {
+        for (const listener of registryEvents.listeners) {
+          listener();
+          listener();
+        }
+        read.resolve();
+        expect(await waiting).toMatchObject(
+          boundary === "tool"
+            ? { completed: [{ runId: entry.runId }], pending: [] }
+            : { runId: entry.runId },
+        );
+        expect(registryEvents.read).toHaveBeenCalledOnce();
+        expect(registryEvents.listeners.size).toBe(0);
+      } finally {
+        controller.abort();
+        read.resolve();
+        await waiting.catch(() => {});
+      }
+    },
+  );
+
+  it("yields between immediate publication retries and returns current state at the deadline", async () => {
+    vi.useFakeTimers({ toFake: ["performance", "setImmediate", "clearImmediate"] });
+    const entry = collectorRun("publication-deadline", "agent:main:main");
+    const checked = createDeferred();
+    const entries = new Map([[entry.runId, entry]]);
+    registryEvents.read
+      .mockImplementationOnce(async () => ({
+        consume(consume) {
+          const value = consume(entries);
+          for (const listener of registryEvents.listeners) {
+            listener();
+          }
+          checked.resolve();
+          return { ready: true, value };
+        },
+      }))
+      .mockImplementationOnce(async () => preparedRuns(() => entries));
+    const controller = new AbortController();
+    const observed = createMainSessionWaitTool()
+      .execute("deadline", { ids: [entry.runId], timeoutSeconds: 0.01 }, controller.signal)
+      .then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+    try {
+      await checked.promise;
+      expect(registryEvents.read).toHaveBeenCalledOnce();
+      vi.advanceTimersByTime(10);
+      expect(await observed).toMatchObject({
+        value: { details: { completed: [], pending: [entry.runId] } },
+      });
+      expect(registryEvents.read).toHaveBeenCalledTimes(2);
+      expect(registryEvents.listeners.size).toBe(0);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      controller.abort();
+      await vi.runAllTimersAsync();
+      await observed;
+      vi.useRealTimers();
+    }
+  });
+
+  it("times out while unrelated persisted publications continue at read settlement", async () => {
+    const state = await vi.importActual<
+      typeof import("../subagents/registry/subagent-registry-state.js")
+    >("../subagents/registry/subagent-registry-state.js");
+    await withOpenClawTestState(
+      { scenario: "minimal", env: { OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" } },
+      async () => {
+        state.clearSubagentRunsReadCacheForTest();
+        const entry = createSubagentRunRecord({
+          ...collectorRun("persisted-deadline", "agent:main:main"),
+          delivery: { status: "not_required" },
+        });
+        const unrelated = createSubagentRunRecord({
+          ...collectorRun("unrelated-publication", "agent:main:main"),
+          delivery: { status: "not_required" },
+        });
+        saveSubagentRegistryToSqlite(new Map([entry, unrelated].map((run) => [run.runId, run])));
+        const unsubscribed = vi.fn();
+        registryEvents.subscribe.mockImplementation((listener) => {
+          const unsubscribe = state.onSubagentRegistryPersisted(listener);
+          return () => {
+            unsubscribe();
+            unsubscribed();
+          };
+        });
+        const overranDeadline = createDeferred();
+        const releaseExtraRead = createDeferred();
+        const abort = new AbortController();
+        const publications: Promise<void>[] = [];
+        let readCount = 0;
+        let elapsed = 0;
+        const clock = vi.spyOn(performance, "now").mockImplementation(() => elapsed);
+        registryEvents.read.mockImplementation(async (runIds) => {
+          readCount += 1;
+          if (readCount === 3) {
+            // Observe starvation without waiting for the runner's timeout or stopping publications.
+            overranDeadline.resolve();
+            await releaseExtraRead.promise;
+          }
+          const prepared = await state.prepareSubagentRunsSnapshotForRunIds(new Map(), runIds);
+          if (abort.signal.aborted) {
+            return prepared;
+          }
+          const publication = Promise.resolve().then(() => {
+            elapsed += 5;
+            state.persistSubagentRunsToDiskOrThrow(
+              new Map([[unrelated.runId, { ...unrelated, model: `publication-${elapsed}` }]]),
+              [unrelated.runId],
+            );
+          });
+          publications.push(publication);
+          void publication.catch(() => abort.abort());
+          return prepared;
+        });
+        const reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+        const waiting = createMainSessionWaitTool()
+          .execute("deadline", { ids: [entry.runId], timeoutSeconds: 0.01 }, abort.signal)
+          .then((result) => result.details);
+        const observed = waiting.then(
+          (value) => ({ value }),
+          (error: unknown) => ({ error }),
+        );
+        try {
+          const result = await Promise.race([
+            observed,
+            overranDeadline.promise.then(() => ({ overranDeadline: true })),
+          ]);
+          expect(result).toEqual({ value: { completed: [], pending: [entry.runId] } });
+          await Promise.all(publications);
+          expect(publications).toHaveLength(2);
+          expect(reads.mock.calls.some(([, command]) => command.type === "subagents.runs")).toBe(
+            true,
+          );
+          expect(unsubscribed).toHaveBeenCalledOnce();
+        } finally {
+          abort.abort();
+          releaseExtraRead.resolve();
+          await Promise.allSettled([waiting, ...publications]);
+          reads.mockRestore();
+          clock.mockRestore();
+          state.clearSubagentRunsReadCacheForTest();
+        }
+      },
+    );
+  });
+
+  it.each([
+    ["tool", "completion"],
+    ["bridge", "completion"],
+    ["tool", "failure"],
+    ["bridge", "failure"],
+  ] as const)("joins the %s read after abort wins its pending %s", async (boundary, outcome) => {
+    const entry = collectorRun("pending-read", "agent:main:main", { status: "done" });
+    const read = createDeferred<ReadonlyMap<string, SubagentRunRecord>>();
+    const readFailure = new Error("worker read failed", {
+      cause: new Error("reader cleanup failed"),
+    });
+    let readSettled = false;
+    registryEvents.read.mockImplementationOnce(async () => {
+      try {
+        const entries = await read.promise;
+        return preparedRuns(() => entries);
+      } finally {
+        readSettled = true;
+      }
+    });
+    const controller = new AbortController();
+    const observed = waitAtBoundary(boundary, entry.runId, controller.signal).then(
+      (value) => ({ value, readSettled }),
+      (error: unknown) => ({ error, readSettled }),
+    );
+    try {
+      controller.abort();
+      if (outcome === "failure") {
+        read.reject(readFailure);
+      } else {
+        read.resolve(new Map([[entry.runId, entry]]));
+      }
+      expect(await observed).toMatchObject({
+        error: {
+          message: boundary === "tool" ? "agents_wait aborted." : "agents.run wait aborted.",
+          ...(outcome === "failure" ? { cause: readFailure } : {}),
+        },
+        readSettled: true,
+      });
+      expect(registryEvents.read).toHaveBeenCalledOnce();
+      expect(registryEvents.listeners.size).toBe(0);
+    } finally {
+      controller.abort();
+      read.resolve(new Map());
+      await observed;
+    }
   });
 
   it.each(["tool", "bridge"] as const)(
@@ -472,17 +890,7 @@ describe("agents_wait", () => {
       pending.swarmRunId = "collector-run";
       records.set(pending.runId, pending);
       const controller = new AbortController();
-      const waiting =
-        boundary === "tool"
-          ? createMainSessionWaitTool()
-              .execute("wait", { ids: ["collector-run"], timeoutSeconds: 1 }, controller.signal)
-              .then((result) => result.details)
-          : waitForCollectorCompletion({
-              runId: "collector-run",
-              currentSessionKeys: new Set(["agent:main:main"]),
-              currentAgentId: "main",
-              signal: controller.signal,
-            });
+      const waiting = waitAtBoundary(boundary, "collector-run", controller.signal);
       const observed = waiting.then(
         (value) => ({ value }),
         (error: unknown) => ({ error }),
@@ -597,7 +1005,7 @@ describe("agents_wait", () => {
   });
 
   it.each(["before", "during", "registration"] as const)(
-    "rejects when the wait is aborted %s collector polling",
+    "rejects when the wait is aborted %s collector waiting",
     async (abortTiming) => {
       records.set("pending", collectorRun("pending", "agent:main:main"));
       const tool = createMainSessionWaitTool();
@@ -629,7 +1037,7 @@ describe("agents_wait", () => {
     },
   );
 
-  it("rejects oversized wait batches before polling", async () => {
+  it("rejects oversized wait batches before waiting", async () => {
     const tool = createMainSessionWaitTool();
 
     await expect(

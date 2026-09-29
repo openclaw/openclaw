@@ -1,6 +1,9 @@
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runtime";
+import {
+  filterStringEntries,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-// Memory Wiki plugin module implements import insights behavior.
 import {
   loadMemoryWikiCompiledDashboards,
   MEMORY_WIKI_DASHBOARD_ITEM_LIMIT,
@@ -12,19 +15,7 @@ import type { ResolvedMemoryWikiConfig } from "./config.js";
 import type { WikiPageSummary } from "./markdown.js";
 
 function normalizeStringArray(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value.filter(
-    (entry): entry is string => typeof entry === "string" && entry.trim().length > 0,
-  );
-}
-
-function normalizeFiniteInt(value: unknown): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return 0;
-  }
-  return Math.max(0, Math.floor(value));
+  return filterStringEntries(value).filter((entry) => entry.trim().length > 0);
 }
 
 function humanizeLabelSuffix(label: string): string {
@@ -83,7 +74,7 @@ function extractIntegerField(lines: string[], prefix: string): number {
     return 0;
   }
   const match = raw.match(/\d+/);
-  return match ? normalizeFiniteInt(Number(match[0])) : 0;
+  return match ? resolveNonNegativeIntegerOption(Number(match[0]), 0) : 0;
 }
 
 function extractPreferenceSignals(lines: string[]): string[] {
@@ -155,11 +146,10 @@ function parseTranscriptTurns(body: string): TranscriptTurn[] {
 }
 
 function firstParagraph(text: string): string | undefined {
-  const candidate = text
+  return text
     .split(/\n\s*\n/)
     .map((entry) => entry.trim())
     .find((entry) => entry.length > 0);
-  return candidate;
 }
 
 function shortenSentence(value: string, maxLength = 180): string {
@@ -200,19 +190,12 @@ function deriveCandidateSignals(params: {
   preferenceSignals: string[];
   correctionSignals: string[];
 }): string[] {
-  const output: string[] = [];
-  for (const signal of params.preferenceSignals) {
-    if (!output.includes(signal)) {
-      output.push(signal);
-    }
-  }
-  for (const correction of params.correctionSignals) {
-    const summary = `Correction detected: ${correction}`;
-    if (!output.includes(summary)) {
-      output.push(summary);
-    }
-  }
-  return output.slice(0, 4);
+  return [
+    ...new Set([
+      ...params.preferenceSignals,
+      ...params.correctionSignals.map((correction) => `Correction detected: ${correction}`),
+    ]),
+  ].slice(0, 4);
 }
 
 function deriveSummary(params: {
@@ -236,10 +219,6 @@ function deriveSummary(params: {
     return shortenSentence(params.firstUserLine, 180);
   }
   return params.title;
-}
-
-function shouldExposeImportContent(digestStatus: "available" | "withheld"): boolean {
-  return digestStatus === "available";
 }
 
 function normalizeRiskLevel(value: unknown): MemoryWikiImportInsightItem["riskLevel"] {
@@ -310,7 +289,7 @@ export function projectMemoryWikiImportInsight(
   )
     ? "withheld"
     : "available";
-  const exposeImportContent = shouldExposeImportContent(digestStatus);
+  const exposeImportContent = digestStatus === "available";
   const userTurns = transcriptTurns.filter((turn) => turn.role === "user");
   const assistantTurns = transcriptTurns.filter((turn) => turn.role === "assistant");
   const assistantOpener = exposeImportContent
@@ -380,24 +359,23 @@ export function buildMemoryWikiImportInsights(
 
   const clusters = [...clustersByKey.entries()]
     .map(([key, clusterItems]) => {
-      const sortedItems = [...clusterItems].toSorted(compareItemsByUpdated);
-      const updatedAt = sortedItems
+      const updatedAt = clusterItems
         .map((item) => item.updatedAt ?? item.createdAt)
         .find((value): value is string => typeof value === "string" && value.length > 0);
       return Object.assign(
         {
           key,
-          label: sortedItems[0]?.topicLabel ?? humanizeLabelSuffix(key),
-          itemCount: sortedItems.length,
-          highRiskCount: sortedItems.filter((item) => item.riskLevel === `high`).length,
-          withheldCount: sortedItems.filter((item) => item.digestStatus === `withheld`).length,
-          preferenceSignalCount: sortedItems.reduce(
+          label: clusterItems[0]?.topicLabel ?? humanizeLabelSuffix(key),
+          itemCount: clusterItems.length,
+          highRiskCount: clusterItems.filter((item) => item.riskLevel === `high`).length,
+          withheldCount: clusterItems.filter((item) => item.digestStatus === `withheld`).length,
+          preferenceSignalCount: clusterItems.reduce(
             (sum, item) => sum + item.preferenceSignals.length,
             0,
           ),
         },
         updatedAt ? { updatedAt } : {},
-        { items: sortedItems },
+        { items: clusterItems },
       ) satisfies MemoryWikiImportInsightCluster;
     })
     .toSorted((left, right) => {

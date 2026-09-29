@@ -219,7 +219,13 @@ describe("Workshop current collection", () => {
           "skills.proposals.inspect",
           fixture.responses["skills.proposals.inspect"],
         );
-        await gateway.resolveDeferred(method, {});
+        const record = inspect.response.record;
+        await gateway.resolveDeferred(
+          method,
+          action === "Apply"
+            ? { record, targetSkillFile: `skills/${record.target.skillKey}/SKILL.md` }
+            : record,
+        );
         await expect.poll(() => page.locator(".sw-row").count()).toBe(remaining);
         const notice = page.locator(".sw-action-toast");
         await expect
@@ -466,7 +472,9 @@ describe("Workshop current collection", () => {
         message: "Workshop inventory is unavailable.",
       });
       await page.getByText("Workshop inventory is unavailable.", { exact: true }).waitFor();
-      expect(await page.locator(".sw-collection__count").textContent()).toBe("Count unavailable");
+      expect((await page.locator(".sw-collection__count").textContent())?.trim()).toBe(
+        "Count unavailable",
+      );
       expect(await page.getByText("No skills installed yet", { exact: true }).count()).toBe(0);
 
       await gateway.setMethodResponse("skills.proposals.list", {

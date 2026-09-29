@@ -1,4 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
+import type { ChannelAccountKeyPolicy } from "../routing/account-lookup.js";
 import type { PluginDiscoveryResult } from "./discovery.types.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index-types.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.types.js";
@@ -7,6 +9,7 @@ import type {
   PluginManifestModelIdNormalizationProvider,
   PluginManifestProviderEndpoint,
   PluginManifestProviderRequestProvider,
+  PluginManifestSetupProvider,
 } from "./manifest-types.js";
 import type {
   PluginRegistrySnapshotDiagnostic,
@@ -26,8 +29,16 @@ export type PluginProviderAuthAliasCandidate = {
   order: number;
 };
 
+export type PluginProviderAuthContribution = {
+  plugin: PluginManifestRecord;
+  envProviders: readonly PluginManifestSetupProvider[];
+  evidenceProviders: readonly PluginManifestSetupProvider[];
+  fallbackProviderRefs: readonly string[];
+};
+
 export type PluginMetadataSnapshotOwnerMaps = {
   channels: ReadonlyMap<string, readonly string[]>;
+  channelAccountKeyPolicies?: ReadonlyMap<string, ChannelAccountKeyPolicy>;
   channelConfigs: ReadonlyMap<string, readonly string[]>;
   providers: ReadonlyMap<string, readonly string[]>;
   modelCatalogProviders: ReadonlyMap<string, readonly string[]>;
@@ -37,6 +48,7 @@ export type PluginMetadataSnapshotOwnerMaps = {
   contracts: ReadonlyMap<string, readonly string[]>;
   /** Empty views must not fall through to process-current model normalization policies. */
   modelIdNormalizationPolicies: ReadonlyMap<string, PluginManifestModelIdNormalizationProvider>;
+  providerAuthContributions: readonly PluginProviderAuthContribution[];
   providerAuthAliases?: ReadonlyMap<string, readonly PluginProviderAuthAliasCandidate[]>;
   providerEndpoints?: readonly PluginManifestProviderEndpoint[];
   providerRequests?: ReadonlyMap<string, PluginManifestProviderRequestProvider>;
@@ -81,6 +93,20 @@ export type PluginMetadataRegistryView = Pick<
 > &
   Partial<Pick<PluginMetadataSnapshot, "declaredProviderOwners">>;
 
+/** Acquired workspace facts before the fleet publishes one immutable snapshot. */
+export type PluginMetadataSnapshotInput = Pick<
+  PluginMetadataSnapshot,
+  | "policyHash"
+  | "workspaceDir"
+  | "index"
+  | "registryIndex"
+  | "registrySource"
+  | "registryDiagnostics"
+  | "manifestRegistry"
+  | "discovery"
+  | "metrics"
+>;
+
 export type PluginMetadataManifestView = Pick<
   PluginMetadataSnapshot,
   "index" | "plugins" | "byPluginId"
@@ -92,6 +118,7 @@ export type LoadPluginMetadataSnapshotParams = {
   stateDir?: string;
   env?: NodeJS.ProcessEnv;
   index?: InstalledPluginIndex;
+  installRecords?: Record<string, PluginInstallRecord>;
   pluginIds?: readonly string[];
   pluginIdScope?: PluginMetadataSnapshotPluginIdScope;
   preferPersisted?: boolean;

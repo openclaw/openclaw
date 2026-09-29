@@ -1,6 +1,7 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildModelCatalogProviderAliasTargets } from "../model-catalog/manifest-planner.js";
+import { normalizePluginsConfig, type NormalizedPluginsConfig } from "../plugins/config-state.js";
 import { isManifestPluginAvailableForControlPlane } from "../plugins/manifest-contract-eligibility.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 
@@ -11,12 +12,15 @@ export function createPreparedModelCatalogProviderNormalizer(
   env?: NodeJS.ProcessEnv,
 ): (provider: string) => string {
   const aliases = new Map<string, string>();
+  let normalizedConfig: NormalizedPluginsConfig | undefined;
   for (const plugin of metadataSnapshot.plugins) {
     if (
       !isManifestPluginAvailableForControlPlane({
         snapshot: metadataSnapshot,
         plugin,
         config,
+        normalizedConfig:
+          config.plugins && (normalizedConfig ??= normalizePluginsConfig(config.plugins)),
         env,
       })
     ) {

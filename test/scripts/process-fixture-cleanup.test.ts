@@ -33,9 +33,14 @@ function errorTree(error: unknown): unknown[] {
 async function captureFixture(owner: (typeof fixtures)[number]["owner"]) {
   vi.resetModules();
   const bodies = new Map<string, () => Promise<void>>();
+  const beforeHooks: Array<() => unknown> = [];
+  const afterHooks: Array<() => unknown> = [];
   const register = (name: string, body: () => Promise<void>) => bodies.set(name, body);
+  const collectSuite = (_name: string, body: () => void) => body();
   vi.doMock("vitest", () => ({
-    describe: (_name: string, body: () => void) => body(),
+    afterEach: (hook: () => unknown) => afterHooks.push(hook),
+    beforeEach: (hook: () => unknown) => beforeHooks.push(hook),
+    describe: Object.assign(collectSuite, { runIf: () => collectSuite }),
     it: Object.assign(register, { each: () => () => {}, runIf: () => register, skip: register }),
     expect,
     vi,
@@ -48,7 +53,19 @@ async function captureFixture(owner: (typeof fixtures)[number]["owner"]) {
   const fixture = fixtures.find((entry) => entry.owner === owner)!;
   const body = bodies.get(fixture.name);
   expect(body, fixture.name).toBeTypeOf("function");
-  return body!;
+  // Run the fixture suite's own per-test hooks so its body sees the same environment.
+  return async () => {
+    for (const hook of beforeHooks) {
+      await hook();
+    }
+    try {
+      await body!();
+    } finally {
+      for (const hook of afterHooks) {
+        await hook();
+      }
+    }
+  };
 }
 
 // Execute the registered process fixtures, injecting OS faults at their real
@@ -59,6 +76,8 @@ describe.skipIf(process.platform === "win32")("process fixture cleanup faults", 
       ["EPERM", "ESRCH"].map((code) => ({ owner, name, code })),
     ),
   )("preserves failures and finishes safe $owner cleanup after $code", async ({ owner, code }) => {
+    const childProcess =
+      await vi.importActual<typeof import("node:child_process")>("node:child_process");
     const primary = new Error("fixture assertion failed");
     const denied = Object.assign(new Error("injected kill failure"), { code });
     const scratchError = new Error("scratch removal failed");
@@ -98,6 +117,7 @@ describe.skipIf(process.platform === "win32")("process fixture cleanup faults", 
     };
     vi.doMock("node:fs", () => ({ ...fs, default: fs }));
     vi.doMock("node:child_process", () => ({
+      ...childProcess,
       spawn: () => {
         setImmediate(() => child.emit("spawn"));
         return child;

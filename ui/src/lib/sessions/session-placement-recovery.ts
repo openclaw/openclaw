@@ -17,6 +17,8 @@ import {
   sessionPlacementRecoveryScopeStoragePrefix,
 } from "./session-placement-recovery-storage-key.ts";
 
+export type SessionPlacementStartMode = "dispatch" | "recover" | "retry";
+
 export type SessionPlacementTarget =
   | { kind: "profile"; profileId: string; os?: string; machineClass?: string }
   | { kind: "device"; deviceId: string }
@@ -67,6 +69,7 @@ const PLACEMENT_CREATE_STRING_FIELDS = [
   "displayName",
   "titleSource",
   "model",
+  "agentRuntime",
   "contextWindow",
   "thinkingLevel",
   "worktreeBaseRef",
@@ -80,6 +83,7 @@ const PLACEMENT_CREATE_FIELDS = new Set<string>([
   "agentId",
   "message",
   "worktree",
+  "worktreeSource",
   "repository",
   "incognito",
   "visibility",
@@ -103,6 +107,14 @@ export function parseSessionPlacementCreateParams(
     record.key !== sessionKey ||
     record.agentId !== agentId ||
     record.message !== "" ||
+    (record.worktreeSource !== undefined &&
+      (!Value.Check(SessionsCreateParamsSchema.properties.worktreeSource, record.worktreeSource) ||
+        record.worktree !== true ||
+        record.repository !== undefined ||
+        record.projectId !== undefined ||
+        record.cwd !== undefined ||
+        record.worktreeBaseRef !== undefined ||
+        record.catalogId !== undefined)) ||
     (record.repository === undefined
       ? record.worktree !== true
       : !Value.Check(SessionsCreateParamsSchema.properties.repository, record.repository) ||
@@ -143,14 +155,6 @@ function parseStoredSessionPlacementRecovery(
   } catch {
     return null;
   }
-}
-
-function sessionPlacementRecoveryClaimsScope(
-  value: Partial<SessionPlacementRecovery>,
-  gatewayUrl: string,
-  recoveryScope: string,
-): boolean {
-  return value.gatewayUrl === gatewayUrl && value.recoveryScope === recoveryScope;
 }
 
 function parseSessionPlacementTarget(value: unknown): SessionPlacementTarget | null {
@@ -200,7 +204,8 @@ function validateSessionPlacementRecovery(
     (value.attachments !== undefined && !Array.isArray(value.attachments)) ||
     !parseSessionPlacementTarget(value.target) ||
     !isNonEmptyString(value.agentId) ||
-    !sessionPlacementRecoveryClaimsScope(value, gatewayUrl, recoveryScope) ||
+    value.gatewayUrl !== gatewayUrl ||
+    value.recoveryScope !== recoveryScope ||
     (value.phase !== "creating" &&
       value.phase !== "dispatching" &&
       value.phase !== "sending" &&

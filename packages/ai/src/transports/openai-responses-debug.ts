@@ -1,11 +1,10 @@
-import { createHash } from "node:crypto";
 import type { Api, Model } from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveModelPayloadDebugMode } from "./model-transport-debug.js";
 import { RESPONSE_FAILED_NO_DETAILS_MESSAGE } from "./openai-responses-contracts.js";
 import { log } from "./openai-transport-shared.js";
-import { redactIdentifier, redactSensitiveText } from "./transport-utils.js";
+import { redactIdentifier, redactSensitiveText, sha256Hex } from "./transport-utils.js";
 
 function stringifyUnknown(value: unknown, fallback = ""): string {
   if (typeof value === "string") {
@@ -91,28 +90,14 @@ function responseInputItemShape(input: unknown): string {
   );
 }
 
-function hashOpaqueResponsesValue(value: string): string {
-  return createHash("sha256").update(value).digest("hex");
-}
-
 function summarizeResponsesCompactionItems(input: unknown): string[] {
-  if (!Array.isArray(input)) {
-    return [
-      "compactionItems=0",
-      "compactionIdHashes=none",
-      "compactionPayloadHashes=none",
-      "compactionInputIndexes=none",
-    ];
-  }
-  const compactions = input.flatMap((item, inputIndex) => {
+  const compactions = (Array.isArray(input) ? input : []).flatMap((item, inputIndex) => {
     if (!isRecord(item) || item.type !== "compaction") {
       return [];
     }
-    const idHash = typeof item.id === "string" ? hashOpaqueResponsesValue(item.id) : undefined;
+    const idHash = typeof item.id === "string" ? sha256Hex(item.id) : undefined;
     const payloadHash =
-      typeof item.encrypted_content === "string"
-        ? hashOpaqueResponsesValue(item.encrypted_content)
-        : undefined;
+      typeof item.encrypted_content === "string" ? sha256Hex(item.encrypted_content) : undefined;
     return [{ idHash, inputIndex, payloadHash }];
   });
   return [
@@ -232,17 +217,12 @@ function buildResponsesFailedEventSummary(
   code?: string,
   observation?: ResponsesFailedNoDetailsObservation,
 ): ResponsesFailedEventSummary {
-  const summary: ResponsesFailedEventSummary = { message };
-  if (responseId) {
-    summary.responseId = responseId;
-  }
-  if (code) {
-    summary.code = code;
-  }
-  if (observation) {
-    summary.observation = observation;
-  }
-  return summary;
+  return {
+    message,
+    ...(responseId ? { responseId } : {}),
+    ...(code ? { code } : {}),
+    ...(observation ? { observation } : {}),
+  };
 }
 
 function isResponseFailedIdentifierKey(key: string): boolean {

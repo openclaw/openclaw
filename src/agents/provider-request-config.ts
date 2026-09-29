@@ -1,8 +1,3 @@
-/**
- * Provider request configuration resolver.
- *
- * Normalizes operator request overrides into transport-ready auth, proxy, TLS, header, and SSRF policy state.
- */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { ModelDefinitionConfig } from "../config/types.js";
 import type {
@@ -73,84 +68,7 @@ export type ModelProviderRequestTransportOverrides = ProviderRequestTransportOve
   allowPrivateNetwork?: boolean;
 };
 
-// Resolved request config separates configured vs default state so transports
-// can decide whether to inject provider defaults or operator-provided headers.
-type ResolvedProviderRequestAuthConfig =
-  | {
-      configured: false;
-      mode: "provider-default" | "authorization-bearer";
-      injectAuthorizationHeader: boolean;
-    }
-  | {
-      configured: true;
-      mode: "authorization-bearer";
-      headerName: "Authorization";
-      value: string;
-      injectAuthorizationHeader: true;
-    }
-  | {
-      configured: true;
-      mode: "header";
-      headerName: string;
-      value: string;
-      prefix?: string;
-      injectAuthorizationHeader: false;
-    };
-
-type ResolvedProviderRequestProxyConfig =
-  | {
-      configured: false;
-    }
-  | {
-      configured: true;
-      mode: "env-proxy";
-      tls: ResolvedProviderRequestTlsConfig;
-    }
-  | {
-      configured: true;
-      mode: "explicit-proxy";
-      proxyUrl: string;
-      tls: ResolvedProviderRequestTlsConfig;
-    };
-
-type ResolvedProviderRequestTlsConfig =
-  | {
-      configured: false;
-    }
-  | {
-      configured: true;
-      ca?: string;
-      cert?: string;
-      key?: string;
-      passphrase?: string;
-      serverName?: string;
-      rejectUnauthorized?: boolean;
-    };
-
-type ResolvedProviderRequestExtraHeadersConfig = {
-  configured: boolean;
-  headers?: Record<string, string>;
-};
-
-type ResolvedProviderRequestConfig = {
-  api?: RequestApi;
-  baseUrl?: string;
-  headers?: Record<string, string>;
-  extraHeaders: ResolvedProviderRequestExtraHeadersConfig;
-  auth: ResolvedProviderRequestAuthConfig;
-  proxy: ResolvedProviderRequestProxyConfig;
-  tls: ResolvedProviderRequestTlsConfig;
-};
-
 type ProviderRequestHeaderPrecedence = "caller-wins" | "defaults-win";
-
-// Policy config includes the resolved transport plus attribution/security facts
-// required before a provider request can be attached to a model call.
-type ResolvedProviderRequestPolicyConfig = ResolvedProviderRequestConfig & {
-  allowPrivateNetwork: boolean;
-  trustConfiguredBaseUrlOrigin: boolean;
-  capabilities: ProviderRequestCapabilities;
-};
 
 const FORBIDDEN_HEADER_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 const FORBIDDEN_INSECURE_TLS_MESSAGE =
@@ -180,25 +98,6 @@ type ResolveProviderRequestPolicyConfigParams = {
   request?: ModelProviderRequestTransportOverrides;
   routeFacts?: ProviderRequestRouteFacts;
 };
-
-function resolvePrivateNetworkAccess(params: ResolveProviderRequestPolicyConfigParams): {
-  allowPrivateNetwork: boolean;
-  explicitlyDenied: boolean;
-} {
-  // Preserve existing precedence: runtime/caller policy overrides model config.
-  const configuredAllowPrivateNetwork =
-    params.allowPrivateNetwork ?? params.request?.allowPrivateNetwork;
-  if (configuredAllowPrivateNetwork !== undefined) {
-    return {
-      allowPrivateNetwork: configuredAllowPrivateNetwork,
-      explicitlyDenied: !configuredAllowPrivateNetwork,
-    };
-  }
-  return {
-    allowPrivateNetwork: false,
-    explicitlyDenied: false,
-  };
-}
 
 function sanitizeConfiguredRequestString(value: unknown, path: string): string | undefined {
   if (typeof value !== "string") {
@@ -270,36 +169,14 @@ export function sanitizeConfiguredProviderRequest(
     }
     const rawTls = tls as Record<string, unknown>;
     const next: ProviderRequestTlsOverride = {};
-    const ca = sanitizeConfiguredRequestString(rawTls.ca, `${pathPrefix}.ca`);
-    const cert = sanitizeConfiguredRequestString(rawTls.cert, `${pathPrefix}.cert`);
-    const key = sanitizeConfiguredRequestString(rawTls.key, `${pathPrefix}.key`);
-    const passphrase = sanitizeConfiguredRequestString(
-      rawTls.passphrase,
-      `${pathPrefix}.passphrase`,
-    );
-    const serverName = sanitizeConfiguredRequestString(
-      rawTls.serverName,
-      `${pathPrefix}.serverName`,
-    );
-    if (ca) {
-      next.ca = ca;
+    for (const key of ["ca", "cert", "key", "passphrase", "serverName"] as const) {
+      const value = sanitizeConfiguredRequestString(rawTls[key], `${pathPrefix}.${key}`);
+      if (value) {
+        next[key] = value;
+      }
     }
-    if (cert) {
-      next.cert = cert;
-    }
-    if (key) {
-      next.key = key;
-    }
-    if (passphrase) {
-      next.passphrase = passphrase;
-    }
-    if (serverName) {
-      next.serverName = serverName;
-    }
-    if (rawTls.insecureSkipVerify === true) {
-      next.insecureSkipVerify = true;
-    } else if (rawTls.insecureSkipVerify === false) {
-      next.insecureSkipVerify = false;
+    if (typeof rawTls.insecureSkipVerify === "boolean") {
+      next.insecureSkipVerify = rawTls.insecureSkipVerify;
     }
     return Object.keys(next).length > 0 ? next : undefined;
   };
@@ -354,11 +231,11 @@ export function sanitizeConfiguredModelProviderRequest(
   };
 }
 
-/** Merges provider request overrides with later entries taking precedence. */
-function mergeProviderRequestOverrides(
-  ...overrides: Array<ProviderRequestTransportOverrides | undefined>
-): ProviderRequestTransportOverrides | undefined {
-  const merged: ProviderRequestTransportOverrides = {};
+/** Merges model request overrides, preserving the latest private-network policy. */
+export function mergeModelProviderRequestOverrides(
+  ...overrides: Array<ModelProviderRequestTransportOverrides | undefined>
+): ModelProviderRequestTransportOverrides | undefined {
+  const merged: ModelProviderRequestTransportOverrides = {};
   let hasMerged = false;
   for (const current of overrides) {
     if (!current) {
@@ -377,24 +254,11 @@ function mergeProviderRequestOverrides(
     if (current.tls) {
       merged.tls = current.tls;
     }
-  }
-  return hasMerged ? merged : undefined;
-}
-
-/** Merges model request overrides, preserving the latest private-network policy. */
-export function mergeModelProviderRequestOverrides(
-  ...overrides: Array<ModelProviderRequestTransportOverrides | undefined>
-): ModelProviderRequestTransportOverrides | undefined {
-  let merged: ModelProviderRequestTransportOverrides | undefined = mergeProviderRequestOverrides(
-    ...overrides,
-  );
-  for (const current of overrides) {
-    if (current?.allowPrivateNetwork !== undefined) {
-      merged ??= {};
+    if (current.allowPrivateNetwork !== undefined) {
       merged.allowPrivateNetwork = current.allowPrivateNetwork;
     }
   }
-  return merged;
+  return hasMerged ? merged : undefined;
 }
 
 /** Normalizes provider base URLs by trimming trailing slashes. */
@@ -444,11 +308,9 @@ function mergeProviderRequestHeaders(
   return merged && Object.keys(merged).length > 0 ? merged : undefined;
 }
 
-function resolveTlsOverride(
-  tls: ProviderRequestTlsOverride | undefined,
-): ResolvedProviderRequestTlsConfig {
+function resolveTlsOverride(tls: ProviderRequestTlsOverride | undefined) {
   if (!tls) {
-    return { configured: false };
+    return { configured: false } as const;
   }
   if (tls.insecureSkipVerify === true) {
     throw new Error(FORBIDDEN_INSECURE_TLS_MESSAGE);
@@ -460,7 +322,7 @@ function resolveTlsOverride(
   const serverName = tls.serverName?.trim();
   const rejectUnauthorized = tls.insecureSkipVerify === false ? true : undefined;
   if (!ca && !cert && !key && !passphrase && !serverName && rejectUnauthorized === undefined) {
-    return { configured: false };
+    return { configured: false } as const;
   }
   return {
     configured: true,
@@ -470,13 +332,15 @@ function resolveTlsOverride(
     ...(passphrase ? { passphrase } : {}),
     ...(serverName ? { serverName } : {}),
     ...(rejectUnauthorized !== undefined ? { rejectUnauthorized } : {}),
-  };
+  } as const;
 }
+
+type ResolvedProviderRequestTlsConfig = ReturnType<typeof resolveTlsOverride>;
 
 function resolveAuthOverride(params: {
   authHeader?: boolean;
   request?: ProviderRequestTransportOverrides;
-}): ResolvedProviderRequestAuthConfig {
+}) {
   const auth = params.request?.auth;
   if (auth?.mode === "authorization-bearer") {
     const value = auth.token.trim();
@@ -487,7 +351,7 @@ function resolveAuthOverride(params: {
         headerName: "Authorization",
         value,
         injectAuthorizationHeader: true,
-      };
+      } as const;
     }
   }
   if (auth?.mode === "header") {
@@ -502,15 +366,17 @@ function resolveAuthOverride(params: {
         value,
         ...(prefix ? { prefix } : {}),
         injectAuthorizationHeader: false,
-      };
+      } as const;
     }
   }
   return {
     configured: false,
     mode: params.authHeader ? "authorization-bearer" : "provider-default",
     injectAuthorizationHeader: params.authHeader === true,
-  };
+  } as const;
 }
+
+type ResolvedProviderRequestAuthConfig = ReturnType<typeof resolveAuthOverride>;
 
 /** Sanitizes runtime-only provider request overrides for auth request paths. */
 function sanitizeRuntimeProviderRequestOverrides(
@@ -578,12 +444,10 @@ export function applyPreparedRuntimeAuthToModel<
     : next;
 }
 
-function resolveProxyOverride(
-  request: ProviderRequestTransportOverrides | undefined,
-): ResolvedProviderRequestProxyConfig {
+function resolveProxyOverride(request: ProviderRequestTransportOverrides | undefined) {
   const proxy = request?.proxy;
   if (!proxy) {
-    return { configured: false };
+    return { configured: false } as const;
   }
   const tls = resolveTlsOverride(proxy.tls);
   if (proxy.mode === "env-proxy") {
@@ -591,18 +455,18 @@ function resolveProxyOverride(
       configured: true,
       mode: "env-proxy",
       tls,
-    };
+    } as const;
   }
   const proxyUrl = proxy.url.trim();
   if (!proxyUrl) {
-    return { configured: false };
+    return { configured: false } as const;
   }
   return {
     configured: true,
     mode: "explicit-proxy",
     proxyUrl,
     tls,
-  };
+  } as const;
 }
 
 function applyResolvedAuthHeader(
@@ -636,17 +500,10 @@ function toTlsConnectOptions(
     return undefined;
   }
   const next: Record<string, unknown> = {};
-  if (tls.ca) {
-    next.ca = tls.ca;
-  }
-  if (tls.cert) {
-    next.cert = tls.cert;
-  }
-  if (tls.key) {
-    next.key = tls.key;
-  }
-  if (tls.passphrase) {
-    next.passphrase = tls.passphrase;
+  for (const key of ["ca", "cert", "key", "passphrase"] as const) {
+    if (tls[key]) {
+      next[key] = tls[key];
+    }
   }
   if (tls.serverName) {
     next.servername = tls.serverName;
@@ -683,24 +540,17 @@ export function buildProviderRequestDispatcherPolicy(
 /** Resolves the full provider request policy, headers, auth, proxy, and TLS config. */
 export function resolveProviderRequestPolicyConfig(
   params: ResolveProviderRequestPolicyConfigParams,
-): ResolvedProviderRequestPolicyConfig {
+) {
   const baseUrl = normalizeBaseUrl(params.baseUrl, params.defaultBaseUrl);
-  const capability = params.capability ?? "llm";
-  const transport = params.transport ?? "http";
-  const policyInput = {
-    provider: params.provider,
-    api: params.api,
-    baseUrl,
-    ...(params.providerMetadataOwners
-      ? { providerMetadataOwners: params.providerMetadataOwners }
-      : {}),
-    capability,
-    transport,
-  };
   const capabilities =
     params.routeFacts?.capabilities ??
     resolveProviderRequestCapabilities({
-      ...policyInput,
+      provider: params.provider,
+      api: params.api,
+      baseUrl,
+      providerMetadataOwners: params.providerMetadataOwners,
+      capability: params.capability ?? "llm",
+      transport: params.transport ?? "http",
       compat: params.compat,
       modelId: params.modelId,
     });
@@ -734,7 +584,8 @@ export function resolveProviderRequestPolicyConfig(
     params.precedence === "caller-wins"
       ? mergeProviderRequestHeaders(mergedDefaults, unprotectedCallerHeaders)
       : mergeProviderRequestHeaders(unprotectedCallerHeaders, mergedDefaults);
-  const privateNetworkAccess = resolvePrivateNetworkAccess(params);
+  // Runtime/caller policy takes precedence over model config.
+  const allowPrivateNetwork = params.allowPrivateNetwork ?? params.request?.allowPrivateNetwork;
 
   return {
     api: params.api,
@@ -748,9 +599,9 @@ export function resolveProviderRequestPolicyConfig(
     proxy: resolveProxyOverride(params.request),
     tls: resolveTlsOverride(params.request?.tls),
     capabilities,
-    allowPrivateNetwork: privateNetworkAccess.allowPrivateNetwork,
+    allowPrivateNetwork: allowPrivateNetwork === undefined ? false : allowPrivateNetwork,
     trustConfiguredBaseUrlOrigin:
-      !privateNetworkAccess.explicitlyDenied &&
+      (allowPrivateNetwork === undefined || allowPrivateNetwork) &&
       (capabilities.endpointClass === "custom" || capabilities.endpointClass === "local"),
   };
 }
@@ -768,7 +619,7 @@ export function resolveProviderRequestConfig(params: {
   modelHeaders?: Record<string, string>;
   authHeader?: boolean;
   request?: ProviderRequestTransportOverrides;
-}): ResolvedProviderRequestConfig {
+}) {
   const resolved = resolveProviderRequestPolicyConfig(params);
   return {
     api: resolved.api,
@@ -783,6 +634,8 @@ export function resolveProviderRequestConfig(params: {
     tls: resolved.tls,
   };
 }
+
+type ResolvedProviderRequestConfig = ReturnType<typeof resolveProviderRequestConfig>;
 
 /** Resolves final headers for one provider request route. */
 export function resolveProviderRequestHeaders(params: {
@@ -844,9 +697,7 @@ export function attachModelProviderRequestTransport<TModel extends object>(
   if (!request) {
     return model;
   }
-  const next = { ...model } as TModel & ModelWithProviderRequestTransport;
-  next[MODEL_PROVIDER_REQUEST_TRANSPORT_SYMBOL] = request;
-  return next;
+  return { ...model, [MODEL_PROVIDER_REQUEST_TRANSPORT_SYMBOL]: request };
 }
 
 /** Reads provider request transport metadata attached to a model definition. */
@@ -902,4 +753,3 @@ export function inheritModelProviderRequestRouteFacts<TModel extends ProviderReq
     getModelProviderRequestRouteFacts(source)?.providerMetadataOwners,
   );
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

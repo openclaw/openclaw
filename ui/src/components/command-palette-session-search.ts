@@ -1,11 +1,8 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import type {
-  SessionsSearchHit,
-  SessionsSearchResult,
-} from "../../../packages/gateway-protocol/src/index.js";
+import type { SessionsSearchResult } from "../../../packages/gateway-protocol/src/index.js";
+import { indexFirstByKey } from "../../../src/shared/dedupe-by-key.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
-import { formatRelativeTimestamp } from "../lib/format.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import type { CommandPaletteItem } from "./command-palette-catalog-search.ts";
 
@@ -58,12 +55,10 @@ export function buildCommandPaletteSessionItems(params: {
 }): CommandPaletteItem[] {
   const { visibleRows, visibleKeys, transcriptResult } = params;
   const normalizedSearch = normalizeLowercaseStringOrEmpty(params.search);
-  const transcriptHitByKey = new Map<string, SessionsSearchHit>();
-  for (const hit of transcriptResult?.results ?? []) {
-    if (!transcriptHitByKey.has(hit.sessionKey)) {
-      transcriptHitByKey.set(hit.sessionKey, hit);
-    }
-  }
+  const transcriptHitByKey = indexFirstByKey(
+    transcriptResult?.results ?? [],
+    (hit) => hit.sessionKey,
+  );
   const rowsByKey = new Map(visibleRows.map((row) => [row.key, row] as const));
   for (const row of transcriptResult?.sessions ?? []) {
     if (!rowsByKey.has(row.key)) {
@@ -98,12 +93,13 @@ export function buildCommandPaletteSessionItems(params: {
       id: `session-${row.key}`,
       label,
       icon: "messageSquare",
-      category: "chats",
+      category: transcriptHit && rawMetadataRank === 0 ? "messages" : "chats",
       action: `${SESSION_ACTION_PREFIX}${row.key}`,
+      session: row,
       // The server match floor affects ordering, not whether the local metadata matched.
       description:
         transcriptHit && rawMetadataRank === 0
           ? transcriptSearchSnippet(transcriptHit.snippet)
-          : formatRelativeTimestamp(row.updatedAt, { fallback: "" }),
+          : undefined,
     }));
 }

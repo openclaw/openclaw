@@ -29,16 +29,18 @@ export async function prepareWorkerProviderProject(params: {
         })
       : undefined;
   params.requireCurrent();
-  if ("source" in project && !repository) {
-    throw new Error("Prepared repository is no longer public");
-  }
   if (repository && preparation && repository.setupRecipe !== preparation.setupRecipe) {
     throw new Error("Prepared repository recipe no longer matches its admission");
   }
   return createWorkerProjectPreparation({
     project,
     namespace: params.namespace,
-    ...(repository ? { revalidateRepositorySource: repository.revalidate } : {}),
+    ...(repository
+      ? {
+          revalidateRepositorySource: repository.revalidate,
+          prepareRepositoryGitPack: repository.prepareGitPack,
+        }
+      : {}),
     preparation: preparation
       ? {
           ...preparation,

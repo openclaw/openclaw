@@ -33,7 +33,7 @@ async function createUpdateMigrationPlan(params: {
   if (observedVersion !== params.candidate.version) {
     return refuseLegacyStateMigrationPlan(plan, {
       code: "candidate-identity-changed",
-      message: `Candidate version changed while migration planning was in progress: expected ${params.candidate.version}, observed ${observedVersion ?? "unknown"}.`,
+      message: `Update version changed while migration planning was in progress: expected ${params.candidate.version}, observed ${observedVersion ?? "unknown"}.`,
     });
   }
   return plan;

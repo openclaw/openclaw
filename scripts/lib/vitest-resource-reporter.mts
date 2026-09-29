@@ -1,5 +1,14 @@
+import { mkdirSync, mkdtempSync, renameSync, writeFileSync } from "node:fs";
 import os from "node:os";
-import type { Reporter, TestModule, TestProject, TestSpecification, Vitest } from "vitest/node";
+import path from "node:path";
+import type {
+  Reporter,
+  TestCase,
+  TestModule,
+  TestProject,
+  TestSpecification,
+  Vitest,
+} from "vitest/node";
 import { detectVitestHostInfo } from "./vitest-local-scheduling.mts";
 
 function writeReceipt(kind: string, value: unknown) {
@@ -18,6 +27,42 @@ export default class VitestResourceReporter implements Reporter {
   private started = 0;
   private cpu = process.cpuUsage();
   private queued = new Map<string, number>();
+  private diagnosticPath: string | undefined;
+  private active = new Map<
+    string,
+    {
+      file: string;
+      project: string;
+      pool: string;
+      phase: "queued" | "collected" | "running";
+      cases: Array<{ id: string; location: TestCase["location"] }>;
+    }
+  >();
+
+  private writeDiagnostic(reason = "running") {
+    if (!this.diagnosticPath) {
+      return;
+    }
+    try {
+      const temporary = `${this.diagnosticPath}.tmp`;
+      // Only native source identities and phases belong in the public artifact;
+      // parameterized titles, errors, logs, and test values can contain secrets.
+      writeFileSync(
+        temporary,
+        JSON.stringify({
+          kind: "vitest-progress",
+          pid: process.pid,
+          reason,
+          elapsedMs: performance.now() - this.started,
+          active: [...this.active.values()],
+        }),
+      );
+      renameSync(temporary, this.diagnosticPath);
+    } catch {
+      console.error("[vitest] failed to write progress diagnostics");
+      this.diagnosticPath = undefined;
+    }
+  }
 
   onInit(ctx: Vitest) {
     writeReceipt("resources", {
@@ -28,8 +73,6 @@ export default class VitestResourceReporter implements Reporter {
       arch: process.arch,
       ...detectVitestHostInfo(),
       osLogicalCpuCount: os.cpus().length,
-      constrainedMemoryBytes: process.constrainedMemory(),
-      availableMemoryBytes: process.availableMemory(),
       rootMaxWorkers: ctx.config.maxWorkers ?? null,
     });
   }
@@ -38,6 +81,21 @@ export default class VitestResourceReporter implements Reporter {
     this.started = performance.now();
     this.cpu = process.cpuUsage();
     this.queued.clear();
+    this.active.clear();
+    this.diagnosticPath = undefined;
+    const diagnosticParent = process.env.OPENCLAW_UI_E2E_DIAGNOSTIC_DIR?.trim();
+    if (diagnosticParent) {
+      try {
+        mkdirSync(diagnosticParent, { recursive: true });
+        this.diagnosticPath = path.join(
+          mkdtempSync(path.join(diagnosticParent, "failure-vitest-")),
+          "failure.public.json",
+        );
+      } catch {
+        console.error("[vitest] failed to allocate progress diagnostics");
+      }
+    }
+    this.writeDiagnostic();
     const counts = new Map<TestProject, number>();
     for (const spec of specs) {
       counts.set(spec.project, (counts.get(spec.project) ?? 0) + 1);
@@ -61,7 +119,52 @@ export default class VitestResourceReporter implements Reporter {
   }
 
   onTestModuleQueued(module: TestModule) {
-    this.queued.set(moduleKey(module.toTestSpecification()), performance.now() - this.started);
+    const spec = module.toTestSpecification();
+    const key = moduleKey(spec);
+    this.queued.set(key, performance.now() - this.started);
+    this.active.set(key, {
+      file:
+        path.isAbsolute(module.relativeModuleId) || module.relativeModuleId.startsWith("..")
+          ? path.basename(module.moduleId)
+          : module.relativeModuleId,
+      project: module.project.name,
+      pool: spec.pool,
+      phase: "queued",
+      cases: [],
+    });
+    this.writeDiagnostic();
+  }
+
+  onTestModuleCollected(module: TestModule) {
+    const active = this.active.get(moduleKey(module.toTestSpecification()));
+    if (active) {
+      active.phase = "collected";
+      this.writeDiagnostic();
+    }
+  }
+
+  onTestModuleStart(module: TestModule) {
+    const active = this.active.get(moduleKey(module.toTestSpecification()));
+    if (active) {
+      active.phase = "running";
+      this.writeDiagnostic();
+    }
+  }
+
+  onTestCaseReady(test: TestCase) {
+    const active = this.active.get(moduleKey(test.module.toTestSpecification()));
+    if (active?.pool === "browser") {
+      active.cases.push({ id: test.id, location: test.location });
+      this.writeDiagnostic();
+    }
+  }
+
+  onTestCaseResult(test: TestCase) {
+    const active = this.active.get(moduleKey(test.module.toTestSpecification()));
+    if (active?.pool === "browser") {
+      active.cases = active.cases.filter((entry) => entry.id !== test.id);
+      this.writeDiagnostic();
+    }
   }
 
   onTestModuleEnd(module: TestModule) {
@@ -80,9 +183,12 @@ export default class VitestResourceReporter implements Reporter {
       diagnostic,
     });
     this.queued.delete(key);
+    this.active.delete(key);
+    this.writeDiagnostic();
   }
 
   onTestRunEnd(modules: readonly TestModule[], errors: readonly unknown[], reason: string) {
+    this.writeDiagnostic(reason);
     writeReceipt("run", {
       reason,
       files: modules.length,

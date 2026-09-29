@@ -7,7 +7,7 @@ import {
   type ProviderModel,
   type ProviderStreamFunction,
 } from "openclaw/plugin-sdk/llm";
-import { resolveFfmpegBin } from "openclaw/plugin-sdk/media-runtime";
+import { resolveFfmpegBin } from "openclaw/plugin-sdk/media-ffmpeg";
 import {
   createCapturedPluginRegistration,
   registerProviderPlugin,
@@ -383,7 +383,7 @@ describeLive("google plugin live", () => {
       expect(assistantPartialCount).toBeGreaterThan(0);
       expect(errors).toStrictEqual([]);
     } finally {
-      bridge.close();
+      await bridge.close();
     }
 
     await waitForGoogleLive(
@@ -461,8 +461,8 @@ describeLive("google plugin live", () => {
       expect(assistantPartialCount).toBeGreaterThan(0);
       expect(errors).toStrictEqual([]);
     } finally {
-      bridge.close();
-      bridge.close();
+      await bridge.close();
+      await bridge.close();
     }
 
     await waitForGoogleLive(

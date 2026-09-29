@@ -9,6 +9,8 @@ struct DeviceSettingsConsentTests {
         let sensitive: [DeviceSettingKey: DeviceSettingsConsent] = [
             .cookieSyncEnabled: .cookieSync,
             .computerControlEnabled: .computerControl,
+            .desktopSharingEnabled: .desktopSharing,
+            .unattendedDesktopEnabled: .unattendedDesktop,
             .peekabooBridgeEnabled: .peekabooBridge,
             .cameraEnabled: .camera,
             .activeComputerPresenceEnabled: .activityReporting,

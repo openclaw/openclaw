@@ -258,13 +258,13 @@ describe("runConversationalOnboarding", () => {
     expect(getActivePluginRegistry()).toBe(rootRegistry);
   });
 
-  it.each(["plugin disable", "plugin upgrade", "missing registry"] as const)(
+  it.each(["plugin disable", "plugin upgrade", "missing harness"] as const)(
     "rejects %s before starting the verified conversation",
     async (kind) => {
       const { invalidate, launchConversation, registry } = await prepareConversation();
-      if (kind === "missing registry") {
+      if (kind === "missing harness") {
         rootRegistry.agentHarnesses.push(...registry.agentHarnesses);
-        mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValueOnce(undefined as never);
+        mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValueOnce(createEmptyPluginRegistry());
       } else {
         invalidate(kind);
       }
@@ -274,7 +274,7 @@ describe("runConversationalOnboarding", () => {
       });
 
       expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(
-        kind === "missing registry" ? 1 : 0,
+        kind === "missing harness" ? 1 : 0,
       );
       expect(launchConversation).not.toHaveBeenCalled();
       expect(getActivePluginRegistry()).toBe(rootRegistry);

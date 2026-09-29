@@ -2,7 +2,7 @@ import { createAccountListHelpers } from "openclaw/plugin-sdk/account-helpers";
 // Line plugin module implements accounts behavior.
 import {
   DEFAULT_ACCOUNT_ID,
-  normalizeAccountId as normalizeSharedAccountId,
+  normalizeAccountId,
   normalizeOptionalAccountId,
 } from "openclaw/plugin-sdk/account-id";
 import {
@@ -82,7 +82,7 @@ export function resolveLineAccount(params: {
   accountId?: string;
 }): ResolvedLineAccount {
   const cfg = params.cfg;
-  const accountId = normalizeSharedAccountId(params.accountId ?? resolveDefaultLineAccountId(cfg));
+  const accountId = normalizeAccountId(params.accountId ?? resolveDefaultLineAccountId(cfg));
   const lineConfig = cfg.channels?.line as LineConfig | undefined;
   const accounts = lineConfig?.accounts;
   const accountConfig = resolveAccountEntry(accounts, accountId);
@@ -166,10 +166,6 @@ export function resolveDefaultLineAccountId(cfg: OpenClawConfig): string {
     configuredDefaultAccountId: normalizeOptionalAccountId(
       (cfg.channels?.line as LineConfig | undefined)?.defaultAccount,
     ),
-    normalizeListedAccountId: normalizeSharedAccountId,
+    normalizeListedAccountId: normalizeAccountId,
   });
-}
-
-export function normalizeAccountId(accountId: string | undefined): string {
-  return normalizeSharedAccountId(accountId);
 }

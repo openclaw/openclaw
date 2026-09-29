@@ -11,6 +11,7 @@ type AuthProfilePortabilityReason =
   | "portable-static-credential"
   | "non-portable-oauth-refresh-token"
   | "credential-opted-out"
+  | "setup-inactive"
   | "oauth-provider-opted-in";
 
 /** Portability decision for copying credentials into an agent-local store. */
@@ -38,6 +39,9 @@ function hasCopyableOAuthMaterial(credential: AuthProfileCredential): boolean {
 export function resolveAuthProfilePortability(
   credential: AuthProfileCredential,
 ): AuthProfilePortability {
+  if (credential.setup?.replacement) {
+    return { portable: false, reason: "setup-inactive" };
+  }
   const override = hasAgentCopyOverride(credential);
   if (override === false) {
     return { portable: false, reason: "credential-opted-out" };
@@ -53,11 +57,6 @@ export function resolveAuthProfilePortability(
   return { portable: true, reason: "portable-static-credential" };
 }
 
-/** Returns true when a credential can be copied into an agent-local store. */
-function isAuthProfileCredentialPortableForAgentCopy(credential: AuthProfileCredential): boolean {
-  return resolveAuthProfilePortability(credential).portable;
-}
-
 /** Builds an agent-copy store containing only portable credentials and their order. */
 export function buildPortableAuthProfileStoreForAgentCopy(store: AuthProfileStore): {
   store: AuthProfileStore;
@@ -68,7 +67,7 @@ export function buildPortableAuthProfileStoreForAgentCopy(store: AuthProfileStor
   const skippedProfileIds: string[] = [];
   const profiles = Object.fromEntries(
     Object.entries(store.profiles).flatMap(([profileId, credential]) => {
-      if (!isAuthProfileCredentialPortableForAgentCopy(credential)) {
+      if (!resolveAuthProfilePortability(credential).portable) {
         skippedProfileIds.push(profileId);
         return [];
       }

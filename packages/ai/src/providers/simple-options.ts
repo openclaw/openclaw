@@ -1,4 +1,5 @@
 import { reasoningTagTextPolicy } from "../provider-options.js";
+import { modelRequestBodyState } from "../transports/model-request-body.js";
 import { copyProviderAcceptanceObserver } from "../transports/transport-stream-shared.js";
 // Simple provider option helpers normalize lightweight provider configuration.
 import type {
@@ -18,12 +19,14 @@ export function buildBaseOptions(
   model: Model,
   options?: SimpleStreamOptions,
   apiKey?: string,
-): StreamOptions & FirstEventStreamOptions {
+): StreamOptions & FirstEventStreamOptions & Pick<SimpleStreamOptions, "serviceTier"> {
   void model;
   const firstEventOptions = options as FirstEventStreamOptions | undefined;
   const baseOptions = {
     temperature: options?.temperature,
+    ...(options?.serviceTier ? { serviceTier: options.serviceTier } : {}),
     maxTokens: options?.maxTokens,
+    responseFormat: options?.responseFormat,
     stop: options?.stop,
     signal: options?.signal,
     apiKey: apiKey || options?.apiKey,
@@ -41,6 +44,7 @@ export function buildBaseOptions(
     metadata: options?.metadata,
   };
   reasoningTagTextPolicy.copy(options, baseOptions);
+  modelRequestBodyState(baseOptions, options);
   return copyProviderAcceptanceObserver(options, baseOptions);
 }
 
@@ -55,7 +59,7 @@ export function clampMaxTokensToModel(
 ): number | undefined {
   return requestedMaxTokens === undefined
     ? undefined
-    : Math.max(1, Math.min(requestedMaxTokens, model.maxTokens));
+    : Math.max(1, Math.min(requestedMaxTokens, model.maxTokens ?? requestedMaxTokens));
 }
 
 export function clampReasoning(effort: ThinkingLevel): Exclude<ThinkingLevel, "xhigh">;

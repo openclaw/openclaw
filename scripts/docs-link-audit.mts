@@ -285,10 +285,6 @@ function isLocalizedDocPath(p: string) {
   return /^\/?[a-z]{2}(?:-[A-Za-z]{2,8})+\//.test(p);
 }
 
-function isGeneratedTranslatedDoc(relPath: string) {
-  return isLocalizedDocPath(relPath);
-}
-
 function createRedirectMap(docsConfig: Record<string, unknown>): Map<string, string> {
   const redirects = new Map<string, string>();
   const redirectEntries = Array.isArray(docsConfig.redirects) ? docsConfig.redirects : [];
@@ -323,31 +319,14 @@ function buildAuditIndex(
       return false;
     }
     const rel = normalizeSlashes(path.relative(docsDir, abs));
-    return !isGeneratedTranslatedDoc(rel);
+    return !isLocalizedDocPath(rel);
   });
   const routes = new Set<string>();
 
   for (const abs of markdownFiles) {
     const rel = normalizeSlashes(path.relative(docsDir, abs));
-    const text = fs.readFileSync(abs, "utf8");
     const slug = rel.replace(/\.(md|mdx)$/i, "");
     addRoute(routes, slug);
-
-    if (!text.startsWith("---")) {
-      continue;
-    }
-
-    const end = text.indexOf("\n---", 3);
-    if (end === -1) {
-      continue;
-    }
-    const frontMatter = text.slice(3, end);
-    const match = frontMatter.match(/^permalink:\s*(.+)\s*$/m);
-    if (!match) {
-      continue;
-    }
-    const permalink = (match[1] ?? "").trim().replace(/^['"]|['"]$/g, "");
-    routes.add(normalizeRoute(permalink));
   }
 
   // Without a ClawHub checkout the mirrored tree is absent, so its pages cannot be
@@ -365,7 +344,6 @@ function buildAuditIndex(
     docsDir,
     docsConfig,
     redirects,
-    allFiles,
     relAllFiles,
     markdownFiles,
     routes,
@@ -460,9 +438,6 @@ function mirroredFragmentReason(terminal: string, hash: string) {
   return `fragment unverified without the ClawHub source checkout (terminal: ${terminal}${hash}); set ${CLAWHUB_REPO_ENV}`;
 }
 
-/**
- * Audits local docs links against route, file, and redirect indexes.
- */
 export function auditDocsLinks(
   options: { docsDir?: string; allowExternalClawHubRoutes?: boolean; anchors?: boolean } = {},
 ) {
@@ -647,7 +622,7 @@ export function auditDocsLinks(
   }
 
   for (const page of collectNavPageEntries(index.docsConfig.navigation || [])) {
-    if (isGeneratedTranslatedDoc(page)) {
+    if (isLocalizedDocPath(page)) {
       continue;
     }
     checked++;
@@ -671,7 +646,6 @@ export function auditDocsLinks(
   return { checked, broken, collisions, unverifiedMirroredFragments };
 }
 
-/** Runs the docs link audit CLI. */
 function runDocsLinkAuditCli() {
   const args = process.argv.slice(2);
   if (args[0] === "--prepare-external-links") {

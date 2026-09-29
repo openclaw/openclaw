@@ -1,24 +1,27 @@
-// Gateway handlers for plugin inventory, metadata refresh and catalog search.
 import {
   ErrorCodes,
   errorShape,
   validatePluginsInspectParams,
+  validatePluginsSkillsReadParams,
   validatePluginsCatalogBrowseParams,
   validatePluginsCatalogCategoriesParams,
   validatePluginsCatalogGetParams,
   validatePluginsListParams,
-  validatePluginsRefreshParams,
   validatePluginsSearchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
-  fetchAllOfficialClawHubPlugins,
   fetchClawHubPluginCatalog,
   fetchClawHubPluginCategories,
   fetchClawHubPluginDetail,
+  fetchClawHubPluginOverview,
+  type ClawHubPluginCatalogEntry,
+  type ClawHubPluginCategory,
 } from "../../infra/clawhub-plugin-catalog.js";
+import { fetchClawHubPluginSkill } from "../../infra/clawhub-plugin-skills.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   encodePluginDiscoveryId,
+  encodeLocalPluginDiscoveryId,
   findLocalPluginByIdentity,
   joinClawHubPluginCatalog,
   joinClawHubPluginDetail,
@@ -28,54 +31,113 @@ import {
 import { registerClawHubCatalogIconUrls } from "../../plugins/catalog-icon-registry.js";
 import { searchInstallablePluginPackages } from "../../plugins/catalog-search.js";
 import { ManagedPluginLifecycleError } from "../../plugins/management-lifecycle-error.js";
-import {
-  inspectManagedPlugin,
-  listManagedPlugins,
-  refreshManagedPluginMetadata,
-} from "../../plugins/management-service.js";
+import { inspectManagedPlugin, listManagedPlugins } from "../../plugins/management-service.js";
+import { readManagedPluginSkill } from "../../plugins/management-skill-read.js";
+import { getPluginRegistryVersion } from "../../plugins/runtime-state.js";
+import { getPluginRegistryForContext } from "../../plugins/runtime/gateway-request-scope.js";
+import { listPluginServiceHealthFailures } from "../../plugins/service-health.js";
+import { validatePluginSkillPath } from "../../skills/loading/plugin-skill-bundle.js";
+import { pluginCredentialHandlers } from "./plugins.credentials.js";
 import type { GatewayRequestHandlers } from "./types.js";
-import { assertValidParams } from "./validation.js";
+import { assertValidParams, defineValidatedGatewayHandler } from "./validation.js";
+
+function pluginReadError(error: unknown) {
+  return errorShape(
+    error instanceof ManagedPluginLifecycleError && error.kind === "invalid-request"
+      ? ErrorCodes.INVALID_REQUEST
+      : ErrorCodes.UNAVAILABLE,
+    formatErrorMessage(error),
+  );
+}
 
 export const pluginsHandlers: GatewayRequestHandlers = {
-  "plugins.refresh": async ({ params, respond, context }) => {
-    if (!assertValidParams(params, validatePluginsRefreshParams, "plugins.refresh", respond)) {
+  ...pluginCredentialHandlers,
+  "plugins.skills.read": async ({ params, respond, context }) => {
+    if (
+      !assertValidParams(params, validatePluginsSkillsReadParams, "plugins.skills.read", respond)
+    ) {
       return;
     }
     try {
-      refreshManagedPluginMetadata({ config: context.getRuntimeConfig() });
-    } catch (error) {
+      if (params.path !== undefined) {
+        try {
+          validatePluginSkillPath(params.path);
+        } catch {
+          throw new ManagedPluginLifecycleError("Invalid plugin skill bundle path.");
+        }
+      }
+      if (params.source === "installed") {
+        respond(
+          true,
+          await readManagedPluginSkill({
+            config: context.getRuntimeConfig(),
+            pluginId: params.pluginId,
+            skillName: params.skillName,
+            path: params.path,
+            version: params.version,
+          }),
+          undefined,
+        );
+        return;
+      }
+      const identity = resolvePluginDiscoveryIdentity(params.catalogId);
+      if (!identity || identity.origin !== "clawhub") {
+        throw new ManagedPluginLifecycleError("Unknown ClawHub plugin identity.");
+      }
       respond(
-        false,
+        true,
+        await fetchClawHubPluginSkill({
+          packageName: identity.identity,
+          version: params.version,
+          skillName: params.skillName,
+          path: params.path,
+        }),
         undefined,
-        errorShape(
-          ErrorCodes.UNAVAILABLE,
-          `Plugin inventory refresh failed: ${formatErrorMessage(error)}. Restart the Gateway to load updated plugins.`,
-          { details: { restartRequired: true } },
-        ),
       );
-      return;
-    } finally {
-      context.notifyPluginMetadataChanged();
+    } catch (error) {
+      respond(false, undefined, pluginReadError(error));
     }
-    respond(true, { ok: true, restartRequired: true }, undefined);
   },
   "plugins.list": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validatePluginsListParams, "plugins.list", respond)) {
       return;
     }
     try {
-      const result = await listManagedPlugins({ config: context.getRuntimeConfig() });
+      const catalog = await listManagedPlugins({ config: context.getRuntimeConfig() });
+      const registry = getPluginRegistryForContext();
+      // The first loaded record owns shadowed IDs; read runtime facts after catalog I/O.
+      const records = new Map(registry?.plugins.toReversed().map((record) => [record.id, record]));
+      const failures = new Map(
+        registry
+          ? listPluginServiceHealthFailures(registry).map((failure) => [failure.pluginId, failure])
+          : [],
+      );
       respond(
         true,
         {
-          ...result,
-          plugins: result.plugins.map((plugin) =>
-            plugin.clawhubPackage
-              ? Object.assign({}, plugin, {
-                  catalogId: encodePluginDiscoveryId(plugin.clawhubPackage),
-                })
-              : plugin,
-          ),
+          ...catalog,
+          generation: getPluginRegistryVersion(registry),
+          plugins: catalog.plugins.map((plugin) => {
+            const record = records.get(plugin.id);
+            const failure = failures.get(plugin.id);
+            const error = failure ? `${failure.serviceId}: ${failure.error}` : record?.error;
+            return Object.assign({}, plugin, {
+              catalogId: plugin.clawhubPackage
+                ? encodePluginDiscoveryId(plugin.clawhubPackage)
+                : encodeLocalPluginDiscoveryId(plugin.id),
+              runtime: {
+                state:
+                  record?.status === "loaded"
+                    ? failure
+                      ? "service-failed"
+                      : "active"
+                    : record?.status === "disabled"
+                      ? "disabled"
+                      : "unloaded",
+                ...(error ? { error: error.slice(0, 2000) } : {}),
+              },
+            });
+          }),
         },
         undefined,
       );
@@ -88,26 +150,23 @@ export const pluginsHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
+      const inspected = await inspectManagedPlugin({
+        config: context.getRuntimeConfig(),
+        pluginId: params.pluginId,
+      });
+      const { inspectDecisionProviders } = await import("../../decisions/runtime.js");
       respond(
         true,
-        await inspectManagedPlugin({
-          config: context.getRuntimeConfig(),
-          pluginId: params.pluginId,
-        }),
+        {
+          ...inspected,
+          decisions: inspectDecisionProviders(context.getRuntimeConfig()).filter(
+            (entry) => entry.pluginId === params.pluginId,
+          ),
+        },
         undefined,
       );
     } catch (error) {
-      const lifecycleError = error instanceof ManagedPluginLifecycleError ? error : undefined;
-      respond(
-        false,
-        undefined,
-        errorShape(
-          lifecycleError?.kind === "invalid-request"
-            ? ErrorCodes.INVALID_REQUEST
-            : ErrorCodes.UNAVAILABLE,
-          formatErrorMessage(error),
-        ),
-      );
+      respond(false, undefined, pluginReadError(error));
     }
   },
   "plugins.search": async ({ params, respond }) => {
@@ -161,139 +220,112 @@ export const pluginsHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
     }
   },
-  "plugins.catalog.browse": async ({ params, respond, context }) => {
-    if (
-      !assertValidParams(
-        params,
-        validatePluginsCatalogBrowseParams,
-        "plugins.catalog.browse",
-        respond,
-      )
-    ) {
-      return;
-    }
-    if (params.query?.trim() && params.cursor) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "Plugin search does not accept a browse cursor."),
-      );
-      return;
-    }
-    try {
-      const local = await listManagedPlugins({ config: context.getRuntimeConfig() });
-      const query = params.query?.trim();
-      const intent = params.intent ?? "all";
-      const includeBundledOnly = intent === "bundled" || (intent === "all" && Boolean(query));
-      let published: Awaited<ReturnType<typeof fetchAllOfficialClawHubPlugins>> = [];
-      let publicationError: string | undefined;
-      if (includeBundledOnly) {
-        // Bundled distributions are first-party, so any published match belongs to ClawHub's
-        // official catalog. Read every page before classifying an unmatched entry as bundled-only.
-        try {
-          published = await fetchAllOfficialClawHubPlugins();
-        } catch (error) {
-          publicationError = `ClawHub is unavailable: ${formatErrorMessage(error)}. Bundled publication status could not be verified.`;
-        }
+  "plugins.catalog.browse": defineValidatedGatewayHandler(
+    "plugins.catalog.browse",
+    validatePluginsCatalogBrowseParams,
+    async ({ params, respond, context }) => {
+      if (params.query?.trim() && params.cursor) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "Plugin search does not accept a browse cursor."),
+        );
+        return;
       }
-      const canIncludeBundledOnly = includeBundledOnly && !publicationError;
       try {
-        const remote =
-          intent === "bundled"
-            ? { items: [] }
-            : await fetchClawHubPluginCatalog({
-                query,
-                intent,
-                category: params.category,
-                cursor: params.cursor,
-                limit: params.pageSize ?? 20,
-              });
-        const items = joinClawHubPluginCatalog({
-          remote: remote.items,
-          published,
+        const local = await listManagedPlugins({ config: context.getRuntimeConfig() });
+        const query = params.query?.trim();
+        const intent = params.intent ?? "all";
+        const includeBundledOnly =
+          intent === "bundled" || intent === "official" || intent === "all";
+        const catalogOptions = {
           local,
-          includeBundledOnly: canIncludeBundledOnly,
+          includeBundledOnly,
           intent,
           category: params.category,
           query: params.query,
           cursor: params.cursor,
-        });
-        registerClawHubCatalogIconUrls(items.map((item) => item.catalog.imageUrl));
-        respond(
-          true,
-          {
-            items,
-            ...(remote.nextCursor ? { nextCursor: remote.nextCursor } : {}),
-            ...(publicationError ? { remoteError: publicationError } : {}),
-          },
-          undefined,
-        );
-      } catch (error) {
-        respond(
-          true,
-          {
-            items: joinClawHubPluginCatalog({
-              remote: [],
-              published,
-              local,
-              includeBundledOnly: canIncludeBundledOnly,
-              intent,
-              category: params.category,
-              query: params.query,
-              cursor: params.cursor,
-            }),
-            ...(params.cursor ? { nextCursor: params.cursor } : {}),
-            remoteError: [
-              publicationError,
-              `ClawHub is unavailable: ${formatErrorMessage(error)}.${
-                canIncludeBundledOnly
-                  ? " Bundled plugins remain available."
-                  : intent === "all"
-                    ? " Installed plugins remain available."
+        };
+        try {
+          const overviewRequest = intent === "all" && !query && !params.category && !params.cursor;
+          const remote: {
+            items: ClawHubPluginCatalogEntry[];
+            categories?: ClawHubPluginCategory[];
+            nextCursor?: string;
+          } = overviewRequest
+            ? await fetchClawHubPluginOverview()
+            : intent === "bundled"
+              ? { items: [] }
+              : await fetchClawHubPluginCatalog({
+                  query,
+                  ...(params.searchSource ? { searchSource: params.searchSource } : {}),
+                  intent,
+                  category: params.category,
+                  cursor: params.cursor,
+                  limit: params.pageSize ?? 20,
+                });
+          const items = joinClawHubPluginCatalog({
+            ...catalogOptions,
+            remote: remote.items,
+            categories: remote.categories,
+          });
+          registerClawHubCatalogIconUrls(items.map((item) => item.catalog.imageUrl));
+          respond(
+            true,
+            {
+              items,
+              ...(overviewRequest ? { categories: remote.categories } : {}),
+              ...(remote.nextCursor ? { nextCursor: remote.nextCursor } : {}),
+            },
+            undefined,
+          );
+        } catch (error) {
+          respond(
+            true,
+            {
+              items: joinClawHubPluginCatalog({ ...catalogOptions, remote: [] }),
+              ...(params.cursor ? { nextCursor: params.cursor } : {}),
+              remoteError: `ClawHub is unavailable: ${formatErrorMessage(error)}.${
+                intent === "all"
+                  ? " Installed plugins remain available."
+                  : includeBundledOnly
+                    ? " Bundled plugins remain available."
                     : ""
               }`,
-            ]
-              .filter(Boolean)
-              .join(" "),
-          },
+            },
+            undefined,
+          );
+        }
+      } catch (error) {
+        respond(
+          false,
           undefined,
+          errorShape(
+            ErrorCodes.UNAVAILABLE,
+            `Plugin discovery is unavailable: ${formatErrorMessage(error)}. Retry to reconnect to ClawHub.`,
+          ),
         );
       }
-    } catch (error) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.UNAVAILABLE,
-          `Plugin discovery is unavailable: ${formatErrorMessage(error)}. Retry to reconnect to ClawHub.`,
-        ),
-      );
-    }
-  },
-  "plugins.catalog.categories": async ({ params, respond }) => {
-    if (
-      !assertValidParams(
-        params,
-        validatePluginsCatalogCategoriesParams,
-        "plugins.catalog.categories",
-        respond,
-      )
-    ) {
-      return;
-    }
-    try {
-      respond(true, { categories: await fetchClawHubPluginCategories() }, undefined);
-    } catch (error) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.UNAVAILABLE,
-          `Plugin categories are unavailable: ${formatErrorMessage(error)}. Retry to reconnect to ClawHub.`,
-        ),
-      );
-    }
-  },
+    },
+  ),
+  "plugins.catalog.categories": defineValidatedGatewayHandler(
+    "plugins.catalog.categories",
+    validatePluginsCatalogCategoriesParams,
+    async ({ respond }) => {
+      try {
+        respond(true, { categories: await fetchClawHubPluginCategories() }, undefined);
+      } catch (error) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.UNAVAILABLE,
+            `Plugin categories are unavailable: ${formatErrorMessage(error)}. Retry to reconnect to ClawHub.`,
+          ),
+        );
+      }
+    },
+  ),
   "plugins.catalog.get": async ({ params, respond, context }) => {
     if (
       !assertValidParams(params, validatePluginsCatalogGetParams, "plugins.catalog.get", respond)

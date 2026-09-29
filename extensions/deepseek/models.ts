@@ -12,7 +12,9 @@ export const DEEPSEEK_MODEL_CATALOG: ModelDefinitionConfig[] = buildManifestMode
 }).models.map((model) => Object.assign(model, { api: "openai-completions" }));
 
 const DEEPSEEK_V4_MODEL_IDS = new Set(
-  DEEPSEEK_MODEL_CATALOG.map((model) => model.id).filter((id) => id.startsWith("deepseek-v4-")),
+  DEEPSEEK_MODEL_CATALOG.map((model) => model.id).filter(
+    (id) => id === "deepseek-flash" || id.startsWith("deepseek-v4-"),
+  ),
 );
 
 export function isDeepSeekV4ModelId(modelId: string): boolean {

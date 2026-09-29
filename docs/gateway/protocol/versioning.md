@@ -20,7 +20,7 @@ Which protocol versions a client may negotiate, and the constants a reference cl
   include the current protocol in that range; current clients and servers run
   protocol v4.
 - Authenticated clients with both `role: "node"` and `client.mode: "node"`
-  may use the N-1 node protocol (currently v3). Lightweight restart probes use
+  may use the N-1 node protocol (v3). Lightweight restart probes use
   the same N-1 window. Device auth, pairing, scopes, command policy, and exec
   approvals are unchanged by this compatibility window. Plugin-owned node
   capabilities and commands are withheld until the node upgrades to the current

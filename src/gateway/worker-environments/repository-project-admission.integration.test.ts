@@ -32,6 +32,7 @@ it("admits public source without a native CLI and fences later configured identi
   // configuration absence and durable agent ownership use their real owners.
   const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
     const request = new Request(input, init);
+    expect(request.method).toBe("GET");
     expect(request.headers.has("authorization")).toBe(false);
     const pathname = new URL(request.url).pathname;
     let body: unknown;
@@ -62,12 +63,16 @@ it("admits public source without a native CLI and fences later configured identi
     assertCurrent: () => {},
   });
 
-  if (!admitted) {
-    throw new Error("Public fixture was classified as private");
-  }
   expect(admitted.project.baseCommit).toBe(commit);
   expect(admitted.project.source.owner.identity).toEqual({ source: "anonymous" });
   await expect(admitted.revalidate()).resolves.toBeUndefined();
+  const reopened = await prepareRepositoryWorkerProjectSource({
+    expected: admitted.project,
+    namespace: "public-source-test",
+    getConfig: () => config,
+    assertCurrent: () => {},
+  });
+  expect(reopened.project).toEqual(admitted.project);
   expect(admitted).not.toHaveProperty("readGitToken");
   expect(fetchMock).toHaveBeenCalled();
   await fs.writeFile(path.join(nativeConfig, "config.yml"), "{}\n");

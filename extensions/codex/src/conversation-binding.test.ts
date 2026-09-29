@@ -76,6 +76,9 @@ vi.mock("node:fs", async (importOriginal) => {
         if (content !== undefined) {
           return content;
         }
+        throw Object.assign(new Error("Synthetic Codex requirements file is absent"), {
+          code: "ENOENT",
+        });
       }
       return actual.readFileSync(
         filePath,
@@ -662,7 +665,10 @@ describe("codex conversation binding", () => {
             pluginConfig: {},
             runtime: {
               modelAuth: { resolveProviderIdForAuth: agentRuntimeMocks.resolveProviderIdForAuth },
-              state: { openSyncKeyedStore: () => stateStore },
+              state: {
+                openSyncKeyedStore: () => stateStore,
+                openKeyedStore: () => stateStore,
+              },
             } as never,
             on,
           }),
@@ -1512,13 +1518,12 @@ describe("codex conversation binding", () => {
         client: harness.client,
         release: vi.fn(),
       });
-      vi.useFakeTimers({ toFake: ["Date"] });
-      const startedAt = Date.now();
+      const elapsedClock = vi.spyOn(performance, "now").mockReturnValue(0);
       let resumeAccepted = false;
       const request = vi.spyOn(harness.client, "request").mockImplementation(async (method) => {
         if (method === "thread/read") {
           if (expiresDuring === "preflight") {
-            vi.setSystemTime(startedAt + 1_001);
+            elapsedClock.mockReturnValue(1_001);
           }
           return { thread: response.thread } as never;
         }
@@ -1547,14 +1552,14 @@ describe("codex conversation binding", () => {
                     throw new Error("Invalid Codex app-server binding row");
                   }
                   if (expiresDuring === "retention") {
-                    vi.setSystemTime(startedAt + 1_001);
+                    elapsedClock.mockReturnValue(1_001);
                   }
                 }
                 return testCodexAppServerBindingStore.read(identity);
               },
               mutate: async (...args) => {
                 if (expiresDuring === "commit") {
-                  vi.setSystemTime(startedAt + 1_001);
+                  elapsedClock.mockReturnValue(1_001);
                 }
                 return await testCodexAppServerBindingStore.mutate(...args);
               },
@@ -1584,7 +1589,7 @@ describe("codex conversation binding", () => {
       } finally {
         retry.mockRestore();
         harness.client.close();
-        vi.useRealTimers();
+        elapsedClock.mockRestore();
       }
     },
   );
@@ -1656,7 +1661,7 @@ describe("codex conversation binding", () => {
       .spyOn(harness.client, "request")
       .mockResolvedValue(conversationThreadStartResult("thread-active-child") as never);
     ensureCodexAppServerClientRuntime(harness.client, { agentDir: tempDir });
-    const parent = codexNativeSubagentMonitorRuntime.register({
+    const parent = await codexNativeSubagentMonitorRuntime.register({
       client: harness.client,
       parentThreadId: "thread-parent",
     });
@@ -1696,7 +1701,7 @@ describe("codex conversation binding", () => {
       expect(request).not.toHaveBeenCalled();
       expect(isCodexAppServerLiveThreadClaimed(harness.client, "thread-active-child")).toBe(true);
     } finally {
-      parent.unregister();
+      await parent.unregister();
       harness.client.close();
     }
   });
@@ -2445,58 +2450,6 @@ describe("codex conversation binding", () => {
       reply: { text: "Only an owner or operator.admin can control Codex native execution." },
     });
     expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
-  });
-
-  it("routes a programmatically bound Control UI session through node resume", async () => {
-    const resumeCodexCliSessionOnNode = vi.fn(async () => ({
-      ok: true as const,
-      sessionId: "019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd",
-      text: "done",
-    }));
-
-    const result = await handleCodexConversationInboundClaim(
-      {
-        content: "continue the task",
-        channel: "webchat",
-        isGroup: false,
-        commandAuthorized: true,
-        sessionKey: "node-session",
-      },
-      {
-        channelId: "webchat",
-        sessionKey: "node-session",
-        pluginBinding: {
-          bindingId: "binding-1",
-          pluginId: "codex",
-          pluginRoot: tempDir,
-          channel: "webchat",
-          accountId: "default",
-          conversationId: "node-session",
-          boundAt: Date.now(),
-          data: {
-            kind: "codex-cli-node-session",
-            version: 1,
-            nodeId: "mb-m5",
-            sessionId: "019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd",
-            cwd: "/repo",
-          },
-        },
-      },
-      {
-        config: { tools: { exec: { host: "node", node: "mb-m5" } } },
-        resumeCodexCliSessionOnNode,
-        timeoutMs: 1234,
-      },
-    );
-
-    expect(result).toEqual({ handled: true, reply: { text: "done" } });
-    expect(resumeCodexCliSessionOnNode).toHaveBeenCalledWith({
-      nodeId: "mb-m5",
-      sessionId: "019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd",
-      prompt: "continue the task",
-      cwd: "/repo",
-      timeoutMs: 1234,
-    });
   });
 
   it("blocks bound Codex app-server turns when the current OpenClaw session is sandboxed", async () => {
@@ -3509,7 +3462,7 @@ describe("codex conversation binding", () => {
     expect(requests[2]?.params.sandboxPolicy).toEqual({ type: "dangerFullAccess" });
   });
 
-  it("does not silently decline auto-mode approvals during missing thread recovery", async () => {
+  it("refuses auto-mode bound approvals before connecting to the native thread", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     await writeTestConversationBinding(sessionFile, {
       threadId: "thread-old",
@@ -3517,47 +3470,6 @@ describe("codex conversation binding", () => {
       approvalPolicy: "never",
       sandbox: "danger-full-access",
     });
-    const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
-    const notificationHandlers: Array<(notification: Record<string, unknown>) => void> = [];
-    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
-      request: vi.fn(async (method: string, requestParams: Record<string, unknown>) => {
-        requests.push({ method, params: requestParams });
-        if (method === "turn/start" && requestParams.threadId === "thread-old") {
-          throw new Error("thread not found: thread-old");
-        }
-        if (method === "thread/start") {
-          return {
-            thread: { id: "thread-new", sessionId: "session-1", cwd: tempDir },
-            model: "gpt-5.4-mini",
-          };
-        }
-        if (method === "turn/start" && requestParams.threadId === "thread-new") {
-          setImmediate(() => {
-            for (const handler of notificationHandlers) {
-              handler({
-                method: "turn/completed",
-                params: {
-                  threadId: "thread-new",
-                  turn: {
-                    id: "turn-new",
-                    status: "completed",
-                    items: [{ id: "assistant-1", type: "agentMessage", text: "Recovered" }],
-                  },
-                },
-              });
-            }
-          });
-          return { turn: { id: "turn-new" } };
-        }
-        throw new Error(`unexpected method: ${method}`);
-      }),
-      addNotificationHandler: vi.fn((handler) => {
-        notificationHandlers.push(handler);
-        return () => undefined;
-      }),
-      addRequestHandler: vi.fn(() => () => undefined),
-    });
-
     const result = await handleCodexConversationInboundClaim(
       {
         content: "hi again",
@@ -3600,7 +3512,7 @@ describe("codex conversation binding", () => {
     expect(result?.reply?.text).toContain(
       "OpenClaw native Codex conversation binding cannot route interactive approvals yet",
     );
-    expect(requests).toEqual([]);
+    expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
   });
 
   it("creates a fresh thread when recovery finds the binding already cleared", async () => {
@@ -4255,39 +4167,43 @@ describe("codex conversation binding", () => {
       const result = handleCodexConversationInboundClaim(event, ctx, {
         pluginConfig: { appServer: { requestTimeoutMs: 100 } },
       });
-      const turnStart = await waitForRequest("turn/start");
-      const interrupt = await waitForRequest("turn/interrupt");
-      expect(interrupt.params).toEqual({ threadId: "thread-1", turnId: "" });
-      harness.send({ id: turnStart.id, result: { turn: { id: "turn-1" } } });
-      harness.send(
-        interruptFails
-          ? { id: interrupt.id, error: { code: -32_000, message: "startup interrupt failed" } }
-          : { id: interrupt.id, result: {} },
-      );
-      if (sessionKey && !interruptFails) {
-        const unsubscribe = await waitForRequest("thread/unsubscribe");
-        harness.send({ id: unsubscribe.id, result: {} });
-      }
+      try {
+        const turnStart = await waitForRequest("turn/start");
+        const interrupt = await waitForRequest("turn/interrupt");
+        expect(interrupt.params).toEqual({ threadId: "thread-1", turnId: "" });
+        harness.send({ id: turnStart.id, result: { turn: { id: "turn-1" } } });
+        harness.send(
+          interruptFails
+            ? { id: interrupt.id, error: { code: -32_000, message: "startup interrupt failed" } }
+            : { id: interrupt.id, result: {} },
+        );
+        if (sessionKey && !interruptFails) {
+          const unsubscribe = await waitForRequest("thread/unsubscribe");
+          harness.send({ id: unsubscribe.id, result: {} });
+        }
 
-      await expect(result).resolves.toEqual({
-        handled: true,
-        reply: { text: "Codex app-server turn failed: turn/start timed out" },
-      });
-      expect(harness.writes.map((write) => JSON.parse(write).method)).toEqual([
-        "turn/start",
-        "turn/interrupt",
-        ...(sessionKey && !interruptFails ? ["thread/unsubscribe"] : []),
-      ]);
-      expect(sharedClientMocks.retireSharedCodexAppServerClientIfCurrent).toHaveBeenCalledTimes(
-        interruptFails ? 1 : 0,
-      );
-      expect(
-        readCodexConversationActiveTurn(testConversationIdentity(sessionFile)),
-      ).toBeUndefined();
-      if (sessionKey) {
-        await expect(readTestConversationBinding(sessionFile)).resolves.toBeUndefined();
+        await expect(result).resolves.toEqual({
+          handled: true,
+          reply: { text: "Codex app-server turn failed: turn/start timed out" },
+        });
+        expect(harness.writes.map((write) => JSON.parse(write).method)).toEqual([
+          "turn/start",
+          "turn/interrupt",
+          ...(sessionKey && !interruptFails ? ["thread/unsubscribe"] : []),
+        ]);
+        expect(sharedClientMocks.retireSharedCodexAppServerClientIfCurrent).toHaveBeenCalledTimes(
+          interruptFails ? 1 : 0,
+        );
+        expect(
+          readCodexConversationActiveTurn(testConversationIdentity(sessionFile)),
+        ).toBeUndefined();
+        if (sessionKey) {
+          await expect(readTestConversationBinding(sessionFile)).resolves.toBeUndefined();
+        }
+      } finally {
+        harness.client.close();
+        await Promise.allSettled([result]);
       }
-      harness.client.close();
     },
   );
 
@@ -4821,7 +4737,7 @@ describe("codex conversation binding", () => {
     expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
   });
 
-  it("infers custom model providers for legacy bound turns without stored modelProvider", async () => {
+  it("refuses legacy custom-provider bindings requiring interactive approvals before connecting", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     await writeTestConversationBinding(sessionFile, {
       threadId: "thread-1",
@@ -4830,11 +4746,6 @@ describe("codex conversation binding", () => {
       approvalPolicy: "on-request",
       sandbox: "workspace-write",
     });
-    const turnStartParams: Record<string, unknown>[] = [];
-    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue(
-      createCompletingBoundTurnClient(turnStartParams),
-    );
-
     await expect(
       handleCodexConversationInboundClaim(
         {
@@ -4879,7 +4790,6 @@ describe("codex conversation binding", () => {
       },
     });
 
-    expect(turnStartParams).toEqual([]);
     expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
   });
 });

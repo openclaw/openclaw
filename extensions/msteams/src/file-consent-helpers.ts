@@ -1,8 +1,9 @@
-// Msteams helper module supports file consent helpers behavior.
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { buildFileConsentCard } from "./file-consent.js";
 import { storePendingUploadFs } from "./pending-uploads-fs.js";
 import { storePendingUpload } from "./pending-uploads.js";
+
+export const FILE_CONSENT_THRESHOLD_BYTES = 4 * 1024 * 1024;
 
 type FileConsentMedia = {
   buffer: Buffer;
@@ -56,8 +57,7 @@ export function prepareFileConsentActivity(params: {
     conversationId,
   });
 
-  const activity = buildConsentActivity({ media, description, uploadId });
-  return { activity, uploadId };
+  return { activity: buildConsentActivity({ media, description, uploadId }), uploadId };
 }
 
 /**
@@ -80,37 +80,25 @@ export async function prepareFileConsentActivityFs(params: {
   // Populate the in-memory store first so the uploadId is consistent, then
   // mirror the same entry to the FS store under the same id so an invoke
   // handler in another process can find it.
-  const uploadId = storePendingUpload({
+  const upload = {
     buffer: media.buffer,
     filename: media.filename,
     contentType: media.contentType,
     conversationId,
-  });
+  };
+  const uploadId = storePendingUpload(upload);
+  await storePendingUploadFs({ id: uploadId, ...upload });
 
-  await storePendingUploadFs({
-    id: uploadId,
-    buffer: media.buffer,
-    filename: media.filename,
-    contentType: media.contentType,
-    conversationId,
-  });
-
-  const activity = buildConsentActivity({ media, description, uploadId });
-  return { activity, uploadId };
+  return { activity: buildConsentActivity({ media, description, uploadId }), uploadId };
 }
 
-/**
- * Check if a file requires FileConsentCard flow.
- * True for: personal chat AND (large file OR non-image)
- */
 export function requiresFileConsent(params: {
   conversationType: string | undefined;
   contentType: string | undefined;
   bufferSize: number;
-  thresholdBytes: number;
 }): boolean {
   const isPersonal = normalizeOptionalLowercaseString(params.conversationType) === "personal";
   const isImage = params.contentType?.startsWith("image/") ?? false;
-  const isLargeFile = params.bufferSize >= params.thresholdBytes;
+  const isLargeFile = params.bufferSize >= FILE_CONSENT_THRESHOLD_BYTES;
   return isPersonal && (isLargeFile || !isImage);
 }

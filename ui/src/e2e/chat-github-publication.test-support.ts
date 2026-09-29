@@ -17,6 +17,7 @@ export const publicationOptions = {
     pending: null,
   },
   pendingPersonal: null,
+  latestShared: null,
 };
 export const publicationMethods = [
   "chat.metadata",
@@ -31,15 +32,16 @@ export const publicationMethods = [
 export async function showPublicationBranch(
   gateway: Awaited<ReturnType<typeof installMockGateway>>,
   branch = "openclaw/personal-publication",
+  expectedSessionKey?: string,
 ) {
-  const key = await waitForWatchedSessionKey(gateway);
+  const key = await waitForWatchedSessionKey(gateway, expectedSessionKey);
   await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
     sessions: {
       [key]: {
         pullRequests: [],
         branch: { owner: "openclaw", repo: "openclaw", branch, additions: 7, deletions: 2 },
         rateLimited: false,
-        status: "ok",
+        status: "ready",
       },
     },
   });
@@ -47,21 +49,22 @@ export async function showPublicationBranch(
 
 export async function waitForWatchedSessionKey(
   gateway: Awaited<ReturnType<typeof installMockGateway>>,
+  expectedSessionKey?: string,
 ): Promise<string> {
   let watchedKey = "";
   await expect
     .poll(async () => {
+      watchedKey = "";
       const requests = await gateway.getRequests(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD);
-      for (const request of requests.toReversed()) {
-        const params = request.params;
-        if (!params || typeof params !== "object" || !("sessionKeys" in params)) {
-          continue;
-        }
-        const keys = (params as { sessionKeys?: unknown }).sessionKeys;
-        if (Array.isArray(keys) && typeof keys[0] === "string") {
-          watchedKey = keys[0];
-          break;
-        }
+      // An empty latest subscription retires every earlier watched key.
+      const params = requests.at(-1)?.params;
+      if (!params || typeof params !== "object" || !("sessionKeys" in params)) {
+        return watchedKey;
+      }
+      const keys = params.sessionKeys;
+      if (Array.isArray(keys)) {
+        const key = expectedSessionKey ?? keys[0];
+        watchedKey = typeof key === "string" && keys.includes(key) ? key : "";
       }
       return watchedKey;
     })

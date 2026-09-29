@@ -8,6 +8,7 @@ import {
   type MascotMood,
   type MascotPose,
 } from "./mascot-pose.ts";
+import { currentThemeBranding, neutralMark } from "./neutral-mark.ts";
 
 const DEFAULT_SIZE = 120;
 const MASCOT_MOODS = new Set<MascotMood>([
@@ -44,6 +45,13 @@ class OpenClawMascot extends LitElement {
       height: 100%;
       will-change: transform;
     }
+
+    .openclaw-mascot--neutral,
+    .openclaw-mascot--neutral svg {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
   `;
 
   @property({ reflect: true }) mood: MascotMood = "idle";
@@ -54,7 +62,6 @@ class OpenClawMascot extends LitElement {
   private animationFrame = 0;
   private visible = true;
   private reducedMotion = false;
-  private lastPose: MascotPose = staticMascotPose("idle");
   private intersectionObserver: IntersectionObserver | null = null;
   private themeObserver: MutationObserver | null = null;
   private motionQuery: MediaQueryList | null = null;
@@ -84,10 +91,10 @@ class OpenClawMascot extends LitElement {
     }
 
     if (typeof MutationObserver !== "undefined") {
-      this.themeObserver = new MutationObserver(() => this.drawPose(this.lastPose));
+      this.themeObserver = new MutationObserver(() => this.requestUpdate());
       this.themeObserver.observe(document.documentElement, {
         attributes: true,
-        attributeFilter: ["data-theme-mode"],
+        attributeFilter: ["data-theme-mode", "data-theme-mascot"],
       });
     }
   }
@@ -123,14 +130,12 @@ class OpenClawMascot extends LitElement {
     if (changed.has("tease")) {
       this.animator.setTease(this.tease, currentSeconds());
     }
-    if (changed.has("size") || changed.has("mood") || changed.has("tease")) {
-      this.drawCurrentFrame(currentSeconds());
-      this.syncPlayback();
-    }
+    this.drawCurrentFrame(currentSeconds());
+    this.syncPlayback();
   }
 
   catchOnce(): void {
-    if (!this.isConnected || this.reducedMotion) {
+    if (!this.isConnected || this.reducedMotion || currentThemeBranding().mascot === "none") {
       return;
     }
     const time = currentSeconds();
@@ -140,7 +145,9 @@ class OpenClawMascot extends LitElement {
   }
 
   override render() {
-    return html`<canvas></canvas>`;
+    return currentThemeBranding().mascot === "none"
+      ? html`<span class="openclaw-mascot--neutral">${neutralMark}</span>`
+      : html`<canvas></canvas>`;
   }
 
   private get resolvedMood(): MascotMood {
@@ -154,6 +161,7 @@ class OpenClawMascot extends LitElement {
   private get shouldAnimate(): boolean {
     return (
       this.isConnected &&
+      currentThemeBranding().mascot === "claw" &&
       this.visible &&
       !this.reducedMotion &&
       document.visibilityState !== "hidden"
@@ -171,12 +179,12 @@ class OpenClawMascot extends LitElement {
 
   private syncPlayback(): void {
     if (!this.renderRoot.querySelector("canvas")) {
+      this.stopAnimation();
       return;
     }
     if (this.reducedMotion) {
       this.stopAnimation();
-      this.lastPose = staticMascotPose(this.resolvedMood);
-      this.drawPose(this.lastPose);
+      this.drawPose(staticMascotPose(this.resolvedMood));
       return;
     }
     if (!this.shouldAnimate) {
@@ -196,10 +204,9 @@ class OpenClawMascot extends LitElement {
   }
 
   private drawCurrentFrame(time: number): void {
-    this.lastPose = this.reducedMotion
-      ? staticMascotPose(this.resolvedMood)
-      : this.animator.poseAt(time);
-    this.drawPose(this.lastPose);
+    this.drawPose(
+      this.reducedMotion ? staticMascotPose(this.resolvedMood) : this.animator.poseAt(time),
+    );
   }
 
   private drawPose(pose: MascotPose): void {

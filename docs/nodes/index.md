@@ -76,6 +76,7 @@ Every anchor this page used to publish still resolves here. Each entry below car
 - <a id="gateway-deployments-that-cannot-host-nodes" />[Gateway deployments that cannot host nodes](/nodes/node-host#gateway-deployments-that-cannot-host-nodes)
 - <a id="start-a-node-host-(foreground)" /><a id="start-a-node-host-foreground" />[Start a node host (foreground)](/nodes/node-host#start-a-node-host-foreground)
 - <a id="remote-gateway-via-ssh-tunnel-(loopback-bind)" /><a id="remote-gateway-via-ssh-tunnel-loopback-bind" />[Remote gateway via SSH tunnel (loopback bind)](/nodes/node-host#remote-gateway-via-ssh-tunnel-loopback-bind)
+- <a id="restrict-the-node-command-surface" />[Restrict the node command surface](/nodes/node-host#restrict-the-node-command-surface)
 - <a id="start-a-node-host-(service)" /><a id="start-a-node-host-service" />[Start a node host (service)](/nodes/node-host#start-a-node-host-service)
 - <a id="pair-%2B-name" /><a id="pair-+-name" />[Pair + name](/nodes/node-host#pair-+-name)
 - <a id="headless-identity-state" />[Headless identity state](/nodes/node-host#headless-identity-state)
@@ -101,6 +102,8 @@ Every anchor this page used to publish still resolves here. Each entry below car
 - <a id="codex-sessions-and-transcripts" />[Codex sessions and transcripts](/nodes/session-catalogs#codex-sessions-and-transcripts)
 - <a id="claude-sessions-and-transcripts" />[Claude sessions and transcripts](/nodes/session-catalogs#claude-sessions-and-transcripts)
 - <a id="opencode-and-pi-sessions" />[OpenCode and Pi sessions](/nodes/session-catalogs#opencode-and-pi-sessions)
+
+- <a id="openclaw-sessions-and-transcripts" />[OpenClaw sessions and transcripts](/nodes/session-catalogs#openclaw-sessions-and-transcripts)
 
 **[Host OpenClaw sessions on a node](/nodes/session-hosting)**
 

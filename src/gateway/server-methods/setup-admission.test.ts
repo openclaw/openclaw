@@ -374,7 +374,9 @@ describe("setup admission", () => {
     async (reset) => {
       const create = vi.fn(() => new WizardSession(async () => {}));
       const pending = createAdmittedWizardSession(create);
-      const rejected = expect(pending).rejects.toThrow("draining");
+      const rejected = expect(pending).rejects.toThrow(
+        "Gateway is restarting. Please try again shortly.",
+      );
       markGatewayRestartDraining();
       if (reset) {
         resetGatewayWorkAdmission();
@@ -438,7 +440,7 @@ describe("setup admission", () => {
         expect(await session.next()).toMatchObject({
           done: true,
           ...(failWrite
-            ? { status: "error", error: "Error: settings write failed" }
+            ? { status: "error", error: "settings write failed" }
             : { status: "done", modelActivation: { modelRef: "ollama/local-model" } }),
         });
       } finally {

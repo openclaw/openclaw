@@ -61,10 +61,11 @@ suite.define(() => {
       });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "main"));
       const heading = page.locator(".agent-chat__welcome-identity h2");
-      const avatar = page.locator(".agent-chat__welcome-identity .agent-chat__avatar--text");
+      const avatar = page.locator(".agent-chat__welcome-avatar");
+      const avatarText = avatar.locator(".identity-avatar__text");
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       await expect.poll(() => heading.textContent()).toBe(initialName);
-      await expect.poll(async () => (await avatar.textContent())?.trim()).toBe(initialAvatar);
+      await expect.poll(() => avatarText.getAttribute("data-avatar")).toBe(initialAvatar);
       await expect.poll(() => composer.getAttribute("placeholder")).toContain(initialName);
       await composer.fill(draft);
       const sessionUrl = page.url();
@@ -114,7 +115,7 @@ suite.define(() => {
         await expect.poll(() => page.title()).toContain(nextName);
         const observed = {
           name: (await heading.textContent())?.trim(),
-          avatar: (await avatar.textContent())?.trim(),
+          avatar: await avatarText.getAttribute("data-avatar"),
           avatarLabel: await avatar.getAttribute("aria-label"),
           placeholder: await composer.getAttribute("placeholder"),
         };

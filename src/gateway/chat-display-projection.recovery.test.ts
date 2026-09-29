@@ -1,7 +1,8 @@
 import { STREAM_ERROR_FALLBACK_TEXT } from "@openclaw/ai/internal/shared";
 import { describe, expect, it } from "vitest";
+import { createPreSessionStartAnnouncePairFilter } from "./chat-display-projection.history.js";
 import { projectChatDisplayMessages } from "./chat-display-projection.js";
-import { buildSessionHistorySnapshot, SessionHistorySseState } from "./session-history-state.js";
+import { SessionHistorySseState } from "./session-history-state.js";
 
 const user = { role: "user", content: "hello", __openclaw: { seq: 1 } };
 const failed = {
@@ -78,33 +79,29 @@ describe("recovered assistant errors", () => {
       errorMessage: "PRIVATE_PROVIDER_DETAIL",
     };
     const original = structuredClone(message);
-    for (const messages of [
-      projectChatDisplayMessages([user, message]),
-      buildSessionHistorySnapshot({ rawMessages: [user, message] }).history.messages,
-    ]) {
-      expect(messages.at(-1)).toMatchObject({
-        stopReason: "error",
-        content: expect.arrayContaining([
-          expect.objectContaining({
-            type: "text",
-            text: expect.stringContaining(
-              "⚠️ The provider returned an unfinished tool call. Earlier actions may have completed; verify their results before continuing.",
-            ),
-          }),
-        ]),
-      });
-      const serialized = JSON.stringify(messages);
-      expect(serialized).not.toContain("PRIVATE_PROVIDER_DETAIL");
-      expect(serialized).not.toContain("PRIVATE_COMMENTARY");
-      expect(serialized.split("The provider returned an unfinished tool call.")).toHaveLength(2);
-      if (JSON.stringify(partial).includes("Partial reply")) {
-        expect(serialized).toContain("Partial reply");
-      }
-      if (JSON.stringify(partial).includes("partial-call")) {
-        expect(serialized).toContain("partial-call");
-      }
-      expect(projectChatDisplayMessages(messages)).toEqual(messages);
+    const messages = projectChatDisplayMessages([user, message]);
+    expect(messages.at(-1)).toMatchObject({
+      stopReason: "error",
+      content: expect.arrayContaining([
+        expect.objectContaining({
+          type: "text",
+          text: expect.stringContaining(
+            "⚠️ The provider returned an unfinished tool call. Earlier actions may have completed; verify their results before continuing.",
+          ),
+        }),
+      ]),
+    });
+    const serialized = JSON.stringify(messages);
+    expect(serialized).not.toContain("PRIVATE_PROVIDER_DETAIL");
+    expect(serialized).not.toContain("PRIVATE_COMMENTARY");
+    expect(serialized.split("The provider returned an unfinished tool call.")).toHaveLength(2);
+    if (JSON.stringify(partial).includes("Partial reply")) {
+      expect(serialized).toContain("Partial reply");
     }
+    if (JSON.stringify(partial).includes("partial-call")) {
+      expect(serialized).toContain("partial-call");
+    }
+    expect(projectChatDisplayMessages(messages)).toEqual(messages);
     expect(message).toEqual(original);
   });
 
@@ -127,11 +124,7 @@ describe("recovered assistant errors", () => {
     const final = { ...answer, __openclaw: { ...answer["__openclaw"], seq: 6 } };
     const raw = [user, ...failures, final];
     const original = structuredClone(raw);
-    expect(projectedIds(raw)).toEqual([user["__openclaw"], final["__openclaw"]]);
-    expect(buildSessionHistorySnapshot({ rawMessages: raw }).history.messages).toEqual([
-      user,
-      final,
-    ]);
+    expect(projectChatDisplayMessages(raw)).toEqual([user, final]);
     expect(raw).toEqual(original);
   });
 
@@ -192,9 +185,27 @@ describe("recovered assistant errors", () => {
   it.each([false, true])(
     "refreshes earlier SSE history after recovery (initial error: %s)",
     (initial) => {
-      const state = SessionHistorySseState.fromRawSnapshot({
+      const messages = initial
+        ? [
+            user,
+            {
+              role: "assistant",
+              provider: "openai",
+              model: "primary",
+              content: [{ type: "text", text: "The agent run failed before producing a reply." }],
+              stopReason: "error",
+              __openclaw: failed["__openclaw"],
+            },
+          ]
+        : [user];
+      const state = SessionHistorySseState.fromSnapshot({
         target: { sessionId: "session", sessionKey: "agent:main:test" },
-        rawMessages: initial ? [user, failed] : [user],
+        snapshot: {
+          history: { items: messages, messages, hasMore: false },
+          rawTranscriptSeq: initial ? 2 : 1,
+          turnBoundaryPending: false,
+          assistantErrorPending: initial,
+        },
       });
       if (!initial) {
         expect(
@@ -208,4 +219,25 @@ describe("recovered assistant errors", () => {
       });
     },
   );
+});
+
+describe("appended history recovery", () => {
+  it("drops only old announce pairs when the adjacent assistant starts a later chunk", () => {
+    const announce = {
+      role: "user",
+      timestamp: 10,
+      provenance: { kind: "inter_session", sourceTool: "subagent_announce" },
+      content: "Earlier child finished",
+    };
+    const oldReply = { role: "assistant", timestamp: 11, content: "Acknowledged" };
+    const newReply = { ...oldReply, timestamp: 30 };
+    const rows = [announce, oldReply, announce, newReply, user];
+    for (let split = 1; split < rows.length; split++) {
+      const filter = createPreSessionStartAnnouncePairFilter(20);
+      expect([...filter(rows.slice(0, split)), ...filter(rows.slice(split))]).toEqual([
+        newReply,
+        user,
+      ]);
+    }
+  });
 });

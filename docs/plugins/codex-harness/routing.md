@@ -12,9 +12,9 @@ Which effective routes select the Codex runtime, and the deployment shapes built
 
 ## Routing and model selection
 
-`openai/gpt-6-astra` defaults to `low` reasoning effort through the shared
-OpenAI provider policy. This limits routine reasoning cost and subscription
-budget use. For OpenClaw-managed turns, the resolved effort is sent in Codex `turn/start` requests,
+`openai/gpt-6-astra` defaults to `medium` reasoning effort through the shared
+OpenAI provider policy when the account supports it. For OpenClaw-managed turns,
+the resolved effort is sent in Codex `turn/start` requests,
 including `collaborationMode.settings.reasoning_effort`, so the native thread
 uses the same default as Control UI. Explicit thinking settings still win;
 an existing session or agent configured for `high` stays at `high`. Threads
@@ -70,6 +70,55 @@ for the normal OpenAI route and `codex/gpt-*` only when image understanding
 should run through a bounded Codex app-server turn. Doctor rewrites legacy
 Codex GPT refs to `openai/gpt-*`.
 
+### Operator role model permissions
+
+A role's [model policy](/gateway/operator-scopes#named-operator-roles) applies to
+each native inference request, including retries, child turns, ordinary reviews,
+native image and search requests, and compaction. OpenClaw checks the actual model against both the work's original
+permissions and current policy before forwarding it. Verified catalog-to-native
+model mappings remain valid. Removing a model cancels affected inference while
+permitted work continues.
+
+Reusing a native child does not attach its creator's permissions permanently.
+A later turn with unambiguous source attribution uses its submitting operator's
+authority after the earlier turn settles. With the native hook integration active,
+sending input to an active turn requires the same original authority,
+including follow-up requests that native execution can consume in that turn. Native
+Guardian reviews and configured memory processing keep their existing service
+authority, verified from native request provenance and their owning execution or
+configured service.
+
+Restricted runs require an OpenClaw-owned native inference route. Managed stdio
+connections can retain HTTP or WebSocket Responses providers over public HTTPS;
+already-owned native bindings can reuse that route.
+Provider projection shares the connection's eight-route limit; excess providers
+remain unavailable to restricted native restores, and selecting a new route after
+capacity is reached requires a fresh managed native connection.
+Custom providers need an explicit native `base_url`; query fields use the native
+`query_params` table. Unowned attachments, native local-model providers,
+AWS-signed requests, system-proxy profiles, custom native
+certificate files, and proxy settings that cannot preserve both upstream routing
+and private loopback access cannot establish this guarantee. OpenClaw rejects a
+restricted run on those paths before starting it. Roles without a model policy
+keep their existing native connection and optional-hook behavior. Introducing a
+model policy while an unqualified operator execution is active cancels directly owned and otherwise
+unambiguously bound work, including its unqualified children.
+
+When staff run without a model policy and qualified native hooks are disabled or
+unavailable, native execution can mix accepted input into an existing turn or
+combine queued input from several senders into a new turn without preserving
+unique sender attribution. Previously accepted unrestricted input that can no
+longer be attributed uniquely may continue under the receiving execution's valid
+authority after a contributing sender's authorization ends or becomes restricted.
+A matching native root alone does not prove unique attribution. OpenClaw does not
+interrupt independently authorized receiver work to guess which input it consumed.
+
+This limitation does not exempt newly restricted work or revocation of a directly
+or otherwise unambiguously bound source. Exact attribution requires the qualified
+native hook integration. Visitor Access requires an explicit model policy; its
+Codex runs require the qualified integration, so its normal restricted flow cannot
+enter this optional staff configuration.
+
 ## Deployment patterns
 
 ### Basic Codex deployment
@@ -88,7 +137,7 @@ route is eligible to select Codex implicitly:
   },
   agents: {
     defaults: {
-      model: "openai/gpt-5.6-sol",
+      model: "openai/gpt-6-astra",
     },
   },
 }
@@ -118,7 +167,7 @@ Configure a Claude `main` agent and add a named Codex agent:
       },
       codex: {
         name: "Codex",
-        model: "openai/gpt-5.6-sol",
+        model: "openai/gpt-6-astra",
       },
     },
   },
@@ -146,7 +195,7 @@ fail-closed rule:
   },
   agents: {
     defaults: {
-      model: "openai/gpt-5.6-sol",
+      model: "openai/gpt-6-astra",
     },
   },
   plugins: {

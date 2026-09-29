@@ -75,7 +75,7 @@ vi.mock("openclaw/plugin-sdk/codex-session-transcript-runtime", async (importOri
             if (appended && message?.role === "user") {
               transcriptRace.userAnchor = appended.anchor;
             }
-            return result;
+            return { ...result, lifecycleRevision: "committed-mirror-lifecycle" };
           },
         };
         return await run(intercepted);
@@ -201,6 +201,7 @@ it("adopts a competing indexed user without duplicating writes or slowing assist
     expect(transcriptRace.publish).toHaveBeenCalledWith(
       expect.objectContaining({
         update: expect.objectContaining({
+          lifecycleRevision: "committed-mirror-lifecycle",
           message: expect.objectContaining({ role: "assistant" }),
           messageSeq: 2,
         }),

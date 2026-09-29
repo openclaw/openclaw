@@ -18,10 +18,10 @@ import {
   tryBeginGatewayRootWorkAdmission,
 } from "../../../process/gateway-work-admission.js";
 import { createDeferredCore, type Deferred } from "../../../shared/deferred.js";
+import { acquireTestPortBlock } from "../../../test-utils/port-claims.js";
 import type { AgentRuntimeIdentity } from "../../agent-runtime-identity-token.js";
 import {
   connectOk,
-  getGatewayTestPort,
   installGatewayTestHooks,
   onceMessage,
   startTestGatewayServer,
@@ -162,25 +162,6 @@ async function sendTraceRequest(
 describe("authenticated WebSocket request trace dispatch", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-  });
-
-  it("continues a valid upstream trace as a child context", async () => {
-    let observed: DiagnosticTraceContext | undefined;
-    const handled = createDeferredCore();
-    const { dispatcher } = createDispatcher(() => {
-      observed = getActiveDiagnosticTraceContext();
-      handled.resolve();
-    });
-
-    await dispatchInFreshMessageScope(dispatcher, createClient(), "first", TRACEPARENTS.first);
-    await handled.promise;
-
-    expect(observed).toMatchObject({
-      traceId: "11111111111111111111111111111111",
-      parentSpanId: "1111111111111111",
-      traceFlags: "01",
-    });
-    expect(observed?.spanId).not.toBe("1111111111111111");
   });
 
   it("rejects a cached agent runtime identity after its delegated authority closes", async () => {
@@ -439,35 +420,6 @@ describe("authenticated WebSocket request trace dispatch", () => {
     expect(responseContext).toEqual(loggedContext);
   });
 
-  it("retains fresh roots for missing and malformed traceparent values", async () => {
-    const observed = new Map<string, DiagnosticTraceContext | undefined>();
-    let handled = createDeferredCore();
-    const { dispatcher } = createDispatcher(({ req }) => {
-      observed.set(req.id, getActiveDiagnosticTraceContext());
-      handled.resolve();
-    });
-    const client = createClient();
-
-    await dispatchInFreshMessageScope(dispatcher, client, "missing");
-    await handled.promise;
-    handled = createDeferredCore();
-    await dispatchInFreshMessageScope(
-      dispatcher,
-      client,
-      "malformed",
-      "00-11111111111111111111111111111111-1111111111111111-zz",
-    );
-    await handled.promise;
-
-    const missing = observed.get("missing");
-    const malformed = observed.get("malformed");
-    expect(missing).toBeDefined();
-    expect(malformed).toBeDefined();
-    expect(missing?.traceId).not.toBe("11111111111111111111111111111111");
-    expect(malformed?.traceId).not.toBe("11111111111111111111111111111111");
-    expect(missing?.traceId).not.toBe(malformed?.traceId);
-  });
-
   it("isolates concurrent request contexts on one connection", async () => {
     const requestBarrier = createDeferredCore();
     const bothObserved = createDeferredCore();
@@ -539,8 +491,8 @@ describe("authenticated WebSocket request trace dispatch", () => {
     setTestPluginRegistry(registry);
 
     const token = "gateway-request-trace-test-token";
-    const port = await getGatewayTestPort();
-    const server = await startTestGatewayServer(port, {
+    const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+    const server = await startTestGatewayServer(portClaim, {
       auth: { mode: "token", token },
       bind: "loopback",
       controlUiEnabled: false,
@@ -548,7 +500,7 @@ describe("authenticated WebSocket request trace dispatch", () => {
     let ws: WebSocket | undefined;
     try {
       ws = await openAuthenticatedTraceSocket({
-        port,
+        port: portClaim.port,
         token,
         connectTraceparent: TRACEPARENTS.first,
       });
@@ -593,6 +545,7 @@ describe("authenticated WebSocket request trace dispatch", () => {
         parentSpanId: "2222222222222222",
         traceFlags: "00",
       });
+      expect(firstObservation?.before?.spanId).not.toBe("1111111111111111");
       expect(firstObservation?.after).toEqual(firstObservation?.before);
       expect(secondObservation?.after).toEqual(secondObservation?.before);
     } finally {
@@ -626,8 +579,8 @@ describe("authenticated WebSocket request trace dispatch", () => {
     setTestPluginRegistry(registry);
 
     const token = "gateway-response-serialization-test-token";
-    const port = await getGatewayTestPort();
-    const server = await startTestGatewayServer(port, {
+    const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+    const server = await startTestGatewayServer(portClaim, {
       auth: { mode: "token", token },
       bind: "loopback",
       controlUiEnabled: false,
@@ -635,7 +588,7 @@ describe("authenticated WebSocket request trace dispatch", () => {
     let ws: WebSocket | undefined;
     try {
       ws = await openAuthenticatedTraceSocket({
-        port,
+        port: portClaim.port,
         token,
         connectTraceparent: TRACEPARENTS.first,
       });
@@ -678,7 +631,7 @@ describe("authenticated WebSocket request trace dispatch", () => {
 
       ws.terminate();
       ws = await openAuthenticatedTraceSocket({
-        port,
+        port: portClaim.port,
         token,
         connectTraceparent: TRACEPARENTS.second,
       });

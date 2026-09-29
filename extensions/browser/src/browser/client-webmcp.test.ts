@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { resolveToolExecutionErrorKind } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -20,6 +21,25 @@ afterEach(() => {
 });
 
 describe("WebMCP execution transport uncertainty", () => {
+  it.each([ErrorCode.RequestTimeout, ErrorCode.InternalError])(
+    "classifies nested numeric MCP error %s without retrying",
+    async (code) => {
+      const send = vi.fn(async () => {
+        throw new Error("Chrome MCP operation failed", {
+          cause: new McpError(code, "SDK request failure"),
+        });
+      });
+      const error: unknown = await browserWebMcp(send, "execute", request).catch(
+        (cause: unknown) => cause,
+      );
+      expect(resolveToolExecutionErrorKind(error)).toBe(
+        code === ErrorCode.RequestTimeout ? "timed_out" : "failed",
+      );
+      expect(formatErrorMessage(error)).toContain("WebMCP execution outcome unknown");
+      expect(send).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it.each([
     ["name", { name: "TimeoutError" }, "timed_out"],
     ["code", { code: "ETIMEDOUT" }, "timed_out"],

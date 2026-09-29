@@ -1,7 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { createPersonalToolScreenDispatcher } from "../../auto-reply/reply/personal-tool-turn.test-support.js";
 import { createQueueTestRun } from "../../auto-reply/reply/queue.test-helpers.js";
 import type { ReplyToolAuthorityOverlay } from "../../auto-reply/reply/reply-run-registry.contracts.js";
-import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
+import {
+  beginReplyMessageInjectionTarget,
+  createReplyOperation,
+  replyRunRegistry,
+} from "../../auto-reply/reply/reply-run-registry.js";
 import { testing as replyTesting } from "../../auto-reply/reply/reply-run-registry.test-support.js";
 import {
   prepareReplyToolAuthority,
@@ -11,6 +17,7 @@ import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js
 import { controlRealtimeVoiceAgentRun } from "../../talk/agent-run-control.js";
 import {
   createOperationalRunInstanceRef,
+  createAdmittedRunOperatorAuthority,
   prepareAgentRunAdmission,
 } from "../admitted-run-context.js";
 import {
@@ -20,6 +27,7 @@ import {
   setActiveEmbeddedRun,
 } from "../embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle, testing } from "../embedded-agent-runner/runs.test-support.js";
+import { prepareOperatorModelPolicy } from "../operator-model-policy.js";
 import { attachToolAllowlistIntersection } from "../tool-policy-shared.js";
 import {
   getGatewayToolCallerIdentity,
@@ -64,10 +72,12 @@ async function admitted<T>(
     admittedRunContext: Awaited<ReturnType<ReturnType<typeof prepareAgentRunAdmission>["admit"]>>;
     close: () => void;
   }) => Promise<T>,
+  operatorAuthority?: Parameters<typeof prepareAgentRunAdmission>[0]["operatorAuthority"],
 ) {
   const admission = prepareAgentRunAdmission({
     cfg: {},
     operationalRunInstance: createOperationalRunInstanceRef(attempt.runId),
+    operatorAuthority,
     facts: {
       agentId: "main",
       runId: attempt.runId,
@@ -101,26 +111,34 @@ async function published<T>(
   run: (owner: {
     handle: ReturnType<typeof createEmbeddedRunHandle>;
     queue: ReturnType<typeof vi.fn<ReturnType<typeof createEmbeddedRunHandle>["queueMessage"]>>;
+    close: () => void;
   }) => Promise<T>,
-  params: Partial<typeof attempt> & { toolsAllow?: string[] } = {},
+  params: Partial<typeof attempt> &
+    Pick<
+      ReplyToolAuthorityOverlay,
+      "toolsAllow" | "senderId" | "senderName" | "clientCaps" | "gatewayUiCommandTarget"
+    > = {},
+  operatorAuthority?: Parameters<typeof prepareAgentRunAdmission>[0]["operatorAuthority"],
 ) {
-  return admitted(async ({ admittedRunContext }) =>
-    withPreparedEmbeddedRunToolAuthority(
-      { admittedRunContext },
-      { ...attempt, ...params },
-      undefined,
-      async (prepared) => {
-        const queue = vi.fn<ReturnType<typeof createEmbeddedRunHandle>["queueMessage"]>(
-          async () => {},
-        );
-        const handle = publishPreparedHandle(prepared.toolAuthorityFingerprint, queue);
-        try {
-          return await run({ handle, queue });
-        } finally {
-          clearActiveEmbeddedRun(sessionId, handle, sessionKey);
-        }
-      },
-    ),
+  return admitted(
+    async ({ admittedRunContext, close }) =>
+      withPreparedEmbeddedRunToolAuthority(
+        { admittedRunContext },
+        { ...attempt, ...params },
+        undefined,
+        async (prepared) => {
+          const queue = vi.fn<ReturnType<typeof createEmbeddedRunHandle>["queueMessage"]>(
+            async () => {},
+          );
+          const handle = publishPreparedHandle(prepared.toolAuthorityFingerprint, queue);
+          try {
+            return await run({ handle, queue, close });
+          } finally {
+            clearActiveEmbeddedRun(sessionId, handle, sessionKey);
+          }
+        },
+      ),
+    operatorAuthority,
   );
 }
 
@@ -140,6 +158,185 @@ afterEach(() => {
 });
 
 describe("host-prepared embedded tool authority", () => {
+  it("binds accepted direct-turn participants before queue settlement and releases them at close", async () => {
+    const modelPolicy = prepareOperatorModelPolicy({ cfg: {}, policy: {} });
+    const releaseSteerer = vi.fn();
+    const retainSteerer = vi.fn(() => releaseSteerer);
+    const authority = (profileId: string) =>
+      createAdmittedRunOperatorAuthority({
+        profileId,
+        scopes: ["operator.read", "operator.write"],
+        gatewayAccessGrant: null,
+        modelPolicy,
+        assertCurrent() {},
+        ...(profileId === "bob" ? { retain: retainSteerer } : {}),
+      });
+    const dispatch = await createPersonalToolScreenDispatcher(["alice", "bob"]);
+    const retained = await published(
+      async ({ handle }) => {
+        const releaseQueue = createDeferred();
+        let queueReturned = false;
+        handle.supportsTranscriptCommitWait = true;
+        handle.messageInjectionV2 = {
+          version: 2,
+          isAvailable: () => true,
+          queueMessage: async (_text, options, assertCurrent) => {
+            assertCurrent();
+            options?.onQueueAccepted?.(true);
+            await releaseQueue.promise;
+            queueReturned = true;
+          },
+        };
+        let pending: ReturnType<typeof beginReplyMessageInjectionTarget> | undefined;
+        try {
+          const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(sessionKey);
+          expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
+          if (!target) {
+            throw new Error("Expected the direct admitted owner to be injectable");
+          }
+          pending = beginReplyMessageInjectionTarget(target, "Change my view", {
+            isInboundUserMessage: true,
+            toolAuthorityOverlay: {
+              ...own,
+              operatorAuthority: authority("bob"),
+              senderId: "bob-sender",
+              senderName: "Bob",
+              clientCaps: ["ui-commands"],
+              gatewayUiCommandTarget: { connId: "bob-tab", profileId: "bob" },
+            },
+          });
+          await expect(pending.acceptance).resolves.toBe(true);
+          const ambiguous = await dispatch();
+          expect(ambiguous.respond).toHaveBeenCalledWith(
+            false,
+            undefined,
+            expect.objectContaining({
+              code: "INVALID_REQUEST",
+              message: expect.stringMatching(/Alice \(user: alice\)[\s\S]*Bob \(user: bob\)/),
+            }),
+          );
+          expect(ambiguous.broadcastToConnIds).not.toHaveBeenCalled();
+          const selected = await dispatch("bob");
+          expect(selected.respond).toHaveBeenCalledWith(true, { ok: true });
+          expect(selected.broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
+            "ui.command",
+            { command: { kind: "sidebar", visible: false } },
+            new Set(["bob-tab"]),
+          );
+          expect(queueReturned).toBe(false);
+          releaseQueue.resolve();
+          await expect(pending.outcome).resolves.toMatchObject({ status: "accepted" });
+        } finally {
+          releaseQueue.resolve();
+          await pending?.outcome;
+        }
+        return getGatewayToolCallerIdentity();
+      },
+      {
+        senderId: "alice-sender",
+        senderName: "Alice",
+        clientCaps: ["ui-commands"],
+        gatewayUiCommandTarget: { connId: "alice-tab", profileId: "alice" },
+      },
+      authority("alice"),
+    );
+    expect(retainSteerer).toHaveBeenCalledOnce();
+    expect(releaseSteerer).toHaveBeenCalledOnce();
+    const closed = await withGatewayToolCallerIdentity(retained, () => dispatch("bob"));
+    expect(closed.respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining("turn has ended"),
+      }),
+    );
+    expect(closed.broadcastToConnIds).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { change: "trace-only", outcome: { status: "accepted" } },
+    { change: "permissions", outcome: { status: "rejected", reason: "tool_authority_mismatch" } },
+    {
+      change: "optional-reply",
+      outcome: { status: "rejected", reason: "reply_expectation_mismatch" },
+    },
+    { change: "audio", outcome: { status: "rejected", reason: "audio_input_unsupported" } },
+  ] as const)("keeps the direct owner's $change input contract", async ({ change, outcome }) => {
+    await published(async ({ handle, queue }) => {
+      handle.supportsTranscriptCommitWait = true;
+      handle.terminalReplyExpectation = change === "optional-reply" ? "optional" : "required";
+      handle.messageInjectionV2 = {
+        version: 2,
+        isAvailable: () => true,
+        queueMessage: async (text, options, assertCurrent) => {
+          assertCurrent();
+          return queue(text, options);
+        },
+      };
+      const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(sessionKey);
+      expect(target).toBeDefined();
+      expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
+      if (!target) {
+        throw new Error("Expected the direct admitted owner to be injectable");
+      }
+      await expect(
+        beginReplyMessageInjectionTarget(target, "Apply the correction", {
+          isInboundUserMessage: true,
+          inboundAudio: change === "audio",
+          toolAuthorityOverlay: {
+            ...own,
+            traceAuthorized: true,
+            disableTools: change === "permissions",
+          },
+        }).outcome,
+      ).resolves.toMatchObject(outcome);
+      expect(queue).toHaveBeenCalledTimes(change === "trace-only" ? 1 : 0);
+    });
+  });
+
+  it.each(["replacement", "closed-admission", "lifecycle-rotation"] as const)(
+    "refuses a captured direct target after %s during runtime preparation",
+    async (transition) => {
+      await published(async ({ handle, queue, close }) => {
+        const entered = createDeferred();
+        const release = createDeferred();
+        handle.supportsTranscriptCommitWait = true;
+        handle.messageInjectionV2 = {
+          version: 2,
+          isAvailable: () => true,
+          queueMessage: async (text, options, assertCurrent) => {
+            assertCurrent();
+            entered.resolve();
+            await release.promise;
+            assertCurrent();
+            return queue(text, options);
+          },
+        };
+        const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(sessionKey);
+        if (!target) {
+          throw new Error("Expected the direct admitted owner to be injectable");
+        }
+        const pending = beginReplyMessageInjectionTarget(target, "Apply the correction", {
+          isInboundUserMessage: true,
+          toolAuthorityOverlay: own,
+          assertCurrent: () => {},
+        });
+        await entered.promise;
+        if (transition === "closed-admission") {
+          close();
+        } else if (transition === "lifecycle-rotation") {
+          rotateAgentEventLifecycleGeneration();
+        } else {
+          setActiveEmbeddedRun(sessionId, { ...handle }, sessionKey, attempt.sessionFile);
+        }
+        release.resolve();
+        await expect(pending.outcome).resolves.toMatchObject({ status: "failed" });
+        expect(queue).not.toHaveBeenCalled();
+      });
+    },
+  );
+
   it("captures only a matching admitted owner for legacy active-run registration", async () => {
     const params = {
       ...attempt,
@@ -349,8 +546,77 @@ describe("host-prepared embedded tool authority", () => {
     );
   });
 
+  it("preserves authorized room cancellation across differing voice tool surfaces", async () => {
+    await published(async ({ handle }) => {
+      const abort = vi.spyOn(handle, "abort");
+      const validateAdmission = vi.fn(() => ({ ...own, messageProvider: "discord-voice" }));
+      await expect(
+        controlRealtimeVoiceAgentRun({
+          sessionKey,
+          text: "cancel",
+          getToolAuthorityOverlay: validateAdmission,
+        }),
+      ).resolves.toMatchObject({ ok: true, aborted: true });
+      expect(validateAdmission).toHaveBeenCalledOnce();
+      expect(abort).toHaveBeenCalledOnce();
+    });
+  });
+
+  it("revalidates voice admission before cancelling the active run", async () => {
+    await published(async ({ handle }) => {
+      const abort = vi.spyOn(handle, "abort");
+      await expect(
+        controlRealtimeVoiceAgentRun({
+          sessionKey,
+          text: "cancel",
+          getToolAuthorityOverlay: () => {
+            throw new Error("Voice admission was revoked");
+          },
+        }),
+      ).rejects.toThrow("Voice admission was revoked");
+      expect(abort).not.toHaveBeenCalled();
+    });
+  });
+
+  it("does not retarget voice steering when caller preparation replaces the registered run", async () => {
+    await published(async ({ handle, queue }) => {
+      const replacementQueue = vi.fn(async () => {});
+      let replacement: ReturnType<typeof createEmbeddedRunHandle> | undefined;
+      try {
+        await expect(
+          controlRealtimeVoiceAgentRun({
+            sessionKey,
+            text: "Use the release branch",
+            getToolAuthorityOverlay: () => {
+              clearActiveEmbeddedRun(sessionId, handle, sessionKey);
+              replacement = publishPreparedHandle(
+                handle.toolAuthorityFingerprint,
+                replacementQueue,
+              );
+              return own;
+            },
+          }),
+        ).resolves.toMatchObject({ ok: false, queued: false, reason: "no_active_run" });
+        expect(queue).not.toHaveBeenCalled();
+        expect(replacementQueue).not.toHaveBeenCalled();
+      } finally {
+        if (replacement) {
+          clearActiveEmbeddedRun(sessionId, replacement, sessionKey);
+        }
+      }
+    });
+  });
+
   it("requires voice caller evidence without audit identity and strips host evidence", async () => {
     await published(async ({ handle, queue }) => {
+      handle.messageInjectionV2 = {
+        version: 2,
+        isAvailable: () => true,
+        queueMessage: async (text, options, assertCurrent) => {
+          assertCurrent();
+          return queue(text, options);
+        },
+      };
       expect(getGatewayToolCallerIdentity()?.executionIdentityToken).toBeUndefined();
       expect(handle.toolAuthorityFingerprint).toMatch(/^[a-f0-9]{64}$/);
       const input = { sessionKey, text: "Use the release branch" };

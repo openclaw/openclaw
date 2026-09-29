@@ -52,9 +52,23 @@ vi.mock("../gateway/call.js", () => ({
   isImplicitLocalGatewayTarget: async ({ config }: { config?: { gateway?: { mode?: string } } }) =>
     !process.env.OPENCLAW_GATEWAY_URL && config?.gateway?.mode !== "remote",
 }));
-vi.mock("../infra/gateway-lock.js", () => ({
-  acquireGatewayLock: mocks.acquireGatewayLock,
-}));
+vi.mock("../infra/gateway-lock.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/gateway-lock.js")>();
+  mocks.acquireGatewayLock.mockImplementation(async (options) => {
+    const lock = await actual.acquireGatewayLock(options);
+    if (!lock) {
+      return lock;
+    }
+    return {
+      ...lock,
+      release: async () => {
+        mocks.releaseGatewayLock();
+        await lock.release();
+      },
+    };
+  });
+  return { ...actual, acquireGatewayLock: mocks.acquireGatewayLock };
+});
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => mocks.config,
   resetConfigRuntimeState: () => undefined,
@@ -101,7 +115,7 @@ describe("skills workshop CLI gateway snapshot invalidation", () => {
     delete mocks.config.gateway;
     mocks.gatewayApply = undefined;
     mocks.releaseGatewayLock.mockReset();
-    mocks.acquireGatewayLock.mockReset().mockResolvedValue({ release: mocks.releaseGatewayLock });
+    mocks.acquireGatewayLock.mockClear();
     mocks.defaultRuntime.error.mockClear();
     mocks.defaultRuntime.exit.mockClear();
     mocks.callGateway.mockReset().mockImplementation(async (request) => {
@@ -127,12 +141,14 @@ describe("skills workshop CLI gateway snapshot invalidation", () => {
       description: "Visible in sessions without restarting the gateway",
       content: "# Gateway Visible\n\nUse the newly applied workflow.\n",
     });
-    const beforeApply = gatewaySnapshots.resolveReusableWorkspaceSkillSnapshot({
-      workspaceDir: mocks.workspaceDir,
-      config: mocks.config,
-      agentId: "main",
-      watch: false,
-    }).snapshot;
+    const beforeApply = (
+      await gatewaySnapshots.resolveReusableWorkspaceSkillSnapshot({
+        workspaceDir: mocks.workspaceDir,
+        config: mocks.config,
+        agentId: "main",
+        watch: false,
+      })
+    ).snapshot;
     expect(beforeApply.skills.map((skill) => skill.name)).not.toContain("gateway-visible");
 
     // Session persistence strips resolvedSkills; the Gateway rehydrates that field
@@ -178,13 +194,15 @@ describe("skills workshop CLI gateway snapshot invalidation", () => {
     expect(gatewayRefreshState.getSkillsSnapshotVersion(mocks.workspaceDir)).toBeGreaterThan(
       beforeVersion,
     );
-    const newSession = gatewaySnapshots.resolveReusableWorkspaceSkillSnapshot({
-      workspaceDir: mocks.workspaceDir,
-      config: mocks.config,
-      agentId: "main",
-      existingSnapshot: persistedSnapshot,
-      watch: false,
-    }).snapshot;
+    const newSession = (
+      await gatewaySnapshots.resolveReusableWorkspaceSkillSnapshot({
+        workspaceDir: mocks.workspaceDir,
+        config: mocks.config,
+        agentId: "main",
+        existingSnapshot: persistedSnapshot,
+        watch: false,
+      })
+    ).snapshot;
     expect(newSession.skills.map((skill) => skill.name)).toContain("gateway-visible");
   });
 
@@ -254,7 +272,7 @@ describe("skills workshop CLI gateway snapshot invalidation", () => {
     expect(mocks.acquireGatewayLock).toHaveBeenCalledWith({
       allowInTests: true,
       port: 18789,
-      role: "skill-workshop-apply",
+      role: "sqlite-maintenance",
       timeoutMs: 250,
     });
     expect(mocks.releaseGatewayLock).toHaveBeenCalledTimes(1);

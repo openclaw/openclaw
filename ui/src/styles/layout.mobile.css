@@ -45,7 +45,7 @@
 
 /* The app host chooses this class from the platform-aware drawer breakpoint.
    Native macOS keeps its rail beside the half-width link browser until 600px;
-   regular browsers retain the 1100px tablet breakpoint. */
+   browsers and Tauri keep the sidebar at the default 1080px window width. */
 .shell--mobile-nav,
 .shell--mobile-nav.shell--nav-collapsed {
   --shell-topbar-height: 58px;
@@ -64,7 +64,6 @@
 html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-web-chrome)
   .shell--mobile-nav.shell--merged-chat-chrome {
   --shell-topbar-height: 0px;
-  grid-template-rows: 0px minmax(0, 1fr);
 }
 
 html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-web-chrome)
@@ -73,21 +72,30 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   display: none;
 }
 
+.shell--mobile-nav.shell--connection-status {
+  grid-template-rows: var(--shell-topbar-height) auto minmax(0, 1fr);
+  grid-template-areas:
+    "topbar"
+    "connection"
+    "content";
+}
+
 .shell--mobile-nav .shell-nav,
 .shell--mobile-nav.shell--nav-collapsed .shell-nav {
   position: fixed;
-  top: max(8px, var(--safe-area-top, 0px));
-  bottom: max(8px, var(--safe-area-bottom, 0px));
-  left: 0;
+  top: calc(8px + var(--safe-area-top));
+  height: calc(var(--shell-content-height) - 16px);
+  left: var(--safe-area-left);
   z-index: 70;
-  width: min(86vw, 320px);
+  width: min(90vw, 336px);
+  max-width: calc(100vw - var(--safe-area-left) - var(--safe-area-right));
   min-width: 0;
   min-height: 0;
   border-inline-end: none;
   overflow: hidden;
   overscroll-behavior: contain;
   border-radius: 0 22px 22px 0;
-  box-shadow: 0 16px 48px color-mix(in srgb, black 30%, transparent);
+  box-shadow: var(--shadow-xl);
   transform: translateX(-100%);
   opacity: 0;
   pointer-events: none;
@@ -217,14 +225,19 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
 }
 
 .shell--mobile-nav .sidebar-shell {
-  --sidebar-pad-x: 16px;
+  --sidebar-pad-x: 8px;
   --sidebar-pad-bottom: 14px;
   padding: 18px var(--sidebar-pad-x) var(--sidebar-pad-bottom);
   border-radius: 0;
 }
 
-/* Drawer navigation keeps toggle and search in the mobile topbar. */
-.shell--mobile-nav .sidebar-brand__desktop-control {
+/* The drawer has nothing to collapse into, so the desktop controls go. Search is
+   the exception, and only where nothing else is left to carry it: merged chat
+   chrome hides the topbar above, so the drawer is the last surface standing.
+   Everywhere else the topbar keeps its own search - including every native host,
+   which never merges the chat chrome - and a drawer copy would show two. */
+.shell--mobile-nav .sidebar-brand__desktop-control:not(.sidebar-brand__search),
+.shell--mobile-nav:not(.shell--merged-chat-chrome) .sidebar-brand__search {
   display: none;
 }
 
@@ -269,6 +282,20 @@ html.openclaw-native-macos body .shell--mobile-nav .topnav-shell__content {
 
 html.openclaw-native-macos body .shell--mobile-nav .topnav-shell__actions {
   margin-left: auto;
+}
+
+/* Desktop webviews keep their caption buttons when resized into drawer mode. */
+html.openclaw-native-desktop body .shell--mobile-nav {
+  --shell-topbar-height: var(--openclaw-native-titlebar-height, 52px);
+
+  .topbar {
+    padding: 0 calc(var(--openclaw-native-window-controls-width, 0px) + 12px) 0
+      var(--openclaw-native-controls-inset, 12px);
+  }
+
+  .topnav-shell {
+    min-height: var(--openclaw-native-titlebar-height, 52px);
+  }
 }
 
 /* Mobile-specific styles */
@@ -323,12 +350,10 @@ html.openclaw-native-macos body .shell--mobile-nav .topnav-shell__actions {
 
   .shell--mobile-nav .shell-nav,
   .shell--mobile-nav.shell--nav-collapsed .shell-nav {
-    width: min(86vw, 320px);
-    box-shadow: 0 16px 48px color-mix(in srgb, black 30%, transparent);
+    box-shadow: var(--shadow-xl);
   }
 
   .shell--mobile-nav .sidebar-shell {
-    --sidebar-pad-x: 14px;
     --sidebar-pad-bottom: 10px;
     padding: 8px var(--sidebar-pad-x) var(--sidebar-pad-bottom);
   }
@@ -417,17 +442,13 @@ html.openclaw-native-macos body .shell--mobile-nav .topnav-shell__actions {
     padding: 0 0 12px;
   }
 
-  .chat-msg {
-    max-width: 90%;
-  }
-
   .chat-bubble {
     padding: 8px 12px;
     border-radius: var(--radius-md);
   }
 
   .agent-chat__input {
-    margin: 0 8px calc(10px + var(--safe-area-bottom));
+    margin: 0 8px 10px;
   }
 
   .agent-chat__input-btn,
@@ -449,12 +470,12 @@ html.openclaw-native-macos body .shell--mobile-nav .topnav-shell__actions {
     max-height: 380px;
   }
 
-  .content:has(openclaw-logs-page) {
+  main.content:where(.content--logs-page) {
     display: block;
     overflow-y: auto;
   }
 
-  .content:has(openclaw-logs-page) > openclaw-router-outlet,
+  main.content:where(.content--logs-page) > openclaw-router-outlet,
   .content openclaw-logs-page,
   .content .settings-workspace--fill-height,
   .content .settings-workspace--fill-height > .settings-workspace__body,

@@ -1,7 +1,7 @@
-// Logger implementation writes structured log output with redaction and transports.
 import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Logger as TsLogger } from "tslog";
 import type { OpenClawConfig } from "../config/types.js";
@@ -23,24 +23,30 @@ import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { DEFAULT_POSIX_TMP_ROOT } from "../infra/tmp-openclaw-dir.js";
 import { invalidateLoggingConfigCache, readLoggingConfig } from "./config.js";
 import { resolveEnvLogLevelOverride } from "./env-log-level.js";
-import { type LogLevel, levelToMinLevel, normalizeLogLevel } from "./levels.js";
+import { type LogLevel, isLogLevelEnabled, levelToMinLevel, normalizeLogLevel } from "./levels.js";
 import {
   isLegacyRollingLogFilePath,
   resolveRollingLogFilePathForDate,
   resolveDefaultRollingLogFile,
 } from "./log-file-path.js";
 import { canUseNodeFs, formatLocalDate, LOG_PREFIX, LOG_SUFFIX } from "./log-file-shared.js";
+import { buildFileLogMessage, type FileLogMessagePart } from "./logger-file-message.js";
 import { fileLogTransport } from "./logger-file-transport.js";
 import { defaultLoggerHostnameResolver, loggerHostnameState } from "./logger-hostname-state.js";
 import { setLoggerFileTargetResolver } from "./logger-settings-internal.js";
-import { redactSecrets, redactSensitiveText } from "./redact.js";
+import {
+  redactSecrets,
+  redactSensitiveText,
+  resolveFileLogRedactOptions,
+  serializeRedactedFileLogRecord,
+} from "./redact.js";
 import { APPLIED_LOGGING_CONFIG_UNOWNED, loggingState } from "./state.js";
 import { formatTimestamp } from "./timestamps.js";
 import type { LoggerSettings } from "./types.js";
 export type { LoggerSettings } from "./types.js";
 
-export const DEFAULT_LOG_DIR = DEFAULT_POSIX_TMP_ROOT;
-export const DEFAULT_LOG_FILE = `${DEFAULT_LOG_DIR}/openclaw.log`; // legacy single-file path
+const DEFAULT_LOG_DIR = DEFAULT_POSIX_TMP_ROOT;
+const DEFAULT_LOG_FILE = `${DEFAULT_LOG_DIR}/openclaw.log`; // legacy single-file path
 
 const MAX_LOG_AGE_MS = 24 * 60 * 60 * 1000; // 24h
 const DEFAULT_MAX_LOG_FILE_BYTES = 100 * 1024 * 1024; // 100 MB
@@ -55,7 +61,6 @@ type ResolvedSettings = {
 type ResolvedRuntimeSettings = ResolvedSettings & { rolling: boolean };
 export type LoggerResolvedSettings = ResolvedSettings;
 type TsLogRecord = Record<string, unknown>;
-type LoggerConfigLoader = () => OpenClawConfig["logging"] | undefined;
 
 type DiagnosticLogCode = {
   line?: number;
@@ -64,9 +69,6 @@ type DiagnosticLogCode = {
 
 const MAX_DIAGNOSTIC_LOG_BINDINGS_JSON_CHARS = 8 * 1024;
 const MAX_DIAGNOSTIC_LOG_MESSAGE_CHARS = 4 * 1024;
-
-const loadLoggerConfigDefault: LoggerConfigLoader = () => readLoggingConfig();
-let loadLoggerConfig: LoggerConfigLoader = loadLoggerConfigDefault;
 
 function invalidateLoggerSettings(): void {
   loggingState.cachedLogger = null;
@@ -81,32 +83,20 @@ export function applyLoggingConfig(config: OpenClawConfig["logging"] | undefined
   invalidateLoggerSettings();
 }
 
-export function setLoggerConfigLoaderForTests(loader?: LoggerConfigLoader): void {
-  loadLoggerConfig = loader ?? loadLoggerConfigDefault;
-  invalidateLoggerSettings();
-}
-
-export function readLoggerConfig(): OpenClawConfig["logging"] | undefined {
-  return loadLoggerConfig();
-}
 const MAX_DIAGNOSTIC_LOG_ATTRIBUTE_COUNT = 32;
 const MAX_DIAGNOSTIC_LOG_ATTRIBUTE_VALUE_CHARS = 2 * 1024;
 const MAX_DIAGNOSTIC_LOG_NAME_CHARS = 120;
-const MAX_FILE_LOG_MESSAGE_CHARS = 4 * 1024;
 const MAX_FILE_LOG_CONTEXT_VALUE_CHARS = 512;
 const DIAGNOSTIC_LOG_ATTRIBUTE_KEY_RE = /^[A-Za-z0-9_.:-]{1,64}$/u;
 
 type DiagnosticLogAttributes = Record<string, string | number | boolean>;
 
-function clampDiagnosticLogText(value: string, maxChars: number): string {
+function clampLogText(value: string, maxChars: number): string {
   return value.length > maxChars ? `${truncateUtf16Safe(value, maxChars)}...(truncated)` : value;
 }
 
 function sanitizeDiagnosticLogText(value: string, maxChars: number): string {
-  return clampDiagnosticLogText(
-    redactSensitiveText(clampDiagnosticLogText(value, maxChars)),
-    maxChars,
-  );
+  return clampLogText(redactSensitiveText(clampLogText(value, maxChars)), maxChars);
 }
 
 function normalizeDiagnosticLogName(value: string | undefined): string | undefined {
@@ -136,23 +126,16 @@ function assignDiagnosticLogAttribute(
   if (!DIAGNOSTIC_LOG_ATTRIBUTE_KEY_RE.test(normalizedKey)) {
     return;
   }
+  let attribute: string | number | boolean;
   if (typeof value === "string") {
-    attributes[normalizedKey] = sanitizeDiagnosticLogText(
-      value,
-      MAX_DIAGNOSTIC_LOG_ATTRIBUTE_VALUE_CHARS,
-    );
-    state.count += 1;
+    attribute = sanitizeDiagnosticLogText(value, MAX_DIAGNOSTIC_LOG_ATTRIBUTE_VALUE_CHARS);
+  } else if (typeof value === "boolean" || (typeof value === "number" && Number.isFinite(value))) {
+    attribute = value;
+  } else {
     return;
   }
-  if (typeof value === "number" && Number.isFinite(value)) {
-    attributes[normalizedKey] = value;
-    state.count += 1;
-    return;
-  }
-  if (typeof value === "boolean") {
-    attributes[normalizedKey] = value;
-    state.count += 1;
-  }
+  attributes[normalizedKey] = attribute;
+  state.count += 1;
 }
 
 function addDiagnosticLogAttributesFrom(
@@ -175,7 +158,7 @@ function addDiagnosticLogAttributesFrom(
 }
 
 function isPlainLogRecordObject(value: unknown): value is Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return false;
   }
   const prototype = Object.getPrototypeOf(value);
@@ -183,11 +166,8 @@ function isPlainLogRecordObject(value: unknown): value is Record<string, unknown
 }
 
 function normalizeTraceContext(value: unknown): DiagnosticTraceContext | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  const candidate = value as Partial<DiagnosticTraceContext>;
-  if (!isValidDiagnosticTraceId(candidate.traceId)) {
+  const candidate = asOptionalRecord(value);
+  if (!candidate || !isValidDiagnosticTraceId(candidate.traceId)) {
     return undefined;
   }
   if (candidate.spanId !== undefined && !isValidDiagnosticSpanId(candidate.spanId)) {
@@ -208,36 +188,21 @@ function normalizeTraceContext(value: unknown): DiagnosticTraceContext | undefin
 }
 
 function extractTraceContext(value: unknown): DiagnosticTraceContext | undefined {
-  const direct = normalizeTraceContext(value);
-  if (direct) {
-    return direct;
-  }
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  return normalizeTraceContext((value as { trace?: unknown }).trace);
+  return normalizeTraceContext(value) ?? normalizeTraceContext(asOptionalRecord(value)?.trace);
 }
 
-function getSortedNumericLogArgs(logObj: TsLogRecord): unknown[] {
+function getSortedNumericLogEntries(logObj: TsLogRecord): Array<[string, unknown]> {
   return Object.entries(logObj)
     .filter(([key]) => /^\d+$/.test(key))
-    .toSorted((a, b) => Number(a[0]) - Number(b[0]))
-    .map(([, value]) => value);
-}
-
-function clampFileLogText(value: string, maxChars: number): string {
-  return value.length > maxChars ? `${truncateUtf16Safe(value, maxChars)}...(truncated)` : value;
+    .toSorted((a, b) => Number(a[0]) - Number(b[0]));
 }
 
 function normalizeFileLogContextValue(value: unknown): string | undefined {
   if (typeof value === "string") {
     const normalized = value.trim();
-    return normalized ? clampFileLogText(normalized, MAX_FILE_LOG_CONTEXT_VALUE_CHARS) : undefined;
+    return normalized ? clampLogText(normalized, MAX_FILE_LOG_CONTEXT_VALUE_CHARS) : undefined;
   }
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return String(value);
-  }
-  if (typeof value === "boolean") {
+  if (typeof value === "boolean" || (typeof value === "number" && Number.isFinite(value))) {
     return String(value);
   }
   return undefined;
@@ -261,39 +226,6 @@ function readFirstContextString(
   return undefined;
 }
 
-function stringifyFileLogMessagePart(value: unknown): string | undefined {
-  if (typeof value === "string") {
-    return value;
-  }
-  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
-    return String(value);
-  }
-  if (value instanceof Error) {
-    return value.message || value.name;
-  }
-  if (isPlainLogRecordObject(value) && typeof value.message === "string") {
-    return value.message;
-  }
-  if (value === null || value === undefined) {
-    return undefined;
-  }
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return undefined;
-  }
-}
-
-function buildFileLogMessage(numericArgs: readonly unknown[]): string | undefined {
-  const parts = numericArgs
-    .map(stringifyFileLogMessagePart)
-    .filter((part): part is string => Boolean(part && part.trim()));
-  if (parts.length === 0) {
-    return undefined;
-  }
-  return clampFileLogText(parts.join(" "), MAX_FILE_LOG_MESSAGE_CHARS);
-}
-
 function resolveLogHostname(): string {
   if (loggerHostnameState.cached) {
     return loggerHostnameState.cached;
@@ -307,10 +239,7 @@ function resolveLogHostname(): string {
 }
 
 function withResolvedLogMetaHostname(meta: unknown, hostname: string): unknown {
-  if (!meta || typeof meta !== "object" || Array.isArray(meta)) {
-    return meta;
-  }
-  return { ...(meta as Record<string, unknown>), hostname };
+  return isRecord(meta) ? { ...meta, hostname } : meta;
 }
 
 function extractLogBindingPrefix(numericArgs: unknown[]): {
@@ -323,10 +252,10 @@ function extractLogBindingPrefix(numericArgs: unknown[]): {
     numericArgs[0].trim().startsWith("{")
   ) {
     try {
-      const parsed = JSON.parse(numericArgs[0]);
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const parsed: unknown = JSON.parse(numericArgs[0]);
+      if (isRecord(parsed)) {
         return {
-          bindings: parsed as Record<string, unknown>,
+          bindings: parsed,
           args: numericArgs.slice(1),
         };
       }
@@ -368,25 +297,43 @@ function resolveLogTraceContext(
     : { trustedTraceContext: false };
 }
 
-function buildFileLogFields(logObj: TsLogRecord): Record<string, string> {
-  const { bindings, args } = extractLogBindingPrefix(getSortedNumericLogArgs(logObj));
-  // Message serialization can invoke caller code; capture the normalized trace first.
+function prepareFileLogRecord(logObj: TsLogRecord): {
+  fields: Record<string, string>;
+  messageParts: FileLogMessagePart[];
+} {
+  const entries = getSortedNumericLogEntries(logObj);
+  const { bindings, args } = extractLogBindingPrefix(entries.map(([, value]) => value));
+  // Capture context and display roles before native conversion can invoke caller code.
   const { trace } = resolveLogTraceContext(bindings, args);
   const structuredArg = isPlainLogRecordObject(args[0]) ? args[0] : undefined;
   const sources = [structuredArg, bindings, logObj];
-  const messageArgs =
-    structuredArg && typeof structuredArg.message !== "string" ? args.slice(1) : args;
-  const message = buildFileLogMessage(messageArgs);
+  const metadataCount = structuredArg && typeof structuredArg.message !== "string" ? 1 : 0;
+  const messageParts = entries
+    .slice(entries.length - args.length + metadataCount)
+    .map(([key, value]) => {
+      const json =
+        value != null &&
+        !["string", "number", "boolean", "bigint"].includes(typeof value) &&
+        !(value instanceof Error) &&
+        !(isPlainLogRecordObject(value) && typeof value.message === "string");
+      const part: FileLogMessagePart = { key, json };
+      if (typeof value === "number" && !Number.isFinite(value)) {
+        part.primitiveText = String(value);
+      }
+      return part;
+    });
   const agentId = readFirstContextString(sources, ["agent_id", "agentId"]);
   const sessionId = readFirstContextString(sources, ["session_id", "sessionId", "sessionKey"]);
   const channel = readFirstContextString(sources, ["channel", "messageProvider"]);
   return {
-    hostname: resolveLogHostname(),
-    ...(message ? { message } : {}),
-    ...(agentId ? { agent_id: agentId } : {}),
-    ...(sessionId ? { session_id: sessionId } : {}),
-    ...(channel ? { channel } : {}),
-    ...trace,
+    fields: {
+      hostname: resolveLogHostname(),
+      ...(agentId ? { agent_id: agentId } : {}),
+      ...(sessionId ? { session_id: sessionId } : {}),
+      ...(channel ? { channel } : {}),
+      ...trace,
+    },
+    messageParts,
   };
 }
 
@@ -406,7 +353,9 @@ function buildDiagnosticLogRecord(logObj: TsLogRecord) {
         };
       }
     | undefined;
-  const { bindings, args: numericArgs } = extractLogBindingPrefix(getSortedNumericLogArgs(logObj));
+  const { bindings, args: numericArgs } = extractLogBindingPrefix(
+    getSortedNumericLogEntries(logObj).map(([, value]) => value),
+  );
 
   const { trace, trustedTraceContext } = resolveLogTraceContext(bindings, numericArgs);
   const structuredArg = numericArgs[0];
@@ -468,24 +417,23 @@ function buildDiagnosticLogRecord(logObj: TsLogRecord) {
   };
 }
 
-function redactLogRecordForTransport<T extends LogObj>(record: T): T {
-  return redactSecrets(record);
-}
-
 function attachDiagnosticEventTransport(logger: TsLogger<LogObj>): void {
-  logger.attachTransport((logObj: LogObj) => {
-    if (!areDiagnosticsEnabledForProcess() || !hasInternalDiagnosticEventInterest("log.record")) {
-      return;
-    }
-    try {
-      const record = buildDiagnosticLogRecord(redactLogRecordForTransport(logObj) as TsLogRecord);
-      const emit = record.trustedTraceContext
-        ? emitDiagnosticEventWithTrustedTraceContext
-        : emitDiagnosticEvent;
-      emit(record.event);
-    } catch {
-      // never block on logging failures
-    }
+  logger.attachTransport({
+    format: () => "",
+    write: (logObj: LogObj) => {
+      if (!areDiagnosticsEnabledForProcess() || !hasInternalDiagnosticEventInterest("log.record")) {
+        return;
+      }
+      try {
+        const record = buildDiagnosticLogRecord(redactSecrets(logObj) as TsLogRecord);
+        const emit = record.trustedTraceContext
+          ? emitDiagnosticEventWithTrustedTraceContext
+          : emitDiagnosticEvent;
+        emit(record.event);
+      } catch {
+        // never block on logging failures
+      }
+    },
   });
 }
 
@@ -533,7 +481,7 @@ function resolveSettings(): ResolvedRuntimeSettings {
   }
 
   const cfg: OpenClawConfig["logging"] | LoggerSettings | undefined =
-    (loggingState.overrideSettings as LoggerSettings | null) ?? loadLoggerConfig();
+    (loggingState.overrideSettings as LoggerSettings | null) ?? readLoggingConfig();
   const defaultLevel =
     process.env.VITEST === "true" && process.env.OPENCLAW_TEST_FILE_LOG !== "1" ? "silent" : "info";
   const fromConfig = normalizeLogLevel(cfg?.level, defaultLevel);
@@ -557,14 +505,7 @@ function getRuntimeSettings(): ResolvedRuntimeSettings {
 }
 
 export function isFileLogLevelEnabled(level: LogLevel): boolean {
-  const settings = getRuntimeSettings();
-  if (level === "silent") {
-    return false;
-  }
-  if (settings.level === "silent") {
-    return false;
-  }
-  return levelToMinLevel(level) >= levelToMinLevel(settings.level);
+  return isLogLevelEnabled(level, getRuntimeSettings().level);
 }
 
 type SubLoggerSettings = NonNullable<Parameters<TsLogger<LogObj>["getSubLogger"]>[0]>;
@@ -603,47 +544,57 @@ class RuntimeLogger extends TsLogger<LogObj> {
 function buildLogger(): TsLogger<LogObj> {
   const logger = new RuntimeLogger({
     name: "openclaw",
-    maskValuesOfKeys: [],
+    mask: { keys: [] },
+    meta: { property: "_meta" },
     minLevel: levelToMinLevel("fatal"),
     type: "hidden", // no ansi formatting
   });
   inheritLogLevel(logger, () => levelToMinLevel(getRuntimeSettings().level));
   let activeFile: string | undefined;
-  logger.attachTransport((logObj: LogObj) => {
-    try {
-      const settings = getRuntimeSettings();
-      if (settings.level === "silent") {
-        return;
-      }
-      const nextActiveFile = resolveActiveLogFileWithMode(settings.file, settings.rolling);
-      if (nextActiveFile !== activeFile) {
-        activeFile = nextActiveFile;
-        fs.mkdirSync(path.dirname(activeFile), { recursive: true });
-        if (settings.rolling) {
-          pruneOldRollingLogs(path.dirname(activeFile));
+  logger.attachTransport({
+    // OpenClaw owns redacted serialization; tslog's formatted line is unused.
+    format: () => "",
+    write: (logObj: LogObj) => {
+      try {
+        const settings = getRuntimeSettings();
+        if (settings.level === "silent") {
+          return;
         }
+        const nextActiveFile = resolveActiveLogFileWithMode(settings.file, settings.rolling);
+        if (nextActiveFile !== activeFile) {
+          activeFile = nextActiveFile;
+          fs.mkdirSync(path.dirname(activeFile), { recursive: true });
+          if (settings.rolling) {
+            pruneOldRollingLogs(path.dirname(activeFile));
+          }
+        }
+        const time = formatTimestamp(logObj.date ?? new Date(), { style: "long" });
+        const { fields, messageParts } = prepareFileLogRecord(logObj as TsLogRecord);
+        const line = serializeRedactedFileLogRecord(
+          {
+            ...logObj,
+            _meta: withResolvedLogMetaHostname(
+              logObj["_meta"],
+              expectDefined(fields.hostname, "structured log hostname"),
+            ),
+            time,
+            ...fields,
+          },
+          {
+            deriveMessage: (materialized) => buildFileLogMessage(materialized, messageParts),
+            decodedOptions: resolveFileLogRedactOptions(),
+          },
+        );
+        fileLogTransport.enqueue({
+          file: activeFile,
+          hostname: expectDefined(fields.hostname, "structured log hostname"),
+          maxFileBytes: settings.maxFileBytes,
+          payload: `${line}\n`,
+        });
+      } catch {
+        // never block on logging failures
       }
-      const time = formatTimestamp(logObj.date ?? new Date(), { style: "long" });
-      const fields = buildFileLogFields(logObj as TsLogRecord);
-      const record = {
-        ...logObj,
-        _meta: withResolvedLogMetaHostname(
-          logObj["_meta"],
-          expectDefined(fields.hostname, "structured log hostname"),
-        ),
-        time,
-        ...fields,
-      };
-      const line = redactSensitiveText(JSON.stringify(redactLogRecordForTransport(record)));
-      fileLogTransport.enqueue({
-        file: activeFile,
-        hostname: expectDefined(fields.hostname, "structured log hostname"),
-        maxFileBytes: settings.maxFileBytes,
-        payload: `${line}\n`,
-      });
-    } catch {
-      // never block on logging failures
-    }
+    },
   });
   attachDiagnosticEventTransport(logger);
 
@@ -681,7 +632,7 @@ export function getChildLogger(
   });
 }
 
-// Baileys expects a pino-like logger shape. Provide a lightweight adapter.
+// Preserve variadic, object-first consumers through tslog's generic log entrypoint.
 export function toPinoLikeLogger(logger: TsLogger<LogObj>, level: LogLevel): PinoLikeLogger {
   return {
     level,
@@ -694,12 +645,12 @@ export function toPinoLikeLogger(logger: TsLogger<LogObj>, level: LogLevel): Pin
       inheritLogLevel(child, () => logger.settings.minLevel);
       return toPinoLikeLogger(child, level);
     },
-    trace: (...args: unknown[]) => logger.trace(...args),
-    debug: (...args: unknown[]) => logger.debug(...args),
-    info: (...args: unknown[]) => logger.info(...args),
-    warn: (...args: unknown[]) => logger.warn(...args),
-    error: (...args: unknown[]) => logger.error(...args),
-    fatal: (...args: unknown[]) => logger.fatal(...args),
+    trace: (...args: unknown[]) => logger.log(levelToMinLevel("trace"), "TRACE", ...args),
+    debug: (...args: unknown[]) => logger.log(levelToMinLevel("debug"), "DEBUG", ...args),
+    info: (...args: unknown[]) => logger.log(levelToMinLevel("info"), "INFO", ...args),
+    warn: (...args: unknown[]) => logger.log(levelToMinLevel("warn"), "WARN", ...args),
+    error: (...args: unknown[]) => logger.log(levelToMinLevel("error"), "ERROR", ...args),
+    fatal: (...args: unknown[]) => logger.log(levelToMinLevel("fatal"), "FATAL", ...args),
   };
 }
 
@@ -734,7 +685,6 @@ export function resetLogger() {
   loggingState.appliedConfig = APPLIED_LOGGING_CONFIG_UNOWNED;
   loggingState.overrideSettings = null;
   invalidateLoggingConfigCache();
-  loadLoggerConfig = loadLoggerConfigDefault;
   loggerHostnameState.resolver = defaultLoggerHostnameResolver;
   loggerHostnameState.cached = null;
   invalidateLoggerSettings();

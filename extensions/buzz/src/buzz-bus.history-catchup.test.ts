@@ -1,7 +1,8 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { finalizeEvent, getPublicKey, type Event, type Filter } from "nostr-tools";
+import { finalizeEvent, getPublicKey, Relay, type Event, type Filter } from "nostr-tools";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const relayMocks = vi.hoisted(() => ({
@@ -124,6 +125,11 @@ vi.mock("nostr-tools", async (importOriginal) => {
 });
 
 import { startBuzzBus } from "./buzz-bus.js";
+import { catchUpBuzzRoomHistory } from "./history-catchup.js";
+import {
+  BUZZ_REPLAY_DISPATCH_MAX_PENDING,
+  createBuzzReplayDispatchQueue,
+} from "./replay-dispatch.js";
 
 const BUZZ_NORMAL_MESSAGE_KIND = 9;
 const BUZZ_ROOM_MEMBERSHIP_KIND = 39_002;
@@ -156,6 +162,18 @@ function seedOfflineBacklog(count: number, createdAt: (index: number) => number)
   for (let index = 0; index < count; index += 1) {
     relayMocks.storedEvents.push(buildMessageEvent(index, createdAt(index)));
   }
+}
+
+function startHistoryBus(overrides: Partial<Parameters<typeof startBuzzBus>[0]> = {}) {
+  return startBuzzBus({
+    accountId: ACCOUNT_ID,
+    relayUrl: "wss://buzz.example.com",
+    privateKey: PRIVATE_KEY,
+    channelIds: [CHANNEL_ID],
+    since: () => BASE_TIMESTAMP - 60,
+    onMessage: async () => {},
+    ...overrides,
+  });
 }
 
 async function waitForSettled(predicate: () => boolean): Promise<void> {
@@ -226,40 +244,12 @@ describe("Buzz reconnect history catch-up", () => {
     vi.useRealTimers();
   });
 
-  it("delivers backlog older than the per-room history limit", async () => {
-    seedOfflineBacklog(HISTORY_LIMIT + 1, (index) => BASE_TIMESTAMP + index);
-    const received: string[] = [];
-
-    const bus = await startBuzzBus({
-      accountId: ACCOUNT_ID,
-      relayUrl: "wss://buzz.example.com",
-      privateKey: PRIVATE_KEY,
-      channelIds: [CHANNEL_ID],
-      since: () => BASE_TIMESTAMP - 60,
-      onMessage: async (message) => {
-        received.push(message.text);
-      },
-    });
-    await waitForSettled(() => received.length >= HISTORY_LIMIT + 1);
-    await bus.close();
-
-    expect(new Set(received).size).toBe(HISTORY_LIMIT + 1);
-    expect(received).toContain("offline-message-000");
-    expect(received.length).toBe(HISTORY_LIMIT + 1);
-    expect(relayMocks.historySubscriptionCloses).toBe(1);
-  });
-
   it("pages a backlog spanning several history windows", async () => {
     const backlogSize = 250;
     seedOfflineBacklog(backlogSize, (index) => BASE_TIMESTAMP + index);
     const received: string[] = [];
 
-    const bus = await startBuzzBus({
-      accountId: ACCOUNT_ID,
-      relayUrl: "wss://buzz.example.com",
-      privateKey: PRIVATE_KEY,
-      channelIds: [CHANNEL_ID],
-      since: () => BASE_TIMESTAMP - 60,
+    const bus = await startHistoryBus({
       onMessage: async (message) => {
         received.push(message.text);
       },
@@ -269,6 +259,8 @@ describe("Buzz reconnect history catch-up", () => {
 
     expect(new Set(received).size).toBe(backlogSize);
     expect(received).toContain("offline-message-000");
+    expect(received).toHaveLength(backlogSize);
+    expect(relayMocks.historySubscriptionCloses).toBe(2);
     expect(relayMocks.historyRequests.length).toBeGreaterThan(1);
   });
 
@@ -277,12 +269,7 @@ describe("Buzz reconnect history catch-up", () => {
     const historyErrors: string[] = [];
     const received: string[] = [];
 
-    const bus = await startBuzzBus({
-      accountId: ACCOUNT_ID,
-      relayUrl: "wss://buzz.example.com",
-      privateKey: PRIVATE_KEY,
-      channelIds: [CHANNEL_ID],
-      since: () => BASE_TIMESTAMP - 60,
+    const bus = await startHistoryBus({
       onMessage: async (message) => {
         received.push(message.text);
       },
@@ -305,12 +292,7 @@ describe("Buzz reconnect history catch-up", () => {
     const historyErrors: string[] = [];
     const received: string[] = [];
 
-    const bus = await startBuzzBus({
-      accountId: ACCOUNT_ID,
-      relayUrl: "wss://buzz.example.com",
-      privateKey: PRIVATE_KEY,
-      channelIds: [CHANNEL_ID],
-      since: () => BASE_TIMESTAMP - 60,
+    const bus = await startHistoryBus({
       onMessage: async (message) => {
         received.push(message.text);
       },
@@ -334,12 +316,7 @@ describe("Buzz reconnect history catch-up", () => {
     const historyErrors: string[] = [];
     const received: string[] = [];
 
-    const bus = await startBuzzBus({
-      accountId: ACCOUNT_ID,
-      relayUrl: "wss://buzz.example.com",
-      privateKey: PRIVATE_KEY,
-      channelIds: [CHANNEL_ID],
-      since: () => BASE_TIMESTAMP - 60,
+    const bus = await startHistoryBus({
       onMessage: async (message) => {
         received.push(message.text);
       },
@@ -364,12 +341,7 @@ describe("Buzz reconnect history catch-up", () => {
     relayMocks.stallHistoryPages = true;
     const fatalErrors: string[] = [];
 
-    const bus = await startBuzzBus({
-      accountId: ACCOUNT_ID,
-      relayUrl: "wss://buzz.example.com",
-      privateKey: PRIVATE_KEY,
-      channelIds: [CHANNEL_ID],
-      since: () => BASE_TIMESTAMP - 60,
+    const bus = await startHistoryBus({
       onMessage: async () => {},
       onFatalError: (error) => {
         fatalErrors.push(error.message);
@@ -388,12 +360,7 @@ describe("Buzz reconnect history catch-up", () => {
     relayMocks.closeHistoryPagesReason = "relay rejected subscription";
     const fatalErrors: string[] = [];
 
-    const bus = await startBuzzBus({
-      accountId: ACCOUNT_ID,
-      relayUrl: "wss://buzz.example.com",
-      privateKey: PRIVATE_KEY,
-      channelIds: [CHANNEL_ID],
-      since: () => BASE_TIMESTAMP - 60,
+    const bus = await startHistoryBus({
       onMessage: async () => {},
       onFatalError: (error) => {
         fatalErrors.push(error.message);
@@ -408,6 +375,37 @@ describe("Buzz reconnect history catch-up", () => {
     expect(relayMocks.close).toHaveBeenCalled();
   });
 
+  it("does not request history when canceled after capacity resolves but before recovery resumes", async () => {
+    const abort = new AbortController();
+    const queue = createBuzzReplayDispatchQueue({ onTaskError: vi.fn() });
+    const capacity = createDeferred<Awaited<ReturnType<typeof queue.reserveCapacity>>>();
+    const onEvent = vi.fn();
+    try {
+      const reservation = await queue.reserveCapacity(HISTORY_LIMIT);
+      expect(reservation).toBeDefined();
+      const recovery = catchUpBuzzRoomHistory({
+        relay: new Relay("wss://buzz.example.com"),
+        channelId: CHANNEL_ID,
+        since: BASE_TIMESTAMP - 60,
+        until: BASE_TIMESTAMP,
+        limit: HISTORY_LIMIT,
+        reserveCapacity: () => capacity.promise,
+        onEvent,
+        signal: abort.signal,
+      });
+      capacity.resolve(reservation);
+      abort.abort();
+      await expect(recovery).resolves.toBe("aborted");
+      expect(relayMocks.historyRequests).toEqual([]);
+      expect(onEvent).not.toHaveBeenCalled();
+      const recoveredCapacity = await queue.reserveCapacity(BUZZ_REPLAY_DISPATCH_MAX_PENDING);
+      expect(recoveredCapacity).toBeDefined();
+      recoveredCapacity?.release();
+    } finally {
+      await queue.close();
+    }
+  });
+
   it("stops an active history query quietly when the bus closes", async () => {
     seedOfflineBacklog(250, (index) => BASE_TIMESTAMP + index);
     relayMocks.stallHistoryPages = true;
@@ -415,12 +413,7 @@ describe("Buzz reconnect history catch-up", () => {
     const historyErrors: string[] = [];
     const received: string[] = [];
 
-    const bus = await startBuzzBus({
-      accountId: ACCOUNT_ID,
-      relayUrl: "wss://buzz.example.com",
-      privateKey: PRIVATE_KEY,
-      channelIds: [CHANNEL_ID],
-      since: () => BASE_TIMESTAMP - 60,
+    const bus = await startHistoryBus({
       onMessage: async (message) => {
         received.push(message.text);
       },

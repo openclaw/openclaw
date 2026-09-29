@@ -1,19 +1,13 @@
-// Discord plugin module implements native command model picker apply behavior.
 import type { ChatCommandDefinition, CommandArgs } from "openclaw/plugin-sdk/command-auth-native";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ButtonInteraction, StringSelectMenuInteraction } from "../internal/discord.js";
-import type { DiscordLivePolicyReader } from "./live-policy.js";
 import {
   recordDiscordModelPickerRecentModel,
   type DiscordModelPickerPreferenceScope,
 } from "./model-picker-preferences.js";
 import type { DispatchDiscordCommandInteraction } from "./native-command-dispatch.js";
-import type { DiscordDispatchReplyFromConfig } from "./native-command.types.js";
-import type { ThreadBindingManager } from "./thread-bindings.js";
-
-type DiscordConfig = NonNullable<OpenClawConfig["channels"]>["discord"];
+import type { DiscordCommandArgContext } from "./native-command-ui.types.js";
 
 type DiscordModelPickerSelectionCommand = {
   prompt: string;
@@ -36,25 +30,20 @@ function normalizeExpectedRuntime(value: string | undefined): string | undefined
   return runtime === "auto" || runtime === "default" ? "auto" : runtime;
 }
 
-export async function applyDiscordModelPickerSelection(params: {
-  interaction: ButtonInteraction | StringSelectMenuInteraction;
-  selectionCommand: DiscordModelPickerSelectionCommand;
-  dispatchCommandInteraction: DispatchDiscordCommandInteraction;
-  cfg: OpenClawConfig;
-  readPolicy?: DiscordLivePolicyReader;
-  discordConfig: DiscordConfig;
-  accountId: string;
-  sessionPrefix: string;
-  threadBindings: ThreadBindingManager;
-  dispatchReplyFromConfig?: DiscordDispatchReplyFromConfig;
-  route: ResolvedAgentRoute;
-  resolvedModelRef: string;
-  selectedRuntime?: string;
-  preferenceScope: DiscordModelPickerPreferenceScope;
-  settleMs: number;
-  resolveCurrentModel: (route: ResolvedAgentRoute) => string;
-  resolveCurrentRuntime: (route: ResolvedAgentRoute) => string;
-}): Promise<DiscordModelPickerApplyResult> {
+export async function applyDiscordModelPickerSelection(
+  params: DiscordCommandArgContext & {
+    interaction: ButtonInteraction | StringSelectMenuInteraction;
+    selectionCommand: DiscordModelPickerSelectionCommand;
+    dispatchCommandInteraction: DispatchDiscordCommandInteraction;
+    route: ResolvedAgentRoute;
+    resolvedModelRef: string;
+    selectedRuntime?: string;
+    preferenceScope: DiscordModelPickerPreferenceScope;
+    settleMs: number;
+    resolveCurrentModel: (route: ResolvedAgentRoute) => string;
+    resolveCurrentRuntime: (route: ResolvedAgentRoute) => string;
+  },
+): Promise<DiscordModelPickerApplyResult> {
   try {
     const dispatchResult = await withTimeout(
       params.dispatchCommandInteraction({
@@ -70,6 +59,7 @@ export async function applyDiscordModelPickerSelection(params: {
         preferFollowUp: true,
         threadBindings: params.threadBindings,
         suppressReplies: true,
+        buildContext: params.buildContext,
         dispatchReplyFromConfig: params.dispatchReplyFromConfig,
         pluginCommandDispatch: { kind: "non-plugin" },
       }),

@@ -1,6 +1,6 @@
 {
   "id": "opencode",
-  "categories": ["models", "media"],
+  "categories": ["models"],
   "activation": { "onStartup": true },
   "providerCatalogEntry": "./provider-discovery.ts",
   "enabledByDefault": true,
@@ -211,6 +211,14 @@
       "defaultModels": { "image": "gpt-5-nano" }
     }
   },
+  "configGroups": [
+    {
+      "id": "native-sessions",
+      "title": "Native sessions",
+      "order": 10,
+      "properties": ["sessionCatalog"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

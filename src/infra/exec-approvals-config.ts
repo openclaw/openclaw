@@ -4,8 +4,7 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
+  normalizeOptionalLowercaseString,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
@@ -113,8 +112,8 @@ export function resolveExecApprovalsSocketPath(): string {
   return path.join(resolveExecApprovalsStateDir().path, EXEC_APPROVALS_SOCKET);
 }
 
-export function resolveExecApprovalsDisplayPath(): string {
-  const stateDir = resolveExecApprovalsStateDir().displayPath;
+export function resolveExecApprovalsDisplayPath(env: NodeJS.ProcessEnv = process.env): string {
+  const stateDir = resolveExecApprovalsStateDir(env).displayPath;
   const locator = path.join("state", "openclaw.sqlite#exec_approvals_config");
   return stateDir === DEFAULT_EXEC_APPROVALS_STATE_DIR
     ? `${stateDir}/${locator}`
@@ -167,6 +166,14 @@ const diagnosticFields = new Set([
   "lastResolvedPath",
 ]);
 
+const diagnosticTypeReasons = new Map([
+  ["string", "expected a string"],
+  ["number", "expected a finite number"],
+  ["boolean", "expected a boolean"],
+  ["array", "expected an array"],
+  ["object", "expected an object"],
+]);
+
 function formatPersistedExecApprovalsIssue(issue: z.core.$ZodIssue, parsed: unknown): string {
   // Only the object arm has field issues. The string arm's root error would
   // misdiagnose object metadata; Zod's union child paths are relative.
@@ -204,25 +211,7 @@ function formatPersistedExecApprovalsIssue(issue: z.core.$ZodIssue, parsed: unkn
   let reason = "invalid value";
   switch (detail.code) {
     case "invalid_type":
-      switch (detail.expected) {
-        case "string":
-          reason = "expected a string";
-          break;
-        case "number":
-          reason = "expected a finite number";
-          break;
-        case "boolean":
-          reason = "expected a boolean";
-          break;
-        case "array":
-          reason = "expected an array";
-          break;
-        case "object":
-          reason = "expected an object";
-          break;
-        default:
-          break;
-      }
+      reason = diagnosticTypeReasons.get(detail.expected) ?? reason;
       break;
     case "invalid_value":
       reason = "expected a supported value";
@@ -273,11 +262,6 @@ export function tryParsePersistedExecApprovals(raw: string): ExecApprovalsFile |
   return result.ok ? result.value : null;
 }
 
-function normalizeAllowlistPattern(value: string | undefined): string | null {
-  const trimmed = normalizeOptionalString(value) ?? "";
-  return trimmed ? normalizeLowercaseStringOrEmpty(trimmed) : null;
-}
-
 function mergeLegacyAgent(
   current: ExecApprovalsAgent,
   legacy: ExecApprovalsAgent,
@@ -285,7 +269,7 @@ function mergeLegacyAgent(
   const allowlist: ExecAllowlistEntry[] = [];
   const seen = new Set<string>();
   const pushEntry = (entry: ExecAllowlistEntry) => {
-    const patternKey = normalizeAllowlistPattern(entry.pattern);
+    const patternKey = normalizeOptionalLowercaseString(entry.pattern);
     if (!patternKey) {
       return;
     }
@@ -355,7 +339,7 @@ function coerceAllowlistEntries(allowlist: unknown): ExecAllowlistEntry[] | unde
   return changed ? (result.length > 0 ? result : undefined) : (allowlist as ExecAllowlistEntry[]);
 }
 
-function ensureAllowlistIds(
+function normalizeAllowlistMetadata(
   allowlist: ExecAllowlistEntry[] | undefined,
 ): ExecAllowlistEntry[] | undefined {
   if (!Array.isArray(allowlist) || allowlist.length === 0) {
@@ -363,29 +347,16 @@ function ensureAllowlistIds(
   }
   let changed = false;
   const next = allowlist.map((entry) => {
-    if (entry.id) {
-      return entry;
+    let normalized = entry;
+    if (!normalized.id) {
+      normalized = { ...normalized, id: crypto.randomUUID() };
     }
-    changed = true;
-    return { ...entry, id: crypto.randomUUID() };
-  });
-  return changed ? next : allowlist;
-}
-
-function stripAllowlistCommandText(
-  allowlist: ExecAllowlistEntry[] | undefined,
-): ExecAllowlistEntry[] | undefined {
-  if (!Array.isArray(allowlist) || allowlist.length === 0) {
-    return allowlist;
-  }
-  let changed = false;
-  const next = allowlist.map((entry) => {
-    if (typeof entry.commandText !== "string") {
-      return entry;
+    if (typeof normalized.commandText === "string") {
+      const { commandText: _commandText, ...rest } = normalized;
+      normalized = rest;
     }
-    changed = true;
-    const { commandText: _commandText, ...rest } = entry;
-    return rest;
+    changed ||= normalized !== entry;
+    return normalized;
   });
   return changed ? next : allowlist;
 }
@@ -421,8 +392,7 @@ export function normalizeExecApprovalsInternal(file: ExecApprovalsFile): ExecApp
   }
   for (const [key, agent] of Object.entries(agents)) {
     const coerced = coerceAllowlistEntries(agent.allowlist);
-    const withIds = ensureAllowlistIds(coerced);
-    const allowlist = stripAllowlistCommandText(withIds);
+    const allowlist = normalizeAllowlistMetadata(coerced);
     const sanitizedPolicy = sanitizeExecApprovalPolicy(agent);
     const agentChanged =
       allowlist !== agent.allowlist ||

@@ -64,7 +64,7 @@ approval.
 openclaw plugins install @openclaw/buzz
 ```
 
-Restart the Gateway after installing or updating the plugin.
+Check the [application result](/plugins/manage-plugins#apply-changes-and-inspect) after installing or updating the plugin.
 
 ## Guided setup
 
@@ -108,6 +108,16 @@ exit setup.
 
 Every target room must contain the bot identity with the **Bot** role. An
 existing human member or ordinary room member role is not sufficient.
+
+At startup, OpenClaw skips active configured rooms where the bot lacks the Bot
+role and logs a warning for each skipped room. Other eligible rooms stay online.
+If active configured rooms remain but none has the Bot role, the account cannot
+start.
+
+When the relay reports a membership change for a skipped room, OpenClaw checks
+its signed roster again. A confirmed Bot role starts that room without restarting
+healthy rooms. A live Bot-role downgrade in a subscribed room still cancels the
+account's active work and reconnects with fresh memberships.
 
 Buzz desktop cannot reliably assign the Bot role to an externally managed
 OpenClaw identity. Use the Buzz CLI as the existing human room owner or admin:
@@ -328,7 +338,7 @@ checks membership before queuing and again after asynchronous admission, and
 follows live relay-signed roster updates, including role changes. A removal
 invalidates queued messages immediately. Cancelled admission is not committed as
 processed. Bounded snapshot refreshes confirm membership-change notifications.
-There is no per-message relay query or Gateway polling.
+Membership does not require per-message relay queries or Gateway polling.
 Removing a sender does not cancel a room turn already admitted for that sender.
 Losing the bot's own Bot role or stopping its connection still fences output.
 
@@ -344,6 +354,36 @@ setting inherits the account-wide value. An explicitly empty room allowlist
 denies every sender when its effective policy is `"allowlist"`.
 Set `requireMention: true` only when the Buzz client used by those members can
 address the bot identity.
+
+Set `requireMentionInBotThreads: false` in a room to accept unmentioned replies
+in threads started by that Buzz bot while keeping mentions required elsewhere:
+
+```json5
+{
+  channels: {
+    buzz: {
+      groups: {
+        "7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c": {
+          requireMention: true,
+          requireMentionInBotThreads: false,
+        },
+      },
+    },
+  },
+}
+```
+
+For a named account, use `channels.buzz.accounts.<id>.groups.<roomId>`.
+Setting the option to `true` requires mentions in bot-started threads even if
+the room otherwise accepts unmentioned messages. Omitting it preserves the
+room's current mention policy. Sender restrictions and command authorization
+remain unchanged.
+
+OpenClaw verifies the root message's signature, author, room, and lack of a
+parent thread. A bot reply inside someone else's thread does not make that
+thread bot-owned. Missing roots are queried through the existing authenticated
+relay; verified roots are cached for the connection. If ownership cannot be
+verified, the room's normal mention policy applies.
 
 These controls decide who can start an agent run. They do not limit what the
 routed agent can do after a message is accepted. Treat room messages as
@@ -624,7 +664,7 @@ Bot identity rotation requires admin approval for the new public key:
 
 1. Generate a new dedicated bot identity.
 2. Have an admin approve its public key for the relay and every configured room.
-3. Replace the configured private key and restart or reload the Gateway.
+3. Replace the configured private key and verify that [hot reload](/gateway/configuration/hot-reload) applies the change. Restart the Gateway if the key comes from a changed service environment.
 4. Test outbound and inbound messages.
 5. Remove the old public key from the rooms and relay.
 

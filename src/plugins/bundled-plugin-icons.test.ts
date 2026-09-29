@@ -1,4 +1,4 @@
-// Verifies every bundled plugin publishes a fixed package-local icon asset.
+// Verifies every bundled plugin ships separate identity and activity artwork.
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -11,7 +11,7 @@ type BundledPluginManifest = {
 };
 
 describe("bundled plugin icons", () => {
-  it("packages a fixed local 512px PNG for every bundled plugin", () => {
+  it("packages a local 512px identity PNG and activity SVG for every bundled plugin", () => {
     const manifestPaths = listGitTrackedFiles({
       repoRoot,
       pathspecs: "extensions/*/openclaw.plugin.json",
@@ -34,6 +34,13 @@ describe("bundled plugin icons", () => {
       expect(icon.readUInt32BE(16), `${manifest.id} icon width`).toBe(512);
       expect(icon.readUInt32BE(20), `${manifest.id} icon height`).toBe(512);
       expect(manifest.icon, `${manifest.id} should not fetch a runtime icon URL`).toBeUndefined();
+      const activityIconPath = path.join(pluginDir, "assets", "activity.svg");
+      expect(fs.lstatSync(activityIconPath).isFile(), `${manifest.id} local activity icon`).toBe(
+        true,
+      );
+      expect(fs.readFileSync(activityIconPath, "utf8"), `${manifest.id} activity artwork`).toMatch(
+        /^<svg\s[^>]*xmlns="http:\/\/www\.w3\.org\/2000\/svg"/u,
+      );
     }
   });
 });

@@ -1,4 +1,3 @@
-// Discord plugin module implements message handler.preflight channel context behavior.
 import {
   normalizeDiscordDisplaySlug,
   normalizeDiscordSlug,
@@ -18,8 +17,6 @@ export function resolveDiscordPreflightChannelContext(params: {
   threadParentName?: string;
 }) {
   const threadName = params.threadChannel?.name;
-  const configChannelName = params.threadParentName ?? params.channelName;
-  const configChannelSlug = configChannelName ? normalizeDiscordSlug(configChannelName) : "";
   const displayChannelName = threadName ?? params.channelName;
   const displayChannelSlug = displayChannelName
     ? normalizeDiscordDisplaySlug(displayChannelName)
@@ -47,13 +44,9 @@ export function resolveDiscordPreflightChannelContext(params: {
 
   return {
     threadName,
-    configChannelName,
-    configChannelSlug,
     displayChannelName,
     displayChannelSlug,
     guildSlug,
-    threadChannelSlug,
-    threadParentSlug,
     channelConfig,
   };
 }

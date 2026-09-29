@@ -1,8 +1,18 @@
 // Session lifecycle timestamps prefer store metadata and fall back to transcript headers.
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import {
+  assertProviderReviewAcknowledgment,
+  type ProviderReviewAcknowledgment,
+} from "../../sessions/provider-review.js";
+import {
+  resolveIncognitoSessionExpiresAt,
+  isIncognitoSessionKey,
+} from "../../shared/incognito-session-key.js";
+import type { SessionLifecycleTimestamps } from "./lifecycle.types.js";
 import { canonicalizeMainSessionAlias } from "./main-session.js";
-import { loadTranscriptHeaderSync, readTranscriptStatsSync } from "./session-accessor.js";
+import { loadTranscriptHeaderSync, readTranscriptMutationStateSync } from "./session-accessor.js";
+import { readSessionTranscriptHeaderStartedAt } from "./transcript-header.js";
 import {
   isTerminalSessionStatus,
   type InternalSessionEntry,
@@ -23,19 +33,28 @@ type SessionLifecycleEntry = Pick<
 type SessionWorkStartEntry = Pick<
   InternalSessionEntry,
   | "archivedAt"
+  | "createdAt"
+  | "incognito"
   | "initializationPending"
   | "mainRestartRecovery"
   | "modelSelectionLocked"
   | "sessionId"
   | "pendingProjectGitUrl"
   | "pendingWorktree"
->;
+  | "providerReview"
+  | "lifecycleRevision"
+> &
+  Partial<Pick<InternalSessionEntry, "updatedAt">>;
 
 type SessionWorkStartOptions = {
+  /** Already-accepted transcript/delivery results settle without dispatching new model work. */
+  purpose?: "accepted-result-settlement";
   allowRestartTombstoneReplacement?: boolean;
   expectedSessionId?: string;
   /** Only workspace preparers and lifecycle cancellation may enter pending sessions. */
   allowPendingWorkspace?: true;
+  providerReviewAcknowledgment?: ProviderReviewAcknowledgment;
+  runId?: string;
 };
 
 export function isRestartRecoveryTombstone(
@@ -97,7 +116,7 @@ export class SessionRestartRecoveryTombstoneError extends Error {
   }
 }
 
-/** Lifecycle-owned initializing, restart-tombstoned, and archived sessions reject new work. */
+/** Lifecycle-owned expired, initializing, restart-tombstoned, and archived sessions reject work. */
 export function resolveSessionWorkStartError(
   sessionKey: string,
   entry: SessionWorkStartEntry | null | undefined,
@@ -109,12 +128,35 @@ export function resolveSessionWorkStartError(
   if (options?.expectedSessionId && entry?.sessionId !== options.expectedSessionId) {
     return `Session "${sessionKey}" changed while starting work. Retry.`;
   }
+  const incognitoExpiresAt = entry ? resolveIncognitoSessionExpiresAt(entry) : undefined;
+  if (
+    (entry?.incognito || isIncognitoSessionKey(sessionKey)) &&
+    incognitoExpiresAt !== undefined &&
+    Date.now() >= incognitoExpiresAt
+  ) {
+    return `Incognito session "${sessionKey}" expired. Start a new Incognito session.`;
+  }
   if (entry?.initializationPending === true) {
     return `Session "${sessionKey}" is still initializing. Retry after initialization completes.`;
   }
+  if (entry?.providerReview && options?.purpose !== "accepted-result-settlement") {
+    try {
+      if (!options?.providerReviewAcknowledgment) {
+        return `Session "${sessionKey}" is paused as a precaution. Review the provider findings in chat before continuing.`;
+      }
+      assertProviderReviewAcknowledgment(options.providerReviewAcknowledgment, {
+        sessionKey,
+        entry,
+        runId: options.runId,
+      });
+    } catch {
+      return `Session "${sessionKey}" provider review changed. Refresh the findings before continuing.`;
+    }
+  }
   const restartRecoveryTombstone = isRestartRecoveryTombstone(entry);
   if (restartRecoveryTombstone) {
-    if (options?.allowRestartTombstoneReplacement === true) {
+    // Acknowledgment owns continuation of the reviewed conversation, never its replacement.
+    if (options?.allowRestartTombstoneReplacement === true && !entry?.providerReview) {
       return undefined;
     }
     return entry?.modelSelectionLocked === true
@@ -159,21 +201,12 @@ function resolvePositiveTimestamp(value: number | undefined): number | undefined
   return timestampMs !== undefined && timestampMs > 0 ? timestampMs : undefined;
 }
 
-function parseTimestampMs(value: unknown): number | undefined {
-  if (typeof value === "number") {
-    return resolveTimestamp(value);
-  }
-  if (typeof value !== "string" || !value.trim()) {
-    return undefined;
-  }
-  return resolveTimestamp(Date.parse(value));
-}
-
 function readSessionHeaderStartedAtMs(params: {
   entry: SessionLifecycleEntry;
   agentId?: string;
   sessionKey?: string;
   storePath?: string;
+  readHeader?: (sessionId: string) => unknown;
 }): number | undefined {
   const sessionId = params.entry.sessionId?.trim();
   const sessionKey = params.sessionKey?.trim();
@@ -183,19 +216,15 @@ function readSessionHeaderStartedAtMs(params: {
     return undefined;
   }
   try {
-    const header = loadTranscriptHeaderSync({
-      agentId,
-      sessionId,
-      ...(params.storePath ? { storePath: params.storePath } : {}),
-      ...(sessionKey ? { sessionKey } : {}),
-    }) as { type?: unknown; id?: unknown; timestamp?: unknown } | undefined;
-    if (
-      header?.type !== "session" ||
-      (typeof header.id === "string" && header.id.trim() && header.id !== sessionId)
-    ) {
-      return undefined;
-    }
-    return parseTimestampMs(header.timestamp);
+    const header = params.readHeader
+      ? params.readHeader(sessionId)
+      : loadTranscriptHeaderSync({
+          agentId,
+          sessionId,
+          ...(params.storePath ? { storePath: params.storePath } : {}),
+          ...(sessionKey ? { sessionKey } : {}),
+        });
+    return readSessionTranscriptHeaderStartedAt(header, sessionId);
   } catch {
     return undefined;
   }
@@ -206,7 +235,8 @@ export function resolveSessionLifecycleTimestamps(params: {
   agentId?: string;
   sessionKey?: string;
   storePath?: string;
-}): { sessionStartedAt?: number; lastInteractionAt?: number } {
+  readHeader?: (sessionId: string) => unknown;
+}): SessionLifecycleTimestamps {
   const entry = params.entry;
   if (!entry) {
     return {};
@@ -236,6 +266,13 @@ function resolveTerminalMainSessionTranscriptRegistryCheck(
     sessionKey: params.sessionKey,
   });
   if (candidateSessionKey !== configuredMainSessionKey) {
+    return undefined;
+  }
+  if (params.entry.status === "running") {
+    // A yielded parent keeps status "running" next to the settled run's endedAt
+    // (see deriveGatewaySessionLifecycleSnapshot). That timestamp records run
+    // timing, not a terminal session: sibling completions must keep reusing the
+    // same session generation instead of rotating the parent mid-preparation.
     return undefined;
   }
   const hasTerminalLifecycle =
@@ -286,17 +323,17 @@ export function hasTerminalMainSessionTranscriptNewerThanRegistrySync(
   try {
     // Runtime transcripts are SQLite-only. Legacy-looking sessionFile values still
     // resolve through agent/session/store scope, so a file stat would read stale state.
-    const stats = readTranscriptStatsSync({
+    const mutation = readTranscriptMutationStateSync({
       agentId: params.agentId,
       sessionId: check.sessionId,
       storePath: params.storePath,
     });
-    if (stats.lastMutationAtMs === undefined) {
+    if (mutation.updatedAt === null) {
       return false;
     }
     return isTranscriptMutationNewerThanRegistry({
-      transcriptMutationAtMs: stats.lastMutationAtMs,
-      registryTimestampMs: stats.lastObservedMutationAtMs ?? check.registryTimestampMs,
+      transcriptMutationAtMs: mutation.updatedAt,
+      registryTimestampMs: mutation.observedAt ?? check.registryTimestampMs,
     });
   } catch {
     return false;

@@ -69,9 +69,9 @@ describe("buildWidgetDocument", () => {
       '<SvG viewBox="0 0 10 10"><circle r="4" /></SvG>',
     );
 
-    expect(Buffer.byteLength(html)).toBe(19352);
+    expect(Buffer.byteLength(html)).toBe(19940);
     expect(createHash("sha256").update(html).digest("hex")).toBe(
-      "c324c9aa8664217fe6a1668eb08fb525b23b46e5c8e3798132be32f9c14f2ddf",
+      "14a38610f87723edcb5b55b548a57cd52bb677c5dac170f008e2c72f23e6edf6",
     );
     expect(html).toContain("openclaw:widget-host-init-ack");
     expect(html).toContain('request("host.open",{url})');

@@ -75,7 +75,7 @@ async function capture(reply = "reply") {
   const root = await mkdtemp(path.join(os.tmpdir(), "tg-record-"));
   try {
     execFileSync(
-      "python",
+      "python3",
       [
         "test/fixtures/mantis-telegram-recorder.py",
         path.resolve(".agents/skills/telegram-e2e-userbot/scripts/user-record.py"),

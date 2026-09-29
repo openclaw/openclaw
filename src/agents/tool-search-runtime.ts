@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
+import { sortAndLimitBy } from "../shared/sort-and-limit.js";
 import { resolveAgentToolExecutionSchema } from "./agent-tool-availability.js";
 import {
   finalizeToolTerminalPresentation,
@@ -8,7 +9,16 @@ import {
 } from "./agent-tools.before-tool-call.js";
 import { runWithToolExecutionValidation } from "./agent-tools.execution-validation.js";
 import { getChannelAgentToolMeta } from "./channel-tool-metadata.js";
+import { collectTextContentBlocks } from "./content-blocks.js";
+import { setMcpCodeModeGuestResultFromAgentResult } from "./mcp-content.js";
+import { captureAgentPluginRuntimeRefresh } from "./plugin-runtime-refresh.js";
 import type { AgentToolResult } from "./runtime/index.js";
+import {
+  captureToolOutputSelection,
+  readToolOutputSchemaVariants,
+  type ToolOutputSelection,
+  selectToolOutputSchema,
+} from "./schema/tool-output-schema.js";
 import { bindJoinedCollectorInvocation } from "./subagents/swarm/swarm-collector-capability.js";
 import { markToolContractFailure } from "./tool-contract-error.js";
 import { isAgentToolReplaySafe } from "./tool-replay-safety.js";
@@ -37,6 +47,7 @@ import {
 } from "./tool-search-ranking.js";
 import {
   formatCatalogInputError,
+  formatCatalogOutputError,
   formatUnknownToolIdError,
   type ToolLookupErrorOptions,
 } from "./tool-search-recovery.js";
@@ -52,9 +63,13 @@ import type {
   ToolSearchConfig,
   ToolSearchToolContext,
   UnknownToolErrorOptions,
-  UnknownToolRecoverySurface,
 } from "./tool-search-types.js";
-import { asToolParamsRecord, textResult, ToolInputError } from "./tools/common.js";
+import { textResult, ToolInputError } from "./tools/common.js";
+
+type ToolSearchExactCallOptions = Pick<
+  ToolSearchCallOptions,
+  "parentToolCallId" | "signal" | "onUpdate" | "recoverySurface" | "mcpNamespaceGuest"
+>;
 
 function describeEntry(entry: ToolSearchCatalogEntry) {
   return {
@@ -81,6 +96,32 @@ function toolSearchEntryText(entry: ToolSearchCatalogEntry, parameterText?: stri
   return [entry.name, entry.id, entry.label ?? "", entry.description, parameters]
     .filter(Boolean)
     .join(" ");
+}
+
+// Code Mode creates runtimes per cell. Share tokens for the owner's entries snapshot;
+// replacing that array retires the cache, and text changes refresh individual entries.
+const toolSearchDocuments = new WeakMap<
+  readonly ToolSearchCatalogEntry[],
+  WeakMap<ToolSearchCatalogEntry, { text: string; terms: string[] }>
+>();
+
+function toolSearchEntryTerms(
+  entries: readonly ToolSearchCatalogEntry[],
+  entry: ToolSearchCatalogEntry,
+  parameterText: string,
+): readonly string[] {
+  let documents = toolSearchDocuments.get(entries);
+  if (!documents) {
+    documents = new WeakMap();
+    toolSearchDocuments.set(entries, documents);
+  }
+  const text = toolSearchEntryText(entry, parameterText);
+  let document = documents.get(entry);
+  if (!document || document.text !== text) {
+    document = { text, terms: tokenizeDocument(text) };
+    documents.set(entry, document);
+  }
+  return document.terms;
 }
 
 function findEntry(
@@ -118,99 +159,6 @@ function findEntryByExactId(
     );
   }
   return entry;
-}
-
-const TOOL_SEARCH_SELECTOR_KEYS = ["id", "toolId", "name"] as const;
-
-function readToolSearchSelector(params: Record<string, unknown>): string | undefined {
-  const value = params.id ?? params.toolId ?? params.name;
-  return typeof value === "string" && value.trim() ? value : undefined;
-}
-
-export function readToolSearchId(args: unknown): string {
-  const params = asToolParamsRecord(args);
-  const value = readToolSearchSelector(params);
-  if (value === undefined) {
-    throw new ToolInputError("id must be a non-empty string.");
-  }
-  return value.trim();
-}
-
-export function readToolSearchCallArgs(
-  args: unknown,
-  catalog?: ToolSearchCatalogSession,
-): { id: string; input: unknown } {
-  const params = asToolParamsRecord(args);
-  const dottedInput = Object.fromEntries(
-    Object.entries(params)
-      .filter(([key]) => key.startsWith("args.") && key.length > 5)
-      .map(([key, value]) => [key.slice(5), value]),
-  );
-  const nestedInput = params.args ?? params.input;
-  // Some local models emit an empty args/input wrapper while flattening the real
-  // arguments to the top level. Treat an empty wrapper as absent so the fallback
-  // below preserves those parameters instead of returning {}.
-  const nestedInputIsEmpty = isRecord(nestedInput) && Object.keys(nestedInput).length === 0;
-  if (nestedInput != null && !nestedInputIsEmpty) {
-    return {
-      id: readToolSearchId(params),
-      input: isRecord(nestedInput) ? { ...dottedInput, ...nestedInput } : nestedInput,
-    };
-  }
-
-  const matchingSelectors = catalog
-    ? TOOL_SEARCH_SELECTOR_KEYS.flatMap((key) => {
-        const value = params[key];
-        if (typeof value !== "string") {
-          return [];
-        }
-        const matches = catalog.entries.filter(
-          (entry) => entry.id === value || entry.name === value,
-        );
-        return matches.length > 0 ? [{ key, matches }] : [];
-      })
-    : [];
-  const matchedToolIds = new Set(
-    matchingSelectors.flatMap(({ matches }) => matches.map((entry) => entry.id)),
-  );
-  if (matchedToolIds.size > 1) {
-    throw new ToolInputError(
-      "Ambiguous tool selectors: pass the target tool id and nest target arguments under args.",
-    );
-  }
-  const matchingSelector = matchingSelectors[0]?.key;
-  const selector = matchingSelector ?? TOOL_SEARCH_SELECTOR_KEYS.find((key) => params[key] != null);
-  const id = readToolSearchId(selector ? { [selector]: params[selector] } : params);
-
-  // Remove every alias that actually identifies the selected catalog tool;
-  // unmatched id/name fields can still be required arguments of that tool.
-  const wrapperKeys = new Set<string>([
-    "args",
-    "input",
-    ...matchingSelectors.map(({ key }) => key),
-    ...(matchingSelector ? [] : [selector ?? "id"]),
-  ]);
-  const targetInputEntries = Object.entries(params).filter(([key]) => !wrapperKeys.has(key));
-  const flattenedInput = Object.fromEntries(
-    targetInputEntries.filter(([key]) => !(key.startsWith("args.") && key.length > 5)),
-  );
-  return { id, input: { ...dottedInput, ...flattenedInput } };
-}
-
-export function prepareToolSearchDispatcherArguments(args: unknown): unknown {
-  if (!isRecord(args) || TOOL_SEARCH_SELECTOR_KEYS.some((key) => Object.hasOwn(args, key))) {
-    return args;
-  }
-  const nestedInput = args.args ?? args.input;
-  if (!isRecord(nestedInput)) {
-    return args;
-  }
-  const selectorValue = readToolSearchSelector(nestedInput);
-  if (selectorValue === undefined) {
-    return args;
-  }
-  const { args: _wrappedArgs, input: _wrappedInput, ...outerRest } = args;
-  return { ...outerRest, ...nestedInput, id: selectorValue };
 }
 
 type CatalogSchemaName = "inputSchema" | "outputSchema";
@@ -275,15 +223,31 @@ async function validateCatalogSchemaValue(
   entry: ToolSearchCatalogEntry,
   schemaName: CatalogSchemaName,
   value: unknown,
+  outputSelection?: ToolOutputSelection,
 ): Promise<CatalogSchemaValidation | undefined> {
-  const schema =
+  let schema =
     schemaName === "inputSchema"
       ? resolveAgentToolExecutionSchema(entry.tool, entry.parameters)
       : entry.outputSchema;
-  if (entry.source !== "openclaw" || !schema) {
+  if (entry.source !== "openclaw") {
     return undefined;
   }
   try {
+    if (schemaName === "outputSchema") {
+      if (
+        outputSelection &&
+        readToolOutputSchemaVariants(schema)?.inputProperty !== outputSelection.inputProperty
+      ) {
+        throw new Error("Tool output discriminator changed during execution.");
+      }
+      schema = selectToolOutputSchema(
+        schema,
+        outputSelection ? { [outputSelection.inputProperty]: outputSelection.value } : undefined,
+      );
+    }
+    if (!schema) {
+      return undefined;
+    }
     schemaValidatorModulePromise ??= import("../plugins/schema-validator.js");
     const { validateJsonSchemaValue } = await schemaValidatorModulePromise;
     return validateJsonSchemaValue({
@@ -320,8 +284,9 @@ async function assertCatalogOutputSchemaIsValid(entry: ToolSearchCatalogEntry): 
 async function assertCatalogOutputMatchesSchema(
   entry: ToolSearchCatalogEntry,
   result: AgentToolResult<unknown>,
+  outputSelection?: ToolOutputSelection,
 ): Promise<void> {
-  if (!entry.outputSchema) {
+  if (!entry.outputSchema && !outputSelection) {
     return;
   }
   if (isPreExecutionBlockedToolResult(result)) {
@@ -336,23 +301,24 @@ async function assertCatalogOutputMatchesSchema(
     entry,
     "outputSchema",
     unwrapToolResultValue(result),
+    outputSelection,
   );
   if (!validation || validation.ok) {
     return;
   }
   throw markToolContractFailure(
-    new Error(`Tool "${entry.id}" returned details that do not match its declared outputSchema.`),
+    new Error(formatCatalogOutputError(entry, validation.errors)),
     "output_contract",
   );
 }
 
 function sanitizeToolCallIdPart(value: string): string {
-  const trimmed = value.trim();
-  const safe = trimmed.replace(/[^A-Za-z0-9_.:-]+/g, "_").slice(0, 120);
-  return safe || "call";
+  const safe = value.trim().replace(/[^A-Za-z0-9_.:-]+/g, "_");
+  return safe.slice(0, 120) || "call";
 }
 
 export class ToolSearchRuntime {
+  private readonly pluginRuntimeRefresh = captureAgentPluginRuntimeRefresh();
   private callSequence = 0;
   private readonly terminalTargetBatchByParent = new Map<string, boolean>();
   private readonly networkInvocations = new Map<string, { active: number; observed: boolean }>();
@@ -364,21 +330,34 @@ export class ToolSearchRuntime {
     private readonly options: { prepareInput?: boolean; validateInput?: boolean } = {},
   ) {}
 
-  search = async (query: string, options?: { limit?: number } & CatalogVisibilityOptions) => {
+  search = async (
+    query: string,
+    options?: { limit?: number; parentToolCallId?: string } & CatalogVisibilityOptions,
+  ) => {
     const catalog = resolveCatalog(this.ctx);
     catalog.searchCount += 1;
     const limit = readToolSearchLimit(options?.limit, this.config);
     const entries = visibleCatalogEntries(catalog, options);
+    const compactEntry = (entry: ToolSearchCatalogEntry) => {
+      if (entry.source !== "openclaw" && options?.parentToolCallId) {
+        this.observeNetworkContent(options.parentToolCallId);
+      }
+      return compactToolSearchCatalogEntry(entry);
+    };
     // A query that is exactly a tool name or id is a request for that tool, not
     // a description of one. BM25 alone can rank a shorter entry that merely
     // mentions the word above it, and the limit then drops the tool asked for.
-    const exact = query.trim().toLowerCase();
-    const isExact = (entry: ToolSearchCatalogEntry) =>
-      entry.name.toLowerCase() === exact || entry.id.toLowerCase() === exact;
-    const exactMatches = entries.filter(isExact);
+    const spelling = query.trim();
+    const exact = spelling.toLowerCase();
+    const exactIdEntry = entries.find((entry) => entry.id === spelling);
+    const exactMatches = exactIdEntry
+      ? [exactIdEntry]
+      : entries.filter(
+          (entry) => entry.name.toLowerCase() === exact || entry.id.toLowerCase() === exact,
+        );
     // An unambiguous exact lookup never needs schema traversal or a BM25 index.
     if (limit === 1 && exactMatches.length === 1) {
-      return exactMatches.slice(0, limit).map((entry) => compactToolSearchCatalogEntry(entry));
+      return exactMatches.slice(0, limit).map(compactEntry);
     }
     const indexKey = options?.allowedIds ?? options?.includeMcp !== false;
     let catalogIndexes = this.searchIndexes.get(catalog);
@@ -403,34 +382,36 @@ export class ToolSearchRuntime {
         index: buildLexicalIndex(
           indexedEntries.map(({ entry, parameterText }) => ({
             value: entry,
-            terms: tokenizeDocument(toolSearchEntryText(entry, parameterText)),
+            terms: toolSearchEntryTerms(catalog.entries, entry, parameterText),
           })),
         ),
       };
       catalogIndexes.set(indexKey, cachedIndex);
     }
-    const ranked = scoreLexical(cachedIndex.index, tokenizeQuery(query))
-      .toSorted(
-        (a, b) =>
-          Number(isExact(b.value)) - Number(isExact(a.value)) ||
-          Number(b.matchedLiteral) - Number(a.matchedLiteral) ||
-          b.score - a.score ||
-          a.value.id.localeCompare(b.value.id),
-      )
-      .map((hit) => hit.value);
+    const hits = scoreLexical(cachedIndex.index, tokenizeQuery(query));
+    const exactMatchSet = new Set(exactMatches);
     // A tool whose name is a stopword ("do") tokenizes to nothing and so never
     // reaches the ranking at all. Naming it exactly is still an unambiguous
     // request for it, which the previous scorer honored.
-    const exactEntries = exactMatches.filter((entry) => !ranked.includes(entry));
-    return [...exactEntries, ...ranked]
-      .slice(0, limit)
-      .map((entry) => compactToolSearchCatalogEntry(entry));
+    const exactEntries = exactMatches.filter((entry) => !hits.some((hit) => hit.value === entry));
+    const remaining = limit - exactEntries.length;
+    const ranked =
+      remaining > 0
+        ? sortAndLimitBy(
+            hits,
+            remaining,
+            (a, b) =>
+              Number(exactMatchSet.has(b.value)) - Number(exactMatchSet.has(a.value)) ||
+              Number(b.matchedLiteral) - Number(a.matchedLiteral) ||
+              b.score - a.score ||
+              a.value.id.localeCompare(b.value.id),
+          ).map((hit) => hit.value)
+        : [];
+    return [...exactEntries, ...ranked].slice(0, limit).map(compactEntry);
   };
 
   all = (options?: CatalogVisibilityOptions) =>
-    visibleCatalogEntries(resolveCatalog(this.ctx), options).map((entry) =>
-      compactToolSearchCatalogEntry(entry),
-    );
+    visibleCatalogEntries(resolveCatalog(this.ctx), options).map(compactToolSearchCatalogEntry);
 
   namespaceEntries = () =>
     // Snapshot host metadata without rendering hints or retaining the executable tool.
@@ -441,12 +422,17 @@ export class ToolSearchRuntime {
       },
     );
 
-  describe = async (id: string, options?: CatalogVisibilityOptions & UnknownToolErrorOptions) => {
+  describe = async (
+    id: string,
+    options?: CatalogVisibilityOptions & UnknownToolErrorOptions & { parentToolCallId?: string },
+  ) => {
     const catalog = resolveCatalog(this.ctx);
     catalog.describeCount += 1;
-    return describeEntry(
-      findEntry(catalog, id, { ...options, codeModeSkills: this.ctx.codeModeSkills }),
-    );
+    const entry = findEntry(catalog, id, { ...options, codeModeSkills: this.ctx.codeModeSkills });
+    if (entry.source !== "openclaw" && options?.parentToolCallId) {
+      this.observeNetworkContent(options.parentToolCallId);
+    }
+    return describeEntry(entry);
   };
 
   call = async (id: string, input?: unknown, options?: ToolSearchCallOptions) => {
@@ -458,16 +444,7 @@ export class ToolSearchRuntime {
     );
   };
 
-  callExactId = async (
-    id: string,
-    input?: unknown,
-    options?: {
-      parentToolCallId?: string;
-      signal?: AbortSignal;
-      onUpdate?: ToolSearchCallOptions["onUpdate"];
-      recoverySurface?: UnknownToolRecoverySurface;
-    },
-  ) => {
+  callExactId = async (id: string, input?: unknown, options?: ToolSearchExactCallOptions) => {
     const catalog = resolveCatalog(this.ctx);
     return await this.callEntry(
       findEntryByExactId(catalog, id, { ...options, codeModeSkills: this.ctx.codeModeSkills }),
@@ -477,7 +454,16 @@ export class ToolSearchRuntime {
   };
 
   callValue = async (id: string, input?: unknown, options?: ToolSearchCallOptions) =>
-    unwrapToolResultValue((await this.call(id, input, options)).result);
+    projectToolResultValue((await this.call(id, input, options)).result);
+
+  callExactValue = async (id: string, input?: unknown, options?: ToolSearchExactCallOptions) =>
+    projectToolResultValue((await this.callExactId(id, input, options)).result);
+
+  observeNetworkContent(parentToolCallId: string): void {
+    const state = this.networkInvocations.get(parentToolCallId) ?? { active: 0, observed: false };
+    state.observed = true;
+    this.networkInvocations.set(parentToolCallId, state);
+  }
 
   hasNetworkContent(parentToolCallId?: string): boolean {
     return parentToolCallId
@@ -534,18 +520,24 @@ export class ToolSearchRuntime {
     catalog: ToolSearchCatalogSession,
     entry: ToolSearchCatalogEntry,
     input?: unknown,
-    options?: {
-      parentToolCallId?: string;
-      signal?: AbortSignal;
-      onUpdate?: ToolSearchCallOptions["onUpdate"];
-    },
+    options?: Pick<
+      ToolSearchCallOptions,
+      "parentToolCallId" | "signal" | "onUpdate" | "mcpNamespaceGuest"
+    >,
   ) => {
+    this.pluginRuntimeRefresh.assertCurrent();
     catalog.callCount += 1;
     const normalizedInput = input ?? {};
     const parentId = sanitizeToolCallIdPart(options?.parentToolCallId ?? "direct");
-    const toolCallId = `tool_search_code:${parentId}:${entry.name}:${++this.callSequence}`;
+    const toolCallId = `tool_call:${parentId}:${entry.name}:${++this.callSequence}`;
     bindJoinedCollectorInvocation(entry.tool, toolCallId);
     await assertCatalogOutputSchemaIsValid(entry);
+    const outputVariants =
+      entry.source === "openclaw" ? readToolOutputSchemaVariants(entry.outputSchema) : undefined;
+    const callerOutputSelection = outputVariants
+      ? captureToolOutputSelection(outputVariants.inputProperty, normalizedInput)
+      : undefined;
+    let executedOutputSelection: ToolOutputSelection | undefined;
     const executeTool =
       this.ctx.executeTool ??
       (async (params: Parameters<ToolSearchCatalogToolExecutor>[0]) => {
@@ -565,19 +557,41 @@ export class ToolSearchRuntime {
       if (isPreExecutionBlockedToolResult(candidate)) {
         // The JSON-safe snapshot drops the private blocked-result marker.
         preExecutionBlocked = true;
+        if (entry.source === "mcp") {
+          const operation = entry.mcp?.operation ?? "tool";
+          if (operation === "tool") {
+            setMcpCodeModeGuestResultFromAgentResult(candidate);
+          } else if (options?.mcpNamespaceGuest) {
+            const details = isRecord(candidate.details) ? candidate.details : undefined;
+            const reason =
+              typeof details?.reason === "string" && details.reason.trim()
+                ? details.reason.trim()
+                : "Tool call blocked by policy";
+            throw new Error(`Tool "${entry.id}" was blocked before execution: ${reason}`);
+          }
+        }
         await assertCatalogOutputMatchesSchema(entry, candidate);
       }
       const snapshot =
         candidate === acceptedSnapshot
           ? candidate
           : snapshotToolSearchTargetTranscriptResult(candidate);
-      await assertCatalogOutputMatchesSchema(entry, snapshot);
+      await assertCatalogOutputMatchesSchema(entry, snapshot, executedOutputSelection);
+      // Hook rewrites must also satisfy the result type advertised to the caller.
+      if (callerOutputSelection && callerOutputSelection.value !== executedOutputSelection?.value) {
+        await assertCatalogOutputMatchesSchema(entry, snapshot, callerOutputSelection);
+      }
       acceptedSnapshot = snapshot;
       return snapshot;
     };
     const validateInput = this.options.validateInput && entry.source === "openclaw";
-    const executionTool = prepareToolSearchCatalogExecutionTool(entry, this.options);
+    const validateExecution = validateInput || outputVariants !== undefined;
+    const executionTool = prepareToolSearchCatalogExecutionTool(entry, {
+      ...this.options,
+      validateInput: validateExecution,
+    });
     const runExecution = async () => {
+      this.pluginRuntimeRefresh.assertCurrent();
       const parentToolCallId = options?.parentToolCallId ?? toolCallId;
       const signal = options?.signal ?? this.ctx.abortSignal;
       const networkInvocation =
@@ -626,10 +640,21 @@ export class ToolSearchRuntime {
     };
     let acceptedResult: AgentToolResult<unknown> | undefined;
     try {
-      const result = validateInput
+      const result = validateExecution
         ? await runWithToolExecutionValidation(
             toolCallId,
-            async (finalInput) => await assertCatalogInputMatchesSchema(entry, finalInput),
+            async (finalInput) => {
+              if (validateInput) {
+                await assertCatalogInputMatchesSchema(entry, finalInput);
+              }
+              if (outputVariants) {
+                // Retain the prepared primitive, not an input object the tool can mutate.
+                executedOutputSelection = captureToolOutputSelection(
+                  outputVariants.inputProperty,
+                  finalInput,
+                );
+              }
+            },
             runExecution,
           )
         : await runExecution();
@@ -701,4 +726,37 @@ export function formatToolSearchControlError(
 
 function unwrapToolResultValue(result: AgentToolResult<unknown>): unknown {
   return isRecord(result) && "details" in result ? result.details : result;
+}
+
+/**
+ * Project a target result into the value Code Mode guests receive. Output
+ * contracts validate the raw details; only the guest value gains error text.
+ */
+function projectToolResultValue(result: AgentToolResult<unknown>): unknown {
+  if (!isRecord(result) || !("details" in result)) {
+    return result;
+  }
+  const { details } = result;
+  // An explicit error can explain itself only in model-facing text; keep that reason.
+  if (result.isError !== true || hasErrorMessage(details)) {
+    return details;
+  }
+  const message = collectTextContentBlocks(result.content)
+    .map((text) => text.trim())
+    .filter(Boolean)
+    .join("\n");
+  if (!message) {
+    return details;
+  }
+  if (details === undefined || details === null) {
+    return { message };
+  }
+  return isRecord(details) ? { ...details, message } : details;
+}
+
+function hasErrorMessage(details: unknown): boolean {
+  return (
+    isRecord(details) &&
+    [details.message, details.error].some((value) => typeof value === "string" && value.trim())
+  );
 }

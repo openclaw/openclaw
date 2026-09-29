@@ -3,6 +3,24 @@ import type { DesktopCredentials } from "./desktop-panel-connection.ts";
 
 const DESKTOP_CREDENTIALS_REQUIRED_CODE = "DESKTOP_CREDENTIALS_REQUIRED";
 
+export function fromForm(
+  formData: FormData,
+  auth: "vnc-password" | "ard-account" | undefined,
+): DesktopCredentials | undefined {
+  const password = formData.get("password");
+  if (typeof password !== "string" || password.length === 0) {
+    return undefined;
+  }
+  const username = formData.get("username");
+  if (auth === "ard-account" && (typeof username !== "string" || username.trim().length === 0)) {
+    return undefined;
+  }
+  return {
+    ...(typeof username === "string" && username.trim() ? { username: username.trim() } : {}),
+    password,
+  };
+}
+
 export function forObserve(
   source: DesktopSource,
   auth: "vnc-password" | "ard-account" | undefined,
@@ -15,19 +33,37 @@ export function forObserve(
     : undefined;
 }
 
-export function rfbCredentials(
+type DesktopConnectionAuthentication = {
+  credentials: DesktopCredentials | undefined;
+} & (
+  | { phase: "credentials"; auth: "vnc-password" }
+  | { phase: "ready"; auth: "ard-account" | undefined }
+);
+
+export function forConnection(
   observed: DesktopObserveResult,
   saved: DesktopCredentials | undefined,
-): DesktopCredentials | undefined {
-  if (observed.preauthenticated) {
-    return undefined;
-  }
+): DesktopConnectionAuthentication {
   // Worker responses can carry a password without an auth discriminator.
-  return observed.vncPassword
-    ? { password: observed.vncPassword }
-    : observed.auth === "vnc-password"
-      ? saved
-      : undefined;
+  const credentials = observed.preauthenticated
+    ? undefined
+    : observed.vncPassword
+      ? { password: observed.vncPassword }
+      : observed.auth === "vnc-password"
+        ? saved
+        : undefined;
+  if (
+    observed.auth === "vnc-password" &&
+    observed.preauthenticated !== true &&
+    !credentials?.password
+  ) {
+    return { phase: "credentials", auth: "vnc-password", credentials };
+  }
+  return {
+    phase: "ready",
+    auth: observed.auth === "ard-account" ? "ard-account" : undefined,
+    credentials,
+  };
 }
 
 /** Reads the host-observe retry contract without exposing credential material. */

@@ -42,6 +42,7 @@ export async function assertRelayTabCreation(params: {
       query: { profile: "e2e" },
       body: { url },
     });
+    expect(opened.status, JSON.stringify(opened.body)).toBe(200);
     await expect.poll(() => createdPages.length, { message: JSON.stringify(opened) }).toBe(1);
     const created = createdPages[0];
     assert(created);
@@ -102,7 +103,6 @@ export async function assertRelayTabCreation(params: {
       ),
     ).toMatchObject({ title: "OpenClaw" });
     expect(created.initialUrl).toBe("about:blank");
-    expect(opened.status, JSON.stringify(opened.body)).toBe(200);
     const body = opened.body as { targetId: string };
     expect(opened.body).toMatchObject({
       targetId: expect.any(String),

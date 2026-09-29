@@ -32,8 +32,11 @@ refs such as `vercel-ai-gateway/openai/gpt-5.5` and
   <Step title="Install the plugin">
     ```bash
     openclaw plugins install @openclaw/vercel-ai-gateway-provider
-    openclaw gateway restart
     ```
+
+    Installation applies to a running Gateway automatically; otherwise it takes effect
+    on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
+
   </Step>
   <Step title="Set the API key">
     ```bash
@@ -112,6 +115,12 @@ Use either form in your configuration; OpenClaw resolves the canonical
     variants down to `gpt-5.1-codex`) expose `/think xhigh`. Other namespaced
     refs keep the standard reasoning levels unless their catalog metadata
     declares more.
+  </Accordion>
+  <Accordion title="App attribution">
+    Requests to `ai-gateway.vercel.sh` carry Vercel's documented app-attribution
+    headers, `HTTP-Referer: https://openclaw.ai` and `X-Title: OpenClaw`. This
+    also applies to custom provider ids whose `baseUrl` points at AI Gateway.
+    A custom proxy `baseUrl` gets no attribution headers.
   </Accordion>
 </AccordionGroup>
 

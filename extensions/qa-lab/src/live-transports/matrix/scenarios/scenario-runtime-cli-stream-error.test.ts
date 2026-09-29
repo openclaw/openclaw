@@ -3,6 +3,7 @@ import type { ChildProcess } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import { isPidAlive } from "openclaw/plugin-sdk/process-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -71,15 +72,6 @@ async function waitForChildClose(child: ChildProcess | undefined): Promise<void>
   await new Promise<void>((resolve) => {
     child.once("close", () => resolve());
   });
-}
-
-function isProcessRunning(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 async function waitForPidFile(pathToCheck: string, timeoutMs: number): Promise<number> {
@@ -158,11 +150,11 @@ describe("Matrix QA CLI runtime stream errors", () => {
           `${streamName} stream error: ${streamName} pipe failed`,
         );
         expect(childClosed).toBe(true);
-        expect(isProcessRunning(grandchildPid)).toBe(false);
+        expect(isPidAlive(grandchildPid)).toBe(false);
       } finally {
         session?.kill();
         await waitForChildClose(child);
-        if (grandchildPid && isProcessRunning(grandchildPid)) {
+        if (grandchildPid && isPidAlive(grandchildPid)) {
           process.kill(grandchildPid, "SIGKILL");
         }
         await rm(root, { force: true, recursive: true });

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { cp, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { cp, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { createServer as createHttpServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -16,7 +16,7 @@ import {
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startProductionControlUiE2eServer,
-  type ControlUiE2eServer,
+  type ControlUiE2eProductionServer,
 } from "../test-helpers/control-ui-e2e.ts";
 
 const useWebKit = process.env.OPENCLAW_CONTROL_UI_E2E_BROWSER === "webkit";
@@ -46,7 +46,7 @@ type InstallGate = {
 
 let browser: Browser;
 let outDir: string;
-let server: ControlUiE2eServer;
+let server: ControlUiE2eProductionServer;
 let buildBPromise: Promise<void> | undefined;
 
 async function stageBuildB(destination: string): Promise<void> {
@@ -380,8 +380,7 @@ describe("Control UI service-worker production update E2E", () => {
         await editor.fill(draft);
         await stageBuildB(nextDir);
         await page.evaluate(() => sessionStorage.setItem("test-missed-activation", "1"));
-        await rename(outDir, previousDir);
-        await rename(nextDir, outDir);
+        await server.replaceBuild(nextDir, previousDir);
         swapped = true;
         await page.evaluate(async () => {
           await (await navigator.serviceWorker.getRegistration())?.update();
@@ -434,8 +433,7 @@ describe("Control UI service-worker production update E2E", () => {
       } finally {
         await context.close();
         if (swapped) {
-          await rename(outDir, nextDir);
-          await rename(previousDir, outDir);
+          await server.replaceBuild(previousDir, nextDir);
         }
         await rm(nextDir, { recursive: true, force: true });
       }
@@ -460,25 +458,22 @@ describe("Control UI service-worker production update E2E", () => {
       defaultAgentId: "research",
       serverBuildId: buildA,
       serverVersion: "2026.7.10",
-      featureMethods: ["terminal.open"],
+      featureMethods: ["terminal.open", "terminal.attach"],
       methodResponses: {
-        "terminal.open": {
+        "terminal.attach": {
           agentId: "research",
           confined: false,
           cwd: "/workspace/research",
           sessionId: "terminal-after-worker-refresh",
           shell: "/bin/bash",
+          buffer: "restored terminal output",
+          seq: 24,
+          owner: "agent:research:main",
         },
       },
       terminalEnabled: true,
     });
-    const getCatalogOpens = async () =>
-      (await gateway.getRequests("terminal.open")).filter(
-        (request) =>
-          typeof request.params === "object" &&
-          request.params !== null &&
-          "catalog" in request.params,
-      );
+    const getTerminalAttaches = () => gateway.getRequests("terminal.attach");
     let installGate: InstallGate | null = null;
 
     try {
@@ -547,8 +542,7 @@ describe("Control UI service-worker production update E2E", () => {
           | null;
         return panel?.available === false;
       });
-      await rename(outDir, previousOutDir);
-      await rename(nextOutDir, outDir);
+      await server.replaceBuild(nextOutDir, previousOutDir);
       await rm(previousOutDir, { force: true, recursive: true });
       // Assets and Gateway identity advance together in a deployment. Publish
       // build B before a stale lazy chunk can reload and reconnect the document.
@@ -574,22 +568,18 @@ describe("Control UI service-worker production update E2E", () => {
           new CustomEvent("openclaw:terminal-toggle", {
             detail: {
               open: true,
-              catalog: {
-                catalogId: "codex",
-                hostId: "gateway:local",
-                threadId: "thread-during-worker-refresh",
-              },
+              terminalSessionId: "terminal-after-worker-refresh",
             },
           }),
         );
       });
       await expect
         .poll(() => page.evaluate(() => sessionStorage.getItem("openclaw.terminal.actions.v1")))
-        .toContain("thread-during-worker-refresh");
+        .toContain("terminal-after-worker-refresh");
       await page.waitForTimeout(300);
-      const catalogOpensBeforeWorkerActivation = await getCatalogOpens();
-      expect(catalogOpensBeforeWorkerActivation.length).toBeLessThanOrEqual(1);
-      if (catalogOpensBeforeWorkerActivation.length > 0) {
+      const attachesBeforeWorkerActivation = await getTerminalAttaches();
+      expect(attachesBeforeWorkerActivation.length).toBeLessThanOrEqual(1);
+      if (attachesBeforeWorkerActivation.length > 0) {
         const currentConnect = (await gateway.getRequests("connect")).at(-1);
         expect(currentConnect?.params).toMatchObject({ client: { buildId: buildB } });
       }
@@ -620,22 +610,14 @@ describe("Control UI service-worker production update E2E", () => {
         .toEqual({ agentId: "research", available: true, open: true });
       // Panel visibility precedes asynchronous terminal boot and RPC dispatch.
       // Observe the request and finish its intent before counting exactly once.
-      await expect.poll(getCatalogOpens).toHaveLength(1);
+      await expect.poll(getTerminalAttaches).toHaveLength(1);
       await expect
         .poll(() => page.evaluate(() => sessionStorage.getItem("openclaw.terminal.actions.v1")))
         .toBeNull();
-      const catalogOpens = await getCatalogOpens();
-      expect(catalogOpens).toHaveLength(1);
-      const [terminalOpen] = catalogOpens;
-      expect(terminalOpen?.params).toMatchObject({
-        agentId: "research",
-        cols: expect.any(Number),
-        rows: expect.any(Number),
-        catalog: {
-          catalogId: "codex",
-          hostId: "gateway:local",
-          threadId: "thread-during-worker-refresh",
-        },
+      const terminalAttaches = await getTerminalAttaches();
+      expect(terminalAttaches).toHaveLength(1);
+      expect(terminalAttaches[0]?.params).toEqual({
+        sessionId: "terminal-after-worker-refresh",
       });
 
       await expect

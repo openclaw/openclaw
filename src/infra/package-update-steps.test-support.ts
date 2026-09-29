@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { writePackageDistInventory } from "../../scripts/lib/package-dist-inventory.ts";
-import type { CommandRunner, ResolvedGlobalInstallTarget } from "./update-global.js";
+import type { CommandRunner } from "./update-global-command-runner.js";
+import type { ResolvedGlobalInstallTarget } from "./update-global.js";
 
 export async function writePackageRoot(packageRoot: string, version: string): Promise<void> {
   await fs.mkdir(path.join(packageRoot, "dist"), { recursive: true });

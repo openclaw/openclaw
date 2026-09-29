@@ -23,6 +23,7 @@ describe("createOverlayHandlers", () => {
       focus: vi.fn(),
       unfocus: vi.fn(),
       isFocused: vi.fn(() => true),
+      getBounds: () => undefined,
     } satisfies OverlayHandle;
     let open = false;
 
@@ -62,6 +63,7 @@ describe("createOverlayHandlers", () => {
       focus: vi.fn(),
       unfocus: vi.fn(),
       isFocused: vi.fn(() => false),
+      getBounds: () => undefined,
     } satisfies OverlayHandle;
     const host = {
       showOverlay: vi.fn(() => handle),
@@ -89,6 +91,7 @@ describe("createOverlayHandlers", () => {
         focus: vi.fn(),
         unfocus: vi.fn(),
         isFocused: vi.fn(() => false),
+        getBounds: () => undefined,
       }) satisfies OverlayHandle;
     const host = {
       showOverlay: vi.fn(),

@@ -101,7 +101,8 @@ calls, but do not replace the plugin's startup owner.
 
 If startup reports that Voice Call has no explicit owner, list your agents with
 `openclaw agents list`, set the existing `agentId` field, and rerun
-`openclaw voicecall setup`. Restart the Gateway after updating its configuration.
+`openclaw voicecall setup`. With the default hybrid reload mode, the configuration
+change reloads the plugin automatically; see [Hot reload](/gateway/configuration/hot-reload).
 Existing legacy default-agent selection is preserved; new multi-agent setups
 should use an explicit owner. See [Agent configuration](/gateway/config-agents).
 
@@ -167,7 +168,7 @@ that Region. See
     - `streaming.sttModel` → `streaming.providers.openai.model`
     - `streaming.silenceDurationMs` → `streaming.providers.openai.silenceDurationMs`
     - `streaming.vadThreshold` → `streaming.providers.openai.vadThreshold`
-    - `realtime.agentContext.includeSystemPrompt` is removed (realtime context now uses the generated agent prompt)
+    - `realtime.agentContext.includeSystemPrompt` is removed. Hosts with the shared context resolver always include agent-context guidance; `realtime.agentContext` controls optional configured identity and profile files. Supported older hosts retain their optional, bounded context capsule. See [Agent voice context](/plugins/voice-call/realtime-and-streaming#agent-voice-context).
 
   </Accordion>
 </AccordionGroup>

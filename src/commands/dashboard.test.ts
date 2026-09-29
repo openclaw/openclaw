@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBindMode } from "../config/types.gateway.js";
 import { dashboardCommand } from "./dashboard.js";
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   readConfigFileSnapshot: vi.fn(),
@@ -48,11 +49,7 @@ vi.mock("./control-ui-handoff.js", async (importOriginal) => ({
   waitForControlUiDocument: mocks.waitForControlUiDocument,
 }));
 
-const runtime = {
-  log: vi.fn(),
-  error: vi.fn(),
-  exit: vi.fn(),
-};
+const runtime = createTestRuntime();
 
 type SnapshotParams = {
   token?: string;

@@ -26,7 +26,7 @@ const completion = vi.hoisted(() => ({
 
 vi.mock("../agents/simple-completion-runtime.js", () => ({
   completeWithPreparedSimpleCompletionModel: completion.complete,
-  acquireSimpleCompletionModel: completion.prepare,
+  acquireSimpleCompletionModelWithSelection: completion.prepare,
 }));
 
 const model = {
@@ -75,6 +75,7 @@ beforeEach(() => {
   installSpeechProviders([createMockSpeechProvider()]);
   completion.complete.mockReset();
   completion.prepare.mockReturnValue({
+    async [Symbol.asyncDispose]() {},
     model,
     auth: { apiKey: "synthetic-test-key", source: "test", mode: "api-key" },
     release: () => {},

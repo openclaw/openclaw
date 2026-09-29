@@ -1,4 +1,7 @@
 // Node proxy agent tests cover shared Node HTTP(S) proxy agent construction.
+import { request as httpRequest } from "node:http";
+import { request as httpsRequest } from "node:https";
+import { inspect } from "node:util";
 import { describe, expect, it } from "vitest";
 import { withEnv } from "../../test-utils/env.js";
 import { createNodeProxyAgent, resolveEnvNodeProxyUrlForTarget } from "./node-proxy-agent.js";
@@ -56,6 +59,45 @@ describe("resolveEnvNodeProxyUrlForTarget", () => {
 });
 
 describe("createNodeProxyAgent", () => {
+  it("rejects unusable env proxies at either Node request boundary", () => {
+    withProxyEnv({ HTTP_PROXY: "socks5://proxy.example:1080" }, () => {
+      const agent = createNodeProxyAgent({ mode: "env" });
+      expect(agent).toBeDefined();
+      try {
+        for (const request of [httpRequest, httpsRequest]) {
+          expect(() => request({ hostname: "upload.invalid", agent }).destroy()).toThrow(
+            "Unsupported proxy protocol",
+          );
+        }
+      } finally {
+        agent?.destroy();
+      }
+    });
+  });
+
+  it.each(["env", "explicit"] as const)(
+    "keeps malformed %s proxy credentials out of errors",
+    (mode) => {
+      const proxyUrl = "https://qa-user:qa-password@[invalid";
+      withProxyEnv({ HTTPS_PROXY: proxyUrl }, () => {
+        let error: unknown;
+        try {
+          if (mode === "env") {
+            createNodeProxyAgent({ mode, targetUrl: "https://collector.example.test" });
+          } else {
+            createNodeProxyAgent({ mode, proxyUrl });
+          }
+        } catch (cause) {
+          error = cause;
+        }
+        expect(error).toMatchObject({ message: expect.stringContaining("Invalid proxy URL") });
+        const rendered = inspect(error, { depth: null });
+        expect(rendered).not.toContain("qa-user");
+        expect(rendered).not.toContain("qa-password");
+      });
+    },
+  );
+
   it("preserves caller Node agent options on env proxy agents", () => {
     withProxyEnv({ HTTPS_PROXY: "http://proxy.example:8080" }, () => {
       const agent = createNodeProxyAgent({

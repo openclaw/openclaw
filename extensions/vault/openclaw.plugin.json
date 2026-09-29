@@ -1,6 +1,6 @@
 {
   "id": "vault",
-  "categories": ["security", "tools"],
+  "categories": ["security"],
   "name": "Vault",
   "description": "HashiCorp Vault SecretRef provider integration.",
   "cliCommands": [

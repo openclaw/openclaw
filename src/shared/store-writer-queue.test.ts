@@ -1,14 +1,20 @@
 // Verifies queue ownership and reentrancy across separately loaded runtime chunks.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { performance } from "node:perf_hooks";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
-import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { beforeEach, expect, it, vi } from "vitest";
+import { createDeferred, drainStoreWriterQueuesForTest } from "../../test/helpers/promise.js";
 import {
   runQueuedStoreWrite,
+  clearStoreWriterQueuesForTest,
   type StoreWriterQueue,
   type StoreWriterTiming,
 } from "./store-writer-queue.js";
+
+beforeEach(async () => {
+  await nextTurn();
+});
 
 it("marks idle and reentrant execution without deferring either callback", async () => {
   const queues = new Map<string, StoreWriterQueue>();
@@ -56,6 +62,168 @@ it("marks idle and reentrant execution without deferring either callback", async
   }
 });
 
+it.each(["fulfilled", "rejected", "rejected-undefined"] as const)(
+  "shares a bounded turn across ready writers while serving I/O (outcome: %s)",
+  async (outcome) => {
+    const queues = new Map<string, StoreWriterQueue>();
+    const gate = createDeferred();
+    const order: number[] = [];
+    const failed = outcome !== "fulfilled";
+    const failure =
+      outcome === "rejected-undefined" ? undefined : new Error("synthetic writer failure");
+    const rejectWrite = vi.fn<() => Promise<never>>().mockRejectedValue(failure);
+    const clock = vi.spyOn(performance, "now").mockReturnValue(0);
+    const first = runQueuedStoreWrite({
+      queues,
+      storePath: "fair-store",
+      label: "held-first",
+      fn: async () => await gate.promise,
+    });
+    const writes = Array.from({ length: 8 }, (_, index) =>
+      runQueuedStoreWrite({
+        queues,
+        storePath: "fair-store",
+        label: "queued",
+        fn: async () => {
+          order.push(index);
+          if (failed) {
+            return rejectWrite();
+          }
+          return index;
+        },
+      }),
+    );
+    const settled = Promise.allSettled(writes);
+    const ioProgress = nextTurn().then(() => order.length);
+    gate.resolve();
+    try {
+      const completedAtIoTurn = await ioProgress;
+      await first;
+      const results = await settled;
+
+      expect(completedAtIoTurn).toBeGreaterThan(0);
+      expect(completedAtIoTurn).toBeLessThan(writes.length);
+      expect(order).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
+      expect(results).toEqual(
+        order.map((value) =>
+          failed ? { status: "rejected", reason: failure } : { status: "fulfilled", value },
+        ),
+      );
+      expect(queues.size).toBe(0);
+    } finally {
+      await first;
+      await settled;
+      clock.mockRestore();
+    }
+  },
+);
+
+it("yields after one expensive ready writer before running its successors", async () => {
+  const queues = new Map<string, StoreWriterQueue>();
+  const gate = createDeferred();
+  const order: number[] = [];
+  let now = 0;
+  const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
+  const first = runQueuedStoreWrite({
+    queues,
+    storePath: "expensive-store",
+    label: "held-first",
+    fn: async () => gate.promise,
+  });
+  const writes = Array.from({ length: 8 }, (_, index) =>
+    runQueuedStoreWrite({
+      queues,
+      storePath: "expensive-store",
+      label: "ready",
+      fn: async () => {
+        order.push(index);
+        now += 10;
+        return index;
+      },
+    }),
+  );
+  const settled = Promise.all(writes);
+  const ioProgress = nextTurn().then(() => order.length);
+  gate.resolve();
+  try {
+    expect(await ioProgress).toBe(1);
+    expect(await settled).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
+    expect(queues.size).toBe(0);
+  } finally {
+    await first;
+    await settled;
+    clock.mockRestore();
+  }
+});
+
+it("keeps I/O progressing across store backlogs in separate runtime chunks", async () => {
+  const sibling = await importFreshModule<typeof import("./store-writer-queue.js")>(
+    import.meta.url,
+    "./store-writer-queue.js?scope=shared-turn-budget",
+  );
+  const queues = new Map<string, StoreWriterQueue>();
+  const gate = createDeferred();
+  const orders = Array.from({ length: 8 }, () => [] as number[]);
+  const clock = vi.spyOn(performance, "now").mockReturnValue(0);
+  let completed = 0;
+  let done = false;
+  const batches: number[] = [];
+  const writers = orders.flatMap((order, store) => {
+    const enqueue = store % 2 === 0 ? runQueuedStoreWrite : sibling.runQueuedStoreWrite;
+    const storePath = `fair-store-${store}`;
+    const first = enqueue({
+      queues,
+      storePath,
+      label: "held-first",
+      fn: async () => gate.promise,
+    });
+    return [
+      first,
+      ...Array.from({ length: 8 }, (_, value) =>
+        enqueue({
+          queues,
+          storePath,
+          label: "queued",
+          fn: async () => {
+            order.push(value);
+            completed++;
+          },
+        }),
+      ),
+    ];
+  });
+  const settled = Promise.all(writers).finally(() => {
+    done = true;
+  });
+  const ioProgress = (async () => {
+    let previous = 0;
+    for (;;) {
+      await nextTurn();
+      batches.push(completed - previous);
+      previous = completed;
+      if (done) {
+        break;
+      }
+    }
+  })();
+  gate.resolve();
+  try {
+    await settled;
+    await ioProgress;
+    // I/O must not wait for even one successor from every busy store at once.
+    expect(Math.max(...batches)).toBeLessThan(orders.length);
+    expect(completed).toBe(64);
+    for (const order of orders) {
+      expect(order).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
+    }
+    expect(queues.size).toBe(0);
+  } finally {
+    await settled;
+    await ioProgress;
+    clock.mockRestore();
+  }
+});
+
 it("retains each queued writer's caller context through async and reentrant work", async () => {
   const contexts = new AsyncLocalStorage<string>();
   const queues = new Map<string, StoreWriterQueue>();
@@ -85,8 +253,243 @@ it("retains each queued writer's caller context through async and reentrant work
   expect(queues.size).toBe(0);
 });
 
+it("admits disjoint keys without bypassing an earlier overlapping waiter", async () => {
+  vi.useFakeTimers();
+  const queues = new Map<string, StoreWriterQueue>();
+  const releaseFirst = createDeferred();
+  const joinedEntered = createDeferred();
+  const releaseJoined = createDeferred();
+  const order: string[] = [];
+  const write = (keys: string[], name: string, run: () => Promise<void>) =>
+    runQueuedStoreWrite({
+      queues,
+      storePath: "keyed-fifo",
+      label: name,
+      keys,
+      fn: async () => {
+        order.push(name);
+        await run();
+      },
+    });
+  const first = write(["a"], "first", () => releaseFirst.promise);
+  const joined = write(["a", "b"], "joined", async () => {
+    joinedEntered.resolve();
+    await releaseJoined.promise;
+  });
+  const follower = write(["b"], "follower", async () => {});
+  const independent = write(["c"], "independent", async () => {});
+
+  try {
+    await vi.advanceTimersByTimeAsync(0);
+    expect(order).toEqual(["first", "independent"]);
+    releaseFirst.resolve();
+    await joinedEntered.promise;
+    expect(order).toEqual(["first", "independent", "joined"]);
+    releaseJoined.resolve();
+    await Promise.all([first, joined, follower]);
+    expect(order).toEqual(["first", "independent", "joined", "follower"]);
+  } finally {
+    releaseFirst.resolve();
+    releaseJoined.resolve();
+    await Promise.allSettled([first, joined, follower, independent]);
+    vi.useRealTimers();
+  }
+});
+
+it("holds a full-store barrier until every keyed writer settles and excludes later keys", async () => {
+  const queues = new Map<string, StoreWriterQueue>();
+  const gates = [
+    { key: "a", entered: createDeferred(), release: createDeferred() },
+    { key: "b", entered: createDeferred(), release: createDeferred() },
+  ] as const;
+  const barrierEntered = createDeferred();
+  const releaseBarrier = createDeferred();
+  const order: string[] = [];
+  const writers = gates.map(({ key, entered, release }) =>
+    runQueuedStoreWrite({
+      queues,
+      storePath: "keyed-barrier",
+      label: key,
+      keys: [key],
+      fn: async () => {
+        entered.resolve();
+        await release.promise;
+        order.push(key);
+      },
+    }),
+  );
+  const barrier = runQueuedStoreWrite({
+    queues,
+    storePath: "keyed-barrier",
+    label: "barrier",
+    fn: async () => {
+      order.push("barrier");
+      barrierEntered.resolve();
+      await releaseBarrier.promise;
+    },
+  });
+  const later = runQueuedStoreWrite({
+    queues,
+    storePath: "keyed-barrier",
+    label: "later",
+    keys: ["c"],
+    fn: async () => {
+      order.push("later");
+    },
+  });
+
+  try {
+    await Promise.all(gates.map(({ entered }) => entered.promise));
+    gates[0].release.resolve();
+    await writers[0];
+    expect(order).toEqual(["a"]);
+    gates[1].release.resolve();
+    await barrierEntered.promise;
+    expect(order).toEqual(["a", "b", "barrier"]);
+    releaseBarrier.resolve();
+    await Promise.all([...writers, barrier, later]);
+    expect(order).toEqual(["a", "b", "barrier", "later"]);
+  } finally {
+    for (const { release } of gates) {
+      release.resolve();
+    }
+    releaseBarrier.resolve();
+    await Promise.allSettled([...writers, barrier, later]);
+  }
+});
+
+it("cancels an overlapping waiter while retaining keyed caller context and active settlement", async () => {
+  const contexts = new AsyncLocalStorage<string>();
+  const queues = new Map<string, StoreWriterQueue>();
+  const releaseActive = createDeferred();
+  const activeController = new AbortController();
+  const waitingController = new AbortController();
+  const denied = new Error("keyed writer revoked");
+  const order: string[] = [];
+  const write = (owner: string, keys: string[], wait: Promise<void>, signal?: AbortSignal) =>
+    contexts.run(owner, () =>
+      runQueuedStoreWrite({
+        queues,
+        storePath: "keyed-cancellation",
+        label: owner,
+        keys,
+        signal,
+        fn: async () => {
+          order.push(owner);
+          await wait;
+          return runQueuedStoreWrite({
+            queues,
+            storePath: "keyed-cancellation",
+            label: "retained-owner",
+            keys,
+            reentrant: true,
+            fn: async () => contexts.getStore(),
+          });
+        },
+      }),
+    );
+  const active = write("active", ["a"], releaseActive.promise, activeController.signal);
+  const canceled = write("canceled", ["a", "b"], Promise.resolve(), waitingController.signal);
+  const canceledOutcome = expect(canceled).rejects.toBe(denied);
+  const independent = write("independent", ["b"], Promise.resolve());
+  const follower = write("follower", ["a"], Promise.resolve());
+
+  try {
+    activeController.abort(denied);
+    waitingController.abort(denied);
+    await canceledOutcome;
+    await expect(independent).resolves.toBe("independent");
+    expect(order).toEqual(["active", "independent"]);
+    releaseActive.resolve();
+    await expect(Promise.all([active, follower])).resolves.toEqual(["active", "follower"]);
+    expect(order).toEqual(["active", "independent", "follower"]);
+  } finally {
+    releaseActive.resolve();
+    await Promise.allSettled([active, canceled, independent, follower, canceledOutcome]);
+  }
+});
+
+it("reenters only keys covered by the active writer", async () => {
+  const queues = new Map<string, StoreWriterQueue>();
+  const expanded = vi.fn(async () => {});
+  const value = await runQueuedStoreWrite({
+    queues,
+    storePath: "keyed-reentrancy",
+    label: "outer",
+    keys: ["a", "b"],
+    fn: async () => {
+      const nested = await runQueuedStoreWrite({
+        queues,
+        storePath: "keyed-reentrancy",
+        label: "covered",
+        keys: ["a"],
+        reentrant: true,
+        fn: async () => "covered",
+      });
+      for (const keys of [["a", "c"], undefined]) {
+        await expect(
+          runQueuedStoreWrite({
+            queues,
+            storePath: "keyed-reentrancy",
+            label: "expanded",
+            keys,
+            reentrant: true,
+            fn: expanded,
+          }),
+        ).rejects.toThrow("Cannot expand an active store writer's keys");
+      }
+      return nested;
+    },
+  });
+  expect(value).toBe("covered");
+  expect(expanded).not.toHaveBeenCalled();
+});
+
+it("cancels only waiting writers while retaining active settlement and follower FIFO", async () => {
+  const queues = new Map<string, StoreWriterQueue>();
+  const release = createDeferred();
+  const activeController = new AbortController();
+  const waitingController = new AbortController();
+  const denied = new Error("writer revoked before admission");
+  const calls: string[] = [];
+  const write = (fn: () => Promise<string>, signal?: AbortSignal) =>
+    runQueuedStoreWrite({ queues, storePath: "cancelable", label: "cancelable", fn, signal });
+  const active = write(async () => {
+    calls.push("active");
+    await release.promise;
+    calls.push("settled");
+    return "committed";
+  }, activeController.signal);
+  const canceled = write(async () => {
+    calls.push("canceled");
+    return "forbidden";
+  }, waitingController.signal);
+  const outcome = canceled.catch((error: unknown) => error);
+  const followers = ["first", "second"].map((name) =>
+    write(async () => {
+      calls.push(name);
+      return name;
+    }),
+  );
+  try {
+    activeController.abort(denied);
+    waitingController.abort(denied);
+    expect(await Promise.race([outcome, nextTurn().then(() => "still queued")])).toBe(denied);
+    await expect(write(async () => "forbidden", waitingController.signal)).rejects.toBe(denied);
+    expect(calls).toEqual(["active"]);
+    release.resolve();
+    await expect(active).resolves.toBe("committed");
+    await expect(Promise.all(followers)).resolves.toEqual(["first", "second"]);
+    expect(calls).toEqual(["active", "settled", "first", "second"]);
+  } finally {
+    release.resolve();
+    await Promise.allSettled([active, canceled, ...followers]);
+  }
+});
+
 it("queues ordinary nested writes behind the active writer", async () => {
   const queues = new Map<string, StoreWriterQueue>();
+  const releaseOuter = createDeferred();
   const order: string[] = [];
   let nested: Promise<unknown> | undefined;
 
@@ -105,14 +508,23 @@ it("queues ordinary nested writes behind the active writer", async () => {
           return "inner-result";
         },
       });
+      await releaseOuter.promise;
       order.push("outer:end");
       return "outer-result";
     },
   });
 
+  try {
+    await nextTurn();
+    expect(order).toEqual(["outer:start"]);
+  } finally {
+    releaseOuter.resolve();
+    await outer;
+    await nested;
+  }
   await expect(outer).resolves.toBe("outer-result");
-  expect(order).toEqual(["outer:start", "outer:end", "inner"]);
   await expect(nested).resolves.toBe("inner-result");
+  expect(order).toEqual(["outer:start", "outer:end", "inner"]);
   expect(queues.size).toBe(0);
 });
 
@@ -153,3 +565,68 @@ it("shares reentrant writer context across duplicate module instances", async ()
   expect(order).toEqual(["outer:start", "inner", "outer:end"]);
   expect(queues.size).toBe(0);
 });
+
+it("keeps an active writer's lane through clear cleanup", async () => {
+  const queues = new Map<string, StoreWriterQueue>();
+  const gate = createDeferred();
+  const active = runQueuedStoreWrite({
+    queues,
+    storePath: "cleanup",
+    label: "active",
+    fn: () => gate.promise,
+  });
+  clearStoreWriterQueuesForTest(queues, "test cleanup");
+  let laterStarted = false;
+  const later = runQueuedStoreWrite({
+    queues,
+    storePath: "cleanup",
+    label: "later",
+    fn: async () => {
+      laterStarted = true;
+    },
+  });
+  // A fresh lane would admit this writer while the active one still owns the store.
+  expect(laterStarted).toBe(false);
+  gate.resolve();
+  await Promise.all([active, later]);
+  expect(laterStarted).toBe(true);
+  expect(queues.size).toBe(0);
+});
+
+it.each(["clear", "drain"] as const)(
+  "never invokes rejected pending writers after %s cleanup settles",
+  async (mode) => {
+    const queues = new Map<string, StoreWriterQueue>();
+    const gate = createDeferred();
+    const active = runQueuedStoreWrite({
+      queues,
+      storePath: "cleanup",
+      label: "active",
+      fn: () => gate.promise,
+    });
+    const pendingWriter = vi.fn(async () => undefined);
+    const pending = runQueuedStoreWrite({
+      queues,
+      storePath: "cleanup",
+      label: "pending",
+      fn: pendingWriter,
+    });
+    const activeDrain = queues.get("cleanup")?.drainPromise;
+    const rejected = expect(pending).rejects.toThrow("test cleanup");
+    const cleanup =
+      mode === "clear"
+        ? Promise.resolve(clearStoreWriterQueuesForTest(queues, "test cleanup"))
+        : drainStoreWriterQueuesForTest(queues, "test cleanup");
+    try {
+      expect(activeDrain).toBeInstanceOf(Promise);
+      await rejected;
+      expect(pendingWriter).not.toHaveBeenCalled();
+      gate.resolve();
+      await Promise.all([active, activeDrain, cleanup]);
+      expect(pendingWriter).not.toHaveBeenCalled();
+    } finally {
+      gate.resolve();
+      await Promise.allSettled([active, pending, activeDrain, cleanup]);
+    }
+  },
+);

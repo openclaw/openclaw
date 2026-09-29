@@ -11,8 +11,10 @@ Install the official `comfy` plugin for workflow-driven ComfyUI runs:
 
 ```bash
 openclaw plugins install @openclaw/comfy-provider
-openclaw gateway restart
 ```
+
+Installation applies to a running Gateway automatically; otherwise it takes effect
+on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 
 The plugin is entirely workflow-driven: OpenClaw does not map generic `size`,
 `aspectRatio`, `resolution`, `durationSeconds`, or TTS-style controls onto

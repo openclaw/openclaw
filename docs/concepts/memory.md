@@ -156,6 +156,20 @@ The agent has three tools for working with memory:
 
 All three tools are provided by the active memory plugin (default: `memory-core`).
 
+When session indexing is enabled, `memory_search` can also return session
+transcript hits. Their `sessions/...jsonl` paths are search references, not files
+that `memory_get` can read. Use `sessions_search` with distinctive text from the
+snippet (optionally scope `sessionKey` to the transcript ID), then pass its returned
+`sessionKey`, `messageId`, and `sessionId` to `sessions_history` for a bounded,
+sanitized excerpt. These tools enforce session visibility independently on each
+request. Memory-search line numbers are not session-history offsets.
+
+The recall prompt recommends only enabled tools. Without session-history tools,
+report the excerpt limitation instead of reading raw transcript files.
+`memory_get` reports unsupported paths as read errors, not missing arguments or a
+globally disabled memory service. Memory-file reads and optional wiki reads keep
+their existing range, continuation, and partial-corpus semantics.
+
 ## Memory search
 
 When an embedding provider is configured, `memory_search` uses hybrid search:
@@ -322,6 +336,7 @@ openclaw memory index --force   # Rebuild the index
 
 ## Further reading
 
+- [Memory architecture](/concepts/memory-architecture): the storage, indexing, and retrieval layers behind every memory feature.
 - [Memory search](/concepts/memory-search): search pipeline, providers, and tuning.
 - [Builtin memory engine](/concepts/memory-builtin): default SQLite backend.
 - [Honcho memory](/concepts/memory-honcho): AI-native cross-session memory.

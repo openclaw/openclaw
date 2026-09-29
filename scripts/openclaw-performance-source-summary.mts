@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 
-// Summarizes OpenClaw performance source fixtures for reports.
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
@@ -8,7 +7,9 @@ import { pathToFileURL } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { requireOptionArgument } from "./lib/arg-utils.mts";
 import {
+  assertCompatibleCliStartupExecutionModes,
   assertCompatibleCliStartupMemoryMetrics,
+  cliStartupExecutionMode,
   cliStartupMemoryMetric,
 } from "./lib/cli-startup-memory-contract.mts";
 import { isStartupTraceDuration } from "./lib/gateway-startup-trace-ranking.js";
@@ -18,22 +19,8 @@ type JsonObject = { [key: string]: JsonValue };
 type JsonValue = boolean | number | string | null | JsonObject | JsonValue[];
 type RequiredOption = { required?: boolean };
 
-function isJsonValue(value: unknown): value is JsonValue {
-  if (value === null || ["boolean", "number", "string"].includes(typeof value)) {
-    return true;
-  }
-  if (Array.isArray(value)) {
-    return value.every(isJsonValue);
-  }
-  return isRecord(value) && Object.values(value).every(isJsonValue);
-}
-
 function parseJson(source: string): JsonValue {
-  const value: unknown = JSON.parse(source);
-  if (!isJsonValue(value)) {
-    throw new Error("parsed value is not JSON");
-  }
-  return value;
+  return JSON.parse(source) as JsonValue;
 }
 
 function isJsonObject(value: JsonValue | undefined): value is JsonObject {
@@ -303,6 +290,7 @@ function validateStartupArtifact(startup: JsonValue, filePath: string) {
 }
 
 function validateCliArtifact(cli: JsonValue, filePath: string) {
+  cliStartupExecutionMode(valueAt(cli, "primary"));
   cliStartupMemoryMetric(valueAt(cli, "primary"));
   const cases = objectArray(valueAt(cli, "primary", "cases"));
   if (cases.length === 0) {
@@ -639,6 +627,10 @@ function buildCliMemoryDeltaRows(current: JsonValue, baseline: JsonValue) {
   if (!current || !baseline) {
     return [];
   }
+  assertCompatibleCliStartupExecutionModes(
+    valueAt(baseline, "primary"),
+    valueAt(current, "primary"),
+  );
   assertCompatibleCliStartupMemoryMetrics(
     valueAt(baseline, "primary"),
     valueAt(current, "primary"),

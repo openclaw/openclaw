@@ -9,7 +9,7 @@ const WEBMCP_OUTCOME_UNKNOWN_MESSAGE =
 const RETRY_ADVICE_SENTENCE_RE = /[^.!?|]*\bretry the browser tool\b[^.!?|]*[.!?]?/gi;
 
 /** Keep structured failure identity without retaining original messages or cause objects. */
-function sanitizedTransportCause(source: unknown, message: string): Error {
+function sanitizedTransportCause(source: unknown, message: string, mcpTimeoutCode: number): Error {
   const root = new Error(message);
   const copies = new Map<object, Error>();
   const pending = [{ source, target: root }];
@@ -28,7 +28,10 @@ function sanitizedTransportCause(source: unknown, message: string): Error {
       } catch {
         continue;
       }
-      if (key !== "cause" && typeof value === "string") {
+      if (key === "code" && value === mcpTimeoutCode) {
+        // Adapt the SDK's numeric deadline to the shared tool classifier's timeout contract.
+        Object.defineProperty(target, key, { value: "ETIMEDOUT", configurable: true });
+      } else if (key !== "cause" && typeof value === "string") {
         // Identity tokens cannot carry prose or reintroduce stripped retry instructions.
         const token = key === "name" ? value : value.trim();
         if (/^[a-z0-9_]{1,128}$/i.test(token)) {
@@ -59,7 +62,7 @@ function sanitizedTransportCause(source: unknown, message: string): Error {
  * formatters print the whole cause graph, so the original error is not chained verbatim: its
  * flattened detail is kept as the cause with every retry hint removed.
  */
-function webMcpOutcomeUnknownError(transportError: unknown): Error {
+function webMcpOutcomeUnknownError(transportError: unknown, mcpTimeoutCode: number): Error {
   const detail = stripBrowserToolModelHints(formatErrorMessage(transportError))
     .replace(RETRY_ADVICE_SENTENCE_RE, "")
     .replace(/^Error:\s*/, "")
@@ -69,6 +72,7 @@ function webMcpOutcomeUnknownError(transportError: unknown): Error {
     cause: sanitizedTransportCause(
       transportError,
       detail === WEBMCP_OUTCOME_UNKNOWN_MESSAGE ? "" : detail,
+      mcpTimeoutCode,
     ),
   });
 }
@@ -85,6 +89,7 @@ export async function withWebMcpOutcome<T>(
       throw cause;
     }
     // Transport cancellation cannot undo page mutations. Never forward generic retry advice.
-    throw webMcpOutcomeUnknownError(cause);
+    const { MCP_REQUEST_TIMEOUT_CODE } = await import("./chrome-mcp-contracts.js");
+    throw webMcpOutcomeUnknownError(cause, MCP_REQUEST_TIMEOUT_CODE);
   }
 }

@@ -1,18 +1,20 @@
 import type { PluginCompatRecord } from "./types.js";
 
 const MARKING_DATE = "2026-07-25";
-const DEFAULT_REMOVE_AFTER = "2026-10-01";
+const DEPRECATION_MARKING = {
+  status: "deprecated",
+  introduced: MARKING_DATE,
+  deprecated: MARKING_DATE,
+  warningStarts: MARKING_DATE,
+  removeAfter: "2026-10-01",
+} as const;
 
 /** Dated metadata for shipped deprecated surfaces that previously had annotations only. */
 export const DEPRECATION_MARKING_COMPAT_RECORDS = [
   {
     code: "plugin-sdk-channel-setup-input-fields",
-    status: "deprecated",
+    ...DEPRECATION_MARKING,
     owner: "channel",
-    introduced: MARKING_DATE,
-    deprecated: MARKING_DATE,
-    warningStarts: MARKING_DATE,
-    removeAfter: DEFAULT_REMOVE_AFTER,
     replacement: "plugin-local setup input intersections that declare each owning channel field",
     docsPath: "/plugins/sdk-migration#published-channel-setup-compatibility",
     surfaces: [
@@ -49,12 +51,8 @@ export const DEPRECATION_MARKING_COMPAT_RECORDS = [
   },
   {
     code: "plugin-sdk-broad-runtime-barrels",
-    status: "deprecated",
+    ...DEPRECATION_MARKING,
     owner: "sdk",
-    introduced: MARKING_DATE,
-    deprecated: MARKING_DATE,
-    warningStarts: MARKING_DATE,
-    removeAfter: DEFAULT_REMOVE_AFTER,
     replacement: "focused plugin SDK subpaths for each runtime capability",
     docsPath: "/plugins/sdk-migration#compatibility-policy",
     surfaces: [
@@ -84,12 +82,8 @@ export const DEPRECATION_MARKING_COMPAT_RECORDS = [
   },
   {
     code: "plugin-sdk-provider-owned-helper-shims",
-    status: "deprecated",
+    ...DEPRECATION_MARKING,
     owner: "provider",
-    introduced: MARKING_DATE,
-    deprecated: MARKING_DATE,
-    warningStarts: MARKING_DATE,
-    removeAfter: DEFAULT_REMOVE_AFTER,
     replacement: "provider-local auth, model, replay, OAuth, and stream helper APIs",
     docsPath: "/plugins/sdk-migration#compatibility-policy",
     surfaces: [
@@ -138,12 +132,8 @@ export const DEPRECATION_MARKING_COMPAT_RECORDS = [
   },
   {
     code: "message-presentation-legacy-bridges",
-    status: "deprecated",
+    ...DEPRECATION_MARKING,
     owner: "channel",
-    introduced: MARKING_DATE,
-    deprecated: MARKING_DATE,
-    warningStarts: MARKING_DATE,
-    removeAfter: DEFAULT_REMOVE_AFTER,
     replacement: "MessagePresentation values and channel presentation renderers",
     docsPath: "/plugins/sdk-migration#compatibility-policy",
     surfaces: [
@@ -183,12 +173,8 @@ export const DEPRECATION_MARKING_COMPAT_RECORDS = [
   },
   {
     code: "plugin-sdk-focused-compat-aliases",
-    status: "deprecated",
+    ...DEPRECATION_MARKING,
     owner: "sdk",
-    introduced: MARKING_DATE,
-    deprecated: MARKING_DATE,
-    warningStarts: MARKING_DATE,
-    removeAfter: DEFAULT_REMOVE_AFTER,
     replacement: "the focused replacement named by each TypeScript @deprecated annotation",
     docsPath: "/plugins/sdk-migration#compatibility-policy",
     surfaces: [
@@ -231,12 +217,8 @@ export const DEPRECATION_MARKING_COMPAT_RECORDS = [
   },
   {
     code: "agent-harness-terminal-result-aliases",
-    status: "deprecated",
+    ...DEPRECATION_MARKING,
     owner: "agent-runtime",
-    introduced: MARKING_DATE,
-    deprecated: MARKING_DATE,
-    warningStarts: MARKING_DATE,
-    removeAfter: DEFAULT_REMOVE_AFTER,
     replacement:
       "AgentHarnessAttemptResult.terminal and AgentHarnessDeliveryDefaults.visibleReplies",
     docsPath: "/plugins/sdk-agent-harness",
@@ -265,12 +247,8 @@ export const DEPRECATION_MARKING_COMPAT_RECORDS = [
   },
   {
     code: "official-plugin-export-aliases",
-    status: "deprecated",
+    ...DEPRECATION_MARKING,
     owner: "channel",
-    introduced: MARKING_DATE,
-    deprecated: MARKING_DATE,
-    warningStarts: MARKING_DATE,
-    removeAfter: DEFAULT_REMOVE_AFTER,
     replacement:
       "the canonical testing export, MessagePresentation renderers, and host-owned timeout/runtime behavior",
     docsPath: "/plugins/compatibility#current-compatibility-areas",
@@ -296,12 +274,8 @@ export const DEPRECATION_MARKING_COMPAT_RECORDS = [
   },
   {
     code: "memory-host-compatibility-aliases",
-    status: "deprecated",
+    ...DEPRECATION_MARKING,
     owner: "sdk",
-    introduced: MARKING_DATE,
-    deprecated: MARKING_DATE,
-    warningStarts: MARKING_DATE,
-    removeAfter: DEFAULT_REMOVE_AFTER,
     replacement: "canonical memory cache/FTS tables and getRuntimeConfig or caller-provided config",
     docsPath: "/plugins/sdk-migration#compatibility-policy",
     surfaces: [
@@ -323,12 +297,8 @@ export const DEPRECATION_MARKING_COMPAT_RECORDS = [
   },
   {
     code: "plugin-runtime-api-compat-aliases",
-    status: "deprecated",
+    ...DEPRECATION_MARKING,
     owner: "plugin-execution",
-    introduced: MARKING_DATE,
-    deprecated: MARKING_DATE,
-    warningStarts: MARKING_DATE,
-    removeAfter: DEFAULT_REMOVE_AFTER,
     replacement: "the namespaced plugin API and focused runtime methods named per surface",
     docsPath: "/plugins/sdk-migration#compatibility-policy",
     surfaces: [
@@ -358,6 +328,7 @@ export const DEPRECATION_MARKING_COMPAT_RECORDS = [
       "PluginRuntime.channel.session.resolveStorePath",
       "PluginRuntime.channel.session.recordInboundSession",
       "PluginRuntime.channel.inbound.runPreparedReply",
+      "PluginRuntime.channel.turn",
       "PluginRuntime.system.requestHeartbeatNow",
     ],
     diagnostics: [
@@ -374,12 +345,8 @@ export const DEPRECATION_MARKING_COMPAT_RECORDS = [
   },
   {
     code: "plugin-provider-manifest-compat-aliases",
-    status: "deprecated",
+    ...DEPRECATION_MARKING,
     owner: "provider",
-    introduced: MARKING_DATE,
-    deprecated: MARKING_DATE,
-    warningStarts: MARKING_DATE,
-    removeAfter: DEFAULT_REMOVE_AFTER,
     replacement: "manifest-owned plugin kind/setup metadata and model catalog registration",
     docsPath: "/plugins/sdk-migration#compatibility-policy",
     surfaces: [

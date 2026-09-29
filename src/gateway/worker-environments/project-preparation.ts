@@ -1,14 +1,16 @@
-import { createHash } from "node:crypto";
-import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { requireGit } from "../../agents/worktrees/git.js";
 import { normalizeCloudRepo } from "../../config/cloud-worker-project-profiles.js";
+import { sha256File } from "../../infra/directory-durability.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import type { WorkerProvider } from "../../plugins/types.js";
 import { createProjectSeedScript } from "./project-seed-script.js";
-import { createProjectSetupScript } from "./project-setup-script.js";
+import {
+  createProjectSetupScript,
+  type PreparedProjectVerification,
+} from "./project-setup-script.js";
 import { readRepositoryWorkerProjectSnapshot } from "./repository-project-source.js";
 import {
   prepareWorkerWorkspaceGitPack,
@@ -78,6 +80,10 @@ export function createWorkerProjectPreparation(params: {
   };
   setupAuthorized?: boolean;
   revalidateRepositorySource?: (signal: AbortSignal) => Promise<void>;
+  prepareRepositoryGitPack?: (input: {
+    temporaryRoot: string;
+    signal: AbortSignal;
+  }) => Promise<string>;
   requireCurrent: () => void;
   signal?: AbortSignal;
 }): {
@@ -114,6 +120,9 @@ export function createWorkerProjectPreparation(params: {
       : params.project.label;
   let active: Promise<PreparationResult> | undefined;
   let preparedWorkspace: PreparationResult["preparedWorkspace"];
+  // The serialized pre-enrollment producer invalidates completion before mutation.
+  // Reuse verification only within this operation; replay starts with a fresh scan.
+  let verifiedRetained: PreparedProjectVerification | null | undefined;
   const requireCurrent = () => {
     signal.throwIfAborted();
     try {
@@ -176,6 +185,27 @@ export function createWorkerProjectPreparation(params: {
     if (!isRecord(inspection) || typeof inspection.ready !== "boolean") {
       throw new Error("Project preparation returned invalid seed status");
     }
+    if (preparation) {
+      const retained = inspection.retainedWorkspace;
+      if (retained === null) {
+        verifiedRetained = null;
+      } else {
+        if (
+          !isRecord(retained) ||
+          typeof retained.baseCommit !== "string" ||
+          !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(retained.baseCommit) ||
+          retained.baseCommit.length !== params.project.baseCommit.length
+        ) {
+          throw new Error("Project preparation returned an invalid retained Git base");
+        }
+        const workspace = readPreparedWorkspace(retained);
+        verifiedRetained = {
+          baseCommit: retained.baseCommit,
+          sourceManifestRef: workspace.sourceManifestRef,
+          preparedManifestRef: workspace.preparedManifestRef,
+        };
+      }
+    }
     if (inspection.ready) {
       return {
         seedKey,
@@ -186,16 +216,7 @@ export function createWorkerProjectPreparation(params: {
       };
     }
     const directory = inspection.directory;
-    const retainedCommit = inspection.retainedCommit;
-    if (
-      retainedCommit !== undefined &&
-      (!preparation ||
-        typeof retainedCommit !== "string" ||
-        !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(retainedCommit) ||
-        retainedCommit.length !== params.project.baseCommit.length)
-    ) {
-      throw new Error("Project preparation returned an invalid retained Git base");
-    }
+    const retainedCommit = verifiedRetained?.baseCommit;
     if (
       typeof directory !== "string" ||
       directory.length > 4096 ||
@@ -213,25 +234,30 @@ export function createWorkerProjectPreparation(params: {
     try {
       requireCurrent();
       let transfer: Pick<Parameters<typeof createProjectSeedScript>[0], "pack" | "repository">;
-      if ("source" in params.project) {
+      if ("source" in params.project && !params.prepareRepositoryGitPack) {
         // Public source fetches need no credential transfer or remote secret lifetime.
         transfer = { repository: { directory, url: params.project.source.url } };
       } else {
-        const pack = await prepareWorkerWorkspaceGitPack({
-          root: params.project.root,
-          baseCommit: params.project.baseCommit,
-          ...(typeof retainedCommit === "string" ? { retainedCommit } : {}),
-          temporaryRoot,
-          signal,
-        });
+        const repository = "source" in params.project ? params.project.source : undefined;
+        const pack =
+          "root" in params.project
+            ? await prepareWorkerWorkspaceGitPack({
+                root: params.project.root,
+                baseCommit: params.project.baseCommit,
+                ...(typeof retainedCommit === "string" ? { retainedCommit } : {}),
+                temporaryRoot,
+                signal,
+              })
+            : await params.prepareRepositoryGitPack!({ temporaryRoot, signal });
         requireCurrent();
         const bytes = (await fsp.stat(pack)).size;
         if (bytes > MAX_WORKSPACE_INVENTORY_TOTAL_BYTES) {
           throw new Error("Project Git pack exceeds the workspace byte limit");
         }
-        const hash = createHash("sha256");
-        for await (const chunk of fs.createReadStream(pack, { signal })) {
-          hash.update(chunk);
+        let sha256: string;
+        {
+          await using handle = await fsp.open(pack, "r");
+          ({ digest: sha256 } = await sha256File(handle, { signal }));
         }
         requireCurrent();
         await transport.upload(pack, path.posix.join(directory, "base.pack"), signal);
@@ -240,8 +266,12 @@ export function createWorkerProjectPreparation(params: {
           pack: {
             directory,
             bytes,
-            sha256: hash.digest("hex"),
-            ...(typeof retainedCommit === "string" ? { retainedCommit } : {}),
+            sha256,
+            ...(repository
+              ? { repositoryUrl: repository.url }
+              : typeof retainedCommit === "string"
+                ? { retainedCommit }
+                : {}),
           },
         };
       }
@@ -250,6 +280,7 @@ export function createWorkerProjectPreparation(params: {
           createProjectSeedScript({
             ...scriptInput,
             ...transfer,
+            verifiedRetained,
           }),
           signal,
         ),
@@ -258,7 +289,16 @@ export function createWorkerProjectPreparation(params: {
       if (!isRecord(installed) || installed.ready !== true) {
         throw new Error("Project checkout was not verified before capture");
       }
-      return { seedKey, cacheHit: false };
+      return {
+        seedKey,
+        cacheHit: false,
+        ...(installed.preparedWorkspace !== undefined
+          ? {
+              preparedWorkspace: readPreparedWorkspace(installed.preparedWorkspace),
+              captureRequired: true,
+            }
+          : {}),
+      };
     } finally {
       await fsp.rm(temporaryRoot, { recursive: true, force: true });
     }
@@ -269,7 +309,7 @@ export function createWorkerProjectPreparation(params: {
       if (!params.revalidateRepositorySource) {
         throw new Error("Repository project preparation has no current source authority");
       }
-      // Retained content does not prove that the repository is still public and accessible.
+      // Retained content does not establish current repository visibility or access.
       await params.revalidateRepositorySource(signal);
       requireCurrent();
     }
@@ -301,6 +341,7 @@ export function createWorkerProjectPreparation(params: {
             setupRecipe: preparation.setupRecipe,
             runSetupScript: preparation.runSetupScript,
             timeoutMs,
+            verifiedRetained,
           }),
         signal,
       ),
@@ -314,6 +355,7 @@ export function createWorkerProjectPreparation(params: {
     project: {
       key: params.project.key,
       baseCommit: params.project.baseCommit,
+      ...("source" in params.project ? {} : { root: params.project.root }),
       ...(label !== undefined ? { label } : {}),
       ...(preparation
         ? {
@@ -323,10 +365,6 @@ export function createWorkerProjectPreparation(params: {
               purpose: preparation.purpose,
               demandAtMs: preparation.demandAtMs,
             },
-          }
-        : {}),
-      ...(preparation
-        ? {
             inspectPreparedWorkspace: async (transport: {
               runScript: (script: string, signal: AbortSignal) => Promise<string>;
             }) => {

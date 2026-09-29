@@ -14,12 +14,8 @@ export function normalizeGoogleChatUserId(raw?: string | null): string {
 
 const GOOGLECHAT_EMAIL_KIND = "plugin:googlechat-email" as const;
 
-function normalizeEntryValue(raw?: string | null): string {
-  return normalizeLowercaseStringOrEmpty(raw ?? "");
-}
-
 function normalizeGoogleChatStableEntry(entry: string): string | null {
-  const withoutProvider = normalizeEntryValue(entry).replace(
+  const withoutProvider = normalizeLowercaseStringOrEmpty(entry).replace(
     /^(googlechat|google-chat|gchat):/i,
     "",
   );
@@ -32,15 +28,14 @@ function normalizeGoogleChatStableEntry(entry: string): string | null {
 }
 
 function normalizeGoogleChatEmailEntry(entry: string): string | null {
-  const withoutProvider = normalizeEntryValue(entry).replace(
+  const withoutProvider = normalizeLowercaseStringOrEmpty(entry).replace(
     /^(googlechat|google-chat|gchat):/i,
     "",
   );
   if (withoutProvider.startsWith("users/")) {
     return null;
   }
-  const stable = normalizeGoogleChatStableEntry(entry);
-  return stable?.includes("@") ? stable : null;
+  return withoutProvider.includes("@") ? withoutProvider : null;
 }
 
 export const googleChatIngressIdentity = defineStableChannelIngressIdentity({
@@ -54,11 +49,11 @@ export const googleChatIngressIdentity = defineStableChannelIngressIdentity({
       key: "email",
       kind: GOOGLECHAT_EMAIL_KIND,
       normalizeEntry: normalizeGoogleChatEmailEntry,
-      normalizeSubject: normalizeEntryValue,
+      normalizeSubject: normalizeLowercaseStringOrEmpty,
       authentication: "mutable",
     },
   ],
-  isWildcardEntry: (entry) => normalizeEntryValue(entry) === "*",
+  isWildcardEntry: (entry) => normalizeLowercaseStringOrEmpty(entry) === "*",
   resolveEntryId: ({ entryIndex, fieldKey }) =>
     fieldKey === "stableId"
       ? `entry-${entryIndex + 1}:user`

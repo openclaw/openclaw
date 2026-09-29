@@ -2,6 +2,7 @@
 import { vi } from "vitest";
 import type { OutputRuntimeEnv } from "../runtime.js";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
+import { createCliRuntimeMock } from "./test-runtime-mock.js";
 
 export type CliMockOutputRuntime = OutputRuntimeEnv & {
   log: MockFn<OutputRuntimeEnv["log"]>;
@@ -30,36 +31,8 @@ type MockCalls = {
   };
 };
 
-function normalizeRuntimeStdout(value: string): string {
-  return value.endsWith("\n") ? value.slice(0, -1) : value;
-}
-
-function stringifyRuntimeJson(value: unknown, space = 2): string {
-  return JSON.stringify(value, null, space > 0 ? space : undefined);
-}
-
 export function createCliRuntimeCapture(): CliRuntimeCapture {
-  // Capture output in arrays while preserving vi mock call inspection.
-  const runtimeLogs: string[] = [];
-  const runtimeErrors: string[] = [];
-  const stringifyArgs = (args: unknown[]) => args.map((value) => String(value)).join(" ");
-  const defaultRuntime: CliMockOutputRuntime = {
-    log: vi.fn((...args: unknown[]) => {
-      runtimeLogs.push(stringifyArgs(args));
-    }),
-    error: vi.fn((...args: unknown[]) => {
-      runtimeErrors.push(stringifyArgs(args));
-    }),
-    writeStdout: vi.fn((value: string) => {
-      defaultRuntime.log(normalizeRuntimeStdout(value));
-    }),
-    writeJson: vi.fn((value: unknown, space = 2) => {
-      defaultRuntime.log(stringifyRuntimeJson(value, space));
-    }),
-    exit: vi.fn((code: number) => {
-      throw new Error(`__exit__:${code}`);
-    }),
-  };
+  const { runtimeLogs, runtimeErrors, defaultRuntime } = createCliRuntimeMock(vi);
   return {
     runtimeLogs,
     runtimeErrors,
@@ -67,6 +40,29 @@ export function createCliRuntimeCapture(): CliRuntimeCapture {
     resetRuntimeCapture: () => {
       runtimeLogs.length = 0;
       runtimeErrors.length = 0;
+    },
+  };
+}
+
+export function createCliTtyMock() {
+  const streams = [process.stdin, process.stdout].map((stream) => ({
+    stream,
+    descriptor: Object.getOwnPropertyDescriptor(stream, "isTTY"),
+  }));
+  return {
+    set: (value: boolean) => {
+      for (const { stream } of streams) {
+        Object.defineProperty(stream, "isTTY", { value, configurable: true });
+      }
+    },
+    restore: () => {
+      for (const { stream, descriptor } of streams) {
+        if (descriptor) {
+          Object.defineProperty(stream, "isTTY", descriptor);
+        } else {
+          Reflect.deleteProperty(stream, "isTTY");
+        }
+      }
     },
   };
 }

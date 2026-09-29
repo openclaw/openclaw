@@ -1,4 +1,3 @@
-// Discord API module exposes the plugin public contract.
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/channel-entry-contract";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 
@@ -10,10 +9,10 @@ const loadDiscordSubagentHooksModule = createLazyRuntimeModule(
 export function registerDiscordSubagentHooks(api: OpenClawPluginApi): void {
   api.on("subagent_ended", async (event) => {
     const { handleDiscordSubagentEnded } = await loadDiscordSubagentHooksModule();
-    handleDiscordSubagentEnded(event);
+    await handleDiscordSubagentEnded(event);
   });
   api.on("subagent_delivery_target", async (event) => {
-    const { handleDiscordSubagentDeliveryTarget } = await loadDiscordSubagentHooksModule();
-    return handleDiscordSubagentDeliveryTarget(event);
+    const { handleDiscordSubagentDeliveryTargetAsync } = await loadDiscordSubagentHooksModule();
+    return await handleDiscordSubagentDeliveryTargetAsync(event);
   });
 }

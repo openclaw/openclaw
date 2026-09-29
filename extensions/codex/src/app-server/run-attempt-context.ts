@@ -12,20 +12,18 @@ import {
 import {
   buildCodexOpenClawPromptContext,
   buildCodexWatchedSessionsContext,
-  buildCodexWorkspaceBootstrapContext,
-  getCodexWorkspaceMemoryToolNames,
   readMirroredSessionHistoryMessages,
-  renderCodexSkillsCollaborationInstructions,
+  renderCodexSkillsInstructions,
 } from "./attempt-context.js";
+import { buildCodexWorkspaceBootstrapContext } from "./attempt-workspace-context.js";
 import {
   resolveCodexContextEngineProjectionMaxChars,
-  resolveCodexContextEngineProjectionReserveTokens,
   resolveCodexContinuityProjectionMaxChars,
   type CodexProjectedContextRange,
 } from "./context-engine-projection.js";
+import { joinPresentSections } from "./developer-instruction-sections.js";
 import { isSystemAgentOnlyCodexDynamicToolAllowlist } from "./dynamic-tool-profile.js";
 import type { CodexAttemptRuntime } from "./run-attempt-runtime.js";
-import { joinPresentSections } from "./run-attempt-state.js";
 import type { CodexAttemptTools } from "./run-attempt-tool-setup.js";
 import {
   buildDeveloperInstructions,
@@ -39,9 +37,6 @@ export async function prepareCodexAttemptContext(
   const {
     connection,
     runtimeParams,
-    activeSessionId,
-    activeSessionFile,
-    buildActiveRunAttemptParams,
     effectiveContextWindowInfo,
     effectiveContextTokenBudget,
     effectiveRuntimeProviderId,
@@ -65,8 +60,8 @@ export async function prepareCodexAttemptContext(
   const { toolBridge } = attemptTools;
   const activeTranscriptTarget = {
     agentId: sessionAgentId,
-    sessionFile: activeSessionFile,
-    sessionId: activeSessionId,
+    sessionFile: runtimeParams.sessionFile,
+    sessionId: runtimeParams.sessionId,
     sessionKey: contextSessionKey,
     sessionTarget: params.sessionTarget,
   };
@@ -75,6 +70,7 @@ export async function prepareCodexAttemptContext(
     const messages = await readMirroredSessionHistoryMessages({
       ...activeTranscriptTarget,
       signal: connection.runAbortController.signal,
+      contextTokenBudget: effectiveContextTokenBudget,
       ...(transcriptReadFence ? { admission: transcriptReadFence } : {}),
     });
     connection.runAbortController.signal.throwIfAborted();
@@ -114,6 +110,7 @@ export async function prepareCodexAttemptContext(
       ? { modelProviderId: params.provider, modelId: params.modelId }
       : {}),
     trigger: params.trigger,
+    inputProvenance: params.inputProvenance,
     ...buildAgentHookContextChannelFields({
       sessionKey: contextSessionKey,
       messageChannel: params.messageChannel,
@@ -129,7 +126,7 @@ export async function prepareCodexAttemptContext(
   const hookRunner = getAgentHarnessHookRunner();
   const buildActiveContextEngineRuntimeContext = () =>
     buildHarnessContextEngineRuntimeContext({
-      attempt: buildActiveRunAttemptParams(),
+      attempt: { ...runtimeParams },
       workspaceDir: effectiveWorkspace,
       cwd: effectiveCwd,
       agentDir,
@@ -141,9 +138,9 @@ export async function prepareCodexAttemptContext(
     await bootstrapHarnessContextEngine({
       hadSessionFile: hadSessionTranscriptState,
       contextEngine: activeContextEngine,
-      sessionId: activeSessionId,
+      sessionId: runtimeParams.sessionId,
       sessionKey: contextSessionKey,
-      sessionFile: activeSessionFile,
+      sessionFile: runtimeParams.sessionFile,
       sessionTarget: params.sessionTarget,
       runtimeContext: buildActiveContextEngineRuntimeContext(),
       transcriptReadFence: params.userTurnTranscriptRecorder?.getAdmissionReceipt(),
@@ -159,26 +156,28 @@ export async function prepareCodexAttemptContext(
     });
     historyState.messages = (await readFencedHistory()) ?? historyState.messages;
   }
-  const memoryToolNames = getCodexWorkspaceMemoryToolNames(toolBridge.availableSpecs);
+  // The admission fence intentionally excludes this logical turn's committed results.
+  historyState.messages.push(...(params.pluginRuntimeRefreshMessages ?? []));
   const workspaceBootstrapContext = await buildCodexWorkspaceBootstrapContext({
     params: runtimeParams,
+    agentWorkspaceDeveloperInstructions:
+      connection.mutable.startupBinding?.agentWorkspaceDeveloperInstructions,
     resolvedWorkspace: runtimeParams.bootstrapWorkspaceDir ?? resolvedWorkspace,
     executionWorkspace: resolvedWorkspace,
     effectiveWorkspace,
     sessionKey: contextSessionKey,
     sessionAgentId,
-    memoryToolNames,
+    tools: toolBridge.availableSpecs,
     ringZeroActive:
       isHostScopedAgentToolActive("openclaw") &&
       isSystemAgentOnlyCodexDynamicToolAllowlist(runtimeParams.toolsAllow),
     sandboxed: sandbox?.enabled === true,
   });
-  // A thread keeps the bounded agent-workspace snapshot captured at creation.
-  // Workspace edits take effect only in the next session.
-  const agentWorkspaceDeveloperInstructions = workspaceBootstrapContext.threadDeveloperInstructions
-    ? (connection.mutable.startupBinding?.agentWorkspaceDeveloperInstructions ??
-      workspaceBootstrapContext.threadDeveloperInstructions)
-    : undefined;
+  const agentWorkspaceDeveloperInstructions = workspaceBootstrapContext.threadDeveloperInstructions;
+  const skillsInstructions = renderCodexSkillsInstructions({
+    attempt: runtimeParams,
+    skillsPrompt: params.skillsSnapshot?.prompt,
+  });
   const baseDeveloperInstructions = joinPresentSections(
     buildDeveloperInstructions(runtimeParams, {
       dynamicTools: toolBridge.availableSpecs,
@@ -199,15 +198,10 @@ export async function prepareCodexAttemptContext(
         : undefined,
       watchedSessionsContext,
     });
-  const skillsCollaborationInstructions = renderCodexSkillsCollaborationInstructions({
-    attempt: runtimeParams,
-    skillsPrompt: params.skillsSnapshot?.prompt,
-  });
   const promptState = {
     promptText: params.prompt,
     promptContextRange: undefined as CodexProjectedContextRange | undefined,
     developerInstructions: baseDeveloperInstructions,
-    prePromptMessageCount: historyState.messages.length,
     contextEngineProjection: undefined as CodexContextEngineThreadBootstrapProjection | undefined,
     precomputedStaleBindingContinuityProjectionApplied: false,
     staleBindingContinuityForcedFreshStart: false,
@@ -220,7 +214,6 @@ export async function prepareCodexAttemptContext(
   };
   const codexContextProjectionMaxChars = resolveCodexContextEngineProjectionMaxChars({
     contextTokenBudget: effectiveContextTokenBudget,
-    reserveTokens: resolveCodexContextEngineProjectionReserveTokens(),
   });
   const codexContinuityProjectionMaxChars = resolveCodexContinuityProjectionMaxChars({
     contextTokenBudget: effectiveContextTokenBudget,
@@ -239,7 +232,7 @@ export async function prepareCodexAttemptContext(
     agentWorkspaceDeveloperInstructions,
     baseDeveloperInstructions,
     buildOpenClawPromptContext,
-    skillsCollaborationInstructions,
+    skillsInstructions,
     promptState,
     codexContextProjectionMaxChars,
     codexContinuityProjectionMaxChars,

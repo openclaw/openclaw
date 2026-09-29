@@ -164,7 +164,7 @@ Remote embeddings require an API key. Bedrock uses the AWS SDK default credentia
 | Bedrock        | AWS credential chain, or `AWS_BEARER_TOKEN_BEDROCK` | No API key needed                   |
 | DeepInfra      | `DEEPINFRA_API_KEY`                                 | `models.providers.deepinfra.apiKey` |
 | Gemini         | `GEMINI_API_KEY`                                    | `models.providers.google.apiKey`    |
-| GitHub Copilot | `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`  | Auth profile via device login       |
+| GitHub Copilot | `COPILOT_GITHUB_TOKEN`                              | Auth profile via device login       |
 | Mistral        | `MISTRAL_API_KEY`                                   | `models.providers.mistral.apiKey`   |
 | Ollama         | `OLLAMA_API_KEY` (placeholder)                      | --                                  |
 | OpenAI         | `OPENAI_API_KEY`                                    | `models.providers.openai.apiKey`    |
@@ -289,6 +289,8 @@ Use `provider: "openai-compatible"` for a generic OpenAI-compatible
     }
     ```
 
+    Concurrent embedding requests share an in-flight AWS credential refresh so a batch does not resolve instance-role credentials separately for every chunk. Later requests refresh through the SDK again, picking up rotated profile files and role selections without restarting the Gateway.
+
     | Key                    | Type     | Default                        | Description                     |
     | ---------------------- | -------- | ------------------------------- | -------------------------------- |
     | `model`                | `string` | `amazon.titan-embed-text-v2:0` | Any Bedrock embedding model ID  |
@@ -344,7 +346,7 @@ Use `provider: "openai-compatible"` for a generic OpenAI-compatible
     | ----------------- | -------- | --------------- | ----------------------- |
     | `local.modelPath` | `string` | auto-downloaded | Path to GGUF model file |
 
-    Install the official llama.cpp provider, then choose llama.cpp once in
+    Install the official [llama.cpp provider](/plugins/llama-cpp), then choose llama.cpp once in
     interactive setup. OpenClaw installs a pinned, verified `llama-server` and
     writes its loopback `localService` configuration. Default model:
     `embeddinggemma-300m-qat-Q8_0.gguf` (~0.3 GB, auto-downloaded).
@@ -381,6 +383,9 @@ Remove unnecessary `memory.search.extraPaths` entries or narrow their directory
 roots. Global entries and `agents.entries.<id>.memory.search.extraPaths` entries
 are combined: an empty per-agent list does not remove global roots. Changing only
 an entry's `pattern` filters indexed files, not the directory tree being watched.
+Events outside every applicable pattern are ignored when they cannot affect an
+indexed file or directory. Events with no path or an unknown entry type remain
+conservative when indexed content could have changed.
 
 Removing extra-path entries does not exclude files that still belong to the
 default `MEMORY.md`, `USER.md`, or `memory/` roots. If reducing extra paths is
@@ -454,7 +459,9 @@ auto-injected.
 
 Paths can be absolute or workspace-relative. Directories are scanned recursively for supported
 files. Object entries narrow a directory with a root-relative glob using `/` separators; direct
-file entries are indexed exactly. The builtin engine skips symlinks. When a configured root is a
+file entries are indexed exactly. Entries with the same resolved directory share one scan, and
+scans skip subdirectories that their patterns can prove irrelevant. Complex patterns retain
+conservative traversal. The builtin engine skips symlinks. When a configured root is a
 symlink, `openclaw memory status` names the skipped root in text and JSON output and recommends
 configuring its canonical absolute directory instead.
 
@@ -737,7 +744,7 @@ For conceptual behavior and slash commands, see [Dreaming](/concepts/dreaming).
 | `frequency`                             | `string`  | `0 3 * * *`   | Optional cron cadence for the full dreaming sweep                                                                                |
 | `model`                                 | `string`  | default model | Optional Dream Diary subagent model override                                                                                     |
 | `phases.deep.maxPromotedSnippetTokens`  | `number`  | `160`         | Maximum estimated tokens kept from each short-term recall snippet promoted into `MEMORY.md`; provenance metadata remains visible |
-| `phases.deep.maxPriorEntryLossFraction` | `number`  | `0.25`        | Reject a consolidation rewrite that removes more than this fraction of prior entries                                             |
+| `phases.deep.maxPriorEntryLossFraction` | `number`  | `0.25`        | Reject consolidation or append compaction that removes more than this fraction of prior entries                                  |
 
 ### Example
 

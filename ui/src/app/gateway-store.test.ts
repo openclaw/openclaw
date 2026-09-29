@@ -12,7 +12,6 @@ import {
 } from "./gateway-store.test-support.ts";
 import { loadSettings } from "./settings.ts";
 import type { scheduleStaleChunkReload } from "./stale-chunk-reload.ts";
-import { readPresenceEntries, resolveCurrentSelfUser } from "./user-profile.ts";
 
 const { scheduleStaleChunkReloadMock } = vi.hoisted(() => ({
   scheduleStaleChunkReloadMock: vi.fn<typeof scheduleStaleChunkReload>(async () => true),
@@ -269,13 +268,21 @@ describe("createApplicationGateway connection phase", () => {
     const { gateway, current } = createStore();
     gateway.start();
     const first = current();
-    first.request.mockReturnValueOnce(firstRefresh);
+    first.request.mockImplementation((method) =>
+      method === "plugin.surface.refresh"
+        ? firstRefresh
+        : Promise.resolve({ profile: { id: "reader", emails: [] } }),
+    );
     first.opts.onHello?.({
       ...HELLO,
+      auth: { role: "operator", scopes: ["operator.read"] },
       pluginSurfaceUrls: { canvas: "https://canvas.test/__openclaw__/cap/first" },
     });
     await vi.dynamicImportSettled();
-    expect(first.request).toHaveBeenCalledOnce();
+    expect(first.request).toHaveBeenCalledWith("plugin.surface.refresh", {
+      surface: "canvas",
+      observedUrl: "https://canvas.test/__openclaw__/cap/first",
+    });
 
     gateway.connect();
     current().opts.onHello?.({
@@ -357,14 +364,27 @@ describe("createApplicationGateway connection phase", () => {
     expect(gateway.snapshot.lastError).not.toContain("sk-1234567890abcdef");
   });
 
-  it("uses translated fallback copy for an empty WebSocket close reason", () => {
-    const { gateway, current } = createStore();
-    gateway.start();
+  it.each([
+    { reason: "", willRetry: true },
+    { reason: "   ", willRetry: true },
+    { reason: "", willRetry: false },
+  ])(
+    "explains a reasonless close with retry=$willRetry and reason='$reason'",
+    ({ reason, willRetry }) => {
+      const { gateway, current } = createStore();
+      gateway.start();
+      current().opts.onHello?.(HELLO);
 
-    current().opts.onClose?.({ code: 1006, reason: "", willRetry: true });
+      current().opts.onClose?.({ code: 1006, reason, willRetry });
 
-    expect(gateway.snapshot.lastError).toBe("disconnected (1006): Unknown");
-  });
+      expect(gateway.snapshot.phase).toBe(willRetry ? "reconnecting" : "offline");
+      expect(gateway.snapshot.lastError).toBe(
+        willRetry
+          ? "Connection to the Gateway was interrupted. Reconnecting automatically. (WebSocket 1006)"
+          : "Connection to the Gateway was interrupted. Check your connection and try again. (WebSocket 1006)",
+      );
+    },
+  );
 
   it("starts a newly selected Gateway as a fresh connection", () => {
     const { gateway, clients, current } = createStore();
@@ -685,6 +705,7 @@ describe("createApplicationGateway connection phase", () => {
   it("discards the gapped frame after recovery synchronously replaces its client", () => {
     const { gateway, current } = createStore();
     const listener = vi.fn();
+    gateway.subscribeEventLog(() => {});
     gateway.subscribeEvents(listener);
     gateway.start();
     const stale = current();
@@ -735,6 +756,7 @@ describe("createApplicationGateway connection phase", () => {
 
   it("fans active events out once without binding subscribers to the transport", () => {
     const { gateway, current } = createStore();
+    gateway.subscribeEventLog(() => {});
     const first = vi.fn();
     const second = vi.fn();
     gateway.subscribeEvents(first);
@@ -763,6 +785,7 @@ describe("createApplicationGateway connection phase", () => {
   it("keeps event subscriptions across reconnects and a stopped gateway", () => {
     const { gateway, current } = createStore();
     const listener = vi.fn();
+    gateway.subscribeEventLog(() => {});
     gateway.subscribeEvents(listener);
     gateway.start();
     const first = current();
@@ -820,6 +843,7 @@ describe("createApplicationGateway connection phase", () => {
 
   it("isolates a failing subscriber from later event subscribers", () => {
     const { gateway, current } = createStore();
+    gateway.subscribeEventLog(() => {});
     const failure = new Error("subscriber failed");
     const reportError = vi.spyOn(console, "error").mockImplementation(() => {});
     const failing = vi.fn(() => {
@@ -891,6 +915,7 @@ describe("createApplicationGateway connection phase", () => {
   it("ignores queued events after the gateway is stopped", () => {
     const { gateway, current } = createStore();
     const listener = vi.fn();
+    gateway.subscribeEventLog(() => {});
     gateway.subscribeEvents(listener);
     gateway.start();
     const stale = current();
@@ -900,196 +925,6 @@ describe("createApplicationGateway connection phase", () => {
 
     expect(listener).not.toHaveBeenCalled();
     expect(gateway.eventLog).toEqual([]);
-  });
-
-  it("ignores presence and event-log callbacks from superseded clients", () => {
-    const { gateway, current } = createStore();
-    gateway.start();
-    current().opts.onHello?.(HELLO);
-    const stale = current();
-
-    gateway.connect();
-    const active = current();
-    active.opts.onHello?.({
-      ...HELLO,
-      snapshot: {
-        presence: [
-          {
-            instanceId: active.instanceId,
-            user: { id: "current-user", name: "Current user" },
-          },
-        ],
-      },
-    });
-
-    stale.opts.onEvent?.({
-      type: "event",
-      event: "presence",
-      payload: {
-        presence: [
-          {
-            instanceId: active.instanceId,
-            user: { id: "stale-user", name: "Stale user" },
-          },
-        ],
-      },
-      seq: 1,
-      stateVersion: { presence: 1, health: 1 },
-    });
-
-    expect(gateway.snapshot.selfUser).toEqual({ id: "current-user", name: "Current user" });
-    expect(gateway.eventLog).toEqual([]);
-
-    active.opts.onEvent?.({
-      type: "event",
-      event: "presence",
-      payload: {
-        presence: [
-          {
-            instanceId: active.instanceId,
-            user: { id: "current-user", name: "Updated current user" },
-          },
-        ],
-      },
-      seq: 2,
-      stateVersion: { presence: 2, health: 1 },
-    });
-
-    expect(gateway.snapshot.selfUser).toEqual({
-      id: "current-user",
-      name: "Updated current user",
-    });
-    expect(gateway.eventLog).toHaveLength(1);
-  });
-
-  it.each([false, true])(
-    "keeps refreshed self authoritative over hello (initial profile: %s)",
-    (qualified) => {
-      const { gateway, current } = createStore();
-      gateway.start();
-      const user = { id: "same-id", name: "Person", avatarUrl: "/api/users/same-id/avatar" };
-      const profile = { ...user, identity: { type: "profile" as const, id: user.id } };
-      const initialUser = qualified ? profile : user;
-      current().opts.onHello?.({
-        ...HELLO,
-        snapshot: { presence: [{ instanceId: current().instanceId, user: initialUser }] },
-      });
-      const renderedSelf = vi.fn(() =>
-        resolveCurrentSelfUser({
-          snapshotUser: gateway.snapshot.selfUser,
-          presenceEntries: readPresenceEntries(gateway.snapshot.hello?.snapshot),
-          presenceInstanceId: current().instanceId,
-        }),
-      );
-      gateway.subscribeEvents(renderedSelf);
-      for (const nextUser of [
-        profile,
-        user,
-        {
-          ...profile,
-          id: "merged-profile",
-          identity: { type: "profile" as const, id: "merged-profile" },
-        },
-      ]) {
-        current().opts.onEvent?.({
-          type: "event",
-          event: "presence",
-          payload: { presence: [{ instanceId: current().instanceId, user: nextUser }] },
-        });
-        expect(gateway.snapshot.selfUser).toEqual(nextUser);
-        expect(renderedSelf.mock.lastCall).toBeDefined();
-        expect(renderedSelf.mock.results.at(-1)?.value).toEqual(nextUser);
-        expect(readPresenceEntries(gateway.snapshot.hello?.snapshot)?.[0]?.user).toEqual(
-          initialUser,
-        );
-      }
-    },
-  );
-
-  it("projects only this browser connection's optional presence identity", () => {
-    const { gateway, current } = createStore();
-    gateway.start();
-    const instanceId = current().opts.instanceId;
-    current().opts.onHello?.({
-      ...HELLO,
-      snapshot: {
-        presence: [
-          { instanceId: "someone-else", user: { id: "other", name: "Other" } },
-          {
-            instanceId,
-            user: { id: "profile-1", email: "ada@example.test", name: "Ada" },
-          },
-        ],
-      },
-    });
-
-    expect(gateway.snapshot.selfUser).toEqual({
-      id: "profile-1",
-      email: "ada@example.test",
-      name: "Ada",
-    });
-
-    gateway.updateSelfUser?.({ name: "Augusta Ada", avatarUrl: "/api/users/profile-1/avatar?v=2" });
-    expect(gateway.snapshot.selfUser).toMatchObject({
-      id: "profile-1",
-      name: "Augusta Ada",
-      avatarUrl: "/api/users/profile-1/avatar?v=2",
-    });
-
-    current().opts.onEvent?.({
-      type: "event",
-      event: "presence",
-      payload: {
-        presence: [
-          {
-            instanceId,
-            user: {
-              id: "profile-1",
-              email: "ada@example.test",
-              name: "Ada Lovelace",
-              avatarUrl: "/api/users/profile-1/avatar?v=3",
-            },
-          },
-        ],
-      },
-      seq: 1,
-      stateVersion: { presence: 1, health: 1 },
-    });
-    expect(gateway.snapshot.selfUser).toMatchObject({
-      id: "profile-1",
-      name: "Ada Lovelace",
-      avatarUrl: "/api/users/profile-1/avatar?v=3",
-    });
-
-    current().opts.onEvent?.({
-      type: "event",
-      event: "presence",
-      payload: { presence: [{ instanceId: "anonymous" }] },
-      seq: 2,
-      stateVersion: { presence: 2, health: 1 },
-    });
-    expect(gateway.snapshot.selfUser).toMatchObject({
-      id: "profile-1",
-      name: "Ada Lovelace",
-      avatarUrl: "/api/users/profile-1/avatar?v=3",
-    });
-  });
-
-  it("clears identity while disconnected", () => {
-    const { gateway, current } = createStore();
-    gateway.start();
-    current().opts.onHello?.({
-      ...HELLO,
-      snapshot: {
-        presence: [
-          { instanceId: current().opts.instanceId, user: { id: "profile-1", name: "Ada" } },
-        ],
-      },
-    });
-
-    current().opts.onClose?.({ code: 1006, reason: "socket lost", willRetry: true });
-
-    expect(gateway.snapshot.selfUser).toBeNull();
   });
 
   it("does not copy selected-remote settings into an ephemeral document Gateway", () => {

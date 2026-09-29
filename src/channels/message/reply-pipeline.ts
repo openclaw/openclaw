@@ -1,8 +1,3 @@
-/**
- * Channel reply pipeline builder.
- *
- * Resolves source delivery mode, reply prefixing, typing callbacks, and payload transforms.
- */
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { resolveResponsePrefixTemplate } from "../../auto-reply/reply/response-prefix-template.js";

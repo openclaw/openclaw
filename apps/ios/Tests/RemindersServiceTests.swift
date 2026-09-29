@@ -60,6 +60,14 @@ struct RemindersServiceTests {
         var buddhist = Calendar(identifier: .buddhist)
         buddhist.timeZone = timeZone
         #expect(buddhist.date(from: components) != expectedDate)
-        #expect(RemindersService.date(fromDueComponents: components) == expectedDate)
+        let store = EKEventStore()
+        let reminder = EKReminder(eventStore: store)
+        reminder.title = "Calendar-aware reminder"
+        reminder.calendar = EKCalendar(for: .reminder, eventStore: store)
+        reminder.startDateComponents = components
+        reminder.dueDateComponents = components
+        let formatter = ISO8601DateFormatter()
+        let payload = RemindersService.payload(from: reminder, formatter: formatter)
+        #expect(payload.dueISO == formatter.string(from: expectedDate))
     }
 }

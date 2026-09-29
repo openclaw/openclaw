@@ -1,6 +1,6 @@
 {
   "id": "document-extract",
-  "categories": ["context", "tools"],
+  "categories": ["documents-files"],
   "activation": {
     "onStartup": false
   },

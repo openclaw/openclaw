@@ -1,71 +1,16 @@
-// Gateway run-id to session-key resolver.
-// Bridges live agent run context with persisted session stores.
-import {
-  asDateTimestampMs,
-  resolveExpiresAtMsFromDurationMs,
-} from "@openclaw/normalization-core/number-coercion";
 import { AgentSelectionRequiredError, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { getAgentRunContext } from "../infra/agent-run-registry.js";
-import { pruneMapToMaxSize } from "../infra/map-size.js";
 import {
   normalizeAgentId,
   parseAgentSessionKey,
   toAgentRequestSessionKey,
 } from "../routing/session-key.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../sessions/session-id-resolution.js";
+import type { SessionRowProjection } from "./session-row-projection.js";
 import { resolveSessionStoreIdentity } from "./session-store-key.js";
-import { loadCombinedSessionStoreForGatewayCore } from "./session-utils.js";
-
-const RUN_LOOKUP_CACHE_LIMIT = 256;
-const RUN_LOOKUP_MISS_TTL_MS = 1_000;
-
-// Run-id to session-key lookup bridges live agent events and persisted session
-// stores. Positive hits are stable; misses stay short-lived so late transcript
-// writes can become visible without polling on every caller.
-type RunLookupCacheEntry = {
-  sessionKey: string | null;
-  expiresAt: number | null;
-};
-
-const resolvedSessionKeyByRunId = new Map<string, RunLookupCacheEntry>();
-
-function runLookupCacheKey(runId: string, agentId: string): string {
-  return `${agentId}\0${runId}`;
-}
-
-function setResolvedSessionKeyCache(
-  runId: string,
-  agentId: string,
-  sessionKey: string | null,
-): void {
-  if (!runId) {
-    return;
-  }
-  const cacheKey = runLookupCacheKey(runId, agentId);
-  if (
-    !resolvedSessionKeyByRunId.has(cacheKey) &&
-    resolvedSessionKeyByRunId.size >= RUN_LOOKUP_CACHE_LIMIT
-  ) {
-    pruneMapToMaxSize(resolvedSessionKeyByRunId, RUN_LOOKUP_CACHE_LIMIT - 1);
-  }
-  let expiresAt: number | null = null;
-  if (sessionKey === null) {
-    // Negative caching avoids repeated full-store scans while still allowing
-    // a just-created run/session pair to appear shortly after the first lookup.
-    const missExpiresAt = resolveExpiresAtMsFromDurationMs(RUN_LOOKUP_MISS_TTL_MS);
-    if (missExpiresAt === undefined) {
-      return;
-    }
-    expiresAt = missExpiresAt;
-  }
-  resolvedSessionKeyByRunId.set(cacheKey, {
-    sessionKey,
-    expiresAt,
-  });
-}
 
 // Keep global run matching scoped and reject malformed qualified keys before
 // normalizing aliases; the prepared owner must survive a main alias becoming global.
@@ -92,55 +37,39 @@ function resolveRunSessionKeyForCaller(storeKey: string) {
   return toAgentRequestSessionKey(storeKey) ?? storeKey;
 }
 
-/** Resolves the caller-facing session key for an active or recently persisted run id. */
-export function resolveSessionKeyForRun(runId: string, opts: { agentId?: string } = {}) {
-  const cfg = getRuntimeConfig();
-  const explicitAgentId =
-    typeof opts.agentId === "string" && opts.agentId.trim()
-      ? normalizeAgentId(opts.agentId)
-      : undefined;
-  const cached = getAgentRunContext(runId)?.sessionKey;
+/** Resolves live runs or the resident current-session ID index without storage reads. */
+export function resolveSessionKeyForRun(
+  runId: string,
+  opts: { agentId?: string; projection?: Pick<SessionRowProjection, "findBySessionId"> } = {},
+) {
+  const context = getAgentRunContext(runId);
+  // Keyless admission is intentional for hidden internal work; never infer its parent.
+  if (context && !context.sessionKey) {
+    return undefined;
+  }
+  const explicitAgentId = opts.agentId?.trim() ? normalizeAgentId(opts.agentId) : undefined;
+  const cached = context?.sessionKey;
   if (!explicitAgentId && cached) {
     return cached;
   }
+  const cfg = getRuntimeConfig();
   const requestedAgentId = explicitAgentId ?? normalizeAgentId(resolveDefaultAgentId(cfg));
-  const cacheAgentId = requestedAgentId;
   if (cached && sessionKeyMatchesAgent(cached, requestedAgentId, cfg)) {
-    const sessionKey = resolveRunSessionKeyForCaller(cached);
-    setResolvedSessionKeyCache(runId, cacheAgentId, sessionKey);
-    return sessionKey;
+    return resolveRunSessionKeyForCaller(cached);
   }
-  const cacheKey = runLookupCacheKey(runId, cacheAgentId);
-  const cachedLookup = resolvedSessionKeyByRunId.get(cacheKey);
-  if (cachedLookup !== undefined) {
-    if (cachedLookup.sessionKey !== null) {
-      return cachedLookup.sessionKey;
+  // The projection owns both hits and absence. Committed identity publications
+  // update its index, so orphan events need neither scans nor a timed miss cache.
+  const matches: Array<[string, SessionEntry]> = [];
+  for (const row of opts.projection?.findBySessionId({
+    sessionId: runId,
+    agentId: requestedAgentId,
+    federated: true,
+  }) ?? []) {
+    const entry = row.sharingEntry ?? row.entry;
+    if (entry?.sessionId === runId && sessionKeyMatchesAgent(row.key, requestedAgentId, cfg)) {
+      matches.push([row.key, entry]);
     }
-    const expiresAt = asDateTimestampMs(cachedLookup.expiresAt);
-    const now = asDateTimestampMs(Date.now());
-    if (expiresAt !== undefined && now !== undefined && expiresAt > now) {
-      return undefined;
-    }
-    resolvedSessionKeyByRunId.delete(cacheKey);
   }
-  const { store } = loadCombinedSessionStoreForGatewayCore(cfg, { agentId: requestedAgentId });
-  const matches = Object.entries(store).filter(
-    (entry): entry is [string, SessionEntry] =>
-      entry[1]?.sessionId === runId && sessionKeyMatchesAgent(entry[0], requestedAgentId, cfg),
-  );
   const storeKey = resolvePreferredSessionKeyForSessionIdMatches(matches, runId);
-  if (storeKey) {
-    // Return caller-facing agent request keys, not raw store keys, because
-    // HTTP/RPC clients reuse this value in later session operations.
-    const sessionKey = resolveRunSessionKeyForCaller(storeKey);
-    setResolvedSessionKeyCache(runId, cacheAgentId, sessionKey);
-    return sessionKey;
-  }
-  setResolvedSessionKeyCache(runId, cacheAgentId, null);
-  return undefined;
-}
-
-/** Clears the run lookup cache for tests that mutate session stores. */
-export function resetResolvedSessionKeyForRunCacheForTest(): void {
-  resolvedSessionKeyByRunId.clear();
+  return storeKey ? resolveRunSessionKeyForCaller(storeKey) : undefined;
 }

@@ -2,10 +2,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import JSON5 from "json5";
-import {
-  NON_PACKAGED_BUNDLED_PLUGIN_DIRS,
-  collectBundledPluginBuildEntries,
-} from "./bundled-plugin-build-entries.mjs";
+import { NON_PACKAGED_BUNDLED_PLUGIN_DIRS } from "../../src/shared/non-packaged-plugin-dirs.ts";
+import { collectBundledPluginBuildEntries } from "./bundled-plugin-build-entries.mjs";
 import { parsePositiveInt } from "./numeric-options.mjs";
 import { isRecord } from "./record-shared.mjs";
 
@@ -440,37 +438,21 @@ function buildGauntletPrebuildEnv(
   } = {},
 ) {
   const buildIds = new Set(normalizeStringArray(options.buildIds));
-  const runtimeOnlyPrebuildEnv = options.skipDeclarationBuild
-    ? { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" }
-    : {};
-  const hasRuntimeOnlyPrebuildEnv = Object.keys(runtimeOnlyPrebuildEnv).length > 0;
   if (options.includePrivateQa) {
     for (const pluginId of NON_PACKAGED_BUNDLED_PLUGIN_DIRS) {
       buildIds.add(pluginId);
     }
   }
-  if (!options.includePrivateQa) {
-    return buildIds.size === 0 && !hasRuntimeOnlyPrebuildEnv
-      ? env
-      : {
-          ...env,
-          PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: env.PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN ?? "false",
-          ...runtimeOnlyPrebuildEnv,
-          ...(buildIds.size > 0
-            ? {
-                OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: [...buildIds]
-                  .toSorted((left, right) => left.localeCompare(right))
-                  .join(","),
-              }
-            : {}),
-        };
+  if (!options.includePrivateQa && !options.skipDeclarationBuild && buildIds.size === 0) {
+    return env;
   }
   return {
     ...env,
     PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: env.PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN ?? "false",
-    ...runtimeOnlyPrebuildEnv,
-    OPENCLAW_BUILD_PRIVATE_QA: "1",
-    OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",
+    ...(options.skipDeclarationBuild ? { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" } : {}),
+    ...(options.includePrivateQa
+      ? { OPENCLAW_BUILD_PRIVATE_QA: "1", OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1" }
+      : {}),
     ...(buildIds.size > 0
       ? {
           OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: [...buildIds]

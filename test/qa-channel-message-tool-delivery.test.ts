@@ -302,7 +302,8 @@ describe("QA message-tool current conversation delivery", () => {
             { target: root },
             { to: root },
             { channelId: root },
-            ...(threadId ? [{ target: `${thread}/${threadId}` }, { threadId }] : []),
+            // Read-capable actions use the host-owned root plus explicit thread identity.
+            ...(threadId ? [{ threadId }] : []),
           ]) {
             const result = await tool.execute(`own-${args.action}`, {
               ...args,

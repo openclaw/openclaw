@@ -71,9 +71,17 @@ suite.define(() => {
         const initialHistory = {
           messages: [],
           sessionId,
-          sessionInfo: { key: sessionKey, kind: "direct", hasActiveRun: false, status: "done" },
+          sessionInfo: {
+            key: sessionKey,
+            sessionId,
+            kind: "direct",
+            hasActiveRun: false,
+            status: "done",
+          },
         };
         const gateway = await installMockGateway(page, {
+          sessionKey,
+          sessions: [initialHistory.sessionInfo],
           historyMessages: [],
           methodResponses: { "chat.startup": initialHistory, "chat.history": initialHistory },
         });
@@ -181,6 +189,7 @@ suite.define(() => {
           };
           const sessionInfo = {
             key: sessionKey,
+            sessionId,
             kind: "direct",
             activeRunIds: [runId],
             hasActiveRun: true,
@@ -216,14 +225,15 @@ suite.define(() => {
             },
             { runId },
           );
-          // Another session's update wakes the outbox without hydrating this transcript.
-          const wakeSessionKey = "agent:main:image-handoff-wakeup";
+          // The owning run's lifecycle update wakes its custody reconciliation.
           await gateway.emitGatewayEvent("sessions.changed", {
-            sessionKey: wakeSessionKey,
-            sessionId: "image-handoff-wakeup-session",
-            reason: "send",
+            sessionKey,
+            sessionId,
+            agentId: "main",
+            runId,
+            reason: "agent.run.started",
             hasActiveRun: true,
-            session: { key: wakeSessionKey, kind: "direct", hasActiveRun: true, status: "running" },
+            session: sessionInfo,
           });
           await gateway.waitForRequest("chat.history", { match: { limit: 1000 } });
 

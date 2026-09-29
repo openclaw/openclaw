@@ -1,18 +1,13 @@
-// Irc plugin module implements inbound behavior.
 import {
   logInboundDrop,
   resolveChannelInboundRouteEnvelope,
 } from "openclaw/plugin-sdk/channel-inbound";
-import {
-  channelIngressRoutes,
-  createChannelIngressResolver,
-} from "openclaw/plugin-sdk/channel-ingress-runtime";
+import { channelIngressRoutes } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   bindIngressLifecycleToReplyOptions,
   resolveChannelStreamingBlockEnabled,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import {
   deliverFormattedTextWithAttachments,
@@ -30,6 +25,7 @@ import {
   normalizeOptionalString,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ResolvedIrcAccount } from "./accounts.js";
 import { createIrcIngressSubject, ircIngressIdentity } from "./ingress-identity.js";
 import type { IrcIngressDispatchResult, IrcIngressLifecycle } from "./irc-ingress.js";
@@ -43,7 +39,6 @@ import type { CoreConfig, IrcInboundMessage } from "./types.js";
 const CHANNEL_ID = "irc" as const;
 type IrcGroupPolicy = "open" | "allowlist" | "disabled";
 
-const escapeIrcRegexLiteral = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 // IRC nicknames permit punctuation, so ASCII word boundaries lose valid leading/trailing chars.
 const IRC_NICK_CHARACTER = String.raw`[A-Za-z0-9_\-\[\]\\\x60^{}|~]`;
 const IRC_RFC1459_CASE_EQUIVALENTS = new Map([
@@ -61,8 +56,8 @@ function buildIrcNickMentionPattern(value: string): string {
   return Array.from(value, (character) => {
     const equivalent = IRC_RFC1459_CASE_EQUIVALENTS.get(character);
     return equivalent
-      ? `[${escapeIrcRegexLiteral(character)}${escapeIrcRegexLiteral(equivalent)}]`
-      : escapeIrcRegexLiteral(character);
+      ? `[${escapeRegExp(character)}${escapeRegExp(equivalent)}]`
+      : escapeRegExp(character);
   }).join("");
 }
 
@@ -136,7 +131,7 @@ export async function handleIrcInbound(params: {
   message: IrcInboundMessage;
   account: ResolvedIrcAccount;
   config: CoreConfig;
-  runtime: RuntimeEnv;
+  runtime: Pick<RuntimeEnv, "error" | "log">;
   connectedNick?: string;
   turnAdoptionLifecycle?: IrcIngressLifecycle;
   sendReply?: (target: string, text: string, replyToId?: string) => Promise<void>;
@@ -191,11 +186,11 @@ export async function handleIrcInbound(params: {
   });
 
   const allowTextCommands = core.channel.commands.shouldHandleTextCommands({
-    cfg: config as OpenClawConfig,
+    cfg: config,
     surface: CHANNEL_ID,
   });
-  const hasControlCommand = core.channel.text.hasControlCommand(rawBody, config as OpenClawConfig);
-  const mentionRegexes = core.channel.mentions.buildMentionRegexes(config as OpenClawConfig);
+  const hasControlCommand = core.channel.text.hasControlCommand(rawBody, config);
+  const mentionRegexes = core.channel.mentions.buildMentionRegexes(config);
   const mentionNick = connectedNick?.trim() || account.nick;
   const explicitMentionRegex = mentionNick
     ? new RegExp(
@@ -225,7 +220,7 @@ export async function handleIrcInbound(params: {
       : `#${message.target}`;
   const peerId = message.isGroup ? channelTarget : message.senderNick;
   const { route, buildEnvelope } = resolveChannelInboundRouteEnvelope({
-    cfg: config as OpenClawConfig,
+    cfg: config,
     channel: CHANNEL_ID,
     accountId: account.accountId,
     peer: {
@@ -233,57 +228,59 @@ export async function handleIrcInbound(params: {
       id: peerId,
     },
   });
-  const access = await createChannelIngressResolver({
-    channelId: CHANNEL_ID,
-    accountId: account.accountId,
-    identity: ircIngressIdentity,
-    cfg: config as OpenClawConfig,
-    readStoreAllowFrom: async () => await pairing.readAllowFromStore(),
-  }).message({
-    subject: createIrcIngressSubject(message),
-    conversation: {
-      kind: message.isGroup ? "group" : "direct",
-      id: message.target,
-    },
-    contextBinding: {
-      agentId: route.agentId,
-      sessionKey: route.sessionKey,
-      ...(message.messageId ? { messageId: message.messageId } : {}),
-      inboundEventKind: "user_request",
-    },
-    route: routeDescriptorsForIrcGroup({
-      isGroup: message.isGroup,
-      groupPolicy,
-      groupAllowed: groupMatch.allowed,
-      hasConfiguredGroups: groupMatch.hasConfiguredGroups,
-      groupEnabled:
-        groupMatch.groupConfig?.enabled !== false && groupMatch.wildcardConfig?.enabled !== false,
-      routeGroupAllowFrom,
-    }),
-    mentionFacts: message.isGroup
-      ? {
-          canDetectMention: true,
-          wasMentioned,
-          hasAnyMention: wasMentioned,
-        }
-      : undefined,
-    dmPolicy,
-    groupPolicy: accessGroupPolicy,
-    policy: {
-      groupAllowFromFallbackToAllowFrom: false,
-      mutableIdentifierMatching: allowNameMatching ? "enabled" : "disabled",
-      activation: {
-        requireMention: message.isGroup && requireMention,
-        allowTextCommands,
+  const access = await core.channel.inbound.ingress
+    .createResolver({
+      channelId: CHANNEL_ID,
+      accountId: account.accountId,
+      identity: ircIngressIdentity,
+      cfg: config,
+      readStoreAllowFrom: async () => await pairing.readAllowFromStore(),
+    })
+    .message({
+      subject: createIrcIngressSubject(message),
+      conversation: {
+        kind: message.isGroup ? "group" : "direct",
+        id: message.target,
       },
-    },
-    allowFrom: account.config.allowFrom,
-    groupAllowFrom: account.config.groupAllowFrom,
-    command: {
-      allowTextCommands,
-      hasControlCommand,
-    },
-  });
+      contextBinding: {
+        agentId: route.agentId,
+        sessionKey: route.sessionKey,
+        ...(message.messageId ? { messageId: message.messageId } : {}),
+        inboundEventKind: "user_request",
+      },
+      route: routeDescriptorsForIrcGroup({
+        isGroup: message.isGroup,
+        groupPolicy,
+        groupAllowed: groupMatch.allowed,
+        hasConfiguredGroups: groupMatch.hasConfiguredGroups,
+        groupEnabled:
+          groupMatch.groupConfig?.enabled !== false && groupMatch.wildcardConfig?.enabled !== false,
+        routeGroupAllowFrom,
+      }),
+      mentionFacts: message.isGroup
+        ? {
+            canDetectMention: true,
+            wasMentioned,
+            hasAnyMention: wasMentioned,
+          }
+        : undefined,
+      dmPolicy,
+      groupPolicy: accessGroupPolicy,
+      policy: {
+        groupAllowFromFallbackToAllowFrom: false,
+        mutableIdentifierMatching: allowNameMatching ? "enabled" : "disabled",
+        activation: {
+          requireMention: message.isGroup && requireMention,
+          allowTextCommands,
+        },
+      },
+      allowFrom: account.config.allowFrom,
+      groupAllowFrom: account.config.groupAllowFrom,
+      command: {
+        allowTextCommands,
+        hasControlCommand,
+      },
+    });
   const commandAuthorized = access.commandAccess.authorized;
 
   if (access.ingress.admission === "pairing-required") {
@@ -414,7 +411,7 @@ export async function handleIrcInbound(params: {
     : undefined;
 
   await core.channel.inbound.dispatch({
-    cfg: config as OpenClawConfig,
+    cfg: config,
     channel: CHANNEL_ID,
     accountId: account.accountId,
     route: { agentId: route.agentId, sessionKey: route.sessionKey },

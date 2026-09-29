@@ -2,10 +2,13 @@ import { html, type TemplateResult } from "lit";
 import { renderHubTabs } from "../../components/hub-tabs.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
+import { registerSkillWorkshopEnglish } from "../../i18n/locales/en-skill-workshop.ts";
 import type { SkillWorkshopMode } from "../../lib/skill-workshop/index.ts";
 import type { SkillWorkshopState } from "./proposals.ts";
 import { renderSelfLearningToggle, type SkillWorkshopSelfLearning } from "./self-learning.ts";
 import { saveSkillWorkshopMode } from "./storage.ts";
+
+registerSkillWorkshopEnglish();
 
 type SkillWorkshopHeaderProps = {
   selfLearning: SkillWorkshopSelfLearning | null;

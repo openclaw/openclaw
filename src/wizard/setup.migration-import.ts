@@ -67,6 +67,33 @@ const loadMigrationContextModule = createLazyRuntimeModule(
 
 const loadConfigPathsModule = createLazyRuntimeModule(() => import("../config/paths.js"));
 
+async function detectSetupMigrationSource(
+  provider: MigrationProviderPlugin,
+  ctx: MigrationProviderContext,
+): Promise<SetupMigrationDetection | undefined> {
+  if (!provider.detect) {
+    return undefined;
+  }
+  try {
+    const detection = await provider.detect(ctx);
+    if (detection.found) {
+      return {
+        providerId: provider.id,
+        label: detection.label ?? provider.label,
+        ...(detection.source ? { source: detection.source } : {}),
+        ...(detection.message ? { message: detection.message } : {}),
+      };
+    }
+  } catch (error) {
+    // Detection is advisory; one failing provider must not prevent onboarding
+    // from offering other migration sources.
+    ctx.logger.debug?.(
+      `Migration provider ${provider.id} detection failed: ${formatErrorMessage(error)}`,
+    );
+  }
+  return undefined;
+}
+
 export async function detectSetupMigrationSources(params: {
   config: OpenClawConfig;
   runtime: RuntimeEnv;
@@ -94,29 +121,13 @@ export async function detectSetupMigrationSources(params: {
       const logger = createMigrationLogger(params.runtime);
       const detections: SetupMigrationDetection[] = [];
       for (const provider of providers) {
-        if (!provider.detect) {
-          continue;
-        }
-        try {
-          const detection = await provider.detect({
-            config: params.config,
-            stateDir,
-            logger,
-          });
-          if (detection.found) {
-            detections.push({
-              providerId: provider.id,
-              label: detection.label ?? provider.label,
-              ...(detection.source ? { source: detection.source } : {}),
-              ...(detection.message ? { message: detection.message } : {}),
-            });
-          }
-        } catch (error) {
-          // Detection is advisory; one failing provider must not prevent onboarding
-          // from offering other migration sources.
-          logger.debug?.(
-            `Migration provider ${provider.id} detection failed: ${formatErrorMessage(error)}`,
-          );
+        const detection = await detectSetupMigrationSource(provider, {
+          config: params.config,
+          stateDir,
+          logger,
+        });
+        if (detection) {
+          detections.push(detection);
         }
       }
       return { detections, providerDescriptors: providers.map(describeSetupMigrationProvider) };
@@ -211,14 +222,10 @@ export async function listSetupMigrationOptions(params: {
         : {}),
     });
   }
-  for (const provider of providers) {
-    addOption({
-      providerId: provider.providerId,
-      label: t("wizard.migration.importFrom", { source: provider.label }),
-      hint: provider.description ?? t("wizard.migration.sourcePathHint"),
-    });
-  }
-  for (const provider of resolveManifestSetupMigrationProviders(params.baseConfig)) {
+  for (const provider of [
+    ...providers,
+    ...resolveManifestSetupMigrationProviders(params.baseConfig),
+  ]) {
     addOption({
       providerId: provider.providerId,
       label: t("wizard.migration.importFrom", { source: provider.label }),
@@ -272,12 +279,7 @@ async function selectSetupMigrationProvider(params: {
   return assertListedMigrationProvider(selection.value, options);
 }
 
-/**
- * Rejects a provider id that is absent from the listed options, naming the ids that are present.
- * `openclaw migrate` already answers an unknown provider this way; onboarding has to match, because
- * a typed id is far likelier to be a typo here than a genuinely missing plugin. An undefined id
- * means the operator dismissed the prompt, which is a cancellation rather than a bad choice.
- */
+/** Undefined means cancellation; unknown ids receive the same guidance as `openclaw migrate`. */
 function assertListedMigrationProvider(
   providerId: string | undefined,
   options: readonly SetupMigrationOption[],
@@ -450,28 +452,14 @@ export async function runSetupMigrationImport(params: {
         });
         const migrationLogger = createMigrationLogger(params.runtime);
         const selectedDetections = [...params.detections];
-        if (
-          resolvedProvider.provider.detect &&
-          !selectedDetections.some((detection) => detection.providerId === providerId)
-        ) {
-          try {
-            const detection = await resolvedProvider.provider.detect({
-              config: resolvedProvider.baseConfig,
-              stateDir,
-              logger: migrationLogger,
-            });
-            if (detection.found) {
-              selectedDetections.push({
-                providerId,
-                label: detection.label ?? resolvedProvider.provider.label,
-                ...(detection.source ? { source: detection.source } : {}),
-                ...(detection.message ? { message: detection.message } : {}),
-              });
-            }
-          } catch (error) {
-            migrationLogger.debug?.(
-              `Migration provider ${providerId} detection failed: ${formatErrorMessage(error)}`,
-            );
+        if (!selectedDetections.some((detection) => detection.providerId === providerId)) {
+          const detection = await detectSetupMigrationSource(resolvedProvider.provider, {
+            config: resolvedProvider.baseConfig,
+            stateDir,
+            logger: migrationLogger,
+          });
+          if (detection) {
+            selectedDetections.push(detection);
           }
         }
         const sourceDefault = resolveImportSourceDefault({
@@ -539,7 +527,6 @@ export async function runSetupMigrationImport(params: {
         });
         await prepareSetupMigrationAttemptBoundary({
           currentConfig: await params.readConfigFile(),
-          targetConfig,
           stateDir,
           workspaceDir,
           plan,
@@ -597,10 +584,7 @@ export async function runSetupMigrationImport(params: {
               workspaceDir: stage.staged.workspaceDir,
               agentDir: stage.staged.agentDir,
               stateDir: stage.staged.stateDir,
-              writeConfig: async (config) => {
-                stage.replaceStagedConfig(config);
-                return stage.getStagedConfig();
-              },
+              configTarget: stage.inferenceConfigTarget,
               required: true,
             });
             if (!verification.verified || !verification.modelRef) {

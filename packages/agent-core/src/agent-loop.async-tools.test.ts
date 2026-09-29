@@ -461,9 +461,96 @@ it("persists async calls before admission, streams the remaining answer, and exe
   }
 });
 
-it.each(["error", "aborted"] as const)(
-  "settles running async tools and fences queued source starts when the response is %s",
-  async (stopReason) => {
+it("preserves external cancellation when an output-limited async batch hits the critical loop limit", async () => {
+  const response = createAssistantMessageEventStream();
+  const beforeBatch = createDeferred();
+  const releaseBatch = createDeferred();
+  const controller = new AbortController();
+  const execute = vi.fn(async () => ({ content: [], details: {} }));
+  const loop = call("loop");
+  const events: AgentEvent[] = [];
+  const run = runAgentLoop(
+    [{ role: "user", content: "continue", timestamp: 0 }],
+    { systemPrompt: "", messages: [], tools: [tool("loop", execute)] },
+    {
+      model,
+      convertToLlm: (messages) => messages as Context["messages"],
+      toolLoopRecoveryState: { criticalToolLoopSeen: true },
+      beforeToolBatch: async () => {
+        beforeBatch.resolve();
+        await releaseBatch.promise;
+        return {
+          intervention: {
+            kind: "critical-tool-loop",
+            toolCallId: loop.id,
+            toolName: loop.name,
+            actionKey: "loop:same-action",
+            detector: "generic_repeat",
+            count: 20,
+            reason: "Repeated critical tool loop",
+          },
+        };
+      },
+    },
+    (event) => {
+      events.push(event);
+      if (event.type === "tool_execution_end") {
+        controller.abort(new Error("Operator stopped the run"));
+      }
+    },
+    controller.signal,
+    () => response,
+  );
+  try {
+    response.push({ type: "start", partial: assistant([]) });
+    response.push({
+      type: "toolcall_end",
+      contentIndex: 0,
+      toolCall: loop,
+      partial: assistant([loop]),
+    });
+    await beforeBatch.promise;
+    response.push({
+      type: "error",
+      reason: "error",
+      error: {
+        ...assistant([loop], "error"),
+        errorCode: "incomplete_tool_call",
+        diagnostics: [
+          {
+            type: "openai_responses_terminal",
+            timestamp: 1,
+            details: {
+              eventType: "response.incomplete",
+              stopReason: "length",
+              incompleteReason: "max_output_tokens",
+            },
+          },
+        ],
+      },
+    });
+    response.end();
+    releaseBatch.resolve();
+    const messages = await run;
+    expect(execute).not.toHaveBeenCalled();
+    expect(messages.findLast((message) => message.role === "assistant")).toMatchObject({
+      stopReason: "aborted",
+      usage,
+    });
+    expect(events.filter((event) => event.type === "agent_end")).toHaveLength(1);
+  } finally {
+    releaseBatch.resolve();
+    controller.abort();
+    response.end();
+    await run;
+  }
+});
+
+it.each(["error", "aborted", "output-limit"] as const)(
+  "settles running async tools with queued source starts after %s",
+  async (failureKind) => {
+    const stopReason = failureKind === "aborted" ? "aborted" : "error";
+    const outputLimit = failureKind === "output-limit";
     const response = createAssistantMessageEventStream();
     const gate = createDeferred();
     const persistTerminal = createDeferred();
@@ -471,8 +558,9 @@ it.each(["error", "aborted"] as const)(
     const second = call("second");
     const persisted: AgentMessage[] = [];
     const events: AgentEvent[] = [];
-    const firstExecute = vi.fn(async () => {
+    const firstExecute = vi.fn<AgentTool["execute"]>(async (_id, _args, signal) => {
       await gate.promise;
+      expect(signal?.aborted).toBe(!outputLimit);
       return { content: [], details: {} };
     });
     const secondExecute = vi.fn(async () => ({ content: [], details: {} }));
@@ -519,10 +607,32 @@ it.each(["error", "aborted"] as const)(
         partial: assistant([first, second]),
       });
       await vi.waitFor(() => expect(firstExecute).toHaveBeenCalledTimes(1));
-      const failure = { ...assistant([first, second], stopReason), errorMessage: "stream failed" };
+      const failure = {
+        ...assistant([first, second], stopReason),
+        errorMessage: "stream failed",
+        ...(outputLimit
+          ? {
+              errorCode: "incomplete_tool_call",
+              diagnostics: [
+                {
+                  type: "openai_responses_terminal",
+                  timestamp: 1,
+                  details: {
+                    eventType: "response.incomplete",
+                    stopReason: "length",
+                    incompleteReason: "max_output_tokens",
+                  },
+                },
+              ],
+            }
+          : {}),
+      };
       response.push({ type: "error", reason: stopReason, error: failure });
       response.end();
       closed = true;
+      if (outputLimit) {
+        gate.resolve();
+      }
       await vi.waitFor(() =>
         expect(
           persisted.some(
@@ -535,11 +645,11 @@ it.each(["error", "aborted"] as const)(
       await vi.waitFor(() =>
         expect(persisted.filter((message) => message.role === "toolResult")).toHaveLength(2),
       );
-      expect(secondExecute).not.toHaveBeenCalled();
+      expect(secondExecute).toHaveBeenCalledTimes(outputLimit ? 1 : 0);
       persistTerminal.resolve();
       const result = await run;
       expect(result).toEqual(persisted);
-      expect(secondExecute).not.toHaveBeenCalled();
+      expect(secondExecute).toHaveBeenCalledTimes(outputLimit ? 1 : 0);
       expect(streamFn).toHaveBeenCalledTimes(1);
       expect(
         result
@@ -547,7 +657,7 @@ it.each(["error", "aborted"] as const)(
           .map((message) => ({ id: message.toolCallId, isError: message.isError })),
       ).toEqual([
         { id: "first", isError: false },
-        { id: "second", isError: true },
+        { id: "second", isError: !outputLimit },
       ]);
       expect(events.at(-1)?.type).toBe("agent_end");
     } finally {

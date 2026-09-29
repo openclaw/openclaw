@@ -9,6 +9,8 @@ type WidgetSandboxHostOptions = {
   sandboxOrigin: string;
   sandboxUrl: string;
   documentKey: string;
+  /** Restricts the untrusted inner document, not the trusted transport shell. */
+  allowScripts?: boolean;
   loadDocument: (signal: AbortSignal) => Promise<string>;
   onLoaded: () => void;
   onRendered?: () => void;
@@ -21,10 +23,10 @@ export class WidgetSandboxHost {
   private active = true;
   private proxyReady = false;
   private readyTimer: number | null = null;
-  private loadedDocumentKey: string | null = null;
+  private documentLoaded = false;
   private renderId: string | null = null;
-  private pendingDocument: { key: string; html: string } | null = null;
-  private activeLoad: { key: string; controller: AbortController; timeout: number } | null = null;
+  private pendingDocument: string | null = null;
+  private activeLoad: { controller: AbortController; timeout: number } | null = null;
 
   constructor(private options: WidgetSandboxHostOptions) {
     // Owners finish installing their bridge before an immediate load can report back.
@@ -40,7 +42,7 @@ export class WidgetSandboxHost {
   }
 
   get loaded(): boolean {
-    return this.loadedDocumentKey === this.options.documentKey;
+    return this.documentLoaded;
   }
 
   update(options: WidgetSandboxHostOptions): void {
@@ -54,7 +56,6 @@ export class WidgetSandboxHost {
     if (sandboxChanged) {
       // Bytes may arrive early, but only the new proxy can enforce the new CSP.
       this.proxyReady = false;
-      this.clearReadyTimeout();
     }
     this.start();
   }
@@ -76,13 +77,12 @@ export class WidgetSandboxHost {
     this.cancelLoad();
     this.clearReadyTimeout();
     this.renderId = null;
-    this.loadedDocumentKey = null;
+    this.documentLoaded = false;
     this.pendingDocument = null;
   }
 
   dispose(): void {
     this.active = false;
-    this.clearReadyTimeout();
     this.reset();
     this.proxyReady = false;
   }
@@ -176,19 +176,17 @@ export class WidgetSandboxHost {
   }
 
   private async loadDocument(): Promise<void> {
-    const { documentKey, loadDocument } = this.options;
+    const { loadDocument } = this.options;
     if (
       this.loaded ||
-      this.pendingDocument?.key === documentKey ||
-      this.activeLoad?.key === documentKey ||
+      this.pendingDocument !== null ||
+      this.activeLoad !== null ||
       !this.frame.contentWindow
     ) {
       return;
     }
-    this.cancelLoad();
     const controller = new AbortController();
     const load = {
-      key: documentKey,
       controller,
       timeout: window.setTimeout(
         () => controller.abort(new DOMException("The operation timed out.", "TimeoutError")),
@@ -206,7 +204,7 @@ export class WidgetSandboxHost {
       if (!this.active || this.activeLoad !== load || !this.frame.isConnected) {
         return;
       }
-      this.pendingDocument = { key: documentKey, html };
+      this.pendingDocument = html;
       this.deliverDocument();
     } catch (error) {
       if (this.activeLoad === load && this.active && this.frame.isConnected) {
@@ -223,7 +221,7 @@ export class WidgetSandboxHost {
 
   private deliverDocument(): void {
     const document = this.pendingDocument;
-    if (!this.active || !this.proxyReady || !document || !this.frame.isConnected) {
+    if (!this.active || !this.proxyReady || document === null || !this.frame.isConnected) {
       return;
     }
     this.renderId = generateUUID();
@@ -232,12 +230,16 @@ export class WidgetSandboxHost {
       {
         jsonrpc: "2.0",
         method: "ui/notifications/sandbox-resource-ready",
-        params: { html: document.html, renderId: this.renderId },
+        params: {
+          html: document,
+          renderId: this.renderId,
+          ...(this.options.allowScripts === false ? { allowScripts: false } : {}),
+        },
       },
       this.options.sandboxOrigin,
     );
     this.pendingDocument = null;
-    this.loadedDocumentKey = document.key;
+    this.documentLoaded = true;
     this.options.onLoaded();
   }
 }

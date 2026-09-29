@@ -29,7 +29,9 @@ type ProviderMonitorTestMocks = {
   createDiscordNativeCommandMock: Mock<(params?: { command?: { name?: string } }) => unknown>;
   createDiscordMessageHandlerMock: Mock<() => unknown>;
   createNoopThreadBindingManagerMock: Mock<() => { stop: ReturnType<typeof vi.fn> }>;
-  createThreadBindingManagerMock: Mock<() => { stop: ReturnType<typeof vi.fn> }>;
+  createThreadBindingManagerMock: Mock<
+    () => { stop: ReturnType<typeof vi.fn> } | Promise<{ stop: ReturnType<typeof vi.fn> }>
+  >;
   reconcileAcpThreadBindingsOnStartupMock: Mock<() => unknown>;
   createdBindingManagers: Array<{ stop: ReturnType<typeof vi.fn> }>;
   getAcpSessionStatusMock: Mock<
@@ -503,6 +505,7 @@ vi.mock(buildDiscordSourceModuleId("monitor/listeners.js"), () => ({
   DiscordReactionListener: function DiscordReactionListener() {},
   DiscordReactionRemoveListener: function DiscordReactionRemoveListener() {},
   DiscordThreadDeleteListener: function DiscordThreadDeleteListener() {},
+  DiscordThreadReadyListener: function DiscordThreadReadyListener() {},
   DiscordThreadUpdateListener: function DiscordThreadUpdateListener() {},
   registerDiscordListener: vi.fn(),
 }));

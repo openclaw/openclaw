@@ -1,4 +1,3 @@
-// Voice Call plugin module implements voice mapping behavior.
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 /**

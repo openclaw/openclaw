@@ -68,7 +68,7 @@ const RepositoryProject = z.object({
 
 export type RepositoryWorkerProjectSnapshot = z.infer<typeof RepositoryProject>;
 
-/** Public project facts persist; current visibility and access remain admission checks. */
+/** Repository facts persist; current visibility and access remain admission checks. */
 export function readRepositoryWorkerProjectSnapshot(
   value: unknown,
 ): RepositoryWorkerProjectSnapshot | undefined {

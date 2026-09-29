@@ -1,18 +1,15 @@
 /* @vitest-environment jsdom */
 
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import type { GatewaySessionRow, SessionsListResult, SessionsPatchResult } from "../api/types.ts";
 import {
   createTestSessionCapability,
   sessionsResult,
 } from "../lib/sessions/session-capability.test-support.ts";
+import { activateSessionMenuValue } from "../test-helpers/app-sidebar-menu.ts";
 import "../test-helpers/app-sidebar-suite.ts";
-import {
-  createGateway,
-  createGatewayHarness,
-  deferred,
-  mountSidebar,
-} from "../test-helpers/app-sidebar.ts";
+import { createGateway, createGatewayHarness, mountSidebar } from "../test-helpers/app-sidebar.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import "./app-sidebar.ts";
@@ -43,8 +40,6 @@ describe("sidebar routed-lineage freshness", () => {
       };
       const initialParent = deferred<{ session: GatewaySessionRow }>();
       const freshSelected = deferred<{ session: GatewaySessionRow }>();
-      const freshParent = deferred<{ session: GatewaySessionRow }>();
-      let filterChanged = false;
       const request = vi.fn(async (method, raw) => {
         const params = raw && typeof raw === "object" ? raw : {};
         if (method === "sessions.list") {
@@ -59,7 +54,7 @@ describe("sidebar routed-lineage freshness", () => {
             return freshSelected.promise;
           }
           if (key === mainKey) {
-            return filterChanged ? freshParent.promise : initialParent.promise;
+            return initialParent.promise;
           }
           throw new Error(`Unexpected describe key: ${String(key)}`);
         }
@@ -79,7 +74,7 @@ describe("sidebar routed-lineage freshness", () => {
         sidebar.activeRouteId = "chat";
         sidebar.sessionKey = selected.key;
         if (kind === "main child") {
-          // Keep the original ancestry pending so the filter starts a fresh lookup.
+          // Keep the shared ancestry read pending across the roster filter change.
           await waitForFast(() =>
             expect(request).toHaveBeenCalledWith("sessions.describe", { key: mainKey }),
           );
@@ -90,7 +85,6 @@ describe("sidebar routed-lineage freshness", () => {
         }
         await waitForFast(() => expect(row()).not.toBeNull());
 
-        filterChanged = true;
         sidebar.sessionOrganizer.setSessionsStatusFilter("archived");
         expect(sidebar.sessionData.childSessionRowsByParent).toEqual({});
         await waitForFast(() =>
@@ -108,14 +102,7 @@ describe("sidebar routed-lineage freshness", () => {
 
         freshSelected.resolve({ session: selected });
         if (kind === "main child") {
-          await waitForFast(() =>
-            expect(
-              request.mock.calls.filter(
-                ([method, params]) => method === "sessions.describe" && params?.key === mainKey,
-              ),
-            ).toHaveLength(2),
-          );
-          freshParent.resolve({ session: parent });
+          initialParent.resolve({ session: parent });
         }
         await waitForFast(() =>
           expect(sidebar.sessionData.activeSessionLineageRoot?.key).toBe(
@@ -123,8 +110,29 @@ describe("sidebar routed-lineage freshness", () => {
           ),
         );
         await sidebar.updateComplete;
+        if (kind === "main child") {
+          expect(
+            request.mock.calls.filter(
+              ([method, params]) => method === "sessions.describe" && params?.key === mainKey,
+            ),
+          ).toHaveLength(1);
+        }
         expect(sidebar.sessionKey).toBe(selected.key);
         expect(sidebar.activeRouteId).toBe("chat");
+        expect(sidebar.sessionData.activeSessionLineageSelectedRow?.key).toBe(selected.key);
+        expect(sidebar.sessionData.sessionsResult?.sessions).toEqual([]);
+        expect(row()).toBeNull();
+
+        const describes = () =>
+          request.mock.calls.filter(
+            ([method, params]) => method === "sessions.describe" && params?.key === selected.key,
+          );
+        const settledDescribes = describes().length;
+        await sessions.refresh({ agentId: "main", force: true });
+        await sidebar.updateComplete;
+        await sidebar.sessionData.loadActiveSessionLineage(selected.key);
+        await sidebar.updateComplete;
+        expect(describes()).toHaveLength(settledDescribes);
         expect(sidebar.sessionData.activeSessionLineageSelectedRow?.key).toBe(selected.key);
         expect(sidebar.sessionData.sessionsResult?.sessions).toEqual([]);
         expect(row()).toBeNull();
@@ -133,7 +141,6 @@ describe("sidebar routed-lineage freshness", () => {
         sessions.dispose();
         initialParent.resolve({ session: parent });
         freshSelected.resolve({ session: selected });
-        freshParent.resolve({ session: parent });
         await sidebar.updateComplete;
       }
     },
@@ -386,14 +393,7 @@ describe("sidebar routed-lineage freshness", () => {
       let lineage: Promise<void> | undefined;
       let children: Promise<void> | undefined;
       try {
-        sidebar.querySelector<HTMLButtonElement>(".sidebar-session-sort")!.click();
-        await sidebar.updateComplete;
-        sidebar.querySelector(".sidebar-session-sort-menu")!.dispatchEvent(
-          new CustomEvent("wa-select", {
-            bubbles: true,
-            detail: { item: { value: "owner:ada" } },
-          }),
-        );
+        await activateSessionMenuValue(sidebar, "owner:ada");
         await waitForFast(() => {
           expect(sidebar.sessionOwnerFilterId).toBe(owner.id);
           expect(sidebar.sessionData.sessionsResult?.sessions.some((row) => row.key === key)).toBe(
@@ -471,8 +471,9 @@ describe("sidebar routed-lineage freshness", () => {
   ])(
     "refreshes a routed child while preserving filtered membership (listed: $listed, rejected refresh: $rejectRefresh, pending selection: $pendingSelection)",
     async ({ listed, rejectRefresh, pendingSelection }) => {
+      vi.useFakeTimers();
       const parentKey = "agent:main:parent";
-      const key = "agent:main:subagent:child";
+      const key = "agent:main:dashboard:child";
       const otherKey = "agent:main:other-owner";
       const owner = { type: "human" as const, id: "ada", label: "Ada" };
       const otherOwner = { type: "human" as const, id: "bob", label: "Bob" };
@@ -567,14 +568,7 @@ describe("sidebar routed-lineage freshness", () => {
       try {
         await sessions.refresh({ agentId: "main", force: true });
         const { sidebar } = await mountSidebar(gateway, sessions);
-        sidebar.querySelector<HTMLButtonElement>(".sidebar-session-sort")!.click();
-        await sidebar.updateComplete;
-        sidebar.querySelector(".sidebar-session-sort-menu")!.dispatchEvent(
-          new CustomEvent("wa-select", {
-            bubbles: true,
-            detail: { item: { value: "owner:ada" } },
-          }),
-        );
+        await activateSessionMenuValue(sidebar, "owner:ada");
         await waitForFast(() => {
           expect(sidebar.sessionOwnerFilterId).toBe(owner.id);
           expect(sidebar.sessionData.sessionsLoading).toBe(false);
@@ -660,16 +654,14 @@ describe("sidebar routed-lineage freshness", () => {
                 activeRunIds: pendingSelection === "introduced-overlap" ? ["remaining-run"] : [],
               });
             } else if (pendingSelection === "introduced-event") {
-              expect(
-                sessions.reconcileChanged({
-                  key,
-                  sessionId: child.sessionId,
-                  updatedAt: 5,
-                  hasActiveRun: true,
-                  status: "running",
-                  archived: false,
-                }).applied,
-              ).toBe(true);
+              gatewayHarness.publishEvent("sessions.changed", {
+                key,
+                sessionId: child.sessionId,
+                updatedAt: 5,
+                hasActiveRun: true,
+                status: "running",
+                archived: false,
+              });
               expect(sessions.state.result?.sessions.find((row) => row.key === key)?.status).toBe(
                 "running",
               );
@@ -763,7 +755,7 @@ describe("sidebar routed-lineage freshness", () => {
             "Latest filtered child",
           );
           if (pendingSelection === "deletion") {
-            sessions.reconcileChanged({
+            gatewayHarness.publishEvent("sessions.changed", {
               key,
               sessionId: child.sessionId,
               agentId: "main",
@@ -811,9 +803,15 @@ describe("sidebar routed-lineage freshness", () => {
             ).toBe(false);
             return;
           }
-          expect(
-            sidebar.sessionData.sessionsResult?.sessions.find((row) => row.key === key),
-          ).toMatchObject({
+          const listedRow = sidebar.sessionData.sessionsResult?.sessions.find(
+            (row) => row.key === key,
+          );
+          expect({
+            label: listedRow?.label,
+            derivedTitle: listedRow?.derivedTitle,
+            lastMessagePreview: listedRow?.lastMessagePreview,
+            status: listedRow?.status,
+          }).toStrictEqual({
             ...presentation("Latest filtered child"),
             status: "done",
           });
@@ -829,7 +827,19 @@ describe("sidebar routed-lineage freshness", () => {
         }
 
         if (rejectRefresh) {
-          await waitForFast(() => expect(rejectedReads).toBe(1));
+          await vi.advanceTimersByTimeAsync(0);
+          await sidebar.updateComplete;
+          expect(sidebar.querySelector(`[data-session-key="${key}"]`)?.textContent).toContain(
+            "Current child",
+          );
+          gatewayHarness.publishEvent("sessions.changed", {
+            sessionKey: key,
+            agentId: "main",
+            reason: "patch",
+            spawnedBy: parentKey,
+          });
+          await vi.advanceTimersByTimeAsync(5_000);
+          expect(rejectedReads).toBe(1);
           expect(sidebar.textContent).toContain("Filtered session refresh unavailable");
         }
         await waitForFast(() =>

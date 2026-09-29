@@ -1,19 +1,18 @@
 import { vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type {
-  GatewaySessionRow,
-  SessionCompactionCheckpoint,
-  SessionsListResult,
-} from "../../api/types.ts";
+import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type {
   SessionCapability,
   SessionListOptions,
   SessionListSnapshot,
 } from "../../lib/sessions/index.ts";
+import { createSessionArchiveState } from "../../lib/sessions/session-archive-state.ts";
 import type { SessionRefreshOptions } from "../../lib/sessions/session-capability.ts";
+import { createSessionRowProvenance } from "../../lib/sessions/session-row-provenance.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
-import { sessionsPageListQuery, type SessionsRouteData } from "./route.ts";
+import { buildSessionsListQuery } from "./list-query.ts";
+import type { SessionsRouteData } from "./route.ts";
 import "./sessions-page.ts";
 
 export type TestSessionsPage = HTMLElement & {
@@ -25,19 +24,18 @@ export type TestSessionsPage = HTMLElement & {
   result: SessionsListResult | null;
   error: string | null;
   loading: boolean;
+  refreshing: boolean;
   statusFilter: "active" | "archived" | "all";
-  selectedKeys: Set<string>;
+  selectedSessions: Map<
+    string,
+    Pick<GatewaySessionRow, "key" | "archived" | "sessionId" | "label" | "displayName">
+  >;
   sessionMenu: { key: string; x: number; y: number } | null;
   sessionMenuTrigger: HTMLElement | null;
-  checkpointItemsByKey: Record<string, SessionCompactionCheckpoint[]>;
-  checkpointErrorByKey: Record<string, string>;
-  checkpointLoadingKey: string | null;
-  checkpointBusyKey: string | null;
   sessionMutationPending: boolean;
   transcriptSearchQuery: string;
   updateTranscriptSearchQuery: (query: string) => void;
   runTranscriptSearch: () => Promise<void>;
-  loadCheckpoint: (sessionKey: string) => Promise<void>;
   deleteSelected: () => Promise<void>;
   deleteSessionFromMenu: (row: GatewaySessionRow) => Promise<void>;
   deleteAllArchived: () => Promise<void>;
@@ -57,8 +55,6 @@ export type TestSessionsPage = HTMLElement & {
   ) => Promise<unknown>;
   archiveSessionWithUndo: (row: GatewaySessionRow) => Promise<void>;
   forkSession: (key: string, fromLastCompleted?: boolean) => Promise<void>;
-  branchCheckpoint: (sessionKey: string, checkpointId: string) => Promise<void>;
-  restoreCheckpoint: (sessionKey: string, checkpointId: string) => Promise<void>;
   runPluginAction: (id: string, session: GatewaySessionRow) => Promise<void>;
 };
 
@@ -129,6 +125,11 @@ const managedListPublishers = new WeakMap<
 
 export function createManagedSessions(overrides: Partial<SessionCapability> = {}) {
   const subscribe = () => () => undefined;
+  const archiveState = createSessionArchiveState(
+    (key) => overrides.state?.result?.sessions.find((row) => row.key === key),
+    () => {},
+    createSessionRowProvenance(),
+  );
   const snapshots = new Map<string, SessionListSnapshot>();
   const listeners = new Map<string, Set<(snapshot: SessionListSnapshot) => void>>();
   const emptySnapshot = (): SessionListSnapshot => ({
@@ -177,12 +178,12 @@ export function createManagedSessions(overrides: Partial<SessionCapability> = {}
     listSnapshot,
     subscribeList,
     refreshList,
-    listCheckpoints: vi.fn(async () => []),
     deleteMany: vi.fn(async () => ({ deleted: [], errors: [], preservedWorktrees: [] })),
+    deletionState: () => undefined,
     patch: vi.fn(async () => null),
+    archiveVisibility: archiveState.visibility,
+    beginArchive: archiveState.beginPending,
     create: vi.fn(async () => null),
-    branchCheckpoint: vi.fn(async () => ({ key: "branch" })),
-    restoreCheckpoint: vi.fn(async () => ({ ok: true })),
     subscribe,
     ...overrides,
   } as unknown as SessionCapability;
@@ -226,7 +227,7 @@ export async function createRenderedPage(
   statusFilter: "active" | "archived" | "all" = "active",
   expandedSessionKey: string | null = null,
 ): Promise<TestSessionsPage> {
-  const query = sessionsPageListQuery(context, {
+  const query = buildSessionsListQuery(context, {
     limit: 50,
     includeGlobal: true,
     includeUnknown: false,

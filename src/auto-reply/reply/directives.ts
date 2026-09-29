@@ -1,5 +1,5 @@
 // Defines reply directive parsing constants and text-matching helpers.
-import { escapeRegExp } from "../../utils.js";
+import { escapeRegExp } from "../../shared/regexp.js";
 import {
   type ReasoningLevel,
   type TraceLevel,
@@ -12,7 +12,7 @@ import {
   normalizeVerboseLevel,
   type ThinkLevel,
   type VerboseLevel,
-} from "../thinking.js";
+} from "../thinking.shared.js";
 import { removeDirectiveSpan, skipDirectiveArgPrefix } from "./directive-parsing.js";
 
 type ExtractedLevel<T> = {

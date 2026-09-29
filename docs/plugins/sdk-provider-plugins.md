@@ -53,6 +53,89 @@ Unavailable storage or an unusable matching OAuth profile continues to interacti
 sign-in. A matching account identity alone does not make expired credentials usable.
 A failed selected import stops the operation instead of silently starting a different login.
 
+## Loopback OAuth callbacks
+
+Bundled providers use `startProviderOAuthLoopbackCallbackServer` from
+`openclaw/plugin-sdk/provider-auth-runtime` to bind their callback before opening
+the browser. `waitForCallback()` returns either an OAuth error or a validated
+code/state pair with `parameters: URLSearchParams` for provider-specific fields.
+Repeated parameters remain available for the provider to validate.
+
+The default response acknowledges the callback and closes the listener. Set
+`deferResponse: true` to finish token exchange and identity checks before calling
+`complete({ status, body, contentType })`. Abort, optional `timeoutMs`, and browser
+disconnection still close a deferred response; a late `complete()` is a no-op.
+Always call `close()` in `finally`. The caller's signal and authority checks own
+token requests and persistence; the listener deadline does not cancel that work.
+
+By default, the listener binds every loopback address resolved for the redirect
+hostname. `bindHostname` adds a loopback host. Use `bindOnlyHostname` instead to
+preserve a provider's exact Node bind host (`localhost`, `127.0.0.1`, or `::1`).
+
+## Handle model access after sign-in
+
+Existing consumers of `runModelsAuthLoginFlow` from
+`openclaw/plugin-sdk/provider-auth-login-flow-runtime` must handle a selection
+after credentials are saved. When effective restrictions can hide the provider's
+models, the existing `prompter.select` receives these options:
+
+| Value  | Label                        | Effect                                                      |
+| ------ | ---------------------------- | ----------------------------------------------------------- |
+| `all`  | `Show all <Provider> models` | Adds that provider's wildcard to the existing policy owner. |
+| `keep` | `Keep current restrictions`  | Leaves restrictions unchanged.                              |
+
+Render the supplied message and options, and return the selected option's value.
+Do not assume that every `select` call chooses a provider or auth method. Neither
+choice activates a new default model. No choice is requested when restrictions
+are absent or already allow the whole provider.
+
+Canceling or rejecting this post-save selection does not undo saved credentials.
+The flow throws `ProviderAuthConfigApplyError`, which extends
+`ProviderCredentialsSavedError`; report that credentials were saved instead of
+treating it as a failed credential exchange. Cancellation at the selection leaves
+restrictions unchanged. A later application failure can leave the policy saved
+but not active in the running Gateway. Keep credential persistence and model
+visibility outcomes distinct.
+
+### Defer the choice to a later reply
+
+For chat buttons, pass the synchronous `onModelAccessRequested` callback. It
+receives a `PreparedProviderModelAccess` request and replaces the post-save
+`select` call; it does not apply the choice. Retain the prepared request until
+login finishes. Use `createProviderLoginFlowRegistry` and
+`reserveProviderLoginFlow` to reserve only the credential exchange.
+
+After login finishes, call `offerProviderLoginModelAccess` with `flows`, `flowKey`,
+`prepared`, and `terminalMessage`. Deliver its structured reply. Always release
+the login in `finally` with `releaseProviderLoginFlow({ flows, flowKey, record })`.
+The pending model-access question has its own lifetime and remains answerable
+after that release; it does not block another login.
+
+Pass the later command to `answerProviderLoginModelAccess` with `flows`, `flowKey`,
+`agentId`, `command`, `runtime`, `readConfig`, and `assertCurrent`; `signal` is
+optional. `readConfig` must return the host's current config. The owner validates
+the answer, applies the choice, and consumes that question. Expired or conflicting
+choices receive a fresh question based on current restrictions.
+Use `cancelProviderLoginFlow({ flows, flowKey })` to cancel either pending phase.
+Do not reconstruct a wildcard write from button text or reuse a prepared request
+for a new login.
+
+### Keep hosted writes authorized
+
+Hosted callers supply `signal` and `assertCurrent` to check the current login,
+sender authority, and selected provider/method before effects and after awaited
+work. An abort signal or matching login identifier alone is not current
+authorization. `beforePersistentEffect` remains the credential-persistence
+preparation callback. Browser authorization ends after the credential phase;
+the later model choice uses the current conversation or wizard authority.
+
+For a deferred choice, pass the answering command's current authority check as
+`answerProviderLoginModelAccess.assertCurrent`. Use its config argument when
+supplied: it is the policy writer's current config. Otherwise read the host's
+current config. The original login callback does not authorize a later command.
+Let the shared owner report the visibility outcome:
+a saved policy is not proof that the running Gateway applied it.
+
 ## Walkthrough
 
 <Steps>
@@ -130,6 +213,9 @@ A failed selected import stops the operation instead of silently starting a diff
     publishing (`openclaw.compat.pluginApi` and `openclaw.build.openclawVersion`
     are the two required fields. `minGatewayVersion` falls back to
     `openclaw.install.minHostVersion` when omitted).
+
+    The version strings in the sample manifests are placeholders. Pin them to
+    the OpenClaw release your plugin builds and tests against.
 
   </Step>
 
@@ -243,6 +329,30 @@ A failed selected import stops the operation instead of silently starting a diff
     `provider-auth` route in new code. See the [removal
     timeline](/plugins/sdk-migration/removal-timeline) for the dates and gates
     that govern deprecated surfaces named on this page and its child pages.
+
+    Bundled custom API-key methods can use `captureProviderApiKey` and
+    `persistProviderApiKey` from `openclaw/plugin-sdk/provider-auth-api-key`
+    when vendor prompts or validation need to stay between auth steps.
+    `captureProviderApiKey(ctx, options)` accepts the existing token/provider,
+    environment, and prompt options. It returns the resolved `apiKey` for
+    validation alongside the original storage `input` and `mode`, without
+    saving credentials. Build returned profiles from `input` and `mode` so
+    SecretRefs remain references. The helper preserves the context's staged
+    workspace and secret-storage prompt preference.
+
+    `persistProviderApiKey(ctx, profileId, { provider, resolved, metadata })`
+    accepts an already resolved non-interactive key. It leaves profile-sourced
+    credentials unchanged, returns `false` if credential conversion fails,
+    and propagates persistence errors. Keep vendor checks before this call;
+    apply auth-profile config and model defaults afterward through their
+    existing owners. Neither helper chooses an endpoint or model.
+    Interactive auth methods can use `ctx.existingProfiles` to reconnect with
+    host-authorized `{ profileId, credential }` candidates. CLI login and onboarding
+    supply stored profiles for the selected provider; `--profile-id` narrows CLI
+    login to that profile. Personal account flows supply only the current person's
+    selected private account. An absent or empty list means no reusable account.
+    Provider methods select compatible candidates and offer reuse or a new account;
+    they must not load shared credentials to fill the list.
 
     A custom interactive auth method that mints a static token or API key can
     request protected persistence on its returned profile:

@@ -59,41 +59,23 @@ const SCENARIO_SPECS: ReadonlyArray<{
   { scenario: "duplicateSuppression", sizes: "sweepRows" },
 ];
 
+const SPAWN_INVARIANT_FIELDS = [
+  "ok",
+  "registeredRuns",
+  "reservationsReleased",
+  "blockedWaits",
+  "settledRuns",
+  "outstandingWaits",
+  "durableSubagentRows",
+  "durableStateFile",
+  "postTeardownRegistryRows",
+  "postTeardownDurableSubagentRows",
+  "postTeardownActiveRootWork",
+] as const;
+
 const REQUIRED_INVARIANT_FIELDS: Record<WorkerScenario, readonly string[]> = {
-  spawnPipelineInMemory: [
-    "ok",
-    "registeredRuns",
-    "reservationsReleased",
-    "blockedWaits",
-    "settledRuns",
-    "settledTasks",
-    "outstandingWaits",
-    "durableSubagentRows",
-    "durableTaskRows",
-    "durableStateFile",
-    "postTeardownRegistryRows",
-    "postTeardownTaskRows",
-    "postTeardownDurableSubagentRows",
-    "postTeardownDurableTaskRows",
-    "postTeardownActiveRootWork",
-  ],
-  spawnPipelineDurable: [
-    "ok",
-    "registeredRuns",
-    "reservationsReleased",
-    "blockedWaits",
-    "settledRuns",
-    "settledTasks",
-    "outstandingWaits",
-    "durableSubagentRows",
-    "durableTaskRows",
-    "durableStateFile",
-    "postTeardownRegistryRows",
-    "postTeardownTaskRows",
-    "postTeardownDurableSubagentRows",
-    "postTeardownDurableTaskRows",
-    "postTeardownActiveRootWork",
-  ],
+  spawnPipelineInMemory: SPAWN_INVARIANT_FIELDS,
+  spawnPipelineDurable: SPAWN_INVARIANT_FIELDS,
   admission: ["ok", "admissionCap", "overflowRejected", "released"],
   recoverySweep: [
     "ok",
@@ -322,6 +304,7 @@ function parseWorkerProcessResult(
 function runWorker(options: Options, scenario: WorkerScenario, size: number): WorkerResult {
   return runBenchmarkWorker({
     args: [
+      "--experimental-test-module-mocks",
       "--import",
       "tsx",
       "scripts/bench-agent-concurrency-worker.ts",

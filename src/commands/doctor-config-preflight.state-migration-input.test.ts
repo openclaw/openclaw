@@ -1,6 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConfigFileSnapshot, LegacyConfigIssue } from "../config/types.js";
 import type { StateMigrationResult } from "./doctor-config-preflight.state-migration.test-helpers.js";
+import { prepareLegacyConfigMigrationRuntime } from "./doctor/shared/legacy-config-migrate.test-support.js";
 
 const autoMigrateLegacyStateDir = vi.hoisted(() =>
   vi.fn(async (): Promise<StateMigrationResult> => ({
@@ -23,14 +24,6 @@ const autoMigrateLegacyPluginDoctorState = vi.hoisted(() =>
     migrated: true,
     skipped: false,
     changes: ["plugin-imported"],
-    warnings: [],
-  })),
-);
-const autoMigrateLegacyTaskStateSidecars = vi.hoisted(() =>
-  vi.fn(async (): Promise<StateMigrationResult> => ({
-    migrated: true,
-    skipped: false,
-    changes: ["task-imported"],
     warnings: [],
   })),
 );
@@ -75,13 +68,15 @@ const addDoctorLegacyIssues = vi.hoisted(() =>
 );
 const note = vi.hoisted(() => vi.fn());
 
-vi.mock("../infra/state-migrations.doctor.js", () => ({
+vi.mock("../infra/state-migrations.doctor.js", async () => ({
+  ...(await vi.importActual<typeof import("../infra/state-migrations.doctor.js")>(
+    "../infra/state-migrations.doctor.js",
+  )),
   autoMigrateLegacyState,
 }));
 
 vi.mock("../infra/state-migrations.state-dir.js", () => ({
   autoMigrateLegacyStateDir,
-  autoMigrateLegacyTaskStateSidecars,
 }));
 
 vi.mock("../infra/state-migrations.plugin-doctor.js", () => ({
@@ -117,9 +112,17 @@ vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
 
 const { runDoctorConfigPreflight } = await import("./doctor-config-preflight.js");
 
+let restoreMigrationRuntime: (() => void) | undefined;
+
+beforeAll(async () => {
+  restoreMigrationRuntime = await prepareLegacyConfigMigrationRuntime();
+});
+afterAll(() => restoreMigrationRuntime?.());
+
 describe("runDoctorConfigPreflight state migration input", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    readConfigFileSnapshot.mockReset();
     findDoctorLegacyConfigIssues.mockReset();
     findDoctorLegacyConfigIssues.mockReturnValue([]);
   });
@@ -154,7 +157,7 @@ describe("runDoctorConfigPreflight state migration input", () => {
     );
   });
 
-  it("does not skip a retired custom cron partition on a pristine state root", async () => {
+  it("preserves a retired custom cron partition with invalid Gateway config", async () => {
     const sourceConfig = {
       gateway: { mode: "local", port: "not-a-port" },
       agents: {
@@ -168,7 +171,7 @@ describe("runDoctorConfigPreflight state migration input", () => {
       cron: { store: "/tmp/custom-cron/jobs.json" },
       talk: { agentId: "ops" },
     };
-    readConfigFileSnapshot.mockResolvedValueOnce({
+    readConfigFileSnapshot.mockResolvedValue({
       exists: true,
       valid: false,
       config: sourceConfig,
@@ -186,7 +189,6 @@ describe("runDoctorConfigPreflight state migration input", () => {
     await runDoctorConfigPreflight({
       migrateLegacyConfig: false,
       invalidConfigNote: false,
-      skipPristineCoreStateMigrations: true,
     });
 
     expect(repairLegacyCronStoreWithoutPrompt).toHaveBeenCalledWith({
@@ -219,7 +221,7 @@ describe("runDoctorConfigPreflight state migration input", () => {
         entries: { main: {} },
       },
     };
-    readConfigFileSnapshot.mockResolvedValueOnce({
+    readConfigFileSnapshot.mockResolvedValue({
       exists: true,
       valid: false,
       config: resolvedConfig,
@@ -299,7 +301,7 @@ describe("runDoctorConfigPreflight state migration input", () => {
         list: [{ id: "main" }],
       },
     };
-    readConfigFileSnapshot.mockResolvedValueOnce({
+    readConfigFileSnapshot.mockResolvedValue({
       exists: true,
       valid: false,
       config: resolvedConfig,
@@ -330,16 +332,14 @@ describe("runDoctorConfigPreflight state migration input", () => {
       env: process.env,
       doctorOnlyStateMigrations: true,
     });
-    expect(autoMigrateLegacyTaskStateSidecars).toHaveBeenCalledWith({ env: process.env });
     expect(note).toHaveBeenCalledWith("- plugin-imported", "Doctor changes");
-    expect(note).toHaveBeenCalledWith("- task-imported", "Doctor changes");
   });
 
   it("runs config-independent state migration for invalid config", async () => {
-    findDoctorLegacyConfigIssues.mockReturnValueOnce([
+    findDoctorLegacyConfigIssues.mockReturnValue([
       { path: "cron.store", message: "cron.store is legacy." },
     ]);
-    readConfigFileSnapshot.mockResolvedValueOnce({
+    readConfigFileSnapshot.mockResolvedValue({
       exists: true,
       valid: false,
       config: { cron: { store: "/tmp/legacy-cron.json" } },
@@ -373,6 +373,5 @@ describe("runDoctorConfigPreflight state migration input", () => {
       cfg: expect.objectContaining({ cron: { store: "/tmp/legacy-cron.json" } }),
       migrateCodexModelRefs: false,
     });
-    expect(autoMigrateLegacyTaskStateSidecars).not.toHaveBeenCalled();
   });
 });

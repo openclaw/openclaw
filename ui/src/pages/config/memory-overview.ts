@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import type { DoctorMemoryStatusPayload } from "../../../../src/gateway/server-methods/doctor.ts";
+import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
 import { lobsterPetSeed } from "../../components/lobster-pet-contract.ts";
 import {
   createLobsterPetLook,
@@ -14,10 +15,13 @@ import {
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import "../../styles/memory-overview.css";
 import type { MemoryEngineSelection } from "./memory-schema.ts";
 import { selectedEngineId } from "./memory-schema.ts";
+
+registerSettingsEnglish();
 
 export type MemoryOverviewStatus =
   | { kind: "idle" | "loading" }
@@ -58,16 +62,20 @@ function renderHero(props: MemoryOverviewProps) {
   const engineId = selectedEngineId(props.engineSelection);
   const off = props.engineSelection.kind === "off" || props.engineDisabled;
   const readyPayload = props.status.kind === "ready" ? props.status.payload : null;
+  const noSearchRuntime = readyPayload?.searchRuntimeRegistered === false;
   const error =
-    props.status.kind === "error" || (readyPayload !== null && hasEmbeddingError(readyPayload));
+    props.status.kind === "error" ||
+    (!noSearchRuntime && readyPayload !== null && hasEmbeddingError(readyPayload));
   const look = createLobsterPetLook(lobsterPetSeed(props.agentId ?? "memory"));
   const headline = off
     ? t("memoryPage.overview.hero.hibernating")
     : props.status.kind === "loading" || props.status.kind === "idle"
       ? t("memoryPage.overview.hero.waking")
-      : error
-        ? t("memoryPage.overview.hero.needsAttention")
-        : t("memoryPage.overview.hero.awake");
+      : noSearchRuntime
+        ? t("memoryPage.overview.hero.noSearchRuntime")
+        : error
+          ? t("memoryPage.overview.hero.needsAttention")
+          : t("memoryPage.overview.hero.awake");
   const description = off
     ? t(
         props.engineDisabled
@@ -77,18 +85,22 @@ function renderHero(props: MemoryOverviewProps) {
     : props.status.kind === "error"
       ? props.status.message
       : readyPayload
-        ? hasEmbeddingError(readyPayload)
-          ? (readyPayload.embedding.error ?? t("memoryPage.overview.health.unavailable"))
-          : t("memoryPage.overview.hero.activeDescription", {
+        ? noSearchRuntime
+          ? t("memoryPage.overview.hero.noSearchRuntimeDescription", {
               engine: engineId ?? t("common.unknown"),
-              mode: searchMode(readyPayload),
             })
+          : hasEmbeddingError(readyPayload)
+            ? (readyPayload.embedding.error ?? t("memoryPage.overview.health.unavailable"))
+            : t("memoryPage.overview.hero.activeDescription", {
+                engine: engineId ?? t("common.unknown"),
+                mode: searchMode(readyPayload),
+              })
         : t("memoryPage.overview.hero.loadingDescription");
   const pose = off
     ? { sleeping: true }
     : error
       ? { grumpy: true, standalone: true }
-      : readyPayload
+      : readyPayload && !noSearchRuntime
         ? { reading: true, standalone: true }
         : { standalone: true };
 
@@ -285,34 +297,33 @@ function renderStatusCards(props: MemoryOverviewProps) {
   return html`
     ${props.status.payload.dreaming ? renderSchedule(props.status.payload.dreaming) : nothing}
     ${props.status.payload.dreaming ? renderActivity(props.status.payload.dreaming) : nothing}
-    ${renderEngineHealth(props.status.payload, props)}
+    ${
+      props.status.payload.searchRuntimeRegistered === false
+        ? nothing
+        : renderEngineHealth(props.status.payload, props)
+    }
   `;
 }
 
 function renderShortcuts(props: MemoryOverviewProps) {
   return renderSettingsSection(
     { title: t("memoryPage.overview.shortcuts.title") },
-    html`
-      ${renderSettingsNavRow({
-        title: t("memoryPage.overview.shortcuts.memories"),
-        onClick: () => props.onNavigate("memories"),
-      })}
-      ${renderSettingsNavRow({
-        title: t("memoryPage.overview.shortcuts.diary"),
-        onClick: () => props.onNavigate("dreams"),
-      })}
-      ${renderSettingsNavRow({
-        title: t("memoryPage.overview.shortcuts.settings"),
-        onClick: () => props.onNavigate("settings"),
-      })}
-    `,
+    (
+      [
+        ["memories", "memoryPage.overview.shortcuts.memories"],
+        ["dreams", "memoryPage.overview.shortcuts.diary"],
+        ["settings", "memoryPage.overview.shortcuts.settings"],
+      ] as const
+    ).map(([tab, label]) =>
+      renderSettingsNavRow({ title: t(label), onClick: () => props.onNavigate(tab) }),
+    ),
   );
 }
 
 export function renderMemoryOverview(props: MemoryOverviewProps) {
   const active = props.engineSelection.kind !== "off" && !props.engineDisabled;
   return html`
-    <div class="settings-page memory-overview">
+    <div class="settings-page memory-overview" ${shellLayoutTraits({ settingsPage: true })}>
       ${renderHero(props)} ${active ? renderStatusCards(props) : nothing} ${renderShortcuts(props)}
     </div>
   `;

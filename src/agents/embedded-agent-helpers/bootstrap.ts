@@ -124,31 +124,36 @@ type PolicyDigest = {
   omittedLines: number;
 };
 
-export function resolveBootstrapMaxChars(cfg?: OpenClawConfig, agentId?: string | null): number {
+function resolveBootstrapCharLimit(
+  cfg: OpenClawConfig | undefined,
+  agentId: string | null | undefined,
+  key: "bootstrapMaxChars" | "bootstrapTotalMaxChars",
+  fallback: number,
+): number {
   const raw =
     cfg && agentId
-      ? (resolveAgentConfig(cfg, agentId)?.bootstrapMaxChars ??
-        cfg.agents?.defaults?.bootstrapMaxChars)
-      : cfg?.agents?.defaults?.bootstrapMaxChars;
+      ? (resolveAgentConfig(cfg, agentId)?.[key] ?? cfg.agents?.defaults?.[key])
+      : cfg?.agents?.defaults?.[key];
   if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
     return Math.floor(raw);
   }
-  return DEFAULT_BOOTSTRAP_MAX_CHARS;
+  return fallback;
+}
+
+export function resolveBootstrapMaxChars(cfg?: OpenClawConfig, agentId?: string | null): number {
+  return resolveBootstrapCharLimit(cfg, agentId, "bootstrapMaxChars", DEFAULT_BOOTSTRAP_MAX_CHARS);
 }
 
 export function resolveBootstrapTotalMaxChars(
   cfg?: OpenClawConfig,
   agentId?: string | null,
 ): number {
-  const raw =
-    cfg && agentId
-      ? (resolveAgentConfig(cfg, agentId)?.bootstrapTotalMaxChars ??
-        cfg.agents?.defaults?.bootstrapTotalMaxChars)
-      : cfg?.agents?.defaults?.bootstrapTotalMaxChars;
-  if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
-    return Math.floor(raw);
-  }
-  return DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS;
+  return resolveBootstrapCharLimit(
+    cfg,
+    agentId,
+    "bootstrapTotalMaxChars",
+    DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS,
+  );
 }
 
 function isAgentsBootstrapFile(fileName: string | undefined): boolean {
@@ -394,7 +399,7 @@ function clampToBudget(content: string, budget: number): string {
 }
 
 export function buildBootstrapContextFiles(
-  files: WorkspaceBootstrapFile[],
+  files: (Omit<WorkspaceBootstrapFile, "name"> & { name: string })[],
   opts?: { warn?: (message: string) => void; maxChars?: number; totalMaxChars?: number },
 ): EmbeddedContextFile[] {
   const maxChars = opts?.maxChars ?? DEFAULT_BOOTSTRAP_MAX_CHARS;
@@ -438,6 +443,11 @@ export function buildBootstrapContextFiles(
       ? Math.min(maxChars, USER_BOOTSTRAP_MAX_CHARS)
       : maxChars;
     const fileMaxChars = Math.max(1, Math.min(fileBudget, remainingTotalChars));
+    // Personal instructions are indivisible: never turn a cut-off directive into new policy.
+    if (file.personalUser && (file.content ?? "").trimEnd().length > fileMaxChars) {
+      opts?.warn?.("Personal USER.md exceeds the bootstrap budget; using shared defaults.");
+      continue;
+    }
     const trimmed = trimBootstrapContent(file.content ?? "", file.name, fileMaxChars);
     const contentWithinBudget = clampToBudget(trimmed.content, remainingTotalChars);
     if (!contentWithinBudget) {
@@ -452,6 +462,7 @@ export function buildBootstrapContextFiles(
     result.push({
       path: pathValue,
       content: contentWithinBudget,
+      ...(file.personalUser ? { personalUser: file.personalUser } : {}),
     });
   }
   return result;

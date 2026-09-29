@@ -55,7 +55,6 @@ export function deferBackgroundCompactionCleanup(params: {
   cleanupByokProxy?: () => Promise<void>;
   cleanupToolBridge?: () => void;
   deleteSessionOnIncompleteCleanup: boolean;
-  finalizeNativeSubagents?: () => void;
   sdkSessionId?: string;
   session: SessionLike;
   timeoutMs: number;
@@ -75,8 +74,8 @@ export function deferBackgroundCompactionCleanup(params: {
         await cancelBackgroundCompactionBeforeTeardown(params.session);
         params.bridge.settleCompactionWait();
       }
-      params.finalizeNativeSubagents?.();
       params.bridge.detach();
+      await params.bridge.awaitAgentEventChain();
       try {
         await params.session.disconnect();
       } catch {}

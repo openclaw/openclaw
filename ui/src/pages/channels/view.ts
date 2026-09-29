@@ -51,18 +51,21 @@ const RECOMMENDED_CHANNEL_ORDER: ChannelKey[] = [
 ];
 
 export function renderChannels(props: ChannelsProps) {
-  const channelOrder = resolveChannelOrder(props.snapshot);
+  const channelOrder = resolveChannelOrder(props.channels.channelsSnapshot);
   // Key both lists so status updates cannot retarget an in-flight channel click.
   const connected = channelOrder.filter((key) => channelEnabled(key, props));
   const available = channelOrder.filter((key) => !channelEnabled(key, props));
-  const showingStaleSnapshot = Boolean(props.loading && props.snapshot && props.lastSuccessAt);
+  const showingStaleSnapshot = Boolean(
+    props.channels.channelsLoading &&
+    props.channels.channelsSnapshot &&
+    props.channels.channelsLastSuccess,
+  );
   const partialWarnings =
-    props.snapshot?.warnings
+    props.channels.channelsSnapshot?.warnings
       ?.filter((warning) => warning.trim())
       .map((warning) => formatUiExternalText(warning)) ?? [];
   const data = buildChannelData(props);
   const selected = props.selectedChannel;
-  const selectedPlugin = selected ? resolveChannelPlugin(props, selected) : undefined;
 
   return html`
     ${renderSettingsPage(html`
@@ -72,7 +75,7 @@ export function renderChannels(props: ChannelsProps) {
           : nothing
       }
       ${
-        props.snapshot?.partial
+        props.channels.channelsSnapshot?.partial
           ? html`
               <div class="callout warn">
                 ${t("channels.hub.partialSnapshot")}
@@ -81,9 +84,9 @@ export function renderChannels(props: ChannelsProps) {
             `
           : nothing
       }
-      ${props.lastError ? html`<div class="callout danger">${props.lastError}</div>` : nothing}
+      ${props.channels.channelsError ? html`<div class="callout danger">${props.channels.channelsError}</div>` : nothing}
       ${
-        props.setupBlockedByDirtyConfig && props.configFormDirty
+        props.wizardHost.blockedByDirtyConfig && props.config.configFormDirty
           ? html`<div class="callout warn">${t("channels.hub.saveBeforeSetup")}</div>`
           : nothing
       }
@@ -92,8 +95,8 @@ export function renderChannels(props: ChannelsProps) {
           title: t("channels.hub.connectedTitle"),
           ...(connected.length > 0 ? { count: connected.length } : {}),
           actions: renderChannelRefreshAction({
-            updatedAt: props.lastSuccessAt,
-            disabled: props.loading,
+            updatedAt: props.channels.channelsLastSuccess,
+            disabled: props.channels.channelsLoading,
             onRefresh: () => props.onRefresh(true),
           }),
         },
@@ -136,8 +139,7 @@ export function renderChannels(props: ChannelsProps) {
         ? renderChannelDetail({
             channelId: selected,
             label: resolveChannelLabel(props, selected),
-            pluginIconUrl: props.pluginIconUrls[selected],
-            preferPluginIcon: selectedPlugin?.hasIcon === true,
+            pluginIconUrl: props.presentation.pluginIconUrls[selected],
             props,
             data,
             onClose: () => props.onCloseDetail(),
@@ -148,23 +150,21 @@ export function renderChannels(props: ChannelsProps) {
     ${
       props.canAdmin
         ? renderChannelWizard({
-            wizard: props.wizard,
+            wizard: props.wizardHost.state,
             channelLabel: (channelId) => resolveChannelLabel(props, channelId),
-            channelIconUrl: (channelId) => props.pluginIconUrls[channelId],
-            channelHasPluginIcon: (channelId) =>
-              resolveChannelPlugin(props, channelId)?.hasIcon === true,
-            multiselectValues: props.wizardMultiselect,
-            onToggleMultiselect: props.onWizardToggleMultiselect,
-            textValue: props.wizardTextValue,
-            secretVisible: props.wizardSecretVisible,
-            onTextInput: props.onWizardTextInput,
-            onToggleSecretVisibility: props.onWizardToggleSecretVisibility,
-            onAnswer: props.onWizardAnswer,
-            onClose: props.onWizardClose,
-            whatsappQrDataUrl: props.whatsappQrDataUrl,
-            whatsappMessage: props.whatsappMessage,
-            whatsappConnected: props.whatsappConnected,
-            whatsappBusy: props.whatsappBusy,
+            channelIconUrl: (channelId) => props.presentation.pluginIconUrls[channelId],
+            multiselectValues: props.wizardHost.multiselect,
+            onToggleMultiselect: (value) => props.wizardHost.toggleMultiselect(value),
+            textValue: props.wizardHost.textValue,
+            secretVisible: props.wizardHost.secretVisible,
+            onTextInput: (value) => props.wizardHost.setTextValue(value),
+            onToggleSecretVisibility: () => props.wizardHost.toggleSecretVisibility(),
+            onAnswer: (value) => props.wizardHost.answer(value),
+            onClose: () => props.wizardHost.close(),
+            whatsappQrDataUrl: props.channels.whatsappLoginQrDataUrl,
+            whatsappMessage: props.channels.whatsappLoginMessage,
+            whatsappConnected: props.channels.whatsappLoginConnected,
+            whatsappBusy: props.channels.whatsappBusy,
             onWhatsAppStart: props.onWhatsAppStart,
             onWhatsAppWait: props.onWhatsAppWait,
           })
@@ -175,7 +175,7 @@ export function renderChannels(props: ChannelsProps) {
 }
 
 function buildChannelData(props: ChannelsProps): ChannelsChannelData {
-  const channels = props.snapshot?.channels as Record<string, unknown> | null;
+  const channels = props.channels.channelsSnapshot?.channels as Record<string, unknown> | null;
   return {
     whatsapp: (channels?.whatsapp ?? undefined) as WhatsAppStatus | undefined,
     telegram: (channels?.telegram ?? undefined) as TelegramStatus | undefined,
@@ -185,7 +185,7 @@ function buildChannelData(props: ChannelsProps): ChannelsChannelData {
     signal: (channels?.signal ?? null) as SignalStatus | null,
     imessage: (channels?.imessage ?? null) as IMessageStatus | null,
     nostr: (channels?.nostr ?? null) as NostrStatus | null,
-    channelAccounts: props.snapshot?.channelAccounts ?? null,
+    channelAccounts: props.channels.channelsSnapshot?.channelAccounts ?? null,
   };
 }
 
@@ -197,11 +197,11 @@ export function resolveChannelOrder(snapshot: ChannelsStatusSnapshot | null): Ch
 }
 
 function resolveChannelPlugin(props: ChannelsProps, key: string) {
-  return props.pluginCatalog?.plugins.find((plugin) => plugin.id === key);
+  return props.presentation.pluginCatalog?.plugins.find((plugin) => plugin.id === key);
 }
 
 function resolveChannelLabel(props: ChannelsProps, key: string): string {
-  const snapshot = props.snapshot;
+  const snapshot = props.channels.channelsSnapshot;
   const labels = snapshot?.channelLabels;
   return (
     resolveChannelPlugin(props, key)?.name ??
@@ -212,7 +212,7 @@ function resolveChannelLabel(props: ChannelsProps, key: string): string {
 }
 
 function resolveChannelDetailLabel(props: ChannelsProps, key: string): string | null {
-  const snapshot = props.snapshot;
+  const snapshot = props.channels.channelsSnapshot;
   const labels = snapshot?.channelDetailLabels;
   const detail =
     snapshot?.channelMeta?.find((entry) => entry.id === key)?.detailLabel ??
@@ -225,7 +225,7 @@ function resolveRowState(key: ChannelKey, props: ChannelsProps): ChannelCardStat
   const lastError =
     typeof displayState.status?.lastError === "string" && displayState.status.lastError.trim()
       ? displayState.status.lastError
-      : resolveChannelAccounts(props.snapshot?.channelAccounts, key).find(
+      : resolveChannelAccounts(props.channels.channelsSnapshot?.channelAccounts, key).find(
           (account) => account.lastError,
         )?.lastError;
   if (lastError) {
@@ -251,10 +251,10 @@ function rowStatus(state: ChannelCardState) {
 }
 
 function lastActivityLine(key: ChannelKey, props: ChannelsProps): string | null {
-  const lastInbound = resolveChannelAccounts(props.snapshot?.channelAccounts, key).reduce(
-    (latest, account) => Math.max(latest, account.lastInboundAt ?? 0),
-    0,
-  );
+  const lastInbound = resolveChannelAccounts(
+    props.channels.channelsSnapshot?.channelAccounts,
+    key,
+  ).reduce((latest, account) => Math.max(latest, account.lastInboundAt ?? 0), 0);
   if (!lastInbound) {
     return null;
   }
@@ -263,7 +263,9 @@ function lastActivityLine(key: ChannelKey, props: ChannelsProps): string | null 
 
 function renderConnectedRow(key: ChannelKey, props: ChannelsProps) {
   const label = resolveChannelLabel(props, key);
-  const statusIssue = props.snapshot?.statusIssues?.find((issue) => issue.channel === key);
+  const statusIssue = props.channels.channelsSnapshot?.statusIssues?.find(
+    (issue) => issue.channel === key,
+  );
   const description = statusIssue
     ? formatUiExternalText(statusIssue.message)
     : (lastActivityLine(key, props) ??
@@ -276,8 +278,7 @@ function renderConnectedRow(key: ChannelKey, props: ChannelsProps) {
       @click=${() => props.onShowDetail(key)}
     >
       ${renderChannelIcon(key, label, "tile", {
-        pluginIconUrl: props.pluginIconUrls[key],
-        preferPluginIcon: resolveChannelPlugin(props, key)?.hasIcon === true,
+        pluginIconUrl: props.presentation.pluginIconUrls[key],
       })}
       <div class="settings-row__text">
         <span class="settings-row__title">${label}</span>
@@ -305,8 +306,7 @@ function renderAvailableRow(key: ChannelKey, props: ChannelsProps) {
         @click=${() => props.onShowDetail(key)}
       >
         ${renderChannelIcon(key, label, "tile", {
-          pluginIconUrl: props.pluginIconUrls[key],
-          preferPluginIcon: plugin?.hasIcon === true,
+          pluginIconUrl: props.presentation.pluginIconUrls[key],
         })}
         <span class="settings-row__text">
           <span class="settings-row__title">${label}</span>

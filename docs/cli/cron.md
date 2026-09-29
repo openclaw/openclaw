@@ -23,6 +23,11 @@ Every automation subcommand accepts the shared Gateway connection options. Use
 an explicit WebSocket URL. Do not combine them. Connection options such as
 `--port`, `--url`, and `--token` may appear before or after the subcommand.
 
+Automation commands require a running Gateway. With token, password, or `none`
+authentication, calls to the configured local loopback Gateway do not open the
+shared state database for device authentication. Remote and explicit URL targets
+retain their device authentication and pairing requirements.
+
 ## Create jobs quickly
 
 `openclaw automations create` is an alias for `openclaw automations add`. For new jobs, put the schedule first and the prompt second:
@@ -33,6 +38,13 @@ openclaw automations create "0 7 * * *" \
   --name "Morning brief" \
   --agent ops
 ```
+
+For agent or command jobs, `--timeout-seconds` accepts non-negative whole seconds.
+Set `--timeout-seconds 0` on `add`/`create` or `edit` to disable the scheduler's
+wall-clock ceiling. Omitting the flag on creation keeps the default timeout;
+omitting it on edit leaves the stored timeout unchanged. Agent/provider timeouts,
+startup watchdogs, and command-runner limits still apply. System-event jobs reject
+`--timeout-seconds`; script jobs use `--script-timeout-seconds` instead.
 
 Use `--webhook <url>` when the job should POST the finished payload instead of delivering to a chat target:
 
@@ -94,6 +106,11 @@ flags is valid with exit or stream schedules. See
 [Automation schedules](/automation/cron-jobs/schedules#schedule-types) for stream lifecycle,
 batching limits, and trigger details.
 
+On creation, omit `--command-cwd`, `--on-exit-cwd`, or `--stream-cwd` to use
+the default working directory. An explicitly empty or whitespace-only path is
+an error. When editing a stream job, `--stream-cwd ""` still clears its configured
+working directory.
+
 ## Sessions
 
 `--session` accepts `main`, `isolated`, `current`, or `session:<id>`.
@@ -113,13 +130,15 @@ Agent-turn jobs default to the creating conversation when session context is ava
   </Accordion>
 </AccordionGroup>
 
-Removing an isolated automation stops future runs and cleans up its reusable session after active work stops. The JSON removal response includes `sessionCleanup: "pending"` while that cleanup is deferred. Run history is retained.
+When an operator removes an automation with an active run, OpenClaw requests cancellation of that run. An admitted automation can remove its own job without cancelling the active run. The JSON removal response includes `activeRunCancellationRequested: true` when cancellation was requested. For an isolated automation, reusable-session cleanup then waits for the active run to stop and reports `sessionCleanup: "pending"` while cleanup is deferred. Run history is retained.
 
 If session cleanup fails, the error is logged. A removal with no active run also returns the cleanup error to the caller. Use `openclaw sessions list --json` to find the remaining session, then `openclaw sessions delete <key> --yes` to retry cleanup after the Gateway or worker recovers.
 
 ## Delivery
 
 `openclaw automations add`, `openclaw automations list`, and `openclaw automations show <job-id>` preview the resolved delivery route. For `channel: "last"`, the preview shows whether the route resolved from the main or current session, or will fail closed.
+
+If an existing session metadata store cannot be read or its schema is not ready, the preview keeps the requested destination and reports why it is unavailable without blocking job creation or listing. An absent database has no session routing history and uses the normal delivery fallback.
 
 Provider-prefixed targets can disambiguate unresolved announce channels. For example, `to: "telegram:123"` selects Telegram when `delivery.channel` is omitted or `last`. Only prefixes advertised by the loaded plugin are provider selectors. If `delivery.channel` is explicit, the prefix must match that channel. `channel: "whatsapp"` with `to: "telegram:123"` is rejected. Service prefixes such as `imessage:` and `sms:` remain channel-owned target syntax.
 
@@ -154,6 +173,8 @@ Failure notifications resolve in this order:
 
 Jobs with one of those routes default to an execution-failure alert after 2 consecutive failures and a 1-hour cooldown. A per-job or global `failureAlert` object explicitly activates/tunes the policy even without an existing route. `failureAlert: false` disables execution and required-delivery failure alerts for the job, but not the auto-disable safety notification. Global `enabled: false` disables inheritance unless the job has its own `failureAlert` object. `delivery.bestEffort: true` suppresses inherited/default execution alerts, but not an explicit per-job policy.
 
+Repeated failures with the same cause stay grouped into one incident across Gateway restarts. A changed cause or destination can notify after the cooldown, and successful completion sends one recovery notice. Skipped runs and unknown delivery outcomes do not count as recovery. If script setup cannot refresh tools after a plugin reload, the alert explains that automatic recovery failed before the script ran.
+
 <Note>
 Main-session jobs may only use `delivery.failureDestination` when primary delivery mode is `webhook`. Isolated jobs accept it in all modes.
 </Note>
@@ -164,7 +185,7 @@ Isolated automation runs treat run-level agent failures as job errors, even when
 
 Command jobs do not start an isolated agent turn. A zero exit code records `ok`. Non-zero exit, signal, timeout, or no-output timeout records `error`, and can trigger the same failure notification path.
 
-Required completion delivery is separate: `status: "ok"` with `completionStatus: "failed"` does not increment the execution streak or backoff. Delivery-failure alerts use a resolved alternate failure destination without the `after` threshold. Every alert honors the shared job/global `failureAlert.cooldownMs` (default 1 hour). This includes the first delivery failure after an execution alert. An alert never retries the primary route that just failed.
+Required completion delivery is separate: `status: "ok"` with `completionStatus: "failed"` does not increment the execution streak or backoff. Delivery-failure alerts use a resolved alternate failure destination without the `after` threshold and group repeated failures into one incident. Alerts for changed failures honor the shared job/global `failureAlert.cooldownMs` (default 1 hour), including the first delivery failure after an execution alert. Recovery notices do not wait for the cooldown. An alert never retries the primary route that just failed.
 
 If an isolated run times out before the first model request, `openclaw automations show` and `openclaw automations runs` include a phase-specific error. Examples are `setup timed out before runner start`, or a stall message naming the last-known startup phase such as `context-engine`. For CLI-backed providers, the pre-model watchdog stays active until the external CLI turn starts. Session lookup, hook, auth, prompt, and CLI setup stalls are therefore reported as pre-model automation failures.
 
@@ -173,6 +194,10 @@ If an isolated run times out before the first model request, `openclaw automatio
 ### One-shot jobs
 
 `--at <datetime>` schedules a one-shot run. Offset-less datetimes are treated as UTC unless you also pass `--tz <iana>`, which interprets the wall-clock time in the given timezone.
+
+Invalid `--tz` values are rejected before saving a job; use an IANA timezone such as
+`America/New_York`. Invalid timestamps and nonexistent local times during a
+daylight-saving transition are reported separately as `--at` errors.
 
 <Note>
 One-shot jobs delete only after `completionStatus: "succeeded"`. Required-delivery failure or unknown completion keeps the job disabled, with no next run, so restarts do not replay payload side effects. Intentional silence and successful executions with explicit `delivery.bestEffort: true` complete and delete normally. Use `--keep-after-run` to preserve successful jobs too.
@@ -194,7 +219,7 @@ Automation jobs, pending runtime state, and run history live in the shared SQLit
 
 Manually running a disabled job does not enable its schedule or create automatic retries. Use `openclaw automations enable <job-id>` to resume scheduled runs.
 
-`openclaw automations run <job-id>` force-runs by default and returns as soon as the manual run is queued. Successful responses include `{ ok: true, enqueued: true, runId }`. Use the returned `runId` to inspect the later result:
+`openclaw automations run <job-id>` force-runs by default and returns after the Gateway durably reserves the run and accepts it into its execution lane. Successful responses include `{ ok: true, enqueued: true, runId }`; the job may still be waiting for a slot. If admission or caller checks fail before queue acceptance, the request fails without reporting a queued run. If the Gateway exits before dispatch, startup records an interrupted receipt for that exact request in the state database. Such pre-dispatch interruptions do not appear in executed-run history. Use the returned `runId` to inspect an executed run's result:
 
 ```bash
 openclaw automations run <job-id>
@@ -259,6 +284,8 @@ Isolated automation turns suppress stale acknowledgement-only replies. If the fi
 If an isolated automation run returns only the silent token (`NO_REPLY` or `no_reply`), the scheduler suppresses direct outbound delivery and the fallback queued summary path. Nothing is posted back to chat.
 
 Human-readable `automations list` and `automations show` label successful intentional suppression as `ok (suppressed)`, not a delivery warning. `automations show` includes `last delivery suppression` with the recorded reason (`empty`, `silent`, `heartbeat`, or `channel_transform`). JSON keeps `deliveryStatus: "not-delivered"` and the separate `deliverySuppressionReason`. Genuine delivery failures without an intentional reason still show `ok (not delivered)` when execution succeeded.
+
+Successful executions with an unconfirmed delivery outcome show `delivery unknown`, including webhook requests that time out before receiving response headers. This label applies to both required and best-effort delivery; it does not claim delivery failed. JSON execution status remains `ok`.
 
 ### Structured denials
 
@@ -358,10 +385,20 @@ openclaw automations run <job-id> --wait --wait-timeout 10m --poll-interval 2s
 openclaw automations runs <job-id> --limit 50
 openclaw automations runs <job-id> --limit 50 --json
 openclaw automations runs <job-id> --run-id <run-id>
+openclaw automations runs <job-id> --status error --query timeout
+openclaw automations runs <job-id> --delivery-status not-delivered
+openclaw automations runs <job-id> --sort asc --offset 200 --limit 50
 ```
 
 `automations runs` is the preferred spelling. `cron runs` and the leaf-local
 `--id <job-id>` form remain supported compatibility aliases.
+
+Run-history filters are applied by the Gateway before paging. Use `--status`
+with `all`, `ok`, `error`, or `skipped`; use `--delivery-status` with
+`delivered`, `not-delivered`, `unknown`, or `not-requested`. `--query <text>`
+searches run summaries and errors. `--sort asc|desc` selects oldest-first or
+newest-first order, and `--offset <n>` advances through the result set using the
+page metadata returned by the previous command.
 
 `openclaw automations list` shows enabled jobs across agents by default, including jobs whose owner cannot be resolved. Pass `--all` to include disabled jobs, or `--agent <id>` to filter by the effective normalized agent ID. Ownership resolves from the job's declared agent, its agent-scoped session key, then the configured system-agent owner. Unresolved jobs do not match an agent filter. The `cron list` alias has the same behavior.
 
@@ -374,6 +411,15 @@ An unresolved owner does not stop the scheduler: that job is skipped with an exp
 `--json` always requests JSON output. Commands whose product is already a machine-readable result emit JSON results by default: `add`/`create`, `status`, `enable`, `disable`, `rm`/`remove`/`delete`, `run`, `edit`, `get`, and `runs`. They accept `--json` as the explicit machine-output spelling. `openclaw automations get <job-id>` returns the stored job JSON directly. Use `automations show <job-id>` when you want the human-readable view with delivery-route preview.
 
 `list` and `show` use human-readable output by default and switch to JSON with `--json`. `scratch` reads raw scratch content by default. With `--json` it prints the scratch plus revision metadata. Scratch writes return the revision result as JSON by default, and accept `--json` as the explicit machine-output spelling.
+
+`automations show` also accepts an exact job name, matched without regard to case.
+Job IDs take precedence. When multiple jobs match the name, including disabled
+jobs, the command reports ambiguity and includes the matching jobs' full IDs,
+names, schedule summaries, enabled state, and status. Retry the same command
+with the intended job ID instead of the name.
+
+With `--json`, the failure envelope includes these summaries in `error.matches`.
+Event schedules appear as `on-exit` or `stream` without their command text.
 
 `automations list --json` and `automations show <job-id> --json` include a top-level `status` field on each job, computed from `enabled`, `state.runningAtMs`, and `state.lastRunStatus`. Values: `disabled`, `running`, `ok`, `error`, `skipped`, or `idle`. JSON status stays canonical and undecorated, so external tooling can read job state without re-deriving it. Human output may decorate repeated `error` statuses with a failure count.
 

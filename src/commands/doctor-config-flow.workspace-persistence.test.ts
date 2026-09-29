@@ -25,6 +25,85 @@ describe("Doctor workspace persistence", () => {
     closeOpenClawStateDatabaseForTest();
   });
 
+  it.each([
+    {
+      retiredPath: "agents.entries.ops.sandbox.perSession",
+      config: { agents: { entries: { ops: { sandbox: { mode: "all", perSession: true } } } } },
+    },
+    { retiredPath: "routing.allowFrom", config: { routing: { allowFrom: ["+15550001111"] } } },
+    {
+      retiredPath: "routing.groupChat",
+      config: { routing: { groupChat: { requireMention: true, historyLimit: 12 } } },
+    },
+    {
+      retiredPath: "channels.telegram.requireMention",
+      config: { channels: { telegram: { requireMention: true } } },
+    },
+    {
+      retiredPath: "channels.feishu.accounts.work.botName",
+      config: { channels: { feishu: { accounts: { work: { botName: "Operations" } } } } },
+    },
+    {
+      retiredPath: "session.threadBindings.ttlHours",
+      config: { session: { threadBindings: { ttlHours: 24 } } },
+    },
+    {
+      retiredPath: "channels.discord.threadBindings.ttlHours",
+      config: { channels: { discord: { threadBindings: { ttlHours: 12 } } } },
+    },
+    {
+      retiredPath: "channels.telegram.accounts.work.threadBindings.ttlHours",
+      config: {
+        channels: { telegram: { accounts: { work: { threadBindings: { ttlHours: 6 } } } } },
+      },
+    },
+    {
+      retiredPath: "channels.line.threadBindings.ttlHours",
+      config: { channels: { line: { threadBindings: { ttlHours: 12 } } } },
+    },
+    {
+      retiredPath: "channels.matrix.accounts.work.threadBindings.ttlHours",
+      config: { channels: { matrix: { accounts: { work: { threadBindings: { ttlHours: 6 } } } } } },
+    },
+    {
+      retiredPath: "channels.webchat",
+      config: { channels: { webchat: { textChunkLimit: 16000 } } },
+    },
+    {
+      retiredPath: "gateway.webchat",
+      config: { gateway: { webchat: { chatHistoryMaxChars: 8000 } } },
+    },
+  ])(
+    "preserves pre-June $retiredPath until the bridge release migrates it",
+    async ({ config, retiredPath }) => {
+      await withDoctorConfigPreflightHome(async (home) => {
+        await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
+          const configPath = await writeOpenClawConfig(home, {
+            ...config,
+            session: { typingMode: "thinking", ...config.session },
+            gatway: { port: 12345 },
+            gateway: { mode: "local", ...config.gateway },
+            plugins: { enabled: false },
+          });
+          const original = await fs.readFile(configPath, "utf8");
+          expect((await readConfigFileSnapshot()).valid).toBe(false);
+          await expect
+            .soft(async () => {
+              const ctx = await prepareDoctorContext(configPath);
+              await runInitialConfigWriteHealth(ctx);
+            })
+            .rejects.toThrow(
+              new RegExp(
+                `${retiredPath.replaceAll(".", "\\.")}[\\s\\S]*2026\\.9\\.5[\\s\\S]*openclaw doctor --fix[\\s\\S]*latest`,
+              ),
+            );
+          expect.soft(await fs.readFile(configPath, "utf8")).toBe(original);
+          expect.soft((await readConfigFileSnapshot()).valid).toBe(false);
+        });
+      });
+    },
+  );
+
   it("persists legacy channel command owners once and reports each rewritten entry", async () => {
     await withDoctorConfigPreflightHome(async (home) => {
       await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
@@ -79,19 +158,20 @@ describe("Doctor workspace persistence", () => {
     ["entries", true],
     ["list", true],
   ] as const)(
-    "persists per-agent migrations with explicit ownership (%s, update in progress: %s)",
-    async (shape, updateInProgress) => {
+    "persists per-agent migrations with explicit ownership (%s, writable update: %s)",
+    async (shape, writableUpdate) => {
       await withDoctorConfigPreflightHome(async (home) => {
         await withEnvAsync(
           {
             OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-            OPENCLAW_UPDATE_IN_PROGRESS: updateInProgress ? "1" : undefined,
+            OPENCLAW_UPDATE_IN_PROGRESS: writableUpdate ? "1" : undefined,
+            OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: writableUpdate ? "1" : undefined,
           },
           async () => {
             const entries = {
               ops: {
                 memorySearch: { enabled: false, extraPaths: [path.join(home, "notes")] },
-                sandbox: { perSession: true },
+                sandbox: { browser: { enableNoVnc: true } },
                 model: { primary: "openai/gpt-5.6-sol", timeoutMs: 20_000 },
               },
               research: { memory: { search: { provider: "auto" } } },
@@ -119,7 +199,7 @@ describe("Doctor workspace persistence", () => {
             const saved = JSON.parse(await fs.readFile(configPath, "utf-8"));
             expect(saved.agents.entries.ops).toEqual({
               memory: { search: entries.ops.memorySearch },
-              sandbox: { scope: "session" },
+              sandbox: { browser: { noVncEnabled: true } },
               model: { primary: "openai/gpt-5.6-sol" },
             });
             expect(saved.agents.ownership).toBe("explicit");

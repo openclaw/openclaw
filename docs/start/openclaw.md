@@ -219,12 +219,17 @@ text. Markdown wrappers, code fences, and inline prose such as
 
 Local-path behavior follows the same file-read trust model as the agent:
 
-- If `tools.fs.workspaceOnly` is `true`, outbound local media paths stay restricted to the OpenClaw temp root, the media cache, agent workspace paths, and sandbox-generated files.
+- If `tools.fs.workspaceOnly` is `true`, outbound local media paths stay restricted to the OpenClaw temp root, the media cache, agent workspace paths, and files generated in the active session sandbox. Files in sibling sandboxes remain inaccessible.
 - If `tools.fs.workspaceOnly` is `false`, outbound local media can use host-local files the agent is already allowed to read.
 - Local paths can be absolute, workspace-relative, or home-relative with `~/`.
 - Host-local sends still only allow media and supported document types (images, audio, video, PDF, Office documents including macro-enabled Excel `.xlsm`, and validated text documents such as Markdown/MD, TXT, JSON, YAML, and YML). This is an extension of the existing host-read trust boundary, not a secret scanner: if the agent can read a host-local `secret.txt` or `config.json`, it can attach that file when the extension and content validation match. File-type validation does not establish that an attached workbook's macros are safe to run.
 
 Keep sensitive files outside the agent-readable filesystem, or keep `tools.fs.workspaceOnly: true` for stricter local-path sends.
+
+When the message tool cannot stage an attachment for the current conversation,
+its error identifies the file and the reported reason, such as a missing file or
+an unsupported local format. Being inside the workspace does not make every
+file type eligible for host-local attachment reads.
 
 ## Operations checklist
 

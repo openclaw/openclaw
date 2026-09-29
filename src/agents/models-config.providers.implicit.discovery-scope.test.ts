@@ -2,6 +2,7 @@
 import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
+import type { ModelProviderConfig } from "../config/types.models.js";
 import type { PluginMetadataSnapshotOwnerMaps } from "../plugins/plugin-metadata-snapshot.js";
 import {
   createPluginManifestRecordFixture,
@@ -31,6 +32,7 @@ const mocks = vi.hoisted(() => ({
   runProviderCatalog: vi.fn(),
   runProviderStaticCatalog: vi.fn(),
 }));
+
 const BUNDLED_PLUGINS_DIR = fileURLToPath(new URL("../../extensions/", import.meta.url));
 
 vi.mock("../plugins/provider-runtime.js", async (importOriginal) => {
@@ -76,26 +78,12 @@ import {
   resolveImplicitProviders,
 } from "./models-config.providers.implicit.js";
 
-function metadataOwners(
-  overrides: Partial<PluginMetadataSnapshotOwnerMaps>,
-): PluginMetadataSnapshotOwnerMaps {
-  // Tests only populate the owner map under inspection; keep the rest explicit.
-  return {
-    channels: new Map(),
-    channelConfigs: new Map(),
-    providers: new Map(),
-    modelCatalogProviders: new Map(),
-    cliBackends: new Map(),
-    setupProviders: new Map(),
-    commandAliases: new Map(),
-    contracts: new Map(),
-    modelIdNormalizationPolicies: new Map(),
-    ...overrides,
-  };
+function metadataWithOwners(owners: Partial<PluginMetadataSnapshotOwnerMaps>) {
+  const snapshot = createPluginMetadataSnapshotFixture();
+  return { ...snapshot, owners: { ...snapshot.owners, ...owners } };
 }
 
 function createProvider(id: string): ProviderPlugin {
-  // Minimal discovery plugin used to assert orchestration, not provider behavior.
   return {
     id,
     label: id,
@@ -141,18 +129,20 @@ function createTextModel(id: string, name: string) {
   };
 }
 
-function firstMockArg(mock: { mock: { calls: unknown[][] } }, label: string): unknown {
-  // Centralizes the mock-call assertion so failed discovery paths report intent.
-  const call = mock.mock.calls[0];
-  if (!call) {
-    throw new Error(`Expected ${label} to be called`);
-  }
-  return call[0];
-}
-
 describe("resolveImplicitProviders startup discovery scope", () => {
   let state: OpenClawTestState;
   let ambientHome: MockInstance<typeof os.homedir>;
+
+  function discover(
+    options: Omit<Parameters<typeof resolveImplicitProviders>[0], "agentDir"> = {},
+  ) {
+    return resolveImplicitProviders({
+      agentDir: state.agentDir(),
+      config: {},
+      env: state.env,
+      ...options,
+    });
+  }
 
   beforeEach(async () => {
     vi.clearAllMocks();
@@ -219,9 +209,7 @@ describe("resolveImplicitProviders startup discovery scope", () => {
     );
 
     await withEnvAsync({ OPENAI_API_KEY: "ambient-catalog-test-key" }, async () => {
-      await resolveImplicitProviders({
-        agentDir: state.agentDir(),
-        config: {},
+      await discover({
         env: { ...state.env, OPENAI_API_KEY: "scoped-catalog-test-key" },
         providerDiscoveryProviderIds: ["openai"],
       });
@@ -230,9 +218,241 @@ describe("resolveImplicitProviders startup discovery scope", () => {
     expect(mocks.runProviderCatalog).toHaveBeenCalledOnce();
   });
 
+  it("loads configured provider entrypoints but runs static hooks only for unresolved refs", async () => {
+    const openai = createStaticOnlyProvider("openai");
+    const anthropic = createStaticOnlyProvider("anthropic");
+    mocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([openai, anthropic]);
+    mocks.prepareProviderStaticCatalog.mockResolvedValue({
+      providers: [anthropic],
+      entries: [],
+    });
+
+    const prepared = await prepareImplicitProviderStaticCatalog({
+      config: {},
+      env: state.env,
+      providerDiscoveryProviderIds: ["openai", "anthropic"],
+      staticCatalogProviderIds: ["anthropic"],
+    });
+
+    expect(mocks.prepareProviderStaticCatalog).toHaveBeenCalledWith({
+      providers: [anthropic],
+    });
+    expect(prepared.providers).toEqual([openai, anthropic]);
+  });
+
+  it("prepares a sole family hook for a selected catalog identity", async () => {
+    const byteplus = { ...createStaticOnlyProvider("byteplus"), pluginId: "byteplus" };
+    mocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([byteplus]);
+
+    await prepareImplicitProviderStaticCatalog({
+      config: {},
+      env: state.env,
+      pluginMetadataSnapshot: metadataWithOwners({
+        modelCatalogProviders: new Map([["byteplus-plan", ["byteplus"]]]),
+      }),
+      providerDiscoveryProviderIds: ["byteplus-plan"],
+      staticCatalogProviderIds: ["byteplus-plan"],
+    });
+
+    expect(mocks.prepareProviderStaticCatalog).toHaveBeenCalledWith({ providers: [byteplus] });
+  });
+
+  it("treats an explicit empty provider scope as no discovery", async () => {
+    const providers = await discover({
+      providerDiscoveryProviderIds: [],
+    });
+
+    expect(mocks.resolveRuntimePluginDiscoveryProviders).not.toHaveBeenCalled();
+    expect(mocks.runProviderCatalog).not.toHaveBeenCalled();
+    expect(mocks.runProviderStaticCatalog).not.toHaveBeenCalled();
+    expect(providers).toEqual({});
+  });
+
+  it("runs only the selected catalog hook within a shared plugin owner", async () => {
+    const alpha = { ...createProvider("alpha"), pluginId: "shared" };
+    const beta = { ...createProvider("beta"), pluginId: "shared" };
+    mocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([alpha, beta]);
+    mocks.runProviderCatalog.mockImplementation(
+      async ({ provider }: { provider: ProviderPlugin }) => ({
+        providers: {
+          [provider.id]: {
+            baseUrl: `https://${provider.id}.example.test`,
+            api: "openai-completions",
+            models: [],
+          },
+        },
+      }),
+    );
+
+    const providers = await discover({
+      pluginMetadataSnapshot: metadataWithOwners({
+        providers: new Map([
+          ["alpha", ["shared"]],
+          ["beta", ["shared"]],
+        ]),
+      }),
+      providerDiscoveryProviderIds: ["alpha"],
+    });
+
+    expect(mocks.runProviderCatalog).toHaveBeenCalledTimes(1);
+    expect(mocks.runProviderCatalog).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: alpha, providerIds: ["alpha"] }),
+    );
+    expect(Object.keys(providers ?? {})).toEqual(["alpha"]);
+  });
+
+  it.each([
+    {
+      name: "honors gateway live provider filters",
+      env: { OPENCLAW_LIVE_TEST: "1", OPENCLAW_LIVE_GATEWAY_PROVIDERS: "Claude-CLI" },
+      owners: { cliBackends: new Map([["claude-cli", ["anthropic"]]]) },
+      expected: ["anthropic"],
+    },
+    {
+      name: "keeps explicit plugin-id filters when no owning provider plugin exists",
+      env: { OPENCLAW_LIVE_TEST: "1", OPENCLAW_LIVE_PROVIDERS: "openrouter" },
+      owners: {},
+      expected: ["openrouter"],
+    },
+  ])("$name", async ({ env, expected, owners }) => {
+    await discover({
+      env: { ...state.env, VITEST: "1", ...env },
+      pluginMetadataSnapshot: metadataWithOwners(owners),
+    });
+
+    expect(mocks.resolveRuntimePluginDiscoveryProviders).toHaveBeenCalledWith(
+      expect.objectContaining({ onlyPluginIds: expected }),
+    );
+  });
+
+  it.each(["timeout", "secret-unavailable"] as const)(
+    "records every selected family identity after %s without accepting late success",
+    async (failure) => {
+      const family = createProvider("family");
+      const healthy = createProvider("healthy");
+      mocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([family, healthy]);
+      const completion = createDeferredCore();
+      let lateCatalog: Promise<void> | undefined;
+      const outcomes: Array<{ provider: string; status: string }> = [];
+      mocks.runProviderCatalog.mockImplementation((params) => {
+        if (params.provider.id === "healthy") {
+          return Promise.resolve({
+            provider: {
+              baseUrl: "https://healthy.example.test/v1",
+              models: [createTextModel("healthy-live", "Healthy live")],
+            },
+          });
+        }
+        if (failure === "secret-unavailable") {
+          return Promise.reject(
+            new SecretSurfaceUnavailableError({
+              ownerKind: "provider",
+              ownerId: "family",
+              state: "unavailable",
+              paths: ["models.providers.family.apiKey"],
+              refKeys: [],
+              reason: "fixture secret is unavailable",
+            }),
+          );
+        }
+        lateCatalog = completion.promise.then(() => {
+          params.reportCatalogOutcome?.({ provider: "family-plan", status: "ready" });
+        });
+        return lateCatalog;
+      });
+      const providers = await discover({
+        providerDiscoveryProviderIds: ["family", "family-plan", "healthy"],
+        providerDiscoveryTimeoutMs: 1,
+        pluginMetadataSnapshot: createPluginMetadataSnapshotFixture({
+          plugins: [
+            createPluginManifestRecordFixture({
+              id: "family",
+              providers: ["family", "family-plan"],
+            }),
+            createPluginManifestRecordFixture({ id: "healthy", providers: ["healthy"] }),
+          ],
+        }),
+        onProviderCatalogOutcome: (outcome) => outcomes.push(outcome),
+      });
+      const expected = [
+        { provider: "family", status: "unavailable" },
+        { provider: "family-plan", status: "unavailable" },
+      ];
+      try {
+        expect(providers?.healthy?.models.map((model) => model.id)).toEqual(["healthy-live"]);
+        expect(outcomes).toEqual(expected);
+      } finally {
+        completion.resolve();
+        await lateCatalog;
+      }
+      expect(outcomes).toEqual(expected);
+    },
+  );
+
+  it("does not fall through to live catalogs when entries-only providers lack static rows", async () => {
+    await discover({
+      providerDiscoveryEntriesOnly: true,
+    });
+
+    expect(mocks.runProviderCatalog).not.toHaveBeenCalled();
+    expect(mocks.runProviderStaticCatalog).not.toHaveBeenCalled();
+  });
+
+  it("runs a prepared provider's static hook when its result was not prepared", async () => {
+    const anthropic = { ...createStaticOnlyProvider("anthropic"), pluginId: "anthropic" };
+    mocks.runProviderStaticCatalog.mockResolvedValueOnce({
+      providers: {
+        anthropic: {
+          baseUrl: "https://api.anthropic.com",
+          api: "anthropic-messages",
+          models: [],
+        },
+      },
+    });
+
+    const providers = await discover({
+      pluginMetadataSnapshot: metadataWithOwners({
+        providers: new Map([["anthropic", ["anthropic"]]]),
+      }),
+      preparedStaticProviderCatalog: {
+        providers: [anthropic],
+        entries: [],
+      },
+      providerDiscoveryEntriesOnly: true,
+      providerDiscoveryProviderIds: ["anthropic"],
+    });
+
+    expect(Object.keys(providers ?? {})).toEqual(["anthropic"]);
+    expect(mocks.resolveRuntimePluginDiscoveryProviders).not.toHaveBeenCalled();
+    expect(mocks.runProviderStaticCatalog).toHaveBeenCalledWith({ provider: anthropic });
+  });
+
+  it("falls back to static provider catalogs when runtime discovery has no rows", async () => {
+    mocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([
+      createProviderWithStaticCatalog("minimax"),
+    ]);
+    mocks.runProviderCatalog.mockResolvedValue(null);
+    mocks.runProviderStaticCatalog.mockResolvedValue({
+      providers: {
+        minimax: {
+          baseUrl: "https://api.minimax.io/anthropic",
+          api: "anthropic-messages" as const,
+          models: [createTextModel("MiniMax-M2.7", "MiniMax M2.7")],
+        },
+      },
+    });
+
+    const providers = await discover({
+      providerDiscoveryProviderIds: ["minimax"],
+    });
+
+    expect(mocks.runProviderCatalog).toHaveBeenCalledTimes(1);
+    // Static catalogs are the startup fallback when scoped runtime discovery is empty.
+    expect(mocks.runProviderStaticCatalog).toHaveBeenCalledTimes(1);
+    expect(providers?.minimax?.models.map((model) => model.id)).toEqual(["MiniMax-M2.7"]);
+  });
   it.each([
     { scoped: false, api: "openai-completions" as const },
-    { scoped: true, api: "openai-completions" as const },
     { scoped: false, api: "openai-responses" as const },
     { scoped: true, api: "openai-responses" as const },
   ])(
@@ -327,547 +547,6 @@ describe("resolveImplicitProviders startup discovery scope", () => {
     },
   );
 
-  it("loads configured provider entrypoints but runs static hooks only for unresolved refs", async () => {
-    const openai = createStaticOnlyProvider("openai");
-    const anthropic = createStaticOnlyProvider("anthropic");
-    mocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([openai, anthropic]);
-    mocks.prepareProviderStaticCatalog.mockResolvedValue({
-      providers: [anthropic],
-      entries: [],
-    });
-
-    const prepared = await prepareImplicitProviderStaticCatalog({
-      config: {},
-      env: state.env,
-      providerDiscoveryProviderIds: ["openai", "anthropic"],
-      staticCatalogProviderIds: ["anthropic"],
-    });
-
-    expect(mocks.prepareProviderStaticCatalog).toHaveBeenCalledWith({
-      providers: [anthropic],
-    });
-    expect(prepared.providers).toEqual([openai, anthropic]);
-  });
-
-  it("prepares a sole family hook for a selected catalog identity", async () => {
-    const byteplus = { ...createStaticOnlyProvider("byteplus"), pluginId: "byteplus" };
-    mocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([byteplus]);
-
-    await prepareImplicitProviderStaticCatalog({
-      config: {},
-      env: state.env,
-      pluginMetadataSnapshot: {
-        index: { plugins: [] } as never,
-        manifestRegistry: { plugins: [], diagnostics: [] },
-        owners: metadataOwners({
-          modelCatalogProviders: new Map([["byteplus-plan", ["byteplus"]]]),
-        }),
-      },
-      providerDiscoveryProviderIds: ["byteplus-plan"],
-      staticCatalogProviderIds: ["byteplus-plan"],
-    });
-
-    expect(mocks.prepareProviderStaticCatalog).toHaveBeenCalledWith({ providers: [byteplus] });
-  });
-
-  it("passes startup provider scopes as plugin owner filters", async () => {
-    await resolveImplicitProviders({
-      agentDir: state.agentDir(),
-      config: {},
-      env: state.env,
-      explicitProviders: {},
-      pluginMetadataSnapshot: {
-        index: { plugins: [] } as never,
-        manifestRegistry: { plugins: [], diagnostics: [] },
-        owners: metadataOwners({
-          providers: new Map([["openai", ["openai"]]]),
-        }),
-      },
-      providerDiscoveryProviderIds: ["openai"],
-      providerDiscoveryTimeoutMs: 1234,
-    });
-
-    const discoveryOptions = firstMockArg(
-      mocks.resolveRuntimePluginDiscoveryProviders,
-      "runtime plugin discovery",
-    ) as { onlyPluginIds?: string[] };
-    expect(discoveryOptions?.onlyPluginIds).toEqual(["openai"]);
-    const catalogOptions = firstMockArg(mocks.runProviderCatalog, "provider catalog") as {
-      timeoutMs?: number;
-    };
-    expect(catalogOptions?.timeoutMs).toBe(1234);
-  });
-
-  it("treats an explicit empty provider scope as no discovery", async () => {
-    const providers = await resolveImplicitProviders({
-      agentDir: state.agentDir(),
-      config: {},
-      env: state.env,
-      explicitProviders: {},
-      providerDiscoveryProviderIds: [],
-    });
-
-    expect(mocks.resolveRuntimePluginDiscoveryProviders).not.toHaveBeenCalled();
-    expect(mocks.runProviderCatalog).not.toHaveBeenCalled();
-    expect(mocks.runProviderStaticCatalog).not.toHaveBeenCalled();
-    expect(providers).toEqual({});
-  });
-
-  it("runs only the selected catalog hook within a shared plugin owner", async () => {
-    const alpha = { ...createProvider("alpha"), pluginId: "shared" };
-    const beta = { ...createProvider("beta"), pluginId: "shared" };
-    mocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([alpha, beta]);
-    mocks.runProviderCatalog.mockImplementation(
-      async ({ provider }: { provider: ProviderPlugin }) => ({
-        providers: {
-          [provider.id]: {
-            baseUrl: `https://${provider.id}.example.test`,
-            api: "openai-completions",
-            models: [],
-          },
-        },
-      }),
-    );
-
-    const providers = await resolveImplicitProviders({
-      agentDir: state.agentDir(),
-      config: {},
-      env: state.env,
-      explicitProviders: {},
-      pluginMetadataSnapshot: {
-        index: { plugins: [] } as never,
-        manifestRegistry: { plugins: [], diagnostics: [] },
-        owners: metadataOwners({
-          providers: new Map([
-            ["alpha", ["shared"]],
-            ["beta", ["shared"]],
-          ]),
-        }),
-      },
-      providerDiscoveryProviderIds: ["alpha"],
-    });
-
-    expect(mocks.runProviderCatalog).toHaveBeenCalledTimes(1);
-    expect(mocks.runProviderCatalog).toHaveBeenCalledWith(
-      expect.objectContaining({ provider: alpha, providerIds: ["alpha"] }),
-    );
-    expect(Object.keys(providers ?? {})).toEqual(["alpha"]);
-  });
-
-  it("filters a shared catalog hook result to its selected identity", async () => {
-    const family = {
-      ...createProvider("family"),
-      pluginId: "family",
-      hookAliases: ["family-plan"],
-    };
-    mocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([family]);
-    mocks.runProviderCatalog.mockResolvedValue({
-      providers: {
-        family: {
-          baseUrl: "https://family.example.test",
-          api: "openai-completions",
-          models: [],
-        },
-        "family-plan": {
-          baseUrl: "https://family-plan.example.test",
-          api: "openai-completions",
-          models: [],
-        },
-      },
-    });
-
-    const providers = await resolveImplicitProviders({
-      agentDir: state.agentDir(),
-      config: {},
-      env: state.env,
-      explicitProviders: {},
-      pluginMetadataSnapshot: {
-        index: { plugins: [] } as never,
-        manifestRegistry: { plugins: [], diagnostics: [] },
-        owners: metadataOwners({
-          modelCatalogProviders: new Map([
-            ["family", ["family"]],
-            ["family-plan", ["family"]],
-          ]),
-        }),
-      },
-      providerDiscoveryProviderIds: ["family-plan"],
-    });
-
-    expect(mocks.runProviderCatalog).toHaveBeenCalledWith(
-      expect.objectContaining({ provider: family, providerIds: ["family-plan"] }),
-    );
-    expect(Object.keys(providers ?? {})).toEqual(["family-plan"]);
-  });
-
-  it("retains a single-provider catalog under its selected registered alias", async () => {
-    const canonical = { ...createProvider("canonical"), pluginId: "canonical" };
-    canonical.aliases = ["alias"];
-    mocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([canonical]);
-    mocks.runProviderCatalog.mockResolvedValue({
-      provider: {
-        baseUrl: "https://canonical.example.test",
-        api: "openai-completions",
-        models: [],
-      },
-    });
-
-    const providers = await resolveImplicitProviders({
-      agentDir: state.agentDir(),
-      config: {},
-      env: state.env,
-      explicitProviders: {},
-      pluginMetadataSnapshot: {
-        index: { plugins: [] } as never,
-        manifestRegistry: { plugins: [], diagnostics: [] },
-        owners: metadataOwners({ providers: new Map([["alias", ["canonical"]]]) }),
-      },
-      providerDiscoveryProviderIds: ["alias"],
-    });
-
-    expect(mocks.runProviderCatalog).toHaveBeenCalledWith(
-      expect.objectContaining({ provider: canonical, providerIds: ["alias"] }),
-    );
-    expect(Object.keys(providers ?? {})).toEqual(["alias"]);
-  });
-
-  it.each([
-    {
-      name: "maps live provider backend ids to owning plugin ids",
-      env: { OPENCLAW_LIVE_TEST: "1", OPENCLAW_LIVE_PROVIDERS: "claude-cli" },
-      owners: { providers: new Map([["claude-cli", ["anthropic"]]]) },
-      expected: ["anthropic"],
-    },
-    {
-      name: "honors gateway live provider filters",
-      env: { OPENCLAW_LIVE_TEST: "1", OPENCLAW_LIVE_GATEWAY_PROVIDERS: "claude-cli" },
-      owners: { providers: new Map([["claude-cli", ["anthropic"]]]) },
-      expected: ["anthropic"],
-    },
-    {
-      name: "keeps explicit plugin-id filters when no owning provider plugin exists",
-      env: { OPENCLAW_LIVE_TEST: "1", OPENCLAW_LIVE_PROVIDERS: "openrouter" },
-      owners: {},
-      expected: ["openrouter"],
-    },
-    {
-      name: "maps live provider backend ids through plugin metadata cli backend owners",
-      env: { OPENCLAW_LIVE_TEST: "1", OPENCLAW_LIVE_PROVIDERS: "claude-cli" },
-      owners: { cliBackends: new Map([["claude-cli", ["anthropic"]]]) },
-      expected: ["anthropic"],
-    },
-    {
-      name: "normalizes mixed-case backend ids through plugin metadata owners",
-      env: { OPENCLAW_LIVE_TEST: "1", OPENCLAW_LIVE_PROVIDERS: "Claude-CLI" },
-      owners: { cliBackends: new Map([["claude-cli", ["anthropic"]]]) },
-      expected: ["anthropic"],
-    },
-    {
-      name: "does not resolve provider aliases through plugin metadata owners",
-      env: { OPENCLAW_LIVE_TEST: "1", OPENCLAW_LIVE_PROVIDERS: "bytedance" },
-      owners: { providers: new Map([["volcengine", ["volcengine"]]]) },
-      expected: ["bytedance"],
-    },
-    {
-      name: "scopes normal startup discovery to requested provider owners",
-      env: {},
-      providerIds: ["openai"],
-      owners: { providers: new Map([["openai", ["openai"]]]) },
-      expected: ["openai"],
-    },
-    {
-      name: "maps mixed-case startup provider ids through model catalog owners",
-      env: {},
-      providerIds: ["OpenAI"],
-      owners: { modelCatalogProviders: new Map([["openai", ["codex"]]]) },
-      expected: ["codex"],
-    },
-  ])("$name", async ({ env, expected, owners, providerIds }) => {
-    await resolveImplicitProviders({
-      agentDir: state.agentDir(),
-      config: {},
-      env: { ...state.env, VITEST: "1", ...env },
-      explicitProviders: {},
-      pluginMetadataSnapshot: {
-        index: { plugins: [] } as never,
-        manifestRegistry: { plugins: [], diagnostics: [] },
-        owners: metadataOwners(owners),
-      },
-      ...(providerIds ? { providerDiscoveryProviderIds: providerIds } : {}),
-    });
-
-    expect(
-      firstMockArg(mocks.resolveRuntimePluginDiscoveryProviders, "runtime plugin discovery"),
-    ).toMatchObject({ onlyPluginIds: expected });
-  });
-
-  it("records an unavailable outcome when live catalog discovery times out", async () => {
-    mocks.runProviderCatalog.mockImplementationOnce(() => new Promise<void>(() => {}));
-    const outcomes: Array<{ provider: string; status: string }> = [];
-
-    await resolveImplicitProviders({
-      agentDir: state.agentDir(),
-      config: {},
-      env: state.env,
-      explicitProviders: {},
-      providerDiscoveryProviderIds: ["openai"],
-      providerDiscoveryTimeoutMs: 1,
-      onProviderCatalogOutcome: (outcome) => outcomes.push(outcome),
-    });
-
-    expect(outcomes).toEqual([{ provider: "openai", status: "unavailable" }]);
-  });
-
-  it.each(["timeout", "secret-unavailable"] as const)(
-    "records every selected family identity after %s without accepting late success",
-    async (failure) => {
-      const family = createProvider("family");
-      const healthy = createProvider("healthy");
-      mocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([family, healthy]);
-      const completion = createDeferredCore();
-      let lateCatalog: Promise<void> | undefined;
-      const outcomes: Array<{ provider: string; status: string }> = [];
-      mocks.runProviderCatalog.mockImplementation((params) => {
-        if (params.provider.id === "healthy") {
-          return Promise.resolve({
-            provider: {
-              baseUrl: "https://healthy.example.test/v1",
-              models: [createTextModel("healthy-live", "Healthy live")],
-            },
-          });
-        }
-        if (failure === "secret-unavailable") {
-          return Promise.reject(
-            new SecretSurfaceUnavailableError({
-              ownerKind: "provider",
-              ownerId: "family",
-              state: "unavailable",
-              paths: ["models.providers.family.apiKey"],
-              refKeys: [],
-              reason: "fixture secret is unavailable",
-            }),
-          );
-        }
-        lateCatalog = completion.promise.then(() => {
-          params.reportCatalogOutcome?.({ provider: "family-plan", status: "ready" });
-        });
-        return lateCatalog;
-      });
-      const providers = await resolveImplicitProviders({
-        agentDir: state.agentDir(),
-        config: {},
-        env: state.env,
-        explicitProviders: {},
-        providerDiscoveryProviderIds: ["family", "family-plan", "healthy"],
-        providerDiscoveryTimeoutMs: 1,
-        pluginMetadataSnapshot: createPluginMetadataSnapshotFixture({
-          plugins: [
-            createPluginManifestRecordFixture({
-              id: "family",
-              providers: ["family", "family-plan"],
-            }),
-            createPluginManifestRecordFixture({ id: "healthy", providers: ["healthy"] }),
-          ],
-        }),
-        onProviderCatalogOutcome: (outcome) => outcomes.push(outcome),
-      });
-      const expected = [
-        { provider: "family", status: "unavailable" },
-        { provider: "family-plan", status: "unavailable" },
-      ];
-      try {
-        expect(providers?.healthy?.models.map((model) => model.id)).toEqual(["healthy-live"]);
-        expect(outcomes).toEqual(expected);
-      } finally {
-        completion.resolve();
-        await lateCatalog;
-      }
-      expect(outcomes).toEqual(expected);
-    },
-  );
-
-  it("rethrows non-timeout live catalog discovery failures", async () => {
-    mocks.runProviderCatalog.mockRejectedValueOnce(
-      new Error("provider catalog timed out after provider-defined retry window"),
-    );
-    const outcomes: Array<{ provider: string; status: string }> = [];
-
-    await expect(
-      resolveImplicitProviders({
-        agentDir: state.agentDir(),
-        config: {},
-        env: state.env,
-        explicitProviders: {},
-        providerDiscoveryProviderIds: ["openai"],
-        providerDiscoveryTimeoutMs: 1_000,
-        onProviderCatalogOutcome: (outcome) => outcomes.push(outcome),
-      }),
-    ).rejects.toThrow("provider catalog timed out after provider-defined retry window");
-
-    expect(outcomes).toEqual([]);
-  });
-
-  it("can keep startup discovery on provider discovery entries only", async () => {
-    await resolveImplicitProviders({
-      agentDir: state.agentDir(),
-      config: {},
-      env: state.env,
-      explicitProviders: {},
-      providerDiscoveryEntriesOnly: true,
-    });
-
-    const discoveryOptions = firstMockArg(
-      mocks.resolveRuntimePluginDiscoveryProviders,
-      "runtime plugin discovery",
-    ) as { discoveryEntriesOnly?: boolean };
-    expect(discoveryOptions?.discoveryEntriesOnly).toBe(true);
-  });
-
-  it("does not fall through to live catalogs when entries-only providers lack static rows", async () => {
-    await resolveImplicitProviders({
-      agentDir: state.agentDir(),
-      config: {},
-      env: state.env,
-      explicitProviders: {},
-      providerDiscoveryEntriesOnly: true,
-    });
-
-    expect(mocks.runProviderCatalog).not.toHaveBeenCalled();
-    expect(mocks.runProviderStaticCatalog).not.toHaveBeenCalled();
-  });
-
-  it("uses static provider catalogs for entries-only startup discovery", async () => {
-    mocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([
-      createProviderWithStaticCatalog("codex"),
-    ]);
-
-    await resolveImplicitProviders({
-      agentDir: state.agentDir(),
-      config: {},
-      env: state.env,
-      explicitProviders: {},
-      providerDiscoveryEntriesOnly: true,
-    });
-
-    expect(mocks.runProviderStaticCatalog).toHaveBeenCalledTimes(1);
-    expect(mocks.runProviderCatalog).not.toHaveBeenCalled();
-  });
-
-  it("reuses prepared static results while preserving the requesting provider scope", async () => {
-    const openai = { ...createStaticOnlyProvider("openai"), pluginId: "openai" };
-    const anthropic = { ...createStaticOnlyProvider("anthropic"), pluginId: "anthropic" };
-    const providers = await resolveImplicitProviders({
-      agentDir: state.agentDir(),
-      config: {},
-      env: state.env,
-      explicitProviders: {},
-      pluginMetadataSnapshot: {
-        index: { plugins: [] } as never,
-        manifestRegistry: { plugins: [], diagnostics: [] },
-        owners: metadataOwners({
-          providers: new Map([
-            ["openai", ["openai"]],
-            ["anthropic", ["anthropic"]],
-          ]),
-        }),
-      },
-      preparedStaticProviderCatalog: {
-        providers: [openai, anthropic],
-        entries: [
-          {
-            provider: openai,
-            result: {
-              providers: {
-                openai: {
-                  baseUrl: "https://api.openai.com/v1",
-                  api: "openai-responses",
-                  models: [],
-                },
-                unrelated: {
-                  baseUrl: "https://unrelated.example.test",
-                  api: "openai-completions",
-                  models: [],
-                },
-              },
-            },
-          },
-          {
-            provider: anthropic,
-            result: {
-              providers: {
-                anthropic: {
-                  baseUrl: "https://api.anthropic.com",
-                  api: "anthropic-messages",
-                  models: [],
-                },
-              },
-            },
-          },
-        ],
-      },
-      providerDiscoveryEntriesOnly: true,
-      providerDiscoveryProviderIds: ["openai"],
-    });
-
-    expect(Object.keys(providers ?? {})).toEqual(["openai"]);
-    expect(mocks.resolveRuntimePluginDiscoveryProviders).not.toHaveBeenCalled();
-    expect(mocks.runProviderStaticCatalog).not.toHaveBeenCalled();
-  });
-
-  it("runs a prepared provider's static hook when its result was not prepared", async () => {
-    const anthropic = { ...createStaticOnlyProvider("anthropic"), pluginId: "anthropic" };
-    mocks.runProviderStaticCatalog.mockResolvedValueOnce({
-      providers: {
-        anthropic: {
-          baseUrl: "https://api.anthropic.com",
-          api: "anthropic-messages",
-          models: [],
-        },
-      },
-    });
-
-    const providers = await resolveImplicitProviders({
-      agentDir: state.agentDir(),
-      config: {},
-      env: state.env,
-      explicitProviders: {},
-      pluginMetadataSnapshot: {
-        index: { plugins: [] } as never,
-        manifestRegistry: { plugins: [], diagnostics: [] },
-        owners: metadataOwners({
-          providers: new Map([["anthropic", ["anthropic"]]]),
-        }),
-      },
-      preparedStaticProviderCatalog: {
-        providers: [anthropic],
-        entries: [],
-      },
-      providerDiscoveryEntriesOnly: true,
-      providerDiscoveryProviderIds: ["anthropic"],
-    });
-
-    expect(Object.keys(providers ?? {})).toEqual(["anthropic"]);
-    expect(mocks.resolveRuntimePluginDiscoveryProviders).not.toHaveBeenCalled();
-    expect(mocks.runProviderStaticCatalog).toHaveBeenCalledWith({ provider: anthropic });
-  });
-
-  it("uses static-only provider catalogs for scoped startup discovery", async () => {
-    mocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([
-      createStaticOnlyProvider("openai"),
-    ]);
-
-    await resolveImplicitProviders({
-      agentDir: state.agentDir(),
-      config: {},
-      env: state.env,
-      explicitProviders: {},
-      providerDiscoveryProviderIds: ["openai"],
-    });
-
-    expect(mocks.runProviderStaticCatalog).toHaveBeenCalledTimes(1);
-    expect(mocks.runProviderCatalog).not.toHaveBeenCalled();
-  });
-
   it("fills missing static catalog apiKey from Google Vertex ADC auth evidence", async () => {
     const credentialsPath = await state.writeJson("application_default_credentials.json", {
       type: "authorized_user",
@@ -910,35 +589,6 @@ describe("resolveImplicitProviders startup discovery scope", () => {
     expect(providers?.["google-vertex"]?.apiKey).toBe("gcp-vertex-credentials");
   });
 
-  it("falls back to static provider catalogs when runtime discovery has no rows", async () => {
-    mocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([
-      createProviderWithStaticCatalog("minimax"),
-    ]);
-    mocks.runProviderCatalog.mockResolvedValue(null);
-    mocks.runProviderStaticCatalog.mockResolvedValue({
-      providers: {
-        minimax: {
-          baseUrl: "https://api.minimax.io/anthropic",
-          api: "anthropic-messages" as const,
-          models: [createTextModel("MiniMax-M2.7", "MiniMax M2.7")],
-        },
-      },
-    });
-
-    const providers = await resolveImplicitProviders({
-      agentDir: state.agentDir(),
-      config: {},
-      env: state.env,
-      explicitProviders: {},
-      providerDiscoveryProviderIds: ["minimax"],
-    });
-
-    expect(mocks.runProviderCatalog).toHaveBeenCalledTimes(1);
-    // Static catalogs are the startup fallback when scoped runtime discovery is empty.
-    expect(mocks.runProviderStaticCatalog).toHaveBeenCalledTimes(1);
-    expect(providers?.minimax?.models.map((model) => model.id)).toEqual(["MiniMax-M2.7"]);
-  });
-
   it("inherits discovered input for a configured model whose source row omitted it", async () => {
     const explicitProvider = {
       baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
@@ -973,10 +623,11 @@ describe("resolveImplicitProviders startup discovery scope", () => {
 
     expect(providers?.["amazon-bedrock"]?.models).toMatchObject([
       { id: "vision-model", input: ["text", "image"] },
+      { id: "discovered-only" },
     ]);
   });
 
-  it("keeps explicit provider models manual without provider wildcard visibility", async () => {
+  it("merges discovered models without treating configured rows or selection policy as inventory limits", async () => {
     const explicitProvider = {
       baseUrl: "http://vllm.example/v1",
       api: "openai-completions" as const,
@@ -1013,49 +664,58 @@ describe("resolveImplicitProviders startup discovery scope", () => {
       },
     });
 
-    expect(providers?.vllm?.models.map((model) => model.id)).toEqual(["manual-model"]);
-  });
-
-  it("merges discovered self-hosted models into explicit provider models for wildcard visibility", async () => {
-    const explicitProvider = {
-      baseUrl: "http://vllm.example/v1",
-      api: "openai-completions" as const,
-      models: [createTextModel("manual-model", "Manual Model")],
-    };
-    mocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([createProvider("vllm")]);
-    mocks.runProviderCatalog.mockResolvedValue({
-      provider: {
-        baseUrl: "http://vllm.example/v1",
-        api: "openai-completions" as const,
-        models: [createTextModel("discovered-model", "Discovered Model")],
-      },
-    });
-
-    const providers = await resolveImplicitProviders({
-      agentDir: state.agentDir(),
-      config: {
-        agents: {
-          defaults: {
-            models: {
-              "vllm/*": {},
-            },
-          },
-        },
-        models: {
-          providers: {
-            vllm: explicitProvider,
-          },
-        },
-      },
-      env: state.env,
-      explicitProviders: {
-        vllm: explicitProvider,
-      },
-    });
-
     expect(providers?.vllm?.models.map((model) => model.id)).toEqual([
       "manual-model",
       "discovered-model",
     ]);
+  });
+  it("reuses prepared static results while preserving the requesting provider scope", async () => {
+    const openai = { ...createStaticOnlyProvider("openai"), pluginId: "openai" };
+    const anthropic = { ...createStaticOnlyProvider("anthropic"), pluginId: "anthropic" };
+    const openaiConfigs: Record<string, ModelProviderConfig> = {
+      openai: { baseUrl: "https://api.openai.com/v1", api: "openai-responses", models: [] },
+      unrelated: {
+        baseUrl: "https://unrelated.example.test",
+        api: "openai-completions",
+        models: [],
+      },
+    };
+    const anthropicConfigs: Record<string, ModelProviderConfig> = {
+      anthropic: {
+        baseUrl: "https://api.anthropic.com",
+        api: "anthropic-messages",
+        models: [],
+      },
+    };
+    const providers = await discover({
+      explicitProviders: {},
+      pluginMetadataSnapshot: metadataWithOwners({
+        providers: new Map([
+          ["openai", ["openai"]],
+          ["anthropic", ["anthropic"]],
+        ]),
+      }),
+      preparedStaticProviderCatalog: {
+        providers: [openai, anthropic],
+        entries: [
+          {
+            provider: openai,
+            result: { providers: openaiConfigs },
+            providerConfigs: openaiConfigs,
+          },
+          {
+            provider: anthropic,
+            result: { providers: anthropicConfigs },
+            providerConfigs: anthropicConfigs,
+          },
+        ],
+      },
+      providerDiscoveryEntriesOnly: true,
+      providerDiscoveryProviderIds: ["openai"],
+    });
+
+    expect(Object.keys(providers ?? {})).toEqual(["openai"]);
+    expect(mocks.resolveRuntimePluginDiscoveryProviders).not.toHaveBeenCalled();
+    expect(mocks.runProviderStaticCatalog).not.toHaveBeenCalled();
   });
 });

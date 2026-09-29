@@ -9,7 +9,8 @@ import {
 export function createGatewayWorkerDispatchAdmission(
   loadSessionRuntime: () => Promise<WorkerPlacementSessionRuntime>,
 ): WorkerPlacementDispatchAdmission {
-  return async (request, run, authorize) => {
+  return async (request, run, authorize, callerSignal) => {
+    callerSignal?.throwIfAborted();
     const runtime = await loadSessionRuntime();
     const resolve = () =>
       runtime.resolveGatewaySessionStoreTargetWithStore({
@@ -23,13 +24,17 @@ export function createGatewayWorkerDispatchAdmission(
     const entry = runtime.resolveCanonicalSessionEntryFromStoreKeys(target.store, target.storeKeys);
     const revision = entry?.lifecycleRevision ?? null;
     const controller = new AbortController();
+    const signal = callerSignal
+      ? AbortSignal.any([callerSignal, controller.signal])
+      : controller.signal;
     const admission = await beginSessionWorkAdmission({
       scope: target.storePath,
       identities: [request.sessionKey, target.canonicalKey, ...target.storeKeys, request.sessionId],
       onInterrupt: (reason) => controller.abort(reason),
+      signal,
       assertAllowed: () => {
         authorize?.();
-        controller.signal.throwIfAborted();
+        signal.throwIfAborted();
         const current = resolve();
         const currentEntry = runtime.resolveCanonicalSessionEntryFromStoreKeys(
           current.store,
@@ -52,7 +57,7 @@ export function createGatewayWorkerDispatchAdmission(
     try {
       // Reserve before the placement queue, and exclude this owner from its own local barrier.
       // Release only after dispatch's canonical failure cleanup has settled the provider child.
-      return await admission.run(() => run(controller.signal));
+      return await admission.run(() => run(signal));
     } finally {
       admission.release();
     }

@@ -155,7 +155,7 @@ async function runAgentSpawnBridge(params: {
         throw new ToolInputError("agents.run persisted launch reservation cannot be recovered.");
       }
       // Cold-start restore idempotently re-enqueues this durable launch before agentWait parks.
-      initSubagentRegistry();
+      await initSubagentRegistry();
       existing =
         getSwarmRunByLaunchReplayKey(idempotencyKey, requesterSessionKey, params.ctx.agentId) ??
         existing;
@@ -232,6 +232,7 @@ function runSwarmNoteBridge(params: {
   emitSessionLifecycleEvent({
     sessionKey,
     reason: "swarm-note",
+    scope: "runtime",
     swarmGroupId: resolveCodeModeSwarmGroupId(params.ctx),
     kind,
     text: text.trim(),

@@ -1,4 +1,4 @@
-// Status message helpers read and format stored status messages.
+import { buildModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import {
   type FastMode,
@@ -9,7 +9,7 @@ import {
 import { resolveAuthoredModelContextTokens } from "../agents/context-resolution.js";
 import { resolveContextTokensForModel } from "../agents/context.js";
 import { resolveCronStyleNow } from "../agents/current-time.js";
-import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { DEFAULT_CONTEXT_TOKENS, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveExtraParams } from "../agents/embedded-agent-runner/extra-params.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
 import { resolveModelAuthMode } from "../agents/model-auth.js";
@@ -18,17 +18,10 @@ import {
   areRuntimeModelRefsEquivalent,
   shouldPreferActiveRuntimeAliasAuthLabel,
 } from "../agents/model-runtime-aliases.js";
-import {
-  buildModelAliasIndex,
-  resolveConfiguredModelRef,
-  resolveModelRefFromString,
-} from "../agents/model-selection.js";
+import { buildModelAliasIndex, resolveModelRefFromString } from "../agents/model-selection.js";
 import { resolveOpenAITextVerbosity } from "../agents/openai-text-verbosity.js";
 import { resolveSandboxRuntimeStatus } from "../agents/sandbox.js";
-import {
-  formatProviderModelRef,
-  resolveSelectedAndActiveModel,
-} from "../auto-reply/model-runtime.js";
+import type { resolveSelectedAndActiveModel } from "../auto-reply/model-runtime.js";
 import type {
   ElevatedLevel,
   ReasoningLevel,
@@ -41,6 +34,7 @@ import {
   resolveMainSessionKey,
   resolveFreshSessionTotalTokens,
   resolveProjectedSessionContextTokens,
+  resolveProjectedSessionContextBudgetStatus,
   resolveSessionPluginStatusLines,
   resolveSessionPluginTraceLines,
   type SessionEntry,
@@ -53,7 +47,7 @@ import {
   hasUserPinnedModelSelection,
 } from "../config/sessions/model-override-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { readRecentSessionUsageFromTranscript } from "../gateway/session-transcript-readers.js";
+import { readRecentSessionUsageFromTranscript } from "../gateway/session-transcript-usage.js";
 import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import type {
@@ -69,7 +63,7 @@ import type { MediaUnderstandingDecision } from "../media-understanding/types.js
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { formatFastModeStatusValue } from "../shared/fast-mode.js";
 import { resolveStatusTtsSnapshot } from "../tts/status-config.js";
-import { sessionDeliveryChannel, sessionDeliveryOrigin } from "../utils/delivery-context.shared.js";
+import { sessionDeliveryChannel, sessionDeliveryOrigin } from "../utils/delivery-context.read.js";
 import {
   estimateAggregateUsageCost,
   formatTokenCount,
@@ -79,6 +73,7 @@ import {
 import { resolveRuntimeServiceCommit, VERSION } from "../version.js";
 import { resolveAgentRuntimeLabel } from "./agent-runtime-label.js";
 import { resolveActiveFallbackState } from "./fallback-notice-state.js";
+import { formatModelEndpointUrl } from "./status-model-endpoint.js";
 
 type AgentDefaults = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>;
 type AgentConfig = Partial<AgentDefaults> & {
@@ -95,7 +90,8 @@ type QueueStatus = {
 };
 
 type StatusArgs = {
-  config?: OpenClawConfig;
+  config: OpenClawConfig;
+  modelRefs: ReturnType<typeof resolveSelectedAndActiveModel>;
   agent: AgentConfig;
   agentId?: string;
   configuredDefaultModelLabel?: string;
@@ -117,14 +113,15 @@ type StatusArgs = {
   resolvedReasoning?: ReasoningLevel;
   resolvedElevated?: ElevatedLevel;
   modelAuth?: string;
+  selectedEndpoint?: string;
   activeModelAuth?: string;
+  activeModel?: { modelProvider: string; model: string };
   usageLine?: string;
   timeLine?: string;
   uptimeValue?: string;
   queue?: QueueStatus;
   mediaDecisions?: ReadonlyArray<MediaUnderstandingDecision>;
   subagentsLine?: string;
-  taskLine?: string;
   pluginHealthLine?: string;
   channelFeatureLine?: string;
   includeTranscriptUsage?: boolean;
@@ -145,23 +142,10 @@ function normalizeAuthMode(value?: string): NormalizedAuthMode | undefined {
   if (!normalized) {
     return undefined;
   }
-  if (normalized === "api-key" || normalized.startsWith("api-key ")) {
-    return "api-key";
-  }
-  if (normalized === "oauth" || normalized.startsWith("oauth ")) {
-    return "oauth";
-  }
-  if (normalized === "token" || normalized.startsWith("token ")) {
-    return "token";
-  }
-  if (normalized === "aws-sdk" || normalized.startsWith("aws-sdk ")) {
-    return "aws-sdk";
-  }
-  if (normalized === "native" || normalized.startsWith("native ")) {
-    return "native";
-  }
-  if (normalized === "mixed" || normalized.startsWith("mixed ")) {
-    return "mixed";
+  for (const mode of ["api-key", "oauth", "token", "aws-sdk", "native", "mixed"] as const) {
+    if (normalized === mode || normalized.startsWith(`${mode} `)) {
+      return mode;
+    }
   }
   if (normalized === "unknown") {
     return "unknown";
@@ -204,7 +188,7 @@ function resolveExecutionLabel(
     if (sandboxMode === "off") {
       return "direct";
     }
-    const runtime = runtimeStatus.sandboxed ? "docker" : sessionKey ? "direct" : "unknown";
+    const runtime = runtimeStatus.sandboxed ? "docker" : "direct";
     return `${runtime}/${sandboxMode}`;
   }
 
@@ -231,13 +215,12 @@ function resolveExecutionLabel(
 
 const formatTokens = (total: number | null | undefined, contextTokens: number | null) => {
   const ctx = contextTokens ?? null;
+  const ctxLabel = ctx ? formatTokenCount(ctx) : "?";
   if (total == null) {
-    const ctxLabel = ctx ? formatTokenCount(ctx) : "?";
     return `?/${ctxLabel}`;
   }
   const pct = ctx ? Math.min(999, Math.round((total / ctx) * 100)) : null;
   const totalLabel = formatTokenCount(total);
-  const ctxLabel = ctx ? formatTokenCount(ctx) : "?";
   return `${totalLabel}/${ctxLabel}${pct !== null ? ` (${pct}%)` : ""}`;
 };
 
@@ -309,19 +292,7 @@ const readUsageFromSessionLog = (
   agentId?: string,
   sessionKey?: string,
   storePath?: string,
-):
-  | {
-      input: number;
-      output: number;
-      cacheRead?: number;
-      cacheWrite?: number;
-      promptTokens: number;
-      total: number;
-      totalTokensFresh: boolean;
-      model?: string;
-    }
-  | undefined => {
-  // Transcripts are stored at the session file path (fallback: ~/.openclaw/sessions/<SessionId>.jsonl)
+) => {
   if (!sessionId) {
     return undefined;
   }
@@ -443,15 +414,13 @@ const formatMediaUnderstandingLine = (decisions?: ReadonlyArray<MediaUnderstandi
       if (decision.outcome === "scope-deny") {
         return `${decision.capability} denied`;
       }
-      if (decision.outcome === "skipped") {
-        const reason = findDecisionReason(decision);
+      if (decision.outcome === "skipped" || decision.outcome === "failed") {
+        const reason = findDecisionReason(
+          decision,
+          decision.outcome === "failed" ? "failed" : undefined,
+        );
         const shortReason = summarizeDecisionReason(reason);
-        return `${decision.capability} skipped${shortReason ? ` (${shortReason})` : ""}`;
-      }
-      if (decision.outcome === "failed") {
-        const reason = findDecisionReason(decision, "failed");
-        const shortReason = summarizeDecisionReason(reason);
-        return `${decision.capability} failed${shortReason ? ` (${shortReason})` : ""}`;
+        return `${decision.capability} ${decision.outcome}${shortReason ? ` (${shortReason})` : ""}`;
       }
       return null;
     })
@@ -567,58 +536,24 @@ export type StatusMessageParts = {
   presentation: MessagePresentation;
 };
 
-export function buildStatusMessage(args: StatusArgs): string {
-  return buildStatusMessageParts(args).text;
-}
-
 export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
   const now = args.now ?? Date.now();
   // Derive the live wall clock here so both /status and session_status expose
   // the same configured timezone without duplicating formatting at each caller.
-  const cronNow = args.config ? resolveCronStyleNow(args.config, now) : undefined;
+  const cronNow = resolveCronStyleNow(args.config, now);
   const timeLine = args.timeLine ?? cronNow?.timeLine;
   const uptimeLine = args.uptimeValue ? `⏱️ Uptime: ${args.uptimeValue}` : undefined;
   const entry = args.sessionEntry;
-  const selectionConfig = {
+  const contextConfig = {
+    ...args.config,
     agents: {
-      defaults: args.agent ?? {},
+      ...args.config.agents,
+      defaults: { ...args.config.agents?.defaults, ...args.agent },
     },
-  } as OpenClawConfig;
-  const contextConfig = args.config
-    ? ({
-        ...args.config,
-        agents: {
-          ...args.config.agents,
-          defaults: {
-            ...args.config.agents?.defaults,
-            ...args.agent,
-          },
-        },
-      } as OpenClawConfig)
-    : ({
-        agents: {
-          defaults: args.agent ?? {},
-        },
-      } as OpenClawConfig);
-  const resolved = resolveConfiguredModelRef({
-    cfg: selectionConfig,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
-    allowPluginNormalization: false,
-  });
-  const selectedProvider = entry?.providerOverride ?? resolved.provider ?? DEFAULT_PROVIDER;
-  const selectedModel = entry?.modelOverride ?? resolved.model ?? DEFAULT_MODEL;
-  const parseSelectedProvider = Boolean(
-    entry?.modelOverride?.trim() && !entry?.providerOverride?.trim(),
-  );
-  const modelRefs = resolveSelectedAndActiveModel({
-    selectedProvider,
-    selectedModel,
-    sessionEntry: entry,
-    parseSelectedProvider,
-  });
-  const selectedLookupProvider = modelRefs.selected.provider || selectedProvider;
-  const selectedLookupModel = modelRefs.selected.model || selectedModel;
+  };
+  const { modelRefs } = args;
+  const selectedLookupProvider = modelRefs.selected.provider;
+  const selectedLookupModel = modelRefs.selected.model;
   const initialFallbackState = resolveActiveFallbackState({
     selectedModelRef: modelRefs.selected.label || "unknown",
     activeModelRef: modelRefs.active.label || "unknown",
@@ -629,8 +564,9 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
   let activeModel = modelRefs.active.model;
   let contextLookupProvider: string | undefined = activeProvider;
   let contextLookupModel = activeModel;
-  const runtimeModelRaw = normalizeOptionalString(entry?.model) ?? "";
-  const runtimeProviderRaw = normalizeOptionalString(entry?.modelProvider) ?? "";
+  const runtimeModelRaw = normalizeOptionalString(args.activeModel?.model ?? entry?.model) ?? "";
+  const runtimeProviderRaw =
+    normalizeOptionalString(args.activeModel?.modelProvider ?? entry?.modelProvider) ?? "";
 
   if (runtimeModelRaw && !runtimeProviderRaw && runtimeModelRaw.includes("/")) {
     const slashIndex = runtimeModelRaw.indexOf("/");
@@ -693,7 +629,7 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
       ) {
         totalTokens = candidate;
       }
-      if (!entry?.model && logUsage.model) {
+      if (!entry?.model && !args.activeModel && logUsage.model) {
         const slashIndex = logUsage.model.indexOf("/");
         if (slashIndex > 0) {
           const provider = logUsage.model.slice(0, slashIndex).trim();
@@ -730,7 +666,7 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
     }
   }
 
-  const activeModelLabel = formatProviderModelRef(activeProvider, activeModel) || "unknown";
+  const activeModelLabel = buildModelCatalogRef(activeProvider, activeModel) || "unknown";
   const runtimeDiffersFromSelected = activeModelLabel !== (modelRefs.selected.label || "unknown");
   const runtimeAliasModelEquivalent = areRuntimeModelRefsEquivalent(
     modelRefs.selected.label || "unknown",
@@ -817,8 +753,8 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
   const fastMode = args.resolvedFast ?? args.sessionEntry?.fastMode ?? false;
   const fastModeState = resolveFastModeState({
     cfg: args.config,
-    provider: activeProvider,
-    model: activeModel,
+    provider: selectedLookupProvider,
+    model: selectedLookupModel,
     agentId: args.agentId,
     sessionEntry: args.sessionEntry,
   });
@@ -869,9 +805,17 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
     ? (args.groupActivation ?? entry?.groupActivation ?? "mention")
     : undefined;
 
+  const contextBudgetStatus = args.activeModel
+    ? resolveProjectedSessionContextBudgetStatus({
+        entry,
+        provider: activeProvider,
+        model: activeModel,
+        contextTokens,
+      })
+    : entry?.contextBudgetStatus;
   const contextUsageLabel =
     totalTokens == null || totalTokens === 0
-      ? (formatEstimatedContextBudgetTokens(entry?.contextBudgetStatus, contextTokens) ??
+      ? (formatEstimatedContextBudgetTokens(contextBudgetStatus, contextTokens) ??
         formatTokens(totalTokens, contextTokens ?? null))
       : formatTokens(totalTokens, contextTokens ?? null);
   const queueMode = args.queue?.mode ?? "unknown";
@@ -997,6 +941,9 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
     `🧠 Model: ${selectedModelLabel}${modelNote}${overrideLabel}${liveSwitchNote}`,
   ];
 
+  const selectedEndpoint = args.selectedEndpoint
+    ? formatModelEndpointUrl(args.selectedEndpoint)
+    : undefined;
   // Show configured fallback models (from agent model config)
   const configuredFallbacks = (() => {
     const modelConfig = args.agent?.model;
@@ -1049,6 +996,7 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
     [versionLine, timeLine, uptimeLine],
     [
       ...modelLines,
+      `🌐 Endpoint: ${selectedEndpoint ?? "unknown"}`,
       selectedAuthLabelValue ? `🔑 Auth: ${selectedAuthLabelValue}` : null,
       configuredFallbacksLine,
       fallbackLine,
@@ -1062,7 +1010,7 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
       mediaLine,
       args.usageLine,
     ],
-    [`🧵 Session: ${sessionValue}`, args.subagentsLine, args.taskLine],
+    [`🧵 Session: ${sessionValue}`, args.subagentsLine],
     [
       `⚙️ Execution: ${execution.label}`,
       `🤖 Runtime: ${agentRuntimeLabel}`,
@@ -1089,6 +1037,7 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
     }
   };
   pushStatusRow("🧠 Model", `${selectedModelLabel}${modelNote}${overrideLabel}${liveSwitchNote}`);
+  pushStatusRow("🌐 Endpoint", selectedEndpoint ?? "unknown");
   pushStatusRow("🔑 Auth", selectedAuthLabelValue);
   pushStatusRow("🔄 Fallbacks", configuredFallbacks?.join(", "));
   pushStatusRow("↪️ Fallback", fallbackValue);
@@ -1140,7 +1089,6 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
       ...contextBlock(mediaLine),
       ...contextBlock(args.usageLine),
       ...contextBlock(args.subagentsLine),
-      ...contextBlock(args.taskLine),
       ...contextBlock(args.pluginHealthLine),
       ...contextBlock(pluginStatusLine ? `🧩 ${pluginStatusLine}` : null),
       ...contextBlock(voiceLine),

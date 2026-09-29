@@ -2,10 +2,10 @@
 export { runChromeMcpWebMcp } from "./chrome-mcp.webmcp.js";
 export { ChromeMcpDocumentUnavailableError } from "./chrome-mcp-contracts.js";
 export type { ChromeMcpOperationOptions, ChromeMcpProfileOptions } from "./chrome-mcp-contracts.js";
-export { decodeChromeMcpStderrTail } from "./chrome-mcp-diagnostics.js";
 export { parseChromeMcpUnixProcessListForTest } from "./chrome-mcp-process.js";
 export {
   closeChromeMcpSession,
+  getChromeMcpPid,
   resetChromeMcpSessionsForTest,
   setChromeMcpProcessCleanupDepsForTest,
   setChromeMcpSessionFactoryForTest,
@@ -13,7 +13,6 @@ export {
 export {
   countChromeMcpTabs,
   ensureChromeMcpAvailable,
-  getChromeMcpPid,
   listChromeMcpTabs,
   openChromeMcpTab,
 } from "./chrome-mcp-tabs.js";
@@ -30,6 +29,7 @@ export {
   navigateChromeMcpPage,
   pressChromeMcpKey,
   resizeChromeMcpPage,
+  selectChromeMcpOption,
   resolveChromeMcpNavigateCallTimeoutMs,
   takeChromeMcpScreenshot,
   takeChromeMcpSnapshot,

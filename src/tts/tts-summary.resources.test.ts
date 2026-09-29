@@ -256,8 +256,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
                 skipCredentials: true,
                 runtimePluginSelections: [{ provider: id, modelId: "summary-model" }],
               },
-              undefined,
-              "static",
+              { catalogMode: "static" },
             );
             acquire = vi
               .spyOn(preparedRuntime, "acquireAgentRunPreparedModelRuntime")
@@ -272,7 +271,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
               state.finishCleanup.resolve();
               await Promise.all(outcomes);
               await parent.drain();
-              lease.release();
+              await lease[Symbol.asyncDispose]();
               await closePreparedModelRuntimeSnapshots();
             }
           },
@@ -489,7 +488,7 @@ it.each(["success", "auth-abort", "completion-abort"] as const)(
       expect(fixture.acquire).not.toHaveBeenCalled();
       expect(fixture.state.connections[0]?.database.isOpen).toBe(true);
       expect(fixture.state.connections[0]?.disposals).toBe(0);
-      fixture.lease.release();
+      await fixture.lease[Symbol.asyncDispose]();
       await fixture.assertClosed();
     });
   },

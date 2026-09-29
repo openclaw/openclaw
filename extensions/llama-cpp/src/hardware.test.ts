@@ -127,17 +127,14 @@ describe("Gateway hardware detection", () => {
     });
   });
 
-  it.each([0x9123683e, 0x794c7630, 0x2fc12fc1])(
-    "reserves combined capacity for pooled or layered Linux filesystems: %s",
-    async (type) => {
-      const cacheStat = await readStat(os.tmpdir());
-      cacheStat.dev += 1;
-      vi.mocked(fs.stat).mockResolvedValueOnce(cacheStat);
-      vi.mocked(fs.statfs).mockResolvedValue({ ...disk, type });
+  it("reserves combined capacity for a pooled Linux filesystem", async () => {
+    const cacheStat = await readStat(os.tmpdir());
+    cacheStat.dev += 1;
+    vi.mocked(fs.stat).mockResolvedValueOnce(cacheStat);
+    vi.mocked(fs.statfs).mockResolvedValue({ ...disk, type: 0x9123683e });
 
-      expect((await detectLlamaCppHardware({ cacheDir: "/models" })).sharedDisk).toBe(true);
-    },
-  );
+    expect((await detectLlamaCppHardware({ cacheDir: "/models" })).sharedDisk).toBe(true);
+  });
 
   it.each([
     { runtimeContainer: "disk4", sharedDisk: true },

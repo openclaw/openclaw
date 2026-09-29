@@ -11,7 +11,7 @@ import {
 } from "../../src/gateway/server/plugins-http.js";
 import { withTempConfig } from "../../src/gateway/test-temp-config.js";
 import { createSubsystemLogger } from "../../src/logging/subsystem.js";
-import { closePluginStateDatabase } from "../../src/plugin-state/plugin-state-store.js";
+import { closePluginStateDatabase } from "../../src/plugin-state/plugin-state-store.sqlite.js";
 import { createPluginRecord } from "../../src/plugins/loader-records.js";
 import { createPluginRegistry } from "../../src/plugins/registry.js";
 import {
@@ -142,14 +142,16 @@ describe("Beam authenticated uploader identity", () => {
       const profileIds: string[] = [];
 
       await withBeamHttpServer(proxyAuth, async (origin, { catalog }) => {
-        expect(listProfiles()).toEqual([]);
+        expect(await listProfiles()).toEqual([]);
         for (const [index, principal] of principals.entries()) {
           const beamId = index === 0 ? firstBeamId : secondBeamId;
           await upload(origin, beamId, `Question from ${principal}`, {
             "x-forwarded-user": principal,
             "x-forwarded-for": "198.51.100.20",
           });
-          const profile = listProfiles().find((candidate) => candidate.emails.includes(principal));
+          const profile = (await listProfiles()).find((candidate) =>
+            candidate.emails.includes(principal),
+          );
           expect(profile).toBeDefined();
           profileIds.push(profile!.id);
           const page = await catalog.read({ agentId: "main", hostId: "gateway", threadId: beamId });
@@ -181,7 +183,7 @@ describe("Beam authenticated uploader identity", () => {
         expect(replaced.items.find((item) => item.type === "userMessage")).toMatchObject({
           text: "Shared-token replacement",
         });
-        const ownerProfile = listProfiles().find((profile) => profile.emails.length === 0);
+        const ownerProfile = (await listProfiles()).find((profile) => profile.emails.length === 0);
         expect(ownerProfile).toBeDefined();
         expect(profileIds).not.toContain(ownerProfile!.id);
         expect(replaced.items.find((item) => item.type === "userMessage")?.sender).toEqual({
@@ -191,7 +193,7 @@ describe("Beam authenticated uploader identity", () => {
         expect(
           (await read(secondBeamId)).items.find((item) => item.type === "userMessage")?.sender,
         ).toEqual({ identity: { type: "profile", id: profileIds[1] } });
-        expect(listProfiles()).toHaveLength(3);
+        expect(await listProfiles()).toHaveLength(3);
       });
     });
   });

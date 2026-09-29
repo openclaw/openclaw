@@ -1,5 +1,7 @@
 // Linux OOM score helpers adjust child process OOM priority when supported.
+import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import fs from "node:fs";
+import { parseBooleanValue } from "../utils/boolean.js";
 
 /**
  * On Linux, children spawned by a long-lived parent (e.g., the gateway) inherit
@@ -39,18 +41,6 @@ const OOM_SCORE_RESTORE_EXEC_ENV_SCRIPT = [
   'if [ "${OC_INTERNAL_OOM_EXEC_PS4+x}" = x ]; then PS4="$OC_INTERNAL_OOM_EXEC_PS4"; export PS4; fi; unset OC_INTERNAL_OOM_EXEC_PS4; exec "$0" "$@"',
 ].join("; ");
 
-function isDisabled(value: string | undefined): boolean {
-  switch (value?.trim().toLowerCase()) {
-    case "0":
-    case "false":
-    case "no":
-    case "off":
-      return true;
-    default:
-      return false;
-  }
-}
-
 let cachedShellAvailable: boolean | null = null;
 function defaultShellAvailable(): boolean {
   if (cachedShellAvailable !== null) {
@@ -85,7 +75,7 @@ function shouldWrapChildForOomScore(options: OomWrapOptions | undefined): boolea
     return false;
   }
   const env = options?.env ?? process.env;
-  if (isDisabled(env[CHILD_OOM_SCORE_ADJ_ENV_KEY])) {
+  if (parseBooleanValue(env[CHILD_OOM_SCORE_ADJ_ENV_KEY]) === false) {
     return false;
   }
   return (options?.shellAvailable ?? defaultShellAvailable)();
@@ -95,11 +85,47 @@ function isWrapped(command: string, args: readonly string[]): boolean {
   return command === OOM_SCORE_WRAP_SHELL && args[0] === "-c" && args[1] === OOM_SCORE_WRAP_SCRIPT;
 }
 
-function canUseShellExecCommand(command: string): boolean {
-  // POSIX sh implementations such as dash do not support `exec --`. A command
-  // starting with "-" could be parsed as an exec option, so keep that rare
-  // shape on the original direct-spawn path instead of wrapping it.
-  return !command.startsWith("-");
+/** Only small spawn owners may temporarily raise their score; never call from the Gateway. */
+export function spawnWithInheritedOomScore(
+  command: string,
+  args: string[],
+  options: SpawnOptions,
+): ChildProcess {
+  if (
+    process.platform !== "linux" ||
+    !isWrapped(command, args) ||
+    !args[2] ||
+    options.shell ||
+    options.argv0 !== undefined
+  ) {
+    return spawn(command, args, options);
+  }
+  let scoreFd: number | undefined;
+  let original: string;
+  try {
+    scoreFd = fs.openSync("/proc/self/oom_score_adj", "r+");
+    original = fs.readFileSync(scoreFd, "utf8").trim();
+    fs.writeSync(scoreFd, "1000", 0, "utf8");
+  } catch {
+    if (scoreFd !== undefined) {
+      fs.closeSync(scoreFd);
+    }
+    return spawn(command, args, options);
+  }
+  try {
+    // No await: only this fork inherits the raised score, including its earliest descendants.
+    return spawn(args[2], args.slice(3), options);
+  } finally {
+    try {
+      // Linux permits restoring the inherited minimum without CAP_SYS_RESOURCE.
+      fs.writeSync(scoreFd, original, 0, "utf8");
+    } catch {
+      // Preserve the child handle so its owner can still supervise and clean it up.
+      process.emitWarning("Could not restore spawn owner's Linux OOM score");
+    } finally {
+      fs.closeSync(scoreFd);
+    }
+  }
 }
 
 function hardenShellEnv(baseEnv: NodeJS.ProcessEnv | undefined): NodeJS.ProcessEnv {
@@ -129,9 +155,12 @@ function prepareOomScoreAdjustedSpawnWithExecEnvPolicy(
     env: options?.env,
     wrapped: false,
   };
+  // POSIX sh implementations such as dash do not support `exec --`. A command
+  // starting with "-" could be parsed as an exec option, so keep that rare
+  // shape on the original direct-spawn path instead of wrapping it.
   if (
     !command ||
-    !canUseShellExecCommand(command) ||
+    command.startsWith("-") ||
     !shouldWrapChildForOomScore(options) ||
     (options?.argv0 !== undefined && options.argv0 !== command)
   ) {

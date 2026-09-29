@@ -43,6 +43,61 @@ describe("memory search staleness", () => {
     ).toMatchObject({ warning: expect.stringContaining("embedding model changed") });
   });
 
+  it.each(["provenance_version", "chunking_version"])(
+    "reports the failed repair prerequisite while %s is still incompatible",
+    (code) => {
+      expect(
+        resolveMemorySearchStaleness(
+          {
+            lastSyncError: "HTTP 400: embedding provider unavailable",
+            custom: {
+              indexIdentity: {
+                status: "mismatched",
+                reason: "runtime format changed",
+                code,
+                owner: "openclaw",
+              },
+            },
+          },
+          "main",
+        ),
+      ).toEqual({
+        stale: true,
+        warning:
+          "Memory index repair failed: HTTP 400: embedding provider unavailable. The existing index was left unchanged.",
+        action:
+          "Run: openclaw memory status --deep --agent main. Resolve the reported sync failure before retrying the search.",
+      });
+    },
+  );
+
+  it.each(["provenance_version", "chunking_version"])(
+    "keeps newer-index recovery visible after a prior sync failure (%s)",
+    (code) => {
+      const status: MemoryProviderStatus = {
+        backend: "builtin",
+        provider: "openai",
+        lastSyncError: "HTTP 400: embedding provider unavailable",
+        custom: {
+          indexIdentity: {
+            status: "mismatched",
+            reason:
+              "the index was written by a newer OpenClaw version; upgrade OpenClaw or reindex explicitly",
+            code,
+            owner: "openclaw",
+            versionOrder: "newer",
+          },
+        },
+      };
+      const result = resolveMemorySearchStaleness(status, "main");
+      expect(result?.warning).toContain("newer OpenClaw version");
+      expect(result?.warning).toContain("Previous memory sync failed: HTTP 400");
+      expect(result?.action).toContain("Upgrade OpenClaw or reindex explicitly");
+      expect(result?.action).toContain("provider cost");
+      expect(status.lastSyncError).toBe("HTTP 400: embedding provider unavailable");
+    },
+  );
+
   it("attributes an OpenClaw-owned format mismatch and names the repair cost", () => {
     const status: MemoryProviderStatus = {
       backend: "builtin",
@@ -69,6 +124,30 @@ describe("memory search staleness", () => {
       action:
         "Run: openclaw memory status --index --agent main. Rebuilding may call the configured embedding provider and can incur provider cost.",
     });
+  });
+
+  it("preserves the keyword-only marker only when a pending upgrade carries it", () => {
+    const base = {
+      status: "mismatched",
+      reason: "index chunking implementation changed",
+      code: "chunking_version",
+      owner: "openclaw",
+    } as const;
+    expect(
+      resolveMemoryIndexIdentityDiagnostic({
+        custom: { indexIdentity: { ...base, chunkingVersionOnly: true } },
+      }),
+    ).toEqual({ ...base, chunkingVersionOnly: true });
+    expect(
+      resolveMemoryIndexIdentityDiagnostic({
+        custom: { indexIdentity: { ...base, versionOrder: "newer", chunkingVersionOnly: true } },
+      }),
+    ).toEqual(base);
+    expect(
+      resolveMemoryIndexIdentityDiagnostic({
+        custom: { indexIdentity: { ...base } },
+      }),
+    ).toEqual({ ...base });
   });
 
   it("does not claim provider cost for a keyword-only index", () => {

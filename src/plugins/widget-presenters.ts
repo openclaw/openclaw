@@ -1,3 +1,8 @@
+import {
+  collectRegistryInvocationInstances,
+  PluginInvocationScope,
+} from "./plugin-invocation-scope.js";
+import { getPluginRegistryInspectionResources } from "./registry-inspection-resources.js";
 import type { PluginWidgetPresenterRegistration, PluginRegistry } from "./registry-types.js";
 import { getActivePluginRegistry } from "./runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
@@ -46,5 +51,19 @@ export function adoptRuntimeWidgetPresenterRegistrations(
 export function resolveWidgetPresenters(): readonly PluginWidgetPresenterRegistration[] {
   const registry =
     getPluginRuntimeGatewayRequestScope()?.pluginRegistry ?? getActivePluginRegistry() ?? undefined;
-  return registry?.widgetPresenters ?? [];
+  if (!registry) {
+    return [];
+  }
+  const source = getPluginRegistryInspectionResources(registry);
+  const ordinary = new PluginInvocationScope(
+    registry,
+    collectRegistryInvocationInstances(registry),
+  );
+  return registry.widgetPresenters.map((registration) => {
+    const adopted = source?.wrapAdoptedValue(registration.presenter) ?? registration.presenter;
+    const presenter = adopted !== registration.presenter ? adopted : ordinary.wrap(adopted);
+    return presenter === registration.presenter
+      ? registration
+      : Object.assign({}, registration, { presenter });
+  });
 }

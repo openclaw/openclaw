@@ -3,6 +3,7 @@ import {
   readSessionMessageIdentity,
 } from "@openclaw/gateway-client/browser";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { escapeRegExp } from "../../../../src/shared/regexp.js";
 import { stripInlineDirectiveTagsForDelivery } from "../../../../src/utils/directive-tags.js";
 import {
   accumulatedStreamText,
@@ -19,20 +20,13 @@ import {
 import {
   hasAssistantStreamPartReplacement,
   visibleAssistantStreamParts,
+  type ToolStreamReconciliationState,
 } from "./stream-reconciliation.ts";
 import {
   extractToolMessageRefs,
   resolveLiveToolStreamRefs,
   resolveMatchingLiveToolIdentity,
 } from "./tool-stream-identity.ts";
-
-type StreamSegmentPruningState = StreamCausalBoundaryState & {
-  chatStream: string | null;
-  chatStreamStartedAt: number | null;
-  chatToolMessages?: unknown[];
-  toolStreamById?: Map<string, unknown>;
-  toolStreamOrder?: unknown[];
-};
 
 type AssistantMessageVisibility = (message: unknown) => boolean;
 type StreamVisibility = (stream: string) => boolean;
@@ -72,29 +66,28 @@ export function discardStreamSegmentIndexes(
   );
 }
 
-export function reconcilePersistedAssistantStream(state: StreamSegmentPruningState): void {
+export function reconcilePersistedAssistantStream(state: ToolStreamReconciliationState): void {
   const runId = state.chatRunId;
   if (!runId) {
     return;
   }
-  for (const [index, segment] of (state.chatStreamSegments ?? []).entries()) {
-    if (segment.runId !== runId || !segment.itemId || !segment.pendingStreamText) {
+  for (const segment of state.chatStreamSegments ?? []) {
+    if (segment.runId !== runId || !segment.retiredItemId || !segment.pendingCommentary) {
       continue;
     }
     const handoff = retireCommentaryStream(state, {
       runId,
-      itemId: segment.itemId,
-      text: segment.text,
+      itemId: segment.retiredItemId,
+      text: segment.pendingCommentary.text,
       timestamp: segment.ts,
-      pendingStreamText: segment.pendingStreamText,
     });
-    const segments = [...(state.chatStreamSegments ?? [])];
-    segments[index] = {
-      ...segment,
-      text: handoff?.text ?? segment.text,
-      pendingStreamText: handoff?.pendingStreamText,
-    };
-    state.chatStreamSegments = segments;
+    if (handoff) {
+      state.chatStreamSegments = state.chatStreamSegments?.map((owner) =>
+        owner.runId === runId && owner.itemId === segment.retiredItemId
+          ? { ...owner, text: handoff.text }
+          : owner,
+      );
+    }
   }
   const stream = state.chatStream ?? accumulatedStreamText(state.chatStreamSegments ?? []);
   if (!stream) {
@@ -119,7 +112,7 @@ export function reconcilePersistedAssistantStream(state: StreamSegmentPruningSta
 }
 
 function retireCumulativePrefix(
-  state: StreamSegmentPruningState,
+  state: ToolStreamReconciliationState,
   runId: string,
   prefix: string,
   timestamp: number,
@@ -165,22 +158,95 @@ function retireCumulativePrefix(
   ];
 }
 
-/** Transfer one complete cumulative occurrence to its first keyed owner. */
+function completePendingCommentary(
+  state: ToolStreamReconciliationState,
+  retired: ChatStreamSegment,
+): { text: string } | null {
+  const pending = retired.pendingCommentary;
+  const stream = state.chatStream ?? accumulatedStreamText(state.chatStreamSegments ?? []);
+  if (!pending || !stream?.startsWith(retired.text)) {
+    return null;
+  }
+  const expectedText = pending.text;
+  const rawTail = stream.slice(pending.prefixLength);
+  const delivered = stripInlineDirectiveTagsForDelivery(rawTail).text;
+  const projected = delivered.replace(/\s+/gu, " ").trim();
+  let prefix = stream;
+  let text = expectedText;
+  let pendingCommentary: ChatStreamSegment["pendingCommentary"];
+  if (expectedText.startsWith(projected) && projected !== expectedText) {
+    pendingCommentary = { ...pending, text: expectedText };
+  } else {
+    // Match only this already-owned occurrence. A coalesced delta may also
+    // contain new output, including another identical commentary paragraph.
+    const pattern = expectedText.split(/\s+/u).map(escapeRegExp).join("\\s+");
+    const match = new RegExp(`^\\s*${pattern}`, "u").exec(delivered);
+    if (!match) {
+      return null;
+    }
+    const suffix = delivered.slice(match[0].length).trimEnd();
+    const source = rawTail.trimEnd();
+    if (suffix && !source.endsWith(suffix)) {
+      return null;
+    }
+    // A shorter item revision changes display, not bytes already owned by it.
+    prefix = stream.slice(
+      0,
+      Math.max(retired.text.length, pending.prefixLength + source.length - suffix.length),
+    );
+    text = match[0].replace(/^(?:[ \t]*\r?\n)+/u, "").trimEnd();
+  }
+  state.chatStreamSegments = state.chatStreamSegments?.map((segment) => {
+    if (segment === retired) {
+      return { ...segment, text: prefix, pendingCommentary };
+    }
+    // A tool may have rolled the observed partial into another segment before
+    // completion. It is the same cumulative occurrence, not new visible text.
+    return segment.runId === retired.runId &&
+      streamSegmentUsesAccumulatedText(segment) &&
+      segment.text.startsWith(retired.text) &&
+      prefix.startsWith(segment.text)
+      ? { ...segment, persisted: true }
+      : segment;
+  });
+  return { text };
+}
+
+/** Transfer one cumulative occurrence to its first keyed owner. */
 export function retireCommentaryStream(
-  state: StreamSegmentPruningState,
+  state: ToolStreamReconciliationState,
   commentary: {
     runId: string;
     itemId: string;
     text: string;
     timestamp: number;
-    pendingStreamText?: string;
   },
-): { text: string; pendingStreamText?: string } | null {
+): { text: string } | null {
+  if (state.chatRunId !== commentary.runId) {
+    return null;
+  }
+  const retired = state.chatStreamSegments?.find(
+    (segment) => segment.runId === commentary.runId && segment.retiredItemId === commentary.itemId,
+  );
+  if (retired) {
+    // Item revisions replace the expected text; only the observed cumulative
+    // prefix must stay monotonic. Keep that update even while chat lags behind.
+    const owner =
+      retired.pendingCommentary && retired.pendingCommentary.text !== commentary.text
+        ? { ...retired, pendingCommentary: { ...retired.pendingCommentary, text: commentary.text } }
+        : retired;
+    if (owner !== retired) {
+      state.chatStreamSegments = state.chatStreamSegments?.map((segment) =>
+        segment === retired ? owner : segment,
+      );
+    }
+    return completePendingCommentary(state, owner);
+  }
+  // Only the first keyed event can acquire an unowned cumulative occurrence.
+  // A later update without a pending retirement must not consume new output.
   if (
-    state.chatRunId !== commentary.runId ||
     state.chatStreamSegments?.some(
-      (segment) =>
-        segment.runId === commentary.runId && segment.retiredItemId === commentary.itemId,
+      (segment) => segment.runId === commentary.runId && segment.itemId === commentary.itemId,
     )
   ) {
     return null;
@@ -190,12 +256,6 @@ export function retireCommentaryStream(
     isHiddenStreamText: () => false,
   }).at(-1);
   if (!part || part.itemId || part.runId !== commentary.runId || part.boundaryRunId) {
-    return null;
-  }
-  if (
-    commentary.pendingStreamText &&
-    !part.replacementText.startsWith(commentary.pendingStreamText)
-  ) {
     return null;
   }
   const preceding = (state.chatStreamSegments ?? []).slice(0, part.segmentIndex);
@@ -211,11 +271,24 @@ export function retireCommentaryStream(
   // when that exact projection identifies the same complete occurrence.
   const projectedText = text.replace(/\s+/gu, " ").trim();
   if (!text || (text !== commentary.text && projectedText !== commentary.text)) {
-    // Item events can overtake the last chat delta. Only that observed prefix
-    // may complete this pending handoff; a later unrelated occurrence cannot.
-    return projectedText && commentary.text.startsWith(projectedText)
-      ? { text: commentary.text, pendingStreamText: part.replacementText }
-      : null;
+    if (!projectedText || !commentary.text.startsWith(projectedText)) {
+      return null;
+    }
+    // Retire observed bytes immediately. Keep completion with the cumulative
+    // owner so replacing the keyed display with history cannot lose the handoff.
+    retireCumulativePrefix(state, commentary.runId, part.replacementText, commentary.timestamp, {
+      itemId: commentary.itemId,
+      segmentIndex: part.segmentIndex,
+    });
+    state.chatStreamSegments = state.chatStreamSegments?.map((segment) =>
+      segment.runId === commentary.runId && segment.retiredItemId === commentary.itemId
+        ? {
+            ...segment,
+            pendingCommentary: { text: commentary.text, prefixLength: prefix?.length ?? 0 },
+          }
+        : segment,
+    );
+    return { text: commentary.text };
   }
   retireCumulativePrefix(state, commentary.runId, part.replacementText, commentary.timestamp, {
     itemId: commentary.itemId,
@@ -246,7 +319,7 @@ export function prunePersistedAssistantStreamSegments(
 
 export function pruneHistoryReplacedStreamSegments(
   messages: unknown[],
-  state: StreamSegmentPruningState,
+  state: ToolStreamReconciliationState,
   opts: {
     isHiddenAssistantMessage: AssistantMessageVisibility;
     isHiddenStreamText: StreamVisibility;
@@ -289,7 +362,7 @@ export function pruneHistoryReplacedStreamSegments(
 }
 
 export function prunePersistedToolStreamMessages(
-  state: StreamSegmentPruningState,
+  state: ToolStreamReconciliationState,
   persistedToolIds: Set<string>,
 ) {
   if (persistedToolIds.size === 0) {

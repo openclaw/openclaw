@@ -105,24 +105,15 @@ function parseArgs(argv: string[]): { options: ProfileOptions; selectedGraphs: G
     if (arg === "--help" || arg === "-h") {
       throw new Error(usage());
     }
-    if (arg === "--all") {
-      options.all = true;
-      continue;
-    }
-    if (arg === "--deep") {
-      options.deep = true;
-      continue;
-    }
-    if (arg === "--explain") {
-      options.explain = true;
-      continue;
-    }
-    if (arg === "--json") {
-      options.json = true;
-      continue;
-    }
-    if (arg === "--reuse") {
-      options.reuse = true;
+    const flag = arg.startsWith("--") ? arg.slice(2) : undefined;
+    if (
+      flag === "all" ||
+      flag === "deep" ||
+      flag === "explain" ||
+      flag === "json" ||
+      flag === "reuse"
+    ) {
+      options[flag] = true;
       continue;
     }
     if (arg.startsWith("--out=")) {
@@ -147,12 +138,6 @@ function parseArgs(argv: string[]): { options: ProfileOptions; selectedGraphs: G
 function ensureDirs(outDir: string): void {
   fs.mkdirSync(outDir, { recursive: true });
   fs.mkdirSync(path.join(outDir, "cache"), { recursive: true });
-}
-
-function removeIfFreshMode(filePath: string, reuse: boolean): void {
-  if (!reuse) {
-    fs.rmSync(filePath, { force: true });
-  }
 }
 
 function runTsgo(
@@ -234,20 +219,8 @@ function classifyFile(relativePath: string): string {
     const nodeModulesIndex = parts.indexOf("node_modules");
     return `node_modules/${packageNameFromNodeModule(parts, nodeModulesIndex)}`;
   }
-  if (first === "extensions") {
-    return `extensions/${parts[1] ?? "(root)"}`;
-  }
-  if (first === "packages") {
-    return `packages/${parts[1] ?? "(root)"}`;
-  }
-  if (first === "src") {
-    return `src/${parts[1] ?? "(root)"}`;
-  }
-  if (first === "ui") {
-    return `ui/${parts[1] ?? "(root)"}`;
-  }
-  if (first === "test") {
-    return `test/${parts[1] ?? "(root)"}`;
+  if (first && ["extensions", "packages", "src", "ui", "test"].includes(first)) {
+    return `${first}/${parts[1] ?? "(root)"}`;
   }
   if (first?.startsWith("/") || (first !== undefined && /^[A-Za-z]:/u.test(first))) {
     return "(external)";
@@ -361,8 +334,11 @@ function profileGraph(name: GraphName, options: ProfileOptions) {
   const noCheckBuildInfo = path.join(graphCacheRoot, `${name}-nocheck.tsbuildinfo`);
   const configPath = graph.config;
 
-  removeIfFreshMode(checkBuildInfo, options.reuse);
-  removeIfFreshMode(noCheckBuildInfo, options.reuse);
+  if (!options.reuse) {
+    for (const filePath of [checkBuildInfo, noCheckBuildInfo]) {
+      fs.rmSync(filePath, { force: true });
+    }
+  }
 
   const baseArgs = ["-p", configPath, "--pretty", "false"];
   const listFiles = runTsgo(`${name}:listFilesOnly`, [...baseArgs, "--listFilesOnly"], {
@@ -474,19 +450,13 @@ async function main(argv: string[]): Promise<void> {
     text: path.relative(repoRoot, textPath),
   };
 
-  fs.writeFileSync(jsonPath, `${JSON.stringify(report, null, 2)}\n`);
-  fs.writeFileSync(textPath, renderTextReport(report));
-  fs.writeFileSync(
-    path.join(options.outDir, "latest.json"),
-    `${JSON.stringify(report, null, 2)}\n`,
-  );
-  fs.writeFileSync(path.join(options.outDir, "latest.md"), renderTextReport(report));
-
-  if (options.json) {
-    process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
-  } else {
-    process.stdout.write(renderTextReport(report));
-  }
+  const json = `${JSON.stringify(report, null, 2)}\n`;
+  const text = renderTextReport(report);
+  fs.writeFileSync(jsonPath, json);
+  fs.writeFileSync(textPath, text);
+  fs.writeFileSync(path.join(options.outDir, "latest.json"), json);
+  fs.writeFileSync(path.join(options.outDir, "latest.md"), text);
+  process.stdout.write(options.json ? json : text);
 }
 
 try {

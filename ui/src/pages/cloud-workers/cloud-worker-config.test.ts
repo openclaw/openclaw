@@ -4,7 +4,6 @@ import { CloudWorkersConfigSchema } from "../../../../src/config/zod-schema.clou
 import {
   buildCloudWorkerDeletePatch,
   buildCloudWorkerUpsertPatch,
-  cloudWorkerProfileStatus,
   createCloudWorkerDraft,
   readCloudWorkerProfiles,
   validateCloudWorkerDraft,
@@ -54,7 +53,7 @@ describe("cloud worker settings state", () => {
     ).toBe("machineClass");
   });
 
-  it("distinguishes empty, advertised, and restart-required profiles", () => {
+  it("reads configured profiles independently of provider availability", () => {
     expect(readCloudWorkerProfiles({})).toEqual([]);
     expect(
       readCloudWorkerProfiles({ cloudWorkers: { profiles: { production: configuredProfile } } }),
@@ -77,11 +76,6 @@ describe("cloud worker settings state", () => {
         binary: "/opt/crabbox",
       },
     ]);
-    expect(cloudWorkerProfileStatus("production", new Set(), false)).toBe("loading");
-    expect(cloudWorkerProfileStatus("production", new Set(["production"]), true)).toBe(
-      "advertised",
-    );
-    expect(cloudWorkerProfileStatus("production", new Set(), true)).toBe("restart-required");
   });
 
   it.each([

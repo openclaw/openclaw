@@ -74,7 +74,7 @@ Add a new isolated agent:
 openclaw agents add work
 ```
 
-Flags: `--workspace <dir>`, `--model <id>`, `--agent-dir <dir>`, `--bind <channel[:accountId]>` (repeatable), `--non-interactive` (requires `--workspace`).
+Flags: `--role <role>`, `--workspace <dir>`, `--model <id>`, `--agent-dir <dir>`, `--bind <channel[:accountId]>` (repeatable), `--non-interactive` (requires `--workspace` unless a role is supplied).
 
 Add `bindings` to route inbound messages (the wizard offers to do this for you), then verify:
 
@@ -82,7 +82,11 @@ Add `bindings` to route inbound messages (the wizard offers to do this for you),
 openclaw agents list --bindings
 ```
 
-In the Control UI, **Settings → Agents** updates model choices when the Gateway
+In the Control UI, **Agents** at `/agents` shows the roster, current work status,
+and recent chat previews, with **Open chat** opening each agent's main session.
+Use **Manage agents** to configure the roster at `/settings/agents`.
+
+**Settings → Agents** updates model choices when the Gateway
 publishes a new catalog. Refreshing choices preserves your selected model,
 fallbacks, and identity draft. If the read fails, the editor shows an error and
 keeps the previous choices until a later update succeeds. Model and fallback
@@ -104,6 +108,75 @@ openclaw agents list --tree
 
 Deleted creators remain historical provenance. If the creator is no longer in
 the configured roster, its children appear at the root of the tree.
+
+## Team preset
+
+Create a small team with written role contracts and directed delegation:
+
+```bash
+openclaw agents team create --non-interactive
+openclaw agent --agent coordinator --message "Research the options and draft a recommendation."
+```
+
+The preset creates a chief of staff (`coordinator`), researcher, writer, and
+reviewer, each with its own workspace and completed identity. The chief of staff remains the
+human's point of contact: it discovers matching specialists, assigns bounded
+work, checks their artifacts, and reports a coherent result. Specialists return
+artifacts and evidence to the coordinator without delegating further. Their
+operating programs live in `AGENTS.md`, so they also apply in spawned sessions
+that do not load `SOUL.md` or `IDENTITY.md`.
+
+The bundled roles are [Claw sources](/cli/claws), sharing the portable
+`CLAW.md` format for identity, the `SOUL.md` body, and declared workspace
+files. `agents add --role <role>` loads one of these sources. With the
+experimental Claws surface enabled, the equivalent source path from a source
+checkout is `openclaw claws add docs/reference/templates/roles/<role>`; follow
+the [Claw preview and consent flow](/cli/claws#inspect-and-preview).
+
+You can also create the chief of staff or the full team from the Control UI:
+choose **New agent** in the sidebar or Agents home, then select the role or
+small-team recommendation in the custodian chat. Creation uses the same role
+templates and waits for your approval.
+
+The relevant per-agent delegation fragment is:
+
+```json5 validate=false
+{
+  agents: {
+    entries: {
+      coordinator: {
+        subagents: {
+          allowAgents: ["researcher", "writer", "reviewer"],
+          delegationMode: "prefer",
+        },
+      },
+      researcher: { subagents: { allowAgents: [] } },
+      writer: { subagents: { allowAgents: [] } },
+      reviewer: { subagents: { allowAgents: [] } },
+    },
+  },
+}
+```
+
+`"prefer"` guides the coordinator to delegate suitable work; it is prompt guidance,
+not a scheduler. `allowAgents` controls explicit spawn targets. The preset keeps
+`agents.defaults.subagents` and `tools.*` unchanged, so existing tool availability
+and access policy still apply. Role instructions require human approval before
+external sends, publication, purchases, deletion, or production changes.
+These delegation settings remain team wiring in config. The role Claws will
+carry them once the separate Claw profile support lands.
+
+The coordinator is an explicit target. Team creation
+sets `agents.defaults.systemAgent.agentId` to the coordinator only when that
+owner is unset; an existing owner is preserved and reported. In an explicit fleet,
+this also designates the default for operations that support default-agent selection.
+Explicit targets and [routing bindings](/concepts/agent-bindings) take precedence.
+
+Use `--prefix <p>` to namespace all team ids, `--coordinator <id>` to rename the
+coordinator, and `--workspace-root <dir>` to choose the parent directory for the
+separate workspaces. All ids are checked for conflicts before creation. See
+[`agents team create`](/cli/agents#agents-team-create) for flags and examples,
+or use the team choice during [onboarding](/start/wizard#choose-one-agent-or-a-team).
 
 ## Quick start
 
@@ -247,10 +320,18 @@ both keyed `agents.entries` and older `agents.list` rosters, including with
 `--fix --non-interactive`. Existing bindings and per-surface owners remain
 unchanged. Last-known-good recovery applies the same ownership stamp before
 validating and restoring a directly authored markerless roster.
-If an account has no fallback route but its matchable narrower bindings
-all explicitly name one configured agent, Doctor adds an account-scoped binding for that
-agent. It does not borrow ownership from another account or channel, choose
-between conflicting owners, or assign other unowned surfaces.
+Doctor never promotes narrower conversation bindings to account-wide ownership.
+It does not borrow ownership from another account or channel, choose between
+conflicting owners, or assign other unowned surfaces.
+
+During a legacy `agents.list` migration, unbound accounts keep
+their historical first-agent fallback as an explicit account binding, including
+when narrower conversation routes name other agents. Doctor
+records the binding alongside the ownership stamp. Both update-channel migration
+and manual Doctor require the original roster; if it is unavailable, Doctor reports
+that reason and leaves the bindings unchanged. An account whose owner remains
+unresolved reports the required binding and stays blocked without automatic
+restart attempts; other accounts and the Gateway continue serving.
 
 When migrating a legacy `agents.list` roster without a default marker, Doctor
 also pins the first agent's inherited workspace to `agents.entries.<id>.workspace`. Its customized instructions
@@ -611,6 +692,7 @@ See [Multi-agent sandbox and tools](/tools/multi-agent-sandbox-tools) for detail
 
 - [ACP agents](/tools/acp-agents) — running external coding harnesses
 - [Channel routing](/channels/channel-routing) — how messages route to agents
+- [Parallel specialist lanes](/concepts/parallel-specialist-lanes) — splitting one job across role-scoped agents
 - [Presence](/concepts/presence) — agent presence and availability
 - [Session](/concepts/session) — session isolation and routing
 - [Sub-agents](/tools/subagents) — spawning background agent runs

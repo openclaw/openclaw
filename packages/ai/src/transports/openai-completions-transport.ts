@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { Context, Model, StreamFn } from "@openclaw/llm-core";
+import type { Model, StreamFn } from "@openclaw/llm-core";
 import OpenAI from "openai";
 import { getEnvApiKey } from "../env-api-keys.js";
 import {
@@ -7,6 +7,7 @@ import {
   reasoningTagTextPolicy,
   type OpenAICompletionsOptions,
 } from "../provider-options.js";
+import { resolveCacheRetention } from "../providers/cache-retention.js";
 import { finalizeOpenAICompletionsToolCalls } from "../providers/openai-completions-tool-calls.js";
 import { tagUnresolvedTextAsCommentary } from "../utils/assistant-text-phase.js";
 import {
@@ -14,7 +15,9 @@ import {
   getFirstStreamEventTimeoutHandler,
   getFirstStreamEventTimeoutMs,
 } from "../utils/stream-first-event-timeout.js";
+import { createAssistantOutput } from "./assistant-output.js";
 import { buildGuardedModelFetch } from "./host-policy.js";
+import { prepareModelRequestBody } from "./model-request-body.js";
 import { hasOpenAICompatibleConversationTurn } from "./openai-compatible-conversation-turn.js";
 import { isAzureOpenAICompatibleHost } from "./openai-completions-host.js";
 import { buildOpenAICompletionsParams } from "./openai-completions-params.js";
@@ -34,11 +37,15 @@ import {
 import {
   createOpenAIProviderAcceptanceHook,
   resolveOpenAIClientBaseUrl,
+  resolvePromptCacheKey,
   type MutableAssistantOutput,
   type OpenAIModeModel,
 } from "./openai-transport-shared.js";
-import { resolveProviderTransportTurnState } from "./provider-transport-turn-state.js";
-import { hasOpencodeSessionHeader, resolveOpencodeSessionHeaders } from "./session-affinity.js";
+import {
+  filterProviderTurnHeadersForExplicitOpencodeSession,
+  resolveProviderTransportTurnState,
+} from "./provider-transport-turn-state.js";
+import { resolveOpencodeSessionHeaders } from "./session-affinity.js";
 import {
   createWritableTransportEventStream,
   failTransportStream,
@@ -114,12 +121,11 @@ function createSseDoneDetector() {
 
 function createOpenAICompletionsClient(
   model: Model,
-  context: Context,
   apiKey: string,
-  optionHeaders?: Record<string, string>,
+  headers: Record<string, string>,
   opts?: { fetch?: typeof globalThis.fetch },
 ) {
-  const clientConfig = buildOpenAICompletionsClientConfig(model, context, optionHeaders);
+  const clientConfig = buildOpenAICompletionsClientConfig(model, headers);
   return new OpenAI({
     apiKey,
     baseURL: clientConfig.baseURL,
@@ -133,14 +139,12 @@ function createOpenAICompletionsClient(
 
 function buildOpenAICompletionsClientConfig(
   model: Model,
-  context: Context,
-  optionHeaders?: Record<string, string>,
+  headers: Record<string, string>,
 ): {
   baseURL: string | undefined;
   defaultHeaders: Record<string, string>;
   defaultQuery?: Record<string, string>;
 } {
-  const headers = buildOpenAIClientHeaders(model, context, optionHeaders);
   const defaultQuery: Record<string, string> = {};
   let baseURL = model.baseUrl;
   let isAzureHost = false;
@@ -183,23 +187,7 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
   return (model, context, options) => {
     const { eventStream, stream } = createWritableTransportEventStream();
     void (async () => {
-      const output: MutableAssistantOutput = {
-        role: "assistant" as const,
-        content: [],
-        api: model.api,
-        provider: model.provider,
-        model: model.id,
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
-        stopReason: "stop",
-        timestamp: Date.now(),
-      };
+      const output: MutableAssistantOutput = createAssistantOutput(model);
       let firstEventAbort: ReturnType<typeof createFirstStreamEventAbortController> | undefined;
       try {
         const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
@@ -210,9 +198,11 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
           transport: "stream",
         });
         const optionHeaders = resolveOpencodeSessionHeaders(model, options);
-        const turnHeaders = hasOpencodeSessionHeader(model, options)
-          ? undefined
-          : turnState?.headers;
+        const turnHeaders = filterProviderTurnHeadersForExplicitOpencodeSession(
+          model,
+          options,
+          turnState?.headers,
+        );
         // The OpenAI SDK consumes the SSE terminal without yielding it. Observe
         // the raw body so native tool calls can distinguish clean DONE from EOF.
         const doneDetector = createSseDoneDetector();
@@ -242,11 +232,18 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
             statusText: response.statusText,
           });
         };
+        const cacheRetention = resolveCacheRetention(options?.cacheRetention);
         const client = createOpenAICompletionsClient(
           model,
-          context,
           apiKey,
-          { ...turnHeaders, ...optionHeaders },
+          buildOpenAIClientHeaders(
+            model,
+            context,
+            { ...turnHeaders, ...optionHeaders },
+            undefined,
+            resolvePromptCacheKey(options, cacheRetention),
+            cacheRetention,
+          ),
           {
             fetch: doneDetectingFetch,
           },
@@ -256,6 +253,7 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
           context,
           options as OpenAICompletionsOptions | undefined,
         );
+        const encodeBody = prepareModelRequestBody(options);
         const nextParams = await options?.onPayload?.(params, model);
         if (nextParams !== undefined) {
           params = nextParams as typeof params;
@@ -285,9 +283,12 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
         const { data: responseStream, response } = await client.chat.completions
           .create(
             params as unknown as OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming,
-            buildOpenAISdkRequestOptions(model, firstEventAbort.signal, {
-              timeoutMs: options?.timeoutMs,
-            }),
+            {
+              ...buildOpenAISdkRequestOptions(model, firstEventAbort.signal, {
+                timeoutMs: options?.timeoutMs,
+              }),
+              ...(await encodeBody(params)),
+            },
           )
           .withResponse();
         const hookedResponseStream = withProviderResponseHook({

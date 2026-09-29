@@ -1,21 +1,20 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { extractArchive } from "openclaw/plugin-sdk/archive";
-import { extractErrorCode, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
-import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
-import { withFileLock } from "openclaw/plugin-sdk/file-lock";
+import type { root } from "openclaw/plugin-sdk/file-access-runtime";
 import { runCommandWithTimeout, type SpawnResult } from "openclaw/plugin-sdk/process-runtime";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import type { CrabboxCommandRunner } from "./crabbox-worker-command.js";
 
-export const CRABBOX_MIN_VERSION = "0.55.0";
+export const CRABBOX_MIN_VERSION = "0.67.0";
 const RELEASE_URL = `https://github.com/openclaw/crabbox/releases/download/v${CRABBOX_MIN_VERSION}`;
 const MAX_ARCHIVE_BYTES = 128 * 1024 * 1024;
-const VERSION_TIMEOUT_MS = 5_000;
+// Gateway startup contention can delay an otherwise healthy executable probe.
+const VERSION_TIMEOUT_MS = 30_000;
 const DOWNLOAD_IDLE_TIMEOUT_MS = 30_000;
 const DOWNLOAD_TOTAL_TIMEOUT_MS = 10 * 60_000;
+
+export type CrabboxBinary = { binary: string; version: string };
 
 type CrabboxVersionProbe =
   | { status: "supported"; version: string }
@@ -95,7 +94,17 @@ export function resolveManagedCrabboxBinaryPath(env: NodeJS.ProcessEnv = process
   );
 }
 
-async function downloadReleaseFile(name: string, maxBytes: number, signal: AbortSignal) {
+async function downloadReleaseFile(
+  destination: Awaited<ReturnType<typeof root>>,
+  name: string,
+  maxBytes: number,
+  signal: AbortSignal,
+) {
+  const [{ buildTimeoutAbortSignal }, { fetchWithSsrFGuard }] = await Promise.all([
+    import("openclaw/plugin-sdk/extension-shared"),
+    import("openclaw/plugin-sdk/ssrf-runtime"),
+  ]);
+  signal.throwIfAborted();
   const deadline = buildTimeoutAbortSignal({
     timeoutMs: DOWNLOAD_TOTAL_TIMEOUT_MS,
     signal,
@@ -122,32 +131,22 @@ async function downloadReleaseFile(name: string, maxBytes: number, signal: Abort
     if (!response.body) {
       throw new Error(`Crabbox release file ${name} has no response body`);
     }
-    const reader = response.body.getReader();
-    const chunks: Uint8Array[] = [];
-    let size = 0;
-    try {
-      while (true) {
-        deadline.signal?.throwIfAborted();
-        const { done, value } = await reader.read();
-        deadline.signal?.throwIfAborted();
-        if (done) {
-          return Buffer.concat(chunks, size);
+    const body = response.body;
+    const mode = 0o600 & ~process.umask();
+    await destination.create(
+      name,
+      (async function* () {
+        for await (const chunk of body.values({ preventCancel: true })) {
+          deadline.signal?.throwIfAborted();
+          if (chunk.byteLength > 0) {
+            // Healthy transfers can take minutes; retain a separate cap on total time.
+            refreshTimeout?.();
+            yield chunk;
+          }
         }
-        if (value.byteLength === 0) {
-          continue;
-        }
-        size += value.byteLength;
-        if (size > maxBytes) {
-          throw new Error(`Crabbox release file ${name} exceeds ${maxBytes} bytes`);
-        }
-        // Healthy release transfers can take minutes; retain a separate cap on total time.
-        refreshTimeout?.();
-        chunks.push(value);
-      }
-    } finally {
-      await reader.cancel().catch(() => undefined);
-      reader.releaseLock();
-    }
+      })(),
+      { maxBytes, signal: deadline.signal, mode, durable: false, mkdir: false },
+    );
   } finally {
     deadline.cleanup();
     await response.body?.cancel().catch(() => undefined);
@@ -158,12 +157,31 @@ async function downloadReleaseFile(name: string, maxBytes: number, signal: Abort
 async function probeInstallation(
   binary: string,
   runCommand: CrabboxCommandRunner,
-  signal: AbortSignal,
-) {
+  signal: AbortSignal | undefined,
+): Promise<CrabboxBinary | undefined> {
   const stat = await fs.lstat(binary).catch(() => undefined);
-  return (
-    stat?.isFile() && (await probeCrabboxVersion(binary, runCommand, signal)).status === "supported"
-  );
+  if (!stat?.isFile()) {
+    return undefined;
+  }
+  const result = await probeCrabboxVersion(binary, runCommand, signal);
+  return result.status === "supported" ? { binary, version: result.version } : undefined;
+}
+
+export async function findManagedCrabboxBinary(
+  params: {
+    env?: NodeJS.ProcessEnv;
+    runCommand?: CrabboxCommandRunner;
+    signal?: AbortSignal;
+  } = {},
+): Promise<CrabboxBinary | undefined> {
+  const runCommand =
+    params.runCommand ??
+    ((argv, options) => runCommandWithTimeout(argv, { ...options, baseEnv: params.env }));
+  const binary = resolveManagedCrabboxBinaryPath(params.env);
+  if (await inspectInstallationDirectory(path.dirname(binary))) {
+    return probeInstallation(binary, runCommand, params.signal);
+  }
+  return undefined;
 }
 
 async function inspectInstallationDirectory(destination: string) {
@@ -171,6 +189,7 @@ async function inspectInstallationDirectory(destination: string) {
   try {
     stat = await fs.lstat(destination);
   } catch (error) {
+    const { extractErrorCode } = await import("openclaw/plugin-sdk/error-runtime");
     if (extractErrorCode(error) === "ENOENT") {
       return undefined;
     }
@@ -184,13 +203,16 @@ async function inspectInstallationDirectory(destination: string) {
 
 async function publishInstallation(params: {
   binary: string;
+  version: string;
   payload: string;
   runCommand: CrabboxCommandRunner;
   signal: AbortSignal;
-}): Promise<void> {
+}): Promise<CrabboxBinary> {
   const { binary, payload, runCommand, signal } = params;
   const destination = path.dirname(binary);
-  await withFileLock(
+  const { withFileLock } = await import("openclaw/plugin-sdk/file-lock");
+  signal.throwIfAborted();
+  return withFileLock(
     `${destination}.publication`,
     {
       retries: { retries: 100, factor: 1, minTimeout: 100, maxTimeout: 100 },
@@ -200,8 +222,9 @@ async function publishInstallation(params: {
     async () => {
       signal.throwIfAborted();
       const existing = await inspectInstallationDirectory(destination);
-      if (existing && (await probeInstallation(binary, runCommand, signal))) {
-        return;
+      const installed = existing ? await probeInstallation(binary, runCommand, signal) : undefined;
+      if (installed) {
+        return installed;
       }
       signal.throwIfAborted();
       let recovery: string | undefined;
@@ -214,6 +237,7 @@ async function publishInstallation(params: {
         signal.throwIfAborted();
         // Publish the whole distribution so Darwin companion executables stay beside the CLI.
         await fs.rename(payload, destination);
+        return { binary, version: params.version };
       } catch (error) {
         // Cooperating installers hold the same lock. Retain ambiguous externally changed state.
         if (recovery) {
@@ -230,12 +254,11 @@ async function publishInstallation(params: {
             );
           }
         }
-        if (
-          !signal.aborted &&
-          (await inspectInstallationDirectory(destination)) &&
-          (await probeInstallation(binary, runCommand, signal))
-        ) {
-          return;
+        if (!signal.aborted && (await inspectInstallationDirectory(destination))) {
+          const winner = await probeInstallation(binary, runCommand, signal);
+          if (winner) {
+            return winner;
+          }
         }
         if (recovery) {
           throw new Error(
@@ -253,20 +276,22 @@ async function installManagedBinary(
   binary: string,
   runCommand: CrabboxCommandRunner,
   signal: AbortSignal,
-): Promise<string> {
+): Promise<CrabboxBinary> {
   const destination = path.dirname(binary);
   await inspectInstallationDirectory(destination);
-  if (await probeInstallation(binary, runCommand, signal)) {
-    return binary;
+  const installed = await probeInstallation(binary, runCommand, signal);
+  if (installed) {
+    return installed;
   }
   const parent = path.dirname(destination);
   await fs.mkdir(parent, { recursive: true, mode: 0o700 });
   const staging = await fs.mkdtemp(path.join(parent, ".install-"));
   try {
+    const { root, sha256File } = await import("openclaw/plugin-sdk/file-access-runtime");
+    const stagingRoot = await root(staging);
     const target = releaseTarget();
-    const checksums = (await downloadReleaseFile("checksums.txt", 64 * 1024, signal)).toString(
-      "utf8",
-    );
+    await downloadReleaseFile(stagingRoot, "checksums.txt", 64 * 1024, signal);
+    const checksums = await stagingRoot.readText("checksums.txt", { maxBytes: 64 * 1024 });
     const hashes = checksums.split(/\r?\n/u).flatMap((line) => {
       const match = /^([a-fA-F0-9]{64})\s+\*?(\S+)\s*$/u.exec(line);
       return match?.[2] === target.asset ? [match[1]!.toLowerCase()] : [];
@@ -276,14 +301,16 @@ async function installManagedBinary(
         `Crabbox release checksums must contain exactly one entry for ${target.asset}`,
       );
     }
-    const archive = await downloadReleaseFile(target.asset, MAX_ARCHIVE_BYTES, signal);
-    if (createHash("sha256").update(archive).digest("hex") !== hashes[0]) {
+    await downloadReleaseFile(stagingRoot, target.asset, MAX_ARCHIVE_BYTES, signal);
+    const archivePath = path.join(staging, target.asset);
+    if (
+      (await sha256File(archivePath, { maxBytes: MAX_ARCHIVE_BYTES, signal })).digest !== hashes[0]
+    ) {
       throw new Error(`Crabbox release checksum mismatch for ${target.asset}`);
     }
+    const { extractArchive } = await import("openclaw/plugin-sdk/archive");
     signal.throwIfAborted();
-    const archivePath = path.join(staging, target.asset);
     const payload = path.join(staging, "distribution");
-    await fs.writeFile(archivePath, archive, { flag: "wx", mode: 0o600 });
     await fs.mkdir(payload, { mode: 0o700 });
     await extractArchive({
       archivePath,
@@ -303,37 +330,58 @@ async function installManagedBinary(
       onFiltered: "reject-archive",
     });
     const stagedBinary = path.join(payload, target.executable);
-    if (!(await probeInstallation(stagedBinary, runCommand, signal))) {
+    const staged = await probeInstallation(stagedBinary, runCommand, signal);
+    if (!staged) {
       throw new Error(`Downloaded Crabbox executable does not satisfy ${CRABBOX_MIN_VERSION}`);
     }
-    await publishInstallation({ binary, payload, runCommand, signal });
-    return binary;
+    return await publishInstallation({
+      binary,
+      version: staged.version,
+      payload,
+      runCommand,
+      signal,
+    });
   } finally {
     await fs.rm(staging, { recursive: true, force: true });
   }
 }
 
-type Acquisition = { promise: Promise<string>; controller: AbortController; waiters: number };
+type Acquisition = {
+  promise: Promise<CrabboxBinary>;
+  controller: AbortController;
+  waiters: number;
+};
 const acquisitions = new Map<string, Acquisition>();
 
 export async function ensureManagedCrabboxBinary(
   params: {
     binary?: string;
+    cwd?: string;
     runCommand?: CrabboxCommandRunner;
     env?: NodeJS.ProcessEnv;
     signal?: AbortSignal;
   } = {},
-): Promise<string> {
+): Promise<CrabboxBinary> {
   const { signal } = params;
-  const runCommand = params.runCommand ?? runCommandWithTimeout;
+  const runCommand: CrabboxCommandRunner =
+    params.runCommand ??
+    ((argv, options) =>
+      runCommandWithTimeout(argv, { ...options, baseEnv: params.env, cwd: params.cwd }));
   const candidate = params.binary ?? "crabbox";
   const binary = resolveManagedCrabboxBinaryPath(params.env);
-  if (path.resolve(candidate) === binary) {
+  if (path.resolve(params.cwd ?? ".", candidate) === binary) {
     await inspectInstallationDirectory(path.dirname(binary));
   }
-  if ((await probeCrabboxVersion(candidate, runCommand, signal)).status === "supported") {
-    return candidate;
+  const preferred = await probeCrabboxVersion(candidate, runCommand, signal);
+  if (preferred.status === "supported") {
+    return { binary: candidate, version: preferred.version };
   }
+  const cached = await findManagedCrabboxBinary({ env: params.env, runCommand, signal });
+  if (cached) {
+    return cached;
+  }
+  const { toErrorObject } = await import("openclaw/plugin-sdk/error-runtime");
+  signal?.throwIfAborted();
   let acquisition = acquisitions.get(binary);
   if (acquisition?.controller.signal.aborted) {
     await acquisition.promise.catch(() => undefined);

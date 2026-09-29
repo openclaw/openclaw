@@ -1,6 +1,3 @@
-/**
- * Loads and renders owned session history for CLI prompts and context-engine synchronization.
- */
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
@@ -14,6 +11,8 @@ import {
   waitForSessionTranscriptProjection,
   type SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.js";
+import { SessionTranscriptStorageUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
+import { resolveSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import { estimateToolResultTextChars } from "../embedded-agent-runner/tool-result-text-budget.js";
 import { MAX_AGENT_HOOK_HISTORY_MESSAGES } from "../harness/hook-history.js";
 import { isOpenClawRuntimeContextCustomMessage } from "../internal-runtime-context.js";
@@ -25,13 +24,10 @@ import {
 } from "../sessions/session-manager.js";
 import { cliBackendLog } from "./log.js";
 
-/** Maximum transcript size read for CLI session history. */
 const MAX_CLI_SESSION_HISTORY_BYTES = 5 * 1024 * 1024;
-/** Maximum transcript messages exposed to CLI hook history. */
 const MAX_CLI_SESSION_HISTORY_MESSAGES = MAX_AGENT_HOOK_HISTORY_MESSAGES;
-/** Minimum reseed-history prompt budget for fresh CLI sessions. */
+// Reseeding uses a context-derived budget bounded by these floor and ceiling values.
 const MAX_CLI_SESSION_RESEED_HISTORY_CHARS = 12 * 1024;
-/** Maximum automatic reseed-history prompt budget derived from context size. */
 const MAX_AUTO_CLI_SESSION_RESEED_HISTORY_CHARS = 256 * 1024;
 const CLI_SESSION_RESEED_HISTORY_CONTEXT_SHARE = 0.08;
 const CHARS_PER_TOKEN_ESTIMATE = 4;
@@ -40,6 +36,7 @@ const MAX_CLI_DURABLE_CONTEXT_CHARS = 2_000;
 const CLI_DURABLE_CONTEXT_OMISSION = "[Session notes truncated; earlier notes may be omitted.]";
 
 type CliSessionHistoryParams = {
+  abortSignal?: AbortSignal;
   sessionManager?: SessionManager;
   sessionTarget?: SessionTranscriptRuntimeTarget;
 };
@@ -76,7 +73,6 @@ const RAW_TRANSCRIPT_RESEED_ALLOWED_REASONS = new Set<RawTranscriptReseedReason>
   "session-expired",
 ]);
 
-/** Resolves how much prior transcript text may reseed a fresh CLI session. */
 export function resolveAutoCliSessionReseedHistoryChars(contextWindowTokens: number): number {
   if (!Number.isFinite(contextWindowTokens) || contextWindowTokens <= 0) {
     return MAX_CLI_SESSION_RESEED_HISTORY_CHARS;
@@ -146,7 +142,6 @@ function renderHistoryMessage(message: unknown): string | undefined {
   return `${timestamp ? `[${timestamp}] ` : ""}${role}: ${text}`;
 }
 
-/** Builds a reseed prompt that carries prior OpenClaw transcript context. */
 export function buildCliSessionHistoryPrompt(params: {
   messages: unknown[];
   prompt: string;
@@ -158,12 +153,8 @@ export function buildCliSessionHistoryPrompt(params: {
     return undefined;
   }
 
-  // loadCliSessionPromptContext deliberately places a `compactionSummary`
-  // entry first when the session was compacted, so the compacted prior
-  // context survives reseed. Pin that summary as a prefix and only
-  // tail-truncate the post-summary transcript — a blind tail-slice of the
-  // joined history would drop the summary whenever the post-summary tail
-  // alone exceeds the cap.
+  // Pin the leading compaction summary; tail-slicing the whole transcript would
+  // discard it whenever the recent turns exceed the budget.
   const firstEntry = params.messages[0];
   const firstIsCompaction =
     Boolean(firstEntry) &&
@@ -208,15 +199,8 @@ export function buildCliSessionHistoryPrompt(params: {
 
   let renderedHistory: string;
   if (summaryRendered) {
-    // Reserve the summary from the budget so the post-summary tail cap is
-    // the remaining headroom. If the summary alone meets or exceeds the
-    // cap, the summary itself must be truncated — pinning a summary that
-    // blows past `maxHistoryChars` would defeat the cap that prevents
-    // reseeding fresh CLI sessions with unexpectedly huge prompts.
     if (summaryRendered.length >= historyBudget) {
-      // Truncate the summary to fit the budget (less the marker line),
-      // keeping the head. Still reserve budget for the post-summary tail so
-      // recent exact turns survive even when the summary itself is oversize.
+      // Oversize summaries must still leave room for recent exact turns.
       renderedHistory = renderTruncatedSummaryWithTail(summaryRendered);
     } else if (tailRaw.length === 0) {
       renderedHistory = summaryRendered;
@@ -226,18 +210,13 @@ export function buildCliSessionHistoryPrompt(params: {
       if (tailRaw.length <= remainingBudget) {
         renderedHistory = `${summaryBlock}${tailRaw}`;
       } else if (remainingBudget <= truncationMarker.length + "\n".length) {
-        // The summary leaves too little room to announce truncation. Reuse
-        // the oversize-summary path so the marker and recent exact turns
-        // both retain budget.
+        // Share the budget with the tail when the truncation marker would not fit.
         renderedHistory = renderTruncatedSummaryWithTail(summaryRendered);
       } else {
         renderedHistory = `${summaryBlock}${renderTruncatedTail(tailRaw, remainingBudget)}`;
       }
     }
   } else {
-    // No compaction summary to pin: tail-slice the full rendered history
-    // and lead with the marker so it correctly describes what follows
-    // (older turns dropped, recent tail retained).
     renderedHistory =
       tailRaw.length > historyBudget ? renderTruncatedTail(tailRaw, historyBudget) : tailRaw;
   }
@@ -324,26 +303,46 @@ function loadCliMemoryEntries(sessionManager: SessionManager, hooks = false): Se
 async function loadCliSessionEntries({
   sessionManager,
   sessionTarget,
+  abortSignal,
 }: CliSessionHistoryParams): Promise<SessionEntry[]> {
+  abortSignal?.throwIfAborted();
   if (sessionManager) {
     return loadCliMemoryEntries(sessionManager);
   }
   if (!sessionTarget) {
     return [];
   }
-  await waitForSessionTranscriptProjection(sessionTarget);
+  const admission = resolveSessionTranscriptReadFence(sessionTarget);
+  const { restoreSessionColdTranscript } =
+    await import("../../config/sessions/session-cold-storage.js");
+  await restoreSessionColdTranscript(sessionTarget, () => abortSignal?.throwIfAborted());
+  await waitForSessionTranscriptProjection(sessionTarget, abortSignal);
   // Normalize bounded cuts with opaque ancestry before rebuilding CLI context.
-  return SessionManager.openBounded(sessionTarget, {
-    maxBytes: MAX_CLI_SESSION_HISTORY_BYTES,
-    maxEvents: MAX_CLI_SESSION_HISTORY_EVENTS,
-    onTruncated: () =>
-      cliBackendLog.warn(
-        `cli session history truncated to bounded active context: ${sessionTarget.sessionId}`,
-      ),
-  }).getBranch();
+  try {
+    return (
+      await SessionManager.openBoundedAsync(sessionTarget, {
+        signal: abortSignal,
+        maxBytes: MAX_CLI_SESSION_HISTORY_BYTES,
+        maxEvents: MAX_CLI_SESSION_HISTORY_EVENTS,
+        onTruncated: () =>
+          cliBackendLog.warn(
+            `cli session history truncated to bounded active context: ${sessionTarget.sessionId}`,
+          ),
+      })
+    ).getBranch();
+  } catch (error) {
+    if (
+      error instanceof SessionTranscriptStorageUnavailableError &&
+      error.reason === "database-missing" &&
+      !admission
+    ) {
+      // History precedes the approved user-turn writer, which owns first-store creation.
+      return [];
+    }
+    throw error;
+  }
 }
 
-/** Checks whether the transcript owner has any session events. */
 export async function hasCliSessionTranscript({
   sessionManager,
   sessionTarget,
@@ -360,7 +359,9 @@ export async function hasCliSessionTranscript({
 export async function loadCliSessionHistoryMessages({
   sessionManager,
   sessionTarget,
+  abortSignal,
 }: CliSessionHistoryParams): Promise<unknown[]> {
+  abortSignal?.throwIfAborted();
   if (sessionManager) {
     return loadCliMemoryEntries(sessionManager, true).flatMap((entry) =>
       entry.type === "message" ? [entry.message] : [],
@@ -369,7 +370,10 @@ export async function loadCliSessionHistoryMessages({
   if (!sessionTarget) {
     return [];
   }
-  await waitForSessionTranscriptProjection(sessionTarget);
+  const { restoreSessionColdTranscript } =
+    await import("../../config/sessions/session-cold-storage.js");
+  await restoreSessionColdTranscript(sessionTarget, () => abortSignal?.throwIfAborted());
+  await waitForSessionTranscriptProjection(sessionTarget, abortSignal);
   // Hooks retain history across compactions; only reset closes their history window.
   const page = readSessionTranscriptBoundedMessageTailPage(sessionTarget, {
     maxBytes: MAX_CLI_SESSION_HISTORY_BYTES,

@@ -21,17 +21,28 @@ export const desktopEnvironment = {
 } as const;
 
 export function createPanel() {
-  return document.createElement("openclaw-desktop-panel");
+  const panel = document.createElement("openclaw-desktop-panel");
+  panel.sessions = {
+    describe: (params, options) => {
+      const client = options?.client ?? panel.client;
+      if (!client) {
+        throw new Error("Desktop fixture has no Gateway client");
+      }
+      return client.request("sessions.describe", params);
+    },
+  };
+  return panel;
 }
 
 export function createConnectionHandle(overrides: Partial<DesktopConnectionHandle> = {}) {
   return {
     disconnect: vi.fn(),
     disableInput: vi.fn(),
+    setPresented: vi.fn(() => true),
     sendBackspace: vi.fn(),
     sendKeyboardEvent: vi.fn(),
     sendText: vi.fn(),
-    setScaleViewport: vi.fn(),
+    setSizingMode: vi.fn(),
     ...overrides,
   } satisfies DesktopConnectionHandle;
 }
@@ -45,6 +56,20 @@ export function clickPanelButton(
     throw new Error(`expected Desktop button: ${selector}`);
   }
   button.click();
+}
+
+export function sizingMenu(panel: DesktopPanelElement): HTMLSelectElement {
+  const menu = panel.renderRoot.querySelector<HTMLSelectElement>(".desktop-sizing");
+  if (!menu) {
+    throw new Error("expected the desktop sizing menu");
+  }
+  return menu;
+}
+
+export function selectSizing(panel: DesktopPanelElement, mode: string): void {
+  const menu = sizingMenu(panel);
+  menu.value = mode;
+  menu.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
 export async function settleTasks(): Promise<void> {

@@ -1,5 +1,4 @@
 import path from "node:path";
-import { Worker } from "node:worker_threads";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { markInboundContextLabel } from "../../../auto-reply/reply/inbound-context-marker.js";
@@ -15,6 +14,7 @@ import {
   startSessionTranscriptIndexReconcile,
   waitForSessionTranscriptIndexReconcile,
 } from "../../../config/sessions/session-transcript-reconcile.js";
+import { useReconcileWorkerObserver } from "../../../config/sessions/session-transcript-reconcile.test-support.js";
 import type { SessionTranscriptReconcileWorkerMessage } from "../../../config/sessions/session-transcript-reconcile.worker.js";
 import {
   SessionTranscriptWriterClaimReboundError,
@@ -26,10 +26,19 @@ import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.j
 import type { AgentMessage } from "../../runtime/index.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import type { AgentSession } from "../../sessions/index.js";
+import { convertToLlm as convertHarnessMessages } from "../../sessions/messages.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
 import { prepareEmbeddedAttemptSessionBoundary } from "./attempt-session-prepare.js";
 import { buildRuntimeContextCustomMessage } from "./runtime-context-prompt.js";
+
+vi.mock("node:worker_threads", async () =>
+  (
+    await import("../../../config/sessions/session-transcript-reconcile.test-support.js")
+  ).createObservedWorkerThreads(),
+);
+
+const observer = useReconcileWorkerObserver();
 
 function createActiveSession(messages: AgentMessage[] = []) {
   const reset = vi.fn();
@@ -51,6 +60,7 @@ function createSessionManager(
     getHeader: () => ({ version: 3 }),
     getLeafEntry: () => undefined,
     getSessionTarget: () => undefined,
+    getSessionId: () => "session-boundary",
     ...overrides,
   } as unknown as ReturnType<typeof guardSessionManager>;
 }
@@ -82,7 +92,7 @@ async function withPersistedOrphanBoundary(
     await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
     const seed = SessionManager.open(target, state.workspaceDir);
     if (options.parent) {
-      seed.appendModelChange("openai", "gpt-5.5");
+      await seed.appendModelChange("openai", "gpt-5.5");
     }
     const orphanId = seed.appendMessage({
       role: "user",
@@ -95,8 +105,8 @@ async function withPersistedOrphanBoundary(
         : {}),
     });
     if (options.metadata) {
-      seed.appendThinkingLevelChange("low");
-      seed.appendModelChange("openai", "gpt-5.5");
+      await seed.appendThinkingLevelChange("low");
+      await seed.appendModelChange("openai", "gpt-5.5");
     }
     const manager = guardSessionManager(
       SessionManager.openBounded(target, {
@@ -124,7 +134,6 @@ async function withPersistedOrphanBoundary(
             : {}),
           prompt: "new request",
           suppressNextUserMessagePersistence: options.suppressNextUserMessagePersistence,
-          trigger: "user",
         },
         getUserTranscriptContexts: () => undefined,
         isRawModelRun: false,
@@ -153,7 +162,7 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
     await prepareEmbeddedAttemptSessionBoundary({
       activeSession,
       appendOnlyRuntimeContext: false,
-      attempt: { prompt: "next question", trigger: "user" },
+      attempt: { prompt: "next question" },
       getUserTranscriptContexts: () => undefined,
       isRawModelRun: false,
       preparedUserTurnMessage: undefined,
@@ -178,7 +187,6 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
         attempt: {
           config: { agents: { defaults: { userTimezone: "UTC" } } },
           prompt: "first question",
-          trigger: "user",
         },
         getUserTranscriptContexts: () => undefined,
         isRawModelRun: false,
@@ -245,6 +253,35 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
     },
   );
 
+  it.each([false, true])(
+    "records runtime-context cache retention at the LLM boundary (%s)",
+    async (appendOnlyRuntimeContext) => {
+      const { activeSession } = createActiveSession();
+      activeSession.agent.convertToLlm = convertHarnessMessages;
+      await prepareEmbeddedAttemptSessionBoundary({
+        activeSession,
+        appendOnlyRuntimeContext,
+        attempt: { prompt: "question" },
+        getUserTranscriptContexts: () => undefined,
+        isRawModelRun: false,
+        preparedUserTurnMessage: undefined,
+        sessionManager: createSessionManager(),
+        setActiveSessionSystemPrompt: vi.fn(),
+      });
+
+      const user = { role: "user" as const, content: "question", timestamp: 1 };
+      const carrier = buildRuntimeContextCustomMessage("context")!;
+      const converted = await activeSession.agent.convertToLlm(
+        appendOnlyRuntimeContext ? [user, carrier] : [carrier, user],
+      );
+      const message = converted.at(-1);
+      expect(message).toMatchObject({ role: "user", runtimeContextCarrier: true });
+      expect(
+        (message as { runtimeContextCarrierRetained?: boolean }).runtimeContextCarrierRetained,
+      ).toBe(appendOnlyRuntimeContext);
+    },
+  );
+
   it.each(["aborted", "rebound-writer"] as const)(
     "does not persist orphan repair for an unavailable owner: %s",
     async (reason) => {
@@ -287,28 +324,25 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
         const claimed = createDeferred();
         const databaseOptions = toDatabaseOptions(resolveSqliteTranscriptScope(target));
         let releaseWorker: (() => void) | undefined;
-        startSessionTranscriptIndexReconcile({
-          ...databaseOptions,
-          createWorker: (filename, options) => {
-            const worker = new Worker(filename, options);
-            const postMessage = worker.postMessage.bind(worker);
-            let claiming = false;
-            worker.on("message", (message: SessionTranscriptReconcileWorkerMessage) => {
-              claiming = message.type === "plan-start";
-            });
-            // Hold the real worker after the owner claims the dirty projection.
-            // No fixture sleeps or database mutation decides the ordering.
-            worker.postMessage = (message: unknown, transferList) => {
-              if (claiming && !releaseWorker) {
-                releaseWorker = () => postMessage(message, transferList);
-                claimed.resolve();
-                return;
-              }
-              postMessage(message, transferList);
-            };
-            return worker;
-          },
-        });
+        observer.onTask = ({ port, observeMessage }) => {
+          const postMessage = port.postMessage.bind(port);
+          let claiming = false;
+          observeMessage((message: SessionTranscriptReconcileWorkerMessage) => {
+            claiming = message.type === "plan-start" && message.plan.sessionId === target.sessionId;
+          });
+          // Hold the real worker after the owner claims the dirty projection.
+          // No fixture sleeps or database mutation decides the ordering.
+          port.postMessage = (message: unknown, transferList) => {
+            const options = Array.isArray(transferList) ? { transfer: transferList } : transferList;
+            if (claiming && !releaseWorker) {
+              releaseWorker = () => postMessage(message, options);
+              claimed.resolve();
+              return;
+            }
+            postMessage(message, options);
+          };
+        };
+        startSessionTranscriptIndexReconcile(databaseOptions);
         const controller = new AbortController();
         input.abortSignal = controller.signal;
         const messages = input.activeSession.agent.state.messages;
@@ -453,7 +487,6 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
       attempt: {
         operation: "settled-tool-finalization",
         prompt: "finalize exactly",
-        trigger: "user",
       },
       getUserTranscriptContexts: () => undefined,
       isRawModelRun: false,
@@ -487,7 +520,6 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
       attempt: {
         config: { agents: { defaults: { userTimezone: "UTC" } } },
         prompt: "Current ask",
-        trigger: "user",
       },
       getUserTranscriptContexts: () => undefined,
       isRawModelRun: false,
@@ -528,7 +560,7 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
     const { activeSession } = createActiveSession();
     await prepareEmbeddedAttemptSessionBoundary({
       activeSession,
-      attempt: { prompt: "The launch is Friday", trigger: "user" },
+      attempt: { prompt: "The launch is Friday" },
       getUserTranscriptContexts: () => [{ runtimeMessage, transcriptMessage }],
       isRawModelRun: false,
       preparedUserTurnMessage: undefined,
@@ -555,7 +587,7 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
     const { activeSession } = createActiveSession();
     await prepareEmbeddedAttemptSessionBoundary({
       activeSession,
-      attempt: { prompt: "The launch is Friday", trigger: "user" },
+      attempt: { prompt: "The launch is Friday" },
       getUserTranscriptContexts: () => [
         {
           runtimeMessage: initialRuntime,
@@ -602,7 +634,7 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
     const { activeSession } = createActiveSession();
     await prepareEmbeddedAttemptSessionBoundary({
       activeSession,
-      attempt: { prompt: "same", trigger: "user" },
+      attempt: { prompt: "same" },
       getUserTranscriptContexts: () => [
         {
           runtimeMessage: secondRuntime,
@@ -675,7 +707,6 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
           onUserMessagePersistenceInvalidated,
           prompt: "current prompt",
           suppressNextUserMessagePersistence,
-          trigger: "user",
           userTurnTranscriptRecorder: recorder,
         },
         getUserTranscriptContexts: () => undefined,
@@ -747,7 +778,6 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
         attempt: {
           onUserMessagePersistenceInvalidated,
           prompt: "current prompt",
-          trigger: "user",
           userTurnTranscriptRecorder: recorder,
         },
         getUserTranscriptContexts: () => undefined,
@@ -811,7 +841,6 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
         attempt: {
           onUserMessagePersistenceInvalidated,
           prompt: "current prompt",
-          trigger: "user",
           userTurnTranscriptRecorder: recorder,
         },
         getUserTranscriptContexts: () => undefined,
@@ -877,7 +906,6 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
         onUserMessagePersistenceInvalidated,
         prompt: "new",
         suppressNextUserMessagePersistence: true,
-        trigger: "user",
       },
       getUserTranscriptContexts: () => undefined,
       isRawModelRun: false,
