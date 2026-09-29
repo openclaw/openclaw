@@ -7,6 +7,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../../../browser-lifecycle-cleanup.js";
+import { captureSessionEntryCurrentRead } from "../../../config/sessions/session-entry-current-runtime.js";
 import { withSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import {
   runWithOwnedSessionTranscriptWrite,
@@ -39,7 +40,7 @@ import {
   waitForFast,
 } from "../../subagent-test-fixtures.test-helpers.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-announce.requester-settle-wake.js";
-import { enqueueSwarmRun, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
+import { releaseSwarmRun } from "../swarm/swarm-scheduler.js";
 import { testing as swarmSchedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
@@ -56,6 +57,7 @@ import {
 import { findRecordCallArg } from "./subagent-registry.mock-call.test-support.js";
 import {
   registerForcedCollectorCompletionSettlementTests,
+  registerQueuedCollectorLaunchSettlementTest,
   registerRestartDrainCompletionSettlementTest,
   registerRestoredRunDeadlineSettlementTests,
 } from "./subagent-registry.native-settlement.test-support.js";
@@ -125,6 +127,11 @@ const { withSessionEntryReadOnlyInWorker: readCanonicalSessionEntry } = await vi
 vi.mock("../../../config/sessions/session-accessor.sqlite-replacement-projection.js", () => ({
   applySessionEntryExactReplacements: mocks.applySessionEntryExactReplacements,
 }));
+vi.mock("../../../config/sessions/session-entry-current-runtime.js", { spy: true });
+const { captureSessionEntryCurrentRead: captureCanonicalSessionEntryCurrent } =
+  await vi.importActual<typeof import("../../../config/sessions/session-entry-current-runtime.js")>(
+    "../../../config/sessions/session-entry-current-runtime.js",
+  );
 
 vi.mock("../../../sessions/session-lifecycle-events.js", () => ({
   emitSessionLifecycleEvent: mocks.emitSessionLifecycleEvent,
@@ -294,8 +301,16 @@ describe("subagent registry seam flow", () => {
           ? mocks.withSessionEntryReadOnlyInWorker(...args)
           : readCanonicalSessionEntry(...args),
       );
+    vi.mocked(captureSessionEntryCurrentRead)
+      .mockReset()
+      .mockImplementation((scope, owner) =>
+        scope.storePath === mocks.resolveStorePath()
+          ? mocks.captureSessionEntryCurrentRead(scope, owner)
+          : captureCanonicalSessionEntryCurrent(scope, owner),
+      );
     mocks.listSessionEntriesCore.mockReset();
     mocks.patchSessionEntryCore.mockReset();
+    mocks.readSessionCurrent.mockReset();
     mocks.applySessionEntryExactReplacements.mockReset();
     mocks.runSubagentAnnounceFlow.mockReset().mockResolvedValue("delivered");
     wakeRequester.mockReset().mockImplementation(async (params) => {
@@ -662,52 +677,7 @@ describe("subagent registry seam flow", () => {
 
   registerRestartDrainCompletionSettlementTest({ getRegistry: () => mod, mocks, findRequesterRun });
 
-  it("keeps an in-flight queued collector pending until launch cleanup settles", async () => {
-    const runId = "run-collector-launch-kill";
-    mod.addSubagentRunForTests({
-      runId,
-      childSessionKey: "agent:main:subagent:launch-kill",
-      task: "cancel while gateway launch is unresolved",
-      createdAt: Date.now(),
-      collect: true,
-      swarmRunId: runId,
-      schedulerSlotId: runId,
-      swarmLaunchPending: true,
-      execution: { status: "queued" },
-      completion: { required: false },
-    });
-
-    const launch = createDeferred();
-    const started = createDeferred();
-    enqueueSwarmRun({
-      groupId: "delayed-acceptance",
-      runId,
-      maxConcurrent: 1,
-      activeRunIds: [],
-      start: async () => {
-        started.resolve();
-        await launch.promise;
-      },
-      onStartFailure: () => true,
-    });
-    try {
-      await started.promise;
-      expect(await mod.markSubagentRunTerminated({ runId, reason: "manual kill" })).toBe(1);
-      expect(mod.getSubagentRunByRunId(runId)?.collectorCompletion).toBeUndefined();
-      expect(mod.startQueuedSubagentRun(runId, "gateway-launch-kill")).toBe(false);
-      expect(mod.getSubagentRunByRunId("gateway-launch-kill")).toBeUndefined();
-
-      expect(mod.settleFailedQueuedSubagentLaunch(runId, "launch response lost")).toBe(true);
-      expect(mod.getSubagentRunByRunId(runId)?.collectorCompletion).toMatchObject({
-        status: "killed",
-      });
-      await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
-    } finally {
-      launch.resolve();
-      await launch.promise;
-      releaseSwarmRun(runId);
-    }
-  });
+  registerQueuedCollectorLaunchSettlementTest({ getRegistry: () => mod });
 
   it("records early structured output through the child session identity", () => {
     const childSessionKey = "agent:main:subagent:early-structured-output";
@@ -2770,6 +2740,7 @@ describe("subagent registry seam flow", () => {
           },
           timeoutMs: 10_000,
           assertDispatchCurrent: expect.any(Function),
+          prepareDispatchCurrent: expect.any(Function),
         });
       });
       expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();

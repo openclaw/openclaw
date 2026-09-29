@@ -201,17 +201,12 @@ function listPrivateCommandRouteCandidateChannels(originChannel: string) {
     (plugin): plugin is NonNullable<ReturnType<typeof getLoadedChannelPlugin>> =>
       Boolean(plugin?.id),
   );
-  const seen = new Set<string>();
-  const candidates: Array<{ channel: string; plugin: (typeof plugins)[number] }> = [];
-  for (const plugin of plugins) {
-    const channel = normalizeOptionalString(plugin.id) ?? "";
-    if (!channel || seen.has(channel)) {
-      continue;
-    }
-    seen.add(channel);
-    candidates.push({ channel, plugin });
-  }
-  return candidates;
+  return dedupeByKey(
+    plugins
+      .map((plugin) => ({ channel: normalizeOptionalString(plugin.id) ?? "", plugin }))
+      .filter(({ channel }) => channel),
+    ({ channel }) => channel,
+  );
 }
 
 function resolveOwnerPreferenceIndex(params: {
