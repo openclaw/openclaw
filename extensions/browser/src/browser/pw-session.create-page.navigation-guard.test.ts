@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { SsrFBlockedError } from "openclaw/plugin-sdk/security-runtime";
 import { chromium } from "playwright-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -407,8 +408,8 @@ describe("pw-session guarded browser navigation route cleanup", () => {
     expect(f.pageGoto).not.toHaveBeenCalled();
   });
   it("awaits remote ownership validation and rejects revocation before goto", async () => {
-    const entered = Promise.withResolvers<void>();
-    const pending = Promise.withResolvers<void>();
+    const entered = createDeferred<void>();
+    const pending = createDeferred<void>();
     const task = navigate({
       targetId: "TARGET_1",
       assertPageCurrent: async () => {
@@ -473,7 +474,7 @@ describe("pw-session selected-page interaction request guard", () => {
       await install?.(...args);
       f.pageUrl.mockReturnValue(privateUrl);
     });
-    const pending = Promise.withResolvers<void>();
+    const pending = createDeferred<void>();
     const unroute = f.pageUnroute.getMockImplementation();
     f.pageUnroute.mockImplementationOnce(async (...args) => {
       await pending.promise;
@@ -536,8 +537,8 @@ describe("pw-session selected-page interaction request guard", () => {
     expect(wasBrowserNavigationSourcePreservedAfterPolicyDenial(caught)).toBe(false);
   });
   it("does not report an unsafe source while another denied fulfillment is pending", async () => {
-    const first = Promise.withResolvers<void>();
-    const second = Promise.withResolvers<void>();
+    const first = createDeferred<void>();
+    const second = createDeferred<void>();
     const firstRoute = createMockRoute({ fulfill: vi.fn(async () => await first.promise) });
     const secondRoute = createMockRoute({ fulfill: vi.fn(async () => await second.promise) });
     const { events, onPolicyDenied } = observeDenials();
@@ -562,7 +563,7 @@ describe("pw-session selected-page interaction request guard", () => {
     expect(events).toEqual(["detected", "handled:true"]);
   });
   it("waits for in-flight policy work before returning", async () => {
-    const pending = Promise.withResolvers<void>();
+    const pending = createDeferred<void>();
     const validation = vi
       .spyOn(navigationGuardModule, "assertBrowserNavigationAllowed")
       .mockImplementationOnce(async () => await pending.promise);

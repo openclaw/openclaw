@@ -1,6 +1,7 @@
-import "./browser-tool.test-support.js";
 import { fileURLToPath } from "node:url";
+import "./browser-tool.test-support.js";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserProxyRequest } from "./browser-node-proxy.js";
@@ -178,7 +179,7 @@ function nodeInvokeCall(callIndex: number): NodeInvocation {
 }
 
 function blockBrowserNodeGateway(count = 1): () => void {
-  const { promise: barrier, resolve: release } = Promise.withResolvers<void>();
+  const { promise: barrier, resolve: release } = createDeferred<void>();
 
   for (let index = 0; index < count; index += 1) {
     gateway.callGatewayTool.mockImplementationOnce(
