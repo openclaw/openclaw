@@ -604,6 +604,81 @@ describe("GatewayProtocolClient requests", () => {
     client.stop();
   });
 
+  it("keeps an image chat.send pending beyond the normal request timeout when explicitly extended", async () => {
+    vi.useFakeTimers();
+    const { client, connections } = createRequestHarness();
+    const connection = connections[0];
+    if (!connection) {
+      throw new Error("expected request connection");
+    }
+
+    const request = client.request(
+      "chat.send",
+      { attachments: [{ type: "image", mimeType: "image/png" }] },
+      { timeoutMs: 5 * 60_000 },
+    );
+    const frame = latestFrame(connection);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(client.hasPendingRequests).toBe(true);
+
+    // Simulate image preparation completing after the old 30-second deadline.
+    await vi.advanceTimersByTimeAsync(15_000);
+    respond(connection, frame.id, { runId: "image-run", status: "started" });
+    await expect(request).resolves.toEqual({ runId: "image-run", status: "started" });
+    expect(client.hasPendingRequests).toBe(false);
+    client.stop();
+  });
+
+  it("expires an image chat.send at its configured RPC deadline and clears pending state", async () => {
+    vi.useFakeTimers();
+    const { client } = createRequestHarness();
+    const request = client
+      .request(
+        "chat.send",
+        { attachments: [{ type: "image", mimeType: "image/png" }] },
+        { timeoutMs: 5 * 60_000 },
+      )
+      .then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+
+    await vi.advanceTimersByTimeAsync(5 * 60_000 - 1);
+    expect(client.hasPendingRequests).toBe(true);
+    await vi.advanceTimersByTimeAsync(1);
+    const result = await request;
+    expect("error" in result && result.error).toBeInstanceOf(GatewayProtocolRequestTimeoutError);
+    expect(client.hasPendingRequests).toBe(false);
+    client.stop();
+  });
+
+  it("does not revive an image send when its ACK arrives after the local deadline", async () => {
+    vi.useFakeTimers();
+    const { client, connections } = createRequestHarness();
+    const connection = connections[0];
+    if (!connection) {
+      throw new Error("expected request connection");
+    }
+    const request = client
+      .request(
+        "chat.send",
+        { attachments: [{ type: "image", mimeType: "image/png" }] },
+        { timeoutMs: 5 * 60_000 },
+      )
+      .catch((error: unknown) => error);
+    const frame = latestFrame(connection);
+
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    const timedOut = await request;
+    expect(timedOut).toBeInstanceOf(GatewayProtocolRequestTimeoutError);
+    expect(client.hasPendingRequests).toBe(false);
+
+    respond(connection, frame.id, { runId: "late-image-run", status: "started" });
+    expect(client.hasPendingRequests).toBe(false);
+    expect(timedOut).toBeInstanceOf(GatewayProtocolRequestTimeoutError);
+    client.stop();
+  });
+
   it("isolates callbacks while preserving accepted/final settlement and timing", async () => {
     let nowMs = 10;
     const trace: string[] = [];

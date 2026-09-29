@@ -17,6 +17,7 @@ import { buildChatApiAttachments } from "./attachment-api.ts";
 import { isInitialChatHistoryUnavailable } from "./chat-history-state.ts";
 import { chatProviderReviewRow } from "./chat-provider-review.ts";
 import { normalizeChatSendAck, type ChatSendAck } from "./chat-send-ack.ts";
+import { resolveImageAttachmentRequestTimeoutMs } from "./chat-send-timeout.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 
 export async function requestChatSend(
@@ -47,7 +48,13 @@ export async function requestChatSend(
   const controlUiReconnectResume = Boolean(
     !params.intent && sessionId && state.reconnectResumeSessionId === sessionId,
   );
-  const payload = await state.client!.request("chat.send", {
+  const attachments = buildChatApiAttachments(params.attachments);
+  const hasImageAttachment =
+    attachments?.some((attachment) => attachment.type === "image") === true;
+  const imageRequestTimeoutMs = hasImageAttachment
+    ? resolveImageAttachmentRequestTimeoutMs(state.chatAttachmentRequestTimeoutMs)
+    : undefined;
+  const requestParams = {
     sessionKey: routing.sessionKey,
     ...(isUiGlobalSessionKey(routing.sessionKey) && routing.selectedAgentId
       ? { agentId: routing.selectedAgentId }
@@ -65,8 +72,17 @@ export async function requestChatSend(
       ? { expectedLeafEntryId: params.expectedLeafEntryId }
       : {}),
     idempotencyKey: params.runId,
-    attachments: buildChatApiAttachments(params.attachments),
-  });
+    attachments,
+    // The local transport deadline and the server-side agent-run budget must
+    // agree; otherwise the UI can wait five minutes while Gateway still cuts
+    // image analysis off at its shorter default.
+    ...(imageRequestTimeoutMs !== undefined ? { timeoutMs: imageRequestTimeoutMs } : {}),
+  };
+  const payload = hasImageAttachment
+    ? await state.client!.request("chat.send", requestParams, {
+        timeoutMs: imageRequestTimeoutMs,
+      })
+    : await state.client!.request("chat.send", requestParams);
   if (controlUiReconnectResume) {
     state.reconnectResumeSessionId = null;
   }

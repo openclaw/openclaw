@@ -44,6 +44,7 @@ import {
   waitForAcceptedChatSendRetry,
 } from "./chat-send-retry.js";
 import { finalizeChatSendSourceReplies } from "./chat-send-source-finalization.js";
+import { resolveChatSendTimeoutOverrideMs } from "./chat-send-timeout.js";
 import { createChatSendTurnAdoptionLifecycle } from "./chat-send-turn-adoption.js";
 import { applyChatSendManagedMedia } from "./chat-send-user-turn.js";
 import {
@@ -102,6 +103,10 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
   } = session;
   const { chatSendReceivedAtMs, clientInfo, p, reconnectResumeRequested, supportsTaskSuggestions } =
     request;
+  const timeoutOverrideMs = resolveChatSendTimeoutOverrideMs({
+    requestedTimeoutMs: p.timeoutMs,
+    hasImageAttachment: imageOrder.length > 0,
+  });
   const {
     accountId,
     ctx,
@@ -380,7 +385,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
                 images: replyOptionImages,
                 imageOrder: imageOrder.length > 0 ? imageOrder : undefined,
                 media: replyOptionMedia,
-                ...(p.timeoutMs !== undefined ? { timeoutOverrideMs: p.timeoutMs } : {}),
+                ...(timeoutOverrideMs !== undefined ? { timeoutOverrideMs } : {}),
                 thinkingLevelOverride: p.thinking,
                 fastModeOverride: p.fastMode,
                 queueModeOverride: p.queueMode,

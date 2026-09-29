@@ -1004,6 +1004,90 @@ describe("gateway server chat", () => {
     }
   });
 
+  test("chat.send applies the five-minute budget at image agent dispatch only", async () => {
+    const pngB64 =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
+    agentDiscoveryMock.enabled = true;
+    agentDiscoveryMock.models = [
+      {
+        id: "claude-opus-4-6",
+        name: "Claude Opus 4.6",
+        provider: "anthropic",
+        input: ["text", "image"],
+      },
+    ];
+    const dispatches: {
+      runId?: string;
+      images?: unknown[];
+      timeoutOverrideMs?: number;
+    }[] = [];
+    const captureDispatch = async (args: unknown) => {
+      const replyOptions = (
+        args as {
+          replyOptions?: {
+            runId?: string;
+            images?: unknown[];
+            timeoutOverrideMs?: number;
+          };
+        }
+      ).replyOptions;
+      dispatches.push({
+        runId: replyOptions?.runId,
+        images: replyOptions?.images,
+        timeoutOverrideMs: replyOptions?.timeoutOverrideMs,
+      });
+      return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
+    };
+
+    try {
+      dispatchInboundMessageMock.mockImplementationOnce(captureDispatch);
+      const textRes = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "text timeout baseline",
+        idempotencyKey: "idem-text-timeout-baseline",
+      });
+      expect(textRes.ok).toBe(true);
+      expect(textRes.payload?.status).toBe("started");
+      await waitForAgentRunDrained("idem-text-timeout-baseline");
+
+      dispatchInboundMessageMock.mockImplementationOnce(captureDispatch);
+      const imageRes = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "inspect image",
+        idempotencyKey: "idem-image-timeout-default",
+        attachments: [
+          {
+            type: "image",
+            source: {
+              type: "base64",
+              media_type: "image/png",
+              data: pngB64,
+            },
+          },
+        ],
+      });
+      expect(imageRes.ok).toBe(true);
+      expect(imageRes.payload?.status).toBe("started");
+      await waitForAgentRunDrained("idem-image-timeout-default");
+
+      expect(dispatches).toEqual([
+        {
+          runId: "idem-text-timeout-baseline",
+          images: undefined,
+          timeoutOverrideMs: undefined,
+        },
+        {
+          runId: "idem-image-timeout-default",
+          images: [expect.anything()],
+          timeoutOverrideMs: 5 * 60_000,
+        },
+      ]);
+    } finally {
+      agentDiscoveryMock.enabled = false;
+      agentDiscoveryMock.models = [];
+    }
+  });
+
   test("chat.send accepts the backing session id returned by chat.history", async () => {
     await withMainSessionStore(async () => {
       const historyRes = await rpcReq<{ sessionId?: string }>(ws, "chat.history", {

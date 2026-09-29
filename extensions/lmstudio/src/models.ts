@@ -27,6 +27,7 @@ export type LmstudioModelWire = {
   key?: string;
   display_name?: string;
   max_context_length?: number;
+  loaded_context_length?: number;
   format?: "gguf" | "mlx" | null;
   variants?: unknown;
   selected_variant?: unknown;
@@ -145,11 +146,14 @@ export function resolveLmstudioReasoningCapability(
 }
 
 /**
- * Reads loaded LM Studio instances and returns the largest valid context window.
+ * Reads loaded LM Studio context metadata and returns the largest valid context
+ * window. Prefer instance-level values when present; newer LM Studio discovery
+ * payloads can omit `loaded_instances` while still reporting
+ * `loaded_context_length` at the model level.
  * Returns null when no usable loaded context is present.
  */
 export function resolveLoadedContextWindow(
-  entry: Pick<LmstudioModelWire, "loaded_instances">,
+  entry: Pick<LmstudioModelWire, "loaded_context_length" | "loaded_instances">,
 ): number | null {
   const loadedInstances = Array.isArray(entry.loaded_instances) ? entry.loaded_instances : [];
   let contextWindow: number | null = null;
@@ -161,7 +165,7 @@ export function resolveLoadedContextWindow(
     }
     contextWindow = contextWindow === null ? normalized : Math.max(contextWindow, normalized);
   }
-  return contextWindow;
+  return contextWindow ?? asPositiveSafeInteger(entry.loaded_context_length) ?? null;
 }
 
 /**
@@ -493,11 +497,13 @@ export function mapLmstudioWireEntry(entry: LmstudioModelWire): LmstudioModelBas
   // ModelDefinitionConfig keeps the native maximum in contextWindow. Runtime
   // budgeting reads contextTokens, so it must reflect what the server actually
   // serves: a loaded instance is authoritative for its own context, while an
-  // unloaded model is budgeted at the length JIT loading will request — the
-  // same clamp ensureLmstudioModelLoaded applies when it triggers the load.
+  // unloaded model is budgeted at the advertised maximum, which is also the
+  // JIT load target unless an explicit smaller override is configured.
   const effectiveContextWindow = loadedContextWindow ?? contextWindow;
   const contextTokens =
-    loadedContextWindow ?? Math.min(contextWindow, LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH);
+    loadedContextWindow ??
+    advertisedContextWindow ??
+    Math.min(contextWindow, LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH);
   const rawDisplayName = entry.display_name?.trim();
   const reasoningCompat = resolveLmstudioReasoningCompat(entry);
   const trainedForToolUse = entry.capabilities?.trained_for_tool_use;

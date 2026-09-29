@@ -352,12 +352,12 @@ function withDefaultCodexContextMetadata(params: {
   if (!params.model) {
     return undefined;
   }
-  const contextTokens =
-    typeof params.model.contextTokens === "number"
-      ? params.model.contextTokens
-      : typeof params.model.contextWindow === "number" && params.model.contextWindow > 0
-        ? Math.min(params.contextTokens, params.model.contextWindow)
-        : params.contextTokens;
+  // GPT-5.5/5.6 Codex owns these native context limits. Older registry rows
+  // can carry stale, undersized contextTokens/contextWindow values; preserve
+  // their non-context metadata, but never let that cached budget cap the
+  // current provider-owned runtime budget. Explicit caller caps are handled
+  // separately as authored runtime policy, not via this model catalog row.
+  const contextTokens = Math.min(params.contextTokens, params.contextWindow);
   const input = params.model.input?.includes("image")
     ? params.model.input
     : uniqueValues<"text" | "image">([...(params.model.input ?? ["text"]), "image"]);

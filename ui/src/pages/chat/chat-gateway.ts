@@ -54,7 +54,11 @@ import {
 export type { ChatEventPayload } from "./chat-history.ts";
 
 function isPendingLocalChatRun(state: ChatState, runId: string): boolean {
-  return state.chatQueue.some((item) => item.sendRunId === runId && item.sendState === "sending");
+  return state.chatQueue.some(
+    (item) =>
+      item.sendRunId === runId &&
+      (item.sendState === "sending" || item.sendState === "unconfirmed"),
+  );
 }
 
 function normalizeAbortedAssistantMessage(message: unknown): Record<string, unknown> | null {
@@ -236,7 +240,8 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
     }
     if (payload.state === "error" || payload.state === "aborted") {
       const pendingRunId = state.chatQueue.find(
-        (item) => item.sendState === "sending" && item.sendRunId,
+        (item) =>
+          (item.sendState === "sending" || item.sendState === "unconfirmed") && item.sendRunId,
       )?.sendRunId;
       const diagnosticOwnerRunId =
         state.chatRunId ?? pendingRunId ?? state.lastLocalTerminalReconcile?.runId;

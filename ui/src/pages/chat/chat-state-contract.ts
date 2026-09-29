@@ -36,6 +36,8 @@ export type ChatState = StreamCausalBoundaryState & {
   connectionEpoch: number;
   /** Config changes retire preview tickets even when session permissions stay inherited. */
   mediaPolicyEpoch?: number;
+  /** Optional local deadline override for image preparation and chat.send's initial ACK. */
+  chatAttachmentRequestTimeoutMs?: number | null;
   sessionKey: string;
   currentSessionId?: string | null;
   reconnectResumeSessionId?: string | null;
