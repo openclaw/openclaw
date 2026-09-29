@@ -25,7 +25,7 @@ enabled plugin's MCP bundle. For example:
 The harness forwards these definitions as native Agents API MCP tools. Connections
 originate from the session's execution environment, so a self-hosted executor can
 reach private HTTP services. The Gateway does not open a second MCP connection.
-Supported servers are required: native initialization failures fail the turn.
+Server initialization is optional: the turn can continue if a server is unavailable.
 HTTP `headers` support explicit values and environment-variable references such as
 `Bearer ${MCP_ACCESS_TOKEN}`. The API receives these credentials to authenticate the
 MCP connection. Gateway OAuth profiles and requester-scoped connections are not

@@ -88,7 +88,6 @@ export async function buildAgentsApiMcpTools(
           },
           // Preserve executor-local network reachability for configured services.
           connection_origin: "environment",
-          required: true,
           ...(allowedTools && { allowed_tools: allowedTools }),
         } satisfies AgentToolParam.AgentToolConfigParamMcp,
       ];
