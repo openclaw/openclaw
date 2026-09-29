@@ -903,4 +903,45 @@ describe("prepared model runtime scoped refresh", () => {
       }),
     ).toMatchObject({ agentId: "pro", config: nextConfig });
   });
+
+  it("keeps a failed scoped provider's prior auth, still drops an observed logout omission", async () => {
+    const profileId = "provider-a:default";
+    const profile = { type: "api_key" as const, provider: "provider-a", key: "fixture-key" };
+    mocks.preparedAuthStore = { version: 1, profiles: { [profileId]: profile } };
+    const config: OpenClawConfig = { agents: { entries: { pro: {} } } };
+    const learned = { provider: "provider-a", id: "learned", name: "Learned" };
+    const ready = makeCatalog([learned], {
+      providerOutcomes: [{ provider: "provider-a", profileId, status: "ready" }],
+    });
+    setPreparedModelFullCatalogAuth(
+      ready,
+      catalogAuth(
+        "provider-a",
+        { version: 1, profiles: { [profileId]: profile } },
+        { "provider-a": { type: "api_key", key: "fixture-key" } },
+      ),
+    );
+    const owner = await prepareCatalogOwner(config, ready);
+    const publishedAuth = async (status: "unavailable" | "ready") => {
+      const reply = makeCatalog([learned], {
+        providerOutcomes: [{ provider: "provider-a", profileId, status }],
+      });
+      setPreparedModelFullCatalogAuth(
+        reply,
+        catalogAuth("provider-a", { version: 1, profiles: {} }),
+      );
+      mocks.runPreparedModelCatalogWorker.mockImplementation(async () => reply);
+      const published = await owner.loadFullModelCatalog!({
+        refresh: true,
+        providerIds: ["provider-a"],
+      });
+      return getPreparedModelFullCatalogAuth(published);
+    };
+    // A failed scoped discovery never observed the credential source, so its auth
+    // omission is not a logout: the prior entry survives until an observed refresh.
+    expect((await publishedAuth("unavailable"))?.credentials["provider-a"]).toBeDefined();
+    // A ready scoped refresh re-read the source and found nothing: the omission is
+    // an observed removal, so the prior entry must go.
+    expect((await publishedAuth("ready"))?.credentials["provider-a"]).toBeUndefined();
+  });
 });

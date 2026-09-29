@@ -329,14 +329,21 @@ export function createFullModelCatalogAccess(
       const retained = published.inventory;
       const retainedAuth =
         getPreparedModelFullCatalogAuth(published.catalog ?? staticCatalog) ?? currentAuth;
+      // Only a provider whose discovery completed observed its credential source:
+      // ready and auth-rejected outcomes re-read it in the worker, so an auth
+      // omission there is a removal, not a pass-over. An unavailable outcome never
+      // observed the source, so its omission must keep the prior auth until a
+      // refresh observes that provider again.
+      const observedProviders = new Set(
+        (workerCatalog.providerOutcomes ?? [])
+          .filter((outcome) => outcome.status !== "unavailable")
+          .map((outcome) => normalizeProvider(outcome.provider)),
+      );
       const auth = providerIds
         ? replacePreparedModelCatalogAuth(
             retainedAuth,
             discoveredAuth,
-            (provider) => scope.has(normalizeProvider(provider)),
-            // A scoped catalog refresh re-reads each scoped provider's credential
-            // source in the worker, so a scoped omission is an observed removal,
-            // not a passive pass-over.
+            (provider) => observedProviders.has(normalizeProvider(provider)),
             { observeScopedRemovals: true },
           )
         : discoveredAuth;
