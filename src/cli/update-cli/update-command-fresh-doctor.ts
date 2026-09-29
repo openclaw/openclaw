@@ -471,23 +471,16 @@ async function validatePostPluginConfigInFreshProcess(params: {
   }
 }
 
-export async function completePostCorePluginUpdate(params: {
-  root: string;
-  runId?: string;
-  opts?: UpdateCommandOptions;
-  doctorConfigWrites?: true;
-  databaseBackup?: UpdateDatabaseBackup;
-  onDatabaseWriteStep?: (step: UpdateStepResult) => void;
-  pluginUpdate: PostCorePluginUpdateResult;
-  freshDoctorRequired: boolean;
-  yes: boolean;
-  json: boolean;
-  timeoutMs?: number;
-  nodeRunner?: string;
-  beforeDoctor?: () => Promise<void>;
-  onWarnings?: (warnings: string[]) => void;
-  assertCurrent?: () => void;
-}): Promise<{
+export async function completePostCorePluginUpdate(
+  params: Omit<
+    Parameters<typeof runUpdateFinalizationDoctorInFreshProcess>[0],
+    "phase" | "workspaceSuggestions" | "entryPath" | "onAuthorityRefused"
+  > & {
+    pluginUpdate: PostCorePluginUpdateResult;
+    freshDoctorRequired: boolean;
+    beforeDoctor?: () => Promise<void>;
+  },
+): Promise<{
   pluginUpdate: PostCorePluginUpdateResult;
   configSnapshot: ConfigFileSnapshot;
 }> {
