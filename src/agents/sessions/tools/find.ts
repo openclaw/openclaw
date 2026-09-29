@@ -110,19 +110,17 @@ function buildFindResult(params: {
   limitNotice: string;
 }) {
   const resultLimitReached = params.paths.length > params.effectiveLimit;
-  const outputPaths = params.paths
-    .slice(0, params.effectiveLimit)
-    .map((foundPath) => {
-      // Backends may return search-relative paths; only absolute paths need relativizing.
-      // Preserve directory markers and filename whitespace when formatting either backend.
-      const normalized = normalizeNativePathSeparators(foundPath);
-      const relativePath = path.isAbsolute(foundPath)
-        ? normalizeNativePathSeparators(path.relative(params.searchPath, foundPath) || ".")
-        : normalized;
-      return normalized.endsWith("/") && !relativePath.endsWith("/")
-        ? `${relativePath}/`
-        : relativePath;
-    });
+  const outputPaths = params.paths.slice(0, params.effectiveLimit).map((foundPath) => {
+    // Backends may return search-relative paths; only absolute paths need relativizing.
+    // Preserve directory markers and filename whitespace when formatting either backend.
+    const normalized = normalizeNativePathSeparators(foundPath);
+    const relativePath = path.isAbsolute(foundPath)
+      ? normalizeNativePathSeparators(path.relative(params.searchPath, foundPath) || ".")
+      : normalized;
+    return normalized.endsWith("/") && !relativePath.endsWith("/")
+      ? `${relativePath}/`
+      : relativePath;
+  });
   // JSON keeps a newline-containing path distinct from the boundary between two paths.
   const rawOutput = outputPaths.some((foundPath) => /[\r\n]/.test(foundPath))
     ? JSON.stringify(outputPaths)
