@@ -84,10 +84,7 @@ const UNSUPPORTED_SESSIONS_SPAWN_PARAM_KEYS = [
 ] as const;
 const loadAcpSpawnModule = createLazyPromise(() => import("../subagents/spawn/acp-spawn.js"));
 
-function addRoleToFailureResult<T extends { status: string }>(
-  result: T,
-  role: string | undefined,
-): T | (T & { role: string }) {
+function addRoleToFailureResult<T extends { status: string }>(result: T, role: string | undefined) {
   if (!role || (result.status !== "error" && result.status !== "forbidden")) {
     return result;
   }
@@ -119,16 +116,11 @@ function recordAcceptedSessionSpawn(
   });
 }
 
-type SessionsSpawnThreadAvailability = {
-  subagent: boolean;
-  acp: boolean;
-};
-
 function resolveSessionsSpawnThreadAvailability(opts?: {
   config?: OpenClawConfig;
   agentChannel?: string;
   agentAccountId?: string;
-}): SessionsSpawnThreadAvailability {
+}) {
   const channel = opts?.agentChannel;
   const cfg = opts?.config;
   if (!channel || !cfg || !supportsThreadBindingSpawn(channel)) {
@@ -445,11 +437,8 @@ export function createSessionsSpawnTool(opts?: SessionsSpawnToolOptions): AnyAge
         const thinkingOverrideRaw = readToolStringParam(params, "thinking");
         const cwd = readToolStringParam(params, "cwd");
         const mode = params.mode === "run" || params.mode === "session" ? params.mode : undefined;
-        const cleanup =
-          params.cleanup === "keep" || params.cleanup === "delete" ? params.cleanup : "keep";
-        const expectsCompletionMessage = collect
-          ? false
-          : params.expectsCompletionMessage !== false;
+        const cleanup = params.cleanup === "delete" ? "delete" : "keep";
+        const expectsCompletionMessage = !collect && params.expectsCompletionMessage !== false;
         const sandbox = params.sandbox === "require" ? "require" : "inherit";
         const context =
           params.context === "fork" || params.context === "isolated" ? params.context : undefined;
@@ -460,8 +449,8 @@ export function createSessionsSpawnTool(opts?: SessionsSpawnToolOptions): AnyAge
         if (opts?.expectedParentSessionId && !expectedParentSessionKey) {
           throw new Error("Exact parent session access requires a session key");
         }
-        const spawnVisible = async () =>
-          await maybeSpawnVisibleSession({
+        const spawnVisible = () =>
+          maybeSpawnVisibleSession({
             raw: params,
             task,
             taskName,

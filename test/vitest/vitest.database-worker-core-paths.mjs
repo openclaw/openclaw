@@ -1,5 +1,6 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
+  "src/infra/update-candidate-canary.test.ts",
   "src/state/session-repository-workspaces.test.ts",
   "src/infra/update-run-reconciliation.worker.test.ts",
   "src/infra/update-run-interruption.worker.test.ts",
@@ -173,6 +174,8 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/subagents/announce/subagent-announce.requester-settle-results.test.ts",
   "src/agents/subagents/announce/subagent-announce.requester-settle-wake.test.ts",
   "src/agents/subagents/registry/subagent-control.accounting.test.ts",
+  "src/agents/subagents/registry/subagent-announcement.worker.test.ts",
+  "src/agents/subagents/registry/subagent-announcement-delivery.worker.test.ts",
   "src/agents/subagents/registry/subagent-registry.persistence.test.ts",
   "src/agents/subagents/registry/subagent-registry-lifecycle.test.ts",
   "src/agents/subagents/registry/subagent-registry.test.ts",
@@ -673,6 +676,11 @@ export const databaseWorkerCoreTestFiles = [
   "src/tts/tts-summary.static-catalog.test.ts",
   "src/tts/tts-summary.selection.test.ts",
   "src/agents/prepared-model-catalog.resources.test.ts",
+  "src/agents/embedded-agent-runner/compaction-runtime-admission.test.ts",
+  "src/media-understanding/image.resources.test.ts",
+  "src/tts/tts-summary.resources.test.ts",
+  "src/agents/simple-completion-runtime.plugin-scope.test.ts",
+  "src/agents/tools/pdf-tool.static-runtime.test.ts",
   "src/agents/prepared-model-catalog-worker.chat-metadata.integration.test.ts",
   "src/agents/prepared-model-catalog-worker.custody.integration.test.ts",
   "src/agents/prepared-model-catalog-worker.directory.test.ts",

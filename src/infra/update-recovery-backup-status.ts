@@ -95,7 +95,10 @@ export async function inspectUpdateRecoveryBackups(params: { installRoot?: strin
         : ambiguity
           ? "ambiguous"
           : "unresolved";
-      const nextAction = "openclaw update status --json";
+      const nextAction =
+        status === "unresolved"
+          ? `Preserve current state and inspect ${ref.manifestPath} before manual recovery. See https://docs.openclaw.ai/cli/update/repair-and-recovery#original-state-captures`
+          : "openclaw update status --json";
       const reason = terminalOutcome
         ? `stale: its update already ${terminalOutcome === "committed" ? "succeeded" : "restored state"}`
         : (ambiguity ?? "unresolved after a failed update");
@@ -106,7 +109,7 @@ export async function inspectUpdateRecoveryBackups(params: { installRoot?: strin
         status,
         terminalOutcome,
         nextAction,
-        message: `Update recovery set ${ref.manifestPath}: ${reason}. ${status === "unresolved" ? "Retained original state requires manual inspection; preserve current state and inspect with" : "Automatic restoration is refused; inspect with"} \`${nextAction}\`.${status === "ambiguous" ? " Resolve the recorded outcome before attempting recovery." : ""}`,
+        message: `Update recovery set ${ref.manifestPath}: ${reason}. ${status === "unresolved" ? `Retained original state requires manual inspection. ${nextAction}` : `Automatic restoration is refused; inspect with \`${nextAction}\`.`}${status === "ambiguous" ? " Resolve the recorded outcome before attempting recovery." : ""}`,
       };
     }),
   );

@@ -441,20 +441,16 @@ export function validateCapabilityBoundInput(params: {
           : ""),
     );
   }
-  if (windowRef && !capabilities?.targets.includes("window")) {
-    throw new Error(
-      `${COMPUTER_CONTRACT_MISMATCH}: selected computer has no window target support`,
-    );
-  }
-  if (elementRef && !capabilities?.targets.includes("element")) {
-    throw new Error(
-      `${COMPUTER_CONTRACT_MISMATCH}: selected computer has no element target support`,
-    );
-  }
-  if ((browserRef || pageRef) && !capabilities?.targets.includes("browser")) {
-    throw new Error(
-      `${COMPUTER_CONTRACT_MISMATCH}: selected computer has no browser target support`,
-    );
+  for (const [target, reference] of [
+    ["window", windowRef],
+    ["element", elementRef],
+    ["browser", browserRef || pageRef],
+  ] as const) {
+    if (reference && !capabilities?.targets.includes(target)) {
+      throw new Error(
+        `${COMPUTER_CONTRACT_MISMATCH}: selected computer has no ${target} target support`,
+      );
+    }
   }
   if (deliveryMode && !capabilities?.deliveryModes.some((mode) => mode === deliveryMode)) {
     throw new Error(

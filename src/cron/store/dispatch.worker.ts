@@ -23,8 +23,22 @@ const loadRecovery = createLazyRuntimeModule(() => import("./run-recovery.worker
 let recovery: typeof import("./run-recovery.worker.js") | undefined;
 const loadMaintenance = createLazyRuntimeModule(() => import("./runtime-maintenance.worker.js"));
 let maintenance: typeof import("./runtime-maintenance.worker.js") | undefined;
+const loadMutation = createLazyRuntimeModule(() => import("./guarded-mutation.worker.js"));
+let mutation: typeof import("./guarded-mutation.worker.js") | undefined;
+const loadScratch = createLazyRuntimeModule(() => import("./scratch.worker.js"));
+let scratch: typeof import("./scratch.worker.js") | undefined;
 
 export function prepareCronStateWorkerCommand(type: PropertyKey): Promise<void> | undefined {
+  if (type === "cron.writeScratch" && !scratch) {
+    return loadScratch().then((loaded) => {
+      scratch = loaded;
+    });
+  }
+  if (type === "cron.mutateJobs" && !mutation) {
+    return loadMutation().then((loaded) => {
+      mutation = loaded;
+    });
+  }
   if (
     [
       "cron.reserveRuns",
@@ -63,6 +77,8 @@ export function isCronStateWorkerCommand(command: {
   input: unknown;
 }): command is SqliteWorkerCommand<CronStateWorkerOperations> {
   switch (command.type) {
+    case "cron.writeScratch":
+    case "cron.mutateJobs":
     case "cron.reserveRuns":
     case "cron.recordRun":
     case "cron.activateRun":
@@ -90,6 +106,16 @@ export function executeCronStateCommand(
   database: OpenClawStateDatabase,
 ): CronStateWorkerOperations[keyof CronStateWorkerOperations]["output"] {
   switch (command.type) {
+    case "cron.writeScratch":
+      if (!scratch) {
+        throw new Error("Cron scratch worker is not prepared");
+      }
+      return scratch.writeCronScratchInWorker(database, command.input);
+    case "cron.mutateJobs":
+      if (!mutation) {
+        throw new Error("Cron mutation worker is not prepared");
+      }
+      return mutation.mutateCronJobsInWorker(database, command.input);
     case "cron.recordRun":
       return runOpenClawStateWriteTransaction(
         ({ db }) => {

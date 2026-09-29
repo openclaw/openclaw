@@ -185,24 +185,22 @@ export async function runGroupThread<T>(params: {
         await Promise.allSettled(eligible.map(launch));
       }
       previous = current;
-      if (!current.some((reply) => reply.replied)) {
+      const replied = current.filter((reply) => reply.replied);
+      if (replied.length === 0) {
         break;
       }
-      eligible = group.agents.filter(
-        (agentId) =>
-          current.some((reply) => reply.agentId === agentId && reply.replied) ||
-          current.some(
-            (reply) =>
-              reply.agentId !== agentId &&
-              reply.replied &&
-              (resolveGroupThreadMentionedAgentIds(params.cfg, [agentId], reply.text).length > 0 ||
-                (/\p{L}|\p{N}/u.test(names.get(agentId) ?? agentId) &&
-                  new RegExp(
-                    `(?<![\\p{L}\\p{N}_])${escapeRegExp(names.get(agentId) ?? agentId)}(?![\\p{L}\\p{N}_])`,
-                    "iu",
-                  ).test(reply.text))),
-          ),
-      );
+      eligible = group.agents.filter((agentId) => {
+        const name = names.get(agentId) ?? agentId;
+        return replied.some(
+          (reply) =>
+            reply.agentId === agentId ||
+            resolveGroupThreadMentionedAgentIds(params.cfg, [agentId], reply.text).length > 0 ||
+            (/\p{L}|\p{N}/u.test(name) &&
+              new RegExp(`(?<![\\p{L}\\p{N}_])${escapeRegExp(name)}(?![\\p{L}\\p{N}_])`, "iu").test(
+                reply.text,
+              )),
+        );
+      });
     }
     if (adoptionFailed) {
       throw adoptionError;

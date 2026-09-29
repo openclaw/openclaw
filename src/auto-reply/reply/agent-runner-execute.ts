@@ -338,13 +338,7 @@ export function createReplyAgentRestartRecoveryController(
   const admissionRunId =
     normalizeOptionalString(sessionCtx.MessageSid) ??
     normalizeOptionalString(sessionCtx.MessageSidFull);
-  const {
-    admitUserTurn,
-    beginBeforeAgentReply,
-    checkpointBeforeAgentReply,
-    clear: clearRestartRecoveryDeliveryClaim,
-    isArmed: isRestartRecoveryArmed,
-  } = createReplyRestartRecoveryClaimController({
+  const recovery = createReplyRestartRecoveryClaimController({
     agentId: followupRun.run.agentId,
     lifecycleGeneration: replyOperation.lifecycleGeneration,
     admissionRunId,
@@ -406,26 +400,22 @@ export function createReplyAgentRestartRecoveryController(
       : opts?.sourceReplyDeliveryMode,
     ...(storePath ? { storePath } : {}),
   });
-  const admitUserTurnWithSourceBinding: typeof admitUserTurn = async (...args) => {
-    const result = await admitUserTurn(...args);
-    if (result === "admitted") {
-      const sourceTurnId = resolveReplySourceTurnId({
-        sourceTurnId: restartRecoverySourceTurnId,
-        admissionRunId,
-        ingressProvider: sessionCtx.Provider ?? sessionCtx.Surface,
-        entry: getActiveSessionEntry(),
-      });
-      if (sourceTurnId) {
-        replyRunRegistry.bindSourceTurnId(replyOperation, sourceTurnId);
-      }
-    }
-    return result;
-  };
   return {
-    admitUserTurn: admitUserTurnWithSourceBinding,
-    beginBeforeAgentReply,
-    checkpointBeforeAgentReply,
-    clear: clearRestartRecoveryDeliveryClaim,
-    isArmed: isRestartRecoveryArmed,
+    ...recovery,
+    admitUserTurn: async (...args: Parameters<typeof recovery.admitUserTurn>) => {
+      const result = await recovery.admitUserTurn(...args);
+      if (result === "admitted") {
+        const sourceTurnId = resolveReplySourceTurnId({
+          sourceTurnId: restartRecoverySourceTurnId,
+          admissionRunId,
+          ingressProvider: sessionCtx.Provider ?? sessionCtx.Surface,
+          entry: getActiveSessionEntry(),
+        });
+        if (sourceTurnId) {
+          replyRunRegistry.bindSourceTurnId(replyOperation, sourceTurnId);
+        }
+      }
+      return result;
+    },
   };
 }

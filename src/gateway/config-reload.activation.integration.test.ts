@@ -219,6 +219,7 @@ describe("setup activation reload ownership", () => {
       let echoObserved = false;
       const completion = createDeferred<() => Promise<boolean>>();
       const applied = createDeferred<ReturnType<typeof createRuntimeConfigWriteApplication>>();
+      let recoveryApplication: ReturnType<typeof createRuntimeConfigWriteApplication> | undefined;
       try {
         await reloader.ready;
         if (scenario === "superseded") {
@@ -259,7 +260,11 @@ describe("setup activation reload ownership", () => {
               base: "source",
               writeOptions,
               transform: (_current, context) => {
-                captureUndo(captureSetupInferenceFileUndo(context.snapshot, candidate));
+                const undo = captureSetupInferenceFileUndo(context.snapshot, candidate);
+                captureUndo((options) => {
+                  recoveryApplication = getRuntimeConfigWriteApplication(options);
+                  return undo(options);
+                });
                 return { nextConfig: candidate };
               },
             });
@@ -337,9 +342,24 @@ describe("setup activation reload ownership", () => {
                 value instanceof Error ? { message: value.message, stack: value.stack } : value,
             ),
           ).toBe(true);
-          await expect((await completion.promise)()).rejects.toThrow(
-            "did not complete activation (failed)",
-          );
+          try {
+            await expect((await completion.promise)()).rejects.toThrow(
+              "did not complete activation (failed)",
+            );
+          } catch (error) {
+            const recoveryState = recoveryApplication?.claimed
+              ? await Promise.race([recoveryApplication.result, Promise.resolve("pending")])
+              : "unclaimed";
+            console.error("Activation recovery failed", {
+              claimed: recoveryApplication?.claimed,
+              status: recoveryState,
+              reloadErrors: reloadError.mock.calls.map(([message]) => String(message)),
+              warnings: getPreparedModelRuntimeMocks().warn.mock.calls.map(([message]) =>
+                String(message),
+              ),
+            });
+            throw error;
+          }
           const restored = (await readConfigFileSnapshot()).sourceConfig;
           for (const section of ["agents", "models", "gateway", "plugins"] as const) {
             expect(restored[section]).toEqual(previous[section]);

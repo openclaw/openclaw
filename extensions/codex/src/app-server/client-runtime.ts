@@ -218,11 +218,6 @@ export function ensureCodexAppServerClientRuntime(
         CODEX_EXTERNAL_AUTH_REFRESH_TIMEOUT_MS,
         "Codex app-server ChatGPT token refresh timed out before its external-auth deadline. Retry the request; if it persists, sign in again with OpenClaw.",
       );
-      if (previousAccountId && tokens.chatgptAccountId !== previousAccountId) {
-        throw new Error(
-          "ChatGPT workspace changed during Codex token refresh. Retry to start a client for the selected workspace.",
-        );
-      }
       if (runtime.closed) {
         throw new Error("Codex app-server client closed during ChatGPT token refresh.");
       }

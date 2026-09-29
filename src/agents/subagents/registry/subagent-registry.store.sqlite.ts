@@ -592,13 +592,6 @@ export function subagentRunsDurableBasisMatches(
   );
 }
 
-export function loadSubagentRunsForSessionsFromSqlite(
-  sessionKeys: readonly string[],
-  inMemoryRuns: Iterable<SubagentRunReadRecord>,
-) {
-  return loadSubagentRunsForSessions(openOpenClawStateDatabase(), sessionKeys, inMemoryRuns);
-}
-
 /** Saves the complete subagent run snapshot to sqlite and prunes rows not in the snapshot. */
 export function saveSubagentRegistryToSqlite(runs: Map<string, SubagentRunRecord>): void {
   const values = [...runs.values()].map(bindSubagentRunRecord);

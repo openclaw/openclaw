@@ -18,6 +18,10 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import {
+  formatMigrationWarningSummary,
+  MIGRATION_WARNING_EXAMPLE_LIMIT,
+} from "./migration-warning-summary.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import {
   parseDirectiveMigrationTranscriptEvent,
@@ -44,6 +48,11 @@ type ArchiveMigrationOptions = {
   pathname: string;
   start: ArchiveCursor;
   writeCursor: (cursor: ArchiveCursor | { phase: "complete" }) => void;
+};
+
+type ArchiveMigrationResult = {
+  rewrittenArchives: number;
+  warnings: string[];
 };
 
 type ArchiveRowPlan = {
@@ -334,8 +343,10 @@ export async function migrateCanonicalTranscriptArchives(
     onArchive?: (archivePath: string) => void;
     transformContent: ArchiveContentTransform;
   },
-): Promise<number> {
+): Promise<ArchiveMigrationResult> {
   let rewrittenArchives = 0;
+  let missingCopies = 0;
+  const missingCopyExamples: string[] = [];
   let cursor = params.start;
   const archiveDirectory = resolveSqliteTranscriptArchiveDirectory({
     agentId: params.agentId,
@@ -356,10 +367,25 @@ export async function migrateCanonicalTranscriptArchives(
           operationLabel: "historical-transcript-archive.complete",
         },
       );
-      return rewrittenArchives;
+      return {
+        rewrittenArchives,
+        warnings:
+          missingCopies > 0
+            ? [
+                formatMigrationWarningSummary({
+                  summary: `${params.pathname}: Missing ${missingCopies} canonical transcript archive file(s)`,
+                  count: missingCopies,
+                  detail:
+                    "Canonical SQLite archive blobs remain retained. Migration completed without recreating the missing copies.",
+                }),
+                ...missingCopyExamples,
+              ]
+            : [],
+      };
     }
     for (const planned of batch) {
-      params.onArchive?.(path.resolve(archiveDirectory, planned.archiveName));
+      const archivePath = path.resolve(archiveDirectory, planned.archiveName);
+      params.onArchive?.(archivePath);
       const rowPresent = runSqliteImmediateTransactionSync(
         params.database,
         () => {
@@ -377,6 +403,12 @@ export async function migrateCanonicalTranscriptArchives(
       const fileCurrent = rowPresent
         ? repairPublishedArchiveFile({ archiveDirectory, planned })
         : false;
+      if (rowPresent && !fileCurrent) {
+        missingCopies += 1;
+        if (missingCopyExamples.length < MIGRATION_WARNING_EXAMPLE_LIMIT) {
+          missingCopyExamples.push(`Missing canonical transcript archive copy: ${archivePath}`);
+        }
+      }
       runSqliteImmediateTransactionSync(
         params.database,
         () => {
@@ -408,7 +440,7 @@ export async function migrateCanonicalTranscriptArchives(
 
 export function migrateTranscriptDirectiveArchives(
   params: ArchiveMigrationOptions,
-): Promise<number> {
+): Promise<ArchiveMigrationResult> {
   return migrateCanonicalTranscriptArchives({
     ...params,
     transformContent: transformArchiveContent,

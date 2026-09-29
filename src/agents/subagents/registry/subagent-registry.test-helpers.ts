@@ -1,14 +1,12 @@
 export * from "./subagent-registry.js";
 export {
   buildSubagentSessionListReadIndex,
-  countActiveDescendantRuns,
   countPendingDescendantRuns,
   getLatestLiveSubagentRunByChildSessionKey,
   getLatestSubagentRunByChildSessionKey,
   getSubagentRunByChildSessionKey,
   getSubagentSessionRuntimeMs,
   getSubagentSessionStartedAt,
-  hasDescendantRunAwaitingSettle,
   isSubagentRunLive,
   isSubagentSessionRunActive,
   listSubagentRunsForController,

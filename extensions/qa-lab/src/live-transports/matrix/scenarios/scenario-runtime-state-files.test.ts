@@ -12,6 +12,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createMatrixQaE2eeTestContext } from "./scenario-runtime-e2ee.test-helpers.js";
 import {
   deleteMatrixSyncStoreCursor,
+  rewriteMatrixSyncStoreCursor,
   waitForMatrixInboundDedupeEntry,
   waitForMatrixSyncStoreWithCursor,
 } from "./scenario-runtime-state-files.js";
@@ -110,6 +111,11 @@ describe("Matrix QA persisted state probes", () => {
         source: "sqlite",
       });
       const unrelatedSyncRows = openStore(other, "sync-cache").entries();
+      await rewriteMatrixSyncStoreCursor({ ...selected, cursor: "rewritten-cursor" });
+      await expect(
+        waitForMatrixSyncStoreWithCursor({ ...identity, context, stateDir, timeoutMs: 1_000 }),
+      ).resolves.toEqual({ ...selected, cursor: "rewritten-cursor" });
+      expect(openStore(other, "sync-cache").entries()).toEqual(unrelatedSyncRows);
       await deleteMatrixSyncStoreCursor(selected);
       expect(openStore(target, "sync-cache").entries()).toEqual([]);
       expect(openStore(other, "sync-cache").entries()).toEqual(unrelatedSyncRows);

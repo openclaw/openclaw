@@ -44,7 +44,6 @@ import {
   resolveReplyOperationAgentId,
   retainStateUntilCompleteOperations,
   type ReplyRunAdmissionBarrier,
-  runAfterReplyOperationClear,
   startReplyOperationSuccessorBarriers,
   updateFollowupAdmissionSessionId,
   updateSuccessorAdmissionSessionId,
@@ -289,10 +288,6 @@ export function createReplyOperation(params: {
     get lastActivityAtMs() {
       return lastActivityAtMs;
     },
-    hasOwnedSessionId(candidateSessionId) {
-      const normalizedSessionId = normalizeOptionalString(candidateSessionId);
-      return normalizedSessionId ? ownedSessionIds.has(normalizedSessionId) : false;
-    },
     captureOwnedSessionIds() {
       return new Set(ownedSessionIds);
     },
@@ -445,10 +440,6 @@ export function createReplyOperation(params: {
       }
       clearState();
       settleOwner();
-    },
-    completeThen(afterClear) {
-      runAfterReplyOperationClear(operation, afterClear);
-      operation.complete();
     },
     completeWithAfterClearBarrier(barrier, timeoutMs) {
       // Producer work is done; delivery may still need a successor operation.

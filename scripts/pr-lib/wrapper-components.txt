@@ -740,6 +740,7 @@ src/infra/path-guards.ts
 src/infra/plain-object.ts
 src/infra/ports-lsof.ts
 src/infra/ports-netstat.ts
+src/infra/private-directory-creation.ts
 src/infra/private-mode.ts
 src/infra/process-env.ts
 src/infra/prototype-keys.ts

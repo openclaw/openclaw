@@ -71,6 +71,7 @@ import { isCronInvalidRequestError } from "./cron-error-classification.js";
 import { cronHistoryHandler } from "./cron-history.js";
 import {
   assertValidCronUpdatePatch,
+  createCronCreatorSessionGuard,
   normalizeCronAddRequest,
   normalizeCronUpdateRequest,
   assertCronDoesNotTargetAgentHarness,
@@ -522,8 +523,11 @@ export const cronHandlers: GatewayRequestHandlers = {
     const actorId = normalizeOptionalString(actor?.id);
     const createdActor = actor ? { ...actor, ...(actorId ? { id: actorId } : {}) } : undefined;
     let captureRuntimeAuthority: (() => CronRuntimeAuthority | undefined) | undefined;
+    let assertCapturedAuthorityCurrent: (() => void) | undefined;
     try {
-      captureRuntimeAuthority = resolveCronCreatorAuthorityCapture(callerScope);
+      const capture = resolveCronCreatorAuthorityCapture(callerScope);
+      captureRuntimeAuthority = capture?.captureRuntimeAuthority;
+      assertCapturedAuthorityCurrent = capture?.assertCurrent;
     } catch (err) {
       respondInvalidCronParams(respond, "cron.add", formatErrorMessage(err));
       return;
@@ -532,23 +536,11 @@ export const cronHandlers: GatewayRequestHandlers = {
       sessionMutationCommitGuard,
       hasCurrentClientAuthority,
     });
-    const selectionIdentity = JSON.stringify(creatorSession?.skillLibrarySelections);
+    const assertCreatorSessionCurrent = createCronCreatorSessionGuard(callerScope, creatorSession);
     const commitGuard = () => {
       assertMutationCurrent?.();
-      if (creatorSession && callerScope?.sessionKey) {
-        const latest = loadGatewaySessionEntryReadOnly(callerScope.sessionKey, {
-          agentId: callerScope.agentId,
-        }).entry;
-        if (
-          latest?.sessionId !== creatorSession.sessionId ||
-          latest.lifecycleRevision !== creatorSession.lifecycleRevision ||
-          JSON.stringify(latest.skillLibrarySelections) !== selectionIdentity
-        ) {
-          throw new Error(
-            "Creator session changed before scheduling; retry from the current turn.",
-          );
-        }
-      }
+      assertCapturedAuthorityCurrent?.();
+      assertCreatorSessionCurrent();
     };
     const jobCreate = applyCronCreateCallerScopeDefault(candidate as CronJobCreate, callerScope);
     const cfg = context.getRuntimeConfig();
@@ -687,14 +679,22 @@ export const cronHandlers: GatewayRequestHandlers = {
     };
     const callerScope = readCronCallerScope(client);
     let captureRuntimeAuthority: (() => CronRuntimeAuthority | undefined) | undefined;
+    let assertCapturedAuthorityCurrent: (() => void) | undefined;
     try {
-      captureRuntimeAuthority = resolveCronCreatorAuthorityCapture(callerScope);
+      const capture = resolveCronCreatorAuthorityCapture(callerScope);
+      captureRuntimeAuthority = capture?.captureRuntimeAuthority;
+      assertCapturedAuthorityCurrent = capture?.assertCurrent;
     } catch (err) {
       respondInvalidCronParams(respond, "cron.update", formatErrorMessage(err));
       return;
     }
     const commitGuard = resolveCronMutationCommitGuard(client, context, undefined, {
-      sessionMutationCommitGuard,
+      sessionMutationCommitGuard: assertCapturedAuthorityCurrent
+        ? () => {
+            sessionMutationCommitGuard?.();
+            assertCapturedAuthorityCurrent?.();
+          }
+        : sessionMutationCommitGuard,
       hasCurrentClientAuthority,
     });
     const jobId = resolveCronJobId(p);
