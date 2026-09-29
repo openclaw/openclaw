@@ -125,7 +125,7 @@ type ConnectMachineDialogProps = {
   onManageDevices: () => void;
 };
 
-export function renderConnectMachineDialog(props: ConnectMachineDialogProps) {
+function renderConnectMachineDialog(props: ConnectMachineDialogProps) {
   if (!props.open) {
     return nothing;
   }
