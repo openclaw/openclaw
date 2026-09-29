@@ -6,7 +6,7 @@ import {
   isBrowserOperatorUiClient,
   isWebchatClient,
 } from "../../utils/message-channel.js";
-import { isGatewayAuthPolicyCurrent } from "../auth-policy.js";
+import { isGatewayAuthGrantCurrent, isGatewayAuthPolicyCurrent } from "../auth-policy.js";
 import { checkBrowserOrigin, normalizeChromeExtensionOrigin } from "../origin-check.js";
 import { invalidateGatewayPolicyClient } from "./ws-policy-close.js";
 import type { GatewayWsBrowserOrigin, GatewayWsClient } from "./ws-types.js";
@@ -60,6 +60,10 @@ export function disconnectDisallowedGatewayPolicyClients(
         reason: "gateway-policy-changed",
         code: 4001,
         message: "gateway policy changed",
+        revokeSource:
+          !isGatewayAuthGrantCurrent(client.authPolicy, cfg) ||
+          (client.browserOrigin !== undefined &&
+            !checkGatewayWsBrowserOrigin(client.browserOrigin, cfg).ok),
       });
     } else if (client.browserOrigin && !checkGatewayWsBrowserOrigin(client.browserOrigin, cfg).ok) {
       invalidateGatewayPolicyClient(client, {

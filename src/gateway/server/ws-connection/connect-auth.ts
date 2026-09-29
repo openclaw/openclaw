@@ -515,6 +515,7 @@ async function authenticateGatewayConnectCore(
   return {
     authPolicy: captureGatewayAuthPolicy(context.configSnapshot, {
       role,
+      authMethod,
       verifiedIdentity: authResult.user,
     }),
     resolvedAuth,
