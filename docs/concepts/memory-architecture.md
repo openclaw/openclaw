@@ -51,7 +51,7 @@ Five rules shape everything below:
 | ------------ | ------------------------------------------------------- | --------------------------------------------------- | ------------------------------------------------------ |
 | Instructions | `AGENTS.md` and workspace instruction files             | Human only                                          | Always, at session start                               |
 | Curated core | `MEMORY.md`, `USER.md`                                  | Dreaming consolidation; direct user request         | At session start when provenance is eligible; budgeted |
-| Episodic     | `memory/YYYY-MM-DD.md` daily notes, session transcripts | Agent during work; memory flush; transcript capture | Never; searchable on demand                            |
+| Episodic     | `memory/YYYY-MM-DD.md` daily notes, session transcripts | Agent during work; memory flush; transcript capture | Via Active Memory for eligible private sessions; otherwise searchable on demand |
 | Prospective  | Standing intents (SQLite) and cron jobs                 | `intent` tool; scheduled tasks                      | Only when a trigger fires                              |
 | Review       | `DREAMS.md`, dreaming reports                           | Dreaming phases                                     | Never; for human reading                               |
 
