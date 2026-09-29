@@ -115,26 +115,6 @@ describe("ClickClack discussion service contracts", () => {
     expect(harness.createChannel).toHaveBeenCalledTimes(1);
   });
 
-  it("accepts a legacy create response that omits display_title", async () => {
-    const harness = createHarness({ label: "Legacy title response" });
-    vi.mocked(harness.createChannel).mockImplementationOnce(async (_workspaceId, input) => {
-      const channel = {
-        id: "chn_legacy_title",
-        route_id: "legacy-title-route",
-        workspace_id: "wsp_team",
-        ...input,
-        kind: "public",
-        created_at: "2026-07-19T00:00:00.000Z",
-      };
-      Reflect.deleteProperty(channel, "display_title");
-      return channel;
-    });
-
-    await expect(harness.service.open("agent:main:legacy-title")).resolves.toMatchObject({
-      state: "open",
-    });
-  });
-
   it("rejects a create response with the wrong display_title", async () => {
     const harness = createHarness({ label: "Expected title" });
     vi.mocked(harness.createChannel).mockImplementationOnce(async (_workspaceId, input) => ({
@@ -217,6 +197,7 @@ describe("ClickClack discussion service contracts", () => {
 
   it("quarantines a newly created channel whose route id is missing", async () => {
     const harness = createHarness({ label: "Missing route" });
+    const sessionKey = "agent:main:missing-route";
     vi.mocked(harness.createChannel).mockImplementationOnce(async (_workspaceId, input) => ({
       id: "chn_route_less",
       route_id: "",
@@ -226,29 +207,11 @@ describe("ClickClack discussion service contracts", () => {
       created_at: "2026-07-19T00:00:00.000Z",
     }));
 
-    await expect(harness.service.open("agent:main:missing-route")).rejects.toThrow(
+    await expect(harness.service.open(sessionKey)).rejects.toThrow(
       "ClickClack discussion channel is missing its route id",
     );
     expect(harness.updateChannel).not.toHaveBeenCalled();
     expect(harness.revokedStore.entries()).toHaveLength(1);
-    expect(harness.generationStore.lookup("agent:main:missing-route")).toBeDefined();
-  });
-
-  it("retains route-less channel recovery state without mutating the room", async () => {
-    const harness = createHarness({ label: "Route-less recovery" });
-    const sessionKey = "agent:main:route-less-recovery";
-    vi.mocked(harness.createChannel).mockImplementationOnce(async (_workspaceId, input) => ({
-      id: "chn_route_less_recovery",
-      route_id: "",
-      workspace_id: "wsp_team",
-      ...input,
-      kind: "public",
-      created_at: "2026-07-19T00:00:00.000Z",
-    }));
-    await expect(harness.service.open(sessionKey)).rejects.toThrow(
-      "ClickClack discussion channel is missing its route id",
-    );
-
     expect(harness.generationStore.lookup(sessionKey)).toMatchObject({
       generation: expect.any(String),
     });
@@ -568,32 +531,19 @@ describe("ClickClack discussion service contracts", () => {
 
   it("keeps the remote channel quarantined when binding persistence fails", async () => {
     const harness = createHarness({ label: "Persistence failure" });
+    const sessionKey = "agent:main:persistence-failure";
     harness.store.register = vi.fn(() => {
       throw new Error("SQLITE_FULL: database is full");
     });
 
-    await expect(harness.service.open("agent:main:persistence-failure")).rejects.toThrow(
-      "SQLITE_FULL",
-    );
+    await expect(harness.service.open(sessionKey)).rejects.toThrow("SQLITE_FULL");
     expect(harness.createChannel).toHaveBeenCalledTimes(1);
     expect(harness.updateChannel).not.toHaveBeenCalled();
     expect(harness.revokedStore.entries()).toHaveLength(1);
-    expect(harness.generationStore.lookup("agent:main:persistence-failure")).toBeDefined();
-  });
-
-  it("retains the reservation when binding persistence fails", async () => {
-    const harness = createHarness({ label: "Persistence and archive failure" });
-    const sessionKey = "agent:main:persistence-archive-failure";
-    harness.store.register = vi.fn(() => {
-      throw new Error("SQLITE_FULL: database is full");
-    });
-    await expect(harness.service.open(sessionKey)).rejects.toThrow("SQLITE_FULL");
-
     expect(harness.generationStore.lookup(sessionKey)).toMatchObject({
       generation: expect.any(String),
     });
     expect(harness.generationStore.lookup(sessionKey)).not.toHaveProperty("pending");
-    expect(harness.revokedStore.entries()).toHaveLength(1);
   });
 
   it("finalizes a persisted binding left with its pending commit markers", async () => {

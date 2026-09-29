@@ -44,8 +44,7 @@ vi.mock("./http-client.js", async (importOriginal) => {
   return {
     ClickClackHttpError: actual.ClickClackHttpError,
     createClickClackClient: mocks.createClickClackClient,
-    normalizeClickClackCorrelationId: (value: unknown) =>
-      typeof value === "string" && /^[A-Za-z0-9._:-]{1,128}$/u.test(value) ? value : undefined,
+    normalizeClickClackCorrelationId: actual.normalizeClickClackCorrelationId,
   };
 });
 
@@ -693,7 +692,7 @@ describe("ClickClack gateway", () => {
 
     await vi.waitFor(() => expect(mocks.client.websocket).toHaveBeenCalledTimes(1));
 
-    emitMessageEvent(socket, 1, { correlation_id: "fakeco.case_1" });
+    emitMessageEvent(socket, 1, { correlation_id: "  fakeco.case_1  " });
 
     await vi.waitFor(() => expect(mocks.handleClickClackInbound).toHaveBeenCalledTimes(1));
     expect(mocks.createClickClackClient).toHaveBeenLastCalledWith({

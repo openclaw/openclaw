@@ -120,7 +120,9 @@ describe("ClickClack discussion service", () => {
     vi.mocked(legacy.createChannel).mockImplementationOnce(async (_workspaceId, input) =>
       legacyCreateResponse(input),
     );
-    await legacy.service.open("agent:main:unconfirmed-title");
+    await expect(legacy.service.open("agent:main:unconfirmed-title")).resolves.toMatchObject({
+      state: "open",
+    });
     expect(legacy.store.lookup("agent:main:unconfirmed-title")).not.toHaveProperty("displayTitle");
   });
 
@@ -977,38 +979,10 @@ describe("ClickClack discussion service", () => {
   it("does not create or adopt a room for an archived main session", async () => {
     const harness = createHarness({ label: "Recovered Name", archivedAt: 123 });
     const sessionKey = "agent:main:recover-stale";
-    const externalRef = testExternalRef(sessionKey);
-    vi.mocked(harness.channels).mockResolvedValue([
-      {
-        id: "chn_recovered",
-        route_id: "recovered-route",
-        workspace_id: "wsp_team",
-        name: "old-name",
-        kind: "public",
-        external_managed: true,
-        external_ref: externalRef,
-        external_url: "https://control.example/control/chat/main/release-planning-12345678",
-        sidebar_section: "Sessions",
-        archived: false,
-        created_at: "2026-07-19T00:00:00.000Z",
-      },
-    ]);
-    vi.mocked(harness.updateChannel).mockImplementationOnce(async (_channelId, patch) => ({
-      id: "chn_recovered",
-      route_id: "recovered-route",
-      workspace_id: "wsp_team",
-      name: "old-name",
-      kind: "public",
-      external_managed: patch.external_managed,
-      external_ref: patch.external_ref,
-      external_url: patch.external_url,
-      sidebar_section: patch.sidebar_section,
-      archived: false,
-      created_at: "2026-07-19T00:00:00.000Z",
-    }));
-
     await expect(harness.service.open(sessionKey)).resolves.toEqual({ state: "available" });
     expect(harness.channels).not.toHaveBeenCalled();
     expect(harness.updateChannel).not.toHaveBeenCalled();
+    expect(harness.createChannel).not.toHaveBeenCalled();
+    expect(harness.client.workspaces).not.toHaveBeenCalled();
   });
 });

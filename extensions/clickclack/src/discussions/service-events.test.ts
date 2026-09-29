@@ -2,7 +2,8 @@ import type {
   OpenClawPluginGatewayEvents,
   OpenClawPluginSessionsChangedEvent,
 } from "openclaw/plugin-sdk/core";
-import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ClickClackDiscussionBinding } from "./binding-store.js";
 import { resolveClickClackDiscussionRoute } from "./routing.js";
 import { createHarness } from "./service-test-support.js";
@@ -37,6 +38,16 @@ function createGatewayEventsHarness() {
 }
 
 describe("ClickClack discussion session events", () => {
+  let finishHeldReconciliation: (() => Promise<void>) | undefined;
+
+  afterEach(async () => {
+    try {
+      await finishHeldReconciliation?.();
+    } finally {
+      finishHeldReconciliation = undefined;
+    }
+  });
+
   it("runs one catch-up reconciliation when gateway events bind", async () => {
     vi.useFakeTimers();
     const gateway = createGatewayEventsHarness();
@@ -93,65 +104,83 @@ describe("ClickClack discussion session events", () => {
       category: "Projects",
     });
     const sessionKey = "agent:main:event-concurrent-reset";
-    try {
-      await harness.service.open(sessionKey);
-      harness.updateChannel.mockClear();
-      let releaseUpdate: (() => void) | undefined;
-      harness.updateChannel.mockImplementationOnce(async (_channelId, patch) => {
-        await new Promise<void>((resolve) => {
-          releaseUpdate = resolve;
+    const updateGate = createDeferred<void>();
+    let reconcile: Promise<void> | undefined;
+    const scenario = Promise.resolve().then(async () => {
+      try {
+        await harness.service.open(sessionKey);
+        harness.updateChannel.mockClear();
+        harness.updateChannel.mockImplementationOnce(async (_channelId, patch) => {
+          await updateGate.promise;
+          return {
+            id: "chn_discussion",
+            route_id: "discussion-route",
+            workspace_id: "wsp_team",
+            name: patch.name ?? "renamed",
+            kind: "public",
+            external_managed: true,
+            external_ref: "agent:main:main",
+            external_url: patch.external_url ?? "https://control.example/control/chat/main",
+            sidebar_section: patch.sidebar_section ?? "Projects",
+            ...(patch.display_title !== undefined ? { display_title: patch.display_title } : {}),
+            archived: false,
+            created_at: "2026-07-19T00:00:00.000Z",
+          };
         });
-        return {
-          id: "chn_discussion",
-          route_id: "discussion-route",
-          workspace_id: "wsp_team",
-          name: patch.name ?? "renamed",
-          kind: "public",
-          external_managed: true,
-          external_ref: "agent:main:main",
-          external_url: patch.external_url ?? "https://control.example/control/chat/main",
-          sidebar_section: patch.sidebar_section ?? "Projects",
-          ...(patch.display_title !== undefined ? { display_title: patch.display_title } : {}),
-          archived: false,
-          created_at: "2026-07-19T00:00:00.000Z",
-        };
-      });
-      harness.setSessionEntry({
-        sessionId: "session-original",
-        label: "Renamed",
-        category: "Projects",
-      });
+        harness.setSessionEntry({
+          sessionId: "session-original",
+          label: "Renamed",
+          category: "Projects",
+        });
 
-      const reconcile = harness.service.reconcile(sessionKey);
-      await vi.waitFor(() => expect(harness.updateChannel).toHaveBeenCalledOnce());
+        reconcile = harness.service.reconcile(sessionKey);
+        void reconcile.catch(() => {});
+        await vi.waitFor(() => expect(harness.updateChannel).toHaveBeenCalledOnce());
 
-      harness.setSessionEntry({
-        sessionId: "session-replacement",
-        label: "Renamed",
-        category: "Projects",
-      });
-      expect(
-        await resolveClickClackDiscussionRoute({
-          runtime: harness.runtime,
-          accountId: "default",
-          serverBaseUrl: "https://clickclack.example",
-          workspaceId: "wsp_team",
-          channelId: "chn_discussion",
-        }),
-      ).toMatchObject({ state: "active" });
-      expect(harness.store.lookup(sessionKey)).toMatchObject({
-        sessionId: "session-replacement",
-      });
+        harness.setSessionEntry({
+          sessionId: "session-replacement",
+          label: "Renamed",
+          category: "Projects",
+        });
+        expect(
+          await resolveClickClackDiscussionRoute({
+            runtime: harness.runtime,
+            accountId: "default",
+            serverBaseUrl: "https://clickclack.example",
+            workspaceId: "wsp_team",
+            channelId: "chn_discussion",
+          }),
+        ).toMatchObject({ state: "active" });
+        expect(harness.store.lookup(sessionKey)).toMatchObject({
+          sessionId: "session-replacement",
+        });
 
-      releaseUpdate?.();
-      await reconcile;
+        updateGate.resolve();
+        await reconcile;
 
-      expect(harness.store.lookup(sessionKey)).toMatchObject({
-        sessionId: "session-replacement",
-        label: "Renamed",
-      });
+        expect(harness.store.lookup(sessionKey)).toMatchObject({
+          sessionId: "session-replacement",
+          label: "Renamed",
+        });
+      } finally {
+        updateGate.resolve();
+        await reconcile;
+      }
+    });
+    let finishing: Promise<void> | undefined;
+    const finish = () =>
+      (finishing ??= (async () => {
+        updateGate.resolve();
+        await Promise.allSettled([scenario]);
+        await harness.service.cleanup();
+      })());
+    // A test timeout does not unwind its callback. Join the owned scenario
+    // before parent teardown resets runtime state or restores mocks.
+    finishHeldReconciliation = finish;
+    try {
+      await scenario;
     } finally {
-      await harness.service.cleanup();
+      await finish();
     }
   });
 

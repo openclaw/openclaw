@@ -5,7 +5,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveClickClackAccount } from "./accounts.js";
-import type { CoreConfig } from "./types.js";
+import type { ClickClackSetupCodeClaim, CoreConfig } from "./types.js";
 
 const claimClickClackSetupCode = vi.hoisted(() => vi.fn());
 const verifyClickClackAccountAfterSetup = vi.hoisted(() => vi.fn());
@@ -29,6 +29,23 @@ type ClickClackSetupInput = ChannelSetupInput & {
   workspace?: string;
   agentActivity?: boolean;
 };
+
+function createClaimResponse(
+  overrides: Partial<ClickClackSetupCodeClaim> = {},
+): ClickClackSetupCodeClaim {
+  return {
+    token: "test-token",
+    bot: { id: "usr_bot", handle: "openclaw", display_name: "OpenClaw" },
+    workspace: {
+      id: "wsp_1",
+      route_id: "clickclack",
+      slug: "default",
+      name: "ClickClack",
+    },
+    defaults: {},
+    ...overrides,
+  };
+}
 
 // Structural stand-in for the internal claim error: the setup formatter
 // duck-types on a numeric `status`, so tests need only that shape.
@@ -72,21 +89,15 @@ describe("ClickClack setup adapter", () => {
   });
 
   it("claims a full setup URL and prepares the token, workspace, and defaults", async () => {
-    claimClickClackSetupCode.mockResolvedValue({
-      token: "test-token",
-      bot: { id: "usr_bot", handle: "openclaw", display_name: "OpenClaw" },
-      workspace: {
-        id: "wsp_1",
-        route_id: "clickclack",
-        slug: "default",
-        name: "ClickClack",
-      },
-      defaults: {
-        defaultTo: "channel:general",
-        allowFrom: ["*"],
-        agentActivity: true,
-      },
-    });
+    claimClickClackSetupCode.mockResolvedValueOnce(
+      createClaimResponse({
+        defaults: {
+          defaultTo: "channel:general",
+          allowFrom: ["*"],
+          agentActivity: true,
+        },
+      }),
+    );
 
     await expect(
       prepare({
@@ -102,6 +113,7 @@ describe("ClickClack setup adapter", () => {
       allowFrom: ["*"],
       agentActivity: true,
     });
+    expect(claimClickClackSetupCode).toHaveBeenCalledOnce();
     expect(claimClickClackSetupCode).toHaveBeenCalledWith({
       claimUrl: "https://clickclack.example/api/bot-setup-codes/claim",
       code: "ABCDEFGHJKMN",
@@ -109,19 +121,12 @@ describe("ClickClack setup adapter", () => {
   });
 
   it("claims an exact v1 endpoint and keeps the returned API base path", async () => {
-    claimClickClackSetupCode.mockResolvedValue({
-      contract_version: 1,
-      api_base_url: "https://api.clickclack.example/services/clickclack",
-      token: "test-token",
-      bot: { id: "usr_bot", handle: "openclaw", display_name: "OpenClaw" },
-      workspace: {
-        id: "wsp_1",
-        route_id: "clickclack",
-        slug: "default",
-        name: "ClickClack",
-      },
-      defaults: {},
-    });
+    claimClickClackSetupCode.mockResolvedValueOnce(
+      createClaimResponse({
+        contract_version: 1,
+        api_base_url: "https://api.clickclack.example/services/clickclack",
+      }),
+    );
 
     const exactClaimUrl =
       "https://api.clickclack.example/services/clickclack/api/bot-setup-codes/claim";
@@ -134,6 +139,7 @@ describe("ClickClack setup adapter", () => {
       token: "test-token",
       workspace: "wsp_1",
     });
+    expect(claimClickClackSetupCode).toHaveBeenCalledOnce();
     expect(claimClickClackSetupCode).toHaveBeenCalledWith({
       claimUrl: exactClaimUrl,
       expectedClaimUrl: exactClaimUrl,
@@ -142,17 +148,7 @@ describe("ClickClack setup adapter", () => {
   });
 
   it("claims a bare setup code with an explicit HTTPS base URL", async () => {
-    claimClickClackSetupCode.mockResolvedValue({
-      token: "test-token",
-      bot: { id: "usr_bot", handle: "openclaw", display_name: "OpenClaw" },
-      workspace: {
-        id: "wsp_1",
-        route_id: "clickclack",
-        slug: "default",
-        name: "ClickClack",
-      },
-      defaults: {},
-    });
+    claimClickClackSetupCode.mockResolvedValueOnce(createClaimResponse());
 
     await expect(
       prepare({
@@ -164,6 +160,7 @@ describe("ClickClack setup adapter", () => {
       token: "test-token",
       workspace: "wsp_1",
     });
+    expect(claimClickClackSetupCode).toHaveBeenCalledOnce();
     expect(claimClickClackSetupCode).toHaveBeenCalledWith({
       claimUrl: "https://clickclack.example/api/bot-setup-codes/claim",
       code: "ABCDEFGHJKMN",
@@ -171,17 +168,7 @@ describe("ClickClack setup adapter", () => {
   });
 
   it("claims setup codes through an existing private API base", async () => {
-    claimClickClackSetupCode.mockResolvedValue({
-      token: "test-token",
-      bot: { id: "usr_bot", handle: "openclaw", display_name: "OpenClaw" },
-      workspace: {
-        id: "wsp_1",
-        route_id: "clickclack",
-        slug: "default",
-        name: "ClickClack",
-      },
-      defaults: {},
-    });
+    claimClickClackSetupCode.mockResolvedValueOnce(createClaimResponse());
 
     await prepare(
       {
@@ -197,6 +184,7 @@ describe("ClickClack setup adapter", () => {
       } as OpenClawConfig,
     );
 
+    expect(claimClickClackSetupCode).toHaveBeenCalledOnce();
     expect(claimClickClackSetupCode).toHaveBeenCalledWith({
       claimUrl: "http://127.0.0.1:8484/api/bot-setup-codes/claim",
       code: "ABCDEFGHJKMN",
@@ -204,19 +192,12 @@ describe("ClickClack setup adapter", () => {
   });
 
   it("uses a private API transport while validating the public exact endpoint", async () => {
-    claimClickClackSetupCode.mockResolvedValue({
-      contract_version: 1,
-      api_base_url: "https://api.clickclack.example/services/clickclack",
-      token: "test-token",
-      bot: { id: "usr_bot", handle: "openclaw", display_name: "OpenClaw" },
-      workspace: {
-        id: "wsp_1",
-        route_id: "clickclack",
-        slug: "default",
-        name: "ClickClack",
-      },
-      defaults: {},
-    });
+    claimClickClackSetupCode.mockResolvedValueOnce(
+      createClaimResponse({
+        contract_version: 1,
+        api_base_url: "https://api.clickclack.example/services/clickclack",
+      }),
+    );
 
     const exactClaimUrl =
       "https://api.clickclack.example/services/clickclack/api/bot-setup-codes/claim";
@@ -231,6 +212,7 @@ describe("ClickClack setup adapter", () => {
     ).resolves.toMatchObject({
       baseUrl: "https://api.clickclack.example/services/clickclack",
     });
+    expect(claimClickClackSetupCode).toHaveBeenCalledOnce();
     expect(claimClickClackSetupCode).toHaveBeenCalledWith({
       claimUrl: "http://127.0.0.1:8484/api/bot-setup-codes/claim",
       expectedClaimUrl: exactClaimUrl,
@@ -239,17 +221,7 @@ describe("ClickClack setup adapter", () => {
   });
 
   it("accepts setup-code URLs for local HTTP installations", async () => {
-    claimClickClackSetupCode.mockResolvedValue({
-      token: "test-token",
-      bot: { id: "usr_bot", handle: "openclaw", display_name: "OpenClaw" },
-      workspace: {
-        id: "wsp_1",
-        route_id: "clickclack",
-        slug: "default",
-        name: "ClickClack",
-      },
-      defaults: {},
-    });
+    claimClickClackSetupCode.mockResolvedValueOnce(createClaimResponse());
 
     await expect(
       prepare({
@@ -260,6 +232,7 @@ describe("ClickClack setup adapter", () => {
       token: "test-token",
       workspace: "wsp_1",
     });
+    expect(claimClickClackSetupCode).toHaveBeenCalledOnce();
     expect(claimClickClackSetupCode).toHaveBeenCalledWith({
       claimUrl: "http://localhost:3000/api/bot-setup-codes/claim",
       code: "ABCDEFGHJKMN",
