@@ -34,11 +34,11 @@ import {
   openAIQuicksilverConnectAbortError,
   waitForOpenAIQuicksilverConnectStep,
 } from "./realtime-quicksilver-sideband.js";
-import {
-  type OpenAIQuicksilverSocket,
-  type OpenAIQuicksilverSocketFactory,
-  type QuicksilverMediaSocket,
-  type QuicksilverMediaSocketFactory,
+import type {
+  OpenAIQuicksilverSocket,
+  OpenAIQuicksilverSocketFactory,
+  QuicksilverMediaSocket,
+  QuicksilverMediaSocketFactory,
 } from "./realtime-quicksilver-socket.shared.js";
 import {
   buildOpenAIQuicksilverSession,

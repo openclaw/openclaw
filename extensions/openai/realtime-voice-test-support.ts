@@ -2,7 +2,6 @@ import type {
   RealtimeVoiceBridge,
   RealtimeVoiceBridgeCreateRequest,
   RealtimeVoiceBrowserSession,
-  RealtimeVoiceBrowserSessionCreateRequest,
   RealtimeVoiceProviderPlugin,
   RealtimeVoiceTool,
 } from "openclaw/plugin-sdk/realtime-voice";
