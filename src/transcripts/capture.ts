@@ -549,6 +549,7 @@ export async function startTranscripts(params: {
       throw error;
     }
     admitted = true;
+    let result: TranscriptsStartResult;
     try {
       assertEnabled();
       startupAbort.signal.throwIfAborted();
@@ -569,12 +570,6 @@ export async function startTranscripts(params: {
           }
         },
       });
-    } catch (error) {
-      entry.phase = "failed";
-      throw error;
-    }
-    let result: TranscriptsStartResult;
-    try {
       assertEnabled();
       acquired.assertOpen();
       startupAbort.signal.throwIfAborted();

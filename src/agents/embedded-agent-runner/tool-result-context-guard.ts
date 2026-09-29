@@ -233,17 +233,6 @@ function truncateToolResultToChars(
   return replaceToolResultContent(msg, truncatedText);
 }
 
-function enforceToolResultLimit(params: {
-  messages: AgentMessage[];
-  maxSingleToolResultChars: number;
-}): AgentMessage[] {
-  const { messages, maxSingleToolResultChars } = params;
-  const estimateCache = createMessageCharEstimateCache();
-  return projectMessages(messages, (message) =>
-    truncateToolResultToChars(message, maxSingleToolResultChars, estimateCache),
-  );
-}
-
 function toMidTurnPrecheckRequest(
   result: ReturnType<typeof shouldPreemptivelyCompactBeforePrompt>,
 ): MidTurnPrecheckRequest | null {
@@ -445,10 +434,10 @@ export function installToolResultContextGuard(params: {
       : messages;
 
     const sourceMessages = Array.isArray(transformed) ? transformed : messages;
-    const contextMessages = enforceToolResultLimit({
-      messages: sourceMessages,
-      maxSingleToolResultChars,
-    });
+    const estimateCache = createMessageCharEstimateCache();
+    const contextMessages = projectMessages(sourceMessages, (message) =>
+      truncateToolResultToChars(message, maxSingleToolResultChars, estimateCache),
+    );
     if (params.midTurnPrecheck?.enabled) {
       const prePromptMessageCount = Math.max(
         0,

@@ -63,7 +63,8 @@ struct DashboardBrowserSessionTests {
         #expect(cookie.isSecure)
         #expect(cookie.isHTTPOnly)
         #expect(cookie.domain == "gateway.example")
-        #expect(controller._testUserScripts.allSatisfy { !$0.source.contains("first-session") })
+        #expect(controller.webView.configuration.userContentController.userScripts
+            .allSatisfy { !$0.source.contains("first-session") })
         try controller.nativeBrowser.open(
             tabId: "mac-private",
             url: #require(URL(string: "about:blank")),
@@ -252,17 +253,18 @@ struct DashboardBrowserSessionTests {
             do {
                 let opened = try #require(manager._testAuxiliaryWindows().first?.controller)
                 #expect(opened.auth.token == "after")
-                #expect(opened._testDashboardDataStore === primaryStore)
+                #expect(opened.webView.configuration.websiteDataStore === primaryStore)
                 await manager._testOpenWindow(for: target)
                 await manager._testOpenWindow(for: .profile("same-origin"))
                 let windows = manager._testAuxiliaryWindows()
                 let sameProfile = windows.filter { $0.target == target }
                 #expect(sameProfile.count == 2)
                 #expect(sameProfile.allSatisfy {
-                    $0.controller._testDashboardDataStore === opened._testDashboardDataStore
+                    $0.controller.webView.configuration.websiteDataStore === opened.webView.configuration
+                        .websiteDataStore
                 })
                 let other = try #require(windows.first { $0.target != target }?.controller)
-                #expect(other._testDashboardDataStore === primaryStore)
+                #expect(other.webView.configuration.websiteDataStore === primaryStore)
                 let readyDeadline = ContinuousClock.now + .seconds(5)
                 while await (try? opened.webView.evaluateJavaScript("document.body.innerText")) as? String != "Ready",
                       ContinuousClock.now < readyDeadline
@@ -336,7 +338,7 @@ struct DashboardBrowserSessionTests {
         defer { manager.close() }
         await manager._testOpenWindow(for: .profile("storage-owner"))
         let controller = try #require(manager._testAuxiliaryWindows().first?.controller)
-        #expect((controller._testDashboardDataStore === existingStore) == !browserSignIn)
+        #expect((controller.webView.configuration.websiteDataStore === existingStore) == !browserSignIn)
     }
 
     @Test func `browser-only setup reopens its Gateway without configuring machine integrations`() async throws {

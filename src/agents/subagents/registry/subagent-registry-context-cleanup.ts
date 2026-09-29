@@ -44,7 +44,7 @@ export function createSubagentRegistryContextCleanup(config: {
 
   async function runContextEngineSubagentEnded(
     params: ContextEngineSubagentEndedParams,
-    options?: { isCurrent?: () => boolean },
+    options?: { isCurrent?: () => boolean; prepareCurrent?: () => Promise<boolean> },
   ): Promise<void> {
     const cfg = getRuntimeConfig();
     const registry = await loadSubagentRegistryPluginRuntimeHandle({
@@ -59,7 +59,7 @@ export function createSubagentRegistryContextCleanup(config: {
       });
       let failure: { error: unknown } | undefined;
       try {
-        if (options?.isCurrent?.() !== false) {
+        if ((await options?.prepareCurrent?.()) !== false && options?.isCurrent?.() !== false) {
           await engine.onSubagentEnded?.(params);
         }
       } catch (error) {
@@ -79,7 +79,7 @@ export function createSubagentRegistryContextCleanup(config: {
   async function tryContextEngineSubagentEnded(
     params: ContextEngineSubagentEndedParams,
     warning: string,
-    options?: { isCurrent?: () => boolean },
+    options?: { isCurrent?: () => boolean; prepareCurrent?: () => Promise<boolean> },
   ): Promise<boolean> {
     try {
       await runContextEngineSubagentEnded(params, options);
@@ -92,7 +92,7 @@ export function createSubagentRegistryContextCleanup(config: {
 
   async function notifyContextEngineSubagentEnded(
     params: ContextEngineSubagentEndedParams,
-    options?: { isCurrent?: () => boolean },
+    options?: { isCurrent?: () => boolean; prepareCurrent?: () => Promise<boolean> },
   ): Promise<void> {
     await tryContextEngineSubagentEnded(
       params,
@@ -156,6 +156,7 @@ export function createSubagentRegistryContextCleanup(config: {
     sendFarewell?: boolean;
     accountId?: string;
     isCurrent?: () => boolean;
+    prepareCurrent?: () => Promise<boolean>;
   }) {
     if (params.entry.endedHookEmittedAt) {
       return;
@@ -183,7 +184,11 @@ export function createSubagentRegistryContextCleanup(config: {
         allowGatewaySubagentBinding: true,
       });
       await withPluginRuntimeRegistryScope(registry, async () => {
-        if (params.entry.endedHookEmittedAt || params.isCurrent?.() === false) {
+        if (
+          (await params.prepareCurrent?.()) === false ||
+          params.entry.endedHookEmittedAt ||
+          params.isCurrent?.() === false
+        ) {
           return;
         }
         assertCurrent();

@@ -1,4 +1,3 @@
-// Skill upload store persists uploaded skill archives before installation.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -43,23 +42,7 @@ type SkillUploadStoreOptions = OpenClawStateDatabaseOptions & {
 
 const locks = new Map<string, { lock: ReturnType<typeof createAsyncLock>; references: number }>();
 
-type SkillUploadRecord = {
-  version: 1;
-  kind: "skill-archive";
-  uploadId: string;
-  slug: string;
-  force: boolean;
-  sizeBytes: number;
-  sha256?: string;
-  actualSha256?: string;
-  receivedBytes: number;
-  archivePath: string;
-  createdAt: number;
-  expiresAt: number;
-  committed: boolean;
-  committedAt?: number;
-  idempotencyKeyHash?: string;
-};
+type SkillUploadRecord = ReturnType<typeof toSkillUploadRecord>;
 
 export type SkillUploadStore = ReturnType<typeof createSkillUploadStore>;
 
@@ -193,10 +176,10 @@ async function cleanupExpiredUploads(
   }
 }
 
-function toSkillUploadRecord(row: SkillUploadMetadataRow, archivePath: string): SkillUploadRecord {
+function toSkillUploadRecord(row: SkillUploadMetadataRow, archivePath: string) {
   return {
-    version: 1,
-    kind: "skill-archive",
+    version: 1 as const,
+    kind: "skill-archive" as const,
     uploadId: row.upload_id,
     slug: row.slug,
     force: row.force === 1,

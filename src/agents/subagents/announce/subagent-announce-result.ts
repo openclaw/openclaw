@@ -1,6 +1,5 @@
-/** Exact-run final answer reads for subagent completion announcements. */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { truncateUtf16WithEllipsis } from "../../../shared/text-truncate.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.types.js";
 import { wrapPromptDataBlock } from "../../sanitize-for-prompt.js";
 import { extractStoredAssistantText } from "../../tools/chat-history-text.js";
@@ -125,12 +124,6 @@ function formatChildResultData(resultText?: string | null): string {
   );
 }
 
-function truncateChildCompletionField(value: string): string {
-  return value.length > MAX_CHILD_COMPLETION_FIELD_CHARS
-    ? `${truncateUtf16Safe(value, MAX_CHILD_COMPLETION_FIELD_CHARS - 1)}…`
-    : value;
-}
-
 type CompletionResultSource = Parameters<typeof resolveSubagentCompletionResultText>[0];
 type ChildCompletionExecution = CompletionResultSource["execution"] & {
   endedAt?: number;
@@ -208,7 +201,7 @@ export function buildChildCompletionFindings(
           maxEscapedChars: MAX_CHILD_COMPLETION_FIELD_CHARS,
           truncationMarker: "…",
         }),
-        `status: ${truncateChildCompletionField(outcome)}`,
+        `status: ${truncateUtf16WithEllipsis(outcome, MAX_CHILD_COMPLETION_FIELD_CHARS)}`,
         formatChildResultData(resultText),
       ].join("\n"),
     );

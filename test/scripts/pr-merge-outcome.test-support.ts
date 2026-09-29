@@ -177,6 +177,12 @@ export function createMergeOutcomeFixtureHarness() {
         afterPolicyRead?: boolean;
       },
       restObservationAppliedAt: 0,
+      restObservations: [] as Array<{
+        main?: string;
+        advanceMain?: boolean;
+        pr?: Record<string, unknown>;
+        priorCi?: Partial<ReturnType<typeof createPriorCiFixtureState>>;
+      }>,
       restMergePayload: null as null | {
         sha: string;
         merge_method: string;
@@ -340,7 +346,7 @@ if(s.restMainReads>0&&args[0]==="api"&&args.includes("repos/fixture/repo/pulls/1
 }
 const quotaRead=s.quotaAt==="checks"&&args[0]==="pr"&&args[1]==="checks"||
   s.quotaAt==="preview"&&args.some(arg=>arg.includes("viewerMergeBodyText"))||
-  s.quotaAt==="observe"&&s.observationReads>=s.quotaAfterObservations&&args.includes("graphql")&&!args.includes("--input")&&!args.some(arg=>arg.includes("viewerMergeBodyText"));
+  s.quotaAt==="observe"&&s.observationReads>=s.quotaAfterObservations&&args.includes(${JSON.stringify(landingSnapshotQuery)});
 if(quotaRead&&s.quotaFailuresRemaining!==0) {
   if(s.quotaFailuresRemaining!==null) s.quotaFailuresRemaining--;
   quota();
@@ -383,8 +389,7 @@ const advanceMain=()=>{
   git(["--git-dir="+process.env.FIXTURE_REMOTE,"update-ref","refs/heads/main",next,parent]);
   s.mainAdvances.push(next);
 };
-const applyRestObservation=()=>{
-  const next=s.restObservation;
+const applyRestObservation=(next=s.restObservation)=>{
   if(next.main) git(["push","-q","--force","origin",next.main+":refs/heads/main"]);
   if(next.pr) Object.assign(s.pr,next.pr);
   if(next.advanceMain) advanceMain();
@@ -453,6 +458,7 @@ else if(args[0]==="api"&&args.includes("repos/fixture/repo/pulls/123")) {
   out(args.includes("--include")?"HTTP/2.0 200 OK\\n\\n"+JSON.stringify(record):record);
 }
 else if(args[0]==="api"&&args.includes("repos/fixture/repo/git/ref/heads/main")) {
+  if(s.restMainReads%2===0&&s.restObservations.length) applyRestObservation(s.restObservations.shift());
   if(s.restObservation?.main&&!s.restObservation.afterPolicyRead&&s.restMainReads===0&&s.observationReads>0) applyRestObservation();
   s.restMainReads++;
   if(s.restMainAdvance&&s.pr.state==="OPEN") {

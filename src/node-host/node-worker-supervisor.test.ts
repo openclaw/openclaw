@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE } from "../infra/node-commands.js";
@@ -713,14 +714,34 @@ describe("node worker supervisor", () => {
   it("does not return stale running after the active worker disappears", async () => {
     const { supervisor, workspaceDir } = fixture();
     const input = launchInput(workspaceDir, "silent-worker-death", "wait");
-    const running = await supervisor.launch(input, TEST_WORKER_ENDPOINT);
-    expect(running.worker).not.toBeNull();
+    try {
+      const running = await supervisor.launch(input, TEST_WORKER_ENDPOINT);
+      expect(running.worker).not.toBeNull();
 
-    process.kill(running.worker!.pid, "SIGKILL");
-    await vi.waitFor(async () => {
-      expect((await supervisor.status(input.launchId))?.state).not.toBe("running");
-    });
-    await supervisor.close();
+      let killed = false;
+      await vi.waitFor(async () => {
+        if (!killed) {
+          // Native receipts name the custody anchor. Killing that owner must remain
+          // uncertain; this case exercises disappearance of the actual task instead.
+          const started: unknown = JSON.parse(
+            fs.readFileSync(path.join(workspaceDir, `${input.launchId}.started.json`), "utf8"),
+          );
+          if (!isRecord(started) || typeof started.pid !== "number") {
+            throw new Error("fixture omitted its task process identity");
+          }
+          const task = requireNodeWorkerProcessIdentity(started.pid);
+          process.kill(task.pid, "SIGKILL");
+          killed = true;
+        }
+        const terminal = await supervisor.status(input.launchId);
+        expect(terminal).toMatchObject({
+          ...testNodeWorkerLaunchIdentity(input),
+          state: expect.stringMatching(/^(?:completed|failed|interrupted|cancelled)$/u),
+        });
+      });
+    } finally {
+      await supervisor.close();
+    }
   });
 
   it("never signals a running worker for a mismatched immutable cancel identity", async () => {

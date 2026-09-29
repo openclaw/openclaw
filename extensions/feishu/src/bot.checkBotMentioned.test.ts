@@ -45,11 +45,11 @@ describe("parseFeishuMessageEvent – mentionedBot", () => {
     expect(ctx.senderId).toBe("u_mobile_only");
   });
 
-  it("returns mentionedBot=true when bot mention name differs from configured botName", () => {
+  it("recognizes bot mentions by ID when the display name is an alias", () => {
     const event = makeEvent("group", [
       { key: "@_user_1", name: "OpenClaw Bot (Alias)", id: { open_id: BOT_OPEN_ID } },
     ]);
-    const ctx = parseFeishuMessageEvent(event, BOT_OPEN_ID, "OpenClaw Bot");
+    const ctx = parseFeishuMessageEvent(event, BOT_OPEN_ID);
     expect(ctx.mentionedBot).toBe(true);
   });
 

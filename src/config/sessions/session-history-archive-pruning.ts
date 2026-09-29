@@ -23,14 +23,16 @@ import {
   timeArchivePruningAsync,
 } from "./session-history-archive-pruning-diagnostics.js";
 import type { SessionArchivePruningOperations } from "./session-history-archive-pruning.types.js";
+import type { SessionHistoryCheckpointGate } from "./session-history-budget-state.js";
 
 type PageReclamation = {
   reclaimPages?: (maxPages?: number) => Promise<SqliteWalReclamationResult>;
   onCheckpointIncomplete?: (checkpoint: SqliteWalCheckpointSnapshot | undefined) => void;
   assertCurrent?: () => void;
+  checkpointGate?: SessionHistoryCheckpointGate;
 };
 
-type ArchivePruningParams = Pick<PageReclamation, "onCheckpointIncomplete"> & {
+type ArchivePruningParams = Pick<PageReclamation, "onCheckpointIncomplete" | "checkpointGate"> & {
   archiveDirectory: string;
   databaseOptions: OpenClawAgentDatabaseOptions;
   diagnostics?: SqliteSessionArchivePruningDiagnostics;
@@ -73,6 +75,7 @@ export async function reclaimSqliteFreePages(
     );
   }
   let remaining = limits?.maxPages;
+  const gate = limits?.checkpointGate ?? { afterNs: process.hrtime.bigint(), completedAtNs: 0n };
   const maxPasses = limits?.maxPasses ?? Infinity;
   for (let pass = 0; pass < maxPasses && (remaining === undefined || remaining > 0); pass++) {
     if (pass > 0) {
@@ -80,10 +83,18 @@ export async function reclaimSqliteFreePages(
     }
     limits?.assertCurrent?.();
     const result = await reclaimPages(remaining);
+    // A vacuum commit needs its own completion; a pre-vacuum receipt cannot cover it.
+    if (result.vacuumPasses > 0) {
+      gate.afterNs = result.checkpoint?.observedAtNs ?? process.hrtime.bigint();
+    }
+    const completedAtNs = result.checkpoint?.lastCompletedAtNs ?? 0n;
+    if (completedAtNs > gate.completedAtNs) {
+      gate.completedAtNs = completedAtNs;
+    }
+    const checkpointCompleted = result.checkpointCompleted || gate.completedAtNs >= gate.afterNs;
     if (diagnostics) {
       for (const key of [
         "checkpointCalls",
-        "checkpointIncomplete",
         "checkpointMs",
         "queryMs",
         "vacuumMs",
@@ -97,8 +108,10 @@ export async function reclaimSqliteFreePages(
         result.checkpointMaxMs,
       );
       diagnostics.checkpoint = result.checkpoint?.health;
+      diagnostics.checkpointIncomplete =
+        (diagnostics.checkpointIncomplete ?? 0) + Number(!checkpointCompleted);
     }
-    if (!result.checkpointCompleted) {
+    if (!checkpointCompleted) {
       limits?.onCheckpointIncomplete?.(result.checkpoint);
       return false;
     }
@@ -174,6 +187,9 @@ async function pruneCanonicalSessionTranscriptArchivesToHighWater(
       await timeArchivePruningAsync(diagnostics, "rowDeletionMs", () =>
         params.archives.deletePublished(row),
       );
+      if (params.checkpointGate) {
+        params.checkpointGate.afterNs = process.hrtime.bigint();
+      }
       return true;
     });
     if (!removed) {

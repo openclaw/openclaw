@@ -4,6 +4,7 @@ import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import { z } from "zod";
 import type { BrowserDashboardIdentity } from "../browser-dashboard.types.js";
 import {
+  assertBrowserSessionTabAuthority,
   getBrowserStateRuntime,
   getPendingBrowserDashboardRegistrations,
   getOptionalBrowserStateRuntime,
@@ -248,14 +249,6 @@ export async function drainBrowserSessionTabStore(runtime: BrowserStateRuntime):
   }
 }
 
-export function assertBrowserSessionTabAuthority(authority: BrowserSessionTabAuthority) {
-  const runtime = authority.runtime ?? getBrowserStateRuntime();
-  if (getOptionalBrowserStateRuntime() !== runtime) {
-    throw new Error("Browser session tab store owner changed");
-  }
-  authority.assertCurrent?.();
-}
-
 export function getBrowserSessionTabStore(authority: BrowserSessionTabAuthority = {}) {
   const runtime = authority.runtime ?? getBrowserStateRuntime();
   const withCurrent = runtime.sessionTabs.withCurrent;
@@ -264,6 +257,7 @@ export function getBrowserSessionTabStore(authority: BrowserSessionTabAuthority 
   }
   return withCurrent({
     assertCurrent: () => assertBrowserSessionTabAuthority({ ...authority, runtime }),
+    sessionEntryCurrent: authority.sessionEntryCurrent,
   });
 }
 

@@ -276,6 +276,12 @@ export function createSessionHistoryWorkerReaders(
           ? err(decodeSessionTranscriptWorkerReadError(value.readError))
           : ok(value.entry),
     ),
+    readEntryCurrent: reader(
+      "session-entry-current",
+      "entry currency facts",
+      (input) => ({ kind: "session-entry-current", ...input }),
+      (value) => value.entry,
+    ),
     readDiagnosticText: reader(
       "session-diagnostic-text",
       "diagnostic text",

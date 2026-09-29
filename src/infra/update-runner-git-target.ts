@@ -4,6 +4,7 @@ import path from "node:path";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import {
   parsePackageOpenClawSchemaVersions,
   type OpenClawSchemaVersions,
@@ -139,6 +140,7 @@ export async function withGitTargetInspectionRoot<T>(
     }
     return result.stdout;
   };
+  let cleanupUncertain = false;
   try {
     const head = (await command(params.root, ["rev-parse", "HEAD"])).trim();
     const headRef = (await command(params.root, ["symbolic-ref", "-q", "HEAD"], true)).trim();
@@ -266,14 +268,19 @@ export async function withGitTargetInspectionRoot<T>(
           : options,
       );
     return await inspect(inspectionRoot, runInspectionCommand);
+  } catch (error) {
+    cleanupUncertain = hasCommandProcessCleanupError(error);
+    throw error;
   } finally {
     // Only this invocation's private inspection repository, never the installed checkout.
-    await cleanupUpdateTemporaryDirectory({
-      directory: temporaryRoot,
-      root: params.root,
-      name: "git-target-inspection-cleanup",
-      onWarning: params.onWarning,
-    });
+    if (!cleanupUncertain) {
+      await cleanupUpdateTemporaryDirectory({
+        directory: temporaryRoot,
+        root: params.root,
+        name: "git-target-inspection-cleanup",
+        onWarning: params.onWarning,
+      });
+    }
   }
 }
 

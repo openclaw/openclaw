@@ -360,21 +360,12 @@ async function fetchGuardedMediaResponse(
           i === attempts.length - 1
         ) {
           if (attemptErrors.length > 0) {
-            const combined = new Error(
-              `Primary fetch failed and fallback fetch also failed for ${sourceUrl}`,
-              { cause: err },
+            throw Object.assign(
+              new Error(`Primary fetch failed and fallback fetch also failed for ${sourceUrl}`, {
+                cause: err,
+              }),
+              { primaryError: attemptErrors[0], attemptErrors: [...attemptErrors, err] },
             );
-            (
-              combined as Error & {
-                primaryError?: unknown;
-                attemptErrors?: unknown[];
-              }
-            ).primaryError = attemptErrors[0];
-            (combined as Error & { attemptErrors?: unknown[] }).attemptErrors = [
-              ...attemptErrors,
-              err,
-            ];
-            throw combined;
           }
           throw err;
         }
@@ -666,56 +657,47 @@ export async function saveResponseMedia(
 /** Fetches media through SSRF guards and saves the body into the media store. */
 export async function saveRemoteMedia(options: SaveRemoteMediaOptions): Promise<SavedRemoteMedia> {
   return await withMediaReadScope(options, (scopedOptions) =>
-    withMediaFetchRetry(scopedOptions, () => saveRemoteMediaOnce(scopedOptions)),
+    withGuardedMediaResponse(scopedOptions, ({ response: res, finalUrl, sourceUrl }) =>
+      saveOkMediaResponse({
+        res,
+        finalUrl,
+        sourceUrl,
+        filePathHint: scopedOptions.filePathHint,
+        maxBytes: scopedOptions.maxBytes ?? DEFAULT_FETCH_MEDIA_MAX_BYTES,
+        readIdleTimeoutMs: scopedOptions.readIdleTimeoutMs,
+        fallbackContentType: scopedOptions.fallbackContentType,
+        subdir: scopedOptions.subdir,
+        originalFilename: scopedOptions.originalFilename,
+      }),
+    ),
   );
 }
 
-async function saveRemoteMediaOnce(options: SaveRemoteMediaOptions): Promise<SavedRemoteMedia> {
-  const { response: res, finalUrl, release, sourceUrl } = await fetchGuardedMediaResponse(options);
-  try {
-    await assertMediaResponseOk({
-      res,
-      url: options.url,
-      finalUrl,
-      sourceUrl,
-      readIdleTimeoutMs: options.readIdleTimeoutMs,
-    });
-    return await saveOkMediaResponse({
-      res,
-      finalUrl,
-      sourceUrl,
-      filePathHint: options.filePathHint,
-      maxBytes: options.maxBytes ?? DEFAULT_FETCH_MEDIA_MAX_BYTES,
-      readIdleTimeoutMs: options.readIdleTimeoutMs,
-      fallbackContentType: options.fallbackContentType,
-      subdir: options.subdir,
-      originalFilename: options.originalFilename,
-    });
-  } finally {
-    await release();
-  }
+async function withGuardedMediaResponse<T>(
+  options: FetchMediaOptions,
+  consume: (result: GuardedMediaResponse) => Promise<T>,
+): Promise<T> {
+  return await withMediaFetchRetry(options, async () => {
+    const result = await fetchGuardedMediaResponse(options);
+    const { release } = result;
+    try {
+      await assertMediaResponseOk({
+        res: result.response,
+        url: options.url,
+        finalUrl: result.finalUrl,
+        sourceUrl: result.sourceUrl,
+        readIdleTimeoutMs: options.readIdleTimeoutMs,
+      });
+      return await consume(result);
+    } finally {
+      await release();
+    }
+  });
 }
 
 /** Fetches media through SSRF guards and returns the bounded response body as a buffer. */
 export async function readRemoteMediaBuffer(options: FetchMediaOptions): Promise<FetchMediaResult> {
-  return await withMediaFetchRetry(options, () => readRemoteMediaBufferOnce(options));
-}
-
-/** @deprecated Use `readRemoteMediaBuffer` for buffer reads or `saveRemoteMedia` for URL-to-store. */
-export const fetchRemoteMedia = readRemoteMediaBuffer;
-
-async function readRemoteMediaBufferOnce(options: FetchMediaOptions): Promise<FetchMediaResult> {
-  const { response: res, finalUrl, release, sourceUrl } = await fetchGuardedMediaResponse(options);
-
-  try {
-    await assertMediaResponseOk({
-      res,
-      url: options.url,
-      finalUrl,
-      sourceUrl,
-      readIdleTimeoutMs: options.readIdleTimeoutMs,
-    });
-
+  return await withGuardedMediaResponse(options, async ({ response: res, finalUrl, sourceUrl }) => {
     const effectiveMaxBytes = options.maxBytes ?? DEFAULT_FETCH_MEDIA_MAX_BYTES;
     assertMediaContentLength({ res, sourceUrl, maxBytes: effectiveMaxBytes });
     let buffer: Buffer;
@@ -759,7 +741,8 @@ async function readRemoteMediaBufferOnce(options: FetchMediaOptions): Promise<Fe
       contentType: contentType ?? undefined,
       fileName,
     };
-  } finally {
-    await release();
-  }
+  });
 }
+
+/** @deprecated Use `readRemoteMediaBuffer` for buffer reads or `saveRemoteMedia` for URL-to-store. */
+export const fetchRemoteMedia = readRemoteMediaBuffer;

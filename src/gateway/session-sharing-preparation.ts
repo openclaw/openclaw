@@ -8,10 +8,10 @@ import {
   readSessionEntryCreationTransition,
   type SessionEntryPlaceholder,
   projectSessionSharingEntry,
-  readCommittedIncognitoSessionSharing,
   retainPreparedSessionSharingFacts,
 } from "../config/sessions/session-accessor.sqlite-entry-cache.js";
 import type { SessionEntryCreationOperation } from "../config/sessions/session-accessor.sqlite-entry-cache.types.js";
+import { readCommittedIncognitoSessionSharing } from "../config/sessions/session-accessor.sqlite-incognito-sharing.js";
 import { readSessionEntriesFromStoreInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import {
   captureSessionStoreReadCandidate,

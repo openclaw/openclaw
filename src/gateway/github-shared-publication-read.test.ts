@@ -367,12 +367,9 @@ describe("shared worktree receipt observation", () => {
 });
 
 describe("shared repository receipt observation", () => {
-  it("reads durable effect facts after a new coordinator starts without confirmation, replay, or credential work", () => {
-    const workspace = sharedRepositoryWorkspace();
-    const row = insertRepositoryGitHubPublication(
-      repositoryReceipt(workspace.workspaceId),
-      () => {},
-    );
+  it("reads durable effect facts after a new coordinator starts without confirmation, replay, or credential work", async () => {
+    const workspace = await sharedRepositoryWorkspace();
+    const row = insertRepositoryGitHubPublication(repositoryReceipt(workspace), () => {});
     const execution = claimRepositoryGitHubPublication(row, "old-instance", {
       assertCustody: () => {},
       assertCurrent: () => {},
@@ -405,11 +402,11 @@ describe("shared repository receipt observation", () => {
     }
   });
 
-  it("discovers terminal outcomes by creation order and recovers exact older invocations", () => {
-    const workspace = sharedRepositoryWorkspace();
+  it("discovers terminal outcomes by creation order and recovers exact older invocations", async () => {
+    const workspace = await sharedRepositoryWorkspace();
     const coordinator = sharedPublicationCoordinator();
     const older = insertRepositoryGitHubPublication(
-      repositoryReceipt(workspace.workspaceId, {
+      repositoryReceipt(workspace, {
         request_id: "older",
         idempotency_key: "older-key",
         created_at_ms: 1,
@@ -418,7 +415,7 @@ describe("shared repository receipt observation", () => {
     );
     for (const requestId of ["new-a", "new-z"]) {
       insertRepositoryGitHubPublication(
-        repositoryReceipt(workspace.workspaceId, {
+        repositoryReceipt(workspace, {
           request_id: requestId,
           idempotency_key: requestId,
           created_at_ms: 2,
@@ -459,23 +456,20 @@ describe("shared repository receipt observation", () => {
     { session_lifecycle_revision: "old-lifecycle" },
     { workspace_id: "old-workspace" },
     { branch: "old-branch" },
-  ])("does not discover stale repository scope: %j", (scope) => {
-    const workspace = sharedRepositoryWorkspace();
+  ])("does not discover stale repository scope: %j", async (scope) => {
+    const workspace = await sharedRepositoryWorkspace();
     const coordinator = sharedPublicationCoordinator();
-    const row = insertRepositoryGitHubPublication(
-      repositoryReceipt(workspace.workspaceId, scope),
-      () => {},
-    );
+    const row = insertRepositoryGitHubPublication(repositoryReceipt(workspace, scope), () => {});
     expect(coordinator.latestShared(session)).toBeNull();
     expect(coordinator.latestShared(session, row.idempotency_key)).toBeNull();
     expect(coordinator.sharedStatus(session, row.request_id)).toBeUndefined();
   });
 
-  it("keeps terminal repository history explicit while refusing discovery after a workspace-kind change", () => {
-    const workspace = sharedRepositoryWorkspace();
+  it("keeps terminal repository history explicit while refusing discovery after a workspace-kind change", async () => {
+    const workspace = await sharedRepositoryWorkspace();
     const coordinator = sharedPublicationCoordinator();
     const row = insertRepositoryGitHubPublication(
-      repositoryReceipt(workspace.workspaceId, {
+      repositoryReceipt(workspace, {
         status: "published",
         head_commit: OLD_HEAD,
         pull_request_url: url,
@@ -500,11 +494,11 @@ describe("shared repository receipt observation", () => {
     ).toThrow(/session.*changed/i);
   });
 
-  it("excludes personal rows before decoding even when their stored digest is corrupt", () => {
-    const workspace = sharedRepositoryWorkspace();
+  it("excludes personal rows before decoding even when their stored digest is corrupt", async () => {
+    const workspace = await sharedRepositoryWorkspace();
     const coordinator = sharedPublicationCoordinator();
     const row = insertRepositoryGitHubPublication(
-      repositoryReceipt(workspace.workspaceId, {
+      repositoryReceipt(workspace, {
         owner_profile_id: "private-person",
         connection_generation: "private-generation",
         identity_source: "personal",
@@ -526,13 +520,10 @@ describe("shared repository receipt observation", () => {
 
   it.each(["title", "branch", "session_lifecycle_revision"])(
     "surfaces shared receipt corruption in %s instead of returning an empty discovery",
-    (field) => {
-      const workspace = sharedRepositoryWorkspace();
+    async (field) => {
+      const workspace = await sharedRepositoryWorkspace();
       const coordinator = sharedPublicationCoordinator();
-      const row = insertRepositoryGitHubPublication(
-        repositoryReceipt(workspace.workspaceId),
-        () => {},
-      );
+      const row = insertRepositoryGitHubPublication(repositoryReceipt(workspace), () => {});
       openOpenClawStateDatabase()
         .db.prepare(
           `UPDATE github_repository_publication_requests SET ${field} = 'changed outside owner' WHERE request_id = ?`,
@@ -542,11 +533,11 @@ describe("shared repository receipt observation", () => {
       expect(() => coordinator.sharedStatus(session, row.request_id)).toThrow(/corrupt/);
     },
   );
-  it("searches repository history in bounded pages before selecting the current lifecycle", () => {
-    const workspace = sharedRepositoryWorkspace();
+  it("searches repository history in bounded pages before selecting the current lifecycle", async () => {
+    const workspace = await sharedRepositoryWorkspace();
     const coordinator = sharedPublicationCoordinator();
     insertRepositoryGitHubPublication(
-      repositoryReceipt(workspace.workspaceId, {
+      repositoryReceipt(workspace, {
         request_id: "current",
         idempotency_key: "current",
         created_at_ms: 0,
@@ -557,7 +548,7 @@ describe("shared repository receipt observation", () => {
       for (let index = 0; index < 70; index += 1) {
         const id = "old-" + index.toString().padStart(3, "0");
         insertRepositoryGitHubPublication(
-          repositoryReceipt(workspace.workspaceId, {
+          repositoryReceipt(workspace, {
             request_id: id,
             idempotency_key: id,
             created_at_ms: 1,
@@ -571,14 +562,11 @@ describe("shared repository receipt observation", () => {
   });
 
   it("reads cold repository receipts without recreating source sidecars or changing bytes", async () => {
-    const workspace = sharedRepositoryWorkspace();
+    const workspace = await sharedRepositoryWorkspace();
     const coordinator = sharedPublicationCoordinator();
-    const row = insertRepositoryGitHubPublication(
-      repositoryReceipt(workspace.workspaceId),
-      () => {},
-    );
+    const row = insertRepositoryGitHubPublication(repositoryReceipt(workspace), () => {});
     const databasePath = openOpenClawStateDatabase().path;
-    closeOpenClawStateDatabaseForTest();
+    await closeOpenClawStateDatabaseAsync();
     const before = await fs.readFile(databasePath);
     const files = await fs.readdir(path.dirname(databasePath));
     prohibitPublicationWork();

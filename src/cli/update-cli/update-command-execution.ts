@@ -10,7 +10,6 @@ import {
 } from "../../infra/update-doctor-config.js";
 import { resolveUpdateFinalizationTimeoutMs } from "../../infra/update-finalization-budget.js";
 import { canResolveRegistryVersionForPackageTarget } from "../../infra/update-global.js";
-import { updateInstallRootsMatch } from "../../infra/update-install-root.js";
 import { recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
@@ -19,7 +18,6 @@ import {
   parsePackageOpenClawSchemaVersions,
   type OpenClawSchemaVersions,
 } from "../../state/openclaw-schema-versions.js";
-import { formatCliCommand } from "../command-format.js";
 import { isCandidateAdmissionContextCovered } from "./schema-preflight.js";
 import {
   normalizeTag,
@@ -75,6 +73,7 @@ import { captureUpdateActivationSchemas } from "./update-command-schema.js";
 import { isUpdatedInstallGatewayExecutorSupported } from "./update-command-service-command.js";
 import { resolveUpdatedInstallCommandEnv } from "./update-command-service-env.js";
 import { GatewayServiceUpdateOwnershipError } from "./update-command-service-plan.js";
+import { assertManagedGatewayArtifactPublication } from "./update-command-service-revalidation.js";
 import {
   maybeRestartServiceAfterFailedMutableUpdate,
   maybeStopManagedServiceBeforeMutableUpdate,
@@ -170,7 +169,7 @@ export async function executeMutableUpdate(
   let databaseCapture: Awaited<ReturnType<typeof captureUpdateDatabases>> | undefined;
   const onTransaction = async (transaction: PackageUpdateTransaction) => {
     packageTransaction = transaction;
-    if (params.updateInstallKind === "package" && originalRun) {
+    if (originalRun) {
       databaseCapture = await captureUpdateDatabases({
         transaction,
         execution: params,
@@ -536,23 +535,26 @@ export async function executeMutableUpdate(
     if (opts.run) {
       recordUpdateRunPhase(opts.run.runId, "activating", undefined, { env: opts.run.env });
     }
+    const publication = {
+      roots,
+      env,
+      timeoutMs: updateStepTimeoutMs,
+      assertCurrent: assertExecutionCurrent,
+      updateInstallKind: params.updateInstallKind,
+      shouldRestart: params.shouldRestart,
+    };
+    await assertManagedGatewayArtifactPublication({
+      ...publication,
+      selected: preManagedServiceStop,
+      phase: "before-stop",
+    });
     await stopManagedServiceBeforeMutableUpdate(roots);
     await recheckSchemas(admittedTargetSchemaVersions);
     assertExecutionCurrent();
-    const serving = preManagedServiceStop;
-    const servingVerdict = serving?.serviceUpdateVerdict;
-    if (
-      params.updateInstallKind === "git" &&
-      serving?.running &&
-      !serving.stopped &&
-      servingVerdict?.kind === "owned" &&
-      roots.some((root) => updateInstallRootsMatch(root, servingVerdict.root))
-    ) {
-      throw new UpdatePreMutationError(
-        "runtime-artifact-publication",
-        `Cannot replace Git runtime artifacts in ${servingVerdict.root}: its Gateway${serving.servicePid === undefined ? "" : ` (PID ${serving.servicePid})`} is still running and this update did not stop it. Stop that Gateway through its service manager, then rerun \`${formatCliCommand("openclaw update", serving.serviceEnv)}\` without \`--no-restart\`. The serving runtime was left unchanged.`,
-      );
-    }
+    await assertManagedGatewayArtifactPublication({
+      ...publication,
+      selected: preManagedServiceStop,
+    });
     // Both install paths enter mutation only after the post-stop schema/authority fence.
     preManagedServiceStop?.windowsTaskAutoStartRecovery?.beginMutation();
     mutationStarted = true;
@@ -636,9 +638,7 @@ export async function executeMutableUpdate(
             gitContextPrepared = true;
           }
         },
-        onTransaction: (transaction) => {
-          packageTransaction = transaction;
-        },
+        onTransaction,
         // Foreign inspection metadata cannot authorize backup or Doctor writes.
         getManagedServiceEnv: () => ownedManagedUpdateContext?.env,
         getSnapshotSource: async () => {
@@ -687,6 +687,7 @@ export async function executeMutableUpdate(
       runId: originalRun.runId,
       env: ownedManagedUpdateContext?.env ?? originalRun.env,
       assertCurrent: () => assertExecutionCurrent("restore"),
+      assertRollbackSafe: packageTransaction?.assertRollbackSafe,
       progress: params.progress,
     });
   }

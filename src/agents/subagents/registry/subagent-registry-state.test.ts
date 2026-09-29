@@ -27,6 +27,7 @@ import {
   publishSubagentRunsAfterAtomicStore,
   restoreSubagentRunsFromDisk,
 } from "./subagent-registry-state.js";
+import { registerSubagentRestoreCacheCases } from "./subagent-registry-state.restore.test-support.js";
 import type { SubagentRunMaintenanceRecord, SubagentRunRecord } from "./subagent-registry.types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -111,6 +112,14 @@ describe("subagent registry state read cache", () => {
             type: command.type,
             sourceAdmitted: true,
             runs: new Map(mocks.readRunsByIds(command.scope.runIds).map((run) => [run.runId, run])),
+          };
+        }
+        if (command.type === "subagents.runs" && command.scope.kind === "all") {
+          return {
+            ok: true,
+            type: command.type,
+            sourceAdmitted: true,
+            runs: mocks.loadSubagentRegistryFromSqlite(),
           };
         }
         throw new Error(`Unexpected registry read: ${command.type}`);
@@ -220,29 +229,19 @@ describe("subagent registry state read cache", () => {
     expect(load).toHaveBeenCalledOnce();
   });
 
-  it.each([false, true])(
-    "invalidates loaded snapshots on restore, including empty stores (%s)",
-    (empty) => {
-      const stale = createRun("stale");
-      persistSubagentRunsToDisk(new Map([[stale.runId, stale]]));
-      const restored = empty
-        ? new Map<string, SubagentRunRecord>()
-        : new Map([["restored", createRun("restored")]]);
-      mocks.loadSubagentRegistryFromSqlite.mockReturnValue(restored);
-      mocks.readCompactRuns.mockReturnValue(restored);
-      mocks.loadSubagentMaintenanceRunsFromSqlite.mockReturnValue(restored);
-
-      restoreSubagentRunsFromDisk({ runs: new Map() });
-
-      for (const read of [
-        getSubagentRunsSnapshotForRead,
-        getSubagentSessionListRunsSnapshotForRead,
-        getSubagentMaintenanceRunsSnapshotForRead,
-      ]) {
-        expect([...read(new Map()).keys()]).toEqual([...restored.keys()]);
-      }
+  registerSubagentRestoreCacheCases({
+    createRun,
+    mockRestoredRows: (runs) => {
+      mocks.loadSubagentRegistryFromSqlite.mockReturnValue(runs);
+      mocks.readCompactRuns.mockReturnValue(runs);
+      mocks.loadSubagentMaintenanceRunsFromSqlite.mockReturnValue(runs);
     },
-  );
+    refuseNextWrite: () => {
+      mocks.saveSubagentRegistryChangesToSqlite.mockImplementationOnce(() => {
+        throw new Error("write refused");
+      });
+    },
+  });
 
   it("loads retained rows when an incremental write precedes the first read", async () => {
     const retained = createRun("retained");
@@ -979,7 +978,7 @@ describe("subagent registry state read cache", () => {
     },
   );
 
-  it("invalidates archived cold-restored groups once per exact parent", () => {
+  it("invalidates archived cold-restored groups once per exact parent", async () => {
     const rows = ["a", "b"].map((runId) => {
       const run = createRun(runId);
       run.collect = true;
@@ -996,7 +995,7 @@ describe("subagent registry state read cache", () => {
     const received = vi.fn();
     const unsubscribe = onSessionLifecycleEvent(received);
     try {
-      restoreSubagentRunsFromDisk({ runs });
+      await restoreSubagentRunsFromDisk({ runs });
       expect(received).not.toHaveBeenCalled();
       runs.clear();
       persistSubagentRunsToDiskOrThrow(

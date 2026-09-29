@@ -197,6 +197,7 @@ export class AgentsApiClient {
     model: string,
     options?: {
       functions?: AgentToolParam.AgentToolConfigParamFunction[];
+      mcpTools?: AgentToolParam.AgentToolConfigParamMcp[];
       files?: AgentsApiInputFile[];
       reasoning?: AgentReasoningParam;
       environment?: AgentsApiEnvironment;
@@ -210,7 +211,11 @@ export class AgentsApiClient {
           instructions,
           reasoning: options?.reasoning,
           multi_agent: { enabled: false },
-          tools: [{ type: "web_search", mode: "live" }, ...(options?.functions ?? [])],
+          tools: [
+            { type: "web_search", mode: "live" },
+            ...(options?.mcpTools ?? []),
+            ...(options?.functions ?? []),
+          ],
         },
         environment:
           environment.type === "openai_hosted"

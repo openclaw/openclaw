@@ -171,6 +171,7 @@ it("retains quiet admitted execution in listing, admission count, and requester 
     const completeBatch = vi.fn();
     const transitionBatch = vi.fn();
     await maybeWakeRequesterAfterAllChildrenSettled({
+      isSourceCurrent: () => true,
       requesterSessionKey: parent,
       settledEntry: sibling,
       completeBatch,

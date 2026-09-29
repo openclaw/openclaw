@@ -451,6 +451,78 @@ function listAllToolingTestFiles(): string[] {
 }
 
 describe("scripts/lib/ci-node-test-plan.mts", () => {
+  it("retries hybrid Gateway-first packing only when the completed plan exceeds its cap", () => {
+    const entries = [
+      ["ordinary-a", "hooks", 180],
+      ["ordinary-b", "hooks", 180],
+      ["ordinary-c", "hooks", 160],
+      ["gateway-constrained", "gateway-core", 120],
+      ["ordinary-d", "hooks", 120],
+      ["ordinary-e", "hooks", 30],
+    ] as const;
+    vi.spyOn(testTimings, "readCompactGroupTimings").mockReturnValue(
+      Object.fromEntries(entries.map(([name, , seconds]) => [name, seconds])),
+    );
+    vi.spyOn(testTimings, "readRuntimePlacementTimings").mockReturnValue([]);
+    vi.spyOn(buildPrerequisites, "resolveVitestPretestBuildMode").mockReturnValue(undefined);
+    const original = fullSuiteVitestShards.slice();
+    try {
+      fullSuiteVitestShards.splice(
+        0,
+        fullSuiteVitestShards.length,
+        ...entries.map(([name, config]) => ({
+          name,
+          config: `fixture-${name}.config.ts`,
+          projects: [`test/vitest/vitest.${config}.config.ts`],
+        })),
+      );
+      const options = {
+        compactMode: "push",
+        runnerBackend: "hybrid",
+        includeReleaseOnlyPluginShards: false,
+      } as const;
+      const originalJobs = createNodeTestShardBundles(options);
+      expect(originalJobs).toHaveLength(3);
+      expect(
+        originalJobs.find((job) =>
+          job.groups.some((group) => group.shard_name === "gateway-constrained"),
+        ),
+      ).toMatchObject({ planConcurrency: 1, predictedSeconds: 280 });
+      const jobs = createNodeTestShardBundles({ ...options, compactNodeJobCap: 2 });
+      // Cost-first packing spends 280s on Gateway and strands 510s of ordinary
+      // work across two rows; admitting Gateway first leaves one 490s parallel row.
+      expect(jobs).toHaveLength(2);
+      const gateway = expectDefined(
+        jobs.find((job) => job.groups.some((group) => group.shard_name === "gateway-constrained")),
+        "Gateway job",
+      );
+      expect(gateway).toMatchObject({
+        planConcurrency: 1,
+        predictedSeconds: 300,
+        predictedTestSeconds: 300,
+        env: { OPENCLAW_VITEST_MAX_WORKERS: "2" },
+      });
+      const ordinary = expectDefined(
+        jobs.find((job) => job !== gateway),
+        "ordinary job",
+      );
+      expect(ordinary).toMatchObject({
+        planConcurrency: 2,
+        predictedSeconds: 490,
+        predictedTestSeconds: 280,
+      });
+      expect(jobs.every((job) => job.runner === EXTRA_LARGE_NODE_TEST_RUNNER)).toBe(true);
+      expect(jobs.flatMap((job) => job.groups.map((group) => group.shard_name)).toSorted()).toEqual(
+        entries.map(([name]) => name).toSorted(),
+      );
+      expect(() => createNodeTestShardBundles({ ...options, compactNodeJobCap: 1 })).toThrow(
+        "compact hybrid node test plan exceeds 1 jobs (2 planned)",
+      );
+    } finally {
+      fullSuiteVitestShards.splice(0, fullSuiteVitestShards.length, ...original);
+    }
+  });
+
   it("packs ordinary work more densely while retaining the serial Gateway budget", () => {
     vi.spyOn(testTimings, "readCompactGroupTimings").mockReturnValue({
       "agentic-gateway-server-isolated": 200,

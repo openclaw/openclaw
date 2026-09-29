@@ -28,25 +28,12 @@ const AUDIT_EVENT_LEGACY_COLUMNS = [
   "tool_name",
 ] as const;
 
+const AUDIT_EVENT_MIGRATED_COLUMNS = AUDIT_EVENT_LEGACY_COLUMNS.flatMap((column) =>
+  column === "source_id" ? [column, "schema_version"] : [column],
+);
+
 const AUDIT_EVENT_V2_COLUMNS = [
-  "sequence",
-  "event_id",
-  "source_id",
-  "schema_version",
-  "source_sequence",
-  "occurred_at",
-  "kind",
-  "action",
-  "status",
-  "error_code",
-  "actor_type",
-  "actor_id",
-  "agent_id",
-  "session_key",
-  "session_id",
-  "run_id",
-  "tool_call_id",
-  "tool_name",
+  ...AUDIT_EVENT_MIGRATED_COLUMNS,
   "direction",
   "channel",
   "conversation_kind",
@@ -270,45 +257,8 @@ export function repairAuditEventsSchema(db: DatabaseSync): boolean {
       message_ref TEXT,
       target_ref TEXT
     );
-    INSERT INTO audit_events_migration_new (
-      sequence,
-      event_id,
-      source_id,
-      schema_version,
-      source_sequence,
-      occurred_at,
-      kind,
-      action,
-      status,
-      error_code,
-      actor_type,
-      actor_id,
-      agent_id,
-      session_key,
-      session_id,
-      run_id,
-      tool_call_id,
-      tool_name
-    )
-    SELECT
-      sequence,
-      event_id,
-      source_id,
-      1,
-      source_sequence,
-      occurred_at,
-      kind,
-      action,
-      status,
-      error_code,
-      actor_type,
-      actor_id,
-      agent_id,
-      session_key,
-      session_id,
-      run_id,
-      tool_call_id,
-      tool_name
+    INSERT INTO audit_events_migration_new (${AUDIT_EVENT_MIGRATED_COLUMNS.join(", ")})
+    SELECT ${AUDIT_EVENT_MIGRATED_COLUMNS.map((column) => (column === "schema_version" ? "1" : column)).join(", ")}
     FROM audit_events;
     DROP TABLE audit_events;
     ALTER TABLE audit_events_migration_new RENAME TO audit_events;

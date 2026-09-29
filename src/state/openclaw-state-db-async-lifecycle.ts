@@ -209,12 +209,12 @@ export function createOpenClawDatabaseMaintenanceScope(
   options?:
     | {
         schemaMaintenance?: false;
-        assertOwnerCurrent?: () => void;
+        assertOwnerCurrent?: (access?: "read") => void;
         assertDatabaseAccess?: (databasePath: string) => void;
       }
     | {
         schemaMaintenance: true;
-        assertOwnerCurrent: () => void;
+        assertOwnerCurrent: (access?: "read") => void;
         assertDatabaseAccess?: (databasePath: string) => void;
       },
 ): OpenClawDatabaseMaintenanceScope {
@@ -253,7 +253,7 @@ export function createOpenClawDatabaseMaintenanceScope(
       checkingOwner = true;
       try {
         parent?.assertOwnerCurrent(access);
-        assertOwnerCurrent?.();
+        assertOwnerCurrent?.(access);
       } finally {
         checkingOwner = false;
       }
@@ -293,8 +293,11 @@ export function createOpenClawDatabaseMaintenanceScope(
       }
     },
     run(operation) {
-      scope.assertAdmission();
-      return runMaintenance(scope, operation);
+      assertAdmissionLifecycle();
+      return runMaintenance(scope, () => {
+        scope.assertAdmission();
+        return operation();
+      });
     },
     track(operation) {
       assertOpen();

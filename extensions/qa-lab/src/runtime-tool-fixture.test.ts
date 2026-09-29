@@ -9,12 +9,14 @@ import {
   makeEnv,
   MOCK_BASE_URL,
   mockToolRequests,
+  runLiveRuntimeToolFixture,
   runMockRuntimeToolFixture,
   runtimePatchAddInput,
   runtimePatchUpdateInput,
   runtimeToolFixtureConfig,
-  runtimeToolFixtureDeps,
   simulateRuntimePatchHappyTurn,
+  transcriptToolCall,
+  transcriptToolResult,
   writeQaSessionTranscript,
   writeRuntimeToolTranscripts,
   type RuntimeToolFixtureConfig,
@@ -24,39 +26,6 @@ import { QaSuiteInfraError } from "./errors.js";
 import { runRuntimeToolFixture } from "./runtime-tool-fixture.js";
 import { readRawQaSessionStore } from "./suite-runtime-agent-session.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
-
-function transcriptToolCall(
-  toolName: string,
-  phase: "happy" | "failure",
-  input: Record<string, unknown>,
-) {
-  return {
-    role: "assistant",
-    content: [
-      {
-        type: "tool_use",
-        id: `call-${toolName}-${phase}`,
-        name: toolName,
-        input,
-      },
-    ],
-  };
-}
-
-function transcriptToolResult(
-  toolName: string,
-  phase: "happy" | "failure",
-  content: string,
-  isError?: boolean,
-) {
-  return {
-    role: "tool",
-    toolName,
-    tool_call_id: `call-${toolName}-${phase}`,
-    ...(isError === undefined ? {} : { isError }),
-    content,
-  };
-}
 
 async function writeLiveRuntimeToolEvidence(env: QaSuiteRuntimeEnv, toolName = "read") {
   await writeRuntimeToolTranscripts(
@@ -173,26 +142,6 @@ function nativePatchFixtureConfig(): RuntimeToolFixtureConfig {
       required: true,
     },
   });
-}
-
-function runLiveRuntimeToolFixture(
-  env: QaSuiteRuntimeEnv,
-  params: {
-    toolName?: string;
-    config?: RuntimeToolFixtureConfig;
-    tools?: Iterable<string>;
-    runAgentPrompt?: RuntimeToolFixtureDeps["runAgentPrompt"];
-  } = {},
-) {
-  const toolName = params.toolName ?? "read";
-  return runRuntimeToolFixture(
-    env,
-    params.config ?? runtimeToolFixtureConfig(toolName),
-    runtimeToolFixtureDeps({
-      tools: params.tools ?? [toolName],
-      runAgentPrompt: params.runAgentPrompt,
-    }),
-  );
 }
 
 function runNativePatchFixture(
@@ -327,112 +276,6 @@ describe("runtime tool fixture", () => {
         "RUNTIME_PARITY_SESSION_KEY=agent:qa:runtime-tool:read:failure",
         "failure prompt did not settle",
       ].join("\n"),
-    );
-  });
-
-  it("requires live runtime tool fixtures to produce transcript tool output", async () => {
-    const env = await makeEnv();
-    await writeRuntimeToolTranscripts(
-      env,
-      "read",
-      [{ role: "assistant", content: "I checked README.md and it looks good." }],
-      [{ role: "assistant", content: "The denied-input path looks good." }],
-    );
-
-    await expect(runLiveRuntimeToolFixture(env)).rejects.toThrow(
-      "expected live happy-path tool call for read",
-    );
-  });
-
-  it("skips async live runtime tool fixtures when the happy path has no result", async () => {
-    const env = await makeEnv();
-    await writeRuntimeToolTranscripts(
-      env,
-      "image_generate",
-      [
-        transcriptToolCall("image_generate", "happy", {
-          prompt: "QA lighthouse runtime parity fixture",
-        }),
-      ],
-      [
-        transcriptToolCall("image_generate", "failure", {
-          __qaFailureMode: "denied-input",
-        }),
-        transcriptToolResult("image_generate", "failure", "denied-input", true),
-      ],
-    );
-
-    await expect(
-      runLiveRuntimeToolFixture(env, {
-        toolName: "image_generate",
-        config: runtimeToolFixtureConfig("image_generate", { happyPathOutputRequired: false }),
-      }),
-    ).rejects.toThrow("planned call without a linked successful result");
-  });
-
-  it("still requires async live runtime tool fixtures to call the happy-path tool", async () => {
-    const env = await makeEnv();
-    await writeRuntimeToolTranscripts(
-      env,
-      "image_generate",
-      [{ role: "assistant", content: "I can start image generation later." }],
-      [
-        transcriptToolCall("image_generate", "failure", {
-          __qaFailureMode: "denied-input",
-        }),
-        transcriptToolResult("image_generate", "failure", "denied-input", true),
-      ],
-    );
-
-    await expect(
-      runLiveRuntimeToolFixture(env, {
-        toolName: "image_generate",
-        config: runtimeToolFixtureConfig("image_generate", { happyPathOutputRequired: false }),
-      }),
-    ).rejects.toThrow("expected live happy-path tool call for image_generate");
-  });
-
-  it("requires live failure fixtures to produce failure-shaped tool output", async () => {
-    const env = await makeEnv();
-    await writeRuntimeToolTranscripts(
-      env,
-      "read",
-      [
-        transcriptToolCall("read", "happy", { path: "README.md" }),
-        transcriptToolResult(
-          "read",
-          "happy",
-          "README documents invalid requests, errors, and denied inputs.",
-        ),
-      ],
-      [
-        transcriptToolCall("read", "failure", { path: "/missing" }),
-        transcriptToolResult("read", "failure", "README contents"),
-      ],
-    );
-
-    await expect(runLiveRuntimeToolFixture(env)).rejects.toThrow(
-      "expected live failure-path tool failure output for read",
-    );
-  });
-
-  it("rejects failure-shaped live happy-path tool output", async () => {
-    const env = await makeEnv();
-    await writeRuntimeToolTranscripts(
-      env,
-      "read",
-      [
-        transcriptToolCall("read", "happy", { path: "README.md" }),
-        transcriptToolResult("read", "happy", "ENOENT: no such file or directory", true),
-      ],
-      [
-        transcriptToolCall("read", "failure", { path: "/missing" }),
-        transcriptToolResult("read", "failure", "ENOENT: no such file or directory", true),
-      ],
-    );
-
-    await expect(runLiveRuntimeToolFixture(env)).rejects.toThrow(
-      "expected live happy-path successful tool output for read",
     );
   });
 

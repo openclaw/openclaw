@@ -10,7 +10,7 @@ import {
   replaceSessionEntry,
   type SessionAccessScope,
 } from "../../config/sessions/session-accessor.js";
-import type { CapturedSessionEntryReadSource } from "../../config/sessions/session-accessor.types.js";
+import type { CapturedSessionEntryReadSource } from "../../config/sessions/session-entry-read-source.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { setGatewayPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import {

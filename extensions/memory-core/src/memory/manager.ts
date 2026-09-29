@@ -88,7 +88,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
   protected readonly settings: ResolvedMemorySearchConfig;
   protected readonly providerRequirement: MemoryEmbeddingProviderRequirement;
   private closePromise: Promise<void> | null = null;
-  private closeTeardownComplete = false;
+  private publishedDatabaseReleased = false;
   protected providerUnavailableReason?: string;
   protected override providerLifecycle: MemoryProviderLifecycleState;
   protected batch: MemoryEmbeddingBatchConfig;
@@ -636,7 +636,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       return;
     }
     const closeOperation = this.withPublishedDatabase(() =>
-      this.closeTeardownComplete ? this.retryFailedClose() : this.closeOnce(),
+      this.publishedDatabaseReleased ? this.retryFailedClose() : this.closeOnce(),
     );
     this.closePromise = closeOperation;
     try {
@@ -651,9 +651,27 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
   }
 
   private async retryFailedClose(): Promise<void> {
+    const errors: unknown[] = [];
+    // A retained observer failure must not strand independently owned resources.
+    await this.closeWatchResources().catch((error: unknown) => errors.push(error));
     const retirementErrors = await this.drainPendingProviderRetirements();
     if (this.providersPendingRetirement.size > 0) {
-      throw toErrorObject(retirementErrors.at(-1), "Embedding provider retirement failed");
+      errors.push(toErrorObject(retirementErrors.at(-1), "Embedding provider retirement failed"));
+    }
+    if (!this.publishedDatabaseReleased) {
+      try {
+        await this.publishedDatabase.closePublicationWorker();
+        this.publishedDatabase.release();
+        this.publishedDatabaseReleased = true;
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    if (errors.length === 1) {
+      throw errors[0];
+    }
+    if (errors.length > 1) {
+      throw new AggregateError(errors, "Memory manager cleanup failed");
     }
   }
 
@@ -664,7 +682,6 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     this.closed = true;
     const pendingProviderInit = this.providerInitPromise;
     const pendingFallbackInit = this.fallbackProviderInitPromise;
-    await this.closeWatchResources();
     const reportPendingWorkError = (err: unknown) => {
       log.warn(`memory close: pending manager work failed: ${formatErrorMessage(err)}`);
     };
@@ -672,13 +689,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     await pendingFallbackInit?.catch(reportPendingWorkError);
     // Initialization may attach sync work; observe its promise only after it settles.
     await this.syncing?.catch(reportPendingWorkError);
-    try {
-      await this.retryFailedClose();
-    } finally {
-      await this.publishedDatabase.closePublicationWorker();
-      this.publishedDatabase.release();
-      this.closeTeardownComplete = true;
-    }
+    await this.retryFailedClose();
   }
 }
 

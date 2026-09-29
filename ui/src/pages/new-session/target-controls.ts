@@ -19,10 +19,8 @@ import { renderWhereChip, resolveWhereChip } from "./where-chip.ts";
 
 registerNewSessionSetupEnglish();
 
-type DraftAgent = GatewayAgentRow;
-
 export function renderAgentSelect(params: {
-  agents: DraftAgent[];
+  agents: GatewayAgentRow[];
   agentId: string;
   agentIdentity?: AgentIdentityCapability;
   disabled: boolean;

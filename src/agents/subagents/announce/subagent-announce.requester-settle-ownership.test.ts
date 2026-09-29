@@ -81,7 +81,13 @@ function wakeParams() {
   if (!settledEntry) {
     throw new Error("The control requires its registered run-b fixture.");
   }
-  return { requesterSessionKey: REQUESTER, settledEntry, transitionBatch, completeBatch };
+  return {
+    requesterSessionKey: REQUESTER,
+    settledEntry,
+    transitionBatch,
+    completeBatch,
+    isSourceCurrent: () => true,
+  };
 }
 
 beforeEach(() => {

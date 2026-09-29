@@ -62,17 +62,7 @@ async function withMediaSession(
       lifecycleRevision: "original-lifecycle",
       updatedAt: 1,
     });
-    const lifecycle = createMediaGenerationTaskLifecycle({
-      toolName: "image_generate",
-      taskKind: "image_generation",
-      label: "Image generation",
-      queuedProgressSummary: "Queued image generation",
-      generatedLabel: "image",
-      failureProgressSummary: "Image generation failed",
-      eventSource: "image_generation",
-      announceType: "image generation task",
-      completionLabel: "image",
-    });
+    const lifecycle = createMediaGenerationTaskLifecycle("image");
     const handle = await lifecycle.createTaskRun({
       sessionKey: scope.sessionKey,
       requesterAgentId: "main",

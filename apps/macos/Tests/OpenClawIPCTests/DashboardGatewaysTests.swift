@@ -211,7 +211,7 @@ struct DashboardGatewaysBridgeTests {
             requestBrowserProfileImportOffer: { _ in false })
         defer { controller.closeDashboard() }
 
-        #expect(controller._testTLSParams == params)
+        #expect(controller.tlsParams == params)
         #expect(ControlUIDocumentHost.isExpectedTLSAuthority(
             host: "gateway.example",
             port: 0,
@@ -414,8 +414,8 @@ struct DashboardManagerGatewayTargetTests {
             #expect(primaryAutosaveName.hasPrefix("OpenClawDashboardWindow-Test-"))
             #expect(!auxiliary.controller._testUpdateBridgeAvailable)
             #expect(auxiliary.controller.currentURL == replacementServer.url("/"))
-            #expect(auxiliary.controller._testDashboardDataStore === dataStore)
-            #expect(!auxiliary.controller._testDashboardDataStore.isPersistent)
+            #expect(auxiliary.controller.webView.configuration.websiteDataStore === dataStore)
+            #expect(!auxiliary.controller.webView.configuration.websiteDataStore.isPersistent)
             try auxiliary.controller.nativeBrowser.open(
                 tabId: "mac-auxiliary",
                 url: server.url("/reader/auxiliary"),
@@ -449,14 +449,14 @@ struct DashboardManagerGatewayTargetTests {
             #expect(replacement.window === auxiliaryWindow)
             let profileAutosaveName = try #require(replacement.window?.frameAutosaveName)
             #expect(profileAutosaveName.hasPrefix("\(primaryAutosaveName)-\(studio)-"))
-            #expect(replacement._testDashboardDataStore === dataStore)
-            #expect(!replacement._testDashboardDataStore.isPersistent)
+            #expect(replacement.webView.configuration.websiteDataStore === dataStore)
+            #expect(!replacement.webView.configuration.websiteDataStore.isPersistent)
             try replacement.nativeBrowser.open(
                 tabId: "mac-replacement",
                 url: server.url("/reader/replacement"),
                 sessionKey: "")
             #expect(try #require(replacement.nativeBrowser.webView(for: "mac-replacement"))
-                .configuration.websiteDataStore === replacement._testDashboardDataStore)
+                .configuration.websiteDataStore === replacement.webView.configuration.websiteDataStore)
         }
     }
 

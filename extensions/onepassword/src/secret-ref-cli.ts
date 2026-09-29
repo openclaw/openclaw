@@ -73,10 +73,6 @@ function writeLine(message = ""): void {
   process.stdout.write(`${message}\n`);
 }
 
-function writeJson(value: unknown): void {
-  process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
-}
-
 async function inspectSecretRefReadiness(
   params: { env: NodeJS.ProcessEnv; tokenFile: string },
   dependencies: ReadinessDependencies = {},
@@ -153,7 +149,7 @@ async function runStatus(
     issues,
   };
   if (options.json) {
-    writeJson(result);
+    writeLine(JSON.stringify(result, null, 2));
     return;
   }
   writeLine(

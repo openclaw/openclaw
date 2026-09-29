@@ -566,32 +566,6 @@ describe("session accessor seam", () => {
     expect(loadSessionEntry({ sessionKey, storePath })).toBeUndefined();
   });
 
-  it("stamps last-route creation from the participant, never the conversation route", async () => {
-    const participantKey = "agent:main:webchat:dm:route-participant";
-    const participant = await updateSessionLastRoute({
-      storePath,
-      sessionKey: participantKey,
-      channel: "webchat",
-      to: "webchat:room-1",
-      ctx: { From: "webchat:room-1", SenderId: "webchat:person-1" },
-    });
-    expect(participant).toMatchObject({
-      createdVia: "channel",
-      createdActor: { type: "human", source: "channel", id: "webchat:person-1" },
-    });
-
-    const senderlessKey = "agent:main:webchat:dm:route-senderless";
-    const senderless = await updateSessionLastRoute({
-      storePath,
-      sessionKey: senderlessKey,
-      channel: "webchat",
-      to: "webchat:room-2",
-      ctx: { From: "webchat:room-2" },
-    });
-    expect(senderless?.createdVia).toBe("channel");
-    expect(senderless?.createdActor).toBeUndefined();
-  });
-
   it("rejects alias targets and keeps canonical lifecycle mutations explicit", async () => {
     await replaceSessionEntry(
       { sessionKey: "agent:main:work", storePath },

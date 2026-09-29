@@ -440,6 +440,10 @@ function createDefaultSessionBindingService(): AsyncSessionBindingService {
     bind: async (input) => {
       const assertCurrent = input.assertCurrent;
       const normalizedConversation = normalizeConversationRef(input.conversation);
+      const scope = {
+        channel: normalizedConversation.channel,
+        accountId: normalizedConversation.accountId,
+      };
       const adapter = resolveAdapterForChannelAccount(normalizedConversation);
       const genericCapabilities = adapter
         ? null
@@ -448,20 +452,14 @@ function createDefaultSessionBindingService(): AsyncSessionBindingService {
         throw new SessionBindingError(
           "BINDING_ADAPTER_UNAVAILABLE",
           `Session binding adapter unavailable for ${normalizedConversation.channel}:${normalizedConversation.accountId}`,
-          {
-            channel: normalizedConversation.channel,
-            accountId: normalizedConversation.accountId,
-          },
+          scope,
         );
       }
       if (adapter && !adapter.bind) {
         throw new SessionBindingError(
           "BINDING_CAPABILITY_UNSUPPORTED",
           `Session binding adapter does not support binding for ${normalizedConversation.channel}:${normalizedConversation.accountId}`,
-          {
-            channel: normalizedConversation.channel,
-            accountId: normalizedConversation.accountId,
-          },
+          scope,
         );
       }
       const placement =
@@ -474,11 +472,7 @@ function createDefaultSessionBindingService(): AsyncSessionBindingService {
         throw new SessionBindingError(
           "BINDING_CAPABILITY_UNSUPPORTED",
           `Session binding placement "${placement}" is not supported for ${normalizedConversation.channel}:${normalizedConversation.accountId}`,
-          {
-            channel: normalizedConversation.channel,
-            accountId: normalizedConversation.accountId,
-            placement,
-          },
+          { ...scope, placement },
         );
       }
       const bindInput = {
@@ -494,11 +488,7 @@ function createDefaultSessionBindingService(): AsyncSessionBindingService {
         throw new SessionBindingError(
           "BINDING_CREATE_FAILED",
           "Session binding adapter failed to bind target conversation",
-          {
-            channel: normalizedConversation.channel,
-            accountId: normalizedConversation.accountId,
-            placement,
-          },
+          { ...scope, placement },
         );
       }
       return bound;

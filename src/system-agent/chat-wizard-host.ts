@@ -6,6 +6,7 @@ import type {
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import {
   sanitizeWizardStepForClient,
   WizardSession,
@@ -97,11 +98,7 @@ const HOSTED_SETUP = {
     runtime: "runHostedGatewaySetup",
   },
 } as const;
-let hostedRuntimePromise: Promise<HostedRuntime> | undefined;
-
-function loadHostedRuntime(): Promise<HostedRuntime> {
-  return (hostedRuntimePromise ??= import("./hosted-setup.runtime.js"));
-}
+const loadHostedRuntime = createLazyRuntimeModule(() => import("./hosted-setup.runtime.js"));
 
 function formatWizardOptions(step: WizardStep): string[] {
   return (step.options ?? []).map((option, index) => {

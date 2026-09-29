@@ -56,9 +56,6 @@ async function loadCleanupBrowserSessionsForLifecycleEnd(): Promise<BrowserClean
 
 function shouldPreservePublishedExplicitRunTimeout(entry: SubagentRunRecord): boolean {
   if (
-    typeof entry.runTimeoutSeconds !== "number" ||
-    !Number.isFinite(entry.runTimeoutSeconds) ||
-    entry.runTimeoutSeconds <= 0 ||
     entry.execution.outcome?.status !== "timeout" ||
     typeof entry.execution.endedAt !== "number"
   ) {
@@ -75,19 +72,6 @@ function shouldPreservePublishedExplicitRunTimeout(entry: SubagentRunRecord): bo
     entry.delivery?.status === "delivered" ||
     typeof entry.delivery?.announcedAt === "number"
   );
-}
-
-function resolveExpiredExplicitRunDeadlineMs(params: {
-  entry: SubagentRunRecord;
-  nextEndedAt: number;
-  observedStartedAt?: number;
-}): number | undefined {
-  const effectiveEndedAt = resolveSubagentRunEffectiveEndedAt(
-    params.entry,
-    params.nextEndedAt,
-    params.observedStartedAt,
-  );
-  return effectiveEndedAt < params.nextEndedAt ? effectiveEndedAt : undefined;
 }
 
 function isOlderEquivalentTerminalCallback(params: {
@@ -121,7 +105,7 @@ export async function completeSubagentRunAttempt(
     isAgentEventLifecycleGenerationCurrent(lifecycleGeneration) &&
     params.runs.get(completeParams.runId) === selectedEntry &&
     selectedEntry?.generation === selectedGeneration &&
-    completeParams.isRecoveryCurrent?.() !== false;
+    completeParams.recoveryCurrent?.isHostCurrent() !== false;
   const assertCurrent = () => {
     assertSubagentRegistryWriteSourceCurrent(stateContext);
     if (!isSelectedEntryCurrent()) {
@@ -147,17 +131,23 @@ export async function completeSubagentRunAttempt(
     if (!entry) {
       return;
     }
+    const currentEntry = entry;
+    const ownerPauseReason = currentEntry.pauseReason;
+    if (completeParams.expectedEntry && entry !== completeParams.expectedEntry) {
+      return;
+    }
+    suppressSessionEffects ||= await context.shouldSuppressSessionEffects(
+      entry,
+      completeParams.sessionEffects,
+    );
     if (
-      (completeParams.expectedEntry && entry !== completeParams.expectedEntry) ||
-      completeParams.isRecoveryCurrent?.() === false
+      (completeParams.recoveryCurrent && !(await completeParams.recoveryCurrent.prepare())) ||
+      !isSelectedEntryCurrent() ||
+      currentEntry.pauseReason !== ownerPauseReason
     ) {
       return;
     }
-    context.bindTerminalSessionEffects(entry, completeParams.isChildSessionEffectsCurrent);
-    suppressSessionEffects ||= context.shouldSuppressSessionEffects(entry);
-    params.clearPendingLifecycleError(completeParams.runId);
-    const currentEntry = entry;
-    const ownerGeneration = currentEntry.generation;
+    assertCurrent();
     if (entry.collect && !entry.collectorCompletion) {
       collectorSession = await prepareSubagentKillSession(
         params.getRuntimeConfig(),
@@ -165,8 +155,17 @@ export async function completeSubagentRunAttempt(
         assertCurrent,
         entry.execution.transcriptTarget,
       );
+      if (
+        (completeParams.recoveryCurrent && !(await completeParams.recoveryCurrent.prepare())) ||
+        !isSelectedEntryCurrent() ||
+        currentEntry.pauseReason !== ownerPauseReason
+      ) {
+        return;
+      }
       assertCurrent();
     }
+    context.bindTerminalSessionEffects(entry, completeParams.sessionEffects);
+    params.clearPendingLifecycleError(completeParams.runId);
     entrySnapshot = captureSubagentRunMutationSnapshot(entry);
     const commit = async (previous: SubagentRunRecord, onPublished?: () => void) => {
       const result = await publishSubagentRunPostimages({
@@ -182,10 +181,7 @@ export async function completeSubagentRunAttempt(
       });
       return result.publication === "published";
     };
-    const restoreEntrySnapshot = (snapshot?: SubagentRunRecord) => {
-      if (!snapshot) {
-        return;
-      }
+    const restoreEntrySnapshot = (snapshot: SubagentRunRecord) => {
       for (const key of Object.keys(currentEntry)) {
         Reflect.deleteProperty(currentEntry, key);
       }
@@ -342,15 +338,11 @@ export async function completeSubagentRunAttempt(
       Number.isFinite(completeParams.startedAt)
         ? completeParams.startedAt
         : undefined;
-    const expiredDeadlineMs = recoveryRequested
-      ? undefined
-      : resolveExpiredExplicitRunDeadlineMs({
-          entry,
-          nextEndedAt: endedAt,
-          observedStartedAt,
-        });
-    if (expiredDeadlineMs !== undefined) {
-      endedAt = expiredDeadlineMs;
+    const effectiveEndedAt = recoveryRequested
+      ? endedAt
+      : resolveSubagentRunEffectiveEndedAt(entry, endedAt, observedStartedAt);
+    if (effectiveEndedAt < endedAt) {
+      endedAt = effectiveEndedAt;
       completionOutcome = { status: "timeout" };
       completionReason = SUBAGENT_ENDED_REASON_COMPLETE;
     }
@@ -596,14 +588,14 @@ export async function completeSubagentRunAttempt(
       // Native persistence is now the sole terminal commit. Capture must not give
       // an old callback authority over a replacement row or a newer cancellation.
       if (
-        params.runs.get(completeParams.runId) !== currentEntry ||
-        currentEntry.generation !== ownerGeneration ||
+        (completeParams.recoveryCurrent && !(await completeParams.recoveryCurrent.prepare())) ||
+        !isSelectedEntryCurrent() ||
         currentEntry.execution !== executionBeforeCapture ||
-        currentEntry.pauseReason === "sessions_yield" ||
-        completeParams.isRecoveryCurrent?.() === false
+        currentEntry.pauseReason === "sessions_yield"
       ) {
         return;
       }
+      assertCurrent();
       sessionSuperseded = context.newerGenerationOwnsSession(entry);
       if (sessionSuperseded) {
         const completion = ensureCompletionState(entry);

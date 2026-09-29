@@ -10,6 +10,8 @@ import * as schtasksProbe from "../../src/daemon/schtasks-state-probe.js";
 import * as serviceLayout from "../../src/daemon/service-layout.js";
 import type { GatewayServiceState } from "../../src/daemon/service-types.ts";
 import * as gatewayService from "../../src/daemon/service.js";
+import * as systemdFiles from "../../src/daemon/systemd-service-files.js";
+import { CommandProcessCleanupError } from "../../src/process/exec-result.js";
 import { withTestDir } from "../../src/test-helpers/temp-dir.js";
 import { withMockedPlatform } from "../../src/test-utils/vitest-spies.js";
 import { createDeferred } from "../helpers/promise.js";
@@ -36,6 +38,7 @@ function baseState(overrides: Partial<GatewayServiceState> = {}): GatewayService
 async function inspectFixtureGateway(
   root: string,
   fixture: {
+    platform?: "linux" | "win32";
     env?: NodeJS.ProcessEnv;
     listBindings?: () => Promise<readonly ManagedGatewayBinding[]>;
     readState: (
@@ -68,7 +71,12 @@ async function inspectFixtureGateway(
     read.mockRestore();
     discover.mockRestore();
   });
-  return resolveLiveManagedGatewayDistFence(root, { env: fixture.env ?? {} });
+  // These service-reader fixtures model Linux or Windows. Darwin's loaded native
+  // observation is exercised through real binding dispatch in managed-gateway-bindings.test.ts.
+  return withMockedPlatform(
+    fixture.platform ?? (process.platform === "win32" ? "win32" : "linux"),
+    () => resolveLiveManagedGatewayDistFence(root, { env: fixture.env ?? {} }),
+  );
 }
 
 function stateForPackage(root: string, overrides: Partial<GatewayServiceState> = {}) {
@@ -81,6 +89,51 @@ function stateForPackage(root: string, overrides: Partial<GatewayServiceState> =
 }
 
 describe("live-gateway-dist-fence", () => {
+  it("retains uncertain command-location work before consulting another service reader", async () => {
+    await withTestDir({ prefix: "openclaw-location-unjoined-inspection-" }, async (root) => {
+      const failure = new CommandProcessCleanupError();
+      const discover = vi
+        .spyOn(gatewayBindings, "discoverManagedGatewayBindings")
+        .mockResolvedValue([]);
+      const location = vi
+        .spyOn(systemdFiles, "readSystemdServiceCommandLocation")
+        .mockRejectedValue(failure);
+      const read = vi.spyOn(gatewayService, "readGatewayServiceState").mockResolvedValue(
+        baseState({
+          installed: false,
+          command: null,
+          loadState: { status: "not-loaded" },
+          runtime: { status: "stopped", missingUnit: true },
+        }),
+      );
+      onTestFinished(() => {
+        discover.mockRestore();
+        location.mockRestore();
+        read.mockRestore();
+      });
+      await expect(
+        withMockedPlatform("linux", () =>
+          resolveLiveManagedGatewayDistFence(root, {
+            env: {},
+            requireVerified: true,
+          }),
+        ),
+      ).rejects.toBe(failure);
+      expect(read).not.toHaveBeenCalled();
+    });
+  });
+  it("retains uncertain native read cleanup instead of allowing a build", async () => {
+    await withTestDir({ prefix: "openclaw-dist-unjoined-inspection-" }, async (root) => {
+      const failure = new CommandProcessCleanupError();
+      await expect(
+        inspectFixtureGateway(root, {
+          readState: async () => {
+            throw failure;
+          },
+        }),
+      ).rejects.toBe(failure);
+    });
+  });
   it.each([
     { name: "running", state: { running: true } },
     {

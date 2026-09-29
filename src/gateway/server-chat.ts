@@ -56,7 +56,11 @@ import {
   resolveHeartbeatFlag,
   shouldHideHeartbeatChatOutput,
 } from "./server-chat-heartbeat.js";
-import { createSessionLifecyclePublisher } from "./server-chat-lifecycle-publication.js";
+import {
+  createSessionEventSnapshotBuilder,
+  createSessionLifecyclePublisher,
+  type SessionEventSnapshotDependencies,
+} from "./server-chat-lifecycle-publication.js";
 import {
   mergeAgentTextPayload,
   mergeChatTextPayload,
@@ -78,16 +82,17 @@ import type {
 } from "./server-chat-state.js";
 import { roundedChatSendTimingMs } from "./server-methods/chat-server-timing.js";
 import { hasSessionChangeReceivers } from "./session-change-receivers.js";
-import { buildGatewaySessionSnapshot } from "./session-event-payload.js";
 import { withPreparedSessionEventRow } from "./session-event-prepared-row.js";
+import { prepareSessionEventProjection } from "./session-event-projection.js";
 import {
   isRestartRecoveryLifecycleEvent,
   persistGatewaySessionLifecycleEvent,
 } from "./session-lifecycle-state.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
+import type { SessionRowReadView } from "./session-row-prepared-read.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 import { resolveSessionSubscriptionKeys } from "./session-subscription-keys.js";
-import { loadGatewaySessionEntryReadOnly, type GatewaySessionRow } from "./session-utils.js";
+import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 import { formatForLog } from "./ws-log.js";
 
 export {
@@ -239,10 +244,7 @@ export type AgentEventHandlerOptions = {
   toolEventRecipients: ToolEventRecipientRegistry;
   sessionEventSubscribers: SessionEventSubscriberRegistry;
   sessionMessageSubscribers: SessionMessageSubscriberRegistry;
-  loadGatewaySessionLifecycleSnapshotForEvent?: (
-    key: string,
-    options?: { agentId?: string; ownerEvent?: AgentEventPayload },
-  ) => { row: GatewaySessionRow | null; lifecycleRunId?: string };
+  loadGatewaySessionLifecycleSnapshotForEvent?: SessionEventSnapshotDependencies["loadGatewaySessionLifecycleSnapshotForEvent"];
   getSessionRowProjection?: () => SessionRowProjection | undefined;
   persistGatewaySessionLifecycleEventForEvent?: typeof persistGatewaySessionLifecycleEvent;
   lifecycleErrorRetryGraceMs?: number;
@@ -270,12 +272,7 @@ export type AgentEventHandlerOptions = {
     clientRunId: string;
     summary: string | undefined;
   }) => void;
-  resolveSessionActiveRunState?: (params: {
-    requestedKey: string;
-    canonicalKey: string;
-    sessionId?: string;
-    agentId?: string;
-  }) => { active: boolean; runIds?: string[] };
+  resolveSessionActiveRunState?: SessionEventSnapshotDependencies["resolveSessionActiveRunState"];
 };
 
 type AgentEventHandler = ((event: AgentEventPayload) => void) & {
@@ -411,49 +408,18 @@ export function createAgentEventHandler({
       : null;
   };
 
-  const buildSessionEventSnapshot = (
-    sessionKey: string,
-    evt?: AgentEventPayload,
-    agentId?: string,
-    includeActiveRunState = false,
-    lifecycleProjection = false,
-    ownerEvent = evt,
-  ) => {
-    const snapshotOptions =
-      agentId || ownerEvent
-        ? { ...(agentId ? { agentId } : {}), ...(ownerEvent ? { ownerEvent } : {}) }
-        : undefined;
-    const lifecycleSnapshot = loadGatewaySessionLifecycleSnapshotForEvent(
-      sessionKey,
-      snapshotOptions,
-    );
-    const { lifecycleRunId, row } = lifecycleSnapshot;
-    const activeRunState = includeActiveRunState
-      ? resolveSessionActiveRunState?.({
-          requestedKey: sessionKey,
-          canonicalKey: row?.key ?? sessionKey,
-          ...(row?.sessionId ? { sessionId: row.sessionId } : {}),
-          ...(agentId ? { agentId } : {}),
-        })
-      : undefined;
-    return buildGatewaySessionSnapshot({
-      sessionRow: row,
-      agentId,
-      includeSession: true,
-      lifecycle: lifecycleProjection,
-      event: evt,
-      lifecycleRunId,
-      activeRunState,
-    });
-  };
+  const buildSessionEventSnapshot = createSessionEventSnapshotBuilder({
+    loadGatewaySessionLifecycleSnapshotForEvent,
+    resolveSessionActiveRunState,
+  });
 
   const publishSessionLifecycle = createSessionLifecyclePublisher({
     broadcastToConnIds,
     sessionEventSubscribers,
     getSessionRowProjection,
     persistGatewaySessionLifecycleEventForEvent,
-    buildSnapshot: (sessionKey, event, agentId, phase) =>
-      buildSessionEventSnapshot(sessionKey, event, agentId, true, phase === "start"),
+    buildSnapshot: (sessionKey, event, agentId, phase, read) =>
+      buildSessionEventSnapshot(sessionKey, event, agentId, true, phase === "start", event, read),
   });
 
   const resolveSessionDeliveryKeys = (sessionKey: string, agentId?: string) => {
@@ -672,7 +638,10 @@ export function createAgentEventHandler({
           sessionId: evt.sessionId,
           persistence,
         });
-        const broadcastSessionChange = (snapshotEvent?: AgentEventPayload) => {
+        const broadcastSessionChange = (
+          snapshotEvent?: AgentEventPayload,
+          read?: SessionRowReadView,
+        ) => {
           if (parseCronRunScopeSuffix(sessionKey).runId) {
             return;
           }
@@ -696,10 +665,16 @@ export function createAgentEventHandler({
                 true,
                 true,
                 evt,
+                read,
               ),
             },
             sessionEventConnIds,
-            { dropIfSlow: true },
+            {
+              dropIfSlow: true,
+              ...(read && projection
+                ? { prepareSessionProjection: prepareSessionEventProjection(projection, read) }
+                : {}),
+            },
           );
         };
         // Terminal writes serialize with restart markers. Reload only after the
@@ -707,19 +682,16 @@ export function createAgentEventHandler({
         void persistence
           .then(
             async () => {
-              await withPreparedSessionEventRow(
-                projection,
-                sessionKey,
-                sessionAgentId,
-                broadcastSessionChange,
+              await withPreparedSessionEventRow(projection, sessionKey, sessionAgentId, (read) =>
+                broadcastSessionChange(undefined, read),
               );
             },
             async (err: unknown) => {
               logError(
                 `gateway: terminal session persistence failed session=${formatForLog(sessionKey)} run=${formatForLog(evt.runId)} error=${formatForLog(err)}`,
               );
-              await withPreparedSessionEventRow(projection, sessionKey, sessionAgentId, () =>
-                broadcastSessionChange(evt),
+              await withPreparedSessionEventRow(projection, sessionKey, sessionAgentId, (read) =>
+                broadcastSessionChange(evt, read),
               );
             },
           )

@@ -3461,6 +3461,11 @@ html[dir="rtl"] .chat-attachment-loading > span {
   object-fit: cover;
 }
 
+.agent-chat__welcome-avatar .identity-avatar__text {
+  font-size: 56px;
+  line-height: 1;
+}
+
 /* The 120x120 Clawd canvas stays centered in the existing hero slot. */
 .agent-chat__welcome-clawd {
   width: 128px;
@@ -3486,6 +3491,10 @@ html[dir="rtl"] .chat-attachment-loading > span {
   .agent-chat__welcome-avatar {
     width: 64px;
     height: 64px;
+  }
+
+  .agent-chat__welcome-avatar .identity-avatar__text {
+    font-size: 40px;
   }
 
   .agent-chat__welcome-clawd {

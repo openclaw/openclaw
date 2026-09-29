@@ -47,12 +47,9 @@ import {
   resolveImageModelConfigForOverride,
   runImagePrompt,
 } from "./image-tool.model-execution.js";
+import { buildNativeImageToolResult, type LoadedImageForTool } from "./image-tool.result.js";
 import {
-  buildImageToolReferenceDetails,
-  buildNativeImageToolResult,
-  type LoadedImageForTool,
-} from "./image-tool.result.js";
-import {
+  buildMediaReferenceDetails,
   buildTextToolResult,
   normalizeMediaReferenceList,
   REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS,
@@ -623,7 +620,7 @@ export function createImageTool(options?: {
           loadedImages.push({
             buffer: media.buffer,
             mimeType,
-            resolvedImage,
+            resolvedInput: resolvedImage,
             ...(rewrittenFrom ? { rewrittenFrom } : {}),
           });
         }
@@ -656,7 +653,7 @@ export function createImageTool(options?: {
           imageToolProviderDeps,
         );
 
-        return buildTextToolResult(result, buildImageToolReferenceDetails(loadedImages));
+        return buildTextToolResult(result, buildMediaReferenceDetails(loadedImages, "image"));
       }),
   };
 }

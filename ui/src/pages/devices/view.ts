@@ -1,4 +1,3 @@
-// Devices page renders its screen content.
 import { html, nothing } from "lit";
 import { live } from "lit/directives/live.js";
 import { repeat } from "lit/directives/repeat.js";
@@ -202,7 +201,7 @@ function resolveAgentBindings(config: Record<string, unknown> | null) {
     isDefault: true,
     binding: null,
   };
-  if (!config || typeof config !== "object") {
+  if (!config) {
     return { defaultBinding: null, agents: [fallbackAgent] };
   }
   const tools = (config.tools ?? {}) as Record<string, unknown>;
