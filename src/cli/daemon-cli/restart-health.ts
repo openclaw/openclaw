@@ -357,6 +357,11 @@ export async function waitForGatewayHealthyRestart(
       }
       const stoppedFree =
         snapshot.runtime.status === "stopped" && snapshot.portUsage.status === "free";
+      const portHeldByForeignProcess =
+        snapshot.runtime.status === "stopped" &&
+        snapshot.portUsage.status === "busy" &&
+        snapshot.portUsage.listeners.length > 0 &&
+        snapshot.staleGatewayPids.length === 0;
       const missingServiceFree =
         params.waitForMissingService === false &&
         snapshot.runtime.status !== "running" &&
@@ -392,7 +397,7 @@ export async function waitForGatewayHealthyRestart(
         elapsedMs = Math.max(0, performance.now() - startedAtMs);
       }
       const owner =
-        stoppedFree || missingServiceFree
+        stoppedFree || missingServiceFree || portHeldByForeignProcess
           ? await read("owner", async () =>
               readGatewayOwnerLease({ env: params.env, port: params.port }),
             )
@@ -414,6 +419,15 @@ export async function waitForGatewayHealthyRestart(
         (!owner || owner.state === "dead")
       ) {
         return withWaitContext(snapshot, "stopped-free", elapsedMs);
+      }
+      if (
+        portHeldByForeignProcess &&
+        (!owner || owner.state === "dead") &&
+        !params.supervisorKeepsAlive
+      ) {
+        snapshot.startupPhase = "Gateway port held by another process";
+        snapshot.probeError = `Gateway port ${params.port} is held by another process while the Gateway service is stopped.`;
+        return withWaitContext(snapshot, "port-held", elapsedMs);
       }
       // A previous crashed owner cannot describe replacement startup. Keep native
       // startup grace for it and for published 2026.9.3 processes without owner rows.
