@@ -324,6 +324,10 @@ function updateCachedLiveStream(cached: CachedChatItems, input: BuildChatItemsPr
   return true;
 }
 
+export function findLiveStreamIndex(items: readonly RenderChatItem[]): number {
+  return items.findIndex((item) => item.kind === "stream" && item.isStreaming);
+}
+
 export function buildCachedChatItems(
   input: BuildChatItemsProps,
 ): ReturnType<typeof buildChatItems> {
@@ -355,7 +359,7 @@ export function buildCachedChatItems(
   const items = stabilizeChatItems(cached.items, buildChatItems(input, cached.inputOrder));
   cached.input = input;
   cached.items = items;
-  const liveStreamIndex = items.findIndex((item) => item.kind === "stream" && item.isStreaming);
+  const liveStreamIndex = findLiveStreamIndex(items);
   cached.liveStream =
     liveStreamIndex < 0
       ? null

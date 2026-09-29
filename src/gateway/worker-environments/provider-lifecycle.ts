@@ -106,7 +106,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
       await failBootstrap(record, leaseId, provider, error, "bootstrap_failure", patch),
   });
 
-  const refreshRuntime = createWorkerRuntimeRefresher({
+  const runtimeRefresher = createWorkerRuntimeRefresher({
     ...options,
     requireCurrentOwner,
     stopOwner,
@@ -601,11 +601,11 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     }
     if (!record.sshEndpoint || record.state === "attached") {
       // Failed upgrades retain the old receipt and exact lease for recovery.
-      await refreshRuntime(record, provider, currentBundle, signal).catch(
-        async (error: unknown) => {
+      await runtimeRefresher
+        .refresh(record, provider, currentBundle, signal)
+        .catch(async (error: unknown) => {
           await saveError(requireCurrentOwner(record), error);
-        },
-      );
+        });
       return;
     }
     if (record.state === "draining") {
@@ -727,5 +727,6 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     ...machineCatalog,
     providerFor,
     reconcileRecord,
+    readRuntimeRefresh: runtimeRefresher.read,
   };
 }

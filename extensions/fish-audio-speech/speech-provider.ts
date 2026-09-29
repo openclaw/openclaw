@@ -8,6 +8,7 @@ import type {
   SpeechSynthesisTarget,
 } from "openclaw/plugin-sdk/speech";
 import {
+  MAX_AUDIO_BYTES,
   parseSpeechDirectiveNumberOverride,
   resolveSpeechProviderApiKey,
 } from "openclaw/plugin-sdk/speech-provider";
@@ -20,7 +21,6 @@ import {
   parseBooleanValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  FISH_AUDIO_STREAM_MAX_BYTES,
   type FishAudioFormat,
   type FishAudioLatency,
   type FishAudioModel,
@@ -335,10 +335,7 @@ export function buildFishAudioSpeechProvider(): SpeechProviderPlugin {
         await import("openclaw/plugin-sdk/media-generation-runtime");
       const stream = await fishAudioTtsStream({
         ...params,
-        maxBytes: Math.min(
-          resolveGeneratedMediaMaxBytes(req.cfg, "audio"),
-          FISH_AUDIO_STREAM_MAX_BYTES,
-        ),
+        maxBytes: Math.min(resolveGeneratedMediaMaxBytes(req.cfg, "audio"), MAX_AUDIO_BYTES),
       });
       return {
         audioStream: stream.audioStream,

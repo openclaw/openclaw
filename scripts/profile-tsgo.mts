@@ -234,20 +234,8 @@ function classifyFile(relativePath: string): string {
     const nodeModulesIndex = parts.indexOf("node_modules");
     return `node_modules/${packageNameFromNodeModule(parts, nodeModulesIndex)}`;
   }
-  if (first === "extensions") {
-    return `extensions/${parts[1] ?? "(root)"}`;
-  }
-  if (first === "packages") {
-    return `packages/${parts[1] ?? "(root)"}`;
-  }
-  if (first === "src") {
-    return `src/${parts[1] ?? "(root)"}`;
-  }
-  if (first === "ui") {
-    return `ui/${parts[1] ?? "(root)"}`;
-  }
-  if (first === "test") {
-    return `test/${parts[1] ?? "(root)"}`;
+  if (first && ["extensions", "packages", "src", "ui", "test"].includes(first)) {
+    return `${first}/${parts[1] ?? "(root)"}`;
   }
   if (first?.startsWith("/") || (first !== undefined && /^[A-Za-z]:/u.test(first))) {
     return "(external)";
@@ -474,19 +462,13 @@ async function main(argv: string[]): Promise<void> {
     text: path.relative(repoRoot, textPath),
   };
 
-  fs.writeFileSync(jsonPath, `${JSON.stringify(report, null, 2)}\n`);
-  fs.writeFileSync(textPath, renderTextReport(report));
-  fs.writeFileSync(
-    path.join(options.outDir, "latest.json"),
-    `${JSON.stringify(report, null, 2)}\n`,
-  );
-  fs.writeFileSync(path.join(options.outDir, "latest.md"), renderTextReport(report));
-
-  if (options.json) {
-    process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
-  } else {
-    process.stdout.write(renderTextReport(report));
-  }
+  const json = `${JSON.stringify(report, null, 2)}\n`;
+  const text = renderTextReport(report);
+  fs.writeFileSync(jsonPath, json);
+  fs.writeFileSync(textPath, text);
+  fs.writeFileSync(path.join(options.outDir, "latest.json"), json);
+  fs.writeFileSync(path.join(options.outDir, "latest.md"), text);
+  process.stdout.write(options.json ? json : text);
 }
 
 try {

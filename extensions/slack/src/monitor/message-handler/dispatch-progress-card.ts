@@ -3,13 +3,18 @@ import type {
   ChannelProgressDraftCompositorSnapshot,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { resolveGatewayPublicOrigin } from "openclaw/plugin-sdk/config-contracts";
+import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { buildControlUiSessionPath } from "openclaw/plugin-sdk/session-discussion";
 import { buildSlackCompleteBlocksFallbackText } from "../../blocks-fallback.js";
 import { createSlackDraftStream } from "../../draft-stream.js";
 import { formatSlackError } from "../../errors.js";
 import { normalizeSlackOutboundText } from "../../format.js";
-import { buildSlackProgressCardBlocks } from "../../progress-blocks.js";
+import {
+  buildSlackProgressCardBlocks,
+  type SlackProgressSessionLink,
+} from "../../progress-blocks.js";
+import { truncateSlackText } from "../../truncate.js";
 import { escapeSlackMrkdwn } from "../mrkdwn.js";
 import {
   combineProgressHeadlineAndExplanation,
@@ -19,6 +24,8 @@ import type { SlackDispatchSetup } from "./dispatch-setup.js";
 import { finalizeSlackPreviewEdit } from "./preview-finalize.js";
 
 type DraftProgressCardState = "working" | "success" | "error";
+const MAX_VISIBLE_WORK_LINKS = 5;
+type VisibleWorkSessions = Parameters<NonNullable<GetReplyOptions["onVisibleWorkSessions"]>>[0];
 
 export function createSlackDraftProgressCardRuntime(params: {
   setup: Pick<SlackDispatchSetup, "account" | "cfg" | "ctx" | "prepared" | "slackClient">;
@@ -32,18 +39,33 @@ export function createSlackDraftProgressCardRuntime(params: {
 }) {
   const { account, cfg, ctx, prepared, slackClient } = params.setup;
   let finalStatus: Exclude<DraftProgressCardState, "working"> | undefined;
+  const visibleWorkSessions = new Map<string, VisibleWorkSessions[number]>();
 
-  const resolveSessionUrl = () => {
+  const resolveSessionLinks = (): SlackProgressSessionLink[] => {
+    if (visibleWorkSessions.size > 0) {
+      return [...visibleWorkSessions.values()]
+        .slice(0, MAX_VISIBLE_WORK_LINKS)
+        .map((session, index) => {
+          const label = session.label?.replace(/\s+/g, " ").trim();
+          return {
+            url: session.url,
+            text:
+              visibleWorkSessions.size === 1
+                ? "Open work session"
+                : truncateSlackText(label ? `Open ${label}` : `Open work session ${index + 1}`, 75),
+          };
+        });
+    }
     // Both conditions are the operator's own statement that this session is
     // openable: `publicOrigin` is where the Gateway is externally reachable,
     // and the Control UI is what serves the session route. Installations that
     // set neither, or that replaced the Control UI, get no dead link.
     if (cfg.gateway?.controlUi?.enabled === false) {
-      return undefined;
+      return [];
     }
     const publicOrigin = resolveGatewayPublicOrigin(cfg);
     if (!publicOrigin) {
-      return undefined;
+      return [];
     }
     const url = new URL(publicOrigin);
     const path = buildControlUiSessionPath({
@@ -54,10 +76,10 @@ export function createSlackDraftProgressCardRuntime(params: {
       basePath: cfg.gateway?.controlUi?.basePath,
     });
     if (!path) {
-      return undefined;
+      return [];
     }
     url.pathname = path;
-    return url.toString();
+    return [{ url: url.toString(), text: "Open in OpenClaw" }];
   };
 
   const resolvePresentation = (
@@ -84,7 +106,7 @@ export function createSlackDraftProgressCardRuntime(params: {
         ? [{ text: snapshot.planExplanation, format: snapshot.planExplanationFormat }]
         : undefined;
     const workCounter = state === "working" ? params.progressWorkCounter : undefined;
-    const sessionUrl = state === "working" ? undefined : resolveSessionUrl();
+    const sessionLinks = state === "working" ? [] : resolveSessionLinks();
     return buildSlackProgressCardBlocks({
       state,
       title,
@@ -96,7 +118,7 @@ export function createSlackDraftProgressCardRuntime(params: {
       diffStat: snapshot.diffStat,
       toolCalls: workCounter?.toolCalls,
       elapsedSeconds: workCounter?.elapsedSeconds,
-      sessionUrl,
+      sessionLinks,
     });
   };
 
@@ -144,7 +166,14 @@ export function createSlackDraftProgressCardRuntime(params: {
   };
 
   return {
-    resolveSessionUrl,
+    resolveSessionLinks,
+    onVisibleWorkSessions: (sessions: VisibleWorkSessions) => {
+      for (const session of sessions) {
+        if (!visibleWorkSessions.has(session.sessionKey)) {
+          visibleWorkSessions.set(session.sessionKey, session);
+        }
+      }
+    },
     resolvePresentation,
     finalize,
     get hasTerminalized() {
@@ -152,6 +181,7 @@ export function createSlackDraftProgressCardRuntime(params: {
     },
     reset() {
       finalStatus = undefined;
+      visibleWorkSessions.clear();
     },
   };
 }

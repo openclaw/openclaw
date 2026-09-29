@@ -18,15 +18,21 @@ export function computeBackoffSchedule(scheduleMs: readonly number[], attempt: n
   return attempt <= 0 ? 0 : (scheduleMs[index] ?? 0);
 }
 
+export function resolveSleepDelayMs(ms: number): number {
+  return Number.isFinite(ms) && ms > 0
+    ? Math.min(Math.max(Math.floor(ms), 1), MAX_TIMER_TIMEOUT_MS)
+    : 0;
+}
+
 export async function sleepWithAbort(
   ms: number,
   abortSignal?: AbortSignal,
   options: { ref?: boolean } = {},
 ): Promise<void> {
-  if (!Number.isFinite(ms) || ms <= 0) {
+  const delayMs = resolveSleepDelayMs(ms);
+  if (delayMs === 0) {
     return;
   }
-  const delayMs = Math.min(Math.max(Math.floor(ms), 1), MAX_TIMER_TIMEOUT_MS);
   await new Promise<void>((resolve, reject) => {
     let settled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;

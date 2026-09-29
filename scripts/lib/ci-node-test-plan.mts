@@ -3644,7 +3644,8 @@ function splitOversizedCompactGroup(
   const buildModes = new Map(
     includePatterns?.map((file) => [file, resolveTestFilesBuildMode([file])]) ?? [],
   );
-  const packTooling = isTooling && runnerBackend === "github";
+  // Hybrid also reserves hosted retry costs; use the same spare-worker packing.
+  const packTooling = isTooling && (runnerBackend === "github" || runnerBackend === "hybrid");
   const agentsCoreFiles = isParallelAgentsCoreGroup(group)
     ? new Set(agentsCoreWorkFiles(group))
     : undefined;

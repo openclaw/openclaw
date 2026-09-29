@@ -146,15 +146,24 @@ function verifyMatrixCancellation(context, cancellation, members) {
   );
   const { workflow, workflowBlob } = readWorkflow(context);
   const owner = workflow?.jobs?.[workflowJob];
+  const failFast = owner?.strategy?.["fail-fast"];
+  const repository = run.repository?.full_name;
+  const attemptAwareFailFast =
+    failFast ===
+      "${{ github.event_name == 'pull_request' && (github.run_attempt != 1 || github.repository != 'openclaw/openclaw') }}" &&
+    positiveInteger(run.run_attempt) &&
+    typeof repository === "string" &&
+    /^[A-Za-z0-9-]+\/[A-Za-z0-9_.-]+$/u.test(repository) &&
+    // Actions compares strings without case; github.repository is the workflow owner, not the fork.
+    (run.run_attempt > 1 || repository.toLowerCase() !== "openclaw/openclaw");
   requireEvidence(
     owner?.name === "${{ matrix.check_name || 'checks-node-core-test-nondist-shard' }}" &&
       Array.isArray(owner.needs) &&
       owner.needs.includes("preflight") &&
       owner.strategy?.matrix ===
         "${{ fromJson(needs.preflight.outputs.checks_node_core_nondist_matrix) }}" &&
-      [true, "${{ github.event_name == 'pull_request' }}"].includes(
-        owner.strategy?.["fail-fast"],
-      ) &&
+      ([true, "${{ github.event_name == 'pull_request' }}"].includes(failFast) ||
+        attemptAwareFailFast) &&
       [undefined, false].includes(owner["continue-on-error"]),
     "the tested workflow must enable the existing PR matrix fail-fast contract",
   );

@@ -10,6 +10,7 @@ import {
   retirePluginCache,
   withPluginCache,
 } from "../plugins/plugin-cache.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import type * as ModelCatalog from "./model-catalog.js";
@@ -35,12 +36,47 @@ const mocks = vi.hoisted(() => {
     maxTokens: 8_192,
   });
 
+  const index: PluginMetadataSnapshot["index"] = {
+    version: 1,
+    hostContractVersion: "test",
+    compatRegistryVersion: "test",
+    migrationVersion: 1,
+    policyHash: "test-policy",
+    generatedAtMs: 0,
+    installRecords: {},
+    plugins: [
+      {
+        pluginId: "openai",
+        enabled: true,
+        manifestPath: "/tmp/prepared-static-openai/openclaw.plugin.json",
+        manifestHash: "test-manifest",
+        rootDir: "/tmp/prepared-static-openai",
+        origin: "bundled",
+        startup: { sidecar: false, memory: false, agentHarnesses: [] },
+        compat: [],
+      },
+    ],
+    diagnostics: [],
+  };
   const metadataSnapshot = {
+    policyHash: index.policyHash,
     plugins: [],
     pluginIds: [],
-    index: { plugins: [{ pluginId: "openai", enabled: true }] },
+    index,
+    registryIndex: index,
     manifestRegistry: { plugins: [], diagnostics: [] },
     registryDiagnostics: [],
+    diagnostics: [],
+    byPluginId: new Map(),
+    normalizePluginId: (pluginId) => pluginId.trim().toLowerCase(),
+    metrics: {
+      registrySnapshotMs: 0,
+      manifestRegistryMs: 0,
+      ownerMapsMs: 0,
+      totalMs: 0,
+      indexPluginCount: index.plugins.length,
+      manifestPluginCount: 0,
+    },
     declaredProviderOwners: new Map(),
     owners: {
       channels: new Map(),
@@ -54,7 +90,7 @@ const mocks = vi.hoisted(() => {
       providerAuthContributions: [],
       modelIdNormalizationPolicies: new Map(),
     },
-  };
+  } satisfies PluginMetadataSnapshot;
   const authStorage = {
     getAll: vi.fn(() => ({ openai: { type: "api_key" as const, key: "test-openai-key" } })),
     getOAuthProviders: vi.fn(() => []),

@@ -3,10 +3,10 @@ import { isRequesterParentOfBackgroundAcpSession } from "@openclaw/acp-core/sess
 import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { readAcpSessionMetaForEntry } from "../../acp/runtime/session-meta-readonly.js";
+import { resolveSessionThreadInfo } from "../../channels/plugins/session-conversation.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
 import type { SessionDeliveryGeneration } from "../../config/sessions/session-delivery-generation.types.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/session-store-owner.js";
-import { parseSessionThreadInfo } from "../../config/sessions/thread-info.js";
 import type { AgentRouteBinding } from "../../config/types.agents.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { shouldResumeParentSubagent } from "../../gateway/session-subagent-resume.js";
@@ -461,7 +461,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
         !parsedRequesterSessionKey.rest.startsWith("hook:") &&
         !requesterIsSubagent &&
         deriveSessionChatTypeFromKey(rawRequesterSessionKey) === "direct" &&
-        !parseSessionThreadInfo(rawRequesterSessionKey).threadId
+        !resolveSessionThreadInfo(rawRequesterSessionKey).threadId
       ) {
         const requesterRouteBindings = cfg.bindings?.filter(
           (binding): binding is AgentRouteBinding => binding.type !== "acp",
@@ -567,7 +567,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
           sessionKey: unresolvedDisplayKey,
         });
       }
-      if (parseSessionThreadInfo(resolvedKey).threadId) {
+      if (resolveSessionThreadInfo(resolvedKey).threadId) {
         return sendFailure(
           "error",
           "sessions_send cannot target a thread session for inter-agent coordination. Use the parent channel session key instead.",

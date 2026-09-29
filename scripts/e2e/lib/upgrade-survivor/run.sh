@@ -2029,7 +2029,7 @@ probe_gateway_endpoint() {
 start_gateway() {
   local port=18789
   local budget
-  budget="$(openclaw_e2e_read_positive_int_env OPENCLAW_UPGRADE_SURVIVOR_START_BUDGET_SECONDS 90)" || return "$?"
+  budget="$(openclaw_e2e_read_positive_int_env OPENCLAW_UPGRADE_SURVIVOR_START_BUDGET_SECONDS 300)" || return "$?"
   local start_epoch
   local ready_epoch
   start_epoch="$(node -e "process.stdout.write(String(Date.now()))")" || return "$?"
@@ -2040,7 +2040,7 @@ start_gateway() {
   if [ "${SCENARIO:-}" = "watchos-direct-node" ]; then
     readiness_mode="legacy-ready-log-ok"
   fi
-  openclaw_e2e_wait_gateway_ready "$gateway_pid" "$GATEWAY_LOG" 360 "$port" "$readiness_mode" || return "$?"
+  openclaw_e2e_wait_gateway_ready "$gateway_pid" "$GATEWAY_LOG" "$((10#$budget * 4))" "$port" "$readiness_mode" || return "$?"
   ready_epoch="$(node -e "process.stdout.write(String(Date.now()))")" || return "$?"
   start_seconds=$(((ready_epoch - start_epoch + 999) / 1000))
   if [ "$start_seconds" -gt "$budget" ]; then

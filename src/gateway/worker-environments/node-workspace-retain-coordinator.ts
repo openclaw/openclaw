@@ -184,6 +184,11 @@ export function createNodeWorkspaceRetainCoordinator(
     if (!isCurrent()) {
       return;
     }
+    // Installation can finish before provisioning publishes its receipt. Do not acknowledge
+    // the node's pending-install protection with an incomplete bundle reachability snapshot.
+    const bundleRetentionReady = !nodeEnvironments(options, node.nodeId).some(
+      (environment) => environment.state === "provisioning",
+    );
     const retainedBundleHashes = [
       ...new Set([
         ...snapshotBundleHashesForNode(options, node.nodeId),
@@ -223,7 +228,7 @@ export function createNodeWorkspaceRetainCoordinator(
       Buffer.byteLength(JSON.stringify(statusInput), "utf8") <=
         NODE_WORKER_RETAIN_REQUEST_MAX_BYTES;
     const input =
-      bundleRetentionSupported && bundleHashesFit
+      bundleRetentionSupported && bundleRetentionReady && bundleHashesFit
         ? statusInput && statusInputFits
           ? statusInput
           : retentionInput
