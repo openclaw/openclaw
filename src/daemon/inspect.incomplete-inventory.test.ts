@@ -3,7 +3,7 @@ import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { resolveLiveManagedGatewayDistFence } from "../../scripts/lib/live-gateway-dist-fence.mts";
 import { withTestDir } from "../test-helpers/temp-dir.js";
-import * as gatewayService from "./service.js";
+import * as launchdRuntime from "./launchd-runtime.js";
 
 vi.mock("./systemd-loaded-unit-inventory.js", () => ({ listLoadedSystemdUnits: async () => [] }));
 vi.mock("../process/exec.js", async (importOriginal) => {
@@ -97,9 +97,9 @@ it("admits an unrelated unreadable launchd plist and still fences a live Gateway
         });
       const label = "ai.openclaw.gateway.dev";
       const readState = vi
-        .spyOn(gatewayService, "readGatewayServiceState")
-        .mockImplementation(async (_service, input) => {
-          const live = input?.env?.OPENCLAW_LAUNCHD_LABEL === label;
+        .spyOn(launchdRuntime, "readLoadedLaunchAgentState")
+        .mockImplementation(async (env) => {
+          const live = env.OPENCLAW_LAUNCHD_LABEL === label;
           return {
             installed: live,
             loadState: { status: live ? "loaded" : "not-loaded" },

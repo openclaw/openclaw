@@ -11,7 +11,10 @@ import {
   readMcpOAuthStatusesInDatabase,
 } from "../agents/mcp-oauth-store.kernel.js";
 import {
+  loadSubagentMaintenanceRunsInDatabase,
+  loadSubagentRegistryFromSqlite,
   loadSubagentRunsByRunIdsFromSqlite,
+  loadSubagentRunsForSessionsInDatabase,
   loadSubagentRunsForChildSessionFromSqlite,
   loadSubagentRunsForSessionFromSqlite,
   loadSubagentSessionListRunsFromSqlite,
@@ -45,6 +48,7 @@ import {
 } from "../gateway/worker-environments/store-row-codec.js";
 import { executeDevicePairingRead } from "../infra/device-pairing-read.kernel.js";
 import { readExecApprovalsConfigRow } from "../infra/exec-approvals-sqlite.js";
+import { bunSqliteNativeCleanupPending } from "../infra/node-sqlite.js";
 import { inspectCurrentConversationBindingRecordInDatabase } from "../infra/outbound/current-conversation-bindings.kernel.js";
 import { readOutboundDeliveriesInDatabase } from "../infra/outbound/delivery-queue-storage.kernel.js";
 import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
@@ -60,7 +64,7 @@ import {
 import {
   inspectUpdateRunReconciliation,
   readUpdateRunReconciliationCandidates,
-} from "../infra/update-run-reconciliation.worker.js";
+} from "../infra/update-run-reconciliation.read.js";
 import { serveOwnedWorkerTasks } from "../infra/worker-task-server.js";
 import {
   pluginBlobLookupInDatabase,
@@ -239,6 +243,34 @@ serveOwnedWorkerTasks(
               return readChannelIngressInDatabase(db, command);
             }
             if (command.type === "subagents.runs") {
+              if (command.scope.kind === "all") {
+                return { type: command.type, runs: loadSubagentRegistryFromSqlite({ db }) };
+              }
+              if (command.scope.kind === "maintenance") {
+                const maintenance = loadSubagentMaintenanceRunsInDatabase({ db });
+                return {
+                  type: command.type,
+                  projection: "maintenance",
+                  runs: maintenance.runs,
+                  maintenanceDigest: maintenance.digest,
+                };
+              }
+              if (command.scope.kind === "descendants") {
+                const descendants = loadSubagentRunsForSessionsInDatabase(
+                  { db },
+                  command.scope.sessionKeys,
+                  command.scope.liveTopology,
+                );
+                return {
+                  type: command.type,
+                  runs: descendants.runs,
+                  descendantBasis: {
+                    digest: descendants.digest,
+                    sessionKeys: descendants.sessionKeys,
+                    runIds: descendants.runIds,
+                  },
+                };
+              }
               const rows =
                 command.scope.kind === "session"
                   ? loadSubagentRunsForSessionFromSqlite(command.scope.sessionKey, { db })
@@ -607,6 +639,9 @@ serveOwnedWorkerTasks(
         );
         return { ok: true, sourceAdmitted: true, ...result };
       });
+      if (process.versions.bun && bunSqliteNativeCleanupPending) {
+        nativeCleanupFailure ??= { error: undefined };
+      }
       return nativeCleanupFailure ? { ...reply, nativeCleanupFailure } : reply;
     } catch (value) {
       const error = toStringifiedError(value);

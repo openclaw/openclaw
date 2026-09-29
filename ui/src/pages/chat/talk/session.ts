@@ -222,8 +222,6 @@ export class RealtimeTalkSession {
           callbacks,
           input,
           videoDeviceId: this.localOptions.videoDeviceId,
-          consultThinkingLevel: session.consultThinkingLevel,
-          consultFastMode: session.consultFastMode,
         });
         this.pendingStartup = nextTransport;
         this.callbacks.onVideoCapability?.(

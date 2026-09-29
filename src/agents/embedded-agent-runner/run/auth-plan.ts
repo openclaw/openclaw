@@ -239,7 +239,6 @@ export async function prepareEmbeddedRunAuthPlan(params: {
   params.markStage?.("harness");
 
   return {
-    usesOpenAIAuthRouting,
     attemptAuthProfileStore,
     lockedProfileId,
     preferredProfileId,

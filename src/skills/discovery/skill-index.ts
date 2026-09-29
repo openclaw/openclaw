@@ -21,11 +21,3 @@ export function isSkillPromptVisible(entry: SkillEntry): boolean {
 export function isSkillUserInvocable(entry: SkillEntry): boolean {
   return (entry.exposure ?? entry.invocation)?.userInvocable ?? true;
 }
-
-export function filterPromptVisibleSkillEntries(entries: readonly SkillEntry[]): SkillEntry[] {
-  return entries.filter(isSkillPromptVisible);
-}
-
-export function filterUserInvocableSkillEntries(entries: readonly SkillEntry[]): SkillEntry[] {
-  return entries.filter(isSkillUserInvocable);
-}

@@ -1,3 +1,4 @@
+import { resolveMediaUnderstandingString } from "../../packages/media-understanding-common/src/openai-compatible-video.js";
 import { OPENAI_AUDIO_TRANSCRIPTIONS_API } from "./openai-audio-api.js";
 // OpenAI-compatible audio transcription adapter for providers exposing the
 // /audio/transcriptions API shape.
@@ -18,12 +19,6 @@ type OpenAiCompatibleAudioParams = AudioTranscriptionRequest & {
   provider?: string;
 };
 
-// Shared implementation for OpenAI-style /audio/transcriptions providers.
-function resolveModel(model: string | undefined, fallback: string): string {
-  const trimmed = model?.trim();
-  return trimmed || fallback;
-}
-
 /** Sends an OpenAI-compatible audio transcription request and returns validated text output. */
 export async function transcribeOpenAiCompatibleAudio(
   params: OpenAiCompatibleAudioParams,
@@ -43,7 +38,7 @@ export async function transcribeOpenAiCompatibleAudio(
     });
   const url = `${baseUrl}/audio/transcriptions`;
 
-  const model = resolveModel(params.model, params.defaultModel);
+  const model = resolveMediaUnderstandingString(params.model, params.defaultModel);
   // Keep multipart construction centralized so provider tests cover filename and MIME behavior.
   const form = buildAudioTranscriptionFormData({
     buffer: params.buffer,

@@ -1,8 +1,13 @@
+import { isDeepStrictEqual } from "node:util";
 import { getAsyncWorkSignal } from "../../../shared/async-work-scope.js";
-import { getActiveOpenClawStateDatabaseReadSnapshot } from "../../../state/openclaw-state-db-readonly.js";
+import {
+  executeExistingOpenClawStateRead,
+  getActiveOpenClawStateDatabaseReadSnapshot,
+} from "../../../state/openclaw-state-db-readonly.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { projectSubagentRunForSessionList } from "./subagent-delivery-state.js";
 import { getSubagentRunIdLookup } from "./subagent-registry-memory.js";
+import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
 import {
   acceptedFullSnapshot,
   assertSubagentReadContext,
@@ -14,10 +19,16 @@ import {
   readCompactSubagentRuns,
   readFullSubagentRuns,
   shouldReadPersistedSubagentRuns,
+  selectSubagentCacheStateForRead,
   type SubagentRunsCache,
 } from "./subagent-registry-read-cache.js";
-import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import type {
+  SubagentMaintenanceDurableBasis,
+  SubagentRunReadRecord,
+  SubagentRunsDurableBasis,
+} from "./subagent-registry-read.types.js";
+import type { SubagentRunMaintenanceRecord, SubagentRunRecord } from "./subagent-registry.types.js";
+import { collectSubagentSessionReadKeys } from "./subagent-session-read-scope.js";
 
 export type SubagentRunReadSelection = {
   runIds: readonly string[];
@@ -210,5 +221,271 @@ export async function prepareSubagentRunReadSnapshot<S extends SubagentRunReadSe
         };
       },
     };
+  }
+}
+
+export type PreparedSubagentSessionsRead = PreparedSubagentRunsRead & {
+  readonly basis: SubagentRunsDurableBasis;
+  dispose(): void;
+};
+
+/** The durable basis is fresh worker evidence; live liveness remains parent-owned. */
+export async function prepareSubagentSessionRunReadSnapshot(params: {
+  inMemoryRuns: Map<string, SubagentRunRecord>;
+  fullCache: SubagentRunsCache<SubagentRunRecord>;
+  sessionKeys: readonly string[];
+}): Promise<PreparedSubagentSessionsRead> {
+  const { inMemoryRuns, fullCache } = params;
+  const context = captureOpenClawStateWorkerContext();
+  const signal = getAsyncWorkSignal();
+  const roots = Object.freeze(
+    [...new Set(params.sessionKeys.map((key) => key.trim()).filter(Boolean))].toSorted(),
+  );
+  const localRuns = () =>
+    mergeSelectedFullRuns(fullCache, inMemoryRuns, new Map(), () => true, {
+      context,
+      freshPersisted: true,
+    });
+  const topology = () =>
+    [...localRuns().values()]
+      .map(({ childSessionKey, requesterSessionKey }) => ({ childSessionKey, requesterSessionKey }))
+      .toSorted(
+        (left, right) =>
+          left.childSessionKey.localeCompare(right.childSessionKey) ||
+          left.requesterSessionKey.localeCompare(right.requesterSessionKey),
+      );
+  let disposed = false;
+  const assertCurrent = () => {
+    if (disposed) {
+      throw new Error("Prepared subagent descendant read was released");
+    }
+    signal?.throwIfAborted();
+    assertSubagentReadContext(context);
+  };
+  let changed: (ids: readonly string[] | undefined) => void = () => {};
+  const unsubscribe = subscribeSubagentRunChanges((ids) => changed(ids));
+  const dispose = () => {
+    disposed = true;
+    unsubscribe();
+  };
+  try {
+    for (;;) {
+      assertCurrent();
+      const publications: Array<readonly string[] | undefined> = [];
+      changed = (ids) => publications.push(ids);
+      const links = topology();
+      const reply = await executeExistingOpenClawStateRead(
+        { path: context.admission.databasePath, env: context.environment },
+        {
+          type: "subagents.runs",
+          scope: { kind: "descendants", sessionKeys: roots, liveTopology: links },
+        },
+        { context, current: true },
+      );
+      assertCurrent();
+      if (
+        reply &&
+        (!reply.ok ||
+          reply.type !== "subagents.runs" ||
+          reply.projection === "maintenance" ||
+          !reply.descendantBasis)
+      ) {
+        throw new Error("Subagent descendant read omitted its durable basis");
+      }
+      const persisted = reply?.runs ?? new Map<string, SubagentRunRecord>();
+      const physicalIds = new Set(reply?.descendantBasis?.runIds.map((id) => id.trim()));
+      const selected =
+        reply?.descendantBasis?.sessionKeys ?? collectSubagentSessionReadKeys(roots, links);
+      const relevantEntry = (
+        entry: Pick<SubagentRunReadRecord, "childSessionKey" | "requesterSessionKey"> | undefined,
+      ) =>
+        Boolean(
+          entry &&
+          (selected.has(entry.childSessionKey.trim()) || selected.has(entry.requesterSessionKey)),
+        );
+      const relevantPublication = (ids: readonly string[] | undefined) =>
+        ids === undefined ||
+        ids.some(
+          (id) =>
+            physicalIds.has(id.trim()) ||
+            relevantEntry(inMemoryRuns.get(id)) ||
+            relevantEntry(fullCache.state.snapshot?.get(id)) ||
+            relevantEntry(fullCache.state.changes?.get(id)?.entry),
+        );
+      const relevantLinks = (values: typeof links) => values.filter(relevantEntry);
+      const expectedTopology = JSON.stringify(relevantLinks(links));
+      if (
+        publications.some(relevantPublication) ||
+        expectedTopology !== JSON.stringify(relevantLinks(topology()))
+      ) {
+        continue;
+      }
+      let invalidated = false;
+      changed = (ids) => {
+        invalidated ||= relevantPublication(ids);
+      };
+      const basis: SubagentRunsDurableBasis = Object.freeze({
+        databasePath: context.admission.databasePath,
+        databaseIdentity: context.admission.identity.key,
+        ...(context.admission.identity.birthtime
+          ? { databaseBirthtime: context.admission.identity.birthtime }
+          : {}),
+        sessionKeys: roots,
+        liveTopology: Object.freeze(links.map((link) => Object.freeze(link))),
+        digest: reply?.descendantBasis?.digest ?? null,
+      });
+      return {
+        basis,
+        dispose,
+        consume(consume) {
+          assertCurrent();
+          if (invalidated || expectedTopology !== JSON.stringify(relevantLinks(topology()))) {
+            return { ready: false };
+          }
+          const runs = mergeSelectedFullRuns(
+            fullCache,
+            inMemoryRuns,
+            persisted,
+            (entry) => selected.has(entry.childSessionKey.trim()),
+            { context, freshPersisted: true },
+          );
+          return { ready: true, value: consumeSubagentRuns(runs, consume) };
+        },
+      };
+    }
+  } catch (error) {
+    dispose();
+    throw error;
+  }
+}
+
+export type PreparedSubagentMaintenanceRead = {
+  readonly basis?: SubagentMaintenanceDurableBasis;
+  capture(): ReadonlyMap<string, SubagentRunMaintenanceRecord>;
+  dispose(): void;
+};
+
+/** Fresh physical maintenance facts share the existing cache's unpublished-intent overlays. */
+export async function prepareSubagentMaintenanceReadSnapshot(
+  inMemoryRuns: Map<string, SubagentRunRecord>,
+  cache: SubagentRunsCache<SubagentRunMaintenanceRecord>,
+): Promise<PreparedSubagentMaintenanceRead> {
+  const context = shouldReadPersistedSubagentRuns()
+    ? captureOpenClawStateWorkerContext()
+    : undefined;
+  const signal = getAsyncWorkSignal();
+  let disposed = false;
+  const assertCurrent = () => {
+    if (disposed) {
+      throw new Error("Prepared subagent maintenance read was released");
+    }
+    signal?.throwIfAborted();
+    getAsyncWorkSignal()?.throwIfAborted();
+    if (context) {
+      assertSubagentReadContext(context);
+    }
+  };
+  const stateForRead = (): SubagentRunsCache<SubagentRunMaintenanceRecord>["state"] =>
+    context ? selectSubagentCacheStateForRead(cache.state, context) : {};
+  const capture = (persisted: ReadonlyMap<string, SubagentRunMaintenanceRecord>) => {
+    assertCurrent();
+    const state = stateForRead();
+    const runs = new Map(state.replacementPending ? state.snapshot : persisted);
+    for (const [runId, { entry, committed }] of state.changes ?? []) {
+      if (!committed) {
+        if (entry) {
+          runs.set(runId, entry);
+        } else {
+          runs.delete(runId);
+        }
+      }
+    }
+    for (const [runId, entry] of inMemoryRuns) {
+      runs.set(runId, cache.project(entry));
+    }
+    return runs;
+  };
+  if (!context) {
+    return {
+      capture: () => capture(new Map()),
+      dispose: () => {
+        disposed = true;
+      },
+    };
+  }
+  let invalidated = false;
+  let published: (runIds: readonly string[] | undefined) => void = () => {
+    invalidated = true;
+  };
+  const unsubscribe = subscribeSubagentRunChanges((runIds) => published(runIds));
+  const dispose = () => {
+    disposed = true;
+    unsubscribe();
+  };
+  try {
+    for (;;) {
+      assertCurrent();
+      invalidated = false;
+      const reply = await executeExistingOpenClawStateRead(
+        { path: context.admission.databasePath, env: context.environment },
+        { type: "subagents.runs", scope: { kind: "maintenance" } },
+        { context, current: true },
+      );
+      assertCurrent();
+      if (
+        reply &&
+        (!reply.ok || reply.type !== "subagents.runs" || reply.projection !== "maintenance")
+      ) {
+        throw new Error("Unexpected subagent maintenance read result");
+      }
+      if (invalidated) {
+        continue;
+      }
+      const persisted = reply?.runs ?? new Map<string, SubagentRunMaintenanceRecord>();
+      // Cache representation may change on publication; compare the actual compact rows.
+      published = (runIds) => {
+        const state = stateForRead();
+        if (state.sourceIdentity !== context.admission.identity.key) {
+          return;
+        }
+        if (runIds === undefined) {
+          const replacement = state.snapshot;
+          invalidated ||=
+            !replacement ||
+            replacement.size !== persisted.size ||
+            [...persisted].some(
+              ([runId, entry]) => !isDeepStrictEqual(entry, replacement.get(runId)),
+            );
+          return;
+        }
+        invalidated ||= runIds.some((runId) => {
+          const change = state.changes?.get(runId);
+          const entry = change ? change.entry : state.snapshot?.get(runId);
+          return !isDeepStrictEqual(persisted.get(runId), entry);
+        });
+      };
+      const basis: SubagentMaintenanceDurableBasis = Object.freeze({
+        databasePath: context.admission.databasePath,
+        databaseIdentity: context.admission.identity.key,
+        ...(context.admission.identity.birthtime
+          ? { databaseBirthtime: context.admission.identity.birthtime }
+          : {}),
+        digest: reply?.maintenanceDigest ?? null,
+      });
+      return {
+        basis,
+        dispose,
+        capture() {
+          assertCurrent();
+          if (invalidated) {
+            throw new Error("Subagent maintenance facts changed during preparation");
+          }
+          return capture(persisted);
+        },
+      };
+    }
+  } catch (error) {
+    dispose();
+    throw error;
   }
 }

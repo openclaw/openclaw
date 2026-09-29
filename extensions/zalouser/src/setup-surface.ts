@@ -302,94 +302,67 @@ export const zalouserSetupWizard: ChannelSetupWizard = {
       credentialPersistence: "read-only",
     });
 
+    let wantsLogin: boolean;
     if (!alreadyAuthenticated) {
       await noteZalouserHelp(prompter);
-      const wantsLogin = await prompter.confirm({
+      wantsLogin = await prompter.confirm({
         message: t("wizard.zalouser.loginQrPrompt"),
         initialValue: true,
       });
-
-      if (wantsLogin) {
-        await options?.beforePersistentEffect?.();
-        const start = await startZaloQrLogin({
-          profile: account.profile,
-          timeoutMs: 35_000,
-          ...(options?.beforePersistentEffect
-            ? { beforeCredentialPersistence: options.beforePersistentEffect }
-            : {}),
-          ...(options?.assertPersistentEffectCurrent
-            ? { assertCredentialPersistenceCurrent: options.assertPersistentEffectCurrent }
-            : {}),
-        });
-        if (start.qrDataUrl) {
-          const qrPath = await writeQrDataUrlToTempFile(start.qrDataUrl, account.profile);
-          await prompter.note(
-            [
-              start.message,
-              qrPath
-                ? t("wizard.zalouser.qrImageSaved", { path: qrPath })
-                : t("wizard.zalouser.qrImageWriteFailed"),
-              t("wizard.zalouser.scanApproveContinue"),
-            ].join("\n"),
-            t("wizard.zalouser.qrLoginTitle"),
-          );
-          const scanned = await prompter.confirm({
-            message: t("wizard.zalouser.qrScannedPrompt"),
-            initialValue: true,
-          });
-          if (scanned) {
-            const waited = await waitForZaloQrLogin({
-              profile: account.profile,
-              timeoutMs: 120_000,
-            });
-            await prompter.note(
-              waited.message,
-              waited.connected ? t("common.done") : t("wizard.zalouser.loginPendingTitle"),
-            );
-          }
-        } else {
-          await prompter.note(start.message, t("wizard.zalouser.loginPendingTitle"));
-        }
-      }
     } else {
-      const keepSession = await prompter.confirm({
+      wantsLogin = !(await prompter.confirm({
         message: t("wizard.zalouser.keepSessionPrompt"),
         initialValue: true,
-      });
-      if (!keepSession) {
+      }));
+    }
+
+    if (wantsLogin) {
+      if (alreadyAuthenticated) {
         await options?.beforePersistentEffect?.();
         await logoutZaloProfile(account.profile, {
           assertCurrent: options?.assertPersistentEffectCurrent,
         });
-        await options?.beforePersistentEffect?.();
-        const start = await startZaloQrLogin({
-          profile: account.profile,
-          force: true,
-          timeoutMs: 35_000,
-          ...(options?.beforePersistentEffect
-            ? { beforeCredentialPersistence: options.beforePersistentEffect }
-            : {}),
-          ...(options?.assertPersistentEffectCurrent
-            ? { assertCredentialPersistenceCurrent: options.assertPersistentEffectCurrent }
-            : {}),
-        });
-        if (start.qrDataUrl) {
-          const qrPath = await writeQrDataUrlToTempFile(start.qrDataUrl, account.profile);
-          await prompter.note(
-            [
+      }
+      await options?.beforePersistentEffect?.();
+      const start = await startZaloQrLogin({
+        profile: account.profile,
+        ...(alreadyAuthenticated ? { force: true } : {}),
+        timeoutMs: 35_000,
+        ...(options?.beforePersistentEffect
+          ? { beforeCredentialPersistence: options.beforePersistentEffect }
+          : {}),
+        ...(options?.assertPersistentEffectCurrent
+          ? { assertCredentialPersistenceCurrent: options.assertPersistentEffectCurrent }
+          : {}),
+      });
+      if (start.qrDataUrl) {
+        const qrPath = await writeQrDataUrlToTempFile(start.qrDataUrl, account.profile);
+        const savedQrNote = qrPath
+          ? t("wizard.zalouser.qrImageSaved", { path: qrPath })
+          : undefined;
+        const qrNotes = alreadyAuthenticated
+          ? [start.message, savedQrNote].filter(Boolean)
+          : [
               start.message,
-              qrPath ? t("wizard.zalouser.qrImageSaved", { path: qrPath }) : undefined,
-            ]
-              .filter(Boolean)
-              .join("\n"),
-            t("wizard.zalouser.qrLoginTitle"),
-          );
+              savedQrNote ?? t("wizard.zalouser.qrImageWriteFailed"),
+              t("wizard.zalouser.scanApproveContinue"),
+            ];
+        await prompter.note(qrNotes.join("\n"), t("wizard.zalouser.qrLoginTitle"));
+        const scanned =
+          alreadyAuthenticated ||
+          (await prompter.confirm({
+            message: t("wizard.zalouser.qrScannedPrompt"),
+            initialValue: true,
+          }));
+        if (scanned) {
           const waited = await waitForZaloQrLogin({ profile: account.profile, timeoutMs: 120_000 });
           await prompter.note(
             waited.message,
             waited.connected ? t("common.done") : t("wizard.zalouser.loginPendingTitle"),
           );
         }
+      } else if (!alreadyAuthenticated) {
+        await prompter.note(start.message, t("wizard.zalouser.loginPendingTitle"));
       }
     }
 

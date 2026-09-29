@@ -31,6 +31,7 @@ import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { AgentsApiClient } from "./agentsapi-client.js";
 import { collectOutputs, prepareInputs, uploadInputs } from "./agentsapi-files.js";
+import { buildAgentsApiMcpTools } from "./agentsapi-mcp.js";
 import { AgentsApiMessageProjection } from "./agentsapi-messages.js";
 import { buildAgentsApiInstructions, buildAgentsApiTurnContext } from "./agentsapi-prompt.js";
 import { resolveAgentsApiReasoningEffort } from "./agentsapi-reasoning.js";
@@ -222,11 +223,14 @@ export async function runAgentsApiAttempt(
       (cleanup) => toolCleanups.push(cleanup),
     );
     toolSurface = surface;
+    const mcpTools = await buildAgentsApiMcpTools(params);
+    assertCurrent();
     const sessionIdentity = [
       params.model.id,
       params.resolvedApiKey,
       // Preserve existing hosted identities only when no network policy is configured.
       ...(environment.type === "self_hosted" || environment.network != null ? [environment] : []),
+      ...(mcpTools.length ? [mcpTools] : []),
     ];
     const fingerprint = createHash("sha256").update(JSON.stringify(sessionIdentity)).digest("hex");
     if (binding && binding.authFingerprint !== fingerprint) {
@@ -237,10 +241,11 @@ export async function runAgentsApiAttempt(
       if (
         environment.type !== "openai_hosted" ||
         environment.network != null ||
+        mcpTools.length > 0 ||
         binding.authFingerprint !== toolsFingerprint
       ) {
         throw new Error(
-          "Agents API model, credential, or environment changed; reset the OpenClaw session before continuing",
+          "Agents API model, credential, environment, or MCP configuration changed; reset the OpenClaw session before continuing",
         );
       }
       await bind({ sessionId: binding.sessionId, authFingerprint: fingerprint });
@@ -299,6 +304,7 @@ export async function runAgentsApiAttempt(
         params.model.id,
         {
           functions: surface.declarations,
+          mcpTools,
           files: inputs.files,
           environment,
           reasoning: {

@@ -155,10 +155,6 @@ function hasUnmergedReplySemantics(payload: ReplyPayload): boolean {
   );
 }
 
-function hasReplySemantics(payload: ReplyPayload): boolean {
-  return hasMergeableReplySemantics(payload) || hasUnmergedReplySemantics(payload);
-}
-
 function mediaSetsMatch(leftMediaUrls: readonly string[], rightMediaUrls: readonly string[]) {
   if (leftMediaUrls.length !== rightMediaUrls.length) {
     return false;
@@ -250,7 +246,10 @@ export function selectChatSendFinalReplyInputs(params: {
         if (
           remainingFinalMediaUrls.length === 0 &&
           ((duplicateBlockEntry && !hasUnmergedReplySemantics(payload)) ||
-            (!duplicateBlockEntry && !finalDisplayText && !hasReplySemantics(payload)))
+            (!duplicateBlockEntry &&
+              !finalDisplayText &&
+              !hasMergeableReplySemantics(payload) &&
+              !hasUnmergedReplySemantics(payload)))
         ) {
           return [];
         }

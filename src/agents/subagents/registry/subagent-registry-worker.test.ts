@@ -41,6 +41,15 @@ vi.mock("../../../state/openclaw-state-worker-context.js", () => ({
 vi.mock("../../../state/openclaw-state-worker-store.js", () => ({
   runOpenClawStateWorkerOperation: mocks.runWorker,
 }));
+vi.mock("../../../state/openclaw-state-db-readonly.js", () => ({
+  getActiveOpenClawStateDatabaseReadSnapshot: () => undefined,
+  executeExistingOpenClawStateRead: vi.fn<
+    typeof import("../../../state/openclaw-state-db-readonly.js").executeExistingOpenClawStateRead
+  >(async (_options, command) => {
+    expect(command).toEqual({ type: "subagents.runs", scope: { kind: "all" } });
+    return { ok: true, type: "subagents.runs", sourceAdmitted: true, runs: new Map() };
+  }),
+}));
 vi.mock("./subagent-registry.store.sqlite.js", () => ({
   loadSubagentRegistryFromSqlite: () => new Map(),
   loadSubagentMaintenanceRunsFromSqlite: () => new Map(),
@@ -117,7 +126,7 @@ describe("queued registry worker publication", () => {
   });
   afterEach(async () => {
     await databaseCache.closeOpenClawStateDatabaseAsync();
-    restoreSubagentRunsFromDisk({ runs: new Map() });
+    await restoreSubagentRunsFromDisk({ runs: new Map() });
     clearSubagentRunsReadCacheForTest();
     vi.restoreAllMocks();
     if (previous === undefined) {
@@ -404,7 +413,7 @@ describe("queued registry worker publication", () => {
             () => assertSubagentRegistryWriteOutcomeKnown([entry.runId], original.admission),
             "close alone cannot replay a stale preimage",
           ).toThrow();
-          restoreSubagentRunsFromDisk({ runs: new Map() });
+          await restoreSubagentRunsFromDisk({ runs: new Map() });
           expect(() =>
             assertSubagentRegistryWriteOutcomeKnown([entry.runId], original.admission),
           ).not.toThrow();

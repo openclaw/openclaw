@@ -12,22 +12,23 @@ import { resolveRetainedManagedNpmInstallPackageInfo } from "./managed-npm-reten
 import { safeRealpathSync } from "./path-safety.js";
 import { getPluginCache } from "./plugin-cache.js";
 import type { PluginCache } from "./plugin-cache.types.js";
+import type { PluginSourceCaptureStorage } from "./plugin-instance-invocation.types.js";
 import { resolvePluginMetadataEnvFingerprint } from "./plugin-metadata-env.js";
 import type {
   PluginNativeArtifactFact,
   PluginNativeNamespaceFact,
   PluginSourceAdmissionReceipt,
 } from "./plugin-source-admission.types.js";
+import { resolvePluginSourceCaptureStorage } from "./plugin-source-capture-context.js";
 import {
   createPluginNativeCaptureRoot,
   retainPluginNativeCapturePath,
 } from "./plugin-source-capture-directory.js";
-import { resolvePluginSourceCaptureStateDir } from "./plugin-source-capture-state-dir.js";
 
 type NativeSnapshot = ReturnType<typeof createPluginNativeCaptureRoot>;
 export type AdmissionState = {
   readonly viewKey: string;
-  readonly captureStateDir: string;
+  readonly captureStorage: PluginSourceCaptureStorage;
   readonly publicationStateDir: string;
   readonly artifactPreservingReadOnly: boolean;
   preparedIndexes: WeakSet<InstalledPluginIndex>;
@@ -142,7 +143,7 @@ export function nativeAdmissionStateFor(cache = getPluginCache()): AdmissionStat
     bindAdmissionState(cache, {
       viewKey,
       // Deferred publication and disposal can run after the caller restores its environment.
-      captureStateDir: resolvePluginSourceCaptureStateDir(),
+      captureStorage: resolvePluginSourceCaptureStorage(),
       publicationStateDir: resolveActivePluginInstallRoots().stateDir,
       artifactPreservingReadOnly,
       preparedIndexes: new WeakSet(),

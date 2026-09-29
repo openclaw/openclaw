@@ -6,13 +6,13 @@ import { describe, expect, it } from "vitest";
 import { linePlugin } from "./channel.js";
 import { createActionCard } from "./flex-templates/basic-cards.js";
 import { lineOutboundAdapter } from "./outbound.js";
+import type { LineRichCard } from "./rich-message-schema.js";
 import {
   createLineQuickReply,
   lineMessageActions,
   prepareLineReplyPayload,
   renderLineCard,
 } from "./rich-messages.js";
-import type { LineRichCard } from "./types.js";
 
 const DIRECT_TARGET = "line:U0123456789abcdef0123456789abcdef";
 

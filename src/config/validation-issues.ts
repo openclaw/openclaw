@@ -120,34 +120,27 @@ function extractBindingsSpecificUnionIssue(
     return null;
   }
   let matchingBranchIssue: UnknownIssueRecord | null = null;
-  let matchingBranchIsUnrecognized = false;
-  let matchingBranchPathLen = -1;
   let sawRouteTypeMismatch = false;
   for (const errGroup of record.errors) {
     if (!Array.isArray(errGroup)) {
       continue;
     }
-    const branch = errGroup.map(asNullableObjectRecord).filter(Boolean) as UnknownIssueRecord[];
-    if (branch.length === 0) {
-      continue;
-    }
+    const branch = errGroup.map(asNullableObjectRecord).filter((issue) => issue !== null);
     if (branch.some(isRouteTypeMismatchIssue)) {
       sawRouteTypeMismatch = true;
       continue;
     }
     let branchBestIssue: UnknownIssueRecord | null = null;
-    let branchBestIsUnrecognized = false;
-    let branchBestPathLen = -1;
     for (const issue of branch) {
       const issuePathLen = toConfigPathSegments(issue.path).length;
-      const issueIsUnrecognized = issue.code === "unrecognized_keys";
+      const bestPathLen = branchBestIssue ? toConfigPathSegments(branchBestIssue.path).length : -1;
       if (
-        issuePathLen > branchBestPathLen ||
-        (issuePathLen === branchBestPathLen && issueIsUnrecognized && !branchBestIsUnrecognized)
+        issuePathLen > bestPathLen ||
+        (issuePathLen === bestPathLen &&
+          issue.code === "unrecognized_keys" &&
+          branchBestIssue?.code !== "unrecognized_keys")
       ) {
         branchBestIssue = issue;
-        branchBestIsUnrecognized = issueIsUnrecognized;
-        branchBestPathLen = issuePathLen;
       }
     }
     if (!branchBestIssue) {
@@ -157,13 +150,12 @@ function extractBindingsSpecificUnionIssue(
       return null;
     }
     matchingBranchIssue = branchBestIssue;
-    matchingBranchIsUnrecognized = branchBestIsUnrecognized;
-    matchingBranchPathLen = branchBestPathLen;
   }
   if (
     !sawRouteTypeMismatch ||
     !matchingBranchIssue ||
-    (matchingBranchPathLen === 0 && !matchingBranchIsUnrecognized)
+    (toConfigPathSegments(matchingBranchIssue.path).length === 0 &&
+      matchingBranchIssue.code !== "unrecognized_keys")
   ) {
     return null;
   }

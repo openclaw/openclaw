@@ -192,13 +192,10 @@ export function resolveChannelInboundAttachmentRootsForChannel(params: {
     cfg: params.cfg,
     resolver: "resolveInboundAttachmentRoots",
   });
-  if (contractApi?.resolveInboundAttachmentRoots) {
-    return contractApi.resolveInboundAttachmentRoots({
-      cfg: params.cfg,
-      accountId: params.accountId ?? undefined,
-    });
-  }
-  return undefined;
+  return contractApi?.resolveInboundAttachmentRoots?.({
+    cfg: params.cfg,
+    accountId: params.accountId ?? undefined,
+  });
 }
 
 /** Resolves remote staging roots for inbound channel attachments without loading full channel code. */
@@ -211,11 +208,8 @@ export function resolveChannelRemoteInboundAttachmentRoots(params: {
     cfg: params.cfg,
     resolver: "resolveRemoteInboundAttachmentRoots",
   });
-  if (contractApi?.resolveRemoteInboundAttachmentRoots) {
-    return contractApi.resolveRemoteInboundAttachmentRoots({
-      cfg: params.cfg,
-      accountId: params.ctx.AccountId,
-    });
-  }
-  return undefined;
+  return contractApi?.resolveRemoteInboundAttachmentRoots?.({
+    cfg: params.cfg,
+    accountId: params.ctx.AccountId,
+  });
 }

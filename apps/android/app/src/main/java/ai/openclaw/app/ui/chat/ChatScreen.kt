@@ -1797,7 +1797,6 @@ private fun ChatMessageList(
     workingRunTracker.resolve(
       indicatorVisible = indicatorVisible,
       clockKey = activeRunClockKey,
-      authoritativeRunId = activeRunId,
       nowElapsedMs = SystemClock.elapsedRealtime(),
       outputTokens = activeRunOutputTokens,
     )
@@ -2037,7 +2036,6 @@ private fun ChatMessageList(
 internal data class ChatWorkingRun(
   val clockKey: String,
   val observedAtElapsedMs: Long,
-  val authoritativeRunId: String?,
   val outputTokens: Long?,
 )
 
@@ -2049,7 +2047,6 @@ internal class ChatWorkingRunTracker(
   fun resolve(
     indicatorVisible: Boolean,
     clockKey: String?,
-    authoritativeRunId: String?,
     nowElapsedMs: Long,
     outputTokens: Long?,
   ): ChatWorkingRun? {
@@ -2063,16 +2060,11 @@ internal class ChatWorkingRunTracker(
       return ChatWorkingRun(
         clockKey = resolvedClockKey,
         observedAtElapsedMs = nowElapsedMs,
-        authoritativeRunId = authoritativeRunId,
         outputTokens = outputTokens,
       ).also { current = it }
     }
-    if (previous.authoritativeRunId != authoritativeRunId || previous.outputTokens != outputTokens) {
-      current =
-        previous.copy(
-          authoritativeRunId = authoritativeRunId,
-          outputTokens = outputTokens,
-        )
+    if (previous.outputTokens != outputTokens) {
+      current = previous.copy(outputTokens = outputTokens)
     }
     return current
   }

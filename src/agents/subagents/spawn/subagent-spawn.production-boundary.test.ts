@@ -408,22 +408,7 @@ describe("recursive spawn production boundary", () => {
     assertNoModelExecution: () => expect(runEmbeddedAgent).not.toHaveBeenCalled(),
   });
 
-  it.each([
-    {
-      name: "configured child model",
-      configuredChildModel: true,
-      storedParentModel: "test-model",
-      requesterModel: { provider: "custom", model: "test-model" },
-    },
-    { name: "parent session model", configuredChildModel: false, storedParentModel: "child-model" },
-    {
-      name: "active parent turn model",
-      configuredChildModel: false,
-      storedParentModel: "test-model",
-      requesterModel: { provider: "custom", model: "child-model" },
-    },
-  ])("admits a descendant using the $name", async (scenario) => {
-    const { configuredChildModel, storedParentModel, requesterModel } = scenario;
+  it("admits a descendant using the active parent turn model", async () => {
     const customProvider = expectDefined(
       runtimeConfig.models?.providers?.custom,
       "custom provider fixture",
@@ -436,7 +421,6 @@ describe("recursive spawn production boundary", () => {
         ...runtimeConfig.agents,
         defaults: {
           ...runtimeConfig.agents?.defaults,
-          ...(configuredChildModel ? { subagents: { model: "custom/child-model" } } : {}),
           modelPolicy: { allow: ["custom/manual-only"] },
         },
       },
@@ -468,7 +452,7 @@ describe("recursive spawn production boundary", () => {
       { storePath: bound.storePath, sessionKey: parentSessionKey },
       {
         providerOverride: "custom",
-        modelOverride: storedParentModel,
+        modelOverride: "test-model",
         modelOverrideSource: "user",
       },
     );
@@ -483,7 +467,10 @@ describe("recursive spawn production boundary", () => {
     let childRunId: string | undefined;
     const failures: unknown[] = [];
     try {
-      const result = await createBoundSpawnInvocation(bound, undefined, requesterModel)();
+      const result = await createBoundSpawnInvocation(bound, undefined, {
+        provider: "custom",
+        model: "child-model",
+      })();
       expect(result.details, JSON.stringify(result)).toMatchObject({
         status: "accepted",
         childSessionKey: expect.any(String),

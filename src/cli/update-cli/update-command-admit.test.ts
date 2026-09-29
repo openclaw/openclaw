@@ -13,6 +13,7 @@ import {
   parseUpdateAdmissionVerdict,
   type UpdateAdmissionVerdict,
 } from "../../infra/update-run-schema.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { runCli } from "../run-main.js";
 import { registerUpdateCli } from "../update-cli.js";
@@ -165,28 +166,46 @@ describe("candidate update admission", () => {
     expect(fs.existsSync(resolveOpenClawStateSqlitePath())).toBe(false);
   });
 
-  it("admits a missing custom plugin path with the candidate warning and preserves its bytes", async () => {
+  it("admits a missing custom plugin path without changing profile artifacts with an idle WAL", async () => {
     writeConfig({ plugins: { load: { paths: [path.join(home, "missing-custom-plugin")] } } });
-    const before = snapshotFiles();
-    await runCli([
-      "node",
-      "openclaw",
-      "--profile",
-      "admission-fixture",
-      "update",
-      "admit",
-      "--context",
-      contextPath,
-    ]);
-    expect(readVerdict()).toMatchObject({
-      verdict: "admit",
-      warnings: expect.arrayContaining([
-        expect.objectContaining({ code: "configured-plugin-path-unavailable" }),
-      ]),
-      facts: { checks: expect.arrayContaining([{ name: "config", status: "warn" }]) },
-    });
-    expect(process.exitCode).toBe(0);
-    expect(snapshotFiles()).toEqual(before);
+    const databasePath = resolveOpenClawStateSqlitePath();
+    fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+    const database = new DatabaseSync(databasePath);
+    try {
+      database.exec(
+        fs.readFileSync(new URL("../../state/openclaw-state-schema.sql", import.meta.url), "utf8"),
+      );
+      database.exec(`PRAGMA user_version=${OPENCLAW_STATE_SCHEMA_VERSION}`);
+      database
+        .prepare("INSERT INTO schema_meta VALUES ('primary','global',?,NULL,?,1,1)")
+        .run(OPENCLAW_STATE_SCHEMA_VERSION, context.supervisor.version);
+      // Keep a committed WAL without a concurrent writer so any byte change belongs to admission.
+      database.exec(
+        "PRAGMA journal_mode=WAL; INSERT INTO config_machine_state VALUES ('admission-fixture','{}',1)",
+      );
+      const before = snapshotFiles();
+      await runCli([
+        "node",
+        "openclaw",
+        "--profile",
+        "admission-fixture",
+        "update",
+        "admit",
+        "--context",
+        contextPath,
+      ]);
+      expect(readVerdict()).toMatchObject({
+        verdict: "admit",
+        warnings: expect.arrayContaining([
+          expect.objectContaining({ code: "configured-plugin-path-unavailable" }),
+        ]),
+        facts: { checks: expect.arrayContaining([{ name: "config", status: "warn" }]) },
+      });
+      expect(process.exitCode).toBe(0);
+      expect(snapshotFiles()).toEqual(before);
+    } finally {
+      database.close();
+    }
   });
 
   it("returns invalid-config with exit 3 without repairing or quoting rejected config values", async () => {

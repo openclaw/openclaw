@@ -1,11 +1,15 @@
-// Tlon plugin module implements sse client behavior.
 import { randomUUID } from "node:crypto";
 import { Readable } from "node:stream";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import type { LookupFn, SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
-import { ensureUrbitChannelOpen, pokeUrbitChannel, scryUrbitPath } from "./channel-ops.js";
+import {
+  ensureUrbitChannelOpen,
+  pokeUrbitChannel,
+  putUrbitChannel,
+  scryUrbitPath,
+} from "./channel-ops.js";
 import { getUrbitContext, normalizeUrbitCookie } from "./context.js";
 import { UrbitHttpError } from "./errors.js";
 import { urbitFetch } from "./fetch.js";
@@ -55,7 +59,6 @@ export class UrbitSSEClient {
   cookie: string;
   ship: string;
   channelId: string;
-  channelUrl: string;
   subscriptions: Array<{
     id: number;
     action: "subscribe";
@@ -100,7 +103,6 @@ export class UrbitSSEClient {
     this.cookie = normalizeUrbitCookie(cookie);
     this.ship = ctx.ship;
     this.channelId = `${Math.floor(Date.now() / 1000)}-${randomUUID()}`;
-    this.channelUrl = new URL(`/~/channel/${this.channelId}`, this.url).toString();
     this.onReconnect = options.onReconnect ?? null;
     this.autoReconnect = options.autoReconnect !== false;
     this.maxReconnectAttempts = options.maxReconnectAttempts ?? 10;
@@ -126,7 +128,6 @@ export class UrbitSSEClient {
 
   private resetChannelIdentity(): void {
     this.channelId = `${Math.floor(Date.now() / 1000)}-${randomUUID()}`;
-    this.channelUrl = new URL(`/~/channel/${this.channelId}`, this.url).toString();
     this.lastHeardEventId = -1;
     this.lastAcknowledgedEventId = -1;
   }
@@ -175,7 +176,8 @@ export class UrbitSSEClient {
     app: string;
     path: string;
   }) {
-    const { response, release } = await this.putChannelPayload([subscription], {
+    const { response, release } = await putUrbitChannel(this.channelRequestContext(), {
+      body: [subscription],
       timeoutMs: 30_000,
       auditContext: "tlon-urbit-subscribe",
     });
@@ -434,10 +436,6 @@ export class UrbitSSEClient {
     );
   }
 
-  /**
-   * Update the cookie used for authentication.
-   * Call this when re-authenticating after session expiry.
-   */
   updateCookie(newCookie: string): void {
     this.cookie = normalizeUrbitCookie(newCookie);
   }
@@ -449,7 +447,8 @@ export class UrbitSSEClient {
       "event-id": eventId,
     };
 
-    const { response, release } = await this.putChannelPayload([ackData], {
+    const { response, release } = await putUrbitChannel(this.channelRequestContext(), {
+      body: [ackData],
       timeoutMs: 10_000,
       auditContext: "tlon-urbit-ack",
     });
@@ -470,17 +469,14 @@ export class UrbitSSEClient {
       return;
     }
 
-    // If we've hit max attempts, wait longer then reset and keep trying
     if (this.reconnectAttempts >= this.maxReconnectAttempts) {
       this.logger.log?.(
         `[SSE] Max reconnection attempts (${this.maxReconnectAttempts}) reached. Waiting 10s before resetting...`,
       );
-      // Wait 10 seconds before resetting and trying again
-      const extendedBackoff = 10000; // 10 seconds
-      if (!(await this.waitForReconnectDelay(extendedBackoff)) || this.aborted) {
+      if (!(await this.waitForReconnectDelay(10_000)) || this.aborted) {
         return;
       }
-      this.reconnectAttempts = 0; // Reset counter to continue trying
+      this.reconnectAttempts = 0;
       this.logger.log?.("[SSE] Reconnection attempts reset, resuming reconnection...");
     }
 
@@ -544,7 +540,8 @@ export class UrbitSSEClient {
       }));
 
       {
-        const { release } = await this.putChannelPayload(unsubscribes, {
+        const { release } = await putUrbitChannel(this.channelRequestContext(), {
+          body: unsubscribes,
           timeoutMs: 30_000,
           auditContext: "tlon-urbit-unsubscribe",
         });
@@ -590,28 +587,5 @@ export class UrbitSSEClient {
       }
       throw error;
     }
-  }
-
-  private async putChannelPayload(
-    payload: unknown,
-    params: { timeoutMs: number; auditContext: string },
-  ) {
-    return await urbitFetch({
-      baseUrl: this.url,
-      path: `/~/channel/${this.channelId}`,
-      init: {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          Cookie: this.cookie,
-        },
-        body: JSON.stringify(payload),
-      },
-      ssrfPolicy: this.ssrfPolicy,
-      lookupFn: this.lookupFn,
-      fetchImpl: this.fetchImpl,
-      timeoutMs: params.timeoutMs,
-      auditContext: params.auditContext,
-    });
   }
 }

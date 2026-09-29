@@ -579,11 +579,11 @@ describe("node worker supervisor recovery", () => {
       ).length;
 
     try {
-      const first = supervisor.initialize();
-      const concurrent = supervisor.initialize();
-
-      expect(concurrent).toBe(first);
-      await expect(first).rejects.toThrow("temporary launch journal failure");
+      await Promise.all([
+        expect(supervisor.initialize()).rejects.toThrow("temporary launch journal failure"),
+        expect(supervisor.initialize()).rejects.toThrow("temporary launch journal failure"),
+      ]);
+      expect(attempts()).toBe(1);
       await expect(supervisor.initialize()).resolves.toBeUndefined();
       expect(attempts()).toBe(2);
       expect(capacitySnapshots).toEqual([

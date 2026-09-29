@@ -49,6 +49,11 @@ vi.mock("openclaw/plugin-sdk/agent-harness-attempt-runtime", () => ({
 }));
 vi.mock("openclaw/plugin-sdk/agent-harness-runtime", () => ({
   agentHarnessAttemptTerminal: { normalize: () => ({ kind: "ok" }) },
+  loadAgentHarnessMcpConfig: async () => ({
+    config: { mcpServers: {} },
+    diagnostics: [],
+    requesterScopedServerNames: [],
+  }),
   resolveAgentHarnessBeforePromptBuildResult: async ({
     prompt,
     developerInstructions,

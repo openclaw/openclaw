@@ -1,5 +1,3 @@
-// Send gateway methods route operator/tool messages and poll actions through
-// channel plugins, outbound session state, durable delivery, and transcript mirrors.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -193,7 +191,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       },
       work: async ({ cfg, channel, plugin, canonicalAction, accountId, dedupeKey, authorize }) => {
         try {
-          const completed = await withChannelReadAuthority(
+          return await withChannelReadAuthority(
             request.action === "download-file" || messageAuthority.assertReadCurrent
               ? assertDirectAdapterHandoff
               : undefined,
@@ -468,7 +466,6 @@ export const sendHandlers: GatewayRequestHandlers = {
               }
             },
           );
-          return completed;
         } catch (err) {
           if (!isChannelPartialDeliveryError(err) && !authorize()) {
             return createGatewayInflightAuthorityFailure({ context, dedupeKey, channel });
@@ -642,9 +639,8 @@ export const sendHandlers: GatewayRequestHandlers = {
             },
           ];
           const outboundPayloadPlan = createOutboundPayloadPlan(outboundPayloads);
-          const mirrorProjection = projectOutboundPayloadPlanForMirror(outboundPayloadPlan);
-          const mirrorText = mirrorProjection.text;
-          const mirrorMediaUrls = mirrorProjection.mediaUrls;
+          const { text: mirrorText, mediaUrls: mirrorMediaUrls } =
+            projectOutboundPayloadPlanForMirror(outboundPayloadPlan);
           const derivedRoute = await resolveOutboundSessionRoute({
             cfg,
             channel,

@@ -1,8 +1,3 @@
-/**
- * Channel ingress allowlist diagnostics.
- *
- * Merges allowlists, applies identifier authentication policy, and redacts access-graph facts.
- */
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   meetsIdentifierAuthentication,

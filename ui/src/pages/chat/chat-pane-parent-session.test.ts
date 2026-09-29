@@ -7,9 +7,8 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import { createMountedPanes, refreshPane } from "./chat-pane-mounted.test-support.ts";
-import type { TestChatPane } from "./chat-pane.test-support.ts";
+import { createPaneHeaderWorkspaceFixture, type TestChatPane } from "./chat-pane.test-support.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
-import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
@@ -22,7 +21,7 @@ function parentBreadcrumb(pane: TestChatPane) {
   const container = document.createElement("div");
   render(
     pane.renderPaneHeader(
-      createSessionWorkspaceProps(pane.state),
+      createPaneHeaderWorkspaceFixture(pane.state),
       selectedChatSessionRow(pane.state),
       false,
       undefined,

@@ -20,6 +20,85 @@ function expectNoDispatch(f: Candidate) {
 }
 
 describePosix("prior-CI whole REST observation fallback", () => {
+  it.each([1, 4])(
+    "preserves prior-CI admission when GraphQL quota expires after %s known observations",
+    (observations) => {
+      const f = preExistingCandidate();
+      f.save({ ...f.state(), quotaAt: "observe", quotaAfterObservations: observations });
+
+      const result = f.adminPriorCi(f.path);
+
+      const state = f.state();
+      expect(
+        result.status,
+        result.output +
+          JSON.stringify({
+            mutations: state.mutations,
+            posts: state.posts,
+            calls: state.calls.slice(-12),
+          }),
+      ).toBe(0);
+      expect(state).toMatchObject({
+        observationReads: observations,
+        mutations: 1,
+        posts: 1,
+        gates: "fail",
+        restMergePayload: { sha: f.head, merge_method: "squash" },
+      });
+      expect(f.record()).toMatchObject({
+        phase: "complete",
+        transport: "rest",
+        route: "admin",
+        head: f.head,
+        priorCiAdmin: { head: f.head, dispatchTransport: "rest" },
+      });
+      const dispatch = state.calls.findIndex(
+        (call) => call.includes("repos/fixture/repo/pulls/123/merge") && call.includes("PUT"),
+      );
+      const reads = state.calls.slice(0, dispatch);
+      const finalRestRead = reads.findLastIndex((call) =>
+        call.includes("repos/fixture/repo/git/ref/heads/main"),
+      );
+      expect(finalRestRead).toBeGreaterThan(0);
+      expect(
+        reads.findLastIndex((call) => call.includes("orgs/fixture/memberships/fixture-operator")),
+      ).toBeGreaterThan(finalRestRead);
+    },
+  );
+
+  it.each([
+    ["admin", "active organization admin"],
+    ["review", "current enforced reviews must be satisfied"],
+    ["security", "unsuccessful openclaw/security-sensitive-review"],
+  ] as const)(
+    "rechecks %s revoked during the first REST read after final GraphQL quota expiry",
+    (fault, diagnostic) => {
+      const f = preExistingCandidate();
+      const state = f.state();
+      f.save({
+        ...state,
+        quotaAt: "observe",
+        quotaAfterObservations: 4,
+        restObservation: {
+          priorCi:
+            fault === "admin"
+              ? { membership: "member" }
+              : fault === "review"
+                ? { reviewDecision: "REVIEW_REQUIRED" }
+                : { security: { ...state.priorCi.security, fault: "failed-guard" } },
+        },
+      });
+
+      const result = f.adminPriorCi(f.path);
+
+      expect(result.status, result.output).toBe(1);
+      expect(result.output).toContain(diagnostic);
+      expect(f.state().observationReads).toBe(4);
+      expect(f.state().restObservationAppliedAt).toBeGreaterThan(0);
+      expectNoDispatch(f);
+    },
+  );
+
   it.each(["stability", "final authority"])(
     "settles a recalculated projection after forward main during %s",
     (stage) => {

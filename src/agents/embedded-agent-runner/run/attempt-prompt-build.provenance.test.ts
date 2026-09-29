@@ -309,9 +309,10 @@ it("injects complete lifecycle results into requester prompts and acknowledges o
     runs,
     persist,
     persistOrThrow: persist,
-    restoreOnce: vi.fn(),
+    restoreOnce: vi.fn(async () => {}),
     startAnnounceCleanup: vi.fn(() => false),
     settleRequesterTurn: controller.settleRequesterTurnAfterSessionSpawns,
+    markRequesterYielded: controller.markRequesterTurnYielded,
   });
   steeringMocks.lease.mockImplementation(api.leasePendingAgentSteeringItems);
 

@@ -91,14 +91,10 @@ export function applyChatSendReplyContextFields(
   ctx: MsgContext,
   fields: ChatSendReplyContextFields,
 ): void {
-  if (fields.ReplyToId !== undefined) {
-    ctx.ReplyToId = fields.ReplyToId;
-  }
-  if (fields.ReplyToBody !== undefined) {
-    ctx.ReplyToBody = fields.ReplyToBody;
-  }
-  if (fields.ReplyToSender !== undefined) {
-    ctx.ReplyToSender = fields.ReplyToSender;
+  for (const key of ["ReplyToId", "ReplyToBody", "ReplyToSender"] as const) {
+    if (fields[key] !== undefined) {
+      ctx[key] = fields[key];
+    }
   }
 }
 

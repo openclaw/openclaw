@@ -196,8 +196,8 @@ describe("subagent orphan recovery — faithful restart path", () => {
     try {
       await lock.run(async () => {
         await runStartupSessionMigration({ cfg: { agents: { entries: { main: {} } } }, log });
-        initSubagentRegistry();
-        activateGatewayRuntime();
+        await initSubagentRegistry();
+        await activateGatewayRuntime();
         await testing.sweepOnceForTests();
         await fixture.settle();
         for (const entry of records) {
@@ -374,8 +374,8 @@ describe("subagent orphan recovery — faithful restart path", () => {
         resetSubagentRegistryForTests({ persist: false });
         resetGatewayWorkAdmission();
         rotateAgentEventLifecycleGeneration();
-        initSubagentRegistry();
-        activateGatewayRuntime();
+        await initSubagentRegistry();
+        await activateGatewayRuntime();
         await testing.sweepOnceForTests();
         expect(dispatchAgent).not.toHaveBeenCalled();
         expect(getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
@@ -522,8 +522,8 @@ describe("subagent orphan recovery — faithful restart path", () => {
         resetSubagentRegistryForTests({ persist: false });
         await cleanupSessionStateForTest({ stateDir: fixture.stateDir });
         rotateAgentEventLifecycleGeneration();
-        initSubagentRegistry();
-        activateGatewayRuntime();
+        await initSubagentRegistry();
+        await activateGatewayRuntime();
       }
       const announce = vi.mocked(runSubagentAnnounceFlow);
       const cleanupBrowser = vi.mocked(cleanupBrowserSessionsForLifecycleEnd);
@@ -742,9 +742,9 @@ describe("subagent orphan recovery — faithful restart path", () => {
         released.resolve();
         try {
           await blocker;
+          await fixture.settle();
           // Settle the original untracked deletion too when the ownership assertion fails.
           await vi.waitFor(() => expect(loadExactSessionEntry(retired)).toBeUndefined());
-          await fixture.settle();
         } finally {
           if (getActiveGatewayRootWorkCount() === 0) {
             resetGatewayWorkAdmission();
@@ -800,8 +800,8 @@ describe("subagent orphan recovery — faithful restart path", () => {
     await fixture.settle();
     resetSubagentRegistryForTests({ persist: false });
     rotateAgentEventLifecycleGeneration();
-    initSubagentRegistry();
-    activateGatewayRuntime();
+    await initSubagentRegistry();
+    await activateGatewayRuntime();
     await Promise.resolve();
     await testing.sweepOnceForTests();
 
@@ -830,8 +830,8 @@ describe("subagent orphan recovery — faithful restart path", () => {
 
     resetSubagentRegistryForTests({ persist: false });
     rotateAgentEventLifecycleGeneration();
-    initSubagentRegistry();
-    activateGatewayRuntime();
+    await initSubagentRegistry();
+    await activateGatewayRuntime();
     await Promise.resolve();
     await testing.sweepOnceForTests();
 

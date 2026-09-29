@@ -68,12 +68,12 @@ export function registerRequesterWakeSettlementBoundaryTests({
     await spawnVisibleChild({ ...child, requesterTurnRunId });
     await createSessionsYieldTool({
       sessionId: "sess-main",
-      claimYield: () =>
-        registry.markRequesterTurnYielded({
+      claimYield: async () =>
+        (await registry.markRequesterTurnYielded({
           requesterSessionKey,
           requesterAgentId: "main",
           requesterTurnRunId,
-        }) > 0,
+        })) > 0,
       onYield: () => {},
     }).execute("yield-current-result", {});
     const { withLocalSessionPlacementTurnSettlement } =
@@ -165,6 +165,7 @@ export function registerRequesterWakeSettlementBoundaryTests({
     const completions: Array<{ delivered: boolean; error?: string }> = [];
     const runWake = () =>
       maybeWakeRequesterAfterAllChildrenSettled({
+        isSourceCurrent: () => true,
         requesterSessionKey,
         settledEntry: batch,
         transitionBatch: (_runIds, state) => {

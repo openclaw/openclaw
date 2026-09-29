@@ -1,5 +1,3 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GitCheckoutContext } from "../infra/git-read-operations.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
@@ -22,6 +20,7 @@ import type { SessionRowProjection } from "./session-row-projection.js";
 import { createSessionListEntryFilter } from "./session-sharing.js";
 import type { loadGatewaySessionEntryReadOnly } from "./session-utils-store.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
+import { resolveSessionWorkspaceRoots } from "./session-workspace-roots.js";
 
 type SelectedSession = Pick<
   ReturnType<typeof loadGatewaySessionEntryReadOnly>,
@@ -62,11 +61,7 @@ export function resolveControlUiSessionPrTarget(
     const remote = repository ? parseGitHubRemoteUrl(repository.url) : null;
     source = remote && repository ? { ...remote, branch: repository.branch } : null;
   } else {
-    source =
-      normalizeOptionalString(entry.spawnedCwd) ??
-      normalizeOptionalString(entry.spawnedWorkspaceDir) ??
-      normalizeOptionalString(resolveAgentWorkspaceDir(cfg, agentId)) ??
-      null;
+    source = resolveSessionWorkspaceRoots(cfg, agentId, entry).diffCwd ?? null;
   }
   return {
     params: { sessionKey: canonicalKey, agentId },

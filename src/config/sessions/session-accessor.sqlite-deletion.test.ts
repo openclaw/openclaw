@@ -8,6 +8,7 @@ import type {
   AgentHarness,
   AgentHarnessSessionDeletionParams,
 } from "../../agents/harness/types.js";
+import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import * as sqliteQueries from "../../infra/kysely-sync.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
@@ -30,10 +31,12 @@ import {
   deferOpenClawAgentPostCommitPublication,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { createOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-db-async-lifecycle.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import {
   applySessionEntryLifecycleMutation,
@@ -173,136 +176,160 @@ describe("session deletion and native owner state", () => {
   ])(
     "clears node artifacts without repeated inventories (delete windows: $deleteWindows, sparse: $sparse, reject suggestions: $rejectSuggestions)",
     async ({ deleteWindows, sparse, rejectSuggestions }) => {
-      await seed();
-      const otherKey = "agent:main:unrelated-artifacts";
-      await replaceSessionEntry(
-        { sessionKey: otherKey, storePath },
-        { sessionId: "unrelated-artifacts", updatedAt: Date.now() },
-      );
-      const target = resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" });
-      const database = openOpenClawAgentDatabase({ agentId: "main", path: target.path });
-      for (const key of [sessionKey, otherKey]) {
-        recordSessionParticipant(
-          { sessionKey: key, storePath },
-          { identity: { type: "profile", id: "artifact-person" }, promptedAt: 10 },
+      const run = async () => {
+        await seed();
+        const otherKey = "agent:main:unrelated-artifacts";
+        await replaceSessionEntry(
+          { sessionKey: otherKey, storePath },
+          { sessionId: "unrelated-artifacts", updatedAt: Date.now() },
         );
-        if (!sparse) {
-          database.db
-            .prepare(
-              "INSERT INTO session_members (session_key, identity_id, added_by, added_at) VALUES (?, ?, ?, ?)",
-            )
-            .run(key, "artifact-person", "owner", 10);
-          database.db
-            .prepare(
-              "INSERT INTO session_suggestions (id, session_key, author_id, text, created_at, state) VALUES (?, ?, ?, ?, ?, ?)",
-            )
-            .run(
-              `suggestion:${key}`,
-              key,
-              "artifact-person",
-              "Keep this suggestion",
-              10,
-              "pending",
-            );
-        }
-      }
-      if (sparse) {
-        database.db.exec("DROP TABLE session_members; DROP TABLE session_suggestions;");
-      }
-      const artifactRows = () =>
-        ["session_participants", "session_members", "session_suggestions"].map((table) =>
-          sparse && table !== "session_participants"
-            ? []
-            : database.db.prepare(`SELECT * FROM ${table} ORDER BY session_key`).all(),
-        );
-      const before = artifactRows();
-      const entryBefore = read();
-      const otherBefore = read(otherKey);
-      const readWindows = () =>
-        database.db.prepare("SELECT * FROM session_windows ORDER BY session_id").all();
-      const windowsBefore = readWindows();
-      if (rejectSuggestions) {
-        database.db
-          .exec(`CREATE TEMP TRIGGER reject_artifact_delete BEFORE DELETE ON session_suggestions
-          WHEN OLD.session_key = '${sessionKey}' BEGIN
-          SELECT CASE WHEN EXISTS (SELECT 1 FROM session_members WHERE session_key = OLD.session_key)
-            THEN RAISE(ABORT, 'membership deletion order changed')
-            ELSE RAISE(ABORT, 'injected suggestion deletion failure') END;
-          END`);
-      }
-      const owner = nativeOwner();
-      const counter = trackSqliteStatementExecutions(database.db, ["inventory"], (sql) =>
-        /^select "name" from "sqlite_schema" where "type" = \? and "name" in \(/i.test(sql)
-          ? "inventory"
-          : null,
-      );
-      try {
-        const deletion = deleteWindows
-          ? owner.run(() =>
-              applySessionEntryLifecycleMutation({
-                storePath,
-                removals: [{ sessionKey, deleteOwnedWindows: true }],
-                skipMaintenance: true,
-              }),
-            )
-          : owner.run(() =>
-              deleteSessionEntryLifecycle({
-                agentId: "main",
-                storePath,
-                target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
-                archiveTranscript: false,
-              }),
-            );
-        if (rejectSuggestions) {
-          const error = await deletion.catch((caughtError: unknown) => caughtError);
-          expect(error).toBeInstanceOf(Error);
-          expect(error).toMatchObject({
-            code: "ERR_SQLITE_ERROR",
-            message: "injected suggestion deletion failure",
-          });
-        } else {
-          await expect(deletion).resolves.toMatchObject(
-            deleteWindows ? { removedSessionKeys: [sessionKey] } : { deleted: true },
+        const target = resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" });
+        const database = openOpenClawAgentDatabase({ agentId: "main", path: target.path });
+        for (const key of [sessionKey, otherKey]) {
+          recordSessionParticipant(
+            { sessionKey: key, storePath },
+            { identity: { type: "profile", id: "artifact-person" }, promptedAt: 10 },
           );
-        }
-        expect.soft(counter.counts.inventory).toBeGreaterThan(0);
-        // Successful public deletion also inventories board cleanup after the node artifacts.
-        const inventoryBudget = !deleteWindows && !rejectSuggestions ? 2 : 1;
-        expect.soft(counter.counts.inventory).toBeLessThanOrEqual(inventoryBudget);
-      } finally {
-        counter.restore();
-      }
-      expect(read(otherKey)).toEqual(otherBefore);
-      if (rejectSuggestions) {
-        expect(artifactRows()).toEqual(before);
-        expect(read()).toEqual(entryBefore);
-        expect(readWindows()).toEqual(windowsBefore);
-        expect(bindings.get(sessionKey)).toBe(`thread:${sessionKey}`);
-      } else {
-        expect(artifactRows()).toEqual(
-          before.map((rows) => rows.filter((row) => row.session_key === otherKey)),
-        );
-        expect(read()).toBeUndefined();
-        expect(bindings.has(sessionKey)).toBe(false);
-        expect(readWindows()).toEqual(
-          deleteWindows
-            ? windowsBefore.filter((window) => window.session_key !== sessionKey)
-            : windowsBefore,
-        );
-        expect(
-          database.db
-            .prepare("SELECT entry_valid FROM session_nodes WHERE session_key = ?")
-            .get(sessionKey),
-        ).toEqual(deleteWindows ? undefined : { entry_valid: -1 });
-        if (sparse) {
-          expect(
+          if (!sparse) {
             database.db
               .prepare(
-                "SELECT name FROM sqlite_schema WHERE name IN ('session_members', 'session_suggestions')",
+                "INSERT INTO session_members (session_key, identity_id, added_by, added_at) VALUES (?, ?, ?, ?)",
               )
-              .all(),
-          ).toEqual([]);
+              .run(key, "artifact-person", "owner", 10);
+            database.db
+              .prepare(
+                "INSERT INTO session_suggestions (id, session_key, author_id, text, created_at, state) VALUES (?, ?, ?, ?, ?, ?)",
+              )
+              .run(
+                `suggestion:${key}`,
+                key,
+                "artifact-person",
+                "Keep this suggestion",
+                10,
+                "pending",
+              );
+          }
         }
+        if (sparse) {
+          database.db.exec("DROP TABLE session_members; DROP TABLE session_suggestions;");
+        }
+        const artifactRows = () =>
+          ["session_participants", "session_members", "session_suggestions"].map((table) =>
+            sparse && table !== "session_participants"
+              ? []
+              : database.db.prepare(`SELECT * FROM ${table} ORDER BY session_key`).all(),
+          );
+        const before = artifactRows();
+        const entryBefore = read();
+        const otherBefore = read(otherKey);
+        const readWindows = () =>
+          database.db.prepare("SELECT * FROM session_windows ORDER BY session_id").all();
+        const windowsBefore = readWindows();
+        if (rejectSuggestions) {
+          database.db
+            .exec(`CREATE TEMP TRIGGER reject_artifact_delete BEFORE DELETE ON session_suggestions
+            WHEN OLD.session_key = '${sessionKey}' BEGIN
+            SELECT CASE WHEN EXISTS (SELECT 1 FROM session_members WHERE session_key = OLD.session_key)
+              THEN RAISE(ABORT, 'membership deletion order changed')
+              ELSE RAISE(ABORT, 'injected suggestion deletion failure') END;
+            END`);
+        }
+        const owner = nativeOwner();
+        const counter = trackSqliteStatementExecutions(database.db, ["inventory"], (sql) =>
+          /^select "name" from "sqlite_schema" where "type" = \? and "name" in \(/i.test(sql)
+            ? "inventory"
+            : null,
+        );
+        try {
+          const deletion = deleteWindows
+            ? owner.run(() =>
+                applySessionEntryLifecycleMutation({
+                  storePath,
+                  removals: [{ sessionKey, deleteOwnedWindows: true }],
+                  skipMaintenance: true,
+                }),
+              )
+            : owner.run(() =>
+                deleteSessionEntryLifecycle({
+                  agentId: "main",
+                  storePath,
+                  target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+                  archiveTranscript: false,
+                }),
+              );
+          if (rejectSuggestions) {
+            const error = await deletion.catch((caughtError: unknown) => caughtError);
+            expect(error).toBeInstanceOf(Error);
+            expect(error).toMatchObject({
+              code: "ERR_SQLITE_ERROR",
+              message: "injected suggestion deletion failure",
+            });
+          } else {
+            await expect(deletion).resolves.toMatchObject(
+              deleteWindows ? { removedSessionKeys: [sessionKey] } : { deleted: true },
+            );
+          }
+          expect.soft(counter.counts.inventory).toBeGreaterThan(0);
+          // Successful public deletion also inventories board cleanup after the node artifacts.
+          const inventoryBudget = !deleteWindows && !rejectSuggestions ? 2 : 1;
+          expect.soft(counter.counts.inventory).toBeLessThanOrEqual(inventoryBudget);
+        } finally {
+          counter.restore();
+        }
+        expect(read(otherKey)).toEqual(otherBefore);
+        if (rejectSuggestions) {
+          expect(artifactRows()).toEqual(before);
+          expect(read()).toEqual(entryBefore);
+          expect(readWindows()).toEqual(windowsBefore);
+          expect(bindings.get(sessionKey)).toBe(`thread:${sessionKey}`);
+        } else {
+          expect(artifactRows()).toEqual(
+            before.map((rows) => rows.filter((row) => row.session_key === otherKey)),
+          );
+          expect(read()).toBeUndefined();
+          expect(bindings.has(sessionKey)).toBe(false);
+          expect(readWindows()).toEqual(
+            deleteWindows
+              ? windowsBefore.filter((window) => window.session_key !== sessionKey)
+              : windowsBefore,
+          );
+          expect(
+            database.db
+              .prepare("SELECT entry_valid FROM session_nodes WHERE session_key = ?")
+              .get(sessionKey),
+          ).toEqual(deleteWindows ? undefined : { entry_valid: -1 });
+          if (sparse) {
+            expect(
+              database.db
+                .prepare(
+                  "SELECT name FROM sqlite_schema WHERE name IN ('session_members', 'session_suggestions')",
+                )
+                .all(),
+            ).toEqual([]);
+          }
+        }
+      };
+      if (sparse) {
+        // Deliberately incomplete schema belongs to Doctor's native maintenance owner.
+        const schemaOwner = acquireGatewayStateOwner({
+          databasePath: resolveOpenClawStateSqlitePath(),
+        });
+        const maintenance = createOpenClawDatabaseMaintenanceScope({
+          schemaMaintenance: true,
+          assertOwnerCurrent: schemaOwner.assertCurrent,
+          assertDatabaseAccess: schemaOwner.assertDatabaseAccess,
+        });
+        try {
+          await maintenance.run(run);
+        } finally {
+          try {
+            await maintenance.close();
+          } finally {
+            schemaOwner.release();
+          }
+        }
+      } else {
+        await run();
       }
     },
   );
@@ -550,8 +577,8 @@ describe("session deletion and native owner state", () => {
     const cleanupError = new Error("injected receipt cleanup failure");
     vi.spyOn(
       personalPublicationLifecycle,
-      "deletePersonalGitHubSessionReceipts",
-    ).mockImplementationOnce(() => {
+      "preparePersonalGitHubSessionReceiptDeletion",
+    ).mockResolvedValueOnce(async () => {
       throw cleanupError;
     });
     const identityListener = vi.fn();

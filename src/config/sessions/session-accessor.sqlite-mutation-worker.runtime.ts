@@ -30,6 +30,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseByPath } from "../../state/openclaw-state-db-cache.js";
 import type { CanonicalSessionValidationResult } from "./session-accessor.sqlite-contract.js";
+import { assertSessionSubagentRunsCurrent } from "./session-accessor.sqlite-descendant-basis.js";
 import type { SqliteSessionReclamationPlan } from "./session-accessor.sqlite-lifecycle-types.js";
 import {
   markSqliteReclamationSettled,
@@ -325,13 +326,17 @@ export async function runReclamationWorkerPort(
                   // Deferred periodic work outside this synchronous page unit still needs its relay.
                   checkpointResultOwnedByRequest =
                     request.type === "reclaim" && request.plan.kind === "maintenance-pages";
-                  const authorizeCommit = () =>
+                  const authorizeCommit = () => {
                     waitForSqliteReclamationCommit(request.commitGate, () =>
                       port.postMessage({
                         type: "commit-request",
                         operationId,
                       } satisfies SqliteReclamationWorkerMessage),
                     );
+                    if (request.type === "reclaim") {
+                      assertSessionSubagentRunsCurrent(request.plan, options.env);
+                    }
+                  };
                   const reclaimed =
                     request.type === "canonical-validation"
                       ? runOpenClawAgentWriteTransaction(

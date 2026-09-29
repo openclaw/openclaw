@@ -95,6 +95,7 @@ export type MediaGenerationExecutionResult = {
 
 type CreateMediaGenerationTaskRunParams = {
   sessionKey?: string;
+  requesterRunSessionKey?: string;
   requesterAgentId?: string;
   requesterOrigin?: DeliveryContext;
   prompt: string;
@@ -215,6 +216,7 @@ async function createMediaGenerationTaskRun(
   if (!sessionKey) {
     return null;
   }
+  const requesterRunSessionKey = params.requesterRunSessionKey?.trim() || sessionKey;
   const runId = `tool:${params.toolName}:${crypto.randomUUID()}`;
   const assertCurrent = captureMediaGenerationAdmission(params.assertCurrent);
   const env = captureSessionTranscriptStorageEnvironment(process.env);
@@ -223,8 +225,16 @@ async function createMediaGenerationTaskRun(
     // Pin the complete requester route when detached work starts. Completion-time
     // session state can move to another peer while generation is still running.
     const cfg = getRuntimeConfig();
-    const agentId = tryResolveSubagentRequesterAgentId(cfg, sessionKey, params.requesterAgentId);
-    const canonicalKey = resolveRequesterStoreKey(cfg, sessionKey, params.requesterAgentId);
+    const agentId = tryResolveSubagentRequesterAgentId(
+      cfg,
+      requesterRunSessionKey,
+      params.requesterAgentId,
+    );
+    const canonicalKey = resolveRequesterStoreKey(
+      cfg,
+      requesterRunSessionKey,
+      params.requesterAgentId,
+    );
     const storePath = agentId
       ? resolveSessionStorePathCore(cfg.session?.store, { agentId })
       : undefined;
@@ -236,9 +246,10 @@ async function createMediaGenerationTaskRun(
               storePath,
               env,
               sessionKey:
-                sessionKey === "main" || sessionKey === normalizeMainKey(cfg.session?.mainKey)
+                requesterRunSessionKey === "main" ||
+                requesterRunSessionKey === normalizeMainKey(cfg.session?.mainKey)
                   ? canonicalKey
-                  : sessionKey,
+                  : requesterRunSessionKey,
               hydrateSkillPromptRefs: false,
             },
             assertCurrent,

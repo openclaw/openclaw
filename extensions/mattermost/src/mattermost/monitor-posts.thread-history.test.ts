@@ -245,27 +245,38 @@ describe("Mattermost server thread recovery through the post handler", () => {
 
   it("rejects same-session lifecycle rotation and deletion while fetching", async () => {
     const f = await setup("channel");
-    for (const remove of [false, true]) {
-      const entered = createDeferred<void>();
-      const release = createDeferred<void>();
-      beforeResponse = async () => {
-        entered.resolve();
-        await release.promise;
-      };
-      const pending = f.recover(f.turn);
-      await entered.promise;
-      if (remove) {
-        await deleteSessionEntry({
-          agentId: "main",
-          storePath: f.monitor.cfg.session?.store,
-          sessionKey: f.sessionKey,
-        });
-      } else {
-        await f.rotate("stored-session", "rotated-generation");
+    // Hold the response race's clock; the separate deadline case exercises real elapsed time.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
+    try {
+      for (const remove of [false, true]) {
+        const entered = createDeferred<void>();
+        const release = createDeferred<void>();
+        beforeResponse = async () => {
+          entered.resolve();
+          await release.promise;
+        };
+        const pending = f.recover(f.turn);
+        try {
+          await entered.promise;
+          if (remove) {
+            await deleteSessionEntry({
+              agentId: "main",
+              storePath: f.monitor.cfg.session?.store,
+              sessionKey: f.sessionKey,
+            });
+          } else {
+            await f.rotate("stored-session", "rotated-generation");
+          }
+          release.resolve();
+          expect((await pending).current).toBe(false);
+          expect(f.histories.size).toBe(0);
+        } finally {
+          release.resolve();
+          await pending;
+        }
       }
-      release.resolve();
-      expect((await pending).current).toBe(false);
-      expect(f.histories.size).toBe(0);
+    } finally {
+      vi.useRealTimers();
     }
   });
 

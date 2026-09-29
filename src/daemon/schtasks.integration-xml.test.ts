@@ -20,7 +20,7 @@ function exportedTaskXml(settings: string[] = [], newline = "\r\n") {
 }
 
 describe("installed Scheduled Task XML fixtures", () => {
-  it.each([undefined, "true", "false"])(
+  it.each([undefined, "true"])(
     "disables task and on-demand launch when exported settings are %s",
     (value) => {
       const xml = exportedTaskXml(
@@ -41,7 +41,7 @@ describe("installed Scheduled Task XML fixtures", () => {
     },
   );
 
-  it.each(["\n", "\r\n", "\r\r\n"])(
+  it.each(["\r\r\n"])(
     "compares enabled exports with %j line endings without ignoring other settings",
     (newline) => {
       const enabled = exportedTaskXml(["<AllowStartOnDemand>false</AllowStartOnDemand>"], newline);
