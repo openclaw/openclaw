@@ -3193,4 +3193,4 @@ ui/src/pages/skills/view.ts	2
 ui/src/pages/usage/view-details.ts	5
 ui/src/pages/usage/view-overview.ts	2
 ui/src/pages/usage/view.ts	5
-ui/src/pages/worktrees/worktrees-page.ts	3
+ui/src/pages/worktrees/worktrees-page.ts	2
