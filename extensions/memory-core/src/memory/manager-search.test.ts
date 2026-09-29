@@ -372,6 +372,33 @@ describe("searchKeyword natural-language questions", () => {
       }
     },
   );
+
+  itWithFts("ranks a full-token match ahead of a shorter partial match", async () => {
+    const db = createFtsDb();
+    try {
+      // The full match is deliberately longer, so plain BM25 length
+      // normalization alone would favor the shorter partial match.
+      insertKeywordFixture(db, {
+        id: "full",
+        path: "notes/full.md",
+        text: "- Alpha deploy preference.\n  Keep the alpha gateway local.",
+        endLine: 3,
+      });
+      insertKeywordFixture(db, {
+        id: "partial",
+        path: "notes/partial.md",
+        text: "- Beta deploy preference.",
+        endLine: 3,
+      });
+
+      const results = await searchKeywordFixture(db, "Alpha deploy preference");
+
+      expect(results.map((row) => row.id)).toEqual(["full", "partial"]);
+      expect(results[0]?.textScore ?? 0).toBeGreaterThan(results[1]?.textScore ?? 0);
+    } finally {
+      db.close();
+    }
+  });
 });
 
 describe("searchKeyword ranked limits", () => {

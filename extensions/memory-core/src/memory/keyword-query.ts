@@ -9,9 +9,15 @@ export function buildFtsQuery(raw: string): string | null {
   if (terms.length === 0) {
     return null;
   }
+  const quoted = terms.map(quoteMatchTerm);
+  if (quoted.length === 1) {
+    return quoted[0] ?? null;
+  }
   // Natural-language questions rarely repeat every token in the answer chunk.
-  // OR the terms and let BM25 rank by the rare ones (issue #160839).
-  return terms.map(quoteMatchTerm).join(" OR ");
+  // OR the terms and let BM25 rank by the rare ones (issue #160839); prepend
+  // the full-coverage conjunction so a note matching every token still earns
+  // each term's score twice and stays ahead of partial matches.
+  return `${quoted.join(" AND ")} OR ${quoted.join(" OR ")}`;
 }
 
 export function buildPathFtsQuery(raw: string): string | null {
