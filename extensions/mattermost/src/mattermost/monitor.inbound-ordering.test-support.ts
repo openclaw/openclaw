@@ -234,4 +234,66 @@ export function registerMattermostOrderingTests<Socket extends OrderingSocket>(h
       clearRuntimeConfigSnapshot();
     }
   });
+
+  it("drops a lane-waiting different-sender post when the monitor is deactivated during the wait", async () => {
+    const cfg = { ...testConfig, messages: { inbound: { debounceMs: 20 } } };
+    setRuntimeConfigSnapshot(cfg, cfg);
+    let releaseA1!: () => void;
+    const a1Gate = new Promise<void>((resolve) => {
+      releaseA1 = resolve;
+    });
+    mockState.dispatchInboundMessage.mockImplementation(
+      async (params: { ctx: { BodyForAgent?: string } }) => {
+        if (params.ctx.BodyForAgent === "A1") {
+          await a1Gate;
+        }
+      },
+    );
+    mockState.runtimeCore = createRuntimeCore(cfg, undefined, {
+      createInboundDebouncer,
+      resolveInboundDebounceMs,
+    });
+    const socket = new FakeWebSocket();
+    const abort = new AbortController();
+    const monitor = monitorMattermostProvider({
+      config: cfg,
+      runtime: testRuntime(),
+      abortSignal: abort.signal,
+      webSocketFactory: vi.fn(() => socket),
+    });
+    await vi.waitFor(() => expect(socket.openListenerCount).toBeGreaterThan(0));
+    socket.emitOpen();
+    const bodies = () =>
+      mockState.dispatchInboundMessage.mock.calls.map(([params]) => params.ctx.BodyForAgent);
+    try {
+      await emitMattermostChannelPost(socket, {
+        id: "abort-a1",
+        message: "A1",
+        senderId: "user-a",
+      });
+      await vi.waitFor(() => expect(mockState.dispatchInboundMessage).toHaveBeenCalledTimes(1));
+      // B1 is now parked on A1's admission; deactivate before A1 settles.
+      void emitMattermostChannelPost(socket, {
+        id: "abort-b1",
+        message: "B1",
+        senderId: "user-b",
+      }).catch(() => undefined);
+      await new Promise((resolve) => {
+        setTimeout(resolve, 30);
+      });
+      abort.abort();
+      releaseA1();
+      // Outlast B1's debounce window: it must never reach dispatch.
+      await new Promise((resolve) => {
+        setTimeout(resolve, 80);
+      });
+      expect(bodies()).toEqual(["A1"]);
+    } finally {
+      abort.abort();
+      releaseA1();
+      socket.emitClose(1000);
+      await monitor;
+      clearRuntimeConfigSnapshot();
+    }
+  });
 }

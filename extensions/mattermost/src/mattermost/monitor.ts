@@ -429,6 +429,13 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           // admission) instead of its full debounce delay.
           if (pendingLane && pendingLane.batchKey !== debounceKey) {
             await (pendingLane.admission ?? debouncer.flushKey(pendingLane.batchKey));
+            // Deactivation can land while this await is pending, before the
+            // new key has a buffer to cancel. Recheck so a stopped monitor
+            // does not track the lane or enqueue after shutdown.
+            if (opts.abortSignal?.aborted) {
+              await fanInChannelIngressLifecycles([turnAdoptionLifecycle]).cancel();
+              return { kind: "deferred" };
+            }
           }
           if (resolveDebounceMs() > 0 && shouldDebounceEntry(entry)) {
             entry.laneTracked = true;
