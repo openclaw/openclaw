@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { AgentsSchema } from "./zod-schema.agents.js";
 import { OpenClawSchema } from "./zod-schema.js";
@@ -59,6 +60,32 @@ describe("agent roster ownership", () => {
       AgentsSchema.safeParse({
         ownership: "explicit",
         entries: { alpha: { default: true }, beta: {} },
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe("per-agent settled-turn finalization", () => {
+  it.each([undefined, true, false])("accepts an explicit boolean or omission (%s)", (enabled) => {
+    const result = AgentsSchema.safeParse({
+      ownership: "explicit",
+      entries: {
+        alpha: { embeddedAgent: { settledTurnFinalization: enabled } },
+        beta: {},
+      },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const agents = expectDefined(result.data, "parsed agent roster");
+      expect(agents.entries?.alpha?.embeddedAgent?.settledTurnFinalization).toBe(enabled);
+      expect(agents.entries?.beta?.embeddedAgent).toBeUndefined();
+    }
+  });
+
+  it.each(["false", 0, null, {}])("rejects non-boolean settings (%j)", (enabled) => {
+    expect(
+      AgentsSchema.safeParse({
+        entries: { alpha: { embeddedAgent: { settledTurnFinalization: enabled } } },
       }).success,
     ).toBe(false);
   });

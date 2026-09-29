@@ -64,6 +64,35 @@ Z.AI GLM-4.x models automatically enable thinking mode unless you set `--thinkin
 Z.AI models enable `tool_stream` by default for tool call streaming. Set `agents.defaults.models["zai/<model>"].params.tool_stream` to `false` to disable it.
 Anthropic Claude Opus 4.8 keeps thinking off by default in OpenClaw; when adaptive thinking is explicitly enabled, Anthropic's provider-owned effort default is `high`. Claude 4.6 models default to `adaptive` when no explicit thinking level is set.
 
+## Settled-turn finalization
+
+When tools finish but the turn has no final answer, the host can request a
+separate tool-free summary from a supporting harness. This is enabled by
+default. To skip that extra model call for one agent:
+
+```json5
+{
+  agents: {
+    entries: {
+      assistant: {
+        embeddedAgent: { settledTurnFinalization: false },
+      },
+    },
+  },
+}
+```
+
+`agents.entries.<id>.embeddedAgent.settledTurnFinalization` accepts a Boolean.
+Omit it or set it to `true` to keep automatic finalization. The setting belongs
+to the selected agent and applies to host-requested settled-turn finalization
+across its provider and harness choices. It does not disable ordinary turns,
+continuation, compaction, or a harness's own internal behavior.
+
+With `false`, the host preserves the original terminal result and any existing
+incomplete-turn warning. A completed tool action is not undone or replayed by
+this switch, and disabling the summary does not turn a failed or incomplete
+turn into a success.
+
 ## CLI backend selection
 
 CLI adapter mechanics are registered by plugins, not configured under agent

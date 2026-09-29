@@ -5,7 +5,7 @@ import {
   getAdmittedRunDelegatedAuthority,
   resolveAdmittedRunActiveAssertion,
 } from "../admitted-run-context.js";
-import { resolveSessionAgentIds } from "../agent-scope.js";
+import { resolveAgentConfig, resolveSessionAgentIds } from "../agent-scope.js";
 import type { ToolOutcomeObservation } from "../agent-tools.before-tool-call.js";
 import type { FailoverReason } from "../embedded-agent-helpers.js";
 import { isStrictAgenticExecutionContractActive } from "../execution-contract.js";
@@ -148,6 +148,7 @@ export async function runPreparedEmbeddedLoop(
     )?.reason ?? lastRetryFailoverReason;
   const { sessionKey, config, agentId } = params;
   const { sessionAgentId } = resolveSessionAgentIds({ sessionKey, config, agentId });
+  const agentConfig = resolveAgentConfig(config ?? {}, sessionAgentId);
   const strictAgenticActive = isStrictAgenticExecutionContractActive({
     config: params.config,
     sessionKey: params.sessionKey,
@@ -549,6 +550,7 @@ export async function runPreparedEmbeddedLoop(
           },
           lastRunPromptUsage,
           finalization: {
+            enabled: agentConfig?.embeddedAgent?.settledTurnFinalization !== false,
             preparedAttempt: dispatchedAttempt.preparedAttempt,
             sessionTarget: sessionPromptState.sessionTarget,
             sessionWriterFence: sessionPromptState.sessionWriterFence,
