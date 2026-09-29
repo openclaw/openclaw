@@ -183,6 +183,7 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
     agentDir: options?.agentDir,
     authProfileStore: options?.authProfileStore,
     agentSessionKey: mediaGenerationAgentSessionKey,
+    requesterRunSessionKey: trimmedRunSessionKey,
     requesterAgentId: sessionAgentId,
     requesterOrigin: widgetPresentation.deliveryContext ?? undefined,
     workspaceDir,

@@ -47,14 +47,13 @@ function injectToolCallThoughtSignatures(
     ? GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP
     : undefined;
   for (const msg of context.messages ?? []) {
-    if ((msg as { role?: string }).role !== "assistant") {
+    if (msg.role !== "assistant") {
       continue;
     }
-    const source = msg as { api?: string; provider?: string; model?: string; content?: unknown };
-    if (!Array.isArray(source.content)) {
+    if (!Array.isArray(msg.content)) {
       continue;
     }
-    for (const block of source.content as Array<Record<string, unknown>>) {
+    for (const block of msg.content) {
       if (block.type !== "toolCall") {
         continue;
       }
@@ -62,9 +61,7 @@ function injectToolCallThoughtSignatures(
       const sig = block.thoughtSignature;
       if (typeof id === "string" && typeof sig === "string" && sig.length > 0) {
         const isSameRoute =
-          source.api === model.api &&
-          source.provider === model.provider &&
-          source.model === model.id;
+          msg.api === model.api && msg.provider === model.provider && msg.model === model.id;
         if (!isSameRoute && !fallbackSig) {
           continue;
         }
@@ -119,9 +116,7 @@ export const COMPLETIONS_REASONING_REPLAY_FIELDS = [
 
 function stripCompletionsReasoningReplayFields(record: Record<string, unknown>): void {
   for (const field of COMPLETIONS_REASONING_REPLAY_FIELDS) {
-    if (field in record) {
-      delete record[field];
-    }
+    delete record[field];
   }
 }
 
@@ -137,14 +132,10 @@ function sanitizeOpenRouterReasoningReplayFields(record: Record<string, unknown>
   }
 
   // Empty reasoning artifacts are rejected by OpenRouter/DeepSeek replay.
-  if ("reasoning" in record && (typeof record.reasoning !== "string" || record.reasoning === "")) {
-    delete record.reasoning;
-  }
-  if (
-    "reasoning_content" in record &&
-    (typeof record.reasoning_content !== "string" || record.reasoning_content === "")
-  ) {
-    delete record.reasoning_content;
+  for (const field of ["reasoning", "reasoning_content"] as const) {
+    if (field in record && (typeof record[field] !== "string" || record[field] === "")) {
+      delete record[field];
+    }
   }
 
   const reasoningText = record.reasoning_text;
@@ -156,9 +147,7 @@ function sanitizeOpenRouterReasoningReplayFields(record: Record<string, unknown>
   ) {
     record.reasoning = reasoningText;
   }
-  if ("reasoning_text" in record) {
-    delete record.reasoning_text;
-  }
+  delete record.reasoning_text;
 }
 
 function sanitizeReasoningContentReplayFields(record: Record<string, unknown>): void {
@@ -222,12 +211,7 @@ function getReasoningContentReplayModelIdCandidates(modelId: unknown): string[] 
   if (colonParts.length > 1) {
     candidates.push(colonParts[0] ?? "", colonParts[colonParts.length - 1] ?? "");
   }
-  const baseCount = candidates.length;
-  for (let index = 0; index < baseCount; index += 1) {
-    const candidate = candidates[index];
-    if (typeof candidate !== "string") {
-      continue;
-    }
+  for (const candidate of candidates.slice()) {
     const stripped = stripReasoningContentReplayTierSuffix(candidate);
     if (stripped !== candidate) {
       candidates.push(stripped);

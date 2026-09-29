@@ -22,6 +22,11 @@ Operator workflows:
 
 Keep this folder in git. Add new scenarios here before wiring them into automation.
 
+QA-channel flows that assert final replies use `waitForCompletedQaReply` with the
+message returned by `sendInbound`. It waits for the channel's processing
+acknowledgment before reading the retained reply. QA-channel reset also waits for
+pending inbound turns before clearing observations.
+
 Generated-media scenarios count attachment deliveries separately from text
 progress and check the saved bytes plus the persisted completion reply.
 

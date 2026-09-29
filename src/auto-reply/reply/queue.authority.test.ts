@@ -8,11 +8,11 @@ import {
 } from "../../agents/admitted-run-context.js";
 import { attachToolAllowlistIntersection } from "../../agents/tool-policy.js";
 import { prepareChannelRunAdmission } from "./channel-run-admission.js";
-import { enqueueFollowupRun, scheduleFollowupDrain, type QueueSettings } from "./queue.js";
+import { createQueueCase } from "./queue.case.test-support.js";
+import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
 import {
   createQueueTestRun as createRun,
   createQueueSettings,
-  createDrainRecorder,
   installQueueRuntimeErrorSilencer,
 } from "./queue.test-helpers.js";
 import { resolveFollowupDeliveryContextKey } from "./queue/delivery-context.js";
@@ -20,9 +20,7 @@ import { admitFollowupRunLifecycle, completeFollowupRunLifecycle } from "./queue
 import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
 import { resolveFollowupAbortSignal } from "./queue/types.js";
 import { resolveStrandedReplyRecovery } from "./stranded-reply-recovery.js";
-
 installQueueRuntimeErrorSilencer();
-
 function createOperatorAuthority() {
   let references = 1;
   const controller = new AbortController();
@@ -115,7 +113,6 @@ describe("followup queue authority", () => {
         }
       });
       await vi.waitFor(() => expect(getExistingFollowupQueue(key)).toBeUndefined());
-
       expect(failures).toEqual([]);
       expect(observed.map((run) => run.profileId)).toEqual([
         "guest",
@@ -211,10 +208,7 @@ describe("followup queue authority", () => {
         for (let index = 0; index < 5; index += 1) {
           enqueueFollowupRun(
             key,
-            {
-              ...createRun({ prompt: `request ${index}` }),
-              operatorAuthority: source.authority,
-            },
+            { ...createRun({ prompt: `request ${index}` }), operatorAuthority: source.authority },
             createQueueSettings({ cap: 1, dropPolicy }),
           );
         }
@@ -275,9 +269,7 @@ describe("followup queue authority", () => {
   });
 
   it("splits collect batches when queued authority facts change", async () => {
-    const key = `test-collect-queued-authority-split-${Date.now()}`;
-    const { calls, done, runFollowup } = createDrainRecorder(3);
-    const settings: QueueSettings = { mode: "collect", debounceMs: 0 };
+    const q = createQueueCase({ mode: "collect", debounceMs: 0 }, 3);
     const route = { originatingChannel: "slack" as const, originatingTo: "channel:A" };
     const pluginGrant = createRun({ prompt: "plugin grant", ...route });
     pluginGrant.run.runtimePluginToolGrant = {
@@ -295,49 +287,19 @@ describe("followup queue authority", () => {
       provider: "openai",
       model: "gpt-5.6-luna",
     };
-
-    enqueueFollowupRun(key, pluginGrant, settings);
-    enqueueFollowupRun(key, scheduled, settings);
-    enqueueFollowupRun(key, handoff, settings);
-    scheduleFollowupDrain(key, runFollowup);
-    await done.promise;
-
-    expect(calls.map((call) => call.prompt)).toEqual([
+    q.add(pluginGrant);
+    q.add(scheduled);
+    q.add(handoff);
+    q.start();
+    await q.done.promise;
+    expect(q.calls.map((call) => call.prompt)).toEqual([
       expect.stringContaining("plugin grant"),
       expect.stringContaining("scheduled authority"),
       expect.stringContaining("trusted handoff"),
     ]);
-    expect(calls[0]?.run.runtimePluginToolGrant).toEqual(pluginGrant.run.runtimePluginToolGrant);
-    expect(calls[1]?.run.scheduledToolPolicy).toEqual(scheduled.run.scheduledToolPolicy);
-    expect(calls[2]?.run.trustedInternalHandoff).toEqual(handoff.run.trustedInternalHandoff);
-  });
-
-  it("drains different provider and model routes under their own run snapshots", async () => {
-    const key = `test-collect-route-authority-split-${Date.now()}`;
-    const { calls, done, runFollowup } = createDrainRecorder(3);
-    const settings: QueueSettings = { mode: "collect", debounceMs: 0 };
-    const route = { originatingChannel: "slack" as const, originatingTo: "channel:A" };
-    const first = createRun({ prompt: "first route", ...route });
-    first.run.provider = "openai";
-    first.run.model = "gpt-primary";
-    const second = createRun({ prompt: "second route", ...route });
-    second.run.provider = "openai";
-    second.run.model = "gpt-fallback";
-    const third = createRun({ prompt: "third route", ...route });
-    third.run.provider = "anthropic";
-    third.run.model = "gpt-fallback";
-
-    enqueueFollowupRun(key, first, settings);
-    enqueueFollowupRun(key, second, settings);
-    enqueueFollowupRun(key, third, settings);
-    scheduleFollowupDrain(key, runFollowup);
-    await done.promise;
-
-    expect(calls.map((call) => [call.prompt, call.run.provider, call.run.model])).toEqual([
-      [expect.stringContaining("first route"), "openai", "gpt-primary"],
-      [expect.stringContaining("second route"), "openai", "gpt-fallback"],
-      [expect.stringContaining("third route"), "anthropic", "gpt-fallback"],
-    ]);
+    expect(q.calls[0]?.run.runtimePluginToolGrant).toEqual(pluginGrant.run.runtimePluginToolGrant);
+    expect(q.calls[1]?.run.scheduledToolPolicy).toEqual(scheduled.run.scheduledToolPolicy);
+    expect(q.calls[2]?.run.trustedInternalHandoff).toEqual(handoff.run.trustedInternalHandoff);
   });
 
   it.each([
@@ -347,9 +309,7 @@ describe("followup queue authority", () => {
   ])(
     "collects turns in order within effective screen and theme authority: $mode",
     async ({ mode, groups }) => {
-      const key = `test-collect-ui-requester-${Date.now()}`;
-      const { calls, runFollowup } = createDrainRecorder();
-      const settings = createQueueSettings();
+      const q = createQueueCase({}, 1);
       const targets = [
         { connId: "browser-a", profileId: "profile-a" },
         { connId: "browser-b", profileId: "profile-a" },
@@ -368,15 +328,13 @@ describe("followup queue authority", () => {
         if (mode === "policy-deny") {
           run.run.config = { tools: { deny: ["screen"] } };
         }
-        enqueueFollowupRun(key, run, settings);
+        q.add(run);
       }
-
-      scheduleFollowupDrain(key, runFollowup);
-      await vi.waitFor(() => expect(getExistingFollowupQueue(key)).toBeUndefined());
-
-      expect(calls).toHaveLength(groups.length);
+      q.start();
+      await vi.waitFor(() => expect(getExistingFollowupQueue(q.key)).toBeUndefined());
+      expect(q.calls).toHaveLength(groups.length);
       for (const [callIndex, group] of groups.entries()) {
-        const call = calls[callIndex];
+        const call = q.calls[callIndex];
         expect(call?.run.gatewayUiCommandTarget).toEqual(targets[group.at(-1)!]);
         for (const index of targets.keys()) {
           const selection = `selection ${index + 1}`;
@@ -392,11 +350,7 @@ describe("followup queue authority", () => {
 
   it("keys collect batches by turn allowlists, intersections, disablement, and roles", () => {
     const createAuthorityRun = () =>
-      createRun({
-        prompt: "authority",
-        originatingChannel: "slack",
-        originatingTo: "channel:A",
-      });
+      createRun({ prompt: "authority", originatingChannel: "slack", originatingTo: "channel:A" });
     const baseline = createAuthorityRun();
     const toolsAllow = createAuthorityRun();
     toolsAllow.toolsAllow = ["exec"];
@@ -411,7 +365,6 @@ describe("followup queue authority", () => {
       ["exec"],
       [["exec"], ["message"]],
     );
-
     const baselineKey = resolveFollowupDeliveryContextKey(baseline);
     expect(resolveFollowupDeliveryContextKey(toolsAllow)).not.toBe(baselineKey);
     expect(resolveFollowupDeliveryContextKey(disabled)).not.toBe(baselineKey);

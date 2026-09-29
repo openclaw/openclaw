@@ -25,6 +25,7 @@ import {
 } from "./agent-tools.before-tool-call.js";
 import { resetAdjustedParamsByToolCallIdForTests } from "./agent-tools.before-tool-call.state.js";
 import { finalizeAgentTools } from "./agent-tools.finalize.js";
+import { createPromptBuildToolPolicy } from "./embedded-agent-runner/run/attempt-prompt-support.js";
 import { normalizeAgentRuntimeTools } from "./runtime-plan/tools.js";
 import { filterToolsByPolicy } from "./tool-policy-match.js";
 import {
@@ -699,7 +700,7 @@ describe("Tool Search", () => {
     );
   });
 
-  it("keeps direct-only tools visible and out of the structured catalog", () => {
+  it("keeps direct-only tools visible and redirects mistaken catalog calls only while declared", async () => {
     const catalogRef = createToolSearchCatalogRef();
     const computer = directOnlyTool("computer", "Control a desktop");
     const lookup = pluginTool("fake_lookup", "Look up a record");
@@ -718,6 +719,34 @@ describe("Tool Search", () => {
       "computer",
     ]);
     expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual(["fake_lookup"]);
+    const call = createRunToolSearchTools({ catalogRef }).find(
+      (tool) => tool.name === TOOL_CALL_RAW_TOOL_NAME,
+    )!;
+    await expect(call.execute("direct", { id: "computer" })).rejects.toThrow(
+      "Call it directly by its declared name",
+    );
+    expect(computer.execute).not.toHaveBeenCalled();
+    let activeToolNames = compacted.tools.map((tool) => tool.name);
+    const policy = createPromptBuildToolPolicy({
+      session: {
+        getActiveToolNames: () => activeToolNames,
+        setActiveToolsByName: (names) => {
+          activeToolNames = names;
+        },
+      },
+      effectiveTools: compacted.tools,
+      uncompactedEffectiveTools: [computer, lookup],
+      tools: compacted.tools,
+      catalogRef,
+      codeModeControlsEnabled: false,
+    });
+    policy.apply(["fake_lookup"]);
+    await expect(call.execute("hidden", { id: "computer" })).rejects.toThrow("Use tool_search");
+    policy.apply(undefined);
+    await expect(call.execute("restored", { id: "computer" })).rejects.toThrow(
+      "Call it directly by its declared name",
+    );
+    await expect(call.execute("unknown", { id: "not_a_tool" })).rejects.toThrow("Use tool_search");
   });
 
   it("keeps run-contract tools direct-only so search never hides them", async () => {

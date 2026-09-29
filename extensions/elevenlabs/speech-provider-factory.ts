@@ -448,9 +448,7 @@ export function buildElevenLabsSpeechProvider({
       const config = req.providerConfig
         ? readElevenLabsProviderConfig(req.providerConfig)
         : undefined;
-      const requestValue = req.apiKey;
-      const configValue = config?.apiKey;
-      const apiKey = resolveElevenLabsApiKey(requestValue, configValue);
+      const apiKey = resolveElevenLabsApiKey(req.apiKey, config?.apiKey);
       if (!apiKey) {
         throw new Error("ElevenLabs API key missing");
       }

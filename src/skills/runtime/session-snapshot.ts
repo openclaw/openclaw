@@ -123,7 +123,6 @@ export async function resolveReusableWorkspaceSkillSnapshot(
   }
   const sourceScope = {
     executionWorkspaceDir: normalizedRoots.executionWorkspaceDir,
-    agentId: params.agentId,
   };
   const sourceVersion = getSkillsSourceVersion(watcherWorkspaceDir, sourceScope);
   const effectiveVersion = getSkillsSnapshotVersion(watcherWorkspaceDir);

@@ -1,8 +1,3 @@
-/**
- * Channel ingress runtime resolver.
- *
- * Merges route, sender, command, access-group, and pairing-store facts before decision evaluation.
- */
 import {
   normalizeStringEntries,
   uniqueStrings,

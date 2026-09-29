@@ -16,7 +16,7 @@ import {
 } from "openclaw/plugin-sdk/number-runtime";
 import type { PluginHookToolContext } from "openclaw/plugin-sdk/types";
 import type { CodexAppServerClient } from "./client.js";
-import { stringifyCodexPolicy } from "./config-policy-json.js";
+import { fingerprintCodexPolicy } from "./config-policy-json.js";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
 import { resolveCodexToolAbortTerminalReason } from "./dynamic-tool-execution.js";
 import type { CodexInferenceThreadQualification } from "./inference-qualification.js";
@@ -614,14 +614,10 @@ export function buildCodexNativeHookRelayConfig(params: {
     config[`hooks.${codexEvent}`] = [group];
     const state = {
       enabled: true,
-      trusted_hash: `sha256:${createHash("sha256")
-        .update(
-          stringifyCodexPolicy({
-            event_name: CODEX_HOOK_KEY_LABEL_BY_NATIVE_EVENT[event],
-            ...group,
-          }),
-        )
-        .digest("hex")}`,
+      trusted_hash: `sha256:${fingerprintCodexPolicy({
+        event_name: CODEX_HOOK_KEY_LABEL_BY_NATIVE_EVENT[event],
+        ...group,
+      })}`,
     };
     for (const sourcePath of CODEX_SESSION_FLAGS_HOOK_SOURCE_PATHS) {
       hookState[`${sourcePath}:${CODEX_HOOK_KEY_LABEL_BY_NATIVE_EVENT[event]}:0:0`] =

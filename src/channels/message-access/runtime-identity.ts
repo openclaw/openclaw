@@ -4,11 +4,6 @@ import {
   meetsIdentifierAuthentication,
   type IdentifierAuthentication,
 } from "./identifier-authentication.js";
-/**
- * Channel ingress identity adapter helpers.
- *
- * Builds stable sender identity descriptors and normalizes matchable allowlist material.
- */
 import type {
   ChannelIngressAdapter,
   ChannelIngressIdentityDescriptor,

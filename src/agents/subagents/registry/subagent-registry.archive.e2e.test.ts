@@ -249,11 +249,10 @@ describe("subagent registry archive behavior", () => {
       data: { phase: "end", endedAt, terminalReply: { disposition: "visible", text: "done" } },
     });
 
-    await vi.waitFor(() => {
-      expect(mod.listSubagentRunsForRequester("agent:main:main")[0]).toMatchObject({
-        execution: { status: "terminal", endedAt },
-        archiveAtMs: endedAt + 60_000,
-      });
+    await settleRootWork(true);
+    expect(mod.listSubagentRunsForRequester("agent:main:main")[0]).toMatchObject({
+      execution: { status: "terminal", endedAt },
+      archiveAtMs: endedAt + 60_000,
     });
   });
 

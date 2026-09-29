@@ -19,8 +19,15 @@ type OwnedWorkerPlacement = Extract<WorkerSessionPlacementRecord, { state: "acti
 
 export function createWorkspaceResultJournal(params: {
   placement: OwnedWorkerPlacement;
-  placements: WorkerSessionPlacementStore;
+  placements: Pick<
+    WorkerSessionPlacementStore,
+    | "loadWorkspaceReconciliation"
+    | "beginWorkspaceReconciliation"
+    | "updateWorkspaceBaseManifest"
+    | "abortWorkspaceReconciliation"
+  >;
   turnClaim: WorkerSessionTurnClaim;
+  assertCurrent?: () => void;
 }) {
   const owner = {
     sessionId: params.placement.sessionId,
@@ -32,13 +39,19 @@ export function createWorkspaceResultJournal(params: {
   return {
     adapter: {
       load: () => params.placements.loadWorkspaceReconciliation(owner),
-      begin: (next: Parameters<typeof params.placements.beginWorkspaceReconciliation>[1]) =>
-        params.placements.beginWorkspaceReconciliation(owner, next),
+      begin: (next: Parameters<typeof params.placements.beginWorkspaceReconciliation>[1]) => {
+        params.assertCurrent?.();
+        return params.placements.beginWorkspaceReconciliation(owner, next);
+      },
       commit: (manifestRef: string) => {
+        params.assertCurrent?.();
         params.placements.updateWorkspaceBaseManifest({ claim: params.turnClaim, manifestRef });
         manifestAccepted = true;
       },
-      abort: () => params.placements.abortWorkspaceReconciliation(owner),
+      abort: () => {
+        params.assertCurrent?.();
+        return params.placements.abortWorkspaceReconciliation(owner);
+      },
     },
     wasAccepted: () => manifestAccepted,
   };

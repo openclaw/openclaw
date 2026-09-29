@@ -12,7 +12,7 @@ import {
   resolveRealtimeVoiceAgentConsultToolsAllow,
   type RealtimeVoiceAgentConsultToolPolicy,
 } from "../talk/agent-consult-tool.js";
-import type { RealtimeVoiceTool, RealtimeVoiceToolCallEvent } from "../talk/provider-types.js";
+import type { RealtimeVoiceTool } from "../talk/provider-types.js";
 import type { RealtimeVoiceBridgeSession } from "../talk/session-runtime.js";
 import type { TalkEventInput } from "../talk/talk-events.js";
 import type {
@@ -104,19 +104,18 @@ async function submitMeetingConsultWorkingResponse(params: {
   );
 }
 
-async function consultMeetingAgent(params: {
+type MeetingAgentConsultContext = {
   surface: MeetingAgentConsultSurface;
   config: OpenClawConfig;
   runtime: PluginRuntime;
   logger: RuntimeLogger;
   agentId?: string;
   toolPolicy: RealtimeVoiceAgentConsultToolPolicy;
-  meetingSessionId: string;
-  requesterSessionKey?: string;
-  args: unknown;
-  transcript: Array<{ role: "user" | "assistant"; text: string }>;
-  abortSignal?: AbortSignal;
-}): Promise<{ text: string }> {
+};
+
+async function consultMeetingAgent(
+  params: MeetingAgentConsultContext & MeetingAgentConsultParams,
+): Promise<{ text: string }> {
   const agentId = params.agentId
     ? normalizeAgentId(params.agentId)
     : resolveDefaultAgentId(params.config);
@@ -146,22 +145,13 @@ async function consultMeetingAgent(params: {
   });
 }
 
-async function handleMeetingRealtimeConsultToolCall(params: {
-  surface: MeetingAgentConsultSurface;
-  strategy: string;
-  session: RealtimeVoiceBridgeSession;
-  event: RealtimeVoiceToolCallEvent;
-  config: OpenClawConfig;
-  runtime: PluginRuntime;
-  logger: RuntimeLogger;
-  agentId?: string;
-  toolPolicy: RealtimeVoiceAgentConsultToolPolicy;
-  meetingSessionId: string;
-  requesterSessionKey?: string;
-  transcript: Array<{ role: "user" | "assistant"; text: string }>;
-  abortSignal?: AbortSignal;
-  onTalkEvent?: (event: TalkEventInput) => void;
-}): Promise<void> {
+async function handleMeetingRealtimeConsultToolCall(
+  params: MeetingAgentConsultContext &
+    Omit<MeetingRealtimeToolCallParams, "onTalkEvent"> & {
+      abortSignal?: AbortSignal;
+      onTalkEvent?: (event: TalkEventInput) => void;
+    },
+): Promise<void> {
   const callId = params.event.callId || params.event.itemId;
   if (params.abortSignal?.aborted) {
     return;
@@ -201,19 +191,7 @@ async function handleMeetingRealtimeConsultToolCall(params: {
   });
   let result: { text: string };
   try {
-    result = await consultMeetingAgent({
-      surface: params.surface,
-      config: params.config,
-      runtime: params.runtime,
-      logger: params.logger,
-      agentId: params.agentId,
-      toolPolicy: params.toolPolicy,
-      meetingSessionId: params.meetingSessionId,
-      requesterSessionKey: params.requesterSessionKey,
-      args: params.event.args,
-      transcript: params.transcript,
-      abortSignal: params.abortSignal,
-    });
+    result = await consultMeetingAgent({ ...params, args: params.event.args });
   } catch (error) {
     if (params.abortSignal?.aborted) {
       return;

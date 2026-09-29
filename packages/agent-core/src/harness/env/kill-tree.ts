@@ -11,12 +11,7 @@ const MAX_UNIX_PROCESS_TREE_DEPTH = 128;
 
 type UnixProcessEntry = {
   pid: number;
-  /**
-   * Stable process-instance identity captured at discovery time
-   * (`${pid}:${starttime}`). A recycled PID produces a different identity, so
-   * delayed signals can be bound to the original process instance instead of
-   * the numeric PID alone.
-   */
+  /** `${pid}:${starttime}` binds delayed signals to the captured process, not a recycled PID. */
   identity?: string;
 };
 
@@ -153,26 +148,16 @@ export function readUnixProcessGroupMembers(pid: number): number[] {
   if (process.platform === "win32" || !isProcessGroupLeader(pid)) {
     return [pid];
   }
-  try {
-    const result = spawnSync("ps", ["-axo", "pid=,pgid="], {
-      encoding: "utf8",
-      timeout: 500,
-    });
-    if (result.error || result.status !== 0) {
-      return [pid];
+  const output = readPsOutput(["-axo", "pid=,pgid="]);
+  const members = new Set([pid]);
+  for (const line of output?.split("\n") ?? []) {
+    const [memberText, groupText] = line.trim().split(/\s+/);
+    const member = parseProcessGroupId(memberText);
+    if (member && parseProcessGroupId(groupText) === pid) {
+      members.add(member);
     }
-    const members = new Set([pid]);
-    for (const line of result.stdout.split("\n")) {
-      const [memberText, groupText] = line.trim().split(/\s+/);
-      const member = parseProcessGroupId(memberText);
-      if (member && parseProcessGroupId(groupText) === pid) {
-        members.add(member);
-      }
-    }
-    return [...members];
-  } catch {
-    return [pid];
   }
+  return [...members];
 }
 
 /** Signals every process group and process still owned by one forkpty session. */
@@ -257,22 +242,19 @@ function parseProcessGroupId(value: unknown): number | undefined {
   return Number.isSafeInteger(pgid) && pgid > 0 ? pgid : undefined;
 }
 
-function readProcessGroupIdFromPs(pid: number): number | undefined {
+function readPsOutput(args: string[]): string | undefined {
   try {
-    const res = spawnSync("ps", ["-p", String(pid), "-o", "pgid="], {
+    const result = spawnSync("ps", args, {
       encoding: "utf8",
       timeout: 500,
     });
-    if (res.error || res.status !== 0) {
-      return undefined;
-    }
-    return parseProcessGroupId(res.stdout);
+    return result.error || result.status !== 0 ? undefined : result.stdout;
   } catch {
     return undefined;
   }
 }
 
-function readProcessGroupIdFromProc(pid: number): number | undefined {
+function readProcStatFields(pid: number): string[] | undefined {
   try {
     const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
     const commEnd = stat.lastIndexOf(")");
@@ -280,68 +262,49 @@ function readProcessGroupIdFromProc(pid: number): number | undefined {
       return undefined;
     }
     // After comm: state, ppid, pgrp. The command name may contain spaces or ')'.
-    const fields = stat
+    return stat
       .slice(commEnd + 1)
       .trim()
       .split(/\s+/);
-    return parseProcessGroupId(fields[2]);
   } catch {
     return undefined;
   }
 }
 
 function readDarwinPtyTty(sessionLeaderPid: number): string | undefined {
-  try {
-    // Darwin ps omits numeric SIDs. A forkpty session exclusively owns its
-    // controlling tty, resolved here from the trusted spawn-time leader.
-    const leader = spawnSync("ps", ["-p", String(sessionLeaderPid), "-o", "tty="], {
-      encoding: "utf8",
-      timeout: 500,
-    });
-    const tty = leader.stdout.trim();
-    if (leader.error || leader.status !== 0 || !tty || tty === "?" || tty === "??") {
-      return undefined;
-    }
-    return tty;
-  } catch {
-    return undefined;
-  }
+  // Darwin ps omits numeric SIDs; the trusted forkpty leader owns its controlling tty.
+  const tty = readPsOutput(["-p", String(sessionLeaderPid), "-o", "tty="])?.trim();
+  return tty && tty !== "?" && tty !== "??" ? tty : undefined;
 }
 
 function readProcessSessionMembers(
   sessionId: number,
   darwinTty?: string,
 ): Array<{ pid: number; pgid: number }> | undefined {
-  try {
-    const expectedSession = darwinTty ?? String(sessionId);
-    const args = darwinTty ? ["-t", darwinTty, "-o", "pid=,pgid="] : ["-axo", "pid=,pgid=,sid="];
-    const result = spawnSync("ps", args, {
-      encoding: "utf8",
-      timeout: 500,
-    });
-    if (result.error || result.status !== 0) {
-      return undefined;
-    }
-    const members: Array<{ pid: number; pgid: number }> = [];
-    for (const line of result.stdout.split("\n")) {
-      const [pidText, pgidText, session] = line.trim().split(/\s+/);
-      const pid = parseProcessGroupId(pidText);
-      const pgid = parseProcessGroupId(pgidText);
-      if (pid && pgid && (darwinTty || session === expectedSession)) {
-        members.push({ pid, pgid });
-      }
-    }
-    return members;
-  } catch {
+  const expectedSession = darwinTty ?? String(sessionId);
+  const args = darwinTty ? ["-t", darwinTty, "-o", "pid=,pgid="] : ["-axo", "pid=,pgid=,sid="];
+  const output = readPsOutput(args);
+  if (output === undefined) {
     return undefined;
   }
+  const members: Array<{ pid: number; pgid: number }> = [];
+  for (const line of output.split("\n")) {
+    const [pidText, pgidText, session] = line.trim().split(/\s+/);
+    const pid = parseProcessGroupId(pidText);
+    const pgid = parseProcessGroupId(pgidText);
+    if (pid && pgid && (darwinTty || session === expectedSession)) {
+      members.push({ pid, pgid });
+    }
+  }
+  return members;
 }
 
 /** Fail closed to direct-PID signaling when group ownership cannot be proved. */
 function isProcessGroupLeader(pid: number): boolean {
   // Linux exposes the fact in procfs; avoid a synchronous child process on the common path.
-  const procPgid = process.platform === "linux" ? readProcessGroupIdFromProc(pid) : undefined;
-  const pgid = procPgid ?? readProcessGroupIdFromPs(pid);
+  const procPgid =
+    process.platform === "linux" ? parseProcessGroupId(readProcStatFields(pid)?.[2]) : undefined;
+  const pgid = procPgid ?? parseProcessGroupId(readPsOutput(["-p", String(pid), "-o", "pgid="]));
   return pgid === pid;
 }
 
@@ -356,23 +319,11 @@ function parsePositivePids(value: unknown): number[] {
     .filter((entry) => Number.isSafeInteger(entry) && entry > 0);
 }
 
-/**
- * Read a stable process-instance identity for `pid`. Linux `starttime` from
- * `/proc/<pid>/stat` distinguishes recycled PIDs. Other Unix platforms do not
- * expose a sufficiently precise portable identity, so attached snapshots stay
- * disabled there rather than authorizing a stale signal.
- */
 function readUnixProcessIdentity(pid: number, deadlineMs?: number): string | undefined {
   return readUnixProcessInstance(pid, deadlineMs)?.identity;
 }
 
-/**
- * Read a process-instance identity and its current parent PID from
- * `/proc/<pid>/stat`. The `ppid` lets the caller revalidate that a numeric PID
- * reported by `/proc/<parent>/children` still belongs to the verified parent at
- * capture time, so a PID reused between the children read and this read cannot
- * be admitted as an authorized descendant.
- */
+/** Capture identity and parent together so a recycled child PID cannot authorize a foreign tree. */
 function readUnixProcessInstance(
   pid: number,
   deadlineMs?: number,
@@ -385,34 +336,17 @@ function readUnixProcessInstance(
     // signal to one process instance when a PID is recycled within that second.
     return undefined;
   }
-  try {
-    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
-    const commEnd = stat.lastIndexOf(")");
-    if (commEnd < 0) {
-      return undefined;
-    }
-    const fields = stat
-      .slice(commEnd + 1)
-      .trim()
-      .split(/\s+/);
-    // Fields after comm: state ppid pgrp sid tty_nr tpgid flags ... starttime
-    // starttime is field 22 in proc(5), which is index 19 in this sliced list;
-    // ppid is field 4, index 1 in this sliced list (state is index 0).
-    const ppid = Number(fields[1]);
-    const starttime = fields[19];
-    if (!starttime || !/^\d+$/u.test(starttime) || !Number.isSafeInteger(ppid)) {
-      return undefined;
-    }
-    return { identity: `${pid}:${starttime}`, ppid };
-  } catch {
+  const fields = readProcStatFields(pid);
+  // After comm, state is index 0; ppid (field 4) is index 1 and starttime (field 22) is 19.
+  const ppid = Number(fields?.[1]);
+  const starttime = fields?.[19];
+  if (!starttime || !/^\d+$/u.test(starttime) || !Number.isSafeInteger(ppid)) {
     return undefined;
   }
+  return { identity: `${pid}:${starttime}`, ppid };
 }
 
-/**
- * True when the captured process instance is still alive at the same identity.
- * Missing identities are never eligible for an attached-tree signal.
- */
+/** Missing identities are never eligible for an attached-tree signal. */
 function verifiedProcessInstanceAlive(entry: UnixProcessEntry): boolean {
   if (!entry.identity || !isProcessAlive(entry.pid)) {
     return false;
@@ -452,19 +386,7 @@ function* readUnixProcessChildren(pid: number, canReadTask: () => boolean): Gene
   }
 }
 
-/**
- * Capture an attached process tree before signaling its root.
- * Descendants are returned first so they retain their parent relationship.
- *
- * Each entry carries a stable process-instance identity captured at discovery
- * time so delayed grace-period signals can be verified against the original
- * instance instead of a numeric PID that may have been recycled. A descendant
- * whose identity cannot be captured is omitted (fail-closed for that subtree)
- * rather than retained as an identity-less PID that a delayed signal could
- * target after reuse. The supervisor-owned root PID is always trusted as the
- * caller's direct child, so the snapshot always contains it once the root's own
- * identity verifies, even when every descendant probe fails.
- */
+/** Capture verified descendants before their parents; an unverified subtree is omitted. */
 function collectUnixProcessTree(rootPid: number): UnixProcessTree | undefined {
   if (process.platform !== "linux") {
     return undefined;
@@ -489,13 +411,8 @@ function collectUnixProcessTree(rootPid: number): UnixProcessTree | undefined {
     if (!withinBounds(depth) || !hasCapacity()) {
       return;
     }
-    // Revalidate that `parentPid` is still the captured process instance before
-    // trusting its children file. A PID reused between the parent's identity
-    // capture and this read would expose an unrelated replacement process's
-    // children, whose numeric ppid would otherwise pass the child check and
-    // admit a foreign subtree. This includes the root: although the supervisor
-    // owns it, the numeric PID can be recycled between snapshot entry and this
-    // children read, so its identity must still match before descending.
+    // Even the root can be recycled after capture. Revalidate before trusting
+    // its children file; the child's numeric ppid alone cannot prove ownership.
     if (readUnixProcessIdentity(parentPid, deadline) !== parentIdentity) {
       return;
     }
@@ -508,10 +425,7 @@ function collectUnixProcessTree(rootPid: number): UnixProcessTree | undefined {
         readUnixProcessIdentity(parentPid, deadline) === parentIdentity,
     );
     for (const childPid of children) {
-      // Re-check the deadline, PID cap, and child depth on every iteration. The
-      // child lives at `depth + 1`, so the depth bound must be evaluated against
-      // the child's level, not the parent's: otherwise a parent at depth 128
-      // could admit a level-129 descendant despite MAX_UNIX_PROCESS_TREE_DEPTH.
+      // Bound the child's depth, not its parent's, before admitting it.
       if (!withinBounds(depth + 1) || !hasCapacity()) {
         return;
       }
@@ -519,14 +433,8 @@ function collectUnixProcessTree(rootPid: number): UnixProcessTree | undefined {
         continue;
       }
       seen.add(childPid);
-      // Bind each child to a captured identity BEFORE descending, and
-      // revalidate its parent membership against the verified `parentPid` in
-      // the same `/proc/<child>/stat` read. Without the ppid check, a PID
-      // reused between `/proc/<parent>/children` and this read would be
-      // admitted as an authorized descendant even though the replacement
-      // process never belonged to the captured tree. A child that cannot be
-      // bound or no longer reports `parentPid` as its parent is dropped with
-      // its subtree.
+      // A child recycled since the children read must still belong to this
+      // verified parent. Capture its identity before descending.
       const instance = readUnixProcessInstance(childPid, deadline);
       if (!instance || instance.ppid !== parentPid || !withinBounds(depth + 1)) {
         continue;

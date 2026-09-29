@@ -42,6 +42,11 @@ beforeEach(async () => {
     command: null,
     runtime: { status: "stopped", missingUnit: true },
   });
+  vi.spyOn(gatewayBindings, "readManagedGatewayBindingState").mockImplementation((binding) =>
+    gatewayService.readGatewayServiceState(gatewayService.resolveGatewayService(), {
+      env: binding.env,
+    }),
+  );
   vi.spyOn(systemdFiles, "readSystemdServiceCommandLocation").mockRejectedValue(
     new Error("native service metadata unavailable"),
   );

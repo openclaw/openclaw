@@ -8,7 +8,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseRecorderReady, readScenarioFile, resolveChatTarget } from "./scenario.mjs";
 import { telegramPythonArgs } from "./telegram-runtime.mjs";
-import { startTelegramTestApiProxy } from "./telegram-test-api-proxy.mjs";
+import { startTelegramTestApiProxy, telegramTestApiPath } from "./telegram-test-api-proxy.mjs";
 import { acquireTelegramTestCredential } from "./telegram-test-credential.mjs";
 
 const SKILL_DIR =
@@ -23,7 +23,12 @@ const FOLLOWUP_DRAIN_CONTROL_PRELOAD_PATH = resolve(
   SKILL_DIR,
   "scripts/followup-drain-control-preload.mjs",
 );
-import { currentTelegramRun, withTelegramRun, runTelegramCli } from "./telegram-run-scope.mjs";
+import {
+  currentTelegramRun,
+  withTelegramRun,
+  runTelegramCli,
+  fetchWithLease,
+} from "./telegram-run-scope.mjs";
 const CHILD_ENV_DENIED_PREFIXES = [
   "BWS_",
   "CLAWSWEEPER_",
@@ -462,31 +467,9 @@ export function writeConfig(params) {
   return { root, stateDir, workspace, configPath };
 }
 
-export async function fetchWithLease(
-  url,
-  init,
-  lease,
-  fetchImpl = fetch,
-  consume = (response) => response.json(),
-) {
-  const scope = currentTelegramRun();
-  scope.assertActive();
-  lease.assertHealthy();
-  const work = (async () => {
-    const signal = init.signal ? AbortSignal.any([scope.signal, init.signal]) : scope.signal;
-    const response = await fetchImpl(url, { ...init, signal });
-    scope.assertActive();
-    const payload = await consume(response);
-    scope.assertActive();
-    lease.assertHealthy();
-    return { response, payload };
-  })();
-  return await scope.trackIo(work);
-}
-
-async function telegram(token, method, body = {}, lease, fetchImpl = fetch) {
-  const { response, payload } = await fetchWithLease(
-    `https://api.telegram.org/bot${token}/test/${method}`,
+export async function requestTelegramTestApi(token, method, body, lease, fetchImpl = fetch) {
+  return await fetchWithLease(
+    `https://api.telegram.org${telegramTestApiPath(`/bot${token}/${method}`)}`,
     {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -495,6 +478,10 @@ async function telegram(token, method, body = {}, lease, fetchImpl = fetch) {
     lease,
     fetchImpl,
   );
+}
+
+async function telegram(token, method, body = {}, lease, fetchImpl = fetch) {
+  const { response, payload } = await requestTelegramTestApi(token, method, body, lease, fetchImpl);
   lease.assertHealthy();
   if (!response.ok || !payload.ok) {
     throw new Error(payload.description || `${method} failed with status ${response.status}`);

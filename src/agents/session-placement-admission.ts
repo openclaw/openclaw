@@ -191,7 +191,7 @@ export async function withSessionPlacementTurnAdmission(
   if (result.meta.executionTrace?.runner === "cli" && params.isFinalFallbackAttempt === undefined) {
     // Standalone CLI completion releases placement before admitting a successor;
     // fallback candidates leave the handoff to their logical run entry.
-    settleRequesterRun({ ...params, ...claim }, result, assertCurrent);
+    await settleRequesterRun({ ...params, ...claim }, result, assertCurrent);
   }
   return result;
 }
@@ -274,7 +274,7 @@ export async function withLocalSessionPlacementTurnSettlement(
         );
         if (options.isFinalFallbackAttempt === undefined) {
           // Candidate classification is provisional until the outer entry accepts it.
-          settleRequesterRun({ ...options, ...claim }, result, () => {
+          await settleRequesterRun({ ...options, ...claim }, result, () => {
             assertCurrent();
             options.preparedRunAdmission?.assertSourceCurrent();
             if (options.admittedRunContext && !assertAdmittedRunCurrent) {

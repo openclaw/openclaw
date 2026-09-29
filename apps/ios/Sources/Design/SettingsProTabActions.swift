@@ -202,13 +202,12 @@ extension SettingsProTab {
         IOSDeviceSettingsActions.registerForRemoteNotificationsIfEnrollmentReady(
             status: notificationSettings.authorizationStatus)
 
-        let issueCount = SettingsDiagnostics.issueCount(
+        self.diagnosticsIssueCount = SettingsDiagnostics.issues(
             gatewayConnected: self.gatewayDiagnosticConnected,
             discoveredGatewayCount: self.gatewayController.gateways.count,
             talkConfigLoaded: self.gatewayDiagnosticTalkConfigLoaded,
-            notificationsAllowed: self.notificationPresentation.isActive)
-        self.diagnosticsIssueCount = issueCount
-        self.diagnosticsLastRunText = SettingsDiagnostics.timestamp(Date())
+            notificationsAllowed: self.notificationPresentation.isActive).count
+        self.diagnosticsLastRunText = Date().formatted(date: .omitted, time: .shortened)
     }
 
     func syncSettingsState() {

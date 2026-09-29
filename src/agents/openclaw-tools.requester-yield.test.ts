@@ -362,7 +362,7 @@ describe("requester yield ownership", () => {
     expect((await turn1.execute("yield-turn-1", {})).details).toMatchObject({ status: "yielded" });
     expect(turn1Yield).toHaveBeenCalledOnce();
     expect(
-      settleRequesterAfterSessionSpawns({
+      await settleRequesterAfterSessionSpawns({
         requesterSessionKey,
         requesterAgentId: "main",
         requesterTurnRunId: "run-turn-1",

@@ -9,6 +9,7 @@ import {
   terminateMeetingBridgeProcess,
   writeMeetingOutputChunk,
   type MeetingOutputWriteWaiter,
+  type MeetingBridgeProcess,
 } from "./bridge-process.js";
 import { splitCommandArgv } from "./command-argv.js";
 import { createMeetingOutputLoopbackVerifier } from "./output-loopback-verifier.js";
@@ -17,11 +18,9 @@ import type { MeetingRealtimeAudioTransport } from "./realtime-audio-transport.j
 
 const LOCAL_BRIDGE_TERMINATION_GRACE_MS = 1_000;
 
-type BridgeProcess = {
+type BridgeProcess = MeetingBridgeProcess & {
   pid?: number;
   killed?: boolean;
-  exitCode: number | null;
-  signalCode: NodeJS.Signals | null;
   stdin?: Writable | null;
   stdout?: {
     on(event: "data", listener: (chunk: Buffer | string) => void): unknown;
@@ -31,20 +30,11 @@ type BridgeProcess = {
     on(event: "data", listener: (chunk: Buffer | string) => void): unknown;
     on(event: "error", listener: (error: Error) => void): unknown;
   } | null;
-  kill(signal?: NodeJS.Signals): boolean;
   on(
     event: "exit",
     listener: (code: number | null, signal: NodeJS.Signals | null) => void,
   ): unknown;
   on(event: "error", listener: (error: Error) => void): unknown;
-  once(
-    event: "exit",
-    listener: (code: number | null, signal: NodeJS.Signals | null) => void,
-  ): unknown;
-  off(
-    event: "exit",
-    listener: (code: number | null, signal: NodeJS.Signals | null) => void,
-  ): unknown;
 };
 
 type MeetingRealtimeAudioSpawn = (
