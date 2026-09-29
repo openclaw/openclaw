@@ -33,7 +33,6 @@ export type WhatsAppQaScenarioEnvironment = {
   runtimeEnv: WhatsAppQaRuntimeEnv;
   scenario: { id: string; timeoutMs: number; title: string };
   sutAccountId: string;
-  sutAuthDir: string;
 };
 
 function resolveWhatsAppQaReplacePaths(accountId: string): string[] {
@@ -132,7 +131,6 @@ export function createWhatsAppQaScenarioEnvironment(params: {
           title: input.scenarioTitle,
         },
         sutAccountId: params.accountId,
-        sutAuthDir: params.sutAuthDir,
       } satisfies WhatsAppQaScenarioEnvironment,
     };
   };

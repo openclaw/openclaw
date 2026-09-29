@@ -1,11 +1,13 @@
-import type { CronFailureNotificationDelivery, CronJob } from "../types.js";
+import type { CronFailureNotificationDelivery, CronJob, CronStoreFile } from "../types.js";
 import type { CronJobFamilyIdentity } from "./row-codec.js";
 import type {
   CronRunReceipt,
   CronRunReceiptHandle,
   CronRunReceiptStatus,
+  PreparedCronRunReceiptAdjudication,
 } from "./run-receipt.types.js";
 import type { CronRunRecoveryProposal } from "./run-recovery-read.types.js";
+import type { CronStoreSaveOptions, PreparedCronStoreChanges } from "./save.types.js";
 
 export type CronScheduleMaintenanceOptions = {
   recomputeExpired?: boolean;
@@ -28,7 +30,30 @@ export type CronReceiptRevisionRefusal = {
   reason: "revision-changed" | "owner-unavailable";
 };
 
+export type CronJobMutationRefusal =
+  | { kind: "store-changed" }
+  | { kind: "receipt-conflict"; receipt: CronRunReceipt };
+
 export type CronRuntimeMutationInputs = {
+  "cron.mutateJobs": {
+    storeKey: string;
+    changes: PreparedCronStoreChanges;
+    replacement?: {
+      store: CronStoreFile;
+      jobsFingerprint: string;
+      runtimeFingerprint: string;
+      options?: CronStoreSaveOptions;
+    };
+    expectedJob?: { id: string; configRevision: string };
+    preconditionJob?: CronJob;
+    receiptMutation?: {
+      jobId: string;
+      triggerStateChanged: boolean;
+      scheduleChanged: boolean;
+      owner?: PreparedCronRunReceiptAdjudication;
+    };
+    agentId?: string;
+  };
   "cron.reserveRuns": {
     storeKey: string;
     proposals: Array<{
@@ -104,6 +129,12 @@ export type CronRuntimeWorkerOperations = {
       | (Type extends "cron.reserveRuns" ? { nonce: string; conflict: CronRunReceipt } : never)
       | (Type extends "cron.finalizeRuns"
           ? { nonce: string; receiptRevision: CronReceiptRevisionRefusal }
+          : never)
+      | (Type extends "cron.mutateJobs"
+          ? {
+              nonce: string;
+              mutationRefusal: CronJobMutationRefusal;
+            }
           : never);
   };
 };

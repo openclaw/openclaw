@@ -149,7 +149,18 @@ describe("update-cli", () => {
           (error: unknown) => error,
         );
         const runs = listUpdateRuns();
-        expectUpdateFailureReport(reported, failure, lastWriteJsonCall(), runs[0]?.runId);
+        if (boundary === "progress initialization") {
+          expect(reported).toEqual(new ExitError(1));
+          expect(lastWriteJsonCall()).toMatchObject({
+            status: "error",
+            reason: "update-failed",
+            runId: runs[0]?.runId,
+            reportPath: expect.any(String),
+          });
+          expect(JSON.stringify(lastWriteJsonCall())).toContain(failure.message);
+        } else {
+          expectUpdateFailureReport(reported, failure, lastWriteJsonCall(), runs[0]?.runId);
+        }
         expect(runs).toHaveLength(1);
         expect(runs[0]).toMatchObject({
           trigger: "cli",
