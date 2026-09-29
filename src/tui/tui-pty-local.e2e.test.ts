@@ -1,6 +1,5 @@
 // Exercises slower TUI PTY paths against real local and Gateway backends.
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
@@ -46,7 +45,9 @@ import {
   createChatTerminalObserver,
   createIdempotentCleanup,
   createFreshSession,
+  createLocalShellControlFloodPreload,
   lastOutputIndexAfter,
+  readLocalShellControlFloodPids,
   registerIdempotentCleanup,
   startGatewayCaseControlClient,
   waitForOutputAfter,
@@ -1568,39 +1569,7 @@ describe("TUI PTY real backends", () => {
         prepareEnv: async ({ env, tempDir }) => {
           const preloadPath = path.join(tempDir, "control-flood.cjs");
           rolePidPath = path.join(tempDir, "control-flood-pids.txt");
-          await writeFile(
-            preloadPath,
-            `
-              const fs = require("node:fs");
-              const { Socket } = require("node:net");
-              const role = /service-child-(relay|group-anchor)\\.[cm]?[jt]s$/.exec(process.argv[1] || "")?.[1];
-              if (role) {
-                fs.appendFileSync(process.env.OPENCLAW_CONTROL_PROBE_PATH, role + " " + process.pid + "\\n");
-              }
-              const originalWrite = Socket.prototype.write;
-              let flooded = false;
-              Socket.prototype.write = function (chunk, ...args) {
-                const text = String(chunk);
-                if (
-                  !flooded &&
-                  role === "group-anchor" &&
-                  text.includes('"type":"ready"')
-                ) {
-                  flooded = true;
-                  const ready = JSON.parse(text);
-                  fs.appendFileSync(
-                    process.env.OPENCLAW_CONTROL_PROBE_PATH,
-                    "root " + ready.commandPid + "\\n",
-                  );
-                  const accepted = originalWrite.call(this, chunk, ...args);
-                  setTimeout(() => originalWrite.call(this, "é".repeat(131_073) + "\\n"), 500);
-                  return accepted;
-                }
-                return originalWrite.call(this, chunk, ...args);
-              };
-            `,
-            "utf8",
-          );
+          await writeFile(preloadPath, createLocalShellControlFloodPreload(), "utf8");
           return {
             ...env,
             NODE_OPTIONS: `${env.NODE_OPTIONS ?? ""} --require=${preloadPath}`.trim(),
@@ -1616,13 +1585,17 @@ describe("TUI PTY real backends", () => {
           `
             const fs = require("node:fs");
             const { spawn } = require("node:child_process");
-            const descendant = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
-              stdio: "ignore",
+            const descendant = spawn(process.execPath, [
+              "-e", "setInterval(() => {}, 1000); process.send('ready');",
+            ], { stdio: ["ignore", "ignore", "ignore", "ipc"] });
+            descendant.once("message", (message) => {
+              if (message !== "ready") throw new Error("unexpected descendant readiness");
+              fs.writeFileSync(
+                ${JSON.stringify(commandPidPath)},
+                "command " + process.pid + "\\ndescendant " + descendant.pid + "\\n",
+              );
+              descendant.disconnect();
             });
-            fs.writeFileSync(
-              ${JSON.stringify(commandPidPath)},
-              "command " + process.pid + "\\ndescendant " + descendant.pid + "\\n",
-            );
             setInterval(() => {}, 1000);
           `,
           "utf8",
@@ -1636,25 +1609,12 @@ describe("TUI PTY real backends", () => {
         await fixture.run.waitForOutput("local shell: enabled for this session");
         const pidEntries = await waitFor({
           timeoutMs: LOCAL_EXIT_TIMEOUT_MS,
-          read: () => {
-            if (!existsSync(rolePidPath) || !existsSync(commandPidPath)) {
-              return null;
-            }
-            const entries = new Map<string, number>();
-            for (const line of `${readFileSync(rolePidPath, "utf8")}${readFileSync(commandPidPath, "utf8")}`
-              .trim()
-              .split("\n")) {
-              const match = /^(relay|group-anchor|root|command|descendant) (\d+)$/u.exec(line);
-              if (!match?.[1] || !match[2]) {
-                throw new Error(`unexpected control-flood PID line: ${JSON.stringify(line)}`);
-              }
-              entries.set(match[1], Number.parseInt(match[2], 10));
-            }
-            return entries.size === 5 ? entries : null;
-          },
+          read: () => readLocalShellControlFloodPids(rolePidPath, commandPidPath),
           onTimeout: () => new Error("local shell did not report its complete process group"),
         });
         trackedPids.push(...pidEntries.values());
+        expect(trackedPids.every(isProcessAlive)).toBe(true);
+        await writeFile(`${rolePidPath}.release`, "release", "utf8");
         await fixture.run.waitForOutput(
           "[local] error: service child cleanup identity lost: control pipe pending line exceeded cap",
           LOCAL_EXIT_TIMEOUT_MS,
