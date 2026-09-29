@@ -361,7 +361,10 @@ export function createStreamingBinaryOutputSanitizer(
 }
 
 function sanitizeStrippedBinaryOutput(text: string): string {
-  const scrubbed = text.replace(/[\p{Format}\p{Surrogate}]/gu, "");
+  // Joiners are part of valid words and emoji sequences, including filenames.
+  const scrubbed = text.replace(/[\p{Format}\p{Surrogate}]/gu, (character) =>
+    character === "\u200c" || character === "\u200d" ? character : "",
+  );
   if (!scrubbed) {
     return scrubbed;
   }
