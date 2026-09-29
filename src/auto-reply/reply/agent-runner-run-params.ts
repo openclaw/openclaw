@@ -4,15 +4,22 @@ import {
   modelFallbackOverrideFromAvailability,
   resolveModelFallbackAvailability,
 } from "../../agents/agent-scope.js";
-import {\n  findModelInCatalog,\n  modelSupportsInput,\n  prepareModelRunCapabilities,\n  type PreparedModelThinkingCapability,\n} from "../../agents/model-catalog-lookup.js";
+import {
+  findModelInCatalog,
+  modelSupportsInput,
+  prepareModelRunCapabilities,
+  type PreparedModelThinkingCapability,
+} from "../../agents/model-catalog-lookup.js";
 import { modelTransportRoutesMatch } from "../../agents/model-compat-catalog.js";
 import {
   findConfiguredProviderModel,
   resolveMergedModelProviderConfig,
 } from "../../config/model-provider-config.js";
-import { isReasoningTagProvider } from "../../utils/provider-utils.js";\nimport { needsThinkHydration, normalizeThinkingCatalogProviders } from "../../agents/thinking-runtime.js";
+import { isReasoningTagProvider } from "../../utils/provider-utils.js";
+import { needsThinkHydration, normalizeThinkingCatalogProviders } from "../../agents/thinking-runtime.js";
 import type { resolveProviderScopedAuthProfile } from "./agent-runner-auth-profile.js";
-import type { FollowupRun } from "./queue.js";\nimport type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { FollowupRun } from "./queue.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
 /** Builds model fallback options for an embedded follow-up run. */
 export function resolveModelFallbackOptions(
@@ -184,7 +191,8 @@ export async function buildEmbeddedRunBaseParams(params: {
     skillLibraryAuthoring: params.run.skillLibraryAuthoring,
     provider: params.provider,
     model: params.model,
-    modelHasVision: await resolveRunModelHasVision(params),\n    ...(modelThinkingCapability ? { modelThinkingCapability } : {}),
+    modelHasVision: await resolveRunModelHasVision(params),
+    ...(modelThinkingCapability ? { modelThinkingCapability } : {}),
     requestedRouteResolution: "resolved" as const,
     modelSelectionLocked: params.run.modelSelectionLocked,
     modelFallbackAvailability,
