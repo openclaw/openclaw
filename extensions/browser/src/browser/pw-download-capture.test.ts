@@ -4,7 +4,75 @@ import os from "node:os";
 import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
-import { createDownloadCaptureForPage } from "./pw-download-capture.js";
+import { createDownloadCaptureForPage, saveBrowserDownload } from "./pw-download-capture.js";
+
+describe("Playwright download output preparation", () => {
+  it("creates the validated nested destination parent before saveAs", async () => {
+    const outputRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-download-parent-"));
+    const outputPath = path.join(outputRoot, "nested", "deeper", "file.bin");
+    const mkdir = vi.spyOn(fs, "mkdir");
+    let observedParent: string | undefined;
+    const saveAs = vi.fn(async (tempPath: string) => {
+      observedParent = path.dirname(tempPath);
+      await expect(fs.stat(observedParent)).resolves.toMatchObject({});
+      await fs.writeFile(tempPath, "nested content", "utf8");
+    });
+
+    try {
+      await expect(
+        saveBrowserDownload(
+          {
+            suggestedFilename: () => "file.bin",
+            saveAs,
+          },
+          { outputPath, outputRoot },
+        ),
+      ).resolves.toMatchObject({ path: outputPath });
+
+      expect(observedParent).toBeDefined();
+      expect(mkdir).toHaveBeenCalledWith(observedParent, { recursive: true });
+      expect(mkdir.mock.invocationCallOrder.at(-1)).toBeLessThan(
+        saveAs.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+      );
+      await expect(fs.readFile(outputPath, "utf8")).resolves.toBe("nested content");
+    } finally {
+      mkdir.mockRestore();
+      await fs.rm(outputRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("reports destination parent creation failures without calling saveAs", async () => {
+    const outputRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-download-parent-error-"));
+    const outputPath = path.join(outputRoot, "nested", "file.bin");
+    const failure = new Error("destination parent creation failed");
+    const originalMkdir = fs.mkdir.bind(fs);
+    const mkdir = vi.spyOn(fs, "mkdir").mockImplementation(async (dirPath, options) => {
+      const directory = String(dirPath);
+      if (path.basename(directory).startsWith("fs-safe-output-")) {
+        throw failure;
+      }
+      return await originalMkdir(dirPath, options);
+    });
+    const saveAs = vi.fn(async () => {});
+
+    try {
+      await expect(
+        saveBrowserDownload(
+          {
+            suggestedFilename: () => "file.bin",
+            saveAs,
+          },
+          { outputPath, outputRoot },
+        ),
+      ).rejects.toThrow("Failed to create validated download destination parent");
+      expect(saveAs).not.toHaveBeenCalled();
+      await expect(fs.access(outputPath)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      mkdir.mockRestore();
+      await fs.rm(outputRoot, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("Playwright download capture cancellation", () => {
   it("awaits cancellation when owned download admission rejects", async () => {
