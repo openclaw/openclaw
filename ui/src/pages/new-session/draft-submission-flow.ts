@@ -1,4 +1,5 @@
 import type { ProjectsAddResult } from "../../../../packages/gateway-protocol/src/index.js";
+import { GatewayRequestError } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import type { ChatAttachment, HumanMention } from "../../lib/chat/chat-types.ts";
@@ -86,6 +87,7 @@ export class DraftSubmissionFlow {
   submissionOutcomeUnknown: SubmissionOutcomeReason | null = null;
   private readonly startedSession = new StartedSessionNavigation();
   error: string | null = null;
+  private retryableError: string | null = null;
   private submitRequestToken = 0;
   private readonly sessionStartup: DraftSessionStartup;
   readonly pendingPlacement = new PendingSessionPlacementRecoveryState(() => this.read().context);
@@ -143,6 +145,11 @@ export class DraftSubmissionFlow {
 
   get submitting(): boolean {
     return this.activeSubmission !== null || this.sessionStartup.active;
+  }
+
+  /** The shown error came from a retryable failure of the draft that is still held. */
+  get canRetryError(): boolean {
+    return this.error !== null && this.error === this.retryableError && !this.submitting;
   }
 
   get pendingMessage() {
@@ -520,7 +527,7 @@ export class DraftSubmissionFlow {
               placementCreateParams ??
                 startup?.params ??
                 this.sessionStartup.start(createParams, background),
-              { reconciliation: "background" },
+              { reconciliation: "background", rethrow: true },
             );
       instant = beginInstant?.();
       const result = await createRequest;
@@ -616,6 +623,8 @@ export class DraftSubmissionFlow {
       if (requestId === this.submitRequestToken && this.gateway.client === input.client) {
         this.sessionStartup.clear();
         this.error = error instanceof Error ? error.message : String(error);
+        this.retryableError =
+          error instanceof GatewayRequestError && error.retryable ? this.error : null;
         if (instant) {
           await instant.rollback();
         }

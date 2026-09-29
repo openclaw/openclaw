@@ -502,6 +502,13 @@ export class NewSessionPage extends OpenClawLightDomElement {
         }
         ${renderNewSessionBody({
           error: this.submission.error,
+          errorAction: this.submission.canRetryError
+            ? {
+                label: t("common.retry"),
+                onClick: () => void this.submission.submit(),
+                disabled: this.context?.gateway.snapshot.phase !== "connected",
+              }
+            : undefined,
           pendingMessage,
           userId: identity?.type === "profile" ? identity.id : null,
           submitting: this.submission.submitting,

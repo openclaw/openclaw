@@ -138,7 +138,7 @@ describe("PaletteSessionDraft", () => {
       await host.draft.submit();
       expect(context.sessions.createResult).toHaveBeenCalledWith(
         expect.objectContaining({ agentId: "other", message: "Create with this explicit agent" }),
-        { reconciliation: "background" },
+        { reconciliation: "background", rethrow: true },
       );
       if (initialRun.status === "rejected") {
         expect(host.started).not.toHaveBeenCalled();

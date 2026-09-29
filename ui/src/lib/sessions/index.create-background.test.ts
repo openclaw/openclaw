@@ -1,6 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
@@ -407,5 +407,25 @@ it("does not prepare rejected worktree or model selections", async () => {
   ).resolves.toBeNull();
   expect(sessions.isPreparedWorkSession(key)).toBe(false);
   expect(sessions.state.modelOverrides[key]).toBeUndefined();
+  sessions.dispose();
+});
+
+it("rethrows a create failure to a caller that owns its presentation", async () => {
+  const failure = new GatewayRequestError({
+    code: "UNAVAILABLE",
+    message: "Models are still loading; retry in a moment.",
+    retryable: true,
+  });
+  const client = {
+    request: vi.fn(async () => {
+      throw failure;
+    }),
+  } as unknown as GatewayBrowserClient;
+  const { sessions } = createSessionCapabilityHarness(client.request.bind(client));
+
+  await expect(
+    sessions.createResult({ agentId: "main" }, { reconciliation: "background", rethrow: true }),
+  ).rejects.toBe(failure);
+  expect(sessions.state.error).toBe("Models are still loading; retry in a moment.");
   sessions.dispose();
 });

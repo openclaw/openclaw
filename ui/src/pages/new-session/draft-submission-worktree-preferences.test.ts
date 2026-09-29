@@ -502,7 +502,7 @@ it("does not let a replacement draft's pending preference load restore a consume
   await next.flow.submit(undefined, true);
   expect(next.context.sessions.createResult).toHaveBeenCalledWith(
     expect.not.objectContaining({ worktreeName: "first-task" }),
-    { reconciliation: "background" },
+    { reconciliation: "background", rethrow: true },
   );
 });
 
@@ -619,6 +619,7 @@ it("retires the restored placement's agent preference even when the picker hydra
   await retry.flow.submit(undefined, true);
   expect(retry.context.sessions.createResult).toHaveBeenCalledExactlyOnceWith(original, {
     reconciliation: "background",
+    rethrow: true,
   });
   expect(start).toHaveBeenCalledOnce();
   expect(prefs.stored("work")).toMatchObject({ worktreeName: "" });

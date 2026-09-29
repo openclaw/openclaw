@@ -201,6 +201,7 @@ describe("DraftSubmissionFlow submit gates", () => {
       if (phase === "creating") {
         expect(context.sessions.createResult).toHaveBeenCalledExactlyOnceWith(createParams, {
           reconciliation: "background",
+          rethrow: true,
         });
       } else {
         expect(context.sessions.createResult).not.toHaveBeenCalled();

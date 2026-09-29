@@ -313,6 +313,7 @@ it.each(["explicit", "implicit", "cleared"] as const)(
     await retry.flow.submit(undefined, true);
     expect(retry.context.sessions.createResult).toHaveBeenCalledExactlyOnceWith(original, {
       reconciliation: "background",
+      rethrow: true,
     });
     expect(start).toHaveBeenCalledOnce();
     expect(retry.flow.error).toBeNull();
