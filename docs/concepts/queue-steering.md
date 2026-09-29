@@ -116,6 +116,10 @@ takes effect on the next new turn; it does not replace the running turn's person
 instructions. Personal context selection does not grant tool permissions or
 change the approval destination.
 
+Accepted cross-session steering retains the selected sender's source authority
+after the sending turn finishes. Access revocation can still block an input
+before its transcript commit.
+
 A visible message or send acknowledgment does not mean the active runtime has
 consumed it. The Control UI shows specific notices when an accepted message is
 waiting for worker setup or workspace sync.

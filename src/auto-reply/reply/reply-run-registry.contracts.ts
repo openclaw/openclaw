@@ -53,6 +53,8 @@ export type ReplyBackendQueueMessageOptions = {
   abortSignal?: AbortSignal;
   /** Releases arrival ordering once the runtime has actually accepted this queue item. */
   onQueueAccepted?: (accepted: boolean) => void;
+  /** Releases per-input custody after commit, cancellation, or terminal rejection. */
+  onQueueSettled?: () => void;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   /** Prepared channel turn to merge only at transcript persistence. */

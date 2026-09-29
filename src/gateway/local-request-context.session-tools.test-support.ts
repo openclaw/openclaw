@@ -1,5 +1,18 @@
+import { steerActiveSessionWithOptionalDeliveryWait } from "../agents/embedded-agent-runner/run/attempt-queue-message.js";
+import {
+  clearActiveEmbeddedRun,
+  setActiveEmbeddedRun,
+} from "../agents/embedded-agent-runner/runs.js";
+import { createEmbeddedRunHandle } from "../agents/embedded-agent-runner/runs.test-support.js";
+import { guardSessionManager } from "../agents/session-tool-result-guard-wrapper.js";
+import { persistAgentSessionMessage } from "../agents/sessions/agent-session-transcript.js";
+import { registerQueuedUserMessageRetirement } from "../agents/sessions/queued-user-message-retirement.js";
+import { SessionManager } from "../agents/sessions/session-manager.js";
+import { setSteeringMessageIdentity } from "../agents/sessions/steering-message-identity.js";
+import { withoutGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { withPersonalToolTurn } from "../auto-reply/reply/personal-tool-turn.test-support.js";
 import type { CliDeps } from "../cli/deps.types.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   appendTranscriptMessage,
   upsertSessionEntryCore,
@@ -7,6 +20,12 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
 import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
+import { attachRuntimeUserTurnTranscriptContext } from "../sessions/user-turn-transcript-runtime-context.js";
+import type {
+  PersistedUserTurnMessage,
+  UserTurnTranscriptRecorder,
+} from "../sessions/user-turn-transcript.types.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { withLocalGatewayRequestScope } from "./local-request-context.js";
 import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
@@ -131,4 +150,112 @@ export async function drainSessionToolsFixture() {
   // Failed test callbacks can still hold isolated state; join cleanup before the next fixture.
   await fixtureRun?.catch(() => {});
   fixtureRun = undefined;
+}
+
+export async function withDelayedSessionToolsSteering(
+  cfg: OpenClawConfig,
+  run: (receiver: {
+    commit: () => Promise<void>;
+    cancel: () => Promise<void>;
+    pendingCount: () => number;
+  }) => Promise<void>,
+) {
+  const target = {
+    agentId: "main",
+    sessionKey: PARTICIPANT_SHARED,
+    sessionId: "participant-shared-id",
+    storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: "main" }),
+  };
+  const manager = guardSessionManager(await SessionManager.openAsync(target), {
+    ...target,
+    config: cfg,
+    runId: "participant-steering-target",
+  });
+  const queued: Array<{
+    message: PersistedUserTurnMessage;
+    recorder: UserTurnTranscriptRecorder;
+  }> = [];
+  const listeners = new Set<(event: unknown) => void>();
+  const settled = createDeferredCore();
+  const emit = (event: unknown) => {
+    for (const listener of listeners) {
+      listener(event);
+    }
+  };
+  const session: Parameters<typeof steerActiveSessionWithOptionalDeliveryWait>[0] = {
+    agent: {
+      cancelSteeringMessage: (predicate) => {
+        const index = queued.findIndex((entry) => predicate(entry.message));
+        return index < 0 ? undefined : queued.splice(index, 1)[0]?.message;
+      },
+    },
+    steer: async (text, _images, recorder, _media, _order, identity, canInject) => {
+      const prepared = await recorder?.resolveMessage();
+      if (!recorder || !prepared) {
+        throw new Error("Expected sessions_send transcript input");
+      }
+      if (canInject && !canInject()) {
+        throw new Error("Steering receiver is no longer current");
+      }
+      const message = attachRuntimeUserTurnTranscriptContext(
+        { role: "user", content: text, timestamp: 1 },
+        { message: prepared, recorder },
+      );
+      setSteeringMessageIdentity(message, identity);
+      registerQueuedUserMessageRetirement(message, () => true);
+      queued.push({ message, recorder });
+    },
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+        settled.resolve();
+      };
+    },
+  };
+  const handle = createEmbeddedRunHandle({
+    runId: "participant-steering-target",
+    supportsTranscriptCommitWait: true,
+  });
+  handle.messageInjectionV2 = {
+    version: 2,
+    isAvailable: () => true,
+    queueMessage: (text, options, assertCurrent) =>
+      steerActiveSessionWithOptionalDeliveryWait(session, text, options, target.sessionKey, () => {
+        assertCurrent();
+        return true;
+      }),
+  };
+  withoutGatewayToolCallerIdentity(() =>
+    setActiveEmbeddedRun(target.sessionId, handle, target.sessionKey, undefined, target.agentId),
+  );
+  const cancel = async () => {
+    if (listeners.size === 0) {
+      return;
+    }
+    emit({ type: "agent_settled" });
+    await settled.promise;
+  };
+  try {
+    await run({
+      pendingCount: () => queued.length,
+      cancel,
+      commit: async () => {
+        const entry = queued[0];
+        if (!entry) {
+          throw new Error("Expected an accepted steering message");
+        }
+        await persistAgentSessionMessage(manager, entry.message, {
+          invalidateSerializedPrefixCache: true,
+        });
+        await entry.recorder.waitForRuntimePersistence();
+        queued.shift();
+        emit({ type: "message_end", message: entry.message });
+        await settled.promise;
+      },
+    });
+  } finally {
+    await cancel();
+    clearActiveEmbeddedRun(target.sessionId, handle, target.sessionKey);
+  }
 }

@@ -34,6 +34,7 @@ import {
   hasInProcessGatewayToolContext,
   type AgentToolGatewayRequestCaller,
 } from "./in-process-gateway.js";
+import { queueSessionsSendSteeringWithCustody } from "./sessions-send-tool.steering.js";
 
 export async function notifySessionsSendSession(params: {
   message: string;
@@ -168,11 +169,18 @@ export async function trySessionsSendActiveRunDelivery(
     }
     const { inputProvenance, message: messageText, sourceReplyDeliveryMode } = params.sendParams;
     if (activeRunSessionId && messageText) {
-      const queue = async (assertCurrent: () => void) => {
+      const queue = async (
+        assertCurrent: () => void,
+        lifecycle: Pick<
+          EmbeddedAgentQueueMessageOptions,
+          "onQueueAccepted" | "onQueueSettled"
+        > = {},
+      ) => {
         const queueOptions: EmbeddedAgentQueueMessageOptions = {
           steeringMode: "all",
           debounceMs: 0,
           deliveryTimeoutMs: params.deliveryTimeoutMs,
+          ...lifecycle,
           // Waiting for a busy run's transcript would withdraw accepted guidance at the deadline.
           ...(params.mode === "steer" || ownChild
             ? { waitForTranscriptCommit: false }
@@ -219,8 +227,9 @@ export async function trySessionsSendActiveRunDelivery(
         return outcome;
       };
       const queueOutcome = selection.operatorAuthority
-        ? await runWithInProcessGatewaySessionMutation(
+        ? await queueSessionsSendSteeringWithCustody(
             { sessionKey: params.sessionKey, agentId: params.sendParams.agentId },
+            selection.assertCurrent,
             queue,
           )
         : await queue(selection.assertCurrent);
