@@ -157,12 +157,12 @@ export function createArtifactTransferHttpCallback(
           }
           const checkAuthority = new Transform({
             transform(chunk: Buffer, _encoding, next) {
-              next(
-                service.isAuthorizationCurrent(authorization)
-                  ? null
-                  : new Error("Worker artifact transfer authority closed"),
-                chunk,
-              );
+              if (!service.isAuthorizationCurrent(authorization)) {
+                next(new Error("Worker artifact transfer authority closed"));
+                return;
+              }
+              service.recordProgress(authorization);
+              next(null, chunk);
             },
           });
           res.writeHead(range === undefined ? 200 : 206, {

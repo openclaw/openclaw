@@ -510,13 +510,16 @@ export async function updateGitCheckout(params: {
           if (completed) {
             throw new Error("Git runtime backup retirement has already started.");
           }
-          return (restored ??= (async () => {
+          return (restored ??= (async (): ReturnType<PackageUpdateTransaction["rollback"]> => {
             await assertRollbackSafe();
             assertCurrent();
+            const rollbackStart = steps.length;
             const verified = await restoreRuntime(assertCurrent, beforeBuiltCommit ?? beforeSha, {
               sha: preflight.candidateSha,
               branch: activatedBranch,
             });
+            const rollbackSteps = steps.slice(rollbackStart);
+            const messages = rollbackSteps.flatMap((entry) => entry.advisory?.message ?? []);
             return {
               name: "git-runtime-rollback",
               command: "restore previous Git runtime",
@@ -524,6 +527,11 @@ export async function updateGitCheckout(params: {
               durationMs: 0,
               exitCode: verified ? 0 : 1,
               activePackageRoot: gitRoot,
+              advisory:
+                verified && messages.length
+                  ? { kind: "recoverable-maintenance", message: messages.join(" ") }
+                  : undefined,
+              stderrTail: verified ? undefined : rollbackSteps.find(isFailedUpdateStep)?.stderrTail,
             };
           })());
         },

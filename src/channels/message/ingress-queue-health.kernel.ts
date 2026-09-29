@@ -55,33 +55,24 @@ export function countChannelIngressQueuePressureInDatabase(
     .where("status", "in", ["pending", "claimed"])
     .where("lane_key", "is not", null)
     .groupBy(["queue_name", "lane_key", "channel_id", "account_id"])
-    .having((eb) =>
-      eb.or([
-        eb(
-          eb.fn
-            .countAll<number>()
-            .filterWhere((filter) =>
+    .having(
+      (eb) =>
+        eb.fn
+          .countAll<number>()
+          .filterWhere((filter) =>
+            filter.or([
               filter.and([
                 filter("attempts", ">=", DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS),
                 filter("last_error", "is not", null),
               ]),
-            ),
-          ">",
-          0,
-        ),
-        eb(
-          eb.fn
-            .countAll<number>()
-            .filterWhere((filter) =>
               filter.and([
                 filter("status", "=", "claimed"),
                 filter("claimed_at", "<=", staleClaimCutoff),
               ]),
-            ),
-          ">",
-          0,
-        ),
-      ]),
+            ]),
+          ),
+      ">",
+      0,
     )
     .as("lanes");
   return executeSqliteQuerySync(

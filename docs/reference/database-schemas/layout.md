@@ -228,11 +228,17 @@ These observations do not grant execution authority. No column, table, or schema
 version changes; older records can omit them. See
 [candidate-owned admission](/cli/update#candidate-owned-admission).
 
-Asynchronous history lookup and listing run their queries and record decoding
-in the shared-state read worker. They preserve source artifacts and inherited
-snapshot or disposable-read scopes, and return empty history without creating
-a missing database or ledger table. Reconciliation and ledger writes retain
-their existing owners.
+Asynchronous history lookup, listing, and status projections run their queries
+and record decoding in the shared-state read worker. They preserve source
+artifacts and inherited snapshot or disposable-read scopes, reuse a retained
+identity-matched warm source without copying it, and return empty
+history without creating a missing database or ledger table. Reconciliation
+retains the selected physical database through its asynchronous lookup and
+shared-state write-worker operation. Its synchronous existing-schema transaction
+rechecks rows, recovery descriptors, and driver liveness before terminalizing;
+source custody and cancellation are checked again before commit. Lightweight
+repair also rechecks newer post-core history in that transaction. Ordinary run
+creation, progress, and terminal writes retain their current ledger owner.
 
 New drivers store optional `origin.driver` fields `host` (the hostname), `pid`,
 and `startIdentity` (the operating system's process-start identity as a decimal

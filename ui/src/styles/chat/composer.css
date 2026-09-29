@@ -1704,6 +1704,11 @@ html[dir="rtl"] .chat-attachment-loading > span {
     transform var(--duration-fast) ease;
 }
 
+.chat-attachment-thumb--pasted-text .chat-attachment-remove {
+  opacity: 1;
+  transform: none;
+}
+
 .chat-attachment-thumb:is(:hover, :focus-within) .chat-attachment-remove {
   opacity: 1;
   transform: scale(1);

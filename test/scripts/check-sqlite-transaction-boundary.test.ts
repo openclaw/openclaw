@@ -45,6 +45,7 @@ describe("SQLite transaction boundary guard", () => {
         runSqliteImmediateTransactionSync(db, async () => await prepare());
         runOpenClawAgentWriteTransaction(async (database) => await write(database), options);
         runOpenClawStateWriteTransaction(async (database) => await write(database));
+        await runOpenClawAgentWriteWithYieldingAdmission(async (database) => await write(database), options);
       `),
       ),
     ).toEqual([
@@ -62,6 +63,11 @@ describe("SQLite transaction boundary guard", () => {
         line: 4,
         reason:
           'passes an async callback to synchronous SQLite transaction helper "runOpenClawStateWriteTransaction"',
+      },
+      {
+        line: 5,
+        reason:
+          'passes an async callback to synchronous SQLite transaction helper "runOpenClawAgentWriteWithYieldingAdmission"',
       },
     ]);
   });
@@ -113,6 +119,10 @@ describe("SQLite transaction boundary guard", () => {
         ...parseFixture(`
         const prepared = await prepareMutation();
         runOpenClawAgentWriteTransaction((database) => {
+          validate(database, prepared.expected);
+          apply(database, prepared.patch);
+        }, options);
+        await runOpenClawAgentWriteWithYieldingAdmission((database) => {
           validate(database, prepared.expected);
           apply(database, prepared.patch);
         }, options);

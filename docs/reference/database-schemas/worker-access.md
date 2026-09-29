@@ -48,6 +48,16 @@ Writes, schema transitions, lease grants, and all generic SQLite broker jobs
 retain immediate fresh ownership verification, including their transaction and
 commit grants. Schemas, retained data, and update behavior are unchanged.
 
+Legacy session-entry patches yield while waiting for a competing SQLite writer.
+Each native attempt uses a zero busy timeout through commit; only a failed
+`BEGIN IMMEDIATE` can retry, within the connection's existing admission budget.
+The session writer queue retains FIFO order, the captured connection stays
+retained, and each attempt rechecks its owner. The admitted transaction revalidates
+the prepared rows and caller authority before mutation. Its callback and committed
+publications never replay. Entry reads and transaction bodies still execute on
+the calling thread; this bounded cutover removes native lock waits without
+changing schemas, durability, or update behavior.
+
 Channel setup awaits a fresh policy read after the agent-selection prompt.
 Deferred plugin migration rows are read by the shared-state worker, and setup
 rechecks its config owner after the read before using the selected agent. Each
@@ -89,6 +99,12 @@ transaction callback remain synchronous **inside the worker**. Complete
 asynchronous planning first, then reread authoritative rows inside the admitted
 transaction. Preserve FIFO order, physical database identity, transaction/commit grants,
 and settlement of accepted write-capable work.
+
+Outbound media staging and recovery create and release their retention rows through
+the delivery queue's shared-state worker. Callers await creation before publishing
+spool files and await release during cleanup, so a concurrent writer waiting for
+host admission cannot block media sends on the Gateway thread. The existing custody
+rows, atomic enqueue, expiry, and update behavior are unchanged.
 
 Published agent and shared-state database timers dispatch periodic WAL checkpoints
 and bounded page reclamation through those same writers. The existing timer keeps

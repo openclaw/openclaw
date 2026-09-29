@@ -1123,6 +1123,7 @@ src/plugins/plugin-source-capture-context.ts
 src/plugins/plugin-source-capture-directory.ts
 src/plugins/plugin-source-capture-native-loads.ts
 src/plugins/plugin-source-capture-path.ts
+src/plugins/plugin-source-capture-state-dir.ts
 src/plugins/plugin-source-file.ts
 src/plugins/plugin-source-references.ts
 src/plugins/plugin-source-verification.ts

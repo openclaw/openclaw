@@ -20,6 +20,7 @@ import {
   prepareSessionTranscriptProjectionAppend,
   shouldProjectActiveEvent,
   transcriptEventContextEligibility,
+  type PreparedSessionTranscriptProjectionAppend,
   type SessionTranscriptProjectionCursor,
   type TranscriptIndexEntry,
 } from "./session-transcript-projection-append.js";
@@ -55,12 +56,7 @@ export type PreparedSessionTranscriptProjectionMetadata = {
 };
 
 export type PreparedSessionTranscriptProjection = PreparedSessionTranscriptProjectionMetadata & {
-  activeRows: Array<{
-    activePosition: number;
-    contextEligible: 0 | 1;
-    eventSeq: number;
-    messagePosition: number | null;
-  }>;
+  activeRows: NonNullable<PreparedSessionTranscriptProjectionAppend["activeRow"]>[];
   ftsRows: TranscriptIndexEntry[];
 };
 

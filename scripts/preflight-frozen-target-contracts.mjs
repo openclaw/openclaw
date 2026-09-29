@@ -1180,11 +1180,6 @@ async function preflightFrozenTargetContracts(input, workflow = false, verifiedT
     for (const path of supportFiles[consumer] ?? []) {
       required(sources.tooling, `scripts/e2e/lib/${path}`);
     }
-    if (
-      ["npm-onboard-channel-agent", "codex-on-demand", "update-corrupt-plugin"].includes(consumer)
-    ) {
-      required(sources.tooling, "scripts/lib/record-shared.mjs");
-    }
     if (consumer === "update-corrupt-plugin") {
       required(sources.tooling, "scripts/lib/update-compat-contract.mjs");
       required(sources.tooling, "scripts/lib/openclaw-e2e-instance.sh");
