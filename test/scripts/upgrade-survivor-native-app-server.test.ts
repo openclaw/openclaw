@@ -6,6 +6,7 @@ import { createInterface } from "node:readline";
 import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { WebSocket } from "ws";
+import { rawDataToString } from "../../packages/gateway-client/src/websocket-data.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 type Turn = { id: string; status: string; items: unknown[] };
@@ -128,7 +129,7 @@ beforeAll(async () => {
   const ready = JSON.parse(line);
   socket = new WebSocket(ready.url);
   socket.on("message", (data) => {
-    const message = JSON.parse(data.toString());
+    const message = JSON.parse(rawDataToString(data));
     if (message.method) {
       notifications.push(message);
       for (const check of waiting) {
