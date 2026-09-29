@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
@@ -13,12 +14,14 @@ import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-cata
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerMinimaxProviders } from "./provider-registration.js";
 
-vi.mock("./oauth.runtime.js", () => ({
+vi.mock("./oauth.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./oauth.runtime.js")>()),
   loginMiniMaxPortalOAuth: vi.fn(async () => ({
     access: "minimax-oauth-access-token",
     refresh: "minimax-oauth-refresh-token",
     expires: Date.now() + 60_000,
     resourceUrl: "https://api.minimax.io/anthropic",
+    tokenEndpoint: "https://account.minimax.io/oauth2/token",
   })),
 }));
 
@@ -673,6 +676,115 @@ describe("minimax provider hooks", () => {
       type: "oauth",
       provider: "minimax-portal",
       authFlow: "device-code",
+      tokenEndpoint: "https://account.minimax.io/oauth2/token",
     });
   });
+
+  it.each([
+    {
+      baseUrl: "https://api.minimaxi.com/anthropic",
+      tokenEndpoint: "https://account.minimaxi.com/oauth2/token",
+    },
+    {
+      baseUrl: "https://api.minimax.io/anthropic",
+      tokenEndpoint: "https://account.minimax.io/oauth2/token",
+    },
+    {
+      baseUrl: "https://proxy.example.com/anthropic",
+      tokenEndpoint: "https://account.minimax.io/oauth2/token",
+    },
+  ])(
+    "refreshes expired portal OAuth at the endpoint that issued it (base URL $baseUrl)",
+    async ({ baseUrl, tokenEndpoint }) => {
+      const { portalProvider } = await registeredProvidersWithPortalBaseUrl(baseUrl);
+      vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+      const fetchMock = vi.fn(async () =>
+        Response.json({
+          status: "success",
+          access_token: "fresh-access",
+          refresh_token: "rotated-refresh",
+          expired_in: 7200,
+        }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+
+      await expect(
+        portalProvider.refreshOAuth?.(expiredPortalCredential(tokenEndpoint)),
+      ).resolves.toEqual({
+        ...expiredPortalCredential(tokenEndpoint),
+        access: "fresh-access",
+        refresh: "rotated-refresh",
+        expires: 1_700_007_200_000,
+      });
+      const [url, init] = fetchMock.mock.calls[0] as unknown as [string, { body: string }];
+      expect(url).toBe(tokenEndpoint);
+      expect(Object.fromEntries(new URLSearchParams(init.body))).toEqual({
+        grant_type: "refresh_token",
+        client_id: "78257093-7e40-4613-99e0-527b14b39113",
+        refresh_token: "stored-refresh",
+      });
+    },
+  );
+
+  it.each([
+    {
+      case: "a credential saved without its issuing endpoint",
+      baseUrl: "https://api.minimax.io/anthropic",
+      tokenEndpoint: undefined,
+    },
+    {
+      case: "a Global credential after the base URL moved to CN",
+      baseUrl: "https://api.minimaxi.com/anthropic",
+      tokenEndpoint: "https://account.minimax.io/oauth2/token",
+    },
+    {
+      case: "a CN credential after the base URL moved to Global",
+      baseUrl: "https://api.minimax.io/anthropic",
+      tokenEndpoint: "https://account.minimaxi.com/oauth2/token",
+    },
+  ])("refuses portal OAuth refresh before any request for $case", async (params) => {
+    const { portalProvider } = await registeredProvidersWithPortalBaseUrl(params.baseUrl);
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      portalProvider.refreshOAuth?.(expiredPortalCredential(params.tokenEndpoint)),
+    ).rejects.toThrow("openclaw models auth login --provider minimax-portal");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 });
+
+function expiredPortalCredential(tokenEndpoint: string | undefined) {
+  return {
+    type: "oauth" as const,
+    provider: "minimax-portal",
+    access: "expired-access",
+    refresh: "stored-refresh",
+    expires: 1,
+    authFlow: "device-code",
+    ...(tokenEndpoint ? { tokenEndpoint } : {}),
+  };
+}
+
+async function registeredProvidersWithPortalBaseUrl(baseUrl: string) {
+  const { providers } = await registerProviderPlugin({
+    plugin: {
+      register: (api: OpenClawPluginApi) =>
+        registerMinimaxProviders({
+          ...api,
+          runtime: {
+            ...api.runtime,
+            config: {
+              ...api.runtime.config,
+              current: () => ({
+                models: { providers: { "minimax-portal": { baseUrl, models: [] } } },
+              }),
+            },
+          },
+        }),
+    },
+    id: "minimax",
+    name: "MiniMax Provider",
+  });
+  return { portalProvider: requireRegisteredProvider(providers, "minimax-portal") };
+}

@@ -436,6 +436,7 @@ describe("loginMiniMaxPortalOAuth", () => {
       await expect(loginMiniMax({ region })).resolves.toMatchObject({
         access: "access",
         refresh: "refresh",
+        tokenEndpoint: expectedHosts[1],
       });
       expect(
         fetchMock.mock.calls.map(([input]) =>

@@ -234,7 +234,7 @@ function createOAuthHandler(region: MiniMaxRegion) {
         access: result.access,
         refresh: result.refresh,
         expires: result.expires,
-        credentialExtra: { authFlow: "device-code" },
+        credentialExtra: { authFlow: "device-code", tokenEndpoint: result.tokenEndpoint },
         configPatch: {
           models: {
             providers: {
@@ -339,7 +339,7 @@ function buildMinimaxApiProviderPlugin(): ProviderPlugin {
   };
 }
 
-function buildMinimaxPortalProviderPlugin(): ProviderPlugin {
+function buildMinimaxPortalProviderPlugin(readBaseUrl: () => string | undefined): ProviderPlugin {
   return {
     ...createMinimaxPortalProvider(),
     catalog: {
@@ -351,6 +351,11 @@ function buildMinimaxPortalProviderPlugin(): ProviderPlugin {
       }),
     },
     auth: [createMinimaxOAuthMethod("global"), createMinimaxOAuthMethod("cn")],
+    // The hook receives only the credential; the configured base URL is read to catch region changes.
+    refreshOAuth: async (credential) => {
+      const { refreshMiniMaxPortalOAuthCredential } = await import("./oauth.runtime.js");
+      return await refreshMiniMaxPortalOAuthCredential(credential, readBaseUrl());
+    },
     ...MINIMAX_PROVIDER_HOOKS,
     resolveDynamicModel: (ctx) =>
       resolveMinimaxDynamicModel({ providerId: PORTAL_PROVIDER_ID, ctx }),
@@ -360,5 +365,11 @@ function buildMinimaxPortalProviderPlugin(): ProviderPlugin {
 
 export function registerMinimaxProviders(api: OpenClawPluginApi) {
   api.registerProvider(buildMinimaxApiProviderPlugin());
-  api.registerProvider(buildMinimaxPortalProviderPlugin());
+  api.registerProvider(
+    buildMinimaxPortalProviderPlugin(() =>
+      normalizeOptionalString(
+        api.runtime.config.current().models?.providers?.[PORTAL_PROVIDER_ID]?.baseUrl,
+      ),
+    ),
+  );
 }
