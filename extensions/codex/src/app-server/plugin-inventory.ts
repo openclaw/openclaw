@@ -551,14 +551,20 @@ function resolveOwnedAppApprovalOverrideKeys(
   // Agents: app/read includes disabled tools. Keep every non-read-only alias,
   // including collisions with read-only titles; retired names cannot authorize
   // a current tool and must not prevent the entire app from being admitted.
-  const keys = app.toolSummaries
-    .filter((tool) => !tool.isReadOnly)
-    .flatMap((tool) => [
-      tool.name,
-      ...(tool.title ? [tool.title] : []),
-      ...prefixes.map((prefix) => `${prefix}_${tool.name}`),
-    ]);
-  return { approvalOverrideToolConfigKeys: Array.from(new Set(keys)).toSorted() };
+  const keys = new Set<string>();
+  for (const tool of app.toolSummaries) {
+    if (tool.isReadOnly) {
+      continue;
+    }
+    keys.add(tool.name);
+    if (tool.title) {
+      keys.add(tool.title);
+    }
+    for (const prefix of prefixes) {
+      keys.add(`${prefix}_${tool.name}`);
+    }
+  }
+  return { approvalOverrideToolConfigKeys: Array.from(keys).toSorted() };
 }
 
 function findPluginSummary(
