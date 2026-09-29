@@ -88,8 +88,9 @@ diagnostics, and the names of omitted requester-scoped servers, without opening
 connections. The same SDK exports `decodeHeaderEnvPlaceholder` for recognizing
 `${NAME}` and `Bearer ${NAME}` header references; the harness resolves the value
 for its own transport.
-`resolveOpenClawMcpTransportAlias` resolves CLI `type` aliases using OpenClaw's
-canonical mapping; an explicit `transport` takes precedence.
+`resolveConfiguredMcpTransport` applies the shared runtime rule: an explicit
+`transport` takes precedence over a legacy CLI `type` alias. Transport support and
+the default for servers without either field remain the caller's responsibility.
 
 ## Runtime strictness
 
