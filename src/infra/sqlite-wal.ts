@@ -34,7 +34,6 @@ import {
 import {
   cancelSqliteWalWriteAdmission,
   createSqliteWalMaintenanceScheduler,
-  SQLITE_WAL_INLINE_CHECKPOINT_VALVE_PAGES,
   type SqliteWalPeriodicRequest,
   type SqliteWalPeriodicResult,
 } from "./sqlite-wal-write-admission.js";
@@ -44,9 +43,12 @@ export type { SqliteWalReclamationResult } from "./sqlite-wal-reclamation.js";
 
 // WAL maintenance configures SQLite write-ahead logging and schedules bounded
 // checkpoints so state databases do not accumulate unbounded WAL files.
-// Worker-maintained writers disable inline checkpoints when they register their
-// owner; every other connection keeps the bounded valve.
-const DEFAULT_SQLITE_WAL_AUTOCHECKPOINT_PAGES = SQLITE_WAL_INLINE_CHECKPOINT_VALVE_PAGES;
+// Inline automatic checkpoints run on the committing connection, and while a
+// reader keeps the log from resetting every later commit above this threshold
+// retries one and syncs the database file. Worker-maintained writers disable it
+// when they register their owner; the checkpoint tick below keeps the log
+// backfilled, so this threshold only bounds a writer nobody else checkpoints.
+const DEFAULT_SQLITE_WAL_AUTOCHECKPOINT_PAGES = 16_384;
 const DEFAULT_SQLITE_WAL_CHECKPOINT_TICK_MS = 10 * 1000;
 const DEFAULT_SQLITE_WAL_CHECKPOINT_INTERVAL_MS = 30 * 60 * 1000;
 // SQLite applies this ceiling when a fully checkpointed WAL resets on the next
@@ -488,12 +490,12 @@ export function configureSqliteWalMaintenance(
     options.checkpointIntervalMs ?? DEFAULT_SQLITE_WAL_CHECKPOINT_INTERVAL_MS,
     "checkpointIntervalMs",
   );
-  // Checkpoint-only ticks keep commits off the checkpoint; vacuum keeps the reclaim cadence.
+  const timerIntervalMs = Math.min(checkpointIntervalMs, MAX_TIMER_TIMEOUT_MS);
+  // Checkpoint-only ticks keep commits off the checkpoint between reclaim passes.
   const checkpointTickMs =
-    checkpointIntervalMs > 0
-      ? Math.min(DEFAULT_SQLITE_WAL_CHECKPOINT_TICK_MS, checkpointIntervalMs)
+    checkpointIntervalMs > DEFAULT_SQLITE_WAL_CHECKPOINT_TICK_MS
+      ? DEFAULT_SQLITE_WAL_CHECKPOINT_TICK_MS
       : 0;
-  const timerIntervalMs = Math.min(checkpointTickMs, MAX_TIMER_TIMEOUT_MS);
   const checkpointMode = options.checkpointMode ?? "TRUNCATE";
   const periodicCheckpointMode = options.checkpointMode ?? "PASSIVE";
   const journalPolicy = options.databasePath
@@ -565,12 +567,9 @@ export function configureSqliteWalMaintenance(
   };
 
   let timer: IntervalHandle | null = null;
-  const ticksPerReclaim = Math.max(
-    1,
-    Math.round(checkpointIntervalMs / Math.max(1, timerIntervalMs)),
-  );
-  let ticksUntilReclaim = 0;
-  let nextPageBudget = 512;
+  let tickTimer: IntervalHandle | null = null;
+  // The periodic pass sets the vacuum budget; the next run consumes it, ticks add none.
+  let nextPageBudget = 0;
   const maintainPeriodic = (
     request: SqliteWalPeriodicRequest,
     admit?: (stage: "transaction" | "commit") => void,
@@ -621,28 +620,35 @@ export function configureSqliteWalMaintenance(
     db,
     maintainPeriodic,
     (maxPages) =>
-      timer && !invalidated
+      (timer || tickTimer) && !invalidated
         ? { maxPages, checkpointMode: periodicCheckpointMode, checkpoint: checkpointOwner.snapshot }
         : undefined,
     checkpointOwner.adopt,
     (error) => checkpointOwner.recordError(error),
-    () => nextPageBudget,
+    () => {
+      const budget = nextPageBudget;
+      nextPageBudget = 0;
+      return budget;
+    },
   );
+  if (checkpointTickMs > 0) {
+    tickTimer = runInSqliteMaintenanceContext(
+      () =>
+        setInterval(() => {
+          if (!tickTimer || invalidated) {
+            return;
+          }
+          void maintain();
+          // SAFETY: Node's setInterval returns a Timeout whose optional unref() this handle type models.
+        }, checkpointTickMs) as IntervalHandle,
+    );
+    tickTimer.unref?.();
+  }
   if (timerIntervalMs > 0) {
     timer = runInSqliteMaintenanceContext(
       () =>
         setInterval(() => {
           if (!timer || invalidated) {
-            return;
-          }
-          // The first fire and every reclaim interval run the bounded vacuum pass and the
-          // split-brain inspection; the checkpoint-only ticks in between skip both.
-          // Counting fires keeps the cadence independent of wall-clock adjustments.
-          const reclaimDue = ticksUntilReclaim === 0;
-          ticksUntilReclaim = reclaimDue ? ticksPerReclaim - 1 : ticksUntilReclaim - 1;
-          nextPageBudget = reclaimDue ? 512 : 0;
-          if (!reclaimDue) {
-            void maintain();
             return;
           }
           // Inspect the published handle before identity admission or synchronous cleanup.
@@ -664,9 +670,14 @@ export function configureSqliteWalMaintenance(
                 clearInterval(timer);
                 timer = null;
               }
+              if (tickTimer) {
+                clearInterval(tickTimer);
+                tickTimer = null;
+              }
               terminateForSqliteWalSplitBrain(splitBrain, options.databaseLabel);
             }
           }
+          nextPageBudget = 512;
           void maintain();
         }, timerIntervalMs) as IntervalHandle,
     );
@@ -684,6 +695,8 @@ export function configureSqliteWalMaintenance(
     close: (closeOptions) => {
       clearInterval(timer ?? undefined);
       timer = null;
+      clearInterval(tickTimer ?? undefined);
+      tickTimer = null;
       void cancelSqliteWalWriteAdmission(db);
       if (invalidated) {
         return false;

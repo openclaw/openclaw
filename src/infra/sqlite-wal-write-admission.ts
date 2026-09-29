@@ -30,25 +30,23 @@ const admissions = resolveGlobalSingleton(
   () => new WeakMap<DatabaseSync, MaintenanceAdmission>(),
 );
 
-// Inline automatic checkpoints run on the committing connection; while a reader
-// keeps the log from resetting, every later commit above this threshold retries
-// one and syncs the database file. It matches the 64 MiB WAL recycling limit and
-// only bounds a writer whose checkpoints nobody else runs.
-export const SQLITE_WAL_INLINE_CHECKPOINT_VALVE_PAGES = 16_384;
-
 /** A worker-maintained writer never checkpoints inline; its maintenance owner ticks instead. */
 export function registerSqliteWalWorkerMaintenance(
   database: DatabaseSync,
   execute: NonNullable<MaintenanceAdmission["execute"]>,
   cancel?: MaintenanceAdmission["cancel"],
 ): void {
+  const previous = Number(
+    // sqlite-allow-raw -- Checkpoint policy belongs to the WAL owner.
+    database.prepare("PRAGMA wal_autocheckpoint;").get()?.wal_autocheckpoint ?? 0,
+  );
   database.exec("PRAGMA wal_autocheckpoint = 0;"); // sqlite-allow-raw -- Checkpoint policy belongs to the WAL owner.
   admissions.set(database, {
     execute,
     cancel: () => {
-      // Without its worker the writer falls back to the bounded inline valve.
-      if (database.isOpen && !database.isTransaction) {
-        database.exec(`PRAGMA wal_autocheckpoint = ${SQLITE_WAL_INLINE_CHECKPOINT_VALVE_PAGES};`); // sqlite-allow-raw -- Restore the connection-local valve.
+      // Without its worker the writer falls back to the bounded inline threshold.
+      if (previous > 0 && database.isOpen && !database.isTransaction) {
+        database.exec(`PRAGMA wal_autocheckpoint = ${previous};`); // sqlite-allow-raw -- Restore the connection-local threshold.
       }
       return cancel?.();
     },

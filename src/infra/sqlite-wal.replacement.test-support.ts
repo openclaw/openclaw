@@ -47,8 +47,7 @@ if (role === "worker") {
   let periodic: (() => void) | undefined;
   const setIntervalNative = globalThis.setInterval;
   globalThis.setInterval = (callback, delay, ...args) => {
-    // The WAL owner arms its 10-second checkpoint tick; vacuum reclaim rides the same timer.
-    if (delay === 10 * 1000 && typeof callback === "function") {
+    if (delay === 30 * 60 * 1000 && typeof callback === "function") {
       assert.equal(periodic, undefined, "Expected exactly one published WAL timer");
       periodic = () => Reflect.apply(callback, undefined, args);
     }

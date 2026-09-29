@@ -45,7 +45,7 @@ function openWithPeriodicMaintenance(databasePath: string) {
   const intervals = vi.spyOn(globalThis, "setInterval");
   try {
     const database = openOpenClawStateDatabase({ path: databasePath });
-    const timers = intervals.mock.calls.filter(([, delay]) => delay === 10 * 1000);
+    const timers = intervals.mock.calls.filter(([, delay]) => delay === 30 * 60 * 1000);
     expect(timers).toHaveLength(1);
     const periodic = timers[0]?.[0];
     if (typeof periodic !== "function") {

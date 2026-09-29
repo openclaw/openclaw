@@ -872,7 +872,7 @@ describe("sqlite WAL maintenance", () => {
     },
   );
 
-  it("arms the checkpoint tick even for oversized reclaim intervals", () => {
+  it("clamps oversized checkpoint intervals before arming timers", () => {
     vi.useFakeTimers();
     const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
     const db = createMockDb();
@@ -882,8 +882,9 @@ describe("sqlite WAL maintenance", () => {
       checkpointIntervalMs: Number.MAX_SAFE_INTEGER,
     });
 
+    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    // The checkpoint-only tick is armed beside the periodic pass.
     expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 10_000);
-    expect(10_000).toBeLessThanOrEqual(MAX_TIMER_TIMEOUT_MS);
     maintenance.close();
   });
 

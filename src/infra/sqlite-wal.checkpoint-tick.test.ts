@@ -80,9 +80,8 @@ describe("sqlite WAL checkpoint tick", () => {
     }
   });
 
-  it("checkpoints on the maintenance tick and vacuums only at the reclaim interval", async () => {
-    // The reclaim cadence reads the monotonic clock; fake it with the timers.
-    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date", "performance"] });
+  it("checkpoints on the maintenance tick and vacuums only on the periodic pass", async () => {
+    vi.useFakeTimers();
     const sqlite = requireNodeSqlite();
     const dir = tempDirs.make("openclaw-sqlite-wal-tick-");
     const dbPath = path.join(dir, "openclaw.sqlite");
@@ -92,7 +91,7 @@ describe("sqlite WAL checkpoint tick", () => {
         (db.prepare("PRAGMA freelist_count;").get() as { freelist_count: number | bigint })
           .freelist_count,
       );
-    // The reclaim pass yields between vacuum units on real immediates that fake timers do not own.
+    // The periodic pass yields between vacuum units on real immediates that fake timers do not own.
     const settle = async () => {
       for (let index = 0; index < 64; index += 1) {
         await realImmediate();
@@ -109,19 +108,16 @@ describe("sqlite WAL checkpoint tick", () => {
       db.exec("CREATE TABLE payload (id INTEGER PRIMARY KEY, value BLOB NOT NULL);");
       const insert = db.prepare("INSERT INTO payload (value) VALUES (?)");
       const value = new Uint8Array(16 * 1024);
-      const churn = () => {
-        for (let index = 0; index < 64; index += 1) {
-          insert.run(value);
-        }
-        db.exec("DELETE FROM payload;");
-      };
-      churn();
+      for (let index = 0; index < 64; index += 1) {
+        insert.run(value);
+      }
+      db.exec("DELETE FROM payload;");
       const freeBefore = freelistCount();
       expect(freeBefore).toBeGreaterThan(0);
       // Commits below the inline threshold leave every frame for the maintenance tick.
       expect(maintenance.health).toBeUndefined();
 
-      // The first fire checkpoints and runs the bounded reclaim pass.
+      // Ticks checkpoint without vacuuming.
       await vi.advanceTimersByTimeAsync(10_000);
       await settle();
 
@@ -129,24 +125,12 @@ describe("sqlite WAL checkpoint tick", () => {
       expect(ticked.state).toBe("complete");
       expect(ticked.checkpointedFrames).toBeGreaterThan(0);
       expect(ticked.checkpointedFrames).toBe(ticked.logFrames);
+      expect(freelistCount()).toBe(freeBefore);
+
+      // The periodic pass runs the bounded reclaim.
+      await vi.advanceTimersByTimeAsync(50_000);
+      await settle();
       expect(freelistCount()).toBeLessThan(freeBefore);
-
-      churn();
-      const freeAgain = freelistCount();
-      expect(freeAgain).toBeGreaterThan(0);
-
-      // Ticks inside the reclaim interval only checkpoint.
-      await vi.advanceTimersByTimeAsync(40_000);
-      await settle();
-      const inInterval = expectDefined(maintenance.health, "WAL tick health");
-      expect(inInterval.state).toBe("complete");
-      expect(inInterval.observedAtMs).toBeGreaterThan(ticked.observedAtMs);
-      expect(freelistCount()).toBe(freeAgain);
-
-      // The reclaim interval counts from the first reclaim pass, so the next one lands at 70 s.
-      await vi.advanceTimersByTimeAsync(20_000);
-      await settle();
-      expect(freelistCount()).toBeLessThan(freeAgain);
     } finally {
       maintenance?.close();
       db.close();
