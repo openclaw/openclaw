@@ -146,6 +146,10 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
   });
   const trimmedRunSessionKey = options?.runSessionKey?.trim();
   const requesterSessionKey = trimmedRunSessionKey || options?.agentSessionKey;
+  const mediaGenerationAgentSessionKey =
+    trimmedRunSessionKey && isCronRunSessionKey(trimmedRunSessionKey)
+      ? trimmedRunSessionKey
+      : options?.agentSessionKey;
   const imageTool =
     options?.agentDir &&
     resolveImageToolFactoryAvailable({
@@ -178,7 +182,8 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
     config: options?.config,
     agentDir: options?.agentDir,
     authProfileStore: options?.authProfileStore,
-    agentSessionKey: requesterSessionKey,
+    agentSessionKey: mediaGenerationAgentSessionKey,
+    requesterRunSessionKey: trimmedRunSessionKey,
     requesterAgentId: sessionAgentId,
     requesterOrigin: widgetPresentation.deliveryContext ?? undefined,
     workspaceDir,
