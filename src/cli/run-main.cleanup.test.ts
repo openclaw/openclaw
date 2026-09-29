@@ -335,6 +335,41 @@ describe("CLI process harness cleanup", () => {
     expect(installUnhandledRejectionHandlerMock).toHaveBeenCalledOnce();
   });
 
+  it("awaits a transient disposer before later finalizers and process completion", async () => {
+    const registry = emptyRegistry.createEmptyPluginRegistry();
+    const gate = createDeferredCore();
+    const entered = createDeferredCore();
+    const resource = resourceHarness("awaited");
+    const dispose = resource.harness.dispose!.bind(resource.harness);
+    resource.harness.dispose = async () => {
+      entered.resolve();
+      await gate.promise;
+      await dispose();
+    };
+    registerHarness(registry, resource.harness);
+    dispatch.run = () => scopes.withPluginRuntimeRegistryScope(registry, () => acquire("awaited"));
+    let returned = false;
+    const command = runProcessEntry().then(() => {
+      returned = true;
+    });
+    try {
+      // Early command return must fail the assertion and still reach fixture teardown.
+      await Promise.race([entered.promise, command]);
+      expect(returned).toBe(false);
+      await resource.ping();
+      expect(returned).toBe(false);
+      expect(dispatch.memoryClosed).not.toHaveBeenCalled();
+    } finally {
+      gate.resolve();
+      try {
+        await command;
+      } finally {
+        await resource.closeAndJoin();
+      }
+    }
+    expect(dispatch.memoryClosed).toHaveBeenCalledOnce();
+  });
+
   it("retains transient cleanup from the primary executable bootstrap", async () => {
     const registry = emptyRegistry.createEmptyPluginRegistry();
     const resource = resourceHarness("primary-entry");

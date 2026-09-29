@@ -407,24 +407,45 @@ describe("handleDiscordMessagingAction", () => {
     });
   });
 
-  it.each([{ name: "DM", type: ChannelType.DM }])(
-    "blocks delegated reads of arbitrary Discord $name targets",
-    async ({ type }) => {
-      fetchChannelInfoDiscord.mockResolvedValueOnce({
-        id: "DM1",
-        type,
-      });
+  it.each([
+    { name: "DM", type: ChannelType.DM },
+    { name: "GroupDM", type: ChannelType.GroupDM },
+  ])("blocks delegated reads of arbitrary Discord $name targets", async ({ type }) => {
+    fetchChannelInfoDiscord.mockResolvedValueOnce({
+      id: "DM1",
+      type,
+    });
 
-      await expect(
-        handleMessagingAction("reactions", {
-          to: "channel:DM1",
+    await expect(
+      handleMessagingAction("reactions", {
+        to: "channel:DM1",
+        messageId: "M1",
+      }),
+    ).rejects.toThrow("Discord read target channel is not allowed.");
+
+    expect(fetchReactionsDiscord).not.toHaveBeenCalled();
+  });
+
+  it("rejects a Discord DM paired with a caller-supplied guild ID", async () => {
+    fetchChannelInfoDiscord.mockResolvedValueOnce({
+      id: "DM1",
+      type: ChannelType.DM,
+    });
+
+    await expect(
+      handleMessagingAction(
+        "fetchMessage",
+        {
+          guildId: "G1",
+          channelId: "DM1",
           messageId: "M1",
-        }),
-      ).rejects.toThrow("Discord read target channel is not allowed.");
+        },
+        enableAllActions,
+      ),
+    ).rejects.toThrow("Discord read target channel is not allowed.");
 
-      expect(fetchReactionsDiscord).not.toHaveBeenCalled();
-    },
-  );
+    expect(fetchMessageDiscord).not.toHaveBeenCalled();
+  });
 
   it("fails closed when Discord cannot verify a caller-supplied guild target", async () => {
     fetchChannelInfoDiscord.mockRejectedValueOnce(new Error("metadata unavailable"));
@@ -1745,11 +1766,13 @@ describe("handleDiscordGuildAction", () => {
       resolvesChannel: false,
     },
   ])("$label for emoji-list", async ({ params, expectedGuildId, resolvesChannel }) => {
-    fetchChannelInfoDiscord.mockResolvedValueOnce({
-      id: "123",
-      type: ChannelType.GuildText,
-      guild_id: "current-guild",
-    });
+    if (resolvesChannel) {
+      fetchChannelInfoDiscord.mockResolvedValueOnce({
+        id: "123",
+        type: ChannelType.GuildText,
+        guild_id: "current-guild",
+      });
+    }
 
     const result = await handleDiscordMessageAction({
       action: "emoji-list",

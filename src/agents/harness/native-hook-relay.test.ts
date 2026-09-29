@@ -694,6 +694,44 @@ describe("native hook relay registry", () => {
     ).rejects.toThrow("native hook relay not found");
   });
 
+  it("fails closed when a retained relay predicate throws", async () => {
+    const host = await createAdmittedHostCapabilityTestFixture({
+      runId: "run-throwing-retain-predicate",
+    });
+    const shouldRetainAfterForegroundClose = vi.fn(() => {
+      throw new Error("predicate failed");
+    });
+    try {
+      const relay = registerOwnedRelay({
+        relayId: uniqueNativeHookRelayIdForTests("throwing-retain-predicate"),
+        runId: "run-throwing-retain-predicate",
+        allowedEvents: ["pre_tool_use"],
+        runBeforeToolCall: host.hostCapabilities.runBeforeToolCall,
+        assertActive: host.hostCapabilities.assertActive,
+        retention: {
+          readClaim: readTestNativeAgentId,
+          allowPreToolUse: () => true,
+          onDispose: () => {},
+          shouldRetainAfterForegroundClose,
+        },
+      });
+
+      expect(() => relay.unregister()).not.toThrow();
+      expect(shouldRetainAfterForegroundClose).toHaveBeenCalledOnce();
+      expect(testing.getNativeHookRelayRegistrationForTests(relay.relayId)).toBeUndefined();
+      await expect(
+        invokeRelay(relay.relayId, "pre_tool_use", {
+          agent_id: "child-thread",
+          tool_name: "Bash",
+          tool_input: {},
+        }),
+      ).rejects.toThrow("native hook relay not found");
+    } finally {
+      host.closeHost();
+      host.closeAdmission();
+    }
+  });
+
   it("preserves the successor when its predecessor's disposal observer throws", () => {
     const relayId = uniqueNativeHookRelayIdForTests("throwing-unregister");
     const onDispose = vi.fn(() => {
@@ -711,9 +749,7 @@ describe("native hook relay registry", () => {
     });
     const successor = registerRelay({ relayId, runId: "run-successor" });
     expect(onDispose).toHaveBeenCalledOnce();
-    expect(testing.getNativeHookRelayRegistrationForTests(relayId)?.generation).toBe(
-      successor.generation,
-    );
+    expect(testing.getNativeHookRelayRegistrationForTests(relayId)?.runId).toBe(successor.runId);
   });
 
   it("keeps the callback-created successor after replacement teardown", async () => {
@@ -1501,7 +1537,7 @@ describe("native hook relay registry", () => {
     expect(await testing.getNativeHookRelayBridgeRecordForTests(staleRelayId)).toBeUndefined();
   });
 
-  it("prunes expired foreign direct bridge records even when their pid is alive", async () => {
+  it("prunes expired foreign records while preserving live or permission-protected owners", async () => {
     const unrelatedLiveRelayId = await writeForeignNativeHookRelayBridgeRecordForTests(
       uniqueNativeHookRelayIdForTests("codex-unrelated-live-foreign-bridge"),
       {
@@ -1516,7 +1552,17 @@ describe("native hook relay registry", () => {
         expiresAtMs: Date.now() - 1,
       },
     );
+    const protectedRelayId = await writeForeignNativeHookRelayBridgeRecordForTests(
+      uniqueNativeHookRelayIdForTests("codex-permission-protected-foreign-bridge"),
+      {
+        pid: 9_999_995,
+        expiresAtMs: Date.now() + 60_000,
+      },
+    );
     const kill = vi.spyOn(process, "kill").mockImplementation((pid) => {
+      if (pid === 9_999_995) {
+        throw Object.assign(new Error("permission denied"), { code: "EPERM" });
+      }
       if (pid !== 9_999_992 && pid !== 9_999_994) {
         throw Object.assign(new Error("unexpected process"), { code: "ESRCH" });
       }
@@ -1530,11 +1576,13 @@ describe("native hook relay registry", () => {
     await relay.ready;
 
     expect(kill).toHaveBeenCalledWith(9_999_994, 0);
+    expect(kill).toHaveBeenCalledWith(9_999_995, 0);
     expect(kill).not.toHaveBeenCalledWith(9_999_992, 0);
     expect(await testing.getNativeHookRelayBridgeRecordForTests(staleRelayId)).toBeUndefined();
     expect(
       await testing.getNativeHookRelayBridgeRecordForTests(unrelatedLiveRelayId),
     ).toBeDefined();
+    expect(await testing.getNativeHookRelayBridgeRecordForTests(protectedRelayId)).toBeDefined();
   });
 
   it("treats direct bridge records with a dead owning pid as absent", async () => {

@@ -481,7 +481,9 @@ describe("followup queue drain restart after idle window", () => {
         cap: mode === "collect" ? 50 : 1,
         dropPolicy: "summarize",
       };
-      const delivered = createDeferred<FollowupRun>();
+      const firstDelivery = createDeferred<FollowupRun>();
+      const retried = createDeferred<FollowupRun>();
+      let attempts = 0;
       for (const prompt of ["first", "second"]) {
         const run = createRun({ prompt });
         run.run.senderIsOwner = senderIsOwner;
@@ -498,21 +500,34 @@ describe("followup queue drain restart after idle window", () => {
         enqueueFollowupRun(key, run, settings);
       }
       scheduleFollowupDrain(key, async (run) => {
-        delivered.resolve(run);
+        attempts += 1;
+        if (attempts === 1) {
+          firstDelivery.resolve(run);
+          if (mode === "followup") {
+            throw new FollowupRunDeferredError("reply lane busy");
+          }
+        } else {
+          retried.resolve(run);
+        }
       });
-      const run = await delivered.promise;
-      expect(run.prompt).toContain(
-        mode === "collect" ? "[Queued messages while agent was busy]" : "[Queue overflow]",
-      );
-      expect(run.run).toMatchObject({ senderIsOwner, inputProvenance });
-      for (const message of [
-        run.userTurnTranscriptRecorder?.message,
-        await run.userTurnTranscriptRecorder?.resolveMessage(),
-      ]) {
-        expect(message).toMatchObject({
-          provenance: inputProvenance,
-          __openclaw: { senderIsOwner: owner },
-        });
+      const deliveries = [await firstDelivery.promise];
+      if (mode === "followup") {
+        deliveries.push(await retried.promise);
+      }
+      for (const run of deliveries) {
+        expect(run.prompt).toContain(
+          mode === "collect" ? "[Queued messages while agent was busy]" : "[Queue overflow]",
+        );
+        expect(run.run).toMatchObject({ senderIsOwner, inputProvenance });
+        for (const message of [
+          run.userTurnTranscriptRecorder?.message,
+          await run.userTurnTranscriptRecorder?.resolveMessage(),
+        ]) {
+          expect(message).toMatchObject({
+            provenance: inputProvenance,
+            __openclaw: { senderIsOwner: owner },
+          });
+        }
       }
     },
   );

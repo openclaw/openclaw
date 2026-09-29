@@ -270,28 +270,28 @@ describe("channelsRemoveCommand", () => {
     expect(runtime.exit).toHaveBeenCalledWith(1);
   }
 
-  it.each([{ deleteConfig: true, label: "delete" }])(
-    "rejects an unknown --account before $label mutates config",
-    async ({ deleteConfig }) => {
-      const plugin = installWorkAccountChannel();
-      const onAccountRemoved = vi.fn();
-      const onAccountConfigChanged = vi.fn();
-      plugin.lifecycle = { onAccountRemoved, onAccountConfigChanged };
-      plugin.gateway = { startAccount: vi.fn() };
+  it.each([
+    { deleteConfig: true, label: "delete" },
+    { deleteConfig: false, label: "disable" },
+  ])("rejects an unknown --account before $label mutates config", async ({ deleteConfig }) => {
+    const plugin = installWorkAccountChannel();
+    const onAccountRemoved = vi.fn();
+    const onAccountConfigChanged = vi.fn();
+    plugin.lifecycle = { onAccountRemoved, onAccountConfigChanged };
+    plugin.gateway = { startAccount: vi.fn() };
 
-      await channelsRemoveCommand(
-        { channel: "external-chat", account: "ghost", delete: deleteConfig },
-        runtime,
-        { hasFlags: true },
-      );
+    await channelsRemoveCommand(
+      { channel: "external-chat", account: "ghost", delete: deleteConfig },
+      runtime,
+      { hasFlags: true },
+    );
 
-      expectNoRemoval('external-chat has no account "ghost" to remove.');
-      expect(plugin.config.deleteAccount).not.toHaveBeenCalled();
-      expect(plugin.config.setAccountEnabled).not.toHaveBeenCalled();
-      expect(onAccountRemoved).not.toHaveBeenCalled();
-      expect(onAccountConfigChanged).not.toHaveBeenCalled();
-    },
-  );
+    expectNoRemoval('external-chat has no account "ghost" to remove.');
+    expect(plugin.config.deleteAccount).not.toHaveBeenCalled();
+    expect(plugin.config.setAccountEnabled).not.toHaveBeenCalled();
+    expect(onAccountRemoved).not.toHaveBeenCalled();
+    expect(onAccountConfigChanged).not.toHaveBeenCalled();
+  });
 
   it("disables a listed default without authored config and runs its lifecycle hook", async () => {
     const plugin = installWorkAccountChannel();

@@ -636,7 +636,7 @@ describe("native hook relay approval wait handling", () => {
     expect(result.stdout).toContain("openclaw mcp configure memory --approval approve");
   });
 
-  it.each(["arguments", "shortened name", "case"])(
+  it.each(["arguments", "shortened name", "tool", "server", "case"])(
     "scopes MCP allow-always after changed %s",
     async (change) => {
       mockCallGatewayTool
@@ -661,13 +661,19 @@ describe("native hook relay approval wait handling", () => {
       if (change === "shortened name") {
         vi.spyOn(Date, "now").mockReturnValue(now + 31 * 60_000);
       }
+      const sameTool = change !== "tool" && change !== "server" && change !== "case";
       const result = await invoke(
-        "/other-repo",
+        sameTool ? "/other-repo" : "/repo",
         change === "arguments" ? "second" : "first",
-        change === "case" ? "mcp__linear__List_Issues" : initialToolName,
+        change === "tool"
+          ? "mcp__linear__get_issue"
+          : change === "server"
+            ? "mcp__other__list_issues"
+            : change === "case"
+              ? "mcp__linear__List_Issues"
+              : initialToolName,
       );
 
-      const sameTool = change !== "case";
       expect(JSON.parse(result.stdout).hookSpecificOutput.decision.behavior).toBe(
         sameTool ? "allow" : "deny",
       );

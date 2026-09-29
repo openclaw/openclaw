@@ -1009,6 +1009,61 @@ describe("runCli exit behavior", () => {
     );
   });
 
+  it("drops normalized credentials from an early config replaced by a later guard", async () => {
+    const { normalizeEnv, normalizeZaiEnv } = await import("../infra/env.js");
+    await withEnvAsync({ ZAI_API_KEY: undefined, Z_AI_API_KEY: undefined }, async () => {
+      let useReplacement = false;
+      readConfigFileSnapshotMock.mockImplementation(async () =>
+        validConfig({
+          env: { vars: { Z_AI_API_KEY: useReplacement ? "replacement-key" : "superseded-key" } },
+          gateway: { mode: "local" },
+        }),
+      );
+      await vi.mocked(normalizeEnv).withImplementation(
+        () => normalizeZaiEnv(),
+        async () => {
+          await runCli(cliArgs("gateway"));
+          expect(process.env.ZAI_API_KEY).toBe("superseded-key");
+
+          useReplacement = true;
+          await runGatewayBeforeHook();
+
+          expect(process.env.Z_AI_API_KEY).toBe("replacement-key");
+          expect(process.env.ZAI_API_KEY).toBe("replacement-key");
+        },
+      );
+    });
+  });
+
+  it("does not let gateway.env authorize automatic mutations of a selected future config", async () => {
+    await withGatewayHome(
+      () => ({
+        ".config/openclaw/gateway.env": "OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1\n",
+      }),
+      async (home) => {
+        const futureConfigPath = path.join(home, "future.json");
+        readConfigFileSnapshotMock.mockImplementation(async () =>
+          validConfig(
+            process.env.OPENCLAW_CONFIG_PATH === futureConfigPath
+              ? { meta: { lastTouchedVersion: "9999.1.1" } }
+              : {
+                  env: { vars: { OPENCLAW_CONFIG_PATH: futureConfigPath } },
+                  gateway: { mode: "local" },
+                },
+          ),
+        );
+        await withCliExitSpies(async (errorSpy) => {
+          await expect(runCli(cliArgs("gateway"))).rejects.toThrow("exit:1");
+          expect(errorSpy).toHaveBeenCalledWith(
+            expect.stringContaining("run gateway state preparation"),
+          );
+          expect(ensureCliExecutionBootstrapMock).not.toHaveBeenCalled();
+          expect(process.env.OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS).toBeUndefined();
+        });
+      },
+    );
+  });
+
   it("retains selected config paths and invocation reset targets", async () => {
     await withEnvAsync(
       {

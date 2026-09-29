@@ -945,6 +945,8 @@ AFTER_CD
     const pullRequest = action.runs.steps.find(
       (step: WorkflowStep) => step.id === "pull-request-token",
     );
+    expect(contents.uses).toBe(CREATE_GITHUB_APP_TOKEN_V3);
+    expect(pullRequest.uses).toBe(CREATE_GITHUB_APP_TOKEN_V3);
     expect(contents.with).toEqual({
       "client-id": "${{ inputs.contents-client-id }}",
       "private-key": "${{ inputs.contents-private-key }}",
