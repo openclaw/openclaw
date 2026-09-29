@@ -242,11 +242,14 @@ judgment and move the repeatable parts into code:
 - Cap `toolsAllow` to the tools the run actually needs.
 - When a script can decide there is nothing to do, use a condition trigger, a
   [command payload](#command-payloads), or a [script payload](#script-payloads) so
-  quiet fires skip the model. Triggers and script payloads are unavailable when
-  `cron.triggers.enabled` is `false`.
-- Record transient failures, such as one source timing out once, and stay silent.
-  Do not post raw errors to the user from inside the run; repeated failures reach
-  the user through [failure notifications](/automation/cron-jobs/delivery#failure-notifications).
+  quiet fires skip the model. Scripts can call a configured MCP server only when
+  `toolsAllow` names it (`<server>__<tool>` or `<server>__*`). Triggers and script
+  payloads are unavailable when `cron.triggers.enabled` is `false`.
+- Let a one-off transient failure, such as one source timing out once, pass
+  silently. When the same failure repeats, make the run fail (an error result or a
+  non-zero exit) instead of posting the error yourself: only failed runs count
+  toward [failure notifications](/automation/cron-jobs/delivery#failure-notifications),
+  and a run that records the failure and succeeds never reaches them.
 
 ## Execution styles
 

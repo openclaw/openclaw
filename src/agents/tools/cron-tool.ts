@@ -190,7 +190,7 @@ function buildCronToolDescription(params: { triggersEnabled: boolean }): string 
     : `TRIGGERS DISABLED (cron.triggers.enabled=false): condition triggers, script payloads, and stream schedules are unavailable here. Omit trigger; use plain time-based schedules. If the user asks for a conditional watcher, say it is unsupported — never model-poll instead, and never silently create an unconditional job in its place.`;
   const silentWatcherCue = params.triggersEnabled ? ' Silent watcher=>mode:"none".' : "";
   const quietSkipCue = params.triggersEnabled
-    ? " When a script can decide there is nothing to do, use a trigger or script payload so quiet fires skip the model."
+    ? " When a script can decide there is nothing to do, use a trigger or script payload so quiet fires skip the model; scripts reach MCP only for servers named in toolsAllow (<server>__tool or <server>__*)."
     : "";
   return `Gateway scheduler: reminders, delayed self-wakeups, loops, recurring work${params.triggersEnabled ? ", event watchers" : ""}. Never exec sleep/poll as timer.
 
@@ -215,7 +215,7 @@ TARGET+PAYLOAD:
 
 PACED LOOP: recurring job + pacing{min?,max?} durations ("15m","4h"; at least one). Inside its run, job calls next_check in:"<dur>" to set the next delay (clamped to bounds, measured from run end; failed runs keep normal backoff). Adaptive polling: tighten when active, back off when quiet.
 
-AUTHORING (recurring): every fire re-runs the same instructions; keep the model for judgment only. Put repeatable logic (listing/diffing, dedupe, checkpoints/watermarks, failure counting) in a workspace script the payload runs in one exec. Message names exact tool ids + argument shapes; cap toolsAllow to what the run needs.${quietSkipCue} Record transient failures (one source timing out) and stay silent; never post raw errors from inside the run.
+AUTHORING (recurring): every fire re-runs the same instructions; keep the model for judgment only. Put repeatable logic (listing/diffing, dedupe, checkpoints/watermarks, failure counting) in a workspace script the payload runs in one exec. Message names exact tool ids + argument shapes; cap toolsAllow to what the run needs.${quietSkipCue} Let a one-off transient failure (a source timing out once) pass silently; when the same failure repeats, fail the run (error/non-zero exit) instead of posting it, so failure handling takes over.
 
 ${triggerSection}
 
