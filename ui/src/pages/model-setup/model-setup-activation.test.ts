@@ -570,6 +570,7 @@ describe("ModelSetupPage first-run activation ownership", () => {
       setActivationState: () => undefined,
       setRefreshWarning: () => undefined,
       resumeWizard: () => undefined,
+      closeWizard: () => undefined,
       notify: () => undefined,
     });
     const notify = vi.fn();

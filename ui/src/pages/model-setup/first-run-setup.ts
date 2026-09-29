@@ -138,6 +138,7 @@ type FirstRunSetupHost = {
     wizard: ModelSetupWizardRecovery,
     observer: (result: ModelSetupWizardResult) => () => boolean,
   ) => void;
+  closeWizard: () => void;
   notify: () => void;
 };
 
@@ -155,6 +156,10 @@ export class FirstRunSetup {
       const activation = this.pending;
       if (activation?.receipt && JSON.stringify(activation.receipt) === receipt) {
         this.pending = null;
+        if (activation.outcome === "pending") {
+          // Another page settled this wizard; retire its local work, not the Gateway session.
+          this.host.closeWizard();
+        }
         if (activation.outcome === "verified") {
           this.host.setActivationState({ phase: "idle" });
         }

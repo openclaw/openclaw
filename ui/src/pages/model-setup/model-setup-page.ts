@@ -110,6 +110,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
       this.wizard.restore(recovery, observer);
       void this.runWizardMutation(() => this.wizard.resume());
     },
+    closeWizard: () => this.closeWizard(),
     notify: () => this.requestUpdate(),
   });
   private readonly nativeModels = new NativeModelSetup(this, {
