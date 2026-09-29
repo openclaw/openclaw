@@ -47,9 +47,16 @@ const RELEASE_OPENWEBUI_COMMAND =
   "OPENCLAW_OPENWEBUI_MODEL=openai/gpt-5.4-mini OPENCLAW_OPENWEBUI_PROVIDER_TIMEOUT_SECONDS=300 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openwebui";
 export const BUNDLED_PLUGIN_INSTALL_UNINSTALL_SHARDS = 24;
 const upgradeSurvivorCommand = upgradeSurvivorScriptCommand();
+// CI Docker seed runs this lane in auto-auth mode, so it carries the running-Gateway
+// recovery update and needs the restart-auth budgets below. Hosted 4-vCPU seed runs
+// measured 846s and 1054s passes, then 1515s and 1516s timeouts (CI 36496123315,
+// 36519374717, in upgrade-survivor:recovery-update-restart). Testbox 8-vCPU: 627s
+// lane, 325s recovery update; x ~2.4 hosted ratio => ~1505s, x ~1.5 => 2280s inner;
+// add 300s host margin => 2580s lane. Recovery update: 325s x 2.4 ~= 780s (hosted
+// 856s in 36506210440) against the 900s default, so use restart-auth's 1500s.
 const publishedUpgradeSurvivorCommand = upgradeSurvivorScriptCommand(
-  "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1",
-  'export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest}"; export OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-1500s}"',
+  "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_COMMAND_TIMEOUT=1500s",
+  'export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest}"; export OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-2280s}"',
 );
 const rootManagedVpsUpgradeCommand = upgradeSurvivorScriptCommand(
   "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_ROOT_MANAGED_VPS=1",
@@ -223,7 +230,7 @@ function createPackageUpdateMaintenanceLanes() {
     }),
     npmLane("published-upgrade-survivor", publishedUpgradeSurvivorCommand, {
       stateScenario: "upgrade-survivor",
-      timeoutMs: 25 * 60 * 1000,
+      timeoutMs: 2580 * 1000,
       upgradeSurvivorScenario: "base",
       weight: 3,
     }),
