@@ -526,6 +526,52 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
     });
   });
 
+  it("passes a slash-containing adapter default model through as a model name", async () => {
+    // DeepInfra's default embedding model is `BAAI/bge-m3`; the provider id of
+    // the model name must not be mistaken for a provider selection.
+    const slashDefaultAdapter: MemoryEmbeddingProviderAdapter = {
+      id: "slash-default-fixture",
+      defaultModel: "BAAI/bge-m3",
+      transport: "remote",
+      create: async (options) => {
+        const result = await createEmbeddingProviderMock({
+          provider: options.provider ?? "slash-default-fixture",
+          model: options.model,
+          agentDir: options.agentDir,
+        });
+        return result;
+      },
+    };
+    registerEmbeddingProvider(slashDefaultAdapter);
+    await writeEmbeddingConfig({
+      memory: {
+        search: { provider: "slash-default-fixture" },
+      },
+    });
+
+    const res = await postEmbeddings({
+      model: "openclaw/default",
+      input: "hello",
+    });
+    await expectDefaultEmbeddingResponse(res);
+    expect(latestCreateEmbeddingProviderOptions()).toMatchObject({
+      provider: "slash-default-fixture",
+      model: "BAAI/bge-m3",
+    });
+  });
+
+  it("accepts x-openclaw-model overrides whose prefix is not a known provider", async () => {
+    const res = await postEmbeddings(
+      { model: "openclaw/default", input: "hello" },
+      { "x-openclaw-model": "BAAI/bge-m3" },
+    );
+    await expectDefaultEmbeddingResponse(res);
+    expect(latestCreateEmbeddingProviderOptions()).toMatchObject({
+      provider: "openai",
+      model: "BAAI/bge-m3",
+    });
+  });
+
   it("rejects invalid agent targets", async () => {
     const res = await postEmbeddings({
       model: "ollama/nomic-embed-text",
@@ -537,13 +583,20 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
     );
   });
 
-  it("rejects disallowed x-openclaw-model provider overrides", async () => {
+  it("rejects x-openclaw-model overrides to a different known provider", async () => {
+    // The guard only applies when the prefix resolves to a known embedding
+    // provider id; unknown prefixes are model names for the configured provider.
+    registerEmbeddingProvider({
+      id: "other-embeddings-fixture",
+      transport: "remote",
+      create: async () => ({ provider: null }),
+    });
     const res = await postEmbeddings(
       {
         model: "openclaw/default",
         input: "hello",
       },
-      { "x-openclaw-model": "ollama/nomic-embed-text" },
+      { "x-openclaw-model": "other-embeddings-fixture/model-x" },
     );
     await expectInvalidEmbeddingRequest(
       res,

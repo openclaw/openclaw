@@ -151,9 +151,13 @@ async function createConfiguredEmbeddingProvider(params: {
 
 // Request model overrides are constrained to the configured memory provider so
 // a gateway client cannot select an arbitrary embedding provider by model name.
+// A slash is only a `provider/model` reference when the prefix is a known
+// embedding provider id; provider model ids (e.g. DeepInfra's `BAAI/bge-m3`)
+// contain slashes too and must pass through as plain model names.
 function resolveEmbeddingsTarget(params: {
   requestModel: string;
   configuredProvider: EmbeddingProviderRequest;
+  cfg: OpenClawConfig;
 }): { provider: EmbeddingProviderRequest; model: string } | { errorMessage: string } {
   const configuredProvider =
     params.configuredProvider === "auto"
@@ -166,6 +170,12 @@ function resolveEmbeddingsTarget(params: {
   }
 
   const provider = normalizeLowercaseStringOrEmpty(raw.slice(0, slash));
+  if (!getMemoryEmbeddingProvider(provider, params.cfg)) {
+    // The prefix is not a known embedding provider id, so the whole string is
+    // the model name for the configured provider.
+    return { provider: configuredProvider, model: raw };
+  }
+
   const model = raw.slice(slash + 1).trim();
   if (!model) {
     return { errorMessage: "Unsupported embedding model reference." };
@@ -252,6 +262,7 @@ export async function handleOpenAiEmbeddingsHttpRequest(
   const target = resolveEmbeddingsTarget({
     requestModel: overrideModel,
     configuredProvider,
+    cfg,
   });
   if ("errorMessage" in target) {
     sendInvalidRequest(res, target.errorMessage);
