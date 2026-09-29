@@ -221,8 +221,8 @@ async function saveCronStoreWithWorker<Value>(
   }
 }
 
-/** Internal synchronous entry for callers whose authority callbacks must not yield before commit. */
-export function saveCronJobsStoreChangesWithRevisionNative(
+/** Maintenance hooks retain their owning synchronous database transaction. */
+function saveCronJobsStoreChangesWithRevisionNative(
   storePath: string,
   previous: CronStoreFile,
   next: CronStoreFile,
@@ -277,8 +277,8 @@ export async function saveCronJobsStoreChanges(
   return (await saveCronJobsStoreChangesWithRevision(storePath, previous, next, opts)).value;
 }
 
-/** Internal synchronous entry preserving the caller's consumed guard/capture window. */
-export function saveCronJobsStoreWithRevisionNative(
+/** Doctor fingerprint hooks retain their owning synchronous database transaction. */
+function saveCronJobsStoreWithRevisionNative(
   storePath: string,
   store: CronStoreFile,
   opts?: SaveCronJobsStoreOptions,
