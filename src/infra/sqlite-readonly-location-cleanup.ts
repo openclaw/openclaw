@@ -44,10 +44,8 @@ export function settleSqliteSnapshotRequest<T>(request: {
 
 type SnapshotDirectory = {
   release?: SqliteStagingToken;
-  releaseAsync?: () => Promise<void>;
   releaseRetained?: () => RetainedOperation<void>;
   retiringRetained?: RetainedOperation<boolean>;
-  retiring?: Promise<void>;
   retirementStarted?: boolean;
   retired?: boolean;
   removed?: boolean;
@@ -159,15 +157,6 @@ export function registerSnapshotTempDirectory(
   registerSignalExitFinalizer(cleanupSnapshotOperations);
 }
 
-/** Async readers keep token custody on their staging worker until removal. */
-export function registerAsyncSnapshotTempDirectory(
-  directory: string,
-  release: () => Promise<void>,
-): void {
-  registerSnapshotTempDirectory(directory);
-  snapshotDirectory(directory).releaseAsync = release;
-}
-
 /** This owner joins token retirement and directory removal in its worker. */
 export function registerRetainedSnapshotTempDirectory(
   directory: string,
@@ -193,7 +182,7 @@ export function retainSnapshotTempDirectory(directory: string): () => void {
 export function releaseSnapshotTempDirectory(directory: string): void {
   const owner = pendingTempDirectoryCleanup.get(directory);
   assertSnapshotReadersRetired(owner);
-  if (owner?.releaseAsync || owner?.releaseRetained) {
+  if (owner?.releaseRetained) {
     throw new SqliteSnapshotCleanupError("SQLite snapshot requires asynchronous cleanup");
   }
   owner?.release?.(false);
@@ -247,7 +236,7 @@ function prepareSnapshotRetirement(directory: string) {
   drainPendingSqliteSnapshotTokens(directory);
   const owner = pendingTempDirectoryCleanup.get(directory);
   assertSnapshotReadersRetired(owner);
-  if (owner?.releaseAsync || owner?.releaseRetained) {
+  if (owner?.releaseRetained) {
     throw new SqliteSnapshotCleanupError("SQLite snapshot requires asynchronous cleanup");
   }
   if (
@@ -314,18 +303,6 @@ export async function removeTempDirectoryAsync(
   try {
     const owner = pendingTempDirectoryCleanup.get(tempDir);
     assertSnapshotReadersRetired(owner);
-    if (owner?.releaseAsync) {
-      owner.retirementStarted = true;
-      await (owner.retiring ??= owner
-        .releaseAsync()
-        .then(() => {
-          owner.releaseAsync = undefined;
-          owner.retired = true;
-        })
-        .finally(() => {
-          owner.retiring = undefined;
-        }));
-    }
     const retirement = prepareSnapshotRetirement(tempDir);
     try {
       for (const file of retirement?.payload ?? []) {

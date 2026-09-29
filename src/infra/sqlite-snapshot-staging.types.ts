@@ -3,6 +3,11 @@ import type { OpenClawStateWorkerErrorPayload } from "../state/openclaw-state-wo
 import type { RetainedOperation } from "./retained-operation.js";
 import type { DatabaseFileIdentity } from "./sqlite-worker-identity.js";
 
+export type SqliteSnapshotStagingDirectory = {
+  directory: string;
+  startRetire: () => RetainedOperation<void>;
+};
+
 export type SqliteSnapshotStagingLaunch = {
   env: NodeJS.ProcessEnv;
   cwd: string;

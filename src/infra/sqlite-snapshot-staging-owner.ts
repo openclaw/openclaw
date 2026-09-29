@@ -21,6 +21,7 @@ import { SQLITE_NATIVE_RESOURCE_PORT } from "./sqlite-readonly-native-resource.t
 import { captureSqliteReadOnlyWorkerLaunch } from "./sqlite-readonly-worker.js";
 import type {
   SqliteSnapshotStagingCommand,
+  SqliteSnapshotStagingDirectory,
   SqliteSnapshotStagingInput,
   SqliteSnapshotStagingRequest,
   SqliteSnapshotStagingReply,
@@ -37,11 +38,6 @@ import { createOwnedWorkerTaskPool } from "./worker-task-pool.js";
 import type { RetainedWorkerTask } from "./worker-task-pool.types.js";
 
 type SuccessfulReply = Exclude<SqliteSnapshotStagingReply, { type: "failed" }>;
-type OwnedDirectory = {
-  directory: string;
-  retire: () => Promise<void>;
-  startRetire(): RetainedOperation<void>;
-};
 
 function decodeSnapshotError(payload: unknown): Error {
   const remote = new Error("SQLite snapshot staging failed");
@@ -76,7 +72,7 @@ function createStagingOwner(workerUrl: URL, nativeSource: RetainedNativeWorkerSo
       decodeResourceError: decodeSnapshotError,
     },
   );
-  const directories = new Map<string, OwnedDirectory>();
+  const directories = new Map<string, SqliteSnapshotStagingDirectory>();
   const preparations = new Map<
     number,
     {
@@ -225,7 +221,7 @@ function createStagingOwner(workerUrl: URL, nativeSource: RetainedNativeWorkerSo
     return retained.operation;
   };
 
-  const retainDirectory = (directory: string): OwnedDirectory => {
+  const retainDirectory = (directory: string): SqliteSnapshotStagingDirectory => {
     const existing = directories.get(directory);
     if (existing) {
       return existing;
@@ -246,7 +242,17 @@ function createStagingOwner(workerUrl: URL, nativeSource: RetainedNativeWorkerSo
         if (!removed) {
           const nativeDirectory = nativeDirectories.get(directory);
           if (!nativeDirectory?.removed || !nativeDirectory.recovering) {
-            cleanup ??= pool.startCloseResources(directory);
+            if (!cleanup) {
+              try {
+                // Re-imported callers can hold another registry; this owner keeps its original readers.
+                sealRetainedSnapshotTempDirectory(directory);
+                cleanup = pool.startCloseResources(directory);
+              } catch (error) {
+                retained.reject(error);
+                return;
+              }
+              void cleanup.result.then(serviceDirectoryClose, serviceDirectoryClose);
+            }
             cleanup.service();
             const outcome = cleanup.read();
             if (outcome.status === "pending") {
@@ -290,15 +296,10 @@ function createStagingOwner(workerUrl: URL, nativeSource: RetainedNativeWorkerSo
       });
       const serviceDirectoryClose = retained.operation.service.bind(retained.operation);
       pending = retained.operation;
-      const nativeDirectory = nativeDirectories.get(directory);
-      if (!removed && (!nativeDirectory?.removed || !nativeDirectory.recovering)) {
-        cleanup = pool.startCloseResources(directory);
-        void cleanup.result.then(serviceDirectoryClose, serviceDirectoryClose);
-      }
       retained.operation.service();
       return retained.operation;
     };
-    const owned = { directory, startRetire, retire: () => startRetire().result };
+    const owned = { directory, startRetire };
     directories.set(directory, owned);
     registerRetainedSnapshotTempDirectory(directory, startRetire);
     return owned;
@@ -707,7 +708,7 @@ export async function allocateWorkerOwnedSqliteSnapshotDirectory(
   root: string,
   allowLegacyWorker: boolean,
   signal?: AbortSignal,
-): Promise<OwnedDirectory> {
+): Promise<SqliteSnapshotStagingDirectory> {
   const { env, cwd } = captureSqliteReadOnlyWorkerLaunch();
   const owner = captureSqliteSnapshotStagingOwner();
   const request = owner.start(

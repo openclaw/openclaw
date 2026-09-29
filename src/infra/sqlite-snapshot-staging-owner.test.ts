@@ -382,7 +382,7 @@ it.each(["after-failure", "queued-during-stop"] as const)(
     const root = directories.make("staging-failed-rotation-");
     const owned = await allocateWorkerOwnedSqliteSnapshotDirectory(root, false);
     const gate = holdNextNativeStop(owned.directory);
-    const retirement = owned.retire();
+    const retirement = owned.startRetire().result;
     void retirement.catch(() => undefined);
     const owner = captureSqliteSnapshotStagingOwner();
     const { env, cwd } = captureSqliteReadOnlyWorkerLaunch();
@@ -483,7 +483,7 @@ it("preserves allocation launch facts while waiting behind another token command
     releaseGate(gate);
     for (const result of await Promise.allSettled([first, second])) {
       if (result.status === "fulfilled" && result.value) {
-        await result.value.retire();
+        await result.value.startRetire().result;
       }
     }
   }
