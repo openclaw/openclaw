@@ -519,6 +519,7 @@ export const databaseWorkerCoreTestFiles = [
   "test/canonical-descendant.integration.test.ts",
   "test/runtime-agent.codex-initialization.integration.test.ts",
   "packages/memory-host-sdk/src/host/session-memory-sync.test.ts",
+  "packages/memory-host-sdk/src/host/session-files-archive-identity.test.ts",
   "src/agents/harness/native-hook-relay-store.test.ts",
   "src/agents/harness/native-hook-relay.approval-binding.test.ts",
   "src/agents/harness/native-hook-relay.approval-wait.test.ts",
