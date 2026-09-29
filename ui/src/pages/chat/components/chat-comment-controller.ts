@@ -80,7 +80,7 @@ class ChatCommentController extends OpenClawLightDomContentsElement {
 
   protected override updated() {
     if (!this.root) {
-      this.root = this.closest(".chat");
+      this.root = this.closest(".chat-session-rail") ?? this.closest(".chat");
       this.root?.addEventListener("openclaw-comment-action", this.handleCommentAction);
     }
   }
@@ -105,9 +105,13 @@ class ChatCommentController extends OpenClawLightDomContentsElement {
   }
 
   private changeAttachments(current: ChatAttachment[], next: ChatAttachment[]) {
-    this.props.onAttachmentsChange?.(next);
+    if (this.props.onAttachmentsChange?.(next) === false) {
+      releaseDisplacedChatAttachmentPayloads(next, [current]);
+      return false;
+    }
     releaseDisplacedChatAttachmentPayloads(current, [next]);
     this.props.onRequestUpdate?.();
+    return true;
   }
 
   private visiblePin(id: string) {
@@ -256,7 +260,7 @@ class ChatCommentController extends OpenClawLightDomContentsElement {
         }
         const replacement = createChatSelectionAttachment(
           { ...selected.selectionAnnotation, comment },
-          this.props.attachmentLimits,
+          this.props,
           stagedAttachmentBytes(
             this.props,
             current.filter((item) => item.id !== attachment.id),
@@ -265,10 +269,14 @@ class ChatCommentController extends OpenClawLightDomContentsElement {
         if (!replacement) {
           return false;
         }
-        this.changeAttachments(
-          current,
-          current.map((item) => (item.id === attachment.id ? replacement : item)),
-        );
+        if (
+          !this.changeAttachments(
+            current,
+            current.map((item) => (item.id === attachment.id ? replacement : item)),
+          )
+        ) {
+          return false;
+        }
         this.retireEditor();
         this.focusFrame = requestAnimationFrame(() => {
           this.focusFrame = undefined;

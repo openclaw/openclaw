@@ -421,16 +421,12 @@ export async function removeStateAndLinkedPaths(
     const preservePaths = requestedPreservePaths.filter((target) =>
       isPathInside(requestedStateDir, target),
     );
-    const stateRemoval =
-      preservePaths.length > 0
-        ? await removePathPreserving(requestedStateDir, preservePaths, runtime, {
-            dryRun: true,
-            label: cleanup.stateDir,
-          })
-        : await removePath(cleanup.stateDir, runtime, {
-            dryRun: true,
-            label: cleanup.stateDir,
-          });
+    const stateRemoval = await removePathPreserving(
+      preservePaths.length > 0 ? requestedStateDir : cleanup.stateDir,
+      preservePaths,
+      runtime,
+      { dryRun: true, label: cleanup.stateDir },
+    );
     const configRemoval = cleanup.configInsideState
       ? { ok: true }
       : await removePath(cleanup.configPath, runtime, { dryRun: true, label: cleanup.configPath });

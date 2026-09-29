@@ -1291,6 +1291,7 @@ describe("frozen admission workflow barriers", () => {
     for (const [index, child] of children.entries()) {
       const toolingPaths = child.sources.tooling.map(({ path }) => path);
       const selectedPaths = child.sources.selected.map(({ path }) => path);
+      expect(toolingPaths).toContain("scripts/lib/record-shared.mjs");
       if (index === 1) {
         expect(toolingPaths).toContain(extra);
         expect(selectedPaths).toContain("extensions/codex/package.json");

@@ -39,7 +39,7 @@ public enum OpenClawChatSessionTargetPolicy: Sendable {
     case scopeBareKeysToSelectedAgent
 }
 
-public struct OpenClawChatSessionTarget: Sendable, Equatable {
+public struct OpenClawChatSessionTarget: Sendable, Hashable {
     public let sessionKey: String
     public let agentID: String?
 
@@ -732,15 +732,10 @@ public enum OpenClawChatGatewayRequests {
         key: String,
         trim: Bool = true)
     {
-        let value = trim ? self.normalized(value) : value
+        let value = trim ? ChatPayloadDecoding.trimmedNonEmptyString(value) : value
         if let value {
             params[key] = AnyCodable(value)
         }
-    }
-
-    private static func normalized(_ value: String?) -> String? {
-        let normalized = value?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return normalized?.isEmpty == false ? normalized : nil
     }
 }
 

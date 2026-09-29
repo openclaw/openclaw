@@ -40,6 +40,7 @@ async function useReadPool() {
 }
 `;
   return {
+    ...sharedStateOwnerFixtureFiles(),
     ...scheduledCloseFixtureFiles(),
     ...stateReadPoolFixtureFiles(),
     ...failedDrainFixtureFiles(readPoolFixture),
@@ -449,6 +450,69 @@ it("rebinds the shared read pool to generation " + generation, async () => {
 afterAll(() => {
   expect(edge.close).not.toHaveBeenCalled();
   if (generation === "c") Reflect.deleteProperty(globalThis, probeKey);
+});
+`,
+    ]),
+  );
+}
+
+function sharedStateOwnerFixtureFiles(): Record<string, string> {
+  return Object.fromEntries(
+    ["a", "b"].map((generation) => [
+      `09-${generation}-shared-state-owner.test.ts`,
+      `
+import fs from "node:fs";
+import path from "node:path";
+import { expect, it, vi } from "vitest";
+import { closeOpenClawStateDatabaseAsync } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-state-db-cache.ts"))};
+import { captureOpenClawStateWorkerContext } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-state-worker-context.ts"))};
+import { getOpenClawStateWorkerOwner } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-state-worker-owner.ts"))};
+
+const generation = ${JSON.stringify(generation)};
+const probeKey = Symbol.for("fixture.sharedStateOwnerGenerations");
+const probe = Reflect.get(globalThis, probeKey) ?? { closes: [] as string[] };
+Reflect.set(globalThis, probeKey, probe);
+const edge = vi.hoisted(() => ({ open: vi.fn(), close: vi.fn(async () => {}) }));
+vi.mock(${JSON.stringify(import.meta.resolve("../src/infra/sqlite-worker-store.ts"))}, () => ({
+  openSharedStateSqliteWorkerStore: edge.open,
+  closeUnclaimedSharedStateSqliteWorkers: async () => {},
+  hasUnclaimedSharedStateSqliteCleanup: () => false,
+  isSqliteWorkerStoreAvailable: () => true,
+  getSqliteWorkerActorIdentity: (store) => store.actor,
+  retireSqliteWorkerActor: async () => {},
+  runSqliteWorkerStoreOperation: async (store, run) => run(store),
+}));
+edge.close.mockImplementation(async () => { probe.closes.push(generation); });
+edge.open.mockImplementation(async (options, context) => ({
+  close: edge.close,
+  actor: { databasePath: options.databasePath, key: context.admission.identity.key },
+}));
+
+it("binds shared-state retirement to the current file's database lifecycle " + generation, async () => {
+  const pathname = path.join(import.meta.dirname, "shared-" + generation + ".sqlite");
+  // Only the transport is controlled; the real owner retains file identity and close custody.
+  fs.writeFileSync(pathname, "synthetic shared-state source");
+  const context = captureOpenClawStateWorkerContext({
+    path: pathname, env: { OPENCLAW_STATE_DIR: import.meta.dirname },
+  });
+  const owner = getOpenClawStateWorkerOwner();
+  try {
+    expect(await owner.open(context)).toBeDefined();
+    if (generation === "a") {
+      expect(probe.closes).toEqual([]);
+      // The file drain retires this resource before the next file is evaluated.
+    } else {
+      expect(probe.closes).toEqual(["a"]);
+      await closeOpenClawStateDatabaseAsync();
+      expect(probe.closes).toEqual(["a", "b"]);
+    }
+  } finally {
+    if (generation === "b") {
+      // A failed regression must still release the old owner's retained resource.
+      await owner.close();
+      Reflect.deleteProperty(globalThis, probeKey);
+    }
+  }
 });
 `,
     ]),

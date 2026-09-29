@@ -139,7 +139,7 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "gateway.auth.trustedProxy.cloudflareAccessOidc.providerId":
     "Exact Access identity-provider ID for the trusted OIDC integration. A provider display name or a matching claim name alone does not establish trust.",
   "gateway.auth.trustedProxy.cloudflareAccessOidc.githubAccountIdClaim":
-    "Exact forwarded OIDC claim whose value is a verified positive decimal-string GitHub account ID. Configure Access to forward it in oidc_fields; never use an unverified user-editable claim.",
+    "Exact forwarded OIDC claim whose value is a verified positive decimal-string GitHub account ID. Configure Access to forward it, then inspect the authenticated Access identity response. OpenClaw reads oidc_fields, or custom when oidc_fields is absent. Never use an unverified user-editable claim.",
   "gateway.auth.trustedProxy.deviceAutoApprove":
     "Optional policy for automatically approving new browser and native UI operator devices and same-key scope upgrades after trusted-proxy authentication. Grants are capped by deviceAutoApprove.scopes and the proxy's x-openclaw-scopes header when present.",
   "gateway.auth.trustedProxy.deviceAutoApprove.enabled":

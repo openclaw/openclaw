@@ -87,7 +87,10 @@ function runDependencyGuard(
   const logPath = path.join(dir, "requests.jsonl");
   const outputPath = path.join(dir, "output.txt");
   writeFileSync(outputPath, "");
-  writeFileSync(eventPath, JSON.stringify({ pull_request: pullRequest }));
+  writeFileSync(
+    eventPath,
+    JSON.stringify({ repository: { default_branch: "main" }, pull_request: pullRequest }),
+  );
   writeFileSync(logPath, "");
   writeFileSync(
     fixturePath,

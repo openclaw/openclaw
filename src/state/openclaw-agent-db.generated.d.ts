@@ -246,6 +246,12 @@ export interface SessionConversations {
   session_id: string;
 }
 
+export interface SessionEntrySnapshots {
+  field: string;
+  session_key: string;
+  value_json: string;
+}
+
 export interface SessionGoalOperations {
   expires_at: number;
   operation_id: string;
@@ -309,6 +315,7 @@ export interface SessionNodes {
   pinned_at: number | null;
   project_id: string | null;
   session_key: string;
+  snapshot_revision: Generated<number>;
   spawned_by: string | null;
   status: string | null;
   updated_at: number;
@@ -583,6 +590,7 @@ export interface DB {
   schema_meta: SchemaMeta;
   session_canonical_validation_pending: SessionCanonicalValidationPending;
   session_conversations: SessionConversations;
+  session_entry_snapshots: SessionEntrySnapshots;
   session_goal_operations: SessionGoalOperations;
   session_input_completions: SessionInputCompletions;
   session_key_contract: SessionKeyContract;

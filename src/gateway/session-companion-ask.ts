@@ -433,6 +433,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
     agentId: string;
     sessionKey: string;
     question: string;
+    selectionContext?: string;
     attachments?: ChatAttachment[];
     connId: string;
     operatorAuthority?: AdmittedRunOperatorAuthority;
@@ -570,6 +571,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
       const messages = composePromptMessages({
         thread,
         question,
+        selectionContext: request.selectionContext,
         referenceContext,
         now: admittedAt,
       });

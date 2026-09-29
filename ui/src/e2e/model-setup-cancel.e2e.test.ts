@@ -227,7 +227,7 @@ suite.define(() => {
       );
     },
   );
-  it.each(["before return", "after return"])(
+  it.each(["before return", "after return", "during resume"])(
     "allows sign-in again after Cancel, route exit, and confirmed cancellation (%s)",
     async (acknowledgement) => {
       await suite.withPage(
@@ -253,10 +253,16 @@ suite.define(() => {
           expect(await readReceipt()).not.toBeNull();
           if (acknowledgement === "before return") {
             await gateway.resolveDeferred("wizard.cancel");
+          } else if (acknowledgement === "during resume") {
+            await gateway.deferNext("wizard.next");
           }
           await page.goForward();
           await signIn.waitFor();
           if (acknowledgement === "after return") {
+            await page.getByText("Complete provider sign-in").waitFor();
+            await gateway.resolveDeferred("wizard.cancel");
+          } else if (acknowledgement === "during resume") {
+            await gateway.waitForRequest("wizard.next", { after: 1 });
             await gateway.resolveDeferred("wizard.cancel");
           }
           if (artifactDir) {
@@ -268,6 +274,12 @@ suite.define(() => {
           await expect.poll(readReceipt).toBeNull();
           await signIn.click();
           await page.getByText("Complete provider sign-in").waitFor();
+          if (acknowledgement === "during resume") {
+            const replacementReceipt = await readReceipt();
+            await gateway.rejectDeferred("wizard.next", { message: "Old wizard read failed" });
+            await page.getByText("Complete provider sign-in").waitFor();
+            expect(await readReceipt()).toBe(replacementReceipt);
+          }
           expect(await gateway.getRequests("openclaw.setup.auth.start")).toHaveLength(2);
           expect(await gateway.getRequests("wizard.cancel")).toHaveLength(1);
           expect(await gateway.getRequests("openclaw.setup.activate.start")).toHaveLength(0);
@@ -295,15 +307,40 @@ suite.define(() => {
         await expect.poll(() => page.locator("openclaw-model-setup-page").count()).toBe(0);
 
         const replacement = await context.newPage();
-        const nextGateway = await installMockGateway(replacement, gatewayOptions);
+        const nextGateway = await installMockGateway(replacement, {
+          ...gatewayOptions,
+          methodResponses: {
+            ...gatewayOptions.methodResponses,
+            "wizard.next": {
+              __mockError: {
+                code: "INVALID_REQUEST",
+                message: "wizard not found",
+                details: { code: "WIZARD_NOT_FOUND" },
+              },
+            },
+          },
+        });
         await replacement.goto(`${suite.server.baseUrl}settings/model-setup?firstRun=1`);
         await replacement.locator('[data-auth-choice="provider-login"] button').waitFor();
+        await replacement
+          .locator("openclaw-modal-dialog")
+          .getByRole("button", { name: "Close", exact: true })
+          .click();
+        const previousReceipt = await replacement.evaluate(
+          (key) => localStorage.getItem(key),
+          receiptKey,
+        );
+        expect(
+          (await nextGateway.getRequests("wizard.next")).map((request) => request.params),
+        ).toEqual([{ sessionId: JSON.parse(previousReceipt!).wizard.sessionId }]);
+        expect(await nextGateway.getRequests("openclaw.setup.auth.start")).toHaveLength(0);
+        expect(await nextGateway.getRequests("wizard.cancel")).toHaveLength(0);
         const deadlineMs = await replacement.evaluate(
           (key) => JSON.parse(localStorage.getItem(key)!).deadlineMs as number,
           receiptKey,
         );
-        // The existing receipt deadline, followed by an explicit retry, admits
-        // another intent. No ordinary settings visit may clear another tab's receipt.
+        // A missing wizard retains the guard until expiry and explicit retry.
+        // A running wizard resumes its input instead of showing this recovery action.
         await replacement.clock.setFixedTime(new Date(deadlineMs + 1));
         await replacement
           .locator(".model-setup__recovery")
@@ -312,10 +349,15 @@ suite.define(() => {
         await expect
           .poll(() => replacement.evaluate((key) => localStorage.getItem(key), receiptKey))
           .toBeNull();
+        await nextGateway.setMethodResponse(
+          "wizard.next",
+          gatewayOptions.methodResponses["wizard.next"],
+        );
         await replacement.locator('[data-auth-choice="provider-login"] button').click();
         await replacement.getByText("Complete provider sign-in").waitFor();
         const receipt = await replacement.evaluate((key) => localStorage.getItem(key), receiptKey);
         expect(receipt).not.toBeNull();
+        expect(receipt).not.toBe(previousReceipt);
         await gateway.resolveDeferred("wizard.cancel");
         await page.goForward();
         await page.locator('[data-auth-choice="provider-login"] button').waitFor();

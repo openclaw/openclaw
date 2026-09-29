@@ -292,6 +292,26 @@ and check `/readyz` before declaring recovery or removing backups. The
 plain-start control did not verify these recovery steps or establish that
 restarting the same 2026.9.4 fleet resolves the failed-update condition.
 
+## Headless nodes waiting on 2026.9.6
+
+A headless node running published 2026.9.6 with the default plugins prepares an
+automatic update but never activates it. Its log shows
+`node auto-update <version> is ready; waiting for active work to finish` even
+when no commands run. That release's bundled File Transfer plugin does not
+report its idle state, and the running node makes the idle decision before any
+newer code loads, so a later release cannot repair this automatically.
+
+Update the node once through the normal workflow, then restart it:
+
+```bash
+openclaw update
+openclaw node restart
+```
+
+For a foreground node, stop `openclaw node run` and start it again instead.
+Later releases report File Transfer commands as idle between invocations, so
+subsequent automatic node updates activate normally.
+
 ## Plugin repair warnings
 
 `post-update-plugins` / `plugin-convergence` with

@@ -65,6 +65,9 @@ describe("anthropic Claude model refs", () => {
     expect(resolveKnownAnthropicModelRef("anthropic/claude-sonnet-4-7")).toBe(
       "anthropic/claude-sonnet-4-7",
     );
+    for (const modelId of ["claude-sonnet-5", "claude-sonnet-5-5", "claude-sonnet-5-20260901"]) {
+      expect(resolveKnownAnthropicModelRef(`anthropic/${modelId}`)).toBe(`anthropic/${modelId}`);
+    }
     expect(resolveKnownAnthropicModelRef("anthropic/claude-haiku-4-5")).toBe(
       "anthropic/claude-haiku-4-5",
     );
@@ -81,6 +84,17 @@ describe("anthropic Claude model refs", () => {
     expect(resolveKnownAnthropicModelRef("anthropic/claude-opus-4-8")).toBe(
       "anthropic/claude-opus-4-8",
     );
+  });
+
+  it.each([
+    ["sonnet", "claude-sonnet-5-5"],
+    ["sonnet-5.5", "claude-sonnet-5-5"],
+    ["sonnet-5-5", "claude-sonnet-5-5"],
+    ["sonnet-5", "claude-sonnet-5"],
+  ])("canonicalizes %s without changing explicit Sonnet versions", (alias, modelId) => {
+    for (const provider of ["", "anthropic/", "claude-cli/"]) {
+      expect(resolveKnownAnthropicModelRef(`${provider}${alias}`)).toBe(`anthropic/${modelId}`);
+    }
   });
 
   it.each([
@@ -201,6 +215,7 @@ describe("anthropic cli migration", () => {
             "anthropic/claude-opus-5-5": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-opus-5": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-opus-4-8": { agentRuntime: { id: "claude-cli" } },
+            "anthropic/claude-sonnet-5-5": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-sonnet-5": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-fable-5": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-fable-5-1": { agentRuntime: { id: "claude-cli" } },
@@ -294,6 +309,7 @@ describe("anthropic cli migration", () => {
             "anthropic/claude-opus-5": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-opus-4-8": { agentRuntime: { id: "claude-cli" } },
+            "anthropic/claude-sonnet-5-5": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-sonnet-5": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-fable-5": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-fable-5-1": { agentRuntime: { id: "claude-cli" } },
@@ -343,6 +359,7 @@ describe("anthropic cli migration", () => {
             "anthropic/claude-opus-5": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-opus-4-8": { agentRuntime: { id: "claude-cli" } },
+            "anthropic/claude-sonnet-5-5": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-sonnet-5": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-fable-5": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-fable-5-1": { agentRuntime: { id: "claude-cli" } },
@@ -529,7 +546,7 @@ describe("anthropic cli migration", () => {
       const expectedModel = {
         primary: "anthropic/claude-opus-5@anthropic:work",
         ...(shape !== "string"
-          ? { fallbacks: ["anthropic/claude-opus-4-8", "team/fast", "anthropic/claude-sonnet-5"] }
+          ? { fallbacks: ["anthropic/claude-opus-4-8", "team/fast", "anthropic/claude-sonnet-5-5"] }
           : {}),
       };
       expect(

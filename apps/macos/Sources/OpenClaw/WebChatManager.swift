@@ -544,20 +544,14 @@ final class WebChatManager {
                 if visible {
                     let subscribe = OpenClawChatGatewayRequests.subscribeSessions()
                     _ = try await connection.request(
-                        method: subscribe.method,
-                        params: subscribe.params,
-                        timeoutMs: subscribe.timeoutMs,
-                        ifCurrentServerLease: lease)
+                        subscribe, ifCurrentServerLease: lease)
                 }
                 guard !Task.isCancelled,
                       self.sessionObserverOwners.isVisible(connection: connectionID) == visible
                 else { return }
                 let request = OpenClawChatGatewayRequests.setSessionObserverVisibility(visible)
                 _ = try await connection.request(
-                    method: request.method,
-                    params: request.params,
-                    timeoutMs: request.timeoutMs,
-                    ifCurrentServerLease: lease)
+                    request, ifCurrentServerLease: lease)
                 guard !Task.isCancelled else { return }
                 if visible {
                     self.sessionObserverDeclarations[connectionID] = (lease: lease, visible: true)

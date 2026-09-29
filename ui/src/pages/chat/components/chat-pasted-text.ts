@@ -38,6 +38,7 @@ class ChatPastedText extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) scope = "";
   @property({ attribute: false }) onOpen?: () => void;
   @property({ attribute: false }) composerAction?: TemplateResult;
+  @property({ attribute: false }) composerRemoveAction?: TemplateResult;
   @state() private excerpt = "";
   private key = "";
   private loading?: AbortController;
@@ -88,7 +89,9 @@ class ChatPastedText extends OpenClawLightDomContentsElement {
 
   protected override render() {
     if (this.composerAction) {
-      return html`<div class="chat-attachment-thumb chat-attachment-thumb--file">
+      return html`<div
+        class="chat-attachment-thumb chat-attachment-thumb--file chat-attachment-thumb--pasted-text"
+      >
         ${renderCompactAttachmentFile(
           { id: this.scope, mimeType: "text/plain" },
           {
@@ -97,6 +100,7 @@ class ChatPastedText extends OpenClawLightDomContentsElement {
             onOpen: this.onOpen,
           },
         )}
+        ${this.composerRemoveAction}
       </div>`;
     }
     return renderAttachmentChip({

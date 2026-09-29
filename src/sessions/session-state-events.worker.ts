@@ -1,6 +1,6 @@
 import { readAcpSessionControlInWorker } from "../acp/runtime/session-meta-source.worker.js";
+import { requestSessionEntryCurrentAdmission } from "../config/sessions/session-entry-current-admission.worker.js";
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
-import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
@@ -18,11 +18,16 @@ export function executeSessionStateCommand(
   command: SqliteWorkerCommand<SessionStateWorkerOperations>,
   options: OpenClawStateDatabaseOptions & { database: OpenClawStateDatabase },
 ): SessionStateWorkerOperations[keyof SessionStateWorkerOperations]["output"] {
+  const admit = (stage: "transaction" | "commit") =>
+    requestSessionEntryCurrentAdmission(command.input.sessionEntryCurrentSource, {
+      stage,
+      facts: undefined,
+    });
   if (command.type === "sessionState.prune") {
     return runOpenClawStateWriteTransaction(({ db }) => {
-      requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+      admit("transaction");
       pruneSessionStateEventsInDatabase(db, command.input.now);
-      requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
+      admit("commit");
     }, options);
   }
   const { event, now, onlyIfWatched, expectedUpstream, acpControl } = command.input;
@@ -39,13 +44,13 @@ export function executeSessionStateCommand(
     return { notices: [] };
   }
   return runOpenClawStateWriteTransaction(({ db }) => {
-    requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+    admit("transaction");
     assertAcpControl();
     if (!current(db)) {
       return { notices: [] };
     }
     const recorded = recordSessionStateEventInDatabase(db, event, now);
-    requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
+    admit("commit");
     assertAcpControl();
     return recorded;
   }, options);

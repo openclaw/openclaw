@@ -162,15 +162,19 @@ async function deleteSessionBackfillRewindBatches(
   workspaceDir: string,
   entries: Array<{ key: string }>,
 ): Promise<void> {
-  await Promise.all(
-    entries.map((entry) =>
-      deleteMemoryCoreWorkspaceEntry({
-        namespace: SESSION_BACKFILL_REWIND_NAMESPACE,
-        workspaceDir,
-        key: entry.key,
-      }),
-    ),
+  const deletions = entries.map((entry) =>
+    deleteMemoryCoreWorkspaceEntry({
+      namespace: SESSION_BACKFILL_REWIND_NAMESPACE,
+      workspaceDir,
+      key: entry.key,
+    }),
   );
+  try {
+    await Promise.all(deletions);
+  } finally {
+    // A failed deletion cannot leave journal mutations running after rollback returns.
+    await Promise.allSettled(deletions);
+  }
 }
 
 function belongsToAgentFileState(key: string, agentId: string): boolean {

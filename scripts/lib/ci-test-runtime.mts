@@ -56,7 +56,7 @@ const bunCompatibleAgentSupportFiles = ["src/agents/worktrees/service.removal-re
 const nativeCompilerTestFiles = [
   "src/agents/agent-bundle-mcp-requester-connect.import-boundary.test.ts",
   "src/agents/agent-model-discovery.imports.test.ts",
-  "src/agents/code-mode.action-output.test.ts",
+  "src/agents/code-mode.auto-results.test.ts",
   "src/agents/harness/native-hook-relay.imports.test.ts",
   "src/cli/program/register.database.import-boundary.test.ts",
   "src/plugin-sdk/provider-tools.test.ts",

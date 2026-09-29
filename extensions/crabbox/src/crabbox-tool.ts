@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { readPositiveIntegerParam, readStringParam } from "openclaw/plugin-sdk/param-readers";
 import type {
   AnyAgentTool,
@@ -193,7 +194,7 @@ export function createCrabboxTool({ context, gateway }: CrabboxToolOptions): Any
             throw error;
           }
           throw new Error(
-            `${error instanceof Error ? error.message : String(error)}\nBackground processId: ${processId}. Check process_status for this ID before retrying; a failed response does not prove that the app failed to start.`,
+            `${coerceErrorMessage(error)}\nBackground processId: ${processId}. Check process_status for this ID before retrying; a failed response does not prove that the app failed to start.`,
             { cause: error },
           );
         }

@@ -32,7 +32,10 @@ import { createDeferredCore } from "../../../shared/deferred.js";
 import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "./attempt.model-diagnostic-events.js";
-import { createModelObserver } from "./attempt.model-diagnostic-observation.js";
+import {
+  createModelObserver,
+  createModelPromptStats,
+} from "./attempt.model-diagnostic-observation.js";
 
 function wrap(
   streamFn: StreamFn,
@@ -429,9 +432,11 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
       custom: { toJSON: (key: string) => key.repeat(1024) },
     };
     const messages = [{ role: "user", content: value }];
+    const measurePromptStats = createModelPromptStats();
     const observer = createModelObserver({
       streamContext: { messages, tools: [value] },
       capturePromptStats: true,
+      measurePromptStats,
     });
     observer.assignRequestPayloadBytes(value);
     observer.observeResponseChunk(Date.now(), value);
@@ -442,6 +447,67 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
       requestPayloadBytes: Buffer.byteLength(JSON.stringify(value), "utf8"),
       responseStreamBytes: Buffer.byteLength(JSON.stringify(value), "utf8"),
     });
+    for (const text of ["changed 漢字\ud800".repeat(512), "short"]) {
+      value.large = text;
+      expect(measurePromptStats({ messages, tools: [value] })).toMatchObject({
+        inputMessagesChars: JSON.stringify(messages).length,
+        toolDefinitionsChars: JSON.stringify([value]).length,
+      });
+    }
+  });
+
+  it("reuses prompt text sizes across appends while observing rewrites and compaction", async () => {
+    setDiagnosticsEnabledForProcess(true);
+    const first = { role: "user" as const, content: 'prefix "漢字"\n'.repeat(512), timestamp: 1 };
+    const second = { role: "user" as const, content: "append 🦞\n".repeat(512), timestamp: 2 };
+    const messages = [first];
+    const context = { messages, systemPrompt: "system", tools: [] };
+    const wrapped = wrap(() => ({}) as never);
+    const expected: unknown[] = [];
+    const events = await collectModelCallEvents(async () => {
+      for (const change of [
+        () => {},
+        () => messages.push(second),
+        () => {
+          first.content = "edited \\ \ud800".repeat(512);
+        },
+        () => messages.splice(0, messages.length, { ...first, content: "compacted summary" }),
+        () => messages.push(second),
+      ]) {
+        change();
+        const inputMessagesChars = JSON.stringify(messages).length;
+        expected.push({
+          inputMessagesCount: messages.length,
+          inputMessagesChars,
+          systemPromptChars: 6,
+          toolDefinitionsCount: 0,
+          toolDefinitionsChars: 2,
+          totalChars: inputMessagesChars + 8,
+        });
+        const stringify = vi.spyOn(JSON, "stringify");
+        try {
+          await wrapped({} as never, context);
+          // Unchanged prefix text must not be encoded again on an append.
+          if (
+            messages.length === 2 &&
+            messages[0] === first &&
+            first.content.startsWith("prefix")
+          ) {
+            expect(stringify.mock.calls.filter(([value]) => value === first.content)).toHaveLength(
+              0,
+            );
+            expect(stringify.mock.calls.filter(([value]) => value === second.content)).toHaveLength(
+              1,
+            );
+          }
+        } finally {
+          stringify.mockRestore();
+        }
+      }
+    });
+    expect(
+      events.flatMap((event) => (event.type === "model.call.started" ? [event.promptStats] : [])),
+    ).toEqual(expected);
   });
 
   it("does not assemble multi-megabyte JSON strings just to measure messages", () => {

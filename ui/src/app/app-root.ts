@@ -644,6 +644,7 @@ export class OpenClawApp extends OpenClawLightDomElement {
             mascot: context.theme.branding.mascot,
             connected: gatewayConnected,
             lastError: gatewaySnapshot.lastError,
+            reconnectAt: gatewaySnapshot.reconnectAt,
             reconnectPending:
               gatewaySnapshot.lastError !== null &&
               (gatewaySnapshot.phase === "connecting" || gatewaySnapshot.phase === "reconnecting"),
