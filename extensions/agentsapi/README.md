@@ -57,7 +57,45 @@ Set `plugins.entries.agentsapi.config.environment` to `openai_hosted` or
 }
 ```
 
-Omitting the setting keeps `openai_hosted`. Self-hosted session creation sends
+Omitting the setting keeps `openai_hosted`. Configure its network policy with
+`plugins.entries.agentsapi.config.openai_host.network`, using the Agents API
+field names:
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "agentsapi": {
+        "config": {
+          "environment": "openai_hosted",
+          "openai_host": {
+            "network": {
+              "access": "restricted",
+              "allowed_domains": ["api.github.com", "pypi.org", "files.pythonhosted.org"]
+            }
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+The plugin forwards `network` unchanged to the hosted session environment.
+`access` accepts `enabled`, `disabled`, or `restricted`. Restricted mode accepts
+1–100 exact hostnames without wildcards, protocols, paths, or ports. Include
+subdomains and redirect destinations separately. The API validates domain rules
+and returns errors through the normal attempt failure path. Hosted stdio MCPs
+currently require `enabled` access. Service-origin remote MCP connections do not
+use the VM's network policy. See the
+[official hosted network guide](https://developers.openai.com/api/docs/guides/agents-api/environments/openai-hosted#control-network-access).
+
+Omitting `openai_host.network` or setting it to `null` preserves the API default and existing hosted
+bindings. Adding, changing, or removing a configured network policy requires an
+explicit session reset before further native session writes. These settings are
+unused for self-hosted sessions.
+
+Self-hosted session creation sends
 the absolute host-prepared OpenClaw workspace as `workspace_directory`. That
 directory must already exist at the same path inside the executor. See the
 [official self-hosted guide](https://developers.openai.com/api/docs/guides/agents-api/environments/self-hosted).
