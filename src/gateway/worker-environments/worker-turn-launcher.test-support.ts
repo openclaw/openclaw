@@ -32,6 +32,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import type { WorkerComputerLaunchDescriptor } from "../../worker/launch-descriptor.js";
+import { WORKER_TOOL_NAMES } from "../../worker/tool-authority.js";
 import type { MintedWorkerCredential } from "./credential.js";
 import { measureNodeWorkerLaunchBytes } from "./node-launch-adapter.js";
 import type {
@@ -66,6 +67,9 @@ const BUNDLE_HASH = "a".repeat(64);
 export const MANIFEST_REF = `sha256:${"b".repeat(64)}`;
 const HOST_KEY = [["ssh", "ed25519"].join("-"), "AAAA"].join(" ");
 
+export const readLaunchToolNames: WorkerTurnTunnelHandle["readLaunchToolNames"] = async () =>
+  WORKER_TOOL_NAMES;
+
 export const measureLaunchTurn: WorkerTurnTunnelHandle["measureLaunchTurn"] = (plan, claim) =>
   measureNodeWorkerLaunchBytes("fixture-node", {
     environmentSession: 1,
@@ -89,6 +93,7 @@ export function createWorkerTurnTunnel<
       resume: vi.fn(async () => {}),
     })),
     measureLaunchTurn,
+    readLaunchToolNames,
     syncWorkspace: vi.fn(async () => {
       throw new Error("unexpected workspace sync");
     }),
@@ -108,6 +113,8 @@ export const reconcileUnchangedLocalWorkspace: WorkerTurnTunnelHandle["reconcile
       changed: false,
       verifyStable: async () => {},
       verifyLocalStable: async () => {},
+      publishStagedResult: async () => {},
+      discardPreparedStagedResult: async () => {},
     };
   };
 

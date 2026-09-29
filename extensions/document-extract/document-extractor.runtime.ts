@@ -1,10 +1,10 @@
-// Document Extract plugin module implements document extractor behavior.
 import type { PdfDocument, PdfEngine, RenderOptions } from "clawpdf";
 import type {
   DocumentExtractedImage,
   DocumentExtractionRequest,
   DocumentExtractionResult,
 } from "openclaw/plugin-sdk/document-extractor";
+import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { WorkerTaskControl } from "openclaw/plugin-sdk/worker-task-server";
 
@@ -74,10 +74,6 @@ function pageRenderOptions(
   };
 }
 
-function isPdfPasswordError(err: unknown): boolean {
-  return err !== null && typeof err === "object" && "code" in err && err.code === "password";
-}
-
 async function openPdfDocument(params: {
   engine: PdfEngine;
   input: Uint8Array;
@@ -88,7 +84,7 @@ async function openPdfDocument(params: {
       ? await params.engine.open(params.input, { password: params.password })
       : await params.engine.open(params.input);
   } catch (err) {
-    if (isPdfPasswordError(err)) {
+    if (extractErrorCode(err) === "password") {
       throw new Error("PDF requires a password or password is incorrect.", { cause: err });
     }
     throw err;

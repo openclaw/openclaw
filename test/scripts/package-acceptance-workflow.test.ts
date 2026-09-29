@@ -212,6 +212,8 @@ const frozenAdmissionClosure = [
   "scripts/lib/docker-e2e-plan.mts",
   "scripts/lib/docker-e2e-scenarios.mts",
   "scripts/lib/official-external-channel-catalog.json",
+  "scripts/lib/official-external-provider-catalog.json",
+  "scripts/lib/record-shared.mjs",
   "scripts/lib/update-compat-inventory.json",
   "scripts/lib/update-first-hop-lanes.mjs",
   "scripts/lib/upgrade-survivor-policy.mjs",
@@ -1277,7 +1279,7 @@ describe("frozen admission workflow barriers", () => {
         "extensions/codex/package.json": readFileSync("extensions/codex/package.json", "utf8"),
       },
       {},
-      ["scripts/e2e/lib", "scripts/lib/record-shared.mjs"],
+      ["scripts/e2e/lib"],
     );
     f.selection();
     const result = f.admit();
@@ -1285,10 +1287,11 @@ describe("frozen admission workflow barriers", () => {
     const record = JSON.parse(readFileSync(join(f.root, "frozen-admission.json"), "utf8"));
     const children = reconstructAdmissionEvaluations(record);
     expect(children).toHaveLength(3);
-    const extra = "scripts/lib/record-shared.mjs";
+    const extra = "scripts/e2e/lib/codex-install-utils.mjs";
     for (const [index, child] of children.entries()) {
       const toolingPaths = child.sources.tooling.map(({ path }) => path);
       const selectedPaths = child.sources.selected.map(({ path }) => path);
+      expect(toolingPaths).toContain("scripts/lib/record-shared.mjs");
       if (index === 1) {
         expect(toolingPaths).toContain(extra);
         expect(selectedPaths).toContain("extensions/codex/package.json");

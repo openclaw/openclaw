@@ -211,20 +211,21 @@
   align-items: center;
   justify-content: center;
   flex-direction: column;
-  gap: 5px;
+  gap: 4px;
   padding: 24px;
   color: var(--muted);
+  font-size: var(--control-ui-text-sm);
   text-align: center;
 }
 
 .sidebar-issues-panel__empty strong {
   color: var(--text-strong);
-  font-size: var(--control-ui-text-sm);
+  font-size: var(--control-ui-text-md);
 }
 
 .sidebar-issues-panel__empty-icon {
   display: inline-flex;
-  margin-block-end: 3px;
+  margin-block-end: 12px;
   color: var(--muted);
 }
 
@@ -561,14 +562,14 @@ footer.sidebar-issues-panel__mentions-note {
 }
 
 .sidebar-update-card__review--primary {
-  border-color: var(--accent);
-  background: var(--accent);
-  color: var(--accent-foreground);
+  border-color: var(--primary);
+  background: var(--primary);
+  color: var(--primary-foreground);
 }
 
 .sidebar-update-card__review--primary:hover {
-  background: var(--accent-hover);
-  color: var(--accent-foreground);
+  background: var(--primary-hover);
+  color: var(--primary-foreground);
 }
 
 .sidebar-issues-panel__notification-meta .sidebar-issues-panel__state {

@@ -125,8 +125,6 @@ if [[ -f "$ENV_FILE" ]]; then
   load_podman_env_file "$ENV_FILE"
 fi
 
-CONFIG_DIR="${OPENCLAW_CONFIG_DIR:-$EFFECTIVE_HOME/.openclaw}"
-ENV_FILE="${OPENCLAW_PODMAN_ENV:-$CONFIG_DIR/.env}"
 WORKSPACE_DIR="${OPENCLAW_WORKSPACE_DIR:-$CONFIG_DIR/workspace}"
 CONTAINER_NAME="${OPENCLAW_PODMAN_CONTAINER:-openclaw}"
 OPENCLAW_IMAGE="${OPENCLAW_PODMAN_IMAGE:-${OPENCLAW_IMAGE:-openclaw:local}}"
@@ -302,7 +300,7 @@ if not isinstance(allowed, list):
     allowed = []
 cleaned = []
 seen = set()
-for origin in allowed:
+for origin in allowed + desired:
     if not isinstance(origin, str):
         continue
     normalized = origin.strip()
@@ -310,10 +308,6 @@ for origin in allowed:
         continue
     cleaned.append(normalized)
     seen.add(normalized)
-for origin in desired:
-    if origin not in seen:
-        cleaned.append(origin)
-        seen.add(origin)
 if not inherits_public_origin:
     control_ui["allowedOrigins"] = cleaned
 with open(tmp, "w", encoding="utf-8") as fh:
@@ -342,7 +336,8 @@ cleanup_token_env_file() {
 trap cleanup_token_env_file EXIT
 
 if [[ -z "${OPENCLAW_GATEWAY_TOKEN:-}" ]]; then
-  export OPENCLAW_GATEWAY_TOKEN="$(generate_token_hex_32)"
+  OPENCLAW_GATEWAY_TOKEN="$(generate_token_hex_32)"
+  export OPENCLAW_GATEWAY_TOKEN
   mkdir -p "$(dirname "$ENV_FILE")"
   ensure_safe_existing_dir "env file directory" "$(dirname "$ENV_FILE")"
   upsert_env_var "$ENV_FILE" "OPENCLAW_GATEWAY_TOKEN" "$OPENCLAW_GATEWAY_TOKEN"
@@ -395,8 +390,8 @@ else
   [[ -n "$SELINUX_MOUNT_OPTS" ]] && SELINUX_MOUNT_OPTS=",$SELINUX_MOUNT_OPTS"
 fi
 
+TOKEN_ENV_FILE="$(create_token_env_file "$ENV_FILE" "$OPENCLAW_GATEWAY_TOKEN")"
 if [[ "$RUN_SETUP" == true ]]; then
-  TOKEN_ENV_FILE="$(create_token_env_file "$ENV_FILE" "$OPENCLAW_GATEWAY_TOKEN")"
   podman run --pull="$PODMAN_PULL" --rm -it \
     --init \
     ${USERNS_ARGS[@]+"${USERNS_ARGS[@]}"} ${RUN_USER_ARGS[@]+"${RUN_USER_ARGS[@]}"} \
@@ -411,7 +406,6 @@ if [[ "$RUN_SETUP" == true ]]; then
   exit 0
 fi
 
-TOKEN_ENV_FILE="$(create_token_env_file "$ENV_FILE" "$OPENCLAW_GATEWAY_TOKEN")"
 run_podman_detached --pull="$PODMAN_PULL" -d --replace \
   --name "$CONTAINER_NAME" \
   --init \

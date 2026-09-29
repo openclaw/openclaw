@@ -513,7 +513,6 @@ export function configureSqliteWalMaintenance(
       : undefined;
   let invalidated = false;
   let splitBrainDetectionEnabled = Boolean(tripwireDatabasePath);
-  let splitBrainDetectionWarningLogged = false;
   const checkpointOwner = createSqliteWalCheckpoint(
     db,
     options,
@@ -625,14 +624,11 @@ export function configureSqliteWalMaintenance(
               splitBrain = detectSqliteWalSplitBrain(tripwireDatabasePath);
             } catch (error) {
               splitBrainDetectionEnabled = false;
-              if (!splitBrainDetectionWarningLogged) {
-                splitBrainDetectionWarningLogged = true;
-                log.warn("SQLite WAL split-brain detection disabled", {
-                  databaseLabel: options.databaseLabel,
-                  databasePath: tripwireDatabasePath,
-                  error: error instanceof Error ? error.message : String(error),
-                });
-              }
+              log.warn("SQLite WAL split-brain detection disabled", {
+                databaseLabel: options.databaseLabel,
+                databasePath: tripwireDatabasePath,
+                error: error instanceof Error ? error.message : String(error),
+              });
             }
             if (splitBrain) {
               invalidated = true;

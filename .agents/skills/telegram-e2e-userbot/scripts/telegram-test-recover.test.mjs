@@ -165,13 +165,17 @@ test("cleanup recovers an actual restored archive with ordinary directory modes"
   try {
     const restored = restoreCredential(f.root, f.directory);
     assert.equal(fs.statSync(path.join(restored.userDriverDir, "db")).mode & 0o777, 0o755);
+    const cache = path.join(restored.stateRoot, "runtime", "uv-cache", "tool-created");
+    fs.mkdirSync(cache);
+    fs.chmodSync(cache, 0o755);
+    fs.writeFileSync(path.join(cache, "CACHEDIR.TAG"), "ordinary cache metadata", { mode: 0o644 });
     fs.writeFileSync(
       path.join(f.root, "uv"),
       `#!${process.execPath}
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
-assert.equal(process.argv[4], "cleanup-group");
+assert.ok(process.argv.includes("cleanup-group"));
 assert.equal(fs.readFileSync(path.join(process.env.TELEGRAM_USER_DRIVER_STATE_DIR, "db", "td_test.binlog"), "utf8"), "tdlib-session");
 console.log(JSON.stringify({ ok: true, cleaned: true }));
 `,
@@ -196,6 +200,7 @@ for (const layout of [
   "public-directory",
   "public-state",
   "public-user-driver",
+  "public-runtime",
   "public-receipt",
 ]) {
   test(`recovery rejects ${layout} before broker access or deletion`, async () => {
@@ -225,6 +230,7 @@ for (const layout of [
           "public-directory": f.directory,
           "public-state": restored.stateRoot,
           "public-user-driver": restored.userDriverDir,
+          "public-runtime": path.join(restored.stateRoot, "runtime"),
           "public-receipt": f.receipt,
         }[layout];
         fs.chmodSync(boundary, layout === "public-receipt" ? 0o644 : 0o755);

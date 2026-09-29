@@ -73,6 +73,7 @@ import {
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import {
   describeToolResultMediaPlaceholder,
+  createEmptyTransportUsage,
   failTransportStream,
   finalizeTerminalToolCallArguments,
   notifyProviderHttpMetadata,
@@ -173,14 +174,7 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
       api: "bedrock-converse-stream",
       provider: model.provider,
       model: model.id,
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
+      usage: createEmptyTransportUsage(),
       stopReason: "stop",
       timestamp: Date.now(),
     };

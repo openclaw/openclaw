@@ -17,11 +17,11 @@ import {
   patchSessionEntry as patchStoredSessionEntry,
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
-import * as sessionStoreRuntime from "openclaw/plugin-sdk/session-store-runtime";
 // Slack tests cover Agent View lifecycle handling.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getSlackListenerWriteClient } from "../../client.js";
 import { appendSlackStream, markSlackStreamsStopped, startSlackStream } from "../../streaming.js";
+import * as sessionEventRouting from "../message-handler/prepare-routing.js";
 import { deliverSlackSlashReplies } from "../replies.js";
 import { getSlackSessionRuns, registerSlackSessionRun } from "../session-run-targets.js";
 import { getSlackSlashMocks, resetSlackSlashMocks } from "../slash.test-harness.js";
@@ -686,13 +686,14 @@ describe("registerSlackAgentEvents", () => {
         },
       });
       await moving.promise;
-      const readOwner = sessionStoreRuntime.getConversationSession;
+      const resolveRouting = sessionEventRouting.resolveSlackSessionEventRoutingContext;
       const lookup = vi
-        .spyOn(sessionStoreRuntime, "getConversationSession")
-        .mockImplementationOnce((params) => {
-          const owner = readOwner(params);
+        .spyOn(sessionEventRouting, "resolveSlackSessionEventRoutingContext")
+        .mockImplementationOnce(async (params) => {
+          const owner = await resolveRouting(params);
           if (phase === "admission") {
             releaseMove.resolve();
+            await move;
           }
           return owner;
         });

@@ -62,15 +62,7 @@ export function canRebasePreparedAssistantInTransaction(
   const preparedParent =
     preparedParentId === null
       ? undefined
-      : executeSqliteQueryTakeFirstSync(
-          database.db,
-          db
-            .selectFrom("transcript_event_identities")
-            .select("seq")
-            .where("session_id", "=", sessionId)
-            .where("event_id", "=", preparedParentId)
-            .limit(1),
-        );
+      : readTranscriptIdentityInTransaction(database, sessionId, preparedParentId);
   if (preparedParentId !== null && !preparedParent) {
     return false;
   }

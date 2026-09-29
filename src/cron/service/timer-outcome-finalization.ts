@@ -2,6 +2,7 @@
 import { clearCronJobActive, isCronActiveJobMarkerCurrent } from "../active-jobs.js";
 import {
   CronRunReceiptRevisionError,
+  finishCronRunReceipt,
   releaseLocalCronRunReceiptOwnership,
 } from "../store/run-receipt-store.js";
 import { isCronRunTriggerStateRetiredInDatabase } from "../store/run-receipt-trigger-state.js";
@@ -10,7 +11,7 @@ import type { CronJob } from "../types.js";
 import { locked } from "./locked.js";
 import { releaseQueuedCronRun, supersedeActivatedCronRun } from "./run-admission.js";
 import { recordQuietCronEvaluation } from "./run-history.js";
-import { cronRunReceiptPersistHooks, supersedeServiceCronRunReceipt } from "./run-receipts.js";
+import { cronRunReceiptPersistHooks } from "./run-receipts.js";
 import { publishCronRuntimeRows } from "./runtime-publication.js";
 import { applyCronRuntimeRowsToState, commitCronRuntimeRows } from "./runtime-store.js";
 import { recomputeUnownedCronSchedules } from "./schedule-maintenance.js";
@@ -285,7 +286,12 @@ export async function finalizeCompletedCronRunOutcomes(
               reason: error.message,
             });
           } else {
-            supersedeServiceCronRunReceipt(stale.runReceipt, state.deps.nowMs(), error.message);
+            finishCronRunReceipt({
+              handle: stale.runReceipt,
+              status: "superseded",
+              finishedAtMs: state.deps.nowMs(),
+              error: error.message,
+            });
           }
         }
         const remaining = outcomes.filter((outcome) => outcome !== stale);

@@ -87,7 +87,6 @@ function collectStartupCatchupJobs(
         }
         if (
           !isRunnableJob({
-            state,
             job,
             nowMs,
             skipAtIfAlreadyRan: true,

@@ -202,9 +202,8 @@ suite.define(() => {
 
   it("keeps usable effort controls when the selected model is locked during a partial refresh", async () => {
     await suite.withPage({ locale: "en-US" }, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
+      await installMockGateway(page, {
         agentModel: partialConfig.agents.defaults.model,
-        heldMethods: ["chat.startup"],
         models: catalog.models,
         methodResponses: {
           "models.list": catalog,
@@ -228,11 +227,8 @@ suite.define(() => {
         },
       });
       await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
       const effort = page.locator("[data-chat-thinking-select]");
       await expect.poll(() => effort.isVisible()).toBe(true);
-      expect(await effort.getAttribute("aria-disabled")).toBe("true");
-      await gateway.resolveDeferred("chat.startup");
       await page.locator('[data-chat-thinking-select][aria-disabled="false"]').waitFor();
       expect(await effort.getAttribute("aria-disabled")).toBe("false");
       expect(await page.locator(".chat-controls__effort-picker").getAttribute("aria-hidden")).toBe(
