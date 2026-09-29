@@ -22,6 +22,7 @@ import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-messa
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../../infra/agent-run-registry.js";
 import type { SpawnResult } from "../../process/exec.js";
+import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
@@ -64,6 +65,7 @@ import {
   createWorkerSessionTurnPlacementProvider,
   credential,
   openSessionManager,
+  createWorkerTurnSessionRuntimeLoader,
   placements,
   root,
   seedActivePlacement,
@@ -621,7 +623,7 @@ describe("worker turn launcher terminal results", () => {
     expect(destroy).not.toHaveBeenCalled();
   });
 
-  it("lends durable reconcile Move retry admission to targeted result recovery during its claim wait", async () => {
+  it("lends durable reconcile Move retry admission to targeted result recovery while interrupting its admitted turn", async () => {
     await seedActivePlacement();
     const source = placements.get(SESSION_ID);
     if (source?.state !== "active") {
@@ -641,7 +643,10 @@ describe("worker turn launcher terminal results", () => {
     const claimWaitCleanup = new AbortController();
     const transferEntered = createDeferredCore();
     const failTransfer = createDeferredCore();
-    const claimWaitEntered = createDeferredCore();
+    const barrierEntered = createDeferredCore();
+    const startBarrier = createDeferredCore();
+    const interrupted = createDeferredCore();
+    const turnAbort = new AbortController();
     const targetedAdmission = createDeferredCore();
     const destroy = vi.fn(async () => attachedEnvironment());
     const tunnelFailure = new NodeWorkerWorkspaceTransferError(
@@ -662,7 +667,6 @@ describe("worker turn launcher terminal results", () => {
           ? AbortSignal.any([options.signal, claimWaitCleanup.signal])
           : claimWaitCleanup.signal,
       });
-      claimWaitEntered.resolve();
       return pending;
     });
     const unexpected = async (): Promise<never> => {
@@ -672,45 +676,21 @@ describe("worker turn launcher terminal results", () => {
       expect(placements.get(SESSION_ID)).toMatchObject({ state: "failed", turnClaim: null });
       throw new Error("fixture: Move barrier complete");
     });
-    const entry = {
-      sessionId: SESSION_ID,
-      updatedAt: 1,
-      worktree: { id: "workspace", branch: "fixture", repoRoot: root },
-    };
-    const loadSessionRuntime = async () => ({
-      managedWorktrees: {
-        findLiveByOwner: () => ({
-          id: "workspace",
-          name: "fixture",
-          repoFingerprint: "fixture",
-          repoRoot: root,
-          path: root,
-          branch: "fixture",
-          baseRef: "main",
-          ownerKind: "session" as const,
-          ownerId: SESSION_KEY,
-          createdAt: 1,
-          lastActiveAt: 1,
-        }),
-      },
-      resolveGatewaySessionStoreTargetWithStore: () => ({
-        storePath: sessionTarget.storePath,
-        canonicalKey: SESSION_KEY,
-        storeKeys: [SESSION_KEY],
-        agentId: "main",
-        store: { [SESSION_KEY]: entry },
-      }),
-      resolveCanonicalSessionEntryFromStoreKeys: () => entry,
+    const loadSessionRuntime = createWorkerTurnSessionRuntimeLoader();
+    const moveBarrier = createGatewayWorkerPlacementMoveBarrier({
+      placements,
+      loadSessionRuntime,
+      revokeSessionAuthority: () => {},
+      awaitTurnClaimRelease: (sessionId, wait) => dispatch.awaitTurnClaimRelease(sessionId, wait),
     });
     const moveService = createWorkerPlacementMoveService({
       placements,
       environments: { get: () => attachedEnvironment() },
-      runMoveBarrier: createGatewayWorkerPlacementMoveBarrier({
-        placements,
-        loadSessionRuntime,
-        revokeSessionAuthority: () => {},
-        awaitTurnClaimRelease: (sessionId, wait) => dispatch.awaitTurnClaimRelease(sessionId, wait),
-      }),
+      runMoveBarrier: async (params) => {
+        barrierEntered.resolve();
+        await startBarrier.promise;
+        return moveBarrier(params);
+      },
       dispatch: unexpected,
       reclaimSource,
       validateAbandonSource: () => {
@@ -771,32 +751,49 @@ describe("worker turn launcher terminal results", () => {
     });
 
     const workerTurn = turn("run-reconcile-tunnel-loss");
-    const running = provider
-      .executeTurn(
-        {
-          sessionId: SESSION_ID,
-          sessionKey: SESSION_KEY,
-          agentId: "main",
-          runId: "run-reconcile-tunnel-loss",
-        },
-        workerTurn,
-        async () => ({ meta: { durationMs: 1 } }),
+    const admission = await beginSessionWorkAdmission({
+      scope: sessionTarget.storePath,
+      identities: [SESSION_KEY, SESSION_ID],
+      assertAllowed: () => {},
+      onInterrupt: (reason) => {
+        turnAbort.abort(reason);
+        interrupted.resolve();
+      },
+    });
+    const running = admission
+      .run(() =>
+        provider.executeTurn(
+          {
+            sessionId: SESSION_ID,
+            sessionKey: SESSION_KEY,
+            agentId: "main",
+            runId: "run-reconcile-tunnel-loss",
+          },
+          { ...workerTurn, abortSignal: turnAbort.signal },
+          async () => ({ meta: { durationMs: 1 } }),
+        ),
       )
+      .finally(() => admission.release())
       .catch((error: unknown) => error);
     await transferEntered.promise;
     expect(placements.get(SESSION_ID)?.state).toBe("draining");
     expect(placements.listPendingWorkspaceResults()).toHaveLength(1);
     const moving = dispatch.move(request).catch((error: unknown) => error);
     try {
-      await Promise.race([
-        claimWaitEntered.promise,
-        moving.then(() => {
-          throw new Error("Move ended before waiting for its turn claim");
-        }),
-      ]);
-      expect(placements.get(SESSION_ID)?.turnClaim).not.toBeNull();
+      await barrierEntered.promise;
       failTransfer.resolve();
       await targetedAdmission.promise;
+      expect(admission.isActive()).toBe(true);
+      expect(targetRecovery).not.toHaveBeenCalled();
+      expect(placements.get(SESSION_ID)?.turnClaim).not.toBeNull();
+      startBarrier.resolve();
+      await Promise.race([
+        interrupted.promise,
+        moving.then(() => {
+          throw new Error("Move ended before interrupting its admitted turn");
+        }),
+      ]);
+      expect(turnAbort.signal.aborted).toBe(true);
       // Independent admission settles after targeted recovery could enter this session.
       await dispatch.forceDestroyEnvironment("unrelated");
       expect(targetRecovery).toHaveBeenCalledOnce();
@@ -813,6 +810,8 @@ describe("worker turn launcher terminal results", () => {
       });
     } finally {
       failTransfer.resolve();
+      startBarrier.resolve();
+      admission.release();
       // Failure cleanup aborts only the waiter; recovery remains the sole claim-release owner.
       claimWaitCleanup.abort();
       await Promise.all([running, moving]);

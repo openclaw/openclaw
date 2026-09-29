@@ -23,11 +23,18 @@ import type { WorkerPlacementDispatchRequest } from "./service-contract.js";
 type DispatchService = WorkerPlacementDispatchService;
 
 describe("worker placement dispatch coordinator", () => {
-  it.each(["resolve", "reject"] as const)(
-    "joins lent result recovery before the claim waiter can %s or queued reservations can run",
-    async (outcome) => {
+  it.each([
+    { outcome: "resolve", timing: "before" },
+    { outcome: "reject", timing: "before" },
+    { outcome: "resolve", timing: "during" },
+    { outcome: "reject", timing: "during" },
+  ])(
+    "joins recovery queued $timing lending before the claim waiter can $outcome or reservations run",
+    async ({ outcome, timing }) => {
       const claimWait = createDeferredCore();
       const waiting = createDeferredCore();
+      const beforeWait = createDeferredCore();
+      const enterWait = createDeferredCore();
       const firstRecovery = createDeferredCore();
       const firstEntered = createDeferredCore();
       const secondRecovery = createDeferredCore();
@@ -53,6 +60,8 @@ describe("worker placement dispatch coordinator", () => {
             dispatch: async (request) => {
               if (request.sessionId === REQUEST.sessionId) {
                 try {
+                  beforeWait.resolve();
+                  await enterWait.promise;
                   await coordinated.awaitTurnClaimRelease(request.sessionId, () => {
                     waiting.resolve();
                     return claimWait.promise;
@@ -86,11 +95,20 @@ describe("worker placement dispatch coordinator", () => {
           (_request, run) => run(),
         );
       const holder = coordinated.dispatch(REQUEST).catch((error: unknown) => error);
-      await waiting.promise;
+      await beforeWait.promise;
+      if (timing === "during") {
+        enterWait.resolve();
+        await waiting.promise;
+      }
       const first = coordinated.reconcileActive("first").catch((error: unknown) => error);
+      const destroy = coordinated.forceDestroyEnvironment(environment.environmentId);
+      if (timing === "before") {
+        await coordinated.dispatch({ ...REQUEST, sessionId: "unrelated" });
+        expect(events).toEqual([]);
+        enterWait.resolve();
+      }
       await firstEntered.promise;
       const second = coordinated.reconcileActive("second");
-      const destroy = coordinated.forceDestroyEnvironment(environment.environmentId);
       const reclaim = coordinated.reclaim(REQUEST);
       const provisioning = coordinated.resumeProvisioning(
         { ...PROVISIONING_PLACEMENT, ...REQUEST },
@@ -114,6 +132,7 @@ describe("worker placement dispatch coordinator", () => {
         await secondEntered.promise;
         expect(events).toEqual(["first:results-only", "second:results-only"]);
       } finally {
+        enterWait.resolve();
         claimWait.resolve();
         firstRecovery.resolve();
         secondRecovery.resolve();
@@ -186,7 +205,10 @@ describe("worker placement dispatch coordinator", () => {
     const multi = coordinated.reconcileActive("multi");
     try {
       await coordinated.reconcileActive("lent");
-      expect(recover.mock.calls).toEqual([["lent", "results-only"]]);
+      expect(recover.mock.calls).toEqual([
+        ["early", "results-only"],
+        ["lent", "results-only"],
+      ]);
     } finally {
       enterWait.resolve();
       releaseWait.resolve();
@@ -198,7 +220,7 @@ describe("worker placement dispatch coordinator", () => {
     expect(recover.mock.calls).toEqual(
       expect.arrayContaining([
         ["lent", "results-only"],
-        ["early", undefined],
+        ["early", "results-only"],
         ["other", undefined],
         ["multi", undefined],
       ]),

@@ -96,20 +96,20 @@ export function createGatewayWorkerPlacementLocalDispatchBarrier(params: {
           sessionId,
           sessionKeys: lifecycleIdentities,
         });
-        const released = await interruptSessionWorkAdmissions({
-          scope: target.storePath,
-          identities: lifecycleIdentities,
-          timeoutMs: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
-        });
-        if (!released) {
-          throw new Error(`Session ${sessionKey} is still active; dispatch stopped`);
-        }
-        await params.awaitTurnClaimRelease(sessionId, () =>
-          params.placements.waitForTurnClaimRelease(sessionId, {
+        await params.awaitTurnClaimRelease(sessionId, async () => {
+          const released = await interruptSessionWorkAdmissions({
+            scope: target.storePath,
+            identities: lifecycleIdentities,
+            timeoutMs: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
+          });
+          if (!released) {
+            throw new Error(`Session ${sessionKey} is still active; dispatch stopped`);
+          }
+          await params.placements.waitForTurnClaimRelease(sessionId, {
             timeoutMs: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
             signal,
-          }),
-        );
+          });
+        });
         await runExclusiveSessionStoreWrite(target.storePath, async () => {}, {
           reentrant: true,
         });

@@ -28,6 +28,7 @@ import {
 } from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import { createRuntime } from "./server-worker-placement-provision-cancellation.test-support.js";
 import { installWorkerPlacementReconcileGuard } from "./server-worker-placement-reconcile-guard.js";
 import { createGatewayWorkerPlacementRuntime } from "./server-worker-placement-startup.js";
 import {
@@ -46,22 +47,6 @@ const REQUEST = {
   profileId: "development",
   executionMode: "remote-exec" as const,
 };
-
-function createRuntime(
-  placements: ReturnType<typeof createWorkerSessionPlacementStore>,
-  environments: ReturnType<typeof support.createService>,
-) {
-  return createGatewayWorkerPlacementRuntime({
-    scheduler: createTestGatewayScheduler(),
-    getCommittedRuntimeConfig: getRuntimeConfig,
-    placements,
-    environments,
-    gatewayNamespace: "gateway-test",
-    warn: vi.fn(),
-    cancelSessionWork: vi.fn(async () => {}),
-    revokeSessionAuthority: vi.fn(),
-  });
-}
 
 describe("dispatch Stop before provider allocation", () => {
   support.setupWorkerEnvironmentServiceSuite();
@@ -100,7 +85,7 @@ describe("dispatch Stop before provider allocation", () => {
     });
   });
 
-  it("lends local dispatch admission to targeted claim settlement after writing requested", async () => {
+  it("lends local dispatch admission to targeted recovery while interrupting work after writing requested", async () => {
     const createDispatch = runtimeFactoryMocks.createDispatch.getMockImplementation()!;
     const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
     const claim = await placements.claimTurn({
@@ -109,7 +94,7 @@ describe("dispatch Stop before provider allocation", () => {
       runId: "local-drain-run",
       owner: { kind: "local" },
     });
-    const claimWaitEntered = createDeferredCore();
+    const interrupted = createDeferredCore();
     const targetedAdmission = createDeferredCore();
     const cleanup = new AbortController();
     const waitForClaim = placements.waitForTurnClaimRelease.bind(placements);
@@ -118,7 +103,6 @@ describe("dispatch Stop before provider allocation", () => {
         ...options,
         signal: options.signal ? AbortSignal.any([options.signal, cleanup.signal]) : cleanup.signal,
       });
-      claimWaitEntered.resolve();
       return waiting;
     });
     let stateAtRecovery: string | undefined;
@@ -148,16 +132,26 @@ describe("dispatch Stop before provider allocation", () => {
     const allocate = vi.spyOn(environments, "createWithRequest");
     const start = vi.spyOn(placements, "startDispatch");
     const runtime = createRuntime(placements, environments);
+    const admission = await beginSessionWorkAdmission({
+      scope: `${support.testState.root}/sessions.sqlite`,
+      identities: [REQUEST.sessionKey, REQUEST.sessionId],
+      assertAllowed: () => {},
+      onInterrupt: () => {
+        interrupted.resolve();
+      },
+    });
     const dispatching = runtime.dispatchService.dispatch(REQUEST).catch((error: unknown) => error);
     let recovery: Promise<void> | undefined;
     try {
       await Promise.race([
-        claimWaitEntered.promise,
+        interrupted.promise,
         dispatching.then(() => {
-          throw new Error("Dispatch ended before waiting for its claim");
+          throw new Error("Dispatch ended before interrupting work");
         }),
       ]);
-      recovery = runtime.dispatchService.reconcileActive("local-result");
+      recovery = admission
+        .run(() => runtime.dispatchService.reconcileActive("local-result"))
+        .finally(() => admission.release());
       await targetedAdmission.promise;
       await runtime.dispatchService.reconcileActive("unrelated");
       expect(recover).toHaveBeenCalledOnce();
@@ -171,6 +165,7 @@ describe("dispatch Stop before provider allocation", () => {
       expect(start).toHaveBeenCalledOnce();
       expect(allocate).not.toHaveBeenCalled();
     } finally {
+      admission.release();
       cleanup.abort();
       await Promise.allSettled([dispatching, recovery]);
     }
