@@ -351,18 +351,6 @@ function renderSupportExportResult(
   ];
 }
 
-function resolveSupportExportRpcOptions(
-  rpc?: Pick<GatewayRpcOpts, "url" | "token" | "password" | "timeout">,
-): GatewayRpcOpts & { timeout: string } {
-  return {
-    url: rpc?.url,
-    token: rpc?.token,
-    password: rpc?.password,
-    timeout: rpc?.timeout ?? "3000",
-    json: true,
-  };
-}
-
 function parseOptionalPositiveIntegerOption(raw: unknown, label: string): number | undefined {
   if (raw === undefined) {
     return undefined;
@@ -383,7 +371,13 @@ async function writeSupportExportFromCli(opts: {
   rpc?: Pick<GatewayRpcOpts, "url" | "token" | "password" | "timeout">;
 }): Promise<void> {
   const { writeDiagnosticSupportExport } = await loadSupportExportModule();
-  const rpc = resolveSupportExportRpcOptions(opts.rpc);
+  const rpc = {
+    url: opts.rpc?.url,
+    token: opts.rpc?.token,
+    password: opts.rpc?.password,
+    timeout: opts.rpc?.timeout ?? "3000",
+    json: true,
+  };
   const result = await writeDiagnosticSupportExport({
     outputPath: opts.output,
     logLimit: parseOptionalPositiveIntegerOption(opts.logLines, "--log-lines"),

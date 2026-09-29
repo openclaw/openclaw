@@ -1818,7 +1818,7 @@ src/cli/capability-cli/embedding.ts	3
 src/cli/capability-cli/image.ts	10
 src/cli/capability-cli/model.ts	4
 src/cli/capability-cli/tts.ts	6
-src/cli/capability-cli/video.ts	7
+src/cli/capability-cli/video.ts	6
 src/cli/capability-cli/web.ts	5
 src/cli/channel-auth.ts	4
 src/cli/channel-options.ts	1
@@ -1826,12 +1826,10 @@ src/cli/channels-cli.ts	5
 src/cli/claws-cli.gateway-readiness.ts	1
 src/cli/claws-cli.runtime.ts	2
 src/cli/command-config-resolution.ts	2
-src/cli/command-format.ts	1
 src/cli/command-options.ts	1
 src/cli/command-secret-targets.ts	1
 src/cli/completion-runtime.ts	2
-src/cli/config-cli-input.ts	1
-src/cli/config-cli-path.ts	5
+src/cli/config-cli-path.ts	4
 src/cli/config-cli-runner.ts	2
 src/cli/config-cli.ts	8
 src/cli/config-model-validation.ts	4
@@ -1842,7 +1840,7 @@ src/cli/cron-cli/register.cron-add.ts	1
 src/cli/cron-cli/register.cron-edit.ts	1
 src/cli/cron-cli/register.cron-scratch.ts	2
 src/cli/cron-cli/register.cron-simple.ts	2
-src/cli/cron-cli/shared.ts	8
+src/cli/cron-cli/shared.ts	7
 src/cli/devices-cli.runtime.ts	10
 src/cli/directory-cli.ts	2
 src/cli/dns-cli.ts	3
