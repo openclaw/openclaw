@@ -42,6 +42,8 @@ export type PluginDiagnostic = {
   pluginId?: string;
   source?: string;
   code?: PluginDiagnosticCode;
+  /** Prevents Doctor from deleting config when discovery intentionally skips this plugin. */
+  configDisposition?: "preserve";
 };
 
 export type PluginManifestChannelConfig = {

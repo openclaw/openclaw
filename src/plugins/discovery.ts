@@ -634,6 +634,7 @@ function shouldSkipIncompatiblePackagePluginApi(params: {
   if (!packagePluginApiRangeCheck.ok) {
     params.diagnostics.push({
       level: "warn",
+      configDisposition: "preserve",
       source: path.join(params.packageDir, "package.json"),
       message: `invalid package plugin API metadata: ${packagePluginApiRangeCheck.error}; skipping discovery (check package.json openclaw.compat.pluginApi)`,
       pluginId: params.pluginId,
@@ -650,6 +651,7 @@ function shouldSkipIncompatiblePackagePluginApi(params: {
   }
   params.diagnostics.push({
     level: "warn",
+    configDisposition: "preserve",
     source: path.join(params.packageDir, "package.json"),
     message: `plugin requires plugin API ${packagePluginApiRange}, but this host is ${compatibilityHostVersion}; skipping discovery (check "openclaw --version", OPENCLAW_COMPATIBILITY_HOST_VERSION, or run "openclaw doctor")`,
     pluginId: params.pluginId,

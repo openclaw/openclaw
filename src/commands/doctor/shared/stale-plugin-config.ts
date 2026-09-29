@@ -87,7 +87,9 @@ function collectPluginRegistryState(
     officialIds,
     knownChannelIds,
     missingInstalledIds: new Set([...installedIds].filter((pluginId) => !knownIds.has(pluginId))),
-    hasDiscoveryErrors: registry.diagnostics.some((diag) => diag.level === "error"),
+    hasDiscoveryErrors: registry.diagnostics.some(
+      (diag) => diag.level === "error" || diag.configDisposition === "preserve",
+    ),
   };
 }
 

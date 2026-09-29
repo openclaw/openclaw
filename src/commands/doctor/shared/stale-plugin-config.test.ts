@@ -555,6 +555,28 @@ describe("doctor stale plugin config helpers", () => {
     expect(warnings.at(-1)).toContain("Auto-removal is paused");
   });
 
+  it("preserves config for a plugin intentionally skipped during discovery", () => {
+    vi.spyOn(manifestRegistry, "loadPluginManifestRegistryCore").mockReturnValue({
+      plugins: [],
+      diagnostics: [
+        {
+          level: "warn",
+          message: "plugin is incompatible with this host",
+          pluginId: "future-plugin",
+          configDisposition: "preserve",
+        },
+      ],
+    });
+    const cfg = {
+      plugins: {
+        allow: ["future-plugin"],
+        entries: { "future-plugin": { enabled: true } },
+      },
+    } as OpenClawConfig;
+
+    expect(maybeRepairStalePluginConfig(cfg)).toEqual({ config: cfg, changes: [] });
+  });
+
   it("keeps official allow ids out of actionable stale warnings", () => {
     const cfg = {
       plugins: {
