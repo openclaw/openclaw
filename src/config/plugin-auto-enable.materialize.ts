@@ -21,9 +21,7 @@ import type {
 import { ensurePluginAllowlisted } from "./plugins-allowlist.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
-export function resolvePluginAutoEnableCandidateReason(
-  candidate: PluginAutoEnableCandidate,
-): string {
+function resolvePluginAutoEnableCandidateReason(candidate: PluginAutoEnableCandidate): string {
   switch (candidate.kind) {
     case "channel-configured":
       return `${candidate.channelId} configured`;
