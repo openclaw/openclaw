@@ -144,7 +144,7 @@ export async function emitSubagentEndedHookOnce(params: {
   outcome?: SubagentLifecycleEndedOutcome;
   error?: string;
   inFlightRunIds: Set<string>;
-  persist: (...runIds: string[]) => void | Promise<void>;
+  recordEmitted: () => void | Promise<void>;
 }) {
   const runId = params.entry.runId.trim();
   if (!runId) {
@@ -185,9 +185,7 @@ export async function emitSubagentEndedHookOnce(params: {
         },
       );
     }
-    params.entry.endedHookEmittedAt = Date.now();
-    // The hook already ran. Keep that fact on its original entry even if the stamp write fails.
-    await params.persist(runId);
+    await params.recordEmitted();
     return true;
   } catch (err) {
     if (hasSqliteWorkerOutcomeUnknown(err)) {
