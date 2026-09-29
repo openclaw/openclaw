@@ -11,6 +11,7 @@ import type {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CODEX_NATIVE_TOOL_REQUIREMENTS } from "./native-tool-policy.js";
 import { readCodexRuntimeModelId } from "./src/app-server/model-runtime.js";
 import { sessionBindingIdentity } from "./src/app-server/session-binding-record.js";
@@ -144,6 +145,14 @@ export function createCodexAppServerAgentHarness(
       visibleReplies: "message_tool",
     },
     authBootstrap: "harness",
+    resolveAuthOwnership: ({ config, provider }) => {
+      if (disposed || !providerIds.has(provider.trim().toLowerCase())) {
+        return undefined;
+      }
+      const pluginConfig = asNullableRecord(resolveAttemptPluginConfig(config));
+      const appServer = asNullableRecord(pluginConfig?.appServer);
+      return appServer?.authMode === "host" ? "host" : undefined;
+    },
     resolveSessionRuntimeOwnership: (params) => {
       const assertCurrent = () => {
         params.assertCurrent();
@@ -287,7 +296,7 @@ export function createCodexAppServerAgentHarness(
           reason: "provider route compatibility with Codex is not declared",
         };
       }
-      if (preparedAuth?.requirement === "subscription") {
+      if (preparedAuth?.owner !== "host" && preparedAuth?.requirement === "subscription") {
         const reproducibleSubscription =
           preparedAuth.source === "profile" &&
           (preparedAuth.mode === "oauth" || preparedAuth.mode === "token");
@@ -297,7 +306,7 @@ export function createCodexAppServerAgentHarness(
             reason: "Codex subscription auth requires a prepared OAuth or token profile",
           };
         }
-      } else if (preparedAuth?.requirement === "api-key") {
+      } else if (preparedAuth?.owner !== "host" && preparedAuth?.requirement === "api-key") {
         const reproducibleApiKey =
           preparedAuth.source !== "none" &&
           preparedAuth.source !== "harness" &&

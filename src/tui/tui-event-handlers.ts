@@ -215,7 +215,11 @@ export function createEventHandlers(context: EventHandlerContext) {
         ) {
           // A completed reply remains authoritative; a later provider failure
           // is one diagnostic and must not clear a newer run or replay the reply.
-          renderTerminalRunError({ runId: evt.runId, errorMessage: lateError });
+          renderTerminalRunError({
+            runId: evt.runId,
+            errorMessage: lateError,
+            errorDetail: evt.errorDetail,
+          });
           tui.requestRender(true);
           return;
         }
@@ -364,6 +368,7 @@ export function createEventHandlers(context: EventHandlerContext) {
       renderTerminalRunError({
         runId: evt.runId,
         errorMessage: evt.errorMessage ?? "unknown",
+        errorDetail: evt.errorDetail,
       });
     }
     tui.requestRender();
@@ -689,13 +694,7 @@ export function createEventHandlers(context: EventHandlerContext) {
         }
         const isTerminalLifecycleError = typeof evt.data?.endedAt === "number";
         if (isTerminalLifecycleError && (isActiveRun || isPendingRun)) {
-          const errorMessage =
-            typeof evt.data?.error === "string"
-              ? evt.data.error
-              : typeof evt.data?.errorMessage === "string"
-                ? evt.data.errorMessage
-                : "unknown";
-          scheduleTerminalLifecycleError(evt.runId, errorMessage);
+          scheduleTerminalLifecycleError(evt);
         }
         setActivityStatus("error");
         forceRender = true;

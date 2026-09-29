@@ -826,6 +826,35 @@ describe("Codex app-server config", () => {
     );
   });
 
+  it("keeps agent scope when a remote app-server owns authentication", () => {
+    const runtime = resolveRuntimeForTest({
+      pluginConfig: {
+        appServer: {
+          transport: "websocket",
+          url: "ws://127.0.0.1:39175",
+          authToken: "test-owner-capability",
+          authMode: "host",
+        },
+      },
+    });
+    expect(runtime.start).toMatchObject({
+      transport: "websocket",
+      homeScope: "agent",
+      authMode: "host",
+    });
+    expect(JSON.parse(codexAppServerStartOptionsKey(runtime.start))).toMatchObject({
+      authMode: "host",
+    });
+  });
+
+  it("requires an explicit remote transport for host authentication", () => {
+    expect(() =>
+      resolveRuntimeForTest({ pluginConfig: { appServer: { authMode: "host" } } }),
+    ).toThrow(
+      "plugins.entries.codex.config.appServer.authMode=host requires appServer.transport=websocket",
+    );
+  });
+
   it("checks shared user config before enabling model-backed approval review", async () => {
     await withTempDir("openclaw-codex-user-home-", async (codexHome) => {
       await fs.writeFile(

@@ -68,6 +68,8 @@ export type CodexAppServerStartOptions = {
   homeScope?: CodexAppServerHomeScope;
   /** Lifecycle-captured local home; does not change requested home ownership. */
   codexHome?: string;
+  /** The remote host owns model credentials; home and thread scope stay independent. */
+  authMode?: "host";
   command: string;
   commandSource?: CodexAppServerCommandSource;
   /** Desktop-first is reserved for the macOS app process that owns Computer Use permissions. */

@@ -72,6 +72,26 @@ app-server login instead of inherited child-process env. WebSocket app-server
 connections do not receive Gateway env API-key fallback; use an explicit auth
 profile or the remote app-server's own account.
 
+For a remote app-server that owns its model account, set
+`appServer.authMode: "host"` with `appServer.transport: "websocket"`.
+OpenClaw verifies host-account compatibility for explicitly selected model routes;
+otherwise, native account selection remains with the app-server. Login and
+credential refresh stay with that host. Use this only for an
+endpoint dedicated to the intended account. The connection's capability token
+authenticates access to the app-server, not the model account.
+This setting keeps the existing `homeScope` and native-thread permissions;
+it does not enable native thread browsing. Leave it unset when OpenClaw owns
+the selected auth profile. Cloud remote-exec placement still requires prepared
+OpenClaw credentials and cannot use host authentication.
+
+In this mode, `/login` refuses to start sign-in or refresh credentials for the
+host-owned provider and explains that the app-server host manages authentication.
+Explicit login choices for unrelated providers and `/login cancel` remain available.
+Authentication failures from a host-owned request direct recovery to the host
+operator. Chat and terminal clients do not suggest OpenClaw `/auth` or a new
+provider login for those failures. Other providers retain their normal sign-in
+guidance, including when a model fallback uses a different authentication owner.
+
 Stdio app-server launches inherit OpenClaw's process environment by default.
 OpenClaw owns the Codex app-server account bridge and sets `CODEX_HOME` to a
 per-agent directory under that agent's OpenClaw state. That keeps Codex

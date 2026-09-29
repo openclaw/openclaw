@@ -86,11 +86,14 @@ export async function resolveCodexBindingAppServerConnection(
     }
   }
   assertCurrent?.();
+  const usesHostAuth = appServer.start.authMode === "host";
   return {
     appServer,
     usesSupervisionConnection,
-    requestAuthProfileId: usesSupervisionConnection ? undefined : authProfileId,
+    requestAuthProfileId: usesSupervisionConnection || usesHostAuth ? undefined : authProfileId,
     clientAuthProfileId:
-      usesSupervisionConnection || appServer.start.homeScope === "user" ? null : authProfileId,
+      usesSupervisionConnection || usesHostAuth || appServer.start.homeScope === "user"
+        ? null
+        : authProfileId,
   };
 }

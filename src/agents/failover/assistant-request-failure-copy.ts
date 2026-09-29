@@ -5,6 +5,7 @@ import {
   formatTransportErrorCopy,
   parseApiErrorInfo,
 } from "../../shared/assistant-error-format.js";
+import { renderHostManagedAuthFailureCopy } from "./auth-error-copy.js";
 import { classifyFailoverSignalCore } from "./classify-core.js";
 import { isContextOverflowErrorFromTables } from "./context-overflow-tables.js";
 import {
@@ -32,6 +33,7 @@ type AssistantRequestFailureCopyFacts = {
   status?: number;
   storageFailure?: GatewayStorageFailure;
   code?: string;
+  authOwner?: "host";
 };
 
 const STORAGE_FAILURE_COPY: Record<GatewayStorageFailure, string> = {
@@ -74,6 +76,10 @@ export function renderAssistantRequestFailureCopy(
 ): string | undefined {
   if (facts.storageFailure) {
     return `⚠️ Agent run failed: ${STORAGE_FAILURE_COPY[facts.storageFailure]}`;
+  }
+  const hostAuthCopy = renderHostManagedAuthFailureCopy(facts);
+  if (hostAuthCopy) {
+    return hostAuthCopy;
   }
   if (facts.code === "incomplete_tool_call") {
     return "⚠️ The provider returned an unfinished tool call. Earlier actions may have completed; verify their results before continuing.";

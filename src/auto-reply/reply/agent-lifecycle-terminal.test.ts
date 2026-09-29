@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { OAuthRefreshFailureError } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import { FailoverError } from "../../agents/failover-error.js";
+import { HOST_MANAGED_AUTH_ERROR_USER_TEXT } from "../../agents/failover/auth-error-copy.js";
 import { renderFailoverCodeUserCopy } from "../../agents/failover/user-copy.js";
 import * as providerFailover from "../../plugins/provider-failover.js";
 import { createAgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
@@ -10,6 +11,30 @@ const { emitAgentEvent } = vi.hoisted(() => ({ emitAgentEvent: vi.fn() }));
 vi.mock("../../infra/agent-events.js", () => ({ emitAgentEvent }));
 
 describe("createAgentLifecycleTerminalBackstop", () => {
+  it("carries host auth ownership with safe recovery copy and preserves the raw failure", () => {
+    emitAgentEvent.mockClear();
+    const cause = new Error("Authentication failed. Run /login to sign in again.");
+    const error = new FailoverError(cause.message, {
+      reason: "auth",
+      authOwner: "host",
+      cause,
+    });
+    const terminal = createAgentLifecycleTerminalBackstop({
+      runId: "host-auth-failure",
+      getLifecycleGeneration: () => "generation",
+      resolveTerminationFields: () => ({}),
+    });
+
+    terminal.emit("error", error);
+
+    expect(emitAgentEvent.mock.calls[0]?.[0]?.data).toMatchObject({
+      error: `⚠️ ${HOST_MANAGED_AUTH_ERROR_USER_TEXT}`,
+      errorObservation: { authOwner: "host", failoverReason: "auth" },
+    });
+    expect(error.message).toBe(cause.message);
+    expect(error.cause).toBe(cause);
+  });
+
   it.each([false, true])("keeps only the selected attempt receipt (retry=%s)", (retry) => {
     emitAgentEvent.mockClear();
     const terminal = createAgentLifecycleTerminalBackstop({

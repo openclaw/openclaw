@@ -2,6 +2,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
 import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -12,6 +13,8 @@ import {
   type PreparedProviderModelAccess,
   decideProviderLoginSessionAdoption,
   createProviderLoginFlowRegistry,
+  createProviderLoginAuthOwnershipGuard,
+  HostManagedProviderAuthError,
   formatProviderLoginCommand,
   formatProviderLoginCompletion,
   formatProviderLoginFailure,
@@ -221,7 +224,10 @@ async function switchLoginSessionProfile(params: {
       return "updated";
     }
     return "unchanged";
-  } catch {
+  } catch (error) {
+    if (error instanceof HostManagedProviderAuthError) {
+      throw error;
+    }
     // Credential persistence already succeeded, so report partial success.
   }
   return "failed";
@@ -257,14 +263,45 @@ async function runChannelProviderLogin(params: {
   const readConfig =
     params.commandParams.opts?.getProviderLoginConfig ??
     (() => getRuntimeConfigSnapshot() ?? params.commandParams.cfg);
+  const assertAuthOwnership = await createProviderLoginAuthOwnershipGuard({
+    agentId: params.agentId,
+    provider: params.choice.providerId,
+    modelId:
+      params.commandParams.provider === params.choice.providerId
+        ? params.commandParams.model
+        : undefined,
+    sessionKey: params.commandParams.sessionKey,
+    runtimeId:
+      params.commandParams.provider === params.choice.providerId
+        ? resolveSessionRuntimeOverrideForProvider({
+            provider: params.choice.providerId,
+            entry: params.commandParams.sessionEntry,
+            cfg: readConfig(),
+          })
+        : undefined,
+  });
   const assertCurrent = (config = readConfig()) => {
     assertProviderLoginAuthority(params.commandParams, config);
+    assertAuthOwnership(config);
   };
   let modelAccess: PreparedProviderModelAccess | undefined;
   try {
     const loginResult = await runProviderChannelLoginFlow({
       choice: params.choice,
       agentId: params.agentId,
+      modelId:
+        params.commandParams.provider === params.choice.providerId
+          ? params.commandParams.model
+          : undefined,
+      sessionKey: params.commandParams.sessionKey,
+      runtimeId:
+        params.commandParams.provider === params.choice.providerId
+          ? resolveSessionRuntimeOverrideForProvider({
+              provider: params.choice.providerId,
+              entry: params.commandParams.sessionEntry,
+              cfg: readConfig(),
+            })
+          : undefined,
       config: params.commandParams.cfg,
       readConfig,
       runtime: params.runtime ?? defaultRuntime,
@@ -331,6 +368,14 @@ export const handleLoginCommand: CommandHandler = async (params, allowTextComman
     isPrivateChat: isPrivateLoginContext(params),
     config: params.cfg,
     agentId: params.agentId,
+    currentProvider: params.provider,
+    currentModelId: params.model,
+    currentRuntimeId: resolveSessionRuntimeOverrideForProvider({
+      provider: params.provider,
+      entry: params.sessionEntry,
+      cfg: params.cfg,
+    }),
+    sessionKey: params.sessionKey,
     workspaceDir: params.workspaceDir,
     signal: params.opts?.abortSignal,
     refreshAuth: () =>

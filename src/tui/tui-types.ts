@@ -1,6 +1,7 @@
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 // Defines shared TUI state, backend, and event types.
 import type { SessionProjectionState } from "../../packages/gateway-client/src/session-projection.js";
+import type { ChatErrorDetail } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { SessionGoal } from "../config/sessions/types.js";
 import type { GatewayAgentRuntime } from "../shared/session-types.js";
 import type { TuiPendingSubmit } from "./tui-submit-state.js";
@@ -69,6 +70,7 @@ export type ChatEvent = {
   deltaText?: string;
   replace?: boolean;
   errorMessage?: string;
+  errorDetail?: ChatErrorDetail;
 };
 
 export type BtwEvent = {

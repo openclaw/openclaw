@@ -19,6 +19,7 @@ export function resolveReplyFailoverFacts(error: unknown, message: string) {
     model: described.model,
     status,
     authMode: described.authMode,
+    authOwner: described.authOwner,
     formatFailureText: reason === "format" ? renderFormatErrorCopy(rawError) : undefined,
     providerRequestError: resolveProviderRequestFailureCopy({
       classification,
@@ -28,6 +29,7 @@ export function resolveReplyFailoverFacts(error: unknown, message: string) {
       }),
       status,
       technicalMessage: message,
+      authOwner: described.authOwner,
     }),
   };
 }

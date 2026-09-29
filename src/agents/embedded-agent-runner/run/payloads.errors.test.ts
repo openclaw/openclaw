@@ -178,6 +178,57 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads.map((payload) => payload.text)).not.toContain(errorJson);
   });
 
+  it.each([
+    { trigger: "message", isHeartbeatTrigger: false, isCronTrigger: false },
+    { trigger: "heartbeat", isHeartbeatTrigger: true, isCronTrigger: false },
+    { trigger: "cron", isHeartbeatTrigger: false, isCronTrigger: true },
+  ])(
+    "renders host recovery for $trigger auth failures",
+    ({ isHeartbeatTrigger, isCronTrigger }) => {
+      const payloads = buildPayloads({
+        isHeartbeatTrigger,
+        isCronTrigger,
+        authOwner: "host",
+        provider: "openai",
+        model: "fixture-model",
+        lastAssistant: makeAssistant({
+          provider: "openai",
+          model: "fixture-model",
+          stopReason: "error",
+          errorMessage: "OAuth token refresh failed for openai: refresh_token_invalidated",
+          content: [],
+        }),
+      });
+      expect(payloads).toEqual([
+        {
+          text: "⚠️ Authentication failed on the app-server host. The host manages credentials automatically. Retry in a moment; if the failure persists, ask the host operator to check authentication.",
+          isError: true,
+        },
+      ]);
+    },
+  );
+
+  it("keeps host refresh timeouts actionable at the host", () => {
+    const payloads = buildPayloads({
+      authOwner: "host",
+      lastAssistant: makeAssistant({
+        stopReason: "error",
+        errorMessage:
+          'OAuth refresh call "refreshProviderOAuthCredentialWithPlugin(openai)" exceeded hard timeout (120000ms)',
+        content: [],
+      }),
+    });
+    expectSinglePayloadSummary(payloads, {
+      text: "⚠️ Authentication failed on the app-server host. The host manages credentials automatically. Retry in a moment; if the failure persists, ask the host operator to check authentication.",
+      isError: true,
+    });
+  });
+
+  it("preserves non-auth errors for host-owned accounts", () => {
+    const payloads = buildPayloads({ authOwner: "host", lastAssistant: makeAssistant({}) });
+    expectOverloadedFallback(payloads);
+  });
+
   it.each(["worker", "main"])("keeps global tool-error replies owned by %s", (agentId) => {
     const payloads = buildPayloads({
       agentId,

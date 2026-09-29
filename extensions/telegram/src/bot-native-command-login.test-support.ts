@@ -53,6 +53,7 @@ export function registerLoginCommand(params: {
   abortSignal?: AbortSignal;
   runtime?: RuntimeEnv;
   getRuntimeConfig?: () => OpenClawConfig;
+  registry?: ReturnType<typeof createEmptyPluginRegistry>;
 }) {
   const botHarness = createCommandBot();
   const accountId = params.accountId ?? `login-test-${++loginAccountIndex}`;
@@ -82,7 +83,7 @@ export function registerLoginCommand(params: {
     return { messageId: String(result.message_id), chatId: "100" };
   });
   const { nativeCommandCallbackDispatcher } = withPluginRuntimeRegistryScope(
-    createEmptyPluginRegistry(),
+    params.registry ?? createEmptyPluginRegistry(),
     () =>
       registerTelegramNativeCommands({
         ...nativeParams,

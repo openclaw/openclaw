@@ -44,9 +44,10 @@ import {
   resolveProviderModelRouteAuthRequirement,
 } from "../provider-model-route-auth.js";
 import { buildAgentRuntimeAuthPlan } from "./auth.js";
+import { prepareHostOwnedRuntimeAuth } from "./prepare-host-auth.js";
 import type { AgentRuntimeAuthPlan } from "./types.js";
 
-type PrepareAgentRuntimeAuthPlanParams = {
+export type PrepareAgentRuntimeAuthPlanParams = {
   provider: string;
   modelId: string;
   modelApi?: string | null;
@@ -66,6 +67,7 @@ type PrepareAgentRuntimeAuthPlanParams = {
   harnessId?: string;
   harnessRuntime?: string;
   harnessAuthBootstrap?: "harness";
+  authOwnership?: "host";
   allowHarnessAuthProfileForwarding?: boolean;
   allowTransientCooldownProbe?: boolean;
   resolveProviderPreferredProfileId?(context: {
@@ -239,6 +241,9 @@ export function prepareAgentRuntimeAuth(
   input: PrepareAgentRuntimeAuthPlanParams,
 ): PreparedAgentRuntimeAuth {
   const params = { ...input, config: resolveModelProviderAuthConfig(input) };
+  if (params.authOwnership === "host") {
+    return prepareHostOwnedRuntimeAuth(params);
+  }
   const requestedProfileId = params.sessionAuthProfileId?.trim() || undefined;
   const userPinnedProfileId =
     params.sessionAuthProfileSource === "user" || params.sessionAuthProfileSource === "user-link"

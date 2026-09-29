@@ -476,6 +476,50 @@ describe("Codex command RPC helpers", () => {
     },
   );
 
+  it("resumes a host-owned Platform route with native auth and admitted session authority", async () => {
+    config.models = {
+      providers: {
+        openai: {
+          api: "openai-responses",
+          auth: "api-key",
+          apiKey: "configured-platform-key",
+          baseUrl: "https://api.openai.com/v1",
+          models: [],
+        },
+      },
+    };
+    const onResponse = vi.fn();
+    const startOptions = {
+      transport: "websocket" as const,
+      homeScope: "agent" as const,
+      authMode: "host" as const,
+      url: "wss://app-server.example.test/ws",
+      command: "codex",
+      args: [],
+      headers: {},
+    };
+
+    await resume({ startOptions, authProfileId: "openai:missing", onResponse });
+
+    expect(acquiredOptions()).toMatchObject({
+      startOptions,
+      authProfileId: null,
+      authRequirement: "api-key",
+      agentDir,
+    });
+    expect(onResponse).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ...resumeResponse,
+        thread: expect.objectContaining(resumeResponse.thread),
+      }),
+      harness.client,
+      expect.objectContaining({ authProfileId: undefined }),
+    );
+    await expect(resume({ startOptions, sessionId: "stale-session" })).rejects.toThrow(
+      "Codex session generation is no longer current: stale-session",
+    );
+  });
+
   it("keeps omitted Unix scope on the explicit user-scoped supervision connection", async () => {
     requestCodexAppServerJsonMock.mockResolvedValue({ data: [] });
     const pluginConfig = {

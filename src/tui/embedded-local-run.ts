@@ -1,3 +1,4 @@
+import type { ChatErrorDetail } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { QueueSettings } from "../auto-reply/reply/queue/types.js";
 import type { AssistantTextSnapshot } from "../gateway/agent-event-assistant-text.js";
 import { buildCollectPrompt, previewQueueSummaryPrompt } from "../utils/queue-helpers.js";
@@ -17,6 +18,7 @@ export type LocalRunState = {
   lifecycleStopReason?: string;
   lifecycleYielded?: boolean;
   toolErrorSummary?: string;
+  errorDetail?: ChatErrorDetail;
   terminalState?: "provisional" | "final";
   registered: boolean;
   pendingQueue?: {

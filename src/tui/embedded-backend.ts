@@ -5,6 +5,7 @@ import type {
   SessionsPatchResult,
 } from "../../packages/gateway-protocol/src/index.js";
 import { CHAT_HISTORY_MAX_ENTRIES } from "../../packages/gateway-protocol/src/schema/chat-history-constants.js";
+import { projectChatErrorDetail } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { agentCommandFromIngress } from "../agents/agent-command.js";
 import { isAgentLifecycleYieldedWaiting } from "../agents/agent-lifecycle-parent-state.js";
 import { findAgentRunTerminalOutcome } from "../agents/agent-run-terminal-error.js";
@@ -20,12 +21,14 @@ import {
   resolveDefaultAgentId,
   resolveSessionAgentId,
 } from "../agents/agent-scope.js";
+import { classifyOAuthRefreshFailureError } from "../agents/auth-profiles/oauth-refresh-failure.js";
 import { ensureContextWindowCacheLoaded } from "../agents/context.js";
 import { resolveActiveEmbeddedRunSessionId } from "../agents/embedded-agent-runner/active-run-projections.js";
 import {
   claimPendingEmbeddedAgentQuestionAnswer,
   queueEmbeddedAgentMessageWithOutcomeAsync,
 } from "../agents/embedded-agent-runner/runs.js";
+import { findErrorProperty, isFailoverError } from "../agents/failover/error.js";
 import { QuestionAnswerUnconfirmedError } from "../agents/harness/gateway-question-dispatch.js";
 import { resolveThinkingDefault } from "../agents/model-selection.js";
 import { resolvePublishedModelCatalogOwner } from "../agents/prepared-model-catalog-owner.js";
@@ -1119,6 +1122,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       ...(state !== "final" && (detail || (state === "aborted" && run.toolErrorSummary))
         ? { errorMessage: formatTuiErrorMessage(detail ?? run.toolErrorSummary) }
         : {}),
+      ...(state === "error" && run.errorDetail ? { errorDetail: run.errorDetail } : {}),
     });
   }
 
@@ -1131,12 +1135,16 @@ export class EmbeddedTuiBackend implements TuiBackend {
       aborted?: unknown;
       phase?: unknown;
       toolErrorSummary?: unknown;
+      errorObservation?: unknown;
     },
     options: {
       visibleText?: string;
       terminalOutcome?: AgentRunTerminalOutcome;
     } = {},
   ): boolean {
+    if (metadata.errorObservation !== undefined) {
+      run.errorDetail = projectChatErrorDetail(metadata.errorObservation);
+    }
     const terminalError =
       metadata.error && typeof metadata.error === "object" && "message" in metadata.error
         ? metadata.error.message
@@ -1246,6 +1254,11 @@ export class EmbeddedTuiBackend implements TuiBackend {
     }
 
     const phase = lifecyclePhase;
+    if (phase === "start") {
+      run.errorDetail = undefined;
+    } else if (evt.data.errorObservation !== undefined) {
+      run.errorDetail = projectChatErrorDetail(evt.data.errorObservation);
+    }
     if (phase === "finishing") {
       run.finishing = true;
       run.markQueuedRunReady();
@@ -1420,6 +1433,20 @@ export class EmbeddedTuiBackend implements TuiBackend {
       }
       const errorMessage = error instanceof Error ? error.message : String(error);
       const outcome = findAgentRunTerminalOutcome(error);
+      const selectedFailure = findErrorProperty(error, (candidate) =>
+        isFailoverError(candidate) ? candidate : undefined,
+      );
+      if (selectedFailure) {
+        run.errorDetail = projectChatErrorDetail({
+          ...run.errorDetail,
+          // A selected gateway-owned failure replaces an earlier attempt's host ownership too.
+          authOwner: selectedFailure.authOwner,
+          failoverReason: selectedFailure.reason,
+          providerRuntimeFailureKind: classifyOAuthRefreshFailureError(error)
+            ? "auth_refresh"
+            : undefined,
+        });
+      }
       this.projectTerminalOutcome(
         params.runId,
         run,

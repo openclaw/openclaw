@@ -231,6 +231,11 @@ export async function normalizeEmbeddedRunAttempt(input: {
         authMode: runtime.lastProfileId
           ? preparedRuntime.attemptAuthProfileStore.profiles?.[runtime.lastProfileId]?.type
           : undefined,
+        authOwner: runtime.agentHarness.resolveAuthOwnership?.({
+          config: params.config ?? {},
+          agentId: params.agentId,
+          provider: activeErrorContext.provider,
+        }),
       })
     : undefined;
   const assistantErrorText =

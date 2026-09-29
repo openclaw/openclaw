@@ -57,6 +57,27 @@ const OPENAI_SERVER_ERROR_PAYLOAD =
   'Codex error: {"type":"error","error":{"type":"server_error","code":"server_error","message":"An error occurred while processing your request."},"sequence_number":2}';
 
 describe("failover-error", () => {
+  it("preserves host ownership and raw auth evidence through enrichment", () => {
+    const source = new FailoverError("Unauthorized", {
+      reason: "auth",
+      provider: "fixture",
+      authMode: "oauth",
+      status: 401,
+      rawError: "provider returned 401",
+      cause: new Error("original failure"),
+    });
+    const enriched = coerceToFailoverError(source, { authOwner: "host" });
+    expect(describeFailoverError(enriched)).toMatchObject({
+      authOwner: "host",
+      authMode: "oauth",
+      status: 401,
+      rawError: "provider returned 401",
+    });
+    expect(enriched?.cause).toBe(source.cause);
+    expect(buildFailoverRemediationHint(enriched)).toBe(
+      "⚠️ Authentication failed on the app-server host. The host manages credentials automatically. Retry in a moment; if the failure persists, ask the host operator to check authentication.",
+    );
+  });
   it("does not promote a direct preflight into a provider failure", () => {
     const message = "handoff refused: 529 OVERLOADED";
     const cause = { status: 529, code: "OVERLOADED", message: "overloaded" };

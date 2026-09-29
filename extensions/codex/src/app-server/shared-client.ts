@@ -334,6 +334,9 @@ async function resolveCodexAppServerClientStartContext(options?: CodexAppServerC
     // ChatGPT account for token logins, so prepared auth must never reach it.
     throw new Error("Prepared Codex auth requires an isolated app-server home.");
   }
+  if (preparedAuth && requestedStartOptions.authMode === "host") {
+    throw new Error("Prepared Codex auth cannot replace host-owned app-server authentication.");
+  }
   const preparedAuthRequirement =
     preparedAuth &&
     (preparedAuth.kind === "api-key" || isCodexResponsesOAuth(preparedAuth)
@@ -349,7 +352,9 @@ async function resolveCodexAppServerClientStartContext(options?: CodexAppServerC
   let authRequirement = options?.authRequirement ?? preparedAuthRequirement;
   const usesNativeAuth =
     !preparedAuth &&
-    (options?.authProfileId === null || requestedStartOptions.homeScope === "user");
+    (options?.authProfileId === null ||
+      requestedStartOptions.homeScope === "user" ||
+      requestedStartOptions.authMode === "host");
   const requestedAuthProfileId =
     preparedAuth?.kind === "profile"
       ? preparedAuth.profileId
@@ -716,7 +721,9 @@ async function acquireSharedCodexAppServerClient(
       authMode:
         preparedAuth?.kind === "api-key" || isCodexResponsesOAuth(preparedAuth)
           ? "prepared-api-key"
-          : "profile",
+          : usesNativeAuth
+            ? "native"
+            : "profile",
       config: options?.config,
     });
     if (leased) {
@@ -1061,7 +1068,11 @@ async function startInitializedCodexAppServerClientOnce(
         authMode:
           params.preparedAuth?.kind === "api-key" || isCodexResponsesOAuth(params.preparedAuth)
             ? "prepared-api-key"
-            : "profile",
+            : params.authProfileId === null ||
+                startOptions.homeScope === "user" ||
+                startOptions.authMode === "host"
+              ? "native"
+              : "profile",
         ...(params.authProfileStore ? { authProfileStore: params.authProfileStore } : {}),
         config: params.config,
         onAuthRefreshFailure: () => retireSharedCodexAppServerClientIfCurrent(client),

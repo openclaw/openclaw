@@ -15,6 +15,7 @@ import type { ReplyPayload } from "../types.js";
 import {
   blockReplyOpts,
   buildLoginParams,
+  mockSuccessfulLoginFlow,
   patchSessionEntryMock,
   runModelsAuthLoginFlowMock,
   setupLoginCommandTests,
@@ -27,21 +28,6 @@ vi.mock("../../gateway/model-auth-refresh.js", () => ({
 
 const { handleLoginCommand } = await import("./commands-login.js");
 const { handleCommands } = await import("./commands-core.js");
-
-function mockSuccessfulLoginFlow(profileId = "openai:owner", authRefresh = "refreshed"): void {
-  runModelsAuthLoginFlowMock.mockImplementation(async (opts: ModelsAuthLoginFlowOptions) => {
-    await opts.prompter.note?.(
-      "Open https://auth.openai.com/device and enter code ABCD-EFGH. Never share this code.",
-      "Codex login",
-    );
-    return {
-      providerId: "openai",
-      methodId: "device-code",
-      authRefresh,
-      profiles: [{ profileId, provider: "openai", mode: "oauth" }],
-    };
-  });
-}
 
 describe("handleLoginCommand", () => {
   setupLoginCommandTests();

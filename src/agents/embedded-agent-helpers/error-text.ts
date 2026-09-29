@@ -36,6 +36,7 @@ import {
   isRawApiErrorPayload,
   isStreamingJsonParseError,
   renderRateLimitOrOverloadedCopy,
+  renderHostManagedAuthFailureCopy,
 } from "../failover/user-copy.js";
 import { formatSandboxToolPolicyBlockedMessage } from "../sandbox/runtime-status.js";
 import { buildAssistantFailoverSignal } from "./assistant-message-failures.js";
@@ -83,6 +84,7 @@ type AssistantErrorTextOptions = {
   model?: string;
   /** Credential auth mode; OAuth/token billing copy omits API-key language (#80877). */
   authMode?: string;
+  authOwner?: "host";
 };
 type ClassifiedAssistantErrorFacts = ReturnType<typeof classifyAssistantErrorFacts>;
 function classifyAssistantErrorFacts(msg: AssistantMessage, opts?: AssistantErrorTextOptions) {
@@ -101,6 +103,7 @@ function classifyAssistantErrorFacts(msg: AssistantMessage, opts?: AssistantErro
     providerRuntimeFailureKind: classifyProviderRuntimeFailureKind(signal, { providerPlugin }),
     storageFailure: classifyGatewayStorageFailure(msg),
     code: signal.code,
+    authOwner: opts?.authOwner,
   };
 }
 function isMissingToolCallInputError(raw: string): boolean {
@@ -154,6 +157,21 @@ export function formatAssistantErrorText(
   const diskSpaceCopy = formatDiskSpaceErrorCopy(raw);
   if (diskSpaceCopy) {
     return diskSpaceCopy;
+  }
+  const hostAuthCopy = renderHostManagedAuthFailureCopy({
+    ...classifiedFacts,
+    authFailure: [
+      "auth_refresh",
+      "refresh_timeout",
+      "auth_scope",
+      "auth_html",
+      "auth_invalid_token",
+      "callback_timeout",
+      "callback_validation",
+    ].includes(providerRuntimeFailureKind),
+  });
+  if (hostAuthCopy) {
+    return hostAuthCopy;
   }
   const runtimeCopy = RUNTIME_FAILURE_COPY[providerRuntimeFailureKind];
   if (runtimeCopy) {

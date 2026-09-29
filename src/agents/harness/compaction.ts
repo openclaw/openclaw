@@ -8,6 +8,7 @@ import { resolveUserPath } from "../../utils.js";
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
+import type { AuthProfileStore } from "../auth-profiles/types.js";
 import type { CompactEmbeddedAgentSessionParams } from "../embedded-agent-runner/compact.types.js";
 import { resolveModelAsync } from "../embedded-agent-runner/model.js";
 import type { EmbeddedAgentCompactResult } from "../embedded-agent-runner/types.js";
@@ -113,9 +114,17 @@ async function resolveHarnessCompactApiKey(params: {
   }
   const provider = compactParams.provider;
   const modelId = compactParams.model;
+  const resolveAuthOwnership = (harness: AgentHarness) =>
+    harness.resolveAuthOwnership?.({
+      config: compactParams.config,
+      agentId: params.agentId,
+      provider,
+    });
+  const hostOwnedAuth = resolveAuthOwnership(initialHarness) === "host";
   const providedRuntimeAuthPlan = compactParams.runtimeAuthPlan ?? compactParams.runtimePlan?.auth;
   const reusableRuntimeAuthPlan =
     providedRuntimeAuthPlan &&
+    (providedRuntimeAuthPlan.authOwnership === "host") === hostOwnedAuth &&
     agentRuntimeAuthPlanMatchesTarget(providedRuntimeAuthPlan, { provider, modelId })
       ? providedRuntimeAuthPlan
       : undefined;
@@ -127,7 +136,10 @@ async function resolveHarnessCompactApiKey(params: {
     runtimeModel?: Model,
     runtimeAuthPlan?: AgentRuntimeAuthPlan,
   ) => {
-    const apiKey = compactParams.resolvedApiKey?.trim() || undefined;
+    const apiKey =
+      resolveAuthOwnership(harness) === "host"
+        ? undefined
+        : compactParams.resolvedApiKey?.trim() || undefined;
     if (harness.authBootstrap === "harness" && !runtimeAuthPlan && apiKey) {
       // Ambient keys need a verified route before crossing into harness-owned auth.
       // With no key, the harness can safely use its own native auth store.
@@ -195,10 +207,11 @@ async function resolveHarnessCompactApiKey(params: {
           abortSignal: compactParams.abortSignal,
           ...preparedStores,
           preparedModelRuntime: params.preparedModelRuntime,
-          authProfileId:
-            reusableRuntimeAuthPlan?.forwardedAuthProfileId ??
-            compactParams.authProfileId?.trim() ??
-            undefined,
+          authProfileId: hostOwnedAuth
+            ? undefined
+            : (reusableRuntimeAuthPlan?.forwardedAuthProfileId ??
+              compactParams.authProfileId?.trim() ??
+              undefined),
           workspaceDir,
         })
       ).model;
@@ -213,16 +226,18 @@ async function resolveHarnessCompactApiKey(params: {
   if (!model) {
     return fallbackResolution(initialHarness);
   }
-  const runtimeAuthProfileStore = isOpenAIProvider(provider)
-    ? ensureAuthProfileStore(agentDir, {
-        profileId: compactParams.authProfileId ?? reusableRuntimeAuthPlan?.forwardedAuthProfileId,
-        externalCliProviderIds: ["openai"],
-        allowKeychainPrompt: false,
-      })
-    : ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
-        profileId: compactParams.authProfileId ?? reusableRuntimeAuthPlan?.forwardedAuthProfileId,
-        allowKeychainPrompt: false,
-      });
+  const runtimeAuthProfileStore: AuthProfileStore = hostOwnedAuth
+    ? { version: 1, profiles: {} }
+    : isOpenAIProvider(provider)
+      ? ensureAuthProfileStore(agentDir, {
+          profileId: compactParams.authProfileId ?? reusableRuntimeAuthPlan?.forwardedAuthProfileId,
+          externalCliProviderIds: ["openai"],
+          allowKeychainPrompt: false,
+        })
+      : ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
+          profileId: compactParams.authProfileId ?? reusableRuntimeAuthPlan?.forwardedAuthProfileId,
+          allowKeychainPrompt: false,
+        });
   const prepareRuntimeAuth = (harness: AgentHarness) =>
     prepareAgentRuntimeAuth({
       provider,
@@ -240,6 +255,7 @@ async function resolveHarnessCompactApiKey(params: {
       harnessId: harness.id,
       harnessRuntime: harness.id,
       harnessAuthBootstrap: harness.authBootstrap,
+      authOwnership: resolveAuthOwnership(harness),
     });
   let preparation: PreparedAgentRuntimeAuth;
   if (reusableRuntimeAuthPlan) {
@@ -309,8 +325,9 @@ async function resolveHarnessCompactApiKey(params: {
       materializeModel,
       resolveAuth: async ({ attempt, model: attemptModel }) => {
         if (
-          (harness.authBootstrap === "harness" || attempt.plan.harnessAuthProvider) &&
-          !runtimePlanRequiresHostApiKey(attempt.plan)
+          attempt.plan.authOwnership === "host" ||
+          ((harness.authBootstrap === "harness" || attempt.plan.harnessAuthProvider) &&
+            !runtimePlanRequiresHostApiKey(attempt.plan))
         ) {
           return { plan: attempt.plan, auth: {} };
         }

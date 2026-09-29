@@ -146,12 +146,13 @@ vi.mock("./auth-profiles.runtime.js", () => authRuntimeMock.runtime);
 const makeCfg = makeModelFallbackCfg;
 let authTempCounter = 0;
 
-function registerFallbackHarness(id: string): void {
+function registerFallbackHarness(id: string, authOwner?: "host"): void {
   registerAgentHarness(
     {
       id,
       label: id,
       supports: () => ({ supported: true }),
+      resolveAuthOwnership: () => authOwner,
       runAttempt: vi.fn<AgentHarness["runAttempt"]>(async () => {
         throw new Error("fallback test should not invoke the registered harness directly");
       }),
@@ -1343,6 +1344,35 @@ describe("runWithModelFallback", () => {
     expect(error.authMode).toBe("oauth");
     expect(error.attempts).toMatchObject([{ authMode: "oauth" }, { authMode: "oauth" }]);
   });
+
+  it.each(["codex", "openclaw"])(
+    "keeps auth ownership tied to the failed candidate when the last runtime is %s",
+    async (lastRuntime) => {
+      registerFallbackHarness("codex", "host");
+      const run = vi
+        .fn()
+        .mockRejectedValue(Object.assign(new Error("Unauthorized"), { status: 401 }));
+      const error = await expectFallbackSummary(
+        runWithModelFallback({
+          cfg: createModelFallbackConfig("openai/model-primary", ["openai/model-fallback"]),
+          provider: "openai",
+          model: "model-primary",
+          resolveAgentHarnessRuntimeOverride: (_provider, model) =>
+            model === "model-primary" ? "codex" : lastRuntime,
+          run,
+        }),
+      );
+      expect(error.authOwner).toBe(lastRuntime === "codex" ? "host" : undefined);
+      expect(error.attempts).toMatchObject([
+        { model: "model-primary", authOwner: "host", status: 401 },
+        {
+          model: "model-fallback",
+          authOwner: lastRuntime === "codex" ? "host" : undefined,
+          status: 401,
+        },
+      ]);
+    },
+  );
 
   it("sanitizes model identifiers in model_not_found warnings", async () => {
     const warnLogs = createWarnLogCapture("openclaw-model-fallback-test");

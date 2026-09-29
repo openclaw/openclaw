@@ -629,7 +629,19 @@ describe("prepareCodexAttemptConnection", () => {
     },
   );
 
-  it("keeps a user-home subscription on native account verification", async () => {
+  it.each([
+    { name: "user-home", appServer: { homeScope: "user" as const } },
+    {
+      name: "host-owned WebSocket",
+      appServer: {
+        transport: "websocket" as const,
+        url: "wss://app-server.example.test/ws",
+        authToken: "test-host-capability",
+        homeScope: "agent" as const,
+        authMode: "host" as const,
+      },
+    },
+  ])("keeps a $name subscription on native account verification", async ({ appServer }) => {
     const sessionFile = path.join(tempDir, "user-home-native-auth.jsonl");
     const workspaceDir = path.join(tempDir, "workspace-user-home-native-auth");
     const params = createParams(sessionFile, workspaceDir);
@@ -664,7 +676,7 @@ describe("prepareCodexAttemptConnection", () => {
       params,
       options: {
         bindingStore: testCodexAppServerBindingStore,
-        pluginConfig: { appServer: { homeScope: "user" } },
+        pluginConfig: { appServer },
       },
     });
     const request = vi.fn(async (_method: string, _params?: unknown) => ({
@@ -674,6 +686,7 @@ describe("prepareCodexAttemptConnection", () => {
     expect(connection.startupAuthProfileId).toBeUndefined();
     expect(connection.startupPreparedAuth).toBeUndefined();
     expect(connection.startupClientAuthProfileId).toBeNull();
+    expect(connection.appServer.start).toMatchObject(appServer);
     await expect(
       applyCodexAppServerAuthProfile({
         client: { request } as never,

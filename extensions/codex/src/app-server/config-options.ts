@@ -120,6 +120,11 @@ export function createCodexAppServerConfig({
     const config = pluginConfig.appServer ?? {};
     const transport = resolveTransport(config.transport);
     const homeScope = resolveCodexAppServerHomeScope({ appServer: config });
+    if (config.authMode === "host" && transport !== "websocket") {
+      throw new Error(
+        "plugins.entries.codex.config.appServer.authMode=host requires appServer.transport=websocket",
+      );
+    }
     if (transport !== "stdio" && pluginConfig.sessionCatalog?.homes?.length) {
       throw new Error(
         "plugins.entries.codex.config.sessionCatalog.homes requires appServer.transport=stdio",
@@ -324,6 +329,7 @@ export function createCodexAppServerConfig({
       start: {
         transport,
         homeScope,
+        ...(config.authMode ? { authMode: config.authMode } : {}),
         command,
         commandSource,
         ...(includeManagedCommandOrder ? { managedCommandOrder } : {}),
@@ -545,6 +551,7 @@ export function codexAppServerStartOptionsKey(
 ): string {
   return JSON.stringify({
     transport: options.transport,
+    ...(options.authMode ? { authMode: options.authMode } : {}),
     command: options.command,
     commandSource: options.commandSource ?? null,
     managedCommandOrder: options.managedCommandOrder ?? "package-first",

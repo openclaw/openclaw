@@ -48,6 +48,54 @@ const isolatedTask = {
 };
 
 describe("Codex agent harness supports()", () => {
+  it("reports explicit host authentication from the current plugin configuration", () => {
+    const hostHarness = createCodexAppServerAgentHarness({
+      bindingStore: testCodexAppServerBindingStore,
+      pluginConfig: { appServer: { authMode: "host" } },
+    });
+    expect(hostHarness.resolveAuthOwnership?.({ provider: "openai" })).toBe("host");
+    expect(
+      hostHarness.resolveAuthOwnership?.({
+        provider: "openai",
+        config: {
+          plugins: { entries: { codex: { config: { appServer: { homeScope: "user" } } } } },
+        },
+      }),
+    ).toBeUndefined();
+  });
+
+  it.each(["api-key", "subscription"] as const)(
+    "accepts a host-owned %s route without Gateway credentials",
+    (requirement) => {
+      expect(
+        harness.supports({
+          provider: "openai",
+          modelId: "test-model",
+          requestedRuntime: "codex",
+          modelProvider: {
+            runtimePolicy: { compatibleIds: ["codex"] },
+            preparedAuth: { source: "harness", owner: "host", requirement },
+          },
+        }),
+      ).toMatchObject({ supported: true });
+    },
+  );
+
+  it("keeps transport constraints on host-owned routes", () => {
+    expect(
+      harness.supports({
+        provider: "openai",
+        modelId: "test-model",
+        requestedRuntime: "codex",
+        modelProvider: {
+          requestTransportOverrides: "present",
+          runtimePolicy: { compatibleIds: ["codex"] },
+          preparedAuth: { source: "harness", owner: "host", requirement: "api-key" },
+        },
+      }),
+    ).toMatchObject({ supported: false, fallbackRuntime: "openclaw" });
+  });
+
   it("owns auth bootstrap for every native attempt", () => {
     expect(harness.authBootstrap).toBe("harness");
   });

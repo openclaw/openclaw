@@ -26,7 +26,7 @@ import { mergeCodexRateLimitsUpdate } from "./rate-limit-cache.js";
 import { withTimeout } from "./timeout.js";
 
 type ClientRuntimeContext = CodexAppServerAuthProfileLookup & {
-  authMode?: "prepared-api-key" | "profile";
+  authMode?: "prepared-api-key" | "profile" | "native";
   onAuthRefreshFailure?: () => void;
 };
 
@@ -191,6 +191,9 @@ export function ensureCodexAppServerClientRuntime(
   client.addRequestHandler(async (request) => {
     if (request.method !== "account/chatgptAuthTokens/refresh") {
       return undefined;
+    }
+    if (runtime.context.authMode === "native") {
+      throw new Error("Codex host-owned authentication must refresh on the app-server host.");
     }
     if (runtime.context.authMode === "prepared-api-key") {
       throw new Error("ChatGPT token refresh is unavailable for prepared Codex API-key auth.");

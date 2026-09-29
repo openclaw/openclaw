@@ -91,6 +91,10 @@ managed stdio or the local Unix control socket for production workloads.
 
 `appServer` fields:
 
+For a WebSocket app-server that already owns the intended model account,
+`authMode: "host"` selects host-managed credentials without changing `homeScope`
+or enabling native-thread controls. See [auth ownership](/plugins/codex-harness-reference/auth).
+
 | Field                            | Default                                                | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | -------------------------------- | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `transport`                      | `"stdio"`                                              | `"stdio"` spawns Codex; explicit `"unix"` connects to the local control socket; `"websocket"` connects to `url`.                                                                                                                                                                                                                                                                                                                   |

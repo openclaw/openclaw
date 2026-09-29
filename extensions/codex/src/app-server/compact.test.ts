@@ -510,6 +510,61 @@ describe("maybeCompactCodexAppServerSession", () => {
     expect(factory.mock.calls[0]?.[0]).not.toHaveProperty("authProfileId");
   });
 
+  it("keeps host-owned Platform auth when compacting an agent-scoped WebSocket session", async () => {
+    const fake = createFakeCodexClient();
+    const factory = vi.fn<CodexAppServerClientFactory>(async () => fake.client);
+    const sessionFile = await writeTestBinding();
+
+    const result = requireCompactResult(
+      await maybeCompactCodexAppServerSession(
+        {
+          sessionId: "session-1",
+          sessionKey: "agent:main:session-1",
+          sessionFile,
+          workspaceDir: tempDir,
+          trigger: "manual",
+          provider: "openai",
+          model: "synthetic-platform-model",
+          runtimeAuthPlan: {
+            providerForAuth: "openai",
+            authProfileProviderForAuth: "openai",
+            harnessAuthProvider: "openai",
+            selectedAuthMode: "api-key",
+            modelRoute: {
+              provider: "openai",
+              modelId: "synthetic-platform-model",
+              api: "openai-responses",
+              baseUrl: "https://api.openai.com/v1",
+              authRequirement: "api-key",
+              requestTransportOverrides: "none",
+            },
+          },
+        },
+        {
+          clientFactory: factory,
+          pluginConfig: {
+            appServer: {
+              transport: "websocket",
+              url: "wss://codex.example.test/app-server",
+              homeScope: "agent",
+              authMode: "host",
+              authToken: "gateway-token",
+            },
+          },
+        },
+      ),
+    );
+
+    expect(result).toMatchObject({ ok: true, compacted: true });
+    expect(factory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authProfileId: null,
+        authRequirement: "api-key",
+        startOptions: expect.objectContaining({ homeScope: "agent", authMode: "host" }),
+      }),
+    );
+  });
+
   it("fails closed when prepared Platform compaction has no key", async () => {
     const fake = createFakeCodexClient();
     const factory = vi.fn(async () => fake.client);

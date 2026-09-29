@@ -6,8 +6,13 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeAgentRunTerminalDeliverySnapshot } from "../agent-run-terminal-delivery.js";
 import type { AgentRunTerminalOutcome } from "../agent-run-terminal-outcome.js";
 import { normalizeAgentRunTerminalReceipt } from "../agent-run-terminal-receipt.js";
+import { classifyOAuthRefreshFailureError } from "../auth-profiles/oauth-refresh-failure.js";
 import type { EmbeddedAgentRunEntryTerminal } from "../embedded-agent-runner/run-entry.js";
-import { getFailoverErrorCode } from "../failover/error.js";
+import {
+  findHostManagedAuthFailure,
+  renderHostManagedAuthFailureCopy,
+} from "../failover/auth-error-copy.js";
+import { findErrorProperty, getFailoverErrorCode, isFailoverError } from "../failover/error.js";
 import { renderFailoverCodeUserCopy } from "../failover/user-copy.js";
 import {
   AGENT_RUN_SUPERSEDED_STOP_REASON,
@@ -21,9 +26,17 @@ const log = createSubsystemLogger("agents/agent-command");
 
 const formatLifecycleError = (error: unknown): string => {
   const staleInstall = classifyGatewayStaleInstall(error);
+  const hostFailure = findHostManagedAuthFailure(error);
   return staleInstall
     ? staleInstall.error.message
-    : formatErrorMessageForDisplay(error, renderFailoverCodeUserCopy(getFailoverErrorCode(error)));
+    : formatErrorMessageForDisplay(
+        error,
+        renderHostManagedAuthFailureCopy({
+          authOwner: hostFailure?.authOwner,
+          reason: hostFailure?.reason,
+          authFailure: Boolean(hostFailure && classifyOAuthRefreshFailureError(error)),
+        }) ?? renderFailoverCodeUserCopy(getFailoverErrorCode(error)),
+      );
 };
 
 function resolveTerminalLogLevel(
@@ -86,6 +99,9 @@ export function createAgentCommandLifecycle(params: {
       return;
     }
     params.state.lifecycleEnded = true;
+    const selectedFailure = findErrorProperty(error, (candidate) =>
+      isFailoverError(candidate) ? candidate : undefined,
+    );
     emitAgentEvent({
       runId: params.runId,
       lifecycleGeneration: params.lifecycleGeneration(),
@@ -96,6 +112,21 @@ export function createAgentCommandLifecycle(params: {
         endedAt: Date.now(),
         error: formatLifecycleError(error),
         ...extraData,
+        ...(selectedFailure
+          ? {
+              errorObservation: {
+                ...params.state.lifecycleErrorObservation,
+                ...(extraData?.errorObservation && typeof extraData.errorObservation === "object"
+                  ? extraData.errorObservation
+                  : {}),
+                authOwner: selectedFailure.authOwner,
+                failoverReason: selectedFailure.reason,
+                providerRuntimeFailureKind: classifyOAuthRefreshFailureError(error)
+                  ? "auth_refresh"
+                  : undefined,
+              },
+            }
+          : {}),
         executionSettled: true,
       },
     });

@@ -121,6 +121,40 @@ function allCooldownOpenAIStore(): AuthProfileStore {
 }
 
 describe("prepareAgentRuntimeAuthPlan", () => {
+  it.each([
+    {
+      modelApi: "openai-responses",
+      modelBaseUrl: "https://api.openai.com/v1",
+      requirement: "api-key" as const,
+    },
+    {
+      modelApi: "openai-chatgpt-responses",
+      modelBaseUrl: "https://chatgpt.com/backend-api/codex",
+      requirement: "subscription" as const,
+    },
+  ])(
+    "retains the $requirement route with host auth and an unavailable Gateway pin",
+    ({ modelApi, modelBaseUrl, requirement }) => {
+      const prepared = prepareAgentRuntimeAuth({
+        ...codexPlatformAuthFixture(),
+        modelApi,
+        modelBaseUrl,
+        routeIntent: { authRequirement: requirement, source: "explicit" },
+        authOwnership: "host",
+        harnessAuthBootstrap: "harness",
+        sessionAuthProfileId: "openai:missing",
+        sessionAuthProfileSource: "user",
+        authProfileStore: authStore({}),
+      });
+      expect(prepared.plan).toMatchObject({
+        authOwnership: "host",
+        modelRoute: { api: modelApi, baseUrl: modelBaseUrl, authRequirement: requirement },
+        credentialSource: { kind: "none" },
+      });
+      expect(prepared.attempts).toEqual([{ kind: "implicit", plan: prepared.plan }]);
+    },
+  );
+
   it("does not defer identity-only ChatGPT login to native Codex credentials", () => {
     expect(() =>
       prepareAgentRuntimeAuth({

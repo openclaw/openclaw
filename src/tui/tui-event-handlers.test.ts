@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { HOST_MANAGED_AUTH_ERROR_USER_TEXT } from "../agents/failover/auth-error-copy.js";
 import * as failoverClassifier from "../agents/failover/classify-core.js";
 import { createEventHandlers } from "./tui-event-handlers.js";
 import { makeTuiState } from "./tui-event-test-support.js";
@@ -1264,6 +1265,28 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       classify.mockRestore();
     }
   });
+
+  it.each([false, true])(
+    "shows host recovery for explicit host auth failures (local=%s)",
+    (localMode) => {
+      const { chatLog, handleChatEvent } = createHandlersHarness({
+        localMode,
+        activeChatRunId: null,
+        sessionInfo: { modelProvider: "openai" },
+      });
+      const event = {
+        runId: "run-host-auth-error",
+        state: "error",
+        errorMessage: "Authentication failed. Run /login to sign in again.",
+        errorDetail: { authOwner: "host", failoverReason: "auth" },
+      };
+
+      handleChatEvent(event);
+
+      expect(chatLog.addSystem.mock.calls).toEqual([[`⚠️ ${HOST_MANAGED_AUTH_ERROR_USER_TEXT}`]]);
+      expect(event.errorMessage).toBe("Authentication failed. Run /login to sign in again.");
+    },
+  );
 
   it("shows a concise /auth hint for local auth failures", () => {
     const { chatLog, handleChatEvent } = createHandlersHarness({

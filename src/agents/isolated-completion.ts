@@ -457,6 +457,7 @@ async function runIsolatedCompletionOwned(
         thinkLevel: request.thinkLevel,
         outputTextPolicy: request.outputTextPolicy,
       };
+      const authOwnership = harness.resolveAuthOwnership?.({ config, agentId, provider });
       const prepareHostAuthorization = async (
         authProfileId: string | undefined,
       ): Promise<Extract<AgentHarnessIsolatedCompletionAuthorization, { owner: "host" }>> => {
@@ -495,7 +496,7 @@ async function runIsolatedCompletionOwned(
               attempts: readonly PreparedAgentRuntimeAuthAttempt[];
             }
           | undefined;
-        if (harness.authBootstrap === "harness") {
+        if (authOwnership === "host" || harness.authBootstrap === "harness") {
           const resolution = await resolveAuthorizedModel(
             provider,
             request.model,
@@ -507,7 +508,7 @@ async function runIsolatedCompletionOwned(
               ...lease.snapshot.createStores(),
               preparedModelRuntime: lease.snapshot,
               workspaceDir,
-              authProfileId: request.authProfileId,
+              authProfileId: authOwnership === "host" ? undefined : request.authProfileId,
               skipAgentDiscovery: true,
               allowBundledStaticCatalogFallback: true,
               preferBundledStaticCatalogTransport: true,
@@ -521,12 +522,15 @@ async function runIsolatedCompletionOwned(
           }
           const runtimeModel = resolution.model;
           assertCurrent();
-          const authProfileStore = ensureAuthProfileStore(agentDir, {
-            profileId: request.authProfileId,
-            readOnly: true,
-            allowKeychainPrompt: false,
-            config,
-          });
+          const authProfileStore =
+            authOwnership === "host"
+              ? { version: 1 as const, profiles: {} }
+              : ensureAuthProfileStore(agentDir, {
+                  profileId: request.authProfileId,
+                  readOnly: true,
+                  allowKeychainPrompt: false,
+                  config,
+                });
           const authParams = {
             provider: runtimeModel.provider,
             modelId: runtimeModel.id,
@@ -541,8 +545,11 @@ async function runIsolatedCompletionOwned(
             harnessId: harness.id,
             harnessRuntime: harness.id,
             harnessAuthBootstrap: harness.authBootstrap,
+            authOwnership,
           } satisfies Parameters<typeof prepareAgentRuntimeAuth>[0];
-          await reconcileAuthProfileQuotaBlocks(authParams);
+          if (authOwnership !== "host") {
+            await reconcileAuthProfileQuotaBlocks(authParams);
+          }
           assertCurrent();
           const authAttempts = prepareAgentRuntimeAuth(authParams).attempts;
           harnessAuth = { model: runtimeModel, store: authProfileStore, attempts: authAttempts };
@@ -592,8 +599,9 @@ async function runIsolatedCompletionOwned(
           try {
             let authorization: AgentHarnessIsolatedCompletionAuthorization;
             if (
-              attempt?.plan.harnessAuthProvider &&
-              attempt.plan.modelRoute?.authRequirement !== "api-key" &&
+              (attempt?.plan.authOwnership === "host" ||
+                (attempt?.plan.harnessAuthProvider &&
+                  attempt.plan.modelRoute?.authRequirement !== "api-key")) &&
               harnessAuth
             ) {
               const plan = attempt.plan;

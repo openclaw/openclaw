@@ -7,6 +7,7 @@ import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   loadRunOverflowCompactionHarness,
   mockedAcquireAgentRunPreparedModelRuntime,
+  mockedBuildAgentRuntimePlan,
   mockedBuildEmbeddedRunPayloads,
   mockedEnsureAuthProfileStore,
   mockedGetApiKeyForModel,
@@ -39,6 +40,7 @@ function prepareAuthFailoverRun(
   options: {
     nativeModelRef?: () => { provider: string; model: string } | undefined;
     rejectAuthoredRequests?: boolean;
+    hostOwnedAuth?: boolean;
   } = {},
 ) {
   const { registerPreparedAgentHarness, runEmbeddedAgent } = runHarness;
@@ -46,6 +48,7 @@ function prepareAuthFailoverRun(
     id: "codex",
     label: "Codex",
     authBootstrap: "harness",
+    ...(options.hostOwnedAuth ? { resolveAuthOwnership: () => "host" as const } : {}),
     supports: ({ provider, modelProvider }) => {
       if (
         options.rejectAuthoredRequests &&
@@ -130,6 +133,26 @@ describe("native harness auth failover", () => {
     );
     return params;
   }
+
+  it("dispatches a host-owned API-key route without resolving a missing Gateway profile", async () => {
+    const runEmbeddedAgent = prepareAuthFailoverRun(false, { hostOwnedAuth: true });
+    mockedGetApiKeyForModel.mockImplementation(async () => {
+      throw new Error("Gateway credentials must not be resolved for host-owned auth");
+    });
+    const params = await createNativeHostRunParams();
+    await expect(
+      runEmbeddedAgent({
+        ...params,
+        authProfileId: "openai:missing",
+        authProfileIdSource: "user",
+      }),
+    ).resolves.toMatchObject({ payloads: [{ text: "OK" }] });
+    expect(mockedBuildAgentRuntimePlan).toHaveBeenCalledWith(
+      expect.objectContaining({
+        preparedAuthPlan: expect.objectContaining({ authOwnership: "host" }),
+      }),
+    );
+  });
 
   it.each(["auto", "user"] as const)(
     "plans divergent native host-auth model selection while retaining %s profile strictness",

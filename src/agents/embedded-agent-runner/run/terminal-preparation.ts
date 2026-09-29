@@ -55,6 +55,7 @@ export function prepareEmbeddedRunTerminal(input: {
   activeErrorContext: { provider: string; model: string };
   authProfileStore: AuthProfileStore;
   authProfileId?: string;
+  authOwner?: "host";
   sessionIdUsed: string;
   sessionFileUsed?: string;
   outerContextTokenMeta: { contextTokens?: number };
@@ -218,6 +219,7 @@ export function prepareEmbeddedRunTerminal(input: {
     authMode: input.authProfileId
       ? input.authProfileStore.profiles?.[input.authProfileId]?.type
       : undefined,
+    authOwner: input.authOwner,
     verboseLevel: runParams.verboseLevel,
     reasoningLevel: runParams.reasoningLevel,
     thinkingLevel: runParams.thinkLevel,

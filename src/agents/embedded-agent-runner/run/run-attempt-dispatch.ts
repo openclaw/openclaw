@@ -28,6 +28,7 @@ import type { EmbeddedRunReplayState } from "../replay-state.js";
 import { remapSkillReferencePaths } from "../sandbox-skills.js";
 import { prepareEmbeddedSkills } from "../skill-runtime.js";
 import { mapThinkingLevelForProvider } from "../utils.js";
+import { runEmbeddedAttemptWithErrorContext } from "./attempt-dispatch-outcome.js";
 import { prepareExecApprovalContinuationForAttempt } from "./attempt-exec-approval-continuation.js";
 import { withPreparedEmbeddedGatewayTools } from "./attempt-gateway-tools.js";
 import { applyResolvedToolPromptFinalizer } from "./attempt-prompt-support.js";
@@ -116,6 +117,11 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     resolveRunAttemptAuthProfileStore,
   } = preparedRuntime;
   const runtime = preparedRuntime.snapshot();
+  const authOwner = runtime.agentHarness.resolveAuthOwnership?.({
+    config: params.config ?? {},
+    agentId: workspaceResolution.agentId,
+    provider,
+  });
   const effectiveModel = attachModelProviderRuntimePluginHandle(
     runtime.effectiveModel,
     runtime.providerRuntimeHandle,
@@ -683,23 +689,18 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     },
     prepareAssistantTranscriptMessage: params.prepareAssistantTranscriptMessage,
   };
-  const rawAttempt = await withPreparedEmbeddedGatewayTools(
-    attemptParams,
-    attemptControls.isCurrent,
-    () => runEmbeddedAttemptWithBackend(attemptParams, nativeSessionRuntime, params.media),
-  )
-    .catch((err: unknown): never => {
-      throw input.getPostCompactionAbortError() ?? err;
-    })
-    .finally(() => {
+  const rawAttempt = await runEmbeddedAttemptWithErrorContext({
+    run: () =>
+      withPreparedEmbeddedGatewayTools(attemptParams, attemptControls.isCurrent, () =>
+        runEmbeddedAttemptWithBackend(attemptParams, nativeSessionRuntime, params.media),
+      ),
+    cleanup: () => {
       attemptControls.close();
       input.clearPostCompactionAbortController(attemptAbortController);
-    });
-
-  const postCompactionAbortError = input.getPostCompactionAbortError();
-  if (postCompactionAbortError) {
-    throw postCompactionAbortError;
-  }
+    },
+    getPostCompactionAbortError: () => input.getPostCompactionAbortError(),
+    context: { provider, model: modelId, authOwner },
+  });
   return {
     dispatchedAttempt: { rawAttempt, preparedAttempt: attemptParams },
     runtimePlan,

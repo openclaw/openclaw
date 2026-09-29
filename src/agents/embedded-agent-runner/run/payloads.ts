@@ -77,6 +77,7 @@ export function buildEmbeddedRunPayloads(params: {
   model?: string;
   /** Credential auth mode for billing copy (#80877). */
   authMode?: string;
+  authOwner?: "host";
   verboseLevel?: VerboseLevel;
   reasoningLevel?: ReasoningLevel;
   thinkingLevel?: ThinkLevel;
@@ -167,10 +168,13 @@ export function buildEmbeddedRunPayloads(params: {
     const oauthRefreshFailure = rawErrorMessage
       ? classifyOAuthRefreshFailure(rawErrorMessage)
       : null;
-    const providerLoginRecovery = buildProviderLoginRecovery({
-      provider: oauthRefreshFailure?.provider ?? params.provider,
-      oauthReason: oauthRefreshFailure?.reason,
-    });
+    const providerLoginRecovery =
+      params.authOwner === "host"
+        ? undefined
+        : buildProviderLoginRecovery({
+            provider: oauthRefreshFailure?.provider ?? params.provider,
+            oauthReason: oauthRefreshFailure?.reason,
+          });
     const errorContext = {
       cfg: params.config,
       sessionKey: params.sessionKey,
@@ -179,6 +183,7 @@ export function buildEmbeddedRunPayloads(params: {
       providerOwner: params.providerOwner,
       model: params.model,
       authMode: params.authMode,
+      authOwner: params.authOwner,
     };
     const errorText =
       assistantForPayload && lastAssistantNeedsErrorSurface

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, vi } from "vitest";
+import type { ModelsAuthLoginFlowOptions } from "../../commands/models/auth.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshotRefreshHandler,
@@ -90,6 +91,24 @@ export function buildLoginParams(
   }
   params.storePath = overrides.storePath;
   return params;
+}
+
+export function mockSuccessfulLoginFlow(
+  profileId = "openai:owner",
+  authRefresh = "refreshed",
+): void {
+  runModelsAuthLoginFlowMock.mockImplementation(async (opts: ModelsAuthLoginFlowOptions) => {
+    await opts.prompter.note?.(
+      "Open https://auth.openai.com/device and enter code ABCD-EFGH. Never share this code.",
+      "Codex login",
+    );
+    return {
+      providerId: "openai",
+      methodId: "device-code",
+      authRefresh,
+      profiles: [{ profileId, provider: "openai", mode: "oauth" }],
+    };
+  });
 }
 
 export function blockReplyOpts(): NonNullable<HandleCommandsParams["opts"]> {

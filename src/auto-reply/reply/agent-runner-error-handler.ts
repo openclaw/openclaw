@@ -14,6 +14,7 @@ import {
   HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
   renderControlUiAgentFailureCopy,
   renderFailoverCodeUserCopy,
+  renderHostManagedAuthFailureCopy,
 } from "../../agents/failover/user-copy.js";
 import { isAgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
@@ -242,6 +243,15 @@ export async function handleAgentExecutionError(params: {
         }),
       }),
     };
+  }
+  const hostAuthFailureCopy =
+    !failureSummary &&
+    renderHostManagedAuthFailureCopy({
+      ...failoverFacts,
+      authFailure: Boolean(oauthRefreshFailure),
+    });
+  if (hostAuthFailureCopy) {
+    return await settleFailure({ text: hostAuthFailureCopy });
   }
   const replayPrevented = findCliTimeoutError(err)?.cliTimeout.observedActivity === true;
   if (providerRequestError) {

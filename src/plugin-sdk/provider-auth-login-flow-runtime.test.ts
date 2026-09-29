@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelsAuthLoginFlowOptions } from "../commands/models/auth.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { HOST_MANAGED_AUTH_LOGIN_MESSAGE } from "../shared/host-managed-auth-error.js";
 import {
   buildProviderLoginChoicesReply,
   cancelProviderLoginFlow,
@@ -15,6 +16,10 @@ import {
 const resolveChoice = vi.hoisted(() =>
   vi.fn<typeof import("../plugins/provider-login-options.js").resolveProviderChannelLoginChoice>(),
 );
+const resolveOwnership = vi.hoisted(() => vi.fn());
+vi.mock("../agents/harness/auth-ownership.js", () => ({
+  resolveAgentHarnessAuthOwnership: resolveOwnership,
+}));
 vi.mock("../plugins/provider-login-options.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/provider-login-options.js")>()),
   resolveProviderChannelLoginChoice: resolveChoice,
@@ -42,10 +47,97 @@ const loginParams = {
 describe("provider channel login runtime", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resolveOwnership.mockReturnValue(undefined);
     resolveChoice.mockReturnValue({ status: "resolved", choice });
   });
 
+  it.each(["/login", "/login refresh", "/login acme", "/login acme/device"])(
+    "refuses host-managed %s before starting authentication or refreshing credentials",
+    async (commandText) => {
+      resolveOwnership.mockReturnValue("host");
+      const refreshAuth = vi.fn(async () => {});
+      expect(
+        await prepareProviderChannelLogin({
+          commandText,
+          commandAuthorized: true,
+          senderIsOwner: true,
+          isPrivateChat: true,
+          config: { commands: { ownerAllowFrom: ["owner"] } },
+          agentId: "worker",
+          currentProvider: "acme-cloud",
+          currentModelId: "test-model",
+          sessionKey: "agent:worker:main",
+          refreshAuth,
+        }),
+      ).toEqual({ status: "rejected", reply: { text: HOST_MANAGED_AUTH_LOGIN_MESSAGE } });
+      expect(resolveOwnership).toHaveBeenCalledWith(
+        expect.objectContaining({
+          provider: "acme-cloud",
+          modelId: "test-model",
+          agentId: "worker",
+          sessionKey: "agent:worker:main",
+        }),
+      );
+      expect(refreshAuth).not.toHaveBeenCalled();
+    },
+  );
+
+  it("refuses a host-owned secure-input choice instead of handing off to another login", async () => {
+    resolveOwnership.mockReturnValue("host");
+    resolveChoice.mockReturnValue({ status: "resolved", choice: { ...choice, mode: "secret" } });
+    expect(
+      await prepareProviderChannelLogin({
+        commandText: "/login acme/api-key",
+        commandAuthorized: true,
+        senderIsOwner: true,
+        isPrivateChat: false,
+        config: { commands: { ownerAllowFrom: ["owner"] } },
+        agentId: "main",
+        refreshAuth: async () => {},
+      }),
+    ).toMatchObject({ status: "rejected", reply: { text: HOST_MANAGED_AUTH_LOGIN_MESSAGE } });
+  });
+
+  it("allows an unrelated provider while the current model uses host-managed auth", async () => {
+    resolveOwnership.mockImplementation(({ provider }) =>
+      provider === "host-provider" ? "host" : undefined,
+    );
+    expect(
+      await prepareProviderChannelLogin({
+        commandText: "/login acme",
+        commandAuthorized: true,
+        senderIsOwner: true,
+        isPrivateChat: true,
+        config: { commands: { ownerAllowFrom: ["owner"] } },
+        agentId: "main",
+        currentProvider: "host-provider",
+        refreshAuth: async () => {},
+      }),
+    ).toEqual({ status: "ready", choice });
+  });
+
+  it("rejects an in-progress login if the host takes ownership before a credential write", async () => {
+    const persist = vi.fn();
+    const runLoginFlow = async (opts: ModelsAuthLoginFlowOptions) => {
+      await Promise.resolve();
+      resolveOwnership.mockReturnValue("host");
+      await opts.beforePersistentEffect?.();
+      persist();
+      return {
+        providerId: "acme-cloud",
+        methodId: "device-code",
+        authRefresh: "refreshed",
+        profiles: [{ profileId: "acme-cloud:new", provider: "acme-cloud", mode: "oauth" }],
+      };
+    };
+    await expect(runProviderChannelLoginFlow({ ...loginParams, runLoginFlow })).rejects.toThrow(
+      HOST_MANAGED_AUTH_LOGIN_MESSAGE,
+    );
+    expect(persist).not.toHaveBeenCalled();
+  });
+
   it("authorizes private cancellation and leaves other conversations active", async () => {
+    resolveOwnership.mockReturnValue("host");
     const flows = createProviderLoginFlowRegistry();
     const first = reserveProviderLoginFlow({ flows, flowKey: "first", providerLabel: "Acme" });
     const other = reserveProviderLoginFlow({ flows, flowKey: "other", providerLabel: "Other" });

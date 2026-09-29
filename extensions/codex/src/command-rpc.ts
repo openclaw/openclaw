@@ -99,13 +99,14 @@ export async function prepareCodexControlSessionAuth(
   options: CodexControlRequestOptions,
   startOptions: CodexAppServerStartOptions,
 ) {
+  const usesHostAuth = startOptions.authMode === "host";
   if (!options.config || !options.sessionKey || !options.sessionId) {
     if (options.onResponse) {
       throw new Error("Codex control subscription requires admitted session authority.");
     }
     return {
-      authProfileId: options.authProfileId ?? undefined,
-      clientOptions: { authProfileId: options.authProfileId },
+      authProfileId: usesHostAuth ? undefined : (options.authProfileId ?? undefined),
+      clientOptions: { authProfileId: usesHostAuth ? null : options.authProfileId },
     };
   }
   const config = options.config;
@@ -128,19 +129,22 @@ export async function prepareCodexControlSessionAuth(
   if (entry?.sessionId !== options.sessionId) {
     throw createCodexSessionGenerationSupersededError(options.sessionId);
   }
-  if (options.authProfileId === null || startOptions.homeScope === "user") {
+  if (!usesHostAuth && (options.authProfileId === null || startOptions.homeScope === "user")) {
     return {
       authProfileId: options.authProfileId ?? undefined,
       clientOptions: { authProfileId: options.authProfileId },
     };
   }
   const model = resolveSessionModelRef(config, entry, sessionAgentId);
-  const authProfileId = entry?.authProfileOverride ?? options.authProfileId;
-  const store = resolveCodexAppServerAuthProfileStore({ agentDir, config, authProfileId });
+  const authProfileId = entry?.authProfileOverride ?? options.authProfileId ?? undefined;
+  const store = usesHostAuth
+    ? { version: 1 as const, profiles: {} }
+    : resolveCodexAppServerAuthProfileStore({ agentDir, config, authProfileId });
   const { plan, attempts } = prepareAgentRuntimeAuth({
     provider: model.provider,
     modelId: model.model,
     config,
+    agentId: sessionAgentId,
     agentDir,
     workspaceDir,
     authProfileStore: store,
@@ -148,8 +152,19 @@ export async function prepareCodexControlSessionAuth(
     sessionAuthProfileSource: entry?.authProfileOverrideSource,
     harnessId: "codex",
     harnessAuthBootstrap: "harness",
+    authOwnership: usesHostAuth ? "host" : undefined,
   });
   const route = plan.modelRoute;
+  if (usesHostAuth) {
+    return {
+      authProfileId: undefined,
+      clientOptions: {
+        authProfileId: null,
+        authRequirement: route?.authRequirement,
+        agentDir,
+      },
+    };
+  }
   // A control subscription must use the same prepared auth partition as a turn.
   // Unsubscribe leaves Codex's native writer loaded for 30 minutes; another
   // process cannot resume that thread, even after its OpenClaw binding is gone.
@@ -181,6 +196,7 @@ export async function prepareCodexControlSessionAuth(
     authProfileStore: store,
     agentDir,
     homeScope: startOptions.homeScope ?? "agent",
+    authMode: startOptions.authMode,
     config,
     subscriptionProfileRequiredError:
       "Prepared Codex subscription route requires a forwarded OpenAI OAuth or token profile.",

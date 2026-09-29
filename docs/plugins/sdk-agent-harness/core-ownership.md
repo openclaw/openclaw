@@ -203,6 +203,16 @@ set this capability on a harness that only sometimes owns authentication.
 This static bootstrap capability is distinct from ownership of an already-bound
 native session's model and connection.
 
+For an account managed by the native runtime's host, a harness can implement
+`resolveAuthOwnership({ config, agentId, provider })` and return `"host"` for the
+selected configuration and provider. This synchronous, secret-free callback must
+not connect to the runtime, read credentials, or start authentication. Core keeps
+the prepared model route and delegates credentials to that host without selecting
+or refreshing an OpenClaw auth profile. The harness remains responsible for
+checking that the host account supports the requested route. Returning `undefined`
+preserves ordinary credential preparation. Ownership applies only when that
+harness is selected; installing a host-auth harness does not change other runtimes.
+
 ### Bound native session ownership
 
 The optional `resolveSessionRuntimeOwnership({ config, agentId, sessionId,

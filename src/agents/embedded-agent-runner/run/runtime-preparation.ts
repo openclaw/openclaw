@@ -261,13 +261,17 @@ export async function prepareEmbeddedRunRuntime(input: {
     profileIndex: 0,
   };
   const pluginHarnessOwnsAuthBootstrap =
-    pluginHarnessOwnsTransport && agentHarness.authBootstrap === "harness";
+    pluginHarnessOwnsTransport &&
+    (activePreparedAuthPlan.authOwnership === "host" || agentHarness.authBootstrap === "harness");
   const preparedApiKeyRoute = activePreparedAuthPlan.modelRoute?.authRequirement === "api-key";
   const pluginHarnessHasPreparedApiKeyAttempt = preparedAuthAttempts.some(
-    (attempt) => attempt.plan.modelRoute?.authRequirement === "api-key",
+    (attempt) =>
+      attempt.plan.authOwnership !== "host" &&
+      attempt.plan.modelRoute?.authRequirement === "api-key",
   );
   const pluginHarnessNeedsOpenClawAuthBootstrap =
     pluginHarnessOwnsTransport &&
+    activePreparedAuthPlan.authOwnership !== "host" &&
     (preparedApiKeyRoute ||
       (!pluginHarnessOwnsAuthBootstrap &&
         preparedAuthAttempts.some((attempt) => attempt.kind !== "implicit")));
@@ -374,7 +378,7 @@ export async function prepareEmbeddedRunRuntime(input: {
   });
   let didTransientCooldownProbe = false;
   const advancePluginHarnessAuthAttempt = async (): Promise<boolean> => {
-    if (!pluginHarnessOwnsTransport) {
+    if (!pluginHarnessOwnsTransport || activePreparedAuthPlan.authOwnership === "host") {
       return false;
     }
     let nextIndex = authState.profileIndex + 1;

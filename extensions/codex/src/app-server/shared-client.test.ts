@@ -1866,6 +1866,70 @@ describe("shared Codex app-server client", () => {
     expect(applyAuthProfileCall().authProfileId).toBeNull();
   });
 
+  it("preserves host auth and agent home scope across shared WebSocket leases", async () => {
+    const harness = createInitializingClientHarness();
+    const start = vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
+    const startOptions: CodexAppServerStartOptions = {
+      transport: "websocket",
+      url: "wss://codex.example.test/app-server",
+      homeScope: "agent",
+      authMode: "host",
+      command: "codex",
+      args: ["app-server"],
+      headers: {},
+    };
+    const options = {
+      timeoutMs: 1000,
+      authProfileId: "openai:target",
+      agentDir: "/tmp/openclaw-target-agent",
+      authRequirement: "subscription" as const,
+      startOptions,
+    };
+
+    const first = await getSharedCodexAppServerClient(options);
+    const second = await getSharedCodexAppServerClient({ ...options, config: {} });
+
+    expect(second).toBe(first);
+    expect(start).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ homeScope: "agent", authMode: "host" }),
+      expect.any(Function),
+    );
+    expect(applyAuthProfileCall()).toMatchObject({
+      authProfileId: null,
+      authRequirement: "subscription",
+    });
+
+    const responseIndex = harness.writes.length;
+    harness.send({
+      id: "refresh-host-after-reuse",
+      method: "account/chatgptAuthTokens/refresh",
+      params: { reason: "expired" },
+    });
+
+    expect(JSON.parse(await harness.waitForWrite(responseIndex))).toMatchObject({
+      id: "refresh-host-after-reuse",
+      error: { message: "Codex host-owned authentication must refresh on the app-server host." },
+    });
+    expect(mocks.refreshCodexAppServerAuthTokens).not.toHaveBeenCalled();
+  });
+
+  it("rejects prepared credentials on a host-owned WebSocket connection", async () => {
+    await expect(
+      getSharedCodexAppServerClient({
+        preparedAuth: { kind: "api-key", apiKey: "prepared-platform-key" },
+        startOptions: {
+          transport: "websocket",
+          url: "wss://codex.example.test/app-server",
+          homeScope: "agent",
+          authMode: "host",
+          command: "codex",
+          args: ["app-server"],
+          headers: {},
+        },
+      }),
+    ).rejects.toThrow("Prepared Codex auth cannot replace host-owned app-server authentication.");
+  });
+
   it("resolves the configured implicit auth profile before sharing a client", async () => {
     const harness = createClientHarness();
     vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);

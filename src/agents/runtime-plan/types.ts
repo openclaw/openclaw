@@ -185,6 +185,8 @@ export type AgentRuntimeModelAttempt = {
 
 export type AgentRuntimeAuthPlan = {
   providerForAuth: string;
+  /** The selected harness keeps credentials on its host; Gateway profiles are not consulted. */
+  authOwnership?: "host";
   /** Model whose order, cooldown, and route facts produced this plan. */
   modelId?: string;
   authProfileProviderForAuth: string;

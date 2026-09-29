@@ -11,6 +11,7 @@ import {
   ChatStartupParamsSchema,
   ChatSendParamsSchema,
   ChatStatusEventSchema,
+  projectChatErrorDetail,
   type ChatHistoryCursorResult,
   type ChatHistoryDeltaResult,
   type ChatHistoryParams,
@@ -179,6 +180,23 @@ describe("ChatErrorEventSchema", () => {
     httpStatus: 502,
     providerErrorMessagePreview: "Upstream unavailable",
   };
+
+  it("projects explicit host auth ownership into the closed error detail", () => {
+    const errorDetail = projectChatErrorDetail({
+      authOwner: "host",
+      failoverReason: "auth",
+      rawErrorPreview: "private diagnostic",
+    });
+    expect(errorDetail).toEqual({
+      authOwner: "host",
+      failoverReason: "auth",
+    });
+    expect(Value.Check(ChatEventSchema, { ...event, errorDetail })).toBe(true);
+    expect(projectChatErrorDetail({ authOwner: "unknown" })).toBeUndefined();
+    expect(Value.Check(ChatEventSchema, { ...event, errorDetail: { authOwner: "unknown" } })).toBe(
+      false,
+    );
+  });
 
   it("round-trips optional closed provider error details", () => {
     for (const errorDetail of [

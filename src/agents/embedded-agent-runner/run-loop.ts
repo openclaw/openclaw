@@ -479,6 +479,11 @@ export async function runPreparedEmbeddedLoop(
         lastRetryFailoverReason = recovery.lastRetryFailoverReason;
         continue;
       }
+      const authOwner = agentHarness.resolveAuthOwnership?.({
+        config: params.config,
+        agentId: params.agentId,
+        provider: activeErrorContext.provider,
+      });
       const assistantFailureOutcome = await handleEmbeddedAssistantFailure({
         runParams: params,
         attempt,
@@ -496,6 +501,7 @@ export async function runPreparedEmbeddedLoop(
         fallbackConfigured,
         pluginHarnessOwnsTransport,
         authProfileId: lastProfileId,
+        authOwner,
         authProfileStore: attemptAuthProfileStore,
         runtimeAuthRetry,
         maybeRefreshRuntimeAuthForAuthError,
@@ -542,6 +548,7 @@ export async function runPreparedEmbeddedLoop(
             activeErrorContext,
             authProfileStore: attemptAuthProfileStore,
             authProfileId: lastProfileId,
+            authOwner,
             outerContextTokenMeta,
             usageAccumulator,
             contextRecoveryState,

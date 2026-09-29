@@ -7,6 +7,8 @@ import {
   type PreparedProviderModelAccess,
   decideProviderLoginSessionAdoption,
   createProviderLoginFlowRegistry,
+  createProviderLoginAuthOwnershipGuard,
+  HostManagedProviderAuthError,
   formatProviderLoginCommand,
   formatProviderLoginCompletion,
   formatProviderLoginFailure,
@@ -68,6 +70,8 @@ export async function executeTelegramLoginCommand(params: {
   dispatch: TelegramCommandDispatch;
   commandText: string;
   currentProvider?: string;
+  currentModelId?: string;
+  runtimeId?: string;
 }): Promise<boolean> {
   const { dispatch } = params;
   const sendLoginMessage = async (text: string) => {
@@ -99,7 +103,7 @@ export async function executeTelegramLoginCommand(params: {
       },
     );
   };
-  const assertCurrent = (config = dispatch.telegramDeps.getRuntimeConfig()) => {
+  const assertAuthority = (config = dispatch.telegramDeps.getRuntimeConfig()) => {
     dispatch.assertOwnerCurrent?.();
     const authorization = resolveCommandAuthorization({
       cfg: config,
@@ -132,6 +136,10 @@ export async function executeTelegramLoginCommand(params: {
     isPrivateChat: dispatch.msg.chat.type === "private",
     config: dispatch.runtimeCfg,
     agentId: dispatch.route.agentId,
+    currentProvider: params.currentProvider,
+    currentModelId: params.currentModelId,
+    currentRuntimeId: params.runtimeId,
+    sessionKey: dispatch.targetSessionKey,
     signal: dispatch.opts.accountAbortSignal,
     refreshAuth: () =>
       refreshProviderLoginAuthState({
@@ -139,7 +147,7 @@ export async function executeTelegramLoginCommand(params: {
         readConfig: dispatch.telegramDeps.getRuntimeConfig,
         assertCurrent: (config) => {
           dispatch.opts.accountAbortSignal?.throwIfAborted();
-          assertCurrent(config);
+          assertAuthority(config);
         },
       }),
     cancelLogin: () =>
@@ -156,7 +164,7 @@ export async function executeTelegramLoginCommand(params: {
         readConfig: dispatch.telegramDeps.getRuntimeConfig,
         runtime: dispatch.runtime,
         signal: dispatch.opts.accountAbortSignal,
-        assertCurrent,
+        assertCurrent: assertAuthority,
       }),
   });
   if (!prepared) {
@@ -170,6 +178,17 @@ export async function executeTelegramLoginCommand(params: {
     return (await sendLoginReply(prepared.reply)) && prepared.status === "reply";
   }
   const loginChoice = prepared.choice;
+  const assertAuthOwnership = await createProviderLoginAuthOwnershipGuard({
+    agentId: dispatch.route.agentId,
+    provider: loginChoice.providerId,
+    modelId: params.currentProvider === loginChoice.providerId ? params.currentModelId : undefined,
+    sessionKey: dispatch.targetSessionKey,
+    runtimeId: params.currentProvider === loginChoice.providerId ? params.runtimeId : undefined,
+  });
+  const assertCurrent = (config = dispatch.telegramDeps.getRuntimeConfig()) => {
+    assertAuthority(config);
+    assertAuthOwnership(config);
+  };
   const flowKey = buildTelegramProviderLoginFlowKey(dispatch);
   const reservation = reserveProviderLoginFlow({
     flows: activeTelegramProviderLoginFlows,
@@ -212,6 +231,10 @@ export async function executeTelegramLoginCommand(params: {
           defaultTelegramNativeCommandDeps.runModelsAuthLoginFlow,
         choice: loginChoice,
         agentId: dispatch.route.agentId,
+        modelId:
+          params.currentProvider === loginChoice.providerId ? params.currentModelId : undefined,
+        runtimeId: params.currentProvider === loginChoice.providerId ? params.runtimeId : undefined,
+        sessionKey: dispatch.targetSessionKey,
         config: dispatch.runtimeCfg,
         readConfig: dispatch.telegramDeps.getRuntimeConfig,
         runtime: dispatch.runtime,
@@ -282,6 +305,9 @@ export async function executeTelegramLoginCommand(params: {
             sessionSwitchFailed = true;
           }
         } catch (error) {
+          if (error instanceof HostManagedProviderAuthError) {
+            throw error;
+          }
           flowSignal.throwIfAborted();
           dispatch.runtime.error?.(
             danger(

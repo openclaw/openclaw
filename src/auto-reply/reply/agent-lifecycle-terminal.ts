@@ -1,6 +1,10 @@
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { classifyOAuthRefreshFailureError } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import { renderAgentHarnessPreflightUserMessage } from "../../agents/embedded-agent-helpers/user-facing-text.js";
+import {
+  findHostManagedAuthFailure,
+  renderHostManagedAuthFailureCopy,
+} from "../../agents/failover/auth-error-copy.js";
 import { getFailoverErrorCode } from "../../agents/failover/error.js";
 import { renderFailoverCodeUserCopy } from "../../agents/failover/user-copy.js";
 import { AGENT_RUN_RESTART_ABORT_STOP_REASON } from "../../agents/run-termination.js";
@@ -119,7 +123,13 @@ export function createAgentLifecycleTerminalBackstop(params: {
       data.stopReason = AGENT_RUN_RESTART_ABORT_STOP_REASON;
     } else if (phase === "error") {
       const oauthFailure = classifyOAuthRefreshFailureError(resultOrError);
+      const hostFailure = findHostManagedAuthFailure(resultOrError);
       data.error =
+        renderHostManagedAuthFailureCopy({
+          authOwner: hostFailure?.authOwner,
+          reason: hostFailure?.reason,
+          authFailure: Boolean(oauthFailure),
+        }) ??
         renderAgentHarnessPreflightUserMessage(resultOrError) ??
         renderFailoverCodeUserCopy(getFailoverErrorCode(resultOrError)) ??
         (oauthFailure?.summary ? `⚠️ ${oauthFailure.summary}` : undefined) ??
@@ -131,6 +141,15 @@ export function createAgentLifecycleTerminalBackstop(params: {
           providerRuntimeFailureKind: "auth_refresh",
           ...(oauthFailure.errorType ? { providerErrorType: oauthFailure.errorType } : {}),
           ...(oauthFailure.status ? { httpStatus: oauthFailure.status } : {}),
+        };
+      }
+      if (hostFailure) {
+        data.errorObservation = {
+          ...(data.errorObservation && typeof data.errorObservation === "object"
+            ? data.errorObservation
+            : {}),
+          authOwner: hostFailure.authOwner,
+          failoverReason: hostFailure.reason,
         };
       }
       Object.assign(data, terminationFields);

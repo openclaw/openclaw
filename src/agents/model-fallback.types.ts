@@ -20,6 +20,7 @@ export type FallbackAttempt = ModelCandidate & {
   error: string;
   reason?: FailoverReason;
   authMode?: string;
+  authOwner?: "host";
   status?: number;
   code?: string;
 };

@@ -255,20 +255,21 @@ export async function executeTelegramBuiltinCommand(
   }
   if (commandDefinition.key === "login") {
     const { executeTelegramLoginCommand } = await loadTelegramLoginCommandExecutor();
-    const currentProvider =
-      resolveTelegramCommandMenuModelContext({
-        cfg: dispatch.runtimeCfg,
-        agentId: dispatch.route.agentId,
-        sessionKey: dispatch.targetSessionKey,
-      }).provider ??
-      resolveDefaultModelForAgent({
-        cfg: dispatch.runtimeCfg,
-        agentId: dispatch.route.agentId,
-      }).provider;
+    const modelContext = resolveTelegramCommandMenuModelContext({
+      cfg: dispatch.runtimeCfg,
+      agentId: dispatch.route.agentId,
+      sessionKey: dispatch.targetSessionKey,
+    });
+    const defaultModel = resolveDefaultModelForAgent({
+      cfg: dispatch.runtimeCfg,
+      agentId: dispatch.route.agentId,
+    });
     const clearButtons = await executeTelegramLoginCommand({
       dispatch,
       commandText: prompt,
-      currentProvider,
+      currentProvider: modelContext.provider ?? defaultModel.provider,
+      currentModelId: modelContext.model ?? defaultModel.model,
+      runtimeId: modelContext.agentRuntime,
     });
     return clearButtons ? "handled-clear-buttons" : "handled";
   }

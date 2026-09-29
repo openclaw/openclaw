@@ -29,6 +29,7 @@ import {
   renderCliTimeoutReplyCopy,
   renderFailoverCodeUserCopy,
   renderHeartbeatRunFailureCopy,
+  renderHostManagedAuthFailureCopy,
   renderMissingApiKeyReplyCopy,
   renderRateLimitOrOverloadedCopy,
   renderRateLimitReplyCopy,
@@ -275,11 +276,18 @@ export function buildExternalRunFailureReply(
     options?.failoverFacts ??
     resolveReplyFailoverFacts(error ?? normalizedMessage, normalizedMessage);
   const failoverCodeCopy = renderFailoverCodeUserCopy(failoverFacts.code);
+  const oauthRefreshFailure =
+    classifyOAuthRefreshFailureError(error) ?? classifyOAuthRefreshFailure(normalizedMessage);
+  const hostAuthFailureCopy = renderHostManagedAuthFailureCopy({
+    ...failoverFacts,
+    authFailure: Boolean(oauthRefreshFailure),
+  });
+  if (hostAuthFailureCopy) {
+    return { text: hostAuthFailureCopy, isGenericRunnerFailure: false };
+  }
   if (failoverCodeCopy) {
     return { text: failoverCodeCopy, isGenericRunnerFailure: false };
   }
-  const oauthRefreshFailure =
-    classifyOAuthRefreshFailureError(error) ?? classifyOAuthRefreshFailure(normalizedMessage);
   const providerLoginRecovery = buildProviderLoginRecovery({
     provider: oauthRefreshFailure
       ? (oauthRefreshFailure.provider ?? undefined)

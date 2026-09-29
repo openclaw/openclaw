@@ -32,6 +32,7 @@ export async function runCodexIsolatedCompletion(
     authProfileStore: authorization.authProfileStore,
     agentDir: params.agentDir,
     homeScope,
+    authMode: pluginConfig.appServer?.authMode,
     config: params.config,
     subscriptionProfileRequiredError:
       "Prepared Codex subscription route requires a scoped native OAuth or token profile.",

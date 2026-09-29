@@ -57,6 +57,7 @@ export function resolveAgentHarnessPreparedAuthSupport(params: {
           : "none");
   return {
     source,
+    ...(plan.authOwnership ? { owner: plan.authOwnership } : {}),
     ...(plan.selectedAuthMode ? { mode: plan.selectedAuthMode } : {}),
     ...(plan.modelRoute ? { requirement: plan.modelRoute.authRequirement } : {}),
   };

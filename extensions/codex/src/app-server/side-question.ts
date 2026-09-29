@@ -211,6 +211,7 @@ export async function runCodexAppServerSideQuestion(
         authProfileStore: preparedRuntimeAuth.authProfileStore,
         agentDir: params.agentDir,
         homeScope: resolveCodexAppServerHomeScope({ appServer: pluginConfig.appServer }),
+        authMode: pluginConfig.appServer?.authMode,
         requirePreparedAuth: isCodexRemoteExecPlacementSandbox(params.sandbox),
         config: params.cfg,
         subscriptionProfileRequiredError:

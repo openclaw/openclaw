@@ -216,6 +216,7 @@ export async function maybeCompactCodexAppServerSession(
   const { appServer, usesSupervisionConnection } = connection;
   if (
     !usesSupervisionConnection &&
+    appServer.start.authMode !== "host" &&
     requestedAuthProfileId &&
     binding.authProfileId &&
     binding.authProfileId !== requestedAuthProfileId
@@ -233,6 +234,7 @@ export async function maybeCompactCodexAppServerSession(
   // would rewrite the CODEX_HOME auth that Codex CLI and Desktop share.
   const usesPreparedApiKey =
     appServer.start.homeScope !== "user" &&
+    appServer.start.authMode !== "host" &&
     runtimeAuthPlan?.modelRoute?.authRequirement === "api-key";
   const preparedApiKey = usesPreparedApiKey ? params.resolvedApiKey?.trim() : undefined;
   if (usesPreparedApiKey && !preparedApiKey) {

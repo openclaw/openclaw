@@ -76,6 +76,7 @@ export async function handleEmbeddedAssistantFailure(input: {
   fallbackConfigured: boolean;
   pluginHarnessOwnsTransport: boolean;
   authProfileId?: string;
+  authOwner?: "host";
   authProfileStore: AuthProfileStore;
   runtimeAuthRetry: boolean;
   maybeRefreshRuntimeAuthForAuthError: (errorText: string, retry: boolean) => Promise<boolean>;
@@ -449,6 +450,7 @@ export async function handleEmbeddedAssistantFailure(input: {
             providerOwner: input.providerOwner,
             model: input.activeErrorContext.model,
             authMode,
+            authOwner: input.authOwner,
           })
         : undefined) ||
       failedAssistant?.errorMessage?.trim() ||
@@ -488,6 +490,7 @@ export async function handleEmbeddedAssistantFailure(input: {
         model: input.activeErrorContext.model,
         profileId: input.authProfileId,
         authMode,
+        authOwner: input.authOwner,
         status,
         code: failedAssistant?.errorCode,
         rawError: failedAssistant?.errorMessage?.trim(),

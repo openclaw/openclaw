@@ -276,6 +276,14 @@ export async function resolveEmbeddedRunModelSetup(params: {
       (catalog?.entries.some(ownsSelectedNativeModel) === true ||
         catalog?.routeVariants.some(ownsSelectedNativeModel) === true));
   const modelConfigProvider = provider;
+  const authProfileId =
+    agentHarness.resolveAuthOwnership?.({
+      config: runParams.config,
+      agentId: runParams.agentId,
+      provider,
+    }) === "host"
+      ? undefined
+      : runParams.authProfileId;
   let resolvedModelProvider = provider;
   let modelResolution;
   if (nativeModelOwned) {
@@ -288,8 +296,8 @@ export async function resolveEmbeddedRunModelSetup(params: {
       provider,
       harnessRuntime: agentHarness.id,
       agentHarnessId: agentHarness.id,
-      authProfileProvider: runParams.authProfileId?.split(":", 1)[0],
-      authProfileId: runParams.authProfileId,
+      authProfileProvider: authProfileId?.split(":", 1)[0],
+      authProfileId,
       config: runParams.config,
       workspaceDir: params.workspaceDir,
     });
@@ -305,7 +313,7 @@ export async function resolveEmbeddedRunModelSetup(params: {
         : runParams.requestedRouteResolution,
       config: runParams.config,
       workspaceDir: params.workspaceDir,
-      authProfileId: runParams.authProfileId,
+      authProfileId,
       preparedModelRuntime: params.preparedModelRuntime,
       staticCatalogOwnsTransport: pluginHarnessOwnsTransport,
     });

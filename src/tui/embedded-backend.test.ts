@@ -1,6 +1,7 @@
 // Covers embedded backend behavior used by the TUI runtime.
 import fs from "node:fs/promises";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { FailoverError } from "../agents/failover/error.js";
 import { QuestionAnswerUnconfirmedError } from "../agents/harness/gateway-question-dispatch.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import { resolveThinkingDefault } from "../agents/model-thinking-default.js";
@@ -2520,6 +2521,86 @@ describe("EmbeddedTuiBackend", () => {
         state: "error",
         errorMessage: diagnostic,
       },
+    });
+  });
+
+  it.each(["lifecycle", "thrown"] as const)(
+    "carries host auth ownership from %s to chat errors",
+    async (source) => {
+      const diagnostic = "Authentication failed. Run /login to sign in again.";
+      const error = new FailoverError(diagnostic, { reason: "auth", authOwner: "host" });
+      const pending = deferred<EmbeddedAgentResult>();
+      agentCommandFromIngressMock.mockReturnValueOnce(pending.promise);
+      const backend = new EmbeddedTuiBackend();
+      const events = captureBackendEvents(backend);
+      backend.start();
+      await sendMainChat(backend, "handle the authentication failure", "host-auth-terminal");
+
+      if (source === "lifecycle") {
+        registeredListener?.({
+          runId: "host-auth-terminal",
+          stream: "lifecycle",
+          data: {
+            phase: "error",
+            error: diagnostic,
+            executionSettled: true,
+            errorObservation: { authOwner: "host", failoverReason: "auth" },
+          },
+        });
+      }
+      pending.reject(error);
+      await flushMicrotasks();
+
+      expect(events).toContainEqual({
+        event: "chat",
+        payload: expect.objectContaining({
+          runId: "host-auth-terminal",
+          state: "error",
+          errorMessage: diagnostic,
+          errorDetail: expect.objectContaining({ authOwner: "host", failoverReason: "auth" }),
+        }),
+      });
+      expect(error.message).toBe(diagnostic);
+    },
+  );
+
+  it("replaces an earlier auth refresh detail with the selected host timeout", async () => {
+    const pending = deferred<EmbeddedAgentResult>();
+    agentCommandFromIngressMock.mockReturnValueOnce(pending.promise);
+    const backend = new EmbeddedTuiBackend();
+    const events = captureBackendEvents(backend);
+    backend.start();
+    await sendMainChat(backend, "handle the request timeout", "host-timeout");
+    registeredListener?.({
+      runId: "host-timeout",
+      stream: "lifecycle",
+      data: {
+        phase: "finishing",
+        errorObservation: {
+          authOwner: "host",
+          failoverReason: "auth",
+          providerRuntimeFailureKind: "auth_refresh",
+        },
+      },
+    });
+
+    pending.reject(
+      new FailoverError("Request timed out.", { reason: "timeout", authOwner: "host" }),
+    );
+    await flushMicrotasks();
+
+    expect(events).toContainEqual({
+      event: "chat",
+      payload: expect.objectContaining({
+        runId: "host-timeout",
+        state: "error",
+        errorMessage: "Request timed out.",
+        errorDetail: expect.objectContaining({
+          authOwner: "host",
+          failoverReason: "timeout",
+          providerRuntimeFailureKind: undefined,
+        }),
+      }),
     });
   });
 

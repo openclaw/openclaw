@@ -6,6 +6,7 @@ import { isSilentReplyText } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveCodexAppServerPreparedAuthHandoff } from "./auth-bridge.js";
 import { resolveCodexBoundedTurnIsolation } from "./bounded-turn-isolation.js";
 import { runBoundedCodexAppServerTurn, type CodexBoundedTurnOptions } from "./bounded-turn.js";
+import { readCodexPluginConfig } from "./config.js";
 import { createAttributedCodexAssistantMessage } from "./event-projector-assistant-message.js";
 import { resolveCodexLocalRuntimeAttribution } from "./local-runtime-attribution.js";
 import { assertCodexPassiveTurnItems } from "./protocol-validators.js";
@@ -43,6 +44,7 @@ export async function runCodexSettledTurnFinalization(
   const { selection, data: historyItems } = finalizationContext;
   const hostAuthPlan = attempt.runtimePlan?.auth;
   const authRequirement = hostAuthPlan?.modelRoute?.authRequirement;
+  const pluginConfig = readCodexPluginConfig(options.pluginConfig);
   // Capture fixes binding/ordered-profile selection. Ordinary user-home sessions
   // intentionally authorize private side turns through the host plan instead.
   const authProfileId =
@@ -54,6 +56,7 @@ export async function runCodexSettledTurnFinalization(
     authProfileStore: attempt.authProfileStore,
     agentDir: attempt.agentDir,
     homeScope: "agent",
+    authMode: pluginConfig.appServer?.authMode,
     config: attempt.config,
     subscriptionProfileRequiredError:
       "Prepared Codex settled-turn finalization requires its selected OpenAI subscription profile.",

@@ -14,7 +14,6 @@ import { resolveSubscriptionAuthModeForProfiles } from "./auth-profiles/profile-
 import { hasAnyAuthProfileStoreSource } from "./auth-profiles/source-check.js";
 import {
   FailoverError,
-  buildProviderReauthCommand,
   coerceToFailoverError,
   describeFailoverError,
   hasProviderRequestSizeCeiling,
@@ -41,6 +40,7 @@ import {
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 import {
   appendFailedCandidateAttempt,
+  buildFallbackAuthSkipMessage,
   hasDifferentLiveSessionRuntimeSelection,
   isTranscriptNotContinuableError,
   type ModelFallbackAuthRuntime,
@@ -290,6 +290,7 @@ async function runWithModelFallbackInternal<T>(
       prepareAgentHarnessRuntime: params.prepareAgentHarnessRuntime,
       ...candidate,
     });
+    const candidateAuthOwner = candidateHarnessAuth.authOwner;
     const isPrimary = candidate.routeOrigin === "requested";
     const requestedModel =
       requestedCandidate !== undefined &&
@@ -315,6 +316,7 @@ async function runWithModelFallbackInternal<T>(
         reason,
         code: MODEL_FALLBACK_SKIPPED_CODE,
         authMode,
+        authOwner: candidateAuthOwner,
       });
     const recordFailure = async (error: unknown, next: ModelFallbackCandidate | undefined) => {
       await observeFailedCandidate({ attempts, ...candObs, error, nextCandidate: next });
@@ -324,7 +326,7 @@ async function runWithModelFallbackInternal<T>(
     let candidateAuthProfileIds: string[] | undefined;
     let quotaRequiresAuthPreparation = false;
     let userLockedAuthProfileEligible = false;
-    if (authRuntime && authStore) {
+    if (authRuntime && authStore && candidateHarnessAuth.authOwner !== "host") {
       userLockedAuthProfileEligible =
         userLockedAuthProfileId !== undefined &&
         authRuntime.resolveAuthProfileEligibility({
@@ -377,11 +379,7 @@ async function runWithModelFallbackInternal<T>(
             ...candidateRef,
             authScope: candidateAuthScope,
           }) ?? "auth";
-        const reauthCommand = buildProviderReauthCommand(candidate.provider);
-        const reauthHint = reauthCommand
-          ? `run \`${reauthCommand}\` to re-authenticate`
-          : "re-authenticate that provider";
-        const error = `Skipping ${candidate.provider}/${candidate.model}: recent ${skipReason} failure in this session (${reauthHint})`;
+        const error = buildFallbackAuthSkipMessage(candidateRef, skipReason, candidateAuthOwner);
         pushSkippedAttempt(error, skipReason as FailoverReason);
         await observeCandidateDecision("skip_candidate", {
           reason: skipReason as FailoverReason,
@@ -623,6 +621,7 @@ async function runWithModelFallbackInternal<T>(
       coerceToFailoverError(err, {
         ...candidateRef,
         ...runAttribution,
+        authOwner: candidateAuthOwner,
       }) ?? err;
 
     // Jump to later live selections; stale targets remain classified failures.

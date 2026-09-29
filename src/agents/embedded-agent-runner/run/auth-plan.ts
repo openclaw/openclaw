@@ -58,6 +58,13 @@ export async function prepareEmbeddedRunAuthPlan(params: {
   const usesOpenAIAuthRouting = params.provider === OPENAI_PROVIDER_ID;
   const initialHarness = params.getAgentHarness();
   const initialPluginHarnessOwnsTransport = initialHarness.id !== "openclaw";
+  const resolveAuthOwnership = (harness: AgentHarness) =>
+    harness.resolveAuthOwnership?.({
+      config: runParams.config,
+      agentId: runParams.agentId,
+      provider: params.provider,
+    });
+  const hostOwnedAuth = resolveAuthOwnership(initialHarness) === "host";
   const openClawNativeCodexResponsesNeedsAuthBootstrap =
     !initialPluginHarnessOwnsTransport &&
     usesOpenAIAuthRouting &&
@@ -110,13 +117,17 @@ export async function prepareEmbeddedRunAuthPlan(params: {
     : initialPluginHarnessOwnsTransport
       ? undefined
       : externalCliAuthScope.providerIds;
-  const attemptAuthProfileStore = externalCliProviderIds
-    ? ensureAuthProfileStore(params.agentDir, { ...authStoreOptions, externalCliProviderIds })
-    : (noExternalAuthStore ??
-      ensureAuthProfileStoreWithoutExternalProfiles(params.agentDir, authStoreOptions));
+  const attemptAuthProfileStore: AuthProfileStore = hostOwnedAuth
+    ? { version: 1, profiles: {} }
+    : externalCliProviderIds
+      ? ensureAuthProfileStore(params.agentDir, { ...authStoreOptions, externalCliProviderIds })
+      : (noExternalAuthStore ??
+        ensureAuthProfileStoreWithoutExternalProfiles(params.agentDir, authStoreOptions));
   params.markStage?.("store");
 
-  const requestedProfileId = runParams.authProfileId?.trim() || undefined;
+  const requestedProfileId = hostOwnedAuth
+    ? undefined
+    : runParams.authProfileId?.trim() || undefined;
   const lockedProfileId = runParams.authProfileIdSource === "user" ? requestedProfileId : undefined;
   const preferredProfileId =
     externalCliAuthScope.ignoreAutoPreferredProfile && !lockedProfileId
@@ -157,6 +168,7 @@ export async function prepareEmbeddedRunAuthPlan(params: {
       harnessId: harness.id,
       harnessRuntime: harness.id,
       harnessAuthBootstrap: harness.authBootstrap,
+      authOwnership: resolveAuthOwnership(harness),
       allowHarnessAuthProfileForwarding: true,
       allowTransientCooldownProbe: runParams.allowTransientCooldownProbe === true,
       resolveProviderPreferredProfileId: (context) =>
@@ -190,7 +202,7 @@ export async function prepareEmbeddedRunAuthPlan(params: {
       metadataSnapshot: params.preparedModelRuntime?.metadataSnapshot,
       getModel: params.getRuntimeModel,
       nativeModelOwned: params.nativeModelOwned,
-      requestedProfileId: runParams.authProfileId,
+      requestedProfileId,
       providerUsesProfileScopedModelMetadata,
       providerOwnsDynamicModelRefresh,
       generationRouteModelMemo: params.preparedModelRuntime?.routeModelResolutionMemo,

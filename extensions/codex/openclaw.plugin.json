@@ -360,6 +360,10 @@
             "type": "string",
             "enum": ["agent", "user"]
           },
+          "authMode": {
+            "type": "string",
+            "enum": ["host"]
+          },
           "command": { "type": "string" },
           "args": {
             "oneOf": [
@@ -673,6 +677,11 @@
     "appServer.homeScope": {
       "label": "Codex Home Scope",
       "help": "Use agent for isolated Codex state, or user to share native Codex threads, config, and authentication with Codex Desktop and the CLI.",
+      "advanced": true
+    },
+    "appServer.authMode": {
+      "label": "Remote Authentication Ownership",
+      "help": "Set host only when the remote WebSocket app-server owns the intended model account. The host handles credentials and refresh; conversation and thread permissions stay unchanged.",
       "advanced": true
     },
     "appServer.command": {

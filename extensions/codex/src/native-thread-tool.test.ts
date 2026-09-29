@@ -95,6 +95,17 @@ describe("native Codex thread tool", () => {
       expect(createTool()).not.toBeNull();
       expect(createTool({ owner: false })).toBeNull();
       expect(createTool({ homeScope: "agent" })).toBeNull();
+      expect(
+        createTool({
+          getPluginConfig: () => ({
+            appServer: {
+              transport: "websocket",
+              url: "ws://127.0.0.1:39175",
+              authMode: "host",
+            },
+          }),
+        }),
+      ).toBeNull();
       expect(createTool({ omitHomeScope: true, supervision: true })).not.toBeNull();
     }));
 
@@ -170,29 +181,16 @@ describe("native Codex thread tool", () => {
 
   it("keeps supervised metadata reads available without leaking transcript fields", () =>
     withFixture(async () => {
-      const request = vi.fn(async (_config, method: string) =>
-        method === CODEX_CONTROL_METHODS.listThreads
-          ? {
-              data: [
-                {
-                  id: "thread-1",
-                  name: "Safe title",
-                  preview: "private preview",
-                  status: { type: "idle" },
-                  turns: [{ id: "turn-1", items: [] }],
-                },
-              ],
-            }
-          : {
-              thread: {
-                id: "thread-1",
-                name: "Safe title",
-                preview: "private preview",
-                status: { type: "idle" },
-                turns: [{ id: "turn-1", items: [] }],
-              },
-            },
-      );
+      const request = vi.fn(async (_config, method: string) => {
+        const thread = {
+          id: "thread-1",
+          name: "Safe title",
+          preview: "private preview",
+          status: { type: "idle" },
+          turns: [{ id: "turn-1", items: [] }],
+        };
+        return method === CODEX_CONTROL_METHODS.listThreads ? { data: [thread] } : { thread };
+      });
       const tool = createTool({ omitHomeScope: true, supervision: true, request });
 
       const listed = await tool?.execute("call-safe-list", { action: "list" });

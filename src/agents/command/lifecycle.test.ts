@@ -5,6 +5,7 @@ import { attachErrorDiagnostic } from "../../infra/error-diagnostics.js";
 import { buildAgentRunTerminalOutcome } from "../agent-run-terminal-outcome.js";
 import { createCliTimeoutError } from "../cli-runner/no-output-timeout-policy.js";
 import { FailoverError } from "../failover-error.js";
+import { HOST_MANAGED_AUTH_ERROR_USER_TEXT } from "../failover/auth-error-copy.js";
 import { renderFailoverCodeUserCopy } from "../failover/user-copy.js";
 import { createAgentCommandLifecycle } from "./lifecycle.js";
 
@@ -32,6 +33,69 @@ function createLifecycle(runId: string) {
 }
 
 describe("createAgentCommandLifecycle", () => {
+  it("publishes host-owned authentication recovery with redacted ownership metadata", () => {
+    emitAgentEvent.mockClear();
+    const error = new FailoverError("Authentication failed. Run /login to sign in again.", {
+      reason: "auth_permanent",
+      authOwner: "host",
+    });
+    const lifecycle = createLifecycle("host-auth-failure");
+
+    lifecycle.emitBasicError(error, { errorObservation: { provider: "openai", httpStatus: 401 } });
+
+    expect(emitAgentEvent.mock.calls[0]?.[0]?.data).toMatchObject({
+      error: `⚠️ ${HOST_MANAGED_AUTH_ERROR_USER_TEXT}`,
+      errorObservation: {
+        provider: "openai",
+        httpStatus: 401,
+        authOwner: "host",
+        failoverReason: "auth_permanent",
+      },
+    });
+    expect(error.message).toBe("Authentication failed. Run /login to sign in again.");
+  });
+
+  it.each([false, true])(
+    "uses the selected gateway-owned failure after an earlier host-owned attempt (wrapped=%s)",
+    (wrapped) => {
+      emitAgentEvent.mockClear();
+      const lifecycle = createLifecycle("gateway-auth-failure");
+      const error = new FailoverError("Gateway credential is invalid.", { reason: "auth" });
+
+      lifecycle.emitBasicError(wrapped ? new Error(error.message, { cause: error }) : error, {
+        errorObservation: { authOwner: "host", failoverReason: "auth_permanent" },
+      });
+
+      expect(emitAgentEvent.mock.calls[0]?.[0]?.data).toMatchObject({
+        error: "Gateway credential is invalid.",
+        errorObservation: { authOwner: undefined, failoverReason: "auth" },
+      });
+    },
+  );
+
+  it("replaces an earlier auth refresh classification with the selected host timeout", () => {
+    emitAgentEvent.mockClear();
+    const lifecycle = createLifecycle("host-timeout");
+    const error = new FailoverError("Request timed out.", { reason: "timeout", authOwner: "host" });
+
+    lifecycle.emitBasicError(error, {
+      errorObservation: {
+        authOwner: "host",
+        failoverReason: "auth",
+        providerRuntimeFailureKind: "auth_refresh",
+      },
+    });
+
+    expect(emitAgentEvent.mock.calls[0]?.[0]?.data).toMatchObject({
+      error: "Request timed out.",
+      errorObservation: {
+        authOwner: "host",
+        failoverReason: "timeout",
+        providerRuntimeFailureKind: undefined,
+      },
+    });
+  });
+
   it("publishes an outer timeout that arrives after a yielded result", () => {
     emitAgentEvent.mockClear();
     const controller = new AbortController();

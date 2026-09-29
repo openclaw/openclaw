@@ -31,6 +31,33 @@ const providerLoginPresentation = (command: string) => ({
 const PROVIDER_LOGIN_PRESENTATION = providerLoginPresentation("/login openai");
 
 describe("executeAgentTurn: authentication failures", () => {
+  it.each(["message", "heartbeat", "control-ui"])(
+    "points %s host-auth failures to the host operator",
+    async (surface) => {
+      state.isInternalMessageChannelMock.mockReturnValue(surface === "control-ui");
+      state.runEmbeddedAgentMock.mockRejectedValueOnce(
+        new FailoverError("OAuth token refresh failed for openai: refresh_token_invalidated", {
+          reason: "auth_permanent",
+          provider: "openai",
+          model: "fixture-model",
+          status: 401,
+          authOwner: "host",
+        }),
+      );
+      const executeAgentTurn = await getExecuteAgentTurnForTest();
+      const params = createMinimalRunAgentTurnParams();
+      params.isHeartbeat = surface === "heartbeat";
+      const result = await executeAgentTurn(params);
+      expect(result.kind).toBe("final");
+      if (result.kind === "final") {
+        expect(result.payload).toMatchObject({
+          text: "⚠️ Authentication failed on the app-server host. The host manages credentials automatically. Retry in a moment; if the failure persists, ask the host operator to check authentication.",
+          isError: true,
+        });
+        expect(result.payload.presentation).toBeUndefined();
+      }
+    },
+  );
   it("surfaces gateway reauth guidance without a profile id", async () => {
     state.runEmbeddedAgentMock.mockRejectedValueOnce(
       new OAuthRefreshFailureError({ provider: "openai", message: "refresh_token_reused" }),

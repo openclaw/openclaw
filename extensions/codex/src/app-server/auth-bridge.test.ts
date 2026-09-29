@@ -101,6 +101,9 @@ it("keeps subscription-sharing OAuth in the host and hands native Codex only an 
     resolveCodexAppServerPreparedAuthHandoff({ ...params, homeScope: "user" }),
   ).rejects.toThrow("isolated home");
   await expect(
+    resolveCodexAppServerPreparedAuthHandoff({ ...params, authMode: "host" }),
+  ).resolves.toEqual({ nativeAuthProfile: true });
+  await expect(
     resolveCodexAppServerPreparedAuthHandoff({ ...params, requirePreparedAuth: true }),
   ).rejects.toThrow("managed local");
 });
@@ -1089,6 +1092,42 @@ describe("bridgeCodexAppServerStartOptions", () => {
       nativeAuthProfile: false,
       preparedAuth: { kind: "api-key", apiKey: "prepared-platform-key" },
     });
+  });
+
+  it.each(["api-key", "subscription"] as const)(
+    "keeps host-owned %s auth independent of the agent home and configured profile",
+    async (authRequirement) => {
+      await expect(
+        resolveCodexAppServerPreparedAuthHandoff({
+          authRequirement,
+          resolvedApiKey: "prepared-platform-key",
+          authProfileId: "openai:decoy",
+          authProfileStore: {
+            version: 1,
+            profiles: {
+              "openai:decoy": { type: "token", provider: "openai", token: "decoy-token" },
+            },
+          },
+          homeScope: "agent",
+          authMode: "host",
+          subscriptionProfileRequiredError: "profile required",
+          subscriptionProfileUnusableError: "profile unusable",
+        }),
+      ).resolves.toEqual({ nativeAuthProfile: true });
+    },
+  );
+
+  it("rejects host-owned auth when cloud placement requires prepared credentials", async () => {
+    await expect(
+      resolveCodexAppServerPreparedAuthHandoff({
+        authProfileStore: { version: 1, profiles: {} },
+        homeScope: "agent",
+        authMode: "host",
+        requirePreparedAuth: true,
+        subscriptionProfileRequiredError: "profile required",
+        subscriptionProfileUnusableError: "profile unusable",
+      }),
+    ).rejects.toThrow("Codex remote-exec cloud placement requires prepared OpenAI auth");
   });
 
   it("materializes one prepared subscription profile snapshot", async () => {
@@ -2943,6 +2982,93 @@ describe("bridgeCodexAppServerStartOptions", () => {
     ).rejects.toBe(transientError);
     expect(request).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { account: { type: "chatgpt", email: null, planType: "plus" }, accepted: true },
+    { account: { type: "apiKey" }, accepted: false },
+    { account: null, accepted: false },
+  ])(
+    "verifies host subscription auth without replacing its account: $account",
+    async ({ account, accepted }) => {
+      const request = vi.fn(async (method: string) => {
+        if (method === "account/login/start") {
+          throw new Error(
+            "Configured external authentication is owned by the app-server host and cannot be changed through account RPCs.",
+          );
+        }
+        return { account, requiresOpenaiAuth: true };
+      });
+      const handoff = await resolveCodexAppServerPreparedAuthHandoff({
+        authRequirement: "subscription",
+        authProfileId: "openai:decoy",
+        authProfileStore: {
+          version: 1,
+          profiles: {
+            "openai:decoy": {
+              type: "token",
+              provider: "openai",
+              token: chatgptAccessToken("decoy"),
+            },
+          },
+        },
+        homeScope: "agent",
+        authMode: "host",
+        subscriptionProfileRequiredError: "profile required",
+        subscriptionProfileUnusableError: "profile unusable",
+      });
+      const application = applyCodexAppServerAuthProfile({
+        client: { request } as never,
+        agentDir: "/tmp/openclaw-agent",
+        authProfileId: handoff.nativeAuthProfile ? null : handoff.authProfileId,
+        preparedAuth: handoff.preparedAuth,
+        authRequirement: "subscription",
+      });
+
+      if (accepted) {
+        await expect(application).resolves.toBeUndefined();
+      } else {
+        await expect(application).rejects.toMatchObject({ status: 401 });
+      }
+      expect(request).toHaveBeenCalledExactlyOnceWith(
+        "account/read",
+        { refreshToken: false },
+        { assertCurrent: undefined },
+      );
+    },
+  );
+
+  it.each([
+    {
+      authRequirement: "subscription",
+      account: { type: "apiKey" },
+      message:
+        "Codex subscription route requires ChatGPT authentication, but the app-server host is not using a ChatGPT account. The host manages credentials automatically. Ask the host operator to check the account and route configuration.",
+    },
+    {
+      authRequirement: "api-key",
+      account: { type: "chatgpt", email: null, planType: "plus" },
+      message:
+        "Codex Platform route requires an API-key account, but the app-server host is using a ChatGPT subscription. The host manages credentials automatically. Ask the host operator to check the account and route configuration.",
+    },
+  ] as const)(
+    "directs host-owned $authRequirement route failures to the host operator",
+    async ({ authRequirement, account, message }) => {
+      const request = vi.fn(async () => ({ account, requiresOpenaiAuth: true }));
+      await expect(
+        applyCodexAppServerAuthProfile({
+          client: { request } as never,
+          authProfileId: null,
+          authRequirement,
+          startOptions: { authMode: "host" },
+        }),
+      ).rejects.toMatchObject({ status: 401, message });
+      expect(request).toHaveBeenCalledExactlyOnceWith(
+        "account/read",
+        { refreshToken: false },
+        { assertCurrent: undefined },
+      );
+    },
+  );
 
   it("accepts native ChatGPT auth for subscription routes", async () => {
     const request = vi.fn(async () => ({

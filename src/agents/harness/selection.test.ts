@@ -3052,6 +3052,17 @@ describe("selectAgentHarness", () => {
       }),
     ).toEqual({ source: "harness" });
     expect(
+      resolveAgentHarnessPreparedAuthSupport({
+        plan: {
+          providerForAuth: "openai",
+          authProfileProviderForAuth: "openai",
+          harnessAuthProvider: "openai",
+          authOwnership: "host",
+          deferredRouteSupport,
+        },
+      }),
+    ).toEqual({ source: "harness", owner: "host" });
+    expect(
       resolveAgentHarnessPreparedRouteSupport({
         providerForAuth: "openai",
         authProfileProviderForAuth: "openai",

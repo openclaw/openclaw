@@ -27,6 +27,7 @@ export type FallbackAttemptRecord = {
   reason: FailoverReason;
   status?: number;
   error?: string;
+  authOwner?: "host";
 };
 
 /** Structured error used to carry model fallback/failover metadata across layers. */
@@ -36,6 +37,8 @@ export class FailoverError extends Error {
   readonly model?: string;
   readonly profileId?: string;
   readonly authMode?: string;
+  /** Credential ownership is independent of the API-key/OAuth mechanism. */
+  readonly authOwner?: "host";
   readonly status?: number;
   readonly code?: string;
   readonly rawError?: string;
@@ -63,6 +66,7 @@ export class FailoverError extends Error {
     this.model = params.model;
     this.profileId = params.profileId;
     this.authMode = params.authMode;
+    this.authOwner = params.authOwner;
     this.status = params.status;
     this.code = params.code;
     this.rawError = params.rawError;

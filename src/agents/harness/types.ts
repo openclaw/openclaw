@@ -26,6 +26,7 @@ export type AgentHarnessSessionRuntimeOwnership = {
 
 export type AgentHarnessPreparedAuthSupport = {
   source: "profile" | "direct" | "harness" | "none";
+  owner?: "host";
   mode?: string;
   requirement?: ProviderModelRouteAuthRequirement;
 };
@@ -487,6 +488,12 @@ type AgentHarnessContract<
   }): AgentHarnessSessionRuntimeOwnership | undefined;
   /** Lets this harness resolve forwarded profiles or its own native credentials. */
   authBootstrap?: "harness";
+  /** Reads configured credential ownership without loading credentials or connecting to the host. */
+  resolveAuthOwnership?(params: {
+    config?: OpenClawConfig;
+    agentId?: string;
+    provider: string;
+  }): "host" | undefined;
   runAttempt(params: TAttemptParams): Promise<AgentHarnessAttemptResult>;
   /**
    * Produces one final answer from a settled tool transcript without exposing

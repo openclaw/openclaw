@@ -292,6 +292,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
   const appServerHomeScope = resolveCodexAppServerHomeScope({
     appServer: pluginConfig.appServer,
   });
+  const usesHostAuth = pluginConfig.appServer?.authMode === "host";
   const preparedAuthRoute = usesSupervisionConnection
     ? undefined
     : params.runtimePlan?.auth.modelRoute;
@@ -302,21 +303,22 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       : (params.runtimePlan?.auth.forwardedAuthProfileId ??
         params.authProfileId ??
         startupBinding?.authProfileId);
-  const resolvedStartupAuthProfileId = usesSupervisionConnection
-    ? undefined
-    : preparedAuthRoute
-      ? startupAuthProfileCandidate
-      : params.authProfileStore
-        ? resolveCodexAppServerAuthProfileId({
-            authProfileId: startupAuthProfileCandidate,
-            store: params.authProfileStore,
-            config: params.config,
-          })
-        : resolveCodexAppServerAuthProfileIdForAgent({
-            authProfileId: startupAuthProfileCandidate,
-            agentDir,
-            config: params.config,
-          });
+  const resolvedStartupAuthProfileId =
+    usesSupervisionConnection || usesHostAuth
+      ? undefined
+      : preparedAuthRoute
+        ? startupAuthProfileCandidate
+        : params.authProfileStore
+          ? resolveCodexAppServerAuthProfileId({
+              authProfileId: startupAuthProfileCandidate,
+              store: params.authProfileStore,
+              config: params.config,
+            })
+          : resolveCodexAppServerAuthProfileIdForAgent({
+              authProfileId: startupAuthProfileCandidate,
+              agentDir,
+              config: params.config,
+            });
   const authHandoff = usesSupervisionConnection
     ? { authProfileId: undefined, nativeAuthProfile: true, preparedAuth: undefined }
     : await resolveCodexAppServerPreparedAuthHandoff({
@@ -326,6 +328,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
         authProfileStore: params.authProfileStore,
         agentDir,
         homeScope: appServerHomeScope,
+        authMode: pluginConfig.appServer?.authMode,
         requirePreparedAuth: isCodexRemoteExecPlacementSandbox(sandbox),
         config: params.config,
         subscriptionProfileRequiredError:
@@ -339,6 +342,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
   } = authHandoff;
   const startupClientAuthProfileId =
     usesSupervisionConnection ||
+    usesHostAuth ||
     appServerHomeScope === "user" ||
     startupPreparedAuth?.kind === "api-key"
       ? null

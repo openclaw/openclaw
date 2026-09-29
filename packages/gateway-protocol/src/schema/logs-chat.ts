@@ -430,6 +430,7 @@ const ChatErrorDetailTextSchema = Type.Optional(
   Type.String({ maxLength: CHAT_ERROR_DETAIL_MAX_CHARS }),
 );
 const ChatErrorDetailSchema = closedObject({
+  authOwner: Type.Optional(Type.Literal("host")),
   provider: ChatErrorDetailTextSchema,
   model: ChatErrorDetailTextSchema,
   failoverReason: ChatErrorDetailTextSchema,
@@ -439,7 +440,7 @@ const ChatErrorDetailSchema = closedObject({
   providerErrorMessagePreview: ChatErrorDetailTextSchema,
 });
 
-type ChatErrorDetail = Static<typeof ChatErrorDetailSchema>;
+export type ChatErrorDetail = Static<typeof ChatErrorDetailSchema>;
 
 /** Bounds already-redacted provider facts before lifecycle and chat publication. */
 export function projectChatErrorDetail(observation: unknown): ChatErrorDetail | undefined {
@@ -455,6 +456,7 @@ export function projectChatErrorDetail(observation: unknown): ChatErrorDetail | 
   // Only the observation owner's redacted facts cross this boundary; raw previews,
   // bodies, and correlation hashes remain outside the closed chat contract.
   const detail: ChatErrorDetail = {
+    authOwner: source.authOwner === "host" ? "host" : undefined,
     provider: readText(source.provider),
     model: readText(source.model),
     failoverReason: readText(source.failoverReason),

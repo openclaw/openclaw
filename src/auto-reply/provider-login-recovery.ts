@@ -6,6 +6,7 @@ import type { FailoverReason } from "../agents/failover/signal.js";
 import type { ModelAuthRefreshOutcome } from "../commands/models/auth-refresh.js";
 import type { MessagePresentation } from "../interactive/payload.js";
 import type { ProviderChannelLoginChoice } from "../plugins/provider-login-options.js";
+import { HostManagedProviderAuthError } from "../shared/host-managed-auth-error.js";
 import {
   ProviderAuthConfigApplyError,
   ProviderCredentialsSavedError,
@@ -34,6 +35,9 @@ export function formatProviderLoginFailure(
   choice: ProviderChannelLoginChoice,
   error: unknown,
 ): string {
+  if (error instanceof HostManagedProviderAuthError) {
+    return error.message;
+  }
   if (error instanceof ProviderAuthConfigApplyError) {
     return `${choice.providerLabel} credentials are saved, but the connection settings could not be applied. Open Models to review the connection settings and try again.`;
   }
