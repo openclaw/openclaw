@@ -82,37 +82,25 @@ export function renderConfiguredUtilityModel(props: {
   </section>`;
 }
 
-function failureLabel(status: string): string {
-  const labels: Record<string, string> = {
-    auth: t("modelSetup.failure.auth"),
-    rate_limit: t("modelSetup.failure.rateLimit"),
-    billing: t("modelSetup.failure.billing"),
-    timeout: t("modelSetup.failure.timeout"),
-    format: t("modelSetup.failure.format"),
-    unavailable: t("modelSetup.failure.unavailable"),
-    unknown: t("modelSetup.failure.unknown"),
-  };
-  return labels[status] ?? labels.unknown!;
-}
-
-function failureGuidance(status: string): string | typeof nothing {
-  const guidance: Record<string, string | typeof nothing> = {
-    auth: t("modelSetup.failureGuidance.auth"),
-    rate_limit: t("modelSetup.failureGuidance.rateLimit"),
-    billing: t("modelSetup.failureGuidance.billing"),
-    timeout: t("modelSetup.failureGuidance.timeout"),
-    format: t("modelSetup.failureGuidance.format"),
-    unavailable: nothing,
-    unknown: t("modelSetup.failureGuidance.unknown"),
-  };
-  return guidance[status] ?? guidance.unknown!;
-}
+const FAILURE_KEYS: Record<string, string> = {
+  auth: "auth",
+  rate_limit: "rateLimit",
+  billing: "billing",
+  timeout: "timeout",
+  format: "format",
+  unavailable: "unavailable",
+  unknown: "unknown",
+};
 
 function renderModelSetupFailure(status: string, error: string): TemplateResult {
+  const key = FAILURE_KEYS[status] ?? "unknown";
   return html`
     <div class="model-setup__failure" role="alert">
       <span class="model-setup__failure-icon" aria-hidden="true">${icons.alertTriangle}</span>
-      <span><strong>${failureLabel(status)}.</strong> ${error} ${failureGuidance(status)}</span>
+      <span
+        ><strong>${t(`modelSetup.failure.${key}`)}.</strong> ${error}
+        ${key === "unavailable" ? nothing : t(`modelSetup.failureGuidance.${key}`)}</span
+      >
     </div>
   `;
 }

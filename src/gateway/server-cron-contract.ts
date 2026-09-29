@@ -1,6 +1,6 @@
 // Gateway cron contracts stay separate from the runtime so shared request
 // types do not pull scheduler implementation dependencies into their graph.
-import type { CronJobScratchState, CronJobScratchWriteResult } from "../cron/scratch-store.js";
+import type { CronJobScratchState, CronJobScratchWriteResult } from "../cron/scratch-contract.js";
 import type { CronServiceContract } from "../cron/service-contract.js";
 
 export type GatewayCronServiceContract = CronServiceContract & {

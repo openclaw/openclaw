@@ -53,6 +53,8 @@ export type ReplyBackendQueueMessageOptions = {
   abortSignal?: AbortSignal;
   /** Releases arrival ordering once the runtime has actually accepted this queue item. */
   onQueueAccepted?: (accepted: boolean) => void;
+  /** Releases per-input custody after commit, cancellation, or terminal rejection. */
+  onQueueSettled?: () => void;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   /** Prepared channel turn to merge only at transcript persistence. */
@@ -127,13 +129,19 @@ export type ReplyTurnParticipant = Readonly<{
   profileId: string;
   senderId: string;
   name: string;
+  /** Host-issued source; independent children acquire their own custody before turn close. */
+  operatorAuthority: AdmittedRunOperatorAuthority;
   gatewayUiCommandTarget?: GatewayUiCommandTarget;
   assertCurrent: () => void;
 }>;
 
 export type ReplyTurnParticipants = {
   accept(participant: ReplyTurnParticipantInput): void;
-  resolve(this: void, user?: string): ReplyTurnParticipant | undefined;
+  resolve(
+    this: void,
+    user?: string,
+    options?: { allowTurnOwner?: () => boolean },
+  ): ReplyTurnParticipant | undefined;
   close(): void;
 };
 
@@ -351,8 +359,6 @@ export type ReplyOperation = {
   readonly staleExpiryReason?: ReplyOperationStaleReason;
   readonly startedAtMs: number;
   readonly lastActivityAtMs: number;
-  /** True when this operation has owned the supplied session ID. */
-  hasOwnedSessionId(sessionId: string): boolean;
   /** Capture lineage before a pending barrier outlives this operation's lane. */
   captureOwnedSessionIds(): Set<string>;
   recordActivity(): void;
@@ -404,11 +410,6 @@ export type ReplyOperation = {
   /** Settles after the lifecycle owner's final delivery/persistence barrier. */
   readonly ownerSettlement?: Promise<void>;
   complete(): void;
-  /**
-   * Complete the operation, clear active-run state, then run follow-up work.
-   * Use when the follow-up can create another ReplyOperation for this session.
-   */
-  completeThen(afterClear: () => void): void;
   /**
    * Clear active-run state immediately, but delay registered after-clear work
    * until delivery or another external barrier settles.

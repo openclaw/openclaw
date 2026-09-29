@@ -25,7 +25,12 @@ import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { OpenClawConfig } from "../../runtime-api.js";
 import { createLoggerBackedRuntime } from "../../runtime-api.js";
 import { getTlonRuntime } from "../runtime.js";
-import { createSettingsManager, putTlonSetting, type TlonSettingsStore } from "../settings.js";
+import {
+  createSettingsManager,
+  putTlonSetting,
+  type PendingApproval,
+  type TlonSettingsStore,
+} from "../settings.js";
 import { normalizeShip, parseChannelNest } from "../targets.js";
 import { resolveTlonAccount } from "../types.js";
 import { authenticate } from "../urbit/auth.js";
@@ -34,12 +39,7 @@ import type { DmInvite, Foreigns } from "../urbit/foreigns.js";
 import { sendDm, sendGroupMessage } from "../urbit/send.js";
 import { UrbitSSEClient } from "../urbit/sse-client.js";
 import { createTlonApprovalRuntime } from "./approval-runtime.js";
-import {
-  createPendingApproval,
-  isAdminCommand,
-  isApprovalResponse,
-  type PendingApproval,
-} from "./approval.js";
+import { createPendingApproval } from "./approval.js";
 import { resolveChannelAuthorization } from "./authorization.js";
 import { createTlonCitationResolver } from "./cites.js";
 import { fetchAllChannels, fetchInitData } from "./discovery.js";
@@ -276,11 +276,6 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
     return normalizeShip(ship) === effectiveOwnerShip;
   }
 
-  /**
-   * Extract the DM partner ship from the 'whom' field.
-   * This is the canonical source for DM routing (more reliable than essay.author).
-   * Returns empty string if whom doesn't contain a valid patp-like value.
-   */
   const processMessage = async (params: {
     messageId: string;
     senderShip: string;
@@ -751,10 +746,6 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       const replySet = asRecord(replyPayload?.set);
       const essay = asRecord(set?.essay);
       const memo = asRecord(replySet?.memo);
-      if (!essay && !memo) {
-        return;
-      }
-
       const content = memo ?? essay;
       if (!content) {
         return;
@@ -932,8 +923,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
               requestingShip: ship,
               messagePreview: "(DM invite - no message yet)",
             });
-            await queueApprovalRequest(approval);
-            processedDmInvites.add(ship);
+            processedDmInvites.addIfAccepted(ship, await queueApprovalRequest(approval));
           }
         }
         return;
@@ -979,20 +969,14 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       }
 
       const messageText = rawText;
-      if (isOwner(senderShip) && isApprovalResponse(messageText)) {
-        const handled = await handleApprovalResponse(messageText);
-        if (handled) {
-          runtime.log?.(`[tlon] Processed approval response from owner: ${messageText}`);
-          return;
-        }
+      if (isOwner(senderShip) && (await handleApprovalResponse(messageText))) {
+        runtime.log?.(`[tlon] Processed approval response from owner: ${messageText}`);
+        return;
       }
 
-      if (isOwner(senderShip) && isAdminCommand(messageText)) {
-        const handled = await handleAdminCommand(messageText);
-        if (handled) {
-          runtime.log?.(`[tlon] Processed admin command from owner: ${messageText}`);
-          return;
-        }
+      if (isOwner(senderShip) && (await handleAdminCommand(messageText))) {
+        runtime.log?.(`[tlon] Processed admin command from owner: ${messageText}`);
+        return;
       }
 
       const ownerDm = isOwner(senderShip);
@@ -1225,7 +1209,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
     // Subscribe to foreigns for auto-accepting group invites
     // Always subscribe so we can hot-reload the setting via settings store
     {
-      const processedGroupInvites = new Set<string>();
+      const processedGroupInvites = createActiveSnapshotTracker();
 
       const processPendingInvites = async (foreigns: Foreigns, propagateWriteFailures = false) => {
         if (!foreigns || typeof foreigns !== "object") {
@@ -1287,8 +1271,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
               requestingShip: inviterShip,
               groupFlag,
             });
-            await queueApprovalRequest(approval);
-            processedGroupInvites.add(groupFlag);
+            processedGroupInvites.addIfAccepted(groupFlag, await queueApprovalRequest(approval));
             continue;
           }
 

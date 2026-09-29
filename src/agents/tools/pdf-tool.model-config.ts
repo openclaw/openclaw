@@ -22,6 +22,13 @@ export type PdfToolActiveModel = {
   supportsImages: boolean;
 };
 
+type PdfModelConfigContext = {
+  cfg?: OpenClawConfig;
+  agentDir: string;
+  workspaceDir?: string;
+  authStore?: AuthProfileStore;
+};
+
 function formatProviderModelRef(providerId: string, modelId: string): string {
   const slash = modelId.indexOf("/");
   if (slash > 0 && modelId.slice(0, slash).trim() === providerId) {
@@ -56,13 +63,9 @@ function resolveConfiguredTextModelFromConfig(params: {
   return modelId || undefined;
 }
 
-function resolveImageCandidateRefs(params: {
-  cfg?: OpenClawConfig;
-  agentDir: string;
-  workspaceDir?: string;
-  authStore?: AuthProfileStore;
-  filter?: (providerId: string) => boolean;
-}): string[] {
+function resolveImageCandidateRefs(
+  params: PdfModelConfigContext & { filter?: (providerId: string) => boolean },
+): string[] {
   // Candidate refs only include providers with usable auth so the tool avoids dead fallbacks.
   return resolveAutoMediaKeyProviders({
     capability: "image",
@@ -107,13 +110,9 @@ function resolveImageCandidateRefs(params: {
     .filter((value): value is string => Boolean(value));
 }
 
-function resolveTextExtractionCandidateRefs(params: {
-  cfg?: OpenClawConfig;
-  primary: { provider: string; model: string };
-  agentDir: string;
-  workspaceDir?: string;
-  authStore?: AuthProfileStore;
-}): string[] {
+function resolveTextExtractionCandidateRefs(
+  params: PdfModelConfigContext & { primary: { provider: string; model: string } },
+): string[] {
   const candidates: string[] = [];
   const addCandidate = (providerId: string, modelId: string) => {
     const provider = providerId.trim();
@@ -192,13 +191,9 @@ function resolveTextExtractionCandidateRefs(params: {
   return candidates;
 }
 
-export function resolvePdfModelConfigForTool(params: {
-  cfg?: OpenClawConfig;
-  agentDir: string;
-  workspaceDir?: string;
-  authStore?: AuthProfileStore;
-  activeModel?: PdfToolActiveModel;
-}): ImageModelConfig | null {
+export function resolvePdfModelConfigForTool(
+  params: PdfModelConfigContext & { activeModel?: PdfToolActiveModel },
+): ImageModelConfig | null {
   const explicitPdf = coercePdfModelConfig(params.cfg);
   if (explicitPdf.primary?.trim() || (explicitPdf.fallbacks?.length ?? 0) > 0) {
     // PDF-specific config wins over generic image model config.

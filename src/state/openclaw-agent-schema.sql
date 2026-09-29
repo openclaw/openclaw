@@ -1,6 +1,6 @@
--- Session storage doctrine: session_nodes.entry_json is the canonical logical-session
--- record. Promoted session_nodes columns are query indexes projected only by the
--- session entry writer; session_windows and their children own transcript generations.
+-- Session storage doctrine: session_nodes.entry_json owns hot logical-session facts;
+-- session_entry_snapshots owns keyed cold values. Promoted node columns are query
+-- indexes; session_windows and their children own transcript generations.
 -- Legacy ACP provenance is private import evidence carried with its logical session.
 
 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS session_nodes (
   session_key TEXT NOT NULL PRIMARY KEY,
   current_session_id TEXT NOT NULL,
   entry_json TEXT NOT NULL,
+  snapshot_revision INTEGER NOT NULL DEFAULT 0,
   legacy_acp_migration_json TEXT,
   entry_valid INTEGER NOT NULL DEFAULT 0 CHECK (entry_valid IN (-1, 0, 1)),
   updated_at INTEGER NOT NULL,
@@ -46,6 +47,37 @@ CREATE TABLE IF NOT EXISTS session_nodes (
   last_interaction_at INTEGER,
   last_activity_at INTEGER
 ) STRICT;
+
+CREATE TABLE IF NOT EXISTS session_entry_snapshots (
+  session_key TEXT NOT NULL,
+  field TEXT NOT NULL CHECK (field IN ('sessionDiffBaseline', 'skillsSnapshot', 'systemPromptReport')),
+  value_json TEXT NOT NULL,
+  PRIMARY KEY (session_key, field),
+  FOREIGN KEY (session_key) REFERENCES session_nodes(session_key) ON DELETE CASCADE
+) STRICT, WITHOUT ROWID;
+
+CREATE TRIGGER IF NOT EXISTS session_entry_snapshots_after_insert
+AFTER INSERT ON session_entry_snapshots
+BEGIN
+  UPDATE session_nodes SET snapshot_revision = snapshot_revision + 1
+  WHERE session_key = NEW.session_key;
+END;
+
+CREATE TRIGGER IF NOT EXISTS session_entry_snapshots_after_update
+AFTER UPDATE OF session_key, field, value_json ON session_entry_snapshots
+WHEN NEW.session_key IS NOT OLD.session_key
+  OR NEW.field IS NOT OLD.field OR NEW.value_json IS NOT OLD.value_json
+BEGIN
+  UPDATE session_nodes SET snapshot_revision = snapshot_revision + 1
+  WHERE session_key IN (OLD.session_key, NEW.session_key);
+END;
+
+CREATE TRIGGER IF NOT EXISTS session_entry_snapshots_after_delete
+AFTER DELETE ON session_entry_snapshots
+BEGIN
+  UPDATE session_nodes SET snapshot_revision = snapshot_revision + 1
+  WHERE session_key = OLD.session_key;
+END;
 
 CREATE INDEX IF NOT EXISTS idx_agent_session_nodes_updated_at
   ON session_nodes(updated_at DESC, session_key);

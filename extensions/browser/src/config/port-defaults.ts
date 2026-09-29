@@ -11,16 +11,9 @@ const DEFAULT_BROWSER_CDP_PORT_RANGE_SPAN =
 /** Default loopback port for the Browser control server. */
 export const DEFAULT_BROWSER_CONTROL_PORT = 18791;
 
-function isValidPort(port: number): boolean {
-  return Number.isFinite(port) && port > 0 && port <= 65535;
-}
-
-function clampPort(port: number, fallback: number): number {
-  return isValidPort(port) ? port : fallback;
-}
-
 function derivePort(base: number, offset: number, fallback: number): number {
-  return clampPort(base + offset, fallback);
+  const port = base + offset;
+  return Number.isFinite(port) && port > 0 && port <= 65535 ? port : fallback;
 }
 
 /** Derives the Browser control port from the gateway port. */

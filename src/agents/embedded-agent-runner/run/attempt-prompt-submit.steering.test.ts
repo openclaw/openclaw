@@ -302,6 +302,9 @@ it("keeps source validation until foreground delivery after pre-prompt compactio
     sessionManager,
     settingsManager: createAutoCompactionSettings(),
   });
+  // The default prompt embeds absolute checkout paths, so its size would decide
+  // whether this 4k window leaves compaction any headroom.
+  session.setBaseSystemPrompt("Use the child findings.");
   const requests: Array<{ messages: Context["messages"]; compacting: boolean }> = [];
   streamMocks.streamSimple.mockImplementation((activeModel: Model, context: Context) => {
     requests.push({

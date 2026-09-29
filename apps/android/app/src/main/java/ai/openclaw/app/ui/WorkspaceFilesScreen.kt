@@ -116,11 +116,6 @@ internal fun WorkspaceFilesScreen(
   }
 }
 
-internal fun isWorkspaceDirectoryRequestInFlight(
-  loading: Boolean,
-  loadingMore: Boolean,
-): Boolean = loading || loadingMore
-
 @Composable
 private fun WorkspaceDirectoryScreen(
   viewModel: MainViewModel,
@@ -137,7 +132,7 @@ private fun WorkspaceDirectoryScreen(
   var loadingMore by remember(path) { mutableStateOf(false) }
   var errorText by remember(path) { mutableStateOf<String?>(null) }
   var refreshNonce by remember(path) { mutableIntStateOf(0) }
-  val requestInFlight = isWorkspaceDirectoryRequestInFlight(loading, loadingMore)
+  val requestInFlight = loading || loadingMore
 
   LaunchedEffect(path, isConnected, refreshNonce) {
     if (!isConnected) {
@@ -198,7 +193,7 @@ private fun WorkspaceDirectoryScreen(
               icon = Icons.Outlined.Refresh,
               contentDescription = nativeString("Refresh"),
               onClick = {
-                if (!isWorkspaceDirectoryRequestInFlight(loading, loadingMore)) {
+                if (!(loading || loadingMore)) {
                   loading = true
                   refreshNonce += 1
                 }
@@ -238,7 +233,7 @@ private fun WorkspaceDirectoryScreen(
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(ClawTheme.radii.row))
                 .clickable(enabled = !requestInFlight) {
-                  if (isWorkspaceDirectoryRequestInFlight(loading, loadingMore)) return@clickable
+                  if (loading || loadingMore) return@clickable
                   loadingMore = true
                   scope.launch {
                     try {

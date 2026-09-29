@@ -247,9 +247,7 @@ catalogSuite.define(() => {
           await expect
             .poll(() => picker.locator('[role="option"][data-value="fixture/retiring"]').count())
             .toBe(1);
-          const identityName = editor.locator(
-            ".agent-identity-editor__fields input[maxlength='64']",
-          );
+          const identityName = editor.getByRole("textbox", { name: "Display name", exact: true });
           // Identity hydration can replace the selection between fill's browser and keyboard steps.
           await expect.poll(() => identityName.inputValue()).toBe("Assistant");
           await identityName.fill("Keep this identity draft");

@@ -3,10 +3,12 @@ import { isMainThread, threadId } from "node:worker_threads";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { tryResolveCronJobEffectiveAgentId } from "../agent-id.js";
+import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { resolveCronListSnapshotRevision } from "../list-snapshot-revision.js";
 import { assertCronJobStateTimestamps } from "../persisted-shape.js";
 import { readCronJobScratchState, writeCronJobScratch } from "../scratch-store.js";
-import { getCronJobsStoreRevision } from "../store.js";
+import { getCronJobsStoreRevision, noteCronJobsStoreCommit } from "../store.js";
+import { CronJobsStoreChangedError } from "../store/save-error.js";
 import { createCronStreamSourceIdentity } from "../stream-schedule.js";
 import type { CronJob } from "../types.js";
 import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
@@ -35,7 +37,11 @@ import {
 } from "./ops-shared.js";
 import { applyCronRuntimeRowsToState, commitCronRuntimeRows } from "./runtime-store.js";
 import type { CronServiceState, DeferredCronNotifications } from "./state.js";
-import { ensureLoaded, runPostPersistCronNotifications } from "./store.js";
+import {
+  captureCronJobMutationSource,
+  ensureLoaded,
+  runPostPersistCronNotifications,
+} from "./store.js";
 import { applyJobResult, armTimer } from "./timer.js";
 
 /** Returns cron service status after a read-only maintenance pass. */
@@ -109,18 +115,37 @@ export async function writeScratch(
     commitGuard?: () => void;
   },
 ) {
+  const source = captureCronJobMutationSource(state);
   return await locked(state, async () => {
+    source.assertCurrent();
     await ensureLoaded(state);
-    findJobOrThrow(state, id);
-    params.commitGuard?.();
-    return writeCronJobScratch({
-      storePath: state.deps.storePath,
-      jobId: id,
-      content: params.content,
-      expectedRevision: params.expectedRevision,
-      sourceSha256: params.sourceSha256,
-      nowMs: state.deps.nowMs(),
-    });
+    source.assertCurrent();
+    const expectedRevision = resolveCronJobConfigRevision(findJobOrThrow(state, id));
+    return await writeCronJobScratch(
+      {
+        storePath: state.deps.storePath,
+        jobId: id,
+        content: params.content,
+        expectedRevision: params.expectedRevision,
+        sourceSha256: params.sourceSha256,
+        nowMs: state.deps.nowMs(),
+      },
+      {
+        context: source.context,
+        assertCurrent() {
+          source.assertCurrent();
+          params.commitGuard?.();
+          source.assertCurrent();
+        },
+        assertJobCurrent(configRevision) {
+          if (configRevision !== expectedRevision) {
+            // The foreign commit invalidates the resident definition used by the caller guard.
+            noteCronJobsStoreCommit(source.storeKey);
+            throw new CronJobsStoreChangedError(source.storeKey);
+          }
+        },
+      },
+    );
   });
 }
 
@@ -298,41 +323,20 @@ function resolveEnabledFilter(opts?: CronListPageOptions): CronJobsEnabledFilter
 }
 
 function resolveScheduleKindFilter(opts?: CronListPageOptions): CronJobsScheduleKindFilter {
-  if (
-    opts?.scheduleKind === "all" ||
-    opts?.scheduleKind === "at" ||
-    opts?.scheduleKind === "every" ||
-    opts?.scheduleKind === "cron" ||
-    opts?.scheduleKind === "on-exit" ||
-    opts?.scheduleKind === "stream"
-  ) {
-    return opts.scheduleKind;
-  }
-  return "all";
+  const kind = opts?.scheduleKind;
+  return kind && ["all", "at", "every", "cron", "on-exit", "stream"].includes(kind) ? kind : "all";
 }
 
 function resolveLastRunStatusFilter(opts?: CronListPageOptions): CronJobsLastRunStatusFilter {
-  if (
-    opts?.lastRunStatus === "all" ||
-    opts?.lastRunStatus === "ok" ||
-    opts?.lastRunStatus === "error" ||
-    opts?.lastRunStatus === "skipped" ||
-    opts?.lastRunStatus === "unknown"
-  ) {
-    return opts.lastRunStatus;
-  }
-  return "all";
+  const lastRunStatus = opts?.lastRunStatus;
+  return lastRunStatus && ["all", "ok", "error", "skipped", "unknown"].includes(lastRunStatus)
+    ? lastRunStatus
+    : "all";
 }
 
 function resolveTriggerFilter(opts?: CronListPageOptions): CronJobsTriggerFilter {
-  if (
-    opts?.trigger === "all" ||
-    opts?.trigger === "conditional" ||
-    opts?.trigger === "unconditional"
-  ) {
-    return opts.trigger;
-  }
-  return "all";
+  const trigger = opts?.trigger;
+  return trigger && ["all", "conditional", "unconditional"].includes(trigger) ? trigger : "all";
 }
 
 const SLOW_LIST_PAGE_MS = 1_000;

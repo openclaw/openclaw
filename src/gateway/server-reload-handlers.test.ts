@@ -4,7 +4,6 @@
 import fs from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import chokidar from "chokidar";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { createInfoWarnErrorLogger } from "../../test/helpers/mock-logger.js";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -106,6 +105,7 @@ import {
   prepareConfigReloadTest,
   waitForReloadState,
 } from "./config-reload.test-support.js";
+import { installWatcherMock } from "./config-reload.watcher.test-support.js";
 import { applyHookMappings } from "./hooks-mapping.js";
 import { commitHooksConfigReload } from "./hooks.js";
 import { createChannelManager } from "./server-channels.js";
@@ -1203,6 +1203,8 @@ async function withManagedChannelSecretFixture(
   const { requestRecoveryRestart, restartEmitted } = createRecoveryRestartMock();
   let currentSource = initialSource;
   let revision = 0;
+  // Explicit writes own these snapshots; native startup must not invent a competing revision.
+  const watcher = installWatcherMock();
   const reloader = startManagedGatewayConfigReloader({
     initialConfig: initialSnapshot.config,
     initialCompareConfig: initialSource,
@@ -1296,6 +1298,7 @@ async function withManagedChannelSecretFixture(
     });
   } finally {
     await reloader.stop();
+    watcher.restore();
     rejectStop = false;
     await manager.stopChannel("mattermost");
   }
@@ -2403,7 +2406,8 @@ describe("gateway hot reload model state", () => {
           .map((job) => (job.schedule.kind === "every" ? job.schedule.everyMs : undefined));
       try {
         await expect(cronState.reconcileSystemJobs()).resolves.toBe("converged");
-        db.exec(`CREATE TEMP TRIGGER monitor_publication_failure BEFORE UPDATE ON cron_jobs
+        // Cron writes use a worker connection, which cannot see this connection's TEMP schema.
+        db.exec(`CREATE TRIGGER monitor_publication_failure BEFORE UPDATE ON cron_jobs
           WHEN json_extract(NEW.job_json, '$.agentId') = 'second'
             AND json_extract(NEW.job_json, '$.schedule.everyMs') = 7200000
           BEGIN SELECT RAISE(FAIL, 'monitor write failed'); END`);
@@ -4986,7 +4990,7 @@ describe("gateway Gmail hot reload handlers", () => {
     );
     let persistedSourceConfig = initialSourceConfig;
     let persistedHash = "initial-source";
-    const watch = vi.spyOn(chokidar, "watch");
+    const watcher = installWatcherMock();
     const initialPromoted = createDeferred();
     let supersededSource = createDeferred();
     const reloader = startManagedGatewayConfigReloader({
@@ -5041,10 +5045,7 @@ describe("gateway Gmail hot reload handlers", () => {
         persistedHash = notification.persistedHash;
         return publishConfigWrite(listener, notification);
       };
-      const watcher = watch.mock.results[0]?.value;
-      if (!watcher) {
-        throw new Error("Expected config watcher to be registered");
-      }
+      expect(watcher.adapter.start).toHaveBeenCalledOnce();
       watcher.emit("change", "/tmp/openclaw.json");
       await initialPromoted.promise;
       expect(activateRuntimeSecrets.prepareSnapshot).not.toHaveBeenCalled();
@@ -5231,7 +5232,7 @@ describe("gateway Gmail hot reload handlers", () => {
       await expect(supersededWrite).resolves.toBe("stopped");
     } finally {
       await reloader.stop();
-      watch.mockRestore();
+      watcher.restore();
     }
   });
 
@@ -5701,8 +5702,7 @@ describe("gateway Gmail hot reload handlers", () => {
 
   it("keeps unchanged config unsettled until metadata hot replacement completes", async () => {
     vi.useFakeTimers();
-    const watcher = new chokidar.FSWatcher();
-    const watch = vi.spyOn(chokidar, "watch").mockReturnValue(watcher);
+    const watcher = installWatcherMock();
     const config: OpenClawConfig = { gateway: { reload: {} } };
     const started = createDeferred();
     const release = createDeferred();
@@ -5750,7 +5750,7 @@ describe("gateway Gmail hot reload handlers", () => {
     } finally {
       release.resolve();
       await reloader.stop();
-      watch.mockRestore();
+      watcher.restore();
     }
   });
 
@@ -7134,7 +7134,7 @@ describe("deferred channel reload abort generation", () => {
       logReload.warn
         .mockImplementation(() => replayDeferralStarted.resolve())
         .mockImplementationOnce(() => deferralStarted.resolve());
-      const watch = vi.spyOn(chokidar, "watch");
+      const watcher = installWatcherMock();
       setActivePluginRegistry(registry);
       const reloader = startManagedGatewayConfigReloader({
         initialConfig,
@@ -7175,8 +7175,7 @@ describe("deferred channel reload abort generation", () => {
 
         // Revoke the write epoch while real hot reload is waiting on unrelated work.
         // Hold the disk reread so cancellation settles before exact-candidate replay.
-        const watcher = watch.mock.results[0]?.value;
-        expect(watcher).toBeDefined();
+        expect(watcher.adapter.start).toHaveBeenCalledOnce();
         observationPending = true;
         watcher.emit("change", "/tmp/openclaw.json");
         expect(reloader.getDeferredChannelReloads?.()).toEqual([]);
@@ -7246,7 +7245,7 @@ describe("deferred channel reload abort generation", () => {
         const stopping = reloader.stop();
         await vi.advanceTimersByTimeAsync(500);
         await stopping;
-        watch.mockRestore();
+        watcher.restore();
         resetPluginRuntimeStateForTest();
       }
     },
@@ -7280,8 +7279,7 @@ describe("deferred channel reload abort generation", () => {
           },
         ]),
       );
-      const watcher = new chokidar.FSWatcher();
-      const watch = vi.spyOn(chokidar, "watch").mockReturnValue(watcher);
+      const watcher = installWatcherMock();
       const writer = createDirectConfigWriteFixture(initialConfig);
       const writeListenerRef = writer.ref;
       const channels = { start: vi.fn(async () => new Map()), stop: vi.fn(async () => {}) };
@@ -7422,7 +7420,7 @@ describe("deferred channel reload abort generation", () => {
         await stopping;
         await request;
         await successorRequest;
-        watch.mockRestore();
+        watcher.restore();
       }
     },
   );

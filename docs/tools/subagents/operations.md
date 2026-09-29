@@ -153,9 +153,12 @@ cancellation, the Gateway refuses further cancellation and reports
 `active-leaf-changed`. Cancellation already accepted by a child still settles.
 
 Incomplete cancellation is reported as an error, not a clean success. `/stop`
-reports actual stopped and failed child counts. Inspect the remaining
-native subagent runs with `subagents` and retry their cancellation;
-request acknowledgment does not mean all runtime cleanup is instantaneous.
+reports actual stopped and failed child counts. A committed child cancellation
+remains in the stopped count if later cleanup fails or the parent is replaced.
+The cleanup error remains visible; a replacement run requires its own Stop
+request. Inspect the remaining native subagent runs with `subagents` and retry
+their cancellation; request acknowledgment does not mean all runtime cleanup is
+instantaneous.
 
 Accepted children remain independent after ordinary parent completion, yield, or
 timeout. Those events do not automatically cancel them.

@@ -1,5 +1,6 @@
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { resolveUsableAgentCredentialModes } from "./agent-auth-credentials.js";
+import { withPreparedAuthStorePathForDisplay } from "./auth-profiles/paths.js";
 import { mergeAuthProfileStores } from "./auth-profiles/persisted.js";
 import { removeRuntimeExternalProfileReferences } from "./auth-profiles/runtime-external-profile-references.js";
 import type { RuntimeAuthProfileStore } from "./auth-profiles/types.js";
@@ -111,7 +112,7 @@ export function replacePreparedModelCatalogAuth(
   };
 }
 
-export function prepareInitialModelCatalogAuth(
+export async function prepareInitialModelCatalogAuth(
   {
     agentFacts,
     catalogFacts,
@@ -121,27 +122,42 @@ export function prepareInitialModelCatalogAuth(
     "agentFacts" | "catalogFacts" | "pluginGeneration"
   >,
   eligibleProviders: readonly string[],
-): PreparedModelCatalogAuth {
+  assertCurrent: () => void,
+): Promise<PreparedModelCatalogAuth> {
+  assertCurrent();
+  const providers = [
+    ...eligibleProviders,
+    ...catalogFacts.modelCatalog.entries.map((entry) => entry.provider),
+    ...Object.values(agentFacts.authStore.profiles).map((profile) => profile.provider),
+  ];
+  const providerAuthLabels =
+    providers.length === 0
+      ? new Map()
+      : await withPreparedAuthStorePathForDisplay(
+          agentFacts.input.agentDir,
+          agentFacts.env,
+          assertCurrent,
+          (authStorePath) =>
+            withPluginRuntimeGenerationScope(
+              {
+                metadataSnapshot: pluginGeneration.pluginMetadataSnapshot,
+                pluginRegistry: pluginGeneration.pluginRegistry,
+              },
+              () =>
+                prepareModelCatalogAuthLabels({
+                  ...agentFacts.input,
+                  env: agentFacts.env,
+                  authStorePath,
+                  store: agentFacts.authStore,
+                  providers,
+                }),
+            ),
+        );
+  assertCurrent();
   return {
     authStore: agentFacts.authStore,
     credentials: agentFacts.credentials,
     authModes: resolveUsableAgentCredentialModes(agentFacts.credentials),
-    providerAuthLabels: withPluginRuntimeGenerationScope(
-      {
-        metadataSnapshot: pluginGeneration.pluginMetadataSnapshot,
-        pluginRegistry: pluginGeneration.pluginRegistry,
-      },
-      () =>
-        prepareModelCatalogAuthLabels({
-          ...agentFacts.input,
-          env: agentFacts.env,
-          store: agentFacts.authStore,
-          providers: [
-            ...eligibleProviders,
-            ...catalogFacts.modelCatalog.entries.map((entry) => entry.provider),
-            ...Object.values(agentFacts.authStore.profiles).map((profile) => profile.provider),
-          ],
-        }),
-    ),
+    providerAuthLabels,
   };
 }

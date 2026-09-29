@@ -23,8 +23,7 @@ import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
 import { sidebarPanelDefinitions } from "../chat-pane-embedded-panels.ts";
-import { readLinkFavicon } from "../link-favicon-cache.ts";
-import type { LinkFaviconFetcher } from "../link-favicon-loader.ts";
+import { readLinkFavicon, type LinkFaviconFetcher } from "../link-favicon-cache.ts";
 import {
   SIDEBAR_GEOMETRY_COMMIT_EVENT,
   SIDEBAR_MIN_HEIGHT_PX,

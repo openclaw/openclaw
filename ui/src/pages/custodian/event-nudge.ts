@@ -99,49 +99,30 @@ export function renderCustodianEventNudge(params: {
 }
 
 export function renderCustodianChannelOnboardingNudge(params: {
-  onOpenChannels: () => void;
-  onDismiss: () => void;
-}) {
-  return html`<div class="custodian__nudge custodian__nudge--channel-onboarding" role="status">
-    <div class="custodian__nudge-copy">
-      <strong>${t("custodian.nudge.channelSetupTitle")}</strong>
-      <span>${t("custodian.nudge.channelSetupBody")}</span>
-    </div>
-    <button
-      class="btn btn--sm primary custodian__nudge-cta"
-      type="button"
-      @click=${params.onOpenChannels}
-    >
-      ${t("custodian.nudge.channelSetupAction")}
-    </button>
-    <button
-      class="custodian__nudge-dismiss"
-      type="button"
-      aria-label=${t("custodian.nudge.channelSetupDismiss")}
-      @click=${params.onDismiss}
-    >
-      ${icons.x}
-    </button>
-  </div>`;
-}
-
-export function renderCustodianChannelOnboardingError(params: {
+  error: boolean;
   retrying: boolean;
-  onRetry: () => void;
+  onAction: () => void;
   onDismiss: () => void;
 }) {
-  return html`<div class="custodian__nudge custodian__nudge--channel-onboarding" role="alert">
+  return html`<div
+    class="custodian__nudge custodian__nudge--channel-onboarding"
+    role=${params.error ? "alert" : "status"}
+  >
     <div class="custodian__nudge-copy">
-      <strong>${t("custodian.nudge.channelStatusErrorTitle")}</strong>
-      <span>${t("custodian.nudge.channelStatusErrorBody")}</span>
+      <strong
+        >${t(params.error ? "custodian.nudge.channelStatusErrorTitle" : "custodian.nudge.channelSetupTitle")}</strong
+      >
+      <span
+        >${t(params.error ? "custodian.nudge.channelStatusErrorBody" : "custodian.nudge.channelSetupBody")}</span
+      >
     </div>
     <button
       class="btn btn--sm primary custodian__nudge-cta"
       type="button"
-      ?disabled=${params.retrying}
-      @click=${params.onRetry}
+      ?disabled=${params.error && params.retrying}
+      @click=${params.onAction}
     >
-      ${params.retrying ? t("common.loading") : t("common.retry")}
+      ${t(params.error ? (params.retrying ? "common.loading" : "common.retry") : "custodian.nudge.channelSetupAction")}
     </button>
     <button
       class="custodian__nudge-dismiss"

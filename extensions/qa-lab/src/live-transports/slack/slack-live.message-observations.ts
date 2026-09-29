@@ -16,8 +16,7 @@ import {
 import {
   listSlackMessages,
   listSlackThreadMessages,
-  collectSlackBlockText,
-  collectSlackActionValues,
+  recordSlackObservedMessage,
   isSutSlackMessage,
 } from "./slack-live.observations.js";
 
@@ -48,18 +47,12 @@ function recordSlackScenarioMessage(
   const observedKey = `${params.channelId}:${message.ts}`;
   if (!observedKeys?.has(observedKey)) {
     observedKeys?.add(observedKey);
-    params.observedMessages.push({
-      actionValues: collectSlackActionValues(message.blocks),
-      blockText: collectSlackBlockText(message.blocks),
-      botId: message.bot_id,
-      channelId: params.channelId,
+    recordSlackObservedMessage({
+      ...params,
       matchedScenario,
+      message,
       scenarioId: params.observationScenarioId,
       scenarioTitle: params.observationScenarioTitle,
-      text,
-      threadTs: message.thread_ts,
-      ts: message.ts,
-      userId: message.user,
     });
   }
   return matchedScenario ? message : undefined;

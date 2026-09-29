@@ -209,10 +209,7 @@ struct MacGatewayChatTransport: OpenClawChatGatewayTransport {
             }
         }
         let data = try await self.connection.request(
-            method: request.method,
-            params: request.params,
-            timeoutMs: request.timeoutMs,
-            ifCurrentServerLease: route)
+            request, ifCurrentServerLease: route)
         return try OpenClawChatGatewayPayloadCodec.decodeProgressCard(
             data,
             agentID: OpenClawChatSessionKey.agentID(from: target.sessionKey) ?? target.agentID)
@@ -310,10 +307,7 @@ struct MacGatewayChatTransport: OpenClawChatGatewayTransport {
         }
         let request = OpenClawChatGatewayRequests.modelsList(agentID: agentID, sessionKey: sessionKey)
         let data = try await self.connection.request(
-            method: request.method,
-            params: request.params,
-            timeoutMs: request.timeoutMs,
-            ifCurrentServerLease: lease)
+            request, ifCurrentServerLease: lease)
         return try OpenClawChatGatewayPayloadCodec.decodeModelCatalog(data)
     }
 
@@ -342,10 +336,7 @@ struct MacGatewayChatTransport: OpenClawChatGatewayTransport {
             fallbackAgentID: self.chatGatewayAgentID)
         let data: Data = if let serverLease {
             try await self.connection.request(
-                method: request.method,
-                params: request.params,
-                timeoutMs: request.timeoutMs,
-                ifCurrentServerLease: serverLease)
+                request, ifCurrentServerLease: serverLease)
         } else {
             try await self.connection.request(request)
         }
@@ -433,10 +424,7 @@ struct MacGatewayChatTransport: OpenClawChatGatewayTransport {
                 configuredAgentsOnly: true)
             let data: Data = if let serverLease {
                 try await self.connection.request(
-                    method: request.method,
-                    params: request.params,
-                    timeoutMs: request.timeoutMs,
-                    ifCurrentServerLease: serverLease)
+                    request, ifCurrentServerLease: serverLease)
             } else {
                 try await self.connection.request(request)
             }
@@ -503,10 +491,7 @@ struct MacGatewayChatTransport: OpenClawChatGatewayTransport {
             patch: patch)
         let data: Data = if let serverLease {
             try await self.connection.request(
-                method: request.method,
-                params: request.params,
-                timeoutMs: request.timeoutMs,
-                ifCurrentServerLease: serverLease)
+                request, ifCurrentServerLease: serverLease)
         } else {
             try await self.connection.request(request)
         }

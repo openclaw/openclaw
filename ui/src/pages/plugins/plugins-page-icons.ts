@@ -26,8 +26,8 @@ function renderedPluginIds(view: ParentNode): Set<string> {
 
 export class PluginsPageIcons {
   private authCandidates: string[] = [];
-  private readonly installed: PluginIconController;
-  private readonly catalog: PluginIconController;
+  readonly installed: PluginIconController;
+  readonly catalog: PluginIconController;
 
   constructor(host: PluginsPageIconsHost) {
     const shared = {
@@ -60,22 +60,6 @@ export class PluginsPageIcons {
     this.installed.sync(result, renderedPluginIds(view));
   }
 
-  reconcileInstalled(result: PluginListResult | null): void {
-    this.installed.reconcile(result);
-  }
-
-  invalidateInstalled(pluginId: string): void {
-    this.installed.invalidate(pluginId);
-  }
-
-  handleInstalledError(pluginId: string): void {
-    this.installed.handleError(pluginId);
-  }
-
-  readonly isInstalledLoading = (pluginId: string): boolean => this.installed.isLoading(pluginId);
-
-  readonly isCatalogLoading = (url: string): boolean => this.catalog.isLoading(url);
-
   syncCatalog(
     discovery: Pick<PluginDiscoveryController, "result" | "featured" | "trending">,
     view: ParentNode,
@@ -92,10 +76,6 @@ export class PluginsPageIcons {
       detail?.detail.author?.imageUrl ? [detail.detail.author.imageUrl] : [],
       rendered,
     );
-  }
-
-  resetInstalled(): void {
-    this.installed.reset();
   }
 
   reset(): void {

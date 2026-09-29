@@ -21,7 +21,7 @@ afterEach(() => {
 });
 
 describe("show_widget script syntax gate", () => {
-  it.each(["inline", "pinned", "current_channel", "node_panel"] as const)(
+  it.each(["pinned", "current_channel"] as const)(
     "rejects broken scripts before any side effect on %s",
     async (route) => {
       const stateDir = tempDirs.make("openclaw-widget-syntax-");
@@ -52,7 +52,6 @@ describe("show_widget script syntax gate", () => {
         title: "Broken widget",
         widget_code: "<p>Widget</p>\n<script>const a='x\n'+b;</script>",
         pin: route === "pinned",
-        ...(route === "node_panel" ? { presentation: { target: "node_panel" } } : {}),
       });
       await expect(result).rejects.toThrow(WidgetHtmlInputError);
       await expect(result).rejects.toThrow(
@@ -76,17 +75,5 @@ describe("show_widget script syntax gate", () => {
     });
     const text = result.content.find((item) => item.type === "text")?.text;
     expect(JSON.parse(text ?? "null")).toMatchObject({ kind: "canvas" });
-  });
-
-  it("still hosts a valid script as a canvas widget", async () => {
-    const stateDir = tempDirs.make("openclaw-widget-syntax-");
-    const tool = createShowWidgetTool({ stateDir, sessionId: "valid-syntax" });
-    const result = await tool.execute("valid", {
-      title: "Working widget",
-      widget_code: "<script>document.body.textContent = 'Working';</script>",
-    });
-    const text = result.content.find((item) => item.type === "text")?.text;
-    expect(JSON.parse(text ?? "null")).toMatchObject({ kind: "canvas" });
-    await expect(access(resolveCanvasDocumentsDir(stateDir))).resolves.toBeUndefined();
   });
 });

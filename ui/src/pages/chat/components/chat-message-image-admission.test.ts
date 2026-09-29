@@ -66,6 +66,43 @@ function draw(images: ImageBlock[], options: ImageRenderOptions = {}) {
   render(renderMessageImages(images, { onRequestUpdate, ...options }), container);
 }
 
+it("replaces failed remote images with an unavailable card while preserving local recovery", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => Response.json({ available: true })),
+  );
+  const remote = { url: "https://images.example.test/missing.png", alt: "Remote image" };
+  const local = { url: `/tmp/${crypto.randomUUID()}.png`, alt: "Local image" };
+  draw([remote, local]);
+  intersections[0]!();
+  intersections[1]!();
+  await vi.advanceTimersByTimeAsync(0);
+
+  const localImage = container.querySelector<HTMLImageElement>('img[alt="Local image"]')!;
+  expect(localImage).not.toBeNull();
+  localImage.dispatchEvent(new Event("error"));
+  expect(container.querySelector('img[alt="Local image"]')).toBe(localImage);
+  expect(container.querySelector(".chat-assistant-attachment-card")).toBeNull();
+
+  const remoteImage = container.querySelector<HTMLImageElement>('img[alt="Remote image"]')!;
+  expect(remoteImage.getAttribute("src")).toBe(remote.url);
+  remoteImage.dispatchEvent(new Event("error"));
+  expect(container.querySelector('img[alt="Remote image"]')).toBeNull();
+  const card = container.querySelector(
+    ".chat-image-frame--compact .chat-assistant-attachment-card",
+  );
+  expect(card?.textContent).toContain("Could not load this image. Try again.");
+  expect(container.querySelector('img[alt="Local image"]')).toBe(localImage);
+
+  const replacement = { ...remote, url: "https://images.example.test/replacement.png" };
+  draw([replacement, local]);
+  intersections.at(-1)!();
+  expect(container.querySelector(".chat-assistant-attachment-card")).toBeNull();
+  expect(container.querySelector('img[alt="Remote image"]')?.getAttribute("src")).toBe(
+    replacement.url,
+  );
+});
+
 it.each(["assistant", "managed", "omitted"] as const)(
   "defers offscreen %s image reads and shares acquisition after admission",
   async (kind) => {

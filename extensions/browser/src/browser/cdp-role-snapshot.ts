@@ -15,7 +15,11 @@ import {
   type CursorInteractiveInfo,
 } from "./cdp-role-snapshot-tree.js";
 import { withCdpSocket } from "./cdp.helpers.js";
-import { finalizeRoleSnapshot, type RoleSnapshotIdentityMode } from "./pw-role-snapshot.js";
+import {
+  finalizeRoleSnapshot,
+  type RoleSnapshotIdentityMode,
+  type RoleSnapshotResult,
+} from "./pw-role-snapshot.js";
 import { appendRoleSnapshotDepthTruncationMarker } from "./snapshot-depth-limit.js";
 import { CONTENT_ROLES, INTERACTIVE_ROLES } from "./snapshot-roles.js";
 import { appendSnapshotUrls, type SnapshotUrlEntry } from "./snapshot-urls.js";
@@ -232,13 +236,7 @@ export async function snapshotRoleViaCdpSession(
     send: CdpProtocolSend;
     rootBackendNodeId?: number;
   },
-): Promise<{
-  snapshot: string;
-  truncated?: boolean;
-  refs: Record<string, CdpRoleRef>;
-  stats: { lines: number; chars: number; refs: number; interactive: number };
-  newElements?: number;
-}> {
+): Promise<RoleSnapshotResult<CdpRoleRef>> {
   await prepareCdpPageSession(opts.send);
   const built = await buildCdpRoleSnapshot({
     send: opts.send,

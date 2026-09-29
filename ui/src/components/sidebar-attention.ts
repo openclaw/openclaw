@@ -82,11 +82,13 @@ class SidebarAttention extends OpenClawLightDomElement {
     // Dismissal belongs to the connected Inbox, including while its panel imports.
     document.addEventListener("pointerdown", this.handleOutsideInteraction, true);
     document.addEventListener("keydown", this.handleOutsideInteraction, true);
+    window.addEventListener("blur", this.handleWindowBlur);
   }
 
   override disconnectedCallback() {
     document.removeEventListener("pointerdown", this.handleOutsideInteraction, true);
     document.removeEventListener("keydown", this.handleOutsideInteraction, true);
+    window.removeEventListener("blur", this.handleWindowBlur);
     this.panelLoad.dispose();
     this.closePanel(false);
     this.subscriptions.clear();
@@ -116,6 +118,21 @@ class SidebarAttention extends OpenClawLightDomElement {
         event.preventDefault();
         event.stopPropagation();
       }
+      this.closePanel(false);
+    }
+  };
+
+  private readonly handleWindowBlur = () => {
+    // Pointer and keyboard events inside dashboard frames never reach our document.
+    // Follow shadow-root focus (MCP Apps) without reading the cross-origin document.
+    let active = document.activeElement;
+    if (this.contains(active)) {
+      return;
+    }
+    while (active?.shadowRoot?.activeElement) {
+      active = active.shadowRoot.activeElement;
+    }
+    if (active instanceof HTMLIFrameElement) {
       this.closePanel(false);
     }
   };
@@ -278,7 +295,7 @@ class SidebarAttention extends OpenClawLightDomElement {
     if (!this.context) {
       return nothing;
     }
-    const entries = [...(this.context.sidebarAttention.entries ?? [])];
+    const entries = this.context.sidebarAttention.entries;
     if (this.context.gateway.snapshot.phase !== "connected" && entries.length === 0) {
       return nothing;
     }

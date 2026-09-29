@@ -36,7 +36,9 @@ import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.
 import { resolveRuntimeServiceVersion } from "../version.js";
 import {
   createGeneratedMediaDeliveryEntry,
+  expectContinuationDispatchFields as assertContinuationDispatchFields,
   expectCapturedQueueContext,
+  expectRestartSentinelTranscriptBroadcast,
   expectRecordFields,
   mockCallArg,
   lastMockCallArg,
@@ -218,18 +220,13 @@ vi.mock(
   }),
 );
 
-vi.mock("../agents/agent-scope.js", async () => {
-  const actual = await vi.importActual<typeof import("../agents/agent-scope.js")>(
-    "../agents/agent-scope.js",
-  );
-  return {
-    ...actual,
-    resolveAgentConfig: mocks.resolveAgentConfig,
-    resolveAgentWorkspaceDir: mocks.resolveAgentWorkspaceDir,
-    resolveDefaultAgentId: mocks.resolveDefaultAgentId,
-    resolveSessionAgentId: mocks.resolveSessionAgentId,
-  };
-});
+vi.mock("../agents/agent-scope.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/agent-scope.js")>()),
+  resolveAgentConfig: mocks.resolveAgentConfig,
+  resolveAgentWorkspaceDir: mocks.resolveAgentWorkspaceDir,
+  resolveDefaultAgentId: mocks.resolveDefaultAgentId,
+  resolveSessionAgentId: mocks.resolveSessionAgentId,
+}));
 
 vi.mock("../infra/restart-sentinel.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/restart-sentinel.js")>()),
@@ -319,9 +316,13 @@ vi.mock("../config/sessions/main-session.js", async (importOriginal) => ({
 
 vi.mock("../config/io.js", () => ({ getRuntimeConfig: vi.fn(() => ({})) }));
 
-vi.mock("../config/sessions/thread-info.js", () => ({
-  parseSessionThreadInfoFast: mocks.parseSessionThreadInfo,
-  parseSessionThreadInfo: mocks.parseSessionThreadInfo,
+vi.mock("../channels/plugins/session-conversation.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../channels/plugins/session-conversation.js")>()),
+  resolveSessionThreadInfo: mocks.parseSessionThreadInfo,
+}));
+
+vi.mock("../channels/plugins/session-thread-info-loaded.js", () => ({
+  resolveLoadedSessionThreadInfo: mocks.parseSessionThreadInfo,
 }));
 
 vi.mock("./session-utils.js", async (importOriginal) => ({
@@ -528,21 +529,10 @@ function expectNthSystemEventFields(callIndex: number, expected: Record<string, 
   expectRecordFields(mocks.enqueueSystemEvent.mock.calls[callIndex]?.[1], expected);
 }
 
-function expectContinuationDispatchFields(
-  expected: Record<string, unknown>,
-  expectedCtx?: Record<string, unknown>,
-  callIndex = 0,
-): Record<string, unknown> {
-  const params = expectMockCallFields(
-    mocks.recordInboundSessionAndDispatchReply,
-    expected,
-    callIndex,
-  );
-  if (expectedCtx) {
-    expectRecordFields(params.ctxPayload, expectedCtx);
-  }
-  return params;
-}
+const expectContinuationDispatchFields = assertContinuationDispatchFields.bind(
+  null,
+  mocks.recordInboundSessionAndDispatchReply,
+);
 
 function deliverGeneratedMedia(
   overrides: Parameters<typeof createGeneratedMediaDeliveryEntry>[0],
@@ -1237,17 +1227,11 @@ describe("scheduleRestartSentinelWake", () => {
           updateRun ? 2 : 1,
         );
         expect(broadcastToConnIds).toHaveBeenCalledTimes(updateRun ? 2 : 1);
-        expect(broadcastToConnIds).toHaveBeenCalledWith(
-          "session.message",
-          expect.objectContaining({
-            sessionKey,
-            message: expect.objectContaining({
-              role: "assistant",
-              content: [{ type: "text", text: report }],
-            }),
-          }),
+        expectRestartSentinelTranscriptBroadcast(broadcastToConnIds, {
+          sessionKey,
+          report,
           subscribers,
-        );
+        });
         expect(mocks.enqueueDeliveryOnce).not.toHaveBeenCalled();
         if (withContinuation) {
           expect(mocks.requestHeartbeat).toHaveBeenCalledTimes(2);
@@ -1570,6 +1554,7 @@ describe("scheduleRestartSentinelWake", () => {
 
     expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith("restart message", {
       sessionKey: "agent:main:main",
+      contextKey: `task:restart-sentinel:${await mocks.enqueueSessionDelivery.mock.results[0]!.value}`,
       deliveryContext: {
         channel: "whatsapp",
         to: "+15550002",
@@ -2998,6 +2983,7 @@ describe("scheduleRestartSentinelWake", () => {
     expect(mocks.recordInboundSessionAndDispatchReply).not.toHaveBeenCalled();
     expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith("continue after restart", {
       sessionKey: "agent:main:main",
+      contextKey: `task:restart-sentinel:${await mocks.enqueueSessionDelivery.mock.results[0]!.value}`,
       deliveryContext: {
         channel: "whatsapp",
         to: "+15550002",
@@ -3046,6 +3032,7 @@ describe("scheduleRestartSentinelWake", () => {
 
     expect(mocks.enqueueSystemEvent).toHaveBeenNthCalledWith(2, "continue after restart", {
       sessionKey: "agent:main:main",
+      contextKey: `task:restart-sentinel:${await mocks.enqueueSessionDelivery.mock.results[1]!.value}`,
       deliveryContext: {
         channel: "whatsapp",
         to: "+15550002",
@@ -3286,6 +3273,7 @@ describe("scheduleRestartSentinelWake", () => {
 
     expect(mocks.enqueueSystemEvent).toHaveBeenNthCalledWith(2, "continue after restart", {
       sessionKey: "agent:main:main",
+      contextKey: `task:restart-sentinel:${await mocks.enqueueSessionDelivery.mock.results[1]!.value}`,
       deliveryContext: {
         channel: "whatsapp",
         to: "+15550002",

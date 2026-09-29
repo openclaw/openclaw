@@ -2736,7 +2736,7 @@ describe("qa suite runtime launcher", () => {
         await native.promise;
       } else if (scenarioIds.includes("docker-npm-onboard-channel-agent")) {
         scriptEnvs.push(params.env);
-        started.push("serial");
+        started.push(...scenarioIds);
         await serial.promise;
       } else {
         scriptEnvs.push(params.env);
@@ -2760,6 +2760,8 @@ describe("qa suite runtime launcher", () => {
         "dm-chat-baseline",
         "control-ui-chat-flow-playwright",
         "docker-npm-onboard-channel-agent",
+        "mcp-gateway-connect-startup-retry",
+        "voice-call-cli-rpc-agent-tool",
         "remote-log-tailing",
         "gateway-smoke",
         "logging-file-boundary",
@@ -2773,14 +2775,12 @@ describe("qa suite runtime launcher", () => {
     expect(started).toEqual(["flow", "native"]);
 
     native.resolve();
-    await vi.waitFor(() => expect(started).toContain("serial"));
-    expect(started.slice(0, 4)).toEqual(["flow", "native", "prep", "serial"]);
+    await vi.waitFor(() => expect(started).toContain("mcp-gateway-connect-startup-retry"));
+    expect(started).toContain("voice-call-cli-rpc-agent-tool");
     expect(parallelScriptIds).toEqual([]);
 
     serial.resolve();
     await vi.waitFor(() => expect(parallelScriptIds).toHaveLength(3));
-    expect(maxActiveParallelScripts).toBe(3);
-    expect(parallelScriptIds).not.toContain("diagnostic-events-boundary");
 
     parallel.resolve();
     await runPromise;

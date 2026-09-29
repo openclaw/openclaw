@@ -44,6 +44,7 @@ import {
   normalizeCdpHttpBaseForJsonEndpoints,
   scopeCdpPolicyToConfiguredEndpoint,
   withCdpSocket,
+  type CdpEndpointPin,
 } from "./cdp.helpers.js";
 import { normalizeCdpWsUrl } from "./cdp.js";
 import {
@@ -796,17 +797,15 @@ function buildOpenClawChromeLaunchArgs(params: {
   return args;
 }
 
-type ChromeCdpEndpointPin = NonNullable<Awaited<ReturnType<typeof assertCdpEndpointAllowed>>>;
-
 export type ChromeWebSocketEndpoint = {
   url: string;
-  lookup?: ChromeCdpEndpointPin["lookup"];
+  lookup?: CdpEndpointPin["lookup"];
 };
 
 async function canOpenWebSocket(
   url: string,
   timeoutMs: number,
-  lookup?: ChromeCdpEndpointPin["lookup"],
+  lookup?: CdpEndpointPin["lookup"],
   signal?: AbortSignal,
 ): Promise<boolean> {
   try {

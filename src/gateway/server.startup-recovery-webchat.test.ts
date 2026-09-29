@@ -409,6 +409,7 @@ it(
       };
       const wakeSavedBatch = (entry: SubagentRunRecord) =>
         maybeWakeRequesterAfterAllChildrenSettled({
+          isSourceCurrent: () => true,
           requesterSessionKey: sessionKey,
           settledEntry: entry,
           transitionBatch: (batch, next) => {
@@ -466,6 +467,7 @@ it(
       const revokedTransition = vi.fn();
       expect(
         await maybeWakeRequesterAfterAllChildrenSettled({
+          isSourceCurrent: () => true,
           requesterSessionKey: sessionKey,
           settledEntry: batchChild,
           transitionBatch: revokedTransition,

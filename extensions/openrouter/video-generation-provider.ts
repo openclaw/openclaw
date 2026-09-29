@@ -437,18 +437,15 @@ export function buildOpenRouterVideoGenerationProvider(): VideoGenerationProvide
       try {
         await assertOkOrThrowHttpError(response, "OpenRouter video generation failed");
         const submitted = readOpenRouterVideoResponse(await readOpenRouterVideoJson(response));
-        const jobId = normalizeOptionalString(submitted.id);
-        const pollingUrl = normalizeOptionalString(submitted.polling_url);
+        const jobId = submitted.id;
+        const pollingUrl = submitted.polling_url;
         if (!jobId || !pollingUrl) {
           throw new Error("OpenRouter video generation response missing job details");
         }
-        const submittedStatus = normalizeOptionalString(submitted.status);
+        const submittedStatus = submitted.status;
         const submittedState = submittedStatus ? resolveVideoJobState(submittedStatus) : "active";
         if (submittedState === "failure") {
-          throw new Error(
-            normalizeOptionalString(submitted.error) ??
-              `OpenRouter video generation ${submittedStatus}`,
-          );
+          throw new Error(submitted.error ?? `OpenRouter video generation ${submittedStatus}`);
         }
         const completed =
           submittedState === "completed"
@@ -464,8 +461,8 @@ export function buildOpenRouterVideoGenerationProvider(): VideoGenerationProvide
                 allowPrivateNetwork,
                 dispatcherPolicy,
               });
-        const completedJobId = normalizeOptionalString(completed.id) ?? jobId;
-        const unsignedUrl = completed.unsigned_urls?.find((url) => normalizeOptionalString(url));
+        const completedJobId = completed.id ?? jobId;
+        const unsignedUrl = completed.unsigned_urls?.[0];
         const videoUrl =
           unsignedUrl ??
           resolveOpenRouterVideoUrl(
@@ -488,13 +485,11 @@ export function buildOpenRouterVideoGenerationProvider(): VideoGenerationProvide
 
         return {
           videos: [video],
-          model: normalizeOptionalString(completed.model) ?? model,
+          model: completed.model ?? model,
           metadata: {
             jobId,
             status: completed.status,
-            ...(normalizeOptionalString(completed.generation_id)
-              ? { generationId: normalizeOptionalString(completed.generation_id) }
-              : {}),
+            ...(completed.generation_id ? { generationId: completed.generation_id } : {}),
             ...(completed.usage ? { usage: completed.usage } : {}),
           },
         };

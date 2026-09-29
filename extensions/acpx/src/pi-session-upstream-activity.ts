@@ -9,6 +9,7 @@ import {
   type SessionUpstreamProbe,
 } from "openclaw/plugin-sdk/session-catalog";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { safeParseJson } from "openclaw/plugin-sdk/text-utility-runtime";
 import { piMessageText, readPiSessionFileBaseline } from "./pi-session-store.js";
 
 const MAX_PI_UPSTREAM_SCAN_BYTES = 1024 * 1024;
@@ -26,15 +27,11 @@ function parseCompletePiRows(tail: Buffer): {
     }
     const line = tail.subarray(lineStart, index).toString("utf8").trim();
     if (line) {
-      try {
-        const value = JSON.parse(line) as unknown;
-        if (!isRecord(value)) {
-          break;
-        }
-        entries.push(value);
-      } catch {
+      const value = safeParseJson<unknown>(line);
+      if (!isRecord(value)) {
         break;
       }
+      entries.push(value);
     }
     classifiedBytes = index + 1;
     lineStart = index + 1;

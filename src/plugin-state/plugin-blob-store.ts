@@ -180,19 +180,18 @@ function createPluginBlobStoreInternal<TMetadata>(
     defaultTtlMs,
   });
 
+  const scope = { pluginId, namespace, ...(env ? { env } : {}) };
   const prepareWrite = (
     key: string,
     bytes: Uint8Array,
     metadata: TMetadata,
     opts?: { ttlMs?: number },
   ) => ({
-    pluginId,
-    namespace,
+    ...scope,
     ...prepareBlob({ key, bytes, metadata, maxBytesPerEntry, defaultTtlMs, opts }),
     maxEntries,
     maxBytesPerNamespace,
     overflowPolicy,
-    ...(env ? { env } : {}),
   });
 
   return {
@@ -204,40 +203,30 @@ function createPluginBlobStoreInternal<TMetadata>(
     },
     async lookup(key) {
       return lookupPluginBlobInWorker<TMetadata>({
-        pluginId,
-        namespace,
+        ...scope,
         key: validateKey(key, "lookup"),
-        ...(env ? { env } : {}),
       });
     },
     async entries() {
-      return listPluginBlobsInWorker<TMetadata>({ pluginId, namespace, ...(env ? { env } : {}) });
+      return listPluginBlobsInWorker<TMetadata>(scope);
     },
     async delete(key) {
       return deletePluginBlobInWorker({
-        pluginId,
-        namespace,
+        ...scope,
         key: validateKey(key, "delete"),
-        ...(env ? { env } : {}),
       });
     },
     async deleteExpiredKey(key) {
       return deleteExpiredPluginBlobKeyInWorker<TMetadata>({
-        pluginId,
-        namespace,
+        ...scope,
         key: validateKey(key, "sweep"),
-        ...(env ? { env } : {}),
       });
     },
     async deleteExpired() {
-      return deleteExpiredPluginBlobsInWorker<TMetadata>({
-        pluginId,
-        namespace,
-        ...(env ? { env } : {}),
-      });
+      return deleteExpiredPluginBlobsInWorker<TMetadata>(scope);
     },
     async clear() {
-      await clearPluginBlobsInWorker({ pluginId, namespace, ...(env ? { env } : {}) });
+      await clearPluginBlobsInWorker(scope);
     },
   };
 }

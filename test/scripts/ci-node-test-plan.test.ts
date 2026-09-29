@@ -119,8 +119,10 @@ import { createUnitVitestConfigWithOptions } from "../vitest/vitest.unit.config.
 import { createWizardVitestConfig } from "../vitest/vitest.wizard.config.ts";
 import {
   expectRuntimeReleaseInventory,
+  isNumberedToolingGroup,
   listMatchedTestFiles,
   listTestFiles,
+  nonToolingPlacement,
 } from "./ci-node-test-plan.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -391,29 +393,24 @@ function usesParallelPacking(job: CompactNodeTestShard | undefined) {
       ))
   );
 }
-function isNumberedToolingGroup(group: { shard_name: string }) {
-  return /^core-tooling-\d+(?:-hosted-\d+)?$/u.test(group.shard_name);
-}
-function nonToolingPlacement(plan: CompactNodeTestShard[]) {
-  return plan
-    .flatMap((job) => {
-      const groups = job.groups
-        .filter((group) => !isNumberedToolingGroup(group))
-        .map((group) => group.shard_name)
-        .toSorted();
-      return groups.length === 0
-        ? []
-        : [
-            {
-              groups,
-              planConcurrency: job.planConcurrency,
-              pretestBuildMode: job.pretestBuildMode,
-              requiresDist: job.requiresDist,
-              runner: job.runner,
-            },
-          ];
-    })
-    .toSorted((a, b) => a.groups.join("\0").localeCompare(b.groups.join("\0")));
+function readCompleteMeasuredGroupSeconds(group: CompactNodeTestShard["groups"][number]): number {
+  const selector =
+    parseCompactSplitTimingKey(group.timing_key!)?.selectorKey ??
+    createCompactSplitTimingGeneration({
+      configs: group.configs,
+      env: group.env,
+      parentShardName: group.timing_key!,
+      stripes: [group.includePatterns!],
+    }).selectorKey;
+  return Math.max(
+    ...(["blacksmith", "github"] as const).map(
+      (runner) =>
+        testTimings.readCompleteSplitGenerationSeconds(
+          testTimings.readCompactGroupTimings(runner),
+          selector,
+        ) ?? 0,
+    ),
+  );
 }
 function isCombinedUnbuiltCliJob(job: CompactNodeTestShard) {
   return (
@@ -454,6 +451,78 @@ function listAllToolingTestFiles(): string[] {
 }
 
 describe("scripts/lib/ci-node-test-plan.mts", () => {
+  it("retries hybrid Gateway-first packing only when the completed plan exceeds its cap", () => {
+    const entries = [
+      ["ordinary-a", "hooks", 180],
+      ["ordinary-b", "hooks", 180],
+      ["ordinary-c", "hooks", 160],
+      ["gateway-constrained", "gateway-core", 120],
+      ["ordinary-d", "hooks", 120],
+      ["ordinary-e", "hooks", 30],
+    ] as const;
+    vi.spyOn(testTimings, "readCompactGroupTimings").mockReturnValue(
+      Object.fromEntries(entries.map(([name, , seconds]) => [name, seconds])),
+    );
+    vi.spyOn(testTimings, "readRuntimePlacementTimings").mockReturnValue([]);
+    vi.spyOn(buildPrerequisites, "resolveVitestPretestBuildMode").mockReturnValue(undefined);
+    const original = fullSuiteVitestShards.slice();
+    try {
+      fullSuiteVitestShards.splice(
+        0,
+        fullSuiteVitestShards.length,
+        ...entries.map(([name, config]) => ({
+          name,
+          config: `fixture-${name}.config.ts`,
+          projects: [`test/vitest/vitest.${config}.config.ts`],
+        })),
+      );
+      const options = {
+        compactMode: "push",
+        runnerBackend: "hybrid",
+        includeReleaseOnlyPluginShards: false,
+      } as const;
+      const originalJobs = createNodeTestShardBundles(options);
+      expect(originalJobs).toHaveLength(3);
+      expect(
+        originalJobs.find((job) =>
+          job.groups.some((group) => group.shard_name === "gateway-constrained"),
+        ),
+      ).toMatchObject({ planConcurrency: 1, predictedSeconds: 280 });
+      const jobs = createNodeTestShardBundles({ ...options, compactNodeJobCap: 2 });
+      // Cost-first packing spends 280s on Gateway and strands 510s of ordinary
+      // work across two rows; admitting Gateway first leaves one 490s parallel row.
+      expect(jobs).toHaveLength(2);
+      const gateway = expectDefined(
+        jobs.find((job) => job.groups.some((group) => group.shard_name === "gateway-constrained")),
+        "Gateway job",
+      );
+      expect(gateway).toMatchObject({
+        planConcurrency: 1,
+        predictedSeconds: 300,
+        predictedTestSeconds: 300,
+        env: { OPENCLAW_VITEST_MAX_WORKERS: "2" },
+      });
+      const ordinary = expectDefined(
+        jobs.find((job) => job !== gateway),
+        "ordinary job",
+      );
+      expect(ordinary).toMatchObject({
+        planConcurrency: 2,
+        predictedSeconds: 490,
+        predictedTestSeconds: 280,
+      });
+      expect(jobs.every((job) => job.runner === EXTRA_LARGE_NODE_TEST_RUNNER)).toBe(true);
+      expect(jobs.flatMap((job) => job.groups.map((group) => group.shard_name)).toSorted()).toEqual(
+        entries.map(([name]) => name).toSorted(),
+      );
+      expect(() => createNodeTestShardBundles({ ...options, compactNodeJobCap: 1 })).toThrow(
+        "compact hybrid node test plan exceeds 1 jobs (2 planned)",
+      );
+    } finally {
+      fullSuiteVitestShards.splice(0, fullSuiteVitestShards.length, ...original);
+    }
+  });
+
   it("packs ordinary work more densely while retaining the serial Gateway budget", () => {
     vi.spyOn(testTimings, "readCompactGroupTimings").mockReturnValue({
       "agentic-gateway-server-isolated": 200,
@@ -2511,7 +2580,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
 
     expect(groups.every((group) => (group.includePatterns?.length ?? 0) > 0)).toBe(true);
     const files = groups.flatMap((group) => group.includePatterns ?? []);
-    expect(files).toHaveLength(17);
+    expect(files).toHaveLength(16);
     expect(files.every((file) => existsSync(file))).toBe(true);
     expect(buildPrerequisites.resolveVitestPretestBuildMode(groups)).toBeUndefined();
     const tooling = expectDefined(
@@ -3703,24 +3772,8 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           const explicitWorkers = group.env?.OPENCLAW_VITEST_MAX_WORKERS;
           if (explicitWorkers !== undefined) {
             expect(explicitWorkers, group.shard_name).toBe("2");
-            const selector =
-              parseCompactSplitTimingKey(group.timing_key!)?.selectorKey ??
-              createCompactSplitTimingGeneration({
-                configs: group.configs,
-                env: group.env,
-                parentShardName: group.timing_key!,
-                stripes: [group.includePatterns!],
-              }).selectorKey;
             expect(
-              Math.max(
-                ...(["blacksmith", "github"] as const).map(
-                  (runner) =>
-                    testTimings.readCompleteSplitGenerationSeconds(
-                      testTimings.readCompactGroupTimings(runner),
-                      selector,
-                    ) ?? 0,
-                ),
-              ),
+              readCompleteMeasuredGroupSeconds(group),
               `${group.shard_name}: measured two-worker generation`,
             ).toBeGreaterThan(0);
             twoWorkerCommands.add(group);
@@ -4376,7 +4429,14 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         );
         const methods = /^agentic-gateway-methods(?:-hosted-\d+)?$/u.test(sibling.shard_name);
         expect(sibling.env?.OPENCLAW_VITEST_MAX_WORKERS, sibling.shard_name).toBe(
-          isolated ? "8" : methods ? "4" : undefined,
+          isolated
+            ? "8"
+            : methods
+              ? "4"
+              : sibling.configs.includes("test/vitest/vitest.commands.config.ts") &&
+                  readCompleteMeasuredGroupSeconds(sibling) > 0
+                ? "2"
+                : undefined,
         );
         if (isolated || methods) {
           expect(sibling.minTotalMemoryBytes).toBe(28 * 1024 ** 3);

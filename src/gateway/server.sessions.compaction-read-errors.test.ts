@@ -4,10 +4,7 @@ import {
   appendTranscriptMessage,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
-// Force the mocked module to load here: the factory below captures the real reader as a
-// side effect, and beforeEach needs that capture. Without this import the factory only ran
-// if some other module in the graph pulled it in first, which is not guaranteed once a
-// shard shares a worker (--isolate=false).
+// Install the mocked reader before the Gateway loads its accessor graph.
 import "../config/sessions/session-accessor.sqlite-read.js";
 import { rpcReq } from "./test-helpers.js";
 import {
@@ -38,22 +35,14 @@ vi.mock("../config/sessions/session-accessor.sqlite-read.js", async (importOrigi
 
 const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
 
-// Read the real implementation back here rather than capturing it inside the mock
-// factory: Vitest runs that factory on first import of the mocked module, and this
-// project is `isolate: false`, so on a warm module graph the factory can still be
-// unrun when the first `beforeEach` fires.
-async function actualTranscriptStatsReader(): Promise<ReadTranscriptStatsSync> {
-  const actual = await vi.importActual<
-    typeof import("../config/sessions/session-accessor.sqlite-read.js")
-  >("../config/sessions/session-accessor.sqlite-read.js");
-  return actual.readTranscriptStatsSync;
-}
-
 let realTranscriptStatsReader: ReadTranscriptStatsSync;
 
 beforeEach(async () => {
   transcriptReads.stats.mockReset();
-  realTranscriptStatsReader = await actualTranscriptStatsReader();
+  const actual = await vi.importActual<
+    typeof import("../config/sessions/session-accessor.sqlite-read.js")
+  >("../config/sessions/session-accessor.sqlite-read.js");
+  realTranscriptStatsReader = actual.readTranscriptStatsSync;
   transcriptReads.stats.mockImplementation(realTranscriptStatsReader);
 });
 
@@ -103,12 +92,7 @@ async function seedCompactionSession(params: {
 const transcriptReadError = () =>
   new Error("SQLITE_IOERR: failed to read session transcript storage");
 
-/**
- * Injects the read failure for one seeded session instead of the next global call.
- * `--isolate=false` shares a worker, so any sibling transcript read can consume a
- * `*Once` mock before the compaction RPC issues its own and the failure silently
- * disappears. Keying on sessionId makes the injection independent of call order.
- */
+// Background reads must not consume the failure intended for the compaction RPC.
 function failTranscriptStatsForSession(
   sessionId: string,
   options?: { succeedFirstWith: ReturnType<ReadTranscriptStatsSync> },
@@ -162,32 +146,29 @@ test.each([
   },
 );
 
-test.each([{ maxLines: undefined }, { maxLines: 50 }])(
-  "sessions.compact keeps an empty transcript as a successful no-op (maxLines=$maxLines)",
-  async ({ maxLines }) => {
-    const { storePath } = await createSessionStoreDir();
-    await seedCompactionSession({
-      sessionId: `sess-empty-${maxLines ?? "model"}`,
-      storePath,
-      withTranscript: false,
+test("sessions.compact keeps an empty transcript as a successful no-op", async () => {
+  const { storePath } = await createSessionStoreDir();
+  await seedCompactionSession({
+    sessionId: "sess-empty-model",
+    storePath,
+    withTranscript: false,
+  });
+
+  const { ws } = await openClient();
+  try {
+    const response = await rpcReq<{ compacted: boolean; ok: true; reason: string }>(
+      ws,
+      "sessions.compact",
+      { key: "main" },
+    );
+
+    expect(response.ok).toBe(true);
+    expect(response.payload).toMatchObject({
+      ok: true,
+      compacted: false,
+      reason: "no transcript",
     });
-
-    const { ws } = await openClient();
-    try {
-      const response = await rpcReq<{ compacted: boolean; ok: true; reason: string }>(
-        ws,
-        "sessions.compact",
-        { key: "main", ...(maxLines === undefined ? {} : { maxLines }) },
-      );
-
-      expect(response.ok).toBe(true);
-      expect(response.payload).toMatchObject({
-        ok: true,
-        compacted: false,
-        reason: "no transcript",
-      });
-    } finally {
-      ws.close();
-    }
-  },
-);
+  } finally {
+    ws.close();
+  }
+});

@@ -223,6 +223,21 @@ Retain these additional fields:
   successful `pr-fail-fast` job's `jobId` and cancellation-step number `step`.
   This records inspected cancellation provenance, never passing coverage.
 
+A cancelled job that actually failed its Node test step can remain an independently
+attributed root. Add `failedStep: { number: 18, workflowJob:
+"checks-node-core-test-nondist-shard" }` to that job's existing `failures` entry,
+using its actual step number. Keep all observed cases, source paths, and independent
+baseline artifacts. The verifier requires the matching current GitHub Actions
+check-run/head/suite/timestamps, complete terminal steps, exactly one failed
+`Run Node test shard`, successful cleanup, and only successful or skipped other
+steps. The unchanged tested workflow must retain the audited Node shard entrypoint
+and matrix owner without `continue-on-error`. Matrix membership remains an inspected
+attestation, not an inference from the job name. The retained `failedStep` proof
+includes its cancelled job conclusion and actual step; exclude that root from
+collateral `cancellation.jobIds`, but include it in every `causedBy` root list.
+Extra failed steps, absent or changed qualification, and mismatched sources refuse
+admission. This does not qualify the underlying test failure by itself.
+
 An explicitly attributed Node job that exhausted its execution deadline may appear
 as `cancelled` in GitHub's job API. Keep it in `failures`, with the actual observed
 cases and incomplete coverage recorded. The verifier requires the matching live
@@ -355,7 +370,7 @@ new scope or a different merge method still needs authorization.
 
 Ordinary replacement recovery requires completed gates, not `github_pending`.
 Use the completed-evidence preparation path above. A confirmed-cancelled auto
-squash may instead recover an explicitly selected different head through the
+squash may instead recover an explicitly selected reviewed head through the
 [prior-CI admin route](#explicit-prior-ci-admin-landing):
 
 ```bash
@@ -365,11 +380,14 @@ scripts/pr merge-recover <PR> <OUTCOME_OID> --confirmed-operator-recovery \
 
 This requires fresh review and exact-head `github_pending` preparation, followed
 by current admin, review, security, and CI-evidence verification for the
-replacement. The old head's CI attribution cannot qualify the new head. The
+selected head. The explicit `--replacement-head` may name the unchanged retained
+head; no synthetic source commit is needed. It is still required for this
+retired-auto transition. CI attribution must bind the selected head and current
+attempt; an old head's evidence cannot qualify a different head. The
 successor CAS retains the original intent, confirmed cancellation, and capture
 history; neither history is relabeled as a rejected or unsubmitted request.
-Unconfirmed cancellation, a renewed auto/queue request, same-head substitution,
-and changed recovery artifacts remain blocked. Queue cancellation is unsupported.
+Unconfirmed cancellation, a renewed auto/queue request, missing explicit head
+selection, and changed recovery artifacts remain blocked. Queue cancellation is unsupported.
 
 A failed operation can retain a lock. Verify no owned child tools remain, then
 recover only with the exact token and command the wrapper printed. Never remove
@@ -437,8 +455,13 @@ PR-owned local branches, and remote head branch absence. It never merges or dele
 resources. It may post a first completion comment from `merged`; uncertain
 comment attempts only look up the existing marker and never POST again.
 Missing or ambiguous markers remain pending. Re-read the OID after any state
-transition. A first admin-route comment requires its original landing audit
-and remains outside this delayed completion path.
+transition. A first admin-route comment is supported only with retained prior-CI
+admission evidence. Before requiring cleanup, it verifies the landed commit's
+historical parent and compares it with the retained admission main. The comment
+labels this audit as reconstructed after merge, claims no original at-landing
+audit, and preserves the historical CI qualification without claiming current-head
+CI success. Other admin receipts still require owner review of their original
+audit and completion record.
 
 Preserve the operator-facing narrative: what failed, the owning repair, important
 proof and limitations, human credit, and linked final state. Record material

@@ -13,7 +13,7 @@ import {
 } from "../pw-tools-core.interactions.navigation.js";
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
 import { isProfileRestartRequiredError } from "../server-context.lifecycle.js";
-import { resolveProfileContext } from "./agent.shared.js";
+import { readBody, resolveProfileContext } from "./agent.shared.js";
 import { readRouteTimerTimeoutMs } from "./route-numeric.js";
 import type { BrowserRouteRegistrar } from "./types.js";
 import {
@@ -23,14 +23,6 @@ import {
   runProfileRouteOperation,
   toStringOrEmpty,
 } from "./utils.js";
-
-type GrantPermissionsBody = {
-  origin?: unknown;
-  permissions?: unknown;
-  optionalPermissions?: unknown;
-  timeoutMs?: unknown;
-  targetId?: unknown;
-};
 
 function readPermissions(raw: unknown): string[] | null {
   if (!Array.isArray(raw)) {
@@ -153,7 +145,7 @@ export function registerBrowserPermissionRoutes(
   ctx: BrowserRouteContext,
 ) {
   app.post("/permissions/grant", async (req, res) => {
-    const body = (req.body ?? {}) as GrantPermissionsBody;
+    const body = readBody(req);
     const origin = readHttpOrigin(body.origin);
     if (!origin) {
       return jsonError(res, 400, "origin must be an http(s) origin");

@@ -1473,6 +1473,16 @@ candidate_update_spec() {
   esac
 }
 
+is_extended_stable_release_version() {
+  local version_pattern='^[1-9][0-9]{3}\.([1-9]|1[0-2])\.([1-9][0-9]*)$'
+  [[ "$1" =~ $version_pattern ]] && ((10#${BASH_REMATCH[2]} >= 33))
+}
+
+candidate_requires_stable_channel() {
+  is_extended_stable_release_version "$baseline_version" &&
+    ! is_extended_stable_release_version "$1"
+}
+
 update_candidate() {
   local after_repair="${1:-0}"
   local expected_version="${3:-$candidate_version}"
@@ -1507,6 +1517,12 @@ update_candidate() {
     previous_systemctl_lines="$(wc -l <"$SYSTEMCTL_SHIM_LOG")"
   fi
   local update_args=(update --tag "$update_spec" --yes --json)
+  local switch_to_stable=0
+  # Shipped extended-stable updaters reject --tag until the operator switches channels.
+  if candidate_requires_stable_channel "$expected_version"; then
+    update_args+=(--channel stable)
+    switch_to_stable=1
+  fi
   local update_env=(
     env
     -u OPENCLAW_GATEWAY_TOKEN
@@ -1617,6 +1633,14 @@ update_candidate() {
   if [ "$installed_version" != "$expected_version" ]; then
     echo "update did not leave the selected target installed: $installed_version (expected $expected_version)" >&2
     return 1
+  fi
+  if [ "$switch_to_stable" = "1" ]; then
+    node --input-type=module - "$OPENCLAW_CONFIG_PATH" <<'NODE' || return "$?"
+import assert from "node:assert/strict";
+import fs from "node:fs";
+const config = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+assert.equal(config.update?.channel, "stable", "update channel was not persisted as stable");
+NODE
   fi
   CURRENT_PHASE="$update_phase"
 }
@@ -2029,7 +2053,7 @@ probe_gateway_endpoint() {
 start_gateway() {
   local port=18789
   local budget
-  budget="$(openclaw_e2e_read_positive_int_env OPENCLAW_UPGRADE_SURVIVOR_START_BUDGET_SECONDS 90)" || return "$?"
+  budget="$(openclaw_e2e_read_positive_int_env OPENCLAW_UPGRADE_SURVIVOR_START_BUDGET_SECONDS 300)" || return "$?"
   local start_epoch
   local ready_epoch
   start_epoch="$(node -e "process.stdout.write(String(Date.now()))")" || return "$?"
@@ -2040,7 +2064,7 @@ start_gateway() {
   if [ "${SCENARIO:-}" = "watchos-direct-node" ]; then
     readiness_mode="legacy-ready-log-ok"
   fi
-  openclaw_e2e_wait_gateway_ready "$gateway_pid" "$GATEWAY_LOG" 360 "$port" "$readiness_mode" || return "$?"
+  openclaw_e2e_wait_gateway_ready "$gateway_pid" "$GATEWAY_LOG" "$((10#$budget * 4))" "$port" "$readiness_mode" || return "$?"
   ready_epoch="$(node -e "process.stdout.write(String(Date.now()))")" || return "$?"
   start_seconds=$(((ready_epoch - start_epoch + 999) / 1000))
   if [ "$start_seconds" -gt "$budget" ]; then

@@ -657,15 +657,11 @@ function tokenize(text: string, opts?: { ftsTokenizer?: "unicode61" | "trigram" 
       const jpParts =
         segment.match(/[a-z0-9_]+|[\u30a0-\u30ffー]+|[\u4e00-\u9fff]+|[\u3040-\u309f]{2,}/g) ?? [];
       for (const part of jpParts) {
-        if (/^[\u4e00-\u9fff]+$/.test(part)) {
-          tokens.push(part);
-          if (!useTrigram) {
-            for (let i = 0; i < part.length - 1; i++) {
-              tokens.push(part.slice(i, i + 2));
-            }
+        tokens.push(part);
+        if (!useTrigram && /^[\u4e00-\u9fff]+$/.test(part)) {
+          for (let i = 0; i < part.length - 1; i++) {
+            tokens.push(part.slice(i, i + 2));
           }
-        } else {
-          tokens.push(part);
         }
       }
     } else if (/[\u4e00-\u9fff]/.test(segment)) {
@@ -715,17 +711,11 @@ export function extractKeywords(
   query: string,
   opts?: { ftsTokenizer?: "unicode61" | "trigram" },
 ): string[] {
-  const tokens = tokenize(query, opts);
-  const keywords: string[] = [];
-  const seen = new Set<string>();
-
-  for (const token of tokens) {
-    if (isQueryStopWordToken(token) || !isValidKeyword(token) || seen.has(token)) {
-      continue;
-    }
-    seen.add(token);
-    keywords.push(token);
-  }
-
-  return keywords;
+  return [
+    ...new Set(
+      tokenize(query, opts).filter(
+        (token) => !isQueryStopWordToken(token) && isValidKeyword(token),
+      ),
+    ),
+  ];
 }

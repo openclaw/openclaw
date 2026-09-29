@@ -1173,13 +1173,7 @@ extension OpenClawChatTransport {
         // Fail closed: a transport on this default cannot honor agent/base-ref
         // selection; delegating would report success while creating the wrong session.
         guard agentID == nil, worktreeBaseRef == nil else {
-            throw NSError(
-                domain: "OpenClawChatTransport",
-                code: 0,
-                userInfo: [
-                    NSLocalizedDescriptionKey:
-                        "sessions.create agent/base-ref options not supported by this transport",
-                ])
+            throw Self.unsupportedOperation("sessions.create agent/base-ref options not supported by this transport")
         }
         return try await self.createSession(
             key: key,
@@ -1375,12 +1369,7 @@ extension OpenClawChatTransport {
         }
         if let thinkingLevelUpdate = patch.thinkingLevel {
             guard let thinkingLevel = thinkingLevelUpdate else {
-                throw NSError(
-                    domain: "OpenClawChatTransport",
-                    code: 0,
-                    userInfo: [
-                        NSLocalizedDescriptionKey: "sessions.patch(thinkingLevel=null) not supported by this transport",
-                    ])
+                throw Self.unsupportedOperation("sessions.patch(thinkingLevel=null) not supported by this transport")
             }
             try await self.setSessionThinking(
                 sessionKey: sessionKey,

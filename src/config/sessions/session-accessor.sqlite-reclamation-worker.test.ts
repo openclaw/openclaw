@@ -25,12 +25,12 @@ import { loadSessionEntry } from "./session-accessor.sqlite-entry.js";
 import { ensureSessionEntrySync } from "./session-accessor.sqlite-initial-entry.js";
 import type { SqliteSessionReclamationPlan } from "./session-accessor.sqlite-lifecycle-types.js";
 import { kickSessionEntryMaintenanceAfterWrite } from "./session-accessor.sqlite-maintenance-kick.js";
+import { runSqliteSessionReclamation } from "./session-accessor.sqlite-reclamation-run.js";
+import * as reclamationRun from "./session-accessor.sqlite-reclamation-run.js";
 import { SqliteReclamationInputsChangedError } from "./session-accessor.sqlite-reclamation-worker-diagnostics.js";
 import * as reclamation from "./session-accessor.sqlite-reclamation.js";
-import {
-  createSessionEntryReclamationPlan,
-  runSqliteSessionReclamation,
-} from "./session-accessor.sqlite-reclamation.js";
+import { createSessionEntryReclamationPlan } from "./session-accessor.sqlite-reclamation.js";
+import { registerSessionMaintenancePreserveKeysProvider } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
 
 test("retains one Worker across twenty admission refusals and interleaved reclamation operations", async () => {
@@ -392,86 +392,125 @@ test("logs a native reclamation Worker throw with its cause, first frame and has
   );
 });
 
-test("commits maintenance despite an unrelated write during Worker planning", async () => {
-  await withOpenClawTestState(
-    { scenario: "minimal", env: { OPENCLAW_TEST_FILE_LOG: "1" } },
-    async (state) => {
-      const sessionKey = "agent:main:synthetic-maintenance-race";
-      const scope = { agentId: "main", env: state.env, sessionKey, sessionId: "maintenance-race" };
-      ensureSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: Date.now() });
-      const database = openOpenClawAgentDatabase(scope);
-      const request = {
-        activeSessionKey: sessionKey,
-        archiveDirectory: state.path("archives"),
-        maintenanceConfig: { ...resolveMaintenanceConfigFromInput(), mode: "enforce" as const },
-        scope: { agentId: scope.agentId, env: state.env, path: database.path },
-        storePath: database.path,
-      };
-      const file = state.path("maintenance-race.log");
-      await fs.writeFile(file, "");
-      setLoggerOverride({ level: "debug", consoleLevel: "silent", file });
-      vi.spyOn(performance, "now").mockReturnValue(0);
-      const plans = vi.spyOn(reclamation, "createSessionMaintenancePlanningOperation");
-      const runs: Promise<unknown>[] = [];
-      const firstRun = createDeferredCore();
-      const run = reclamation.runSqliteSessionReclamation;
-      vi.spyOn(reclamation, "runSqliteSessionReclamation").mockImplementation((params) => {
-        const operation = run(params);
-        runs.push(operation);
-        firstRun.resolve();
-        return operation;
-      });
-      const spawn = sqliteArchive.createSqliteTranscriptArchiveWorker;
-      let raced = false;
-      const constructions = vi
-        .spyOn(sqliteArchive, "createSqliteTranscriptArchiveWorker")
-        .mockImplementation((data) => {
-          const worker = spawn(data);
-          worker.prependListener("message", (message: { type: string }) => {
-            if (message.type !== "admission-request" || raced) {
-              return;
-            }
-            // The protected active row is outside the plan's destructive candidates.
-            raced = true;
-            runOpenClawAgentWriteTransaction((owner) => {
-              writeSessionEntry(owner, sessionKey, {
-                sessionId: scope.sessionId,
-                updatedAt: Date.now(),
-                label: "concurrent-write",
-              });
-            }, scope);
-            kickSessionEntryMaintenanceAfterWrite(request);
-          });
-          return worker;
+test.each(["active key", "provider"] as const)(
+  "commits maintenance despite unrelated %s changes during Worker planning",
+  async (change) => {
+    await withOpenClawTestState(
+      { scenario: "minimal", env: { OPENCLAW_TEST_FILE_LOG: "1" } },
+      async (state) => {
+        const sessionKey = "agent:main:synthetic-maintenance-race";
+        const scope = {
+          agentId: "main",
+          env: state.env,
+          sessionKey,
+          sessionId: "maintenance-race",
+        };
+        ensureSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: Date.now() });
+        const victim = {
+          ...scope,
+          sessionKey: "agent:main:maintenance-victim",
+          sessionId: "victim",
+        };
+        ensureSessionEntrySync(victim, { sessionId: victim.sessionId, updatedAt: 1 });
+        const unrelated = {
+          ...scope,
+          sessionKey: "agent:main:maintenance-unrelated",
+          sessionId: "unrelated",
+        };
+        ensureSessionEntrySync(unrelated, {
+          sessionId: unrelated.sessionId,
+          updatedAt: Date.now(),
         });
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      try {
-        kickSessionEntryMaintenanceAfterWrite(request);
-        await firstRun.promise;
-        await expect(runs[0]).resolves.toMatchObject({ kind: "maintenance-plan" });
-        expect(raced).toBe(true);
-        expect(loadSessionEntry(scope)?.label).toBe("concurrent-write");
-        expect(constructions).toHaveBeenCalledTimes(1);
-        await flushLogger();
-        const records: unknown[] = (await fs.readFile(file, "utf8"))
-          .split("\n")
-          .filter(Boolean)
-          .map((line) => JSON.parse(line));
-        const logged = (message: string) => expect.objectContaining({ message });
-        expect(records).not.toContainEqual(
-          logged("SQLite reclamation Worker superseded by newer inputs"),
+        const database = openOpenClawAgentDatabase(scope);
+        const request = {
+          activeSessionKey: sessionKey,
+          archiveDirectory: state.path("archives"),
+          maintenanceConfig: { ...resolveMaintenanceConfigFromInput(), mode: "enforce" as const },
+          scope: { agentId: scope.agentId, env: state.env, path: database.path },
+          storePath: database.path,
+        };
+        const file = state.path("maintenance-race.log");
+        await fs.writeFile(file, "");
+        setLoggerOverride({ level: "debug", consoleLevel: "silent", file });
+        vi.spyOn(performance, "now").mockReturnValue(0);
+        const plans = vi.spyOn(reclamation, "createSessionMaintenancePlanningOperation");
+        const runs: Promise<unknown>[] = [];
+        const firstRun = createDeferredCore();
+        let armed = false;
+        const run = reclamationRun.runSqliteSessionReclamation;
+        vi.spyOn(reclamationRun, "runSqliteSessionReclamation").mockImplementation((params) => {
+          armed =
+            params.plan.kind === "maintenance-plan" && params.plan.input.preservation !== null;
+          const operation = run(params);
+          if (armed) {
+            runs.push(operation);
+            firstRun.resolve();
+          }
+          return operation;
+        });
+        const spawn = sqliteArchive.createSqliteTranscriptArchiveWorker;
+        let raced = false;
+        const unregister = registerSessionMaintenancePreserveKeysProvider(() =>
+          change === "provider" && raced ? [unrelated.sessionKey] : [],
         );
-        expect(records).not.toContainEqual(logged("SQLite reclamation Worker failed"));
-        expect(records).not.toContainEqual(logged("SQLite automatic session maintenance failed"));
+        const constructions = vi
+          .spyOn(sqliteArchive, "createSqliteTranscriptArchiveWorker")
+          .mockImplementation((data) => {
+            const worker = spawn(data);
+            worker.prependListener("message", (message: { type: string }) => {
+              if (message.type !== "admission-request" || raced || !armed) {
+                return;
+              }
+              // A different active row is outside the plan's destructive candidates.
+              raced = true;
+              runOpenClawAgentWriteTransaction((owner) => {
+                writeSessionEntry(owner, unrelated.sessionKey, {
+                  sessionId: unrelated.sessionId,
+                  updatedAt: Date.now(),
+                  label: "concurrent-write",
+                });
+              }, scope);
+              kickSessionEntryMaintenanceAfterWrite({
+                ...request,
+                activeSessionKey: change === "active key" ? unrelated.sessionKey : sessionKey,
+              });
+            });
+            return worker;
+          });
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        try {
+          kickSessionEntryMaintenanceAfterWrite(request);
+          await firstRun.promise;
+          await expect(runs[0]).resolves.toMatchObject({
+            kind: "maintenance-plan",
+            value: { archived: 1 },
+          });
+          expect(loadSessionEntry(victim)?.archiveReason).toBe("age-retention");
+          expect(raced).toBe(true);
+          expect(loadSessionEntry(unrelated)?.label).toBe("concurrent-write");
+          expect(constructions).toHaveBeenCalledTimes(1);
+          await flushLogger();
+          const records: unknown[] = (await fs.readFile(file, "utf8"))
+            .split("\n")
+            .filter(Boolean)
+            .map((line) => JSON.parse(line));
+          const logged = (message: string) => expect.objectContaining({ message });
+          expect(records).not.toContainEqual(
+            logged("SQLite reclamation Worker superseded by newer inputs"),
+          );
+          expect(records).not.toContainEqual(logged("SQLite reclamation Worker failed"));
+          expect(records).not.toContainEqual(logged("SQLite automatic session maintenance failed"));
 
-        expect(plans).toHaveBeenCalledTimes(1);
-      } finally {
-        vi.useRealTimers();
-        vi.restoreAllMocks();
-        await closeOpenClawAgentDatabasesAsync(state.stateDir);
-        await flushLogger();
-        setLoggerOverride(null);
-      }
-    },
-  );
-});
+          expect(plans).toHaveBeenCalledTimes(1);
+        } finally {
+          unregister();
+          vi.useRealTimers();
+          vi.restoreAllMocks();
+          await closeOpenClawAgentDatabasesAsync(state.stateDir);
+          await flushLogger();
+          setLoggerOverride(null);
+        }
+      },
+    );
+  },
+);

@@ -3,26 +3,15 @@ import { describeControlFailure } from "./app-server/capabilities.js";
 import { formatCodexDisplayText } from "./command-formatters.js";
 import type { CodexCommandOptions } from "./commands.js";
 
-type CodexSubcommandHandler = (
-  ctx: PluginCommandContext,
-  options: CodexCommandOptions,
-) => Promise<PluginCommandResult>;
-
-type CodexCommandInternalOptions = CodexCommandOptions & {
-  loadSubcommandHandler?: () => Promise<CodexSubcommandHandler>;
-};
-
 /** Dispatches a `/codex` command to the lazily loaded handler. */
 export async function handleCodexCommand(
   ctx: PluginCommandContext,
-  options: CodexCommandInternalOptions,
+  options: CodexCommandOptions,
 ): Promise<PluginCommandResult> {
   const commandContext = { ...ctx, gatewayClientScopes: ctx.gatewayClientScopes?.slice() };
-  const { loadSubcommandHandler, resolvePluginConfig, ...subcommandOptions } = options;
+  const { resolvePluginConfig, ...subcommandOptions } = options;
   try {
-    const handleCodexSubcommand = loadSubcommandHandler
-      ? await loadSubcommandHandler()
-      : (await import("./command-handlers.js")).handleCodexSubcommand;
+    const { handleCodexSubcommand } = await import("./command-handlers.js");
     return await handleCodexSubcommand(commandContext, {
       ...subcommandOptions,
       pluginConfig: resolvePluginConfig?.() ?? subcommandOptions.pluginConfig,

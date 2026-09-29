@@ -1,5 +1,4 @@
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
-// Shared queue type contracts for admission, drain, and fallback handling.
 import type { QueueMode } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { AdmittedRunOperatorAuthority } from "../../../agents/admitted-run-context.js";
 import type { AutoFallbackPrimaryProbe } from "../../../agents/agent-scope.js";
@@ -157,7 +156,6 @@ export type FollowupRun = {
   disableTools?: boolean;
   /** Force individual drain; never merge this run into a collect batch. */
   disableCollectBatching?: boolean;
-  /** The current-turn hook already ran before this steer became a fallback. */
   /** Pending same-turn acceptance while this item remains parked in FIFO order. */
   steerPending?: {
     phase: "waiting" | "injecting";

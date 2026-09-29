@@ -138,11 +138,11 @@ describe("Skill Workshop proposal evaluation", () => {
         return [];
       });
       const denied = Object.assign(new Error(`Cannot read ${references}`), { code: "EACCES" });
-      const readdir = fs.readdir;
+      const opendir = fs.opendir;
       const spy = vi
-        .spyOn(fs, "readdir")
+        .spyOn(fs, "opendir")
         .mockImplementation((...args) =>
-          blocked && args[0] === references ? Promise.reject(denied) : readdir(...args),
+          blocked && args[0] === references ? Promise.reject(denied) : opendir(...args),
         );
       try {
         await expect(

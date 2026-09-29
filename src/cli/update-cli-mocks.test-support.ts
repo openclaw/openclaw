@@ -293,6 +293,18 @@ vi.mock("../config/config.js", () => {
   };
 });
 
+vi.mock("../config/io.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/io.js")>();
+  const mocked = await import("../config/config.js");
+  return {
+    ...actual,
+    createConfigIO: (options: Parameters<typeof actual.createConfigIO>[0] = {}) => ({
+      ...actual.createConfigIO(options),
+      readConfigFileSnapshotForWrite: mocked.createConfigIO(options).readConfigFileSnapshotForWrite,
+    }),
+  };
+});
+
 vi.mock("../infra/update-check.js", async (importOriginal) => ({
   formatGitInstallLabel: (await importOriginal<typeof import("../infra/update-check.js")>())
     .formatGitInstallLabel,
@@ -378,10 +390,31 @@ vi.mock("../infra/update-managed-service-handoff-cleanup.js", async (importOrigi
 
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+  const { SQLITE_READONLY_CHILD_ARG } = await import("../infra/runtime-process-entrypoints.js");
+  const { resolveRuntimeProcessEntrypointUrl } = await import("../infra/runtime-process-url.js");
+  const { resolveRuntimeWorkerArgv } = await import("../infra/runtime-worker-url.js");
   return {
     ...actual,
-    execFile,
-    spawn,
+    // SQLite snapshots and their native broker need real IPC; updater/service children stay simulated.
+    execFile: (...args: Parameters<typeof actual.execFile>) =>
+      args[0] === process.execPath &&
+      Array.isArray(args[1]) &&
+      args[1].includes(SQLITE_READONLY_CHILD_ARG)
+        ? actual.execFile(...args)
+        : execFile(...args),
+    spawn: (...args: Parameters<typeof actual.spawn>) => {
+      const brokerArgv = resolveRuntimeWorkerArgv(
+        resolveRuntimeProcessEntrypointUrl("spawnBroker"),
+      );
+      const childArgs = args[1];
+      return args[0] === process.execPath &&
+        Array.isArray(childArgs) &&
+        (childArgs.includes(SQLITE_READONLY_CHILD_ARG) ||
+          (childArgs.length === brokerArgv.length &&
+            childArgs.every((arg, index) => arg === brokerArgv[index])))
+        ? actual.spawn(...args)
+        : spawn(...args);
+    },
   };
 });
 

@@ -319,6 +319,27 @@ describe("config env vars", () => {
     ).toThrow("process-stable Gateway selector OPENCLAW_CONFIG_PATH");
   });
 
+  it.each([0, 1])(
+    "retains committed publication %s when its successors roll back",
+    (committedIndex) => {
+      const previousConfig = initialize({ [key]: "original" });
+      const configs = ["first", "middle", "last"].map((value) => config({ [key]: value }));
+      const prepared = configs.map((nextConfig) =>
+        prepareConfigRuntimeEnv({ previousConfig, nextConfig }),
+      );
+      const publications = prepared.map((candidate) => candidate.publish());
+      publications[committedIndex]!.commit();
+      for (const publication of publications.toReversed()) {
+        publication();
+      }
+      expect(process.env[key]).toBe(committedIndex === 0 ? "first" : "middle");
+      expect(getPublishedConfigRuntimeEnvState()).toMatchObject({
+        sourceConfig: configs[committedIndex],
+        ownedEnv: { [key]: committedIndex === 0 ? "first" : "middle" },
+      });
+    },
+  );
+
   it("preserves Windows case-insensitive precedence in a merged runtime env", () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     const merged = createConfigRuntimeEnv(config({ OPENCLAW_LOAD_SHELL_ENV: "1" }), {

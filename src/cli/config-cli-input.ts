@@ -311,17 +311,8 @@ function parseBatchOperations(entries: ConfigSetBatchEntry[]): ConfigSetOperatio
       entry.path,
     );
     const path = pathTokens.map(String);
-    if (entry.ref !== undefined) {
-      return buildAssignmentOperation({
-        requestedPath: path,
-        pathTokens,
-        quotedNumericSegments,
-        value: parseSecretRefFromUnknown(entry.ref, `batch[${index}].ref`),
-        inputMode: "json",
-        validatedRef: true,
-      });
-    }
-    if (entry.provider !== undefined) {
+    const pathFields = { requestedPath: path, pathTokens, quotedNumericSegments };
+    if (entry.ref === undefined && entry.provider !== undefined) {
       validateProviderAliasPath(path);
       const validated = SecretProviderSchema.safeParse(entry.provider);
       if (!validated.success) {
@@ -332,20 +323,20 @@ function parseBatchOperations(entries: ConfigSetBatchEntry[]): ConfigSetOperatio
       }
       return {
         inputMode: "json",
-        requestedPath: path,
-        pathTokens,
-        quotedNumericSegments,
+        ...pathFields,
         setPath: path,
         value: validated.data,
         schemaValidated: true,
       };
     }
     return buildAssignmentOperation({
-      requestedPath: path,
-      pathTokens,
-      quotedNumericSegments,
-      value: entry.value,
+      ...pathFields,
+      value:
+        entry.ref === undefined
+          ? entry.value
+          : parseSecretRefFromUnknown(entry.ref, `batch[${index}].ref`),
       inputMode: "json",
+      validatedRef: entry.ref !== undefined,
     });
   });
 }

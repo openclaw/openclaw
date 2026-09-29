@@ -1,4 +1,8 @@
-import { captureEventKey, findPairedCaptureEvent } from "./ui-render-capture-events.js";
+import {
+  captureEventKey,
+  findPairedCaptureEvent,
+  groupCaptureEvents,
+} from "./ui-render-capture-events.js";
 import { renderCapturePayload } from "./ui-render-capture-format.js";
 import {
   isSensitiveCaptureField,
@@ -194,9 +198,7 @@ export function buildCaptureViewModel(state: UiState) {
   const selectedFlowIndex =
     selectedEvent == null
       ? -1
-      : selectedFlowEvents.findIndex(
-          (event) => captureEventKey(event) === captureEventKey(selectedEvent),
-        );
+      : selectedFlowEvents.findIndex((event) => captureEventKey(event) === selectedEventKey);
   const previousFlowEvent =
     selectedFlowIndex > 0 ? selectedFlowEvents[selectedFlowIndex - 1] : null;
   const nextFlowEvent =
@@ -253,42 +255,27 @@ export function buildCaptureViewModel(state: UiState) {
   const groupedEvents =
     state.captureGroupMode === "none" || state.captureGroupMode === "burst"
       ? [{ id: "__all__", label: "All Events", meta: "", events: filteredEvents }]
-      : Array.from(
-          filteredEvents.reduce((groups, event) => {
-            const key =
-              state.captureGroupMode === "flow"
-                ? event.flowId || "(no flow)"
-                : [event.host || "(no host)", event.path || "/"].join(" ");
-            const label =
-              state.captureGroupMode === "flow"
-                ? event.flowId || "(no flow id)"
-                : [event.host || "(no host)", event.path || "/"].join(" ");
-            const existing = groups.get(key);
-            if (existing) {
-              existing.events.push(event);
-              return groups;
-            }
-            groups.set(key, {
-              id: key,
-              label,
-              meta:
-                state.captureGroupMode === "flow"
-                  ? [event.host, event.path].filter(Boolean).join(" ")
-                  : event.flowId || "",
-              events: [event],
-            });
-            return groups;
-          }, new Map()),
-        ).map(([, group]) => group);
+      : groupCaptureEvents(filteredEvents, (event) =>
+          state.captureGroupMode === "flow"
+            ? {
+                id: event.flowId || "(no flow)",
+                label: event.flowId || "(no flow id)",
+                meta: [event.host, event.path].filter(Boolean).join(" "),
+              }
+            : {
+                id: [event.host || "(no host)", event.path || "/"].join(" "),
+                label: [event.host || "(no host)", event.path || "/"].join(" "),
+                meta: event.flowId || "",
+              },
+        );
   const clusterEventBursts = (eventsForGroup: CaptureEventView[]) => {
-    const sorted = [...eventsForGroup].toSorted(
+    const sorted = eventsForGroup.toSorted(
       (left, right) =>
         left.ts - right.ts || captureEventKey(left).localeCompare(captureEventKey(right)),
     );
     const clusters: Array<{
       key: string;
       representative: CaptureEventView;
-      events: CaptureEventView[];
       count: number;
       startTs: number;
       endTs: number;
@@ -309,14 +296,12 @@ export function buildCaptureViewModel(state: UiState) {
         clusters.push({
           key: captureEventKey(event),
           representative: event,
-          events: [event],
           count: 1,
           startTs: event.ts,
           endTs: event.ts,
         });
         continue;
       }
-      previous.events.push(event);
       previous.count += 1;
       previous.endTs = event.ts;
       previous.representative = event;
@@ -415,7 +400,6 @@ export function buildCaptureViewModel(state: UiState) {
     availableHosts,
     activeFilters,
     minTs,
-    maxTs,
     totalSpanMs,
     activeWindowStartPct,
     activeWindowEndPct,
@@ -431,7 +415,6 @@ export function buildCaptureViewModel(state: UiState) {
     topKinds,
     topProviders,
     topModels,
-    selectedFlowId,
     selectedFlowEvents,
     selectedFlowIndex,
     previousFlowEvent,

@@ -58,9 +58,7 @@ export class OpenClawBoardDocument extends OpenClawLightDomElement {
   private provider: BoardProvider | null = null;
   private providerLease: BoardProviderLease | null = null;
   private binding: (ProviderBinding & { session: BoardGetParams }) | null = null;
-  private unsubscribeSnapshot: (() => void) | null = null;
-  private unsubscribeLoadError: (() => void) | null = null;
-  private unsubscribeEvents: (() => void) | null = null;
+  private providerSubscriptions: (() => void)[] = [];
   private bindingGeneration = 0;
 
   override connectedCallback(): void {
@@ -85,12 +83,7 @@ export class OpenClawBoardDocument extends OpenClawLightDomElement {
     }
   }
 
-  private providerCapabilities(snapshot: ApplicationGatewaySnapshot): {
-    canPinWidgets: boolean;
-    canPinMcpApps: boolean;
-    canMutate: boolean;
-    canGrant: boolean;
-  } {
+  private providerCapabilities(snapshot: ApplicationGatewaySnapshot) {
     const canMutate = hasOperatorWriteAccess(snapshot.hello?.auth ?? null);
     return {
       canMutate,
@@ -189,21 +182,22 @@ export class OpenClawBoardDocument extends OpenClawLightDomElement {
       this.provider = provider;
       this.providerLease = lease;
       this.binding = { ...binding, session };
-      this.unsubscribeSnapshot = provider.snapshot$.subscribe(() =>
-        this.reconcileProvider(provider),
+      this.providerSubscriptions.push(
+        provider.snapshot$.subscribe(() => this.reconcileProvider(provider)),
       );
-      this.unsubscribeLoadError = provider.loadError$.subscribe(() =>
-        this.reconcileProvider(provider),
+      this.providerSubscriptions.push(
+        provider.loadError$.subscribe(() => this.reconcileProvider(provider)),
       );
-      this.unsubscribeEvents = provider.events.subscribe((event) => {
-        const command = event.command;
-        if (command.kind !== "focus_tab") {
-          return;
-        }
-        if (provider.snapshot$.value.tabs.some((tab) => tab.tabId === command.tabId)) {
-          this.activeTabId = command.tabId;
-        }
-      });
+      this.providerSubscriptions.push(
+        provider.events.subscribe(({ command }) => {
+          if (
+            command.kind === "focus_tab" &&
+            provider.snapshot$.value.tabs.some((tab) => tab.tabId === command.tabId)
+          ) {
+            this.activeTabId = command.tabId;
+          }
+        }),
+      );
       this.reconcileProvider(provider);
     } catch (error) {
       if (generation === this.bindingGeneration) {
@@ -246,12 +240,10 @@ export class OpenClawBoardDocument extends OpenClawLightDomElement {
 
   private releaseProvider(): void {
     this.bindingGeneration += 1;
-    this.unsubscribeSnapshot?.();
-    this.unsubscribeLoadError?.();
-    this.unsubscribeEvents?.();
-    this.unsubscribeSnapshot = null;
-    this.unsubscribeLoadError = null;
-    this.unsubscribeEvents = null;
+    for (const unsubscribe of this.providerSubscriptions) {
+      unsubscribe();
+    }
+    this.providerSubscriptions = [];
     this.providerLease?.release();
     this.provider = null;
     this.providerLease = null;

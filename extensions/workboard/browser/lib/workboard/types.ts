@@ -97,9 +97,7 @@ export type WorkboardUiState = {
   collapsedStatuses: Set<WorkboardStatus>;
   expandedEmptyStatuses: Set<WorkboardStatus>;
   lastRefreshAt: number | null;
-  lastRefreshStartedAt: number | null;
   lastRefreshError: string | null;
-  lastRefreshSource: WorkboardRefreshSource | null;
   draftOpen: boolean;
   draftDiscardOpen: boolean;
   draftSaving: boolean;

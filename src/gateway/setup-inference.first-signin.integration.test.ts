@@ -159,6 +159,7 @@ it(
             },
             agents: { defaults: { workspace: state.workspaceDir, skipBootstrap: true } },
             plugins: {
+              allow: ["github-copilot"],
               slots: { memory: "none" },
               entries: { "github-copilot": { enabled: true } },
             },

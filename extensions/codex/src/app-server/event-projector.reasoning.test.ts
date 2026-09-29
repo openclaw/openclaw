@@ -11,108 +11,127 @@ import {
   createProjector,
   buildEmptyToolTelemetry,
   requireRecord,
-  findAgentEvent,
-  findPlanEventWithSteps,
   forCurrentTurn,
+  findPlanEventWithSteps,
   turnCompleted,
   type ProjectorNotification,
+  agentMessageDelta,
 } from "./event-projector.test-harness.js";
 
 registerCodexEventProjectorTestLifecycle();
 
-function guardianWarning(message: string, threadId = THREAD_ID): ProjectorNotification {
-  return { method: "guardianWarning", params: { threadId, message } } as ProjectorNotification;
-}
-
-function guardianReview(params: {
-  id: string;
-  status: string;
-  target?: string | null;
-  phase?: "started" | "completed";
-  riskLevel?: string;
-  userAuthorization?: string;
-  rationale?: string | null;
-  action?: Record<string, unknown>;
-}): ProjectorNotification {
-  const phase = params.phase ?? "completed";
-  return forCurrentTurn(`item/autoApprovalReview/${phase}`, {
-    reviewId: params.id,
-    targetItemId: params.target === undefined ? "cmd-1" : params.target,
-    ...(phase === "completed" ? { decisionSource: "agent" } : {}),
-    review: {
-      status: params.status,
-      ...(params.riskLevel ? { riskLevel: params.riskLevel } : {}),
-      ...(params.userAuthorization ? { userAuthorization: params.userAuthorization } : {}),
-      ...(params.rationale !== undefined ? { rationale: params.rationale } : {}),
-    },
-    action: params.action ?? {
-      type: "execve",
-      source: "shell",
-      program: "/bin/printf",
-      argv: ["printf", "hello"],
-      cwd: "/tmp",
-    },
-  });
-}
-
-function commandItem(phase: "started" | "completed", id = "cmd-1"): ProjectorNotification {
-  const completed = phase === "completed";
-  return forCurrentTurn(`item/${phase}`, {
-    item: {
-      type: "commandExecution",
-      id,
-      command: "printf hello",
-      cwd: "/tmp",
-      status: completed ? "completed" : "inProgress",
-      commandActions: [],
-      ...(completed ? { aggregatedOutput: "hello", exitCode: 0 } : {}),
-    },
-  });
-}
-
 describe("CodexAppServerEventProjector reasoning and guardian projection", () => {
-  it("preserves successful statusless native search results", async () => {
+  async function observeProjector() {
     const onAgentEvent = vi.fn();
     const projector = await createProjector({ ...(await createParams()), onAgentEvent });
+    return {
+      projector,
+      onAgentEvent,
+      async send(this: void, ...notifications: ProjectorNotification[]) {
+        for (const notification of notifications) {
+          await projector.handleNotification(notification);
+        }
+      },
+      events(this: void, stream: string, phase?: string) {
+        return onAgentEvent.mock.calls
+          .map(([event]) => event)
+          .filter((event) => event.stream === stream && (!phase || event.data.phase === phase))
+          .map((event) => event.data);
+      },
+    };
+  }
+
+  function guardianWarning(message: string, threadId = THREAD_ID): ProjectorNotification {
+    return { method: "guardianWarning", params: { threadId, message } } as ProjectorNotification;
+  }
+
+  function guardianReview(params: {
+    id: string;
+    status: string;
+    target?: string | null;
+    phase?: "started" | "completed";
+    riskLevel?: string;
+    userAuthorization?: string;
+    rationale?: string | null;
+    action?: Record<string, unknown>;
+  }): ProjectorNotification {
+    const phase = params.phase ?? "completed";
+    return forCurrentTurn(`item/autoApprovalReview/${phase}`, {
+      reviewId: params.id,
+      targetItemId: params.target === undefined ? "cmd-1" : params.target,
+      ...(phase === "completed" ? { decisionSource: "agent" } : {}),
+      review: {
+        status: params.status,
+        ...(params.riskLevel ? { riskLevel: params.riskLevel } : {}),
+        ...(params.userAuthorization ? { userAuthorization: params.userAuthorization } : {}),
+        ...(params.rationale !== undefined ? { rationale: params.rationale } : {}),
+      },
+      action: params.action ?? {
+        type: "execve",
+        source: "shell",
+        program: "/bin/printf",
+        argv: ["printf", "hello"],
+        cwd: "/tmp",
+      },
+    });
+  }
+
+  function commandItem(phase: "started" | "completed", id = "cmd-1"): ProjectorNotification {
+    return forCurrentTurn(`item/${phase}`, {
+      item: {
+        type: "commandExecution",
+        id,
+        command: "printf hello",
+        cwd: "/tmp",
+        status: phase === "completed" ? "completed" : "inProgress",
+        commandActions: [],
+        ...(phase === "completed" ? { aggregatedOutput: "hello", exitCode: 0 } : {}),
+      },
+    });
+  }
+
+  it("preserves successful statusless native search results", async () => {
+    const { send, events } = await observeProjector();
     const item = {
       id: "search-statusless",
       type: "webSearch",
       query: "sample",
       action: { type: "search", query: "sample" },
     };
-    await projector.handleNotification(forCurrentTurn("item/started", { item }));
-    await projector.handleNotification(forCurrentTurn("item/completed", { item }));
-    const events = onAgentEvent.mock.calls.map(([event]) => event);
-    expect(
-      events.find((event) => event.stream === "tool" && event.data.phase === "result")?.data,
-    ).toMatchObject({
-      isError: false,
-      result: { status: "completed", query: "sample" },
-    });
-    expect(
-      events.find(
-        (event) =>
-          event.stream === "item" &&
-          event.data.itemId === "tool:search-statusless" &&
-          event.data.phase === "end",
-      )?.data,
-    ).toMatchObject({ status: "completed" });
+    await send(
+      forCurrentTurn("item/started", { item }),
+      forCurrentTurn("item/completed", { item }),
+    );
+    expect(events("tool", "result")).toMatchObject([
+      { isError: false, result: { status: "completed", query: "sample" } },
+    ]);
+    expect(events("item", "end")).toContainEqual(
+      expect.objectContaining({ itemId: "tool:search-statusless", status: "completed" }),
+    );
   });
 
   it("projects guardian review lifecycle details into agent events", async () => {
-    const onAgentEvent = vi.fn();
-    const projector = await createProjector({ ...(await createParams()), onAgentEvent });
-
-    await projector.handleNotification(commandItem("started"));
-    await projector.handleNotification(
+    const { send, events, projector } = await observeProjector();
+    await send(
+      commandItem("started"),
       guardianReview({ id: "review-1", status: "inProgress", phase: "started" }),
+      forCurrentTurn("autoApprovalReview/strictReviewRequired", { startedAtMs: 1_787_273_600_000 }),
     );
-    await projector.handleNotification(
+    expect(events("codex_app_server.guardian", "strict_review_required")).toMatchObject([
+      {
+        method: "autoApprovalReview/strictReviewRequired",
+        threadId: THREAD_ID,
+        turnId: TURN_ID,
+        reviewId: "review-1",
+        targetItemId: "cmd-1",
+        command: "printf hello",
+        startedAtMs: 1_787_273_600_000,
+      },
+    ]);
+    await send(
       guardianWarning(
         "Automatic approval review approved (risk: low, authorization: high): Benign local probe.",
       ),
-    );
-    await projector.handleNotification(
       guardianReview({
         id: "review-1",
         status: "approved",
@@ -120,42 +139,17 @@ describe("CodexAppServerEventProjector reasoning and guardian projection", () =>
         userAuthorization: "high",
         rationale: "Benign local probe.",
       }),
+      commandItem("completed"),
     );
-    await projector.handleNotification(commandItem("completed"));
-
-    const started = findAgentEvent(onAgentEvent, {
-      stream: "codex_app_server.guardian",
-      phase: "started",
-    }).data;
-    expect(started).toMatchObject({
-      reviewId: "review-1",
-      targetItemId: "cmd-1",
-      status: "inProgress",
-    });
-    const completed = findAgentEvent(onAgentEvent, {
-      stream: "codex_app_server.guardian",
-      phase: "completed",
-    }).data;
-    expect(completed).toMatchObject({
-      reviewId: "review-1",
-      targetItemId: "cmd-1",
-      status: "approved",
-      command: "printf hello",
-    });
-    const toolReviews = onAgentEvent.mock.calls
-      .map(([event]) => event)
-      .filter(
-        (event) =>
-          event?.stream === "tool" &&
-          event.data?.phase === "review" &&
-          event.data?.toolCallId === "cmd-1",
-      );
-    expect(toolReviews.map((event) => event.data.review)).toEqual([
-      {
-        id: "review-1",
-        label: "Guardian",
-        status: "in_progress",
-      },
+    expect(events("codex_app_server.guardian", "started")).toMatchObject([
+      { reviewId: "review-1", targetItemId: "cmd-1", status: "inProgress" },
+    ]);
+    expect(events("codex_app_server.guardian", "completed")).toMatchObject([
+      { reviewId: "review-1", targetItemId: "cmd-1", status: "approved", command: "printf hello" },
+    ]);
+    const reviews = events("tool", "review");
+    expect(reviews.map((event) => event.review)).toEqual([
+      { id: "review-1", label: "Guardian", status: "in_progress" },
       {
         id: "review-1",
         label: "Guardian",
@@ -165,30 +159,38 @@ describe("CodexAppServerEventProjector reasoning and guardian projection", () =>
         rationale: "Benign local probe.",
       },
     ]);
-    expect(toolReviews[0]?.data.approvalReviewOutcome).toBe("reviewing");
-    expect(toolReviews[1]?.data.approvalReviewOutcome).toBe("approved");
-    expect(toolReviews.every((event) => event.data.hideFromChannelProgress === true)).toBe(true);
-    const result = projector.buildResult(buildEmptyToolTelemetry());
-    const toolResult = result.messagesSnapshot.find((message) => message.role === "toolResult");
+    expect(
+      reviews.map((event) => [
+        event.toolCallId,
+        event.approvalReviewOutcome,
+        event.hideFromChannelProgress,
+      ]),
+    ).toEqual([
+      ["cmd-1", "reviewing", true],
+      ["cmd-1", "approved", true],
+    ]);
+    const toolResult = projector
+      .buildResult(buildEmptyToolTelemetry())
+      .messagesSnapshot.find((message) => message.role === "toolResult");
     expect(requireRecord(toolResult, "reviewed tool result").details).toMatchObject({
       approvalReviews: [{ id: "review-1", status: "approved" }],
       approvalReviewOutcome: "approved",
     });
+    expect(
+      projector.buildResult(buildEmptyToolTelemetry()).didSendDeterministicApprovalPrompt,
+    ).toBe(false);
   });
 
-  it("correlates identical parallel routine warnings with two distinct command reviews", async () => {
-    const onAgentEvent = vi.fn();
-    const projector = await createProjector({ ...(await createParams()), onAgentEvent });
-    const warning =
-      "Automatic approval review approved (risk: low, authorization: high): Safe command.";
-
+  it("correlates identical routine warnings with distinct command reviews", async () => {
+    const { send, events } = await observeProjector();
     for (const [index, command] of ["printf first", "printf second"].entries()) {
-      const itemId = `cmd-${index + 1}`;
-      await projector.handleNotification(guardianWarning(warning));
-      await projector.handleNotification(
+      await send(
+        guardianWarning(
+          "Automatic approval review approved (risk: low, authorization: high): Safe command.",
+        ),
         guardianReview({
           id: `review-${index + 1}`,
-          target: itemId,
+          target: `cmd-${index + 1}`,
           status: "approved",
           riskLevel: "low",
           userAuthorization: "high",
@@ -197,33 +199,23 @@ describe("CodexAppServerEventProjector reasoning and guardian projection", () =>
         }),
       );
     }
-
-    const events = onAgentEvent.mock.calls.map(([event]) => event);
-    expect(
-      events.filter(
-        (event) => event.stream === "codex_app_server.guardian" && event.data.phase === "warning",
-      ),
-    ).toEqual([]);
-    expect(
-      events
-        .filter((event) => event.stream === "tool" && event.data.phase === "review")
-        .map((event) => event.data.review.id),
-    ).toEqual(["review-1", "review-2"]);
+    expect(events("codex_app_server.guardian", "warning")).toEqual([]);
+    expect(events("tool", "review").map((event) => event.review.id)).toEqual([
+      "review-1",
+      "review-2",
+    ]);
   });
 
-  it("flushes routine warnings at targetless, unrelated, and projector-finalization boundaries", async () => {
-    const onAgentEvent = vi.fn();
-    const projector = await createProjector({ ...(await createParams()), onAgentEvent });
-    const approvedWarning =
+  it("flushes warnings at targetless, unrelated, and finalization boundaries", async () => {
+    const { send, events, projector, onAgentEvent } = await observeProjector();
+    const approved =
       "Automatic approval review approved (risk: low, authorization: high): Network call.";
-    const deniedWarning =
+    const denied =
       "Automatic approval review denied (risk: high, authorization: low): Unsafe command.";
-    const timeoutWarning =
-      "Automatic approval review timed out while evaluating the requested approval.";
-
-    await projector.handleNotification(guardianWarning(approvedWarning));
+    const timeout = "Automatic approval review timed out while evaluating the requested approval.";
+    await send(guardianWarning(approved));
     expect(onAgentEvent).not.toHaveBeenCalled();
-    await projector.handleNotification(
+    await send(
       guardianReview({
         id: "review-network",
         target: null,
@@ -239,41 +231,31 @@ describe("CodexAppServerEventProjector reasoning and guardian projection", () =>
           port: 443,
         },
       }),
-    );
-    await projector.handleNotification(guardianWarning(deniedWarning));
-    await projector.handleNotification(
+      guardianWarning(denied),
       forCurrentTurn("item/plan/delta", { itemId: "plan-1", delta: "continue" }),
+      guardianWarning(timeout),
     );
-    await projector.handleNotification(guardianWarning(timeoutWarning));
     projector.buildResult(buildEmptyToolTelemetry());
-
-    const warnings = onAgentEvent.mock.calls
-      .map(([event]) => event)
-      .filter(
-        (event) => event.stream === "codex_app_server.guardian" && event.data.phase === "warning",
-      );
-    expect(warnings.map((event) => event.data.message)).toEqual([
-      approvedWarning,
-      deniedWarning,
-      timeoutWarning,
+    expect(events("codex_app_server.guardian", "completed")).toMatchObject([
+      { reviewId: "review-network", targetItemId: null, command: "https://example.invalid" },
     ]);
-    expect(
-      onAgentEvent.mock.calls
-        .map(([event]) => event)
-        .filter((event) => event.stream === "tool" && event.data.phase === "review"),
-    ).toEqual([]);
+    expect(events("codex_app_server.guardian", "warning").map((event) => event.message)).toEqual([
+      approved,
+      denied,
+      timeout,
+    ]);
+    expect(events("tool", "review")).toEqual([]);
   });
 
   it.each([
     { firstStatus: "denied", liveOutcome: "denied", persistedOutcome: "denied" },
     { firstStatus: "inProgress", liveOutcome: "reviewing", persistedOutcome: "approved" },
   ])("bounds rows without losing a $liveOutcome aggregate", async (scenario) => {
-    const onAgentEvent = vi.fn();
-    const projector = await createProjector({ ...(await createParams()), onAgentEvent });
-    await projector.handleNotification(commandItem("started", "cmd-many-reviews"));
+    const { send, events, projector } = await observeProjector();
+    await send(commandItem("started", "cmd-many-reviews"));
     for (let index = 0; index < 18; index += 1) {
       const status = index === 0 ? scenario.firstStatus : "approved";
-      await projector.handleNotification(
+      await send(
         guardianReview({
           id: `review-${index}`,
           target: "cmd-many-reviews",
@@ -285,46 +267,31 @@ describe("CodexAppServerEventProjector reasoning and guardian projection", () =>
         }),
       );
     }
-    const reviewEvents = onAgentEvent.mock.calls
-      .map(([event]) => event)
-      .filter((event) => event.stream === "tool" && event.data.phase === "review");
-    expect(reviewEvents.at(-1)?.data.approvalReviewOutcome).toBe(scenario.liveOutcome);
-    await projector.handleNotification(commandItem("completed", "cmd-many-reviews"));
-
-    const result = projector.buildResult(buildEmptyToolTelemetry());
-    const toolResult = result.messagesSnapshot.find((message) => message.role === "toolResult");
-    const details = requireRecord(toolResult, "bounded review tool result").details as {
-      approvalReviews: Array<{ id: string }>;
-      approvalReviewOutcome: string;
-    };
-    expect(details.approvalReviews).toHaveLength(16);
-    expect(details.approvalReviews.map((review) => review.id)).toEqual(
-      Array.from({ length: 16 }, (_, index) => `review-${index + 2}`),
-    );
-    expect(details.approvalReviewOutcome).toBe(scenario.persistedOutcome);
-    expect(
-      onAgentEvent.mock.calls
-        .map(([event]) => event)
-        .find((event) => event.stream === "tool" && event.data.phase === "result")?.data
-        .approvalReviewOutcome,
-    ).toBe(scenario.persistedOutcome);
+    expect(events("tool", "review").at(-1)?.approvalReviewOutcome).toBe(scenario.liveOutcome);
+    await send(commandItem("completed", "cmd-many-reviews"));
+    const toolResult = projector
+      .buildResult(buildEmptyToolTelemetry())
+      .messagesSnapshot.find((message) => message.role === "toolResult");
+    expect(requireRecord(toolResult, "bounded review tool result").details).toMatchObject({
+      approvalReviews: Array.from({ length: 16 }, (_, index) => ({ id: `review-${index + 2}` })),
+      approvalReviewOutcome: scenario.persistedOutcome,
+    });
+    expect(events("tool", "result")[0]?.approvalReviewOutcome).toBe(scenario.persistedOutcome);
   });
 
   it.each([
     {
       status: "timedOut",
       normalizedStatus: "timed_out",
-      warning: "Automatic approval review timed out while evaluating the requested approval.",
       rationale: "Automatic approval review timed out while evaluating the requested approval.",
     },
-    { status: "aborted", normalizedStatus: "aborted", warning: undefined, rationale: null },
+    { status: "aborted", normalizedStatus: "aborted", rationale: null },
   ])("keeps a targeted $normalizedStatus review command-owned", async (terminal) => {
-    const onAgentEvent = vi.fn();
-    const projector = await createProjector({ ...(await createParams()), onAgentEvent });
-    if (terminal.warning) {
-      await projector.handleNotification(guardianWarning(terminal.warning));
+    const { send, events } = await observeProjector();
+    if (terminal.rationale) {
+      await send(guardianWarning(terminal.rationale));
     }
-    await projector.handleNotification(
+    await send(
       guardianReview({
         id: `review-${terminal.normalizedStatus}`,
         target: "cmd-terminal",
@@ -332,147 +299,51 @@ describe("CodexAppServerEventProjector reasoning and guardian projection", () =>
         rationale: terminal.rationale,
       }),
     );
-
-    const events = onAgentEvent.mock.calls.map(([event]) => event);
-    expect(
-      events.filter(
-        (event) => event.stream === "codex_app_server.guardian" && event.data.phase === "warning",
-      ),
-    ).toEqual([]);
-    expect(
-      events.find((event) => event.stream === "tool" && event.data.phase === "review")?.data,
-    ).toMatchObject({
-      approvalReviewOutcome: "denied",
-      review: { status: terminal.normalizedStatus },
-    });
+    expect(events("codex_app_server.guardian", "warning")).toEqual([]);
+    expect(events("tool", "review")).toMatchObject([
+      { approvalReviewOutcome: "denied", review: { status: terminal.normalizedStatus } },
+    ]);
   });
 
   it("projects thread-scoped guardian warnings", async () => {
-    const onAgentEvent = vi.fn();
-    const projector = await createProjector({ ...(await createParams()), onAgentEvent });
-
-    await projector.handleNotification(guardianWarning("Wrong thread.", "thread-other"));
-    await projector.handleNotification(
-      guardianWarning("Guardian rejection limit reached; ending turn as interrupted."),
-    );
+    const { send, projector, onAgentEvent } = await observeProjector();
+    const message = "Guardian rejection limit reached; ending turn as interrupted.";
+    await send(guardianWarning("Wrong thread.", "thread-other"), guardianWarning(message));
     projector.buildResult(buildEmptyToolTelemetry());
-
-    const warnings = onAgentEvent.mock.calls.map(([event]) => event.data.message);
-    expect(warnings).toEqual(["Guardian rejection limit reached; ending turn as interrupted."]);
-  });
-
-  it("describes targetless network reviews using the upstream network target", async () => {
-    const onAgentEvent = vi.fn();
-    const projector = await createProjector({ ...(await createParams()), onAgentEvent });
-
-    await projector.handleNotification(
-      guardianReview({
-        id: "network-review",
-        status: "inProgress",
-        phase: "started",
-        target: null,
-        action: {
-          type: "networkAccess",
-          target: "https://api.example.test:443",
-          host: "api.example.test",
-          protocol: "https",
-          port: 443,
-        },
-      }),
-    );
-
-    expect(onAgentEvent).toHaveBeenCalledWith({
-      stream: "codex_app_server.guardian",
-      data: expect.objectContaining({
-        phase: "started",
-        reviewId: "network-review",
-        targetItemId: null,
-        command: "https://api.example.test:443",
-      }),
-    });
-  });
-
-  it("preserves Codex 0.149 strict-review correlation for its active Guardian assessment", async () => {
-    const onAgentEvent = vi.fn();
-    const projector = await createProjector({ ...(await createParams()), onAgentEvent });
-
-    await projector.handleNotification(
-      guardianReview({ id: "strict-review", status: "inProgress", phase: "started" }),
-    );
-    await projector.handleNotification(
-      forCurrentTurn("autoApprovalReview/strictReviewRequired", {
-        startedAtMs: 1_787_273_600_000,
-      }),
-    );
-
-    expect(
-      findAgentEvent(onAgentEvent, {
-        stream: "codex_app_server.guardian",
-        phase: "strict_review_required",
-      }).data,
-    ).toMatchObject({
-      method: "autoApprovalReview/strictReviewRequired",
-      threadId: THREAD_ID,
-      turnId: TURN_ID,
-      reviewId: "strict-review",
-      targetItemId: "cmd-1",
-      command: "printf hello",
-      startedAtMs: 1_787_273_600_000,
-    });
-    expect(
-      projector.buildResult(buildEmptyToolTelemetry()).didSendDeterministicApprovalPrompt,
-    ).toBe(false);
+    expect(onAgentEvent.mock.calls.map(([event]) => event.data.message)).toEqual([message]);
   });
 
   it.each([
-    {
-      name: "unsupported service tier",
-      message:
-        "Configured service tier `priority` is not advertised as supported for model `test-no-tier-model` and will be omitted from requests.",
-    },
-    {
-      name: "host-managed Code Mode metadata",
-      message:
-        "Code Mode is enabled in configuration, but model `gpt-5.6-sol` does not advertise Code Mode support. This may degrade model performance. Disable `features.code_mode` and `features.code_mode_only`, or select a model whose metadata enables Code Mode.",
-    },
-  ])("logs $name warnings without projecting a UI notice", async ({ message }) => {
+    "Configured service tier `priority` is not advertised as supported for model `test-no-tier-model` and will be omitted from requests.",
+    "Code Mode is enabled in configuration, but model `gpt-5.6-sol` does not advertise Code Mode support. This may degrade model performance. Disable `features.code_mode` and `features.code_mode_only`, or select a model whose metadata enables Code Mode.",
+  ])("keeps only the exact managed warning log-only: %s", async (message) => {
     const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
-    const onAgentEvent = vi.fn();
-    const projector = await createProjector({ ...(await createParams()), onAgentEvent });
-
-    await projector.handleNotification({
-      method: "warning",
-      params: { threadId: THREAD_ID, message },
-    });
-
+    const { send, onAgentEvent } = await observeProjector();
+    await send({ method: "warning", params: { threadId: THREAD_ID, message } });
     expect(onAgentEvent).not.toHaveBeenCalled();
     expect(warn).toHaveBeenCalledWith(message);
+    const actionable = `${message} Additional action required.`;
+    await send({ method: "warning", params: { threadId: THREAD_ID, message: actionable } });
+    expect(onAgentEvent.mock.calls.map(([event]) => event)).toEqual([
+      { stream: "notice", data: { phase: "warning", message: actionable } },
+    ]);
   });
 
-  it.each([
-    "Project hooks were disabled.",
-    "Configured service tier `priority` is not advertised as supported for model `test-no-tier-model` and will be omitted from requests. Additional action required.",
-    "Code Mode is enabled in configuration, but model `gpt-5.6-sol` does not advertise Code Mode support. This may degrade model performance. Disable `features.code_mode` and `features.code_mode_only`, or select a model whose metadata enables Code Mode. Additional action required.",
-  ])("surfaces startup and thread warnings: %s", async (message) => {
-    const onAgentEvent = vi.fn();
-    const projector = await createProjector({ ...(await createParams()), onAgentEvent });
-
-    await projector.handleNotification({
-      method: "configWarning",
-      params: {
-        summary: "Error parsing rules; custom rules not applied.",
-        details: "rules.toml: unexpected token",
+  it("surfaces configuration warnings and ignores another thread", async () => {
+    const { send, onAgentEvent } = await observeProjector();
+    await send(
+      {
+        method: "configWarning",
+        params: {
+          summary: "Error parsing rules; custom rules not applied.",
+          details: "rules.toml: unexpected token",
+        },
       },
-    });
-    await projector.handleNotification({
-      method: "warning",
-      params: { threadId: THREAD_ID, message },
-    });
-    await projector.handleNotification({
-      method: "warning",
-      params: { threadId: "another-thread", message: "Other session warning." },
-    });
-
+      {
+        method: "warning",
+        params: { threadId: "another-thread", message: "Other session warning." },
+      },
+    );
     expect(onAgentEvent.mock.calls.map(([event]) => event)).toEqual([
       {
         stream: "notice",
@@ -481,203 +352,142 @@ describe("CodexAppServerEventProjector reasoning and guardian projection", () =>
           message: "Error parsing rules; custom rules not applied.\nrules.toml: unexpected token",
         },
       },
-      {
-        stream: "notice",
-        data: { phase: "warning", message },
-      },
     ]);
   });
 
-  it("projects reasoning end, plan updates, compaction state, and tool metadata", async () => {
-    const onReasoningStream = vi.fn();
-    const onReasoningEnd = vi.fn();
-    const onAgentEvent = vi.fn();
-    const params = {
-      ...(await createParams()),
-      onReasoningStream,
-      onReasoningEnd,
-      onAgentEvent,
-    };
-    const onContextCompacted = vi.fn();
-    const projector = await createProjector(params, { onContextCompacted });
-
-    await projector.handleNotification(
-      forCurrentTurn("item/started", { item: { type: "reasoning", id: "reason-1" } }),
-    );
-    await projector.handleNotification(
-      forCurrentTurn("item/reasoning/textDelta", { itemId: "reason-1", delta: "thinking" }),
-    );
-    await projector.handleNotification(
+  it("projects streamed and structured plans without adding them to history", async () => {
+    const { send, events, projector, onAgentEvent } = await observeProjector();
+    await send(
       forCurrentTurn("item/plan/delta", { itemId: "plan-1", delta: "- inspect\n" }),
-    );
-    await projector.handleNotification(
       forCurrentTurn("turn/plan/updated", {
         explanation: "next",
         plan: [{ step: "patch", status: "inProgress" }],
       }),
+      turnCompleted(),
     );
-    await projector.handleNotification(
-      forCurrentTurn("item/started", {
-        item: { type: "contextCompaction", id: "compact-1" },
-      }),
-    );
-    expect(projector.isCompacting()).toBe(true);
-    await projector.handleNotification(
-      forCurrentTurn("item/completed", {
-        item: { type: "contextCompaction", id: "compact-1" },
-      }),
-    );
-    expect(projector.isCompacting()).toBe(false);
-    await projector.handleNotification(
-      forCurrentTurn("item/completed", {
-        item: {
-          type: "dynamicToolCall",
-          id: "tool-1",
-          tool: "sessions_send",
-          status: "completed",
-        },
-      }),
-    );
-    await projector.handleNotification(turnCompleted());
-
-    const result = projector.buildResult(buildEmptyToolTelemetry());
-
-    expect(onReasoningStream).toHaveBeenCalledWith({
-      text: "thinking",
-      isReasoningSnapshot: true,
-    });
-    expect(onReasoningEnd).toHaveBeenCalledTimes(1);
-    for (const itemId of ["reason-1", "compact-1"]) {
-      expect(onAgentEvent).toHaveBeenCalledWith(
-        expect.objectContaining({
-          stream: "item",
-          data: expect.objectContaining({
-            itemId,
-            kind: "analysis",
-            phase: "start",
-            hideFromChannelProgress: true,
-          }),
-        }),
-      );
-    }
-    expect(onAgentEvent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        stream: "item",
-        data: expect.objectContaining({
-          itemId: "compact-1",
-          kind: "analysis",
-          phase: "end",
-          status: "completed",
-          hideFromChannelProgress: true,
-        }),
-      }),
-    );
+    expect(events("plan")).toHaveLength(2);
     expect(
       findPlanEventWithSteps(onAgentEvent, [{ step: "inspect", status: "pending" }]).steps,
     ).toEqual([{ step: "inspect", status: "pending" }]);
     expect(
-      findPlanEventWithSteps(onAgentEvent, [{ step: "patch", status: "in_progress" }]).steps,
-    ).toEqual([{ step: "patch", status: "in_progress" }]);
-    expect(findAgentEvent(onAgentEvent, { stream: "compaction", phase: "start" }).data.itemId).toBe(
-      "compact-1",
-    );
-    expect(findAgentEvent(onAgentEvent, { stream: "compaction", phase: "end" }).data).toMatchObject(
-      {
-        itemId: "compact-1",
-        completed: true,
-      },
-    );
-    expect(result.toolMetas).toEqual([{ toolName: "sessions_send", isError: false }]);
-    expect(result.messagesSnapshot.map((message) => message.role)).toEqual(["user", "assistant"]);
-    expect(result.messagesSnapshot[1]).toMatchObject({
-      role: "assistant",
-      content: [{ type: "thinking", thinking: "thinking" }],
-    });
-    expect(JSON.stringify(result.messagesSnapshot)).not.toContain("Codex plan:");
-    expect(result.compactionCount).toBe(1);
-    expect(requireRecord(result.itemLifecycle, "item lifecycle")).not.toHaveProperty(
-      "compactionCount",
-    );
-    expect(onContextCompacted).toHaveBeenCalledOnce();
+      findPlanEventWithSteps(onAgentEvent, [{ step: "patch", status: "in_progress" }]),
+    ).toMatchObject({ explanation: "next", steps: [{ step: "patch", status: "in_progress" }] });
+    expect(
+      JSON.stringify(projector.buildResult(buildEmptyToolTelemetry()).messagesSnapshot),
+    ).not.toContain("Codex plan:");
   });
 
-  it.each([
-    ["textDelta", "contentIndex"],
-    ["summaryTextDelta", "summaryIndex"],
-  ])("streams reasoning %s snapshots in section order", async (method, indexField) => {
+  it("orders streamed reasoning sections and replaces them with authoritative completion", async () => {
     const onReasoningStream = vi.fn();
-    const projector = await createProjector({ ...(await createParams()), onReasoningStream });
-
-    for (const [index, delta] of [
-      [1, "Second"],
-      [0, "First "],
-      [0, "section"],
+    const onReasoningEnd = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      onReasoningStream,
+      onReasoningEnd,
+    });
+    for (const [method, indexField, prefix] of [
+      ["summaryTextDelta", "summaryIndex", ""],
+      ["textDelta", "contentIndex", "First section\n\nSecond\n\n"],
     ] as const) {
-      await projector.handleNotification(
-        forCurrentTurn(`item/reasoning/${method}`, {
-          itemId: "reason-1",
-          [indexField]: index,
-          delta,
-        }),
-      );
-    }
-
-    expect(onReasoningStream.mock.calls).toEqual([
-      [{ text: "Second", isReasoningSnapshot: true }],
-      [{ text: "First \n\nSecond", isReasoningSnapshot: true }],
-      [{ text: "First section\n\nSecond", isReasoningSnapshot: true }],
-    ]);
-  });
-
-  it.each([false, true])(
-    "uses completed reasoning sections for streams and history with prior deltas=%s",
-    async (streamDeltas) => {
-      const onReasoningStream = vi.fn();
-      const onReasoningEnd = vi.fn();
-      const projector = await createProjector({
-        ...(await createParams()),
-        onReasoningStream,
-        onReasoningEnd,
-      });
-      if (streamDeltas) {
+      for (const [index, delta] of [
+        [1, "Second"],
+        [0, "First "],
+        [0, "section"],
+      ] as const) {
         await projector.handleNotification(
-          forCurrentTurn("item/reasoning/summaryTextDelta", {
+          forCurrentTurn(`item/reasoning/${method}`, {
             itemId: "reason-1",
-            summaryIndex: 1,
-            delta: "Partial summary",
-          }),
-        );
-        await projector.handleNotification(
-          forCurrentTurn("item/reasoning/textDelta", {
-            itemId: "reason-1",
-            contentIndex: 1,
-            delta: "Superseded section",
+            [indexField]: index,
+            delta,
           }),
         );
       }
-      await projector.handleNotification(
-        forCurrentTurn("item/completed", {
-          item: {
-            type: "reasoning",
-            id: "reason-1",
-            summary: ["First summary", "Second summary"],
-            content: ["Completed reasoning"],
-          },
-        }),
-      );
-      await projector.handleNotification(
-        forCurrentTurn("item/completed", {
-          item: { type: "reasoning", id: "reason-2", summary: ["Next item"], content: [] },
-        }),
-      );
-      await projector.handleNotification(turnCompleted());
+      expect(onReasoningStream.mock.calls.slice(-3)).toEqual([
+        [{ text: `${prefix}Second`, isReasoningSnapshot: true }],
+        [{ text: `${prefix}First \n\nSecond`, isReasoningSnapshot: true }],
+        [{ text: `${prefix}First section\n\nSecond`, isReasoningSnapshot: true }],
+      ]);
+    }
+    expect(onReasoningStream).toHaveBeenCalledTimes(6);
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "reasoning",
+          id: "reason-1",
+          summary: ["First summary", "Second summary"],
+          content: ["Completed reasoning"],
+        },
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "reasoning",
+          id: "reason-2",
+          summary: ["Next item"],
+          content: [],
+        },
+      }),
+    );
+    await projector.handleNotification(turnCompleted());
+    const text = "First summary\n\nSecond summary\n\nCompleted reasoning\n\nNext item";
+    expect(onReasoningStream).toHaveBeenLastCalledWith({ text, isReasoningSnapshot: true });
+    expect(onReasoningEnd).toHaveBeenCalledOnce();
+    expect(projector.buildResult(buildEmptyToolTelemetry()).messagesSnapshot).toContainEqual(
+      expect.objectContaining({ content: [{ type: "thinking", thinking: text }] }),
+    );
+  });
+});
 
-      const text = "First summary\n\nSecond summary\n\nCompleted reasoning\n\nNext item";
-      expect(onReasoningStream).toHaveBeenLastCalledWith({ text, isReasoningSnapshot: true });
-      expect(onReasoningEnd).toHaveBeenCalledOnce();
-      expect(projector.buildResult(buildEmptyToolTelemetry()).messagesSnapshot).toContainEqual(
-        expect.objectContaining({ content: [{ type: "thinking", thinking: text }] }),
+describe("CodexAppServerEventProjector started text", () => {
+  it.each(["final_answer", "commentary"])(
+    "includes started-item text in the %s stream before subsequent deltas",
+    async (phase) => {
+      const onAgentEvent = vi.fn();
+      const onPartialReply = vi.fn();
+      const projector = await createProjector({
+        ...(await createParams()),
+        onAgentEvent,
+        onPartialReply,
+      });
+
+      await projector.handleNotification(
+        forCurrentTurn("item/started", {
+          item: { type: "agentMessage", id: "msg-1", phase, text: "Hello " },
+        }),
       );
+      expect(onAgentEvent).toHaveBeenCalledWith({
+        stream: phase === "commentary" ? "item" : "assistant",
+        data: expect.objectContaining(
+          phase === "commentary" ? { progressText: "Hello" } : { text: "Hello ", delta: "Hello " },
+        ),
+      });
+
+      await projector.handleNotification(agentMessageDelta("world"));
+      await projector.handleNotification(
+        forCurrentTurn("item/started", {
+          item: { type: "agentMessage", id: "msg-1", phase, text: "Hello " },
+        }),
+      );
+      await projector.handleNotification(agentMessageDelta("!"));
+
+      expect(onAgentEvent).toHaveBeenCalledWith({
+        stream: phase === "commentary" ? "item" : "assistant",
+        data: expect.objectContaining(
+          phase === "commentary"
+            ? { progressText: "Hello world!" }
+            : { text: "Hello world!", delta: "!" },
+        ),
+      });
+      if (phase === "commentary") {
+        expect(onPartialReply).not.toHaveBeenCalled();
+      } else {
+        expect(onPartialReply.mock.calls.map(([payload]) => payload)).toEqual([
+          { text: "Hello ", delta: "Hello " },
+          { text: "Hello world", delta: "world" },
+          { text: "Hello world!", delta: "!" },
+        ]);
+      }
     },
   );
 });

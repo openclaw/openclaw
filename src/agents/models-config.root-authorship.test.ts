@@ -8,6 +8,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { clearRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
 
 const { resolveRuntimePluginDiscoveryProviders } = vi.hoisted(() => ({
   resolveRuntimePluginDiscoveryProviders: vi.fn(),
@@ -57,98 +58,101 @@ const metadata = createPluginMetadataSnapshotFixture({
 describe("manual root catalog authorship", () => {
   let state: OpenClawTestState;
   beforeEach(async () => {
+    clearRuntimeAuthProfileStoreSnapshots();
     state = await createOpenClawTestState({ label: "manual-root-catalog" });
   });
   afterEach(async () => {
+    clearRuntimeAuthProfileStoreSnapshots();
     await state.cleanup();
     vi.clearAllMocks();
   });
 
-  it.each([
-    ["latest", "middle"],
-    ["middle", "latest"],
-  ])(
-    "keeps manual, implicit, and generated ids literal across replanning (%s first)",
-    async (first, second) => {
-      const modelIds = [first, second];
-      const models = modelIds.map((id) => ({ ...native.models[0]!, id, name: id }));
-      const discovered = { ...native, models: [...native.models, ...models] };
-      const provider: ProviderPlugin = {
-        id: "fixture",
-        pluginId: "catalog-owner",
-        label: "Fixture",
-        auth: [],
-        staticCatalog: { order: "simple", run: async () => ({ provider: discovered }) },
-      };
-      resolveRuntimePluginDiscoveryProviders.mockResolvedValue([provider]);
-      const manual: ModelProviderConfig = {
-        ...native,
-        baseUrl: "https://manual.example/v1",
-        apiKey: "manual-root-key",
-        headers: { "X-Manual": "preserve" },
-        models: [
-          {
-            ...native.models[0]!,
-            id: "manual-model",
-            name: "Manual root model",
-            contextWindow: 24576,
-          },
-          ...models,
-        ],
-      };
-      const cached = { ...native, models };
-      const root = {
-        providers: { fixture: manual, "auth-only": { apiKey: "auth-only-key", models: [] } },
-      };
-      const rootPath = path.join(state.agentDir(), "models.json");
-      let rootContents = JSON.stringify(root);
-      let pluginContents = JSON.stringify({
-        generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
-        providers: { fixture: native, "cached-fixture": cached },
+  it("keeps manual, implicit, and generated ids literal across replanning", async () => {
+    const modelIds = ["latest", "middle"];
+    const models = modelIds.map((id) => ({ ...native.models[0]!, id, name: id }));
+    const discovered = { ...native, models: [...native.models, ...models] };
+    const provider: ProviderPlugin = {
+      id: "fixture",
+      pluginId: "catalog-owner",
+      label: "Fixture",
+      auth: [],
+      staticCatalog: { order: "simple", run: async () => ({ provider: discovered }) },
+    };
+    resolveRuntimePluginDiscoveryProviders.mockResolvedValue([provider]);
+    const manual: ModelProviderConfig = {
+      ...native,
+      baseUrl: "https://manual.example/v1",
+      apiKey: "manual-root-key",
+      headers: { "X-Manual": "preserve" },
+      models: [
+        {
+          ...native.models[0]!,
+          id: "manual-model",
+          name: "Manual root model",
+          contextWindow: 24576,
+        },
+        ...models,
+      ],
+    };
+    const cached = { ...native, models };
+    const root = {
+      providers: { fixture: manual, "auth-only": { apiKey: "auth-only-key", models: [] } },
+    };
+    const rootPath = path.join(state.agentDir(), "models.json");
+    let rootContents = JSON.stringify(root);
+    let pluginContents = JSON.stringify({
+      generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+      providers: {
+        fixture: {
+          ...native,
+          baseUrl: "https://persisted.example/v1",
+          apiKey: "persisted-plugin-key",
+        },
+        "cached-fixture": cached,
+      },
+    });
+    await fs.mkdir(state.agentDir(), { recursive: true });
+
+    for (let pass = 0; pass < 3; pass++) {
+      // Each pass starts from the prior planned generation, installed only by this fixture.
+      await fs.writeFile(rootPath, rootContents);
+      replacePersistedPluginModelCatalogs({
+        agentDir: state.agentDir(),
+        pluginCatalogWrites: { "plugins/catalog-owner/catalog.json": pluginContents },
       });
-      await fs.mkdir(state.agentDir(), { recursive: true });
+      const persistedCatalogs = loadPersistedPluginModelCatalogsReadOnly(state.agentDir());
+      const planned = await planOpenClawModelsJsonSource({}, state.agentDir(), {
+        env: state.env,
+        pluginMetadataSnapshot: metadata,
+        providerDiscoveryProviderIds: ["fixture"],
+        providerDiscoveryEntriesOnly: true,
+      });
 
-      for (let pass = 0; pass < 3; pass++) {
-        // Each pass starts from the prior planned generation, installed only by this fixture.
-        await fs.writeFile(rootPath, rootContents);
-        replacePersistedPluginModelCatalogs({
-          agentDir: state.agentDir(),
-          pluginCatalogWrites: { "plugins/catalog-owner/catalog.json": pluginContents },
-        });
-        const persistedCatalogs = loadPersistedPluginModelCatalogsReadOnly(state.agentDir());
-        const planned = await planOpenClawModelsJsonSource({}, state.agentDir(), {
-          env: state.env,
-          pluginMetadataSnapshot: metadata,
-          providerDiscoveryProviderIds: ["fixture"],
-          providerDiscoveryEntriesOnly: true,
-        });
-
-        assert(planned.modelsJsonContents, "The plan must retain the manual root catalog");
-        const plannedRoot = JSON.parse(planned.modelsJsonContents);
-        expect(plannedRoot).toEqual(root);
-        expect(
-          plannedRoot.providers.fixture.models.map((model: { id: string }) => model.id),
-        ).toEqual(["manual-model", ...modelIds]);
-        expect(planned.pluginCatalogs).toHaveLength(1);
-        const generated = planned.pluginCatalogs.find(
-          ({ pluginId }) => pluginId === "catalog-owner",
-        );
-        assert(generated, "The refreshed plugin catalog must remain independently generated");
-        const generatedProviders = JSON.parse(generated.contents).providers;
-        expect(generatedProviders.fixture.models.map((model: { id: string }) => model.id)).toEqual([
-          "native-model",
-          ...modelIds,
-        ]);
-        expect(
-          generatedProviders["cached-fixture"].models.map((model: { id: string }) => model.id),
-        ).toEqual(modelIds);
-        expect(await fs.readFile(rootPath, "utf8")).toBe(rootContents);
-        expect(loadPersistedPluginModelCatalogsReadOnly(state.agentDir())).toEqual(
-          persistedCatalogs,
-        );
-        rootContents = planned.modelsJsonContents;
-        pluginContents = generated.contents;
-      }
-    },
-  );
+      assert(planned.modelsJsonContents, "The plan must retain the manual root catalog");
+      const plannedRoot = JSON.parse(planned.modelsJsonContents);
+      expect(plannedRoot).toEqual(root);
+      expect(plannedRoot.providers.fixture.models.map((model: { id: string }) => model.id)).toEqual(
+        ["manual-model", ...modelIds],
+      );
+      expect(planned.pluginCatalogs).toHaveLength(1);
+      const generated = planned.pluginCatalogs.find(({ pluginId }) => pluginId === "catalog-owner");
+      assert(generated, "The refreshed plugin catalog must remain independently generated");
+      const generatedProviders = JSON.parse(generated.contents).providers;
+      expect(generatedProviders.fixture).toMatchObject({
+        baseUrl: "https://persisted.example/v1",
+        apiKey: "persisted-plugin-key",
+      });
+      expect(generatedProviders.fixture.models.map((model: { id: string }) => model.id)).toEqual([
+        "native-model",
+        ...modelIds,
+      ]);
+      expect(
+        generatedProviders["cached-fixture"].models.map((model: { id: string }) => model.id),
+      ).toEqual(modelIds);
+      expect(await fs.readFile(rootPath, "utf8")).toBe(rootContents);
+      expect(loadPersistedPluginModelCatalogsReadOnly(state.agentDir())).toEqual(persistedCatalogs);
+      rootContents = planned.modelsJsonContents;
+      pluginContents = generated.contents;
+    }
+  });
 });

@@ -82,6 +82,7 @@ import {
   respondPlainText,
 } from "./control-ui-http-utils.js";
 import { resolveAssistantMediaRoutePath } from "./control-ui-resource-routes.js";
+import { selectControlUiRoutePreloads } from "./control-ui-route-preloads.js";
 import { classifyControlUiRequest, isControlUiApprovalDocumentPath } from "./control-ui-routing.js";
 import { isControlUiSharePath, serveControlUiShareDocument } from "./control-ui-share.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
@@ -755,13 +756,24 @@ async function serveResolvedIndexHtml(
   req: IncomingMessage,
   res: ServerResponse,
   body: string,
+  uiPath: string,
   basePath?: string,
   allowWasm?: boolean,
   environment?: ControlUiEnvironment,
   buildId?: string,
 ) {
   const normalizedBasePath = normalizeControlUiBasePath(basePath);
-  const withBasePath = rewriteControlUiIndexHtmlAssetHrefs(body, normalizedBasePath, buildId);
+  const preloadRoute =
+    uiPath === "/chat" || uiPath.startsWith("/chat/")
+      ? "chat"
+      : uiPath === "/new" || uiPath === "/new/"
+        ? "new"
+        : null;
+  const withBasePath = rewriteControlUiIndexHtmlAssetHrefs(
+    selectControlUiRoutePreloads(body, preloadRoute),
+    normalizedBasePath,
+    buildId,
+  );
   // An empty base path is authoritative for Gateway resources even when the
   // router infers a namespace. Always emit it so resources stay root-mounted.
   const basePathAttribute = ` ${CONTROL_UI_BASE_PATH_ATTRIBUTE}="${escapeHtml(normalizedBasePath)}"`;
@@ -1096,6 +1108,7 @@ export async function handleControlUiHttpRequest(
         req,
         res,
         prepared.file.body.toString("utf8"),
+        uiPath,
         basePath,
         terminalEnabled,
         opts?.config?.gateway?.controlUi?.environment,

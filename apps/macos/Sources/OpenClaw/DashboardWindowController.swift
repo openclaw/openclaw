@@ -115,11 +115,6 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     private var browserProfileImportOfferIsArmed = false
     private var browserProfileImportOfferRequestIsInFlight = false
     private var browserProfileImportOfferRetryPending = false
-    private var hasLiveContent: Bool {
-        get { self.documentHost.hasLiveContent }
-        set { self.documentHost.hasLiveContent = newValue }
-    }
-
     private var nativeCommandsReady = false
     private(set) var gatewayHealth: DashboardGatewayHealth?
     private var gatewayHealthReadRevision: UInt64 = 0
@@ -135,10 +130,6 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     private var signInProgress: GatewayBrowserSignInProgress?
     private var browserSignInRoute: (baseURL: URL, url: URL)?
     private var navigationGeneration: UInt64 = 0
-    private var pendingLoad: Task<Void, Never>? {
-        self.documentHost.pendingLoad
-    }
-
     private var pendingNativeCommands: [DashboardNativeCommand] = []
     private var pendingNativeNavigation: DashboardNativeNavigation?
     var onClosed: (() -> Void)?
@@ -234,6 +225,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         WindowPlacement.ensureOnScreen(window: window, defaultSize: DashboardWindowLayout.windowSize)
 
         documentHost.isAvailable = { [weak self] in self?.window != nil }
+        documentHost.isNativeAuthAvailable = { [weak self] in self?.hasRetainedWindow == true }
         documentHost.onAuthenticationFailure = { [weak self] error in
             self?.showFailure(
                 title: "Gateway sign-in required",
@@ -315,7 +307,10 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
             completionHandler(nil)
             return
         }
-        self.documentHost.openPanel(parameters: parameters, parent: self.window, completionHandler: completionHandler)
+        ControlUIDocumentHost.openPanel(
+            parameters: parameters,
+            parent: self.window,
+            completionHandler: completionHandler)
     }
 
     func webView(
@@ -393,7 +388,8 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
             newURL: url,
             currentAuth: self.auth,
             newAuth: auth,
-            hasUsableDocument: self.hasLiveContent || self.webView.isLoading || self.pendingLoad != nil,
+            hasUsableDocument: self.documentHost.hasLiveContent || self.webView.isLoading || self.documentHost
+                .pendingLoad != nil,
             isShowingFailurePage: self.isShowingFailurePage)
         self.currentURL = url
         self.auth = auth
@@ -476,11 +472,11 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         self.reconnectTask?.task.cancel()
         self.reconnectTask = nil
         self.browserSignInRoute = nil
-        self.retirePendingLoad()
+        self.documentHost.retirePendingLoad()
         self.deviceSettingsMessageHandler.stopObserving()
         self.webView.stopLoading()
         self.nativeBrowser.dispose()
-        self.hasLiveContent = false
+        self.documentHost.hasLiveContent = false
         self.invalidateGatewayHealth()
         self.onGatewayHealthChanged = nil
         self.onClosed = nil
@@ -495,10 +491,6 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         self.invalidateGatewayHealth()
         self.nativeCommandsReady = false
         self.documentHost.load(url)
-    }
-
-    private func retirePendingLoad() {
-        self.documentHost.retirePendingLoad()
     }
 
     private func requestBrowserProfileImportOfferIfNeeded() {
@@ -629,7 +621,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         Self.installNativeChromeScript(into: controller, url: self.currentURL)
         Self.installNativeAppLinkScript(into: controller, url: self.currentURL)
         Self.installNativeGatewaysScript(into: controller, url: self.currentURL, snapshot: self.gatewaySnapshot)
-        ControlUIDocumentHost.installNativeAuthScript(into: controller, url: self.currentURL, auth: self.auth)
+        self.documentHost.installNativeAuthScript()
     }
 
     private func installHistoryStateBridge() {
@@ -765,9 +757,9 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
 
 extension DashboardWindowController {
     private func prepareForFailure(preservingPendingCommands: Bool = false) {
-        self.retirePendingLoad()
+        self.documentHost.retirePendingLoad()
         self.invalidateGatewayHealth()
-        self.hasLiveContent = false
+        self.documentHost.hasLiveContent = false
         self.nativeCommandsReady = false
         self.isShowingFailurePage = true
         self.advanceNavigationGeneration()
@@ -981,7 +973,9 @@ extension DashboardWindowController {
     /// cancelled load with no successor, needs a reload before dispatch —
     /// otherwise queued ⌘N/⌘K would wait on a `didFinish` that never comes.
     var canDeliverNativeCommands: Bool {
-        !self.isShowingFailurePage && (self.hasLiveContent || self.webView.isLoading || self.pendingLoad != nil)
+        !self
+            .isShowingFailurePage &&
+            (self.documentHost.hasLiveContent || self.webView.isLoading || self.documentHost.pendingLoad != nil)
     }
 
     private var isTrustedDashboardDocument: Bool {
@@ -991,7 +985,7 @@ extension DashboardWindowController {
     private var canDispatchNativeCommands: Bool {
         // Older shared-credential Gateways predate the shell-ready signal.
         // Personal browser sign-in requires the current Control UI's listener-owned fact.
-        self.hasLiveContent && self.pendingGatewaySwitch == nil && self.isTrustedDashboardDocument &&
+        self.documentHost.hasLiveContent && self.pendingGatewaySwitch == nil && self.isTrustedDashboardDocument &&
             (!self.auth.usesBrowserIdentity || self.nativeCommandsReady)
     }
 
@@ -1022,7 +1016,7 @@ extension DashboardWindowController {
 
     func refreshGatewayHealth() {
         self.gatewayHealthReadRevision &+= 1
-        guard self.hasLiveContent, self.hasRetainedWindow, self.hasCurrentBrowserSession,
+        guard self.documentHost.hasLiveContent, self.hasRetainedWindow, self.hasCurrentBrowserSession,
               !self.isShowingFailurePage, !self.webView.isLoading, self.isTrustedDashboardDocument,
               let window else { return }
         let revision = self.gatewayHealthReadRevision
@@ -1037,7 +1031,7 @@ extension DashboardWindowController {
             guard let self, let window, self.window === window,
                   self.gatewayHealthReadRevision == revision, self.notificationSourceID == sourceID,
                   self.windowLifetimeRevision == lifetime, self.currentURL == sourceURL,
-                  self.hasLiveContent, self.hasRetainedWindow, self.hasCurrentBrowserSession,
+                  self.documentHost.hasLiveContent, self.hasRetainedWindow, self.hasCurrentBrowserSession,
                   !self.isShowingFailurePage, !self.webView.isLoading, self.isTrustedDashboardDocument
             else { return }
             // The web connection can change independently of the native picker.
@@ -1095,13 +1089,13 @@ extension DashboardWindowController {
         self.reconnectTask?.task.cancel()
         self.reconnectTask = nil
         self.browserSignInRoute = nil
-        self.retirePendingLoad()
+        self.documentHost.retirePendingLoad()
         (self.window as? DashboardWindow)?.lifetimeRevision &+= 1
         (self.window as? DashboardWindow)?.isHiddenForExperience = false
         self.deviceSettingsMessageHandler.stopObserving()
         self.advanceWindowIntent()
         self.advanceNavigationGeneration()
-        self.hasLiveContent = false
+        self.documentHost.hasLiveContent = false
         self.nativeCommandsReady = false
         self.invalidateGatewayHealth()
         self.pendingNativeCommands = []
@@ -1417,7 +1411,7 @@ extension DashboardWindowController {
             guard !self.isShowingFailurePage else { return }
             // A finished sign-in document is usable but never receives native
             // commands. Keep pending intent until the verified dashboard returns.
-            self.hasLiveContent = true
+            self.documentHost.hasLiveContent = true
             guard self.isTrustedDashboardDocument else { return }
             self.deviceSettingsMessageHandler.refresh(refreshAvailability: true)
             self.publishNativeHistoryState()
@@ -1447,7 +1441,7 @@ extension DashboardWindowController {
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         if webView === self.webView {
-            self.hasLiveContent = false
+            self.documentHost.hasLiveContent = false
             self.nativeCommandsReady = false
             self.invalidateGatewayHealth()
         } else if self.nativeBrowser.owns(webView) {
@@ -1488,24 +1482,12 @@ extension DashboardWindowController {
 
 #if DEBUG
 extension DashboardWindowController {
-    var _testUserScripts: [WKUserScript] {
-        self.webView.configuration.userContentController.userScripts
-    }
-
     var _testUpdateBridgeAvailable: Bool {
         self.updateBridgeEnabled
     }
 
-    var _testTLSParams: GatewayTLSParams? {
-        self.tlsParams
-    }
-
-    var _testDashboardDataStore: WKWebsiteDataStore {
-        self.webView.configuration.websiteDataStore
-    }
-
-    var _testAllowsBackForwardGestures: Bool {
-        self.webView.allowsBackForwardNavigationGestures
+    var _testHasPendingBrowserProfileImportOffer: Bool {
+        self.browserProfileImportOfferRequestIsInFlight || self.browserProfileImportOfferRetryPending
     }
 
     var _testPendingNativeCommands: [DashboardNativeCommand] {
@@ -1526,18 +1508,6 @@ extension DashboardWindowController {
 
     var _testNavigationWebViewIdentity: ObjectIdentifier {
         ObjectIdentifier(self.activeNavigationWebView)
-    }
-
-    var _testDashboardWebViewIdentity: ObjectIdentifier {
-        ObjectIdentifier(self.webView)
-    }
-
-    static func _testJavaScriptConfirmAlert(message: String, host: String?) -> NSAlert {
-        ControlUIDocumentHost.makeJavaScriptConfirmAlert(message: message, host: host)
-    }
-
-    static func _testJavaScriptConfirmResult(for response: NSApplication.ModalResponse) -> Bool {
-        ControlUIDocumentHost.javaScriptConfirmResult(for: response)
     }
 }
 #endif
