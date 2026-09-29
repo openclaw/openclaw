@@ -27,7 +27,7 @@ import {
 import { getCoreCliParentDefaultHelpCommands } from "./program/core-command-descriptors.js";
 import { getSubCliParentDefaultHelpCommands } from "./program/subcli-descriptors.js";
 
-const ROOT_HELP_ALIASES = new Set(["tools"]);
+const ROOT_HELP_ALIASES = new Set(["tools", "help"]);
 const SETUP_ONBOARD_CONFIGURE_HELP_COMMANDS = new Set(["setup", "onboard", "configure"]);
 const BARE_PARENT_DEFAULT_HELP_COMMANDS = new Set([
   ...getCoreCliParentDefaultHelpCommands(),
@@ -112,9 +112,7 @@ export function rewriteUpdateFlagArgv(argv: string[]): string[] {
       return argv;
     }
     if (i === updateIndex) {
-      const next = [...argv];
-      next.splice(updateIndex, 1, "update");
-      return next;
+      return argv.toSpliced(updateIndex, 1, "update");
     }
     const consumed = consumeRootOptionToken(argv, i);
     if (consumed > 0) {
@@ -150,9 +148,6 @@ export function shouldUseRootHelpFastPath(
     (invocation.isRootHelpInvocation ||
       (invocation.commandPath.length === 1 &&
         ROOT_HELP_ALIASES.has(invocation.commandPath[0] ?? "") &&
-        invocation.hasHelpOrVersion) ||
-      (invocation.commandPath.length === 1 &&
-        invocation.commandPath[0] === "help" &&
         invocation.hasHelpOrVersion))
   );
 }

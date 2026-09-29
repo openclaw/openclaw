@@ -501,7 +501,9 @@ export async function persistCronJobMutation(params: {
     },
     publish({ store, jobsFingerprint: committedJobs, runtimeFingerprint: committedRuntime }) {
       published = true;
-      markCommitted?.();
+      if (changes.changedIds.size > 0) {
+        markCommitted?.();
+      }
       const unchanged = getCronJobsStoreRevision(source.storeKey) === observedRevision;
       noteCronJobsStoreCommit(source.storeKey);
       state.store = store;
@@ -538,9 +540,8 @@ export async function persistCronJobMutation(params: {
       }
     },
     onRolledBackMutation(refusal) {
-      if (refusal.kind === "store-changed") {
-        loadedCronStoreRevisions.set(state, { revision: -1 });
-      }
+      // A foreign receipt owner can advance runtime rows without publishing in this process.
+      loadedCronStoreRevisions.set(state, { revision: -1 });
       throw refusal.kind === "receipt-conflict"
         ? new CronRunReceiptConflictError(refusal.receipt)
         : new CronJobsStoreChangedError(source.storeKey);

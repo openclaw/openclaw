@@ -7,11 +7,9 @@ import {
   type ManagedProxyTlsOptions,
 } from "./proxy-tls.js";
 
-type ManagedProxyTlsEnv = NodeJS.ProcessEnv;
-
 type ResolveActiveManagedProxyTlsOptionsParams = {
   proxyUrl?: string;
-  env?: ManagedProxyTlsEnv;
+  env?: NodeJS.ProcessEnv;
 };
 
 const MANAGED_PROXY_ENV_PREFIX = ["OPENCLAW", "PROXY"].join("_");
@@ -29,7 +27,7 @@ function normalizeProxyUrl(value: string | undefined): string | undefined {
   }
 }
 
-function resolveManagedProxyUrl(env: ManagedProxyTlsEnv = process.env): string | undefined {
+function resolveManagedProxyUrl(env: NodeJS.ProcessEnv = process.env): string | undefined {
   const activeProxyUrl = getActiveManagedProxyUrl();
   if (activeProxyUrl) {
     return activeProxyUrl.href;

@@ -306,6 +306,5 @@ export async function reconcileProvisionalSubagentKill(params: {
   entry.killReconciliation = undefined;
   entry.cleanupHandled = false;
   entry.cleanupCompletedAt = undefined;
-  params.startSubagentAnnounceCleanupFlow(runId, entry);
-  return true;
+  return !params.startSubagentAnnounceCleanupFlow(runId, entry);
 }

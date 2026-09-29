@@ -390,11 +390,9 @@ vi.mock("../config/io.js", () => ({
   }),
 }));
 
-vi.mock("./agent-runtime-config.js", () => {
-  return {
-    resolveAgentRuntimeConfig: async () => state.runtimeConfigMock ?? state.defaultRuntimeConfig,
-  };
-});
+vi.mock("./agent-runtime-config.js", () => ({
+  resolveAgentRuntimeConfig: async () => state.runtimeConfigMock ?? state.defaultRuntimeConfig,
+}));
 
 vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => {
   const { rebasePluginMetadataSnapshotManifestRegistry } =

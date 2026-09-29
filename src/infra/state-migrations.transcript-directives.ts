@@ -28,7 +28,7 @@ import {
 } from "./kysely-sync.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
-import { createSqliteWalReclamationResult } from "./sqlite-wal-reclamation.js";
+import { createMigrationDatabaseHandle } from "./state-migrations.agent-database.js";
 import {
   resolveAgentDatabaseMigrationTargets,
   type AgentDatabaseMigrationTarget,
@@ -68,23 +68,6 @@ type DatabaseMigrationResult = {
   transcriptSessions: number;
   warnings: string[];
 };
-
-function createMigrationDatabaseHandle(
-  database: DatabaseSync,
-  agentId: string,
-  pathname: string,
-): OpenClawAgentDatabase {
-  return {
-    agentId,
-    db: database,
-    path: pathname,
-    walMaintenance: {
-      checkpoint: () => false,
-      close: () => false,
-      reclaimFreePages: createSqliteWalReclamationResult,
-    },
-  };
-}
 
 function parseMigrationCursor(value: string | null | undefined, pathname: string): MigrationCursor {
   if (!value) {

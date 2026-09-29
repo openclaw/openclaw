@@ -219,7 +219,7 @@ struct CronGatewayOwnershipTests {
             #expect(GatewayDiscoveryPreferences.deviceAuthGatewayID(root: root) != nil)
             let expected = MacChatTranscriptCache.gatewayID(
                 mode: transport == "local" ? .local : .remote,
-                localStateDir: OpenClawConfigFile.stateDirURL(),
+                localStateDir: OpenClawPaths.stateDirURL,
                 remoteTransport: transport == "direct" ? .direct : .ssh,
                 directURL: URL(string: "ws://127.0.0.1:49301"),
                 sshTarget: "user@gateway.test",

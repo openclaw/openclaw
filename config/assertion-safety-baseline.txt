@@ -1202,7 +1202,7 @@ packages/ai/src/transports/openai-responses-client.ts	11
 packages/ai/src/transports/openai-responses-compact-request.ts	2
 packages/ai/src/transports/openai-responses-continuation.ts	2
 packages/ai/src/transports/openai-responses-contracts.ts	1
-packages/ai/src/transports/openai-responses-debug.ts	12
+packages/ai/src/transports/openai-responses-debug.ts	11
 packages/ai/src/transports/openai-responses-params-internal.ts	8
 packages/ai/src/transports/openai-responses-payload-policy.ts	3
 packages/ai/src/transports/openai-responses-prompt-observer-internal.ts	2
@@ -1274,7 +1274,6 @@ packages/normalization-core/src/stable-stringify.ts	1
 packages/normalization-core/src/string-coerce.ts	1
 packages/sdk/src/event-hub.ts	2
 packages/sdk/src/transport.ts	3
-packages/session-url-contract/src/parse.ts	1
 packages/terminal-core/src/note.ts	1
 packages/terminal-core/src/prompt-select-styled-params.ts	1
 packages/terminal-core/src/stream-writer.ts	1
@@ -1909,11 +1908,9 @@ src/cli/program/preaction.ts	1
 src/cli/program/program-context.ts	2
 src/cli/program/register-lazy-command.ts	1
 src/cli/program/register.agent-turn.ts	1
-src/cli/program/register.agent.ts	16
 src/cli/program/register.audit.ts	12
-src/cli/program/register.backup.ts	14
 src/cli/program/register.configure.ts	1
-src/cli/program/register.migrate.ts	10
+src/cli/program/register.migrate.ts	7
 src/cli/program/register.onboard.ts	27
 src/cli/program/register.setup.ts	2
 src/cli/program/register.status-health-sessions.ts	29
@@ -2388,7 +2385,6 @@ src/infra/backup-archive-publication.ts	6
 src/infra/backup-create-stream.ts	3
 src/infra/backup-create.ts	1
 src/infra/backup-tar-retry.ts	2
-src/infra/backup-volatile-stat-cache.ts	1
 src/infra/bonjour-discovery.ts	5
 src/infra/boundary-file-read.ts	1
 src/infra/channel-runtime-context.ts	1
@@ -2417,7 +2413,7 @@ src/infra/exec-approvals-socket.ts	1
 src/infra/exec-approvals-store.ts	1
 src/infra/exec-argv-analysis.ts	1
 src/infra/exec-host.ts	3
-src/infra/fetch-headers.ts	4
+src/infra/fetch-headers.ts	3
 src/infra/fetch.ts	5
 src/infra/file-lock-manager.ts	1
 src/infra/file-lock-sync.ts	1
@@ -2445,13 +2441,12 @@ src/infra/net/undici-global-dispatcher.ts	2
 src/infra/node-commands.ts	1
 src/infra/node-sqlite.ts	3
 src/infra/npm-managed-root.ts	8
-src/infra/npm-registry-spec.ts	1
 src/infra/oauth-loopback-callback.ts	1
 src/infra/openclaw-cli-shim.ts	1
 src/infra/openclaw-root.ts	1
 src/infra/outbound/agent-delivery.ts	2
 src/infra/outbound/conversation-delivery.ts	1
-src/infra/outbound/deliver-channel.ts	4
+src/infra/outbound/deliver-channel.ts	3
 src/infra/outbound/deliver-payload.ts	1
 src/infra/outbound/deliver-prepare.ts	1
 src/infra/outbound/delivery-queue-media-spool.ts	2
@@ -2542,7 +2537,6 @@ src/infra/windows-port-pids.ts	2
 src/infra/windows-powershell-spawn.ts	1
 src/infra/windows-shell-command.ts	1
 src/interactive/payload.ts	1
-src/llm/providers/stream-wrappers/anthropic-family-tool-payload-compat.ts	2
 src/llm/providers/stream-wrappers/google-thinking-payload.ts	3
 src/llm/providers/stream-wrappers/moonshot-thinking.ts	2
 src/llm/providers/stream-wrappers/openai.ts	12
@@ -2665,13 +2659,11 @@ src/plugin-sdk/provider-entry.ts	3
 src/plugin-sdk/provider-onboard.ts	5
 src/plugin-sdk/provider-stream-shared.ts	14
 src/plugin-sdk/provider-stream.ts	1
-src/plugin-sdk/provider-tools.ts	5
+src/plugin-sdk/provider-tools.ts	4
 src/plugin-sdk/qa-channel-protocol.ts	1
-src/plugin-sdk/qa-channel.ts	15
 src/plugin-sdk/qa-lab.ts	2
 src/plugin-sdk/qa-runtime.ts	5
 src/plugin-sdk/reply-payload.ts	2
-src/plugin-sdk/runtime-store-registry.ts	1
 src/plugin-sdk/runtime-store.ts	2
 src/plugin-sdk/secret-ref-runtime.ts	2
 src/plugin-sdk/session-store-runtime-internal.ts	1
@@ -2840,7 +2832,7 @@ src/secrets/runtime-owner-assignments.ts	1
 src/secrets/runtime-secret-scan.ts	1
 src/secrets/runtime-state.ts	4
 src/secrets/runtime-web-tools.shared.ts	1
-src/secrets/runtime-web-tools.ts	4
+src/secrets/runtime-web-tools.ts	3
 src/secrets/runtime.ts	4
 src/secrets/store/secret-store.ts	2
 src/secrets/target-registry-query.ts	1
@@ -2862,10 +2854,10 @@ src/sessions/user-turn-transcript.ts	5
 src/shared/account-enabled.ts	1
 src/shared/bounded-serial-queue.ts	1
 src/shared/chat-content.ts	2
-src/shared/chat-message-content.ts	7
+src/shared/chat-message-content.ts	1
 src/shared/config-eval.ts	1
 src/shared/deferred.ts	1
-src/shared/frontmatter.ts	5
+src/shared/frontmatter.ts	1
 src/shared/global-singleton.ts	4
 src/shared/json-schema-defaults.ts	25
 src/shared/message-content-blocks.ts	2
@@ -2876,7 +2868,6 @@ src/shared/pid-alive.ts	2
 src/shared/runtime-import.ts	1
 src/shared/safe-record.ts	1
 src/shared/store-writer-queue.ts	1
-src/shared/transcript-only-openclaw-assistant.ts	4
 src/shared/worker-bundle-archive.ts	1
 src/skills/lifecycle/clawhub-install-core.ts	2
 src/skills/lifecycle/clawhub-store.ts	4

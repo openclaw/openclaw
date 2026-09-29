@@ -12,7 +12,7 @@ import {
 } from "../gateway/operator-approval-standing-grants.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { describeInterpreterInlineEval } from "../infra/command-analysis/inline-eval.js";
-import { detectPolicyInlineEval } from "../infra/command-analysis/policy.js";
+import { detectInlineEvalInSegments } from "../infra/command-analysis/risks.js";
 import { lookupCronRunExecSource } from "../infra/cron-run-exec-source.js";
 import { emitTrustedSecurityEvent } from "../infra/diagnostic-events.js";
 import {
@@ -498,7 +498,7 @@ export async function processGatewayAllowlist(
     });
   }
   const inlineEvalHit =
-    params.strictInlineEval === true ? detectPolicyInlineEval(allowlistEval.segments) : null;
+    params.strictInlineEval === true ? detectInlineEvalInSegments(allowlistEval.segments) : null;
   const allowAlwaysPersistence = resolveAllowAlwaysPersistenceDecision({
     segments: allowlistEval.segments,
     cwd: params.workdir,

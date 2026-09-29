@@ -4,6 +4,7 @@ import { runExistingOpenClawStateWriteTransaction } from "../state/openclaw-stat
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
+import { extractSqliteTableSchema } from "./sqlite-schema-sql.js";
 import { createUpdateErrorFact } from "./update-failure-facts.js";
 import { encodeRun, isRetainedStep, type UpdateRunLedgerOptions } from "./update-run-codec.js";
 import { decodeRun, readUpdateRunRecord } from "./update-run-read.kernel.js";
@@ -18,15 +19,13 @@ import { updateRunStepKey } from "./update-run-step-key.js";
 import { updateRunStepsFromResultStep } from "./update-run-step.js";
 import { recordUpdateRunVerificationRecord } from "./update-run-verification.js";
 
-const schemaStart = OPENCLAW_STATE_SCHEMA_SQL.indexOf("CREATE TABLE IF NOT EXISTS update_runs (");
-const schemaEndMarker = "ON update_runs(status, created_at_ms DESC, run_id);";
-const schemaEnd = OPENCLAW_STATE_SCHEMA_SQL.indexOf(schemaEndMarker, schemaStart);
-if (schemaStart < 0 || schemaEnd < 0) {
-  throw new Error("Update run schema markers are missing");
-}
-export const updateRunLedgerSchema = OPENCLAW_STATE_SCHEMA_SQL.slice(
-  schemaStart,
-  schemaEnd + schemaEndMarker.length,
+export const updateRunLedgerSchema = extractSqliteTableSchema(
+  OPENCLAW_STATE_SCHEMA_SQL,
+  "update_runs",
+  {
+    endMarker: "ON update_runs(status, created_at_ms DESC, run_id);",
+    errorMessage: "Update run schema markers are missing",
+  },
 );
 
 export function upsertStep(record: UpdateRunRecord, input: UpdateRunStep): void {

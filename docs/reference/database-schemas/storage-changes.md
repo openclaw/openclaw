@@ -580,8 +580,11 @@ become visible only after confirmed native commit and settlement; a missing repl
 does not replay the mutation. One-use creator grants retain their original
 issuer and scope for repeated live checks without redeeming the token again.
 Effectful caller preconditions execute once, and their observed target is checked
-again by the native transaction. Ordinary removal deletes scratch in that same
-transaction. Agent-roster compensation retains its separate scratch-cleanup
+again by the native transaction. A refused job or receipt mutation invalidates
+the scheduler's cached observation before another edit; a foreign receipt owner
+can finish without publishing a local revision. Unchanged declaration validation
+does not mark a user mutation as committed. Ordinary removal deletes scratch in
+that same transaction. Agent-roster compensation retains its separate scratch-cleanup
 boundary until the roster outcome is known. Doctor metadata callbacks, synchronous
 diagnostic reads, and full creator-session/harness currentness predicates retain
 their existing owners and remain separate caller-migration work.
