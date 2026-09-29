@@ -345,7 +345,7 @@ function* matchBarePassAssignments(text: string): Iterable<RedactMatch> {
   }
 }
 
-export const BARE_PASS_ASSIGNMENT_MATCHER = Object.freeze({
+const BARE_PASS_ASSIGNMENT_MATCHER = Object.freeze({
   source: "bare-pass-assignment",
   exec: matchBarePassAssignments,
 });
