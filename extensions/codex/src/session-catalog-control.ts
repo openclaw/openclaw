@@ -11,7 +11,6 @@ import type { CodexManagedThreadStore } from "./app-server/managed-thread-store.
 import { buildCodexAppServerConnectionFingerprint } from "./app-server/plugin-app-cache-key.js";
 import type {
   CodexAppServerRequestResult,
-  CodexThreadListParams,
   CodexThreadListResponse,
 } from "./app-server/protocol.js";
 import {
@@ -27,16 +26,12 @@ import {
 import {
   startCodexCatalogPageDiagnostics,
   startCodexCatalogControlRequestDiagnostics,
-  type CodexCatalogPageDiagnostics,
 } from "./session-catalog-diagnostics.js";
 import { codexCatalogResidentHomeKey } from "./session-catalog-events.js";
 import { createCodexCatalogHomeResolver, type CodexCatalogHome } from "./session-catalog-homes.js";
 import type { CodexCatalogState } from "./session-catalog-index-state.js";
 import type { CodexCatalogIndex } from "./session-catalog-index.js";
-import {
-  currentCodexCatalogListRequest,
-  type CodexCatalogListRequest,
-} from "./session-catalog-list-request.js";
+import { currentCodexCatalogListRequest } from "./session-catalog-list-request.js";
 import type { CodexCatalogPreviewCache } from "./session-catalog-native-projection.js";
 import { CodexCatalogSourceBackoff } from "./session-catalog-source-backoff.js";
 import type {
@@ -182,73 +177,6 @@ export function createCodexSessionCatalogControl(params: {
             )
           : undefined);
       let nativeAttempt: ReturnType<CodexCatalogSourceBackoff["begin"]> | undefined;
-      const readNativePage = async <T>(
-        query: CodexThreadListParams,
-        remainingRows: number,
-        project: (
-          response: CodexThreadListResponse,
-          diagnostics: CodexCatalogPageDiagnostics | undefined,
-        ) => T | Promise<T>,
-        foreground?: CodexCatalogListRequest,
-      ): Promise<T> => {
-        const requests = createRequestSnapshot(
-          agentId,
-          source,
-          true,
-          query.useStateDbOnly
-            ? (thread) => {
-                const row = index?.get(thread.id);
-                return canReuseCodexCatalogPreview(row, thread) ? row?.preview : undefined;
-              }
-            : undefined,
-          remainingRows,
-        );
-        const attempt = foreground
-          ? requests.beginList(foreground)
-          : query.cursor && nativeAttempt
-            ? nativeAttempt
-            : requests.beginList();
-        if (!foreground) {
-          nativeAttempt = attempt;
-        }
-        if (!attempt.allowed) {
-          throw attempt.error;
-        }
-        const diagnostics = startCodexCatalogPageDiagnostics("cold");
-        if (diagnostics) {
-          diagnostics.fields.controlRequestCalls = 1;
-        }
-        const observation = startCodexCatalogControlRequestDiagnostics(diagnostics);
-        let outcome: "resolved" | "rejected" = "rejected";
-        try {
-          const started = performance.now();
-          let response: CodexThreadListResponse;
-          try {
-            response = await requests.listThreads(
-              query,
-              foreground?.remaining(requests.requestTimeoutMs) ?? requests.requestTimeoutMs,
-              observation,
-            );
-          } finally {
-            if (diagnostics) {
-              const elapsed = performance.now() - started;
-              diagnostics.fields.inclusiveControlRequestWaitMs = elapsed;
-              diagnostics.fields.inclusiveControlRequestWaitMaxMs = elapsed;
-            }
-          }
-          foreground?.assertActive();
-          const page = await project(response, diagnostics);
-          foreground?.assertActive();
-          outcome = "resolved";
-          return page;
-        } catch (error) {
-          observation?.rejected();
-          throw error;
-        } finally {
-          observation?.close();
-          diagnostics?.finish(outcome);
-        }
-      };
       index = new CodexCatalogIndex({
         homeId,
         requestTimeoutMs: runtime.requestTimeoutMs,
@@ -277,27 +205,77 @@ export function createCodexSessionCatalogControl(params: {
             throw new Error("Codex catalog configuration changed");
           }
         },
-        readNative: (query, remainingRows, foreground) =>
-          readNativePage(
-            query,
+        readNative: async (query, remainingRows, foreground) => {
+          const requests = createRequestSnapshot(
+            agentId,
+            source,
+            true,
+            query.useStateDbOnly
+              ? (thread) => {
+                  const row = index?.get(thread.id);
+                  return canReuseCodexCatalogPreview(row, thread) ? row?.preview : undefined;
+                }
+              : undefined,
             Math.min(64, remainingRows),
-            async (response, diagnostics) => {
-              const { sanitizeTerminalText } = await import("openclaw/plugin-sdk/text-chunking");
-              const bounded = { ...response, data: response.data.slice(0, remainingRows) };
-              const projection = {
-                localSessionsRoot: root,
-                sanitize: sanitizeTerminalText,
-                diagnostics,
-              };
-              return query.useStateDbOnly
-                ? await projectCodexCatalogDeltaPage(bounded, {
-                    ...projection,
-                    getRow: (threadId) => index?.get(threadId),
-                  })
-                : await projectCodexCatalogPage(bounded, projection);
-            },
-            foreground,
-          ),
+          );
+          const attempt = foreground
+            ? requests.beginList(foreground)
+            : query.cursor && nativeAttempt
+              ? nativeAttempt
+              : requests.beginList();
+          if (!foreground) {
+            nativeAttempt = attempt;
+          }
+          if (!attempt.allowed) {
+            throw attempt.error;
+          }
+          const diagnostics = startCodexCatalogPageDiagnostics("cold");
+          if (diagnostics) {
+            diagnostics.fields.controlRequestCalls = 1;
+          }
+          const observation = startCodexCatalogControlRequestDiagnostics(diagnostics);
+          let outcome: "resolved" | "rejected" = "rejected";
+          try {
+            const started = performance.now();
+            let response: CodexThreadListResponse;
+            try {
+              response = await requests.listThreads(
+                query,
+                foreground?.remaining(requests.requestTimeoutMs) ?? requests.requestTimeoutMs,
+                observation,
+              );
+            } finally {
+              if (diagnostics) {
+                const elapsed = performance.now() - started;
+                diagnostics.fields.inclusiveControlRequestWaitMs = elapsed;
+                diagnostics.fields.inclusiveControlRequestWaitMaxMs = elapsed;
+              }
+            }
+            foreground?.assertActive();
+            const { sanitizeTerminalText } = await import("openclaw/plugin-sdk/text-chunking");
+            const bounded = { ...response, data: response.data.slice(0, remainingRows) };
+            const projection = {
+              localSessionsRoot: root,
+              sanitize: sanitizeTerminalText,
+              diagnostics,
+            };
+            const page = query.useStateDbOnly
+              ? await projectCodexCatalogDeltaPage(bounded, {
+                  ...projection,
+                  getRow: (threadId) => index?.get(threadId),
+                })
+              : await projectCodexCatalogPage(bounded, projection);
+            foreground?.assertActive();
+            outcome = "resolved";
+            return page;
+          } catch (error) {
+            observation?.rejected();
+            throw error;
+          } finally {
+            observation?.close();
+            diagnostics?.finish(outcome);
+          }
+        },
       });
       indexes.set(homeId, index);
     }

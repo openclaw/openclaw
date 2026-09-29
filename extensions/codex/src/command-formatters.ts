@@ -289,7 +289,7 @@ export function formatCodexAccountLine(value: string): string {
   return formatted;
 }
 
-function isLikelyEmailAddress(value: string): boolean {
+export function isLikelyEmailAddress(value: string): boolean {
   return /^[^\s@<>()[\]`]+@[^\s@<>()[\]`]+\.[^\s@<>()[\]`]+$/.test(value);
 }
 

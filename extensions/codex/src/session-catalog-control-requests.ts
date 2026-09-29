@@ -5,14 +5,8 @@ import type {
   CodexAppServerRequestParams,
   CodexAppServerRequestResult,
   CodexThread,
-  CodexThreadForkParams,
-  CodexThreadForkResponse,
   CodexThreadListParams,
   CodexThreadListResponse,
-  CodexThreadItemsListParams,
-  CodexThreadItemsListResponse,
-  CodexThreadTurnsListParams,
-  CodexThreadTurnsListResponse,
 } from "./app-server/protocol.js";
 import type { CodexControlRequestObservation } from "./app-server/request-observation.js";
 import { withTimeout } from "./app-server/timeout.js";
@@ -28,7 +22,10 @@ import { readControlCursor, readPageParams } from "./session-catalog-parsing.js"
 import type { CodexCatalogSourceBackoff } from "./session-catalog-source-backoff.js";
 import type { CodexSessionCatalogControl } from "./session-catalog-types.js";
 
-export type CodexSessionCatalogRequestSnapshot = {
+export type CodexSessionCatalogRequestSnapshot = Pick<
+  CodexSessionCatalogControl,
+  "forkThread" | "archiveThread"
+> & {
   beginList: (request?: CodexCatalogListRequest) => ReturnType<CodexCatalogSourceBackoff["begin"]>;
   index: () => Promise<CodexCatalogIndex>;
   requestTimeoutMs: number;
@@ -37,14 +34,9 @@ export type CodexSessionCatalogRequestSnapshot = {
     timeoutMs: number,
     observation?: CodexControlRequestObservation,
   ): Promise<CodexThreadListResponse>;
-  listThreadTurns(params: CodexThreadTurnsListParams): Promise<CodexThreadTurnsListResponse>;
-  listThreadItems(params: CodexThreadItemsListParams): Promise<CodexThreadItemsListResponse>;
-  forkThread(
-    params: CodexThreadForkParams,
-    assertCurrent?: () => void,
-  ): Promise<CodexThreadForkResponse>;
+  listThreadTurns: CodexSessionCatalogControl["listTurnPage"];
+  listThreadItems: CodexSessionCatalogControl["listItemPage"];
   readThread(threadId: string, includeTurns: boolean, timeoutMs?: number): Promise<CodexThread>;
-  archiveThread(threadId: string, assertCurrent?: () => void): Promise<void>;
 };
 
 type CodexCatalogRequestMethod =

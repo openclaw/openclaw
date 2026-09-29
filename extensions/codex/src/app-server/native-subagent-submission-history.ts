@@ -39,12 +39,7 @@ export async function readCodexNativeSubmissionTurn(
     ) {
       return undefined;
     }
-    const turns: JsonObject[] = [];
-    for (const turn of Array.isArray(thread?.turns) ? thread.turns : []) {
-      if (isJsonObject(turn)) {
-        turns.push(turn);
-      }
-    }
+    const turns = Array.isArray(thread?.turns) ? thread.turns.filter(isJsonObject) : [];
     const predecessorIndex = turns.findIndex(
       (turn) => readString(turn, "id") === receipt.predecessorNativeTurnId,
     );

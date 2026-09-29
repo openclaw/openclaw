@@ -19,6 +19,7 @@ import {
   summarizeCodexAccountUsage,
   type CodexAccountUsageSummary,
 } from "./app-server/rate-limits.js";
+import { isLikelyEmailAddress } from "./command-formatters.js";
 import type {
   SafeCodexControlRequestFn as SafeCodexControlRequest,
   SafeValue,
@@ -288,7 +289,7 @@ function formatProfileLabel(
       ? simplifyApiKeyDisplayName(displayName, tail)
       : displayName;
   }
-  const email = credential?.email?.trim() ?? extractEmailFromProfileId(profileId);
+  const email = credential?.email?.trim() ?? (isLikelyEmailAddress(tail) ? tail : undefined);
   if (email) {
     return email;
   }
@@ -329,11 +330,6 @@ function splitProfileTail(tail: string): string[] {
 
 function titleCase(value: string): string {
   return value ? `${value[0]?.toUpperCase() ?? ""}${value.slice(1)}` : value;
-}
-
-function extractEmailFromProfileId(profileId: string): string | undefined {
-  const tail = profileId.includes(":") ? profileId.slice(profileId.indexOf(":") + 1) : profileId;
-  return /^[^\s@<>()[\]`]+@[^\s@<>()[\]`]+\.[^\s@<>()[\]`]+$/.test(tail) ? tail : undefined;
 }
 
 function describeFailureStatus(
