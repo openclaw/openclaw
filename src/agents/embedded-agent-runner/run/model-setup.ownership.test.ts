@@ -295,6 +295,42 @@ describe("model chat and native model ownership", () => {
     });
   });
 
+  it.each(["entries", "routeVariants"] as const)(
+    "carries exact native catalog parameters from %s into the selected runtime model",
+    async (source) => {
+      const fixture = await createFixture();
+      const selected = {
+        provider: "openai",
+        id: "fixture-model",
+        name: "Native model",
+        nativeRuntime: "codex",
+        params: { nativeModelIdentity: "fixture-runtime", nativeModelGeneration: "second" },
+      };
+      const decoys = [
+        { ...selected, nativeRuntime: "other-runtime", params: { otherRuntime: true } },
+        { ...selected, provider: "other-provider", params: { otherProvider: true } },
+        { ...selected, id: "other-model", params: { otherModel: true } },
+      ];
+      const catalog = {
+        entries: source === "entries" ? [...decoys, selected] : decoys,
+        routeVariants: source === "routeVariants" ? [...decoys, selected] : decoys,
+      };
+      const setup = await fixture.resolve(undefined, {
+        ...fixture.generation.preparedModelRuntime,
+        modelCatalog: catalog,
+      });
+
+      expect(setup.nativeModelOwned).toBe(true);
+      expect(setup.model).toMatchObject({
+        provider: selected.provider,
+        id: selected.id,
+      });
+      expect(setup.model.params).toEqual(selected.params);
+      selected.params.nativeModelGeneration = "changed-after-selection";
+      expect(setup.model.params?.nativeModelGeneration).toBe("second");
+    },
+  );
+
   it.each([false, true])(
     "keeps host model resolution when a harness catalog does not claim native ownership (catalog fails=%s)",
     async (catalogFails) => {
@@ -653,8 +689,23 @@ describe("model chat and native model ownership", () => {
           }
         : undefined,
     );
-    const setup = await fixture.resolve();
+    const setup = await fixture.resolve(undefined, {
+      ...fixture.generation.preparedModelRuntime,
+      modelCatalog: {
+        entries: [
+          {
+            provider: "openai",
+            id: "fixture-model",
+            name: "Caller-selected model",
+            nativeRuntime: "codex",
+            params: { callerSelectedGeneration: "second" },
+          },
+        ],
+        routeVariants: [],
+      },
+    });
     expect(setup.nativeModelOwned).toBe(true);
+    expect(setup.model.params).toBeUndefined();
     expect(fixture.generation.resolveDynamicModel).not.toHaveBeenCalled();
     await expect(setup.nativeSessionRuntime?.assertCurrent()).resolves.toBeUndefined();
     native = false;

@@ -154,6 +154,9 @@ const threadBindingSchema = z
     // Bootstrap refreshes must not mutate a captured native-thread snapshot.
     agentWorkspaceDeveloperInstructions: optionalStringSchema,
     model: optionalStringSchema,
+    // Model-selected compatibility at thread creation, retained across resumes.
+    // Native config overrides remain part of the separate configuration identity.
+    nativeMultiAgentVersion: z.enum(["disabled", "v1", "v2"]).optional().catch(undefined),
     // Codex App Server owns selection for supervised and adopted threads. Keep
     // this marker across resumes so OpenClaw never substitutes a default or fallback.
     preserveNativeModel: z.literal(true).optional().catch(undefined),

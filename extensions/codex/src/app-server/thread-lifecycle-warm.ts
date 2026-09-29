@@ -18,6 +18,7 @@ import {
   getCodexInferenceThread,
   getCodexInferenceThreadQualification,
 } from "./inference-routing.js";
+import { readCodexModelMultiAgentVersion } from "./model-runtime.js";
 import { applyCodexNativeSkillIsolation } from "./native-skill-isolation.js";
 import { attestCodexThreadToolSurface } from "./plugin-thread-attestation.js";
 import {
@@ -28,6 +29,10 @@ import {
 import type { CodexThread } from "./protocol.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
 import { retainSharedCodexAppServerClientByInstanceId } from "./shared-client.js";
+import {
+  resolveCodexMultiAgentVersion,
+  shouldRotateCodexMultiAgentBinding,
+} from "./thread-binding-policy.js";
 import { fingerprintCodexThreadConfig } from "./thread-fingerprints.js";
 import { CodexThreadBindingConflictError } from "./thread-lifecycle-errors.js";
 import { prepareCodexThreadFinalConfigPatch } from "./thread-lifecycle-preflight.js";
@@ -60,7 +65,7 @@ type CodexWarmThreadReuseParams = CodexThreadRequestContext & {
 
 type CodexWarmThreadReuseResult =
   | { kind: "ready"; binding: CodexAppServerThreadLifecycleBinding }
-  | { kind: "rotate" }
+  | { kind: "rotate"; modelGenerationChanged?: true }
   | { kind: "resume"; prebuiltFinalConfigPatch?: CodexThreadFinalConfigPatchResult };
 
 type CodexLiveThreadReleaseParams = {
@@ -327,6 +332,21 @@ export async function tryReuseCodexLiveThread(
           : undefined),
       params.inferenceProviderRoutes,
     );
+    if (
+      !binding.preserveNativeModel &&
+      binding.connectionScope !== "supervision" &&
+      shouldRotateCodexMultiAgentBinding({
+        bindingModel: binding.model,
+        requestedModel: params.params.modelId,
+        bindingVersion: binding.nativeMultiAgentVersion,
+        requestedVersion: readCodexModelMultiAgentVersion(params.params.model),
+        config: resumeParams.config,
+        effectiveConfig: options.effectiveConfig,
+      })
+    ) {
+      assertWarmOwner();
+      return { kind: "rotate", modelGenerationChanged: true };
+    }
     const liveThreadConfigFingerprint = incognito
       ? retainedThread.configFingerprint
       : fingerprintCodexThreadConfig(
@@ -334,10 +354,6 @@ export async function tryReuseCodexLiveThread(
             ...resumeParams,
             // Keep the actual loaded provider separate from caller-selected
             // overrides so account or provider changes always invalidate reuse.
-            model: binding.preserveNativeModel
-              ? null
-              : (binding.model ?? resumeParams.model ?? null),
-            requestedModel: binding.preserveNativeModel ? null : (resumeParams.model ?? null),
             modelProvider: binding.preserveNativeModel
               ? null
               : (binding.modelProvider ?? resumeParams.modelProvider ?? null),
@@ -347,6 +363,10 @@ export async function tryReuseCodexLiveThread(
           },
           resumeAuthProfileId,
           dynamicToolsFingerprint,
+          resolveCodexMultiAgentVersion(undefined, binding.nativeMultiAgentVersion, {
+            config: resumeParams.config,
+            effectiveConfig: options.effectiveConfig,
+          }),
         );
     const ephemeralPolicy = retainedThread.ephemeralPolicy;
     if (

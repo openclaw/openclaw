@@ -49,7 +49,9 @@ import {
 } from "./shared-client.js";
 import { createClientHarness } from "./test-support.js";
 import { fingerprintEnvironmentSelection } from "./thread-fingerprints.js";
+import { registerThreadModelCompatibilityTests } from "./thread-lifecycle-model-compatibility.test-support.js";
 import { registerThreadPolicyRefreshTests } from "./thread-lifecycle-policy-refresh.test-support.js";
+import { createLifecycleRequest } from "./thread-lifecycle-request.test-support.js";
 import {
   buildThreadResumeParams,
   startOrResumeThread as startOrResumeThreadImpl,
@@ -60,20 +62,6 @@ import {
   withCodexAppServerThreadMutation,
 } from "./thread-ownership.js";
 import { CodexIncognitoPolicyChangeError } from "./thread-policy.js";
-
-function createLifecycleRequest(
-  respond: (method: string, requestParams?: unknown) => Promise<unknown>,
-) {
-  return vi.fn((method: string, requestParams?: unknown) => {
-    if (method === "config/read") {
-      return Promise.resolve({ config: {}, origins: {}, layers: [] });
-    }
-    if (method === "configRequirements/read") {
-      return Promise.resolve({ requirements: null });
-    }
-    return respond(method, requestParams);
-  });
-}
 
 function createFixedThreadRequest(threadId: string, methods: string[]) {
   return createLifecycleRequest(async (method) => {
@@ -867,6 +855,16 @@ describe("Codex app-server thread lifecycle bindings", () => {
     },
   );
 
+  registerThreadModelCompatibilityTests({
+    createParams,
+    createLifecycleRequest,
+    startOrResumeThread,
+    writeCodexAppServerBinding,
+    retainThread,
+    preflightMethods: PREFLIGHT_METHODS,
+    coldResumeMethods: COLD_RESUME_METHODS,
+  });
+
   registerThreadPolicyRefreshTests({
     createParams,
     createThreadLifecycleAppServerOptions,
@@ -1610,54 +1608,6 @@ describe("Codex app-server thread lifecycle bindings", () => {
       }
     },
   );
-
-  it("refreshes model and workspace ownership when reusing a turn-mutable native session", async () => {
-    const sessionFile = path.join(tempDir, "warm-model-workspace.jsonl");
-    const originalWorkspace = path.join(tempDir, "workspace-original");
-    const currentWorkspace = path.join(tempDir, "workspace-current");
-    const params = createParams(sessionFile, originalWorkspace);
-    const request = createLifecycleRequest(async (method: string) => {
-      if (method === "thread/start") {
-        return threadStartResult("thread-warm-model-workspace", { cwd: originalWorkspace });
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-    const client = {
-      getInstanceId: () => "client-warm-model-workspace",
-      request,
-      addNotificationHandler: () => () => undefined,
-      addRequestHandler: () => () => undefined,
-      addCloseHandler: () => () => undefined,
-    } as never;
-    ensureCodexAppServerClientRuntime(client, { agentDir: originalWorkspace });
-    const common = {
-      client,
-      params,
-      cwd: originalWorkspace,
-      userMcpServersEnabled: false,
-    };
-    const started = await startOrResumeThread(common);
-    await retainThread(client, started);
-    params.modelId = "gpt-5.5";
-    params.workspaceDir = currentWorkspace;
-
-    const reused = await startOrResumeThread({ ...common, cwd: currentWorkspace });
-
-    expect(request.mock.calls.map(([method]) => method)).toEqual([
-      ...PREFLIGHT_METHODS,
-      "thread/start",
-      ...PREFLIGHT_METHODS,
-    ]);
-    expect(reused).toMatchObject({
-      threadId: "thread-warm-model-workspace",
-      cwd: currentWorkspace,
-      model: "gpt-5.5",
-    });
-    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
-      cwd: currentWorkspace,
-      model: "gpt-5.5",
-    });
-  });
 
   it("releases a retained subscription when its unchanged binding loses ownership", async () => {
     const sessionFile = path.join(tempDir, "warm-conflict-session.jsonl");
@@ -2935,92 +2885,6 @@ describe("Codex app-server thread lifecycle bindings", () => {
         "thread/start",
         "thread/delete",
       ]);
-    },
-  );
-
-  it.each([["gpt-5.6-luna", "gpt-5.6-sol"]])(
-    "starts a fresh thread when switching from %s to %s",
-    async (bindingModel, requestedModel) => {
-      const sessionFile = path.join(tempDir, `${bindingModel}-${requestedModel}.jsonl`);
-      const workspaceDir = path.join(tempDir, "workspace");
-      await writeCodexAppServerBinding(sessionFile, {
-        threadId: "thread-existing",
-        cwd: workspaceDir,
-        model: bindingModel,
-      });
-      const params = createParams(sessionFile, workspaceDir);
-      params.modelId = requestedModel;
-      const request = createLifecycleRequest(async (method: string, requestParams?: unknown) => {
-        if (method === "thread/start") {
-          const response = threadStartResult("thread-rebound");
-          response.model = (requestParams as { model: string }).model;
-          return response;
-        }
-        throw new Error(`unexpected method: ${method}`);
-      });
-
-      const binding = await startOrResumeThread({
-        client: { request } as never,
-        params,
-      });
-
-      expect(request.mock.calls.map(([method]) => method)).toEqual([
-        ...PREFLIGHT_METHODS,
-        "thread/start",
-      ]);
-      expect(request.mock.calls.find(([method]) => method === "thread/start")?.[1]).toMatchObject({
-        model: requestedModel,
-      });
-      expect(binding).toMatchObject({
-        threadId: "thread-rebound",
-        model: requestedModel,
-        lifecycle: { action: "started" },
-      });
-    },
-  );
-
-  it.each([["gpt-5.6-sol", "gpt-5.6-terra"]])(
-    "resumes the thread when switching from %s to %s",
-    async (bindingModel, requestedModel) => {
-      const sessionFile = path.join(tempDir, `${bindingModel}-${requestedModel}.jsonl`);
-      const workspaceDir = path.join(tempDir, "workspace");
-      await writeCodexAppServerBinding(sessionFile, {
-        threadId: "thread-existing",
-        cwd: workspaceDir,
-        model: bindingModel,
-      });
-      const params = createParams(sessionFile, workspaceDir);
-      params.modelId = requestedModel;
-      const respond = createLifecycleRequest(async (method: string, requestParams?: unknown) => {
-        if (method === "thread/resume") {
-          const response = threadStartResult("thread-existing");
-          response.model = (requestParams as { model: string }).model;
-          return response;
-        }
-        throw new Error(`unexpected method: ${method}`);
-      });
-      const fixture = await createLeasedCodexLifecycleHarness({
-        agentDir: path.join(tempDir, "agent"),
-        respond,
-        persistedThreads: ["thread-existing"],
-      });
-      const { client, request } = fixture;
-
-      const binding = await startOrResumeThread({
-        client,
-        params,
-      });
-
-      expect(request.mock.calls.map(([method]) => method)).toEqual(COLD_RESUME_METHODS);
-      expect(request.mock.calls.find(([method]) => method === "thread/resume")?.[1]).toMatchObject({
-        threadId: "thread-existing",
-        model: requestedModel,
-      });
-      expect(binding).toMatchObject({
-        threadId: "thread-existing",
-        model: requestedModel,
-        lifecycle: { action: "resumed" },
-      });
     },
   );
 
@@ -4519,7 +4383,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
     ).rejects.toThrow("plugin inventory unavailable");
 
     const requestCalls = request.mock.calls as unknown as Array<[string, { config?: unknown }]>;
-    expect(requestCalls.map(([method]) => method)).toEqual([...PREFLIGHT_METHODS, "thread/read"]);
+    expect(requestCalls.map(([method]) => method)).toEqual(PREFLIGHT_METHODS);
     const binding = await readCodexAppServerBinding(sessionFile);
     expect(binding?.threadId).toBe("thread-existing");
     expect(binding?.pluginAppsFingerprint).toBe("plugin-apps-config-1");

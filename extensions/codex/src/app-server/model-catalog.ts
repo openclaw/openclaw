@@ -32,7 +32,11 @@ function codexAppServerModelsToCatalogEntries(
 ): ModelCatalogEntry[] {
   return models.map((model, providerOrder) => {
     const input = model.inputModalities.filter(isModelInputType);
-    const runtimeParams = buildCodexRuntimeModelParams(model.id, model.model);
+    const runtimeParams = buildCodexRuntimeModelParams(
+      model.id,
+      model.model,
+      model.multiAgentVersion,
+    );
     return {
       provider: "openai",
       id: model.id,

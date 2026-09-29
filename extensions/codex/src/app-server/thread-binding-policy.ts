@@ -1,10 +1,19 @@
 import type { CodexAppServerConnectionClass } from "./config-contracts.js";
+import { CODEX_SESSION_OVERRIDABLE_LAYER_TYPES } from "./config-layer-policy.js";
 import { normalizeCodexDynamicToolName } from "./dynamic-tool-profile.js";
+import type { CodexMultiAgentVersion } from "./model-runtime.js";
+import type { CodexConfigReadResponse } from "./protocol-control-plane.js";
+import { isJsonObject, type JsonObject, type JsonValue } from "./protocol.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
 import type {
   CodexPluginThreadConfigProvider,
   CodexStartOrResumeThreadParams,
 } from "./thread-lifecycle-types.js";
+
+type CodexMultiAgentConfiguration = {
+  config?: JsonObject;
+  effectiveConfig?: CodexConfigReadResponse;
+};
 
 export function shouldRotateCodexAppServerBindingForRuntime(params: {
   connectionClass: CodexAppServerConnectionClass;
@@ -20,11 +29,23 @@ export function shouldRotateCodexAppServerBindingForRuntime(params: {
   return params.connectionClass === "remote" || Boolean(params.binding);
 }
 
-type CodexGpt56MultiAgentVersion = "v1" | "v2";
-
-export function resolveCodexGpt56MultiAgentVersion(
+export function resolveCodexMultiAgentVersion(
   modelRef: string | undefined,
-): CodexGpt56MultiAgentVersion | undefined {
+  catalogVersion?: CodexMultiAgentVersion,
+  configuration: CodexMultiAgentConfiguration = {},
+): CodexMultiAgentVersion | undefined {
+  // Native configuration overrides both model metadata and a retained generation.
+  // Forced v2 wins even when agents.enabled is false.
+  if (readCodexMultiAgentConfigFlag(configuration, "features.multi_agent_v2") === true) {
+    return "v2";
+  }
+  if (readCodexMultiAgentConfigFlag(configuration, "agents.enabled") === false) {
+    return "disabled";
+  }
+  if (catalogVersion !== undefined) {
+    return catalogVersion;
+  }
+  // Older catalogs omit metadata. Preserve their existing compatibility rules.
   let modelId = modelRef?.trim().toLowerCase();
   if (!modelId) {
     return undefined;
@@ -43,12 +64,24 @@ export function resolveCodexGpt56MultiAgentVersion(
   return modelId === "gpt-5.6-luna" ? "v1" : undefined;
 }
 
-export function shouldRotateCodexGpt56MultiAgentBinding(params: {
-  bindingModel?: string;
-  requestedModel: string;
-}): boolean {
-  const bindingVersion = resolveCodexGpt56MultiAgentVersion(params.bindingModel);
-  const requestedVersion = resolveCodexGpt56MultiAgentVersion(params.requestedModel);
+export function shouldRotateCodexMultiAgentBinding(
+  params: CodexMultiAgentConfiguration & {
+    bindingModel?: string;
+    requestedModel: string;
+    bindingVersion?: CodexMultiAgentVersion;
+    requestedVersion?: CodexMultiAgentVersion;
+  },
+): boolean {
+  const bindingVersion = resolveCodexMultiAgentVersion(
+    params.bindingModel,
+    params.bindingVersion,
+    params,
+  );
+  const requestedVersion = resolveCodexMultiAgentVersion(
+    params.requestedModel,
+    params.requestedVersion,
+    params,
+  );
   return Boolean(bindingVersion && requestedVersion && bindingVersion !== requestedVersion);
 }
 
@@ -129,4 +162,42 @@ export function shouldRecheckRecoverablePluginBinding(params: {
     (accountAppRecoveryEnabled && Object.keys(policyContext.apps).length === 0) ||
     recoverablePluginConfigKeys.length > 0
   );
+}
+
+function readCodexMultiAgentConfigFlag(
+  configuration: CodexMultiAgentConfiguration,
+  key: "features.multi_agent_v2" | "agents.enabled",
+): boolean | undefined {
+  const readFlag = (config: JsonObject | undefined) => {
+    const value = readCodexMultiAgentConfigValue(config, key);
+    if (typeof value === "boolean") {
+      return value;
+    }
+    const enabled = readCodexMultiAgentConfigValue(config, `${key}.enabled`);
+    return typeof enabled === "boolean" ? enabled : undefined;
+  };
+  const effective = configuration.effectiveConfig;
+  const origin = effective?.origins?.[`${key}.enabled`] ?? effective?.origins?.[key];
+  if (origin && !CODEX_SESSION_OVERRIDABLE_LAYER_TYPES.has(origin.name.type)) {
+    return readFlag(effective?.config);
+  }
+  return readFlag(configuration.config) ?? readFlag(effective?.config);
+}
+
+function readCodexMultiAgentConfigValue(
+  config: JsonObject | undefined,
+  key: string,
+): JsonValue | undefined {
+  if (!config) {
+    return undefined;
+  }
+  if (Object.hasOwn(config, key)) {
+    return config[key];
+  }
+  const separator = key.lastIndexOf(".");
+  if (separator < 0) {
+    return undefined;
+  }
+  const parent = readCodexMultiAgentConfigValue(config, key.slice(0, separator));
+  return isJsonObject(parent) ? parent[key.slice(separator + 1)] : undefined;
 }

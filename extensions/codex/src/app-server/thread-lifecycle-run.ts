@@ -21,7 +21,6 @@ import {
   isTransientWebSearchRestriction,
   shouldRecheckRecoverablePluginBinding,
   shouldRotateCodexAppServerBindingForRuntime,
-  shouldRotateCodexGpt56MultiAgentBinding,
 } from "./thread-binding-policy.js";
 import { isContextEngineBindingCompatible } from "./thread-context-engine.js";
 import {
@@ -234,7 +233,7 @@ export async function startOrResumeThread(
         }),
       );
     }
-    const clearCurrentBinding = async (operation: string) => {
+    const clearCurrentBinding = async (operation: string, resetModelSelection?: true) => {
       const current = binding;
       if (!current?.threadId) {
         return;
@@ -252,6 +251,9 @@ export async function startOrResumeThread(
         throw new CodexThreadBindingConflictError(current.threadId, operation);
       }
       binding = undefined;
+      if (resetModelSelection) {
+        selectionBinding = undefined;
+      }
     };
     const transientDelegationRestriction = params.params.delegationCapability === "report_only";
     const persistentWebSearchRestriction =
@@ -320,25 +322,6 @@ export async function startOrResumeThread(
         connectionClass: params.appServer.connectionClass,
       });
       await clearCurrentBinding("rotating a stale thread binding");
-    }
-    if (
-      binding?.threadId &&
-      shouldRotateCodexGpt56MultiAgentBinding({
-        bindingModel: binding.model,
-        requestedModel: params.params.modelId,
-      })
-    ) {
-      // Codex locks the model-selected multi-agent version on the first turn.
-      // Sol/Terra (V2) and Luna (V1) therefore cannot share one resumed thread.
-      embeddedAgentLog.debug(
-        "codex app-server GPT-5.6 multi-agent version changed; starting a new thread",
-        {
-          threadId: binding.threadId,
-          bindingModel: binding.model,
-          requestedModel: params.params.modelId,
-        },
-      );
-      await clearCurrentBinding("rotating a GPT-5.6 multi-agent thread binding");
     }
     selectionBinding = binding;
     // Capability read failures use managed search for this turn but must not
@@ -647,7 +630,10 @@ export async function startOrResumeThread(
           await clearCurrentBinding(
             incognito
               ? "rotating an unavailable ephemeral thread binding"
-              : "rotating a stale plugin app binding",
+              : warmReuse.kind === "rotate" && warmReuse.modelGenerationChanged
+                ? "rotating a model multi-agent thread binding"
+                : "rotating a stale plugin app binding",
+            warmReuse.kind === "rotate" ? warmReuse.modelGenerationChanged : undefined,
           );
         } else {
           const resumeBinding = binding;

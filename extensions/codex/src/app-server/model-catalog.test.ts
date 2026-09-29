@@ -2,6 +2,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { AuthProfileStore } from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCodexAppServerModelCatalog } from "./model-catalog.js";
+import { readCodexModelMultiAgentVersion, readCodexRuntimeModelId } from "./model-runtime.js";
 import { listAllCodexAppServerModels } from "./models.js";
 import { probeCodexNativeAuth } from "./native-auth.js";
 import { withCodexAppServerJsonClient } from "./request.js";
@@ -83,6 +84,7 @@ describe("Codex app-server model catalog", () => {
           displayName: "Synthetic reasoning model",
           inputModalities: ["text", "image", "unknown"],
           supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+          multiAgentVersion: "v2",
         },
         {
           id: "synthetic-basic-model",
@@ -90,6 +92,7 @@ describe("Codex app-server model catalog", () => {
           displayName: "Synthetic basic model",
           inputModalities: ["text"],
           supportedReasoningEfforts: [],
+          multiAgentVersion: "disabled",
         },
       ],
     });
@@ -103,7 +106,10 @@ describe("Codex app-server model catalog", () => {
         providerOrder: 0,
         reasoning: true,
         input: ["text", "image"],
-        params: { codexAppServerRuntimeModel: "codex-execution-model" },
+        params: {
+          codexAppServerRuntimeModel: "codex-execution-model",
+          codexAppServerMultiAgentVersion: "v2",
+        },
         compat: {
           supportsReasoningEffort: true,
           supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
@@ -117,11 +123,20 @@ describe("Codex app-server model catalog", () => {
         providerOrder: 1,
         reasoning: false,
         input: ["text"],
+        params: { codexAppServerMultiAgentVersion: "disabled" },
         compat: {
           supportsReasoningEffort: false,
           supportedReasoningEfforts: [],
         },
       },
+    ]);
+    expect(catalog.map((model) => readCodexModelMultiAgentVersion(model))).toEqual([
+      "v2",
+      "disabled",
+    ]);
+    expect(catalog.map((model) => readCodexRuntimeModelId(model, model.id))).toEqual([
+      "codex-execution-model",
+      "synthetic-basic-model",
     ]);
     expect(listModelsMock).toHaveBeenCalledExactlyOnceWith({
       request: rpc.request,
@@ -133,6 +148,18 @@ describe("Codex app-server model catalog", () => {
     );
     expect(probeCodexNativeAuth).not.toHaveBeenCalled();
   });
+
+  it.each([undefined, null, "unknown", 2, { version: "v2" }])(
+    "preserves unknown generation for unsupported model metadata %j",
+    (version) => {
+      expect(
+        readCodexModelMultiAgentVersion({
+          id: "synthetic-unclassified-model",
+          params: { codexAppServerMultiAgentVersion: version },
+        }),
+      ).toBeUndefined();
+    },
+  );
 
   it("returns no rows without a live call when discovery is disabled", async () => {
     expect(

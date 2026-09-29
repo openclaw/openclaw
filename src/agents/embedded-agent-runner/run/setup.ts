@@ -145,6 +145,7 @@ export function buildBeforeModelResolveAttachments(
 export function createNativeModelOwnedRuntimeModel(params: {
   provider: string;
   modelId: string;
+  modelParams?: ProviderRuntimeModel["params"];
 }): ProviderRuntimeModel {
   return {
     provider: params.provider,
@@ -157,6 +158,7 @@ export function createNativeModelOwnedRuntimeModel(params: {
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: DEFAULT_CONTEXT_TOKENS,
     maxTokens: DEFAULT_CONTEXT_TOKENS,
+    ...(params.modelParams ? { params: { ...params.modelParams } } : {}),
   };
 }
 

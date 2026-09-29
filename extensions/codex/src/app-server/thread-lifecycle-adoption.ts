@@ -17,7 +17,6 @@ import {
   type CodexAppServerThreadBinding,
 } from "./session-binding.js";
 import { captureCodexAppServerClientLifetime } from "./shared-client.js";
-import { shouldRotateCodexGpt56MultiAgentBinding } from "./thread-binding-policy.js";
 import { isContextEngineBindingCompatible } from "./thread-context-engine.js";
 import { codexDynamicToolsFingerprint } from "./thread-fingerprints.js";
 import {
@@ -103,7 +102,7 @@ export async function withCodexThreadLifecycleBinding(
 
 type PendingResumeContext = CodexThreadRequestContext & {
   binding: CodexAppServerThreadBinding;
-  clearCurrentBinding: (operation: string) => Promise<void>;
+  clearCurrentBinding: (operation: string, resetModelSelection?: true) => Promise<void>;
   releaseRetainedThread: (threadId: string, assertCurrent: () => void) => Promise<boolean>;
   transientRestriction: boolean;
 };
@@ -120,11 +119,7 @@ export async function resumePendingCodexThread(
     (!restrictedToolSurface && binding.nativeToolPolicyRestricted === true) ||
     (contextEngineBinding
       ? !isContextEngineBindingCompatible(binding.contextEngine, contextEngineBinding)
-      : binding.contextEngine !== undefined) ||
-    shouldRotateCodexGpt56MultiAgentBinding({
-      bindingModel: binding.model,
-      requestedModel: params.params.modelId,
-    })
+      : binding.contextEngine !== undefined)
   ) {
     throw new Error(
       `Cannot configure resumed Codex thread ${binding.threadId} under a transient or incompatible session policy. ` +

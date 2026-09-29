@@ -9,6 +9,7 @@ import type { CodexInferenceProviderRoutes } from "./inference-routing.js";
 import type { CodexNativeModelInputTools } from "./native-model-input-tools.js";
 import type { CodexNativeSkillIsolation } from "./native-skill-isolation.js";
 import type { CodexPluginThreadConfig } from "./plugin-thread-config.js";
+import type { CodexConfigReadResponse } from "./protocol-control-plane.js";
 import type { CodexDynamicToolSpec, JsonObject } from "./protocol.js";
 import type {
   CodexAppServerBindingIdentity,
@@ -106,6 +107,7 @@ export type CodexStartOrResumeThreadParams = Omit<
 };
 
 export type CodexThreadRequestContext = {
+  effectiveConfig: CodexConfigReadResponse;
   nativeModelInputTools?: CodexNativeModelInputTools;
   bindingIdentity: CodexAppServerBindingIdentity;
   startModelSelection: ReturnType<typeof resolveCodexAppServerThreadModelSelection>;
@@ -144,7 +146,7 @@ export type CodexThreadResumePreparation = {
 
 export type CodexResumeThreadContext = CodexThreadRequestContext & {
   binding: CodexAppServerThreadBinding;
-  clearCurrentBinding: (operation: string) => Promise<void>;
+  clearCurrentBinding: (operation: string, resetModelSelection?: true) => Promise<void>;
   prebuiltPluginThreadConfig?: CodexPluginThreadConfig;
   buildLoadedPluginThreadConfig?: (
     binding: CodexAppServerThreadBinding,

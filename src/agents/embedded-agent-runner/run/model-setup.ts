@@ -270,17 +270,24 @@ export async function resolveEmbeddedRunModelSetup(params: {
       params.preparedModelRuntime.isCurrent,
     );
   }
-  const nativeModelOwned =
-    nativeSessionRuntime !== undefined ||
-    (pluginHarnessOwnsTransport &&
-      (catalog?.entries.some(ownsSelectedNativeModel) === true ||
-        catalog?.routeVariants.some(ownsSelectedNativeModel) === true));
+  // Opaque harness metadata must follow the exact native route, while a
+  // supervised session keeps its own model selection independent of this catalog.
+  const nativeCatalogEntry =
+    !nativeSessionRuntime && pluginHarnessOwnsTransport
+      ? (catalog?.entries.find(ownsSelectedNativeModel) ??
+        catalog?.routeVariants.find(ownsSelectedNativeModel))
+      : undefined;
+  const nativeModelOwned = nativeSessionRuntime !== undefined || nativeCatalogEntry !== undefined;
   const modelConfigProvider = provider;
   let resolvedModelProvider = provider;
   let modelResolution;
   if (nativeModelOwned) {
     modelResolution = {
-      model: createNativeModelOwnedRuntimeModel({ provider, modelId }),
+      model: createNativeModelOwnedRuntimeModel({
+        provider,
+        modelId,
+        modelParams: nativeCatalogEntry?.params,
+      }),
       ...createEmptyAgentDiscoveryStores(),
     };
   } else {

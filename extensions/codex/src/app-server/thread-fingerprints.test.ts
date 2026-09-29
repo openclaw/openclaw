@@ -120,7 +120,6 @@ describe("fingerprintCodexThreadConfig", () => {
   it.each<{ setting: string; patch: JsonObject }>([
     { setting: "model provider", patch: { modelProvider: "custom" } },
     { setting: "requested model provider", patch: { requestedModelProvider: "custom" } },
-    { setting: "native multi-agent generation", patch: { model: "gpt-5.6-luna" } },
     { setting: "named permissions profile", patch: { permissions: "read-only" } },
     { setting: "base instructions", patch: { baseInstructions: "Different base policy." } },
     { setting: "developer instructions", patch: { developerInstructions: "Different policy." } },
@@ -130,6 +129,19 @@ describe("fingerprintCodexThreadConfig", () => {
       fingerprintCodexThreadConfig(request, "openai:personal"),
     );
   });
+
+  it.each([
+    { previous: undefined, next: "v2" },
+    { previous: "disabled", next: "v1" },
+    { previous: "v1", next: "v2" },
+  ] as const)(
+    "invalidates reuse when the creation-time native generation changes from $previous to $next",
+    ({ previous, next }) => {
+      expect(
+        fingerprintCodexThreadConfig(request, "openai:personal", undefined, previous),
+      ).not.toBe(fingerprintCodexThreadConfig(request, "openai:personal", undefined, next));
+    },
+  );
 
   it("invalidates reuse when the selected authentication profile changes", () => {
     expect(fingerprintCodexThreadConfig(request, "openai:work")).not.toBe(
@@ -163,9 +175,9 @@ describe("fingerprintCodexThreadConfig", () => {
     { setting: "personality", patch: { personality: "friendly" } },
     { setting: "working directory", patch: { cwd: "/other/workspace" } },
   ])("preserves the native session when turn/start changes $setting", ({ patch }) => {
-    expect(fingerprintCodexThreadConfig({ ...request, ...patch }, "openai:personal")).toBe(
-      fingerprintCodexThreadConfig(request, "openai:personal"),
-    );
+    expect(
+      fingerprintCodexThreadConfig({ ...request, ...patch }, "openai:personal", undefined, "v2"),
+    ).toBe(fingerprintCodexThreadConfig(request, "openai:personal", undefined, "v2"));
   });
 });
 
