@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { withUpdateCommandExecutor } from "../cli/update-cli/update-command-executor.js";
 import {
@@ -23,6 +24,7 @@ import { writePackageRoot } from "./package-update-steps.test-support.js";
 import { swapStagedPackageInstall, type PackageUpdateTransaction } from "./package-update-swap.js";
 import { createPackageSwapFixture } from "./package-update-swap.test-support.js";
 import * as snapshot from "./sqlite-snapshot.js";
+import { withRetainedUpdateRuntime } from "./update-retained-runtime.js";
 
 const fixtures = createPackageActivationLifetimeFixture();
 let root: string;
@@ -167,15 +169,31 @@ it.skipIf(process.platform === "win32")(
       await fixtures.writePostCoreCapability(f.params.stage.packageRoot);
       fs.mkdirSync(f.params.stage.layout.binDir, { recursive: true });
       fs.writeFileSync(path.join(f.params.stage.layout.binDir, "openclaw"), "candidate launcher\n");
-      await withUpdateCommandExecutor(randomUUID(), async (executor) => {
-        const fence = await executor.enter(f.packageRoot);
-        const result = await swapStagedPackageInstall({
-          ...f.params,
-          activation: { fence, nodeRunner: process.execPath, onPrepared: () => {} },
-          beforeActivate: async () => {},
-        });
-        expect(result.status, result.step.stderrTail ?? undefined).toBe("committed");
-      });
+      await withRetainedUpdateRuntime(
+        pathToFileURL(path.join(f.packageRoot, "dist/index.js")).href,
+        async (retain) => {
+          await withUpdateCommandExecutor(randomUUID(), async (executor) => {
+            const fence = await executor.enter(f.packageRoot);
+            await retain({
+              mutationRoots: [f.packageRoot],
+              installTarget: f.params.installTarget,
+              timeoutMs: 30_000,
+              assertCurrent: fence.assertCurrent,
+            });
+            const journal = resolvePackageActivationJournalPath(
+              resolvePackageActivationAnchor(f.packageRoot),
+            );
+            expect(fs.statSync(journal).nlink).toBe(1);
+            assertNoPendingPackageActivation(f.packageRoot);
+            const result = await swapStagedPackageInstall({
+              ...f.params,
+              activation: { fence, nodeRunner: process.execPath, onPrepared: () => {} },
+              beforeActivate: async () => {},
+            });
+            expect(result.status, result.step.stderrTail ?? undefined).toBe("committed");
+          });
+        },
+      );
       assertNoPendingPackageActivation(f.packageRoot);
       expect(fs.readFileSync(f.launcher, "utf8")).toBe("candidate launcher\n");
       expect(fs.readFileSync(path.join(f.packageRoot, "package.json"), "utf8")).toContain(
