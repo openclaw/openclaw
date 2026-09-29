@@ -1,5 +1,4 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatErrorMessage } from "../infra/errors.js";
 import type {
@@ -44,7 +43,7 @@ import {
   readGeminiCliStreamJsonError,
   supportsCliJsonlToolEvents,
 } from "./cli-output-records.js";
-import { appendCliResultText, withCliRawFinalText } from "./cli-output-results.js";
+import { appendCliResultText, recordItemText, withCliRawFinalText } from "./cli-output-results.js";
 import {
   CLI_STREAM_JSON_OUTPUT_LIMITS,
   frameBoundedCliJsonlChunk,
@@ -79,6 +78,9 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
   let rawChars = 0;
   let rawLines = 0;
   const texts: string[] = [];
+  // The last item text is the final message only until a later message or tool
+  // call begins; boundary flags set before that text must not blank it.
+  let finalItemText: string | undefined;
   let sawCustomJsonlEvent = false;
   let sawGeminiStructuredOutput = false;
   let sawTerminalResult = false;
@@ -181,6 +183,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
   const beginClaudeMessage = (messageId?: string) => {
     beginTaggedReasoningMessage();
     pendingMessageSeparator = true;
+    finalItemText = undefined;
     previousMessageHadToolUse = currentMessageHadToolUse;
     currentMessageHadToolUse = false;
     currentClaudeMessageId = messageId;
@@ -191,7 +194,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
   // cumulative delivery reply. The final message is the last streamed segment,
   // empty when a new message began or a tool call followed its last text.
   const finalStreamedMessageText = () =>
-    texts.at(-1)?.trim() ??
+    finalItemText?.trim() ??
     (pendingMessageSeparator || sawToolUseSinceText
       ? ""
       : assistantText.slice(currentMessageStart).trim());
@@ -502,13 +505,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       return;
     }
 
-    const item = isRecord(parsed.item) ? parsed.item : null;
-    if (item && typeof item.text === "string") {
-      const type = normalizeLowercaseStringOrEmpty(item.type);
-      if (!type || type.includes("message")) {
-        texts.push(item.text);
-      }
-    }
+    finalItemText = recordItemText(parsed, texts, finalItemText);
 
     if (parsed.type === "stream_event" && isRecord(parsed.event)) {
       const evt = parsed.event;
@@ -527,6 +524,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
         isClaudeToolUseBlockType(evt.content_block.type);
       if (isToolUseBlockStart) {
         sawToolUseSinceText = true;
+        finalItemText = undefined;
         currentMessageHadToolUse = true;
       }
       if (classifyClaudeCommentary) {
@@ -579,6 +577,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
         claudeStreamJson && parsed.type === "assistant"
           ? (tool: Parameters<NonNullable<typeof params.onToolUseStart>>[0]) => {
               sawToolUseSinceText = true;
+              finalItemText = undefined;
               currentMessageHadToolUse = true;
               if (classifyClaudeCommentary) {
                 flushPendingClaudeCommentaryText();

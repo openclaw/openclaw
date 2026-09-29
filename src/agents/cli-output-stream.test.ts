@@ -41,6 +41,10 @@ function claudeBlockStart(contentBlock: Record<string, unknown>, index?: number)
   });
 }
 
+function itemMessage(text: string) {
+  return JSON.stringify({ type: "item.completed", item: { type: "agent_message", text } });
+}
+
 function claudeSyntheticNoResponse(text = "No response requested.") {
   return {
     type: "assistant",
@@ -398,6 +402,58 @@ describe("createCliJsonlStreamingParser", () => {
       parser.finish();
 
       expect(parser.getOutput()?.rawFinalText).toBe(expected);
+    },
+  );
+
+  it.each([
+    {
+      name: "a tool call after stored item text",
+      frames: [
+        itemMessage("Checking now."),
+        claudeBlockStart({ type: "tool_use", id: "tool-1", name: "session_status" }),
+      ],
+      expected: "",
+    },
+    {
+      name: "a new message after stored item text",
+      frames: [itemMessage("Checking now."), claudeMessageStart()],
+      expected: "",
+    },
+    {
+      name: "a tool item after stored item text",
+      frames: [
+        itemMessage("Checking now."),
+        JSON.stringify({ type: "item.completed", item: { type: "command_execution" } }),
+      ],
+      expected: "",
+    },
+    {
+      name: "item text after an earlier boundary",
+      frames: [
+        claudeMessageStart(),
+        claudeBlockStart({ type: "tool_use", id: "tool-1", name: "session_status" }),
+        itemMessage("All done."),
+      ],
+      expected: "All done.",
+    },
+  ])(
+    "checks message boundaries before reusing stored item text ($name)",
+    ({ frames, expected }) => {
+      const parser = createParser();
+
+      parser.push(
+        joinJsonlFrames(
+          JSON.stringify({ type: "init", session_id: "session-items" }),
+          ...frames,
+          JSON.stringify({ type: "result", session_id: "session-items", result: "" }),
+          "",
+        ),
+      );
+      parser.finish();
+
+      // rawFinalText is omitted when the final message equals the reply text.
+      const output = parser.getOutput();
+      expect(output?.rawFinalText ?? output?.text.trim()).toBe(expected);
     },
   );
 
