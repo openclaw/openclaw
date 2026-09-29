@@ -157,6 +157,30 @@ describe("Codex app-server client runtime", () => {
     });
   });
 
+  it("never returns an OpenClaw token to a host-owned Codex app-server", async () => {
+    const harness = createHarness();
+    ensureCodexAppServerClientRuntime(harness.client, {
+      agentDir: "/tmp/agent",
+      authProfileId: "openai:owner",
+      authMode: "native",
+    });
+
+    harness.send({
+      id: "refresh-native",
+      method: "account/chatgptAuthTokens/refresh",
+      params: { reason: "expired" },
+    });
+
+    await vi.waitFor(() => expect(harness.writes.length).toBeGreaterThan(0));
+    expect(mocks.refreshAuth).not.toHaveBeenCalled();
+    expect(JSON.parse(harness.writes.at(-1) ?? "{}")).toMatchObject({
+      id: "refresh-native",
+      error: {
+        message: "Codex host-owned authentication must refresh on the app-server host.",
+      },
+    });
+  });
+
   it("bounds token refresh at the Codex external-auth request boundary", async () => {
     vi.useFakeTimers();
     mocks.refreshAuth.mockImplementationOnce(() => new Promise(() => {}));

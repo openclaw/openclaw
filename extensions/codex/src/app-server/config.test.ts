@@ -796,25 +796,27 @@ describe("Codex app-server config", () => {
     );
   });
 
-  it("resolves opt-in user-home coexistence only for local stdio", () => {
+  it("resolves opt-in user-home coexistence for stdio and authenticated WebSocket", () => {
     const runtime = resolveRuntimeForTest({
       pluginConfig: { appServer: { homeScope: "user" } },
     });
 
     expect(runtime.start.homeScope).toBe("user");
-    expect(() =>
-      resolveRuntimeForTest({
-        pluginConfig: {
-          appServer: {
-            transport: "websocket",
-            url: "ws://127.0.0.1:39175",
-            homeScope: "user",
-          },
+    const remote = resolveRuntimeForTest({
+      pluginConfig: {
+        appServer: {
+          transport: "websocket",
+          url: "ws://127.0.0.1:39175",
+          authToken: "owner-capability",
+          homeScope: "user",
         },
-      }),
-    ).toThrow(
-      "plugins.entries.codex.config.appServer.homeScope=user requires appServer.transport=stdio or unix",
-    );
+      },
+    });
+    expect(remote.start).toMatchObject({
+      transport: "websocket",
+      homeScope: "user",
+      authToken: "owner-capability",
+    });
   });
 
   it("resolves the native user Codex home from CODEX_HOME or the OS home", () => {

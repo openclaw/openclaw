@@ -103,7 +103,10 @@ function createNativeBoundary(accountType = "chatgpt") {
               {
                 name: {
                   type: "user",
-                  file: path.join(startedOptions!.env!.CODEX_HOME!, "config.toml"),
+                  file: path.join(
+                    startedOptions?.env?.CODEX_HOME ?? "/home/owner/.codex",
+                    "config.toml",
+                  ),
                 },
                 config: {},
               },
@@ -212,6 +215,30 @@ describe("isolated completion account and daemon ownership", () => {
       expect(boundary.inferenceAccounts).toEqual([nativeAccount]);
       expect(JSON.stringify(boundary.calls)).not.toContain("synthetic-stored-b-access");
       expect(readStart(boundary)).toMatchObject(pluginConfig.appServer);
+    });
+  });
+
+  it("uses the remote WebSocket app-server's native account for an owner-scoped turn", async () => {
+    await withTempDir("codex-isolated-websocket-auth-", async (root) => {
+      const boundary = createNativeBoundary();
+      const pluginConfig = {
+        appServer: {
+          transport: "websocket",
+          url: "ws://127.0.0.1:39175",
+          authToken: "owner-capability",
+          homeScope: "user",
+        },
+      };
+      const result = await runCodexIsolatedCompletion(createParams(root), { pluginConfig });
+
+      expect(result.assistant.content).toEqual([
+        { type: "text", text: `Garden Planning (${nativeAccount})` },
+      ]);
+      expect(readStart(boundary)).toMatchObject(pluginConfig.appServer);
+      expect(boundary.calls.some((call) => call.method === "account/read")).toBe(true);
+      expect(boundary.calls.filter((call) => call.method === "account/login/start")).toEqual([]);
+      expect(boundary.inferenceAccounts).toEqual([nativeAccount]);
+      expect(JSON.stringify(boundary.calls)).not.toContain("synthetic-stored-b-access");
     });
   });
 

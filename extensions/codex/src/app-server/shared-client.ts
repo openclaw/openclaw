@@ -1063,7 +1063,9 @@ async function startInitializedCodexAppServerClientOnce(
         authMode:
           params.preparedAuth?.kind === "api-key" || isCodexResponsesOAuth(params.preparedAuth)
             ? "prepared-api-key"
-            : "profile",
+            : params.authProfileId === null || startOptions.homeScope === "user"
+              ? "native"
+              : "profile",
         ...(params.authProfileStore ? { authProfileStore: params.authProfileStore } : {}),
         config: params.config,
         onAuthRefreshFailure: () => retireSharedCodexAppServerClientIfCurrent(client),
