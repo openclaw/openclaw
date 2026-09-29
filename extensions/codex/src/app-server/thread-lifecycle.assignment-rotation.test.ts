@@ -48,7 +48,7 @@ async function fixture() {
   const values = new Map<string, StoredCodexAppServerBinding>();
   const store = createCodexAppServerBindingStore(createCodexTestBindingStateStore(values));
   let starts = 0;
-  let successor: (() => unknown | Promise<unknown>) | undefined;
+  let successor: (() => Promise<ReturnType<typeof threadStartResult>>) | undefined;
   const wire = createCodexLifecycleHarness({
     respond: async (method) => {
       if (method === "config/read") {
@@ -135,15 +135,15 @@ async function fixture() {
       binding,
     });
     assert(currentOwner);
-    assert(store.readNativeSubagentAssignments);
+    assert(typeof store.readNativeSubagentAssignments === "function");
     return store.readNativeSubagentAssignments(identity, currentOwner);
   };
   const readState = () => {
-    const stored = values.get(key);
-    if (!stored) {
+    const current = values.get(key);
+    if (!current) {
       return undefined;
     }
-    const { lease: _lease, ...durable } = stored;
+    const { lease: _lease, ...durable } = current;
     return structuredClone(durable);
   };
   expect(readAssignments(parent.threadId)).toEqual(assignments);
@@ -157,7 +157,7 @@ async function fixture() {
     assignments,
     releasePredecessor,
     readAssignments,
-    setSuccessor: (respond: () => unknown | Promise<unknown>) => {
+    setSuccessor: (respond: () => Promise<ReturnType<typeof threadStartResult>>) => {
       successor = respond;
     },
     rotate: (patch: Partial<CodexStartOrResumeThreadParams> = {}) =>
@@ -196,7 +196,7 @@ describe("native assignment custody across ordinary parent rotation", () => {
       await settled;
     }
     const replacement = await pending;
-    expect((await f.store.read(f.identity))?.threadId).toBe("parent-2");
+    expect(f.store.read(f.identity)?.threadId).toBe("parent-2");
     expect(f.readAssignments(replacement.threadId, replacement)).toEqual(f.assignments);
   });
 
@@ -313,7 +313,7 @@ describe("native assignment custody across ordinary parent rotation", () => {
     const replacement = await startOrResumeThread(f.options);
     expect(replacement.threadId).toBe("parent-3");
     expect(replacement.lifecycle.preserveExistingBinding).toBeUndefined();
-    expect((await f.store.read(f.identity))?.threadId).toBe(replacement.threadId);
+    expect(f.store.read(f.identity)?.threadId).toBe(replacement.threadId);
     expect(f.readAssignments(replacement.threadId, replacement)).toEqual(f.assignments);
     expect(f.releasePredecessor).toHaveBeenCalledExactlyOnceWith(f.parent.threadId);
   });
