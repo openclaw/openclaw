@@ -1,14 +1,33 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  clearActiveEmbeddedRun,
+  setActiveEmbeddedRun,
+} from "../agents/embedded-agent-runner/runs.js";
+import { createEmbeddedRunHandle } from "../agents/embedded-agent-runner/runs.test-support.js";
+import {
+  withGatewayToolCallerIdentity,
+  withoutGatewayToolCallerIdentity,
+} from "../agents/tools/gateway-caller-context.js";
 import { createSessionsSendTool } from "../agents/tools/sessions-send-tool.js";
 import { loadTranscriptEvents } from "../config/sessions/session-accessor.js";
 import { readTranscriptEventMessage } from "../config/sessions/session-accessor.sqlite-read.js";
 import {
+  claimAgentRunDelegatedAuthority,
+  releaseAgentRunDelegatedAuthority,
+} from "../infra/agent-run-registry.js";
+import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import {
   REQUESTER,
+  TARGET,
+  withSessionToolsFixture,
   PARTICIPANT_SHARED,
   withParticipantSessionToolsFixture,
   withDelayedSessionToolsSteering,
   drainSessionToolsFixture,
 } from "./local-request-context.session-tools.test-support.js";
+import { handleGatewayRequest } from "./server-methods.js";
+import type { GatewayRequestOptions } from "./server-methods/types.js";
+import { roleClient } from "./session-sharing.test-utils.js";
 
 // These synthetic sessions own no browser tabs or browser cleanup resources.
 vi.mock("../browser-lifecycle-cleanup.js", () => ({
@@ -121,3 +140,76 @@ describe("sessions_send steering custody", () => {
   );
 });
 import { setImmediate } from "node:timers/promises";
+
+describe("runtime-only session authority", () => {
+  beforeAll(async () => {
+    await import("./server-methods/chat.js");
+  });
+  afterEach(drainSessionToolsFixture);
+
+  it("keeps runtime-only session access working without a personal-tool participant registry", async () => {
+    await withSessionToolsFixture(async () => {
+      const context = getPluginRuntimeGatewayRequestScope()?.context;
+      if (!context) {
+        throw new Error("expected local Gateway context");
+      }
+      const caller = {
+        agentId: "main",
+        sessionKey: REQUESTER,
+        operationalRunInstance: { instanceId: "unregistered-instance", runId: "unregistered-run" },
+      };
+      const delegatedAuthority = claimAgentRunDelegatedAuthority(caller.operationalRunInstance);
+      const handle = createEmbeddedRunHandle({ runId: caller.operationalRunInstance.runId });
+      const sessionId = "session-tools-requester-id";
+      const client = roleClient("write");
+      client.internal = {
+        syntheticClient: true,
+        agentRuntimeIdentity: {
+          kind: "agentRuntime",
+          ...caller,
+          delegatedAuthority: { kind: "local", ...delegatedAuthority },
+        },
+      };
+      try {
+        await withGatewayToolCallerIdentity(caller, () =>
+          setActiveEmbeddedRun(sessionId, handle, REQUESTER, undefined, "main"),
+        );
+        await withoutGatewayToolCallerIdentity(async () => {
+          const request = async (method: string, params: Record<string, unknown>) => {
+            const respond = vi.fn<GatewayRequestOptions["respond"]>();
+            await handleGatewayRequest({
+              req: { type: "req", id: "unregistered-session-call", method, params },
+              context,
+              client,
+              isWebchatConnect: () => false,
+              respond,
+            });
+            return respond.mock.calls;
+          };
+          expect(await request("chat.history", { sessionKey: TARGET })).toMatchObject([
+            [true, { sessionKey: TARGET, messages: [] }],
+          ]);
+          expect(await request("agent.wait", { runId: "unknown-run", timeoutMs: 0 })).toMatchObject(
+            [[true, { runId: "unknown-run", status: "timeout" }]],
+          );
+          expect(
+            await request("ui.command", { command: { kind: "sidebar", visible: false } }),
+          ).toMatchObject([
+            [
+              false,
+              undefined,
+              {
+                message: expect.stringContaining(
+                  "Personal-tool turn authority is no longer active",
+                ),
+              },
+            ],
+          ]);
+        });
+      } finally {
+        clearActiveEmbeddedRun(sessionId, handle, REQUESTER);
+        releaseAgentRunDelegatedAuthority(delegatedAuthority);
+      }
+    });
+  });
+});
