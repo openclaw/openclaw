@@ -8,7 +8,6 @@ import {
   type MainSessionRecoveryOwnerLease,
 } from "../../agents/main-session-recovery/main-session-recovery-store.js";
 import { beginForegroundSessionMaintenance } from "../../agents/session-maintenance/coordinator.js";
-// Decides whether an inbound turn may start, queue, or abort a reply run.
 import {
   isRestartRecoveryTombstone,
   SessionWorkStartChangedError,
@@ -203,6 +202,11 @@ export async function admitReplyTurn(
   let discardedDatabaseClaimRelease: Promise<void> | undefined;
   let owned = false;
   let admitting = true;
+  function rejectSessionChange(
+    message = `Session "${params.sessionKey}" changed while starting work. Retry.`,
+  ): never {
+    rejectLifecycleInvalidatedWork({ kind: params.kind, message, transientSessionChange: true });
+  }
   const assertDatabaseOwnerCurrent = (nextClaim?: SessionAdmissionDatabaseClaim) => {
     if (
       admittedDatabaseClaim &&
@@ -215,11 +219,9 @@ export async function admitReplyTurn(
         // The synchronous assertion revokes now; the outer finally joins release.
         void release.catch(() => {});
       }
-      rejectLifecycleInvalidatedWork({
-        kind: params.kind,
-        message: `Session store for "${params.sessionKey}" changed while starting work. Retry.`,
-        transientSessionChange: true,
-      });
+      rejectSessionChange(
+        `Session store for "${params.sessionKey}" changed while starting work. Retry.`,
+      );
     }
   };
   const assertRecoveryOwnerCurrent = (
@@ -231,11 +233,9 @@ export async function admitReplyTurn(
       lifecycleGeneration !== getAgentEventLifecycleGeneration() ||
       resolveGatewayContext?.()?.recoveryRuntime !== recoveryRuntime
     ) {
-      rejectLifecycleInvalidatedWork({
-        kind: params.kind,
-        message: `Session "${params.sessionKey}" changed while ${action} recovery. Retry.`,
-        transientSessionChange: true,
-      });
+      rejectSessionChange(
+        `Session "${params.sessionKey}" changed while ${action} recovery. Retry.`,
+      );
     }
   };
   const waitForRecovery = async (ownerRelease?: Promise<void>) => {
@@ -355,11 +355,9 @@ export async function admitReplyTurn(
                 const currentEntry = current.entry;
                 admittedSessionEntry = currentEntry;
                 if (expectedSessionId && !currentEntry) {
-                  rejectLifecycleInvalidatedWork({
-                    kind: params.kind,
-                    message: `Session "${params.sessionKey}" was deleted while starting work. Retry.`,
-                    transientSessionChange: true,
-                  });
+                  rejectSessionChange(
+                    `Session "${params.sessionKey}" was deleted while starting work. Retry.`,
+                  );
                 }
                 rotationObservation?.recordCompletions();
                 const activeOperationRotatedExpectedSession = rotations.hasExpectedSessionRotation({
@@ -372,11 +370,7 @@ export async function admitReplyTurn(
                   currentEntry?.sessionId !== expectedSessionId &&
                   !activeOperationRotatedExpectedSession
                 ) {
-                  rejectLifecycleInvalidatedWork({
-                    kind: params.kind,
-                    message: `Session "${params.sessionKey}" changed while starting work. Retry.`,
-                    transientSessionChange: true,
-                  });
+                  rejectSessionChange();
                 }
                 if (activeOperationRotatedExpectedSession) {
                   expectedSessionId = currentEntry?.sessionId;
@@ -499,30 +493,18 @@ export async function admitReplyTurn(
               target: { agentId: params.agentId, sessionKey: params.sessionKey, storePath },
             });
             if (ownerClaim.kind === "invalidated") {
-              rejectLifecycleInvalidatedWork({
-                kind: params.kind,
-                message: `Session "${params.sessionKey}" changed while starting work. Retry.`,
-                transientSessionChange: true,
-              });
+              rejectSessionChange();
             }
             recoveryOwnerLease = ownerClaim.kind === "claimed" ? ownerClaim.lease : undefined;
             admittedSessionEntry = ownerClaim.entry;
           }
           if (interruptedBeforeOperation || isAbortSignalAborted(params.upstreamAbortSignal)) {
-            rejectLifecycleInvalidatedWork({
-              kind: params.kind,
-              message: `Session "${params.sessionKey}" changed while starting work. Retry.`,
-              transientSessionChange: true,
-            });
+            rejectSessionChange();
           }
           assertDatabaseOwnerCurrent();
           if (rotationObservation?.changed()) {
             if (recoveryClaimStarted) {
-              rejectLifecycleInvalidatedWork({
-                kind: params.kind,
-                message: `Session "${params.sessionKey}" changed while starting work. Retry.`,
-                transientSessionChange: true,
-              });
+              rejectSessionChange();
             }
             // A predecessor can rotate after the final row read but before this handoff.
             // Reacquire the full admission; its session ID alone grants no authority.

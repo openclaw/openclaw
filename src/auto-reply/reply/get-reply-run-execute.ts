@@ -488,7 +488,8 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       sessionFile: preparedSessionState.sessionFile,
       workspaceDir,
       cwd:
-        normalizeOptionalString(state.sessionEntry?.spawnedCwd) ?? resolveAgentRunCwd(cfg, agentId),
+        normalizeOptionalString(preparedSessionState.sessionEntry?.spawnedCwd) ??
+        resolveAgentRunCwd(cfg, agentId),
       permissionMode: admittedSessionSettings
         ? admittedSessionSettings.permissionMode
         : preparedSessionState.sessionEntry?.permissionMode,

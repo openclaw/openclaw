@@ -121,6 +121,16 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
         getDispatchAbortSignal(),
         () =>
           state.traceReplyPhase("reply.run_reply_resolver", async () => {
+            const toolProgressOptions = {
+              forwardWhenSourceDeliverySuppressed: true,
+              requiresToolSummaryVisibility: true,
+              waitForDirectBlockReplyDelivery: true,
+            };
+            const toolLifecycleOptions = {
+              ...toolProgressOptions,
+              allowWhenToolSummariesHidden:
+                params.replyOptions?.allowToolLifecycleWhenProgressHidden === true,
+            };
             const result = await replyResolver(
               ctx,
               {
@@ -185,11 +195,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                 },
                 onBlockReplyQueued: wrapProgressCallback(params.replyOptions?.onBlockReplyQueued),
                 onToolStart: wrapProgressCallback(params.replyOptions?.onToolStart, {
-                  allowWhenToolSummariesHidden:
-                    params.replyOptions?.allowToolLifecycleWhenProgressHidden === true,
-                  forwardWhenSourceDeliverySuppressed: true,
-                  requiresToolSummaryVisibility: true,
-                  waitForDirectBlockReplyDelivery: true,
+                  ...toolLifecycleOptions,
                   onForward: async () => {
                     // Commentary precedes the tool that follows it.
                     await flushPendingCommentaryProgress();
@@ -202,25 +208,18 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                   params.replyOptions?.commentaryProgressEnabled,
                 reasoningPayloadsEnabled,
                 commentaryPayloadsEnabled,
-                onCommandOutput: wrapProgressCallback(params.replyOptions?.onCommandOutput, {
-                  forwardWhenSourceDeliverySuppressed: true,
-                  requiresToolSummaryVisibility: true,
-                  waitForDirectBlockReplyDelivery: true,
-                }),
-                onCompactionStart: wrapProgressCallback(params.replyOptions?.onCompactionStart, {
-                  allowWhenToolSummariesHidden:
-                    params.replyOptions?.allowToolLifecycleWhenProgressHidden === true,
-                  forwardWhenSourceDeliverySuppressed: true,
-                  requiresToolSummaryVisibility: true,
-                  waitForDirectBlockReplyDelivery: true,
-                }),
-                onCompactionEnd: wrapProgressCallback(params.replyOptions?.onCompactionEnd, {
-                  allowWhenToolSummariesHidden:
-                    params.replyOptions?.allowToolLifecycleWhenProgressHidden === true,
-                  forwardWhenSourceDeliverySuppressed: true,
-                  requiresToolSummaryVisibility: true,
-                  waitForDirectBlockReplyDelivery: true,
-                }),
+                onCommandOutput: wrapProgressCallback(
+                  params.replyOptions?.onCommandOutput,
+                  toolProgressOptions,
+                ),
+                onCompactionStart: wrapProgressCallback(
+                  params.replyOptions?.onCompactionStart,
+                  toolLifecycleOptions,
+                ),
+                onCompactionEnd: wrapProgressCallback(
+                  params.replyOptions?.onCompactionEnd,
+                  toolLifecycleOptions,
+                ),
                 onToolResult: (payload) => {
                   if (state.replyOperationRunState.heartbeat) {
                     return Promise.resolve();

@@ -4,6 +4,7 @@ import { directive } from "lit/directive.js";
 import { t } from "../../../i18n/index.ts";
 import { captureChatSessionScrollPosition, type ChatSessionScrollPosition } from "../scroll.ts";
 import type { ChatPositionIndex } from "./chat-position-projection.ts";
+import type { PositionRailAssistant } from "./chat-position-rail-view.ts";
 import { renderChatPositionRailView } from "./chat-position-rail-view.ts";
 import { subscribeTranscriptScroll } from "./chat-transcript-scroll-events.ts";
 import type { ChatTranscriptSession } from "./chat-transcript-session.ts";
@@ -22,6 +23,7 @@ type RailInteraction = {
 type PositionRailParams = {
   positions: ChatPositionIndex;
   transcript: ChatTranscriptSession;
+  assistant?: PositionRailAssistant;
   requestUpdate: () => void;
 };
 
@@ -600,7 +602,7 @@ class ChatPositionRailDirective extends AsyncDirective {
 
   render(params: PositionRailParams) {
     this.renderParams = params;
-    const { positions, transcript, requestUpdate } = params;
+    const { positions, transcript, assistant, requestUpdate } = params;
     this.requestUpdate = requestUpdate;
     if (this.session !== transcript) {
       this.session = transcript;
@@ -685,6 +687,7 @@ class ChatPositionRailDirective extends AsyncDirective {
     };
     return renderChatPositionRailView({
       transcript,
+      assistant,
       markers,
       renderedIndexes: this.renderedIndexes,
       markerHeight: MARKER_HEIGHT,

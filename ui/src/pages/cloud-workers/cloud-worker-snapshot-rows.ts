@@ -94,25 +94,18 @@ export function renderSnapshotImage(image: SnapshotImage, options: SnapshotRowOp
   const runtimeDigest = image.runtimeIdentity?.nodeBootstrapSha256.slice(0, 12);
   const facts = [
     ...(options.showMachineFacts ? [image.backend, image.machineClass, image.os] : []),
-    ...(image.baseCommit
-      ? [t("cloudWorkersPage.snapshots.baseCommit", { commit: image.baseCommit.slice(0, 8) })]
-      : []),
-    ...(image.createdAtMs != null
-      ? [
-          t("cloudWorkersPage.snapshots.created", {
-            age: formatRelativeTimestamp(image.createdAtMs),
-          }),
-        ]
-      : []),
-    ...(image.lastDemandAtMs != null
-      ? [
-          t("cloudWorkersPage.snapshots.lastUsed", {
-            age: formatRelativeTimestamp(image.lastDemandAtMs),
-          }),
-        ]
-      : []),
+    image.baseCommit &&
+      t("cloudWorkersPage.snapshots.baseCommit", { commit: image.baseCommit.slice(0, 8) }),
+    image.createdAtMs != null &&
+      t("cloudWorkersPage.snapshots.created", {
+        age: formatRelativeTimestamp(image.createdAtMs),
+      }),
+    image.lastDemandAtMs != null &&
+      t("cloudWorkersPage.snapshots.lastUsed", {
+        age: formatRelativeTimestamp(image.lastDemandAtMs),
+      }),
     t("cloudWorkersPage.snapshots.allocations", { count: String(image.allocationCount) }),
-    ...(runtimeDigest ? [t("cloudWorkersPage.snapshots.runtime", { digest: runtimeDigest })] : []),
+    runtimeDigest && t("cloudWorkersPage.snapshots.runtime", { digest: runtimeDigest }),
   ];
   return renderSettingsRow({
     title: image.projectKey

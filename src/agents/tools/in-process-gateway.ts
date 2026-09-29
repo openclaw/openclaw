@@ -33,6 +33,7 @@ import {
 import {
   captureGatewayToolCallerAssertion,
   getGatewayToolCallerIdentity,
+  resolveGatewayToolOperatorSelection,
   withoutGatewayToolCallerIdentity,
 } from "./gateway-caller-context.js";
 import { runWithGatewaySessionSpawnContext } from "./gateway-session-spawn-context.js";
@@ -452,7 +453,7 @@ export async function callInProcessGatewayToolWithCreation<T = Record<string, un
     timeoutMs?: number | null;
   } = {},
 ): Promise<T> {
-  const requesterProfileId = getGatewayToolCallerIdentity()?.operatorAuthority?.profileId;
+  const requesterProfileId = resolveGatewayToolOperatorSelection().operatorAuthority?.profileId;
   const trustedCreation =
     creation.via === "spawn" && requesterProfileId ? { ...creation, requesterProfileId } : creation;
   return await callInProcessGatewayToolBound(

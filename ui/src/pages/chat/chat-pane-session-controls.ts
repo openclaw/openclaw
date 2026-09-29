@@ -92,35 +92,22 @@ export function readChatPaneMutationAccess(
   sessionKey: string,
   session?: GatewaySessionRow,
 ) {
+  const scopedPatchAccess = (patch: SessionPatch) =>
+    readSessionMethodAccess(snapshot, {
+      method: "sessions.patch",
+      params: { key: sessionKey, ...patch },
+      sessionScope: true,
+      session,
+    });
   return {
-    model: readSessionMethodAccess(snapshot, {
-      method: "sessions.patch",
-      params: { key: sessionKey, model: null },
-      sessionScope: true,
-      session,
-    }),
-    effort: readSessionMethodAccess(snapshot, {
-      method: "sessions.patch",
-      params: { key: sessionKey, thinkingLevel: null },
-      sessionScope: true,
-      session,
-    }),
+    model: scopedPatchAccess({ model: null }),
+    effort: scopedPatchAccess({ thinkingLevel: null }),
     contextWindow: readSessionMethodAccess(snapshot, {
       method: "sessions.patch",
       params: { key: sessionKey, contextWindow: null },
     }),
-    permission: readSessionMethodAccess(snapshot, {
-      method: "sessions.patch",
-      params: { key: sessionKey, permissionMode: "guarded" },
-      sessionScope: true,
-      session,
-    }),
-    unarchive: readSessionMethodAccess(snapshot, {
-      method: "sessions.patch",
-      params: { key: sessionKey, archived: false },
-      sessionScope: true,
-      session,
-    }),
+    permission: scopedPatchAccess({ permissionMode: "guarded" }),
+    unarchive: scopedPatchAccess({ archived: false }),
   };
 }
 

@@ -19,6 +19,7 @@ import type { OperatorApprovalStoreGuard } from "../operator-approval-store.type
 import {
   type ApprovalRecordLookupResult,
   isApprovalRecordVisibleToClient,
+  readApprovalRequestSource,
   resolvePendingApprovalRecord,
   resolveResolvedApprovalRecord,
   respondPendingApprovalLookupError,
@@ -254,6 +255,7 @@ export async function handleApprovalWaitDecision<TPayload>(params: {
     );
     return;
   }
+  params.authority?.bindSource(readApprovalRequestSource(snapshot));
   const decisionPromise = params.manager.awaitDecision(id);
   if (!decisionPromise) {
     params.respond(
