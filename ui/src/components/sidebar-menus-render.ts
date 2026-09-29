@@ -499,6 +499,7 @@ export function renderSidebarSessionSortMenuForController(controller: SidebarMen
     return nothing;
   }
   const sessionSources = SETTINGS_ROUTE_TARGETS.sessionSources;
+  const rosterMode = host.sidebarAgentsMode === "roster";
   return renderSidebarSessionSortMenu({
     position,
     trigger: controller.sessionSortMenuTrigger,
@@ -507,7 +508,7 @@ export function renderSidebarSessionSortMenuForController(controller: SidebarMen
       sessionSources.search +
       sessionSources.hash,
     grouping: host.effectiveSessionsGrouping(),
-    rosterMode: host.sidebarAgentsMode === "roster",
+    rosterMode,
     sortMode: host.effectiveSessionSortMode(),
     peopleSortAvailable: host.sessionPeopleSortAvailable(),
     statusFilter: host.sessionsStatusFilter,
@@ -519,14 +520,27 @@ export function renderSidebarSessionSortMenuForController(controller: SidebarMen
     ownerFilterId: host.sessionOwnerFilterActive ? host.sessionOwnerFilterId : null,
     involvingMe: host.sessionInvolvingMeFilterActive,
     selfOwnerId: host.sessionDataContext?.gateway.snapshot.selfUser?.id ?? null,
-    // The badge counts Owners and Status; Reset also clears the other Filters rows.
-    filtersChanged:
-      countSidebarSessionFilters(host) > 0 || host.sessionsShowCron || host.sessionsShowSystem,
-    onResetFilters: () => {
+    // Reset covers the panel; the toolbar dot still counts only Owners and Status.
+    settingsChanged:
+      countSidebarSessionFilters(host) > 0 ||
+      host.sessionsShowCron ||
+      host.sessionsShowSystem ||
+      host.sessionsShowPreview ||
+      host.effectiveSessionSortMode() !== "created" ||
+      (!rosterMode &&
+        (host.effectiveSessionsGrouping() !== "category" ||
+          host.sessionsEmptyGroupsMode !== "filtering")),
+    onReset: () => {
       host.setSessionOwnerFilter(null);
       host.sessionOrganizer.setSessionsStatusFilter("active");
       host.sessionOrganizer.setSessionsShowCron(false);
       host.sessionOrganizer.setSessionsShowSystem(false);
+      host.sessionOrganizer.setSessionsShowPreview(false);
+      host.setSessionSortMode("created");
+      if (!rosterMode) {
+        host.sessionOrganizer.setSessionsGrouping("category");
+        host.setSessionsEmptyGroupsMode("filtering");
+      }
     },
     onGroupingChange: (grouping) => {
       host.sessionOrganizer.setSessionsGrouping(grouping);
