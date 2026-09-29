@@ -301,22 +301,28 @@ it("coalesces queued revisions without moving the session behind later arrivals"
 });
 
 it.each([
-  { count: 3, cursor: true, error: false },
-  { count: 0, cursor: true, error: false },
-  { count: 0, cursor: false, error: true },
-  { count: 0, cursor: false, error: false },
+  { count: 3, cursor: true, omitted: false, error: false },
+  { count: 3, cursor: true, omitted: true, error: false },
+  { count: 0, cursor: true, omitted: false, error: false },
+  { count: 0, cursor: false, omitted: true, error: false },
+  { count: 0, cursor: true, omitted: true, error: false },
+  { count: 0, cursor: false, omitted: false, error: true },
+  { count: 0, cursor: true, omitted: true, error: true },
+  { count: 0, cursor: false, omitted: false, error: false },
 ])(
   "keeps image discovery feedback inside its media inset (%j)",
-  async ({ count, cursor, error }) => {
+  async ({ count, cursor, omitted, error }) => {
     vi.useFakeTimers();
     const continued = createDeferred<ArtifactsListResult>();
     try {
       const result: ArtifactsListResult = {
         ...images("preview", count),
         ...(cursor ? { nextCursor: "older" } : {}),
+        ...(omitted ? { omittedOversized: true } : {}),
       };
+      // With a notice and an error, the first page carries the notice and the next page fails.
       const request = vi.fn(async () => {
-        if (error) {
+        if (error && (!omitted || request.mock.calls.length > 1)) {
           throw new Error("Image discovery failed");
         }
         return result;
@@ -338,13 +344,16 @@ it.each([
       await row.updateComplete;
 
       const media = row.querySelector(".activity-feed__media");
-      expect(Boolean(media)).toBe(count > 0 || cursor || error);
+      expect(Boolean(media)).toBe(count > 0 || cursor || omitted || error);
       expect(row.querySelectorAll(".chat-image-frame")).toHaveLength(count);
       const note = row.querySelector(".activity-feed__note");
-      expect(Boolean(note)).toBe(error || (count === 0 && cursor));
+      expect(Boolean(note)).toBe(error || omitted || (count === 0 && cursor));
       if (note) {
         expect(note.parentElement).toBe(media);
       }
+      expect(note?.textContent?.includes("Images too large to preview here") ?? false).toBe(
+        omitted,
+      );
       if (error) {
         expect(note?.querySelector('[role="status"]')?.textContent).toBe("Couldn't load images");
         expect(note?.querySelector("button")?.textContent?.trim()).toBe("Retry");
@@ -375,19 +384,23 @@ it.each([
 );
 
 it.each([
-  { count: 1, error: false },
-  { count: 0, error: false },
-  { count: 1, error: true },
+  { count: 1, error: false, omitted: false },
+  { count: 0, error: false, omitted: false },
+  { count: 1, error: true, omitted: false },
+  { count: 1, error: false, omitted: true },
+  { count: 0, error: false, omitted: true },
 ])(
   "keeps settled media DOM unchanged during revision revalidation (%j)",
-  async ({ count, error }) => {
+  async ({ count, error, omitted }) => {
     vi.useFakeTimers();
     const refresh = createDeferred<ArtifactsListResult>();
     const older = createDeferred<ArtifactsListResult>();
     try {
-      const request = vi
-        .fn()
-        .mockResolvedValue({ ...images("settled", count), nextCursor: "older" });
+      const request = vi.fn().mockResolvedValue({
+        ...images("settled", count),
+        nextCursor: "older",
+        omittedOversized: omitted,
+      });
       if (error) {
         request
           .mockResolvedValueOnce({ ...images("settled", count), nextCursor: "older" })
@@ -413,6 +426,11 @@ it.each([
       const media = row.querySelector(".activity-feed__media")!;
       const nodes = [...media.querySelectorAll("*")];
       const markup = media.innerHTML;
+      if (omitted) {
+        expect(media.querySelector(".activity-feed__note")?.textContent).toContain(
+          "Images too large to preview here",
+        );
+      }
       expect(row.querySelectorAll(".chat-image-frame")).toHaveLength(count);
       expect(media.textContent).toContain(error ? "Couldn't load images" : "Older images");
       const settledCalls = request.mock.calls.length;

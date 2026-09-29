@@ -240,6 +240,7 @@ describe("bounded Activity image discovery", () => {
         download: { mode: "bytes" },
       });
       expect(image).not.toHaveProperty("image");
+      expect(oversized).not.toHaveProperty("omittedOversized");
       expect(Buffer.byteLength(JSON.stringify(oversized))).toBeLessThan(2 * 1024);
       expect(oversized.nextCursor).toBeUndefined();
       expect(await invoke("artifacts.download", { artifactId: image.id })).toMatchObject({
@@ -256,12 +257,20 @@ describe("bounded Activity image discovery", () => {
       await append([
         { type: "image", url },
         { type: "image", source: { url } },
+        { type: "image", url: `data:image/png;base64,${"a".repeat(256 * 1024)}` },
         { type: "image_url", image_url: { url } },
         { type: "attachment", attachment: { kind: "image", url } },
-        { type: "image", url: `data:image/png;base64,${"a".repeat(256 * 1024)}` },
       ]);
+      const newest = page(await list({ limit: 2 }));
+      expect(newest).not.toHaveProperty("omittedOversized");
+      const older = page(await list({ cursor: newest.nextCursor, limit: 1 }));
+      expect(older.omittedOversized).toBe(true);
+      const oldest = page(await list({ cursor: older.nextCursor, limit: 1 }));
+      expect(oldest).not.toHaveProperty("omittedOversized");
+      expect(oldest.nextCursor).toBeUndefined();
       const previews = page(await list());
       expect(previews.artifacts).toHaveLength(4);
+      expect(previews.omittedOversized).toBe(true);
       expect(previews.nextCursor).toBeUndefined();
       for (const artifact of previews.artifacts) {
         expect(artifact).toMatchObject({

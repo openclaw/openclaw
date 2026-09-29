@@ -28,6 +28,7 @@ type ImageEntry = {
   pending?: Promise<void>;
   cursor?: string;
   error?: boolean;
+  omitted?: boolean;
 };
 type ImageQueueAdmission = "run" | "superseded" | "full";
 type ConnectionImages = {
@@ -238,6 +239,7 @@ class ActivitySessionMedia extends OpenClawLightDomElement {
           }
           entry.loaded = true;
           entry.cursor = result.nextCursor;
+          entry.omitted ||= result.omittedOversized;
           for (const artifact of result.artifacts) {
             const image: ImageBlock | undefined = artifact.image?.url
               ? {
@@ -304,8 +306,8 @@ class ActivitySessionMedia extends OpenClawLightDomElement {
             </button>`,
           ]
         : [];
-    const showNote = Boolean(entry.error) || (!hasImages && Boolean(entry.cursor));
-    const note = html`${
+    const showNote = Boolean(entry.error || entry.omitted) || (!hasImages && Boolean(entry.cursor));
+    const note = html`${entry.omitted ? html`<span>${t("activity.images.incomplete")}</span>` : nothing}${
       entry.error
         ? html`<span role="status">${t("activity.images.failed")}</span
             ><button

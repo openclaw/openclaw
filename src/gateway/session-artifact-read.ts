@@ -97,6 +97,7 @@ export type SessionArtifactReadResult =
       kind: "image-page";
       artifacts: ArtifactSummary[];
       next?: { beforeSeq: number; imageOffset: number; readWindow: TranscriptReadWindow };
+      omittedOversized?: boolean;
     }
   | { kind: "image"; artifact?: ArtifactRecord }
   | {
@@ -166,17 +167,20 @@ function isArtifactBlock(block: Record<string, unknown>): boolean {
   );
 }
 
-function collectArtifactsFromMessage(params: {
-  message: unknown;
-  messageFallbackSeq: number;
-  collection: { artifacts: ArtifactRecord[]; count: number };
-  sessionKey: string;
-  runId?: string;
-  messageRole?: ArtifactsListParams["messageRole"];
-  includeDownloadData?: boolean;
-  downloadArtifactIds?: Set<string>;
-  imagesOnly?: boolean;
-}): void {
+function collectArtifactsFromMessage(
+  params: {
+    message: unknown;
+    messageFallbackSeq: number;
+    sessionKey: string;
+    runId?: string;
+    messageRole?: ArtifactsListParams["messageRole"];
+    includeDownloadData?: boolean;
+    downloadArtifactIds?: Set<string>;
+  } & (
+    | { imagesOnly: true; collection: { artifacts: (ArtifactRecord | undefined)[]; count: number } }
+    | { imagesOnly?: false; collection: { artifacts: ArtifactRecord[]; count: number } }
+  ),
+): void {
   const msg = asOptionalRecord(params.message);
   if (!msg) {
     return;
@@ -272,14 +276,17 @@ function collectArtifactsFromMessage(params: {
             asNonEmptyString(source?.url) ??
             mediaUrlValue(block.image_url))
         : undefined;
+    if (params.imagesOnly && (transcriptImage ? download.mode !== "bytes" : !imageUrl)) {
+      continue;
+    }
     if (
       params.imagesOnly &&
-      (transcriptImage
-        ? download.mode !== "bytes"
-        : !imageUrl ||
-          (/^data:/i.test(imageUrl) &&
-            Buffer.byteLength(imageUrl) > IMAGE_INLINE_PREVIEW_MAX_BYTES))
+      imageUrl &&
+      /^data:/i.test(imageUrl) &&
+      Buffer.byteLength(imageUrl) > IMAGE_INLINE_PREVIEW_MAX_BYTES
     ) {
+      // Preserve omitted slots so notices follow the cursor's actual scan window.
+      params.collection.artifacts.push(undefined);
       continue;
     }
     const summary: ArtifactRecord = {
@@ -458,13 +465,14 @@ export async function selectSessionArtifacts(
       throw new SessionTranscriptProjectionUnavailableError(scope.sessionId, "window-changed");
     }
     const artifacts: ArtifactSummary[] = [];
+    let omittedOversized = false;
     let next: { beforeSeq: number; imageOffset: number } | undefined;
     for (const message of page.messages.toReversed()) {
       const seq = asOptionalRecord(asOptionalRecord(message)?.["__openclaw"])?.seq;
       if (typeof seq !== "number") {
         continue;
       }
-      const collected: ArtifactRecord[] = [];
+      const collected: (ArtifactRecord | undefined)[] = [];
       collectArtifactsFromMessage({
         message: projectTranscriptImageArtifacts(message),
         messageFallbackSeq: 1,
@@ -474,13 +482,17 @@ export async function selectSessionArtifacts(
         messageRole: query.messageRole,
         imagesOnly: true,
       });
-      const images = collected.map(toArtifactSummary).toReversed();
+      const images = collected
+        .map((artifact) => artifact && toArtifactSummary(artifact))
+        .toReversed();
       const start = query.beforeSeq === seq + 1 ? (query.imageOffset ?? 0) : 0;
       for (let index = start; index < images.length; index++) {
         const image = images[index];
-        if (image) {
-          artifacts.push(image);
+        if (!image) {
+          omittedOversized = true;
+          continue;
         }
+        artifacts.push(image);
         if (artifacts.length === query.limit) {
           next =
             index + 1 < images.length
@@ -502,6 +514,7 @@ export async function selectSessionArtifacts(
     return {
       kind: "image-page",
       artifacts,
+      ...(omittedOversized ? { omittedOversized: true } : {}),
       ...(next && next.beforeSeq > 1 && page.readWindow
         ? { next: { ...next, readWindow: page.readWindow } }
         : {}),

@@ -101,6 +101,7 @@ async function loadArtifacts(
   artifacts: ArtifactRecord[];
   sessionKey?: string;
   nextCursor?: string;
+  omittedOversized?: boolean;
   assertCurrent?: () => void;
 }> {
   const selected = await prepareArtifactSessionRead(
@@ -342,7 +343,7 @@ export const artifactsHandlers: GatewayRequestHandlers = {
     if (!loaded.ok) {
       return;
     }
-    const { artifacts, sessionKey, nextCursor } = loaded.value;
+    const { artifacts, sessionKey, nextCursor, omittedOversized } = loaded.value;
     if (!sessionKey && query.runId) {
       respond(
         false,
@@ -354,6 +355,7 @@ export const artifactsHandlers: GatewayRequestHandlers = {
     respond(true, {
       artifacts: artifacts.map(toArtifactSummary),
       ...(nextCursor ? { nextCursor } : {}),
+      ...(omittedOversized ? { omittedOversized: true } : {}),
     });
   },
   "artifacts.get": async (request) => {
