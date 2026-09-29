@@ -87,7 +87,7 @@ it("shares role credentials across embedding batches and refreshes after expiry"
   }
 });
 
-it("assumes a profile role in the region selected by the Bedrock endpoint", async () => {
+it("refreshes an unexpired profile role while preserving the Bedrock region", async () => {
   const dir = tempDirs.make("bedrock-embedding-role-region-");
   const credentialsFile = path.join(dir, "credentials");
   const configFile = path.join(dir, "config");
@@ -95,10 +95,12 @@ it("assumes a profile role in the region selected by the Bedrock endpoint", asyn
     credentialsFile,
     "[source]\naws_access_key_id = TEST_SOURCE\naws_secret_access_key = synthetic-secret\n",
   );
-  await writeFile(
-    configFile,
-    "[profile role]\nrole_arn = arn:aws-us-gov:iam::123456789012:role/synthetic\nsource_profile = source\n",
-  );
+  const rotate = (role: string) =>
+    writeFile(
+      configFile,
+      `[profile role]\nrole_arn = arn:aws-us-gov:iam::123456789012:role/${role}\nsource_profile = source\n`,
+    );
+  await rotate("A");
   for (const name of Object.keys(process.env).filter((key) => key.startsWith("AWS_"))) {
     vi.stubEnv(name, undefined);
   }
@@ -109,10 +111,18 @@ it("assumes a profile role in the region selected by the Bedrock endpoint", asyn
   const signatures: string[] = [];
   const server = createServer((req, res) => {
     signatures.push(req.headers.authorization ?? "");
-    res.setHeader("content-type", "text/xml");
-    res.end(
-      `<AssumeRoleResponse xmlns="https://sts.amazonaws.com/doc/2011-06-15/"><AssumeRoleResult><Credentials><AccessKeyId>TEST_ASSUMED</AccessKeyId><SecretAccessKey>synthetic-secret</SecretAccessKey><SessionToken>synthetic-session</SessionToken><Expiration>${new Date(Date.now() + 3600000).toISOString()}</Expiration></Credentials></AssumeRoleResult></AssumeRoleResponse>`,
-    );
+    let body = "";
+    req.setEncoding("utf8");
+    req.on("data", (chunk) => {
+      body += chunk;
+    });
+    req.on("end", () => {
+      const role = new URLSearchParams(body).get("RoleArn")?.split("/").at(-1);
+      res.setHeader("content-type", "text/xml");
+      res.end(
+        `<AssumeRoleResponse xmlns="https://sts.amazonaws.com/doc/2011-06-15/"><AssumeRoleResult><Credentials><AccessKeyId>TEST_${role}</AccessKeyId><SecretAccessKey>synthetic-secret</SecretAccessKey><SessionToken>synthetic-session</SessionToken><Expiration>${new Date(Date.now() + 3600000).toISOString()}</Expiration></Credentials></AssumeRoleResult></AssumeRoleResponse>`,
+      );
+    });
   });
   await new Promise<void>((resolve) => {
     server.listen(0, "127.0.0.1", resolve);
@@ -124,12 +134,13 @@ it("assumes a profile role in the region selected by the Bedrock endpoint", asyn
     }
     vi.stubEnv("AWS_ENDPOINT_URL_STS", `http://127.0.0.1:${address.port}`);
     const pendingCredentials: Promise<void>[] = [];
+    const resolved: string[] = [];
     vi.spyOn(BedrockRuntimeClient.prototype, "send").mockImplementation(function (
       this: BedrockRuntimeClient,
     ) {
       pendingCredentials.push(
         this.config.credentials().then((credentials) => {
-          expect(credentials.accessKeyId).toBe("TEST_ASSUMED");
+          resolved.push(credentials.accessKeyId);
         }),
       );
       return { $metadata: {}, body: new TextEncoder().encode('{"embedding":[1,0]}') };
@@ -141,7 +152,14 @@ it("assumes a profile role in the region selected by the Bedrock endpoint", asyn
     });
     expect(await provider.embed("memory")).toEqual([1, 0]);
     await Promise.all(pendingCredentials);
-    expect(signatures).toEqual([expect.stringContaining("/us-gov-west-1/sts/aws4_request")]);
+    await rotate("B");
+    expect(await provider.embed("next memory")).toEqual([1, 0]);
+    await Promise.all(pendingCredentials);
+    expect(resolved).toEqual(["TEST_A", "TEST_B"]);
+    expect(signatures).toEqual([
+      expect.stringContaining("/us-gov-west-1/sts/aws4_request"),
+      expect.stringContaining("/us-gov-west-1/sts/aws4_request"),
+    ]);
   } finally {
     server.closeAllConnections();
     await new Promise<void>((resolve, reject) => {

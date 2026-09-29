@@ -289,7 +289,7 @@ Use `provider: "openai-compatible"` for a generic OpenAI-compatible
     }
     ```
 
-    Embedding requests share the AWS credential chain so a batch does not resolve instance-role credentials separately for every chunk. The SDK refreshes expiring role credentials; rotated profile files are still picked up without restarting the Gateway.
+    Concurrent embedding requests share an in-flight AWS credential refresh so a batch does not resolve instance-role credentials separately for every chunk. Later requests refresh through the SDK again, picking up rotated profile files and role selections without restarting the Gateway.
 
     | Key                    | Type     | Default                        | Description                     |
     | ---------------------- | -------- | ------------------------------- | -------------------------------- |

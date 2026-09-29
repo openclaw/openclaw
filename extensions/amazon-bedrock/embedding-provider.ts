@@ -313,19 +313,11 @@ export async function createBedrockEmbeddingProvider(
   });
 
   let credentialProvider: AwsCredentialIdentityProvider | undefined;
-  let refreshStaticCredentials = false;
   const credentialDefaultProvider: typeof bedrockCredentialDefaultProvider = (init) => {
     const shared = (credentialProvider ??= bedrockCredentialDefaultProvider(init));
-    return async (credentialOptions) => {
-      const resolved = await shared({
-        ...credentialOptions,
-        forceRefresh: credentialOptions?.forceRefresh || refreshStaticCredentials,
-      });
-      // Role credentials use SDK expiry handling; profile files without expiry
-      // must still be reread after external rotation, as with per-request clients.
-      refreshStaticCredentials = resolved.expiration === undefined;
-      return resolved;
-    };
+    // SDK force-refresh calls share an in-flight resolution, but reread rotated
+    // profiles on the next request even when the previous role is not expired.
+    return (credentialOptions) => shared({ ...credentialOptions, forceRefresh: true });
   };
 
   const invoke = async (body: string, signal?: AbortSignal): Promise<Uint8Array | undefined> => {
