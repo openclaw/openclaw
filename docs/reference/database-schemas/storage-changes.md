@@ -586,6 +586,15 @@ boundary until the roster outcome is known. Doctor metadata callbacks, synchrono
 diagnostic reads, and full creator-session/harness currentness predicates retain
 their existing owners and remain separate caller-migration work.
 
+Ordinary scratch and heartbeat-proposal writes use that same Cron worker. Job
+existence and scratch revision are checked in one transaction; guarded service
+writes also bind the current job definition and retain live caller authority at
+transaction and commit admission. Only an actual scratch write marks its business
+completion receipt. Unset tombstones, byte limits, source provenance and uncertain
+outcome handling are unchanged. Doctor's migration and compensation keep the same
+synchronous kernel; ordinary scratch reads remain separate migration work. This
+changes no schema, retention policy, public API or installed-updater contract.
+
 Cron recovery observes each batch in one shared-state read-worker snapshot. Healthy
 live receipts need no writer admission. A missing receipt table uses its existing
 writable first-use initializer before observation resumes. Process liveness and

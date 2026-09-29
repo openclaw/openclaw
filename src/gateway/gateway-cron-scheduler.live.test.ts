@@ -2,6 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
+import type {
+  CronScratchGetResult,
+  CronScratchSetResult,
+} from "../../packages/gateway-protocol/src/schema/cron.types.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
@@ -123,6 +127,18 @@ describeLive("cron scheduling through an isolated Gateway", () => {
           lastTriggerEvalAtMs: firstEvalAt,
           nextRunAtMs: nextEvalAt,
         });
+        const scratchText = "private café notes\nretained across restart";
+        expect(
+          await cliJson<CronScratchSetResult>(instance, [
+            "cron",
+            "scratch",
+            watcher.id,
+            "--set",
+            scratchText,
+            "--expected-revision",
+            "0",
+          ]),
+        ).toMatchObject({ ok: true, currentRevision: 1, scratch: { content: scratchText } });
         await instance.stopGateway();
         await instance.startGateway();
         const restored = await cliJson<CronJob>(instance, ["cron", "get", watcher.id]);
@@ -132,6 +148,42 @@ describeLive("cron scheduling through an isolated Gateway", () => {
           lastTriggerEvalAtMs: firstEvalAt,
           nextRunAtMs: nextEvalAt,
         });
+        expect(
+          await cliJson<CronScratchGetResult>(instance, ["cron", "scratch", watcher.id]),
+        ).toMatchObject({ currentRevision: 1, scratch: { content: scratchText } });
+        expect(
+          await cliJson<CronScratchSetResult>(instance, [
+            "cron",
+            "scratch",
+            watcher.id,
+            "--unset",
+            "--expected-revision",
+            "1",
+          ]),
+        ).toEqual({ ok: true, currentRevision: 2 });
+        const staleScratch = await instance.cli([
+          "cron",
+          "scratch",
+          watcher.id,
+          "--set",
+          "stale resurrection",
+          "--expected-revision",
+          "1",
+          "--url",
+          instance.url,
+          "--token",
+          instance.gatewayToken,
+          "--json",
+        ]);
+        expect(staleScratch.code).toBe(1);
+        expect(staleScratch.stderr).toContain("cron scratch changed concurrently");
+        const clearedScratch = await cliJson<CronScratchGetResult>(instance, [
+          "cron",
+          "scratch",
+          watcher.id,
+        ]);
+        expect(clearedScratch.currentRevision).toBe(2);
+        expect(clearedScratch.scratch).toBeUndefined();
         const second = await waitForJob(
           instance,
           watcher.id,
