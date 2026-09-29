@@ -125,9 +125,6 @@ export async function readLoadedLaunchAgentState(
   if (!sourcePath || !path.isAbsolute(sourcePath)) {
     throw new Error("Loaded LaunchAgent definition path is unavailable.");
   }
-  if (path.resolve(sourcePath) !== path.resolve(expectedPath)) {
-    return empty;
-  }
   const program = job.fields.get("program");
   if (!program || !path.isAbsolute(program) || !job.arguments?.length) {
     throw new Error("Loaded LaunchAgent command is unavailable.");

@@ -25,7 +25,15 @@ it.each([
   { loaded: "system", target: "system", edited: false, refused: true },
   { loaded: "system", target: "local", edited: false, refused: false },
   { loaded: "system", target: "system", edited: false, refused: false, observation: "stopped" },
-  { loaded: "system", target: "system", edited: false, refused: false, observation: "mismatch" },
+  { loaded: "system", target: "system", edited: false, refused: true, observation: "mismatch" },
+  { loaded: "system", target: "local", edited: false, refused: false, observation: "mismatch" },
+  {
+    loaded: "system",
+    target: "system",
+    edited: false,
+    refused: false,
+    observation: "mismatch-stopped",
+  },
   { loaded: "system", target: "system", edited: false, refused: true, observation: "uncertain" },
   { loaded: "local", target: "local", edited: false, refused: true },
   { loaded: "local", target: "global", edited: false, refused: false },
@@ -33,6 +41,14 @@ it.each([
   { loaded: "global", target: "global", edited: false, refused: true },
   { loaded: "local", target: "local", edited: true, refused: true },
   { loaded: "local", target: "local", edited: false, refused: false, selected: "generated" },
+  {
+    loaded: "local",
+    target: "local",
+    edited: false,
+    refused: true,
+    selected: "generated",
+    observation: "mismatch",
+  },
   { loaded: "local", target: "local", edited: false, refused: false, selected: "native logging" },
   { loaded: "local", target: "local", edited: false, refused: false, selected: "authored logging" },
   { loaded: "local", target: "local", edited: false, refused: true, selected: "changed logging" },
@@ -195,13 +211,18 @@ it.each([
       const domain = scenario.loaded === "system" ? "system" : guiDomain;
       const loaded = allLocations[scenario.loaded];
       const observation = "observation" in scenario ? scenario.observation : undefined;
+      const sourceMismatch = observation?.startsWith("mismatch") ?? false;
+      const observedPlist = sourceMismatch
+        ? path.join(directory, "loaded-elsewhere.plist")
+        : loaded.plist;
+      const stopped = observation === "stopped" || observation === "mismatch-stopped";
       const cleanupError = new CommandProcessCleanupError();
       const print = [
         `${domain}/${label} = {`,
-        `\tpath = ${observation === "mismatch" ? locations.local.plist : loaded.plist}`,
+        `\tpath = ${observedPlist}`,
         `\ttype = ${scenario.loaded === "system" ? "LaunchDaemon" : "LaunchAgent"}`,
-        `\tstate = ${observation === "stopped" ? "exited" : "running"}`,
-        ...(observation === "stopped" ? [] : [`\tpid = ${process.pid}`]),
+        `\tstate = ${stopped ? "exited" : "running"}`,
+        ...(stopped ? [] : [`\tpid = ${process.pid}`]),
         `\tprogram = ${selectedScenario === "explicit Program" ? process.execPath : rawArgv(loaded.root)[0]}`,
         "\targuments = {",
         ...rawArgv(loaded.root).map(
@@ -284,9 +305,9 @@ it.each([
       }
       if (scenario.refused) {
         await expect(admission).rejects.toMatchObject({ reason: "runtime-artifact-publication" });
-        if (customLabel || scenario.loaded === "system") {
+        if (customLabel || scenario.loaded === "system" || sourceMismatch) {
           await expect(admission).rejects.toMatchObject({
-            message: expect.stringContaining(loaded.plist),
+            message: expect.stringContaining(observedPlist),
           });
           await expect(admission).rejects.toMatchObject({
             message: expect.stringContaining(`${domain}/${label}`),
@@ -295,25 +316,30 @@ it.each([
       } else {
         await expect(admission).resolves.toBeUndefined();
       }
-      if ((scenario.loaded === "global" || scenario.loaded === "system") && !selectedScenario) {
+      if (
+        ((scenario.loaded === "global" || scenario.loaded === "system") && !selectedScenario) ||
+        sourceMismatch
+      ) {
         const fence = await resolveLiveManagedGatewayDistFence(allLocations[scenario.target].root, {
           env: { HOME: home, OPENCLAW_LAUNCHD_LABEL: label },
         });
         expect(fence.refuse).toBe(scenario.refused);
-        if ((customLabel || scenario.loaded === "system") && fence.refuse) {
-          expect(fence.message).toContain(loaded.plist);
+        if ((customLabel || scenario.loaded === "system" || sourceMismatch) && fence.refuse) {
+          expect(fence.message).toContain(observedPlist);
           expect(fence.message).toContain(`${domain}/${label}`);
           expect(fence.message).not.toContain("`openclaw gateway stop`");
           expect(fence.message).not.toContain("`openclaw gateway start`");
         }
       }
-      if (scenario.loaded === "system" && scenario.refused) {
+      if ((scenario.loaded === "system" && scenario.refused) || sourceMismatch) {
         const state = await readManagedGatewayBindingState({
           profile: "shared-proof",
           env: { HOME: home, OPENCLAW_LAUNCHD_LABEL: label },
-          launchAgentPlistPath: systemPlist,
+          launchAgentPlistPath: loaded.plist,
         });
-        expect(state.launchAgent?.target).toBe(`system/${label}`);
+        expect(state.launchAgent?.target).toBe(`${domain}/${label}`);
+        expect(state.launchAgent?.sourcePath).toBe(observedPlist);
+        expect(state.command?.sourcePath).toBe(observedPlist);
         expect(state.launchAgent).toBeDefined();
         await expect(
           readCorrespondingLaunchAgentCommand(
@@ -322,11 +348,13 @@ it.each([
             5_000,
           ),
         ).resolves.toBeNull();
-        expect(
-          inventory.renderGatewayServiceCleanupHints([
-            { platform: "darwin", label, detail: `plist: ${systemPlist}`, scope: "system" },
-          ]),
-        ).toContain(`sudo launchctl bootout system/${label}`);
+        if (scenario.loaded === "system") {
+          expect(
+            inventory.renderGatewayServiceCleanupHints([
+              { platform: "darwin", label, detail: `plist: ${systemPlist}`, scope: "system" },
+            ]),
+          ).toContain(`sudo launchctl bootout system/${label}`);
+        }
       }
       if (scenario.loaded === "system") {
         expect(native).toHaveBeenCalledWith(["print", `system/${label}`], expect.any(Number));
