@@ -14,6 +14,7 @@ type WritableSkillPatchTarget = Awaited<ReturnType<typeof readWritableWorkshopSk
 const PATCH_CONTEXT_PREFIX = [
   "Prepared patch context. This is a bounded excerpt, not the complete skill.",
   "Only the exact text under authorized old_string may be replaced by the next patch call.",
+  "This preparation does not make the skill eligible for foreground repair; the skill must have been used in this run.",
 ].join("\n");
 
 export function readSkillPatchText(params: Record<string, unknown>) {
@@ -178,7 +179,7 @@ export function assertSkillPatchRunUsage(params: {
     })
   ) {
     throw new ToolInputError(
-      `skill "${params.skill.skillName}" was not used in this run and cannot be repaired autonomously`,
+      `skill "${params.skill.skillName}" was not used in this run and cannot be repaired autonomously. Workshop read and prepare_patch do not count as skill use. For a planned change, use action=update with complete proposal_content only after a complete read; keep it pending unless the user explicitly requests apply. If the complete body was omitted, use operator or CLI access to inspect it rather than overwriting unseen content.`,
     );
   }
 }
