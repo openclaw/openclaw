@@ -620,6 +620,23 @@ The existing shared schema is unchanged. Cron retains its own history operations
 on the existing storage rows; removed Task projections do not regain execution
 or delivery authority.
 
+Requester wake transitions and settlement use that same worker transaction and
+registry publication owner. Timers and retries retain the original database, run,
+and wake generation through acknowledgement. A known commit keeps its existing
+wake episode until current canonical facts can be published; reconciliation reads
+those facts without repeating the data write. Outcome settlement also retains any
+committed system-event intent until the existing queue owner can finish scheduling
+it. Pending intent payloads must still match; current terminal queue receipts are
+consumed without another dispatch. An absent or replaced intent leaves the episode
+unsettled instead of recreating delivery, including when existing retention has
+removed a terminal receipt.
+
+Uncertain outcomes stay fenced. Definite failures retain the existing delivery
+failure and replay rules, and outcome-bearing settlement publishes its new
+delivery receipt. Initial requester-yield creation and requester/session reads
+remain separate worker migration work. Schema, retention, and update behavior
+are unchanged.
+
 Concurrent first opens wait for owner-record publication and a transient schema
 initializer within one database busy timeout. Incomplete records never grant
 access; each attempt rechecks ownership, and records that remain malformed still

@@ -383,7 +383,9 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
           ? html`<div
               class="agent-chat__input agent-chat__input--chat agent-chat__input--mobile-toolbar ${
                 props.offline ? "agent-chat__input--offline" : ""
-              }${dictation?.active ? " agent-chat__input--dictating" : ""}"
+              }${dictation?.active ? " agent-chat__input--dictating" : ""}${
+                !canCompose ? " agent-chat__input--disabled" : ""
+              }"
               aria-busy=${props.disabledReasonBusy ? "true" : "false"}
               @wa-show=${handleChatComposerDropdownShow}
               @wa-after-show=${restorePointerOpenedChatComposerTrigger}

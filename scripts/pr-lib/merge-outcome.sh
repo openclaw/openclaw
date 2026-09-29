@@ -372,8 +372,12 @@ merge_outcome_write() {
 merge_rest() {
   local mode="$1" pr="$2" repo="${MERGE_REPO:-}"
   shift 2
-  if [ "$mode" = observe ] && [ "${MERGE_ADMISSION_ACTIVE:-false}" = true ] && [ "${MERGE_USE_CRABBOX_ADMIN_BYPASS:-false}" = false ] && [ "${MERGE_USE_PRIOR_CI_ADMIN:-false}" = false ]; then
-    mode=observe-admission
+  if [ "$mode" = observe ] && [ "${MERGE_ADMISSION_ACTIVE:-false}" = true ] && [ "${MERGE_USE_CRABBOX_ADMIN_BYPASS:-false}" = false ]; then
+    if [ "${MERGE_USE_PRIOR_CI_ADMIN:-false}" = true ]; then
+      mode=observe-prior-ci
+    else
+      mode=observe-admission
+    fi
   fi
   [ -n "$repo" ] || repo=$(pr_gh_plain repo view --json id,nameWithOwner,url) || return 1
   node "${BASH_SOURCE[0]%/*}/merge-rest.mjs" "$mode" "$repo" "$pr" "$@"
@@ -496,9 +500,10 @@ merge_outcome_read_remote() {
       (if .pr.state == "MERGED" then (.pr.mergeCommit.oid | oid) else
         (.pr.state == "OPEN" or .pr.state == "CLOSED") and .pr.mergeCommit == null end))
   ') || return 1
-  if [ "${MERGE_PRIOR_CI_REST_OBSERVATION:-false}" = true ] &&
-    [ "${MERGE_USE_PRIOR_CI_ADMIN:-false}" = true ] &&
-    [ "$(printf '%s\n' "$observation" | jq -r .transport)" = rest ]; then
+  if [ "${MERGE_USE_PRIOR_CI_ADMIN:-false}" = true ] &&
+    [ "$(printf '%s\n' "$observation" | jq -r .transport)" = rest ] &&
+    { [ "${MERGE_PRIOR_CI_REST_OBSERVATION:-false}" = true ] ||
+      { [ "${MERGE_ADMISSION_ACTIVE:-false}" = true ] && [ "${MERGE_USE_CRABBOX_ADMIN_BYPASS:-false}" = false ]; }; }; then
     before=$(printf '%s\n' "$response" | jq -er '.payload.mainBefore | select(type == "string" and test("^[0-9a-f]{40}$"))') || return 1
     main=$(printf '%s\n' "$observation" | jq -r .main) || return 1
     if [ "${MERGE_ADMISSION_ACTIVE:-false}" = true ] &&
@@ -541,6 +546,7 @@ merge_outcome_observe() {
     [ "${MERGE_USE_PRIOR_CI_ADMIN:-false}" = true ] &&
     [ "${MERGE_USE_CRABBOX_ADMIN_BYPASS:-false}" = false ]; then
     MERGE_PRIOR_CI_OBSERVED_MAIN="$main"
+    [ "$MERGE_TRANSPORT" != rest ] || MERGE_PRIOR_CI_REST_OBSERVATION=true
   fi
 }
 
@@ -578,13 +584,20 @@ merge_outcome_stable() {
     # Keep the intent anchor separate from the latest verified main. Recalculation
     # may temporarily erase projections, but never replaces their known pins.
     if [ "${MERGE_ADMISSION_ACTIVE:-false}" = true ] && [ "${MERGE_USE_CRABBOX_ADMIN_BYPASS:-false}" = false ]; then
+      if [ "${MERGE_USE_PRIOR_CI_ADMIN:-false}" = true ] &&
+        [ "$(printf '%s\n' "$reread" | jq -r .transport)" = rest ]; then
+        # Persist selection outside the read's subshell so final authority is rechecked.
+        MERGE_PRIOR_CI_REST_OBSERVATION=true
+      fi
       previous_main="${MERGE_PRIOR_CI_OBSERVED_MAIN:-$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r .main)}"
       if [ "${MERGE_USE_PRIOR_CI_ADMIN:-false}" != true ] ||
         printf '%s\n' "$reread" | jq -e --argjson observed "$MERGE_OBSERVATION" \
           --arg previous "$previous_main" --argjson settling "$settling" \
           --argjson priorRest "${MERGE_PRIOR_CI_REST_OBSERVATION:-false}" '
           def facts: del(.main,.pr.mergeable,.pr.mergeStateStatus);
-          facts == ($observed | facts) and
+          (if .transport != $observed.transport then
+             (facts | del(.transport,.restPolicy)) == ($observed | facts | del(.transport,.restPolicy))
+           else facts == ($observed | facts) end) and
           ((.pr.mergeable == $observed.pr.mergeable and .pr.mergeStateStatus == $observed.pr.mergeStateStatus) or
            ($priorRest and .transport == "rest" and .pr.state == "OPEN" and
             ($settling or .main != $previous) and

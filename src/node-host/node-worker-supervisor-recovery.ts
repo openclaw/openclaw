@@ -1,3 +1,4 @@
+import { setTimeout as delay } from "node:timers/promises";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { NodeWorkerCapacity } from "./node-worker-capacity.js";
@@ -42,7 +43,7 @@ export function createNodeWorkerLaunchRecovery(
     if (
       !context.isRecoveryActive() ||
       receipt.state !== "running" ||
-      receipt.workerCleanupMode !== "owned-anchor" ||
+      !["owned-anchor", "linux-subreaper"].includes(receipt.workerCleanupMode ?? "") ||
       !receipt.worker ||
       receipt.container
     ) {
@@ -167,6 +168,24 @@ async function recoverNodeWorkerLaunch(params: {
       throw new Error(`node worker launch ${receipt.launchId} lost its container ownership`);
     }
     await params.containerLifecycle.remove(receipt.container, receipt);
+  } else if (receipt.worker && receipt.workerCleanupMode === "linux-subreaper") {
+    // The surviving owner observes its original IPC parent loss and drains its
+    // scope. A replacement has neither child wait ownership nor a retained pidfd:
+    // never turn a procfs identity check into permission to signal a numeric PID.
+    let owner = inspectNodeWorkerProcessIdentity(receipt.worker);
+    while (owner === "live" && (await stillOwned())) {
+      await delay(25);
+      owner = inspectNodeWorkerProcessIdentity(receipt.worker);
+    }
+    if (owner !== "dead" && owner !== "reused") {
+      return latest();
+    }
+    if ((await params.store.getMatching(receipt))?.workerDescendantsReaped !== true) {
+      log.warn(
+        `Worker ${receipt.launchId} lost its native process owner without recorded descendant extinction; capacity remains reserved.`,
+      );
+      return latest();
+    }
   } else if (receipt.worker) {
     const worker = receipt.worker;
     let workerState = inspectOwnedNodeWorkerTree(worker);

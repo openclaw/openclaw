@@ -3,6 +3,7 @@ import { getQaProvider } from "./providers/index.js";
 import {
   QaStateBackedTransportAdapter,
   waitForQaTransportAccountReady,
+  waitForQaTransportCondition,
   waitForQaTransportOutboundSequence,
 } from "./qa-transport.js";
 import type {
@@ -87,6 +88,7 @@ async function handleQaChannelAction(
 
 class QaChannelTransport extends QaStateBackedTransportAdapter {
   readonly #transportPolicy?: QaTransportPolicy;
+  readonly #busState: QaBusState;
 
   constructor(state: QaBusState, transportPolicy?: QaTransportPolicy) {
     super({
@@ -98,6 +100,27 @@ class QaChannelTransport extends QaStateBackedTransportAdapter {
       state,
     });
     this.#transportPolicy = transportPolicy;
+    this.#busState = state;
+  }
+
+  override async reset() {
+    await waitForQaTransportCondition(() => {
+      if (
+        this.#busState
+          .getSnapshot()
+          .events.some(
+            (event) =>
+              event.kind === "inbound-message" &&
+              this.#busState.getAcknowledgedPollCursor(event.accountId) < event.cursor,
+          )
+      ) {
+        return undefined;
+      }
+      // Reset clears every account. Check and clear together so a newly admitted
+      // turn cannot lose its message while an earlier turn is being drained.
+      this.#busState.reset();
+      return true;
+    });
   }
 
   createGatewayConfig = ({ baseUrl }: { baseUrl: string }) =>

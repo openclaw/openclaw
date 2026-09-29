@@ -23,7 +23,12 @@ export function createLifecycleControllerFixture(
   dependencies: Pick<
     SubagentLifecycleOptions,
     "callGateway" | "cleanupBrowserSessionsForLifecycleEnd"
-  > & { runsByEntry: WeakMap<SubagentRunRecord, Map<string, SubagentRunRecord>> },
+  > & {
+    ownersByEntry: WeakMap<
+      SubagentRunRecord,
+      Pick<SubagentLifecycleOptions, "runs" | "persistAsyncOrThrow">
+    >;
+  },
 ) {
   const params: SubagentLifecycleOptions = {
     runs,
@@ -69,8 +74,16 @@ export function createLifecycleControllerFixture(
     warn: vi.fn(),
   };
   Object.assign(params, overrides);
-  for (const run of runs.values()) {
-    dependencies.runsByEntry.set(run, runs);
-  }
+  const recordOwners = () => {
+    for (const run of params.runs.values()) {
+      dependencies.ownersByEntry.set(run, params);
+    }
+  };
+  recordOwners();
+  const wake = params.maybeWakeRequesterAfterAllChildrenSettled;
+  params.maybeWakeRequesterAfterAllChildrenSettled = (request) => {
+    recordOwners();
+    return wake(request);
+  };
   return new SubagentLifecycleController(params);
 }

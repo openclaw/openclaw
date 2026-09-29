@@ -1,10 +1,22 @@
 import { createHash, randomUUID } from "node:crypto";
 import { resolveExecutablePath } from "../infra/executable-path.js";
+import {
+  decodeWindowsOutputBuffer,
+  resolveWindowsConsoleEncoding,
+} from "../infra/windows-encoding.js";
+import {
+  appendCapturedOutput,
+  createCapturedOutputBuffers,
+  finalizeCapturedOutput,
+  type CapturedOutputBuffers,
+} from "../process/exec-output.js";
+import { runCommandWithTimeout } from "../process/exec.js";
 import { getProcessSupervisor, type ManagedRun } from "../process/supervisor/index.js";
 import type { RunExit } from "../process/supervisor/types.js";
-import type {
-  NodeWorkerWorkspaceExecInput,
-  NodeWorkerWorkspaceExecResult,
+import {
+  projectNodeWorkerWorkspaceExecResult,
+  type NodeWorkerWorkspaceExecInput,
+  type NodeWorkerWorkspaceExecResult,
 } from "../worker/node-workspace-protocol.js";
 
 const MAX_PROCESSES_PER_WORKSPACE = 32;
@@ -30,6 +42,12 @@ type WorkspaceProcess = {
   stdout: string;
   stderr: string;
   started: Promise<void>;
+  settlement?: Promise<void>;
+  output?: {
+    stdout: CapturedOutputBuffers;
+    stderr: CapturedOutputBuffers;
+    windowsEncoding: string | null;
+  };
   releaseWorkspace: () => void;
 };
 
@@ -46,12 +64,52 @@ export class NodeWorkerWorkspaceProcesses {
     );
   }
 
+  async executeForeground(params: {
+    input: NodeWorkerWorkspaceExecInput;
+    workspaceDir: string;
+    env: NodeJS.ProcessEnv;
+    signal?: AbortSignal;
+    timeoutMs: number;
+    stdoutLimit: number;
+    stderrLimit: number;
+    retainWorkspace: () => () => void;
+  }): Promise<NodeWorkerWorkspaceExecResult> {
+    // Legacy callers retain their shipped executor, including detached lease helpers.
+    if (!params.input.nativeProcessOwner) {
+      const result = await runCommandWithTimeout(params.input.argv, {
+        cwd: params.workspaceDir,
+        baseEnv: params.env,
+        ...(params.input.input === undefined ? {} : { input: params.input.input }),
+        timeoutMs: params.timeoutMs,
+        ...(params.signal ? { signal: params.signal } : {}),
+        killProcessTree: true,
+        requireProcessTreeExtinction: true,
+        maxOutputBytes: { stdout: params.stdoutLimit, stderr: params.stderrLimit },
+        terminateOnOutputLimit: true,
+      });
+      return projectNodeWorkerWorkspaceExecResult(params.workspaceDir, result);
+    }
+    return this.execute({
+      ...params,
+      input: {
+        ...params.input,
+        process: { action: "start", processId: "foreground-" + randomUUID() },
+      },
+      foreground: {
+        timeoutMs: params.timeoutMs,
+        stdoutLimit: params.stdoutLimit,
+        stderrLimit: params.stderrLimit,
+      },
+    });
+  }
+
   async execute(params: {
     input: NodeWorkerWorkspaceExecInput;
     workspaceDir: string;
     env: NodeJS.ProcessEnv;
     signal?: AbortSignal;
     retainWorkspace: () => () => void;
+    foreground?: { timeoutMs: number; stdoutLimit: number; stderrLimit: number };
   }): Promise<NodeWorkerWorkspaceExecResult> {
     const { input, workspaceDir, signal } = params;
     const operation = input.process!;
@@ -105,7 +163,11 @@ export class NodeWorkerWorkspaceProcesses {
           };
           this.owners.set(key, owner);
         }
-        if (owner.processes.size >= MAX_PROCESSES_PER_WORKSPACE) {
+        if (
+          !params.foreground &&
+          [...owner.processes.values()].filter((entry) => !entry.output).length >=
+            MAX_PROCESSES_PER_WORKSPACE
+        ) {
           throw new Error(
             "INVALID_REQUEST: workspace process limit reached; stop the environment before starting more processes",
           );
@@ -125,11 +187,32 @@ export class NodeWorkerWorkspaceProcesses {
           settled: false,
           started: Promise.resolve(),
           releaseWorkspace: params.retainWorkspace(),
+          ...(params.foreground
+            ? {
+                output: {
+                  stdout: createCapturedOutputBuffers(),
+                  stderr: createCapturedOutputBuffers(),
+                  windowsEncoding: resolveWindowsConsoleEncoding(),
+                },
+              }
+            : {}),
         };
         owner.processes.set(operation.processId, created);
         created.started = (async () => {
           const runId = randomUUID();
           const abortStartup = () => this.supervisor.cancel(runId);
+          const capture = (stream: "stdout" | "stderr", bytes: Buffer) => {
+            const output = created.output;
+            const limit =
+              stream === "stdout" ? params.foreground?.stdoutLimit : params.foreground?.stderrLimit;
+            if (!output || limit === undefined) {
+              return;
+            }
+            appendCapturedOutput(output[stream], bytes, limit, "tail");
+            if (output[stream].truncatedBytes > 0) {
+              this.supervisor.cancel(runId);
+            }
+          };
           signal?.addEventListener("abort", abortStartup, { once: true });
           try {
             const run = await this.supervisor.spawn({
@@ -142,11 +225,22 @@ export class NodeWorkerWorkspaceProcesses {
               exactEnv: true,
               ...(input.input === undefined ? {} : { input: input.input }),
               captureOutput: false,
+              ...(params.foreground
+                ? {
+                    timeoutMs: params.foreground.timeoutMs,
+                    onStdoutRaw: (bytes: Buffer) => capture("stdout", bytes),
+                    onStderrRaw: (bytes: Buffer) => capture("stderr", bytes),
+                  }
+                : {}),
               onStdout: (chunk) => {
-                created.stdout = (created.stdout + chunk).slice(-MAX_OUTPUT_CHARS);
+                if (!created.output) {
+                  created.stdout = (created.stdout + chunk).slice(-MAX_OUTPUT_CHARS);
+                }
               },
               onStderr: (chunk) => {
-                created.stderr = (created.stderr + chunk).slice(-MAX_OUTPUT_CHARS);
+                if (!created.output) {
+                  created.stderr = (created.stderr + chunk).slice(-MAX_OUTPUT_CHARS);
+                }
               },
               assertCurrent: () => {
                 assertCurrent();
@@ -158,7 +252,7 @@ export class NodeWorkerWorkspaceProcesses {
             created.run = run;
             // Spawn admission is run-bound; the accepted process is environment-bound.
             // Later turn completion must not kill an app the user is still viewing.
-            void run
+            created.settlement = run
               .wait()
               .then(async (result) => {
                 created.completion = result;
@@ -194,7 +288,40 @@ export class NodeWorkerWorkspaceProcesses {
       throw new Error("INVALID_REQUEST: unknown workspace process");
     }
     await process.started;
-    assertCurrent();
+    if (params.foreground) {
+      const accepted = process;
+      const cancelAccepted = () => accepted.run!.cancel();
+      signal?.addEventListener("abort", cancelAccepted, { once: true });
+      try {
+        if (signal?.aborted) {
+          cancelAccepted();
+        }
+        await process.settlement;
+        if (!process.cleanupError) {
+          await process.cleanup();
+        }
+      } finally {
+        signal?.removeEventListener("abort", cancelAccepted);
+      }
+      if (process.output) {
+        process.stdout = decodeWindowsOutputBuffer({
+          buffer: finalizeCapturedOutput(process.output.stdout, "tail"),
+          windowsEncoding: process.output.windowsEncoding,
+        });
+        process.stderr = decodeWindowsOutputBuffer({
+          buffer: finalizeCapturedOutput(process.output.stderr, "tail"),
+          windowsEncoding: process.output.windowsEncoding,
+        });
+      }
+      if (process.settled) {
+        owner?.processes.delete(operation.processId);
+        if (owner?.processes.size === 0) {
+          this.owners.delete(owner.key);
+        }
+      }
+    } else {
+      assertCurrent();
+    }
     if (operation.action === "stop") {
       process.run!.cancel();
       process.completion = await process.run!.wait();
@@ -209,14 +336,31 @@ export class NodeWorkerWorkspaceProcesses {
       workspaceDir,
       stdout: process.stdout,
       stderr: process.stderr,
-      code: completion?.exitCode ?? null,
+      code: completion?.timedOut && !completion.exitCode ? 124 : (completion?.exitCode ?? null),
       signal: typeof completion?.exitSignal === "string" ? completion.exitSignal : null,
-      killed: completion?.reason === "manual-cancel",
-      termination:
-        completion?.reason === "manual-cancel" || completion?.reason === "signal"
+      killed: completion?.reason === "manual-cancel" || completion?.timedOut === true,
+      termination: completion?.timedOut
+        ? "timeout"
+        : completion?.reason === "manual-cancel" || completion?.reason === "signal"
           ? "signal"
           : "exit",
-      process: { processId: operation.processId, state: completion ? "exited" : "running" },
+      ...(params.foreground
+        ? {
+            killIssuedByAbort: signal?.aborted === true || undefined,
+            stdoutTruncatedBytes: process.output?.stdout.truncatedBytes || undefined,
+            stderrTruncatedBytes: process.output?.stderr.truncatedBytes || undefined,
+            noOutputTimedOut: false,
+            outputLimitExceeded:
+              Boolean(
+                process.output?.stdout.truncatedBytes || process.output?.stderr.truncatedBytes,
+              ) || undefined,
+          }
+        : {
+            process: {
+              processId: operation.processId,
+              state: completion ? ("exited" as const) : ("running" as const),
+            },
+          }),
     };
   }
 

@@ -98,21 +98,4 @@ export abstract class AgentSessionExecution extends AgentSessionExtensions {
   abortRetry(): void {
     this.retryAbortController?.abort();
   }
-
-  /** Whether auto-retry is currently in progress */
-  get isRetrying(): boolean {
-    return this.retryAbortController !== undefined;
-  }
-
-  /** Whether auto-retry is enabled */
-  get autoRetryEnabled(): boolean {
-    return this.settingsManager.getRetryEnabled();
-  }
-
-  /**
-   * Toggle auto-retry setting.
-   */
-  setAutoRetryEnabled(enabled: boolean): void {
-    this.settingsManager.setRetryEnabled(enabled);
-  }
 }

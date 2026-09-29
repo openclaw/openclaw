@@ -675,6 +675,8 @@ export const databaseWorkerCoreTestFiles = [
   "src/commands/doctor-device-pairing.test.ts",
   "src/cli/proxy-cli.runtime.test.ts",
   "src/commands/doctor-maintenance.worker.test.ts",
+  "src/commands/doctor-maintenance.session-workers.test.ts",
+  "src/commands/doctor-session-canonical-keys.completions.test.ts",
   "src/commands/doctor-lint.crabbox.test.ts",
   "src/fleet/doctor.runtime.test.ts",
   "src/fleet/registry.test.ts",
@@ -800,6 +802,8 @@ const databaseWorkerCoreTestFileSet = new Set(databaseWorkerCoreTestFiles);
 
 // Preserve watch admission for consumers previously inferred into fast lanes.
 export const databaseWorkerCoreFormerFastKinds = new Map([
+  ["src/commands/doctor-maintenance.session-workers.test.ts", "unitFast"],
+  ["src/commands/doctor-session-canonical-keys.completions.test.ts", "unitFast"],
   ["src/plugins/installed-plugin-index-store.availability.test.ts", "unitFast"],
   ["test/e2e/qa-lab/runtime/gateway-loopback-lan-access.test.ts", "unitFast"],
   ["src/infra/outbound/bound-delivery-router.test.ts", "unitFast"],

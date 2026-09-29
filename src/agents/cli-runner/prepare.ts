@@ -182,12 +182,12 @@ type PrivateCliBackendPreparedExecution = CliBackendPreparedExecution & {
 };
 
 function unsupportedIsolatedCompletionError(backendId: string): Error & { code: "unsupported" } {
-  const error = new Error(
-    `CLI backend "${backendId}" does not support isolated completion; OpenClaw did not start the run.`,
-  ) as Error & { code: "unsupported" };
-  error.name = "IsolatedCompletionUnsupportedError";
-  error.code = "unsupported";
-  return error;
+  return Object.assign(
+    new Error(
+      `CLI backend "${backendId}" does not support isolated completion; OpenClaw did not start the run.`,
+    ),
+    { name: "IsolatedCompletionUnsupportedError", code: "unsupported" as const },
+  );
 }
 
 function resolveClaudeCliContextModelId(modelId: string): string {

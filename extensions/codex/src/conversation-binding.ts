@@ -56,7 +56,6 @@ import {
 import type { CodexAppServerConversationBindingData } from "./conversation-binding-data.js";
 import {
   assertNativeConversationApprovalPolicySupported,
-  buildCodexConversationAgentLookup,
   buildConversationThreadRequestForClient,
   CODEX_CONVERSATION_THREAD_DEVELOPER_INSTRUCTIONS,
   prepareCodexConversationBinding,
@@ -64,7 +63,10 @@ import {
   resolveModelBackedReviewerPolicyProvider,
   type CodexConversationConfig,
 } from "./conversation-binding-preparation.js";
-import { trackCodexConversationActiveTurn } from "./conversation-control.js";
+import {
+  buildCodexConversationAgentLookup,
+  trackCodexConversationActiveTurn,
+} from "./conversation-control.js";
 import {
   CodexConversationTurnTimeoutError,
   createCodexConversationTurnCollector,

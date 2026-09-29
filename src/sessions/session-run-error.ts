@@ -60,7 +60,7 @@ export async function recordGatewaySessionRunFailure(
               content:
                 params.errorKind === "state_contention"
                   ? STATE_CONTENTION_SUMMARY
-                  : `This turn ended before a reply: ${error}`,
+                  : `Your request couldn't be completed: ${error}`,
               display: true,
               details: {
                 runId,

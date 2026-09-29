@@ -206,6 +206,9 @@ export function buildQaToolSearchArgs(
   failureMode: boolean,
   prompt = "",
 ): Record<string, unknown> {
+  if (targetTool === "ls") {
+    return { path: failureMode ? "runtime-tool-fixture-missing-directory" : "." };
+  }
   if (failureMode && targetTool === "web_search") {
     return { query: QA_LAB_WEB_SEARCH_DENIED_INPUT_QUERY };
   }

@@ -1,7 +1,7 @@
 // Feishu tests cover monitor.cleanup plugin behavior.
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupFeishuMonitorStateForTests } from "./monitor.cleanup.test-helpers.js";
-import { botNames, botOpenIds, wsClients } from "./monitor.state.js";
+import { botOpenIds, wsClients } from "./monitor.state.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
 const createFeishuWSClientMock = vi.hoisted(() => vi.fn());
@@ -57,11 +57,6 @@ function startWebSocketMonitor(accountId: string, runtime: MockRuntime = createR
   };
 }
 
-function seedBotIdentity(accountId: string, botOpenId: string, botName: string): void {
-  botOpenIds.set(accountId, botOpenId);
-  botNames.set(accountId, botName);
-}
-
 function firstRuntimeError(runtime: { error: ReturnType<typeof vi.fn> }): string {
   return String(runtime.error.mock.calls[0]?.[0] ?? "");
 }
@@ -91,7 +86,7 @@ describe("feishu websocket cleanup", () => {
     createFeishuWSClientMock.mockReturnValue(wsClient);
 
     const accountId = "alpha";
-    seedBotIdentity(accountId, "ou_alpha", "Alpha");
+    botOpenIds.set(accountId, "ou_alpha");
     const { abortController, monitorPromise } = startWebSocketMonitor(accountId);
 
     await vi.waitFor(() => {
@@ -105,7 +100,6 @@ describe("feishu websocket cleanup", () => {
     expect(wsClient.close).toHaveBeenCalledTimes(1);
     expect(wsClients.has(accountId)).toBe(false);
     expect(botOpenIds.has(accountId)).toBe(false);
-    expect(botNames.has(accountId)).toBe(false);
   });
 
   it("retries with backoff after websocket start rejects", async () => {
@@ -159,7 +153,7 @@ describe("feishu websocket cleanup", () => {
       .mockResolvedValueOnce(recoveredClient);
 
     const accountId = "exhausted";
-    seedBotIdentity(accountId, "ou_exhausted", "Exhausted");
+    botOpenIds.set(accountId, "ou_exhausted");
     const { abortController, runtime, monitorPromise } = startWebSocketMonitor(accountId);
 
     await vi.waitFor(() => {
@@ -176,7 +170,6 @@ describe("feishu websocket cleanup", () => {
       expect(wsClients.has(accountId)).toBe(false);
     });
     expect(botOpenIds.get(accountId)).toBe("ou_exhausted");
-    expect(botNames.get(accountId)).toBe("Exhausted");
 
     await vi.advanceTimersByTimeAsync(1_000);
 
@@ -191,7 +184,6 @@ describe("feishu websocket cleanup", () => {
     expect(createFeishuWSClientMock).toHaveBeenCalledTimes(2);
     expect(recoveredClient.close).toHaveBeenCalledTimes(1);
     expect(botOpenIds.has(accountId)).toBe(false);
-    expect(botNames.has(accountId)).toBe(false);
     const errorMessage = firstRuntimeError(runtime);
     expect(errorMessage).toContain("WebSocket connection ended, recreating client in 1000ms");
     expect(errorMessage).toContain("Bearer [redacted]");
@@ -238,7 +230,7 @@ describe("feishu websocket cleanup", () => {
     createFeishuWSClientMock.mockResolvedValueOnce(exhaustedClient);
 
     const accountId = "abort-backoff";
-    seedBotIdentity(accountId, "ou_abort", "Abort");
+    botOpenIds.set(accountId, "ou_abort");
     const { abortController, monitorPromise } = startWebSocketMonitor(accountId);
 
     await vi.waitFor(() => {
@@ -257,7 +249,6 @@ describe("feishu websocket cleanup", () => {
     expect(createFeishuWSClientMock).toHaveBeenCalledTimes(1);
     expect(wsClients.has(accountId)).toBe(false);
     expect(botOpenIds.has(accountId)).toBe(false);
-    expect(botNames.has(accountId)).toBe(false);
   });
 
   it("redacts websocket close errors during abort cleanup", async () => {

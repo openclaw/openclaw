@@ -14,7 +14,6 @@ import { quarantineOrphanedSqliteSidecars } from "../infra/sqlite-files.js";
 import {
   confirmSqliteFileIntegrity,
   isTerminalSqliteIntegrityError,
-  runSqliteIntegrityOperationSync,
   type SqliteIntegrityDiagnostics,
   type SqliteIntegrityOperation,
   type SqliteIntegrityConfirmation,
@@ -190,23 +189,12 @@ export function clearOpenClawAgentDatabaseOpenFailure(
   return cleared;
 }
 
-/** Open or return a cached per-agent database after schema and owner validation. */
-export function openOpenClawAgentDatabase(
-  options: OpenClawAgentDatabaseOptions,
-  preparedLease?: ReturnType<typeof prepareOpenClawAgentDatabaseWorkerLease>,
-  registrationObserver?: OpenClawAgentDatabaseRegistrationObserver,
-): OpenClawAgentDatabase {
-  const run = () =>
-    runSqliteIntegrityOperationSync(
-      openOpenClawAgentDatabaseSteps(options, undefined, preparedLease, registrationObserver),
-    );
-  const scope = getOpenClawDatabaseMaintenanceScope();
-  return scope ? scope.run(run) : run();
-}
-
 export type { OpenClawAgentDatabaseWriteAdmission } from "./openclaw-agent-db-admission.js";
-export const { withOpenClawAgentDatabaseAsync, withOpenClawAgentDatabaseAdmission } =
-  createOpenClawAgentDatabaseAdmissionOwner(openOpenClawAgentDatabaseSteps);
+export const {
+  openOpenClawAgentDatabase,
+  withOpenClawAgentDatabaseAsync,
+  withOpenClawAgentDatabaseAdmission,
+} = createOpenClawAgentDatabaseAdmissionOwner(openOpenClawAgentDatabaseSteps);
 
 function* openOpenClawAgentDatabaseSteps(
   options: OpenClawAgentDatabaseOptions,
