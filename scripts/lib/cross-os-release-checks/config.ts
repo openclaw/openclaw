@@ -1,6 +1,10 @@
 import type { ChildProcess } from "node:child_process";
 import { basename, dirname, resolve, win32 as pathWin32 } from "node:path";
-import { compareReleaseVersions } from "../release-version.mjs";
+import {
+  classifyReleaseTrain,
+  compareReleaseVersions,
+  parseReleaseVersion,
+} from "../release-version.mjs";
 import { trimForSummary } from "./shared.ts";
 import { type CrossOsSuite, parseCrossOsSuiteFilter } from "./suite-filter.mjs";
 
@@ -536,6 +540,19 @@ export function buildRealUpdateEnv(env: NodeJS.ProcessEnv) {
   return updateEnv;
 }
 
+function isExtendedStableCandidateVersion(candidateVersion: string | undefined) {
+  const parsed = candidateVersion ? parseReleaseVersion(candidateVersion) : null;
+  return parsed !== null && classifyReleaseTrain(parsed) === "extended-stable";
+}
+
+export function buildPackagedUpgradeUpdateEnv(env: NodeJS.ProcessEnv, candidateVersion?: string) {
+  const updateEnv = buildRealUpdateEnv(env);
+  if (isExtendedStableCandidateVersion(candidateVersion)) {
+    updateEnv.OPENCLAW_UPDATE_PACKAGE_SPEC = "openclaw";
+  }
+  return updateEnv;
+}
+
 export function verifyPackagedUpgradeUpdateResult(
   result: CommandResult,
   _options?: { candidateVersion?: string },
@@ -623,11 +640,11 @@ export function resolvePackagedUpgradeTimeouts(
 export function buildPackagedUpgradeUpdateArgs(
   candidateUrl: string,
   timeoutSeconds = resolvePackagedUpgradeTimeouts(0).stepTimeoutSeconds,
+  candidateVersion?: string,
 ) {
   return [
     "update",
-    "--tag",
-    candidateUrl,
+    ...(isExtendedStableCandidateVersion(candidateVersion) ? [] : ["--tag", candidateUrl]),
     "--yes",
     "--json",
     "--no-restart",

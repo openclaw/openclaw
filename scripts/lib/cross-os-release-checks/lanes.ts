@@ -23,6 +23,7 @@ import type {
 } from "./config.ts";
 import {
   buildPackagedUpgradeUpdateArgs,
+  buildPackagedUpgradeUpdateEnv,
   buildRealUpdateEnv,
   isRecoverableWindowsPackagedUpgradeSwapCleanupFailure,
   isRecoverableWindowsPackagedUpgradeTimeoutError,
@@ -293,7 +294,7 @@ export async function runUpgradeLane(
       });
     }
 
-    const updateEnv = buildRealUpdateEnv(env);
+    const updateEnv = buildPackagedUpgradeUpdateEnv(env, params.build.candidateVersion);
     const baselineInstallDurationMs = lane.phaseTimings.find(
       (phase) => phase.name === "install-baseline",
     )!.durationMs;
@@ -302,6 +303,7 @@ export async function runUpgradeLane(
     const updateArgs = buildPackagedUpgradeUpdateArgs(
       params.candidateUrl,
       updateTimeouts.stepTimeoutSeconds,
+      params.build.candidateVersion,
     );
     const updateLogPath = join(params.logsDir, "upgrade-update.log");
     appendFileSync(

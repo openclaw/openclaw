@@ -15,7 +15,10 @@ import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as packageArtifact from "../../scripts/e2e/parallels/package-artifact.ts";
 import { packAndServeSmokeArtifact } from "../../scripts/e2e/parallels/smoke-common.ts";
-import { resolveCrossOsPackageSet } from "../../scripts/lib/cross-os-release-checks/companions.ts";
+import {
+  resolveCrossOsPackageSet,
+  resolveCrossOsRegistryDistTags,
+} from "../../scripts/lib/cross-os-release-checks/companions.ts";
 import {
   findLaneByName,
   requiredPrepublishPluginPackagesForLanes,
@@ -270,6 +273,7 @@ describe("prepublish plugin registry artifact", () => {
       "@openclaw/ai",
       PACKAGE_NAME,
       "@openclaw/gateway-protocol",
+      "openclaw",
     ]);
     expect(crossOs.companions.map((entry) => entry.name)).toEqual([PACKAGE_NAME]);
   });
@@ -437,6 +441,19 @@ describe("prepublish plugin registry artifact", () => {
         tarballPath: path.join(paths.artifactDir, "openclaw-feishu-2026.8.1-beta.1.tgz"),
       },
     ]);
+  });
+
+  it("publishes the candidate root under the extended-stable registry tag", () => {
+    expect(
+      resolveCrossOsRegistryDistTags([
+        { name: "openclaw", version: "2026.8.34", tarballPath: "/tmp/openclaw.tgz" },
+      ]),
+    ).toBe("extended-stable=2026.8.34");
+    expect(
+      resolveCrossOsRegistryDistTags([
+        { name: "openclaw", version: "2026.9.1", tarballPath: "/tmp/openclaw.tgz" },
+      ]),
+    ).toBeUndefined();
   });
 
   it("rejects mismatched cross-OS companion registry identities", () => {

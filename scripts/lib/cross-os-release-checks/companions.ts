@@ -4,6 +4,7 @@ import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { validatePrepublishPluginRegistryArtifact } from "../../prepublish-plugin-registry-artifact.mjs";
+import { classifyReleaseTrain, parseReleaseVersion } from "../release-version.mjs";
 import { hasChildExited, registerActiveChildProcessTree } from "./process.ts";
 
 type CrossOsCompanionPackage = {
@@ -35,16 +36,24 @@ export function resolveCrossOsPackageSet(params: {
     }));
   return {
     companions,
-    // Baseline and installer selectors still belong to the published registry.
-    // The candidate root is installed by its explicit tarball path.
-    packages: manifest.packages
-      .filter((entry: { name: string }) => entry.name !== "openclaw")
-      .map((entry: { name: string; version: string; tarball: string }) => ({
+    packages: manifest.packages.map(
+      (entry: { name: string; version: string; tarball: string }) => ({
         name: entry.name,
         version: entry.version,
         tarballPath: resolve(artifactDir, entry.tarball),
-      })),
+      }),
+    ),
   };
+}
+
+export function resolveCrossOsRegistryDistTags(
+  packages: ReturnType<typeof resolveCrossOsPackageSet>["packages"],
+): string | undefined {
+  const rootVersion = packages.find((entry) => entry.name === "openclaw")?.version;
+  const parsed = rootVersion ? parseReleaseVersion(rootVersion) : null;
+  return parsed && classifyReleaseTrain(parsed) === "extended-stable"
+    ? `extended-stable=${rootVersion}`
+    : undefined;
 }
 
 export async function startCrossOsPackageRegistry(
@@ -68,6 +77,7 @@ export async function startCrossOsPackageRegistry(
       env: {
         ...process.env,
         OPENCLAW_NPM_REGISTRY_BIND_HOST: "127.0.0.1",
+        OPENCLAW_NPM_REGISTRY_DIST_TAGS: resolveCrossOsRegistryDistTags(packages),
         OPENCLAW_NPM_REGISTRY_PORT: "0",
         OPENCLAW_NPM_REGISTRY_MERGE_UPSTREAM: "1",
         OPENCLAW_NPM_REGISTRY_UPSTREAM: "https://registry.npmjs.org",

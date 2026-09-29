@@ -25,6 +25,7 @@ import {
   buildCrossOsReleaseSmokeMemorySlotConfigArgs,
   buildDiscordFetchInit,
   buildPackagedUpgradeUpdateArgs,
+  buildPackagedUpgradeUpdateEnv,
   buildReleaseOnboardArgs,
   buildWindowsDevUpdateToolchainCheckScript,
   buildWindowsFreshShellVersionCheckScript,
@@ -1164,6 +1165,21 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       "--no-restart",
     ]);
     expect(args.at(-2)).toBe("--timeout");
+  });
+
+  it("uses the loopback registry seam for extended-stable packaged upgrades", () => {
+    const args = buildPackagedUpgradeUpdateArgs(
+      "http://127.0.0.1:49152/openclaw-current.tgz",
+      1200,
+      "2026.8.34",
+    );
+    expect(args).toEqual(["update", "--yes", "--json", "--no-restart", "--timeout", "1200"]);
+    expect(
+      buildPackagedUpgradeUpdateEnv({ NPM_CONFIG_REGISTRY: "http://127.0.0.1:49152" }, "2026.8.34"),
+    ).toMatchObject({
+      NPM_CONFIG_REGISTRY: "http://127.0.0.1:49152",
+      OPENCLAW_UPDATE_PACKAGE_SPEC: "openclaw",
+    });
   });
 
   it("uses forced shutdown only when the installed gateway supports it", () => {
