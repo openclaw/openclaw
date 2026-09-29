@@ -73,7 +73,9 @@ export function createSqliteWalMaintenanceScheduler(
         let remaining = pageBudget();
         while (true) {
           const request = prepare(remaining);
-          if (!request) {
+          // A delegated writer's checkpoint-only tick would round-trip through its worker
+          // and race store replacement; worker connections to the same WAL tick inline.
+          if (!request || (remaining === 0 && admissions.get(database)?.execute)) {
             return;
           }
           let result: SqliteWalPeriodicResult | undefined;

@@ -3,7 +3,6 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import { performance } from "node:perf_hooks";
 import type { DatabaseSync } from "node:sqlite";
-import { isMainThread } from "node:worker_threads";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
@@ -44,8 +43,8 @@ export type { SqliteWalReclamationResult } from "./sqlite-wal-reclamation.js";
 // Inline automatic checkpoints run on the committing connection, and while a
 // reader keeps the log from resetting every later commit above this threshold
 // retries one and syncs the database file. Worker-maintained writers disable it
-// when they register their owner; worker connections tick checkpoints between
-// periodic passes, so this threshold only bounds a writer nobody else checkpoints.
+// when they register their owner and skip checkpoint-only ticks; worker
+// connections tick inline, so this threshold only bounds an unmaintained writer.
 const DEFAULT_SQLITE_WAL_AUTOCHECKPOINT_PAGES = 16_384;
 const DEFAULT_SQLITE_WAL_CHECKPOINT_TICK_MS = 10 * 1000;
 const DEFAULT_SQLITE_WAL_CHECKPOINT_INTERVAL_MS = 30 * 60 * 1000;
@@ -85,8 +84,6 @@ export type SqliteWalMaintenanceOptions = SqliteWalCheckpointOptions & {
   autoCheckpointPages?: number;
   busyTimeoutMs?: number;
   checkpointIntervalMs?: number;
-  /** Checkpoint-only cadence between periodic passes; worker threads tick by default, the main thread never. */
-  checkpointTickMs?: number;
   checkpointMode?: SqliteWalCheckpointMode;
   /** Owner-held synchronous exclusion around maintenance writes, including periodic vacuum. */
   runMaintenance?: (operation: () => boolean) => boolean;
@@ -250,13 +247,11 @@ export function configureSqliteWalMaintenance(
     "checkpointIntervalMs",
   );
   const timerIntervalMs = Math.min(checkpointIntervalMs, MAX_TIMER_TIMEOUT_MS);
-  // Ticks stay on worker threads: a main-thread tick would round-trip through the
-  // maintenance worker every few seconds and race store replacement.
-  const requestedTickMs = normalizeSqliteNonNegativeInteger(
-    options.checkpointTickMs ?? (isMainThread ? 0 : DEFAULT_SQLITE_WAL_CHECKPOINT_TICK_MS),
-    "checkpointTickMs",
-  );
-  const checkpointTickMs = requestedTickMs < checkpointIntervalMs ? requestedTickMs : 0;
+  // Checkpoint-only ticks keep commits off the checkpoint between periodic passes.
+  const checkpointTickMs =
+    checkpointIntervalMs > DEFAULT_SQLITE_WAL_CHECKPOINT_TICK_MS
+      ? DEFAULT_SQLITE_WAL_CHECKPOINT_TICK_MS
+      : 0;
   const checkpointMode = options.checkpointMode ?? "TRUNCATE";
   const periodicCheckpointMode = options.checkpointMode ?? "PASSIVE";
   const journalPolicy = options.databasePath

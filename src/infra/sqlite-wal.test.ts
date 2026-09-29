@@ -883,8 +883,8 @@ describe("sqlite WAL maintenance", () => {
     });
 
     expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
-    // A main-thread handle arms no checkpoint tick; worker connections tick.
-    expect(setIntervalSpy).toHaveBeenCalledTimes(1);
+    // The checkpoint-only tick is armed beside the periodic pass.
+    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 10_000);
     maintenance.close();
   });
 
