@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { SESSION_CREATE_IDEMPOTENCY_RETENTION_MS } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  ErrorCodes,
+  SESSION_CREATE_IDEMPOTENCY_RETENTION_MS,
+  errorShape,
+} from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { DEDUPE_MAX } from "../server-constants.js";
 import { idempotentSessionCreate } from "./session-create-idempotency.js";
@@ -189,6 +193,34 @@ describe("sessions.create process-lifetime idempotency", () => {
     expect(joined.respond).toHaveBeenCalledWith(true, { key: "agent:main:finished" }, undefined, {
       cached: true,
     });
+  });
+
+  it("runs a joined retry itself when the in-flight create fails", async () => {
+    const leaderDisconnected = createDeferredCore();
+    const { execute, invoke } = createFixture(async (request) => {
+      if (execute.mock.calls.length === 1) {
+        await leaderDisconnected.promise;
+        request.respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.FORBIDDEN, "reconnect and try again"),
+        );
+        return;
+      }
+      request.respond(true, { key: "agent:main:reconnected" });
+    });
+    const leader = invoke();
+    await vi.waitFor(() => expect(execute).toHaveBeenCalledOnce());
+    const reconnectedRetry = invoke();
+    leaderDisconnected.resolve();
+    await Promise.all([leader.done, reconnectedRetry.done]);
+
+    expect(leader.respond.mock.calls).toEqual([
+      [false, undefined, errorShape(ErrorCodes.FORBIDDEN, "reconnect and try again"), undefined],
+    ]);
+    expect(reconnectedRetry.respond.mock.calls).toEqual([
+      [true, { key: "agent:main:reconnected" }, undefined, undefined],
+    ]);
   });
 
   it("expires only settled successful results and immediately releases failed creates", async () => {
