@@ -86,9 +86,7 @@ internal class ChatMediaPlaybackClaims<T>(
 
   fun claim(value: T) {
     if (active === value) return
-    val previous = active
-    active = null
-    previous?.let(release)
+    releaseActive()
     active = value
   }
 
@@ -338,17 +336,6 @@ internal fun ChatMediaPlayerCard(
       onReleased = { clearPlayerState(requested, requestedFile) },
     )
 
-  fun registerPrepared(
-    prepared: ExoPlayer,
-    preparedFile: File?,
-    intentGeneration: Long,
-  ): Boolean =
-    ChatMediaPlaybackArbiter.registerPrepared(
-      player = prepared,
-      intentGeneration = intentGeneration,
-      onReleased = { clearPlayerState(prepared, preparedFile) },
-    )
-
   fun pause() {
     player?.let(ChatMediaPlaybackArbiter::pause)
   }
@@ -440,7 +427,13 @@ internal fun ChatMediaPlayerCard(
       )
       player = created
       if (content.playback != "transcode") loading = false
-      if (!registerPrepared(created, prepared.tempFile, intentGeneration)) {
+      if (
+        !ChatMediaPlaybackArbiter.registerPrepared(
+          player = created,
+          intentGeneration = intentGeneration,
+          onReleased = { clearPlayerState(created, prepared.tempFile) },
+        )
+      ) {
         disposeUnclaimedPlayer(created, prepared.tempFile)
         return@launch
       }

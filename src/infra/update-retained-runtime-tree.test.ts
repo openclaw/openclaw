@@ -131,11 +131,16 @@ it.each([
         }),
       ],
       [`${nestedBrowser}/dist/control-ui/index.js`, "export {};\n"],
+      [
+        "node_modules/native-addon/package.json",
+        JSON.stringify({ name: "native-addon", version: "1.0.0", main: "addon.node" }),
+      ],
     ]);
     const payloads = [
       "assets/large-model.bin",
       "lib/implementation.js",
       "data/payload.json",
+      "node_modules/native-addon/addon.node",
       "dist/control-ui/README.txt",
     ];
     const relativePlugin = path.join("extensions", "fixture");
@@ -191,6 +196,13 @@ it.each([
           const file = readPluginCacheFile({ rootDir, relativePath, rejectHardlinks: true });
           expect(file.ok).toBe(!preexistingHardlink);
           expect(fsSync.readFileSync(path.join(rootDir, relativePath), "utf8")).toBe(content);
+          if (relativePath === "node_modules/native-addon/package.json") {
+            const source = fsSync.statSync(path.join(f.source, relativePlugin, relativePath));
+            const retained = fsSync.statSync(
+              path.join(f.destination, relativePlugin, relativePath),
+            );
+            expect([retained.dev, retained.ino]).not.toEqual([source.dev, source.ino]);
+          }
         }
       });
       expect([...(await readPluginControlUiAssets(rootDir, controlUi)).assets.keys()]).toEqual(

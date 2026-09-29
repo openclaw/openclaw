@@ -13,13 +13,6 @@ type ReadBundleJsonResult =
   | { ok: true; raw: Record<string, unknown> }
   | { ok: false; error: string; reason?: "open" };
 
-type BundleServerRuntimeSupport = {
-  hasSupportedServer: boolean;
-  supportedServerNames: string[];
-  unsupportedServerNames: string[];
-  diagnostics: string[];
-};
-
 export function extractBundleServerMap(
   raw: unknown,
   containerKeys: readonly string[],
@@ -86,29 +79,6 @@ export function resolveBundleJsonOpenFailure(params: {
       error: `unable to read ${params.relativePath}: ${failure.reason}`,
     }),
   });
-}
-
-export function inspectBundleServerRuntimeSupport<TConfig>(params: {
-  loaded: { config: TConfig; diagnostics: string[] };
-  resolveServers: (config: TConfig) => Record<string, Record<string, unknown>>;
-}): BundleServerRuntimeSupport {
-  const supportedServerNames: string[] = [];
-  const unsupportedServerNames: string[] = [];
-  let hasSupportedServer = false;
-  for (const [serverName, server] of Object.entries(params.resolveServers(params.loaded.config))) {
-    if (typeof server.command === "string" && server.command.trim().length > 0) {
-      hasSupportedServer = true;
-      supportedServerNames.push(serverName);
-      continue;
-    }
-    unsupportedServerNames.push(serverName);
-  }
-  return {
-    hasSupportedServer,
-    supportedServerNames,
-    unsupportedServerNames,
-    diagnostics: params.loaded.diagnostics,
-  };
 }
 
 export function loadEnabledBundleConfig<TConfig, TDiagnostic>(params: {

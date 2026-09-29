@@ -243,9 +243,17 @@ export async function readPreparedGatewayModelCatalogBatch(
 export async function readPreparedGatewayModelCatalogOwnerSnapshot(
   params?: LoadGatewayModelCatalogParams,
 ): Promise<PreparedGatewayModelCatalogSnapshot | undefined> {
-  const { getPublishedPreparedModelCatalogOwnerSnapshot, materializePreparedModelCatalogOwner } =
-    await import("../agents/prepared-model-catalog.js");
+  const {
+    getPublishedPreparedModelCatalogOwnerSnapshot,
+    getPendingPreparedModelRuntimeReplacement,
+    materializePreparedModelCatalogOwner,
+  } = await import("../agents/prepared-model-catalog.js");
   const config = (params?.getConfig ?? getRuntimeConfig)();
+  const replacement = getPendingPreparedModelRuntimeReplacement();
+  if (replacement) {
+    await replacement;
+    return readPreparedGatewayModelCatalogOwnerSnapshot(params);
+  }
   const candidate = getPublishedPreparedModelCatalogOwnerSnapshot({
     ...(params?.agentId ? { agentId: params.agentId } : {}),
     ...(params?.agentDir ? { agentDir: params.agentDir } : {}),
