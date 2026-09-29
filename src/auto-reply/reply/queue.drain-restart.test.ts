@@ -6,6 +6,12 @@ import {
   getPreparedModelRuntimePluginGeneration,
   withPreparedModelRuntimePluginGenerationScope,
 } from "../../agents/prepared-model-runtime-generation-scope.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import {
+  getPluginRuntimeGenerationRegistry,
+  withPluginRuntimeGenerationScope,
+} from "../../plugins/runtime/generation-scope.js";
 import {
   beginGatewayRestartSignalAdmission,
   GatewayDrainingError,
@@ -49,31 +55,43 @@ describe("followup queue drain restart after idle window", () => {
     let subordinateAdmissionClosed: boolean | undefined;
     let activeRootCountDuringDrain: number | undefined;
     let generationDuringDrain: unknown;
+    let pluginRegistryDuringDrain: unknown;
     const predecessorGeneration = {
       configuredCatalogEntries: [],
       inlineProviderModels: [],
       pluginMetadataSnapshot: {} as never,
     };
+    // A channel turn runs inside its admitted plugin generation; the parked
+    // follow-up is scheduled from there and must not resume on that registry.
+    const predecessorRegistry = createEmptyPluginRegistry();
+    const predecessorPluginGeneration = {
+      metadataSnapshot: createPluginMetadataSnapshotFixture(),
+      pluginRegistry: predecessorRegistry,
+    };
 
     try {
-      await withPreparedModelRuntimePluginGenerationScope(predecessorGeneration, () =>
-        parent.run(async () => {
-          expect(getPreparedModelRuntimePluginGeneration()).toBe(predecessorGeneration);
-          enqueueFollowupRun(key, createRun({ prompt: "detached" }), settings);
-          scheduleFollowupDrain(key, async () => {
-            await parentReleased.promise;
-            const suspension = tryBeginGatewaySuspendAdmission(() => {});
-            suspensionStarted = suspension !== null;
-            try {
-              generationDuringDrain = getPreparedModelRuntimePluginGeneration();
-              subordinateAdmissionClosed = isGatewaySubordinateWorkAdmissionClosed();
-              activeRootCountDuringDrain = getActiveGatewayRootWorkCount();
-            } finally {
-              suspension?.rollback();
-              drained.resolve();
-            }
-          });
-        }),
+      await withPluginRuntimeGenerationScope(predecessorPluginGeneration, () =>
+        withPreparedModelRuntimePluginGenerationScope(predecessorGeneration, () =>
+          parent.run(async () => {
+            expect(getPreparedModelRuntimePluginGeneration()).toBe(predecessorGeneration);
+            expect(getPluginRuntimeGenerationRegistry()).toBe(predecessorRegistry);
+            enqueueFollowupRun(key, createRun({ prompt: "detached" }), settings);
+            scheduleFollowupDrain(key, async () => {
+              await parentReleased.promise;
+              const suspension = tryBeginGatewaySuspendAdmission(() => {});
+              suspensionStarted = suspension !== null;
+              try {
+                generationDuringDrain = getPreparedModelRuntimePluginGeneration();
+                pluginRegistryDuringDrain = getPluginRuntimeGenerationRegistry();
+                subordinateAdmissionClosed = isGatewaySubordinateWorkAdmissionClosed();
+                activeRootCountDuringDrain = getActiveGatewayRootWorkCount();
+              } finally {
+                suspension?.rollback();
+                drained.resolve();
+              }
+            });
+          }),
+        ),
       );
 
       parent.release();
@@ -84,6 +102,7 @@ describe("followup queue drain restart after idle window", () => {
       expect(subordinateAdmissionClosed).toBe(false);
       expect(activeRootCountDuringDrain).toBe(1);
       expect(generationDuringDrain).toBeUndefined();
+      expect(pluginRegistryDuringDrain).toBeUndefined();
       await vi.waitFor(() => {
         expect(getActiveGatewayRootWorkCount()).toBe(0);
       });

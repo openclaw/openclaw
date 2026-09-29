@@ -4,7 +4,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { MediaImageLayout } from "../../../agents/embedded-agent-runner/run/prompt-image-metadata.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../../agents/harness/hook-helpers.js";
-import { runOutsidePreparedModelRuntimePluginGenerationScope } from "../../../agents/prepared-model-runtime-generation-scope.js";
 import { normalizeChatType } from "../../../channels/chat-type.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions.js";
 import { loadSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
@@ -47,6 +46,7 @@ import {
   resolveFollowupReplyAnchor,
   resolveOverflowSummaryInboundEventKind,
 } from "./delivery-context.js";
+import { runOutsideAdmittedGenerationScopes } from "./drain-admission-scope.js";
 import {
   admitFollowupRunLifecycle,
   completeFollowupRunLifecycle,
@@ -1313,10 +1313,10 @@ export function scheduleFollowupDrain(
   // Queue drains outlive their enqueue request across debounce and retries.
   // Give the detached chain its own root so inherited request admission cannot go stale.
   // Queued turns re-admit on the generation current at drain time: the detached
-  // drain runs outside any ambient prepared-generation scope, so a parked turn
-  // never inherits the predecessor run's replaced generation.
+  // drain runs outside the scheduling turn's admitted generation scopes, so a
+  // parked turn never inherits the predecessor run's replaced generation.
   void runWithGatewayIndependentRootWorkContinuation(
-    () => runOutsidePreparedModelRuntimePluginGenerationScope(drainQueuedFollowups),
+    () => runOutsideAdmittedGenerationScopes(drainQueuedFollowups),
     "session:followup-drain",
   ).catch((err: unknown) => {
     if (FOLLOWUP_QUEUES.get(key) === queue && queue.drainOwner === drainOwner) {
