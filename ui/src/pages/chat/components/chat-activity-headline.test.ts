@@ -342,7 +342,7 @@ it("uses the newest group's live card label without inheriting an earlier failur
 });
 
 it("uses the prepared running mutation title in an active group summary", () => {
-  const group = createToolGroup(
+  const runningGroup = createToolGroup(
     "running-tool-group",
     [
       createMessageEntry("finished-read", {
@@ -387,7 +387,7 @@ it("uses the prepared running mutation title in an active group summary", () => 
   );
 
   render(
-    renderActivityGroup([group], {
+    renderActivityGroup([runningGroup], {
       runActive: true,
       activityRunId: "active-mutation",
       showReasoning: false,

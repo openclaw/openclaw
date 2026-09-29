@@ -176,7 +176,7 @@ it.each(["session", "run", "connection"] as const)(
     const owner = scope === "run" ? "replacement-run" : runId;
     draw(
       [
-        { ...user, __openclaw: { ...user.__openclaw, idempotencyKey: owner + ":user" } },
+        { ...user, __openclaw: { ...user["__openclaw"], idempotencyKey: owner + ":user" } },
         tool("first", "Inspect the first file", "completed", owner),
         tool("fresh", "Fresh scope file", "running", owner, 4),
       ],
