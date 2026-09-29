@@ -1273,6 +1273,18 @@ child.once("exit", (code, signal) => {
         if (entrypointPid !== 0 && (!Number.isSafeInteger(entrypointPid) || entrypointPid <= 1)) {
           throw new Error("invalid fixture entrypoint PID");
         }
+        const phases: WrapperReadinessPhase[] = JSON.parse(readFileSync(phasesPath, "utf8"));
+        const wrapperPhase = phases.find(({ phase }) => phase === "loading wrapper");
+        const wrapperPid = wrapperPhase?.pid ?? 0;
+        if (proof.kind === "readiness" && wrapperPid) {
+          if (!Number.isSafeInteger(wrapperPid) || wrapperPid <= 1) {
+            throw new Error("invalid owned fixture PID");
+          }
+          expect(wrapperPhase?.parentPid).toBe(entrypointPid);
+          // Keep the shim alive to reap its held child before joining the shim itself.
+          process.kill(wrapperPid, "SIGKILL");
+          await entrypointClosed;
+        }
         if (entrypointPid && isProcessAlive(entrypointPid)) {
           try {
             forceStop?.();
@@ -1282,8 +1294,6 @@ child.once("exit", (code, signal) => {
             }
           }
         }
-        const phases: WrapperReadinessPhase[] = JSON.parse(readFileSync(phasesPath, "utf8"));
-        const wrapperPid = phases.find(({ phase }) => phase === "loading wrapper")?.pid ?? 0;
         identity ??= existsSync(identityPath)
           ? JSON.parse(readFileSync(identityPath, "utf8"))
           : undefined;

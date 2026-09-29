@@ -135,7 +135,8 @@ export async function prepareUpdateCandidateRehearsal(params: {
   nodeRunner?: string;
   timeoutMs?: number;
   signal?: AbortSignal;
-  onProgress?: (step: UpdateRunStep) => void;
+  assertCurrent?: () => void;
+  onProgress?: (step: UpdateRunStep) => void | Promise<void>;
 }): Promise<UpdateCandidateRehearsal> {
   const sourceEnv = params.env ?? process.env;
   const workerEnv = (tempDir: string): NodeJS.ProcessEnv => {
@@ -221,6 +222,7 @@ export async function prepareUpdateCandidateRehearsal(params: {
   };
   try {
     params.signal?.throwIfAborted();
+    params.assertCurrent?.();
     const port = await tryListenOnPort({
       port: 0,
       host: "127.0.0.1",
@@ -236,7 +238,11 @@ export async function prepareUpdateCandidateRehearsal(params: {
         pluginPaths,
       ),
     );
+    params.signal?.throwIfAborted();
+    params.assertCurrent?.();
     await fs.writeFile(configPath, serialized, { mode: 0o600 });
+    params.signal?.throwIfAborted();
+    params.assertCurrent?.();
     await fs.mkdir(workspaceDir, { recursive: true, mode: 0o700 });
     return {
       stateDir: tempDir,

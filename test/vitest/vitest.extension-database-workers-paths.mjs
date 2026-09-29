@@ -129,6 +129,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/codex/src/app-server/native-subagent-submission-store.test.ts",
   "extensions/codex/src/commands.native-subagent-retention.test.ts",
   "extensions/codex/src/session-catalog-adoption.test.ts",
+  "extensions/codex/src/session-catalog-adoption-recovery.test.ts",
   "extensions/codex/index-services.test.ts",
   "extensions/codex/src/session-catalog-resident-state.test.ts",
   "extensions/codex/src/session-catalog-snapshot-recovery.test.ts",

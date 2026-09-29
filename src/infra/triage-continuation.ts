@@ -181,7 +181,7 @@ export async function continueTriageInFreshProcess(params: {
   failure: TriageFailureContext;
   signal: AbortSignal;
   output: (text: string) => void;
-}): Promise<void> {
+}): Promise<"completed" | void> {
   params.signal.throwIfAborted();
   const root = realpathSync(params.root);
   const failure = failureSchema.parse(params.failure);
@@ -389,6 +389,7 @@ export async function continueTriageInFreshProcess(params: {
         `automatic triage candidate ${admitted ? `failed (exit ${exit.code ?? "signal"})` : "is incompatible"}; run openclaw triage manually`,
       );
     }
+    return "completed";
   } finally {
     clearTimeout(timeout);
     clearTimeout(shutdown);

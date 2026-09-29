@@ -61,6 +61,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/github-repository-publication-restart.test.ts",
   "src/gateway/github-repository-publication-workflows.test.ts",
   "src/gateway/github-repository-publication.test.ts",
+  "src/gateway/github-shared-publication-events.test.ts",
   "src/gateway/github-shared-publication-read.test.ts",
   "src/gateway/github-user-identity.cache.test.ts",
   "src/gateway/github-user-identity.oidc.test.ts",
@@ -450,6 +451,8 @@ export const gatewayMethodsTestExclude = [
 
 // Gateway server tests that need a private module graph and the plain Vitest runner.
 export const gatewayServerIsolatedTestFiles = [
+  // Native source captures must not retain this fixture's forbidden process constructors.
+  "src/gateway/server-startup-post-attach.test.ts",
   "src/gateway/server.agent-artifact-apis.test.ts",
   "src/gateway/server-worker-environment-startup.state.test.ts",
   // A failed native close permanently fences this process's metadata owner.

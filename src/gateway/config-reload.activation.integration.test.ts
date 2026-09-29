@@ -5,7 +5,9 @@ import fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { resolveApiKeyForProfile } from "../agents/auth-profiles/oauth.js";
+import { runtimeAuthProfileRowsCache } from "../agents/auth-profiles/runtime-snapshots.js";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles/store-runtime.js";
+import * as authProfileStore from "../agents/auth-profiles/store.js";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import {
   prepareModelRuntimeSnapshot,
@@ -219,6 +221,33 @@ describe("setup activation reload ownership", () => {
       let echoObserved = false;
       const completion = createDeferred<() => Promise<boolean>>();
       const applied = createDeferred<ReturnType<typeof createRuntimeConfigWriteApplication>>();
+      let recoveryApplication: ReturnType<typeof createRuntimeConfigWriteApplication> | undefined;
+      // Recovery can capture auth before the config write returns to its rollback caller.
+      const prepareRows = runtimeAuthProfileRowsCache.prepare.bind(runtimeAuthProfileRowsCache);
+      const rowRead = vi
+        .spyOn(runtimeAuthProfileRowsCache, "prepare")
+        .mockImplementation((...args) => {
+          const reader = prepareRows(...args);
+          if (outcome !== "runtime-failed" || !recoveryApplication?.claimed) {
+            return reader;
+          }
+          return {
+            ...reader,
+            async read() {
+              const rows = await reader.read();
+              captureEntered.resolve();
+              await releaseCapture.promise;
+              return rows;
+            },
+          };
+        });
+      const restoreAuth = authProfileStore.restoreAuthProfileStorePersistenceSnapshot;
+      const rollback = vi
+        .spyOn(authProfileStore, "restoreAuthProfileStorePersistenceSnapshot")
+        .mockImplementation((...args) => {
+          restoreAuth(...args);
+          releaseCapture.resolve();
+        });
       try {
         await reloader.ready;
         if (scenario === "superseded") {
@@ -259,7 +288,15 @@ describe("setup activation reload ownership", () => {
               base: "source",
               writeOptions,
               transform: (_current, context) => {
-                captureUndo(captureSetupInferenceFileUndo(context.snapshot, candidate));
+                const undo = captureSetupInferenceFileUndo(context.snapshot, candidate);
+                captureUndo(async (options) => {
+                  recoveryApplication = getRuntimeConfigWriteApplication(options);
+                  const restored = await undo(options);
+                  if (outcome === "runtime-failed") {
+                    await captureEntered.promise;
+                  }
+                  return restored;
+                });
                 return { nextConfig: candidate };
               },
             });
@@ -337,9 +374,24 @@ describe("setup activation reload ownership", () => {
                 value instanceof Error ? { message: value.message, stack: value.stack } : value,
             ),
           ).toBe(true);
-          await expect((await completion.promise)()).rejects.toThrow(
-            "did not complete activation (failed)",
-          );
+          try {
+            await expect((await completion.promise)()).rejects.toThrow(
+              "did not complete activation (failed)",
+            );
+          } catch (error) {
+            const recoveryState = recoveryApplication?.claimed
+              ? await Promise.race([recoveryApplication.result, Promise.resolve("pending")])
+              : "unclaimed";
+            console.error("Activation recovery failed", {
+              claimed: recoveryApplication?.claimed,
+              status: recoveryState,
+              reloadErrors: reloadError.mock.calls.map(([message]) => String(message)),
+              warnings: getPreparedModelRuntimeMocks().warn.mock.calls.map(([message]) =>
+                String(message),
+              ),
+            });
+            throw error;
+          }
           const restored = (await readConfigFileSnapshot()).sourceConfig;
           for (const section of ["agents", "models", "gateway", "plugins"] as const) {
             expect(restored[section]).toEqual(previous[section]);
@@ -399,6 +451,8 @@ describe("setup activation reload ownership", () => {
         try {
           await reloader.stop();
         } finally {
+          rowRead.mockRestore();
+          rollback.mockRestore();
           configFileAdapter.mockRestore();
         }
       }

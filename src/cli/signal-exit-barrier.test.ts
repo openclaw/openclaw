@@ -50,44 +50,55 @@ it.each([
   },
 );
 
-it.skipIf(process.platform === "win32").each(["owner", "once-owner", "execa"])(
-  "preserves the existing %s signal lifecycle",
-  (kind) => {
-    const root = directories.make("cli-signal-owner-");
-    const result = spawnSync(
-      process.execPath,
-      [
-        "--import",
-        import.meta.resolve("tsx"),
-        "--input-type=module",
-        "-e",
-        `import { once } from 'node:events';
-         import { installCliSignalExitHandlers } from ${JSON.stringify(new URL("./signal-exit-barrier.ts", import.meta.url).href)};
+it.skipIf(process.platform === "win32").each([
+  { kind: "owner", signal: "SIGTERM" },
+  { kind: "once-owner", signal: "SIGTERM" },
+  { kind: "execa", signal: "SIGTERM" },
+  { kind: "fallback", signal: "SIGINT" },
+  { kind: "fallback", signal: "SIGTERM" },
+])("preserves the $kind signal lifecycle ($signal)", ({ kind, signal }) => {
+  const root = directories.make("cli-signal-owner-");
+  const result = spawnSync(
+    process.execPath,
+    [
+      "--import",
+      import.meta.resolve("tsx"),
+      "--input-type=module",
+      "-e",
+      `import { once } from 'node:events';
+         import { installCliSignalExitHandlers, registerSignalExitBarrier } from ${JSON.stringify(new URL("./signal-exit-barrier.ts", import.meta.url).href)};
          installCliSignalExitHandlers();
          if (${JSON.stringify(kind)} === 'execa') {
            const { execa } = await import('execa');
            const child = execa(process.execPath, ['-e', 'setInterval(() => {}, 1000)']);
            await once(child.nodeChildProcess, 'spawn');
+         } else if (${JSON.stringify(kind)} === 'fallback') {
+           registerSignalExitBarrier(async () => {
+             await Promise.resolve();
+             process.stdout.write('fallback drained');
+           });
          } else {
            process[${JSON.stringify(kind === "once-owner" ? "once" : "on")}]('SIGTERM', () => {
              setImmediate(() => { process.stdout.write('owner drained'); process.exit(23); });
            });
          }
-         process.kill(process.pid, 'SIGTERM');
+         process.kill(process.pid, ${JSON.stringify(signal)});
          setTimeout(() => process.exit(99), 5000);`,
-      ],
-      {
-        encoding: "utf8",
-        timeout: 30_000,
-        env: { ...process.env, HOME: root, OPENCLAW_STATE_DIR: root, XDG_CACHE_HOME: root },
-      },
-    );
-    expect(result.error, result.stderr).toBeUndefined();
-    if (kind === "execa") {
-      expect(result.signal, result.stderr).toBe("SIGTERM");
-    } else {
-      expect(result.status, result.stderr).toBe(23);
-      expect(result.stdout).toBe("owner drained");
-    }
-  },
-);
+    ],
+    {
+      encoding: "utf8",
+      timeout: 30_000,
+      env: { ...process.env, HOME: root, OPENCLAW_STATE_DIR: root, XDG_CACHE_HOME: root },
+    },
+  );
+  expect(result.error, result.stderr).toBeUndefined();
+  if (kind === "execa") {
+    expect(result.signal, result.stderr).toBe("SIGTERM");
+  } else if (kind === "fallback") {
+    expect(result.status, result.stderr).toBe(signal === "SIGINT" ? 130 : 143);
+    expect(result.stdout).toBe("fallback drained");
+  } else {
+    expect(result.status, result.stderr).toBe(23);
+    expect(result.stdout).toBe("owner drained");
+  }
+});

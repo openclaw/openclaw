@@ -111,7 +111,7 @@ describe("cron one-shot removal", () => {
         true,
       );
       expect(
-        writeCronJobScratch({
+        await writeCronJobScratch({
           storePath,
           jobId: job.id,
           content: "original scratch",
@@ -157,7 +157,7 @@ describe("cron one-shot removal", () => {
     "restores %s wake state when the final deletion write fails",
     async (path) => {
       const { storePath, nowMs, job, events, state } = await createFixture(path);
-      writeCronJobScratch({
+      await writeCronJobScratch({
         storePath,
         jobId: job.id,
         content: "scratch must survive rollback",
@@ -168,7 +168,7 @@ describe("cron one-shot removal", () => {
 
       const database = openOpenClawStateDatabase().db;
       database.exec(`
-      CREATE TEMP TRIGGER reject_final_cron_job_delete
+      CREATE TRIGGER reject_final_cron_job_delete
       BEFORE DELETE ON cron_jobs
       WHEN OLD.store_key = '${cronStoreKey(storePath)}' AND OLD.job_id = '${job.id}'
       BEGIN

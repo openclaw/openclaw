@@ -69,17 +69,7 @@ describe("undelivered generated media", () => {
             return append(params);
           });
         }
-        const lifecycle = createMediaGenerationTaskLifecycle({
-          toolName: "image_generate",
-          taskKind: "image_generation",
-          label: "Image generation",
-          queuedProgressSummary: "Queued image generation",
-          generatedLabel: "image",
-          failureProgressSummary: "Image generation failed",
-          eventSource: "image_generation",
-          announceType: "image generation task",
-          completionLabel: "image",
-        });
+        const lifecycle = createMediaGenerationTaskLifecycle("image");
         if (requesterState === "current") {
           await cleanupSessionStateForTest({ stateDir: state.stateDir });
         }

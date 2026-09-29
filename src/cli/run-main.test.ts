@@ -9,6 +9,7 @@ import {
   resolveGatewayRunPreBootstrapOptions,
 } from "./gateway-run-argv.js";
 import {
+  isGatewayRunFastPathArgv,
   rewriteUpdateFlagArgv,
   resolveMissingPluginCommandMessage,
   shouldHandleBareRoot,
@@ -16,15 +17,30 @@ import {
   shouldUseRootHelpFastPath,
   shouldUseSetupOnboardConfigureHelpFastPath,
 } from "./run-main-policy.js";
-import { isGatewayRunFastPathArgv, runCli } from "./run-main.js";
+import { runCli } from "./run-main.js";
 
 const cliArgs = (...args: string[]) => ["node", "openclaw", ...args];
 const runGatewayCommand = vi.hoisted(() => vi.fn());
 vi.mock("./gateway-cli/run.js", () => ({ runGatewayCommand }));
-vi.mock("./gateway-cli/pre-bootstrap.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./gateway-cli/pre-bootstrap.js")>()),
+// Keep Commander parsing independent of native startup; run-main.exit and
+// command-execution-startup tests own bootstrap and admission behavior.
+vi.mock("./gateway-cli/pre-bootstrap.js", () => ({
   selectGatewayRunEnvironment: async () => true,
   prepareGatewayRunBootstrap: async () => false,
+  recheckGatewayRunBootstrap: async () => {
+    throw new Error("Commander parsing fixture unexpectedly rechecked Gateway bootstrap");
+  },
+  reloadTrustedGatewayRunEnvironment: async () => {
+    throw new Error("Commander parsing fixture unexpectedly reloaded Gateway environment");
+  },
+}));
+vi.mock("../state/agent-database-startup.js", () => ({
+  withAgentDatabaseStartupAdmission: <T>(run: () => Promise<T>) => run(),
+}));
+vi.mock("./command-execution-startup.js", () => ({
+  ensureCliExecutionBootstrap: async () => {
+    throw new Error("Commander parsing fixture unexpectedly entered CLI bootstrap");
+  },
 }));
 vi.mock("../logging/console.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../logging/console.js")>()),

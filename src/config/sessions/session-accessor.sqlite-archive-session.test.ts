@@ -36,6 +36,7 @@ import type {
 import * as archiveWorker from "./session-accessor.sqlite-archive.js";
 import { runExclusiveSqliteTranscriptArchiveWorker } from "./session-accessor.sqlite-archive.js";
 import * as reclamation from "./session-accessor.sqlite-reclamation-run.js";
+import type { SqliteReclamationWorker } from "./session-accessor.sqlite-reclamation-worker-lifetime.js";
 import * as reclamationWorker from "./session-accessor.sqlite-reclamation-worker.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
@@ -344,7 +345,7 @@ describe("SQLite transcript archive sessions", () => {
         [...observedWorkers].filter((observed) => observed.threadId !== -1).length,
       );
     });
-    const publicationWorkers = new Set<reclamationWorker.SqliteReclamationWorker>();
+    const publicationWorkers = new Set<SqliteReclamationWorker>();
     const withWorker = reclamationWorker.withSqliteReclamationWorker;
     const reclamationObserver = vi
       .spyOn(reclamationWorker, "withSqliteReclamationWorker")

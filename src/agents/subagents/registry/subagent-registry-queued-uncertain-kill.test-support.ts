@@ -61,12 +61,14 @@ export function registerQueuedUnknownKillAuthorityTest(params: {
       expect(entry.execution.status).toBe("queued");
       expect(usable(f.scope)).toEqual([false, false, false]);
       expect(usable(unrelated.scope)).toEqual([true, true, true]);
-      await expect(registryState.restoreSubagentRunsFromDisk({ runs: f.runs })).rejects.toThrow();
+      await expect(
+        registryState.restoreSubagentRunsFromDisk({ runs: f.runs }),
+      ).rejects.toMatchObject({ outcome: "unknown" });
       await databaseLifecycle.closeOpenClawStateDatabaseAsync();
       expect(usable(f.scope)).toEqual([false, false, false]);
       await expect(
         registryState.restoreSubagentRunsFromDisk({ runs: f.runs, mergeOnly: true }),
-      ).rejects.toThrow();
+      ).rejects.toMatchObject({ outcome: "unknown" });
       await expect(
         f.manager.claimSubagentRunKill({ runId: entry.runId, expected: entry }),
       ).rejects.toMatchObject({ outcome: "unknown" });

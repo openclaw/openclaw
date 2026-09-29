@@ -474,7 +474,7 @@ export function normalizeAutomation(
   const launch = normalizeLaunchState(
     options.allowLaunchState && Object.hasOwn(record, "launch") ? record.launch : fallback.launch,
   );
-  const next = removeUndefinedAutomationFields({
+  const next = {
     ...(tenant ? { tenant } : {}),
     ...(boardId ? { boardId } : {}),
     ...(createdByCardId ? { createdByCardId } : {}),
@@ -490,7 +490,13 @@ export function normalizeAutomation(
     ...(dispatchCount ? { dispatchCount } : {}),
     ...(lastDispatchAt ? { lastDispatchAt } : {}),
     ...(launch ? { launch } : {}),
-  });
+  };
+  // Legacy imports can retain empty workspace or authority objects.
+  for (const [key, entry] of Object.entries(next)) {
+    if (entry !== null && typeof entry === "object" && Object.keys(entry).length === 0) {
+      Reflect.deleteProperty(next, key);
+    }
+  }
   return Object.keys(next).length ? next : undefined;
 }
 
@@ -689,19 +695,7 @@ function normalizeProof(value: unknown): WorkboardProof | null {
   if (!id || !createdAt) {
     return null;
   }
-  const label = normalizeBoundedString(record.label, undefined, 160, "proof label");
-  const command = normalizeBoundedString(record.command, undefined, 1000, "proof command");
-  const url = normalizeBoundedString(record.url, undefined, 2000, "proof URL");
-  const note = normalizeBoundedString(record.note, undefined, 2000, "proof note");
-  return {
-    id,
-    status: normalizeEnumValue(record.status, WORKBOARD_PROOF_STATUSES, "unknown"),
-    createdAt,
-    ...(label ? { label } : {}),
-    ...(command ? { command } : {}),
-    ...(url ? { url } : {}),
-    ...(note ? { note } : {}),
-  };
+  return normalizeProofInput(record, createdAt, id);
 }
 
 export function normalizeArtifact(value: unknown): WorkboardArtifact | null {
@@ -956,13 +950,17 @@ function normalizeNotification(value: unknown): WorkboardNotification | null {
   };
 }
 
-export function normalizeProofInput(input: WorkboardProofInput, now: number): WorkboardProof {
+export function normalizeProofInput(
+  input: WorkboardProofInput,
+  now: number,
+  id?: string,
+): WorkboardProof {
   const label = normalizeBoundedString(input.label, undefined, 160, "proof label");
   const command = normalizeBoundedString(input.command, undefined, 1000, "proof command");
   const url = normalizeBoundedString(input.url, undefined, 2000, "proof URL");
   const note = normalizeBoundedString(input.note, undefined, 2000, "proof note");
   return {
-    id: randomUUID(),
+    id: id ?? randomUUID(),
     status: normalizeEnumValue(input.status, WORKBOARD_PROOF_STATUSES, "unknown"),
     createdAt: now,
     ...(label ? { label } : {}),
@@ -1197,37 +1195,6 @@ export function syncExecutionSessionKey(
   };
   for (const key of ["engine", "model", "sessionKey", "runId"] as const) {
     if (next[key] === undefined) {
-      delete next[key];
-    }
-  }
-  return next;
-}
-
-function removeUndefinedAutomationFields(automation: WorkboardAutomation): WorkboardAutomation {
-  const next = { ...automation };
-  for (const key of [
-    "tenant",
-    "boardId",
-    "createdByCardId",
-    "idempotencyKey",
-    "skills",
-    "workspace",
-    "workspaceAccess",
-    "maxRuntimeSeconds",
-    "maxRetries",
-    "scheduledAt",
-    "summary",
-    "createdCardIds",
-    "dispatchCount",
-    "lastDispatchAt",
-    "launch",
-  ] as const) {
-    const value = next[key];
-    if (
-      value === undefined ||
-      (Array.isArray(value) && value.length === 0) ||
-      (typeof value === "object" && value !== null && Object.keys(value).length === 0)
-    ) {
       delete next[key];
     }
   }

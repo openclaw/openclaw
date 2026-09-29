@@ -99,12 +99,10 @@ async function fixture(
     channelConfig: null,
     replyTarget: "channel:C1",
     ctxPayload,
-    turn: { storePath: "/unused/slack-status-test", record: {} },
+    turn: { record: {} },
     replyToMode: "all",
-    requireMention: false,
     isDirectMessage: false,
     isRoomish: true,
-    preview: "hello",
     ackReactionValue: "",
     ackReactionPromise: null,
   };

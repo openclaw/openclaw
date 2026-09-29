@@ -9,6 +9,7 @@ import { sessionChanges } from "../sessions/session-row-changes.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db.js";
+import { startAwaitedReadMock } from "../state/openclaw-state-read-mock.test-support.js";
 import * as stateReadWorker from "../state/openclaw-state-read-worker.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
@@ -211,23 +212,31 @@ describe("registered session PR subscriptions", () => {
         f.load.mockResolvedValue(refreshed);
         const entered = createDeferredCore();
         const release = createDeferredCore();
-        const createTransport = stateReadWorker.createOpenClawStateReadTransport;
+        const captureSource = stateReadWorker.captureOpenClawStateReadSource;
         let held = false;
         const transport = vi
-          .spyOn(stateReadWorker, "createOpenClawStateReadTransport")
-          .mockImplementation((command) => {
-            const owned = createTransport(command);
-            if (held || command.type !== "agentDatabaseDeletion.snapshot") {
-              return owned;
-            }
-            held = true;
+          .spyOn(stateReadWorker, "captureOpenClawStateReadSource")
+          .mockImplementation(() => {
+            const source = captureSource();
             return {
-              ...owned,
-              async read(...args: Parameters<typeof owned.read>) {
-                const result = await owned.read(...args);
-                entered.resolve();
-                await release.promise;
-                return result;
+              ...source,
+              createTransport(command) {
+                const owned = source.createTransport(command);
+                if (held || command.type !== "agentDatabaseDeletion.snapshot") {
+                  return owned;
+                }
+                held = true;
+                return {
+                  ...owned,
+                  startRead(...args) {
+                    return startAwaitedReadMock(async () => {
+                      const result = await owned.startRead(...args).result;
+                      entered.resolve();
+                      await release.promise;
+                      return result;
+                    });
+                  },
+                };
               },
             };
           });

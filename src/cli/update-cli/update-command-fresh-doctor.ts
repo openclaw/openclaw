@@ -223,6 +223,7 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
           },
           input: {
             configInputHash: snapshot.hash,
+            originalRecoveryCapture: run?.originalRecoveryCapture,
             repair: true,
             databaseGenerations:
               params.databaseBackup?.migration?.to ?? params.databaseBackup?.sourceGenerations,

@@ -468,7 +468,6 @@ describe("handleSlackAction", () => {
       readSlackMessages,
       removeOwnSlackReactions,
       removeSlackReaction,
-      resolveSlackConversationName,
       resolveSlackConversationInfo,
       sendSlackMessage,
       unpinSlackMessage,

@@ -867,12 +867,23 @@ class AgentsPage
     });
   }
 
-  private toolsPath(agentId: string, ensure: boolean) {
-    if (agentId !== this.agentsSelectedId) {
-      return null;
+  private stageTools(agentId: string, values: Record<string, unknown>, ensure: boolean) {
+    if (agentId !== this.agentsSelectedId || !this.canCall("config.set", "operator.admin")) {
+      return;
     }
-    const target = this.context.runtimeConfig.agentEntry(agentId, { ensure });
-    return target ? ([...target.path, "tools"] as Array<string | number>) : null;
+    const runtimeConfig = this.context.runtimeConfig;
+    const target = runtimeConfig.agentEntry(agentId, { ensure });
+    if (!target) {
+      return;
+    }
+    for (const [field, value] of Object.entries(values)) {
+      const path = [...target.path, "tools", field];
+      if (value === undefined) {
+        runtimeConfig.removeFormValue(path);
+      } else {
+        runtimeConfig.patchForm(path, value);
+      }
+    }
   }
 
   private loadEffectiveToolsForAgent(agentId: string) {
@@ -1099,42 +1110,21 @@ class AgentsPage
                 );
               }
             },
-            onToolsProfileChange: (agentId, profile, clearAllow) => {
-              if (!this.canCall("config.set", "operator.admin")) {
-                return;
-              }
-              const path = this.toolsPath(agentId, Boolean(profile || clearAllow));
-              if (!path) {
-                return;
-              }
-              if (profile) {
-                this.context.runtimeConfig.patchForm([...path, "profile"], profile);
-              } else {
-                this.context.runtimeConfig.removeFormValue([...path, "profile"]);
-              }
-              if (clearAllow) {
-                this.context.runtimeConfig.removeFormValue([...path, "allow"]);
-              }
-            },
-            onToolsOverridesChange: (agentId, alsoAllow, deny) => {
-              if (!this.canCall("config.set", "operator.admin")) {
-                return;
-              }
-              const path = this.toolsPath(agentId, alsoAllow.length > 0 || deny.length > 0);
-              if (!path) {
-                return;
-              }
-              if (alsoAllow.length) {
-                this.context.runtimeConfig.patchForm([...path, "alsoAllow"], alsoAllow);
-              } else {
-                this.context.runtimeConfig.removeFormValue([...path, "alsoAllow"]);
-              }
-              if (deny.length) {
-                this.context.runtimeConfig.patchForm([...path, "deny"], deny);
-              } else {
-                this.context.runtimeConfig.removeFormValue([...path, "deny"]);
-              }
-            },
+            onToolsProfileChange: (agentId, profile, clearAllow) =>
+              this.stageTools(
+                agentId,
+                { profile: profile || undefined, ...(clearAllow ? { allow: undefined } : {}) },
+                Boolean(profile || clearAllow),
+              ),
+            onToolsOverridesChange: (agentId, alsoAllow, deny) =>
+              this.stageTools(
+                agentId,
+                {
+                  alsoAllow: alsoAllow.length ? alsoAllow : undefined,
+                  deny: deny.length ? deny : undefined,
+                },
+                alsoAllow.length > 0 || deny.length > 0,
+              ),
             onConfigReload: () =>
               void this.context.runtimeConfig.discardDraft({ reloadOnly: true }),
             onConfigSave: () => void this.saveAgentConfig(),

@@ -246,7 +246,7 @@ function createQaSuiteScenarioFlowApi(
 ) {
   const createWebPageOpener = (signal?: AbortSignal) => {
     const open = webRuntime.createQaWebPageOpener(params.env.webSessionIds, signal);
-    return (webParams: Parameters<typeof webRuntime.qaWebOpenPage>[0]) =>
+    return (webParams: webRuntime.QaWebOpenPageParams) =>
       open({ ...webParams, repoRoot: params.env.repoRoot });
   };
   const api = {
