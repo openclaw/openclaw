@@ -199,7 +199,10 @@ export const EMBEDDED_RUN_COMPLETION_CLAIMS =
   (embeddedRunState.completionClaims = new Map<string, EmbeddedRunCompletionClaim>());
 
 /** Identity-only dispatch must resolve the same participant owner as in-process tools. */
-export function captureActiveEmbeddedRunPersonalToolParticipants(identity: AgentRuntimeIdentity) {
+export function captureActiveEmbeddedRunPersonalToolParticipants(
+  identity: AgentRuntimeIdentity,
+  options?: { allowMissingRegistry?: boolean },
+) {
   const instance = identity.operationalRunInstance;
   const handle = ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.get(instance.runId);
   if (!handle) {
@@ -207,6 +210,10 @@ export function captureActiveEmbeddedRunPersonalToolParticipants(identity: Agent
   }
   const registration = ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(handle);
   const toolAuthority = registration?.toolAuthority;
+  // Session fencing only applies to runs that admitted personal-tool participants.
+  if (options?.allowMissingRegistry && !toolAuthority?.personalToolParticipants) {
+    return undefined;
+  }
   const delegatedAuthority = registration?.delegatedAuthority;
   const ownsRegistration = () =>
     registration !== undefined &&

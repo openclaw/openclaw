@@ -1,16 +1,13 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
-import { validateAgentWaitParams } from "../../packages/gateway-protocol/src/index.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
-import { prepareAgentWaitForTurn } from "./agent-turn/agent-wait.js";
 import { resolveAuthorizedBoardViewTicketClaims } from "./board-view-ticket.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { listSessionGroups } from "./session-groups.js";
 import {
   isApprovalSessionTargetMethod,
-  isDirectSessionReadMethod,
   sessionMutationTargetFields,
 } from "./session-method-policy.js";
 import type { SessionMutationTarget } from "./session-mutation-authorization-error.js";
@@ -55,42 +52,6 @@ export function resolveDirectIncognitoTargets(
       canonicalizeSessionKeyForAgent(target.agentId ?? DEFAULT_AGENT_ID, target.sessionKey),
     ),
   );
-}
-
-/** Undefined means the request's complete session target set is not known. */
-export function resolveSessionRequestTargets(params: {
-  method: string;
-  requestParams: unknown;
-  context: GatewayRequestContext;
-  connId?: string;
-}): SessionMutationTarget[] | undefined {
-  if (params.method === "agent.wait") {
-    if (!validateAgentWaitParams(params.requestParams)) {
-      return undefined;
-    }
-    const session = prepareAgentWaitForTurn(params.context, params.requestParams).session;
-    return session ? [{ sessionKey: session.sessionKey, agentId: session.agentId }] : undefined;
-  }
-  // These operations can select a transcript or destination absent from the sharing targets.
-  if (
-    (params.method === "agent" &&
-      readSessionSharingStringParam(params.requestParams, "sessionId")) ||
-    params.method === "sessions.fork" ||
-    params.method === "sessions.move" ||
-    (params.method === "sessions.create" &&
-      !readSessionSharingStringParam(params.requestParams, "key"))
-  ) {
-    return undefined;
-  }
-  const talk = resolveTalkSessionTargetInput(params.method, params.requestParams, params.connId);
-  if (talk?.kind === "relay") {
-    return [{ sessionKey: talk.target.canonicalKey, agentId: talk.target.agentId }];
-  }
-  if (isDirectSessionReadMethod(params.method)) {
-    const targets = resolveDirectSessionTargets(params.method, params.requestParams);
-    return targets.length ? targets : undefined;
-  }
-  return resolveSessionMutationTargets(params);
 }
 
 function readSessionSharingStringParam(params: unknown, key: string): string | undefined {

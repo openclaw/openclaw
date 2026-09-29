@@ -8,7 +8,7 @@ import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createInternalAgentTurnFacade } from "./agent-turn/internal-facade.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "./server-methods/types.js";
-import { resolveSessionRequestTargets } from "./session-sharing-target-input.js";
+import { resolveSessionRequestTargets } from "./session-request-targets.js";
 
 export function createContext(): GatewayRequestContext {
   const context = {

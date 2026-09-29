@@ -14,6 +14,8 @@ OpenClaw gives agents tools to work across sessions, inspect status, and orchest
 It is required when several people have steered the turn. The named person's
 authority determines session access and child execution; unknown or revoked
 participants are rejected. Single-person turns can omit it.
+Scheduled jobs and SDK/plugin runs without turn participants retain their existing
+session access rules.
 
 ## Available tools
 

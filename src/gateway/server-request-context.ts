@@ -28,8 +28,8 @@ import {
 import type { GatewayClientRegistry } from "./server/client-registry.js";
 import { getHealthCache } from "./server/health-state.js";
 import { invalidateGatewayPolicyClient } from "./server/ws-policy-close.js";
+import { resolveSessionRequestTargets } from "./session-request-targets.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
-import { resolveSessionRequestTargets } from "./session-sharing-target-input.js";
 
 type GatewayRequestContextClient = GatewayClient & {
   socket: { close: (code: number, reason: string) => void };

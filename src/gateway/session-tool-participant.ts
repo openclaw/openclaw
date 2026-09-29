@@ -62,6 +62,7 @@ export function resolveRuntimeSessionParticipant(params: {
   const participant = checked(() =>
     resolveGatewayPersonalToolParticipant(runtimeIdentity, {
       requireSingleParticipant: true,
+      allowMissingRegistry: true,
       allowTurnOwner,
     }),
   );
