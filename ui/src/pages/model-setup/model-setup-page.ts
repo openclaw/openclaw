@@ -18,6 +18,7 @@ import { ModelProviderLoginController } from "../model-providers/login-controlle
 import {
   captureModelSetupConnection,
   modelSetupAgentSelection,
+  modelSetupOwnerChanges,
   reconcileModelSetupConnection,
   FirstRunSetup,
   type ModelSetupRouteData,
@@ -280,16 +281,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
       this.wizard.suspend(suspendedNotice);
       return;
     }
-    const authenticatedOwnerLost =
-      previous &&
-      (!connection.recoveryScope || connection.recoveryScope !== previous.recoveryScope);
-    const ownerChanged =
-      previous &&
-      (connection.agentId !== previous.agentId ||
-        connection.selectionIntentRevision !== previous.selectionIntentRevision ||
-        connection.firstRun !== previous.firstRun ||
-        connection.connectionRevision !== previous.connectionRevision ||
-        authenticatedOwnerLost);
+    const { authenticatedOwnerLost, ownerChanged } = modelSetupOwnerChanges(previous, connection);
     const setupAuthorityLost =
       connection.connected && !hasOperatorAdminAccess(snapshot.hello?.auth ?? null);
     if (authenticatedOwnerLost || setupAuthorityLost) {

@@ -283,7 +283,13 @@ export function createSqliteSnapshotStagingTokenSync(
   // A shared parent token fences admission until the child's own token is held.
   // No mkdir of root: a late orphan must abort if reclamation already won.
   const parentDirectory = stagingParent(root);
-  const parent = parentDirectory ? snapshotToken(parentDirectory, "read") : undefined;
+  let parent: SnapshotToken | undefined;
+  try {
+    parent = parentDirectory ? snapshotToken(parentDirectory, "read") : undefined;
+  } catch (error) {
+    // Parent admission finishes before any new staging directory is attempted.
+    throw markPrivateDirectoryCreationRefused(error);
+  }
   let directory: string | undefined;
   try {
     // A selected installation may launch a worker without token admission.

@@ -17,7 +17,7 @@ struct ChatMessageMetadataTests {
         {"state":"final","message":\(raw)}
         """.utf8))
         for payload in try [#require(history.messages?.first), #require(event.message)] {
-            let message = try ChatPayloadDecoding.decode(payload, as: OpenClawChatMessage.self)
+            let message = try GatewayPayloadDecoding.decode(payload, as: OpenClawChatMessage.self)
             let restored = try JSONDecoder().decode(
                 OpenClawChatMessage.self,
                 from: JSONEncoder()
@@ -46,7 +46,10 @@ struct ChatMessageMetadataTests {
     @Test
     func `a hidden trailing group member cannot take the visible reply footer`() throws {
         let reply = try self.message(fields: #""phase":"final_answer""#)
-        var hidden = try self.message(timestamp: 2000, model: "\"provider/model-b\"", fields: #""phase":"final_answer""#)
+        var hidden = try self.message(
+            timestamp: 2000,
+            model: "\"provider/model-b\"",
+            fields: #""phase":"final_answer""#)
         hidden.content = []
         let metadata = self.footers([reply, hidden], hiddenIDs: [hidden.id])
         #expect(Set(metadata.keys) == [reply.id])

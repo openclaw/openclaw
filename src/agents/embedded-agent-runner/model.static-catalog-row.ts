@@ -2,15 +2,7 @@ import { normalizeResolvedPricing } from "@openclaw/llm-core";
 import type { NormalizedModelCatalogRow } from "@openclaw/model-catalog-core/model-catalog-types";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
-
-function normalizeStaticCatalogInput(
-  input: readonly unknown[] | undefined,
-): ProviderRuntimeModel["input"] {
-  const normalizedInput = (input ?? []).filter(
-    (item): item is "text" | "image" => item === "text" || item === "image",
-  );
-  return normalizedInput.length > 0 ? normalizedInput : ["text"];
-}
+import { resolveProviderModelInput } from "./model.inline-provider.js";
 
 /** Converts a normalized catalog row into the provider runtime model shape. */
 export function modelFromStaticCatalogRow(row: NormalizedModelCatalogRow): ProviderRuntimeModel {
@@ -21,7 +13,7 @@ export function modelFromStaticCatalogRow(row: NormalizedModelCatalogRow): Provi
     api: row.api ?? "openai-responses",
     baseUrl: row.baseUrl ?? "",
     reasoning: row.reasoning,
-    input: normalizeStaticCatalogInput(row.input),
+    input: resolveProviderModelInput({ input: row.input }),
     cost: normalizeResolvedPricing(row.cost ?? {}),
     contextWindow: row.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
     contextWindows: row.contextWindows?.map((option) => ({ ...option })),

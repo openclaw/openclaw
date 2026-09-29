@@ -48,6 +48,7 @@ export async function finishAlreadyCurrentUpdate(
     managedServiceRootRedirect: ManagedServiceRootRedirect | null;
     managedServiceRoot?: string;
     legacyConfigPlan?: LegacyConfigUpdatePlan;
+    callerLegacyConfigPlan?: LegacyConfigUpdatePlan;
     runtimeTarget?: { version: string; nodeEngine: string | null };
     stop: () => void;
     refuseUpdate: RefuseUpdate;

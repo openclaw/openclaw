@@ -136,7 +136,7 @@ extension OpenClawChatViewModel {
         self.questionCards.compactMap { card in
             guard card.status() == .pending || card.status() == .submitting else { return nil }
             let record = card.record
-            let preview = record.questions.first?.question.trimmingCharacters(in: .whitespacesAndNewlines)
+            let preview = ChatPayloadDecoding.trimmedNonEmptyString(record.questions.first?.question)
             return OpenClawChatAttentionRequest(
                 id: record.id,
                 kind: .question,
@@ -144,7 +144,7 @@ extension OpenClawChatViewModel {
                 agentID: record.agentid,
                 createdAtMs: Double(record.createdatms),
                 expiresAtMs: Double(record.expiresatms),
-                preview: preview.flatMap { $0.isEmpty ? nil : $0 } ?? String(localized: "Question needs an answer"),
+                preview: preview ?? String(localized: "Question needs an answer"),
                 count: record.questions.count,
                 ownerID: self.questionAttentionOwnerID.uuidString)
         }

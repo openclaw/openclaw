@@ -153,19 +153,6 @@ export function createEmbeddedRunAuthController(params: {
   const baseRuntimeModel = state.models.runtime;
   const baseEffectiveModel = state.models.effective;
 
-  const commitPreparedModel = (
-    preparedModel:
-      | Awaited<ReturnType<NonNullable<typeof params.prepareModelForAuthProfile>>>
-      | undefined,
-  ) => {
-    preparedModel?.commit();
-    if (preparedModel?.authRequirement) {
-      return;
-    }
-    state.models.runtime = baseRuntimeModel;
-    state.models.effective = baseEffectiveModel;
-  };
-
   const applyPreparedRuntimeRequestOverrides = (paramsForApply: {
     runtimeModel: Model;
     preparedAuth: {
@@ -536,7 +523,11 @@ export function createEmbeddedRunAuthController(params: {
       const runtimeModel = preparedModel?.runtimeModel ?? state.models.runtime;
       throw new MissingProviderAuthError(runtimeModel.provider, apiKeyInfo);
     }
-    commitPreparedModel(preparedModel);
+    preparedModel?.commit();
+    if (!preparedModel?.authRequirement) {
+      state.models.runtime = baseRuntimeModel;
+      state.models.effective = baseEffectiveModel;
+    }
     const runtimeModel = state.models.runtime;
     // AWS's default credential chain has no explicit key. The sentinel admits
     // runtime auth preparation or, without a plugin token, SDK request signing.

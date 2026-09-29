@@ -17,7 +17,6 @@ import { shortHash } from "../utils/hash.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
 import {
   buildOpenAIResponsesCompactionReplayPlan,
-  isOpenAIResponsesReplayContext,
   isSafeResponsesReplayItemId,
   type OpenAIResponsesReplayMode,
 } from "./openai-responses-compaction-replay.js";
@@ -26,7 +25,6 @@ import {
   OPENAI_RESPONSES_REASONING_REPLAY_META_KEY,
   OPENAI_RESPONSES_REPLAY_ITEM_ID_MAX_LENGTH,
   type OpenAIResponsesReasoningReplayMetadata,
-  type OpenAIResponsesReplayContext,
   type ReplayableResponseOutputMessage,
   type ReplayableResponseReasoningItem,
 } from "./openai-responses-contracts.js";
@@ -34,7 +32,9 @@ import { createResponsesInputReplay } from "./openai-responses-input-replay.js";
 import { resolveReplayableResponsesMessageId } from "./openai-responses-replay.js";
 import {
   buildProviderReplayContext,
+  isProviderReplayContext,
   providerReplayContextMatches,
+  type ProviderReplayContext,
 } from "./provider-replay-context.js";
 import {
   sanitizeNonEmptyTransportPayloadText,
@@ -79,7 +79,7 @@ export function stripEncryptedReasoningContentFields(value: unknown): {
 function isOpenAIResponsesReasoningReplayMetadata(
   value: unknown,
 ): value is OpenAIResponsesReasoningReplayMetadata {
-  if (!isOpenAIResponsesReplayContext(value)) {
+  if (!isProviderReplayContext(value)) {
     return false;
   }
   const record = value as Record<string, unknown>;
@@ -108,7 +108,7 @@ function normalizeOpenAIResponsesReasoningReplayItem(
 
 function prepareOpenAIResponsesReasoningItemForReplay(
   item: ReplayableResponseReasoningItem,
-  context: OpenAIResponsesReplayContext,
+  context: ProviderReplayContext,
   blockMetadata?: OpenAIResponsesReasoningReplayMetadata | null,
   options?: { preserveUnattributedEncryptedContent?: boolean },
 ): ReplayableResponseReasoningItem {

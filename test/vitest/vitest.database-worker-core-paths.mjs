@@ -281,7 +281,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/cli/program/register.configure.persistence.test.ts",
   "src/cli/run-main.profile-env.test.ts",
   "src/cli/skills-cli.workshop-cache.test.ts",
-  "src/cli/skills-cli.workshop.test.ts",
   "src/cli/update-cli.deferred-completion.test.ts",
   "src/cli/update-cli.admission-ledger.test.ts",
   "src/cli/update-cli.already-current.test.ts",

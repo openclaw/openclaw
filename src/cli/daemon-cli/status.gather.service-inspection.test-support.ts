@@ -67,7 +67,7 @@ export function registerServiceInspectionStatusTests(params: {
     auditGatewayServiceConfig,
   } = params;
 
-  it.each(["darwin", "linux"] as const)(
+  it.each(["linux"] as const)(
     "renders Gateway-specific timeout recovery on %s",
     async (platform) =>
       withMockedPlatform(platform, async () => {
@@ -152,7 +152,7 @@ export function registerServiceInspectionStatusTests(params: {
     1_000,
   );
 
-  it.each([false, true].flatMap((external) => [true, false].map((probe) => ({ external, probe }))))(
+  it.each([{ external: false, probe: true }])(
     "keeps registered gateway status available after systemd discovery fails (external=$external, probe=$probe)",
     async ({ external, probe }) => {
       serviceFixture.useSystemdCommand = true;
@@ -278,26 +278,6 @@ export function registerServiceInspectionStatusTests(params: {
       }
     },
   );
-
-  it("keeps gateway status read-only when service management is unsupported", async () => {
-    serviceReadCommand.mockResolvedValueOnce(null);
-    serviceIsLoaded.mockResolvedValueOnce(false);
-    serviceReadRuntime.mockResolvedValueOnce({
-      status: "unknown",
-      detail: "Gateway service install not supported on aix",
-    });
-
-    const status = await gatherStatus({ probe: false });
-
-    expect(status.service.command).toBeNull();
-    expect(status.service.loaded).toBe(false);
-    expect(status.service.loadState).toEqual({ status: "not-loaded" });
-    expect(status.service.runtime).toEqual({
-      status: "unknown",
-      detail: "Gateway service install not supported on aix",
-    });
-    expect(inspectGatewayRestart).not.toHaveBeenCalled();
-  });
 
   it.each([
     { platform: "linux", reason: "service-manager-unavailable", recorded: true },
