@@ -66,7 +66,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
 
-it("publishes only after the current hello and propagates an admitted request failure", async () => {
+it("gates inventory on current hello, propagates failures, and retires removed nodes", async () => {
   const operator = new GatewayClient({});
   transport.clients.at(-1)!.request.mockResolvedValue({
     nodes: [
@@ -134,6 +134,29 @@ it("publishes only after the current hello and propagates an admitted request fa
     expect(client.request).toHaveBeenCalledTimes(2);
     expect(replacementClient.request).toHaveBeenCalledOnce();
     await expect(host.publishInventory()).rejects.toThrow("disconnected");
+
+    for (const reason of ["device removed", "client invalidated: device-pair-removed"]) {
+      await host.connect();
+      const removedClient = transport.clients.at(-1)!;
+      const stopRemoved = vi.spyOn(removedClient, "stop");
+      removedClient.options.onClose?.(4001, reason);
+      const removedPublication = host.publishInventory();
+      removedClient.hello();
+      await expect(removedPublication).rejects.toThrow("disconnected");
+      expect(stopRemoved).toHaveBeenCalledOnce();
+      expect(removedClient.request).toHaveBeenCalledOnce();
+      await expect(host.publishInventory()).rejects.toThrow("disconnected");
+
+      await host.connect();
+      const reconnectedClient = transport.clients.at(-1)!;
+      const stopReconnected = vi.spyOn(reconnectedClient, "stop");
+      removedClient.options.onClose?.(4001, reason);
+      removedClient.hello();
+      await host.publishInventory();
+      expect(stopReconnected).not.toHaveBeenCalled();
+      expect(reconnectedClient.request).toHaveBeenCalledTimes(2);
+      expect(removedClient.request).toHaveBeenCalledOnce();
+    }
   } finally {
     await host.stop();
   }

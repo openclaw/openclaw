@@ -146,7 +146,7 @@ export async function connectWireClient(params: {
   includeApprovals?: boolean;
   onEvent?: (event: WireGatewayEvent) => void;
   onHelloOk?: () => void;
-  onClose?: () => void;
+  onClose?: (code: number, reason: string) => void;
   timeoutMs?: number;
 }): Promise<GatewayClient> {
   const [{ prepareGatewayClientDeviceAuth }, { acquireGatewayTestClient }] = await Promise.all([
@@ -429,8 +429,18 @@ export async function createPairedNodeWorkerHost(
           next.hello = true;
           next.changed.resolve();
         },
-        onClose: () => {
+        onClose: (code, reason) => {
           next.hello = false;
+          if (
+            connection === next &&
+            code === 4001 &&
+            (reason === "device removed" || reason === "client invalidated: device-pair-removed")
+          ) {
+            // Pairing removal ends this fixture's connection until an explicit connect().
+            retireConnection();
+            client?.stop();
+            return;
+          }
           const previous = next.changed;
           next.changed = createDeferred();
           previous.resolve();
