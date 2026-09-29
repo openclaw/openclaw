@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { expect, it } from "vitest";
 import { readQaScenarioExecutionConfig } from "../../scenario-catalog.js";
 import type { AnthropicMessage } from "./mock-openai-contracts.js";
@@ -127,17 +128,19 @@ it("plans runtime-fixture sessions_spawn happy and failure calls deterministical
 
 it("routes the directory fixture through ls with valid happy and missing-directory inputs", async () => {
   const config = readQaScenarioExecutionConfig("runtime-tool-fs-list") ?? {};
+  const toolName = normalizeOptionalString(config.toolName) ?? "";
   const turn = await startTurn("", {
     tools: ["ls", "read"].map((name) => ({ type: "function", name })),
   });
-  for (const [prompt, expectedPath] of [
-    [config.happyPrompt ?? `tool search qa check target=${config.toolName}`, "."],
+  const cases: Array<[prompt: string, expectedPath: string]> = [
+    [normalizeOptionalString(config.happyPrompt) ?? `tool search qa check target=${toolName}`, "."],
     [
-      config.failurePrompt ?? `tool search qa failure target=${config.toolName}`,
+      normalizeOptionalString(config.failurePrompt) ?? `tool search qa failure target=${toolName}`,
       "runtime-tool-fixture-missing-directory",
     ],
-  ]) {
-    turn.input.splice(0, 1, makeUserInput(String(prompt)));
+  ];
+  for (const [prompt, expectedPath] of cases) {
+    turn.input.splice(0, 1, makeUserInput(prompt));
     expect(callArgs(outputToolCall(await turn.request(), "ls"))).toEqual({ path: expectedPath });
   }
 });
