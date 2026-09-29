@@ -20,6 +20,7 @@ import {
 } from "../../admitted-run-context.js";
 import type { EmbeddedAgentRunResult } from "../../embedded-agent.js";
 import { createSessionsSpawnTool } from "../../tools/sessions-spawn-tool.js";
+import { observeRootWork } from "../registry/subagent-registry.browser-cleanup.test-support.js";
 import { closeSwarmScheduler, enqueueSwarmRun, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
 import {
   createBoundSpawnInvocation,
@@ -45,6 +46,7 @@ export function registerParticipantSpawnCases(options: {
   it.each([false, true])(
     "spawns for the named participant and transfers custody (visible=%s)",
     async (visible) => {
+      const settleRootWork = observeRootWork();
       const aliceSource = createSpawnOperatorSource("alice");
       const bobSource = createSpawnOperatorSource("bob");
       const alice = {
@@ -199,6 +201,7 @@ export function registerParticipantSpawnCases(options: {
         modelRuns.resolve({ payloads: [{ text: "child complete" }], meta: { durationMs: 1 } });
         await Promise.all(childSettlements);
         await bound.execution.drain();
+        await settleRootWork();
         runtime.close();
         bound.admission.close();
         bound.parent.cleanup();
@@ -207,6 +210,7 @@ export function registerParticipantSpawnCases(options: {
   );
 
   it("keeps a queued child's named participant authority after the turn closes", async () => {
+    const settleRootWork = observeRootWork();
     const aliceSource = createSpawnOperatorSource("alice");
     const bobSource = createSpawnOperatorSource("bob");
     const bound = await createBoundParent(aliceSource.authority);
@@ -292,6 +296,7 @@ export function registerParticipantSpawnCases(options: {
       releaseSwarmRun("participant-capacity");
       await closeSwarmScheduler();
       await bound.execution.drain();
+      await settleRootWork();
       runtime.close();
       bound.admission.close();
       bound.parent.cleanup();
