@@ -558,7 +558,6 @@ describe("detectChangedScope", () => {
   it.each([
     "ui/src/pages/chat/chat-realtime.test.ts",
     "ui/package.json",
-    "test/vitest/vitest.shared.config.ts",
     "scripts/ensure-playwright-chromium.mts",
   ])("runs control-ui tests for %s", (changedPath) => {
     expect(detectChangedScope([changedPath]).runUiTests).toBe(true);
@@ -592,6 +591,14 @@ describe("detectChangedScope", () => {
         "scripts/run-vitest.mts",
         "scripts/test-projects.test-support.mts",
         "scripts/lib/ci-docker-seed-plan.mts",
+        "test/scripts/ci-changed-node-test-plan.test.ts",
+        "test/scripts/ci-changed-node-test-plan.config-fallback.test.ts",
+        "test/scripts/ci-changed-node-test-plan.dependency-hubs.test.ts",
+        "test/scripts/ci-changed-node-test-plan.dependency-inputs.test.ts",
+        "test/scripts/ci-changed-node-test-plan.policy.test.ts",
+        "test/scripts/ci-changed-node-test-plan.process-owners.test.ts",
+        "test/scripts/ci-changed-node-test-plan.source-owners.test.ts",
+        "test/scripts/ci-changed-node-test-plan.test-support.ts",
         "test/scripts/ci-docker-seed-plan.test.ts",
         "src/commands/status.scan-result.test.ts",
         "src/scripts/ci-changed-scope.control-ui.test.ts",

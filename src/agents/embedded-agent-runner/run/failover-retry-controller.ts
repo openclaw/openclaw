@@ -252,6 +252,7 @@ export function createEmbeddedRunFailoverRetryController(input: {
     maybeRetryTransient: async (retry: {
       reason: TransientRetryReason;
       message?: string;
+      code?: string;
       retryAfterMs?: number;
       /** Saved retry.provider.maxRetryDelayMs; undefined or 0 disables the cap. */
       maxRetryDelayMs?: number;
@@ -268,6 +269,7 @@ export function createEmbeddedRunFailoverRetryController(input: {
         decision: "accepted" | "rejected",
         reason:
           | "non_transient"
+          | "connection_retry_disabled"
           | "long_window_rate_limit"
           | "retry_budget_exhausted"
           | "retry_delay_unavailable"
@@ -284,6 +286,14 @@ export function createEmbeddedRunFailoverRetryController(input: {
           },
           { config: params.config },
         );
+      if (
+        params.retryConnectionErrors === false &&
+        retry.code !== undefined &&
+        ["ECONNREFUSED", "ENOTFOUND", "EHOSTUNREACH", "ENETUNREACH"].includes(retry.code)
+      ) {
+        recordDecision("rejected", "connection_retry_disabled");
+        return false;
+      }
       if (
         retry.reason !== "rate_limit" &&
         retry.reason !== "overloaded" &&

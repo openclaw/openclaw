@@ -38,10 +38,7 @@ import {
   buildSyntheticContext,
   buildSyntheticTextMessage,
 } from "./bot-handlers.message-context.js";
-import type {
-  RegisterTelegramHandlerParams,
-  TelegramCallbackRouter,
-} from "./bot-handlers.types.js";
+import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
 import {
   isTelegramSpooledReplayUpdate,
   recordTelegramMessageProcessingResult,
@@ -97,7 +94,7 @@ export function createTelegramCallbackRouter({
   params: RegisterTelegramHandlerParams;
   message: TelegramCallbackMessageRuntime;
   authorization: TelegramHandlerAuthorization;
-}): TelegramCallbackRouter {
+}) {
   const { processMessageWithReplyChain } = messageRuntime;
   const {
     resolveTelegramEventAuthorizationContext,
@@ -111,14 +108,12 @@ export function createTelegramCallbackRouter({
     if (!callback) {
       return;
     }
-    let callbackAnswered = false;
     const answerCallbackQuery = async () => {
       await withTelegramApiErrorLogging({
         operation: "answerCallbackQuery",
         runtime,
         fn: () => startTelegramCallbackQueryAnswer(bot, callback.id, false),
       }).catch(() => {});
-      callbackAnswered = true;
     };
     if (shouldSkipUpdate(ctx)) {
       const earlyAnswerPromise = getTelegramCallbackQueryAnswerPromise(ctx);
@@ -135,7 +130,6 @@ export function createTelegramCallbackRouter({
     if (earlyAnswerPromise) {
       try {
         await earlyAnswerPromise;
-        callbackAnswered = true;
       } catch {
         await answerCallbackQuery();
       }
@@ -291,7 +285,6 @@ export function createTelegramCallbackRouter({
           chatId,
           isGroup,
           senderId,
-          senderUsername,
           context: eventAuthContext,
         });
       if (typedApprovalCallback) {
@@ -412,22 +405,10 @@ export function createTelegramCallbackRouter({
       if (isTelegramSpooledReplayUpdate(ctx.update)) {
         recordTelegramMessageProcessingResult({ kind: "failed-retryable", error: err });
       }
-    } finally {
-      if (typedQuestionCallback && !callbackAnswered) {
-        await answerCallbackQuery();
-      }
     }
   };
 
-  return {
-    route: async (ctx) => {
-      if (!ctx.callbackQuery) {
-        return { kind: "ignored" };
-      }
-      await handleCallback(ctx);
-      return { kind: "handled" };
-    },
-  };
+  return { route: handleCallback };
 }
 
 async function handleTelegramModelCallback(params: {

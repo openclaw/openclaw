@@ -84,6 +84,42 @@ function fixture(customPaths = true, registry?: string) {
 }
 
 describe.skipIf(process.platform === "win32")("survivor manager fixture", () => {
+  it("unloads the deleted service when resetting a first-hop lane", async () => {
+    const { home, env, unit, shell, systemctl } = fixture();
+    const firstHop = readFileSync(
+      resolve("scripts/e2e/lib/upgrade-survivor/update-first-hop-compat.sh"),
+      "utf8",
+    );
+    const firstHopTiming = firstHop.slice(
+      firstHop.indexOf("first_hop_timing() {"),
+      firstHop.indexOf("run_update() {"),
+    );
+    const resetLane = firstHop.slice(
+      firstHop.indexOf("reset_lane() {"),
+      firstHop.indexOf("run_negative_control() {"),
+    );
+    writeFileSync(unit, buildSystemdUnit({ programArguments: ["/usr/bin/fixture", "gateway"] }));
+    expect(systemctl("daemon-reload").status).toBe(0);
+    rmSync(unit);
+    expect(await readLoadedSystemdServiceRuntime(env)).toMatchObject({ status: "stopped" });
+    const reset = shell(`
+ARTIFACT_DIR="$HOME"
+openclaw() { return 1; }
+${firstHopTiming}
+${resetLane}
+reset_lane negative
+`);
+    expect(reset.status, reset.stderr).toBe(0);
+    expect(reset.stdout).toMatch(/^first-hop timing: negative reset \d+s$/m);
+    expect(existsSync(`${unit}.loaded-unit`)).toBe(false);
+    expect(await readLoadedSystemdServiceRuntime(env)).toMatchObject({ status: "unknown" });
+    expect(await readSystemdServiceRuntime(env)).toMatchObject({
+      status: "stopped",
+      missingUnit: true,
+    });
+    expect(existsSync(join(home, "negative-service-uninstall.json"))).toBe(true);
+  });
+
   it("keeps native placement by default and runs the no-identity recovery fixture outside it", () => {
     const { home, env, unit, shell, manager, execute } = fixture();
     const preload = join(home, "available-cgroup.cjs");
@@ -290,6 +326,7 @@ fs.existsSync = (file) => file === "/sys/fs/cgroup/openclaw-gateway.service/cgro
     );
     expect(await readSystemdServiceRuntime(env)).toMatchObject({ status: "unknown" });
     rmSync(unit);
+    expect(systemctl("daemon-reload").status).toBe(0);
     expect(await readSystemdServiceExecStart(env, { requireEffective: true })).toBeNull();
     expect(await readSystemdServiceRuntime(env)).toMatchObject({
       status: "stopped",

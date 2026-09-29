@@ -139,11 +139,6 @@ function createRuntime() {
     async (opts: Parameters<typeof import("./monitor.js").monitorLineProvider>[0]) => {
       providerStarted.resolve();
       await waitForAbortSignal(opts.abortSignal);
-      return {
-        account: { accountId: "default" },
-        handleWebhook: async () => {},
-        stop: async () => {},
-      };
     },
   );
 

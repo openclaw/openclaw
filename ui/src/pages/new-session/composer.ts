@@ -8,12 +8,12 @@ import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { updateHumanMentions } from "../../lib/chat/human-mentions.ts";
 import "../../components/tooltip.ts";
+import { renderChatAttachmentInputs } from "../chat/components/chat-attachment-inputs.ts";
 import {
   createChatAttachmentDropHandlers,
   handleChatAttachmentPaste,
   renderAttachmentPreview,
   renderAttachmentReadStatus,
-  renderChatAttachmentInputs,
 } from "../chat/components/chat-attachments.ts";
 import { adjustTextareaHeight, paneDomId } from "../chat/components/chat-composer-dom.ts";
 import type { HumanMentionMenuHost } from "../chat/components/chat-composer-mention-menu.ts";
@@ -244,6 +244,7 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
   const attachmentProps = {
     attachmentReads: options.attachmentReads,
     attachmentLimits: options.attachmentLimits,
+    uploadConfig: options.uploadConfig,
     attachments: options.attachments,
     get disabled() {
       return (

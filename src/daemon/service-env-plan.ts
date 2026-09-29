@@ -1,4 +1,3 @@
-/** Builds normalized environment plans for managed daemon service rendering. */
 import { normalizeServiceEnvKey } from "./service-managed-env.js";
 import type { GatewayServiceEnvironmentValueSource } from "./service-types.js";
 
@@ -19,6 +18,7 @@ export function addServiceEnvPlanEntries(
   entries: Record<string, string | undefined>,
   options: {
     includeRawKeys?: boolean;
+    includeKeys?: ReadonlySet<string>;
     valueSource?:
       | GatewayServiceEnvironmentValueSource
       | ((params: {
@@ -37,12 +37,11 @@ export function addServiceEnvPlanEntries(
       }
       continue;
     }
-    const value = rawValue;
     const normalizedKey = normalizeServiceEnvKey(rawKey);
-    if (!normalizedKey) {
+    if (!normalizedKey || (options.includeKeys && !options.includeKeys.has(normalizedKey))) {
       continue;
     }
-    plan.environment[rawKey] = value;
+    plan.environment[rawKey] = rawValue;
     const valueSource =
       typeof options.valueSource === "function"
         ? options.valueSource({ rawKey, normalizedKey })

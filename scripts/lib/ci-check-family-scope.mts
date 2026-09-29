@@ -1,3 +1,4 @@
+import { detectChangedLanes, hasProtocolEventCoverageInput } from "../changed-lanes.mts";
 import {
   getChangedPathFacts,
   isTestFileTarget,
@@ -6,7 +7,6 @@ import {
 } from "./changed-path-facts.mjs";
 
 const CHECK_TASKS = ["guards", "npm-lock", "bundled-channel-config-metadata", "dependencies"];
-const FAST_TASKS = ["startup-corpus", "coercion-helpers", "bundled-protocol", "bun-launcher"];
 const ADDITIONAL_GROUPS = [
   "boundaries",
   "source-contracts",
@@ -19,12 +19,11 @@ const PROTOCOL_OUTPUT_PATH_RE =
   /^(?:apps\/shared\/OpenClawKit\/Sources\/OpenClawProtocol\/GatewayModels\.swift|apps\/android\/app\/src\/main\/java\/ai\/openclaw\/app\/(?:gateway\/GatewayProtocol|protocol\/OpenClawProtocolConstants)\.kt)$/u;
 
 type CiCheckFamilyScope = {
+  mode: "full" | "scoped";
   checkTasks: string[];
   fastTasks: string[];
   additionalGroups: string[];
   baselineRatchets: boolean;
-  pluginContracts: boolean;
-  channelContracts: boolean;
   lint: boolean;
   types: boolean;
 };
@@ -32,6 +31,12 @@ type CiCheckFamilyScope = {
 /** Selects check families after the caller admits a complete, narrow PR diff. */
 export function resolveCiCheckFamilyScope(changedPaths: readonly string[]): CiCheckFamilyScope {
   const facts = changedPaths.map((path) => getChangedPathFacts(normalizeChangedPath(path)));
+  const bunLauncher = changedPaths.some(
+    (file) =>
+      file === "openclaw.mjs" ||
+      file === "test/openclaw-launcher.e2e.test.ts" ||
+      /^src\/plugins\/plugin-module-generation(?:\.|-)/u.test(file),
+  );
   // Configuration and shared fixtures can change scanner inputs or arbitrary
   // consumers; path ownership alone cannot establish their import closure.
   const full =
@@ -49,12 +54,11 @@ export function resolveCiCheckFamilyScope(changedPaths: readonly string[]): CiCh
     );
   if (full) {
     return {
+      mode: "full",
       checkTasks: [...CHECK_TASKS],
-      fastTasks: [...FAST_TASKS],
+      fastTasks: ["bundled-protocol", ...(bunLauncher ? ["bun-launcher"] : [])],
       additionalGroups: [...ADDITIONAL_GROUPS],
       baselineRatchets: true,
-      pluginContracts: true,
-      channelContracts: true,
       lint: true,
       types: true,
     };
@@ -79,18 +83,19 @@ export function resolveCiCheckFamilyScope(changedPaths: readonly string[]): CiCh
     "docs/.generated/sqlite-session-transcript-schema-baseline.sha256",
   );
   const inventoryDocs = matches(/^docs\/(?:channels|providers|plugins|\.generated)\//u);
-  const bundledTests = matches(
-    /^src\/(?:infra|plugins|plugin-sdk)\/.*\.(?:test|spec)\.[cm]?[jt]sx?$/u,
-  );
-  // Tests can be imported by contract suites. Keep these consumers even when
-  // the changed file itself is outside the dedicated contract directories.
-  const contracts = source || facts.some(({ surface }) => surface === "rootTest");
-  // Plugin contract scanners also read SDK guides and manifest-declared skill assets.
-  const pluginContractDocs = matches(/^docs\/plugins\/|^extensions\/.+\.md$/u);
+  const { lanes } = detectChangedLanes(paths);
+  // Protocol generation also reads source text instead of importing it. Keep
+  // the package scanner, method descriptors, and existing event owner edges.
+  const protocolInput =
+    matches(PROTOCOL_OUTPUT_PATH_RE) ||
+    paths.some((file) => file.startsWith("packages/gateway-protocol/")) ||
+    paths.includes("src/gateway/methods/core-descriptors.ts") ||
+    hasProtocolEventCoverageInput(paths);
   const types =
     code || (matches(/\.json$/u) && (source || facts.some(({ surface }) => surface === "ui")));
 
   return {
+    mode: "scoped",
     // The required planner owns conflict markers and wall-clock deprecation checks on
     // narrow PRs; the remaining guard row follows its scanned source inputs.
     checkTasks: CHECK_TASKS.filter(
@@ -98,18 +103,15 @@ export function resolveCiCheckFamilyScope(changedPaths: readonly string[]): CiCh
         (task === "guards" &&
           (code || runtimeSource || matches(/\.swift$/u) || toolDisplaySnapshot)) ||
         (task === "npm-lock" && matches(/^packages\/normalization-core\//u)) ||
-        (task === "bundled-channel-config-metadata" && runtimeSource) ||
+        (task === "bundled-channel-config-metadata" && lanes.bundledChannelConfigMetadata) ||
         (task === "dependencies" && code),
     ),
-    // The guard row already owns the same coercion scan for every narrow code diff.
-    fastTasks: FAST_TASKS.filter(
-      (task) =>
-        (task === "startup-corpus" && (code || runtimeSource || inventoryDocs)) ||
-        (task === "bundled-protocol" &&
-          (runtimeSource || bundledTests || matches(PROTOCOL_OUTPUT_PATH_RE))) ||
-        (task === "bun-launcher" &&
-          (runtimeSource || bundledTests || paths.includes("test/openclaw-launcher.e2e.test.ts"))),
-    ),
+    // PR protocol generation stays blocking; its bundled runtime tests use the
+    // same changed-owner Node plan as every other runtime family.
+    fastTasks: [
+      ...(protocolInput ? ["bundled-protocol"] : []),
+      ...(bunLauncher ? ["bun-launcher"] : []),
+    ],
     additionalGroups: ADDITIONAL_GROUPS.filter(
       (group) =>
         (group === "boundaries" && (code || nativeSchema)) ||
@@ -118,8 +120,6 @@ export function resolveCiCheckFamilyScope(changedPaths: readonly string[]): CiCh
         (group === "runtime-topology-architecture" && (source || code || nativeStorage)),
     ),
     baselineRatchets: code || runtimeSource || inventoryDocs,
-    pluginContracts: contracts || pluginContractDocs,
-    channelContracts: contracts,
     // The changed-lint row also owns formatting for YAML, JSON5, and other data.
     lint: true,
     types,

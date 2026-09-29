@@ -212,6 +212,7 @@ export async function uploadSkillLibrary(
     { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "openclaw-library-import-" },
     async ({ dir }) => {
       const archivePath = path.join(dir, "skill.zip");
+      authority.assertFileMutationAllowed?.();
       await fs.writeFile(archivePath, bytes, { mode: 0o600, flag: "wx" });
       const result = await withExtractedArchiveRoot({
         archivePath,

@@ -37,7 +37,7 @@ function releaseFixture(
     });
   const coordinator = new GatewaySessionMessageSubscriptionCoordinator({ request });
   const source = {
-    subscribeMessages: (key: string, options?: { agentId?: string | null }) =>
+    subscribeMessages: (key: string, options?: Parameters<typeof coordinator.acquire>[1]) =>
       coordinator.acquire(key, options),
     unsubscribeMessages: vi.fn((handle: Awaited<ReturnType<typeof coordinator.acquire>>) =>
       coordinator.release(handle),
@@ -141,12 +141,27 @@ describe("sidebar narration subscription retries", () => {
     expect(request).toHaveBeenCalledTimes(2);
     expect(wireKeys.size).toBe(1);
     expect(vi.getTimerCount()).toBe(0);
-    const pane = await coordinator.acquire(input.rows[0]!.key);
+    const key = input.rows[0]!.key;
+    const pane = await coordinator.acquire(key);
     controller.disconnect();
     await vi.advanceTimersByTimeAsync(0);
-    expect(request).toHaveBeenCalledTimes(2);
+    expect(request.mock.calls.map(([method, params]) => [method, params])).toEqual([
+      [
+        "sessions.messages.subscribe",
+        { key, mode: "narration", subscriptionId: expect.any(String) },
+      ],
+      ["sessions.messages.unsubscribe", { key, subscriptionId: expect.any(String) }],
+      ["sessions.messages.subscribe", { key, subscriptionId: expect.any(String) }],
+    ]);
+    expect(wireKeys.has(key)).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
     server.failure = null;
     await coordinator.release(pane);
+    expect(request).toHaveBeenCalledTimes(4);
+    expect(request.mock.calls.at(-1)?.slice(0, 2)).toEqual([
+      "sessions.messages.unsubscribe",
+      { key, subscriptionId: expect.any(String) },
+    ]);
     expect(wireKeys.size).toBe(0);
   });
 
@@ -362,10 +377,14 @@ describe("sidebar narration subscription retries", () => {
       )
       .mockResolvedValue({ key: "agent:main:run" });
     const coordinator = new GatewaySessionMessageSubscriptionCoordinator({ request });
+    const subscribeMessages = vi.fn(coordinator.acquire.bind(coordinator));
     const { controller } = createRunningNarrationController({
-      subscribeMessages: (key, options) => coordinator.acquire(key, options),
+      subscribeMessages,
       unsubscribeMessages: (handle) => coordinator.release(handle),
     });
+    await expect(subscribeMessages.mock.results[0]?.value).rejects.toBeInstanceOf(
+      GatewayProtocolRequestTimeoutError,
+    );
     await vi.advanceTimersByTimeAsync(0);
     expect(request.mock.calls.map(([method]) => method)).toEqual([
       "sessions.messages.subscribe",

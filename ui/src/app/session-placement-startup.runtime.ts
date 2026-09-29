@@ -182,6 +182,7 @@ export default function createApplicationPlacementStartupRuntime(
     let currentRecovery = recovery;
     void advanceSessionPlacementDraft({
       client: entry.scope.client,
+      describe: params.sessions.describe,
       recovery: currentRecovery,
       persistRecovery: entry.persistRecovery,
       cleanupOnCancellation: () => !entry.persistRecovery && entry.work.kind !== "paused",

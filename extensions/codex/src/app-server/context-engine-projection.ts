@@ -516,7 +516,7 @@ function renderMessageBody(
 ): string {
   // Canonical summaries carry `summary`, not `content`; keep them in the quoted history.
   if (message.role === "compactionSummary" || message.role === "branchSummary") {
-    return truncateText(message.summary.trim(), options.maxTextPartChars);
+    return message.summary.trim();
   }
   if (!("content" in message)) {
     return "";
@@ -527,9 +527,10 @@ function renderMessageBody(
   if (toolResult && options.toolPayloadMode === "elide") {
     return `${toolResultLabel} [content omitted]`;
   }
+  // The history window bounds conversation text; per-part caps apply only to payloads.
   const body =
     typeof message.content === "string"
-      ? truncateText(message.content.trim(), options.maxTextPartChars)
+      ? message.content.trim()
       : Array.isArray(message.content)
         ? message.content
             .map((part: unknown) => renderMessagePart(part, options, toolResult))
@@ -559,9 +560,8 @@ function renderMessagePart(
   const record = part as Record<string, unknown>;
   const type = typeof record.type === "string" ? record.type : undefined;
   if (type === "text") {
-    return typeof record.text === "string"
-      ? truncateText(record.text.trim(), options.maxTextPartChars)
-      : "";
+    const text = typeof record.text === "string" ? record.text.trim() : "";
+    return toolResultBody ? truncateText(text, options.maxTextPartChars) : text;
   }
   if (type === "image") {
     return options.mediaPrepared ? "" : "[image omitted]";

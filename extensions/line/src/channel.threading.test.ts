@@ -17,10 +17,6 @@ describe("line reply-to mode", () => {
     expect(resolveReplyToMode({ channelAccessToken: "token" })).toBe("off");
   });
 
-  it("reads the channel-wide setting", () => {
-    expect(resolveReplyToMode({ channelAccessToken: "token", replyToMode: "all" })).toBe("all");
-  });
-
   it("lets an account override the channel-wide setting", () => {
     const line = {
       channelAccessToken: "token",

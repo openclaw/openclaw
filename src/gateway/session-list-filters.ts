@@ -3,7 +3,10 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
+import type {
+  SessionOwnerSessionCount,
+  SessionsListParams,
+} from "../../packages/gateway-protocol/src/index.js";
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import type { SessionEntry } from "../config/sessions.js";
@@ -48,6 +51,7 @@ export type SessionListFilteredEntries = {
   entries: SessionEntryPair[];
   ownerEntries: SessionEntryPair[];
   ownerFacet: SessionOwnerFacetIdentity[];
+  ownerSessionCounts?: SessionOwnerSessionCount[];
   people?: SessionsListResult["people"];
   peopleIncomplete?: boolean;
   peopleSessionCount?: number;
@@ -126,6 +130,8 @@ export function* filterSessionCandidateEntries(
           label: entry.label,
           displayName: entry.displayName,
           subject: entry.subject,
+          // Same provenance fact sessionClassificationForRow projects to clients.
+          classification: entry.heartbeatIsolatedBaseSessionKey ? "heartbeat" : undefined,
         })) ||
       (opts.excludeSubagents === true && selection.isSubagent) ||
       (!includeGlobal && storeKey === "global") ||
@@ -248,6 +254,9 @@ export function* filterSessionEntries(
   const entries: SessionEntryPair[] = [];
   const ownerEntries: SessionEntryPair[] = [];
   const ownerFacet = new Map<string, SessionOwnerFacetIdentity>();
+  const ownerSessionCounts = opts.includeOwnerSessionCounts
+    ? new Map<string, SessionOwnerSessionCount>()
+    : undefined;
   const people = new Map<string, NonNullable<SessionsListResult["people"]>[number]>();
   let peopleSessionCount = 0;
   let peopleIncomplete = false;
@@ -259,6 +268,7 @@ export function* filterSessionEntries(
   const identityProjection = getRowContext().identityProjection;
   const projectOwner = identityProjection?.owner ?? projectSessionOwner;
   const projectParticipants = identityProjection?.participants ?? projectSessionParticipants;
+  const projectInvolvement = identityProjection?.involvement ?? projectSessionProfileInvolvement;
   const projectPeople = identityProjection?.people ?? projectSessionPeople;
   const profileRelation = opts.profileRelation
     ? {
@@ -335,21 +345,25 @@ export function* filterSessionEntries(
         projectActiveRun: params.projectActiveRun,
       })
     : undefined;
+  const participantKeys = new Map<string, string>();
   const matchesInvolvement = (
     entry: SessionEntry,
     effectiveOwner: NonNullable<ReturnType<typeof projectOwner>>["actor"] | undefined,
     profileId: string,
     personal: boolean,
   ) => {
-    const state = projectSessionProfileInvolvement(entry, profileId, identities);
+    const state = projectInvolvement(entry, profileId, identities);
+    let participantKey = participantKeys.get(profileId);
+    if (!participantKey) {
+      participantKey = JSON.stringify({ type: "profile", id: profileId });
+      participantKeys.set(profileId, participantKey);
+    }
     return (
       !(personal && state?.hidden) &&
       (Boolean(state?.lastMention || (personal && state?.hidden === false)) ||
         (effectiveOwner?.identity?.type === "profile" &&
           effectiveOwner.identity.id === profileId) ||
-        projectParticipants(entry, identities, cfg).has(
-          JSON.stringify({ type: "profile", id: profileId }),
-        ))
+        projectParticipants(entry, identities, cfg).has(participantKey))
     );
   };
 
@@ -443,6 +457,19 @@ export function* filterSessionEntries(
         }
       }
     }
+    if (
+      ownerSessionCounts &&
+      entry.archivedAt === undefined &&
+      effectiveOwner?.identity?.type === "profile"
+    ) {
+      const profileId = effectiveOwner.identity.id;
+      const counts = ownerSessionCounts.get(profileId) ?? { profileId, open: 0, running: 0 };
+      const agentId = expectDefined(params.getTarget(key), "counted row owner").agentId;
+      const active = params.projectActiveRun?.(key, entry, agentId);
+      counts.open += 1;
+      counts.running += Number(active?.active === true && active.status !== "queued");
+      ownerSessionCounts.set(profileId, counts);
+    }
     if (activityPulse) {
       // "Running now" is present tense: a run that started before midnight still counts.
       const agentId = expectDefined(params.getTarget(key), "pulse row owner").agentId;
@@ -479,6 +506,13 @@ export function* filterSessionEntries(
     entries,
     ownerEntries,
     ownerFacet: sortSessionOwnerFacet(ownerFacet),
+    ...(ownerSessionCounts
+      ? {
+          ownerSessionCounts: [...ownerSessionCounts.values()].toSorted((a, b) =>
+            a.profileId.localeCompare(b.profileId),
+          ),
+        }
+      : {}),
     // Empty time/search windows do not invalidate a resolved person link.
     involvingProfileId: selectedProfileId,
     ...(activityPulse ? { activityPulse } : {}),

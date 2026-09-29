@@ -125,65 +125,55 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
   const llmMessages: Message[] = [];
   // Preserve map's hole skipping and captured length without its intermediate array.
   messages.forEach((message) => {
+    let content: (TextContent | ImageContent)[];
     switch (message.role) {
       case "bashExecution":
         if (message.excludeFromContext) {
           return;
         }
-        llmMessages.push({
-          role: "user",
-          content: [{ type: "text", text: bashExecutionToText(message) }],
-          timestamp: message.timestamp,
-        });
+        content = [{ type: "text", text: bashExecutionToText(message) }];
         break;
-      case "custom": {
+      case "custom":
         if (message.excludeFromContext) {
           return;
         }
-        const content =
+        content =
           typeof message.content === "string"
-            ? [{ type: "text" as const, text: message.content }]
+            ? [{ type: "text", text: message.content }]
             : message.content;
-        // Preserve carrier identity so provider-owned replay and cache policy
-        // can distinguish transient context from append-only context.
-        llmMessages.push({
-          role: "user",
-          content,
-          timestamp: message.timestamp,
-          ...(isRuntimeContextCarrier(message) ? { runtimeContextCarrier: true } : {}),
-        });
         break;
-      }
       case "branchSummary":
-        llmMessages.push({
-          role: "user",
-          content: [
-            {
-              type: "text" as const,
-              text: BRANCH_SUMMARY_PREFIX + message.summary + BRANCH_SUMMARY_SUFFIX,
-            },
-          ],
-          timestamp: message.timestamp,
-        });
+        content = [
+          { type: "text", text: BRANCH_SUMMARY_PREFIX + message.summary + BRANCH_SUMMARY_SUFFIX },
+        ];
         break;
       case "compactionSummary":
-        llmMessages.push({
-          role: "user",
-          content: [
-            {
-              type: "text" as const,
-              text: COMPACTION_SUMMARY_PREFIX + message.summary + COMPACTION_SUMMARY_SUFFIX,
-            },
-          ],
-          timestamp: normalizeCompactionSummaryTimestamp(message.timestamp),
-        });
+        content = [
+          {
+            type: "text",
+            text: COMPACTION_SUMMARY_PREFIX + message.summary + COMPACTION_SUMMARY_SUFFIX,
+          },
+        ];
         break;
       case "user":
       case "assistant":
       case "toolResult":
         llmMessages.push(message);
-        break;
+        return;
+      default:
+        return;
     }
+    // Preserve carrier identity so provider-owned replay and cache policy can
+    // distinguish transient context from append-only context.
+    llmMessages.push({
+      role: "user",
+      content,
+      timestamp:
+        message.role === "compactionSummary"
+          ? normalizeCompactionSummaryTimestamp(message.timestamp)
+          : message.timestamp,
+      ...(isRuntimeContextCarrier(message) ? { runtimeContextCarrier: true } : {}),
+    });
   });
   return llmMessages;
 }

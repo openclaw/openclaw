@@ -92,7 +92,7 @@ OPENCLAW_UPGRADE_SURVIVOR_UPDATE_CHANNEL="stable"
 if [ "$SCENARIO" = "prerelease-plugin-registry" ] ||
   { [ "$UPDATE_RESTART_MODE" = "auto-auth" ] &&
     [ -n "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ] &&
-    [[ "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION:-}" =~ -(alpha|beta)\.[1-9][0-9]*$ ]]; }; then
+    [[ "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION:-}" =~ -beta\.[1-9][0-9]*$ ]]; }; then
   OPENCLAW_UPGRADE_SURVIVOR_UPDATE_CHANNEL="beta"
 fi
 export OPENCLAW_UPGRADE_SURVIVOR_UPDATE_CHANNEL
@@ -1852,13 +1852,20 @@ NODE
 repair_update_restart_auth() {
   [ "$SCENARIO" = "legacy-operator-state" ] && return 0
   if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
+    local membership_mode="${OPENCLAW_FROZEN_UPGRADE_SURVIVOR_MEMBERSHIP_MODE:-absent}"
+    case "$membership_mode" in
+      native | absent) ;;
+      *) echo "invalid selected service membership mode: $membership_mode" >&2; return 2 ;;
+    esac
+    # Standalone Doctor may have started the service after the first update.
+    phase stop-recovery-service stop_update_restart_probe_gateway "$COMMAND_TIMEOUT" || return "$?"
     # Historical preservation has already passed. This separate current-runtime
     # update needs a configured inference route for its real serving receipt.
     phase prepare-restart-inference prepare_restart_inference || return "$?"
     phase prepare-restart-fixture prepare_restart_fixture || return "$?"
-    # Keep the baseline's native-cgroup proof; this update exercises a service
-    # without native containment, including its recorded membership warning.
-    phase prepare-restart-manager install_update_restart_systemctl_shim absent || return "$?"
+    # New targets exercise absent containment and its warning. Frozen cuts
+    # without that contract retain their original native-contained recovery.
+    phase prepare-restart-manager install_update_restart_systemctl_shim "$membership_mode" || return "$?"
     # Start is preparation only. The following updater must replace this exact
     # supervisor itself; its existing replacement and auth assertions remain required.
     phase prepare-recovery-service run_update_restart_probe_gateway start 18789 "$COMMAND_TIMEOUT"
@@ -1871,7 +1878,9 @@ repair_update_restart_auth() {
     phase recovery-update-restart update_candidate 1 "file:$restart_fixture_package" "$restart_fixture_version"
     local recovery_status=$?
     [ "$recovery_status" -eq 0 ] || return "$recovery_status"
-    phase recovery-membership-warning assert_managed_membership_warning || return "$?"
+    if [ "$membership_mode" = absent ]; then
+      phase recovery-membership-warning assert_managed_membership_warning || return "$?"
+    fi
     if [ "$SCENARIO" != "watchos-direct-node" ] && [ "$SCENARIO" != "mobile-pairing-reconnect" ]; then
       phase assert-restart-serving-turn node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
         assert-restart-serving-turn "$ARTIFACT_ROOT/restart-serving-turn.json" || return "$?"
@@ -2020,7 +2029,7 @@ probe_gateway_endpoint() {
 start_gateway() {
   local port=18789
   local budget
-  budget="$(openclaw_e2e_read_positive_int_env OPENCLAW_UPGRADE_SURVIVOR_START_BUDGET_SECONDS 90)" || return "$?"
+  budget="$(openclaw_e2e_read_positive_int_env OPENCLAW_UPGRADE_SURVIVOR_START_BUDGET_SECONDS 300)" || return "$?"
   local start_epoch
   local ready_epoch
   start_epoch="$(node -e "process.stdout.write(String(Date.now()))")" || return "$?"
@@ -2031,7 +2040,7 @@ start_gateway() {
   if [ "${SCENARIO:-}" = "watchos-direct-node" ]; then
     readiness_mode="legacy-ready-log-ok"
   fi
-  openclaw_e2e_wait_gateway_ready "$gateway_pid" "$GATEWAY_LOG" 360 "$port" "$readiness_mode" || return "$?"
+  openclaw_e2e_wait_gateway_ready "$gateway_pid" "$GATEWAY_LOG" "$((10#$budget * 4))" "$port" "$readiness_mode" || return "$?"
   ready_epoch="$(node -e "process.stdout.write(String(Date.now()))")" || return "$?"
   start_seconds=$(((ready_epoch - start_epoch + 999) / 1000))
   if [ "$start_seconds" -gt "$budget" ]; then

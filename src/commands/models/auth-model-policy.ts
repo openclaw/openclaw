@@ -15,7 +15,7 @@ import {
   type RuntimeConfigWriteApplicationStatus,
 } from "../../config/runtime-write-application.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { applyDefaultModel } from "../../plugins/provider-auth-choice-helpers.js";
+import { applyPrimaryModel } from "../../plugins/provider-model-primary.js";
 import { captureGatewayRootWorkAdmissionContinuationScope } from "../../process/gateway-work-admission.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { WizardPrompter, WizardSelectParams } from "../../wizard/prompts.js";
@@ -37,7 +37,7 @@ export function applyProviderLoginDefaultModel(
   config: OpenClawConfig,
   model: string,
 ): OpenClawConfig {
-  const next = applyDefaultModel(config, model);
+  const next = applyPrimaryModel(config, model);
   if (
     resolveConfiguredModelPolicyAllow({ cfg: config }).configPath ===
     LEGACY_MODEL_POLICY_ALLOW_CONFIG_PATH

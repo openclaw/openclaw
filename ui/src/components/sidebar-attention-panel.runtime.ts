@@ -8,6 +8,7 @@ import type { UpdateProgress } from "../app/update-confirmation.ts";
 import { t } from "../i18n/index.ts";
 import { registerSidebarAttentionEnglish } from "../i18n/locales/en-sidebar-attention.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
+import "../styles/sidebar-menus.css";
 import "../styles/sidebar-issues.css";
 import { renderHubTabs } from "./hub-tabs.ts";
 import { icons } from "./icons.ts";

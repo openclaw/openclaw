@@ -33,7 +33,7 @@ import { clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { resolveGatewayAuthPolicyGeneration } from "./auth-policy.js";
+import { captureGatewayAuthPolicy } from "./auth-policy.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { createChannelManager } from "./server-channels.js";
 import { readGatewayRequestMutationAuthority } from "./server-methods/session-mutation-guards.js";
@@ -42,6 +42,7 @@ import {
   createDefaultGatewayReloadState,
   createDirectConfigWriteFixture,
   createConfigWriteNotification,
+  createTestConfigRevisionProjector,
   publishConfigWrite,
 } from "./server-reload-handlers.config.test-support.js";
 import { startManagedGatewayConfigReloader } from "./server-reload-managed.js";
@@ -52,6 +53,18 @@ import {
   createOperatorWsClient,
 } from "./server/ws-connection/authenticated-request-dispatch.test-support.js";
 import { disconnectDisallowedGatewayPolicyClients } from "./server/ws-origin-policy.js";
+
+// A write that lands while the previous reload finishes its tail is re-armed from that reload's
+// finally, after a single zero-delay tick has run. Zero-delay ticks never move the fake clock.
+async function tickUntilSettled(operation: Promise<unknown>): Promise<void> {
+  const settled = operation.then(
+    () => true,
+    () => true,
+  );
+  while (!(await Promise.race([settled, Promise.resolve(false)]))) {
+    await vi.advanceTimersByTimeAsync(0);
+  }
+}
 
 let registrySnapshot: ReturnType<typeof captureActivePluginRegistrySnapshot>;
 const registry = createEmptyPluginRegistry();
@@ -112,7 +125,10 @@ it("keeps unrelated identity reloads out of retained operator and delegated run 
         avatarRevision: "1",
         updatedAt: 1,
       },
-      authPolicyGeneration: resolveGatewayAuthPolicyGeneration(initialConfig, identity),
+      authPolicy: captureGatewayAuthPolicy(initialConfig, {
+        role: "operator",
+        verifiedIdentity: identity,
+      }),
     };
     const generation = new SharedGatewaySessionGenerationState({
       current: undefined,
@@ -120,6 +136,7 @@ it("keeps unrelated identity reloads out of retained operator and delegated run 
     });
     let state = createDefaultGatewayReloadState();
     const channelManager = createChannelManager({
+      scheduler: createTestGatewayScheduler(),
       getRuntimeConfig: () => initialConfig,
       getPluginRegistry: () => registry,
       channelLogs: {},
@@ -130,10 +147,7 @@ it("keeps unrelated identity reloads out of retained operator and delegated run 
     const reloader = startManagedGatewayConfigReloader({
       scheduler: createTestGatewayScheduler("fake-timers"),
       getPluginRegistry: () => registry,
-      configRevisionProjector: {
-        projectRawHash: (hash) => hash,
-        projectResolvedHash: (hash) => hash,
-      },
+      configRevisionProjector: createTestConfigRevisionProjector(),
       minimalTestGateway: false,
       initialConfig,
       initialCompareConfig: initialConfig,
@@ -296,7 +310,7 @@ it("keeps unrelated identity reloads out of retained operator and delegated run 
             "source-" + revision,
           ),
         );
-        await vi.advanceTimersByTimeAsync(0);
+        await tickUntilSettled(application);
         await expect(application).resolves.toBe("applied");
       };
       const allowedEffect = await prepareEffect("allowed.txt", original.authority);

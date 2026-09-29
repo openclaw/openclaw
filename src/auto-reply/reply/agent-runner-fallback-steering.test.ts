@@ -1,12 +1,16 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { normalizeProviderModelRef } from "../../agents/embedded-agent-runner/model.registry-resolution.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { runWithModelFallback } from "../../agents/model-fallback-runner.js";
+import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.js";
+import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import * as metadata from "../../plugins/current-plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { bindReplyFallbackSteeringRoute } from "./agent-runner-fallback-authority.js";
 import { runReplyAgent } from "./agent-runner-run.js";
+import { createPersonalToolScreenDispatcher } from "./personal-tool-turn.test-support.js";
 import { clearSessionQueues } from "./queue.js";
 import { createQueueTestRun } from "./queue.test-helpers.js";
 import {
@@ -22,6 +26,8 @@ afterEach(() => vi.restoreAllMocks());
 describe("ordinary steering into automatic model fallback", () => {
   it.each([
     "automatic",
+    "cross-profile",
+    "cross-profile-pending",
     "policy-fallback",
     "explicit-redirect",
     "new-selection",
@@ -32,6 +38,7 @@ describe("ordinary steering into automatic model fallback", () => {
     "transport-alias",
     "replaced-during-preparation",
   ] as const)("preserves admitted selection and authority: %s", async (scenario) => {
+    const crossProfile = scenario === "cross-profile" || scenario === "cross-profile-pending";
     const key = `agent:main:fallback-steering-${scenario}`;
     const run = createQueueTestRun({ prompt: "use the new requirements", messageId: scenario });
     run.run.agentId = "main";
@@ -71,6 +78,25 @@ describe("ordinary steering into automatic model fallback", () => {
       sessionId: run.run.sessionId,
       resetTriggered: false,
     });
+    const modelPolicy = prepareOperatorModelPolicy({ cfg: run.run.config, policy: {} });
+    const operator = (profileId: string) =>
+      createAdmittedRunOperatorAuthority({
+        profileId,
+        scopes: ["operator.read", "operator.write"],
+        gatewayAccessGrant: null,
+        modelPolicy,
+        assertCurrent() {},
+      });
+    if (crossProfile) {
+      run.operatorAuthority = operator("alice");
+      Object.assign(run.run, {
+        senderId: "alice-sender",
+        senderName: "Alice",
+        senderIsOwner: true,
+        clientCaps: ["ui-commands"],
+        gatewayUiCommandTarget: { connId: "alice-tab", profileId: "alice" },
+      });
+    }
     operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(run));
     operation.setPhase("running");
     const delivered: string[] = [];
@@ -128,7 +154,25 @@ describe("ordinary steering into automatic model fallback", () => {
             messageInjectionV2: {
               version: 2,
               isAvailable: () => true,
+              ...(scenario === "cross-profile-pending"
+                ? {
+                    claimPendingUserInputAnswer: async (
+                      text: string,
+                      _options: unknown,
+                      assertCurrent: () => void,
+                    ) => {
+                      assertCurrent();
+                      delivered.push(text);
+                      return true;
+                    },
+                  }
+                : {}),
               queueMessage: async (text, _options, assertCurrent) => {
+                if (scenario === "cross-profile-pending") {
+                  throw new Error(
+                    "A locked selection may only answer the pending fallback question",
+                  );
+                }
                 if (scenario === "replaced-during-preparation") {
                   await Promise.resolve();
                   operation.setAutomaticFallbackRoute(operation.automaticFallbackRoute);
@@ -148,13 +192,22 @@ describe("ordinary steering into automatic model fallback", () => {
       } else if (scenario === "pinned-selection") {
         run.run.hasSessionModelOverride = true;
         run.run.modelOverrideSource = "user";
-      } else if (scenario === "locked-selection") {
+      } else if (scenario === "locked-selection" || scenario === "cross-profile-pending") {
         run.run.modelSelectionLocked = true;
       } else if (scenario === "changed-tools") {
         run.toolsAllow = ["read"];
       }
       const resultState: ReplyOperationRunState = {};
-      const shouldSteer = scenario === "automatic" || scenario === "policy-fallback";
+      const shouldSteer =
+        scenario === "automatic" || scenario === "policy-fallback" || crossProfile;
+      if (crossProfile) {
+        run.operatorAuthority = operator("bob");
+        Object.assign(run.run, {
+          senderId: "bob-sender",
+          senderName: "Bob",
+          gatewayUiCommandTarget: { connId: "bob-tab", profileId: "bob" },
+        });
+      }
       const incoming = runReplyAgent({
         commandBody: run.prompt,
         followupRun: run,
@@ -187,6 +240,33 @@ describe("ordinary steering into automatic model fallback", () => {
         });
       }
       expect(delivered).toEqual(shouldSteer ? [run.prompt] : []);
+      if (crossProfile) {
+        const dispatch = await createPersonalToolScreenDispatcher(["alice", "bob"]);
+        await withGatewayToolCallerIdentity(
+          {
+            agentId: "main",
+            sessionKey: key,
+            personalToolParticipants: operation.personalToolParticipants,
+          },
+          async () => {
+            const ambiguous = await dispatch();
+            expect(ambiguous.respond).toHaveBeenCalledWith(
+              false,
+              undefined,
+              expect.objectContaining({
+                message: expect.stringMatching(/Alice \(user: alice\).*Bob \(user: bob\)/),
+              }),
+            );
+            expect(ambiguous.broadcastToConnIds).not.toHaveBeenCalled();
+            const selected = await dispatch("bob");
+            expect(selected.broadcastToConnIds).toHaveBeenCalledWith(
+              "ui.command",
+              expect.any(Object),
+              new Set(["bob-tab"]),
+            );
+          },
+        );
+      }
     } finally {
       clearSessionQueues([key]);
       operation.complete();

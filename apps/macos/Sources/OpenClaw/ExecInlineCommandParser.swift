@@ -85,51 +85,22 @@ enum ExecInlineCommandParser {
     }
 
     static func hasFishInitCommandOption(_ argv: [String]) -> Bool {
-        var idx = 1
-        while idx < argv.count {
-            let token = argv[idx].trimmingCharacters(in: .whitespacesAndNewlines)
-            if token.isEmpty {
-                idx += 1
-                continue
-            }
-            if token == "--" {
-                return false
-            }
-            if token == "-C" || token == "--init-command" {
-                return true
-            }
-            if token.hasPrefix("-C"), token != "-C" {
-                return true
-            }
-            if token.hasPrefix("--init-command=") {
-                return true
-            }
-            if !token.hasPrefix("-"), !token.hasPrefix("+") {
-                return false
-            }
-            idx += 1
+        self.hasFishOption(argv) {
+            $0.hasPrefix("-C") || $0 == "--init-command" || $0.hasPrefix("--init-command=")
         }
-        return false
     }
 
     static func hasFishAttachedCommandOption(_ argv: [String]) -> Bool {
-        var idx = 1
-        while idx < argv.count {
-            let token = argv[idx].trimmingCharacters(in: .whitespacesAndNewlines)
-            if token.isEmpty {
-                idx += 1
-                continue
-            }
-            if token == "--" {
-                return false
-            }
-            if token.hasPrefix("-c"), token != "-c" {
-                return true
-            }
-            if !token.hasPrefix("-"), !token.hasPrefix("+") {
-                return false
-            }
-            idx += 1
+        self.hasFishOption(argv) { $0.hasPrefix("-c") && $0 != "-c" }
+    }
+
+    private static func hasFishOption(_ argv: [String], matching matches: (String) -> Bool) -> Bool {
+        for argument in argv.dropFirst() {
+            let token = argument.trimmingCharacters(in: .whitespacesAndNewlines)
+            if token.isEmpty { continue }
+            if token == "--" { return false }
+            if matches(token) { return true }
+            if !token.hasPrefix("-"), !token.hasPrefix("+") { return false }
         }
         return false
     }

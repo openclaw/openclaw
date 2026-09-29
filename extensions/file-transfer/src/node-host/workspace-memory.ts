@@ -6,6 +6,7 @@ import {
   readWorkspaceSkillResources,
   resolveWorkspaceWorkerArgv,
 } from "openclaw/plugin-sdk/agent-workspace-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type {
   OpenClawPluginApi,
   OpenClawPluginNodeHostCommand,
@@ -56,20 +57,17 @@ export function createWorkspaceCommand(
         }
       }
       io.signal.throwIfAborted();
-      let start!: () => void;
-      const started = new Promise<void>((resolve) => {
-        start = resolve;
-      });
+      const started = createDeferred<void>();
       const unsubscribe = io.frames.onMessage((message) => {
         if (Buffer.from(message).toString("utf8") !== "start") {
           throw new Error("Unexpected workspace worker input");
         }
-        start();
+        started.resolve();
       });
-      const abortStart = () => start();
+      const abortStart = () => started.resolve();
       io.signal.addEventListener("abort", abortStart, { once: true });
       try {
-        await started;
+        await started.promise;
         io.signal.throwIfAborted();
         if (kind === "skills" && params.operation === "readResources") {
           const assertFileAccess = createSkillFileAccessAssertion(

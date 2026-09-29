@@ -1,9 +1,58 @@
+import { execFileSync } from "node:child_process";
 import { once } from "node:events";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { expect, it, vi, type TestContext } from "vitest";
 import WebSocket from "ws";
 import * as testInstance from "../../../helpers/openclaw-test-instance.js";
+import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 import { createQuotaResetFixture, MARKER, startQuotaProvider } from "./quota-reset.test-support.js";
+
+it("trusts only the fixture certificate for auxiliary HTTPS requests", async (context) => {
+  const root = useAutoCleanupTempDirTracker(context.onTestFinished).make("quota-provider-tls-");
+  const key = join(root, "key.pem");
+  const cert = join(root, "cert.pem");
+  execFileSync(
+    "openssl",
+    [
+      "req",
+      "-x509",
+      "-newkey",
+      "rsa:2048",
+      "-nodes",
+      "-keyout",
+      key,
+      "-out",
+      cert,
+      "-days",
+      "1",
+      "-subj",
+      "/CN=localhost",
+      "-addext",
+      "subjectAltName=IP:127.0.0.1",
+      "-addext",
+      "basicConstraints=critical,CA:FALSE",
+    ],
+    { stdio: "ignore" },
+  );
+  const provider = await startQuotaProvider("codex_rate_limits", MARKER, {
+    key: readFileSync(key),
+    cert: readFileSync(cert),
+  });
+  context.onTestFinished(() => provider.stop());
+  await expect(fetch(`${provider.baseUrl}/v1/responses`)).rejects.toMatchObject({
+    cause: { code: "DEPTH_ZERO_SELF_SIGNED_CERT" },
+  });
+  const response = await provider.fetch("/v1/responses", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model: "gpt-5.6-luna", input: [] }),
+  });
+  expect(response.status).toBe(200);
+  expect(await response.text()).toContain('"type":"response.completed"');
+  expect(provider.errors).toEqual([]);
+});
 
 it("prints bounded readiness receipts from the quota failure hook before Gateway logs", async (context) => {
   const instance = await testInstance.createOpenClawTestInstance({

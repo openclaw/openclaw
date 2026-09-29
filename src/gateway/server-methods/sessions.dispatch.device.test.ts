@@ -95,7 +95,7 @@ function pairedNode(deviceId: string): PairedDevice {
   };
 }
 
-function connectedNode(deviceId: string, available: number) {
+function connectedNode(deviceId: string, available: number): NodeWorkerSupervisorNodeProof {
   return {
     nodeId: deviceId,
     connId: `conn-${deviceId}`,
@@ -219,6 +219,35 @@ describe("sessions.dispatch device targets", () => {
   describe("automatic paired-device selection", () => {
     afterEach(() => {
       vi.restoreAllMocks();
+    });
+
+    it("dispatches to a capacity-one host whose occupied slot is reclaimable idle", async () => {
+      useDeviceSession();
+      const node = connectedNode("idle-host", 0);
+      node.workerHost.capacity = { total: 1, available: 0, reclaimableIdle: 1 };
+      node.workerHost.idleRetention = true;
+      vi.spyOn(environmentMethods, "listGatewayEnvironments").mockResolvedValue(
+        deviceEnvironments([node]),
+      );
+      const dispatch = vi.fn().mockResolvedValue(activeDevicePlacement(node.nodeId));
+      const context = makeDispatchTestContext({
+        nodeRegistry: { get: () => node } as never,
+        workerPlacementDispatchService: { dispatch },
+        workerSessionPlacementService: { getMany: () => new Map() },
+      });
+      bindDeviceWorkerAvailability(context.workerEnvironmentService!, async () => ({
+        available: true,
+        node,
+      }));
+      const respond = await invokeSessionDispatch(context, { autoDevice: true });
+      expect(dispatch).toHaveBeenCalledWith(
+        expect.objectContaining({ deviceId: node.nodeId }),
+        expect.any(Function),
+        undefined,
+        undefined,
+      );
+      expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ ok: true }), undefined);
+      expect(node.workerHost.capacity.available).toBe(0);
     });
 
     it("dispatches to the highest-capacity eligible host and identifies it in the response", async () => {

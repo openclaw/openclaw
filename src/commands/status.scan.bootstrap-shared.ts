@@ -1,6 +1,3 @@
-// Shared bootstrap for status scans.
-// Starts update, Tailscale, agent, and gateway probes with cold-start shortcuts for first-run users.
-
 import { measureCliCommandStartup } from "../cli/command-startup-timing.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { UpdateCheckResult } from "../infra/update-check.js";
@@ -11,6 +8,7 @@ import {
   resolveGatewayProbeSnapshot,
   type GatewayProbeSnapshot,
 } from "./status.scan.shared.js";
+import type { getUpdateCheckResult } from "./status.update.js";
 
 function buildColdStartUpdateResult(): UpdateCheckResult {
   return {
@@ -59,12 +57,6 @@ function shouldSkipStatusScanNetworkChecks(params: {
   return params.coldStart && !params.hasConfiguredChannels && params.all !== true;
 }
 
-type StatusScanExecRunner = (
-  command: string,
-  args: string[],
-  opts?: number | { timeoutMs?: number; maxBuffer?: number; cwd?: string },
-) => Promise<{ stdout: string; stderr: string }>;
-
 type StatusScanCoreBootstrapParams<TAgentStatus> = {
   coldStart: boolean;
   cfg: OpenClawConfig;
@@ -78,17 +70,11 @@ type StatusScanCoreBootstrapParams<TAgentStatus> = {
   includeLocalStatusRpcFallback?: boolean;
   gatewaySnapshot?: GatewayProbeSnapshot;
   onGatewayProgress?: (phase: string) => void;
-  getTailnetHostname: (runner: StatusScanExecRunner) => Promise<string | null>;
-  getUpdateCheckResult: (params: {
-    timeoutMs: number;
-    fetchGit: boolean;
-    includeRegistry: boolean;
-    updateConfigChannel?: string | null;
-  }) => Promise<UpdateCheckResult>;
+  getTailnetHostname: (runner: typeof runExec) => Promise<string | null>;
+  getUpdateCheckResult: typeof getUpdateCheckResult;
   getAgentLocalStatuses: (cfg: OpenClawConfig) => Promise<TAgentStatus>;
 };
 
-/** Starts the common async probes used by status scans and exposes their promises to callers. */
 export async function createStatusScanCoreBootstrap<TAgentStatus>(
   params: StatusScanCoreBootstrapParams<TAgentStatus>,
 ) {

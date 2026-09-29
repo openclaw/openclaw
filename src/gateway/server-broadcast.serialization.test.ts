@@ -529,12 +529,14 @@ describe("broadcast serialization failures", () => {
 
     const encode = (reason: string, seq: number) =>
       JSON.stringify({ type: "event", event: "skills.changed", payload: { reason }, seq });
-    expect(first.socket.send.mock.calls.map(([frame]) => frame)).toEqual([
+    expect(first.socket.send.mock.calls.map(([frame]) => String(frame))).toEqual([
       encode("outer", 1),
       encode("inner", 2),
     ]);
     for (const peer of [second, third]) {
-      expect(peer.socket.send.mock.calls.map(([frame]) => frame)).toEqual([encode("outer", 2)]);
+      expect(peer.socket.send.mock.calls.map(([frame]) => String(frame))).toEqual([
+        encode("outer", 2),
+      ]);
     }
   });
 
@@ -633,7 +635,9 @@ describe("broadcast serialization failures", () => {
     const broken = await connectPeer();
     const healthy = await connectPeer();
     const delivered: Array<{ event: string; seq: number }> = [];
-    healthy.peer.on("message", (data: RawData) => {
+    const binaryFrames: boolean[] = [];
+    healthy.peer.on("message", (data: RawData, isBinary: boolean) => {
+      binaryFrames.push(isBinary);
       delivered.push(JSON.parse(rawDataToString(data)) as { event: string; seq: number });
     });
     const makeRealClient = (connId: string, socket: WebSocket): GatewayWsClient => ({
@@ -673,6 +677,7 @@ describe("broadcast serialization failures", () => {
         { event: "chat", seq: 1 },
         { event: "skills.changed", seq: 2 },
       ]);
+      expect(binaryFrames).toEqual([false, false]);
       expect(warnSpy).toHaveBeenCalledWith(
         expect.stringContaining("real-broken: injected synchronous send failure"),
         { event: "chat" },

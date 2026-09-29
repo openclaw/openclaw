@@ -17,7 +17,6 @@ import { t } from "../../i18n/index.ts";
 import { registerFilePreviewEnglish } from "../../i18n/locales/en-file-preview.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
-import { formatKeyboardShortcutCombo } from "../../lib/keyboard-shortcut-catalog.ts";
 import type { ControlUiRegistration } from "../../plugins/control-ui-capability.ts";
 import { renderPluginContribution } from "../../plugins/control-ui-view.ts";
 import { SIDEBAR_PANEL_SHORTCUTS } from "./chat-pane-panel-shortcuts.ts";
@@ -26,6 +25,7 @@ import type {
   ChatSessionCompanionTurn,
 } from "./chat-session-companion.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import { resolveChatAttachmentLimits } from "./components/chat-attachment-admission.ts";
 import {
   getSessionWorkspace,
   selectSessionWorkspacePreview,
@@ -158,9 +158,7 @@ export function sidebarPanelDefinitions(
     ),
     empty: { description: t(`chat.sidePanel.${textKey}Empty`) },
     headerAction,
-    shortcut: SIDEBAR_PANEL_SHORTCUTS[slot]
-      ? formatKeyboardShortcutCombo(SIDEBAR_PANEL_SHORTCUTS[slot].combo)
-      : undefined,
+    shortcut: SIDEBAR_PANEL_SHORTCUTS[slot]?.combo,
   });
   const terminal = state?.terminalAvailable
     ? html`<openclaw-terminal-panel
@@ -212,7 +210,8 @@ export function sidebarPanelDefinitions(
         .onSubmit=${params.onCompanionSubmit}
         .onDraftChange=${params.onCompanionDraftChange}
         .onAttachmentsChange=${params.onCompanionAttachmentsChange}
-        .attachmentLimits=${state?.hello?.policy?.attachments}
+        .uploadConfig=${state?.uploadConfig}
+        .attachmentLimits=${resolveChatAttachmentLimits(state?.hello?.policy)}
         .onVisibilityChange=${params.onCompanionVisibilityChange}
       ></openclaw-chat-session-rail>`
     : null;

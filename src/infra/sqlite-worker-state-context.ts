@@ -55,8 +55,34 @@ export function sqliteWorkerRequestBytes(
 // Source hosts and built backends can load separate module copies in one Worker.
 const stateContexts = resolveGlobalSingleton(
   Symbol.for("openclaw.sqliteWorkerStateContext"),
-  () => new AsyncLocalStorage<SqliteWorkerStateContext>(),
+  () =>
+    new AsyncLocalStorage<
+      SqliteWorkerStateContext & {
+        existingDatabase?: { databasePath: string; identity: string };
+      }
+    >(),
 );
+
+/** Preserve factory facts across later commands without changing their captured host context. */
+export function withSqliteWorkerExistingDatabase<T>(
+  databasePath: string,
+  identity: string,
+  operation: () => T,
+): T {
+  return stateContexts.run(
+    {
+      ...getSqliteWorkerStateContext(),
+      existingDatabase: { databasePath, identity },
+    },
+    operation,
+  );
+}
+
+/** Only cold writable opens need this factory's prior-existence constraint. */
+export function getSqliteWorkerExistingDatabaseIdentity(databasePath: string): string | undefined {
+  const existing = stateContexts.getStore()?.existingDatabase;
+  return existing?.databasePath === databasePath ? existing.identity : undefined;
+}
 
 export function runWithSqliteWorkerStateContext<T>(
   context: SqliteWorkerStateContext,

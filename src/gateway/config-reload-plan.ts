@@ -158,6 +158,7 @@ const CORE_RELOAD_POLICIES: ReloadPolicy[] = [
       "gateway.http.endpoints",
       "gateway.http.securityHeaders.strictTransportSecurity",
       "gateway.tools",
+      "gateway.uploads",
       "gateway.cliAgents",
       "gateway.controlUi.enabled",
       "gateway.controlUi.environment",

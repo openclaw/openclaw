@@ -4,6 +4,11 @@ import type { IncomingMessage } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type {
+  OpenClawPluginApi,
+  OpenClawPluginToolContext,
+} from "openclaw/plugin-sdk/plugin-entry";
 import type {
   PluginBlobEntry,
   PluginBlobEntryInfo,
@@ -13,7 +18,6 @@ import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createMockServerResponse } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig, OpenClawPluginApi, OpenClawPluginToolContext } from "../api.js";
 import type { DiffScreenshotter } from "./browser.runtime.js";
 import { registerDiffsPlugin } from "./plugin.js";
 import { createTempDiffRoot } from "./test-helpers.js";

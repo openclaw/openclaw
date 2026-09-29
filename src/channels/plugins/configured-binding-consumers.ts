@@ -57,12 +57,7 @@ export function listConfiguredBindingConsumers(): ConfiguredBindingConsumer[] {
 export function resolveConfiguredBindingConsumer(
   binding: ConfiguredBindingRuleConfig,
 ): ConfiguredBindingConsumer | null {
-  for (const consumer of listConfiguredBindingConsumers()) {
-    if (consumer.supports(binding)) {
-      return consumer;
-    }
-  }
-  return null;
+  return listConfiguredBindingConsumers().find((consumer) => consumer.supports(binding)) ?? null;
 }
 
 /**

@@ -446,6 +446,7 @@ export class SessionLineageController {
         (globalBinding ? this.bindingIsCurrent(globalBinding) : childScope === this.childScope());
       const lineage = await fetchSessionLineage({
         client,
+        sessions,
         sessionKey: key,
         captureReconcile: sessions.captureReconcile,
         knownRows: collectKnownSessionRows(
@@ -530,13 +531,17 @@ export class SessionLineageController {
     // Invalidated receipts reissue within the existing descriptor request.
     // Failures leave through fetchSessionLineage's existing retry policy.
     while (isCurrent()) {
+      const refresh = binding.refreshRequested;
       binding.refreshRequested = false;
       const reconcile = observation.captureReconcile();
-      const described = await binding.client
-        .request<{ session?: GatewaySessionRow | null }>("sessions.describe", {
-          key: binding.key,
-          ...(isUiGlobalSessionKey(binding.key) ? { agentId: binding.target.agentId } : {}),
-        })
+      const described = await binding.sessions
+        .describe(
+          {
+            key: binding.key,
+            ...(isUiGlobalSessionKey(binding.key) ? { agentId: binding.target.agentId } : {}),
+          },
+          { client: binding.client, refresh },
+        )
         .catch((error: unknown) => {
           binding.refreshRequested = true;
           throw error;
@@ -545,7 +550,12 @@ export class SessionLineageController {
         return undefined;
       }
       const outcome = reconcile(
-        described?.session ? { ...described.session, runtimeSampledAt: Date.now() } : undefined,
+        described?.session
+          ? {
+              ...described.session,
+              runtimeSampledAt: described.session.runtimeSampledAt ?? Date.now(),
+            }
+          : undefined,
       );
       if (outcome.status === "invalidated") {
         continue;

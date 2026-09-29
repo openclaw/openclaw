@@ -398,6 +398,75 @@ export function registerHarnessCompletionRecoveryCases(
     },
   );
 
+  it.each(
+    ["missing", "invalid", "external_user"].flatMap((source) =>
+      [false, true].map((preparedFinal) => ({ source, preparedFinal })),
+    ),
+  )(
+    "requires human evidence for internal recovery ($source; prepared final=$preparedFinal)",
+    async ({ source, preparedFinal }) => {
+      const {
+        makeSessionsDir,
+        mainSessionEntry,
+        writeStore,
+        writeTranscript,
+        expectRecovery,
+        loadSessionEntry,
+        sendRecoveryNotice,
+      } = getFixture();
+      const sessionsDir = await makeSessionsDir();
+      const storePath = path.join(sessionsDir, "sessions.json");
+      const sessionKey = "agent:main:main";
+      const entry = mainSessionEntry({
+        restartRecoverySourceIngress: "internal",
+        ...(preparedFinal
+          ? {
+              pendingFinalDelivery: {
+                kind: "replayable",
+                text: "Prepared internal reply",
+                createdAt: Date.now(),
+                intentId: "source-evidence-final",
+                deliveries: [{ id: "source-evidence-delivery", state: "prepared" }],
+              },
+            }
+          : {}),
+      });
+      await writeStore(sessionsDir, { [sessionKey]: entry });
+      await writeTranscript(sessionsDir, entry.sessionId, [
+        { role: "user", content: "Earlier human request", provenance: { kind: "external_user" } },
+        { role: "assistant", content: "Earlier request finished." },
+        {
+          role: "user",
+          content: "Current interrupted input",
+          ...(source === "missing"
+            ? {}
+            : { provenance: { kind: source === "invalid" ? "unknown" : "external_user" } }),
+        },
+        {
+          role: "assistant",
+          stopReason: "toolUse",
+          content: [{ type: "toolCall", id: "status-current", name: "session_status" }],
+        },
+      ]);
+      if (source === "external_user") {
+        await expectRecovery({ started: 1, settled: 0, failed: 0, skipped: 0 });
+        expect(callGateway).toHaveBeenCalledOnce();
+      } else {
+        await expectRecovery({ started: 0, settled: 0, failed: 0, skipped: 1 });
+        expect(callGateway).not.toHaveBeenCalled();
+        expect(sendRecoveryNotice).not.toHaveBeenCalled();
+        expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
+          abortedLastRun: false,
+          mainRestartRecovery: {
+            tombstone: { reason: "delegated recovery sender authority is unavailable" },
+          },
+        });
+        await expectRecovery({ started: 0, settled: 0, failed: 0, skipped: 0 });
+        expect(callGateway).not.toHaveBeenCalled();
+      }
+    },
+  );
+
   it("resumes an explicit human run despite stale completion provenance", async () => {
     const {
       makeSessionsDir,

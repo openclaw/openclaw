@@ -723,7 +723,10 @@ suite.define(() => {
     try {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
-      const effortSelect = pane.locator('[data-chat-thinking-select="true"]');
+      // Summary click actionability does not wait for our history-loading disabled state.
+      const effortSelect = pane.locator(
+        '[data-chat-thinking-select="true"][aria-disabled="false"]',
+      );
       await effortSelect.click();
       const thinkingSlider = pane.locator('[data-chat-thinking-slider="true"]');
       await thinkingSlider.waitFor({ state: "visible" });

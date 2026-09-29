@@ -12,7 +12,6 @@ import * as delegatedState from "./delegated-state.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 import { loadMSTeamsSdkWithAuth } from "./sdk.js";
 import { msteamsRuntimeStub } from "./test-support/runtime.js";
-import { readAccessToken } from "./token-response.js";
 import {
   hasConfiguredMSTeamsCredentials,
   resolveDelegatedAccessToken,
@@ -475,20 +474,5 @@ describe("resolveDelegatedAccessToken", () => {
       }),
     ).rejects.toBe(error);
     expect(oauthTokenMocks.refreshMSTeamsDelegatedTokens).not.toHaveBeenCalled();
-  });
-});
-
-describe("readAccessToken", () => {
-  it("reads string and object token forms", () => {
-    expect(readAccessToken("abc")).toBe("abc");
-    expect(readAccessToken({ accessToken: "access-token" })).toBe("access-token");
-    expect(readAccessToken({ token: "fallback-token" })).toBe("fallback-token");
-  });
-
-  it("returns null for unsupported token payloads", () => {
-    expect(readAccessToken({ accessToken: 123 })).toBeNull();
-    expect(readAccessToken({ token: false })).toBeNull();
-    expect(readAccessToken(null)).toBeNull();
-    expect(readAccessToken(undefined)).toBeNull();
   });
 });

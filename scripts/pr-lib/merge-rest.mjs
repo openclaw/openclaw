@@ -4,6 +4,11 @@ import { parseGithubResponse } from "./gh-api-preflight.mjs";
 import { execPrGh, execPrGhJson } from "./github.mjs";
 
 const OID = /^[0-9a-f]{40}$/;
+// REST values normalize into GitHub's MergeStateStatus enum, never arbitrary admission states.
+// https://docs.github.com/en/graphql/reference/pulls#mergestatestatus
+const MERGE_STATES = new Set(
+  "behind blocked clean dirty draft has_hooks unknown unstable".split(" "),
+);
 const RULE_TYPES = new Set([
   "deletion",
   "non_fast_forward",
@@ -173,7 +178,7 @@ function readPullRequest(repo, authority, pr) {
       typeof record.merged === "boolean" &&
       typeof record.draft === "boolean" &&
       [true, false, null].includes(record.mergeable) &&
-      nonemptyString(record.mergeable_state) &&
+      MERGE_STATES.has(record.mergeable_state) &&
       Object.hasOwn(record, "auto_merge") &&
       (record.auto_merge === null ||
         ["squash", "merge", "rebase"].includes(record.auto_merge?.merge_method)),
@@ -383,7 +388,7 @@ function latestRequiredChecks(repo, head, checks) {
   return [...unique, ...groups.values()];
 }
 
-export function readRequiredMergeChecks(repo, head, policy) {
+export function readRequiredMergeChecks(repo, head, policy, { includeCheckIdentity = false } = {}) {
   const requirements = new Map();
   for (const rule of policy.rules) {
     if (rule.type !== "required_status_checks") {
@@ -511,19 +516,30 @@ export function readRequiredMergeChecks(repo, head, policy) {
     const matchingStatuses = statuses.filter((status) => status.context === context);
     const boundChecks = candidates
       .filter((check) => check.name === context && (app === null || check.app.id === app))
-      .map((check) =>
-        (check.status === "completed"
-          ? (check.conclusion ?? "UNKNOWN")
-          : check.status
-        ).toUpperCase(),
-      );
+      .map((check) => {
+        const state = (
+          check.status === "completed" ? (check.conclusion ?? "UNKNOWN") : check.status
+        ).toUpperCase();
+        return includeCheckIdentity
+          ? {
+              state,
+              checkRunId: check.id,
+              checkSuiteId: check.check_suite?.id,
+              publisherId: check.app.id,
+            }
+          : { state };
+      });
     const matches = [
       ...boundChecks,
-      ...(app !== null && boundChecks.length === 0 ? ["EXPECTED"] : []),
-      ...matchingStatuses.map((status) => status.state.toUpperCase()),
+      ...(app !== null && boundChecks.length === 0 ? [{ state: "EXPECTED" }] : []),
+      ...matchingStatuses.map((status) =>
+        includeCheckIdentity
+          ? { state: status.state.toUpperCase(), statusId: status.id }
+          : { state: status.state.toUpperCase() },
+      ),
     ];
-    for (const state of matches.length > 0 ? matches : ["EXPECTED"]) {
-      rows.push({ name: context, bucket: bucket(state), state });
+    for (const match of matches.length > 0 ? matches : [{ state: "EXPECTED" }]) {
+      rows.push({ name: context, bucket: bucket(match.state), ...match });
     }
   }
   return canonical(rows);
@@ -546,8 +562,10 @@ function mergeBody(value) {
 }
 
 function main([mode, repository, prValue, head, bodySnapshot, expectedObservation, ...extra]) {
+  const observing = ["observe", "observe-admission", "observe-prior-ci"].includes(mode);
+  const priorCiObservation = mode === "observe-prior-ci";
   requireEvidence(
-    ["observe", "observe-admission", "checks", "preview", "merge"].includes(mode) &&
+    (observing || ["checks", "preview", "merge"].includes(mode)) &&
       /^[1-9][0-9]*$/.test(prValue ?? "") &&
       Number.isSafeInteger(Number(prValue)) &&
       extra.length === 0 &&
@@ -560,7 +578,6 @@ function main([mode, repository, prValue, head, bodySnapshot, expectedObservatio
   );
   const repo = parseRepository(repository);
   const pr = Number(prValue);
-  const observing = mode === "observe" || mode === "observe-admission";
   const body = mode === "merge" ? mergeBody(bodySnapshot) : undefined;
   const snapshot = beginRead(repo, pr, observing);
   const checks =
@@ -569,13 +586,13 @@ function main([mode, repository, prValue, head, bodySnapshot, expectedObservatio
       : undefined;
   if (mode !== "checks" && checks !== undefined) {
     requireEvidence(
-      checks.every((check) => check.bucket === "pass"),
+      priorCiObservation || checks.every((check) => check.bucket === "pass"),
       "required checks are not passing",
     );
     snapshot.policy.requiredChecks = checks;
   }
-  const current = finishRead(repo, pr, snapshot, mode === "observe");
-  if (observing && current.state === "open") {
+  const current = finishRead(repo, pr, snapshot, observing && mode !== "observe-admission");
+  if (observing && !priorCiObservation && current.state === "open") {
     // REST can still be calculating after GraphQL is ready. Select the alternate
     // reader before retaining intent; mutation dispatch never changes transports.
     requireRestSupport(

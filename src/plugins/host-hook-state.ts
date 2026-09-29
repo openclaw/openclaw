@@ -60,7 +60,7 @@ function isExpired(entry: unknown, now: number) {
   if (!isPluginNextTurnInjectionRecord(entry)) {
     return true;
   }
-  return typeof entry.ttlMs === "number" && entry.ttlMs >= 0 && now - entry.createdAt > entry.ttlMs;
+  return entry.ttlMs !== undefined && now - entry.createdAt > entry.ttlMs;
 }
 
 function toPluginNextTurnInjectionRecord(params: {
@@ -143,7 +143,7 @@ export async function enqueuePluginNextTurnInjection(params: {
     // Guard against malformed/hand-edited persisted state — a non-array value
     // here would crash the spread/filter and break the whole session's enqueue.
     const rawExisting = injections[params.pluginId];
-    const existing = (Array.isArray(rawExisting) ? [...rawExisting] : []).filter(
+    const existing = (Array.isArray(rawExisting) ? rawExisting : []).filter(
       (candidate): candidate is PluginNextTurnInjectionRecord => !isExpired(candidate, now),
     );
     const duplicate = record.idempotencyKey

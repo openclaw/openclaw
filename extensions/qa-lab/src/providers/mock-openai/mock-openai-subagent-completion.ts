@@ -3,6 +3,7 @@ import {
   extractAllRequestTexts,
   extractLastUserText,
   extractLastMatchingUserTurn,
+  isMockSubagentSettledWake,
   parseToolOutputJson,
   resolveMockSubagentTurn,
   splitMockConversationContext,
@@ -27,9 +28,7 @@ export function readMockSubagentCompletion(
   ).exec(current);
   if (
     settled &&
-    current.includes(
-      "[Subagent Context] Every subagent spawned from this session has now settled",
-    ) &&
+    isMockSubagentSettledWake(current) &&
     currentInput.includes("sourceTool=subagent_settle")
   ) {
     return { ok: settled[1] === "ok", result: normalizeChildResult(settled[2] ?? "") };

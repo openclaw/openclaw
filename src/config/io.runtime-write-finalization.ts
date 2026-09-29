@@ -183,6 +183,7 @@ export async function finalizeCommittedConfigWrite(params: {
     });
   } catch (error) {
     let rollbackStatus: ConfigWriteRollbackStatus = "unknown";
+    let cause = error;
     try {
       const rollback = writeResult[configWritePostCommitRollback];
       const rolledBackConfig = await rollback?.restoreFile(() =>
@@ -206,20 +207,16 @@ export async function finalizeCommittedConfigWrite(params: {
         rollback?.restoreEffects(() => params.assertPostCommitCurrent?.());
       }
     } catch (rollbackError) {
-      throw new ConfigWritePostCommitError({
-        configPath: io.configPath,
-        rollbackStatus,
-        cause: new AggregateError(
-          [error, rollbackError],
-          `${formatErrorMessage(error)} Recovery failed: ${formatErrorMessage(rollbackError)}`,
-          { cause: rollbackError },
-        ),
-      });
+      cause = new AggregateError(
+        [error, rollbackError],
+        `${formatErrorMessage(error)} Recovery failed: ${formatErrorMessage(rollbackError)}`,
+        { cause: rollbackError },
+      );
     }
     throw new ConfigWritePostCommitError({
       configPath: io.configPath,
       rollbackStatus,
-      cause: error,
+      cause,
     });
   }
   return writeResult;

@@ -1,4 +1,7 @@
-import { ensureSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
+import {
+  ensureSystemPromptCacheBoundary,
+  splitSystemPromptRelocatableBoundary,
+} from "@openclaw/ai/internal/shared";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { messageToolOwnsVisibleReply } from "../../auto-reply/source-reply-delivery-mode.js";
@@ -1022,23 +1025,22 @@ async function prepareCliRunContextWithinReadFence(
   const requestedLoopbackToolsAllow =
     runtimeToolsAllowPolicy ??
     (rootedExecution ? rootedToolsAllow : params.cliToolAvailability?.openClaw);
-  const mcpProjectionContext =
-    mcpContextBase && requestedLoopbackToolsAllow !== undefined
-      ? { ...mcpContextBase, toolsAllow: [...requestedLoopbackToolsAllow] }
-      : mcpContextBase;
   const resolveProjectedTools =
     runtimeToolsAllowPolicy !== undefined || (rootedExecution && rootedToolsAllow === undefined)
       ? prepareDeps.resolveMcpLoopbackPolicyTools
       : prepareDeps.resolveMcpLoopbackScopedTools;
   params.assertCurrent?.();
   const projectedToolsBeforePromptBuild =
-    (bundleMcpEnabled || shouldMaterializeRuntimePolicy || nodeWorkshopEnabled) &&
-    mcpProjectionContext
+    (bundleMcpEnabled || shouldMaterializeRuntimePolicy || nodeWorkshopEnabled) && mcpContextBase
       ? (
           await resolveProjectedTools({
             cfg: runConfig,
             signal: params.abortSignal,
-            context: mcpProjectionContext,
+            context:
+              requestedLoopbackToolsAllow !== undefined
+                ? { ...mcpContextBase, toolsAllow: [...requestedLoopbackToolsAllow] }
+                : mcpContextBase,
+            sessionControlAuthority: readRunOperatorAuthority(params),
             rootedExecution,
             ...(skillLibraryAuthoring ? { skillLibraryAuthoring } : {}),
             ...(mcpToolAuth ? { authProfileStore: mcpToolAuth.store } : {}),
@@ -1753,7 +1755,11 @@ async function prepareCliRunContextWithinReadFence(
           systemPrompt: builtSystemPrompt,
         }) ?? builtSystemPrompt)
       : builtSystemPrompt;
-    let systemPrompt = transformedSystemPrompt;
+    const turnRuntimeFacts =
+      params.runtimeFactsInTurn && !skipsTurnPreparation
+        ? splitSystemPromptRelocatableBoundary(transformedSystemPrompt)
+        : undefined;
+    let systemPrompt = turnRuntimeFacts?.remainingPrompt ?? transformedSystemPrompt;
     const allowRawTranscriptReseed =
       backendResolved.config.reseedFromRawTranscriptWhenUncompacted === true;
     const historyParams = (params = await admitCliRunParams(params, workspaceResolution.agentId));
@@ -1823,7 +1829,11 @@ async function prepareCliRunContextWithinReadFence(
             !reusableCliSessionId?.trim() || reusableCliSession.mode === "reuse-with-drift",
           systemPrompt,
           thinkLevel: params.thinkLevel,
-          context: [hookResult?.appendContext, authorizedPromptBuildResult?.appendContext],
+          context: [
+            turnRuntimeFacts?.relocatable,
+            hookResult?.appendContext,
+            authorizedPromptBuildResult?.appendContext,
+          ],
         });
         const logicalPrompt = composeCliPromptContext(preparedPrompt, {
           prependContext,

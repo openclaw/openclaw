@@ -62,8 +62,8 @@ import {
 import {
   maybeSpawnVisibleSession,
   type VisibleSessionsSpawnDeps,
-  VISIBLE_SESSIONS_SPAWN_SCHEMA,
 } from "./sessions-spawn-visible.js";
+import { VISIBLE_SESSIONS_SPAWN_SCHEMA } from "./sessions-spawn-visible.schema.js";
 
 const SESSIONS_SPAWN_RUNTIMES = ["subagent", "acp"] as const;
 const SESSIONS_SPAWN_SANDBOX_MODES = ["inherit", "require"] as const;
@@ -567,6 +567,25 @@ export function createSessionsSpawnTool(
           cleanup,
           expectsCompletionMessage,
         } as const;
+        const inheritedSpawnContext = () => ({
+          assertActive,
+          onSpawnEffectsStart,
+          agentSessionKey: opts?.agentSessionKey,
+          requesterTurnRunId: opts?.requesterTurnRunId,
+          completionOwnerKey: opts?.completionOwnerKey,
+          requesterAgentIdOverride: opts?.requesterAgentIdOverride,
+          agentChannel: opts?.agentChannel,
+          agentAccountId: opts?.agentAccountId,
+          agentTo: opts?.agentTo,
+          agentThreadId: opts?.agentThreadId,
+          currentChannelId: opts?.currentChannelId,
+          currentMessageId: opts?.currentMessageId,
+          agentGroupSpace: opts?.agentGroupSpace,
+          agentMemberRoleIds: opts?.agentMemberRoleIds,
+          sandboxed: opts?.sandboxed,
+          inheritedToolAllowlist: opts?.inheritedToolAllowlist,
+          inheritedToolDenylist: opts?.inheritedToolDenylist,
+        });
 
         if (runtime === "acp") {
           const { spawnAcpDirect } = await loadAcpSpawnModule();
@@ -590,25 +609,9 @@ export function createSessionsSpawnTool(
             },
             withParentExecutionIdentity(
               {
-                assertActive,
-                onSpawnEffectsStart,
-                agentSessionKey: opts?.agentSessionKey,
-                requesterTurnRunId: opts?.requesterTurnRunId,
-                completionOwnerKey: opts?.completionOwnerKey,
-                requesterAgentIdOverride: opts?.requesterAgentIdOverride,
-                agentChannel: opts?.agentChannel,
-                agentAccountId: opts?.agentAccountId,
-                agentTo: opts?.agentTo,
-                agentThreadId: opts?.agentThreadId,
+                ...inheritedSpawnContext(),
                 currentMessagingTarget: opts?.currentMessagingTarget,
-                currentChannelId: opts?.currentChannelId,
-                currentMessageId: opts?.currentMessageId,
                 agentGroupId: opts?.agentGroupId ?? undefined,
-                agentGroupSpace: opts?.agentGroupSpace,
-                agentMemberRoleIds: opts?.agentMemberRoleIds,
-                sandboxed: opts?.sandboxed,
-                inheritedToolAllowlist: opts?.inheritedToolAllowlist,
-                inheritedToolDenylist: opts?.inheritedToolDenylist,
               },
               parentExecutionIdentityToken,
             ),
@@ -649,31 +652,15 @@ export function createSessionsSpawnTool(
           },
           withParentExecutionIdentity(
             {
-              agentSessionKey: opts?.agentSessionKey,
-              requesterTurnRunId: opts?.requesterTurnRunId,
+              ...inheritedSpawnContext(),
               requesterThinkingLevel: opts?.requesterThinkingLevel,
               requesterModel: opts?.requesterModel,
-              completionOwnerKey: opts?.completionOwnerKey,
-              agentChannel: opts?.agentChannel,
-              agentAccountId: opts?.agentAccountId,
-              agentTo: opts?.agentTo,
-              agentThreadId: opts?.agentThreadId,
               currentMessagingTarget: opts?.currentMessagingTarget ?? opts?.currentChannelId,
-              currentChannelId: opts?.currentChannelId,
-              currentMessageId: opts?.currentMessageId,
               agentGroupId: opts?.agentGroupId,
               agentGroupChannel: opts?.agentGroupChannel,
-              agentGroupSpace: opts?.agentGroupSpace,
-              agentMemberRoleIds: opts?.agentMemberRoleIds,
-              requesterAgentIdOverride: opts?.requesterAgentIdOverride,
               workspaceDir: opts?.workspaceDir,
               sessionPermissionPolicy: opts?.sessionPermissionPolicy,
-              inheritedToolAllowlist: opts?.inheritedToolAllowlist,
-              inheritedToolDenylist: opts?.inheritedToolDenylist,
               requesterRunId: opts?.requesterRunId,
-              sandboxed: opts?.sandboxed,
-              assertActive,
-              onSpawnEffectsStart,
             },
             parentExecutionIdentityToken,
           ),

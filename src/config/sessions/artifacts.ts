@@ -92,11 +92,6 @@ function isTrajectoryRuntimeArtifactName(fileName: string): boolean {
   return fileName.endsWith(".trajectory.jsonl");
 }
 
-/** Returns true for trajectory pointer artifacts. */
-function isTrajectoryPointerArtifactName(fileName: string): boolean {
-  return fileName.endsWith(".trajectory-path.json");
-}
-
 export function resolveTrajectoryPath(transcriptPath: string): string | undefined {
   return transcriptPath.endsWith(".jsonl")
     ? `${transcriptPath.slice(0, -".jsonl".length)}.trajectory.jsonl`
@@ -111,24 +106,16 @@ export function resolveTrajectoryPointerPath(transcriptPath: string): string | u
 
 /** Returns true for any trajectory-related session artifact. */
 export function isTrajectorySessionArtifactName(fileName: string): boolean {
-  return isTrajectoryRuntimeArtifactName(fileName) || isTrajectoryPointerArtifactName(fileName);
+  return isTrajectoryRuntimeArtifactName(fileName) || fileName.endsWith(".trajectory-path.json");
 }
 
 /** Returns true for primary session transcript files that represent live session history. */
 export function isPrimarySessionTranscriptFileName(fileName: string): boolean {
-  if (fileName === "sessions.json") {
-    return false;
-  }
-  if (!fileName.endsWith(".jsonl")) {
-    return false;
-  }
-  if (isTrajectoryRuntimeArtifactName(fileName)) {
-    return false;
-  }
-  if (isCompactionCheckpointTranscriptFileName(fileName)) {
-    return false;
-  }
-  return !isSessionArchiveArtifactName(fileName);
+  return (
+    fileName.endsWith(".jsonl") &&
+    !isTrajectoryRuntimeArtifactName(fileName) &&
+    !isCompactionCheckpointTranscriptFileName(fileName)
+  );
 }
 
 /** Returns true for transcript files counted in usage, including reset/deleted archives. */

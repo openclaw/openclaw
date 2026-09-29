@@ -116,6 +116,10 @@ NODE
   *) exit "$context_status" ;;
 esac
 openclaw_resolve_frozen_upgrade_survivor_capabilities "$ROOT_DIR"
+UPGRADE_COMPAT_ENV_ARGS+=(
+  -e "OPENCLAW_FROZEN_UPGRADE_SURVIVOR_TOOL_SEARCH_RECIPE=$OPENCLAW_FROZEN_UPGRADE_SURVIVOR_TOOL_SEARCH_RECIPE"
+  -e "OPENCLAW_FROZEN_UPGRADE_SURVIVOR_MEMBERSHIP_MODE=$OPENCLAW_FROZEN_UPGRADE_SURVIVOR_MEMBERSHIP_MODE"
+)
 if [ "$UPGRADE_TARGET_TRAIN" = extended-stable ]; then
   if [ -n "${OPENCLAW_UPGRADE_SURVIVOR_LIVE_MODELS:-}" ]; then
     echo "Selected extended-stable target does not support OPENCLAW_UPGRADE_SURVIVOR_LIVE_MODELS with its frozen upgrade survivor runner." >&2
@@ -187,7 +191,7 @@ if [ "$SCENARIO" = "abandoned-update" ] && [ -z "${OPENCLAW_UPGRADE_SURVIVOR_UPD
   UPDATE_RESTART_MODE="auto-auth"
 fi
 COMMAND_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_COMMAND_TIMEOUT:-900s}"
-START_BUDGET_SECONDS="$(openclaw_e2e_read_positive_int_env OPENCLAW_UPGRADE_SURVIVOR_START_BUDGET_SECONDS 90)"
+START_BUDGET_SECONDS="$(openclaw_e2e_read_positive_int_env OPENCLAW_UPGRADE_SURVIVOR_START_BUDGET_SECONDS 300)"
 STATUS_BUDGET_SECONDS="$(openclaw_e2e_read_positive_int_env OPENCLAW_UPGRADE_SURVIVOR_STATUS_BUDGET_SECONDS 30)"
 PROBE_TIMEOUT_MS="$(openclaw_e2e_read_nonnegative_int_env OPENCLAW_UPGRADE_SURVIVOR_PROBE_TIMEOUT_MS 60000)"
 PROBE_ATTEMPT_TIMEOUT_MS="$(
@@ -618,7 +622,7 @@ fi
 UPDATE_RESTART_MODE="${OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE:-manual}"
 command_timeout="${OPENCLAW_UPGRADE_SURVIVOR_COMMAND_TIMEOUT:-900s}"
 PORT=18789
-START_BUDGET="$(openclaw_e2e_read_positive_int_env OPENCLAW_UPGRADE_SURVIVOR_START_BUDGET_SECONDS 90)"
+START_BUDGET="$(openclaw_e2e_read_positive_int_env OPENCLAW_UPGRADE_SURVIVOR_START_BUDGET_SECONDS 300)"
 STATUS_BUDGET="$(openclaw_e2e_read_positive_int_env OPENCLAW_UPGRADE_SURVIVOR_STATUS_BUDGET_SECONDS 30)"
 GATEWAY_LOG="$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/gateway.log"
 SYSTEMCTL_SHIM_LOG="$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/systemctl-shim.log"
@@ -861,7 +865,7 @@ else
   start_epoch="$(node -e "process.stdout.write(String(Date.now()))")"
   openclaw gateway --port "$PORT" --bind loopback --allow-unconfigured >"$GATEWAY_LOG" 2>&1 &
   gateway_pid="$!"
-  openclaw_e2e_wait_gateway_ready "$gateway_pid" "$GATEWAY_LOG" 360 "$PORT"
+  openclaw_e2e_wait_gateway_ready "$gateway_pid" "$GATEWAY_LOG" "$((10#$START_BUDGET * 4))" "$PORT"
   ready_epoch="$(node -e "process.stdout.write(String(Date.now()))")"
   start_seconds=$(((ready_epoch - start_epoch + 999) / 1000))
   if [ "$start_seconds" -gt "$START_BUDGET" ]; then

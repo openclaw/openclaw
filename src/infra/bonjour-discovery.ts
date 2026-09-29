@@ -398,15 +398,16 @@ async function discoverWideAreaViaTailnetDns(
       continue;
     }
 
+    const beacon: GatewayBonjourBeacon = {
+      instanceName: instanceName || ptrName,
+      displayName: instanceName || ptrName,
+      domain,
+      host: srvParsed.host,
+      port: srvParsed.port,
+    };
+    results.push(beacon);
     const txtBudget = remainingMs();
     if (txtBudget <= 0) {
-      results.push({
-        instanceName: instanceName || ptrName,
-        displayName: instanceName || ptrName,
-        domain,
-        host: srvParsed.host,
-        port: srvParsed.port,
-      });
       continue;
     }
 
@@ -416,19 +417,11 @@ async function discoverWideAreaViaTailnetDns(
     const txtTokens = txt ? parseDigTxt(txt.stdout) : [];
     const txtMap = txtTokens.length > 0 ? parseTxtTokens(txtTokens) : {};
 
-    const beacon: GatewayBonjourBeacon = {
-      instanceName: instanceName || ptrName,
-      displayName: txtMap.displayName || instanceName || ptrName,
-      domain,
-      host: srvParsed.host,
-      port: srvParsed.port,
-      txt: Object.keys(txtMap).length ? txtMap : undefined,
-      tailnetDns: txtMap.tailnetDns || undefined,
-      cliPath: txtMap.cliPath || undefined,
-    };
+    beacon.displayName = txtMap.displayName || beacon.displayName;
+    beacon.txt = Object.keys(txtMap).length ? txtMap : undefined;
+    beacon.tailnetDns = txtMap.tailnetDns || undefined;
+    beacon.cliPath = txtMap.cliPath || undefined;
     applyBeaconTxt(beacon, txtMap);
-
-    results.push(beacon);
   }
 
   return results;

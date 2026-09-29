@@ -7,6 +7,7 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+const NOW_SECONDS = 1_800_000_000;
 const AUTH_MONITOR_PATH = "scripts/auth-monitor.sh";
 const MOBILE_REAUTH_PATH = "scripts/mobile-reauth.sh";
 const SETUP_AUTH_SYSTEM_PATH = "scripts/setup-auth-system.sh";
@@ -30,6 +31,11 @@ function createAuthMonitorHarness() {
   const stateFile = join(home, ".openclaw", "auth-monitor-state");
   mkdirSync(binDir);
   writeFileSync(
+    join(binDir, "date"),
+    `#!/bin/sh\nif [ "$1" = "+%s" ]; then printf '%s\\n' '${NOW_SECONDS}'; else /bin/date "$@"; fi\n`,
+    { mode: 0o755 },
+  );
+  writeFileSync(
     join(binDir, "curl"),
     '#!/bin/sh\nprintf "called\\n" >> "$FAKE_CURL_LOG"\nexit "$FAKE_CURL_EXIT_CODE"\n',
     { mode: 0o755 },
@@ -38,10 +44,9 @@ function createAuthMonitorHarness() {
     join(binDir, "openclaw"),
     [
       "#!/bin/sh",
-      'if [ "$1" = "models" ]; then',
-      "  exit 1",
-      "fi",
-      'printf "called\\n" >> "$FAKE_OPENCLAW_LOG"',
+      'if [ "$1" = "models" ]; then exit 1; fi',
+      'if [ "$#" -ne 6 ] || [ "$1" != "message" ] || [ "$2" != "send" ] || [ "$3" != "--target" ] || [ "$5" != "--message" ]; then exit 64; fi',
+      `jq -cn --arg target "$4" --arg message "$6" '{target:$target,message:$message}' >> "$FAKE_OPENCLAW_LOG"`,
       'exit "$FAKE_OPENCLAW_EXIT_CODE"',
       "",
     ].join("\n"),
@@ -53,8 +58,8 @@ function createAuthMonitorHarness() {
     home,
     openclawLog,
     stateFile,
-    enablePhoneAuth: () => {
-      const expiresAt = Date.now() + 90 * 60 * 1000;
+    enablePhoneAuth: (minutes = 90) => {
+      const expiresAt = (NOW_SECONDS + minutes * 60) * 1000;
       mkdirSync(join(home, ".claude"), { recursive: true });
       mkdirSync(join(home, ".openclaw", "agents", "main", "agent"), { recursive: true });
       writeFileSync(
@@ -163,25 +168,41 @@ describe("auth monitoring scripts", () => {
     expect(readFileSync(harness.curlLog, "utf8").trim().split("\n")).toHaveLength(1);
   });
 
-  it("rate-limits after any configured notification channel succeeds", () => {
-    const harness = createAuthMonitorHarness();
-    harness.enablePhoneAuth();
+  it.each([
+    {
+      minutes: 90,
+      message: "Claude Code auth expires in 1h 30m. Consider re-auth soon.",
+    },
+    {
+      minutes: 30,
+      message: "Claude Code auth expires in 0h 30m. Consider re-auth soon.",
+    },
+  ])(
+    "delivers a phone alert and rate-limits with $minutes minutes left",
+    ({ minutes, message }) => {
+      const harness = createAuthMonitorHarness();
+      harness.enablePhoneAuth(minutes);
 
-    const delivered = harness.run({
-      curlExitCode: 22,
-      notifyPhone: "+15550000000",
-    });
-    expect(delivered.status).toBe(0);
-    expect(existsSync(harness.stateFile)).toBe(true);
+      const delivered = harness.run({
+        curlExitCode: 22,
+        notifyPhone: "+15550000000",
+      });
+      expect(delivered.status).toBe(0);
+      expect(existsSync(harness.stateFile)).toBe(true);
+      expect(JSON.parse(readFileSync(harness.openclawLog, "utf8"))).toEqual({
+        target: "+15550000000",
+        message,
+      });
 
-    const throttled = harness.run({
-      curlExitCode: 22,
-      notifyPhone: "+15550000000",
-    });
-    expect(throttled.stdout).toContain("Skipping notification (sent recently)");
-    expect(readFileSync(harness.openclawLog, "utf8").trim().split("\n")).toHaveLength(1);
-    expect(readFileSync(harness.curlLog, "utf8").trim().split("\n")).toHaveLength(1);
-  });
+      const throttled = harness.run({
+        curlExitCode: 22,
+        notifyPhone: "+15550000000",
+      });
+      expect(throttled.stdout).toContain("Skipping notification (sent recently)");
+      expect(readFileSync(harness.openclawLog, "utf8").trim().split("\n")).toHaveLength(1);
+      expect(readFileSync(harness.curlLog, "utf8").trim().split("\n")).toHaveLength(1);
+    },
+  );
 
   it("retries when all configured notification channels fail", () => {
     const harness = createAuthMonitorHarness();

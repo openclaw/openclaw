@@ -137,13 +137,7 @@ function buildAcpTargetFactory(params: {
 export const acpConfiguredBindingConsumer: ConfiguredBindingConsumer = {
   id: "acp",
   supports: (binding) => binding.type === "acp",
-  buildTargetFactory: (params) =>
-    buildAcpTargetFactory({
-      cfg: params.cfg,
-      binding: params.binding,
-      channel: params.channel,
-      agentId: params.agentId,
-    }),
+  buildTargetFactory: buildAcpTargetFactory,
   parseSessionKey: ({ sessionKey }) => parseConfiguredAcpSessionKey(sessionKey),
   matchesSessionKey: ({ sessionKey, materializedTarget }) =>
     materializedTarget.record.targetSessionKey === sessionKey,

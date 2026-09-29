@@ -17,6 +17,7 @@ import {
 } from "../../app/context.ts";
 import { hasOperatorAdminAccess, hasOperatorPairingAccess } from "../../app/operator-access.ts";
 import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
+import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
 import { readPresenceEntries } from "../../app/user-profile.ts";
 import { showSecretRevealDialog } from "../../components/secret-reveal-dialog.ts";
 import { renderLearnMoreLink } from "../../components/settings-ui.ts";
@@ -492,7 +493,7 @@ class DevicesPage extends OpenClawLightDomElement {
         ? gatewaySnapshot.hello?.server?.version?.trim() || null
         : null;
     return html`
-      <section class="content-header">
+      <section class="content-header" ${shellLayoutTraits({ toolbarHeader: true })}>
         <div>
           <div class="page-title">${titleForRoute("devices")}</div>
           <div class="page-subtitle">

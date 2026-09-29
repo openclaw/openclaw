@@ -1,4 +1,3 @@
-// Workboard contract declarations define the plugin and Control UI data model.
 export const WORKBOARD_STATUSES = [
   "triage",
   "backlog",

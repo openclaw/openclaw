@@ -673,6 +673,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
       ],
     suppressNextUserMessagePersistence,
     beforeAgentFinalizeRevisionAttempts,
+    completionCheck: terminalRetryState.completionCheck,
     maxBeforeAgentFinalizeRevisions: MAX_BEFORE_AGENT_FINALIZE_REVISIONS,
     suppressTranscriptOnlyAssistantPersistence: params.suppressTranscriptOnlyAssistantPersistence,
     assistantErrorTranscript: params.assistantErrorTranscript,

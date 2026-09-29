@@ -184,7 +184,11 @@ final class WebChatManager {
         let route = WebChatRoute(sessionKey: sessionKey, agentID: agentID)
         if !newWindow,
            let instance = self.gatewayWindowOrder.reversed().lazy.compactMap({ self.gatewayWindows[$0] })
-               .first(where: { $0.target == .primary && $0.route == route })
+               .first(where: {
+                   $0.target == .primary && $0.route == route &&
+                       (draft?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false ||
+                           $0.controller.acceptsNativeDraft)
+               })
         {
             instance.controller.applyDraftIfEmpty(draft)
             instance.controller.show()
@@ -298,6 +302,7 @@ final class WebChatManager {
             agentID: route.agentID,
             connection: connection,
             gatewayID: chatStoreID,
+            gatewayTarget: target,
             windowTitle: "\(name) — OpenClaw",
             windowAutosaveName: "OpenClawChatWindow-\(autosaveID)")
         self.install(controller, target: target, route: route, connection: connection)

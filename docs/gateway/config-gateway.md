@@ -70,6 +70,9 @@ For the full key index and the other top-level config domains, see [Configuratio
       // allowedOrigins: ["https://control.example.com"], // optional override of publicOrigin
       // dangerouslyAllowHostHeaderOriginFallback: false, // dangerous Host-header origin fallback mode
     },
+    uploads: {
+      enabled: true, // set false to reject client file/image uploads
+    },
     cliAgents: {
       enabled: true, // show create-capable CLI session targets in the model picker
     },
@@ -222,6 +225,46 @@ For the full key index and the other top-level config domains, see [Configuratio
   unavailable to non-owner callers even when allowlisted.
 
 </Accordion>
+
+### Disable file and image uploads
+
+Set `gateway.uploads.enabled` to `false` to disable client file and image uploads:
+
+```json5
+{
+  gateway: {
+    uploads: { enabled: false },
+  },
+}
+```
+
+The default is `true`. Changes hot-apply without restarting the Gateway. The
+Gateway rejects uploads even from a stale browser or a direct API client; hiding
+the Control UI controls is not the enforcement boundary. Rejections return
+`FORBIDDEN` with detail code `UPLOADS_DISABLED` (OpenAI-compatible HTTP APIs return
+status `403` and error code `UPLOADS_DISABLED`). Tool-invocation endpoints retain
+their existing blocked-tool envelope with the same disabled-upload message.
+
+The switch covers chat and new-session attachments, companion attachments,
+terminal uploads, inline user/agent avatars, skill archive and folder uploads,
+and Workboard attachments. Direct node and tool invocations
+that carry new upload bytes are also rejected; existing-media transfers remain
+available. OpenAI-compatible requests containing image or file
+content parts are rejected, including URL-backed parts, before fetching or
+decoding them. Text-only requests still work. A disabled upload is rejected as
+a whole; its attachments are not silently removed. Already accepted writes finish
+settling: for example, an avatar persisted before the switch changes still gets
+its matching agent configuration update. Disabling uploads does not undo existing
+bytes or turn that completed upload into a denial. Authorized retries of accepted
+chat, session-creation, and outbound-message requests replay their existing receipts
+without uploading again; a fresh idempotency key still requires uploads to be enabled.
+
+Downloads, existing media, agent-generated images/files, ordinary text editing,
+server-local memory migration, channel-inbound media, and internal worker file
+transfers remain available. This switch is not a sandbox or data-loss-prevention
+policy: it does not remove authorized shell access, agent filesystem tools,
+configuration administration, or arbitrary third-party plugin capabilities.
+Use the corresponding tool, terminal, channel, and plugin policies for those.
 
 ### OpenAI-compatible endpoints
 

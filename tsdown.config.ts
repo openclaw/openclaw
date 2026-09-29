@@ -11,7 +11,7 @@ import {
   createBundledPluginBuildInventory,
 } from "./scripts/lib/bundled-plugin-build-entries.mjs";
 import { createGatewayRunChunkMetadataPlugin } from "./scripts/lib/gateway-run-chunk-metadata.mts";
-import { createManagedHandoffBuildConfig } from "./scripts/lib/managed-handoff-build-config.mts";
+import { createManagedHandoffBuildConfigs } from "./scripts/lib/managed-handoff-build-config.mts";
 import { createPluginInventoryModuleRefsPlugin } from "./scripts/lib/plugin-inventory-module-refs.mts";
 import {
   buildPluginSdkEntrySources,
@@ -520,6 +520,7 @@ function buildDockerE2eHarnessEntries(): Record<string, string> {
     "cli/run-main": "src/cli/run-main.ts",
     "commands/onboard-guided": "src/commands/onboard-guided.ts",
     "config/config": "src/config/config.ts",
+    "infra/gateway-scheduler": "src/infra/gateway-scheduler.ts",
     "infra/sqlite-audit-record-store": "src/infra/sqlite-audit-record-store.ts",
     "state/local-onboarding-state": "src/state/local-onboarding-state.ts",
     "system-agent/audit": "src/system-agent/audit.ts",
@@ -973,7 +974,9 @@ const configs: UserConfig[] = [
   workerDeployBuildConfig({
     "worker/sqlite-store.worker": "src/worker/worker-deploy-sqlite-store.ts",
   }),
-  { ...createManagedHandoffBuildConfig(), name: TSDOWN_UNIFIED_CONFIG_GROUP, env },
+  ...createManagedHandoffBuildConfigs().map((config) =>
+    Object.assign(config, { name: TSDOWN_UNIFIED_CONFIG_GROUP, env }),
+  ),
   nodeBuildConfig(
     {
       name: TSDOWN_UNIFIED_CONFIG_GROUP,

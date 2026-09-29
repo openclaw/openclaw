@@ -9,7 +9,7 @@
   "type": "module",
   "dependencies": {
     "@openclaw/fs-safe": "0.21.1",
-    "p-limit": "7.3.2",
+    "p-limit": "7.3.3",
     "zod": "4.6.5"
   },
   "devDependencies": {

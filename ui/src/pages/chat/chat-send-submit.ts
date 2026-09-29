@@ -18,6 +18,8 @@ import { trimHumanMentions } from "../../lib/chat/human-mentions.ts";
 import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
 import { scopedAgentIdForSession, visibleSessionMatches } from "../../lib/sessions/index.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
+import { showToast } from "../../lib/toast.ts";
+import { uploadsEnabled, uploadsDisabledMessage } from "../../lib/uploads.ts";
 import { composeBrowserAnnotationContext } from "./browser-annotation-context.ts";
 import {
   dispatchChatSlashCommand,
@@ -64,6 +66,7 @@ import {
 import { recordChatSendTiming } from "./chat-send-timing.ts";
 import { getPendingChatPickerPatch } from "./chat-settings-patches.ts";
 import { withChatSubmitGuard, withChatSubmitHandoff } from "./chat-submit-guard.ts";
+import { attachmentBatchRejection } from "./components/chat-attachment-admission.ts";
 import { recordNonTranscriptInputHistory } from "./input-history.ts";
 import {
   captureOutboxPayloadOwner,
@@ -160,6 +163,10 @@ export async function handleSendChat(
         )
       : {};
   const hasAttachments = attachmentsToSend.length > 0;
+  if (hasAttachments && !uploadsEnabled(host.uploadConfig)) {
+    setChatError(host, uploadsDisabledMessage());
+    return undefined;
+  }
   if (intent) {
     if (draftMentions?.length) {
       setChatError(host, t("chat.mentions.unsupported"));
@@ -219,6 +226,14 @@ export async function handleSendChat(
         (attachment) => !attachment.browserAnnotation && !attachment.selectionAnnotation,
       )
     : attachmentsToSend;
+  const rejectOversizedAttachments = () => {
+    const error = attachmentBatchRejection(deliveredAttachments, host.hello?.policy);
+    if (error === undefined) {
+      return false;
+    }
+    showToast({ message: error });
+    return true;
+  };
 
   if (!message && !hasAttachments) {
     return undefined;
@@ -302,6 +317,9 @@ export async function handleSendChat(
       const submitKey = chatSubmitKey(host, "detached", message, attachmentsToSend);
       await withChatSubmitGuard(host, submitKey, async () => {
         if (!(await waitForSubmittedRoute(host, submittedSessionKey))) {
+          return;
+        }
+        if (rejectOversizedAttachments()) {
           return;
         }
         const cleared = clearComposer("annotations");
@@ -441,6 +459,10 @@ export async function handleSendChat(
       }
       return undefined;
     }
+  }
+
+  if (rejectOversizedAttachments()) {
+    return undefined;
   }
 
   const { replyTargetOverride = previousReplyTarget } = opts ?? {};

@@ -131,6 +131,7 @@ const enNewSessionSetup = {
     checkout: "Checkout",
     checkoutCurrent: "Current checkout",
     checkoutWorktree: "New worktree",
+    checkoutWorktreeNamed: "Worktree · {name}",
     checkoutWorktreeSub: "Isolated copy of the repo",
     checkoutWorktreeFrom: "New worktree from {branch}",
     checkoutCloud: "Starting branch",

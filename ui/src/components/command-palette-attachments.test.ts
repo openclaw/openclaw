@@ -108,6 +108,20 @@ async function mount() {
 }
 
 describe("command palette paste-only images", () => {
+  it("blocks image ingestion in both loaded and loading palettes while keeping text paste native", async () => {
+    const { context, input } = await mount();
+    context.config.current.uploadsEnabled = false;
+    expect(paste(input, [image()]).defaultPrevented).toBe(true);
+    expect(readers).toHaveLength(0);
+    expect(paste(input, [], "plain text ".repeat(200)).defaultPrevented).toBe(false);
+    const loading = new CommandPaletteLoadingState({ context, requestUpdate: vi.fn() });
+    loading.begin();
+    const loadingInput = document.createElement("textarea");
+    loadingInput.addEventListener("paste", loading.handlePaste);
+    expect(paste(loadingInput, [image()]).defaultPrevented).toBe(true);
+    expect(loading.captureHandoff()()?.imageFiles).toBeUndefined();
+  });
+
   it("preserves the input and submits text with images in the background", async () => {
     const message = "Describe these images";
     const { palette, input, context, start } = await mount();
@@ -249,7 +263,10 @@ describe("command palette paste-only images", () => {
       await palette.updateComplete;
       if (outcome === "oversized" || outcome === "partial") {
         Object.assign(context.gateway.snapshot.hello!, {
-          policy: { attachments: { maxBytes: 65_536, maxImageBytes: 4 } },
+          policy: {
+            maxPayload: 25 * 1024 * 1024,
+            attachments: { maxBytes: 65_536, maxImageBytes: 4 },
+          },
         });
       }
       const state = new CommandPaletteLoadingState({ requestUpdate: () => {} });

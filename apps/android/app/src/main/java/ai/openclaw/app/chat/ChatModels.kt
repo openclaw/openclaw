@@ -1,5 +1,6 @@
 package ai.openclaw.app.chat
 
+import ai.openclaw.app.asJsonStringOrNull
 import ai.openclaw.app.gateway.SessionObserverDigest
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonArray
@@ -291,15 +292,14 @@ internal fun parseChatPlanSteps(element: JsonElement?): List<ChatPlanStep> {
   var hasInProgressStep = false
   return entries.mapNotNull { entry ->
     val step =
-      ((if (entry is JsonObject) entry["step"] else entry) as? JsonPrimitive)
-        ?.takeIf { it.isString }
-        ?.content
+      (if (entry is JsonObject) entry["step"] else entry)
+        .asJsonStringOrNull()
         ?.trim()
         ?.takeIf { it.isNotEmpty() }
         ?: return@mapNotNull null
     val status =
       if (entry is JsonObject) {
-        when ((entry["status"] as? JsonPrimitive)?.takeIf { it.isString }?.content) {
+        when (entry["status"].asJsonStringOrNull()) {
           "pending" -> ChatPlanStepStatus.Pending
           "in_progress" -> ChatPlanStepStatus.InProgress
           "completed" -> ChatPlanStepStatus.Completed
@@ -325,9 +325,8 @@ internal fun parseChatProgressCardGetResult(element: JsonElement): ChatProgressC
   }
   val card = rawCard as? JsonObject ?: error("Invalid progressCard.get response")
   val sessionKey =
-    (card["sessionKey"] as? JsonPrimitive)
-      ?.takeIf { it.isString }
-      ?.content
+    card["sessionKey"]
+      .asJsonStringOrNull()
       ?.trim()
       ?.takeIf { it.isNotEmpty() }
       ?: error("Invalid progress card session key")
@@ -347,9 +346,7 @@ internal fun parseChatProgressCardGetResult(element: JsonElement): ChatProgressC
       ?: error("Invalid progress card update time")
   val markdown =
     if (card.containsKey("markdown")) {
-      (card["markdown"] as? JsonPrimitive)
-        ?.takeIf { it.isString }
-        ?.content
+      card["markdown"].asJsonStringOrNull()
         ?: error("Invalid progress card markdown")
     } else {
       null
@@ -505,6 +502,10 @@ data class ChatSessionEntry(
   val hasActiveRunMetadata: Boolean = hasActiveRun != null || activeRunIds != null,
   val hasActiveRunIdsMetadata: Boolean = activeRunIds != null,
   val parentSessionKey: String? = null,
+  val worktreeId: String? = null,
+  val hasWorktreeMetadata: Boolean = worktreeId != null,
+  val spawnDepth: Int? = null,
+  val forkedFromParent: Boolean? = null,
   val spawnedBy: String? = null,
   val hasActiveSubagentRun: Boolean? = null,
   val subagentRunState: String? = null,

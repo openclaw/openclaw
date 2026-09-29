@@ -25,6 +25,8 @@ const closure = [
   "scripts/lib/docker-e2e-plan.mts",
   "scripts/lib/docker-e2e-scenarios.mts",
   "scripts/lib/official-external-channel-catalog.json",
+  "scripts/lib/official-external-provider-catalog.json",
+  "scripts/lib/record-shared.mjs",
   "scripts/lib/update-compat-inventory.json",
   "scripts/lib/update-first-hop-lanes.mjs",
   "scripts/lib/upgrade-survivor-policy.mjs",
@@ -473,6 +475,8 @@ describe("frozen admission upgrade Docker aliases", () => {
     expect(record.contracts).toHaveLength(1);
     expect(record.contracts[0].modes).toEqual({
       OPENCLAW_FROZEN_UPGRADE_SURVIVOR_CLAWHUB_MODE: "current",
+      OPENCLAW_FROZEN_UPGRADE_SURVIVOR_TOOL_SEARCH_RECIPE: "absent",
+      OPENCLAW_FROZEN_UPGRADE_SURVIVOR_MEMBERSHIP_MODE: "native",
       releaseTrain: train,
     });
     expect(record.selectedSha).toBe(f.selected.sha);
@@ -573,6 +577,8 @@ describe("frozen admission bootstrap repairs", () => {
   it.each([
     entrypoint,
     "scripts/lib/official-external-channel-catalog.json",
+    "scripts/lib/official-external-provider-catalog.json",
+    "scripts/lib/record-shared.mjs",
     "scripts/lib/upgrade-survivor-scenarios.json",
     `${recipeDirectory}/agents.json`,
     "package.json",

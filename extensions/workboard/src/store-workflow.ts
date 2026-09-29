@@ -56,7 +56,6 @@ import {
   normalizeProofInput,
   normalizeStatus,
   normalizeStringList,
-  removeUndefinedMetadataFields,
 } from "./store-normalizers.js";
 import { WorkboardPromoteStore } from "./store-promote.js";
 
@@ -191,7 +190,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
       const metadata = clearDiagnostics(existing.metadata, ["running_without_heartbeat"]);
       return {
         ...metadata,
-        claim: removeUndefinedMetadataFields({ claim: nextClaim }).claim,
+        claim: nextClaim,
         comments: note
           ? [...(metadata.comments ?? []), { id: randomUUID(), body: note, createdAt: now }].slice(
               -MAX_CARD_COMMENTS,

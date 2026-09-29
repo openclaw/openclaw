@@ -104,6 +104,7 @@ const runtimePartitions = new Map<
         "src/cli/cli-process-diagnostics.test.ts",
         // Native heap accounting, GC, and Worker limits require V8.
         "src/infra/worker-task-pool.memory.test.ts",
+        "src/plugins/runtime.retention.test.ts",
         "src/process/spawn-broker/callback-context.test.ts",
         "src/process/spawn-broker/cleanup.test.ts",
         "src/process/spawn-broker/handoff.test.ts",
@@ -134,6 +135,7 @@ const runtimePartitions = new Map<
           .toSorted(),
       // Bun GC can retain released chat and overview payloads; keep their retention proof on Node.
       nodeRequired: new Set([
+        "ui/src/pages/chat/chat-pane-retained-presentation.test.ts",
         "ui/src/pages/chat/chat-thread.test.ts",
         "ui/src/pages/usage/usage-page-details.test.ts",
       ]),

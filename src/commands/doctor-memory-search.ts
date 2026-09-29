@@ -218,10 +218,6 @@ function inspectRememberAcrossConversationsHealth(params: {
   return { enabled: true };
 }
 
-/**
- * Check whether memory search has a usable embedding provider.
- * Runs as part of `openclaw doctor` using config-only checks where possible.
- */
 type MemorySearchHealthOptions = {
   gatewayMemoryProbe?: {
     checked: boolean;
@@ -526,13 +522,7 @@ async function inspectMemorySearchHealthForAgent(
     if (opts?.gatewayMemoryProbe?.checked && opts.gatewayMemoryProbe.ready) {
       return;
     }
-    // When the probe was intentionally skipped (skipped: true / checked: false
-    // due to probe:false path), we have no embedding status information — do
-    // not warn. A skipped probe means the user ran `openclaw doctor` without
-    // --deep; it does not mean embeddings are unavailable.
-    // NOTE: a transport timeout also sets checked: false, but skipped stays
-    // false/absent — a timeout is a real diagnostic signal and should fall
-    // through to the warning below.
+    // Shallow probes are intentionally skipped; transport timeouts still warrant a warning.
     if (opts?.gatewayMemoryProbe?.skipped) {
       return;
     }
@@ -551,7 +541,6 @@ async function inspectMemorySearchHealthForAgent(
     return;
   }
 
-  // Remote provider — check for API key.
   if (
     hasRemoteApiKey ||
     (await hasApiKeyForProvider(provider, cfg, agentDir, {
@@ -590,10 +579,6 @@ async function inspectMemorySearchHealthForAgent(
   );
 }
 
-/**
- * Check whether local embeddings are available.
- *
- */
 function hasLocalEmbeddings(local: { modelPath?: string }): boolean {
   const modelPath = normalizeOptionalString(local.modelPath);
   if (!modelPath) {
@@ -659,14 +644,7 @@ function resolvePrimaryMemoryProviderEnvVar(provider: string): string {
 }
 
 function buildGatewayProbeWarning(
-  probe:
-    | {
-        checked: boolean;
-        ready: boolean;
-        error?: string;
-        skipped?: boolean;
-      }
-    | undefined,
+  probe: MemorySearchHealthOptions["gatewayMemoryProbe"],
 ): string | null {
   if (!probe?.checked || probe.ready) {
     return null;

@@ -60,6 +60,7 @@ import {
 import { getPluginCache } from "./plugin-cache.js";
 import { tracePluginLifecyclePhase } from "./plugin-lifecycle-trace.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
+import { groupPluginRecords } from "./record-groups.js";
 import { resolvePluginSourceRoots, type PluginSourceRoots } from "./roots.js";
 import { normalizePluginDependencySpecs } from "./status-dependencies-core.js";
 
@@ -446,9 +447,7 @@ function derivePackagePluginIdHint(packageName: unknown): string | undefined {
   }
   // Scoped package names must normalize to their unscoped runtime owner so
   // diagnostics, config keys, and discovered plugin identities cannot diverge.
-  const unscoped = rawPackageName.includes("/")
-    ? (rawPackageName.split("/").pop() ?? rawPackageName)
-    : rawPackageName;
+  const unscoped = rawPackageName.slice(rawPackageName.lastIndexOf("/") + 1);
   for (const suffix of ["-provider", "-plugin"]) {
     if (unscoped.endsWith(suffix) && unscoped.length > suffix.length) {
       return unscoped.slice(0, -suffix.length);
@@ -460,22 +459,15 @@ function derivePackagePluginIdHint(packageName: unknown): string | undefined {
 export function resolvePluginPackageEntries(
   params: Parameters<typeof resolvePackageRuntimeExtensions>[0] & { manifestId?: string },
 ): Array<{ idHint: string; entryPath: string; source: string }> {
-  const entryIdSources = new Map<string, Array<{ entryPath: string; source: string }>>();
-  for (const entry of resolvePackageRuntimeExtensions(params)) {
-    const idHint = deriveIdHint({
+  const entryIdSources = groupPluginRecords(resolvePackageRuntimeExtensions(params), (entry) =>
+    deriveIdHint({
       filePath: entry.source,
       manifestId: params.manifestId,
       packageName: params.manifest?.name,
       fallbackId: path.basename(params.packageDir),
       hasMultipleExtensions: params.extensions.length > 1,
-    });
-    const sources = entryIdSources.get(idHint);
-    if (sources) {
-      sources.push(entry);
-    } else {
-      entryIdSources.set(idHint, [entry]);
-    }
-  }
+    }),
+  );
   const entries: Array<{ idHint: string; entryPath: string; source: string }> = [];
   for (const [idHint, sources] of entryIdSources) {
     // Entry ids derive from basenames; colliding entries must not silently vanish in the registry.
@@ -764,10 +756,10 @@ function createPluginScanner(env: NodeJS.ProcessEnv, ownershipUid?: number | nul
     installOwner?: string;
     installOwnerAmbiguous?: true;
     manifest?: PackageManifest | null;
-  }): "added" | "invalid" | "none" {
+  }): boolean {
     const bundleFormat = detectBundleManifestFormat(params.rootDir);
     if (!bundleFormat) {
-      return "none";
+      return false;
     }
     const rootRealPath = pluginCacheRealpathSync(params.rootDir) ?? undefined;
     const rejectHardlinks = shouldRejectHardlinkedPluginFiles({
@@ -787,7 +779,7 @@ function createPluginScanner(env: NodeJS.ProcessEnv, ownershipUid?: number | nul
         message: bundleManifest.error,
         source: bundleManifest.manifestPath,
       });
-      return "invalid";
+      return false;
     }
     addCandidate({
       idHint: bundleManifest.manifest.id,
@@ -804,7 +796,7 @@ function createPluginScanner(env: NodeJS.ProcessEnv, ownershipUid?: number | nul
       bundledManifestId: bundleManifest.manifest.id,
       bundledManifestPath: bundleManifest.manifestPath,
     });
-    return "added";
+    return true;
   }
 
   function discoverPluginDirectory(params: PluginDirectoryDiscoveryParams): boolean {
@@ -923,7 +915,7 @@ function createPluginScanner(env: NodeJS.ProcessEnv, ownershipUid?: number | nul
         ...(params.installOwner ? { installOwner: params.installOwner } : {}),
         ...(params.installOwnerAmbiguous ? { installOwnerAmbiguous: true } : {}),
         manifest,
-      }) === "added"
+      })
     ) {
       return true;
     }

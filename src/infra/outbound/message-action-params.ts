@@ -303,6 +303,7 @@ async function hydrateSendBufferMediaParams(params: {
   args: Record<string, unknown>;
   dryRun?: boolean;
   preserveBuffer?: boolean;
+  assertClientUploadAllowed?: () => void;
   extraParamKeys?: readonly string[];
 }): Promise<void> {
   if (hasExplicitSendMediaSource(params.args, params.extraParamKeys)) {
@@ -338,7 +339,11 @@ async function hydrateSendBufferMediaParams(params: {
       : await resolveOutboundAttachmentFromBuffer(
           Buffer.from(canonicalBase64, "base64"),
           maxBytes,
-          { contentType: normalized.contentType, filename },
+          {
+            contentType: normalized.contentType,
+            filename,
+            assertCommitAllowed: params.assertClientUploadAllowed,
+          },
         );
   params.args.media = staged.path;
   params.args.mediaUrl = staged.path;
@@ -515,6 +520,8 @@ export async function hydrateAttachmentParamsForAction(params: {
   action: ChannelMessageActionName;
   dryRun?: boolean;
   preserveSendBuffer?: boolean;
+  /** Pure ingress policy only: media publication must not run SQL-backed runtime guards. */
+  assertClientUploadAllowed?: () => void;
   mediaPolicy: AttachmentMediaPolicy;
   extraParamKeys?: readonly string[];
 }): Promise<void> {
@@ -527,6 +534,7 @@ export async function hydrateAttachmentParamsForAction(params: {
       args: params.args,
       dryRun: params.dryRun,
       preserveBuffer: params.preserveSendBuffer,
+      assertClientUploadAllowed: params.assertClientUploadAllowed,
       extraParamKeys: params.extraParamKeys,
     });
     return;

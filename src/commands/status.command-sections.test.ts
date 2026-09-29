@@ -293,6 +293,27 @@ describe("status.command-sections", () => {
     ]);
   });
 
+  it("warns when deep health says the retained Node executable is gone", () => {
+    const execPath = "/opt/homebrew/Cellar/node@24/24.20.0/bin/node";
+    const rows = buildStatusHealthRows({
+      health: {
+        durationMs: 42,
+        childRuntime: { execPath, available: false },
+      } as HealthSummary,
+      formatHealthChannelLines: () => ["Discord: OK"],
+      ok: (value) => `ok(${value})`,
+      warn: (value) => `warn(${value})`,
+      muted: (value) => `muted(${value})`,
+    });
+
+    expect(rows[0]).toEqual({ Item: "Gateway", Status: "ok(reachable)", Detail: "42ms" });
+    expect(rows[1]).toEqual({
+      Item: "Gateway runtime",
+      Status: "warn(WARN)",
+      Detail: `Gateway runtime is stale after Node upgrade: child workers are using ${execPath}, which no longer exists. Restart the Gateway.`,
+    });
+  });
+
   it.each([
     { account: {}, status: "ok(OK)", detail: "healthy" },
     {
@@ -347,7 +368,7 @@ describe("status.command-sections", () => {
     expect(rows).toContainEqual({ Item: "WhatsApp", Status: status, Detail: detail });
   });
 
-  it("marks activated plugin service failures as warnings in deep health rows", () => {
+  it("marks colon-bearing plugin failures and unavailable plugins as warnings in deep health rows", () => {
     const health: HealthSummary = {
       ok: true,
       ts: 0,
@@ -360,14 +381,25 @@ describe("status.command-sections", () => {
       channelOrder: [],
       channelLabels: {},
       plugins: {
-        loaded: ["calendar"],
+        loaded: ["broken:ok"],
         errors: [
           {
-            id: "calendar",
+            id: "broken:ok",
             origin: "workspace",
             activated: true,
             failurePhase: "service",
             error: "service scheduler: address already in use",
+          },
+        ],
+        unavailable: [
+          {
+            id: "memory-owner",
+            state: "configured-unavailable",
+            diagnostic: {
+              kind: "plugin-verification",
+              reason: "unreadable-package-json",
+              detail: "manifest unreadable",
+            },
           },
         ],
       },
@@ -381,9 +413,14 @@ describe("status.command-sections", () => {
     });
 
     expect(rows).toContainEqual({
-      Item: "Plugin calendar",
+      Item: "Plugin",
       Status: "warn(WARN)",
-      Detail: "failed - service scheduler: address already in use; run openclaw doctor",
+      Detail: "failed - broken:ok: service scheduler: address already in use; run openclaw doctor",
+    });
+    expect(rows).toContainEqual({
+      Item: "Plugin memory-owner",
+      Status: "warn(WARN)",
+      Detail: expect.stringContaining("unavailable - unreadable-package-json: manifest unreadable"),
     });
   });
 

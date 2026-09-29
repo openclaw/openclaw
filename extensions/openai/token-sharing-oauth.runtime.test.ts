@@ -329,7 +329,7 @@ describe("ChatGPT token-sharing authorization", () => {
       clientId,
       issuer: TOKEN_SHARING_ISSUER,
       authFlow: TOKEN_SHARING_AUTH_FLOW,
-      displayName: "Sign in with ChatGPT",
+      displayName: "Sign in with ChatGPT (Beta)",
       email: "owner@example.test",
       grantedScope: grantScope,
       authorizationScope: TOKEN_SHARING_LEGACY_SCOPE,
@@ -349,7 +349,7 @@ describe("ChatGPT token-sharing authorization", () => {
     const result = await loginTokenSharing(context());
     expect(result.profiles[0]?.credential).toMatchObject({
       authFlow: IDENTITY_AUTH_FLOW,
-      displayName: "Sign in with ChatGPT (identity only)",
+      displayName: "Sign in with ChatGPT (Beta, identity only)",
       grantedScope: "openid offline_access",
       authorizationScope: TOKEN_SHARING_LEGACY_SCOPE,
     });
