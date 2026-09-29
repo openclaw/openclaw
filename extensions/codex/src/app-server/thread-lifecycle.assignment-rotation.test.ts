@@ -226,12 +226,18 @@ describe("native assignment custody across ordinary parent rotation", () => {
       if (closeHost) {
         onTestFinished(closeHost);
       }
+      if (failure === "abort") {
+        const mutate = f.store.mutate.bind(f.store);
+        vi.spyOn(f.store, "mutate").mockImplementation((identity, mutation, assertCurrent) => {
+          if (mutation.kind === "replace-thread") {
+            controller.abort(new Error("Rotation aborted"));
+          }
+          return mutate(identity, mutation, assertCurrent);
+        });
+      }
       f.setSuccessor(async () => {
         if (failure === "start") {
           throw new Error("Successor start rejected");
-        }
-        if (failure === "abort") {
-          controller.abort(new Error("Rotation aborted"));
         }
         if (failure === "revoked") {
           closeHost?.();
