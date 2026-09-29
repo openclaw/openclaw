@@ -337,8 +337,7 @@ describe("provider attribution", () => {
     ).toEqual({
       "HTTP-Referer": "https://openclaw.ai",
       "X-OpenRouter-Title": "OpenClaw",
-      "X-OpenRouter-Categories":
-        "cli-agent,cloud-agent,programming-app,creative-writing,writing-assistant,general-chat,personal-agent",
+      "X-OpenRouter-Categories": "personal-agent,cli-agent",
     });
   });
 
@@ -684,7 +683,7 @@ describe("provider attribution", () => {
     });
   });
 
-  it("gates documented OpenRouter attribution to known OpenRouter endpoints", () => {
+  it("gates documented OpenRouter attribution to OpenRouter endpoints for any provider id", () => {
     expectRecordFields(
       resolveProviderRequestPolicy({
         provider: "openrouter",
@@ -700,6 +699,20 @@ describe("provider attribution", () => {
         allowsHiddenAttribution: false,
       },
     );
+
+    expect(
+      resolveProviderRequestPolicy({
+        provider: "or",
+        api: "openai-completions",
+        baseUrl: "https://openrouter.ai/api/v1",
+        transport: "stream",
+        capability: "llm",
+      }).attributionHeaders,
+    ).toEqual({
+      "HTTP-Referer": "https://openclaw.ai",
+      "X-OpenRouter-Title": "OpenClaw",
+      "X-OpenRouter-Categories": "personal-agent,cli-agent",
+    });
 
     expect(
       resolveProviderRequestPolicy({
