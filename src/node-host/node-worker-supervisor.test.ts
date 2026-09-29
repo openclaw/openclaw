@@ -714,11 +714,11 @@ describe("node worker supervisor", () => {
   it("does not return stale running after the active worker disappears", async () => {
     const { supervisor, workspaceDir } = fixture();
     const input = launchInput(workspaceDir, "silent-worker-death", "wait");
-    const running = await supervisor.launch(input, TEST_WORKER_ENDPOINT);
-    expect(running.worker).not.toBeNull();
-
-    let killed = false;
     try {
+      const running = await supervisor.launch(input, TEST_WORKER_ENDPOINT);
+      expect(running.worker).not.toBeNull();
+
+      let killed = false;
       await vi.waitFor(async () => {
         if (!killed) {
           // Native receipts name the custody anchor. Killing that owner must remain
@@ -734,8 +734,10 @@ describe("node worker supervisor", () => {
           killed = true;
         }
         const terminal = await supervisor.status(input.launchId);
-        expect(terminal).toBeDefined();
-        expect(terminal?.state).not.toMatch(/^(pending|running)$/u);
+        expect(terminal).toMatchObject({
+          ...testNodeWorkerLaunchIdentity(input),
+          state: expect.stringMatching(/^(?:completed|failed|interrupted|cancelled)$/u),
+        });
       });
     } finally {
       await supervisor.close();
