@@ -24,7 +24,10 @@ function renderChatInto(
   container: HTMLElement,
   overrides: Partial<Parameters<typeof renderChat>[0]> = {},
 ) {
-  render(renderChat(createChatProps(overrides)), container);
+  render(
+    renderChat(createChatProps({ currentSessionId: "goal-session", ...overrides })),
+    container,
+  );
 }
 
 function renderChatView(overrides: Partial<Parameters<typeof renderChat>[0]> = {}) {
@@ -39,6 +42,7 @@ describe("chat goal status", () => {
   ): GatewaySessionRow {
     return {
       key: "main",
+      sessionId: "goal-session",
       kind: "direct",
       updatedAt: 2,
       goal: {

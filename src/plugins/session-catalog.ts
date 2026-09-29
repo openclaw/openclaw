@@ -179,16 +179,6 @@ export type SessionCatalogContinueProviderResult = {
   };
 };
 
-type SessionCatalogGatewayCopy = {
-  displayName?: string;
-  preferredModel?: string;
-};
-
-type SessionCatalogCreateParams = {
-  /** Agent whose model/runtime policy must authorize the catalog target. */
-  agentId?: string;
-};
-
 export type SessionCatalogProvider = {
   id: string;
   label: string;
@@ -199,9 +189,10 @@ export type SessionCatalogProvider = {
   /** Declares that every HOME-sensitive action honors the host isolation policy. */
   supportsProcessHomeIsolation?: true;
   /** Config-derived target; the Gateway memoizes it for one runtime-config object identity. */
-  resolveCreateSession?: (
-    params: SessionCatalogCreateParams,
-  ) => SessionCatalogCreateTarget | undefined;
+  resolveCreateSession?: (params: {
+    /** Agent whose model/runtime policy must authorize the catalog target. */
+    agentId?: string;
+  }) => SessionCatalogCreateTarget | undefined;
   list: (params: SessionCatalogListProviderParams) => Promise<SessionCatalogHost[]>;
   /** Optional inert factory; each settled step leaves no foreground work running. */
   createListOperation?: (params: SessionCatalogListProviderParams) => {
@@ -217,7 +208,7 @@ export type SessionCatalogProvider = {
   /** Copy catalog history into a new ordinary Gateway-owned session. */
   copyToGatewaySession?: (
     params: SessionCatalogContinueProviderParams,
-  ) => Promise<SessionCatalogGatewayCopy>;
+  ) => Promise<{ displayName?: string; preferredModel?: string }>;
   checkUpstreamActivity?: (
     probes: SessionUpstreamProbe[],
     policy?: { allowProcessHomeFallback?: boolean },
@@ -235,9 +226,6 @@ export type SessionCatalogProvider = {
     request: SessionCatalogStartTerminalProviderParams,
   ) => Promise<SessionCatalogTerminalPlan>;
 };
-
-type SessionCatalogAdoptedSource = { hostId: string; threadId: string };
-type SessionCatalogEntry = SessionCatalogEntrySummary["entry"];
 
 export function listSessionCatalogEntries(params: {
   agentId?: string;
@@ -291,7 +279,7 @@ export function listAdoptedSessionCatalogSessions(params: {
   pluginId: string;
   runtime: PluginRuntime;
   sessionEntries?: SessionCatalogEntrySnapshot;
-  sourceFromEntry: (entry: SessionCatalogEntry) => SessionCatalogAdoptedSource | undefined;
+  sourceFromEntry: (entry: SessionEntry) => { hostId: string; threadId: string } | undefined;
 }): Map<string, string> {
   const adopted = new Map<string, string>();
   for (const { sessionKey, entry } of listSessionCatalogEntries(params)) {
@@ -303,10 +291,7 @@ export function listAdoptedSessionCatalogSessions(params: {
   return adopted;
 }
 
-// `complete` is intentionally required, not optional-with-fallback: adoption and its
-// upstream baseline must share one single-flight operation, or concurrent continues
-// race to baseline the same thread. This helper shipped in no release tag yet
-// (added #113718), so no external plugin can depend on the older 3-field shape.
+// Adoption and its upstream baseline share one single-flight operation.
 export function createSessionCatalogAdoptionCoordinator<TResult extends { sessionKey: string }>() {
   const operations = new Map<string, Promise<TResult>>();
   return async (params: {
@@ -321,18 +306,16 @@ export function createSessionCatalogAdoptionCoordinator<TResult extends { sessio
     }
     const operation = (async () => {
       const existing = await params.findExisting();
-      if (existing) {
-        // The gateway's same-source link upsert preserves its active marker. Re-running
-        // completion only supplies a new baseline after that link was removed.
-        return await params.complete({ sessionKey: existing });
-      }
-      const continued = await params.create().catch(async (error: unknown) => {
-        const raced = await params.findExisting();
-        if (raced) {
-          return { sessionKey: raced };
-        }
-        throw error;
-      });
+      // Completion preserves an existing link's marker, or supplies a baseline after removal.
+      const continued = existing
+        ? { sessionKey: existing }
+        : await params.create().catch(async (error: unknown) => {
+            const raced = await params.findExisting();
+            if (raced) {
+              return { sessionKey: raced };
+            }
+            throw error;
+          });
       return await params.complete(continued);
     })();
     operations.set(params.sourceKey, operation);

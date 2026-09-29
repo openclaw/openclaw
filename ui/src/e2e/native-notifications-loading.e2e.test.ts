@@ -1,5 +1,6 @@
 import path from "node:path";
 import { expect, it } from "vitest";
+import { waitForControlUiInitialRoster } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { installMockGateway, startControlUiE2eServer } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -63,6 +64,8 @@ suite.define(() => {
             });
           }
           const gateway = await installMockGateway(page, {
+            // Observe gesture-free native startup before Playwright readiness evaluation.
+            awaitInitialRoster: native ? false : undefined,
             historyMessages: [],
             methodResponses: {
               "sessions.create": {
@@ -95,6 +98,7 @@ suite.define(() => {
             } finally {
               await protocol.detach();
             }
+            await waitForControlUiInitialRoster(page);
           }
           await composer.fill("Check notification startup.");
           expect(notificationModules).toHaveLength(native ? 1 : 0);

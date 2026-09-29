@@ -4,6 +4,7 @@ import type {
   RealtimeVoiceBrowserSessionCreateRequest,
   RealtimeVoiceProviderCapabilities,
   RealtimeVoiceProviderConfig,
+  RealtimeVoiceProviderConfiguredContext,
   RealtimeVoiceProviderPlugin,
   RealtimeVoiceProviderResolveConfigContext,
 } from "openclaw/plugin-sdk/realtime-voice";
@@ -70,23 +71,14 @@ type OpenAIInternalRealtimeVoiceCapabilities = RealtimeVoiceProviderCapabilities
 };
 
 type OpenAIInternalRealtimeVoiceProviderApi = {
-  isBrowserSessionConfigured: (ctx: {
-    cfg?: RealtimeVoiceBrowserSessionCreateRequest["cfg"];
-    providerConfig: RealtimeVoiceProviderConfig;
-    agentId?: string;
-  }) => boolean;
-  resolveBrowserSessionCapabilities?: (ctx: {
-    cfg?: RealtimeVoiceBrowserSessionCreateRequest["cfg"];
-    providerConfig: RealtimeVoiceProviderConfig;
-    agentId?: string;
-    model?: string;
-    clientControl?: RealtimeVoiceBrowserSessionCreateRequest["clientControl"];
-  }) => OpenAIInternalRealtimeVoiceCapabilities;
-  isGatewayRelayConfigured?: (ctx: {
-    cfg?: RealtimeVoiceBrowserSessionCreateRequest["cfg"];
-    providerConfig: RealtimeVoiceProviderConfig;
-    agentId?: string;
-  }) => boolean | undefined;
+  isBrowserSessionConfigured: (ctx: RealtimeVoiceProviderConfiguredContext) => boolean;
+  resolveBrowserSessionCapabilities?: (
+    ctx: RealtimeVoiceProviderConfiguredContext & {
+      model?: string;
+      clientControl?: RealtimeVoiceBrowserSessionCreateRequest["clientControl"];
+    },
+  ) => OpenAIInternalRealtimeVoiceCapabilities;
+  isGatewayRelayConfigured?: (ctx: RealtimeVoiceProviderConfiguredContext) => boolean | undefined;
   resolveGatewayRelayCapabilities?: (ctx: {
     cfg?: RealtimeVoiceBrowserSessionCreateRequest["cfg"];
     providerConfig: RealtimeVoiceProviderConfig;

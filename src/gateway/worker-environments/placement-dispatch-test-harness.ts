@@ -32,6 +32,7 @@ import {
   type WorkerTurnTunnelHandle,
   type WorkerWorkspaceReconcileRequest,
 } from "./tunnel-contract.js";
+import { readLaunchToolNames } from "./worker-turn-launcher.test-support.js";
 import {
   projectWorkspaceResultConflict,
   type WorkspaceResultConflictLookup,
@@ -70,6 +71,7 @@ export function createHarness(
     verifyFailureCall?: number;
     leaseFails?: boolean;
     leaseFailureCount?: number;
+    leaseFailureCall?: number;
     localVerifyFails?: boolean;
     resumeFails?: boolean;
     workspacePath?: string;
@@ -103,6 +105,7 @@ export function createHarness(
   let remainingDestroyFailures = options.destroyFailureCount ?? 0;
   let remainingReconcileFailures = options.reconcileFailureCount ?? 0;
   let remainingLeaseFailures = options.leaseFailureCount ?? 0;
+  let leaseCalls = 0;
   let verifyCalls = 0;
   const log: string[] = [];
   const reportWorkspaceResultConflict = vi.fn(async () => {});
@@ -210,13 +213,19 @@ export function createHarness(
     environmentId: ready.environmentId,
     ownerEpoch,
     measureLaunchTurn: vi.fn(),
+    readLaunchToolNames,
     launchTurn: vi.fn(),
     quiesceWorkspace: vi.fn(async () => {
       log.push("workspace:quiesce");
       return {
         assertActive: vi.fn(async () => {
           log.push("workspace:lease");
-          if (options.leaseFails || remainingLeaseFailures > 0) {
+          leaseCalls += 1;
+          if (
+            options.leaseFails ||
+            remainingLeaseFailures > 0 ||
+            leaseCalls === options.leaseFailureCall
+          ) {
             remainingLeaseFailures -= 1;
             throw new Error("workspace quiescence expired");
           }
@@ -274,9 +283,17 @@ export function createHarness(
         stagedResult.record(stagedResult.ref);
       }
       await options.afterReconcile?.();
+      const verifyLocalStable = async () => {
+        log.push("workspace:verify-local");
+        if (options.localVerifyFails) {
+          throw new Error("local workspace changed after reconciliation");
+        }
+      };
       return {
         manifestRef: reconciledManifestRef,
         changed: options.reconcileChanged ?? true,
+        publishStagedResult: async () => {},
+        discardPreparedStagedResult: async () => {},
         verifyStable: async () => {
           log.push("workspace:verify");
           verifyCalls += 1;
@@ -284,12 +301,11 @@ export function createHarness(
             throw new Error("workspace changed after reconciliation");
           }
         },
-        verifyLocalStable: async () => {
-          log.push("workspace:verify-local");
-          if (options.localVerifyFails) {
-            throw new Error("local workspace changed after reconciliation");
-          }
-        },
+        verifyLocalStable,
+        acceptUnchangedStagedResult:
+          options.reconcileChanged === false && !options.reconcileConflictPaths?.length
+            ? verifyLocalStable
+            : undefined,
         getAppliedWorkspaceResult: options.reconcileConflictPaths?.length
           ? () => ({
               manifestRef: reconciledManifestRef,
@@ -304,7 +320,6 @@ export function createHarness(
                 log.push("workspace:apply-prepared");
                 journal.commit(reconciledManifestRef);
               },
-              publishStagedResult: async () => {},
             }
           : {}),
       };
@@ -564,8 +579,7 @@ export function createHarness(
       seedProvisioning: (executionMode?: "worker-turn" | "remote-exec") =>
         seedProvisioningPlacement(placementStore, environmentId, executionMode),
       seedStarting: () => seedStartingPlacement(placementStore, environmentId),
-      seedActive: (ownerEpoch: number, executionMode?: "worker-turn" | "remote-exec") =>
-        seedActive(ownerEpoch, executionMode),
+      seedActive,
       seedDraining: async (ownerEpoch: number) => {
         const active = await seedActive(ownerEpoch);
         if (active.state !== "active") {
@@ -607,9 +621,8 @@ export function createHarness(
     markEnvironmentNodeDeviceId: (nodeDeviceId: string) => {
       setEnvironment({ ...attached, providerId: "device", nodeDeviceId, sshEndpoint: null });
     },
-    markEnvironmentAttachments: (attachedSessionIds: string[]) => {
-      setEnvironment({ ...attached, attachedSessionIds });
-    },
+    markEnvironmentAttachments: (attachedSessionIds: string[]) =>
+      setEnvironment({ ...attached, attachedSessionIds }),
     markEnvironmentProtocolFeatures: (protocolFeatures: string[]) => {
       if (!currentEnvironment?.bootstrapReceipt) {
         throw new Error("worker environment fixture has no bootstrap receipt");

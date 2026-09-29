@@ -47,6 +47,21 @@ function selectedFiles(shards: ReturnType<typeof createChangedNodeTestShards>) {
   );
 }
 
+it("keeps the hybrid hourly plan within the main-tier cap", () => {
+  const hourly = createNodeTestShardBundles({
+    runnerBackend: "hybrid",
+    compactMode: "pull-request",
+    compactNodeJobCap: 77,
+    includeProofTests: true,
+    includeReleaseOnlyToolingShards: true,
+    includePrExemptRuntimeTests: true,
+    includeReleaseOnlyRuntimeTests: false,
+    includeReleaseOnlyPluginShards: false,
+  });
+  expect(hourly.filter((job) => !job.requiresDist).length).toBeLessThanOrEqual(77);
+  expect(hourly.length).toBeLessThanOrEqual(79);
+});
+
 it("retains every PR-exempt file in hourly and release plans with its canonical owner", () => {
   const prExemptFiles = listPrExemptRuntimeTestFiles();
   expect(prExemptFiles.length).toBeGreaterThan(0);
@@ -182,6 +197,7 @@ it("retains every PR-exempt file in hourly and release plans with its canonical 
   const hourlyUiOwners = dedicatedGroups(uiHourly);
   const releaseUiOwners = dedicatedGroups(uiRelease);
   expect(hourly.filter((job) => !job.requiresDist).length).toBeLessThanOrEqual(77);
+  expect(hourly.length).toBeLessThanOrEqual(79);
   // Node retains canonical jsdom ownership. The UI package independently runs
   // those projects; native Chromium and mocked E2E have dedicated owners only.
   const projectNodeOwners = (jobs: NonNullable<ReturnType<typeof createChangedNodeTestShards>>) =>
@@ -287,17 +303,17 @@ it("retains every PR-exempt file in hourly and release plans with its canonical 
   }
 });
 
-it("opts in a PR-exempt process proof for test and opaque subject edits beside hub inputs", () => {
-  const target = "test/scripts/bench-gateway-installed.test.ts";
-  const source = "scripts/bench-gateway-startup.ts";
-  expect(listPrExemptRuntimeTestFiles()).toContain(target);
-  const options = {
-    runnerBackend: "github",
-    includeReleaseOnlyRuntimeTests: false,
-    includePrExemptRuntimeTests: false,
-    includeReleaseOnlyToolingShards: false,
-  };
-  for (const changedPath of [target, source]) {
+it.each(["test/scripts/bench-gateway-installed.test.ts", "scripts/bench-gateway-startup.ts"])(
+  "opts in a PR-exempt process proof beside hub inputs: %s",
+  (changedPath) => {
+    const target = "test/scripts/bench-gateway-installed.test.ts";
+    expect(listPrExemptRuntimeTestFiles()).toContain(target);
+    const options = {
+      runnerBackend: "github",
+      includeReleaseOnlyRuntimeTests: false,
+      includePrExemptRuntimeTests: false,
+      includeReleaseOnlyToolingShards: false,
+    };
     const precise = createChangedNodeTestShards([changedPath], options);
     expect(precise, changedPath).not.toBeNull();
     expect(selectedFiles(precise), changedPath).toContain(target);
@@ -307,8 +323,8 @@ it("opts in a PR-exempt process proof for test and opaque subject edits beside h
     expect(selectedFiles(withHub)).not.toContain(
       "extensions/acpx/src/runtime-advertised-model.process.test.ts",
     );
-  }
-});
+  },
+);
 
 it("keeps precise first-signin targets under exclusive Gateway admission", () => {
   const target = "src/gateway/setup-inference.first-signin.integration.test.ts";
@@ -557,4 +573,89 @@ it("adds the fixed smoke once to narrow, hub, and directly edited smoke plans", 
     expect(files).not.toContain("extensions/acpx/src/runtime-advertised-model.process.test.ts");
     expect(shards?.every((shard) => (shard.predictedSeconds ?? 0) <= 300)).toBe(true);
   }
+});
+
+it("keeps new-plugin, core, and manifest changes within the complete PR matrix cap", () => {
+  // Exact changed set from PR #159879, whose preflight originally emitted 134 rows.
+  const changedPaths = [
+    ".github/labeler.yml",
+    "docs/.generated/config-baseline.counts.json",
+    "docs/.generated/config-baseline.sha256",
+    "docs/.i18n/glossary.zh-CN.json",
+    "docs/channels/slack.md",
+    "docs/cli/transcripts.md",
+    "docs/docs.json",
+    "docs/plugins/meeting-plugins.md",
+    "docs/plugins/plugin-inventory.md",
+    "docs/plugins/reference.md",
+    "docs/plugins/reference/slack-huddles.md",
+    "docs/plugins/sdk-runtime.md",
+    "docs/plugins/slack-huddles.md",
+    "extensions/slack-huddles/README.md",
+    "extensions/slack-huddles/cli-metadata.ts",
+    "extensions/slack-huddles/index.ts",
+    "extensions/slack-huddles/openclaw.plugin.json",
+    "extensions/slack-huddles/package.json",
+    "extensions/slack-huddles/src/cli-output-mode.ts",
+    "extensions/slack-huddles/src/cli.ts",
+    "extensions/slack-huddles/src/config.test.ts",
+    "extensions/slack-huddles/src/config.ts",
+    "extensions/slack-huddles/src/errors.ts",
+    "extensions/slack-huddles/src/node-host.ts",
+    "extensions/slack-huddles/src/node-invoke-policy.test.ts",
+    "extensions/slack-huddles/src/node-invoke-policy.ts",
+    "extensions/slack-huddles/src/runtime-probes.ts",
+    "extensions/slack-huddles/src/runtime-setup.ts",
+    "extensions/slack-huddles/src/runtime.ts",
+    "extensions/slack-huddles/src/transports/chrome.ts",
+    "extensions/slack-huddles/src/transports/slack-huddles-page-scripts.ts",
+    "extensions/slack-huddles/src/transports/slack-huddles-platform-adapter.audio.test.ts",
+    "extensions/slack-huddles/src/transports/slack-huddles-platform-adapter.test-helpers.ts",
+    "extensions/slack-huddles/src/transports/slack-huddles-platform-adapter.test.ts",
+    "extensions/slack-huddles/src/transports/slack-huddles-platform-adapter.ts",
+    "extensions/slack-huddles/src/transports/slack-huddles-selectors.ts",
+    "extensions/slack-huddles/src/transports/slack-huddles-status-call-source.ts",
+    "extensions/slack-huddles/src/transports/slack-huddles-status-prejoin-source.ts",
+    "extensions/slack-huddles/src/transports/slack-huddles-urls.test.ts",
+    "extensions/slack-huddles/src/transports/slack-huddles-urls.ts",
+    "extensions/slack-huddles/src/transports/types.ts",
+    "extensions/slack-huddles/tsconfig.json",
+    "package.json",
+    "pnpm-lock.yaml",
+    "scripts/generate-plugin-inventory-doc.mts",
+    "scripts/lib/official-external-plugin-catalog.json",
+    "src/meeting-bot/status-call-ownership-source.ts",
+    "src/meeting-bot/status-call-source.test.ts",
+    "src/meeting-bot/status-call-source.ts",
+    "src/plugins/bundled-plugin-metadata.test.ts",
+    "src/plugins/official-external-meeting-catalog.test.ts",
+    "src/plugins/official-external-plugin-catalog.test.ts",
+    "test/scripts/bundled-plugin-build-entries.test.ts",
+  ];
+  const shards = expectDefined(
+    createChangedNodeTestShards(changedPaths, {
+      runnerBackend: "hybrid",
+      compactNodeJobCap: 130,
+      dedicatedCoreTypeChecks: true,
+      dedicatedBuildArtifacts: false,
+      includeReleaseOnlyToolingShards: false,
+      includeReleaseOnlyRuntimeTests: false,
+      includePrExemptRuntimeTests: false,
+      dedicatedUiE2e: true,
+      dedicatedUiTests: true,
+    }),
+    "new plugin and global-input owner plan",
+  );
+  expect(shards.filter((shard) => !shard.requiresDist).length).toBeLessThanOrEqual(130);
+  expect(new Set(shards.map((shard) => shard.checkName)).size).toBe(shards.length);
+  const files = selectedFiles(shards);
+  expect(files).toContain("src/plugins/official-external-plugin-catalog.test.ts");
+  expect(files).toContain("src/plugins/bundled-plugin-metadata.test.ts");
+  expect(files).toContain("test/scripts/bundled-plugin-build-entries.test.ts");
+  expect(shards.some((shard) => shard.checkName.startsWith("checks-node-changed-extensions"))).toBe(
+    true,
+  );
+  expect(
+    shards.some((shard) => shard.configs.includes("test/vitest/vitest.boundary.config.ts")),
+  ).toBe(true);
 });

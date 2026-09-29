@@ -689,6 +689,7 @@ class ChatPositionRailDirective extends AsyncDirective {
       activeId: this.activeId,
       visibleIds: this.visibleIds,
       rovingId,
+      hoveredId: interaction.hoveredId,
       previewId: interaction.dismissed
         ? undefined
         : (interaction.hoveredId ?? interaction.focusedId),

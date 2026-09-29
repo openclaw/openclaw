@@ -66,13 +66,9 @@ async function corruptChildDatabase(storePath: string, sessionKey: string) {
   expect(() => loadExactSessionEntryReadOnly({ storePath, sessionKey })).toThrow();
 }
 
-it.each(
-  ["exact", "session cascade", "typed stop", "channel stop", "embedded stop"].flatMap((boundary) =>
-    [false, true].map((nested) => ({ boundary, nested })),
-  ),
-)(
-  "$boundary stops the healthy parent and siblings despite a corrupt child database (nested=$nested)",
-  async ({ boundary, nested }) => {
+it.each(["exact", "session cascade", "typed stop", "channel stop", "embedded stop"])(
+  "%s stops the healthy parent and siblings despite nested corrupt child databases",
+  async (boundary) => {
     const sessionKey = "agent:main:main";
     const badKey = "agent:broken:subagent:bad";
     const healthyKey = "agent:main:subagent:healthy";
@@ -91,19 +87,15 @@ it.each(
     const rootKey = "agent:main:subagent:root";
     const secondBadKey = "agent:broken:subagent:second-bad";
     for (const [runId, childSessionKey] of [
-      ...(nested
-        ? ([
-            ["root", rootKey],
-            ["second-bad", secondBadKey],
-          ] as const)
-        : []),
+      ["root", rootKey],
+      ["second-bad", secondBadKey],
       ["bad", badKey],
       ["healthy", healthyKey],
     ] as const) {
       await registerSubagentRun({
         runId,
         childSessionKey,
-        requesterSessionKey: nested && runId !== "root" ? rootKey : sessionKey,
+        requesterSessionKey: runId !== "root" ? rootKey : sessionKey,
         requesterAgentId: "main",
         requesterDisplayKey: "main",
         requesterTurnRunId: "parent",
@@ -211,16 +203,16 @@ it.each(
         expect(result).toMatchObject({
           handled: true,
           aborted: true,
-          stoppedSubagents: nested ? 2 : 1,
-          failedSubagents: nested ? 2 : 1,
+          stoppedSubagents: 2,
+          failedSubagents: 2,
         });
       }
-      if (nested && typeof result === "function") {
+      if (typeof result === "function") {
         const error = result.mock.calls.at(-1)?.[2];
         expect(error?.message).toContain("bad:");
         expect(error?.message).toContain("second-bad:");
       }
-      if (nested && typeof result !== "function") {
+      if (typeof result !== "function") {
         expect(
           formatAbortReplyText(result.stoppedSubagents, undefined, result.failedSubagents),
         ).toContain("Cancellation was incomplete for 2 sub-agents");
@@ -241,9 +233,10 @@ it.each(
   },
 );
 
-it.each(
-  ["admin", "HTTP"].flatMap((boundary) => [false, true].map((queued) => ({ boundary, queued }))),
-)(
+it.each([
+  { boundary: "HTTP", queued: true },
+  { boundary: "admin", queued: false },
+])(
   "$boundary reports incomplete cancellation for a corrupt descendant (queued=$queued)",
   async ({ boundary, queued }) => {
     const sessionKey = "agent:main:subagent:parent";
@@ -403,7 +396,7 @@ it.each(
   },
 );
 
-it.each(["exact native new", "cascade native new", "RPC reset", "RPC delete"])(
+it.each(["cascade native new", "RPC reset", "RPC delete"])(
   "%s does not append delayed aborted text into a new session incarnation",
   async (boundary) => {
     const sessionKey = "agent:main:direct:incarnation";

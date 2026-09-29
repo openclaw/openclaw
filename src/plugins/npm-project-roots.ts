@@ -11,10 +11,6 @@ import {
   validatePluginId,
 } from "./install-paths.js";
 
-function isMissing(error: unknown): boolean {
-  return isNotFoundPathError(error);
-}
-
 function sortPaths(paths: string[]): string[] {
   return paths.toSorted((left, right) => left.localeCompare(right));
 }
@@ -52,7 +48,7 @@ export function listPluginNpmProjectCandidatesSync(npmRoot: string): string[] {
         .map((entry) => path.join(projectsDir, entry.name)),
     );
   } catch (error) {
-    if (isMissing(error)) {
+    if (isNotFoundPathError(error)) {
       return [];
     }
     throw error;
@@ -75,7 +71,7 @@ async function listManagedPluginNpmProjectRoots(npmRoot: string): Promise<string
       npmRoot,
     ).map(({ projectRoot }) => projectRoot);
   } catch (error) {
-    if (isMissing(error)) {
+    if (isNotFoundPathError(error)) {
       return [];
     }
     throw error;

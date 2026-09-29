@@ -48,7 +48,8 @@ export function createComputerToolSchema(
       ? "get_accessibility_tree"
       : "Accessibility observations";
   return Type.Object({
-    action: stringEnum(actions),
+    // Attached desktops arbitrate control on the Gateway, independently of provider actions.
+    action: stringEnum(actions.includes("screenshot") ? [...actions, "take_control"] : actions),
     ...(targetScope === "paired"
       ? {
           ...gatewayCallOptionSchemaProperties(),

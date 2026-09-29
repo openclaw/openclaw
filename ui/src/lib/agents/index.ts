@@ -179,12 +179,10 @@ export async function setDefaultAgent(
     return;
   }
   const hadPendingConfigDraft = config.state.configFormDirty;
-  if (config.stageDefaultAgent(agentId)) {
-    if (!hadPendingConfigDraft && config.state.configFormDirty) {
-      const saved = await config.save({ canDispatch });
-      if (saved && canDispatch()) {
-        await refreshAgents();
-      }
+  if (config.stageDefaultAgent(agentId) && !hadPendingConfigDraft && config.state.configFormDirty) {
+    const saved = await config.save({ canDispatch });
+    if (saved && canDispatch()) {
+      await refreshAgents();
     }
   }
 }

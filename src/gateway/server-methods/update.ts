@@ -83,6 +83,7 @@ import {
   recordHandoffFailure,
   resolveGatewayUpdateAdmission,
 } from "./update-admission.js";
+import { recordGatewayUpdateOutcome } from "./update-outcome-observation.js";
 import { updateReportHandler } from "./update-report.js";
 import { updateStatusHandlers } from "./update-status.js";
 
@@ -702,9 +703,7 @@ export const updateHandlers: GatewayRequestHandlers = {
     if ((ackDelivered || ackQueued) && handoff?.status !== "started") {
       await notify(outcomeRun, "finished");
     }
-    context?.logGateway?.info(
-      `update.run completed ${formatControlPlaneActor(actor)} changedPaths=<n/a> restartReason=update.run status=${result.status}`,
-    );
+    recordGatewayUpdateOutcome(result, actor, context?.logGateway);
     respond(
       true,
       {

@@ -1,4 +1,3 @@
-// QA Lab Matrix substrate implements E2EE client behavior.
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import type {
@@ -344,32 +343,22 @@ export async function createMatrixQaE2eeScenarioClient(
     async acceptVerification(id: string) {
       return await requireCrypto().acceptVerification(id);
     },
-    async bootstrapOwnDeviceVerification(
-      opts?: Parameters<MatrixClient["bootstrapOwnDeviceVerification"]>[0],
-    ) {
-      return await client.bootstrapOwnDeviceVerification(opts);
-    },
+    bootstrapOwnDeviceVerification: client.bootstrapOwnDeviceVerification.bind(client),
     async confirmVerificationReciprocateQr(id: string) {
       return await requireCrypto().confirmVerificationReciprocateQr(id);
     },
     async confirmVerificationSas(id: string) {
       return await requireCrypto().confirmVerificationSas(id);
     },
-    async deleteOwnDevices(deviceIds: string[]) {
-      return await client.deleteOwnDevices(deviceIds);
-    },
+    deleteOwnDevices: client.deleteOwnDevices.bind(client),
     async generateVerificationQr(id: string) {
       return await requireCrypto().generateVerificationQr(id);
     },
-    async getDeviceVerificationStatus(userId: string, deviceId: string) {
-      return await client.getDeviceVerificationStatus(userId, deviceId);
-    },
+    getDeviceVerificationStatus: client.getDeviceVerificationStatus.bind(client),
     async getRecoveryKey() {
       return await requireCrypto().getRecoveryKey();
     },
-    async listOwnDevices() {
-      return await client.listOwnDevices();
-    },
+    listOwnDevices: client.listOwnDevices.bind(client),
     async listVerifications() {
       const current = await requireCrypto().listVerifications();
       return [...verificationSummaries, ...current].toSorted((a, b) =>
@@ -392,12 +381,8 @@ export async function createMatrixQaE2eeScenarioClient(
     async requestVerification(opts: Parameters<MatrixQaCrypto["requestVerification"]>[0]) {
       return await requireCrypto().requestVerification(opts);
     },
-    async resetRoomKeyBackup(paramsLocal?: Parameters<MatrixClient["resetRoomKeyBackup"]>[0]) {
-      return await client.resetRoomKeyBackup(paramsLocal);
-    },
-    async restoreRoomKeyBackup(opts?: Parameters<MatrixClient["restoreRoomKeyBackup"]>[0]) {
-      return await client.restoreRoomKeyBackup(opts);
-    },
+    resetRoomKeyBackup: client.resetRoomKeyBackup.bind(client),
+    restoreRoomKeyBackup: client.restoreRoomKeyBackup.bind(client),
     async scanVerificationQr(id: string, qrDataBase64: string) {
       return await requireCrypto().scanVerificationQr(id, qrDataBase64);
     },
@@ -471,9 +456,7 @@ export async function createMatrixQaE2eeScenarioClient(
       }
       throw new Error(`timed out after ${waitParams.timeoutMs}ms waiting for Matrix E2EE event`);
     },
-    async verifyWithRecoveryKey(rawRecoveryKey: string) {
-      return await client.verifyWithRecoveryKey(rawRecoveryKey);
-    },
+    verifyWithRecoveryKey: client.verifyWithRecoveryKey.bind(client),
   };
 }
 

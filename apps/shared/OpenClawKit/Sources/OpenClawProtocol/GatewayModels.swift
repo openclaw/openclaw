@@ -10311,6 +10311,7 @@ public struct PluginCatalogEntry: Codable, Sendable {
     public let error: String?
     public let runtime: PluginRuntimeStatus?
     public let categories: [String]?
+    public let capabilitycategories: [String]?
     public let category: String?
     public let removable: Bool?
 
@@ -10338,6 +10339,7 @@ public struct PluginCatalogEntry: Codable, Sendable {
         error: String? = nil,
         runtime: PluginRuntimeStatus? = nil,
         categories: [String]? = nil,
+        capabilitycategories: [String]? = nil,
         category: String? = nil,
         removable: Bool? = nil)
     {
@@ -10364,6 +10366,7 @@ public struct PluginCatalogEntry: Codable, Sendable {
         self.error = error
         self.runtime = runtime
         self.categories = categories
+        self.capabilitycategories = capabilitycategories
         self.category = category
         self.removable = removable
     }
@@ -10392,6 +10395,7 @@ public struct PluginCatalogEntry: Codable, Sendable {
         case error
         case runtime
         case categories
+        case capabilitycategories = "capabilityCategories"
         case category
         case removable
     }
@@ -11330,6 +11334,7 @@ public struct PluginsInspectResult: Codable, Sendable {
     public let ok: Bool
     public let overview: [String: AnyCodable]?
     public let credentials: [[String: AnyCodable]]?
+    public let mcpauth: [[String: AnyCodable]]?
     public let decisions: [PluginDecisionProviderStatus]?
     public let plugin: [String: AnyCodable]
     public let source: PluginInspectSource?
@@ -11344,6 +11349,7 @@ public struct PluginsInspectResult: Codable, Sendable {
         ok: Bool,
         overview: [String: AnyCodable]? = nil,
         credentials: [[String: AnyCodable]]? = nil,
+        mcpauth: [[String: AnyCodable]]? = nil,
         decisions: [PluginDecisionProviderStatus]? = nil,
         plugin: [String: AnyCodable],
         source: PluginInspectSource? = nil,
@@ -11357,6 +11363,7 @@ public struct PluginsInspectResult: Codable, Sendable {
         self.ok = ok
         self.overview = overview
         self.credentials = credentials
+        self.mcpauth = mcpauth
         self.decisions = decisions
         self.plugin = plugin
         self.source = source
@@ -11372,6 +11379,7 @@ public struct PluginsInspectResult: Codable, Sendable {
         case ok
         case overview
         case credentials
+        case mcpauth = "mcpAuth"
         case decisions
         case plugin
         case source
@@ -25448,13 +25456,22 @@ public struct WorkerEnvironmentMetadata: Codable, Sendable {
 public struct WorkerSlotSummary: Codable, Sendable {
     public let total: Int
     public let available: Int
+    public let reclaimableidle: Int?
 
     public init(
         total: Int,
-        available: Int)
+        available: Int,
+        reclaimableidle: Int? = nil)
     {
         self.total = total
         self.available = available
+        self.reclaimableidle = reclaimableidle
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case total
+        case available
+        case reclaimableidle = "reclaimableIdle"
     }
 }
 

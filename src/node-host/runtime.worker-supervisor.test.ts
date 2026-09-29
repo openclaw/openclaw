@@ -126,7 +126,7 @@ describe("node-host runtime worker supervisor lifetime", () => {
       expect((await store.get(input.launchId))?.state).toBe("running");
 
       runtime.cancel("invoke-launch");
-      runtime.cancelAll();
+      await runtime.cancelAll();
       expect((await store.get(input.launchId))?.state).toBe("running");
       launchResponseHeld.resolve();
       await launching;

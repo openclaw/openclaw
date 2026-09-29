@@ -12,48 +12,10 @@ type Fixture = {
   getRegistry: () => SubagentRegistryHarness;
   mocks: Pick<
     ReturnType<typeof createSubagentRegistryMockState>,
-    "entries" | "applySessionEntryExactReplacements" | "callGateway"
+    "entries" | "applySessionEntryExactReplacements"
   >;
   mockPendingAgentWait: () => void;
 };
-
-export function registerNativeKillTimingAdmissionTest({
-  getRegistry,
-  mocks,
-  mockPendingAgentWait,
-}: Fixture) {
-  it("keeps killed session timing root-admitted until the awaited stop settles", async () => {
-    const mod = getRegistry();
-    const entered = createDeferred();
-    const release = createDeferred();
-    const apply = expectDefined(
-      mocks.applySessionEntryExactReplacements.getMockImplementation(),
-      "session replacement owner",
-    );
-    mocks.applySessionEntryExactReplacements.mockImplementationOnce(async (params) => {
-      entered.resolve();
-      await release.promise;
-      return apply(params);
-    });
-    mockPendingAgentWait();
-    const runId = "run-kill-tail-admission";
-    await mod.registerSubagentRun({
-      runId,
-      task: "persist killed session state",
-      spawnMode: "session",
-    });
-    await waitForFast(() => expect(mocks.callGateway).toHaveBeenCalled());
-    const termination = mod.markSubagentRunTerminated({ runId, reason: "manual kill" });
-    try {
-      await entered.promise;
-      expect(getActiveGatewayRootWorkCount()).toBeGreaterThan(0);
-    } finally {
-      release.resolve();
-      expect(await termination).toBe(1);
-    }
-    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
-  });
-}
 
 export function registerSupersededNativeTimingTest({
   getRegistry,
@@ -90,6 +52,7 @@ export function registerSupersededNativeTimingTest({
     });
     try {
       await entered.promise;
+      expect(getActiveGatewayRootWorkCount()).toBeGreaterThan(0);
       await mod.registerSubagentRun({
         runId: "run-released-timing-new",
         childSessionKey,
@@ -100,6 +63,7 @@ export function registerSupersededNativeTimingTest({
       release.resolve();
       expect(await termination).toBe(1);
     }
+    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
     const oldRun = mod
       .listSubagentRunsForRequester("agent:main:main")
       .find((entry) => entry.runId === "run-released-timing-old");
