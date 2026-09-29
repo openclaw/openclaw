@@ -213,6 +213,9 @@ describe("Phase E maintainer policy", () => {
     expect(source).toContain("SameAcl(label,actualLabel)");
     expect(source).toContain("SE_DACL_PROTECTED");
     expect(source).toContain("FILE_FLAG_OPEN_REPARSE_POINT");
+    expect(source).toContain("GENERIC_READ|GENERIC_WRITE|READ_CONTROL|WRITE_DAC|WRITE_OWNER");
+    expect(source).toContain("CreateFileW(path,kNormalizedFileAccess");
+    expect(source).toContain("SetFileInformationByHandle(object,FileDispositionInfo");
   });
   it("records a non-reusable Windows process identity and bounded fault rollback", async () => {
     const source = await import("node:fs/promises").then((fs) =>

@@ -31,8 +31,11 @@ leaves no canonical account or Phase E root:
 
 From that same console, execute the retained-handle ACL component gate. It
 requires setup to pass application and exact read-back verification of the
-SYSTEM owner/group, protected DACL, expected ACEs, and high-integrity label,
-then fault immediately after root security normalization and prove rollback:
+SYSTEM owner/group, protected DACL, expected ACEs, and high-integrity label for
+the root, profiles/scratch, manifest, stable lock, and lease store. It requires
+`SETUP_COMPLETE`, then starts a separate maintainer process for authenticated
+manifest-owned teardown and proves canonical=0, root absent, and the foreign
+`srt-*` account snapshot unchanged:
 
 ```powershell
 .\extensions\srt-sandbox\scripts\exercise-windows-arm64-phase-e-acl.ps1 `
