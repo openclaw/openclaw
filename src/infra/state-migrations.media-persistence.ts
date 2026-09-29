@@ -265,12 +265,12 @@ async function migrateAgentDatabase(params: {
         { databaseLabel: params.pathname, operationLabel: "media-persistence-detection" },
       );
       if (!needsRepair) {
-        const rewrittenArchives = await migrateArchives();
+        const archives = await migrateArchives();
         refreshAgentDatabasePlannerStatistics(database);
         return {
           rewrittenSessions: 0,
           rewrittenTrajectoryRows: 0,
-          rewrittenArchives,
+          ...archives,
           initialVersion,
           finalVersion: userVersion,
         };
@@ -350,11 +350,11 @@ async function migrateAgentDatabase(params: {
         },
       );
     }
-    const rewrittenArchives = await migrateArchives();
+    const archives = await migrateArchives();
     refreshAgentDatabasePlannerStatistics(database);
     return {
       ...rewritten,
-      rewrittenArchives,
+      ...archives,
       initialVersion,
       finalVersion: readSqliteUserVersion(database),
     };
@@ -511,6 +511,8 @@ export async function migrateLegacyMediaPersistence(
             pathname,
           });
           maintenance.assertOwned();
+          warnings.push(...result.warnings);
+          recoverableWarningCount += result.warnings.length;
           // A prior attempt may have committed the schema before publishing its registration.
           registerOpenClawAgentDatabase({ agentId: entry.agentId, env, path: pathname });
           const schemaAdvanced = result.finalVersion > result.initialVersion;
