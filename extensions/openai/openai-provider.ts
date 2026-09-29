@@ -1153,6 +1153,11 @@ export function buildOpenAIProvider(): ProviderPlugin {
     isModernModelRef: ({ modelId }) =>
       matchesExactOrPrefix(modelId, OPENAI_PROVIDER_MODERN_MODEL_IDS),
     augmentModelCatalog: (ctx) => {
+      const openAiGpt61SolTemplate = findCatalogTemplate({
+        entries: ctx.entries,
+        providerId: PROVIDER_ID,
+        templateIds: [OPENAI_GPT_61_SOL_MODEL_ID],
+      });
       const openAiGpt55ProTemplate = findCatalogTemplate({
         entries: ctx.entries,
         providerId: PROVIDER_ID,
@@ -1179,6 +1184,12 @@ export function buildOpenAIProvider(): ProviderPlugin {
         templateIds: OPENAI_GPT_54_NANO_TEMPLATE_MODEL_IDS,
       });
       return [
+        buildOpenAISyntheticCatalogEntry(openAiGpt61SolTemplate, {
+          id: OPENAI_GPT_61_SOL_MODEL_ID,
+          reasoning: true,
+          input: ["text", "image"],
+          contextWindow: openAiGpt61SolTemplate?.contextWindow ?? 1_050_000,
+        }),
         buildOpenAISyntheticCatalogEntry(openAiGpt55ProTemplate, {
           id: OPENAI_GPT_55_PRO_MODEL_ID,
           reasoning: true,
