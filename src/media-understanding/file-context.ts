@@ -223,6 +223,8 @@ export async function extractFileContext(params: {
   skipAttachmentIndexes?: Set<number>;
   assertCurrent?: () => void;
   selfServePathsEnabled: boolean;
+  /** Retained context shares one text budget across its ordered attachments. */
+  totalMaxChars?: number;
 }) {
   const { attachments, cache, cfg, limits, skipAttachmentIndexes } = params;
   if (!attachments || attachments.length === 0) {
@@ -231,19 +233,28 @@ export async function extractFileContext(params: {
   const blocks: AttachmentContextBlock[] = [];
   const images: ExtractedFileImage[] = [];
   const localPathSelfServeUpgrades: LocalPathSelfServeUpgrade[] = [];
+  let remainingChars = params.totalMaxChars;
   for (const attachment of attachments) {
     if (!attachment) {
       continue;
     }
-    const { outcome, filename, mimeType } = await classifyFileAttachment({
+    params.assertCurrent?.();
+    const classified = await classifyFileAttachment({
       attachment,
       cache,
       cfg,
-      limits,
+      limits:
+        remainingChars === undefined
+          ? limits
+          : { ...limits, maxChars: Math.min(limits.maxChars, Math.max(0, remainingChars)) },
       skipAttachmentIndexes,
       assertCurrent: params.assertCurrent,
     }).finally(() => cache.releaseBuffer(attachment.index));
     params.assertCurrent?.();
+    const { filename, mimeType, outcome } = classified;
+    if (remainingChars !== undefined && outcome.kind === "extracted") {
+      remainingChars -= outcome.text.length;
+    }
     if (outcome.kind === "extracted" || outcome.kind === "rendered-to-images") {
       images.push(
         ...outcome.images.map((image) => ({
@@ -299,17 +310,24 @@ export async function prepareFileContextFromMedia(params: {
   channelId?: string;
   accountId?: string;
   maxChars: number;
+  /** Native replay can share a total budget; plugin-host limits remain per file. */
+  totalMaxChars?: number;
   assertCurrent: () => void;
 }) {
+  const context = { Provider: params.channelId, AccountId: params.accountId };
   return await renderInboundDocumentContext({
-    ctx: {
-      media: [...params.media],
-      Provider: params.channelId,
-      AccountId: params.accountId,
-    },
+    ctx: { ...context, media: [...params.media] },
+    // Recorded workspaces locate the original file; they cannot grant this
+    // attempt access after a fork or reassignment. Only current roots authorize reads.
+    localPathRoots: resolveMediaAttachmentLocalRoots({
+      cfg: params.config,
+      ctx: context,
+      workspaceDir: params.workspaceDir,
+    }),
     cfg: params.config,
     workspaceDir: params.workspaceDir,
     maxChars: params.maxChars,
+    totalMaxChars: params.totalMaxChars,
     assertCurrent: params.assertCurrent,
   });
 }
@@ -321,7 +339,9 @@ export async function renderInboundDocumentContext(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;
   workspaceDir?: string;
+  localPathRoots?: readonly string[];
   maxChars?: number;
+  totalMaxChars?: number;
   assertCurrent?: () => void;
 }): Promise<InboundDocumentContext> {
   params.assertCurrent?.();
@@ -329,11 +349,13 @@ export async function renderInboundDocumentContext(params: {
   const limits = resolveFileExtractionLimits(cfg);
   const attachments = normalizeMediaAttachments(ctx);
   const cache = createMediaAttachmentCache(attachments, {
-    localPathRoots: resolveMediaAttachmentLocalRoots({
-      cfg,
-      ctx,
-      workspaceDir: params.workspaceDir,
-    }),
+    localPathRoots:
+      params.localPathRoots ??
+      resolveMediaAttachmentLocalRoots({
+        cfg,
+        ctx,
+        workspaceDir: params.workspaceDir,
+      }),
     // The scoped root set is authoritative: merging sessionless defaults back in would restore
     // the shared workspace/sandbox parents for sandboxed sessions.
     includeDefaultLocalPathRoots: false,
@@ -350,6 +372,7 @@ export async function renderInboundDocumentContext(params: {
           ? limits
           : { ...limits, maxChars: Math.min(limits.maxChars, params.maxChars) },
       selfServePathsEnabled: false,
+      totalMaxChars: params.totalMaxChars,
       assertCurrent: params.assertCurrent,
     });
     params.assertCurrent?.();

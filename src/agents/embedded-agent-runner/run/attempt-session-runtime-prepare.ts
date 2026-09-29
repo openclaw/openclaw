@@ -201,6 +201,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     effectiveFsWorkspaceOnly,
     effectiveWorkspace,
     getPrePromptMessageCount: () => state.prePromptMessageCount,
+    getUserTranscriptContexts: preparedSessionManager.userMessageBoundary.getUserTranscriptContexts,
     getPromptCache: () => state.promptCache,
     onCurrentTurnImageFailure: recordCurrentTurnImageFailure,
     getPromptCacheRetention: () => transport.effectivePromptCacheRetention,
