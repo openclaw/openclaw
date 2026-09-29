@@ -420,10 +420,10 @@ async function prepareCapturedWorkspaceSkillEntries(
   const gatewaySourceEntries = bundledOnly
     ? readBundledSkillEntries(opts.bundledSkillName!, opts)
     : loadWorkspaceSkillSourceEntries(gatewayPlan, opts?.config);
-  const gatewayEntries: SkillEntry[] = gatewaySourceEntries.map((entry) => ({
-    ...entry,
-    skill: { ...entry.skill, fileHost: "gateway" },
-  }));
+  const gatewayEntries: SkillEntry[] = [];
+  for (const entry of gatewaySourceEntries) {
+    gatewayEntries.push({ ...entry, skill: { ...entry.skill, fileHost: "gateway" } });
+  }
   const sources = await access.loadSkills({
     sourcePlan: bundledOnly ? { ...workspacePlan, roots: [] } : workspacePlan,
     executionWorkspaceDir: opts?.workspaceOnly || bundledOnly ? undefined : executionWorkspaceDir,

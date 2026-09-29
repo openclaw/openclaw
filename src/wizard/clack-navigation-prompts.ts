@@ -176,7 +176,7 @@ export function selectWithNavigationFooter<Value>(
 }
 
 function renderAutocompleteOption<Value>(
-  prompt: AutocompletePrompt<Option<Value>>,
+  prompt: Omit<AutocompletePrompt<Option<Value>>, "prompt">,
   option: Option<Value>,
   active: boolean,
 ): string {
@@ -201,7 +201,7 @@ function renderAutocompleteOption<Value>(
 }
 
 function renderAutocomplete<Value>(
-  prompt: AutocompletePrompt<Option<Value>>,
+  prompt: Omit<AutocompletePrompt<Option<Value>>, "prompt">,
   opts: Pick<
     AutocompleteOptions<Value>,
     "message" | "withGuide" | "placeholder" | "maxItems" | "output"
@@ -679,4 +679,3 @@ export function confirmWithNavigationFooter(
     },
   }).prompt() as Promise<boolean | symbol>;
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

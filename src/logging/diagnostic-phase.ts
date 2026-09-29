@@ -52,7 +52,7 @@ export function getRecentDiagnosticPhases(
       : recentPhases.filter(
           (phase) => phase.endedAt !== undefined && phase.endedAt >= completedAfter,
         );
-  return eligiblePhases.slice(-Math.floor(limit)).map((phase) => ({ ...phase }));
+  return eligiblePhases.slice(-Math.floor(limit)).map((phase) => Object.assign({}, phase));
 }
 
 function recordDiagnosticPhase(snapshot: DiagnosticPhaseSnapshot): void {
