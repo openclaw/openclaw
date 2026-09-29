@@ -84,7 +84,7 @@ import {
 } from "./shared.js";
 import { suppressDeprecations } from "./suppress-deprecations.js";
 import { resolveForegroundUpdateAdmission } from "./update-command-handoff.js";
-import type { InitializedUpdate } from "./update-command-initialization.js";
+import type { UpdateInitializationAdmission } from "./update-command-initialization-types.js";
 import { revalidateUpdateDatabaseContext } from "./update-command-managed-context.js";
 import {
   admitMutableUpdateSignalRun,
@@ -238,15 +238,7 @@ export async function admitUpdateCommandRun(params: {
   invocationCwd?: string;
   pkgOwnership?: FreeBsdPkgOwnershipInspection;
   expectedForeground?: true;
-  initialization?: Pick<
-    InitializedUpdate,
-    "env" | "runId" | "originalRecoveryCapture" | "databasePath" | "configPath"
-  > & {
-    target?: Pick<NonNullable<InitializedUpdate["target"]>, "configSnapshot"> &
-      Partial<
-        Pick<NonNullable<InitializedUpdate["target"]>, "legacyConfigPlan" | "updateInstallKind">
-      >;
-  };
+  initialization?: UpdateInitializationAdmission;
   assertCurrent?: () => void;
 }): Promise<NonNullable<UpdateCommandOptions["run"]>> {
   assertUpdatePackageActivationAdmission(params.root, { serviceRoot: params.serviceRoot });

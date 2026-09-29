@@ -4,7 +4,6 @@ import { hasNodeErrorCode } from "../../infra/path-guards.js";
 import { SQLITE_SIDECAR_SUFFIXES } from "../../infra/sqlite-files.js";
 import type { UpdateCandidateAdmissionResult } from "../../infra/update-candidate-admission.js";
 import { compareSemverStrings } from "../../infra/update-check.js";
-import type { UpdateRecoveryBaselineRef } from "../../infra/update-recovery-baseline-capture.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
 import { isFailedUpdateStep } from "../../infra/update-run-step.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
@@ -17,6 +16,7 @@ import {
   type UpdateCommandOptions,
 } from "./shared.js";
 import type { UpdateCommandExecutor } from "./update-command-executor.js";
+import type { UpdateInitializationAdmission } from "./update-command-initialization-types.js";
 import type { StagedPackageInstallUpdate } from "./update-command-package.js";
 import { runPackageUpdateDoctor } from "./update-command-package.js";
 import { UnreportedUpdateAdmissionOutcome } from "./update-command-result.js";
@@ -29,18 +29,14 @@ export type UpdateTargetSelection =
     }
   | { target?: never; refusal: UnreportedUpdateAdmissionOutcome };
 
-export type InitializedUpdate = UpdateTargetSelection & {
-  env: NodeJS.ProcessEnv;
-  runId: string;
-  originalRecoveryCapture?: UpdateRecoveryBaselineRef;
-  executor: UpdateCommandExecutor;
-  registerRun: (run: NonNullable<UpdateCommandOptions["run"]>) => Promise<void>;
-  databasePath: string;
-  configPath: string;
-  stagedPackage?: StagedPackageInstallUpdate;
-  candidateAdmission?: UpdateCandidateAdmissionResult;
-  downgradeConfirmed?: boolean;
-};
+export type InitializedUpdate = UpdateInitializationAdmission &
+  UpdateTargetSelection & {
+    executor: UpdateCommandExecutor;
+    registerRun: (run: NonNullable<UpdateCommandOptions["run"]>) => Promise<void>;
+    stagedPackage?: StagedPackageInstallUpdate;
+    candidateAdmission?: UpdateCandidateAdmissionResult;
+    downgradeConfirmed?: boolean;
+  };
 
 export async function confirmFreshUpdateDowngrade(params: {
   target: NonNullable<InitializedUpdate["target"]>;
