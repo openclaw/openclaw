@@ -283,7 +283,7 @@ struct DashboardWindowSmokeTests {
             buttonNumber: 1))
     }
 
-    @Test func `dashboard permits only trusted ClickClack discussion subframes`() throws {
+    @Test func `dashboard permits credential-free web subframes`() throws {
         let dashboard = try #require(URL(string: "http://127.0.0.1:18789/control/"))
         let channel = try #require(URL(string: "http://127.0.0.1:18890/embed/channel/T01/C01"))
         let thread = try #require(URL(string: "http://127.0.0.1:18890/embed/thread/T01/M01"))
@@ -296,27 +296,25 @@ struct DashboardWindowSmokeTests {
         let localFile = try #require(URL(string: "file:///tmp/discussion.html"))
 
         #expect(ControlUIDocumentHost.shouldAllowNavigation(
-            to: channel, dashboardURL: dashboard, isMainFrame: false, isTrustedDashboardSource: true))
+            to: channel, dashboardURL: dashboard, isMainFrame: false))
         #expect(ControlUIDocumentHost.shouldAllowNavigation(
-            to: thread, dashboardURL: dashboard, isMainFrame: false, isTrustedDashboardSource: true))
+            to: thread, dashboardURL: dashboard, isMainFrame: false))
         #expect(ControlUIDocumentHost.shouldAllowNavigation(
-            to: hostnameAlias, dashboardURL: dashboard, isMainFrame: false, isTrustedDashboardSource: true))
+            to: hostnameAlias, dashboardURL: dashboard, isMainFrame: false))
         #expect(ControlUIDocumentHost.shouldAllowNavigation(
-            to: ipv6Alias, dashboardURL: dashboard, isMainFrame: false, isTrustedDashboardSource: true))
+            to: ipv6Alias, dashboardURL: dashboard, isMainFrame: false))
         #expect(ControlUIDocumentHost.shouldAllowNavigation(
-            to: externalFrame, dashboardURL: dashboard, isMainFrame: false, isTrustedDashboardSource: true))
+            to: externalFrame, dashboardURL: dashboard, isMainFrame: false))
         #expect(ControlUIDocumentHost.shouldAllowNavigation(
-            to: externalHTTPFrame, dashboardURL: dashboard, isMainFrame: false, isTrustedDashboardSource: true))
+            to: externalHTTPFrame, dashboardURL: dashboard, isMainFrame: false))
+        #expect(ControlUIDocumentHost.shouldAllowNavigation(
+            to: unrelatedPath, dashboardURL: dashboard, isMainFrame: false))
         #expect(!ControlUIDocumentHost.shouldAllowNavigation(
             to: channel, dashboardURL: dashboard, isMainFrame: true))
         #expect(!ControlUIDocumentHost.shouldAllowNavigation(
-            to: credentialedFrame, dashboardURL: dashboard, isMainFrame: false, isTrustedDashboardSource: true))
+            to: credentialedFrame, dashboardURL: dashboard, isMainFrame: false))
         #expect(!ControlUIDocumentHost.shouldAllowNavigation(
-            to: unrelatedPath, dashboardURL: dashboard, isMainFrame: false, isTrustedDashboardSource: true))
-        #expect(!ControlUIDocumentHost.shouldAllowNavigation(
-            to: externalFrame, dashboardURL: dashboard, isMainFrame: false, isTrustedDashboardSource: false))
-        #expect(!ControlUIDocumentHost.shouldAllowNavigation(
-            to: localFile, dashboardURL: dashboard, isMainFrame: false, isTrustedDashboardSource: true))
+            to: localFile, dashboardURL: dashboard, isMainFrame: false))
     }
 
     @Test func `dashboard navigation shortcuts target the focused browser`() async throws {
