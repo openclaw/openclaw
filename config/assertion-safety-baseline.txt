@@ -11,7 +11,6 @@ extensions/active-memory/config.ts	2
 extensions/active-memory/index.ts	3
 extensions/active-memory/query.ts	2
 extensions/active-memory/transcript-result.ts	2
-extensions/admin-http-rpc/src/handler.ts	1
 extensions/amazon-bedrock-mantle/discovery.ts	3
 extensions/amazon-bedrock-mantle/mantle-anthropic.runtime.ts	4
 extensions/amazon-bedrock-mantle/register.sync.runtime.ts	2
@@ -220,7 +219,7 @@ extensions/cua-computer/src/window-actions.ts	3
 extensions/deepinfra/provider-models.ts	2
 extensions/deepseek/provider-policy-api.ts	2
 extensions/device-pair/index.ts	6
-extensions/device-pair/notify-state.ts	3
+extensions/device-pair/notify-state.ts	1
 extensions/device-pair/notify.ts	1
 extensions/diagnostics-otel/src/service-content-normalization.ts	1
 extensions/diagnostics-otel/src/service-exporter.ts	2
@@ -229,7 +228,7 @@ extensions/diagnostics-otel/src/service-propagation.ts	2
 extensions/diagnostics-otel/src/service-trace-context.ts	1
 extensions/diagnostics-otel/src/service.ts	1
 extensions/diagnostics-prometheus/src/service.ts	1
-extensions/diffs/src/config.ts	4
+extensions/diffs/src/config.ts	2
 extensions/diffs/src/language-hints.ts	6
 extensions/diffs/src/plugin.ts	4
 extensions/diffs/src/store.ts	3
@@ -468,7 +467,6 @@ extensions/imessage/src/send.ts	2
 extensions/imessage/src/setup-core.ts	1
 extensions/inworld/tts.ts	2
 extensions/irc/src/channel.ts	5
-extensions/irc/src/inbound.ts	6
 extensions/irc/src/irc-ingress.ts	9
 extensions/irc/src/message-adapter.ts	1
 extensions/irc/src/monitor.ts	1
@@ -648,12 +646,9 @@ extensions/memory-wiki/src/tool.ts	2
 extensions/microsoft-foundry/cli.ts	7
 extensions/microsoft-foundry/onboard.ts	2
 extensions/microsoft-foundry/provider.ts	1
-extensions/migrate-claude/memory.ts	1
-extensions/migrate-claude/source.ts	2
 extensions/migrate-hermes/apply.ts	1
 extensions/migrate-hermes/auth-config.ts	2
 extensions/migrate-hermes/auth.ts	1
-extensions/migrate-hermes/memory.ts	1
 extensions/migrate-hermes/model.ts	1
 extensions/minimax/model-definitions.ts	2
 extensions/minimax/music-generation-provider.ts	2
