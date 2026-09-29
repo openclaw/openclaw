@@ -2168,10 +2168,6 @@ try {
     const worker = readFileSync(swiftScriptPath, "utf8");
     const build = worker.indexOf('swift build -c "$BUILD_CONFIG" --jobs');
     expect(worker).toContain('chmod 0400 "$SWIFT_PACKAGE_LOCK_BASELINE"');
-    // A reused scratch path must never reach SwiftPM's pin-dropping full resolver first.
-    expect(worker).toContain(
-      'run_with_locked_swift_packages swift package --scratch-path "$BUILD_PATH" resolve --force-resolved-versions',
-    );
     expect(worker).toContain('cmp -s "$resolved_snapshot" "$resolved_file"');
     expect(worker).toContain('cp "$resolved_snapshot" "$resolved_file"');
     expect(worker).toContain("identity in result");
@@ -2181,6 +2177,33 @@ try {
     expect(worker.indexOf("verify_snapshot_swift_lock", build)).toBeGreaterThan(build);
     expect(worker).toContain(
       'cp "$ROOT_DIR/apps/macos-mlx-tts/Package.resolved" "$MLX_TTS_HELPER_ROOT/Package.resolved"',
+    );
+  });
+
+  it("runs no SwiftPM operation before the locked lock-file resolve", () => {
+    // Any earlier resolve on a reused scratch path can float pins before the lock guard snapshots.
+    const root = tempDirs.make("openclaw-swift-first-resolve-");
+    for (const app of ["macos", "macos-mlx-tts"]) {
+      mkdirSync(path.join(root, "apps", app), { recursive: true });
+      writeFileSync(path.join(root, "apps", app, "Package.swift"), "// fixture\n");
+      writeFileSync(path.join(root, "apps", app, "Package.resolved"), "locked\n");
+    }
+    const invocations = path.join(root, "swift-invocations");
+    const result = runHelper(`
+      set -euo pipefail
+      source ${JSON.stringify(swiftScriptPath)}
+      ROOT_DIR=${JSON.stringify(root)}
+      BUILD_ROOT="$ROOT_DIR/apps/macos/.build"
+      SWIFT_WORK_ROOT="$ROOT_DIR/work"
+      PEEKABOO_LOCKED_SOURCE_COMMIT=${JSON.stringify("b".repeat(40))}
+      swift() { printf '%s\\n' "$*" >> ${JSON.stringify(invocations)}; }
+      create_verified_peekaboo_snapshot() { exit 0; }
+      build_swift_architecture arm64
+    `);
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(readFileSync(invocations, "utf8")).toBe(
+      `package --scratch-path ${root}/apps/macos/.build/arm64 resolve --force-resolved-versions\n`,
     );
   });
 
