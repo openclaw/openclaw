@@ -411,25 +411,9 @@ export async function appendAssistantMessageToSessionTranscript(
   }
 
   return appendExactAssistantMessageToSessionTranscript({
-    agentId: params.agentId,
+    ...params,
     sessionKey,
-    ...(params.expectedSessionId ? { expectedSessionId: params.expectedSessionId } : {}),
-    ...(params.expectedLifecycleRevision !== undefined
-      ? { expectedLifecycleRevision: params.expectedLifecycleRevision }
-      : {}),
-    ...(params.expectedWriterRunId ? { expectedWriterRunId: params.expectedWriterRunId } : {}),
-    ...(params.expectedSessionState ? { expectedSessionState: params.expectedSessionState } : {}),
-    ...(params.sessionLifecyclePatch
-      ? { sessionLifecyclePatch: params.sessionLifecyclePatch }
-      : {}),
-    storePath: params.storePath,
-    ...(params.eventId ? { eventId: params.eventId } : {}),
-    ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
-    ...(params.runId ? { runId: params.runId } : {}),
-    updateMode: params.updateMode,
-    onMessageCommitted: params.onMessageCommitted,
-    config: params.config,
-    ...(params.beforeMessageWrite ? { beforeMessageWrite: params.beforeMessageWrite } : {}),
+    expectedWriterRunId: params.expectedWriterRunId || undefined,
     message: {
       ...recordAssistantManagedMediaUrls(
         { role: "assistant" as const, openclawDelivery: { mediaUrls: [] } },
