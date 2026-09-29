@@ -334,7 +334,8 @@ preserving newer beta versions. Resume incomplete stages through the selected
 route; never republish successful immutable versions.
 
 Stable direct publication passes `finalize_release_before_docker=true` (the
-standing policy above) and `wait_for_clawhub=false`. Approve the activation
+standing policy above) and `wait_for_clawhub=false`; the candidate and
+publish-preflight commands emit both for final versions on `latest`. Approve the activation
 gate (`Approve GitHub release before Docker`, `npm-release`) as soon as the
 `publish` job succeeds; that job has already verified core npm. Activation
 keeps the Linux updater carry, and Docker is still required for parent success.
