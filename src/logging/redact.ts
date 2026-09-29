@@ -195,6 +195,9 @@ function parsePattern(raw: RedactPattern): ResolvedRedactPattern | null {
     return PEM_REDACT_MATCHER;
   }
   if (typeof raw !== "string" && !(raw instanceof RegExp)) {
+    if (TOOL_PAYLOAD_AMBIGUOUS_ASSIGNMENT_PATTERNS.has(raw)) {
+      sourceAssignmentPatterns.add(raw);
+    }
     return raw;
   }
   let pattern: RegExp | null = null;

@@ -72,6 +72,63 @@ describe("default pattern table", () => {
       expect(redactSensitiveText(`pass: ${value} pass: ${value}`, { mode: "tools" })).toBe(
         "pass: opaque…7890 pass: opaque…7890",
       );
+      expect(
+        redactSensitiveText(
+          "pass: opaque-first-value-abcdefghij pass: opaque-second-value-klmnopqrst",
+          {
+            mode: "tools",
+          },
+        ),
+      ).toBe("pass: opaque…ghij pass: opaque…qrst");
+      expect(
+        redactSensitiveText(
+          "smtp.pass: opaque-first-value-abcdefghij pass: opaque-second-value-klmnopqrst",
+          { mode: "tools" },
+        ),
+      ).toBe("smtp.pass: opaque…ghij pass: opaque…qrst");
+      expect(
+        redactSensitiveText(
+          "pass:\n  opaque-first-value-abcdefghij pass: opaque-second-value-klmnopqrst",
+          { mode: "tools" },
+        ),
+      ).toBe("pass:\n  opaque…ghij pass: opaque…qrst");
+      expect(
+        redactSensitiveText(
+          "db_pass: opaque-first-value-abcdefghij pass: opaque-second-value-klmnopqrst",
+          { mode: "tools" },
+        ),
+      ).toBe("db_pass: opaque…ghij pass: opaque…qrst");
+      expect(redactSensitiveText(`bypass:\n  pass: ${value}`, { mode: "tools" })).toBe(
+        "bypass:\n  pass: opaque…7890",
+      );
+      expect(
+        redactSensitiveText(
+          "smtp.pass:\n  opaque-first-value-abcdefghij pass: opaque-second-value-klmnopqrst",
+          { mode: "tools" },
+        ),
+      ).toBe("smtp.pass:\n  opaque…ghij pass: opaque…qrst");
+      expect(
+        redactSensitiveText(
+          "password: opaque-first-value-abcdefghij pass: opaque-second-value-klmnopqrst",
+          { mode: "tools" },
+        ),
+      ).toBe("password: opaque…ghij pass: opaque…qrst");
+      expect(
+        redactSensitiveText(
+          "Authorization: Bearer opaque-bearer-token-value-1234567890 pass: opaque-second-value-klmnopqrst",
+          { mode: "tools" },
+        ),
+      ).toBe("Authorization: Bearer opaque…7890 pass: opaque…qrst");
+      expect(
+        redactSensitiveText("pass: prefix/pass:embedded\npass: opaque-second-value-klmnopqrst", {
+          mode: "tools",
+        }),
+      ).toBe("pass: prefix…dded\npass: opaque…qrst");
+      expect(redactSensitiveText(`? pass\n: ${value}`, { mode: "tools" })).toBe(
+        "? pass\n: opaque…7890",
+      );
+      const wordProse = "Use the bypass: it keeps the compass: north.";
+      expect(redactSensitiveText(wordProse, { mode: "tools" })).toBe(wordProse);
       expect(redactSensitiveText(`host:db.example.test pass: ${value}`, { mode: "tools" })).toBe(
         "host:db.example.test pass: opaque…7890",
       );
@@ -85,6 +142,8 @@ describe("default pattern table", () => {
       ).toBe("smtp:\n  pass:\n    opaque…7890\n  user: bot");
       const wrappedProse = "The boundary tests now pass:\nolder clients receive compatible values.";
       expect(redactSensitiveText(wrappedProse, { mode: "tools" })).toBe(wrappedProse);
+      const summaryProse = "Suite result: 12 pass: 0 fail, 1 skipped.";
+      expect(redactSensitiveText(summaryProse, { mode: "tools" })).toBe(summaryProse);
     });
 
     it("keeps mid-sentence pass: prose when it lands on a bounded-replacement chunk start", () => {
@@ -99,12 +158,13 @@ describe("default pattern table", () => {
     });
 
     it("stays linear on a long unbroken token before pass:", () => {
-      // One forward pass classifies every occurrence, so the cost is linear in the text. 60k stays
-      // below the size at which the Bun lane currently drops full-text masks (tracked separately).
-      const token = "a".repeat(60_000);
+      // One forward pass classifies every occurrence, so the cost is linear in the text.
+      const token = "a".repeat(200_000);
       const prose = `${token} pass: still prose`;
       expect(redactSensitiveText(prose, { mode: "tools" })).toBe(prose);
-      // The bounded key still matches the token tail, so a record shape stays masked at linear cost.
+      // The `=` after a 200k key run also exercises the default prefilter's obfuscated-key lookbehind
+      // on every runtime: JSC abandoned the previous nested form above roughly 70k characters, which
+      // skipped default redaction for the whole text on Bun.
       expect(
         redactSensitiveText(`${token}=v pass: opaque-pass-secret-1234567890`, { mode: "tools" }),
       ).toBe(`${token}=v pass: opaque…7890`);
