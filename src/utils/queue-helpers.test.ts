@@ -139,6 +139,7 @@ describe("queue summary helpers", () => {
 
 describe("waitForQueueDebounce", () => {
   it("settles one debounce window after the system clock moves backward", async () => {
+    vi.stubEnv("OPENCLAW_TEST_FAST", "0");
     vi.useFakeTimers();
     try {
       const queue = { debounceMs: 1_000, lastEnqueuedAt: Date.now() };
