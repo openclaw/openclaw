@@ -1,12 +1,12 @@
 import "@awesome.me/webawesome/dist/components/popover/popover.js";
 import type WaPopover from "@awesome.me/webawesome/dist/components/popover/popover.js";
-import { html } from "lit";
+import { html, svg } from "lit";
 import { property, state } from "lit/decorators.js";
 import { ref } from "lit/directives/ref.js";
 import emojiDefinitions from "markdown-it-emoji/lib/data/full.mjs";
 import { t } from "../i18n/index.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
-import { icons } from "./icons.ts";
+import { strokeIcon } from "./icons-tools.ts";
 import { syncPopoverLabel } from "./web-awesome-popover.ts";
 import "../styles/agent-emoji-picker.css";
 
@@ -71,14 +71,15 @@ export class AgentEmojiPicker extends OpenClawLightDomElement {
         aria-label=${t("agents.identity.chooseEmoji")}
         ?disabled=${this.disabled}
       >
-        <span class="agent-emoji-picker__current">${this.value || "🦞"}</span>
-        <span class="agent-emoji-picker__chevron" aria-hidden="true">${icons.chevronDown}</span>
+        <span class="agent-emoji-picker__icon" aria-hidden="true"
+          >${strokeIcon(svg`<circle cx="12" cy="12" r="10" /><path d="M8 14s1.5 2 4 2 4-2 4-2" /><path d="M9 9h.01M15 9h.01" />`)}</span
+        >
       </button>
       <wa-popover
         ${ref(syncPopoverLabel)}
         class="agent-emoji-picker__popover"
         for=${this.triggerId}
-        placement="bottom-start"
+        placement="bottom-end"
         without-arrow
         @wa-hide=${(event: Event) => {
           if (event.target === event.currentTarget) {

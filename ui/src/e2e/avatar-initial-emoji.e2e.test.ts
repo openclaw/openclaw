@@ -220,9 +220,10 @@ suite.define(() => {
           .poll(() => new URL(page.url()).pathname)
           .toBe("/settings/agents/emoji/overview");
         const picker = page.locator("openclaw-agent-emoji-picker");
-        await expect
-          .poll(() => picker.locator(".agent-emoji-picker__current").textContent())
-          .toBe(emojiGrapheme);
+        const emojiInput = page.locator(".agent-identity-editor__emoji").getByRole("textbox", {
+          name: "Emoji",
+        });
+        await expect.poll(() => emojiInput.inputValue()).toBe(emojiGrapheme);
         await picker.getByRole("button", { name: "Choose emoji" }).click();
         await expect.poll(() => picker.getByRole("button", { name: "lobster" }).count()).toBe(1);
         await screenshot(page, "03-agents-emoji-picker-open.png");
@@ -230,16 +231,16 @@ suite.define(() => {
         expect(await picker.getByRole("button", { name: "Use", exact: true }).count()).toBe(0);
         await picker.getByRole("searchbox", { name: "Search emoji…" }).fill("dolphin");
         await picker.getByRole("button", { name: "dolphin", exact: true }).click();
-        await expect
-          .poll(() => picker.locator(".agent-emoji-picker__current").textContent())
-          .toBe("🐬");
+        await expect.poll(() => emojiInput.inputValue()).toBe("🐬");
         await screenshot(page, "04-agents-emoji-selected.png");
+        await emojiInput.fill("🪿");
+        await expect.poll(() => emojiInput.inputValue()).toBe("🪿");
         await page
           .locator(".agent-identity-editor__actions")
           .getByRole("button", { name: "Save" })
           .click();
         const update = await gateway.waitForRequest("agents.update");
-        expect(update.params).toMatchObject({ agentId: "emoji", emoji: "🐬" });
+        expect(update.params).toMatchObject({ agentId: "emoji", emoji: "🪿" });
         await expect
           .poll(() =>
             page

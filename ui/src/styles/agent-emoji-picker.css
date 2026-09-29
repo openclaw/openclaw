@@ -3,12 +3,11 @@ openclaw-agent-emoji-picker {
 }
 
 .agent-emoji-picker__trigger {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  width: 100%;
-  min-height: 38px;
-  padding: 5px 9px;
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  padding: 0;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--bg);
@@ -24,16 +23,10 @@ openclaw-agent-emoji-picker {
   outline-offset: 2px;
 }
 
-.agent-emoji-picker__current {
-  font-size: 24px;
-  line-height: 1;
-}
-
-.agent-emoji-picker__chevron {
-  display: inline-flex;
-  width: 14px;
-  height: 14px;
-  color: var(--muted);
+.agent-emoji-picker__icon svg {
+  display: block;
+  width: 18px;
+  height: 18px;
 }
 
 wa-popover.agent-emoji-picker__popover {

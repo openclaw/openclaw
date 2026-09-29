@@ -176,81 +176,98 @@ export function renderAgentOverview(params: {
             <span class="agent-identity-editor__avatar" aria-hidden="true">
               ${renderAgentIdentityAvatar({ id: agent.id, avatar: identityAvatarUrl, textAvatar: identityDraft.emoji ?? resolveAgentTextAvatar(agent, params.agentIdentity) }, "", persistedAvatarUrl ? params.identityAvatarLoader.imageErrorHandler(persistedAvatarUrl) : undefined)}
             </span>
-            <div class="agent-identity-editor__fields">
-              <label class="field">
-                <span>${t("agents.identity.name")}</span>
-                <input
-                  type="text"
-                  maxlength="64"
-                  .value=${identityName}
-                  placeholder=${t("agents.identity.namePlaceholder")}
-                  ?disabled=${identityBusy}
-                  @input=${(e: Event) =>
-                    params.onIdentityFieldChange("name", (e.target as HTMLInputElement).value)}
-                />
-              </label>
-              <div class="field agent-identity-editor__emoji">
-                <span>${t("agents.identity.emoji")}</span>
-                <openclaw-agent-emoji-picker
-                  .value=${identityEmoji}
-                  .disabled=${identityBusy}
-                  .onSelect=${(emoji: string) => params.onIdentityFieldChange("emoji", emoji)}
-                ></openclaw-agent-emoji-picker>
-              </div>
-            </div>
-          </div>
-          ${
-            params.identityError
-              ? html`<div class="settings-row__desc" role="alert" style="color: var(--danger);">
-                  ${params.identityError}
-                </div>`
-              : nothing
-          }
-          <div class="agent-identity-editor__actions">
-            ${
-              uploadsEnabled(params.applicationConfig)
-                ? html`<button
-                      type="button"
-                      class="btn btn--sm"
+            <div class="agent-identity-editor__content">
+              <div class="agent-identity-editor__fields">
+                <label class="field">
+                  <span>${t("agents.identity.name")}</span>
+                  <input
+                    type="text"
+                    maxlength="64"
+                    .value=${identityName}
+                    placeholder=${t("agents.identity.namePlaceholder")}
+                    ?disabled=${identityBusy}
+                    @input=${(e: Event) =>
+                      params.onIdentityFieldChange("name", (e.target as HTMLInputElement).value)}
+                  />
+                </label>
+                <div class="field agent-identity-editor__emoji">
+                  <span>${t("agents.identity.emoji")}</span>
+                  <div class="agent-identity-editor__emoji-control">
+                    <input
+                      type="text"
+                      aria-label=${t("agents.identity.emoji")}
+                      .value=${identityEmoji}
                       ?disabled=${identityBusy}
-                      @click=${(event: Event) => {
-                        const button = event.currentTarget;
-                        const input =
-                          button instanceof HTMLButtonElement ? button.nextElementSibling : null;
-                        if (
-                          uploadsEnabled(params.applicationConfig) &&
-                          input instanceof HTMLInputElement
-                        ) {
-                          input.click();
+                      @input=${(event: Event) => {
+                        if (event.currentTarget instanceof HTMLInputElement) {
+                          params.onIdentityFieldChange("emoji", event.currentTarget.value);
                         }
                       }}
-                    >
-                      ${
-                        identityAvatarUrl
-                          ? t("agents.identity.replaceImage")
-                          : t("agents.identity.chooseImage")
-                      }
-                    </button>
-                    <input
-                      type="file"
-                      accept="image/*"
-                      hidden
-                      ?disabled=${identityBusy}
-                      @change=${handleAvatarFileSelect}
-                    />`
-                : nothing
-            }
-            <button
-              type="button"
-              class="btn btn--sm primary"
-              ?disabled=${identityBusy || !identityDirty || identityInvalid || (identityDraft.avatar !== null && !uploadsEnabled(params.applicationConfig))}
-              @click=${() => params.onIdentitySave()}
-            >
-              ${params.identitySaving ? t("common.saving") : t("common.save")}
-            </button>
-          </div>
-          <div class="settings-row__desc agent-identity-editor__hint">
-            ${uploadsEnabled(params.applicationConfig) ? t("agents.identity.fileHint") : nothing}
+                    />
+                    <openclaw-agent-emoji-picker
+                      .value=${identityEmoji}
+                      .disabled=${identityBusy}
+                      .onSelect=${(emoji: string) => params.onIdentityFieldChange("emoji", emoji)}
+                    ></openclaw-agent-emoji-picker>
+                  </div>
+                </div>
+              </div>
+              ${
+                params.identityError
+                  ? html`<div class="settings-row__desc" role="alert" style="color: var(--danger);">
+                      ${params.identityError}
+                    </div>`
+                  : nothing
+              }
+              <div class="agent-identity-editor__actions">
+                ${
+                  uploadsEnabled(params.applicationConfig)
+                    ? html`<button
+                          type="button"
+                          class="btn btn--sm"
+                          ?disabled=${identityBusy}
+                          @click=${(event: Event) => {
+                            const button = event.currentTarget;
+                            const input =
+                              button instanceof HTMLButtonElement
+                                ? button.nextElementSibling
+                                : null;
+                            if (
+                              uploadsEnabled(params.applicationConfig) &&
+                              input instanceof HTMLInputElement
+                            ) {
+                              input.click();
+                            }
+                          }}
+                        >
+                          ${
+                            identityAvatarUrl
+                              ? t("agents.identity.replaceImage")
+                              : t("agents.identity.chooseImage")
+                          }
+                        </button>
+                        <input
+                          type="file"
+                          accept="image/*"
+                          hidden
+                          ?disabled=${identityBusy}
+                          @change=${handleAvatarFileSelect}
+                        />`
+                    : nothing
+                }
+                <button
+                  type="button"
+                  class="btn btn--sm primary"
+                  ?disabled=${identityBusy || !identityDirty || identityInvalid || (identityDraft.avatar !== null && !uploadsEnabled(params.applicationConfig))}
+                  @click=${() => params.onIdentitySave()}
+                >
+                  ${params.identitySaving ? t("common.saving") : t("common.save")}
+                </button>
+              </div>
+              <div class="settings-row__desc agent-identity-editor__hint">
+                ${uploadsEnabled(params.applicationConfig) ? t("agents.identity.fileHint") : nothing}
+              </div>
+            </div>
           </div>
         </div>
       `,

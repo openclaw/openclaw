@@ -205,7 +205,8 @@ suite.define(() => {
         await page.setViewportSize(viewport);
         for (const [name, control] of [
           ["Display name", editor.getByRole("textbox", { name: "Display name" })],
-          ["Emoji", editor.getByRole("button", { name: "Choose emoji" })],
+          ["Emoji input", editor.getByRole("textbox", { name: "Emoji" })],
+          ["Emoji picker", editor.getByRole("button", { name: "Choose emoji" })],
         ] as const) {
           await control.focus();
           await expect
