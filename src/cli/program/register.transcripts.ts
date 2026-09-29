@@ -113,8 +113,8 @@ function selectedArtifactKind(options: TranscriptsPathOptions): TranscriptArtifa
     options.transcript ? "--transcript" : undefined,
   ].filter((option): option is string => option !== undefined);
   if (selected.length > 1) {
-    throw new Error(
-      `transcripts path accepts only one artifact selector; received ${selected.join(", ")}`,
+    process.stderr.write(
+      `warning: transcripts path received multiple artifact selectors; using ${selected[0]} (${selected.join(", ")}).\n`,
     );
   }
   if (options.dir) {
