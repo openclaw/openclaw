@@ -23,7 +23,12 @@ const FOLLOWUP_DRAIN_CONTROL_PRELOAD_PATH = resolve(
   SKILL_DIR,
   "scripts/followup-drain-control-preload.mjs",
 );
-import { currentTelegramRun, withTelegramRun, runTelegramCli } from "./telegram-run-scope.mjs";
+import {
+  currentTelegramRun,
+  withTelegramRun,
+  runTelegramCli,
+  fetchWithLease,
+} from "./telegram-run-scope.mjs";
 const CHILD_ENV_DENIED_PREFIXES = [
   "BWS_",
   "CLAWSWEEPER_",
@@ -460,28 +465,6 @@ export function writeConfig(params) {
   config = mergeConfig(config, readConfigPatch("E2E_ROOT_CONFIG_PATCH"));
   fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
   return { root, stateDir, workspace, configPath };
-}
-
-export async function fetchWithLease(
-  url,
-  init,
-  lease,
-  fetchImpl = fetch,
-  consume = (response) => response.json(),
-) {
-  const scope = currentTelegramRun();
-  scope.assertActive();
-  lease.assertHealthy();
-  const work = (async () => {
-    const signal = init.signal ? AbortSignal.any([scope.signal, init.signal]) : scope.signal;
-    const response = await fetchImpl(url, { ...init, signal });
-    scope.assertActive();
-    const payload = await consume(response);
-    scope.assertActive();
-    lease.assertHealthy();
-    return { response, payload };
-  })();
-  return await scope.trackIo(work);
 }
 
 export async function requestTelegramTestApi(token, method, body, lease, fetchImpl = fetch) {
