@@ -348,6 +348,18 @@ function parseOptionalCatalogString(
   return detachCodexCatalogString(value);
 }
 
+const CATALOG_SESSION_STRINGS = [
+  ["sessionId", "session id", MAX_SESSION_ID_LENGTH],
+  ["name", "session name", MAX_SESSION_NAME_LENGTH],
+  ["fallbackName", "session fallback name", MAX_SESSION_PREVIEW_LENGTH],
+  ["cwd", "cwd", MAX_CWD_LENGTH],
+  ["source", "source", MAX_METADATA_LENGTH],
+  ["modelProvider", "model provider", MAX_METADATA_LENGTH],
+  ["cliVersion", "CLI version", MAX_METADATA_LENGTH],
+  ["gitBranch", "Git branch", MAX_METADATA_LENGTH],
+  ["sessionKey", "OpenClaw session key", MAX_SESSION_KEY_LENGTH],
+] as const;
+
 function parseCatalogSession(
   value: unknown,
   options: { allowSessionKey?: boolean } = {},
@@ -380,57 +392,36 @@ function parseCatalogSession(
         return flag;
       })
     : undefined;
-  const sessionId = parseOptionalCatalogString(
-    value.sessionId,
-    "session id",
-    MAX_SESSION_ID_LENGTH,
-  );
-  const name =
-    value.name === null
-      ? null
-      : parseOptionalCatalogString(value.name, "session name", MAX_SESSION_NAME_LENGTH);
-  const fallbackName = parseOptionalCatalogString(
-    value.fallbackName,
-    "session fallback name",
-    MAX_SESSION_PREVIEW_LENGTH,
-  );
-  const cwd = parseOptionalCatalogString(value.cwd, "cwd", MAX_CWD_LENGTH);
-  const source = parseOptionalCatalogString(value.source, "source", MAX_METADATA_LENGTH);
-  const modelProvider = parseOptionalCatalogString(
-    value.modelProvider,
-    "model provider",
-    MAX_METADATA_LENGTH,
-  );
-  const cliVersion = parseOptionalCatalogString(
-    value.cliVersion,
-    "CLI version",
-    MAX_METADATA_LENGTH,
-  );
-  const gitBranch = parseOptionalCatalogString(value.gitBranch, "Git branch", MAX_METADATA_LENGTH);
-  const sessionKey = options.allowSessionKey
-    ? parseOptionalCatalogString(value.sessionKey, "OpenClaw session key", MAX_SESSION_KEY_LENGTH)
-    : undefined;
-  const createdAt = asFiniteNumber(value.createdAt);
-  const updatedAt = asFiniteNumber(value.updatedAt);
-  const recencyAt = value.recencyAt === null ? null : asFiniteNumber(value.recencyAt);
-  return {
+  const session: CodexSessionCatalogSession = {
     threadId: detachCodexCatalogString(value.threadId),
     status,
     archived: value.archived,
-    ...(sessionId !== undefined ? { sessionId } : {}),
-    ...(name !== undefined ? { name } : {}),
-    ...(fallbackName !== undefined ? { fallbackName } : {}),
-    ...(cwd !== undefined ? { cwd } : {}),
-    ...(activeFlags && activeFlags.length > 0 ? { activeFlags } : {}),
-    ...(createdAt !== undefined ? { createdAt } : {}),
-    ...(updatedAt !== undefined ? { updatedAt } : {}),
-    ...(recencyAt !== undefined ? { recencyAt } : {}),
-    ...(source !== undefined ? { source } : {}),
-    ...(modelProvider !== undefined ? { modelProvider } : {}),
-    ...(cliVersion !== undefined ? { cliVersion } : {}),
-    ...(gitBranch !== undefined ? { gitBranch } : {}),
-    ...(sessionKey !== undefined ? { sessionKey } : {}),
   };
+  for (const [key, label, limit] of CATALOG_SESSION_STRINGS) {
+    if (key === "sessionKey" && !options.allowSessionKey) {
+      continue;
+    }
+    if (key === "name" && value.name === null) {
+      session.name = null;
+      continue;
+    }
+    const parsed = parseOptionalCatalogString(value[key], label, limit);
+    if (parsed !== undefined) {
+      session[key] = parsed;
+    }
+  }
+  if (activeFlags?.length) {
+    session.activeFlags = activeFlags;
+  }
+  for (const key of ["createdAt", "updatedAt", "recencyAt"] as const) {
+    const parsed = asFiniteNumber(value[key]);
+    if (parsed !== undefined) {
+      session[key] = parsed;
+    } else if (key === "recencyAt" && value.recencyAt === null) {
+      session.recencyAt = null;
+    }
+  }
+  return session;
 }
 
 export function parseCatalogPage(

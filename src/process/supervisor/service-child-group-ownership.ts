@@ -14,6 +14,21 @@ type GroupMember = {
   command?: { ppid: number } & ProcessCommand;
 };
 
+/** Reject a known unsupported legacy contract before launching application work. */
+export function assertProcessGroupControl(): void {
+  if (process.platform !== "linux") {
+    return;
+  }
+  try {
+    process.kill(0, 0);
+  } catch (cause) {
+    throw new Error(
+      "Process-group ownership is unavailable; use a matching Node host and worker with native process ownership. Cleanup cannot fall back to transport-only execution.",
+      { cause },
+    );
+  }
+}
+
 /** Only kernel absence, observed outside the owned group, confirms extinction. */
 export function isOwnedProcessGroupGone(pgid: number): boolean {
   try {
