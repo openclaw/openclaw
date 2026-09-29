@@ -1,4 +1,3 @@
-// Device Pair tests cover notify plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -83,6 +82,39 @@ describe("device-pair notify persistence", () => {
           },
         },
       } as never,
+    });
+  }
+
+  function notifyCommand(
+    api: ReturnType<typeof createApi>,
+    action: string,
+    ctx: Partial<Parameters<typeof handleNotifyCommand>[0]["ctx"]> = {},
+  ) {
+    return handleNotifyCommand({
+      api,
+      action,
+      ctx: { channel: "telegram", senderId: "chat-123", ...ctx },
+    });
+  }
+
+  function setPendingRequests(
+    ...requests: Array<
+      Partial<Awaited<ReturnType<typeof listDevicePairingMock>>["pending"][number]>
+    >
+  ) {
+    listDevicePairingMock.mockResolvedValue({
+      pending: requests.map((request) =>
+        Object.assign(
+          {
+            requestId: "request-1",
+            deviceId: "device-1",
+            publicKey: "public-key-1",
+            ts: 2_000,
+          },
+          request,
+        ),
+      ),
+      paired: [],
     });
   }
 
@@ -418,16 +450,8 @@ describe("device-pair notify persistence", () => {
     await sendEntered.promise;
     expect(sendText).toHaveBeenCalledTimes(1);
 
-    await handleNotifyCommand({
-      api,
-      ctx: { channel: "telegram", senderId: "old-chat" },
-      action: "off",
-    });
-    await handleNotifyCommand({
-      api,
-      ctx: { channel: "telegram", senderId: "new-chat" },
-      action: "on",
-    });
+    await notifyCommand(api, "off", { senderId: "old-chat" });
+    await notifyCommand(api, "on", { senderId: "new-chat" });
     firstSend.resolve({ channel: "telegram", to: "old-chat" });
     await storage.requestStored("request-1");
     await vi.advanceTimersByTimeAsync(0);
@@ -516,24 +540,14 @@ describe("device-pair notify persistence", () => {
     await handleNotifyCommand(command);
     const key = notifySubscriberStoreKey({ to: "chat-123" });
     const first = await openSubscriberStore().lookup(key);
-    await handleNotifyCommand(command);
+    await notifyCommand(api, "once");
     const second = await openSubscriberStore().lookup(key);
 
     expect(first).toMatchObject({ addedAtMs: 1_000, armId: expect.any(String) });
     expect(second).toMatchObject({ addedAtMs: 1_000, armId: expect.any(String) });
     expect(second?.armId).not.toBe(first?.armId);
 
-    listDevicePairingMock.mockResolvedValue({
-      pending: [
-        {
-          requestId: "request-same-ms",
-          deviceId: "device-1",
-          publicKey: "public-key-1",
-          ts: 1_000,
-        },
-      ],
-      paired: [],
-    });
+    setPendingRequests({ requestId: "request-same-ms", ts: 1_000 });
     const service = createPairingNotifierService(api);
     try {
       await service.start({} as never);
@@ -607,30 +621,15 @@ describe("device-pair notify persistence", () => {
     await openSubscriberStore().register(notifySubscriberStoreKey(subscriber), subscriber);
     const api = createApi();
 
-    const status = await handleNotifyCommand({
-      api,
-      ctx: {
-        channel: "telegram",
-        senderId: "chat-123",
-        accountId: "telegram-default",
-        messageThreadId: "271",
-      },
-      action: "status",
+    const status = await notifyCommand(api, "status", {
+      accountId: "telegram-default",
+      messageThreadId: "271",
     });
 
     expect(status.text).toContain("Pair request notifications: enabled for this chat.");
     expect(status.text).toContain("Mode: persistent");
 
-    await handleNotifyCommand({
-      api,
-      ctx: {
-        channel: "telegram",
-        senderId: "chat-123",
-        accountId: "telegram-default",
-        messageThreadId: "271",
-      },
-      action: "off",
-    });
+    await notifyCommand(api, "off", { accountId: "telegram-default", messageThreadId: "271" });
 
     await expect(openSubscriberStore().entries()).resolves.toStrictEqual([]);
   });
@@ -653,25 +652,9 @@ describe("device-pair notify persistence", () => {
     await store.register(notifySubscriberStoreKey(secondSubscriber), secondSubscriber);
     const api = createApi();
 
-    await handleNotifyCommand({
-      api,
-      ctx: {
-        channel: "telegram",
-        senderId: "chat",
-        accountId: "123|acct",
-      },
-      action: "off",
-    });
+    await notifyCommand(api, "off", { senderId: "chat", accountId: "123|acct" });
 
-    const status = await handleNotifyCommand({
-      api,
-      ctx: {
-        channel: "telegram",
-        senderId: "chat",
-        accountId: "123|acct",
-      },
-      action: "status",
-    });
+    const status = await notifyCommand(api, "status", { senderId: "chat", accountId: "123|acct" });
     expect(status.text).toContain("Pair request notifications: disabled for this chat.");
 
     await expect(openSubscriberStore().entries()).resolves.toMatchObject([

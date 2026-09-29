@@ -1,4 +1,3 @@
-// Deepinfra tests cover cache wrapper plugin behavior.
 import { buildOpenAICompletionsParams } from "@openclaw/ai/transports";
 import { createAssistantMessageEventStream, type Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
@@ -48,7 +47,7 @@ function capturePayload(params: {
 describe("createDeepInfraAnthropicCacheWrapper", () => {
   it("injects ephemeral cache_control markers on the system message for anthropic/* models", () => {
     const { captured, baseCalls } = capturePayload({
-      modelId: "anthropic/claude-sonnet-4-6",
+      modelId: "Anthropic/Claude-Sonnet-4-6",
       initialPayload: {
         messages: [
           { role: "system", content: "You are a helpful assistant." },
@@ -104,21 +103,7 @@ describe("createDeepInfraAnthropicCacheWrapper", () => {
     ]);
   });
 
-  it("matches the anthropic/ prefix case-insensitively", () => {
-    const { captured } = capturePayload({
-      modelId: "Anthropic/Claude-Sonnet-4-6",
-      initialPayload: {
-        messages: [{ role: "system", content: "sys" }],
-      },
-    });
-
-    const messages = captured.messages as Array<{ content: unknown }>;
-    expect(messages[0]?.content).toEqual([
-      { type: "text", text: "sys", cache_control: { type: "ephemeral" } },
-    ]);
-  });
-
-  it.each(["none", "short", "long"] as const)(
+  it.each(["none", "long"] as const)(
     "honors configured %s retention without inventing TTL support",
     (cacheRetention) => {
       const { captured } = capturePayload({

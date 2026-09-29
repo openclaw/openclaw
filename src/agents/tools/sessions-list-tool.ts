@@ -410,7 +410,7 @@ export function createSessionsListTool(opts?: {
         });
 
         const entryChannel = readStringValue(entry.channel);
-        const entryOrigin = entry.origin as Record<string, unknown> | undefined;
+        const entryOrigin = entry.origin;
         const originChannel =
           typeof entryOrigin?.provider === "string" ? entryOrigin.provider : undefined;
         const deliveryContext = entry.deliveryContext;

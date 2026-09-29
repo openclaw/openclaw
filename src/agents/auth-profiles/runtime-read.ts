@@ -14,6 +14,7 @@ import {
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
+import type { ExternalCliOverlayOptions } from "./external-auth.js";
 import type { ExternalCliAuthDiscovery } from "./external-cli-discovery.js";
 import {
   assertAuthProfileMigrationCandidates,
@@ -81,16 +82,9 @@ export type AuthProfileReadOwner = {
   readStore: () => AuthProfileStore | null;
 };
 
-export type ResolvedExternalCliOverlayOptions = {
-  allowKeychainPrompt?: boolean;
-  config?: OpenClawConfig;
-  externalCliProviderIds?: Iterable<string>;
-  externalCliProfileIds?: Iterable<string>;
-};
-
 export function resolveExternalCliOverlayOptions(
   options: LoadAuthProfileStoreOptions | undefined,
-): ResolvedExternalCliOverlayOptions {
+): ExternalCliOverlayOptions {
   const discovery = options?.externalCli;
   const config = discovery?.config ?? options?.config;
   if (discovery?.mode === "none") {

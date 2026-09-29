@@ -573,7 +573,7 @@ function createPreparedLocation(
       // Register ownership before invoking native removal; concurrent callers
       // join it, and synchronous callers cannot race or report early success.
       pending = Promise.resolve()
-        .then(() => removeTempDirectoryAsync(tempDir, reportFailure))
+        .then(() => removeTempDirectoryAsync(tempDir, reportFailure, originalOwner))
         .then(complete)
         .finally(() => {
           pending = undefined;

@@ -25,7 +25,7 @@ import { normalizeAgentPlanSteps } from "../../channels/streaming.js";
 import type { AgentEventPayload } from "../../infra/agent-events.js";
 import { emitAgentEvent, withAgentRunLifecycleGeneration } from "../../infra/agent-events.js";
 import { isAgentPlanProgressToolName } from "../../session-cards/progress-card-input.js";
-import { FAST_MODE_AUTO_PROGRESS_KIND, type ReplyPayload } from "../reply-payload.js";
+import { FAST_MODE_AUTO_PROGRESS_KIND } from "../reply-payload.js";
 import { formatToolAggregate } from "../tool-meta.js";
 import type { GetReplyOptions } from "../types.js";
 import {
@@ -56,9 +56,7 @@ type ReasoningTextPayload = {
   isReasoningSnapshot?: boolean;
 };
 
-type ReasoningProgressPayload = {
-  progressTokens: number;
-};
+type ReasoningProgressPayload = Parameters<NonNullable<GetReplyOptions["onReasoningProgress"]>>[0];
 
 export function createCliReasoningStreamBridge(
   onReasoningStream: GetReplyOptions["onReasoningStream"] | undefined,
@@ -217,7 +215,7 @@ export function createCliToolSummaryTracker(params: {
   commandDetailsVisible: boolean;
   shouldEmitToolResult: () => boolean;
   shouldEmitToolOutput: () => boolean;
-  deliver: (payload: { text: string; isError?: boolean }) => Promise<void> | void;
+  deliver: NonNullable<GetReplyOptions["onToolResult"]>;
 }) {
   const toolByCallId = new Map<string, { name: string; meta?: string; commandBearing: boolean }>();
   return {
@@ -308,14 +306,14 @@ type RunCliAgentWithLifecycleParams = {
   onAssistantText?: (text: string) => Promise<boolean | void>;
   onCompletedReply?: (text: string, assistantMessageIndex: number) => Promise<void>;
   onReasoningText?: (payload: ReasoningTextPayload) => Promise<void>;
-  onReasoningProgress?: (payload: ReasoningProgressPayload) => Promise<void>;
+  onReasoningProgress?: GetReplyOptions["onReasoningProgress"];
   onCompactionStart?: GetReplyOptions["onCompactionStart"];
   onCompactionEnd?: GetReplyOptions["onCompactionEnd"];
   onToolEvent?: (payload: CliToolEventPayload) => Promise<void>;
   onItemEvent?: GetReplyOptions["onItemEvent"];
   onCommentaryText?: (payload: CommentaryTextPayload) => Promise<void>;
   onPlanUpdate?: GetReplyOptions["onPlanUpdate"];
-  onFastModeAutoProgress?: (payload: ReplyPayload) => Promise<void>;
+  onFastModeAutoProgress?: GetReplyOptions["onToolResult"];
   onErrorBeforeLifecycle?: (err: unknown) => Promise<void>;
   transformResult?: (result: EmbeddedAgentRunResult) => EmbeddedAgentRunResult;
 };
@@ -490,20 +488,11 @@ async function runCliAgentWithLifecycleInternal(
       Value.Check(AgentActivityItemSchema, evt.data)
         ? evt.data
         : undefined,
-    deliver: params.onItemEvent
-      ? async (item) => {
-          await params.onItemEvent?.(item);
-        }
-      : undefined,
+    deliver: params.onItemEvent ? (item) => params.onItemEvent?.(item) : undefined,
   });
-  const onPlanUpdate = params.onPlanUpdate;
   const planBridge = createAgentEventBridge({
     ...progressBridgeParams,
-    deliver: onPlanUpdate
-      ? async (payload) => {
-          await onPlanUpdate(payload);
-        }
-      : undefined,
+    deliver: params.onPlanUpdate,
     read: readPlanUpdatePayload,
   });
   const toolBoundaryBridge = createAgentEventBridge({
