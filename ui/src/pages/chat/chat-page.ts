@@ -156,7 +156,14 @@ export class ChatPage extends OpenClawLightDomElement implements SessionSplitHos
         () => this.context?.nativeConversation,
         (bridge, notify) => bridge.subscribe(notify),
       );
-    new SessionPrefetchController(this, this.messageCache, this.snapshotStore, () => this.context);
+    this.addController(
+      new SessionPrefetchController(
+        this,
+        this.messageCache,
+        this.snapshotStore,
+        () => this.context,
+      ),
+    );
   }
 
   override connectedCallback() {

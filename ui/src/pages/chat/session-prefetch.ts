@@ -552,7 +552,6 @@ export class SessionPrefetchController implements ReactiveController {
   ) {
     this.paneRoot = host;
     this.prefetcher = new SessionPrefetcher(cache, snapshotStore);
-    host.addController(this);
   }
 
   hostConnected(): void {
