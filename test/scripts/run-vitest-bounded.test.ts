@@ -264,7 +264,10 @@ syncBuiltinESMExports();
       const pidPath = path.join(root, "builder.pid");
       const executable = path.join(root, "command.mjs");
       const preload = path.join(root, "preload.mjs");
+      const includeFile = path.join(root, "include.json");
       const aiDeclarations = path.join(root, "ai-declarations");
+      // Keep the AI E2E consumer selected without activating Doctor's worker compiler.
+      fs.writeFileSync(includeFile, JSON.stringify(["packages/ai/src/package.e2e.test.ts"]));
       if (outcome === "prebuilt") {
         // A complete prebuilt generation includes the typed AI package.
         fs.writeFileSync(aiDeclarations, "");
@@ -329,6 +332,9 @@ syncBuiltinESMExports();
       }
       if (outcome === "skip") {
         env.OPENCLAW_E2E_SKIP_BUILD = "1";
+      }
+      if (outcome !== "custom") {
+        env.OPENCLAW_VITEST_INCLUDE_FILE = includeFile;
       }
       const child = spawn(
         testNodeExecPath,

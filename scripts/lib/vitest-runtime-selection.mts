@@ -6,6 +6,10 @@ import {
   type VitestRuntimeTestSelection,
 } from "./vitest-build-prerequisites.mts";
 
+// Doctor maintenance reaches the SQLite broker during this timed E2E case.
+const doctorDatabaseWorkerE2E =
+  "src/commands/doctor.runs-legacy-state-migrations-yes-mode-without.e2e.test.ts";
+
 /** Bind installed CLI matching without adding runtime dependencies to CI planning. */
 export function resolveVitestRuntimeCliSelections(
   config: string,
@@ -36,9 +40,18 @@ export function shouldPrepareVitestCoreWorkers(
       (shard) => shard.config === config && shard.projects.includes(infra),
     );
   return (
-    includesInfra &&
-    databaseWorkerCoreTestFiles.some((file) =>
-      matchesVitestCliSelection(file, [file], args, "", env, includePatterns),
-    )
+    (includesInfra &&
+      databaseWorkerCoreTestFiles.some((file) =>
+        matchesVitestCliSelection(file, [file], args, "", env, includePatterns),
+      )) ||
+    (config === "test/vitest/vitest.e2e.config.ts" &&
+      matchesVitestCliSelection(
+        doctorDatabaseWorkerE2E,
+        [doctorDatabaseWorkerE2E],
+        args,
+        "",
+        env,
+        includePatterns,
+      ))
   );
 }

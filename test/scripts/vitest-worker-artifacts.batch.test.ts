@@ -76,6 +76,8 @@ process.exitCode = await runVitestBatch({
 
 const coreWorker = "src/infra/sqlite-worker-operation-attachment.test.ts";
 const infraConfig = "test/vitest/vitest.infra.config.ts";
+const doctorE2E = "src/commands/doctor.runs-legacy-state-migrations-yes-mode-without.e2e.test.ts";
+const e2eConfig = "test/vitest/vitest.e2e.config.ts";
 
 it.for([
   { name: "worker", args: [coreWorker], prepare: true },
@@ -88,6 +90,21 @@ it.for([
   { name: "worker include", args: [], include: [coreWorker], prepare: true },
   { name: "nonmatching include", args: [coreWorker], include: ["test/**"], prepare: false },
   { name: "root config", config: "vitest.config.ts", args: [coreWorker], prepare: true },
+  { name: "focused Doctor E2E", config: e2eConfig, args: [doctorE2E], prepare: true },
+  { name: "unfiltered E2E", config: e2eConfig, args: [], prepare: true },
+  {
+    name: "excluded Doctor E2E",
+    config: e2eConfig,
+    args: [doctorE2E, "--exclude", doctorE2E],
+    prepare: false,
+  },
+  { name: "Doctor E2E include", config: e2eConfig, args: [], include: [doctorE2E], prepare: true },
+  {
+    name: "other E2E",
+    config: e2eConfig,
+    args: ["src/commands/doctor.other.e2e.test.ts"],
+    prepare: false,
+  },
   { name: "custom config", config: "custom.config.ts", args: [coreWorker], prepare: false },
 ])(
   "selects eager worker preparation for $name",
@@ -110,6 +127,7 @@ it.runIf(process.platform !== "win32").for(
       "custom-root",
       "custom-project",
       ...(route === "direct" ? ["include-worker", "include-excluded"] : []),
+      ...(route === "projects" ? ["doctor-e2e"] : []),
     ].map((mode) => ({
       route,
       mode,
@@ -208,7 +226,7 @@ syncFixtureBuiltinExports();
               "--import",
               "./scripts/tsx.mjs",
               "scripts/test-projects.mts",
-              coreWorker,
+              mode === "doctor-e2e" ? doctorE2E : coreWorker,
               "--",
               ...controls,
             ];
@@ -223,12 +241,13 @@ syncFixtureBuiltinExports();
         ...process.env,
         // Each nested invocation owns its selection, independently of the outer tooling shard.
         OPENCLAW_VITEST_INCLUDE_FILE: includeFile,
+        ...(mode === "doctor-e2e" ? { OPENCLAW_E2E_SKIP_BUILD: "1" } : {}),
         ...fixturePreloadEnv(preload, "node"),
       });
       expect(result.code, result.stdout + result.stderr).toBe(
         mode === "cancel" ? 143 : mode === "failure" ? 1 : 0,
       );
-      const ready = mode === "ready" || mode === "include-worker";
+      const ready = mode === "ready" || mode === "include-worker" || mode === "doctor-e2e";
       const prepared = ready || mode === "failure" || mode === "cancel";
       expect(fs.existsSync(compilerReceipt)).toBe(prepared);
       if (mode === "failure" || mode === "cancel") {
