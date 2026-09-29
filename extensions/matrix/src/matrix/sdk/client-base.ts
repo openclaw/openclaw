@@ -10,7 +10,6 @@ import {
 import { VerificationMethod } from "matrix-js-sdk/lib/types.js";
 import { captureChannelReadAuthority } from "openclaw/plugin-sdk/fetch-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/ssrf-dispatcher";
 import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { SqliteBackedMatrixSyncStore } from "../client/file-sync-store.js";
@@ -28,6 +27,7 @@ import {
 import { quiesceMatrixClientSync } from "./client-sync-quiesce.js";
 import { waitForMatrixInitialSyncReady } from "./client-sync-ready.js";
 import type { MatrixCryptoFacade } from "./crypto-facade.js";
+import * as cryptoRuntime from "./crypto-runtime-loader.js";
 import type { MatrixDecryptBridge } from "./decrypt-bridge.js";
 import { matrixEventToRaw } from "./event-helpers.js";
 import { MatrixAuthedHttpClient } from "./http-client.js";
@@ -41,18 +41,7 @@ import { createMatrixGuardedFetch } from "./transport.js";
 import type { MatrixClientEventMap, MatrixCryptoBootstrapApi, MatrixRawEvent } from "./types.js";
 import type { MatrixVerificationSummary } from "./verification-manager.js";
 
-type MatrixCryptoRuntime = typeof import("./crypto-runtime.js");
-
 const MATRIX_ENCRYPTED_STARTUP_TIMEOUT_MS = 60_000;
-
-let loadedMatrixCryptoRuntime: MatrixCryptoRuntime | null = null;
-
-export const loadMatrixCryptoRuntime = createLazyRuntimeModule(() =>
-  import("./crypto-runtime.js").then((runtime) => {
-    loadedMatrixCryptoRuntime = runtime;
-    return runtime;
-  }),
-);
 
 export abstract class MatrixClientBase {
   abstract getUserId(): Promise<string>;
@@ -229,11 +218,26 @@ export abstract class MatrixClientBase {
       deviceId: opts.deviceId,
       logger: createMatrixJsSdkClientLogger("MatrixClient"),
       localTimeoutMs: this.localTimeoutMs,
-      fetchFn: guardedFetch,
+      fetchFn: (async (resource: RequestInfo | URL, init?: RequestInit) => {
+        // The SDK cache callback is void; even stores without a key getter must
+        // settle its admitted writes before another request reaches the wire.
+        await this.recoveryKeyStore.drainPendingPersistence();
+        await cryptoRuntime.persistCryptoBeforeKeyUpload({
+          resource,
+          init,
+          encryptionEnabled: this.encryptionEnabled,
+          snapshotPath: this.idbSnapshotPath,
+          databasePrefix: this.cryptoDatabasePrefix,
+          stateRuntime: this.stateRuntime,
+        });
+        return await guardedFetch(resource, init);
+      }) as typeof fetch, // SAFETY: The SDK callback generic is not expressible across this plugin boundary.
       scheduler: new MatrixSendScheduler((event) =>
         this.messageWireDispatchGuards.wasCurrentnessRejected(event.getTxnId()),
       ),
       store: this.syncStore,
+      // SAFETY: Matrix SDK crypto callbacks use a structurally compatible callback shape
+      // whose concrete generic type is not expressible across this plugin boundary.
       cryptoCallbacks: cryptoCallbacks as never,
       verificationMethods: [
         VerificationMethod.Sas,
@@ -281,8 +285,7 @@ export abstract class MatrixClientBase {
     ) {
       return;
     }
-
-    const runtime = await loadMatrixCryptoRuntime();
+    const runtime = await cryptoRuntime.loadMatrixCryptoRuntime();
     this.decryptBridge ??= new runtime.MatrixDecryptBridge<MatrixRawEvent>({
       client: this.client,
       toRaw: (event) => matrixEventToRaw(event, { contentMode: "original" }),
@@ -563,7 +566,7 @@ export abstract class MatrixClientBase {
       }
       await Promise.all([this.recoveryKeyStore.close(), activePeriodicPersist]);
       if (persist) {
-        const runtime = loadedMatrixCryptoRuntime ?? (await loadMatrixCryptoRuntime());
+        const runtime = await cryptoRuntime.getOrLoadMatrixCryptoRuntime();
         await runtime.persistIdbToDisk({
           snapshotPath: this.idbSnapshotPath,
           databasePrefix: this.cryptoDatabasePrefix,
@@ -675,9 +678,7 @@ export abstract class MatrixClientBase {
 
   private async initializeCrypto(abortSignal: AbortSignal): Promise<void> {
     throwIfMatrixStartupAborted(abortSignal);
-    const { persistIdbToDisk, restoreIdbFromDisk } = await loadMatrixCryptoRuntime();
-
-    // Restore persisted IndexedDB crypto store before initializing WASM crypto.
+    const { persistIdbToDisk, restoreIdbFromDisk } = await cryptoRuntime.loadMatrixCryptoRuntime();
     await restoreIdbFromDisk(this.idbSnapshotPath, this.stateRuntime);
     throwIfMatrixStartupAborted(abortSignal);
 
