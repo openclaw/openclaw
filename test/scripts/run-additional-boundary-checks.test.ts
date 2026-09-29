@@ -89,6 +89,103 @@ async function waitForNotRunning(pid: number, timeoutMs: number): Promise<void> 
 }
 
 describe("run-additional-boundary-checks", () => {
+  it("runs graph discovery under its own termination owner", () => {
+    expect(BOUNDARY_CHECKS.find((check) => check.label === "lint:tmp:tsgo-core-boundary")).toEqual({
+      label: "lint:tmp:tsgo-core-boundary",
+      command: process.execPath,
+      args: ["--import", "./scripts/tsx.mjs", "scripts/check-tsgo-core-boundary.mts"],
+      terminationOwner: "implementation",
+    });
+  });
+
+  it.skipIf(process.platform === "win32").each(["timeout", "SIGINT", "SIGTERM", "SIGHUP"] as const)(
+    "joins implementation cleanup after %s without admitting queued work on cancellation",
+    async (mode) => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "boundary-owned-cleanup-"));
+      const files = Object.fromEntries(
+        ["pid", "cancelled", "survived", "release", "queued"].map((name) => [
+          name,
+          path.join(root, name),
+        ]),
+      );
+      let ownerPid: number | undefined;
+      let runner: ReturnType<typeof spawn> | undefined;
+      let close: ReturnType<typeof waitForChildClose> | undefined;
+      const owner = `
+const fs = require("node:fs");
+const files = ${JSON.stringify(files)};
+let stopping = false;
+for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(signal, () => {
+  if (stopping) return;
+  stopping = true;
+  fs.writeFileSync(files.cancelled, signal);
+  // Cross the disposable-child deadline before offering the release barrier.
+  setTimeout(() => fs.writeFileSync(files.survived, "alive"), 350);
+});
+const poll = setInterval(() => {
+  if (stopping && fs.existsSync(files.release)) {
+    clearInterval(poll);
+    process.stdout.write("cleanup-joined\\n");
+    process.exitCode = 0;
+  }
+}, 10);
+fs.writeFileSync(files.pid + ".tmp", String(process.pid));
+fs.renameSync(files.pid + ".tmp", files.pid);
+`;
+      const script = `
+import { runChecks } from ${JSON.stringify(new URL("../../scripts/run-additional-boundary-checks.mts", import.meta.url).href)};
+const checks = [{
+  label: "owned",
+  command: process.execPath,
+  args: ["-e", ${JSON.stringify(owner)}],
+  terminationOwner: "implementation",
+}];
+${
+  mode === "timeout"
+    ? ""
+    : `checks.push({
+  label: "queued",
+  command: process.execPath,
+  args: ["-e", ${JSON.stringify(`require("node:fs").writeFileSync(${JSON.stringify(files.queued)}, "started")`)}],
+});`
+}
+process.exitCode = await runChecks(checks, {
+  concurrency: 1, checkTimeoutMs: ${mode === "timeout" ? 1000 : 30000},
+}) ? 1 : 0;
+`;
+      try {
+        runner = spawn(process.execPath, ["--input-type=module", "--eval", script], {
+          cwd: process.cwd(),
+          env: process.env,
+          stdio: ["ignore", "ignore", "pipe"],
+        });
+        close = waitForChildClose(runner, 10_000);
+        void close.catch(() => {});
+        ownerPid = await waitForPidFile(files.pid!, 2000);
+        if (mode !== "timeout") runner.kill(mode);
+        await waitForFile(files.cancelled!, 3000);
+        if (mode !== "timeout") runner.kill(mode);
+        await waitForFile(files.survived!, 2000);
+        expect(isProcessAlive(ownerPid)).toBe(true);
+        expect(runner.exitCode).toBeNull();
+        expect(fs.existsSync(files.queued!)).toBe(false);
+        fs.writeFileSync(files.release!, "release");
+        await expect(close).resolves.toEqual(
+          mode === "timeout" ? { code: 1, signal: null } : { code: null, signal: mode },
+        );
+        await waitForNotRunning(ownerPid, 2000);
+        expect(fs.existsSync(files.queued!)).toBe(false);
+      } finally {
+        fs.writeFileSync(files.release!, "release");
+        if (ownerPid && isProcessAlive(ownerPid)) process.kill(ownerPid, "SIGKILL");
+        if (runner && runner.exitCode === null && runner.signalCode === null)
+          runner.kill("SIGKILL");
+        await close?.catch(() => {});
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("keeps prompt snapshot drift checks out of boundary shards", () => {
     // The snapshot check regenerates prompt fixtures over the full agent
     // tool/prompt import graph; packing it into a boundary shard makes that

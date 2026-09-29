@@ -1,13 +1,17 @@
+import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 const require = createRequire(import.meta.url);
 
 /** Availability only; integration assertions still verify the actual kernel scope. */
 export function hasSemanticTestBackend(): boolean {
-  if (process.platform !== "linux") return false;
+  if (process.platform !== "linux") {
+    return false;
+  }
   try {
     return (
       fs
@@ -153,4 +157,62 @@ export function installNativeAncestorTypes(ancestor: string, root: string) {
     path.join(peerRoot, "synthetic-core"),
     "junction",
   );
+}
+
+/** Crash fixtures retain admission deliberately; isolate their OS account identity. */
+export function semanticFixtureEnv(root: string): NodeJS.ProcessEnv {
+  const preload = path.join(root, "semantic-account.mjs");
+  fs.writeFileSync(
+    preload,
+    `import os from 'node:os';
+import fs from 'node:fs';
+const userInfo = os.userInfo.bind(os);
+os.userInfo = (options) => ({ ...userInfo(options), homedir: ${JSON.stringify(root)} });
+if (process.argv[1]?.endsWith('/scripts/run-tsgo.mts') ||
+    (process.argv[1]?.endsWith('/scripts/lib/dist-artifact-ownership.mts') &&
+     process.argv[2]?.endsWith('/scripts/run-tsgo.mts'))) {
+  fs.writeFileSync(${JSON.stringify(path.join(root, "semantic-supervisor.pid"))}, String(process.pid));
+}
+`,
+  );
+  return {
+    ...process.env,
+    NODE_OPTIONS: [process.env.NODE_OPTIONS, `--import=${pathToFileURL(preload).href}`]
+      .filter(Boolean)
+      .join(" "),
+  };
+}
+
+/** Join only kernel scopes whose receipts were produced inside this private fixture. */
+export function stopSemanticFixtureScopes(root: string) {
+  const directory = path.join(root, ".cache/openclaw/semantic-checks");
+  for (const file of fs.existsSync(directory) ? fs.readdirSync(directory) : []) {
+    if (!file.endsWith(".scope-owner")) {
+      continue;
+    }
+    const unit = fs.readFileSync(path.join(directory, file), "utf8").trim();
+    assert.match(unit, /^openclaw-check-[a-f0-9-]+\.scope$/u);
+    for (const args of [["kill", "--kill-whom=all", "--signal=SIGKILL"], ["stop"]]) {
+      spawnSync("systemctl", ["--user", ...args, unit], { timeout: 5_000 });
+    }
+    const state = spawnSync(
+      "systemctl",
+      ["--user", "show", "--property=LoadState", "--property=ControlGroup", unit],
+      { encoding: "utf8", timeout: 5_000 },
+    );
+    assert.equal(state.error, undefined);
+    const fields = Object.fromEntries(
+      state.stdout
+        .trim()
+        .split("\n")
+        .map((line) => line.split("=")),
+    );
+    if (fields.LoadState !== "not-found") {
+      assert(fields.ControlGroup?.endsWith("/" + unit));
+      assert.match(
+        fs.readFileSync(path.join("/sys/fs/cgroup", fields.ControlGroup, "cgroup.events"), "utf8"),
+        /^populated 0$/mu,
+      );
+    }
+  }
 }

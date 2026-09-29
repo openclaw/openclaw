@@ -15,28 +15,36 @@ it.for(
   ),
 )("owns $signal through $outcome cleanup", async ({ signal, exitCode, outcome }) => {
   const previous = process.listeners(signal);
-  const release = createDeferred<void>();
+  const release = createDeferred();
   const failure = Object.assign(
     new Error("cleanup failed", {
       cause: outcome === "unjoined" ? { processTreeState: "indeterminate" } : undefined,
     }),
     { code: outcome === "unjoined" ? "ABORT_ERR" : "EIO" },
   );
+  const observed: NodeJS.Signals[] = [];
   let aborted = false;
   let settled = false;
-  const command = runCancelableCommand(async (abortSignal) => {
-    abortSignal.addEventListener(
-      "abort",
-      () => {
-        aborted = true;
-      },
-      { once: true },
-    );
-    await release.promise;
-    if (outcome === "abort") abortSignal.throwIfAborted();
-    if (outcome === "release failure" || outcome === "unjoined") throw failure;
-    return 7;
-  });
+  const command = runCancelableCommand(
+    async (abortSignal) => {
+      abortSignal.addEventListener(
+        "abort",
+        () => {
+          aborted = true;
+        },
+        { once: true },
+      );
+      await release.promise;
+      if (outcome === "abort") {
+        abortSignal.throwIfAborted();
+      }
+      if (outcome === "release failure" || outcome === "unjoined") {
+        throw failure;
+      }
+      return 7;
+    },
+    { onSignal: (value) => observed.push(value) },
+  );
   const result = command
     .then(
       (value) => ({ value }),
@@ -49,6 +57,8 @@ it.for(
     // Invoke only this operation's listener; never signal the shared test process.
     const handler = process.listeners(signal).find((entry) => !previous.includes(entry))!;
     handler(signal);
+    handler(signal);
+    expect(observed).toEqual([signal]);
     // The leaf sees the original signal before generic abort; ownership stays
     // pending for arbitrary asynchronous cleanup, without a second grace timer.
     expect(aborted).toBe(false);

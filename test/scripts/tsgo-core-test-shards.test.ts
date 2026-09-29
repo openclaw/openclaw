@@ -24,6 +24,7 @@ import { isProcessAlive, waitForPidFile } from "../helpers/process-wait.js";
 import { runNodeScript } from "../helpers/run-node-script.js";
 import { createNestedGitEnv } from "../helpers/temp-repo.js";
 import {
+  hasSemanticTestBackend,
   materializeNativeCompiler,
   overrideNativeFixtureExecutable,
 } from "./native-boundary-fixture.js";
@@ -492,7 +493,7 @@ export async function runPreparedTsgoCommand(args, options) {
   });
 });
 
-it.runIf(process.platform !== "win32")(
+it.runIf(hasSemanticTestBackend())(
   "checks a helper type error in its transitive test consumers without repeating enumeration",
   ({ signal }) =>
     lifetime.run(async () => {

@@ -3,11 +3,14 @@
 // Enforces core tsgo project boundaries and sparse-checkout safety.
 import { realpathSync } from "node:fs";
 import path from "node:path";
+import { isCommandCancellation, runCancelableCommand } from "./lib/cancelable-command.mts";
 import { reportLimitViolations } from "./lib/check-limits.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
+import { writeFailedTrailer } from "./lib/failed-trailer.mts";
 import { resolveRepoToolBinPath } from "./lib/local-check-runtime.mts";
-import { runManagedCommand, signalExitCode } from "./lib/managed-child-process.mts";
+import { signalExitCode } from "./lib/managed-child-process.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
+import { runSemanticCheck } from "./lib/semantic-check-admission.mts";
 import {
   findOversizedTsgoCoreTestShards,
   findTsgoCoreTestShardViolations,
@@ -42,23 +45,20 @@ async function runTsgoQuery(
   query: string,
   label: string,
   cwd: string,
+  signal: AbortSignal,
 ): Promise<string> {
   const outputs: Buffer[][] = [[], []];
   const overflow = new AbortController();
   let outputBytes = 0;
-  let receivedSignal: NodeJS.Signals | undefined;
   let code: number;
   try {
-    code = await runManagedCommand({
+    code = await runSemanticCheck({
       bin: tsgoPath,
       args: ["-p", config, "--pretty", "false", query],
       cwd,
       stdio: ["ignore", "pipe", "pipe"],
-      signal: overflow.signal,
+      signal: AbortSignal.any([signal, overflow.signal]),
       requireProcessTreeExit: process.platform !== "win32",
-      onSignal(signal) {
-        receivedSignal = signal;
-      },
       onReady(child) {
         for (const [index, stream] of [child.stdout!, child.stderr!].entries()) {
           stream.on("data", (chunk: Buffer) => {
@@ -66,7 +66,7 @@ async function runTsgoQuery(
               return;
             }
             outputBytes += chunk.byteLength;
-            // Inventory must be complete; preserve spawnSync's bound and fail rather than truncate.
+            // Inventory must be complete; preserve the existing bound and fail rather than truncate.
             if (outputBytes > 256 * 1024 * 1024) {
               overflow.abort();
               return;
@@ -77,14 +77,16 @@ async function runTsgoQuery(
       },
     });
   } catch (error) {
+    // Never hide an unjoined tree or filesystem failure behind cancellation.
+    if (!isCommandCancellation(error)) {
+      throw error;
+    }
     if (overflow.signal.aborted) {
       throw new Error(`${label} output exceeded 256 MiB`, { cause: error });
     }
     throw error;
   }
-  if (receivedSignal) {
-    throw new CoreTsgoBoundaryInterruptedError(receivedSignal);
-  }
+  signal.throwIfAborted();
   const [stdout, stderr] = outputs.map((chunks) => Buffer.concat(chunks).toString("utf8"));
   if (code !== 0) {
     throw new Error(
@@ -97,12 +99,13 @@ async function runTsgoQuery(
 async function readGraphConfig(
   config: string,
   cwd: string,
+  signal: AbortSignal,
 ): Promise<{
   compilerOptions?: { tsBuildInfoFile?: string };
   files?: string[];
 }> {
   return JSON.parse(
-    await runTsgoQuery(config, "--showConfig", `${config} config expansion`, cwd),
+    await runTsgoQuery(config, "--showConfig", `${config} config expansion`, cwd, signal),
   ) as {
     compilerOptions?: { tsBuildInfoFile?: string };
     files?: string[];
@@ -116,19 +119,49 @@ export type CoreTsgoGraph = {
   files: readonly string[];
 };
 
+async function withBoundaryCancellation(
+  run: (signal: AbortSignal) => Promise<CoreTsgoGraph[]>,
+): Promise<CoreTsgoGraph[]> {
+  let graphs: CoreTsgoGraph[] | undefined;
+  let received: NodeJS.Signals | undefined;
+  // Own the whole discovery lifetime, including admission and gaps between queries.
+  await runCancelableCommand(
+    async (signal) => {
+      graphs = await run(signal);
+      return 0;
+    },
+    {
+      onSignal: (signal) => {
+        received = signal;
+      },
+    },
+  );
+  if (received) {
+    throw new CoreTsgoBoundaryInterruptedError(received);
+  }
+  return graphs!;
+}
+
 /** Validates all boundaries and returns this invocation's compiler-resolved inputs. */
 export async function checkCoreTsgoGraphBoundary(
   options: { cwd?: string } = {},
 ): Promise<CoreTsgoGraph[]> {
   const cwd = realpathSync(options.cwd ?? repoRoot);
+  return await withBoundaryCancellation((signal) => readCoreTsgoGraphBoundary(cwd, signal));
+}
+
+async function readCoreTsgoGraphBoundary(
+  cwd: string,
+  signal: AbortSignal,
+): Promise<CoreTsgoGraph[]> {
   const normalize = (file: string) => normalizeFilePath(file, cwd);
   const testRootPattern = /\.test\.(?:ts|tsx)$/u;
-  const canonicalRoots = ((await readGraphConfig(canonicalCoreTestConfig, cwd)).files ?? [])
+  const canonicalRoots = ((await readGraphConfig(canonicalCoreTestConfig, cwd, signal)).files ?? [])
     .map(normalize)
     .filter((file) => testRootPattern.test(file));
   const shardConfigs = [];
   for (const shard of TSGO_CORE_TEST_SHARDS) {
-    shardConfigs.push({ ...shard, expanded: await readGraphConfig(shard.config, cwd) });
+    shardConfigs.push({ ...shard, expanded: await readGraphConfig(shard.config, cwd, signal) });
   }
   const shardRoots = shardConfigs.map((shard) => ({
     name: shard.name,
@@ -178,7 +211,7 @@ export async function checkCoreTsgoGraphBoundary(
   const graphs: CoreTsgoGraph[] = [];
   for (const graph of TSGO_CORE_GRAPHS) {
     const files = (
-      await runTsgoQuery(graph.config, "--listFilesOnly", `${graph.name} file listing`, cwd)
+      await runTsgoQuery(graph.config, "--listFilesOnly", `${graph.name} file listing`, cwd, signal)
     )
       .split(/\r?\n/u)
       .map(normalize)
@@ -214,17 +247,25 @@ export async function inspectCiTsgoCheckGraphs(
   options: { cwd?: string } = {},
 ): Promise<CoreTsgoGraph[]> {
   const cwd = realpathSync(options.cwd ?? repoRoot);
-  const graphs = await checkCoreTsgoGraphBoundary({ cwd });
-  for (const graph of TSGO_CI_ADDITIONAL_GRAPHS) {
-    const files = (
-      await runTsgoQuery(graph.config, "--listFilesOnly", `${graph.name} file listing`, cwd)
-    )
-      .split(/\r?\n/u)
-      .map((file) => normalizeFilePath(file, cwd))
-      .filter(Boolean);
-    graphs.push({ ...graph, files, roots: [] });
-  }
-  return graphs;
+  return await withBoundaryCancellation(async (signal) => {
+    const graphs = await readCoreTsgoGraphBoundary(cwd, signal);
+    for (const graph of TSGO_CI_ADDITIONAL_GRAPHS) {
+      const files = (
+        await runTsgoQuery(
+          graph.config,
+          "--listFilesOnly",
+          `${graph.name} file listing`,
+          cwd,
+          signal,
+        )
+      )
+        .split(/\r?\n/u)
+        .map((file) => normalizeFilePath(file, cwd))
+        .filter(Boolean);
+      graphs.push({ ...graph, files, roots: [] });
+    }
+    return graphs;
+  });
 }
 
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {
@@ -233,5 +274,6 @@ if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = error instanceof CoreTsgoBoundaryInterruptedError ? error.exitCode : 1;
+    writeFailedTrailer("tsgo-boundary", process.exitCode);
   }
 }

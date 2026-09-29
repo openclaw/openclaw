@@ -9,13 +9,19 @@ export function isCommandCancellation(error: unknown) {
 }
 
 /** Keep the command owner alive through leaf cleanup and asynchronous ownership release. */
-export async function runCancelableCommand(run: (signal: AbortSignal) => Promise<number>) {
+export async function runCancelableCommand(
+  run: (signal: AbortSignal) => Promise<number>,
+  options: { onSignal?: (signal: NodeJS.Signals) => void } = {},
+) {
   const controller = new AbortController();
   let received: NodeJS.Signals | undefined;
   const handlers = new Map<NodeJS.Signals, () => void>();
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
     const handler = () => {
-      received ??= signal;
+      if (!received) {
+        received = signal;
+        options.onSignal?.(signal);
+      }
       // Let active leaves receive the original OS signal before generic abort.
       queueMicrotask(() => controller.abort());
     };

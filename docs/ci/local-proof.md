@@ -163,6 +163,31 @@ index, so remote results describe those materialized files rather than an exact
 copy of the staged snapshot. Keep the intended proof files consistent before
 using that route.
 
+## Contained compiler graph discovery
+
+Compiler boundary discovery uses one semantic-check slot per host and OS account,
+shared across checkouts. Each native compiler query runs in a verified Linux
+cgroup with swap disabled. The limit is the smallest of 8 GiB, half the detected
+capacity, and half the current effective memory ceiling. Unknown usage or less
+than 512 MiB of admissible memory prevents the query from starting.
+
+The default 15-minute deadline includes waiting for the shared slot. Expiry does
+not authorize another compiler to start: the owner joins process-tree cleanup
+before releasing admission. Unverified cleanup retains ownership and reports a
+failure. Go heap settings remain soft tuning inside this hard process-tree cap.
+
+Direct discovery on macOS, Windows, or Linux without the verified backend fails
+with an actionable error. It does not fall back to an unbounded compiler. Use a
+qualified remote worker or a memory-limited Linux VM. For example:
+
+```bash
+node scripts/crabbox-wrapper.mjs run --workload ci-fast --target linux -- corepack pnpm lint:tmp:tsgo-core-boundary
+```
+
+This policy covers native compiler queries used by boundary discovery. Other
+commands need their own containment integration; a configured Go heap target or
+a helper's presence alone does not establish a hard memory limit.
+
 ## Workflow lint tools
 
 `pnpm check:workflows` requires actionlint built from the revision pinned in

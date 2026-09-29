@@ -24,7 +24,13 @@ const POST_FORCE_KILL_WAIT_MS = 250;
 
 type ProcessSignal = `SIG${string}`;
 type TimerHandle = ReturnType<typeof setTimeout>;
-type BoundaryCheck = { args: string[]; command: string; label: string };
+type BoundaryCheck = {
+  args: string[];
+  command: string;
+  label: string;
+  terminationOwner?: "implementation";
+};
+type ActiveChecks = Map<ChildProcess, { ownsTermination: boolean; completion: Promise<void> }>;
 
 type BoundaryShard = { count: number; index: number; label: string };
 type OutputWriter = { write(chunk: string): boolean };
@@ -42,7 +48,7 @@ type CheckExecutionOptions = {
   env: NodeJS.ProcessEnv;
   outputMaxBytes?: number;
 };
-type RunSingleCheckOptions = CheckExecutionOptions & { activeChildren?: Set<ChildProcess> };
+type RunSingleCheckOptions = CheckExecutionOptions & { activeChildren?: ActiveChecks };
 type RunChecksOptions = Partial<CheckExecutionOptions> & {
   concurrency?: number;
   output?: OutputWriter;
@@ -58,7 +64,12 @@ export const BOUNDARY_CHECKS = (
     "lint:docker-e2e",
     "lint:tmp:no-random-messaging",
     "lint:tmp:channel-agnostic-boundaries",
-    "lint:tmp:tsgo-core-boundary",
+    {
+      label: "lint:tmp:tsgo-core-boundary",
+      command: process.execPath,
+      args: ["--import", "./scripts/tsx.mjs", "scripts/check-tsgo-core-boundary.mts"],
+      terminationOwner: "implementation",
+    },
     "lint:tmp:no-raw-channel-fetch",
     "lint:tmp:no-raw-http2-imports",
     "lint:agent:ingress-owner",
@@ -78,10 +89,13 @@ export const BOUNDARY_CHECKS = (
     ],
     "lint:extensions:telegram-grammy-types",
     ["native-state-schema-version", "node", ["scripts/check-native-state-schema-version.mjs"]],
-  ] satisfies Array<string | [label: string, command: string, args: string[]]>
+  ] satisfies Array<string | [label: string, command: string, args: string[]] | BoundaryCheck>
 ).map((check) => {
   if (typeof check === "string") {
     return { label: check, command: "pnpm", args: ["run", check] };
+  }
+  if (!Array.isArray(check)) {
+    return check;
   }
   const [label, command, args] = check;
   return { label, command, args };
@@ -280,9 +294,10 @@ function terminateActiveChildren(activeChildren: Iterable<ChildProcess>, signal:
   }
 }
 
-function installActiveChildCleanup(activeChildren: Set<ChildProcess>) {
+function installActiveChildCleanup(activeChildren: ActiveChecks) {
   let active = true;
   let shutdownChildren: ChildProcess[] = [];
+  let ownedCompletions: Promise<void>[] = [];
   let shutdownPromise: Promise<void> | null = null;
   let shutdownForceKillTimer: TimerHandle | null = null;
   let resolveShutdownForceKill: (() => void) | null = null;
@@ -308,8 +323,19 @@ function installActiveChildCleanup(activeChildren: Set<ChildProcess>) {
       return shutdownPromise ?? Promise.resolve();
     }
     active = false;
-    shutdownChildren = [...activeChildren];
-    terminateActiveChildren(shutdownChildren, signal);
+    const running = [...activeChildren];
+    // The graph owner must outlive cgroup extinction and admission release.
+    // Only disposable children may inherit this scheduler's force-kill deadline.
+    shutdownChildren = running
+      .filter(([, entry]) => !entry.ownsTermination)
+      .map(([child]) => child);
+    ownedCompletions = running
+      .filter(([, entry]) => entry.ownsTermination)
+      .map(([, entry]) => entry.completion);
+    terminateActiveChildren(
+      running.map(([child]) => child),
+      signal,
+    );
     if (!waitForExit) {
       return Promise.resolve();
     }
@@ -320,9 +346,12 @@ function installActiveChildCleanup(activeChildren: Set<ChildProcess>) {
       shutdownForceKillTimer = setTimeout(forceKillShutdownChildren, TIMEOUT_KILL_GRACE_MS);
     })
       .then(() =>
-        Promise.all(
-          shutdownChildren.map((child) => waitForProcessGroupExit(child, POST_FORCE_KILL_WAIT_MS)),
-        ),
+        Promise.all([
+          ...ownedCompletions,
+          ...shutdownChildren.map((child) =>
+            waitForProcessGroupExit(child, POST_FORCE_KILL_WAIT_MS),
+          ),
+        ]),
       )
       .then(() => undefined);
     return shutdownPromise;
@@ -349,12 +378,15 @@ function installActiveChildCleanup(activeChildren: Set<ChildProcess>) {
   };
   process.once("exit", exitHandler);
 
-  return () => {
-    if (shutdownPromise) {
-      return;
-    }
-    active = false;
-    removeHandlers();
+  return {
+    isStopping: () => !active,
+    remove() {
+      if (shutdownPromise) {
+        return;
+      }
+      active = false;
+      removeHandlers();
+    },
   };
 }
 
@@ -378,10 +410,16 @@ export function runSingleCheck(
       shell: false,
       stdio: ["ignore", "pipe", "pipe"],
     });
-    activeChildren?.add(child);
+    const ownsTermination = check.terminationOwner === "implementation";
+    let complete!: () => void;
+    const completion = new Promise<void>((resolveCompletion) => {
+      complete = resolveCompletion;
+    });
+    activeChildren?.set(child, { ownsTermination, completion });
     const output = createBoundedOutputBuffer(outputMaxBytes);
     let settled = false;
     let timedOut = false;
+    let processError = false;
     let forceKillTimer: TimerHandle | null = null;
     const finish = (code: number | null, signal: ProcessSignal | null) => {
       if (settled) {
@@ -393,9 +431,10 @@ export function runSingleCheck(
         clearTimeout(forceKillTimer);
       }
       activeChildren?.delete(child);
+      complete();
       resolve({
         check,
-        code: timedOut ? 1 : (code ?? 1),
+        code: timedOut || processError ? 1 : (code ?? 1),
         durationMs: Math.round(performance.now() - startedAt),
         signal,
         timedOut,
@@ -415,6 +454,9 @@ export function runSingleCheck(
         `\n[boundary-check] ${check.label} timed out after ${formatDuration(resolvedCheckTimeoutMs)}; terminating process group\n`,
       );
       terminateChild(child, "SIGTERM");
+      if (ownsTermination) {
+        return;
+      }
       forceKillTimer = setTimeout(() => {
         output.append(
           `[boundary-check] ${check.label} still running after ${formatDuration(TIMEOUT_KILL_GRACE_MS)}; sending SIGKILL\n`,
@@ -430,11 +472,15 @@ export function runSingleCheck(
     child.stdout.on("data", (chunk) => output.append(chunk));
     child.stderr.on("data", (chunk) => output.append(chunk));
     child.on("error", (error) => {
+      processError = true;
       output.append(`${error.stack ?? error.message}\n`);
-      finish(1, null);
+      // A failed spawn has no owner to join. A running owner still must close.
+      if (!child.pid) {
+        finish(1, null);
+      }
     });
     child.on("close", (code, signal) => {
-      if (timedOut) {
+      if (timedOut && !ownsTermination) {
         void finishAfterTimeoutTeardown(code, signal);
         return;
       }
@@ -495,35 +541,38 @@ export async function runChecks(
     outputMaxBytes = DEFAULT_OUTPUT_MAX_BYTES,
   }: RunChecksOptions = {},
 ) {
-  const activeChildren = new Set<ChildProcess>();
-  const removeActiveChildCleanup = installActiveChildCleanup(activeChildren);
-  let results: BoundaryCheckResult[];
+  const activeChildren: ActiveChecks = new Map();
+  const cleanup = installActiveChildCleanup(activeChildren);
+  let results: Array<BoundaryCheckResult | undefined>;
 
   try {
     results = await pMap(
       checks,
       (check) =>
-        runSingleCheck(check, {
-          activeChildren,
-          checkTimeoutMs,
-          cwd,
-          env,
-          outputMaxBytes,
-        }),
+        cleanup.isStopping()
+          ? undefined
+          : runSingleCheck(check, {
+              activeChildren,
+              checkTimeoutMs,
+              cwd,
+              env,
+              outputMaxBytes,
+            }),
       { concurrency, stopOnError: true },
     );
   } finally {
-    removeActiveChildCleanup();
+    cleanup.remove();
   }
 
+  const completed = results.filter((result) => result !== undefined);
   let failures = 0;
-  for (const result of results) {
+  for (const result of completed) {
     writeGroupedResult(result, output);
     if (result.code !== 0) {
       failures += 1;
     }
   }
-  writeTimingSummary(results, output);
+  writeTimingSummary(completed, output);
   return failures;
 }
 
