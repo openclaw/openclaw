@@ -12,6 +12,7 @@ import {
   isWebSocketUrl,
   redactCdpErrorText,
   stripCdpUrlCredentials,
+  type CdpEndpointPin,
 } from "./cdp.helpers.js";
 import { getChromeWebSocketEndpoint } from "./chrome.js";
 import { resolveBrowserEngine } from "./engines/registry.js";
@@ -52,8 +53,6 @@ import {
 } from "./pw-session-state.js";
 
 export { pageTargetInfo } from "./pw-session-page-target.js";
-
-type CdpEndpointPin = NonNullable<Awaited<ReturnType<typeof assertCdpEndpointAllowed>>>;
 
 export function hasCachedPlaywrightBrowserConnection(cdpUrl: string): boolean {
   return cachedByCdpUrl.has(normalizeCdpUrl(cdpUrl));

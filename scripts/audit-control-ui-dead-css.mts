@@ -9,6 +9,7 @@ import postcss, { type Rule } from "postcss";
 import selectorParser, { type ClassName, type Selector } from "postcss-selector-parser";
 import * as ts from "typescript/unstable/ast";
 import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
+import { getPropertyNameText } from "./lib/ts-guard-utils.mts";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(SCRIPT_DIR, "..");
@@ -17,34 +18,17 @@ const UI_SOURCE_ROOT = path.join(UI_ROOT, "src");
 const CLASS_TOKEN_PATTERN = /[-_A-Za-z][-_A-Za-z0-9]*/gu;
 const CLASS_STEM_PATTERN = /(?:^|[\s"'`=])([-_A-Za-z][-_A-Za-z0-9]*)$/u;
 
-type ExternalClassFamily = {
-  matches: (className: string) => boolean;
-  producer: string;
-};
-
 // These classes are emitted by dependencies rather than written literally in ui/src.
-const EXTERNAL_CLASS_FAMILIES: ExternalClassFamily[] = [
+const EXTERNAL_CLASS_PREFIXES = [
   // highlight.js emits language token spans during markdown rendering.
-  {
-    matches: (className) => className === "hljs" || className.startsWith("hljs-"),
-    producer: "highlight.js via ui/src/components/markdown-code-blocks.ts",
-  },
+  "hljs-",
   // CodeMirror owns cm-* editor DOM; its Lezer highlighter owns tok-* spans.
-  {
-    matches: (className) => className.startsWith("cm-") || className.startsWith("tok-"),
-    producer:
-      "CodeMirror and @lezer/highlight via ui/src/pages/chat/components/file-editor-view.ts",
-  },
+  "cm-",
+  "tok-",
   // Web Awesome owns wa-* classes inside its component implementation.
-  {
-    matches: (className) => className.startsWith("wa-"),
-    producer: "Web Awesome custom-element internals",
-  },
+  "wa-",
   // ProseMirror owns the editor-root and state classes it adds to its DOM.
-  {
-    matches: (className) => className.startsWith("ProseMirror"),
-    producer: "ProseMirror editor DOM",
-  },
+  "ProseMirror",
 ];
 
 type SourceReferences = {
@@ -82,12 +66,9 @@ function groupBy<T, K>(values: Iterable<T>, keyFor: (value: T) => K): Map<K, T[]
   const groups = new Map<K, T[]>();
   for (const value of values) {
     const key = keyFor(value);
-    const group = groups.get(key);
-    if (group) {
-      group.push(value);
-    } else {
-      groups.set(key, [value]);
-    }
+    const group = groups.get(key) ?? [];
+    group.push(value);
+    groups.set(key, group);
   }
   return groups;
 }
@@ -146,11 +127,7 @@ function classMapPropertyName(node: ts.ObjectLiteralElementLike): string | null 
   if (!ts.isPropertyAssignment(node) && !ts.isShorthandPropertyAssignment(node)) {
     return null;
   }
-  const name = node.name;
-  if (ts.isIdentifier(name) || ts.isStringLiteral(name) || ts.isNumericLiteral(name)) {
-    return name.text;
-  }
-  return null;
+  return getPropertyNameText(node.name);
 }
 
 /** Collect literal class tokens and dynamic class stems from TypeScript source. */
@@ -414,8 +391,10 @@ function isReferenced(className: string, references: SourceReferences): boolean 
   );
 }
 
-function externalProducer(className: string): string | null {
-  return EXTERNAL_CLASS_FAMILIES.find((family) => family.matches(className))?.producer ?? null;
+function isExternallyProducedClass(className: string): boolean {
+  return (
+    className === "hljs" || EXTERNAL_CLASS_PREFIXES.some((prefix) => className.startsWith(prefix))
+  );
 }
 
 function selectorClasses(selector: Selector): ClassName[] {
@@ -468,7 +447,7 @@ function auditStylesheet(
       }
       const classNames = [...new Set(classes.map((classNode) => classNode.value))];
       const keptAlive = classNames.some(
-        (className) => externalProducer(className) || isReferenced(className, references),
+        (className) => isExternallyProducedClass(className) || isReferenced(className, references),
       );
       if (keptAlive) {
         continue;

@@ -397,10 +397,10 @@ export async function resolveUpdateCommandTarget(
             pkgOwnership,
             serviceUnitTarget,
           }).catch(async (error: unknown) => {
-            if (hasCommandProcessCleanupError(error)) {
-              throw error;
-            }
-            if (!(error instanceof UpdatePreMutationError)) {
+            if (
+              hasCommandProcessCleanupError(error) ||
+              !(error instanceof UpdatePreMutationError)
+            ) {
               throw error;
             }
             const report = {

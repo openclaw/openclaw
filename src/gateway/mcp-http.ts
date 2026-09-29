@@ -411,6 +411,9 @@ async function startMcpLoopbackServer(
                   turnSourceThreadId: requestContext.currentThreadTs,
                 })
               : undefined;
+            if (callerIdentity && boundClientGrant?.personalToolParticipants) {
+              callerIdentity.personalToolParticipants = boundClientGrant.personalToolParticipants;
+            }
             response = await withGatewayToolCallerIdentity(callerIdentity, () =>
               runWithTrackedCancellation(requestAbort.signal, handleRequest),
             );

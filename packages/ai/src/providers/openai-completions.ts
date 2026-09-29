@@ -34,6 +34,7 @@ import {
   type PendingCommentaryTags,
 } from "../utils/assistant-text-phase.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
+import { requireApiKey } from "../utils/required-api-key.js";
 import {
   createFirstStreamEventAbortController,
   getFirstStreamEventTimeoutHandler,
@@ -224,10 +225,7 @@ export const streamSimpleOpenAICompletions: StreamFunction<
   "openai-completions",
   SimpleStreamOptions
 > = (model: Model<"openai-completions">, context: Context, options?: SimpleStreamOptions) => {
-  const apiKey = options?.apiKey || getEnvApiKey(model.provider);
-  if (!apiKey) {
-    throw new Error(`No API key for provider: ${model.provider}`);
-  }
+  const apiKey = requireApiKey(model.provider, options?.apiKey);
 
   const base = buildBaseOptions(model, options, apiKey);
   const clampedReasoning = options?.reasoning

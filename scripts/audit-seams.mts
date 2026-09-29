@@ -255,8 +255,7 @@ function buildDuplicatedSeamFamilies(inventory: ImportEntry[]) {
     bucket.push(entry);
     grouped.set(entry.family, bucket);
   }
-
-  const duplicated = Object.fromEntries(
+  return Object.fromEntries(
     [...grouped.entries()]
       .map(([family, entries]) => {
         const files = [...new Set(entries.map((entry) => entry.file))].toSorted(compareStrings);
@@ -279,8 +278,6 @@ function buildDuplicatedSeamFamilies(inventory: ImportEntry[]) {
         );
       }),
   );
-
-  return duplicated;
 }
 
 function buildOverlapFiles(inventory: ImportEntry[]) {
@@ -370,24 +367,14 @@ function classifyMissingPackageCluster(params: {
     };
   }
   if (optionalBundledClusterSet.has(params.cluster)) {
-    if (params.cluster === "ui") {
-      return {
-        decision: "optional",
-        reason:
-          "Private UI workspace. Repo-wide CLI/plugin CI should not require UI-only packages.",
-      };
-    }
-    if (params.pluginSdkEntries.length > 0) {
-      return {
-        decision: "optional",
-        reason:
-          "Public plugin-sdk entry exists, but repo-wide default check/build should isolate this optional cluster from the static graph.",
-      };
-    }
     return {
       decision: "optional",
       reason:
-        "Workspace package is intentionally not mirrored into the root dependency set by default CI policy.",
+        params.cluster === "ui"
+          ? "Private UI workspace. Repo-wide CLI/plugin CI should not require UI-only packages."
+          : params.pluginSdkEntries.length > 0
+            ? "Public plugin-sdk entry exists, but repo-wide default check/build should isolate this optional cluster from the static graph."
+            : "Workspace package is intentionally not mirrored into the root dependency set by default CI policy.",
     };
   }
   return {
@@ -497,9 +484,7 @@ function isSubagentProductionPath(relativePath: string) {
   return (
     (relativePath.startsWith("src/agents/") || relativePath.startsWith("src/cron/")) &&
     isProductionLikeFile(relativePath) &&
-    (/subagent|sessions-spawn|acp-spawn/.test(relativePath) ||
-      relativePath === "src/agents/tools/sessions-spawn-tool.ts" ||
-      relativePath === "src/agents/tools/subagents-tool.ts")
+    /subagent|sessions-spawn|acp-spawn/.test(relativePath)
   );
 }
 
@@ -772,7 +757,6 @@ async function buildTestIndex(testFiles: string[]) {
       const baseName = path.basename(stem);
       const source = await readScannableText(filePath);
       return {
-        filePath,
         relativePath,
         stem,
         baseName,
@@ -823,12 +807,11 @@ function findRelatedTests(relativePath: string, testIndex: TestIndexEntry[]): Re
       return [{ file: entry.relativePath, matchQuality: "path-nearby" }];
     }
     const entryDir = path.dirname(entry.relativePath).split(path.sep).join("/");
+    const relativeImportPath = path.posix.relative(entryDir, stem);
     const importPath =
-      path.posix.relative(entryDir, stem) === path.basename(stem)
-        ? `./${path.basename(stem)}`
-        : path.posix.relative(entryDir, stem).startsWith(".")
-          ? path.posix.relative(entryDir, stem)
-          : `./${path.posix.relative(entryDir, stem)}`;
+      relativeImportPath === baseName || !relativeImportPath.startsWith(".")
+        ? `./${relativeImportPath}`
+        : relativeImportPath;
     if (
       hasExecutableImportReference(entry.source, importPath) &&
       !hasModuleMockReference(entry.source, importPath)

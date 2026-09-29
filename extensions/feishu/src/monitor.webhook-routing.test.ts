@@ -1,3 +1,4 @@
+import { createConnection } from "node:net";
 import * as Lark from "@larksuiteoapi/node-sdk";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { getActivePluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -7,15 +8,16 @@ import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { FeishuConfigSchema } from "./config-schema.js";
 import { cleanupFeishuMonitorStateForTests } from "./monitor.cleanup.test-helpers.js";
-import { botNames, botOpenIds, setFeishuBotIdentityState } from "./monitor.state.js";
+import { botOpenIds, setFeishuBotIdentityState } from "./monitor.state.js";
 import { monitorWebhook } from "./monitor.transport.js";
 import {
   createFeishuWebhookTestAccount,
   getGatewayPort,
+  getGatewayServer,
+  signFeishuPayload,
   postSignedPayload,
   waitForWebhookRoute,
 } from "./monitor.webhook.test-helpers.js";
-import type { FeishuConfig } from "./types.js";
 
 const legacyListener = vi.hoisted(() => ({
   value: undefined as { port: number; host?: string } | undefined,
@@ -42,7 +44,7 @@ describe("Feishu webhook route configuration", () => {
     const account = createFeishuWebhookTestAccount("already-stopped", "/hook-already-stopped");
     const abort = new AbortController();
     abort.abort();
-    setFeishuBotIdentityState(account.accountId, { botOpenId: "ou_stopped", botName: "Stopped" });
+    setFeishuBotIdentityState(account.accountId, "ou_stopped");
     await monitorWebhook({
       account,
       accountId: account.accountId,
@@ -51,7 +53,6 @@ describe("Feishu webhook route configuration", () => {
       runtime: createRuntimeSpies(),
     });
     expect(botOpenIds.has(account.accountId)).toBe(false);
-    expect(botNames.has(account.accountId)).toBe(false);
     expect(
       getActivePluginRegistry()?.httpRoutes.some((route) => route.path === "/hook-already-stopped"),
     ).toBe(false);
@@ -159,7 +160,7 @@ describe("Feishu webhook route configuration", () => {
     { name: "normal stop after identity recovery", replacement: undefined },
     {
       name: "successor publishing the same identity",
-      replacement: { botOpenId: "ou_recovered", botName: "Recovered" },
+      replacement: "ou_recovered",
     },
   ])("preserves identity ownership during $name", async ({ replacement }) => {
     const port = await getGatewayPort();
@@ -168,7 +169,7 @@ describe("Feishu webhook route configuration", () => {
     const abort = new AbortController();
     const invoked = createDeferred<void>();
     const releaseDispatch = createDeferred<void>();
-    setFeishuBotIdentityState(accountId, { botOpenId: "ou_initial", botName: "Initial" });
+    setFeishuBotIdentityState(accountId, "ou_initial");
     const monitor = monitorWebhook({
       account,
       accountId,
@@ -187,10 +188,9 @@ describe("Feishu webhook route configuration", () => {
     });
     try {
       await invoked.promise;
-      setFeishuBotIdentityState(accountId, { botOpenId: "ou_recovered", botName: "Recovered" });
+      setFeishuBotIdentityState(accountId, "ou_recovered");
       abort.abort();
       expect(botOpenIds.get(accountId)).toBe("ou_recovered");
-      expect(botNames.get(accountId)).toBe("Recovered");
       if (replacement) {
         setFeishuBotIdentityState(accountId, replacement);
       }
@@ -199,8 +199,7 @@ describe("Feishu webhook route configuration", () => {
       expect(response.status).toBe(200);
       await expect(response.json()).resolves.toEqual({});
       await monitor;
-      expect(botOpenIds.get(accountId)).toBe(replacement?.botOpenId);
-      expect(botNames.get(accountId)).toBe(replacement?.botName);
+      expect(botOpenIds.get(accountId)).toBe(replacement);
     } finally {
       releaseDispatch.resolve();
       abort.abort();
@@ -258,80 +257,120 @@ describe("Feishu webhook route configuration", () => {
     },
   );
 
-  it.each<{
-    name: string;
-    configured?: FeishuConfig["legacyWebhook"];
-    accountOverride?: FeishuConfig["legacyWebhook"];
-    endpoint?: { port: number; host: string };
-  }>([
-    { name: "omitted setting", endpoint: { port: 3000, host: "127.0.0.1" } },
-    {
-      name: "omitted host",
-      configured: { port: 3100 },
-      endpoint: { port: 3100, host: "127.0.0.1" },
-    },
-    {
-      name: "explicit wildcard",
-      configured: { port: 3000, host: "0.0.0.0" },
-      endpoint: { port: 3000, host: "0.0.0.0" },
-    },
-    { name: "account disable override", configured: { port: 3100 }, accountOverride: false },
-  ])(
-    "prepares the inherited legacy listener for $name and preserves Gateway delivery",
-    async ({ configured, accountOverride, endpoint }) => {
-      const path = "/hook-legacy-bind-address";
-      const port = await getGatewayPort();
-      const fixture = createFeishuWebhookTestAccount("legacy-bind-address", path);
-      const account = resolveFeishuRuntimeAccount({
-        accountId: fixture.accountId,
-        cfg: {
-          channels: {
-            feishu: FeishuConfigSchema.parse({
-              ...fixture.config,
-              appId: "cli_test",
-              appSecret: "secret_test",
-              legacyWebhook: configured,
-              accounts: {
-                [fixture.accountId]:
-                  accountOverride === undefined ? {} : { legacyWebhook: accountOverride },
-              },
-            }),
-          },
+  it("disables an inherited legacy listener without disabling Gateway delivery", async () => {
+    const path = "/hook-legacy-bind-address";
+    const port = await getGatewayPort();
+    const fixture = createFeishuWebhookTestAccount("legacy-bind-address", path);
+    const account = resolveFeishuRuntimeAccount({
+      accountId: fixture.accountId,
+      cfg: {
+        channels: {
+          feishu: FeishuConfigSchema.parse({
+            ...fixture.config,
+            appId: "cli_test",
+            appSecret: "secret_test",
+            legacyWebhook: { port: 3100 },
+            accounts: {
+              [fixture.accountId]: { legacyWebhook: false },
+            },
+          }),
         },
+      },
+    });
+    const abort = new AbortController();
+    const eventDispatcher = new Lark.EventDispatcher({ encryptKey: "encrypt_key" });
+    const invoke = vi.spyOn(eventDispatcher, "invoke").mockResolvedValue({ accepted: true });
+    const monitor = monitorWebhook({
+      account,
+      accountId: account.accountId,
+      abortSignal: abort.signal,
+      eventDispatcher,
+      runtime: createRuntimeSpies(),
+    });
+    const url = `http://127.0.0.1:${port}${path}`;
+    try {
+      await waitForWebhookRoute(url);
+      expect(
+        getActivePluginRegistry()?.httpRoutes.find((route) => route.path === path)
+          ?.legacyListeners ?? [],
+      ).toEqual([]);
+      legacyListener.value = { port: 3000, host: "127.0.0.1" };
+      let response = await postSignedPayload(url, { schema: "2.0", event: {} });
+      expect(response.status).toBe(404);
+      expect(invoke).not.toHaveBeenCalled();
+      legacyListener.value = undefined;
+      response = await postSignedPayload(url, { schema: "2.0", event: {} });
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toEqual({ accepted: true });
+      expect(invoke).toHaveBeenCalledOnce();
+    } finally {
+      legacyListener.value = undefined;
+      abort.abort();
+      await monitor;
+    }
+  });
+  it("does not publish healthy activity when the client aborts a held signed dispatch", async () => {
+    const accountId = "aborted-signed-dispatch";
+    const path = "/hook-e2e-aborted-signed-dispatch";
+    const port = await getGatewayPort();
+    const dispatchGate = createDeferred<void>();
+    const dispatchStarted = createDeferred<void>();
+    const handler = vi.fn(async () => {
+      dispatchStarted.resolve();
+      await dispatchGate.promise;
+      return { accepted: true };
+    });
+    const eventDispatcher = new Lark.EventDispatcher({ encryptKey: "encrypt_key" });
+    eventDispatcher.register({ "test.aborted_dispatch": handler });
+    const statusSink = vi.fn();
+    const abortController = new AbortController();
+    const monitorPromise = monitorWebhook({
+      account: createFeishuWebhookTestAccount(accountId, path),
+      accountId,
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      abortSignal: abortController.signal,
+      eventDispatcher,
+      statusSink,
+    });
+    const socket = createConnection({ host: "127.0.0.1", port });
+    try {
+      await waitForWebhookRoute(`http://127.0.0.1:${port}${path}`);
+      statusSink.mockClear();
+      const server = getGatewayServer();
+      const responseClosed = new Promise<void>((resolve) => {
+        server.once("request", (_req, res) => res.once("close", resolve));
       });
-      const abort = new AbortController();
-      const eventDispatcher = new Lark.EventDispatcher({ encryptKey: "encrypt_key" });
-      const invoke = vi.spyOn(eventDispatcher, "invoke").mockResolvedValue({ accepted: true });
-      const monitor = monitorWebhook({
-        account,
-        accountId: account.accountId,
-        abortSignal: abort.signal,
-        eventDispatcher,
-        runtime: createRuntimeSpies(),
+      const rawBody = JSON.stringify({
+        schema: "2.0",
+        header: { event_type: "test.aborted_dispatch" },
+        event: {},
       });
-      const url = `http://127.0.0.1:${port}${path}`;
-      try {
-        await waitForWebhookRoute(url);
-        expect(
-          getActivePluginRegistry()?.httpRoutes.find((route) => route.path === path)
-            ?.legacyListeners ?? [],
-        ).toEqual(endpoint ? [endpoint] : []);
-        legacyListener.value = endpoint ?? { port: 3000, host: "127.0.0.1" };
-        let response = await postSignedPayload(url, { schema: "2.0", event: {} });
-        if (!endpoint) {
-          expect(response.status).toBe(404);
-          expect(invoke).not.toHaveBeenCalled();
-          legacyListener.value = undefined;
-          response = await postSignedPayload(url, { schema: "2.0", event: {} });
-        }
-        expect(response.status).toBe(200);
-        await expect(response.json()).resolves.toEqual({ accepted: true });
-        expect(invoke).toHaveBeenCalledOnce();
-      } finally {
-        legacyListener.value = undefined;
-        abort.abort();
-        await monitor;
-      }
-    },
-  );
+      const headers = Object.entries(signFeishuPayload({ encryptKey: "encrypt_key", rawBody }))
+        .map(([name, value]) => `${name}: ${value}`)
+        .join("\r\n");
+      socket.write(
+        `POST ${path} HTTP/1.1\r\nHost: localhost\r\n${headers}\r\nContent-Length: ${Buffer.byteLength(rawBody)}\r\n\r\n${rawBody}`,
+      );
+      await dispatchStarted.promise;
+      const clientClosed = new Promise<void>((resolve) => {
+        socket.once("close", resolve);
+      });
+      socket.destroy();
+      await clientClosed;
+      await responseClosed;
+      expect(statusSink).not.toHaveBeenCalled();
+      dispatchGate.resolve();
+      await expect(handler.mock.results[0]?.value).resolves.toEqual({ accepted: true });
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(statusSink).not.toHaveBeenCalled();
+    } finally {
+      socket.destroy();
+      dispatchGate.resolve();
+      abortController.abort();
+      await monitorPromise;
+    }
+  });
 });

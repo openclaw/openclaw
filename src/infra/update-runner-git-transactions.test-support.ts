@@ -26,79 +26,91 @@ export function registerGitActivationDoctorOutcomeTests(
   },
 ) {
   registerGitRetainedTransactionTests(getFixture);
-  it.each(["restore", "complete", "cleanup-failed", "source-changed", "runtime-changed"] as const)(
-    "retains the activated Git transaction through finalization: %s",
-    async (outcome) => {
-      const { root, beforeSha, advanceRemote, git, update, expectNoRuntimeStagingPaths } =
-        getFixture();
-      const targetSha = await advanceRemote();
-      let retained: PackageUpdateTransaction | undefined;
-      const result = await update({
-        onTransaction: (transaction) => {
-          retained = transaction;
-        },
-      });
-      expect(result.status).toBe("ok");
-      assert(retained, "Finalization must receive the retained Git runtime transaction");
-      await expect(fs.stat(retained.backupRoot)).resolves.toBeDefined();
+  it.each([
+    "restore",
+    "complete",
+    "cleanup-failed",
+    "source-changed",
+    "runtime-changed",
+    "doctor-entry-missing",
+  ] as const)("retains the activated Git transaction through finalization: %s", async (outcome) => {
+    const { root, beforeSha, advanceRemote, git, update, expectNoRuntimeStagingPaths } =
+      getFixture();
+    const targetSha = await advanceRemote();
+    let retained: PackageUpdateTransaction | undefined;
+    const missingDoctor = outcome === "doctor-entry-missing";
+    const result = await update({
+      onTransaction: (transaction) => {
+        retained = transaction;
+      },
+      ...(missingDoctor ? { runGitDoctor: async () => null } : {}),
+    });
+    expect(result.status).toBe(missingDoctor ? "error" : "ok");
+    assert(retained, "Finalization must receive the retained Git runtime transaction");
+    await expect(fs.stat(retained.backupRoot)).resolves.toBeDefined();
+    if (missingDoctor) {
+      expect(result.reason).toBe("doctor-entry-missing");
+      expect(await git(root, "rev-parse", "HEAD")).toBe(targetSha);
+      await expectRuntime(root, targetSha);
+    } else {
       expect(result.gitRuntime).toEqual({
         commit: targetSha,
         distDigest: expect.stringMatching(/^[0-9a-f]{64}$/u),
       });
-      if (outcome === "cleanup-failed") {
-        const remove = fs.rm.bind(fs);
-        const backupRoot = retained.backupRoot;
-        const removal = vi.spyOn(fs, "rm").mockImplementation(async (entry, options) => {
-          if (entry === backupRoot) {
-            throw Object.assign(new Error("backup cleanup denied"), { code: "EACCES" });
-          }
-          return remove(entry, options);
-        });
-        try {
-          const warning = await retained.complete({ activationVerified: true }, () => {});
-          expect(warning).toMatchObject({
-            advisory: {
-              kind: "recoverable-maintenance",
-              message: expect.stringContaining(backupRoot),
-            },
-          });
-          expect(await retained.complete({ activationVerified: true }, () => {})).toBe(warning);
-          await expectRuntime(root, targetSha);
-          await expect(fs.stat(backupRoot)).resolves.toBeDefined();
-        } finally {
-          removal.mockRestore();
+    }
+    if (outcome === "cleanup-failed") {
+      const remove = fs.rm.bind(fs);
+      const backupRoot = retained.backupRoot;
+      const removal = vi.spyOn(fs, "rm").mockImplementation(async (entry, options) => {
+        if (entry === backupRoot) {
+          throw Object.assign(new Error("backup cleanup denied"), { code: "EACCES" });
         }
-        return;
-      }
-      if (outcome === "complete") {
-        await retained.complete({ activationVerified: true }, () => {});
+        return remove(entry, options);
+      });
+      try {
+        const warning = await retained.complete({ activationVerified: true }, () => {});
+        expect(warning).toMatchObject({
+          advisory: {
+            kind: "recoverable-maintenance",
+            message: expect.stringContaining(backupRoot),
+          },
+        });
+        expect(await retained.complete({ activationVerified: true }, () => {})).toBe(warning);
         await expectRuntime(root, targetSha);
-        await expectNoRuntimeStagingPaths();
-        return;
+        await expect(fs.stat(backupRoot)).resolves.toBeDefined();
+      } finally {
+        removal.mockRestore();
       }
-      if (outcome === "source-changed") {
-        await fs.writeFile(path.join(root, "operator-edit.txt"), "preserve this edit\n");
-        await expect(retained.rollback(() => {})).rejects.toThrow("changed after activation");
-        await expect(retained.complete({ activationVerified: false }, () => {})).rejects.toThrow(
-          "changed after activation",
-        );
-        expect(await git(root, "rev-parse", "HEAD")).toBe(targetSha);
-        expect(await fs.readFile(path.join(root, "operator-edit.txt"), "utf8")).toBe(
-          "preserve this edit\n",
-        );
-        await expect(fs.stat(retained.backupRoot)).resolves.toBeDefined();
-        return;
-      } else if (outcome === "runtime-changed") {
-        await fs.writeFile(path.join(root, "dist", "operator-chunk.mjs"), "export {};\n");
-      }
-      const restored = await retained.rollback(() => {});
-      expect(restored.exitCode).toBe(0);
-      await retained.complete({ activationVerified: false }, () => {});
-      expect(await git(root, "rev-parse", "HEAD")).toBe(beforeSha);
-      await expectRuntime(root, beforeSha);
+      return;
+    }
+    if (outcome === "complete") {
+      await retained.complete({ activationVerified: true }, () => {});
+      await expectRuntime(root, targetSha);
       await expectNoRuntimeStagingPaths();
-    },
-  );
+      return;
+    }
+    if (outcome === "source-changed") {
+      await fs.writeFile(path.join(root, "operator-edit.txt"), "preserve this edit\n");
+      await expect(retained.rollback(() => {})).rejects.toThrow("changed after activation");
+      await expect(retained.complete({ activationVerified: false }, () => {})).rejects.toThrow(
+        "changed after activation",
+      );
+      expect(await git(root, "rev-parse", "HEAD")).toBe(targetSha);
+      expect(await fs.readFile(path.join(root, "operator-edit.txt"), "utf8")).toBe(
+        "preserve this edit\n",
+      );
+      await expect(fs.stat(retained.backupRoot)).resolves.toBeDefined();
+      return;
+    } else if (outcome === "runtime-changed") {
+      await fs.writeFile(path.join(root, "dist", "operator-chunk.mjs"), "export {};\n");
+    }
+    const restored = await retained.rollback(() => {});
+    expect(restored.exitCode).toBe(0);
+    await retained.complete({ activationVerified: false }, () => {});
+    expect(await git(root, "rev-parse", "HEAD")).toBe(beforeSha);
+    await expectRuntime(root, beforeSha);
+    await expectNoRuntimeStagingPaths();
+  });
   it.each([
     ["success", undefined],
     ["config-refused", "repair-requires-config-change"],
@@ -388,11 +400,11 @@ function registerGitRetainedTransactionTests(
       });
       expect(result.status).toBe("ok");
       assert(retained);
-      expect((await retained.rollback(() => {})).exitCode).toBe(0);
+      const kept = await retained.rollback(() => {});
+      expect(kept.exitCode).toBe(0);
       expect(await runFixtureGit(root, "rev-parse", "refs/heads/main")).toBe(targetSha);
       expect(await runFixtureGit(root, "rev-parse", "HEAD")).toBe(beforeSha);
       expect(await runFixtureGit(root, "rev-parse", "--abbrev-ref", "HEAD")).toBe(branch);
-      const kept = result.steps.find((step) => step.name === "git-rollback-keep-branch");
       expect(kept?.advisory).toMatchObject({ kind: "recoverable-maintenance" });
       expect(kept?.advisory?.message).toContain(
         `Kept branch main created by this update at ${targetSha}`,
@@ -477,8 +489,59 @@ function registerGitRetainedTransactionTests(
     },
   );
 
-  it.each(["raw-writer-before", "raw-writer-after", "missing-reflog"] as const)(
-    "retains the runtime when the rollback rewrite transition cannot be verified: %s",
+  it("retained rollback restores the previous generation detached when the branch reflog is missing", async () => {
+    const { root, beforeSha, advanceRemote, update, expectNoRuntimeStagingPaths } = getFixture();
+    const targetSha = await advanceRemote();
+    let retained: PackageUpdateTransaction | undefined;
+    const result = await update({
+      onTransaction: (transaction) => {
+        retained = transaction;
+      },
+    });
+    expect(result.status).toBe("ok");
+    assert(retained);
+    await runFixtureGit(root, "config", "core.logAllRefUpdates", "false");
+    await fs.rm(path.join(root, ".git", "logs", "refs", "heads", "main"));
+    await fs.appendFile(path.join(root, ".git", "info", "exclude"), "\noperator-note.txt\n");
+    const operatorFile = path.join(root, "operator-note.txt");
+    await fs.writeFile(operatorFile, "preserve this operator note\n");
+
+    const restored = await retained.rollback(() => {});
+    expect(restored.exitCode).toBe(0);
+    expect(await runFixtureGit(root, "rev-parse", "HEAD")).toBe(beforeSha);
+    await expect(runFixtureGit(root, "symbolic-ref", "-q", "HEAD")).rejects.toThrow();
+    expect(await runFixtureGit(root, "rev-parse", "refs/heads/main")).toBe(targetSha);
+    await expect(runFixtureGit(root, "reflog", "exists", "refs/heads/main")).rejects.toThrow();
+    expect(restored?.advisory).toMatchObject({ kind: "recoverable-maintenance" });
+    expect(restored.advisory?.message).toContain(root);
+    expect(restored.advisory?.message).toMatch(
+      new RegExp(`update-ref (?:refs/heads/main|'refs/heads/main') ${beforeSha} ${targetSha}`),
+    );
+    // The suggested restore is compare-and-swap: a later branch writer keeps its commit.
+    const advanced = await runFixtureGit(
+      root,
+      "commit-tree",
+      `${targetSha}^{tree}`,
+      "-p",
+      targetSha,
+      "-m",
+      "operator commit",
+    );
+    await runFixtureGit(root, "update-ref", "refs/heads/main", advanced, targetSha);
+    await expect(
+      runFixtureGit(root, "update-ref", "refs/heads/main", beforeSha, targetSha),
+    ).rejects.toThrow();
+    expect(await runFixtureGit(root, "rev-parse", "refs/heads/main")).toBe(advanced);
+    await expectRuntime(root, beforeSha);
+    expect(await fs.readFile(operatorFile, "utf8")).toBe("preserve this operator note\n");
+    await expect(
+      retained.complete({ activationVerified: false }, () => {}),
+    ).resolves.toBeUndefined();
+    await expectNoRuntimeStagingPaths();
+  });
+
+  it.each(["raw-writer-before", "raw-writer-after"] as const)(
+    "retained rollback keeps the runtime when the rewrite transition cannot be verified: %s",
     async (failure) => {
       const { root, beforeSha, advanceRemote, update, runCommand, setRunCommand } = getFixture();
       const targetSha = await advanceRemote();
@@ -516,45 +579,30 @@ function registerGitRetainedTransactionTests(
       });
       expect(result.status).toBe("ok");
       assert(retained);
-      if (failure === "missing-reflog") {
-        await runFixtureGit(root, "config", "core.logAllRefUpdates", "false");
-        await fs.rm(path.join(root, ".git", "logs", "refs", "heads", "main"));
-      }
-      const sourceTree = await runFixtureGit(root, "ls-files", "--stage");
-      const sourceStatus = await runFixtureGit(root, "status", "--porcelain=v1");
       rollingBack = true;
-      await expect(retained.rollback(() => {})).rejects.toThrow("git-rollback-source");
-      expect(injected).toBe(failure !== "missing-reflog");
-      const finalSha =
-        failure === "missing-reflog"
-          ? targetSha
-          : failure === "raw-writer-after"
-            ? concurrentSha
-            : beforeSha;
+      const rollback = retained.rollback(() => {});
+      await expect(rollback).rejects.toThrow("git-rollback-source");
+      for (const sha of [targetSha, beforeSha, concurrentSha]) {
+        await expect(rollback).rejects.toThrow(sha);
+      }
+      expect(injected).toBe(true);
+      const finalSha = failure === "raw-writer-after" ? concurrentSha : beforeSha;
       expect(await runFixtureGit(root, "rev-parse", "HEAD")).toBe(finalSha);
       expect(await runFixtureGit(root, "rev-parse", "refs/heads/main")).toBe(finalSha);
       expect(await runFixtureGit(root, "symbolic-ref", "HEAD")).toBe("refs/heads/main");
       const diagnostic = result.steps.find(
         (step) => step.name === "git-rollback-source",
       )?.stderrTail;
-      if (failure === "missing-reflog") {
-        expect(diagnostic).toContain("reflog");
-        expect(diagnostic).toContain("Source untouched");
-        expect(diagnostic).not.toContain("branch -f");
-        expect(await runFixtureGit(root, "ls-files", "--stage")).toBe(sourceTree);
-        expect(await runFixtureGit(root, "status", "--porcelain=v1")).toBe(sourceStatus);
+      expect(diagnostic).toContain(targetSha);
+      expect(diagnostic).toContain(beforeSha);
+      expect(diagnostic).toContain(concurrentSha);
+      if (failure === "raw-writer-before") {
+        expect(diagnostic).toContain("git checkout --detach --no-overwrite-ignore");
+        expect(diagnostic).toMatch(new RegExp(`git branch -f (?:main|'main') ${concurrentSha}`));
       } else {
-        expect(diagnostic).toContain(targetSha);
-        expect(diagnostic).toContain(beforeSha);
-        expect(diagnostic).toContain(concurrentSha);
-        if (failure === "raw-writer-before") {
-          expect(diagnostic).toContain("git checkout --detach --no-overwrite-ignore");
-          expect(diagnostic).toMatch(new RegExp(`git branch -f (?:main|'main') ${concurrentSha}`));
-        } else {
-          expect(diagnostic).not.toContain("branch -f");
-          expect(diagnostic).toMatch(/git reflog (?:main|'main')/);
-          expect(diagnostic).toContain("keep the newest intended commit");
-        }
+        expect(diagnostic).not.toContain("branch -f");
+        expect(diagnostic).toMatch(/git reflog (?:main|'main')/);
+        expect(diagnostic).toContain("keep the newest intended commit");
       }
       await expectRuntime(root, targetSha);
       await expect(fs.stat(retained.backupRoot)).resolves.toBeDefined();

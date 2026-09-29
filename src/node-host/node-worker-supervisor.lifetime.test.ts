@@ -292,6 +292,9 @@ describe("node worker environment lifetime", () => {
       expect(await supervisor.status(first.launchId)).toEqual({
         ...completed,
         workerLineageSettled: completed.workerCleanupMode === "owned-anchor",
+        ...(completed.workerCleanupMode === "linux-subreaper"
+          ? { workerDescendantsReaped: true }
+          : {}),
       });
       expect((await supervisor.status(waiting.launchId))?.state).toBe("cancelled");
     } finally {
@@ -322,6 +325,9 @@ describe("node worker environment lifetime", () => {
       expect(await supervisor.status(input.launchId)).toEqual({
         ...completed,
         workerLineageSettled: completed.workerCleanupMode === "owned-anchor",
+        ...(completed.workerCleanupMode === "linux-subreaper"
+          ? { workerDescendantsReaped: true }
+          : {}),
       });
       await vi.waitFor(() => expectBackgroundRetired(connection!, running.worker!, server));
     } finally {
@@ -464,6 +470,9 @@ describe("node worker environment lifetime", () => {
       expect(await supervisor.status(first.launchId)).toEqual({
         ...completed,
         workerLineageSettled: completed.workerCleanupMode === "owned-anchor",
+        ...(completed.workerCleanupMode === "linux-subreaper"
+          ? { workerDescendantsReaped: true }
+          : {}),
       });
       if (binding === "owner epoch" || binding === "session") {
         await supervisor.stopEnvironment(testNodeWorkerEnvironmentIdentity(first));
@@ -656,11 +665,16 @@ describe("node worker environment lifetime", () => {
         expect((await store.get(first.launchId))?.state).toBe("running");
         expect(inspectNodeWorkerProcessIdentity(owner.worker!)).toBe("live");
 
-        const readOwner = vi.spyOn(NodeWorkerLaunchStore.prototype, "get");
+        const readOwner = vi.spyOn(NodeWorkerJournalWorker.prototype, "execute");
         admission = supervisor.launch(next, TEST_WORKER_ENDPOINT).catch((error: unknown) => {
           admissionError = error;
         });
-        await vi.waitFor(() => expect(readOwner).toHaveBeenCalledWith(first.launchId));
+        await vi.waitFor(() =>
+          expect(readOwner).toHaveBeenCalledWith({
+            type: "nodeWorker.launch.get",
+            input: [first.launchId],
+          }),
+        );
         readOwner.mockRestore();
         if (cleanupError) {
           vi.spyOn(
@@ -700,6 +714,9 @@ describe("node worker environment lifetime", () => {
         expect(await supervisor.status(first.launchId)).toEqual({
           ...completed,
           workerLineageSettled: completed.workerCleanupMode === "owned-anchor",
+          ...(completed.workerCleanupMode === "linux-subreaper"
+            ? { workerDescendantsReaped: true }
+            : {}),
         });
         expect(await supervisor.status(next.launchId)).toBeUndefined();
         expect(fs.existsSync(path.join(workspaceDir, `${next.launchId}.started.json`))).toBe(false);

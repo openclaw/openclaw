@@ -56,6 +56,7 @@ describe("requester wake cancellation rollback", () => {
   it.each([
     { outcome: "delivered", owner: "current" },
     { outcome: "replay budget", owner: "current" },
+    { outcome: "replay budget", owner: "replacement" },
     { outcome: "delivered", owner: "replacement" },
     { outcome: "delivered", owner: "rearm" },
   ] as const)(
@@ -79,20 +80,17 @@ describe("requester wake cancellation rollback", () => {
       const original = structuredClone(input.subagent);
       const driver = requesterWakeDriver(inputs);
       const finalized = vi.fn();
-      let rejectReplayWrite = outcome === "replay budget";
       driver.controller.options.persistOrThrow = (...ids) => {
-        if (
-          rejectReplayWrite &&
-          ids.some((id) => subagentRuns.get(id)?.requesterSettleWake?.replayCount === 1)
-        ) {
-          throw new Error("replay receipt write failed");
-        }
         // A sibling write must not persist another member's staged cancellation.
         registryState.persistSubagentRunsToDiskOrThrow(subagentRuns, ids);
       };
       if (outcome === "delivered") {
         database.db.exec(
           "CREATE TRIGGER reject_delivered AFTER UPDATE ON subagent_runs WHEN json_extract(NEW.payload_json, '$.delivery.status') = 'delivered' BEGIN SELECT RAISE(ABORT, 'cut:delivered'); END",
+        );
+      } else {
+        database.db.exec(
+          "CREATE TRIGGER reject_replay AFTER UPDATE ON subagent_runs WHEN json_extract(NEW.payload_json, '$.requesterSettleWake.replayCount') = 1 BEGIN SELECT RAISE(ABORT, 'replay receipt write failed'); END",
         );
       }
       const replayStates: Array<typeof input.subagent.requesterSettleWake> = [];
@@ -156,9 +154,10 @@ describe("requester wake cancellation rollback", () => {
         await advanceRequesterWakeTime(retryAt - Date.now());
         expect(driver.wake).toHaveBeenCalledOnce();
         expect(getActiveGatewayRootWorkCount()).toBe(0);
-        rejectReplayWrite = false;
         if (outcome === "delivered") {
           database.db.exec("DROP TRIGGER reject_delivered");
+        } else {
+          database.db.exec("DROP TRIGGER reject_replay");
         }
 
         let successor: typeof input.subagent | undefined;
@@ -200,13 +199,21 @@ describe("requester wake cancellation rollback", () => {
               lastError: "ambiguous transport",
             }),
           ]);
-          for (const record of inputs) {
+          for (const record of owner === "current" ? inputs : [sibling]) {
             expect(stored.get(record.subagent.runId)?.requesterSettleWake).toMatchObject({
               status: "dispatching",
               attemptCount: 1,
               replayCount: 1,
               lastError: "ambiguous transport",
             });
+          }
+          if (owner === "replacement") {
+            expect(subagentRuns.get(input.subagent.runId)).toBe(successor);
+            expect(stored.get(input.subagent.runId)?.requesterSettleWake).toEqual(
+              successor?.requesterSettleWake,
+            );
+            expect(stored.get(input.subagent.runId)?.delivery?.status).toBe("in_progress");
+            expect(driver.wake.mock.calls[1]?.[0].settledEntry).toBe(sibling.subagent);
           }
         } else {
           expect(subagentRuns.get(input.subagent.runId)).toBe(successor);
@@ -224,6 +231,8 @@ describe("requester wake cancellation rollback", () => {
           );
         }
       } finally {
+        database.db.exec("DROP TRIGGER IF EXISTS reject_delivered");
+        database.db.exec("DROP TRIGGER IF EXISTS reject_replay");
         releaseWriter.resolve();
         await stopResult;
         driver.controller.clearScheduledResumeTimers();

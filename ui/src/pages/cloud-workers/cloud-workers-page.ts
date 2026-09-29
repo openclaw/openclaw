@@ -38,7 +38,7 @@ import {
   type CloudWorkerProfileDraft,
   type ConfiguredCloudWorkerProfile,
 } from "./cloud-worker-config.ts";
-import { renderCloudWorkerRepositories } from "./cloud-worker-repositories.ts";
+import "./cloud-worker-repositories.ts";
 import "./cloud-worker-pool.ts";
 import "./cloud-worker-snapshots.ts";
 
@@ -568,7 +568,10 @@ class CloudWorkersPage extends OpenClawLightDomElement {
         },
         rows,
       )}
-      ${this.renderEditor()} ${renderCloudWorkerRepositories(canManage)}
+      ${this.renderEditor()}
+      <openclaw-cloud-worker-repositories
+        .canManage=${canManage}
+      ></openclaw-cloud-worker-repositories>
     `);
     return html`
       ${renderSettingsPageHeader({

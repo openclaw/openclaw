@@ -237,49 +237,41 @@ export const pushHandlers = {
       }
 
       const overrideEnvironment = normalizeApnsEnvironment(params.environment);
-      const result =
-        registration.transport === "direct"
-          ? await (async () => {
-              // Direct registrations require local APNs signing material at
-              // send time; relay registrations must not touch those secrets.
-              const auth = await resolveApnsAuthConfigFromEnv(process.env);
-              if (!auth.ok) {
-                respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, auth.error));
-                return null;
-              }
-              return await sendApnsAlert({
-                registration: {
-                  ...registration,
-                  environment: overrideEnvironment ?? registration.environment,
-                },
-                nodeId,
-                title,
-                body,
-                auth: auth.value,
-              });
-            })()
-          : await (async () => {
-              // Relay registrations carry a grant from the node, so the gateway
-              // only needs relay config plus the origin bound at registration.
-              const relay = resolveApnsRelayConfigFromEnv(
-                process.env,
-                context.getRuntimeConfig().gateway,
-                { registrationRelayOrigin: registration.relayOrigin },
-              );
-              if (!relay.ok) {
-                respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, relay.error));
-                return null;
-              }
-              return await sendApnsAlert({
-                registration,
-                nodeId,
-                title,
-                body,
-                relayConfig: relay.value,
-              });
-            })();
-      if (!result) {
-        return;
+      let result: Awaited<ReturnType<typeof sendApnsAlert>>;
+      if (registration.transport === "direct") {
+        // Relay registrations must not read local APNs signing material.
+        const auth = await resolveApnsAuthConfigFromEnv(process.env);
+        if (!auth.ok) {
+          respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, auth.error));
+          return;
+        }
+        result = await sendApnsAlert({
+          registration: {
+            ...registration,
+            environment: overrideEnvironment ?? registration.environment,
+          },
+          nodeId,
+          title,
+          body,
+          auth: auth.value,
+        });
+      } else {
+        const relay = resolveApnsRelayConfigFromEnv(
+          process.env,
+          context.getRuntimeConfig().gateway,
+          { registrationRelayOrigin: registration.relayOrigin },
+        );
+        if (!relay.ok) {
+          respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, relay.error));
+          return;
+        }
+        result = await sendApnsAlert({
+          registration,
+          nodeId,
+          title,
+          body,
+          relayConfig: relay.value,
+        });
       }
       if (
         shouldClearStoredApnsRegistration({

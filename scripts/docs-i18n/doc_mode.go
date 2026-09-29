@@ -60,9 +60,7 @@ func processFileDoc(ctx context.Context, translator docsTranslator, docsRoot, fi
 		}
 	}
 	docTM := &TranslationMemory{entries: map[string]TMEntry{}}
-	if err := translateFrontMatter(ctx, translator, docTM, frontData, relPath, srcLang, tgtLang); err != nil {
-		return false, "", fmt.Errorf("frontmatter translation failed for %s: %w", relPath, err)
-	}
+	translateFrontMatter(ctx, translator, docTM, frontData, relPath, srcLang, tgtLang)
 	updatedFront, err := encodeFrontMatter(frontData, relPath, content)
 	if err != nil {
 		return false, "", err

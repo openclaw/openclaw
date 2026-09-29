@@ -1,4 +1,3 @@
-// Diffs plugin module implements url behavior.
 import {
   resolveGatewayPublicOrigin,
   type OpenClawConfig,

@@ -4,14 +4,6 @@ const LINK_FAVICON_BROWSER_TIMEOUT_MS = 15_000;
 
 export type LinkFaviconFetcher = (hostname: string, signal: AbortSignal) => Promise<string | null>;
 
-function createLinkFaviconFetcher(params: {
-  auth: Parameters<typeof fetchLinkFaviconBlobUrl>[0]["auth"];
-  resourceBasePath: string;
-  gatewayUrl: string;
-}): LinkFaviconFetcher {
-  return (hostname, signal) => fetchLinkFaviconBlobUrl({ ...params, hostname, signal });
-}
-
 export function resolveChatLinkFaviconFetcher(
   state: Parameters<typeof fetchLinkFaviconBlobUrl>[0]["auth"] & {
     automaticallyFetchFavicons: boolean;
@@ -20,13 +12,15 @@ export function resolveChatLinkFaviconFetcher(
     client: { gatewayUrl: string } | null;
   },
 ): LinkFaviconFetcher | undefined {
-  return state.automaticallyFetchFavicons
-    ? createLinkFaviconFetcher({
-        auth: { hello: state.hello, settings: state.settings, password: state.password },
-        resourceBasePath: state.resourceBasePath,
-        gatewayUrl: state.client?.gatewayUrl ?? state.settings.gatewayUrl,
-      })
-    : undefined;
+  if (!state.automaticallyFetchFavicons) {
+    return undefined;
+  }
+  const params = {
+    auth: { hello: state.hello, settings: state.settings, password: state.password },
+    resourceBasePath: state.resourceBasePath,
+    gatewayUrl: state.client?.gatewayUrl ?? state.settings.gatewayUrl,
+  };
+  return (hostname, signal) => fetchLinkFaviconBlobUrl({ ...params, hostname, signal });
 }
 
 export function hydrateLinkFavicons(root: ParentNode, fetchFavicon?: LinkFaviconFetcher): void {

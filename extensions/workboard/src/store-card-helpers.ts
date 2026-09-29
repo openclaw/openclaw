@@ -16,6 +16,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import {
   BLOCKED_TOO_LONG_MS,
   MAX_CARD_ATTEMPTS,
+  MAX_CARD_COMMENTS,
   MAX_CARD_EVENTS,
   MAX_WORKER_CONTEXT_PARENTS,
   MAX_WORKER_CONTEXT_RECENT_CARDS,
@@ -128,6 +129,18 @@ export function appendEvent(
       ...event,
     },
   ].slice(-MAX_CARD_EVENTS);
+}
+
+export function appendComment(
+  comments: WorkboardMetadata["comments"],
+  body: string | undefined,
+  now?: number,
+): WorkboardMetadata["comments"] {
+  return body
+    ? [...(comments ?? []), { id: randomUUID(), body, createdAt: now ?? Date.now() }].slice(
+        -MAX_CARD_COMMENTS,
+      )
+    : comments;
 }
 
 function metadataEntriesChanged(

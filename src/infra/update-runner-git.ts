@@ -1,9 +1,6 @@
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { resolveControlUiAssetHealth } from "./control-ui-assets.js";
-import { isErrno } from "./errno.js";
-import { formatErrorMessage } from "./errors.js";
 import { readPackageVersion } from "./package-json.js";
-import type { PackageUpdateTransaction } from "./package-update-swap-contract.js";
 import { DEV_BRANCH, type UpdateChannel } from "./update-channels.js";
 import { getUpdateDoctorConfigFailureReason } from "./update-doctor-config.js";
 import { createUpdateErrorFact } from "./update-failure-facts.js";
@@ -21,7 +18,10 @@ import {
   readCurrentGitUpdateRecovery,
   recordGitRollbackOutcome,
 } from "./update-runner-git-recovery.js";
-import { prepareGitRuntimePromotion } from "./update-runner-git-runtime.js";
+import {
+  createGitRuntimeTransaction,
+  prepareGitRuntimePromotion,
+} from "./update-runner-git-runtime.js";
 import { createGitUpdateSteps } from "./update-runner-git-step-policy.js";
 import {
   runGitActivationBranchCheckStep,
@@ -145,17 +145,20 @@ export async function updateGitCheckout(params: {
     runtimeSha = beforeSha,
     source?: { sha: string; branch: string | null },
   ) => {
-    const sourceRestored = await runGitRollbackSteps({
-      beforeSha,
-      branch,
-      gitRoot,
-      createdDevBranchDuringUpdate,
-      sourceTreeStagingPaths: runtimePromotion?.sourceTreeStagingPaths,
-      recoveryStep,
-      checkSourceUnchanged,
-      assertCurrent,
-      activatedSource: source,
-    });
+    const restoreSource = () =>
+      runGitRollbackSteps({
+        beforeSha,
+        branch,
+        gitRoot,
+        createdDevBranchDuringUpdate,
+        sourceTreeStagingPaths: runtimePromotion?.sourceTreeStagingPaths,
+        recoveryStep,
+        checkSourceUnchanged,
+        assertCurrent,
+        activatedSource: source,
+      });
+    // Retained rollback must settle every source/ref fence before changing runtime.
+    let sourceRestored = source ? await restoreSource() : false;
     let runtimeRestored = true;
     try {
       await runtimePromotion?.restore(assertCurrent);
@@ -170,6 +173,10 @@ export async function updateGitCheckout(params: {
         exitCode: 1,
         stderrTail: String(error),
       });
+    }
+    // Immediate activation recovery reconstructs tracked output after runtime restoration.
+    if (!source) {
+      sourceRestored = await restoreSource();
     }
     recovery = !sourceRestored
       ? { serviceRestartSafe: false, reason: "source-rollback-failed" }
@@ -204,7 +211,9 @@ export async function updateGitCheckout(params: {
         };
         return buildError(reason);
       }
-      await restoreRuntime();
+      if (!runtimeRetained) {
+        await restoreRuntime();
+      }
       return buildError(reason);
     } catch (error) {
       if (sourceMutationStarted && !stateMigrationStarted) {
@@ -480,6 +489,45 @@ export async function updateGitCheckout(params: {
       return await rollbackError("runtime-verification-failed");
     }
 
+    if (opts.onTransaction) {
+      const activatedBranch = await readBranchName(runCommand, gitRoot, timeoutMs);
+      const assertRollbackSafe = async () => {
+        if (await checkSourceUnchanged(preflight.candidateSha, activatedBranch)) {
+          throw new Error("Git checkout changed after activation; retained rollback was refused.");
+        }
+      };
+      runtimeRetained = true;
+      await opts.onTransaction(
+        createGitRuntimeTransaction({
+          root: gitRoot,
+          promotion: runtimePromotion,
+          assertRollbackSafe,
+          restoreRuntime: async (assertCurrent) => {
+            const rollbackStart = steps.length;
+            const verified = await restoreRuntime(assertCurrent, beforeBuiltCommit ?? beforeSha, {
+              sha: preflight.candidateSha,
+              branch: activatedBranch,
+            });
+            const rollbackSteps = steps.slice(rollbackStart);
+            const messages = rollbackSteps.flatMap((entry) => entry.advisory?.message ?? []);
+            return {
+              name: "git-runtime-rollback",
+              command: "restore previous Git runtime",
+              cwd: gitRoot,
+              durationMs: 0,
+              exitCode: verified ? 0 : 1,
+              activePackageRoot: gitRoot,
+              advisory:
+                verified && messages.length
+                  ? { kind: "recoverable-maintenance", message: messages.join(" ") }
+                  : undefined,
+              stderrTail: verified ? undefined : rollbackSteps.find(isFailedUpdateStep)?.stderrTail,
+            };
+          },
+        }),
+      );
+    }
+
     // Source conversion migrates only after its prepared global exposure is swapped.
     if (!opts.prepareGitExposure) {
       stateMigrationStarted = true;
@@ -536,79 +584,6 @@ export async function updateGitCheckout(params: {
       return await rollbackError("target-sha-mismatch");
     }
     const gitRuntime = await readGitRuntimeArtifactIdentity(gitRoot);
-    if (opts.onTransaction) {
-      const promotion = runtimePromotion;
-      const activatedBranch = await readBranchName(runCommand, gitRoot, timeoutMs);
-      const assertRollbackSafe = async () => {
-        if (await checkSourceUnchanged(preflight.candidateSha, activatedBranch)) {
-          throw new Error("Git checkout changed after activation; retained rollback was refused.");
-        }
-      };
-      let restored: ReturnType<PackageUpdateTransaction["rollback"]> | undefined;
-      let completed: Promise<UpdateStepResult | void> | undefined;
-      const retention = (message: string, warning = false): UpdateStepResult => ({
-        name: "git-runtime-backup-retention",
-        command: "retain previous Git runtime",
-        cwd: gitRoot,
-        durationMs: 0,
-        exitCode: 1,
-        stderrTail: message,
-        ...(warning ? { advisory: { kind: "recoverable-maintenance" as const, message } } : {}),
-      });
-      opts.onTransaction({
-        backupRoot: promotion.backupRoot,
-        assertRollbackSafe,
-        rollback: (assertCurrent) => {
-          assertCurrent();
-          if (completed) {
-            throw new Error("Git runtime backup retirement has already started.");
-          }
-          return (restored ??= (async () => {
-            await assertRollbackSafe();
-            assertCurrent();
-            const verified = await restoreRuntime(assertCurrent, beforeBuiltCommit ?? beforeSha, {
-              sha: preflight.candidateSha,
-              branch: activatedBranch,
-            });
-            return {
-              name: "git-runtime-rollback",
-              command: "restore previous Git runtime",
-              cwd: gitRoot,
-              durationMs: 0,
-              exitCode: verified ? 0 : 1,
-              activePackageRoot: gitRoot,
-            };
-          })());
-        },
-        complete: (outcome, assertCurrent) => {
-          assertCurrent();
-          return (completed ??= (async () => {
-            if (!outcome.activationVerified && (await restored)?.exitCode !== 0) {
-              return retention(
-                `Git recovery is unverified; previous runtime retained at ${promotion.backupRoot}.`,
-              );
-            }
-            try {
-              await promotion.cleanup(assertCurrent);
-            } catch (error) {
-              assertCurrent();
-              if (
-                hasCommandProcessCleanupError(error) ||
-                !(error instanceof AggregateError ? error.errors : [error]).every(isErrno)
-              ) {
-                throw error;
-              }
-              return retention(
-                `Git verification succeeded; backup cleanup remains pending at ${promotion.backupRoot}: ${formatErrorMessage(error)}`,
-                true,
-              );
-            }
-            return undefined;
-          })());
-        },
-      });
-      runtimeRetained = true;
-    }
     return {
       status: "ok",
       mode: "git",

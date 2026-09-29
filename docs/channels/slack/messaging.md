@@ -124,6 +124,8 @@ Compact progress always uses normal final delivery, including for media and erro
 
 Both surfaces link the session with **Open in OpenClaw**, but only when that link can work: `gateway.publicOrigin` must be set (the externally reachable Gateway origin) and the Control UI must not be disabled via `gateway.controlUi.enabled: false`. Installations that leave `publicOrigin` unset — where there is no way to reach OpenClaw from Slack — get no link rather than a dead one. If the Control UI is served below a path prefix, also set `gateway.controlUi.basePath`.
 
+When a turn spawns a visible work session, the finished card instead links to that child with **Open work session**. For multiple visible work sessions, it shows up to five links in acceptance order, using their labels or numbered **Open work session** links; hidden subagents do not replace the conversation link.
+
 - A reply thread must be available for native text streaming and Slack session status to appear. Thread selection still follows `replyToMode`.
 - Channel, group-chat, and top-level DM roots use draft previews when explicitly selected. Default `progress` turns without a reply thread use only the temporary typing reaction.
 - Top-level Slack DMs stay off-thread by default; Agent View and Assistant View retain their thread-based native progress.

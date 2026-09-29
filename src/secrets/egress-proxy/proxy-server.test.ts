@@ -886,7 +886,12 @@ describe("secret egress proxy", () => {
     const sibling = proxy.registerProcess();
     await requestThroughTunnel({ headers: { "X-Secret": sentinel } });
     await expect(
-      forwardedRequest(basicProxyAuth(registeredPassword(proxyEnv)), "http"),
+      forwardedRequest(
+        basicProxyAuth(registeredPassword(proxyEnv)),
+        "http",
+        proxy.proxyOrigin,
+        "http://example.com/",
+      ),
     ).resolves.toBe(502);
     expect(auditEvents).toContainEqual(
       expect.objectContaining({ kind: "refused", reason: "non-https-request" }),

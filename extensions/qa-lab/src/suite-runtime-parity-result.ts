@@ -1,8 +1,8 @@
 // QA Lab projects canonical runtime-pair results into suite scenario results.
+import type { RuntimeId } from "./runtime-id.js";
 import {
   isRuntimeParityResultPass,
   runtimeParityCellStatus,
-  type RuntimeId,
   type RuntimeParityCell,
   type RuntimeParityResult,
 } from "./runtime-parity.js";

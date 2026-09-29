@@ -65,15 +65,11 @@ function pendingTurnKey(agentId: string, id: string): string {
   return JSON.stringify([agentId, id]);
 }
 
-function outboundMessageKey(agentId: string, outboundMessageId: string): string {
-  return JSON.stringify([agentId, outboundMessageId]);
-}
-
 function removePendingOutboundMembership(pending: PendingConversationTurn): void {
   if (!pending.outboundMessageId) {
     return;
   }
-  const key = outboundMessageKey(pending.agentId, pending.outboundMessageId);
+  const key = pendingTurnKey(pending.agentId, pending.outboundMessageId);
   const bucket = pendingTurnsByOutboundId.get(key);
   bucket?.delete(pending);
   if (bucket?.size === 0) {
@@ -161,7 +157,7 @@ export function registerPendingConversationTurn(params: {
         pending.settle(undefined);
         return;
       }
-      const outboundKey = outboundMessageKey(pending.agentId, pending.outboundMessageId);
+      const outboundKey = pendingTurnKey(pending.agentId, pending.outboundMessageId);
       const bucket = pendingTurnsByOutboundId.get(outboundKey) ?? new Set();
       bucket.add(pending);
       pendingTurnsByOutboundId.set(outboundKey, bucket);
@@ -216,7 +212,7 @@ export async function claimPendingConversationTurnReply(params: {
     return undefined;
   }
   let pending: PendingConversationTurn | undefined;
-  const candidates = pendingTurnsByOutboundId.get(outboundMessageKey(agentId, replyToId));
+  const candidates = pendingTurnsByOutboundId.get(pendingTurnKey(agentId, replyToId));
   for (const candidate of candidates ?? []) {
     if (
       candidate.claimed ||
@@ -255,7 +251,7 @@ export async function claimPendingConversationTurnReply(params: {
   const reply: ConversationTurnReply = {
     conversationRef: params.conversationRef,
     messageId: params.messageId,
-    ...(replyToId ? { replyToId } : {}),
+    replyToId,
     ...(threadId ? { threadId } : {}),
     text: params.text,
     timestamp: params.timestamp ?? Date.now(),

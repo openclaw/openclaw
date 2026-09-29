@@ -114,10 +114,18 @@ class MessageImageResourceDirective extends AsyncDirective {
       this.element?.getAttribute("src") !== this.retained.previewUrl
     ) {
       if (event.type === "error") {
-        this.failRetainedImage();
+        this.failImage();
       } else {
         this.releaseRetainedImage();
       }
+    } else if (
+      event.type === "error" &&
+      !this.managed &&
+      this.image?.url &&
+      !isLocalAssistantAttachmentSource(this.image.url) &&
+      !isInlineImageSource(this.image.url)
+    ) {
+      this.failImage();
     }
   };
 
@@ -263,10 +271,7 @@ class MessageImageResourceDirective extends AsyncDirective {
       ) {
         // IMG keeps its current decoded request while the new src loads. One
         // native load/error boundary replaces the detached decode preloader.
-        retained.timeout = setTimeout(
-          () => this.failRetainedImage(),
-          CANONICAL_IMAGE_HANDOFF_TIMEOUT_MS,
-        );
+        retained.timeout = setTimeout(() => this.failImage(), CANONICAL_IMAGE_HANDOFF_TIMEOUT_MS);
       }
       return this.present(this.renderImageElement(image, displayUrl, options));
     }
@@ -442,7 +447,7 @@ class MessageImageResourceDirective extends AsyncDirective {
     }
   }
 
-  private failRetainedImage() {
+  private failImage() {
     this.releaseRetainedImage();
     this.retained = { status: "unavailable" };
     this.refreshImage();

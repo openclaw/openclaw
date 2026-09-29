@@ -1,4 +1,3 @@
-// Control UI view renders nodes exec approvals screen content.
 import { html, nothing } from "lit";
 import { live } from "lit/directives/live.js";
 import "../../components/agent-select-registration.ts";
@@ -110,19 +109,6 @@ function resolveExecApprovalsAgents(
   return agents;
 }
 
-function resolveExecApprovalsScope(
-  selected: string | null,
-  agents: ExecApprovalsAgentOption[],
-): string {
-  if (selected === EXEC_APPROVALS_DEFAULT_SCOPE) {
-    return EXEC_APPROVALS_DEFAULT_SCOPE;
-  }
-  if (selected && agents.some((agent) => agent.id === selected)) {
-    return selected;
-  }
-  return EXEC_APPROVALS_DEFAULT_SCOPE;
-}
-
 export function resolveExecApprovalsState(props: DevicesProps) {
   const snapshot = props.execApprovalsSnapshot;
   const nativePolicy = isNativeExecApprovalsSnapshot(snapshot) ? snapshot : null;
@@ -140,32 +126,31 @@ export function resolveExecApprovalsState(props: DevicesProps) {
   if (target === "node" && targetNodeId && !targetNodes.some((node) => node.id === targetNodeId)) {
     targetNodeId = null;
   }
-  const selectedScope = resolveExecApprovalsScope(props.execApprovalsSelectedAgent, agents);
+  const selected = props.execApprovalsSelectedAgent;
+  const selectedScope =
+    selected && agents.some((agent) => agent.id === selected)
+      ? selected
+      : EXEC_APPROVALS_DEFAULT_SCOPE;
   const defaults = resolveExecApprovalsDefaults(
     form,
     fileSnapshot?.resolvedDefaults,
     selectedScope !== EXEC_APPROVALS_DEFAULT_SCOPE,
   );
   const selectedAgent =
-    selectedScope !== EXEC_APPROVALS_DEFAULT_SCOPE
-      ? (((form?.agents ?? {})[selectedScope] as Record<string, unknown> | undefined) ?? null)
-      : null;
-  const allowlist = Array.isArray((selectedAgent as { allowlist?: unknown })?.allowlist)
-    ? ((selectedAgent as { allowlist?: ExecApprovalsAllowlistEntry[] }).allowlist ?? [])
-    : [];
+    selectedScope !== EXEC_APPROVALS_DEFAULT_SCOPE ? (form?.agents?.[selectedScope] ?? null) : null;
+  const allowlist = selectedAgent?.allowlist;
   return {
     ready,
     disabled: !props.canAdmin || props.execApprovalsSaving || props.execApprovalsLoading,
     dirty: props.execApprovalsDirty,
     loading: props.execApprovalsLoading,
     saving: props.execApprovalsSaving,
-    form,
     nativePolicy,
     defaults,
     selectedScope,
     selectedAgent,
     agents,
-    allowlist,
+    allowlist: Array.isArray(allowlist) ? allowlist : [],
     target,
     targetNodeId,
     targetNodes,

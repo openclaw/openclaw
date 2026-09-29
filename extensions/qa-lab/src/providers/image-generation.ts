@@ -6,7 +6,7 @@ import {
   QA_BASE_RUNTIME_PLUGIN_IDS,
   QA_CODEX_OPENAI_CATALOG_BASE_URL,
 } from "../qa-gateway-config.js";
-import type { RuntimeId } from "../runtime-parity.js";
+import type { RuntimeId } from "../runtime-id.js";
 import type { QaProviderMode } from "./index.js";
 import { getQaProvider } from "./index.js";
 

@@ -17,7 +17,6 @@ type PublicationExit = ReliabilityReport["publicationInterruptionProof"]["before
 
 type CrashPointResult = {
   exit: PublicationExit;
-  sourceStatePreserved: true;
   stagingEntries: number;
   targetState: ReliabilityStateProof | null;
   targetVisibleAfterCrash: boolean;
@@ -105,11 +104,10 @@ async function runCrashPoint(params: {
     child.once("exit", (code, signal) => resolve({ code, signal }));
   });
 
-  let crashStagingEntries: string[];
   try {
     await waitForCrashPoint({ child, markerPath, readStderr: () => stderr });
     const targetVisibleAfterCrash = fs.existsSync(targetPath);
-    crashStagingEntries = listCrashStagingEntries(params.scratchPath);
+    const crashStagingEntries = listCrashStagingEntries(params.scratchPath);
     if (crashStagingEntries.length === 0) {
       throw new Error(`SQLite publication worker reached ${params.crashPoint} without staging.`);
     }
@@ -136,8 +134,6 @@ async function runCrashPoint(params: {
         targetPath,
       });
       assertNoSqliteSidecars(targetPath);
-      const retryState = params.verifyDatabase(targetPath);
-      assertSameReliabilityState(retryState, params.expectedState, `${params.crashPoint} retry`);
     } else {
       const targetHash = hashFile(targetPath);
       let retryError: unknown;
@@ -158,13 +154,9 @@ async function runCrashPoint(params: {
       if (hashFile(targetPath) !== targetHash) {
         throw new Error("SQLite retry changed the already-published target.");
       }
-      const preservedState = params.verifyDatabase(targetPath);
-      assertSameReliabilityState(
-        preservedState,
-        params.expectedState,
-        `${params.crashPoint} retry`,
-      );
     }
+    const retryState = params.verifyDatabase(targetPath);
+    assertSameReliabilityState(retryState, params.expectedState, `${params.crashPoint} retry`);
     for (const entry of crashStagingEntries) {
       if (!fs.existsSync(path.join(params.scratchPath, entry))) {
         throw new Error(`SQLite retry removed crash staging it did not own: ${entry}`);
@@ -173,7 +165,6 @@ async function runCrashPoint(params: {
 
     return {
       exit,
-      sourceStatePreserved: true,
       stagingEntries: crashStagingEntries.length,
       targetState,
       targetVisibleAfterCrash,

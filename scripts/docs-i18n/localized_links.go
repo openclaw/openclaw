@@ -153,11 +153,8 @@ func normalizeSlashes(path string) string {
 }
 
 func firstPathSegment(relPath string) string {
-	if relPath == "" {
-		return ""
-	}
-	parts := strings.SplitN(relPath, "/", 2)
-	return parts[0]
+	segment, _, _ := strings.Cut(relPath, "/")
+	return segment
 }
 
 func addRouteCandidates(routes map[string]struct{}, relPath string, permalinks []string) {
@@ -317,12 +314,7 @@ func prefixLocaleRoute(lang, route string) string {
 }
 
 func (ri *routeIndex) routeHasLocalePrefix(route string) bool {
-	if route == "/" {
-		return false
-	}
-	firstSegment := strings.TrimPrefix(route, "/")
-	firstSegment = strings.SplitN(firstSegment, "/", 2)[0]
-	return ri.isLocalePrefix(firstSegment)
+	return ri.isLocalePrefix(firstPathSegment(strings.TrimPrefix(route, "/")))
 }
 
 func (ri *routeIndex) isLocalePrefix(segment string) bool {

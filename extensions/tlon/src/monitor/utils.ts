@@ -8,9 +8,9 @@ import type {
   StableChannelIngressIdentityParams,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-// Tlon helper module supports utils behavior.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { asNullableRecord, readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import { getTlonRuntime } from "../runtime.js";
 import { normalizeShip } from "../targets.js";
 
@@ -117,14 +117,14 @@ export function isBotMentioned(
   }
 
   const normalizedBotShip = normalizeShip(botShipName);
-  const escapedShip = normalizedBotShip.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const escapedShip = escapeRegExp(normalizedBotShip);
   const mentionPattern = new RegExp(`(^|\\s)${escapedShip}(?=\\s|$)`, "i");
   if (mentionPattern.test(messageText)) {
     return true;
   }
 
   if (nickname) {
-    const escapedNickname = nickname.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const escapedNickname = escapeRegExp(nickname);
     const nicknamePattern = new RegExp(`(^|\\s)${escapedNickname}(?=\\s|$|[,!?.])`, "i");
     if (nicknamePattern.test(messageText)) {
       return true;

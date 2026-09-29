@@ -1,4 +1,5 @@
 import {
+  cpSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -41,6 +42,28 @@ function expectPluginNpmRuntimeBuildPlan(
     throw new Error("expected plugin npm runtime build plan");
   }
   return plan;
+}
+
+function copyPluginBuildFixture(plugin: string) {
+  const source = path.join(repoRoot, "extensions", plugin);
+  const packageDir = path.join(tempDirs.make("openclaw-plugin-runtime-package-"), plugin);
+  // Source packages are also pnpm dependencies; never rebuild their shared dist during tests.
+  cpSync(source, packageDir, {
+    recursive: true,
+    filter: (file) => !["dist", "node_modules"].includes(path.basename(file)),
+  });
+  if (existsSync(path.join(source, "node_modules"))) {
+    symlinkSync(
+      path.join(source, "node_modules"),
+      path.join(packageDir, "node_modules"),
+      "junction",
+    );
+  }
+  const tsconfig = path.join(source, "tsconfig.json");
+  if (existsSync(tsconfig)) {
+    writeFileSync(path.join(packageDir, "tsconfig.json"), JSON.stringify({ extends: tsconfig }));
+  }
+  return packageDir;
 }
 
 describe("plugin npm runtime build planning", () => {
@@ -557,17 +580,38 @@ describe("plugin npm runtime build planning", () => {
   });
 
   it("includes top-level public runtime surfaces", () => {
-    const diffsPlan = resolvePluginNpmRuntimeBuildPlan({
-      repoRoot,
-      packageDir: path.join(repoRoot, "extensions", "diffs"),
+    const packageDir = tempDirs.make("openclaw-plugin-runtime-public-surfaces-");
+    writeFileSync(
+      path.join(packageDir, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/public-surfaces-fixture",
+        version: "1.0.0",
+        openclaw: { extensions: ["./index.ts"] },
+      }),
+    );
+    writeFileSync(path.join(packageDir, "openclaw.plugin.json"), "{}\n");
+    mkdirSync(path.join(packageDir, "assets"));
+    mkdirSync(path.join(packageDir, "skills"));
+    for (const file of [
+      "api.ts",
+      "index.ts",
+      "runtime-api.ts",
+      "README.md",
+      "assets/icon.png",
+      "assets/activity.svg",
+    ]) {
+      writeFileSync(path.join(packageDir, file), "");
+    }
+
+    const plan = expectPluginNpmRuntimeBuildPlan(
+      resolvePluginNpmRuntimeBuildPlan({ repoRoot, packageDir }),
+    );
+    expect(plan.entry).toEqual({
+      api: path.join(packageDir, "api.ts"),
+      index: path.join(packageDir, "index.ts"),
+      "runtime-api": path.join(packageDir, "runtime-api.ts"),
     });
-    const diffsRuntimePlan = expectPluginNpmRuntimeBuildPlan(diffsPlan);
-    expect(diffsRuntimePlan.entry).toEqual({
-      api: path.join(repoRoot, "extensions", "diffs", "api.ts"),
-      index: path.join(repoRoot, "extensions", "diffs", "index.ts"),
-      "runtime-api": path.join(repoRoot, "extensions", "diffs", "runtime-api.ts"),
-    });
-    expect(diffsRuntimePlan.packageFiles).toEqual([
+    expect(plan.packageFiles).toEqual([
       "dist/**",
       "openclaw.plugin.json",
       "README.md",
@@ -597,7 +641,7 @@ describe("plugin npm runtime build planning", () => {
   it("builds msteams startup runtime surfaces as CommonJS files", async () => {
     const result = await buildPluginNpmRuntime({
       repoRoot,
-      packageDir: "extensions/msteams",
+      packageDir: copyPluginBuildFixture("msteams"),
       logLevel: "silent",
     });
     const plan = expectPluginNpmRuntimeBuildPlan(result);
@@ -614,20 +658,17 @@ describe("plugin npm runtime build planning", () => {
       "dist/secret-contract-api.cjs",
     ];
     const missing = entrypoints.filter(
-      (relativePath) => !existsSync(path.join(repoRoot, "extensions/msteams", relativePath)),
+      (relativePath) => !existsSync(path.join(plan.packageDir, relativePath)),
     );
     expect(missing).toEqual([]);
 
     for (const relativePath of entrypoints) {
-      const text = readFileSync(path.join(repoRoot, "extensions/msteams", relativePath), "utf8");
+      const text = readFileSync(path.join(plan.packageDir, relativePath), "utf8");
       expect(text).not.toMatch(/^import\s/u);
       expect(text).toMatch(/(?:require\(|exports\.)/u);
     }
 
-    const indexText = readFileSync(
-      path.join(repoRoot, "extensions/msteams/dist/index.cjs"),
-      "utf8",
-    );
+    const indexText = readFileSync(path.join(plan.outDir, "index.cjs"), "utf8");
     expect(indexText).toContain('specifier: "./channel-plugin-api.cjs"');
     expect(indexText).toContain('specifier: "./secret-contract-api.cjs"');
     expect(indexText).toContain('specifier: "./runtime-api.cjs"');
@@ -704,7 +745,7 @@ describe("plugin npm runtime build planning", () => {
   it("keeps published Codex runtime imports resolvable from the host package", async () => {
     const result = await buildPluginNpmRuntime({
       repoRoot,
-      packageDir: "extensions/codex",
+      packageDir: copyPluginBuildFixture("codex"),
       logLevel: "silent",
     });
     const plan = expectPluginNpmRuntimeBuildPlan(result);
@@ -715,7 +756,7 @@ describe("plugin npm runtime build planning", () => {
   it("keeps published llama.cpp runtime imports resolvable from the host package", async () => {
     const result = await buildPluginNpmRuntime({
       repoRoot,
-      packageDir: "extensions/llama-cpp",
+      packageDir: copyPluginBuildFixture("llama-cpp"),
       logLevel: "silent",
     });
     const plan = expectPluginNpmRuntimeBuildPlan(result);

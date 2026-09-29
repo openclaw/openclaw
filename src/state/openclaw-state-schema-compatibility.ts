@@ -3,6 +3,7 @@ import {
   type SqliteSchemaCompatibility,
   type SqliteSchemaIssue,
 } from "../infra/sqlite-schema-contract.js";
+import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import {
   ORDERED_STARTUP_ADDITIVE_STATE_COLUMNS,
   CLAW_FIRST_USE_ADDITIVE_STATE_COLUMN_DEFINITIONS,
@@ -79,13 +80,12 @@ export function getOpenClawStateRuntimeSchema(options: {
     ? FIRST_USE_STATE_INDEXES
     : LAZY_ADDITIVE_STATE_INDEXES;
   for (const tableName of omittedTables) {
-    const start = schema.indexOf(`CREATE TABLE IF NOT EXISTS ${tableName} (`);
-    const endMarker = "\n) STRICT;";
-    const end = start >= 0 ? schema.indexOf(endMarker, start) : -1;
-    if (start < 0 || end < 0) {
-      throw new Error(`lazy additive state schema block is missing for ${tableName}`);
-    }
-    schema = `${schema.slice(0, start)}${schema.slice(end + endMarker.length)}`;
+    schema = schema.replace(
+      extractSqliteTableSchema(schema, tableName, {
+        errorMessage: `lazy additive state schema block is missing for ${tableName}`,
+      }),
+      "",
+    );
   }
   for (const indexName of omittedIndexes) {
     const plainStart = schema.indexOf(`CREATE INDEX IF NOT EXISTS ${indexName}`);

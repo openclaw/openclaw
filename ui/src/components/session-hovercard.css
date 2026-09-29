@@ -234,13 +234,26 @@ button.session-hovercard__attribution-others:is(:hover, :focus-visible) {
   grid-template-columns: var(--session-hovercard-context-icon-size) minmax(0, 1fr) auto;
 }
 
-.session-hovercard__plan-step {
-  display: block;
+.session-hovercard__plan-step,
+.session-hovercard__branch-action,
+.session-hovercard__branch-label,
+.session-hovercard__pr-title {
   overflow: hidden;
   color: var(--text);
   font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.session-hovercard__plan-step,
+.session-hovercard__pr-title {
+  display: block;
+}
+
+.session-hovercard__branch-action,
+.session-hovercard__branch-label,
+.session-hovercard__pr-title {
+  min-width: 0;
 }
 
 .session-hovercard__plan-count {
@@ -250,24 +263,34 @@ button.session-hovercard__attribution-others:is(:hover, :focus-visible) {
   white-space: nowrap;
 }
 
-.session-hovercard__context-icon {
+.session-hovercard__context-icon,
+.session-hovercard__pr-state-icon,
+.session-hovercard__branch-icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   width: var(--session-hovercard-context-icon-size);
   height: var(--session-hovercard-context-icon-size);
+}
+
+.session-hovercard__context-icon {
   align-self: center;
   color: var(--muted);
 }
 
-.session-hovercard__context-icon svg {
-  display: block;
+.session-hovercard__context-icon svg,
+.session-hovercard__pr-state-icon svg,
+.session-hovercard__branch-icon svg {
   width: var(--session-hovercard-context-icon-size);
   height: var(--session-hovercard-context-icon-size);
-  flex: none;
   stroke-width: 1.5px;
   stroke-linecap: round;
   stroke-linejoin: round;
+}
+
+.session-hovercard__context-icon svg {
+  display: block;
+  flex: none;
 }
 
 .session-hovercard__context-value {
@@ -346,16 +369,6 @@ button.session-hovercard__attribution-others:is(:hover, :focus-visible) {
   text-decoration: none;
 }
 
-.session-hovercard__branch-action,
-.session-hovercard__branch-label {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--text);
-  font-weight: 500;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .session-hovercard__branch-action {
   text-decoration: none;
 }
@@ -370,24 +383,6 @@ button.session-hovercard__attribution-others:is(:hover, :focus-visible) {
 .session-hovercard__pr-row:hover,
 .session-hovercard__pr-row:focus-visible {
   background: var(--bg-hover);
-}
-
-.session-hovercard__pr-state-icon,
-.session-hovercard__branch-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: var(--session-hovercard-context-icon-size);
-  height: var(--session-hovercard-context-icon-size);
-}
-
-.session-hovercard__pr-state-icon svg,
-.session-hovercard__branch-icon svg {
-  width: var(--session-hovercard-context-icon-size);
-  height: var(--session-hovercard-context-icon-size);
-  stroke-width: 1.5px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 .session-hovercard__diff {
@@ -414,16 +409,6 @@ button.session-hovercard__attribution-others:is(:hover, :focus-visible) {
 
 .session-hovercard__pr-row[data-state="closed"] {
   --session-pr-state-color: var(--danger);
-}
-
-.session-hovercard__pr-title {
-  display: block;
-  min-width: 0;
-  overflow: hidden;
-  color: var(--text);
-  font-weight: 500;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .session-hovercard__pr-state-icon {

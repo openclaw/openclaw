@@ -79,7 +79,7 @@ actor GatewayConnection: Observable {
 
     struct Route: Equatable, Sendable {
         fileprivate let generation: UInt64
-        fileprivate let authority: UInt64?
+        let authority: UInt64?
         let url: URL
         fileprivate let token: String?
         fileprivate let password: String?
@@ -210,7 +210,7 @@ actor GatewayConnection: Observable {
     private nonisolated let endpointObservation = ObservationRegistrar()
     private let supportsSharedEndpointRecovery: Bool
     private let activationBindingKeyProvider: @Sendable () -> SymmetricKey?
-    private let includeDeviceIdentity: Bool
+    let includeDeviceIdentity: Bool
     private let sessionProvider: SessionProvider
     private let clientShutdown: @Sendable (GatewayChannelActor) async -> Void
     private let decoder = JSONDecoder()
@@ -686,6 +686,17 @@ extension GatewayConnection {
             timeoutMs: request.timeoutMs,
             ifCurrentRoute: route,
             distinguishPreDispatchRouteChange: distinguishPreDispatchRouteChange)
+    }
+
+    func request(
+        _ request: OpenClawChatGatewayRequest,
+        ifCurrentServerLease lease: ServerLease) async throws -> Data
+    {
+        try await self.request(
+            method: request.method,
+            params: request.params,
+            timeoutMs: request.timeoutMs,
+            ifCurrentServerLease: lease)
     }
 
     func requestDecoded<T: Decodable>(
@@ -1245,6 +1256,14 @@ extension GatewayConnection {
 // MARK: - Snapshot cache and subscriptions
 
 extension GatewayConnection {
+    func controlUiAuthBinding(ifCurrentServerLease lease: ServerLease) async throws -> GatewayAuthBinding {
+        guard await self.isCurrentServerLease(lease),
+              let binding = await lease.client.authBinding(ifCurrentConnectionGeneration: lease.socketGeneration),
+              await self.isCurrentServerLease(lease)
+        else { throw CancellationError() }
+        return binding
+    }
+
     func sourceResourceBearer(ifCurrentServerLease lease: ServerLease) async throws -> String? {
         guard await self.isCurrentServerLease(lease) else { throw CancellationError() }
         let bearer = await lease.client.httpResourceBearer(ifCurrentConnectionGeneration: lease.socketGeneration)

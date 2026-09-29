@@ -15,7 +15,7 @@ export type GatewayDrainReason =
   | `${"stop" | "restart"} (${GatewayShutdownTrigger}${"" | `: ${string}`})`;
 
 export class GatewayDrainingError extends Error {
-  constructor(message = "Gateway is draining; new tasks are not accepted") {
+  constructor(message = gatewayWorkAdmissionMessage()) {
     super(message);
     this.name = "GatewayDrainingError";
   }
@@ -29,7 +29,7 @@ type GatewayRootWorkAdmission = {
 };
 
 type GatewayWorkAdmissionState = {
-  restartDraining: boolean;
+  restartDrainReason: GatewayDrainReason | undefined;
   restartDrainController: AbortController;
   restartSignalPending: boolean;
   restartSignalGeneration: number;
@@ -47,7 +47,7 @@ const admissionLog = createSubsystemLogger("gateway/admission");
 const GATEWAY_WORK_ADMISSION_STATE = resolveGlobalSingleton(
   Symbol.for("openclaw.gatewayWorkAdmissionState"),
   (): GatewayWorkAdmissionState => ({
-    restartDraining: false,
+    restartDrainReason: undefined,
     restartDrainController: new AbortController(),
     restartSignalPending: false,
     restartSignalGeneration: 0,
@@ -59,6 +59,19 @@ const GATEWAY_WORK_ADMISSION_STATE = resolveGlobalSingleton(
     suspendListeners: new Set(),
   }),
 );
+
+function gatewayWorkAdmissionMessage(): string {
+  if (GATEWAY_WORK_ADMISSION_STATE.restartDrainReason?.startsWith("stop (")) {
+    return "Gateway is shutting down. Please try again once it is back online.";
+  }
+  if (isGatewayRestartDraining()) {
+    return "Gateway is restarting. Please try again shortly.";
+  }
+  if (GATEWAY_WORK_ADMISSION_STATE.suspendPhase !== "accepting") {
+    return "Gateway is temporarily paused. Please try again shortly.";
+  }
+  return "Gateway is temporarily unavailable. Please try again shortly.";
+}
 
 type GatewayRootWorkAdmissionLease = {
   ownsRoot: boolean;
@@ -166,7 +179,7 @@ function invalidateSuspendAdmission(): void {
   GATEWAY_WORK_ADMISSION_STATE.suspendGeneration += 1;
   resolveSuspendOpenWaiters();
   // Restart drain supersedes suspension without reopening process admission.
-  if (wasClosed && !GATEWAY_WORK_ADMISSION_STATE.restartDraining) {
+  if (wasClosed && GATEWAY_WORK_ADMISSION_STATE.restartDrainReason === undefined) {
     admissionLog.info("admission reopened: suspend phase");
   }
   callback?.();
@@ -178,7 +191,7 @@ function invalidateSuspendAdmission(): void {
 /** Reopens a reversible restart-signal fence; one-way restart drain retains admission. */
 export function rollbackGatewayRestartSignalFence(): boolean {
   if (
-    GATEWAY_WORK_ADMISSION_STATE.restartDraining ||
+    GATEWAY_WORK_ADMISSION_STATE.restartDrainReason !== undefined ||
     !GATEWAY_WORK_ADMISSION_STATE.restartSignalPending
   ) {
     return false;
@@ -251,7 +264,7 @@ function notifyGatewaySuspendAdmission(): void {
 
 export function isGatewayRestartDraining(): boolean {
   return (
-    GATEWAY_WORK_ADMISSION_STATE.restartDraining ||
+    GATEWAY_WORK_ADMISSION_STATE.restartDrainReason !== undefined ||
     GATEWAY_WORK_ADMISSION_STATE.restartSignalPending
   );
 }
@@ -277,17 +290,20 @@ export function isGatewayRestartDrainError(error: unknown): error is GatewayDrai
 
 /** Restart drain is one-way until the in-process restart resets runtime state. */
 export function markGatewayRestartDraining(reason: GatewayDrainReason = "restart"): void {
-  if (GATEWAY_WORK_ADMISSION_STATE.restartDraining) {
+  if (GATEWAY_WORK_ADMISSION_STATE.restartDrainReason !== undefined) {
+    // An accepted stop can supersede a queued restart. Keep admission closed
+    // and the original abort receipt intact; only new refusals use the stop reason.
+    if (reason.startsWith("stop (")) {
+      GATEWAY_WORK_ADMISSION_STATE.restartDrainReason = reason;
+    }
     return;
   }
   // Drain supersedes the reversible signal fence; do not reopen before the
   // one-way close, or waiters could briefly admit work into a dying process.
   GATEWAY_WORK_ADMISSION_STATE.restartSignalPending = false;
   GATEWAY_WORK_ADMISSION_STATE.restartSignalGeneration += 1;
-  GATEWAY_WORK_ADMISSION_STATE.restartDraining = true;
-  GATEWAY_WORK_ADMISSION_STATE.restartDrainController.abort(
-    new GatewayDrainingError("gateway is draining for restart"),
-  );
+  GATEWAY_WORK_ADMISSION_STATE.restartDrainReason = reason;
+  GATEWAY_WORK_ADMISSION_STATE.restartDrainController.abort(new GatewayDrainingError());
   resolveSuspendOpenWaiters();
   admissionLog.info(`admission closed: ${reason}`);
   if (GATEWAY_WORK_ADMISSION_STATE.suspendPhase !== "accepting") {
@@ -393,7 +409,7 @@ export async function beginGatewayRootWorkAdmissionWhenOpen(
 ): Promise<GatewayRootWorkAdmissionLease> {
   while (true) {
     signal?.throwIfAborted();
-    if (GATEWAY_WORK_ADMISSION_STATE.restartDraining) {
+    if (GATEWAY_WORK_ADMISSION_STATE.restartDrainReason !== undefined) {
       throw new GatewayDrainingError();
     }
     const admission = tryBeginGatewayRootWorkAdmission(origin);
@@ -431,8 +447,8 @@ async function runWithGatewayNewRootWorkAdmission<T>(
   while (true) {
     // Cancellation retires admission only; an admitted operation still owns its full completion.
     signal?.throwIfAborted();
-    if (GATEWAY_WORK_ADMISSION_STATE.restartDraining) {
-      throw new GatewayDrainingError("gateway is draining for restart");
+    if (GATEWAY_WORK_ADMISSION_STATE.restartDrainReason !== undefined) {
+      throw new GatewayDrainingError();
     }
     const admission = isGatewayWorkAdmissionClosed()
       ? null
@@ -658,7 +674,7 @@ export function resetGatewayWorkAdmission(): void {
     admission.released = true;
   }
   GATEWAY_WORK_ADMISSION_STATE.activeRootWork.clear();
-  GATEWAY_WORK_ADMISSION_STATE.restartDraining = false;
+  GATEWAY_WORK_ADMISSION_STATE.restartDrainReason = undefined;
   GATEWAY_WORK_ADMISSION_STATE.restartDrainController = new AbortController();
   GATEWAY_WORK_ADMISSION_STATE.restartSignalPending = false;
   GATEWAY_WORK_ADMISSION_STATE.restartSignalGeneration += 1;

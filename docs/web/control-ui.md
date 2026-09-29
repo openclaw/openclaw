@@ -32,7 +32,7 @@ Session details share concurrent reads across the sidebar, chat, and resource pa
 
 Sidebar pull-request indicators reuse the last known snapshot. Opening a session, its progress card, or its Git activity requests current checkout facts; sidebar rows alone do not poll Git. Active panels detect branch and staged changes from Git metadata. Tool completion refreshes working-tree stats, with a five-minute fallback for edits made outside OpenClaw.
 
-The sidebar’s **Online** list separates human presence from session workload. **Open** counts each person’s owned, unarchived conversations that you can access across configured agents, excluding hidden subagents, automation, system, and global/unknown sessions. **Running** counts those conversations actively executing an agent turn, not queued work or activity in descendant sessions. Counts cover the matching sessions before pagination and do not change with your session-list filters. Select a count heading to sort, or **All** to show only people with running sessions. Totals cover the people currently shown. Unavailable identities or counts display a dash instead of zero; a failed refresh keeps the last counts with a retry notice.
+The sidebar’s **Online** list shows compact person rows with avatar presence indicators: solid green means active, amber means idle, and a hollow green ring means connected with activity unavailable. Names stay on one line and fade at the edge when space is tight. The indicators, hovercard, and accessible description preserve the activity distinctions. A compact group at the end of each row shows a theme-accent spinner and running count, then a small message-circle icon and muted open count. Each icon-number pair keeps its natural width, with a wider gap between running and open groups. The group rests at the right edge; names and counts share a text baseline, without fixed digit columns. Counts have no pill background at rest, with explanatory tooltips; hovering or keyboard-focusing the row reveals a subtle grouping pill without shifting the content. Reduced motion keeps the spinner still. Known zero counts are omitted. Open counts each person’s owned, unarchived conversations that you can access across configured agents, excluding hidden subagents, automation, system, and global/unknown sessions. Running counts those conversations actively executing an agent turn, not queued work or activity in descendant sessions. Counts cover the matching sessions before pagination and do not change with your session-list filters. All connected people remain visible, ordered Active, Idle, then Online with activity unavailable. Unavailable counts show no placeholder; the row tooltip and accessible description identify them as unavailable rather than zero. A failed refresh keeps the last counts with a retry notice.
 
 Sidebar live narration pauses while the browser tab is hidden and resumes from current activity when you return. The selected chat and pending outbox keep their separately owned subscriptions.
 
@@ -66,6 +66,9 @@ not whether the active run’s narration survives a history refresh. Completed
 dashboard turns collapse their narration and tool activity under **Worked for …**
 above the answer. Expanding it restores the sequence with the existing tool-call
 groups. When no run duration is available, the heading reads **Worked**.
+The heading includes the total tool-call count followed by any failures, such as
+**Worked · 200 tool calls · 20 failed**. Calls without failures still show the
+total; turns without tool calls omit it.
 
 Consecutive tool activity shares one expandable log, including when background
 work resumes in a new run. Visible messages, media, and conversation markers
@@ -88,6 +91,8 @@ active tasks. Select the indicator to open the full task list, including finishe
 Select a session's title in the chat header to rename it. Enter saves the name;
 Escape cancels the edit. While an input method is composing text, Enter and
 Escape stay with composition. Finish composing before saving or canceling.
+Once the Gateway confirms a rename, the saved name stays visible while the session
+list refreshes, even if an older snapshot arrives late.
 
 Dragging a session between sidebar groups updates its placement immediately. A successful
 save keeps that placement even if the subsequent list refresh fails; the UI reports

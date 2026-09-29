@@ -1,3 +1,4 @@
+import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
 /**
  * Subagent run completion helpers.
  * Compares outcomes, maps them to lifecycle events, and emits completion hooks
@@ -143,7 +144,7 @@ export async function emitSubagentEndedHookOnce(params: {
   outcome?: SubagentLifecycleEndedOutcome;
   error?: string;
   inFlightRunIds: Set<string>;
-  persist: (...runIds: string[]) => void;
+  recordEmitted: () => void | Promise<void>;
 }) {
   const runId = params.entry.runId.trim();
   if (!runId) {
@@ -184,10 +185,12 @@ export async function emitSubagentEndedHookOnce(params: {
         },
       );
     }
-    params.entry.endedHookEmittedAt = Date.now();
-    params.persist(runId);
+    await params.recordEmitted();
     return true;
   } catch (err) {
+    if (hasSqliteWorkerOutcomeUnknown(err)) {
+      throw err;
+    }
     log.warn(
       `failed to emit subagent_ended hook for run ${runId}: ${err instanceof Error ? err.message : String(err)}`,
     );

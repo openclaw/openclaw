@@ -9,7 +9,6 @@ import type { PluginManifestRecord } from "./manifest-registry.js";
 import { isJavaScriptModulePath } from "./native-module-require.js";
 import { getPluginMetadataSnapshotCache, withPluginCache } from "./plugin-cache.js";
 import { withProfile } from "./plugin-load-profile.js";
-import type { PluginMetadataRegistryView } from "./plugin-metadata-snapshot.types.js";
 import { preparePluginModule } from "./plugin-module-loader-cache.js";
 import { resolvePluginRuntimeArtifact } from "./plugin-runtime-artifact-resolution.js";
 import {
@@ -215,17 +214,9 @@ function prepareManifestCatalogDiscovery(
   return { providers, runtimeManifestCatalogPluginIds };
 }
 
-function resolveProviderDiscoveryEntryPlugins(params: {
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  onlyPluginIds?: string[];
-  includeUntrustedWorkspacePlugins?: boolean;
-  requireCompleteDiscoveryEntryCoverage?: boolean;
-  discoveryEntriesOnly?: boolean;
-  includeManifestModelCatalogProviders?: boolean;
-  pluginMetadataSnapshot?: PluginMetadataRegistryView;
-}): ProviderDiscoveryEntryResult {
+function resolveProviderDiscoveryEntryPlugins(
+  params: Omit<ResolveRuntimePluginDiscoveryProvidersParams, "includeSyntheticAuthProviders">,
+): ProviderDiscoveryEntryResult {
   const metadataSnapshot =
     params.pluginMetadataSnapshot ??
     loadManifestMetadataSnapshot({

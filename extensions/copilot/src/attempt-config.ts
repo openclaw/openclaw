@@ -50,7 +50,6 @@ export function createResult(
     lastToolError?: AgentHarnessAttemptResult["lastToolError"];
     messagesSnapshot: AgentMessage[];
     nativeReplayInvalid?: boolean;
-    now: () => number;
     promptError: Error | undefined;
     resumeFailureRecovered?: boolean;
     sdkSessionId?: string;

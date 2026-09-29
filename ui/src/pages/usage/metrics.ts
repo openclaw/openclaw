@@ -181,25 +181,23 @@ function getZonedWeekday(date: Date, zone: "local" | "utc"): number {
   return zone === "utc" ? date.getUTCDay() : date.getDay();
 }
 
-function parseUtcDate(dateStr: string): Date | null {
+function parseYmdDate(dateStr: string, timeZone: "local" | "utc" = "local"): Date | null {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateStr);
   if (!match) {
     return null;
   }
-  const [, yStr, mStr, dStr] = match;
-  const y = Number(yStr);
-  const m = Number(mStr);
-  const d = Number(dStr);
-  const date = new Date(Date.UTC(y, m - 1, d));
-  if (
-    Number.isNaN(date.valueOf()) ||
-    date.getUTCFullYear() !== y ||
-    date.getUTCMonth() !== m - 1 ||
-    date.getUTCDate() !== d
-  ) {
-    return null;
-  }
-  return date;
+  const [, y, m, d] = match;
+  const year = Number(y);
+  const month = Number(m) - 1;
+  const day = Number(d);
+  const date =
+    timeZone === "utc" ? new Date(Date.UTC(year, month, day)) : new Date(year, month, day);
+  const [actualYear, actualMonth, actualDay] =
+    timeZone === "utc"
+      ? [date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()]
+      : [date.getFullYear(), date.getMonth(), date.getDate()];
+  // Reject normalized dates, including a local calendar date skipped by an offset change.
+  return actualYear === year && actualMonth === month && actualDay === day ? date : null;
 }
 
 type UtcQuarterBucketState = {
@@ -219,7 +217,7 @@ function mapUtcQuarterBucket(
   }
   if (dateStr !== state.utcDateKey) {
     state.utcDateKey = dateStr;
-    const date = parseUtcDate(dateStr);
+    const date = parseYmdDate(dateStr, "utc");
     state.utcWeekday = date ? date.getUTCDay() : null;
     state.utcStartMs = date ? date.getTime() : 0;
   }
@@ -524,29 +522,8 @@ function formatIsoDate(date: Date, timeZone: "local" | "utc" = "local"): string 
   return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
 
-function parseYmdDate(dateStr: string): Date | null {
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateStr);
-  if (!match) {
-    return null;
-  }
-  const [, y, m, d] = match;
-  const year = Number(y);
-  const monthIndex = Number(m) - 1;
-  const day = Number(d);
-  const date = new Date(year, monthIndex, day);
-  if (
-    Number.isNaN(date.valueOf()) ||
-    date.getFullYear() !== year ||
-    date.getMonth() !== monthIndex ||
-    date.getDate() !== day
-  ) {
-    return null;
-  }
-  return date;
-}
-
 function parseIsoDayIndex(dateStr: string): number | null {
-  const date = parseUtcDate(dateStr);
+  const date = parseYmdDate(dateStr, "utc");
   return date ? date.getTime() / DAY_MS : null;
 }
 

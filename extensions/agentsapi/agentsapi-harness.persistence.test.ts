@@ -140,7 +140,7 @@ it("reopens an existing hosted binding and requires reset before persisting a fr
           kind: "failed",
           error: expect.objectContaining({
             message:
-              "Agents API model, credential, or environment changed; reset the OpenClaw session before continuing",
+              "Agents API model, credential, environment, or MCP configuration changed; reset the OpenClaw session before continuing",
           }),
         },
       });

@@ -33,11 +33,8 @@ function resolveNativeCommandSetting(
 ): boolean {
   const { providerId, providerSetting, globalSetting, ...options } = params;
   const setting = providerSetting === undefined ? globalSetting : providerSetting;
-  if (setting === true) {
-    return true;
-  }
-  if (setting === false) {
-    return false;
+  if (typeof setting === "boolean") {
+    return setting;
   }
   const id = normalizeChannelId(providerId) ?? normalizeOptionalLowercaseString(providerId);
   if (!id) {
@@ -66,11 +63,5 @@ export function isNativeCommandsExplicitlyDisabled(params: {
   globalSetting?: NativeCommandsSetting;
 }): boolean {
   const { providerSetting, globalSetting } = params;
-  if (providerSetting === false) {
-    return true;
-  }
-  if (providerSetting === undefined) {
-    return globalSetting === false;
-  }
-  return false;
+  return providerSetting === false || (providerSetting === undefined && globalSetting === false);
 }

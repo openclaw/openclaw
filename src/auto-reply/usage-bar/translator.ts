@@ -86,22 +86,14 @@ function meter(value: unknown, width: number, scale: unknown): string {
   const full = expectDefined(glyphs[glyphs.length - 1], "glyphs entry at glyphs.length 1");
   const total = norm(value) * width;
   const fullc = Math.trunc(total);
-  const cells: string[] = [];
-  for (let i = 0; i < Math.min(fullc, width); i++) {
-    cells.push(full);
+  if (fullc === width) {
+    return full.repeat(width);
   }
-  if (cells.length < width) {
-    cells.push(
-      expectDefined(
-        glyphs[Math.round((total - fullc) * (glyphs.length - 1))],
-        "glyphs entry at math.round((total fullc) * (glyphs.length 1))",
-      ),
-    );
-  }
-  while (cells.length < width) {
-    cells.push(empty);
-  }
-  return cells.slice(0, width).join("");
+  const partial = expectDefined(
+    glyphs[Math.round((total - fullc) * (glyphs.length - 1))],
+    "glyphs entry at math.round((total fullc) * (glyphs.length 1))",
+  );
+  return full.repeat(fullc) + partial + empty.repeat(width - fullc - 1);
 }
 
 const VERB_NAMES = new Set(["num", "fixed", "dur", "pct", "inv", "alias", "meter"]);

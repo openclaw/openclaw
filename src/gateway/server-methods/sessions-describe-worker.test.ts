@@ -10,7 +10,7 @@ import { saveSubagentRegistryToSqlite } from "../../agents/subagents/registry/su
 import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
 import {
   bindSwarmRunReservation,
-  removeQueuedSwarmRun,
+  holdQueuedSwarmRun,
   reserveSwarmRun,
 } from "../../agents/subagents/swarm/swarm-scheduler.js";
 import { getRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
@@ -589,6 +589,7 @@ it.each(["executor", "reservation"] as const)(
       });
       subagentRuns.set(run.runId, run);
       let claim: string | undefined;
+      const reservationReleases: Promise<void>[] = [];
       if (owner === "executor") {
         claim = claimAgentRunContext(
           run.runId,
@@ -619,15 +620,25 @@ it.each(["executor", "reservation"] as const)(
             if (owner === "executor") {
               releaseAgentRunContext(run.runId, claim);
             } else {
-              expect(removeQueuedSwarmRun(run.runId)).toBe(true);
+              const hold = holdQueuedSwarmRun(run.runId);
+              const withdrawn = hold?.withdraw();
+              if (hold) {
+                reservationReleases.push(hold.release());
+              }
+              expect(withdrawn).toBe(true);
             }
           },
         );
         expect(response).toMatchObject({ session: { hasActiveSubagentRun: undefined } });
       } finally {
         releaseAgentRunContext(run.runId, claim);
-        removeQueuedSwarmRun(run.runId);
+        const hold = holdQueuedSwarmRun(run.runId);
+        if (hold) {
+          hold.withdraw();
+          reservationReleases.push(hold.release());
+        }
         subagentRuns.delete(run.runId);
+        await Promise.all(reservationReleases);
       }
     });
   },

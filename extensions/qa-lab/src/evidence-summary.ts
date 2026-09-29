@@ -1,4 +1,3 @@
-// QA Lab plugin module implements QA evidence summary behavior.
 import { normalizeSortedUniqueTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveQaEvidenceEnvironment } from "./evidence-environment.js";
 import {
@@ -174,19 +173,9 @@ export function resolveQaEvidenceProfile(params: {
     return explicit;
   }
 
-  const envProfiles = [
-    ["OPENCLAW_E2E_PROFILE", params.env?.OPENCLAW_E2E_PROFILE],
-    ["OPENCLAW_QA_PROFILE", params.env?.OPENCLAW_QA_PROFILE],
-  ] as const;
-  for (const [, value] of envProfiles) {
-    const normalized = value?.trim();
-    if (!normalized) {
-      continue;
-    }
-    return normalized;
-  }
-
-  return undefined;
+  return (
+    params.env?.OPENCLAW_E2E_PROFILE?.trim() || params.env?.OPENCLAW_QA_PROFILE?.trim() || undefined
+  );
 }
 
 function resolveQaEvidencePackageSource(env: NodeJS.ProcessEnv | undefined) {

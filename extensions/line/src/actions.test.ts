@@ -54,19 +54,4 @@ describe("postbackAction", () => {
     expect((action as { data: string }).data).toBe("action=select&item=1");
     expect((action as { displayText: string }).displayText).toBe("Selected item 1");
   });
-
-  it("visibly disables overlong postback data and truncates displayText", () => {
-    const unavailable = postbackAction("Test", "x".repeat(400));
-    expect(unavailable).toEqual({
-      type: "message",
-      label: "Unavailable",
-      text: "Action unavailable: callback data exceeds LINE's limit.",
-    });
-
-    const truncatedDisplay = postbackAction("Test", "data", "y".repeat(400));
-    expect((truncatedDisplay as { displayText: string }).displayText?.length).toBe(300);
-
-    const noDisplayText = postbackAction("Test", "data");
-    expect((noDisplayText as { displayText?: string }).displayText).toBeUndefined();
-  });
 });

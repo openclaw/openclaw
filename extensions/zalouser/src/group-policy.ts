@@ -1,4 +1,3 @@
-// Zalouser plugin module implements group policy behavior.
 import type { ScopeTree } from "openclaw/plugin-sdk/channel-policy";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ZalouserGroupConfig } from "./types.js";

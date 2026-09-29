@@ -22,7 +22,7 @@ import type { WizardPrompter } from "../wizard/prompts.js";
 import { enablePluginWithCapabilityConsent } from "./enable.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
-import { applyProviderAuthConfigPatch, applyDefaultModel } from "./provider-auth-choice-helpers.js";
+import { applyProviderAuthConfigPatch } from "./provider-auth-choice-helpers.js";
 import {
   resolveManifestProviderAuthChoice,
   type ProviderAuthChoiceMetadata,
@@ -31,6 +31,7 @@ import { applyAuthProfileConfig } from "./provider-auth-helpers.js";
 import { runProviderPluginAuthMethodUnpersisted } from "./provider-auth-method.js";
 import { persistProviderAuthProfileBatch } from "./provider-auth-persistence.js";
 import { resolveProviderInstallCatalogEntry } from "./provider-install-catalog.js";
+import { applyPrimaryModel } from "./provider-model-primary.js";
 import { buildProviderPluginMethodChoice } from "./provider-plugin-choice.js";
 import type {
   ProviderAuthMethod,
@@ -178,7 +179,7 @@ async function applyDefaultModelFromAuthChoice(params: {
     params.preserveExistingDefaultModel === true
       ? restoreConfiguredPrimaryModel(params.config, defaultModelBaseConfig)
       : params.config;
-  let nextConfig = applyDefaultModel(defaultModelConfig, params.selectedModel, {
+  let nextConfig = applyPrimaryModel(defaultModelConfig, params.selectedModel, {
     preserveExistingPrimary: params.preserveExistingDefaultModel === true,
   });
   if (!preservesDifferentPrimary) {

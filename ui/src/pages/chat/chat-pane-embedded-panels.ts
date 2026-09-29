@@ -25,6 +25,7 @@ import type {
   ChatSessionCompanionTurn,
 } from "./chat-session-companion.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import { resolveChatAttachmentLimits } from "./components/chat-attachment-admission.ts";
 import {
   getSessionWorkspace,
   selectSessionWorkspacePreview,
@@ -70,16 +71,13 @@ type SidebarPanelDefinitionParams = {
   renderDetail: (content: SidebarContent) => TemplateResult;
   digest: SessionObserverDigest | null;
   activeRunId: string | null;
-  startedAt: number | undefined;
-  lastReadAt: number | undefined;
   pullRequests: ControlUiSessionPullRequest[];
   companion: ChatSessionCompanionThread;
   companionPresented: boolean;
   companionFocusRequest: (() => boolean) | undefined;
   onCompanionSubmit: (question: string | ChatSessionCompanionTurn) => void;
   onCompanionDraftChange: (draft: string) => void;
-  onCompanionAttachmentsChange?: (attachments: ChatAttachment[]) => void;
-  onCompanionVisibilityChange: (visible: boolean) => void;
+  onCompanionAttachmentsChange?: (attachments: ChatAttachment[]) => boolean | void;
   connected: boolean;
   onClearCompanion: () => void;
   discussion: SessionDiscussionPanelConfig | null;
@@ -193,15 +191,12 @@ export function sidebarPanelDefinitions(
     : null;
   const companion = params
     ? html`<openclaw-chat-session-rail
-        embedded
         .presented=${params.companionPresented}
         .focusRequest=${params.companionFocusRequest}
         .sessionKey=${state?.sessionKey}
         .digest=${params.digest}
         .running=${Boolean(params.activeRunId)}
         .activeRunId=${params.activeRunId}
-        .startedAt=${params.startedAt}
-        .lastReadAt=${params.lastReadAt}
         .pullRequests=${params.pullRequests}
         .companion=${params.companion}
         .connected=${state?.connected === true}
@@ -210,8 +205,7 @@ export function sidebarPanelDefinitions(
         .onDraftChange=${params.onCompanionDraftChange}
         .onAttachmentsChange=${params.onCompanionAttachmentsChange}
         .uploadConfig=${state?.uploadConfig}
-        .attachmentLimits=${state?.hello?.policy?.attachments}
-        .onVisibilityChange=${params.onCompanionVisibilityChange}
+        .attachmentLimits=${resolveChatAttachmentLimits(state?.hello?.policy)}
       ></openclaw-chat-session-rail>`
     : null;
   const desktop =
