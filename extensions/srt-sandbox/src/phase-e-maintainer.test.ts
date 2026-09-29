@@ -203,6 +203,10 @@ describe("Phase E maintainer policy", () => {
     expect(source).toContain("GetSecurityInfo(object,SE_FILE_OBJECT");
     expect(source).toContain("GetSecurityDescriptorOwner");
     expect(source).toContain("GetSecurityDescriptorGroup");
+    expect(source).toContain("GetSecurityDescriptorOwner(descriptor,&owner,&ownerDefaulted)");
+    expect(source).toContain("GetSecurityDescriptorGroup(descriptor,&group,&groupDefaulted)");
+    expect(source).not.toContain("GetSecurityDescriptorOwner(descriptor,&owner,nullptr)");
+    expect(source).not.toContain("GetSecurityDescriptorGroup(descriptor,&group,nullptr)");
     expect(source).toContain("GetSecurityDescriptorSacl");
     expect(source).toContain(
       "DACL_SECURITY_INFORMATION|PROTECTED_DACL_SECURITY_INFORMATION|LABEL_SECURITY_INFORMATION",

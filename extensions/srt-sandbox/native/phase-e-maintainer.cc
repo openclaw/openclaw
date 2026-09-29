@@ -120,9 +120,10 @@ static void ApplyAndVerifySecurity(HANDLE object, const wchar_t* sddl,
        sddl, SDDL_REVISION_1, &descriptor, nullptr))
     throw std::string("PHASE_E_ACL_BUILD_FAILED");
   PSID owner=nullptr, group=nullptr; PACL dacl=nullptr, label=nullptr;
-  BOOL daclPresent=FALSE, daclDefaulted=FALSE, labelPresent=FALSE, labelDefaulted=FALSE;
-  if(!GetSecurityDescriptorOwner(descriptor,&owner,nullptr) || !owner || !IsValidSid(owner) ||
-     !GetSecurityDescriptorGroup(descriptor,&group,nullptr) || !group || !IsValidSid(group) ||
+  BOOL ownerDefaulted=FALSE, groupDefaulted=FALSE, daclPresent=FALSE, daclDefaulted=FALSE,
+       labelPresent=FALSE, labelDefaulted=FALSE;
+  if(!GetSecurityDescriptorOwner(descriptor,&owner,&ownerDefaulted) || !owner || !IsValidSid(owner) ||
+     !GetSecurityDescriptorGroup(descriptor,&group,&groupDefaulted) || !group || !IsValidSid(group) ||
      !GetSecurityDescriptorDacl(descriptor,&daclPresent,&dacl,&daclDefaulted) || !daclPresent || !dacl ||
      !GetSecurityDescriptorSacl(descriptor,&labelPresent,&label,&labelDefaulted) || !labelPresent || !label) {
     LocalFree(descriptor); throw std::string("PHASE_E_ACL_BUILD_FAILED");
