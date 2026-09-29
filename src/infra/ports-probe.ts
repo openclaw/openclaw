@@ -96,6 +96,15 @@ export async function probeTcpListener(
   });
 }
 
+async function isIpv6LoopbackUnavailable(signal?: AbortSignal): Promise<boolean> {
+  try {
+    await tryListenOnPort({ port: 0, host: "::1", ...(signal ? { signal } : {}) });
+    return false;
+  } catch (err) {
+    return isErrno(err) && err.code === "EADDRNOTAVAIL";
+  }
+}
+
 async function probePortOnHost(
   port: number,
   host: string,
@@ -106,10 +115,12 @@ async function probePortOnHost(
     // A successful scoped bind can coexist with a wildcard listener on macOS.
     // Confirm the endpoint before declaring it free, even without lsof or ss.
     const confirmed = await probeTcpListener(port, host, signal);
-    // Connecting to a wildcard reaches that family's loopback, which may be unavailable
-    // (IPv6 disabled on Linux). With no listener answering, the wildcard bind is conclusive.
-    const wildcard = host === "0.0.0.0" || host === "::";
-    return confirmed === "unknown" && wildcard ? "free" : confirmed;
+    // With IPv6 disabled on Linux, `::` still binds but its confirming connect targets the
+    // missing `::1` and cannot be answered. The successful wildcard bind is then conclusive.
+    if (confirmed === "unknown" && host === "::" && (await isIpv6LoopbackUnavailable(signal))) {
+      return "free";
+    }
+    return confirmed;
   } catch (err) {
     signal?.throwIfAborted();
     if (isErrno(err) && err.code === "EADDRINUSE") {
