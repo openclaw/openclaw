@@ -268,7 +268,37 @@ it("preserves fd paths containing newlines", async () => {
   child.emit("close", 0, null);
 
   const result = await resultPromise;
-  expect(textContent(result)).toBe(JSON.stringify(["line\nbreak.ts", "plain.ts"]));
+  expect(textContent(result)).toBe(
+    `${JSON.stringify("line\nbreak.ts")}\n${JSON.stringify("plain.ts")}`,
+  );
   expect(result.details?.resultLimitReached).toBeUndefined();
   expect(vi.mocked(spawnCommand).mock.calls[0]?.[0]).toEqual(expect.arrayContaining(["--print0"]));
+});
+
+it("keeps newline-containing paths when mixed output exceeds the byte budget", async () => {
+  const searchRoot = path.resolve(path.sep, "find-fixture");
+  const newlinePath = path.join(searchRoot, "line\nbreak.ts");
+  const longPaths = Array.from({ length: 1000 }, (_, index) =>
+    path.join(searchRoot, `ordinary-${index}-${"x".repeat(50)}.ts`),
+  );
+  const child = createChild();
+  vi.mocked(spawnCommand).mockReturnValue(child as never);
+  vi.mocked(ensureTool).mockResolvedValue("fd");
+
+  const tool = createFindToolDefinition(searchRoot);
+  const resultPromise = tool.execute(
+    "call-newline-path-over-budget",
+    { pattern: "*.ts", limit: 1000 },
+    undefined,
+    undefined,
+    {} as never,
+  );
+  await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledOnce());
+  child.stdout.end(`${newlinePath}\0${longPaths.join("\0")}\0`);
+  child.stderr.end();
+  child.emit("close", 0, null);
+
+  const result = await resultPromise;
+  expect(textContent(result).startsWith(JSON.stringify("line\nbreak.ts"))).toBe(true);
+  expect(result.details?.truncation?.truncated).toBe(true);
 });

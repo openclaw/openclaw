@@ -121,9 +121,9 @@ function buildFindResult(params: {
       ? `${relativePath}/`
       : relativePath;
   });
-  // JSON keeps a newline-containing path distinct from the boundary between two paths.
+  // JSON Lines keeps each newline-containing path distinct and independently truncatable.
   const rawOutput = outputPaths.some((foundPath) => /[\r\n]/.test(foundPath))
-    ? JSON.stringify(outputPaths)
+    ? outputPaths.map((foundPath) => JSON.stringify(foundPath)).join("\n")
     : outputPaths.join("\n");
   const { content, ...truncation } = truncateHead(rawOutput, { maxLines: Number.MAX_SAFE_INTEGER });
   const details: FindToolDetails = { content };
