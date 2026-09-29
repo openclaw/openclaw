@@ -57,6 +57,11 @@ import {
 import { PEM_REDACT_MATCHER, PEM_REDACT_PATTERN_SOURCE } from "./redact-pem.js";
 import { startRedactionMeasurement } from "./redact-performance.js";
 import {
+  resolveModelVisibleToolPayloadRedaction,
+  resolveToolPayloadRedaction,
+  type RedactOptions,
+} from "./redact-policy.js";
+import {
   captureSecretRedactionRegistrySnapshot,
   createSecretValueRedactor,
   redactRegisteredSecretValues,
@@ -171,12 +176,6 @@ const DEFAULT_REDACT_PREFILTER_RE = new RegExp(
 // Keep the shared text probe unchanged: its chunked matching has separate boundary semantics.
 const FULL_CONTEXT_REDACT_EXTRA_TRIGGERS_RE =
   /JWT|Bearer\s+|am_|sk_|(?<!\d)\d{6,}:[A-Za-z0-9_-]{20,}/i;
-
-type RedactOptions = {
-  mode?: RedactSensitiveMode;
-  patterns?: readonly RedactPattern[];
-  sensitiveFieldPatterns?: readonly RedactPattern[];
-};
 
 type ResolvedRedactOptions = {
   mode: RedactSensitiveMode;
@@ -408,12 +407,13 @@ function redactAssignmentValues(
   text: string,
   kind: SensitiveAssignmentKind,
   onEdits?: PreparationEditSink,
+  replacementOverride?: string,
 ): string {
   const parts: string[] = [];
   const edits: RedactionEdit[] = [];
   let cursor = 0;
   visitSensitiveAssignments(text, kind, (start, end, maskable) => {
-    const replacement = kind === "url" ? maskToken(maskable) : "***";
+    const replacement = replacementOverride ?? (kind === "url" ? maskToken(maskable) : "***");
     parts.push(text.slice(cursor, start), replacement);
     if (onEdits) {
       edits.push({ start, end, replacement });
@@ -696,6 +696,7 @@ export function redactText(
   patterns: ResolvedRedactPattern[],
   options?: {
     fullContext?: boolean;
+    urlCredentialReplacement?: string;
     preserveSourceAssignment?: (text: string, offset: number) => boolean;
   },
 ): string {
@@ -715,6 +716,11 @@ export function redactText(
         pattern instanceof RegExp && !options?.fullContext && !chunkUnsafePatterns.has(pattern)
           ? replacePatternBounded(next, pattern, replaceRegex)
           : replaceRedactPattern(next, pattern, replace, replaceRegex);
+    }
+    // Keep diagnostic hints out of actionable model-visible URLs. Apply this last so
+    // subsequent pattern passes cannot turn the explicit marker back into a hint.
+    if (options?.urlCredentialReplacement) {
+      next = redactAssignmentValues(next, "url", undefined, options.urlCredentialReplacement);
     }
     outcome = "ok";
     return next;
@@ -848,38 +854,13 @@ function redactSensitiveTextWithOptions(
     return exactRedacted;
   }
   const resolved = resolveRedactOptions(resolvedOptions);
-  return redactText(exactRedacted, resolved.patterns);
+  return redactText(exactRedacted, resolved.patterns, {
+    urlCredentialReplacement: resolvedOptions.urlCredentialReplacement,
+  });
 }
 
 export function redactToolDetail(detail: string): string {
   return redactToolPayloadText(detail);
-}
-
-function resolveToolPayloadRedaction(
-  loggingConfig: LoggingConfig | undefined = readLoggingConfig(),
-): RedactOptions {
-  const userPatterns = loggingConfig?.redactPatterns;
-  const patterns =
-    userPatterns && userPatterns.length > 0
-      ? [...userPatterns, ...DEFAULT_REDACT_PATTERNS]
-      : undefined;
-  return { mode: "tools", patterns };
-}
-
-function resolveModelVisibleToolPayloadRedaction(
-  loggingConfig: LoggingConfig | undefined = readLoggingConfig(),
-): RedactOptions {
-  const userPatterns = loggingConfig?.redactPatterns;
-  const hasUserPatterns = userPatterns && userPatterns.length > 0;
-  return {
-    mode: "tools",
-    patterns: hasUserPatterns
-      ? [...userPatterns, ...TOOL_PAYLOAD_REDACT_PATTERNS]
-      : TOOL_PAYLOAD_REDACT_PATTERNS,
-    sensitiveFieldPatterns: hasUserPatterns
-      ? [...userPatterns, ...DEFAULT_REDACT_PATTERNS]
-      : DEFAULT_REDACT_PATTERNS,
-  };
 }
 
 // Forces tools-mode so UI/tool payloads never inherit a caller-supplied "off"
@@ -903,6 +884,7 @@ function redactToolPayloadTextWithPolicy(
   const resolved = resolveRedactOptions(options);
   return redactText(redactRegisteredSecretValues(text, maskToken), resolved.patterns, {
     fullContext: true,
+    urlCredentialReplacement: options.urlCredentialReplacement,
   });
 }
 
@@ -1006,7 +988,9 @@ function redactSensitiveFieldValueWithOptions(
   const redacted =
     !usesBuiltInRedactPatterns(fieldOptions.patterns) ||
     couldMatchDefaultRedactPatterns(exactRedacted)
-      ? redactText(exactRedacted, resolved.patterns)
+      ? redactText(exactRedacted, resolved.patterns, {
+          urlCredentialReplacement: fieldOptions.urlCredentialReplacement,
+        })
       : exactRedacted;
   const shouldRedactAppPassword = redacted !== value || STRUCTURED_APP_PASSWORD_FIELD_RE.test(key);
   if (shouldRedactAppPassword) {
