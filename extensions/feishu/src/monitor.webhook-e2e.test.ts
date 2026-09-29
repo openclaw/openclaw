@@ -989,24 +989,27 @@ describe("Feishu webhook security hardening", () => {
     );
   });
 
-  it("rejects correctly signed callbacks with a stale timestamp", async () => {
-    await withSignedWebhook("stale-timestamp", async (url) => {
-      const payload = { type: "url_verification", challenge: "challenge-token" };
-      const headers = signFeishuPayload({
-        encryptKey: "encrypt_key",
-        rawBody: JSON.stringify(payload),
-        timestamp: (Math.floor(Date.now() / 1000) - 7_200).toString(),
-      });
+  it.each([-7_200, 7_200])(
+    "rejects correctly signed callbacks with %i seconds of timestamp skew",
+    async (offsetSeconds) => {
+      await withSignedWebhook("timestamp-skew", async (url) => {
+        const payload = { type: "url_verification", challenge: "challenge-token" };
+        const headers = signFeishuPayload({
+          encryptKey: "encrypt_key",
+          rawBody: JSON.stringify(payload),
+          timestamp: (Math.floor(Date.now() / 1000) + offsetSeconds).toString(),
+        });
 
-      const response = await fetch(url, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(payload),
-      });
+        const response = await fetch(url, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(payload),
+        });
 
-      expect(response.status).toBe(401);
-      expect(response.headers.get("content-type")).toBe("text/plain; charset=utf-8");
-      expect(await response.text()).toBe("Invalid signature");
-    });
-  });
+        expect(response.status).toBe(401);
+        expect(response.headers.get("content-type")).toBe("text/plain; charset=utf-8");
+        expect(await response.text()).toBe("Invalid signature");
+      });
+    },
+  );
 });
