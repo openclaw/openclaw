@@ -44,7 +44,19 @@ type WorkboardCardMutation = (
 
 function readCardToolParams(rawParams: unknown, ownerId: string): WorkboardToolCardParams {
   const record = asRecord(rawParams);
-  const id = readStringParam(record, "id", { required: true });
+  // Accept `cardId` as an alias for `id` across all workboard mutation tools.
+  // `id` is the canonical name; `cardId` is supported for agents who
+  // naturally reach for it (friction datapoint from live probe 2026-09-29).
+  // When both are present, `id` wins. When neither is present, we fail with
+  // a clear message naming both accepted keys.
+  let id: string;
+  if (typeof record.id === "string" && record.id.trim() !== "") {
+    id = record.id;
+  } else if (typeof record.cardId === "string" && record.cardId.trim() !== "") {
+    id = record.cardId;
+  } else {
+    throw new Error("card id is required (provide `id` or `cardId`).");
+  }
   const token = readStringValue(record.token);
   return {
     record,
