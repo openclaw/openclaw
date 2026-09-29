@@ -56,7 +56,7 @@ Five rules shape everything below:
 | Review       | `DREAMS.md`, dreaming reports                           | Dreaming phases                                     | Never; for human reading                               |
 
 The boundary that matters most is between the **curated core** and the
-**episodic** tier. Curated files are small, normally in context when their
+**episodic** tier. The table's **Injected** column refers to automatic context assembly: the episodic tier itself is not injected at session start, but eligible private-session transcripts can be surfaced into reply context by the separate Active Memory recall path. Curated files are small, normally in context when their
 provenance is eligible, and written only through gated consolidation. Episodic
 files are large, append-friendly,
 and reachable only through explicit search tools or the escalation lane.
