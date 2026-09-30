@@ -453,9 +453,31 @@ it.each([1, 2])(
             },
           },
         };
-        body = encode(finalCatalog);
-        expect((await refresh()).status).toBe("updated");
-        for (const publication of ["config", "auth"] as const) {
+        const authCatalog = {
+          ...finalCatalog,
+          generatedAt: generatedAt + 3,
+          providers: {
+            kimi: {
+              models: [
+                ...finalCatalog.providers.kimi.models,
+                {
+                  ...modelMetadata,
+                  id: "remote-auth",
+                  name: "Remote Auth",
+                  cost: { input: 15, output: 30 },
+                },
+              ],
+            },
+          },
+        };
+        // A concurrent config or auth publication discards the in-flight candidate, then
+        // adoption retries against the settled owners instead of waiting for the next check.
+        for (const [publication, catalog, model, price] of [
+          ["config", finalCatalog, "remote-last", 13],
+          ["auth", authCatalog, "remote-auth", 15],
+        ] as const) {
+          body = encode(catalog);
+          expect((await refresh()).status).toBe("updated");
           preparing = createDeferred();
           commit = createDeferred();
           pausePublication = true;
@@ -488,13 +510,13 @@ it.each([1, 2])(
             "Supersession retired current readers",
           );
           expect(kimiIds(current)).toContain("remote-next");
-          expect(kimiIds(current)).not.toContain("remote-last");
-          expect(currentPrice()).toBe(7);
+          expect(kimiIds(current)).not.toContain(model);
+          expect(currentPrice(model)).toBeUndefined();
           pausePublication = false;
           commit.resolve();
-          expect(await pending).toBe("superseded");
-          expect(kimiIds(await list())).not.toContain("remote-last");
-          expect(currentPrice()).toBe(7);
+          expect(await pending).toBe("published");
+          expect(kimiIds(await list())).toContain(model);
+          expect(currentPrice(model)).toBe(price);
         }
         await list(true);
         expect(kimiIds(await waitForRows("remote-last"))).toContain("remote-last");

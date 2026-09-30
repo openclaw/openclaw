@@ -10,12 +10,17 @@ import {
   loadPreparedGatewayModelCatalogSnapshot,
   readPreparedGatewayModelCatalogOwnerSnapshot,
 } from "../gateway/server-model-catalog.js";
+import { createGatewayUpdateLifecycle } from "../infra/update-check-lifecycle.js";
+import { createGatewayUpdateCheck } from "../infra/update-startup.js";
 import * as pricing from "../model-catalog/pricing.js";
 import {
   captureRemoteModelCatalogSnapshot,
   captureRemoteModelCatalogStartupSnapshot,
 } from "../model-catalog/remote-overlay.js";
 import { setRemoteModelCatalogOverlaySourcesForTest } from "../model-catalog/remote-overlay.test-support.js";
+import * as remoteRefresh from "../model-catalog/remote-refresh.js";
+import * as nativeAdmission from "../plugins/plugin-native-admission-state.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import * as catalogWorker from "./prepared-model-catalog-worker.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import {
@@ -42,7 +47,16 @@ const config: OpenClawConfig = {
       custom: {
         baseUrl: "https://fixture.invalid",
         api: "openai-completions",
-        models: [{ id: "remote-200", name: "Remote 200" }],
+        models: [
+          {
+            id: "remote-200",
+            name: "Remote 200",
+            reasoning: false,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            maxTokens: 4096,
+          },
+        ],
       },
     },
   },
@@ -243,4 +257,62 @@ it("publishes the accepted bundle despite a provider discovery failure", async (
   expect(captureRemoteModelCatalogStartupSnapshot()?.pricing["custom/remote-300"]?.cost.input).toBe(
     300,
   );
+});
+
+it("retries a scheduled adoption when its pending auth owner settles", async () => {
+  await setup();
+  const rebuilding = createDeferred();
+  const releaseRebuild = createDeferred();
+  const settleAdmissions = nativeAdmission.settlePluginNativeAdmissions;
+  const admissionSpy = vi
+    .spyOn(nativeAdmission, "settlePluginNativeAdmissions")
+    .mockImplementationOnce(async (...args) => {
+      rebuilding.resolve();
+      await releaseRebuild.promise;
+      return await settleAdmissions(...args);
+    });
+  const refreshSpy = vi.spyOn(remoteRefresh, "refreshRemoteModelCatalog").mockResolvedValue({
+    status: "updated",
+    providers: 1,
+    models: 1,
+    generatedAt: 300,
+  });
+  const checked = createDeferred<string>();
+  const log = {
+    info: vi.fn((message: string) => {
+      if (message.startsWith("remote model catalog")) {
+        checked.resolve(message);
+      }
+    }),
+  };
+  const check = createGatewayUpdateCheck({
+    lifecycle: createGatewayUpdateLifecycle(createTestGatewayScheduler("fake-timers")),
+    getConfig: () => config,
+    applyRemoteCatalogUpdate: (signal) => {
+      const adoption = applyRemoteModelCatalogUpdate(() => config, signal);
+      // The stored-catalog read and owner claim settle in microtasks; the auth build
+      // settles only after this turn, so adoption first observes the pending owner.
+      setImmediate(() => releaseRebuild.resolve());
+      return adoption;
+    },
+    log,
+    isNixMode: false,
+  });
+  try {
+    mocks.mutationListener?.({
+      agentDir: fixture.agentInput("default", config).agentDir,
+      affectsInheritedStores: false,
+    });
+    await withTestTimeout(rebuilding.promise, 10_000, "auth mutation did not start a rebuild");
+    check.start();
+    expect(await withTestTimeout(checked.promise, 10_000, "catalog check did not settle")).toBe(
+      "remote model catalog applied",
+    );
+    expect(captureRemoteModelCatalogStartupSnapshot()?.generatedAt).toBe(300);
+  } finally {
+    releaseRebuild.resolve();
+    await check.stop();
+    refreshSpy.mockRestore();
+    admissionSpy.mockRestore();
+  }
 });
