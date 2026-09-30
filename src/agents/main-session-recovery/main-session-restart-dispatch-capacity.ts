@@ -19,7 +19,6 @@ export async function dispatchRestartRecoveryWithinCapacity(params: {
   beginDispatch: () => boolean;
   shouldContinue: () => boolean;
   holdTimeoutMs?: number;
-  retainPollMs?: number;
 }): Promise<RestartRecoveryDispatchStartOutcome | undefined> {
   const terminalRunId = params.agentParams.idempotencyKey;
   if (!terminalRunId) {
@@ -56,7 +55,6 @@ export async function dispatchRestartRecoveryWithinCapacity(params: {
         runId: terminalRunId,
         shouldContinue: params.shouldContinue,
         holdTimeoutMs: params.holdTimeoutMs,
-        retainPollMs: params.retainPollMs,
       });
     }
     return outcome;
@@ -72,7 +70,6 @@ async function releaseCapacityAtTerminal(params: {
   runId: string;
   shouldContinue: () => boolean;
   holdTimeoutMs?: number;
-  retainPollMs?: number;
 }): Promise<void> {
   const deadline = Date.now() + (params.holdTimeoutMs ?? 300_000);
   let settled = false;
@@ -100,20 +97,9 @@ async function releaseCapacityAtTerminal(params: {
       }
     }
     if (params.shouldContinue() && Date.now() >= deadline) {
-      if (!hasLiveAgentRunContext(params.runId)) {
-        log.warn(`recovery capacity held beyond budget for run ${params.runId}, releasing`);
-        settled = true;
-        return;
-      }
-      log.warn(
-        `recovery capacity hold budget exhausted for live run ${params.runId}; retaining slot until run is no longer live`,
-      );
-      while (params.shouldContinue() && hasLiveAgentRunContext(params.runId)) {
-        await sleepWithAbort(params.retainPollMs ?? 5_000, undefined, { ref: false });
-      }
-      if (params.shouldContinue()) {
-        settled = true;
-      }
+      log.warn(`recovery capacity hold budget exhausted for run ${params.runId}; releasing slot`);
+      settled = true;
+      return;
     }
   } finally {
     if (settled) {

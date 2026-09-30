@@ -38,7 +38,7 @@ function recoveryRuntime(
 function dispatchRecovery(
   params: Pick<
     Parameters<typeof dispatchRestartRecoveryWithinCapacity>[0],
-    "capacity" | "gatewayRuntime" | "onSettled" | "holdTimeoutMs" | "retainPollMs"
+    "capacity" | "gatewayRuntime" | "onSettled" | "holdTimeoutMs"
   >,
 ) {
   return dispatchRestartRecoveryWithinCapacity({
@@ -154,9 +154,8 @@ it("forces capacity release after the hold budget is exhausted when the run is n
   release?.();
 });
 
-it("retains capacity slot when hold budget is exhausted but the run is still live, then releases when the run is no longer live", async () => {
-  let live = true;
-  vi.spyOn(agentRuns, "hasLiveAgentRunContext").mockImplementation(() => live);
+it("releases capacity slot after the hold budget is exhausted even when the run is still live", async () => {
+  vi.spyOn(agentRuns, "hasLiveAgentRunContext").mockReturnValue(true);
   const runtime = recoveryRuntime(async <T>() => ({ status: "timeout" }) as T);
   const capacity = createMainSessionRecoveryCapacity({
     limit: 1,
@@ -169,24 +168,7 @@ it("retains capacity slot when hold budget is exhausted but the run is still liv
     gatewayRuntime: runtime,
     onSettled,
     holdTimeoutMs: 100,
-    retainPollMs: 10,
   });
-  await expect(
-    Promise.race([
-      vi.waitFor(() => expect(onSettled).toHaveBeenCalledOnce()).then(() => "settled"),
-      new Promise<string>((resolve) => {
-        setTimeout(() => resolve("pending"), 200);
-      }),
-    ]),
-  ).resolves.toBe("pending");
-  // While the run is still live, the sole capacity slot must be retained:
-  // a second acquire against the same capacity must time out and return
-  // undefined. This guards against an observer that releases the slot before
-  // the run is no longer live, which would otherwise let the final onSettled
-  // assertion pass on a false release.
-  const heldRelease = await capacity.acquire(() => true);
-  expect(heldRelease).toBeUndefined();
-  live = false;
   await vi.waitFor(() => expect(onSettled).toHaveBeenCalledOnce());
   const release = await capacity.acquire(() => true);
   expect(release).toBeTypeOf("function");
