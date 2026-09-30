@@ -764,7 +764,7 @@ describe("resolveGatewayStartupPluginPlanFromRegistry", () => {
       } as OpenClawConfig,
       ["browser", "external-env-channel-plugin", "memory-core"],
     ],
-  ] as const)("%s", (_name, config, expected) => {
+  ] satisfies Array<[string, OpenClawConfig, string[]]>)("%s", (_name, config, expected) => {
     expectStartupPluginIds({ config, expected });
   });
 

@@ -102,6 +102,7 @@ it.each(["completed", "interrupted"] as const)(
       const interrupted = new AbortController();
       const human = "Reply only FOREGROUND_READY. Preserve ünicode 🦞.\nThis is the human request.";
       const requests: ModelRequest[] = [];
+      const requestErrors: unknown[] = [];
       const runtimeBudgets: number[] = [];
       const privateSessionIds = new Set<string>();
       let missingPrivateSessionId = false;
@@ -120,55 +121,62 @@ it.each(["completed", "interrupted"] as const)(
           }
         }
       });
-      const server = createServer(async (request, response) => {
+      const server = createServer((request, response) => {
         if (request.url === "/mcp" && request.method !== "POST") {
           response.writeHead(request.method === "DELETE" ? 200 : 405).end();
           return;
         }
-        const body = await readBody(request);
-        // Memory preparation reads the MCP catalog before inference. Keep a real
-        // server owned by the run without adding tools to its model request.
-        if (request.url === "/mcp") {
-          const message = JSON.parse(body) as {
-            id?: number;
-            method: string;
-            params?: { protocolVersion?: string };
-          };
-          let result;
-          if (message.method === "initialize") {
-            result = {
-              protocolVersion: message.params?.protocolVersion,
-              capabilities: { tools: {} },
-              serverInfo: { name: "memory-lifetime", version: "1" },
-            };
-          } else if (message.method === "tools/list") {
-            result = { tools: [] };
-          }
-          if (!result) {
-            response.writeHead(202).end();
-            return;
-          }
-          response.writeHead(200, { "content-type": "application/json" });
-          response.end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
-          return;
-        }
-        const modelRequest = JSON.parse(body) as ModelRequest;
-        requests.push(modelRequest);
-        const isHuman = lastHumanText(modelRequest).endsWith(human);
-        response.writeHead(200, { "content-type": "text/event-stream", connection: "close" });
-        response.flushHeaders();
-        const completeResponse = () =>
-          finishModelResponse(response, isHuman ? "FOREGROUND_READY" : "NO_REPLY");
-        if (!isHuman) {
-          if (requests.length === 1 && outcome === "completed") {
-            completeFirstPrivateResponse = completeResponse;
-          }
-          entered.resolve();
-          if (requests.length === 1) {
-            return;
-          }
-        }
-        completeResponse();
+        void readBody(request)
+          .then((body) => {
+            // Memory preparation reads the MCP catalog before inference. Keep a real
+            // server owned by the run without adding tools to its model request.
+            if (request.url === "/mcp") {
+              const message = JSON.parse(body) as {
+                id?: number;
+                method: string;
+                params?: { protocolVersion?: string };
+              };
+              let result;
+              if (message.method === "initialize") {
+                result = {
+                  protocolVersion: message.params?.protocolVersion,
+                  capabilities: { tools: {} },
+                  serverInfo: { name: "memory-lifetime", version: "1" },
+                };
+              } else if (message.method === "tools/list") {
+                result = { tools: [] };
+              }
+              if (!result) {
+                response.writeHead(202).end();
+                return;
+              }
+              response.writeHead(200, { "content-type": "application/json" });
+              response.end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
+              return;
+            }
+            const modelRequest = JSON.parse(body) as ModelRequest;
+            requests.push(modelRequest);
+            const isHuman = lastHumanText(modelRequest).endsWith(human);
+            response.writeHead(200, { "content-type": "text/event-stream", connection: "close" });
+            response.flushHeaders();
+            const completeResponse = () =>
+              finishModelResponse(response, isHuman ? "FOREGROUND_READY" : "NO_REPLY");
+            if (!isHuman) {
+              if (requests.length === 1 && outcome === "completed") {
+                completeFirstPrivateResponse = completeResponse;
+              }
+              entered.resolve();
+              if (requests.length === 1) {
+                return;
+              }
+            }
+            completeResponse();
+          })
+          .catch((error: unknown) => {
+            requestErrors.push(error);
+            entered.reject(error);
+            response.destroy();
+          });
       });
       await new Promise<void>((resolve) => {
         server.listen(0, "127.0.0.1", resolve);
@@ -415,6 +423,7 @@ it.each(["completed", "interrupted"] as const)(
         await new Promise<void>((resolve, reject) => {
           server.close((error) => (error ? reject(error) : resolve()));
         });
+        expect(requestErrors).toEqual([]);
       }
     });
   },
