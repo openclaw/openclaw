@@ -29,7 +29,7 @@ function readCommittedRunId(entry: BranchEntry): string | undefined {
  * same-run tail without tool activity is safe to build on, because it can
  * carry no side effects worth replaying.
  */
-export function classifyWorkerRelaunchSuffix(params: {
+function classifyWorkerRelaunchSuffix(params: {
   branch: readonly BranchEntry[];
   admissionEntryId: string;
   runId: string;
