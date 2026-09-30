@@ -7,8 +7,11 @@ import { getSpawnBroker, runWithSpawnBroker } from "../../spawn-broker/context.j
 import { createSpawnBrokerHost } from "../../spawn-broker/host.js";
 
 /** Run the existing process-owner contracts through each supported POSIX transport. */
-export function describeSpawnTransports(name: string, register: () => void): void {
-  const transports = process.versions.bun ? ["native"] : ["native", "broker"];
+export function describeSpawnTransports(
+  name: string,
+  register: () => void,
+  transports = process.versions.bun ? ["native"] : ["native", "broker"],
+): void {
   describe.skipIf(process.platform === "win32").each(transports)(
     `${name} (%s transport)`,
     (transport) => {
