@@ -6,7 +6,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { readConfigFileSnapshot, transformConfigFile } from "../config/config.js";
 import { makeCronJob } from "../cron/delivery.test-helpers.js";
 import { CronService } from "../cron/service.js";
-import { saveCronJobsStoreWithRevisionNative } from "../cron/store.js";
+import { saveCronJobsStore } from "../cron/store.js";
 import { cronStoreKey } from "../cron/store/key.js";
 import { loadCronRows } from "../cron/store/row-codec.js";
 import { runInitialConfigWriteHealth } from "../flows/doctor-health-contribution-runners.config.js";
@@ -39,8 +39,8 @@ function sourceConfig(storePath?: string) {
   };
 }
 
-function seedJobs(storePath: string) {
-  saveCronJobsStoreWithRevisionNative(storePath, {
+async function seedJobs(storePath: string) {
+  await saveCronJobsStore(storePath, {
     version: 1,
     jobs: [
       makeCronJob({
@@ -120,7 +120,7 @@ it.each(["retains", "removes"])(
           },
         });
         const storePath = state.statePath("cron", "jobs.json");
-        seedJobs(storePath);
+        await seedJobs(storePath);
         const beforeRows = rows(storePath);
         const beforeConfig = await fs.readFile(state.configPath, "utf8");
         const write = transformConfigFile({
@@ -158,7 +158,7 @@ it.each(["update", "remove"])(
       async (state) => {
         await state.writeConfig(sourceConfig());
         const storePath = state.statePath("cron", "jobs.json");
-        seedJobs(storePath);
+        await seedJobs(storePath);
         const { cron } = createCron(storePath);
         try {
           expect(
@@ -180,13 +180,13 @@ it.each(["update", "remove"])(
   },
 );
 
-it("preserves historical rows and rolls back explicit jobs when agent deletion needs Doctor", async () => {
+it("preserves historical and explicit jobs when agent deletion needs Doctor", async () => {
   await withOpenClawTestState(
     { label: "cron-owner-agent-deletion", env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" } },
     async (state) => {
       await state.writeConfig(sourceConfig());
       const storePath = state.statePath("cron", "jobs.json");
-      saveCronJobsStoreWithRevisionNative(storePath, {
+      await saveCronJobsStore(storePath, {
         version: 1,
         jobs: [
           makeCronJob({ id: "historical", enabled: false }),
@@ -225,7 +225,7 @@ it("preserves malformed cron bytes and the historical marker when Doctor cannot 
     async (state) => {
       await state.writeConfig(sourceConfig());
       const storePath = state.statePath("cron", "jobs.json");
-      seedJobs(storePath);
+      await seedJobs(storePath);
       openOpenClawStateDatabase()
         .db.prepare(
           "UPDATE cron_jobs SET job_json = '{malformed' WHERE store_key = ? AND job_id = 'historical'",
@@ -245,7 +245,7 @@ it("leaves SQLite and legacy JSON owners unchanged on ordinary cron startup", as
   await withOpenClawTestState({ label: "cron-owner-startup" }, async (state) => {
     await state.writeConfig(sourceConfig());
     const storePath = state.statePath("cron", "jobs.json");
-    seedJobs(storePath);
+    await seedJobs(storePath);
     openOpenClawStateDatabase()
       .db.prepare(
         "UPDATE cron_jobs SET state_json = json_set(state_json, '$.nextRunAtMs', 123), job_json = json_set(job_json, '$.notify', json('true')) WHERE store_key = ? AND job_id = 'sql-owner'",
@@ -290,7 +290,7 @@ it("keeps a due legacy one-shot pending until Doctor repairs its owner, then run
       await state.writeConfig(sourceConfig());
       const storePath = state.statePath("cron", "jobs.json");
       const dueAt = Date.now() - 1_000;
-      saveCronJobsStoreWithRevisionNative(storePath, {
+      await saveCronJobsStore(storePath, {
         version: 1,
         jobs: [
           makeCronJob({
@@ -366,7 +366,7 @@ it.each([
       async (state) => {
         await state.writeConfig(sourceConfig());
         const storePath = state.statePath("cron", "jobs.json");
-        saveCronJobsStoreWithRevisionNative(storePath, {
+        await saveCronJobsStore(storePath, {
           version: 1,
           jobs: [
             makeCronJob({
@@ -510,7 +510,7 @@ it.each([
       if (machineStore) {
         writeConfigMachineState("cron.store", storePath);
       }
-      seedJobs(storePath);
+      await seedJobs(storePath);
       const oldWriterRecreation = entry === "health write";
       const retainedGrantGeneration = 40;
       if (oldWriterRecreation) {
@@ -548,7 +548,7 @@ it.each([
       }
       const otherStorePath = state.statePath("other-cron", "jobs.json");
       if (machineStore) {
-        saveCronJobsStoreWithRevisionNative(otherStorePath, {
+        await saveCronJobsStore(otherStorePath, {
           version: 1,
           jobs: [makeCronJob({ id: "other-ownerless", enabled: false })],
         });
@@ -699,7 +699,7 @@ it("retains the marker and a verified backup when SQL ownership changes after in
     async (state) => {
       await state.writeConfig(sourceConfig());
       const storePath = state.statePath("cron", "jobs.json");
-      seedJobs(storePath);
+      await seedJobs(storePath);
       const originalConfig = await fs.readFile(state.configPath, "utf8");
       const createSnapshot = sqliteSnapshot.createVerifiedSqliteSnapshot;
       const snapshot = vi
