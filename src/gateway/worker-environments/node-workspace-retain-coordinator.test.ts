@@ -434,6 +434,44 @@ describe("node workspace retain coordinator", () => {
     }
   });
 
+  it("keeps cloud workspace retention running when current build preparation rejects", async () => {
+    const currentBuild = vi.fn(async () => receipt("c".repeat(64)));
+    const { coordinator, invoke, warn } = createHarness({
+      environments: [
+        environment({ nodeSetupId: "cloud-setup", bootstrapReceipt: receipt("b".repeat(64)) }),
+      ],
+      bundleRetention: { currentBuild, isEnvironmentOwnedNode: () => true },
+      results: [{ applied: true, deleted: 0, hasMore: false, bundleGeneration: 7 }],
+    });
+
+    try {
+      await coordinator.start();
+      currentBuild.mockRejectedValue(new Error("build preparation unavailable"));
+      await coordinator.schedule(node.nodeId);
+
+      expect(invoke).toHaveBeenCalledTimes(2);
+      const input = invoke.mock.calls[1]?.[0].params;
+      expect(input).toMatchObject({
+        retain: [
+          {
+            environmentId: "environment-1",
+            sessionId: "session-1",
+            generation: 7,
+            manifestRefs: [`sha256:${"a".repeat(64)}`],
+          },
+        ],
+      });
+      expect(input).not.toHaveProperty("bundleHashes");
+      expect(input).not.toHaveProperty("acknowledgedBundleGeneration");
+      expect(input).not.toHaveProperty("bundleStatusHash");
+      expect(warn).toHaveBeenCalledExactlyOnceWith(
+        "Node bundle retention skipped (node-1): build preparation unavailable",
+      );
+    } finally {
+      await coordinator.stop();
+    }
+  });
+
   it("fails safe to workspace-only retention when bundle ownership exceeds the wire bound", async () => {
     const environments = Array.from(
       { length: NODE_WORKER_BUNDLE_RETAIN_MAX_HASHES + 1 },

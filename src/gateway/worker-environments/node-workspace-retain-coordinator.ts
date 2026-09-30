@@ -182,9 +182,13 @@ export function createNodeWorkspaceRetainCoordinator(
     const bundleRetention = options.bundleRetention;
     const bundleRetentionSupported =
       node.workerHost.bundleRetention === NODE_WORKER_BUNDLE_RETENTION_VERSION;
+    let bundlePreparationError: string | undefined;
     const currentBuild =
       bundleRetentionSupported && bundleRetention
-        ? await bundleRetention.currentBuild()
+        ? await bundleRetention.currentBuild().catch((error: unknown) => {
+            bundlePreparationError = error instanceof Error ? error.message : String(error);
+            return undefined;
+          })
         : undefined;
     const hostBuild =
       bundleRetention && !bundleRetention.isEnvironmentOwnedNode(node.nodeId)
@@ -268,7 +272,7 @@ export function createNodeWorkspaceRetainCoordinator(
       Buffer.byteLength(JSON.stringify(statusInput), "utf8") <=
         NODE_WORKER_RETAIN_REQUEST_MAX_BYTES;
     const input =
-      bundleRetentionSupported && bundleHashesFit
+      bundleRetentionSupported && bundlePreparationError === undefined && bundleHashesFit
         ? statusInput && statusInputFits
           ? statusInput
           : retentionInput
@@ -280,7 +284,9 @@ export function createNodeWorkspaceRetainCoordinator(
     ) {
       currentTransport.acceptBundleStatus?.(node, undefined);
     }
-    if (bundleRetentionSupported && !bundleHashesFit) {
+    if (bundlePreparationError !== undefined) {
+      options.warn(`Node bundle retention skipped (${node.nodeId}): ${bundlePreparationError}`);
+    } else if (bundleRetentionSupported && !bundleHashesFit) {
       options.warn(
         `Node bundle retention skipped (${node.nodeId}): ${retainedBundleHashes.length} retained hashes exceed the bounded maintenance request`,
       );
