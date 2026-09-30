@@ -60,20 +60,6 @@ type ExecutePreparedReplyAgentRunInput = Omit<
     turnAdoptionLifecycle: NonNullable<RunReplyAgentParams["opts"]>["turnAdoptionLifecycle"];
   };
 
-function markPostCompactionFailureResult(
-  result: ReplyPayload | ReplyPayload[] | undefined,
-  postCompactionModelFailure: true | undefined,
-): ReplyPayload | ReplyPayload[] | undefined {
-  if (Array.isArray(result)) {
-    return result.map((payload) =>
-      markPostCompactionModelFailurePayload(postCompactionModelFailure, payload),
-    );
-  }
-  return result
-    ? markPostCompactionModelFailurePayload(postCompactionModelFailure, result)
-    : result;
-}
-
 export async function executePreparedReplyAgentRun(
   input: ExecutePreparedReplyAgentRunInput,
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
@@ -297,7 +283,15 @@ export async function executePreparedReplyAgentRun(
     runId: runOutcome.runId,
     runStartedAt,
   });
-  return markPostCompactionFailureResult(result, runOutcome.outcome.postCompactionModelFailure);
+  const { postCompactionModelFailure } = runOutcome.outcome;
+  if (Array.isArray(result)) {
+    return result.map((payload) =>
+      markPostCompactionModelFailurePayload(postCompactionModelFailure, payload),
+    );
+  }
+  return result
+    ? markPostCompactionModelFailurePayload(postCompactionModelFailure, result)
+    : result;
 }
 
 export function createReplyAgentRestartRecoveryController(

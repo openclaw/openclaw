@@ -1189,6 +1189,7 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
         {
             vm.input = initialDraft
         }
+        vm.enableSidebarData()
         self.viewModel = vm
         self.conversationController = if let conversationOwner, let gatewayTarget {
             NativeConversationController(

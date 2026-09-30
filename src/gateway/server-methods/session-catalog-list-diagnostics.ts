@@ -1,6 +1,6 @@
-import { createHash } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import { isMainThread, threadId } from "node:worker_threads";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import type { SessionCatalogHost } from "../../../packages/gateway-protocol/src/index.js";
 import {
   areDiagnosticsEnabledForProcess,
@@ -118,9 +118,7 @@ export function startSessionCatalogListDiagnostics(
             pid: process.pid,
             threadId,
             isMainThread,
-            ...(providerId === undefined
-              ? {}
-              : { providerIdHash: createHash("sha256").update(providerId).digest("hex") }),
+            ...(providerId === undefined ? {} : { providerIdHash: sha256Hex(providerId) }),
             elapsedMs: Math.round(elapsedMs),
             admitted: timing.admittedAt !== undefined,
             providerInvoked: providerStartedAt !== undefined,

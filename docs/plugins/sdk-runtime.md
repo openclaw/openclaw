@@ -191,12 +191,25 @@ unchanged, including any handles inside them.
 `createPluginRuntimeStore` resolves its slot from the invoking managed instance.
 Preparing another instance does not overwrite that instance's runtime. Calls
 outside managed instance scope retain the store's existing standalone behavior.
-Gateway-hosted agent turns borrow tool registrations from the admitting Gateway's
-current registry, so factories and execution share the instance whose services
-initialized the runtime. Adoption requires the same plugin source, configuration,
-non-empty set of declared tool names, and optionality. It preserves discovery's
-tool membership and order. Without an unambiguous admitting Gateway owner, turns
-keep their discovery registrations.
+Gateway-hosted agent turns use the admitting Gateway's own instance for each
+unchanged plugin: same source, install, manifest, activation, entry policy, and
+configuration, in the Gateway's workspace and environment. The lender comes from
+the admitting Gateway owner, never another Gateway that happens to be process-active.
+Without an unambiguous live owner, preparation loads separate instances. Borrowing
+turns run the Gateway's `registrationMode: "full"` registrations and share its
+services and runtime store; only plugins the Gateway lacks or configures
+differently load a separate discovery instance. After `openclaw plugins reload`,
+later turns use the reloaded Gateway instance, and the reload waits for turns that
+still hold the previous one. Borrowed channel methods and read-authority grants
+expire with the borrowing runtime or invocation scope; retiring the borrower does
+not retire the Gateway's instance.
+
+Turns that load a plugin separately borrow its tool registrations from the
+admitting Gateway's current registry, so factories and execution share the
+instance whose services initialized the runtime. Adoption requires the same
+plugin source, configuration, non-empty set of declared tool names, and
+optionality. It preserves discovery's tool membership and order. Without an
+unambiguous admitting Gateway owner, turns keep their discovery registrations.
 
 SDK helpers that return bare results retain their resources until the owning
 host closes. Callers do not need to dispose those results; see

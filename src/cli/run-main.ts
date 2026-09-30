@@ -1,4 +1,3 @@
-// Main CLI entry orchestration: fast paths, env setup, plugin aliases, and Commander dispatch.
 import { existsSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";

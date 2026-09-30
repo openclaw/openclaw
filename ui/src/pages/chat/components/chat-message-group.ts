@@ -36,11 +36,13 @@ import { renderRewindButton } from "./chat-message-confirmation.ts";
 import type { RenderMessageGroupOptions } from "./chat-message-group-options.ts";
 import {
   FULL_MESSAGE_RETRY_REVISION_LIMIT,
+  hasMessageActionButtons,
   renderMessageActionButtons,
   renderReplyButton,
   prepareChatMessageRender,
   resolveMessageActionDetails,
 } from "./chat-message-markdown.ts";
+import { messageReactionOptions, renderGroupMessageReactions } from "./chat-message-reactions.ts";
 import { renderChatSendStatus } from "./chat-message-send-status.ts";
 import {
   isOwnSenderGroup,
@@ -119,12 +121,13 @@ function renderPreparedGroupMessage(
         : {}),
     };
   }
-  return renderGroupedMessage(
+  const isStreaming = group.isStreaming && index === group.messages.length - 1;
+  return html`${renderGroupedMessage(
     source,
     item.key,
     {
       ...opts,
-      isStreaming: group.isStreaming && index === group.messages.length - 1,
+      isStreaming,
       entryId: persistedMessageEntryId(item.message) ?? undefined,
       entryRef: opts.entryRefFor?.(item.key),
       duplicateCount: item.duplicateCount ?? 1,
@@ -134,7 +137,7 @@ function renderPreparedGroupMessage(
       messageActions: actionDetails,
     },
     opts.onOpenSidebar,
-  );
+  )}${renderGroupMessageReactions(group, actionDetails, isStreaming, opts)}`;
 }
 
 export function renderActivityGroup(
@@ -469,11 +472,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
   const footerActionMessageKey = actionOwners.at(-1)?.key;
   const hasUserFooterActions =
     normalizedRole === "user" &&
-    Boolean(
-      (footerActionDetails?.replyTarget && opts.onReply) ||
-      (opts.onRewind && !opts.rewindDisabled) ||
-      footerActionDetails?.markdown,
-    );
+    ((opts.onRewind && !opts.rewindDisabled) || hasMessageActionButtons(footerActionDetails, opts));
   const userFooterActions = hasUserFooterActions
     ? html`
         <div
@@ -486,11 +485,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
               : nothing
           }
           ${opts.onRewind && !opts.rewindDisabled ? renderRewindButton(opts.onRewind) : nothing}
-          ${
-            footerActionDetails?.markdown
-              ? renderMessageActionButtons(footerActionDetails, {})
-              : nothing
-          }
+          ${renderMessageActionButtons(footerActionDetails, messageReactionOptions(group, opts))}
         </div>
       `
     : nothing;
@@ -559,8 +554,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
               (prepared, index) => {
                 const { item, actions: actionDetails } = prepared;
                 const actions =
-                  actionDetails &&
-                  (actionDetails.markdown || (actionDetails.replyTarget && opts.onReply)) &&
+                  hasMessageActionButtons(actionDetails, opts) &&
                   index < lastMessageIndex &&
                   !isTurnBlock
                     ? mobile

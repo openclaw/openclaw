@@ -532,7 +532,7 @@ export async function writeConfigFileFromContext(
     publication.phase = "accepted";
     recordUpdateDoctorConfigWrite(configPath, previousHash, nextHash, snapshot.parsed, json);
     try {
-      recordConfigWriteMetadata(new Date().toISOString(), options.lastTouchedVersionOverride);
+      recordConfigWriteMetadata();
     } catch (error) {
       deps.logger.warn(`Config metadata state update failed: ${formatErrorMessage(error)}`);
     }

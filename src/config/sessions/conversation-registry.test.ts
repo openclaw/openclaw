@@ -122,6 +122,25 @@ describe("conversation registry", () => {
     );
   });
 
+  it("rejects an empty conversation reference instead of widening the lookup", () => {
+    const identity = buildConversationIdentity({
+      channel: "reef",
+      accountId: "default",
+      kind: "direct",
+      peerId: "reef:peer-b",
+      deliveryTarget: "reef:peer-b",
+      nativeDirectUserId: "peer-b",
+      label: "@peer-b's agent",
+    });
+    registerConversationAddresses({ agentId: "main", storePath }, [identity!], 100);
+
+    for (const conversationRef of ["", "   "]) {
+      expect(() => resolveConversation({ agentId: "main", storePath }, conversationRef)).toThrow(
+        /Invalid conversationRef/,
+      );
+    }
+  });
+
   it("round-trips authoritative route context on its conversation association", async () => {
     const sessionKey = "agent:main:discord:channel:ops";
     const scope = { agentId: "main", sessionKey, storePath };

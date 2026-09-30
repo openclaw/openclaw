@@ -1,4 +1,3 @@
-// Strict parser for grouped Claw schema version 1 manifests.
 import { z } from "zod";
 import { isToolAllowedByPolicyName } from "../agents/tool-policy-match.js";
 import {

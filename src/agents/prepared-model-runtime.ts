@@ -58,6 +58,7 @@ import {
 import {
   refreshCommittedProviderCatalogs,
   createPreparedModelRuntimeCatalogRecovery,
+  createPreparedModelRuntimePluginRecovery,
   resolveSafeRefreshAgentIds,
   updateOwnersForScopedRefresh,
 } from "./prepared-model-runtime.refresh-scope.js";
@@ -515,6 +516,15 @@ export const recoverPreparedModelRuntimeCatalogWorker = createPreparedModelRunti
   refreshPreparedModelRuntimeSnapshots,
 );
 
+const recoverRetiredConfiguredPluginGeneration = createPreparedModelRuntimePluginRecovery(
+  owners,
+  () =>
+    gatewayLifecycleActive &&
+    !refreshCancellation.signal.aborted &&
+    !pendingModelRuntimeReplacement,
+  refreshPreparedModelRuntimeSnapshots,
+);
+
 /** Serializes config/plugin publications so only the latest completed refresh retires owners. */
 export function refreshPreparedModelRuntimeSnapshots(
   config: OpenClawConfig | (() => OpenClawConfig | Promise<OpenClawConfig>),
@@ -622,6 +632,7 @@ export function refreshPreparedModelRuntimeSnapshots(
           buildTimeoutMs: modelRuntimeBuildTimeoutMs,
           progress: startup?.progress,
           acquisitionSignal,
+          onPluginGenerationRetired: recoverRetiredConfiguredPluginGeneration,
         },
       );
       if (!isPublicationCurrent()) {

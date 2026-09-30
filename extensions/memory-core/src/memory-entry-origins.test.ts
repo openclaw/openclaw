@@ -33,6 +33,7 @@ import {
   type MemoryEntryOrigin,
 } from "./memory-entry-origins.js";
 import { memoryCpuProcessEntrypoints } from "./memory/manager-cpu-entrypoints.js";
+import * as cpuRuntime from "./memory/manager-cpu-worker-runtime.js";
 import { buildPromotionMarker, extractPromotionKeys } from "./short-term-promotion-memory-write.js";
 import { recordShortTermRecalls } from "./short-term-promotion-record.js";
 import {
@@ -112,7 +113,7 @@ describe("memory entry origins", () => {
       const version = db.prepare("PRAGMA user_version").get();
       db.exec("DROP TABLE IF EXISTS memory_entry_origins");
 
-      expect(listMemoryEntryOrigins({ agentId: "main" })).toEqual([]);
+      expect(await listMemoryEntryOrigins({ agentId: "main" })).toEqual([]);
       await pruneMemoryEntryOrigins(pruning);
       expect(
         db.prepare("SELECT name FROM sqlite_schema WHERE name = 'memory_entry_origins'").get(),
@@ -129,7 +130,7 @@ describe("memory entry origins", () => {
       expect(
         db.prepare("SELECT name FROM sqlite_schema WHERE name = 'memory_entry_origins'").get(),
       ).toEqual({ name: "memory_entry_origins" });
-      expect(listMemoryEntryOrigins({ agentId: "main" })).toEqual([]);
+      expect(await listMemoryEntryOrigins({ agentId: "main" })).toEqual([]);
       expect(transactionAdmissions).toBe(2);
       await recordMemoryEntryOrigins({
         agentId: "main",
@@ -142,7 +143,7 @@ describe("memory entry origins", () => {
       });
       expect(transactionAdmissions).toBe(4);
 
-      expect(listMemoryEntryOrigins({ agentId: "main" })).toEqual([
+      expect(await listMemoryEntryOrigins({ agentId: "main" })).toEqual([
         origin("candidate", "session-1"),
       ]);
       expect(db.prepare("PRAGMA user_version").get()).toEqual(version);
@@ -152,7 +153,7 @@ describe("memory entry origins", () => {
         origins: [origin("recovered", "session-2")],
       });
       expect(transactionAdmissions).toBe(6);
-      expect(listMemoryEntryOrigins({ agentId: "main" })).toEqual([
+      expect(await listMemoryEntryOrigins({ agentId: "main" })).toEqual([
         origin("recovered", "session-2"),
       ]);
       expect(db.prepare("PRAGMA user_version").get()).toEqual(version);
@@ -176,7 +177,7 @@ describe("memory entry origins", () => {
     try {
       original.sessionId = "changed-after-queue";
       vi.stubEnv("OPENCLAW_STATE_DIR", alternate);
-      expect(listMemoryEntryOrigins({ agentId: "main" })).toEqual([]);
+      expect(await listMemoryEntryOrigins({ agentId: "main" })).toEqual([]);
       await expect(fs.access(resolveOpenClawAgentSqlitePath(options))).rejects.toThrow();
     } finally {
       release.resolve();
@@ -185,7 +186,30 @@ describe("memory entry origins", () => {
       await pending;
     }
     await expect(pending).resolves.toEqual([origin("queued", "session-1")]);
-    expect(listMemoryEntryOrigins({ agentId: "main" })).toEqual([origin("queued", "session-1")]);
+    expect(await listMemoryEntryOrigins({ agentId: "main" })).toEqual([
+      origin("queued", "session-1"),
+    ]);
+    const dispatch = Promise.withResolvers<void>();
+    const run = cpuRuntime.runMemoryOriginRows;
+    const transport = vi
+      .spyOn(cpuRuntime, "runMemoryOriginRows")
+      .mockImplementationOnce(async (...args) => {
+        await dispatch.promise;
+        return run(...args);
+      });
+    const sessionIds = ["session-1"];
+    const reading = listMemoryEntryOrigins({ agentId: "main", sessionIds });
+    try {
+      sessionIds[0] = "changed-after-dispatch";
+      vi.stubEnv("OPENCLAW_STATE_DIR", alternate);
+      dispatch.resolve();
+      expect(await reading).toEqual([origin("queued", "session-1")]);
+    } finally {
+      dispatch.resolve();
+      await reading.catch(() => undefined);
+      transport.mockRestore();
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    }
     await expect(fs.access(alternate)).rejects.toThrow();
   });
 
@@ -195,8 +219,8 @@ describe("memory entry origins", () => {
     const revisionBefore = db.prepare("SELECT revision FROM memory_index_state WHERE id = 1").get();
     db.exec("DROP TABLE IF EXISTS memory_session_tombstones");
 
-    expect(listMemorySessionTombstones({ agentId: "main" })).toEqual([]);
-    expect(listMemorySessionTombstones({ agentId: "main", sessionIds: [] })).toEqual([]);
+    expect(await listMemorySessionTombstones({ agentId: "main" })).toEqual([]);
+    expect(await listMemorySessionTombstones({ agentId: "main", sessionIds: [] })).toEqual([]);
     expect(
       db.prepare("SELECT name FROM sqlite_schema WHERE name = 'memory_session_tombstones'").get(),
     ).toBeUndefined();
@@ -230,13 +254,13 @@ describe("memory entry origins", () => {
     expect(db.prepare("SELECT revision FROM memory_index_state WHERE id = 1").get()).toEqual(
       deletionRevision,
     );
-    expect(listMemorySessionTombstones({ agentId: "main" })).toEqual([
+    expect(await listMemorySessionTombstones({ agentId: "main" })).toEqual([
       { sessionId: "session-1", agentId: "main", reason: "forgotten", createdAt: 1_000 },
       { sessionId: "session-2", agentId: "main", reason: "forgotten", createdAt: 1_000 },
     ]);
-    expect(listMemorySessionTombstones({ agentId: "main", sessionIds: ["session-2"] })).toEqual([
-      { sessionId: "session-2", agentId: "main", reason: "forgotten", createdAt: 1_000 },
-    ]);
+    expect(
+      await listMemorySessionTombstones({ agentId: "main", sessionIds: ["session-2"] }),
+    ).toEqual([{ sessionId: "session-2", agentId: "main", reason: "forgotten", createdAt: 1_000 }]);
     expect(db.prepare("PRAGMA user_version").get()).toEqual(version);
   });
 
@@ -267,11 +291,11 @@ describe("memory entry origins", () => {
       retainedEntryKeys: new Set(extractPromotionKeys(currentMemory)),
     });
 
-    expect(listMemoryEntryOrigins({ agentId: "main" })).toEqual([
+    expect(await listMemoryEntryOrigins({ agentId: "main" })).toEqual([
       origin("candidate", "session-1"),
       origin("candidate", "session-2"),
     ]);
-    expect(listMemoryEntryOrigins({ agentId: "main", entryKeys: ["prior"] })).toEqual([]);
+    expect(await listMemoryEntryOrigins({ agentId: "main", entryKeys: ["prior"] })).toEqual([]);
   });
 
   it("re-keys superseded session lineage while preserving unrelated live memory", async () => {
@@ -301,7 +325,7 @@ describe("memory entry origins", () => {
       retainedEntryKeys: new Set(extractPromotionKeys(currentMemory)),
     });
 
-    expect(listMemoryEntryOrigins({ agentId: "main" })).toEqual([
+    expect(await listMemoryEntryOrigins({ agentId: "main" })).toEqual([
       origin("replacement", "session-1"),
       origin("surviving", "session-3"),
     ]);
@@ -310,7 +334,9 @@ describe("memory entry origins", () => {
         deleteMemoryEntryOriginsInDatabase(db, { agentId: "main", entryKeys: ["replacement"] }),
       ),
     ).resolves.toBe(1);
-    expect(listMemoryEntryOrigins({ agentId: "main" })).toEqual([origin("surviving", "session-3")]);
+    expect(await listMemoryEntryOrigins({ agentId: "main" })).toEqual([
+      origin("surviving", "session-3"),
+    ]);
   });
 
   it("rolls back only newly reserved lineage when a replacement does not commit", async () => {
@@ -333,30 +359,35 @@ describe("memory entry origins", () => {
         ),
       ).resolves.toBe(0);
     }
-    expect(listMemoryEntryOrigins({ agentId: "main" })).toEqual(original);
+    expect(await listMemoryEntryOrigins({ agentId: "main" })).toEqual(original);
     const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
     const calibration = "UPDATE memory_entry_origins SET observed_at = observed_at WHERE 0";
+    const readCalibration = "SELECT entry_key FROM memory_entry_origins WHERE 0";
     const observation = observeHostDataSql();
     try {
       db.prepare(calibration).run();
+      db.prepare(readCalibration).all();
       expect(observation.queries).toContain(calibration);
+      expect(observation.queries).toContain(readCalibration);
       observation.queries.length = 0;
       const rollback = await reserveMemoryEntryOrigins({
         agentIds: ["main"],
         previousMemory: `${buildPromotionMarker("prior")}\n${priorEntry}\n`,
         operations: [{ candidateKey: "candidate", action: "merged", priorEntries: [priorEntry] }],
       });
-      expect(listMemoryEntryOrigins({ agentId: "main", entryKeys: ["candidate"] })).toEqual([
+      expect(await listMemoryEntryOrigins({ agentId: "main", entryKeys: ["candidate"] })).toEqual([
         ...prior.map((entry) => origin("candidate", entry.sessionId)),
         existing,
       ]);
 
       await rollback();
 
-      expect(listMemoryEntryOrigins({ agentId: "main" })).toEqual(original);
+      expect(await listMemoryEntryOrigins({ agentId: "main" })).toEqual(original);
       expect(
         observation.queries.filter((sql) =>
-          /\b(?:insert\s+into|update|delete\s+from)\s+"?memory_entry_origins\b/iu.test(sql),
+          /\b(?:from|insert\s+into|update|delete\s+from)\s+"?memory_(?:entry_origins|session_tombstones)\b/iu.test(
+            sql,
+          ),
         ),
       ).toEqual([]);
     } finally {
@@ -388,7 +419,7 @@ describe("memory entry origins", () => {
           ),
       );
       expect(inserted).toEqual(batch.map(({ sessionId }) => origin("candidate", sessionId)));
-      expect(listMemoryEntryOrigins({ agentId: "main", sessionIds: ["existing"] })).toEqual([
+      expect(await listMemoryEntryOrigins({ agentId: "main", sessionIds: ["existing"] })).toEqual([
         existing,
       ]);
       const inserts = compile.mock.results.filter(
@@ -437,7 +468,7 @@ describe("memory entry origins", () => {
           ? "fixture reservation cleanup rejected"
           : "fixture reservation write rejected",
       );
-      expect(listMemoryEntryOrigins({ agentId: "main" })).toEqual(
+      expect(await listMemoryEntryOrigins({ agentId: "main" })).toEqual(
         cleanupFails ? [origin("first", "session-1"), prior] : [prior],
       );
     },
@@ -452,7 +483,7 @@ describe("memory entry origins", () => {
       previousMemory: `${buildPromotionMarker("prior")}\n${priorEntry}\n`,
       operations: [{ candidateKey: "candidate", action: "merged", priorEntries: [priorEntry] }],
     });
-    const before = listMemoryEntryOrigins({ agentId: "main" });
+    const before = await listMemoryEntryOrigins({ agentId: "main" });
     await closeOpenClawAgentDatabasesAsync(stateDir);
     closeOpenClawAgentDatabasesForTest();
     const pathname = resolveOpenClawAgentSqlitePath({ agentId: "main" });
@@ -460,7 +491,7 @@ describe("memory entry origins", () => {
     await fs.copyFile(`${pathname}.original`, pathname);
 
     const [outcome] = await Promise.allSettled([rollback()]);
-    expect(listMemoryEntryOrigins({ agentId: "main" })).toEqual(before);
+    expect(await listMemoryEntryOrigins({ agentId: "main" })).toEqual(before);
     expect(outcome).toMatchObject({
       status: "rejected",
       reason: { message: "Agent database target changed before write admission" },
@@ -492,17 +523,17 @@ describe("memory entry origins", () => {
       }),
     ).toEqual([first, second, third]);
     const before = [second, third, first];
-    expect(listMemoryEntryOrigins({ agentId: "main" })).toEqual(before);
+    expect(await listMemoryEntryOrigins({ agentId: "main" })).toEqual(before);
     await expect(
       recordMemoryEntryOrigins({
         agentId: "main",
         origins: [origin("next", "new-session"), { ...second, agentId: "other" }],
       }),
     ).rejects.toThrow("memory entry origin belongs to another agent");
-    expect(listMemoryEntryOrigins({ agentId: "main" })).toEqual(before);
+    expect(await listMemoryEntryOrigins({ agentId: "main" })).toEqual(before);
     await closeOpenClawAgentDatabasesAsync(stateDir);
     closeOpenClawAgentDatabasesForTest();
-    expect(listMemoryEntryOrigins({ agentId: "main" })).toEqual(before);
+    expect(await listMemoryEntryOrigins({ agentId: "main" })).toEqual(before);
   });
 
   it.each(["DREAMS.md", "dreams.md"])(
@@ -545,47 +576,62 @@ describe("memory entry origins", () => {
         await save(["current"], index * 1_000);
       }
       expect(await readMemoryPreimages(workspaceDir)).toHaveLength(8);
-      expect(listMemoryEntryOrigins({ agentId: "main" }).map((entry) => entry.entryKey)).toEqual([
-        "current",
-        "diary",
-        "indexed",
-        "shared",
-        "staged",
-      ]);
+      expect(
+        (await listMemoryEntryOrigins({ agentId: "main" })).map((entry) => entry.entryKey),
+      ).toEqual(["current", "diary", "indexed", "shared", "staged"]);
 
       await save(["current"], 10_000);
 
       expect(await readMemoryPreimages(workspaceDir)).toHaveLength(8);
-      expect(listMemoryEntryOrigins({ agentId: "main" }).map((entry) => entry.entryKey)).toEqual([
-        "current",
-        "diary",
-        "indexed",
-        "staged",
-      ]);
+      expect(
+        (await listMemoryEntryOrigins({ agentId: "main" })).map((entry) => entry.entryKey),
+      ).toEqual(["current", "diary", "indexed", "staged"]);
       await fs.unlink(diaryPath);
-      await pruneMemoryEntryOrigins({
-        workspaceDir,
-        agentIds: ["main"],
-        entryKeys: ["diary"],
-        retainedEntryKeys,
-      });
-      expect(listMemoryEntryOrigins({ agentId: "main", entryKeys: ["diary"] })).toEqual([]);
+      const observation = observeHostDataSql();
+      const calibration = "SELECT text FROM memory_index_chunks WHERE 0";
+      try {
+        db.prepare(calibration).all();
+        expect(observation.queries).toContain(calibration);
+        observation.queries.length = 0;
+        await pruneMemoryEntryOrigins({
+          workspaceDir,
+          agentIds: ["main"],
+          entryKeys: ["diary"],
+          retainedEntryKeys,
+        });
+        expect(await listMemoryEntryOrigins({ agentId: "main", entryKeys: ["diary"] })).toEqual([]);
+        expect(
+          observation.queries.filter((sql) =>
+            /\bfrom\s+"?memory_(?:entry_origins|index_chunks)\b/iu.test(sql),
+          ),
+        ).toEqual([]);
+      } finally {
+        observation.restore();
+      }
     },
   );
 
   it("records exact session identity when a transcript recall candidate is first produced", async () => {
     const workspaceDir = path.join(stateDir, "workspace");
     await fs.mkdir(workspaceDir, { recursive: true });
+    seedMemoryForgetTombstones({
+      agentId: "main",
+      sessionIds: ["already-forgotten"],
+      createdAt: 999,
+    });
     await recordMemoryEntryOrigins({
       agentId: "main",
       origins: [origin("calibration", "calibration-session")],
     });
     const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
     const calibration = "UPDATE memory_entry_origins SET observed_at = observed_at WHERE 0";
+    const readCalibration = "SELECT entry_key FROM memory_entry_origins WHERE 0";
     const observation = observeHostDataSql();
     try {
       db.prepare(calibration).run();
+      db.prepare(readCalibration).all();
       expect(observation.queries).toContain(calibration);
+      expect(observation.queries).toContain(readCalibration);
       observation.queries.length = 0;
       await recordShortTermRecalls({
         workspaceDir,
@@ -614,14 +660,16 @@ describe("memory entry origins", () => {
       });
       expect(
         observation.queries.filter((sql) =>
-          /\b(?:insert\s+into|update|delete\s+from)\s+"?memory_entry_origins\b/iu.test(sql),
+          /\b(?:from|insert\s+into|update|delete\s+from)\s+"?memory_(?:entry_origins|session_tombstones)\b/iu.test(
+            sql,
+          ),
         ),
       ).toEqual([]);
     } finally {
       observation.restore();
     }
 
-    expect(listMemoryEntryOrigins({ agentId: "main", sessionIds: ["session-1"] })).toEqual([
+    expect(await listMemoryEntryOrigins({ agentId: "main", sessionIds: ["session-1"] })).toEqual([
       expect.objectContaining({
         agentId: "main",
         sessionId: "session-1",

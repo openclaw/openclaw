@@ -238,14 +238,10 @@ export type ConfigAuditRecord =
   | ConfigObserveAuditRecord
   | ConfigExternalChangeAuditRecord;
 
-type ConfigAuditStatMetadata = {
-  dev: string | null;
-  ino: string | null;
-  mode: number | null;
-  nlink: number | null;
-  uid: number | null;
-  gid: number | null;
-};
+type ConfigAuditStatMetadata = Pick<
+  ConfigHealthFingerprint,
+  "dev" | "ino" | "mode" | "nlink" | "uid" | "gid"
+>;
 
 type ConfigAuditProcessInfo = {
   pid: number;

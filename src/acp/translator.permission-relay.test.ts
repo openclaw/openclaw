@@ -228,6 +228,7 @@ describe("ACP translator permission relay", () => {
     expect(harness.requestPermission).not.toHaveBeenCalled();
     expect(resolveCalls(harness.request)).toHaveLength(0);
     await harness.agent.handleGatewayEvent(tool(secondRun, "tool-second", "exec", "echo second"));
+    expect(harness.requestPermission).not.toHaveBeenCalled();
     await harness.agent.handleGatewayEvent(rawApproval("approval-shared", "tool-second"));
     await vi.waitFor(() => {
       expect(harness.requestPermission).toHaveBeenCalledTimes(1);

@@ -5,23 +5,23 @@ import {
   type ErrorShape,
   type SessionWorkspaceRecoveryRequiredErrorDetails,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveEmbeddedSessionLane } from "../../agents/embedded-agent-runner/lanes.js";
 import {
   abortEmbeddedAgentRun,
   isEmbeddedAgentRunInProgress,
   waitForEmbeddedAgentRunEnd,
 } from "../../agents/embedded-agent-runner/runs.js";
 import { createAgentRunDirectAbortError } from "../../agents/run-termination.js";
-import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
-import { hasPendingFollowupQueueWork } from "../../auto-reply/reply/queue/state.js";
 import {
-  abortReplyRunBySessionId,
-  isReplyRunActiveForSessionId,
-  replyRunRegistry,
-  waitForReplyRunEndBySessionId,
+  clearSessionLifecycleQueues,
+  hasSessionLifecycleQueueWork,
+  type SessionLifecycleQueueTarget,
+} from "../../auto-reply/reply/queue/cleanup.js";
+import {
+  isReplyOperationForSession,
+  resolveReplyOperationsForSession,
+  waitForReplyOperationOwnerSettlement,
 } from "../../auto-reply/reply/reply-run-registry.js";
 import { withTimeout } from "../../infra/fs-safe.js";
-import { getCommandLaneSnapshot } from "../../process/command-queue.js";
 import {
   closeSessionWorkAdmissions,
   startSessionWorkAdmissionInterruption,
@@ -84,18 +84,14 @@ function hasAuthoritativeSessionWork(
   params: SessionLifecycleParams,
   workerDrain: WorkerInferenceSessionDrain | undefined,
   terminalDrain: AgentTerminalSessionDrain | undefined,
-  workIdentities: string[],
+  queueTarget: SessionLifecycleQueueTarget,
 ): boolean {
   const sessionId = params.sessionId;
   return (
     isCompetingSessionWorkAdmissionActive(params.storePath, params.lifecycleIdentities) ||
-    params.sessionKeys.some((key) => replyRunRegistry.isActive(key)) ||
-    Boolean(sessionId && isReplyRunActiveForSessionId(sessionId)) ||
+    resolveReplyOperationsForSession(params).length > 0 ||
     Boolean(sessionId && isEmbeddedAgentRunInProgress(sessionId)) ||
-    hasPendingFollowupQueueWork(workIdentities) ||
-    workIdentities.some(
-      (key) => getCommandLaneSnapshot(resolveEmbeddedSessionLane(key)).queuedCount > 0,
-    ) ||
+    hasSessionLifecycleQueueWork(queueTarget) ||
     hasGatewaySessionAbortOwner({
       context: params.context,
       sessionKeys: params.sessionKeys,
@@ -117,9 +113,12 @@ export async function prepareSessionLifecycleDrain(
   params: SessionLifecycleParams,
 ): Promise<SessionLifecycleDrain> {
   const timeoutMs = SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS;
-  const workIdentities = Array.from(
-    new Set([...params.sessionKeys, ...(params.sessionId ? [params.sessionId] : [])]),
-  );
+  const queueTarget: SessionLifecycleQueueTarget = {
+    keys: params.sessionKeys,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+  };
   const workerService = params.context.workerEnvironmentService;
   const workerControl = asWorkerInferenceControl(workerService);
   let workerDrain: AcceptedWorkerInferenceSessionDrain | undefined;
@@ -196,6 +195,7 @@ export async function prepareSessionLifecycleDrain(
           void reclaimed.catch(() => {});
         }
         let controllerDrain = Promise.resolve(true);
+        const replyRuns = resolveReplyOperationsForSession(params);
         const cancellation = abortChatRunsForSessionKeyWithPartials({
           context: params.context,
           ops: createChatAbortOps(params.context),
@@ -216,13 +216,18 @@ export async function prepareSessionLifecycleDrain(
             });
           },
           onAuthorizedAfterQueuedAbort: () => {
-            const cleared = clearSessionQueues(workIdentities);
+            const cleared = clearSessionLifecycleQueues({
+              ...queueTarget,
+              assertCurrent: () => params.authorize?.(),
+            });
             let aborted = cleared.followupCleared > 0 || cleared.laneCleared > 0;
-            for (const key of params.sessionKeys) {
-              aborted = replyRunRegistry.abort(key) || aborted;
+            for (const operation of replyRuns) {
+              params.authorize?.();
+              if (isReplyOperationForSession(params, operation)) {
+                aborted = operation.abortByUser() || aborted;
+              }
             }
             if (params.sessionId) {
-              aborted = abortReplyRunBySessionId(params.sessionId) || aborted;
               aborted = abortEmbeddedAgentRun(params.sessionId) || aborted;
             }
             return aborted;
@@ -230,7 +235,7 @@ export async function prepareSessionLifecycleDrain(
         });
         // Observe failures immediately while the short mutation releases its queues.
         void cancellation.catch(() => {});
-        return { workerStop, cancellation, controllerDrain };
+        return { workerStop, cancellation, controllerDrain, replyRuns };
       },
     });
     const abortResult = await prepared.cancellation;
@@ -274,10 +279,11 @@ export async function prepareSessionLifecycleDrain(
       scope: params.storePath,
       identities: params.lifecycleIdentities,
     });
-    const replyWork = Promise.all([
-      ...params.sessionKeys.map((key) => replyRunRegistry.waitForIdle(key, timeoutMs)),
-      ...(params.sessionId ? [waitForReplyRunEndBySessionId(params.sessionId, timeoutMs)] : []),
-    ]).then((results) => results.every(Boolean));
+    const replyWork = Promise.all(
+      prepared.replyRuns.map((operation) =>
+        waitForReplyOperationOwnerSettlement(operation, timeoutMs),
+      ),
+    ).then((results) => results.every(Boolean));
     const embeddedWork = params.sessionId
       ? waitForEmbeddedAgentRunEnd(params.sessionId, timeoutMs)
       : Promise.resolve(true);
@@ -333,7 +339,7 @@ export async function prepareSessionLifecycleDrain(
         } catch {
           return true;
         }
-        return hasAuthoritativeSessionWork(params, workerDrain, terminalDrain, workIdentities);
+        return hasAuthoritativeSessionWork(params, workerDrain, terminalDrain, queueTarget);
       },
     };
   } catch (error) {

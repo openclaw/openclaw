@@ -216,7 +216,7 @@ export function createReplyOperation(params: {
         isReplyOperationPreBackendPhase(phaseBeforeAbort) &&
         !retainStateUntilCompleteOperations.has(operation)
       ) {
-        clearState();
+        operation.complete();
       } else {
         scheduleTerminalSettle();
       }

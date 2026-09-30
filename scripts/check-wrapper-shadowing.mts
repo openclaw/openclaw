@@ -120,18 +120,25 @@ function resolveWrappedDefinition(
 export function findWrapperShadowingViolations(modules: SourceModule[]) {
   using parser = createNativeTypeScriptParser();
   const modulesByPath = new Map<string, ModuleExports>();
-  for (const sourceModule of modules.toSorted((left, right) =>
-    left.path.localeCompare(right.path),
-  )) {
-    const modulePath = normalizeRelativePath(sourceModule.path);
-    modulesByPath.set(
-      modulePath,
-      collectModuleExportNames(
-        sourceModule.content,
-        modulePath,
-        parser.parseSourceFile(modulePath, sourceModule.content),
-      ),
+  const sortedModules = modules.toSorted((left, right) => left.path.localeCompare(right.path));
+  // Reload native roots once per bounded batch, retaining only the export graph.
+  const batchSize = 32;
+  for (let offset = 0; offset < sortedModules.length; offset += batchSize) {
+    const batch = sortedModules.slice(offset, offset + batchSize);
+    const sourceFiles = parser.parseSourceFiles(
+      batch.map((sourceModule) => ({
+        fileName: normalizeRelativePath(sourceModule.path),
+        text: sourceModule.content,
+      })),
     );
+    for (const [index, sourceFile] of sourceFiles.entries()) {
+      const sourceModule = batch[index]!;
+      const modulePath = normalizeRelativePath(sourceModule.path);
+      modulesByPath.set(
+        modulePath,
+        collectModuleExportNames(sourceModule.content, modulePath, sourceFile),
+      );
+    }
   }
 
   const violations = new Map<string, WrapperShadowingViolation>();

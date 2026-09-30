@@ -1,4 +1,3 @@
-// Resolves shell inline-command flags across shell families.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 // Shell inline-command parsing recognizes POSIX, cmd, and PowerShell command

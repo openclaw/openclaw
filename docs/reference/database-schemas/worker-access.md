@@ -213,9 +213,16 @@ writer and a connection-bound worker. Recall staging, backfill, and consolidatio
 await their origin writes before publication or releasing the workspace lock.
 Compensation removes only the inserted prefix from its original database;
 uncertain file publication retains the reserved lineage. Missing-store and
-no-match preflights remain noncreating. Read-only origin planning and forget's
-supplied-connection kernels retain their existing owners; this is a mutation cut,
-not a claim that all memory persistence is off the calling thread.
+no-match preflights remain noncreating. Origin and tombstone listings, reservation
+planning, and prune preflights use the existing memory retrieval worker and fresh
+read-only admission. Each reader classifies failures through the canonical owner
+and closes before replying, without creating, registering, or migrating a store.
+The existing pool transports the primary error message, not native error identity
+or nested cause metadata.
+Callers retain their captured paths and recheck write authority after awaited
+planning. Synchronous ingestion filters consume prepared tombstones. Forget's
+live lineage rechecks and supplied-connection mutation transactions retain their
+existing owner. Session policy metadata reads and cold bootstrap also remain separate.
 
 The exported `OpenClawAgentSqliteWorkerStore` type retains its `run` and `close`
 contract for existing adapters. The factory's inferred return type additionally

@@ -1,4 +1,3 @@
-// Builds export bundles for a session transcript and runtime context.
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -41,17 +40,6 @@ interface SessionData {
 const BACKEND_DELEGATED_WARNING =
   "This session was handled by a backend runtime (e.g. CLI/ACP). Assistant replies, tool calls, and usage data are stored in the backend transcript and are not included in this export.";
 
-function hasBackendSession(entry: StoredSessionEntry, hasStoredAcpSession: boolean): boolean {
-  return (
-    hasStoredAcpSession ||
-    hasNonEmptyString(entry.claudeCliSessionId) ||
-    Object.values(entry.cliSessionBindings ?? {}).some((binding) =>
-      hasNonEmptyString(binding?.sessionId),
-    ) ||
-    Object.values(entry.cliSessionIds ?? {}).some(hasNonEmptyString)
-  );
-}
-
 function hasPersistedAcpSession(params: {
   sessionKey: string;
   entry: StoredSessionEntry;
@@ -71,7 +59,14 @@ function isBackendDelegatedSession(
   entries: AgentSessionEntry[],
   hasStoredAcpSession: boolean,
 ): boolean {
-  if (!hasBackendSession(entry, hasStoredAcpSession)) {
+  const hasBackendSession =
+    hasStoredAcpSession ||
+    hasNonEmptyString(entry.claudeCliSessionId) ||
+    Object.values(entry.cliSessionBindings ?? {}).some((binding) =>
+      hasNonEmptyString(binding?.sessionId),
+    ) ||
+    Object.values(entry.cliSessionIds ?? {}).some(hasNonEmptyString);
+  if (!hasBackendSession) {
     return false;
   }
   const messages = entries.filter(
@@ -159,17 +154,13 @@ async function generateHtml(sessionData: SessionData): Promise<string> {
     --mdCode: #8abeb7;
     --mdCodeBlock: #b5bd68;
   `;
-  const bodyBg = "#1e1e28";
-  const containerBg = "#282832";
-  const infoBg = "#343541";
-
   const sessionDataBase64 = Buffer.from(JSON.stringify(sessionData)).toString("base64");
 
   const css = templateCss
     .replace("/* {{THEME_VARS}} */", themeVars.trim())
-    .replace("/* {{BODY_BG_DECL}} */", `--body-bg: ${bodyBg};`)
-    .replace("/* {{CONTAINER_BG_DECL}} */", `--container-bg: ${containerBg};`)
-    .replace("/* {{INFO_BG_DECL}} */", `--info-bg: ${infoBg};`);
+    .replace("/* {{BODY_BG_DECL}} */", "--body-bg: #1e1e28;")
+    .replace("/* {{CONTAINER_BG_DECL}} */", "--container-bg: #282832;")
+    .replace("/* {{INFO_BG_DECL}} */", "--info-bg: #343541;");
 
   const replacements: Array<[string, string]> = [
     ["CSS", css],
@@ -184,18 +175,14 @@ async function generateHtml(sessionData: SessionData): Promise<string> {
   );
 }
 
-function formatSkippedRows(count: number): string {
-  return `${count.toLocaleString()} malformed transcript ${count === 1 ? "row" : "rows"}`;
-}
-
 function formatSessionExportWarning(summary: SessionExportWarningSummary): string {
   const rows =
     summary.rows.length > 0
       ? ` rows ${summary.rows.join(", ")}${summary.count > summary.rows.length ? ", …" : ""}`
       : "";
-  return summary.count === 1
-    ? `⚠️ Skipped ${formatSkippedRows(summary.count)} that was not a session entry.${rows}`
-    : `⚠️ Skipped ${formatSkippedRows(summary.count)} that were not session entries.${rows}`;
+  const entryDescription =
+    summary.count === 1 ? "row that was not a session entry" : "rows that were not session entries";
+  return `⚠️ Skipped ${summary.count.toLocaleString()} malformed transcript ${entryDescription}.${rows}`;
 }
 
 async function readSessionDataFromIdentity(params: {
@@ -203,13 +190,11 @@ async function readSessionDataFromIdentity(params: {
   sessionId: string;
   sessionKey: string;
   storePath: string;
-}): Promise<{
-  header: SessionHeader | null;
-  entries: AgentSessionEntry[];
-  leafId: string | null;
-  hasLeafControl: boolean;
-  warnings: SessionExportWarningSummary[];
-}> {
+}): Promise<
+  Pick<SessionData, "header" | "entries" | "leafId" | "hasLeafControl"> & {
+    warnings: SessionExportWarningSummary[];
+  }
+> {
   const events = await loadTranscriptEvents(params);
   const fileEntries: SessionFileEntry[] = [];
   const skippedRows: SessionExportWarningSummary = { count: 0, rows: [] };

@@ -6,6 +6,7 @@ import type { AssistantMessageExpansionState } from "../chat-message-recovery.ts
 import type { TurnRecap } from "../chat-progress.ts";
 import type { renderGroupedMessage } from "./chat-message-bubble.ts";
 import type { MessageReplyTarget } from "./chat-message-markdown.ts";
+import type { MessageReactionOptions } from "./chat-message-reactions.ts";
 import type { ChatSendStatusActions } from "./chat-message-send-status.ts";
 import type { StreamGroupOptions, StreamGroupPart } from "./chat-message-stream.ts";
 import type { ReplyLine } from "./chat-reply-attribution.ts";
@@ -68,4 +69,4 @@ export type RenderMessageGroupOptions = Omit<
     latestAssistant?: boolean;
     /** Rendered as a transcript search result, outside its turn. */
     searchResult?: boolean;
-  };
+  } & MessageReactionOptions;

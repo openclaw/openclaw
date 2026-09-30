@@ -290,10 +290,6 @@ function settleParkedSteerAcceptance(key: string, run: FollowupRun, accepted: bo
   return true;
 }
 
-function isParkedFollowupRunOwned(key: string, run: FollowupRun): boolean {
-  return getExistingFollowupQueue(key)?.items.includes(run) === true;
-}
-
 function reapplyDeferredOverflow(key: string): void {
   const queue = getExistingFollowupQueue(key);
   if (
@@ -386,7 +382,7 @@ export function parkSteerCandidate(
         }
         throw error;
       });
-      if (isFollowupRunAborted(run) || !isParkedFollowupRunOwned(key, run)) {
+      if (isFollowupRunAborted(run) || !getExistingFollowupQueue(key)?.items.includes(run)) {
         return "cancelled";
       }
       if (!pending || run.steerPending !== pending) {

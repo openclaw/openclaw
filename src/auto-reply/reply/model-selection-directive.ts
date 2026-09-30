@@ -1,4 +1,3 @@
-// Normalizes model selection directives into provider and model ids.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { modelKey } from "../../agents/model-ref-shared.js";

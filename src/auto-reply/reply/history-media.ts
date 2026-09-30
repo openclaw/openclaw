@@ -1,4 +1,3 @@
-// Extracts media attachment references from reply history entries.
 import { mimeTypeFromFilePath } from "@openclaw/media-core/mime";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";

@@ -1,4 +1,3 @@
-// Main auto-reply pipeline: prepares context, runs commands, and dispatches agents.
 import fs from "node:fs/promises";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isImplicitAcpWorkspaceCandidate } from "../../agents/agent-scope-config.js";
@@ -654,30 +653,27 @@ export async function getReplyFromConfig(
     storePath,
   });
 
-  if (sessionEntry?.pendingFinalDelivery?.kind === "replayable") {
+  // Heartbeats may safely clear ack-only pending state, but must not replay
+  // user-facing pending finals through a different delivery target.
+  if (opts?.isHeartbeat && sessionEntry.pendingFinalDelivery?.kind === "replayable") {
     const text = sanitizePendingFinalDeliveryText(sessionEntry.pendingFinalDelivery.text);
-
-    // Heartbeats may safely clear ack-only pending state, but must not replay
-    // user-facing pending finals through a different delivery target.
-    if (opts?.isHeartbeat) {
-      const heartbeatPending = classifyHeartbeatPendingFinalDelivery(
-        text,
-        DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
-      );
-      if (heartbeatPending.shouldClear) {
-        Object.assign(sessionEntry, PENDING_FINAL_DELIVERY_CLEAR_PATCH);
-        sessionEntryHandle.replaceCurrent(sessionEntry);
-        if (sessionKey && storePath) {
-          const { updateSessionEntry } = await import("../../config/sessions/session-accessor.js");
-          await updateSessionEntry(
-            { storePath, sessionKey },
-            () => ({ ...PENDING_FINAL_DELIVERY_CLEAR_PATCH }),
-            {
-              skipMaintenance: true,
-              takeCacheOwnership: true,
-            },
-          );
-        }
+    const heartbeatPending = classifyHeartbeatPendingFinalDelivery(
+      text,
+      DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
+    );
+    if (heartbeatPending.shouldClear) {
+      Object.assign(sessionEntry, PENDING_FINAL_DELIVERY_CLEAR_PATCH);
+      sessionEntryHandle.replaceCurrent(sessionEntry);
+      if (sessionKey && storePath) {
+        const { updateSessionEntry } = await import("../../config/sessions/session-accessor.js");
+        await updateSessionEntry(
+          { storePath, sessionKey },
+          () => ({ ...PENDING_FINAL_DELIVERY_CLEAR_PATCH }),
+          {
+            skipMaintenance: true,
+            takeCacheOwnership: true,
+          },
+        );
       }
     }
   }

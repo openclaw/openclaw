@@ -11,7 +11,6 @@ import {
 } from "../infra/shell-env.js";
 import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
 import { loadInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-record-reader.js";
-import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { getPluginMetadataSnapshotCache, withPluginCache } from "../plugins/plugin-cache.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { withSynchronousArtifactPreservingStateSnapshot } from "../state/openclaw-state-db-readonly.js";
@@ -48,9 +47,10 @@ import {
   validateConfigObjectWithPlugins,
   validateConfigObjectWithPluginsAsync,
 } from "./validation.js";
-import type { PreparedConfigValidationPluginMetadata } from "./validation.types.js";
-
-type ValidateConfigWithPluginsResult = ReturnType<typeof validateConfigObjectWithPlugins>;
+import type {
+  PreparedConfigValidationPluginMetadata,
+  ValidateConfigWithPluginsResult,
+} from "./validation.types.js";
 
 type RecoveryCandidateValidation = {
   authoredCandidate: unknown;
@@ -68,7 +68,6 @@ export type ConfigRecoveryCandidateTransform = (params: {
 type ValidationPluginMetadataSnapshotLoader = {
   load: (config: OpenClawConfig) => Pick<PluginMetadataSnapshot, "manifestRegistry">;
   loadAsync: (config: OpenClawConfig) => Promise<PreparedConfigValidationPluginMetadata>;
-  getManifestRegistry: () => PluginManifestRegistry | undefined;
   getSnapshot: () => PluginMetadataSnapshot | undefined;
 };
 
@@ -209,7 +208,6 @@ export function createConfigIoContext(
             installedPluginRecordIds: new Set(Object.keys(records)),
           };
         })()),
-      getManifestRegistry: () => snapshot?.manifestRegistry,
       getSnapshot: () => snapshot,
     };
   }

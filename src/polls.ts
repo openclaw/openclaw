@@ -1,4 +1,3 @@
-// Defines poll input and output contracts used by polling commands.
 export type PollInput = {
   question: string;
   options: string[];

@@ -1,4 +1,3 @@
-// Coordinates gateway restart requests across supported supervisors.
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { abortPendingChannelReloads } from "../gateway/server-reload-generation.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";

@@ -228,13 +228,13 @@ export function createBlockReplyPipeline(params: {
         }
         if (delivery.source?.complete !== false) {
           sentKeys.add(dedupeKey);
-        }
-        if (isTerminalContent && delivery.source?.complete !== false) {
-          if (attempt.terminal) {
-            attempt.terminalDeliveryConfirmed = true;
+          if (isTerminalContent) {
+            if (attempt.terminal) {
+              attempt.terminalDeliveryConfirmed = true;
+            }
+            sentContentKeys.add(contentKey);
+            sentContentKeys.add(createIndexedBlockReplyContentKey(payload));
           }
-          sentContentKeys.add(contentKey);
-          sentContentKeys.add(createIndexedBlockReplyContentKey(payload));
         }
         for (const mediaUrl of reply.mediaUrls) {
           sentMediaUrls.add(mediaUrl);
@@ -379,14 +379,15 @@ export function createBlockReplyPipeline(params: {
       : [blockAttemptsByMessage.get(index) ?? []];
   };
   const normalizeSource = (text: string) => text.replace(/\s+/g, "");
+  const combinedSource = (attempts: BlockAttempt[]) =>
+    normalizeSource(attempts.map((attempt) => attempt.sourceText).join(""));
   const matchesSource = (payload: ReplyPayload, attempts: BlockAttempt[]) => {
     const reply = resolveSendableOutboundReplyParts(payload);
     return (
       !reply.hasMedia &&
       Boolean(reply.trimmedText) &&
       attempts.length > 0 &&
-      normalizeSource(attempts.map((attempt) => attempt.sourceText).join("")) ===
-        normalizeSource(reply.trimmedText)
+      combinedSource(attempts) === normalizeSource(reply.trimmedText)
     );
   };
   const hasAttemptSince = (
@@ -421,7 +422,7 @@ export function createBlockReplyPipeline(params: {
         const attempts = group.filter((attempt) => attempt.terminal);
         if (
           text &&
-          normalizeSource(attempts.map((attempt) => attempt.sourceText).join("")) === text &&
+          combinedSource(attempts) === text &&
           attempts.some((attempt) => attempt.source?.complete === false)
         ) {
           return Array.from(new Set(attempts.flatMap((attempt) => attempt.source ?? [])));
@@ -437,9 +438,7 @@ export function createBlockReplyPipeline(params: {
       for (const group of matchingAttempts(payload)) {
         const attempts = group.filter((attempt) => attempt.terminal);
         const blocked = attempts.filter(hasBlockReplyDeliveryCustody);
-        const sourcePrefix = normalizeSource(
-          attempts.map((attempt) => attempt.sourceText).join(""),
-        );
+        const sourcePrefix = combinedSource(attempts);
         if (
           blocked.some((attempt) => attempt.contentKey === contentKey) ||
           (textOnly &&

@@ -4267,6 +4267,9 @@ process.on("exit", () => {
       const nodeExecPath = resolveTestNodeExecPath();
       const env = {
         ...testHomeEnv(home),
+        TMPDIR: root,
+        TMP: root,
+        TEMP: root,
         PATH: [fakeBin, path.dirname(nodeExecPath), process.env.PATH ?? ""].join(path.delimiter),
         GIT_CONFIG_GLOBAL: "/dev/null",
         GIT_CONFIG_NOSYSTEM: "1",

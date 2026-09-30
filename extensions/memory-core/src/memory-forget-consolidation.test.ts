@@ -255,9 +255,9 @@ describe("memory forget", () => {
         const memory = await fs.readFile(memoryPath, "utf8");
         expect(memory).toContain("openclaw-memory-promotion:retired-entry");
         expect(memory).toContain(`openclaw-memory-promotion:${promoted!.key}`);
-        expect(listMemoryEntryOrigins({ agentId: "gamma", entryKeys: [promoted!.key] })).toEqual(
-          [],
-        );
+        expect(
+          await listMemoryEntryOrigins({ agentId: "gamma", entryKeys: [promoted!.key] }),
+        ).toEqual([]);
         await forgetMemoryEntries({ cfg, agentId: "gamma", sessionIds: ["private-session"] });
         expect(await fs.readFile(memoryPath, "utf8")).toContain(
           `openclaw-memory-promotion:${promoted!.key}`,
@@ -305,10 +305,10 @@ describe("memory forget", () => {
           ).map(({ value }) => value.content),
         ).toEqual([previousMemory]);
         expect(
-          listMemoryEntryOrigins({ agentId: "gamma", entryKeys: ["retired-entry"] }),
+          await listMemoryEntryOrigins({ agentId: "gamma", entryKeys: ["retired-entry"] }),
         ).toHaveLength(1);
         expect(
-          listMemoryEntryOrigins({ agentId: "gamma", entryKeys: [promoted!.key] }),
+          await listMemoryEntryOrigins({ agentId: "gamma", entryKeys: [promoted!.key] }),
         ).toMatchObject([{ entryKey: promoted!.key, sessionId: "private-session" }]);
         const report = await forgetMemoryEntries({
           cfg,
@@ -319,9 +319,9 @@ describe("memory forget", () => {
         expect(await fs.readFile(memoryPath, "utf8")).not.toContain(
           `openclaw-memory-promotion:${promoted!.key}`,
         );
-        expect(listMemoryEntryOrigins({ agentId: "gamma", entryKeys: [promoted!.key] })).toEqual(
-          [],
-        );
+        expect(
+          await listMemoryEntryOrigins({ agentId: "gamma", entryKeys: [promoted!.key] }),
+        ).toEqual([]);
         return;
       }
       if (failOrigins) {
@@ -340,7 +340,7 @@ describe("memory forget", () => {
 
       expect(applied.applied).toBe(1);
       expect(
-        listMemoryEntryOrigins({ agentId: "gamma", entryKeys: [promoted!.key] }),
+        await listMemoryEntryOrigins({ agentId: "gamma", entryKeys: [promoted!.key] }),
       ).toMatchObject([{ entryKey: promoted!.key, sessionId: "private-session" }]);
       const readBackups = () =>
         readMemoryCoreWorkspaceEntries<{ content: string }>({
@@ -374,7 +374,7 @@ describe("memory forget", () => {
       expect((await readBackups()).every(({ value }) => !value.content.includes(priorEntry))).toBe(
         true,
       );
-      expect(listMemoryEntryOrigins({ agentId: "gamma" })).toEqual([]);
+      expect(await listMemoryEntryOrigins({ agentId: "gamma" })).toEqual([]);
       const diary = await fs.readFile(diaryPath, "utf8");
       expect.soft(diary).not.toContain(priorEntry);
       expect.soft(diary).not.toContain(snippet);

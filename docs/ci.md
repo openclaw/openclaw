@@ -35,7 +35,9 @@ fail-fast. Main and manual runs retain complete matrices. See
 
 First-hop compatibility uses a 3,200-second container budget and a 3,500-second lane
 budget, based on hosted 4-vCPU measurements with a slow-host margin. The release
-self-upgrade job allows 130 minutes for two waves of six source versions plus setup.
+self-upgrade job gives first-hop lanes weight two at npm limit five, admitting at
+most two concurrently. It allows 210 minutes for three waves of six source versions,
+the survivor, and setup.
 Authenticated update restart uses a 2,280-second container budget, a 43-minute lane
 budget, and a lane-specific 1,500-second command timeout. Its OpenAI/recovery chunk
 allows 160 minutes for the npm-serialized lanes plus setup; see
@@ -60,7 +62,7 @@ The [Testbox check workflow](/ci/local-proof#testbox-validation) requests the Bl
 
 Full GitHub and hybrid type checks run the five core stripes independently, retaining two compiler children per job. The last four rows then each run one root-test partition serially, leaving extension tests and scripts in the central row. Narrow plans reuse four already-selected rows when available; smaller selections retain central root checking. This adds no jobs or compiler overlap. Current hybrid full runs use three hosted extension-lint jobs; targeted layouts retain six stripe identities. Trusted hybrid first attempts place both packed core-lint rows on the Blacksmith 16-class and the final gate on the 4-class to avoid serial hosted assignment delays. Frozen targets keep their earlier layout; see [static checks](/ci/runners#runner-backend-modes).
 
-Additional checks start directly after preflight. Known full compiler selections skip discovery while retaining the core graph boundary in an existing required owner; see [pipeline ordering](/ci/pipeline#fail-fast-order).
+Additional checks and narrow-PR dependency scans start directly after preflight. Known full compiler selections skip discovery while retaining the core graph boundary in an existing required owner; see [pipeline ordering](/ci/pipeline#fail-fast-order).
 
 The extension package boundary row has a 30-minute job budget for SDK preparation,
 all selected plugin compiles, input-receipt validation, the required negative

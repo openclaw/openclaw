@@ -302,6 +302,9 @@ export const validateSessionSuggestionsResolveParams = compile(
   S.SessionSuggestionsResolveParamsSchema,
 );
 export const validateSessionTypingParams = compile(S.SessionTypingParamsSchema);
+export const validateSessionReactionsSetParams = compile(S.SessionReactionsSetParamsSchema);
+export const validateSessionReactionsListParams = compile(S.SessionReactionsListParamsSchema);
+export const validateSessionReactionEvent = compile(S.SessionReactionEventSchema);
 export const validateSessionsCreateParams = compile(S.SessionsCreateParamsSchema);
 export const validateSessionsTitlePrepareParams = compile(S.SessionsTitlePrepareParamsSchema);
 export const validateSessionsRecoverParams = compile(S.SessionsRecoverParamsSchema);

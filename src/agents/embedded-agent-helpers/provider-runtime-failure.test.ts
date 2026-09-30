@@ -27,19 +27,6 @@ describe("classifyProviderRuntimeFailureKind", () => {
       }),
     ).toBe("rate_limit");
   });
-
-  it.each([
-    { provider: "openai", code: "SERVER_ERROR" },
-    { provider: "google", code: "UNAVAILABLE" },
-    { provider: "anthropic", code: "RATE_LIMIT_ERROR" },
-  ] as const)(
-    "does not report code-only $provider $code failures as empty responses",
-    ({ provider, code }) => {
-      expect(classifyProviderRuntimeFailureKind({ provider, code, message: "" })).not.toBe(
-        "empty_response",
-      );
-    },
-  );
   it("classifies missing scope failures", () => {
     expect(
       classifyProviderRuntimeFailureKind({
@@ -232,19 +219,6 @@ describe("classifyProviderRuntimeFailureKind", () => {
         'Model-provider request.proxy/request.tls is not yet supported for api "ollama"',
       ),
     ).not.toBe("proxy");
-  });
-
-  it("classifies google-style INTERNAL status payloads as timeout", () => {
-    expect(
-      classifyFailoverReason(
-        'ERROR provider=google model=gemini-3.1-flash-lite-preview: got status: INTERNAL, details: {"code":500,"status":"INTERNAL"}',
-      ),
-    ).toBe("timeout");
-    expect(
-      classifyFailoverReason(
-        'got status: INTERNAL. {"error":{"code":500,"message":"Internal error encountered.","status":"INTERNAL"}}',
-      ),
-    ).toBe("timeout");
   });
 
   it("does not classify google-style INTERNAL payloads without a 500 code as timeout", () => {

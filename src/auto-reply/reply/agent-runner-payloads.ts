@@ -54,17 +54,13 @@ async function normalizeSentMediaUrlsForDedupe(params: {
     return [...params.sentMediaUrls];
   }
 
-  const normalizedUrls: string[] = [];
-  const seen = new Set<string>();
+  const normalizedUrls = new Set<string>();
   for (const raw of params.sentMediaUrls) {
     const trimmed = raw.trim();
     if (!trimmed) {
       continue;
     }
-    if (!seen.has(trimmed)) {
-      seen.add(trimmed);
-      normalizedUrls.push(trimmed);
-    }
+    normalizedUrls.add(trimmed);
     try {
       const normalized = await params.normalizeMediaPaths({
         mediaUrl: trimmed,
@@ -73,18 +69,16 @@ async function normalizeSentMediaUrlsForDedupe(params: {
       const normalizedMediaUrls = resolveSendableOutboundReplyParts(normalized).mediaUrls;
       for (const mediaUrl of normalizedMediaUrls) {
         const candidate = mediaUrl.trim();
-        if (!candidate || seen.has(candidate)) {
-          continue;
+        if (candidate) {
+          normalizedUrls.add(candidate);
         }
-        seen.add(candidate);
-        normalizedUrls.push(candidate);
       }
     } catch (err) {
       logVerbose(`messaging tool sent-media normalization failed: ${String(err)}`);
     }
   }
 
-  return normalizedUrls;
+  return [...normalizedUrls];
 }
 
 function shouldKeepPayloadDuringSilentTurn(payload: ReplyPayload): boolean {
