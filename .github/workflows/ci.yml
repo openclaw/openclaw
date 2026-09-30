@@ -2403,7 +2403,8 @@ jobs:
             export OPENCLAW_VITEST_INCLUDE_FILE
           fi
           config=test/vitest/vitest.ui-e2e-prebuilt.config.ts
-          # Fall back only for old frozen targets; existing configs must pass readiness.
+          # Old frozen targets retain their own serial config and complete test list.
+          # A present config's readiness failure must fail this invocation.
           if [[ ! -f "$config" ]]; then
             if [[ "$FROZEN_TARGET" != "true" ]]; then
               echo "::error::Current target is missing $config" >&2
@@ -2411,7 +2412,7 @@ jobs:
             fi
             config=test/vitest/vitest.ui-e2e.config.ts
           fi
-          # Frozen targets keep their reporter defaults.
+          # Frozen targets retain their own reporter implementation and defaults.
           reporter_args=()
           if [[ "$FROZEN_TARGET" != "true" ]]; then
             reporter_args=(--reporter verbose --reporter github-actions --reporter default --reporter ./scripts/lib/vitest-resource-reporter.mts)
