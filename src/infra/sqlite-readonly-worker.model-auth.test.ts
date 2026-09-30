@@ -1,8 +1,13 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { getRuntimeAuthProfileStoreMutationRevisionAtDatabasePath } from "../agents/auth-profiles/mutation-lineage.js";
+import { overlayRuntimeExternalOAuthProfiles } from "../agents/auth-profiles/oauth-shared.js";
 import * as authPathResolve from "../agents/auth-profiles/path-resolve.js";
+import { markAuthProfileSuccess } from "../agents/auth-profiles/profiles.js";
 import {
+  getRuntimeAuthProfileStoreMetadataRevision,
+  getRuntimeAuthProfileStoreSnapshotCore,
   getRuntimeAuthProfileStoreSnapshotRevisionAtDatabasePath,
   setRuntimeAuthProfileStoreSnapshot,
 } from "../agents/auth-profiles/runtime-snapshots.js";
@@ -11,7 +16,10 @@ import {
   resolveAuthProfileDatabasePath,
   writePersistedAuthProfileStoreRaw,
 } from "../agents/auth-profiles/sqlite.js";
-import { loadAuthProfileStoreForRuntimeAsync } from "../agents/auth-profiles/store-runtime.js";
+import {
+  loadAuthProfileStoreForRuntimeAsync,
+  loadAuthProfileStoreWithoutExternalProfiles,
+} from "../agents/auth-profiles/store-runtime.js";
 import { withAuthProfileStoreAgentDir } from "../agents/auth-profiles/store.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { persistAuthProfileBatch } from "../agents/auth-profiles/upsert-with-lock.js";
@@ -21,20 +29,26 @@ import {
 } from "../agents/embedded-agent-runner/model.js";
 import type { ProviderRuntimeHooks } from "../agents/embedded-agent-runner/model.provider-hooks.js";
 import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
+import { redactRegisteredSecretValues } from "../logging/secret-redaction-registry.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { openClawStateDatabaseCache } from "../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { createSqliteWorkerBackend } from "../state/openclaw-state.worker.js";
+import { connectUserModelAccount } from "../state/user-model-accounts.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "./kysely-sync-cache-state.js";
 import * as sqliteWorker from "./sqlite-readonly-worker.js";
+import { SQLITE_WORKER_PREPARE_COMMAND } from "./sqlite-worker-contract.js";
 import { runWithSqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
+import { readUpdateDatabaseGenerationsIsolated } from "./update-candidate-state.js";
 
 const PROVIDER = "auth-runtime-fixture";
 const PROFILE_ID = `${PROVIDER}:default`;
@@ -45,6 +59,18 @@ function fixtureStore(key: string): AuthProfileStore {
     version: 1,
     profiles: { [PROFILE_ID]: { type: "api_key", provider: PROVIDER, key } },
   };
+}
+
+function personalAccountFixture() {
+  const key = randomUUID();
+  const owner = ensureProfileForEmail(`personal-${key}@example.test`);
+  const credential = { type: "api_key" as const, provider: PROVIDER, key };
+  const { authProfileId } = connectUserModelAccount({
+    ownerProfileId: owner.id,
+    credential,
+    assertCurrent: () => {},
+  });
+  return { authProfileId, credential };
 }
 
 function modelResolver(state: OpenClawTestState, options?: { automatic: boolean }) {
@@ -85,6 +111,49 @@ function modelResolver(state: OpenClawTestState, options?: { automatic: boolean 
 }
 
 describe("model resolution auth row snapshots", () => {
+  it("loads the selected personal account through the real worker and redacts its host result", async () => {
+    await withOpenClawTestState({ label: "model-auth-personal-worker" }, async (state) => {
+      await state.writeAuthProfiles(fixtureStore("fixture-shared"));
+      const { authProfileId, credential } = personalAccountFixture();
+      const redact = () => redactRegisteredSecretValues(credential.key, () => "[redacted]");
+      expect(redact()).toBe(credential.key);
+
+      const store = await loadAuthProfileStoreForRuntimeAsync(state.agentDir(), {
+        profileId: authProfileId,
+        inheritedAuthDir: state.agentDir(),
+        readOnly: true,
+        allowKeychainPrompt: false,
+        externalCli: { mode: "none" },
+      });
+
+      expect(store.profiles[authProfileId]).toMatchObject(credential);
+      expect(store.profiles[PROFILE_ID]).toMatchObject({ key: "fixture-shared" });
+      expect(redact()).toBe("[redacted]");
+    });
+  });
+
+  it("drains an admitted personal read before closing its maintenance owner and rejects reuse", async () => {
+    await withOpenClawTestState({ label: "model-auth-personal-maintenance" }, async () => {
+      const { authProfileId, credential } = personalAccountFixture();
+      const scope = createOpenClawDatabaseMaintenanceScope();
+      const context = scope.run(() => captureOpenClawStateWorkerContext());
+      const loading = scope.run(() =>
+        sqliteRead.readUserModelAuthProfileAsync(authProfileId, context),
+      );
+      const closing = scope.close();
+      try {
+        await expect(loading).resolves.toMatchObject({ credential });
+        await closing;
+        await expect(
+          sqliteRead.readUserModelAuthProfileAsync(authProfileId, context),
+        ).rejects.toThrow(/scope is closed|admission is closed/);
+      } finally {
+        await Promise.allSettled([loading, closing]);
+        await scope.close();
+      }
+    });
+  });
+
   it.each(["row", "cache proof"])("evicts a shared handle after %s corruption", async (stage) => {
     await withOpenClawTestState({ label: "model-auth-query-corruption" }, async (state) => {
       await persistAuthProfileBatch({
@@ -120,6 +189,9 @@ describe("model resolution auth row snapshots", () => {
         return prepare(sql);
       });
       try {
+        await runWithSqliteWorkerStateContext(context, () =>
+          backend[SQLITE_WORKER_PREPARE_COMMAND]?.("authProfiles.read"),
+        );
         const rows = await runWithSqliteWorkerStateContext(context, () =>
           backend.execute({ type: "authProfiles.read", input: { artifactPreserving: false } }),
         );
@@ -180,9 +252,21 @@ describe("model resolution auth row snapshots", () => {
           try {
             const resolve = modelResolver(state);
             expect((await resolve()).model?.name).toBe(`${PROFILE_ID}:api_key`);
+            const beforePublication = await readUpdateDatabaseGenerationsIsolated([databasePath], {
+              env: state.env,
+            });
             fs.writeSync(sharedMemory, committedHeader, 0, committedHeader.length, 0);
             expect(walStamp()).toEqual(writtenWal);
+            const afterPublication = await readUpdateDatabaseGenerationsIsolated([databasePath], {
+              env: state.env,
+            });
+            expect(afterPublication[databasePath]).not.toBe(beforePublication[databasePath]);
+            expect(afterPublication[databasePath]).toMatch(/^[a-f0-9]{64}$/u);
             expect((await resolve()).model?.name).toBe(`${PROFILE_ID}:token`);
+            fs.writeSync(sharedMemory, previousHeader, 0, 48, 0);
+            await expect(
+              readUpdateDatabaseGenerationsIsolated([databasePath], { env: state.env }),
+            ).rejects.toThrow(/WAL commit header is unavailable or changing/);
           } finally {
             fs.writeSync(sharedMemory, committedHeader, 0, committedHeader.length, 0);
           }
@@ -201,8 +285,12 @@ describe("model resolution auth row snapshots", () => {
     { change: "usage", cached: true, published: false },
     { change: "usage", cached: false, published: true },
     { change: "usage", cached: true, published: true },
+    { change: "usage", cached: false, published: "during" },
+    { change: "usage", cached: true, published: "during" },
     { change: "order", cached: true, published: false },
     { change: "disabled", cached: false, published: false },
+    { change: "order", cached: true, published: "during" },
+    { change: "disabled", cached: false, published: "during" },
     { change: "unrelated-order", cached: true, published: false },
   ] as const)(
     "handles concurrent $change changes (cached=$cached, published=$published)",
@@ -220,10 +308,8 @@ describe("model resolution auth row snapshots", () => {
         if (change === "unrelated-order") {
           await state.writeAuthProfiles(store, "other");
         }
-        if (published) {
+        if (published === true) {
           setRuntimeAuthProfileStoreSnapshot(store, state.agentDir());
-          // Materialize the published view through its persistence owner before the race.
-          await state.writeAuthProfiles(store);
         }
         const resolve = modelResolver(state, { automatic: true });
         if (cached) {
@@ -260,6 +346,9 @@ describe("model resolution auth row snapshots", () => {
               throw new Error("Model resolution completed before the usage-write barrier");
             }),
           ]);
+          if (published === "during") {
+            setRuntimeAuthProfileStoreSnapshot(store, state.agentDir());
+          }
           const updated: AuthProfileStore =
             change === "order" || change === "unrelated-order"
               ? { ...store, order: { [PROVIDER]: [fallbackProfileId, PROFILE_ID] } }
@@ -293,6 +382,86 @@ describe("model resolution auth row snapshots", () => {
       });
     },
   );
+
+  it("preserves authoritative empty external auth during a successful inherited usage write", async () => {
+    await withOpenClawTestState(
+      { label: "model-auth-empty-external-publication" },
+      async (state) => {
+        const store = fixtureStore("fixture-original");
+        await persistAuthProfileBatch({
+          stateDir: state.stateDir,
+          profiles: [{ profileId: PROFILE_ID, credential: store.profiles[PROFILE_ID]! }],
+        });
+        for (const agentDir of [undefined, state.agentDir()]) {
+          setRuntimeAuthProfileStoreSnapshot(
+            overlayRuntimeExternalOAuthProfiles(
+              loadAuthProfileStoreWithoutExternalProfiles(agentDir),
+              [],
+              {
+                runtimeExternalProfileIdsAuthoritative: true,
+              },
+            ),
+            agentDir,
+          );
+        }
+        const before = getRuntimeAuthProfileStoreSnapshotCore(state.agentDir())!;
+        const revision = getRuntimeAuthProfileStoreMetadataRevision(state.agentDir());
+        const databasePath = resolveAuthProfileDatabasePath(state.agentDir());
+        const rowsRevision = getRuntimeAuthProfileStoreSnapshotRevisionAtDatabasePath(databasePath);
+        const entered = createDeferredCore();
+        const resume = createDeferredCore();
+        const prepare = sqliteRead.prepareAgentAuthProfileRowsRead;
+        const read = vi
+          .spyOn(sqliteRead, "prepareAgentAuthProfileRowsRead")
+          .mockImplementation((options) => {
+            const reader = prepare(options);
+            return options.databasePath === databasePath
+              ? {
+                  ...reader,
+                  read: async () => {
+                    const rows = await reader.read();
+                    entered.resolve();
+                    await resume.promise;
+                    return rows;
+                  },
+                }
+              : reader;
+          });
+        const loading = modelResolver(state)();
+        try {
+          await Promise.race([
+            entered.promise,
+            loading.then(() => {
+              throw new Error("Model resolution completed before the publication barrier");
+            }),
+          ]);
+          await markAuthProfileSuccess({
+            store: before,
+            provider: PROVIDER,
+            profileId: PROFILE_ID,
+            agentDir: state.agentDir(),
+          });
+          resume.resolve();
+          await expect(loading).resolves.toMatchObject({
+            model: { name: `${PROFILE_ID}:api_key` },
+          });
+          const published = getRuntimeAuthProfileStoreSnapshotCore(state.agentDir())!;
+          expect(published.profiles).toEqual(before.profiles);
+          expect(published.runtimeExternalProfileIds).toEqual([]);
+          expect(published.runtimeExternalProfileIdsAuthoritative).toBe(true);
+          expect(published.usageStats?.[PROFILE_ID]?.lastProbeAt).toEqual(expect.any(Number));
+          expect(getRuntimeAuthProfileStoreMetadataRevision(state.agentDir())).toBe(revision);
+          expect(
+            getRuntimeAuthProfileStoreSnapshotRevisionAtDatabasePath(databasePath),
+          ).toBeGreaterThan(rowsRevision);
+        } finally {
+          resume.resolve();
+          await Promise.allSettled([loading]);
+          read.mockRestore();
+        }
+      },
+    );
+  });
 
   it("reads unchanged credentials once across turns and observes published rotation and addition", async () => {
     await withOpenClawTestState({ label: "model-auth-row-snapshot" }, async (state) => {
@@ -330,12 +499,13 @@ describe("model resolution auth row snapshots", () => {
     });
   });
 
-  it("observes same-file writes that do not publish a runtime revision", async () => {
+  it("observes external same-file writes at the fixed identity-probe boundary", async () => {
     await withOpenClawTestState({ label: "model-auth-row-external-write" }, async (state) => {
       await state.writeAuthProfiles(fixtureStore("fixture-original"));
       const read = vi.spyOn(sqliteWorker, "runSqliteReadOnlyWorker");
       const databasePath = resolveAuthProfileDatabasePath(state.agentDir());
       const resolve = modelResolver(state);
+      const clock = vi.spyOn(performance, "now").mockReturnValue(0);
       try {
         expect((await resolve()).model?.name).toBe(`${PROFILE_ID}:api_key`);
         const inode = fs.statSync(databasePath).ino;
@@ -359,6 +529,11 @@ describe("model resolution auth row snapshots", () => {
         expect(getRuntimeAuthProfileStoreMutationRevisionAtDatabasePath(databasePath)).toBe(
           mutationRevision,
         );
+        expect((await resolve()).model?.name).toBe(`${PROFILE_ID}:api_key`);
+        clock.mockReturnValue(99);
+        expect((await resolve()).model?.name).toBe(`${PROFILE_ID}:api_key`);
+        expect(read.mock.calls.filter(([pathname]) => pathname === databasePath)).toHaveLength(1);
+        clock.mockReturnValue(100);
         expect((await resolve()).model?.name).toBe(`${PROFILE_ID}:token`);
         const current = await loadAuthProfileStoreForRuntimeAsync(state.agentDir(), {
           readOnly: true,
@@ -370,6 +545,7 @@ describe("model resolution auth row snapshots", () => {
           .soft(read.mock.calls.filter(([pathname]) => pathname === databasePath))
           .toHaveLength(2);
       } finally {
+        clock.mockRestore();
         read.mockRestore();
       }
     });

@@ -50,7 +50,6 @@ export function createResult(
     lastToolError?: AgentHarnessAttemptResult["lastToolError"];
     messagesSnapshot: AgentMessage[];
     nativeReplayInvalid?: boolean;
-    now: () => number;
     promptError: Error | undefined;
     resumeFailureRecovered?: boolean;
     sdkSessionId?: string;
@@ -243,7 +242,12 @@ export async function createMessageOptions(
     workspaceOnly: boolean;
   },
 ): Promise<MessageOptions> {
-  const attachments = createPromptImageAttachments(await resolvePromptImages(params, context));
+  const attachments = (await resolvePromptImages(params, context)).map((image, index) => ({
+    type: "blob" as const,
+    data: image.data,
+    mimeType: image.mimeType,
+    displayName: `prompt-image-${index + 1}`,
+  }));
   const providerHeaders = context.provider.provider?.headers;
   const requestHeaders =
     providerHeaders && Object.keys(providerHeaders).length > 0 ? { ...providerHeaders } : undefined;
@@ -253,29 +257,6 @@ export async function createMessageOptions(
     ...(requestHeaders ? { requestHeaders } : {}),
   };
 }
-function createPromptImageAttachments(
-  images: unknown[],
-): NonNullable<MessageOptions["attachments"]> {
-  return images.flatMap((image, index) => {
-    if (
-      !image ||
-      typeof image !== "object" ||
-      (image as { type?: unknown }).type !== "image" ||
-      typeof (image as { data?: unknown }).data !== "string" ||
-      typeof (image as { mimeType?: unknown }).mimeType !== "string"
-    ) {
-      return [];
-    }
-    return [
-      {
-        type: "blob" as const,
-        data: (image as { data: string }).data,
-        mimeType: (image as { mimeType: string }).mimeType,
-        displayName: `prompt-image-${index + 1}`,
-      },
-    ];
-  });
-}
 async function resolvePromptImages(
   params: AttemptParamsLike,
   context: {
@@ -284,7 +265,7 @@ async function resolvePromptImages(
     sandbox: SandboxContext | null;
     workspaceOnly: boolean;
   },
-): Promise<unknown[]> {
+) {
   const workspaceDir =
     context.effectiveCwd ??
     context.effectiveWorkspaceDir ??

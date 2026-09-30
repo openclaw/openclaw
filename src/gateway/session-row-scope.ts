@@ -2,6 +2,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import { resolveGatewaySessionStoreTargets } from "../config/sessions/combined-store-gateway.js";
+import type { GatewaySessionStoreDiscovery } from "../config/sessions/combined-store-paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import * as records from "./session-row-projection-record.js";
@@ -62,10 +63,12 @@ export function selectMatchingSessionRows<T extends SessionRowScopeTarget>(
       : query.agentId
         ? byAgent.get(query.agentId)
         : rows.keys();
+  if (!candidates) {
+    return [];
+  }
   const matches = createSessionRowScopeMatcher(query, scope);
-  const ids = Array.from(candidates ?? []);
   const selected: T[] = [];
-  for (const id of ids) {
+  for (const id of candidates) {
     const row = rows.get(id);
     if (row !== undefined && matches(row)) {
       selected.push(row);
@@ -79,6 +82,7 @@ export function prepareSessionRowScopes(
   cfg: OpenClawConfig,
   agentIds: Iterable<string>,
   residentPaths: ReadonlyMap<string, string>,
+  discovery?: GatewaySessionStoreDiscovery,
 ) {
   const residentPath = (pathname: string) => residentPaths.get(pathname) ?? pathname;
   const filenames = new Map([...residentPaths].map(([filename, locator]) => [locator, filename]));
@@ -87,6 +91,7 @@ export function prepareSessionRowScopes(
     try {
       const resolved = resolveGatewaySessionStoreTargets(cfg, {
         ...options,
+        discovery,
         includeIncognito: false,
       });
       for (const [identity, physical] of resolved.physicalTargets) {
@@ -145,7 +150,8 @@ export function prepareSessionRowScopes(
   return {
     select,
     physicalPaths(locator: string, agentId?: string) {
-      const normalized = residentPath(path.resolve(locator));
+      // Resident physical locators were normalized when the topology was prepared.
+      const normalized = filenames.has(locator) ? locator : residentPath(path.resolve(locator));
       const owners = aliases.get(normalized);
       return agentId
         ? [owners?.get(normalizeAgentId(agentId)) ?? normalized]
@@ -167,6 +173,7 @@ export function selectSessionRowEntries(
     dirty: ReadonlySet<string>;
     matching: (query: records.Query, kind?: string) => records.Row[];
     acquire: (row: records.Row) => records.Row | undefined;
+    referenced: (reference: string) => records.Row | undefined;
   },
   query: records.Query,
 ) {
@@ -175,21 +182,34 @@ export function selectSessionRowEntries(
   const parent = query.parentSessionKey;
   const owner = parent && parseAgentSessionKey(parent)?.agentId;
   const agents = owner ? [owner] : query.agentId ? [query.agentId] : byAgent.keys();
-  const children = new Set<string>();
+  const childKeys = new Set<string>();
   if (parent) {
-    for (const ref of [
-      ...[...agents].map((agentId) => records.parentReference(cfg, parent, agentId)),
-      ...matching({ ...query, key: parent }).map((row) =>
-        records.physical(row.storeTarget.storePath, parent),
-      ),
-    ]) {
+    const sentinel = parent === "global" || parent === "unknown";
+    const references = sentinel
+      ? byParent.keys()
+      : [
+          ...[...agents].map((agentId) =>
+            records.parentReference(cfg, parent, agentId, undefined, params.referenced),
+          ),
+          ...matching({ ...query, key: parent }).map((row) =>
+            records.physical(row.storeTarget.storePath, parent),
+          ),
+        ];
+    for (const ref of references) {
+      // Sentinels retain physical and cross-agent alias links even without a parent row.
+      if (sentinel && ref.slice(ref.indexOf("\0") + 1) !== parent) {
+        continue;
+      }
       for (const id of byParent.get(ref) ?? []) {
-        children.add(id);
+        const row = rows.get(id);
+        if (row) {
+          childKeys.add(row.key);
+        }
       }
     }
   }
   const sessionIdOrKey = query.sessionIdOrKey;
-  let keys: Set<string> | undefined;
+  let keys: Set<string> | undefined = parent ? childKeys : undefined;
   if (sessionIdOrKey) {
     // Broad publications can change IDs before the resident index has caught up.
     for (const id of dirty) {
@@ -201,18 +221,23 @@ export function selectSessionRowEntries(
     const indexed = { ...query, key: sessionIdOrKey };
     keys = new Set([...matching(indexed, "id"), ...matching(indexed)].map((row) => row.key));
   }
-  // Keep every physical competitor; federation precedes ID and visibility filtering.
+  // Keep every physical competitor; federation precedes ID, parent, and visibility filtering.
   const candidates = keys
     ? [...keys].flatMap((key) => matching({ ...query, key }))
-    : parent
-      ? [...children].map((id) => rows.get(id))
-      : matching(query);
+    : matching(query);
   const acquired =
     sessionIdOrKey || dirty.size === 0
       ? candidates
       : candidates.map((row) => (row && dirty.has(records.identity(row)) ? acquire(row) : row));
-  const selected = acquired.filter(
-    (row): row is records.EntryRow => records.hasEntry(row) && matches(row),
-  );
-  return records.sort(selected, query.sortBy);
+  // Each candidate path returns an owned array. Finish all acquisitions before
+  // compacting it, since acquiring one dirty row can update another row's facts.
+  let selectedCount = 0;
+  acquired.forEach((row) => {
+    if (records.hasEntry(row) && matches(row)) {
+      acquired[selectedCount++] = row;
+    }
+  });
+  acquired.length = selectedCount;
+  // SAFETY: The compacted prefix contains only rows accepted by records.hasEntry.
+  return records.sort(acquired as records.EntryRow[], query.sortBy);
 }

@@ -4,15 +4,17 @@ import {
   WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES,
 } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import {
+  getAdmittedRunDelegatedAuthority,
+  readAdmittedRunOperatorAuthority,
   resolvePreparedRunAdmission,
   resolveAdmittedRunActiveAssertion,
-  type AdmittedRunContext,
 } from "../../agents/admitted-run-context.js";
 import {
   isDefaultAgentRuntimeId,
   normalizeOptionalAgentRuntimeId,
   OPENCLAW_AGENT_RUNTIME_ID,
 } from "../../agents/agent-runtime-id.js";
+import { bindActiveOperatorTurnAuthority } from "../../agents/cron-creator-authority-context.js";
 import {
   buildUsageAgentMetaFields,
   resolveFinalAssistantRawText,
@@ -24,9 +26,11 @@ import {
   mergeUsageIntoAccumulator,
 } from "../../agents/embedded-agent-runner/usage-accumulator.js";
 import { resolveDefaultModelForAgent } from "../../agents/model-selection-config.js";
+import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
+import { capturePresenceToolAuthority } from "../../agents/tools/presence-tool-authority.js";
 import { hasNonzeroUsage, normalizeUsage } from "../../agents/usage.js";
 import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import type { WorkerLaunchPlan } from "../../worker/launch-descriptor.js";
@@ -39,8 +43,10 @@ import {
   toWorkerTranscriptMessage,
   type WorkerProviderReplayUnavailable,
 } from "../../worker/transcript-message.js";
-import { parseWorkerRuntimeResult } from "../../worker/worker-process-protocol.js";
-import type { WorkerRuntimeResult } from "../../worker/worker.runtime.js";
+import {
+  parseWorkerRuntimeResult,
+  type WorkerRuntimeResult,
+} from "../../worker/worker-process-protocol.js";
 import {
   measureAgentRuntimeIdentityTokenBytes,
   mintAgentRuntimeIdentityToken,
@@ -48,7 +54,10 @@ import {
 } from "../agent-runtime-identity-token.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
-import { bindWorkerTurnOwner } from "./placement-turn-claim-events.js";
+import {
+  bindWorkerTurnOwner,
+  type WorkerTurnPromptCacheContext,
+} from "./placement-turn-claim-events.js";
 
 type WorkerInitialMessagePlan =
   | { kind: "complete"; messages: WorkerTranscriptMessage[] }
@@ -57,46 +66,16 @@ type WorkerInitialMessagePlan =
       details: WorkerProviderReplayUnavailable | WorkerReplayMessageWindowUnavailable;
     };
 
-function buildWorkerAgentRuntimeIdentity(params: {
-  admittedRunContext: AdmittedRunContext;
+type PrepareWorkerAgentRuntimeIdentityParams = {
   agentId: string;
   sessionKey: string;
-  turn: Pick<
-    SessionPlacementTurnParams,
-    | "agentAccountId"
-    | "currentChannelId"
-    | "currentMessagingTarget"
-    | "currentThreadTs"
-    | "gatewayUiCommandTarget"
-    | "messageChannel"
-    | "messageProvider"
-  >;
   turnClaim: WorkerSessionTurnClaim;
-}): AgentRuntimeIdentityTokenParams {
-  const { turn } = params;
-  // Worker-local process keys isolate ephemeral state only. The signed caller
-  // identity retains the host-owned session and route used by approvals.
-  return {
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-    operationalRunInstance: params.admittedRunContext.operationalRunInstance,
-    executionIdentityToken: params.admittedRunContext.executionIdentityToken,
-    turnSourceChannel: turn.messageChannel ?? turn.messageProvider,
-    turnSourceTo: turn.currentMessagingTarget ?? turn.currentChannelId,
-    turnSourceAccountId: turn.agentAccountId,
-    turnSourceThreadId: turn.currentThreadTs,
-    gatewayUiCommandTarget: turn.gatewayUiCommandTarget,
-    workerTurnClaim: params.turnClaim,
-  };
-}
-
-type PrepareWorkerAgentRuntimeIdentityParams = Omit<
-  Parameters<typeof buildWorkerAgentRuntimeIdentity>[0],
-  "admittedRunContext" | "turn"
-> & {
   runtimeInstanceId: string;
   turn: SessionPlacementTurnParams;
   placements: WorkerSessionPlacementStore;
+  sessionTarget: BoundAgentRunSessionTarget;
+  promptCacheContext: WorkerTurnPromptCacheContext;
+  assertSourceCurrent: () => void;
 };
 
 export async function prepareWorkerAgentRuntimeIdentity(
@@ -109,30 +88,63 @@ export async function prepareWorkerAgentRuntimeIdentity(
     admittedRunContext: params.turn.admittedRunContext,
     preparedRunAdmission: params.turn.preparedRunAdmission,
   });
-  const assertActive = resolveAdmittedRunActiveAssertion(
+  const assertAdmittedActive = resolveAdmittedRunActiveAssertion(
     admittedRunContext,
     params.turn.abortSignal,
   );
-  if (!assertActive) {
+  if (!assertAdmittedActive) {
     throw new Error("Worker turn has no active admitted execution authority");
   }
-  assertActive();
-  const runtimeIdentity = buildWorkerAgentRuntimeIdentity({ ...params, admittedRunContext });
+  const assertActive = () => {
+    params.assertSourceCurrent();
+    assertAdmittedActive();
+  };
+  assertAdmittedActive();
+  const operatorAuthority = readAdmittedRunOperatorAuthority(admittedRunContext);
+  const assertPresenceSourceCurrent = capturePresenceToolAuthority({
+    runId: params.turn.runId,
+    ownerAuthority: bindActiveOperatorTurnAuthority(params.turn.runId),
+    operatorAuthority,
+    delegatedAuthority: getAdmittedRunDelegatedAuthority(admittedRunContext),
+    assertCurrent: assertActive,
+  });
   // Stop closes the operational run before its placement claim finishes draining.
   // Worker tools must retain both owners even when audit collection is disabled.
-  const takeFinishingOutcome = bindWorkerTurnOwner(
+  const { capability, takeFinishingOutcome } = await bindWorkerTurnOwner(
     params.placements,
     params.turnClaim,
-    runtimeIdentity.executionIdentityToken,
+    admittedRunContext.executionIdentityToken,
     admittedRunContext.operationalRunInstance,
-    { agentId: params.agentId, sessionKey: params.sessionKey },
+    params.sessionTarget,
     assertActive,
     params.turn.prepareAssistantTranscriptMessage,
+    operatorAuthority,
+    assertPresenceSourceCurrent,
+    params.promptCacheContext,
   );
+  capability.receiptAuthority();
+  // Worker-local process keys isolate ephemeral state only. The signed caller
+  // identity retains the host-owned session and route used by approvals.
+  const runtimeIdentity = await capability.run((owner) => {
+    const { turn } = params;
+    return {
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      operationalRunInstance: admittedRunContext.operationalRunInstance,
+      executionIdentityToken: admittedRunContext.executionIdentityToken,
+      turnSourceChannel: turn.messageChannel ?? turn.messageProvider,
+      turnSourceTo: turn.currentMessagingTarget ?? turn.currentChannelId,
+      turnSourceAccountId: turn.agentAccountId,
+      turnSourceThreadId: turn.currentThreadTs,
+      gatewayUiCommandTarget: turn.gatewayUiCommandTarget,
+      workerTurnClaim: owner.turnClaim,
+      approvalAuthority: owner.delegatedAuthority,
+    } satisfies AgentRuntimeIdentityTokenParams;
+  });
   return {
     operationalRunInstance: admittedRunContext.operationalRunInstance,
     runtimeIdentity,
-    assertActive,
+    assertActive: capability.receiptAuthority,
     takeFinishingOutcome,
   };
 }
@@ -265,13 +277,6 @@ export function parseRuntimeResult(stdout: string): StartedWorkerRuntimeResult {
   return result;
 }
 
-export function assistantText(message: AgentMessage): string {
-  if (message.role !== "assistant") {
-    return "";
-  }
-  return message.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("");
-}
-
 export function buildWorkerTurnResult(params: {
   messages: AgentMessage[];
   modelRef: { provider: string; model: string };
@@ -329,22 +334,6 @@ export function buildWorkerTurnResult(params: {
   };
 }
 
-function resolveTurnModelRef(params: SessionPlacementTurnParams): {
-  provider: string;
-  model: string;
-} {
-  const explicitProvider = params.provider?.trim();
-  const explicitModel = params.model?.trim();
-  const defaults =
-    explicitProvider && explicitModel
-      ? undefined
-      : resolveDefaultModelForAgent({ cfg: params.config ?? {}, agentId: params.agentId });
-  return {
-    provider: explicitProvider ?? defaults?.provider ?? "",
-    model: explicitModel ?? defaults?.model ?? "",
-  };
-}
-
 export function assertSupportedTurn(params: SessionPlacementTurnParams): {
   provider: string;
   model: string;
@@ -352,7 +341,16 @@ export function assertSupportedTurn(params: SessionPlacementTurnParams): {
   if (params.clientTools?.length) {
     throw new Error("Cloud worker turns do not support client-provided tools");
   }
-  const modelRef = resolveTurnModelRef(params);
+  const explicitProvider = params.provider?.trim();
+  const explicitModel = params.model?.trim();
+  const defaults =
+    explicitProvider && explicitModel
+      ? undefined
+      : resolveDefaultModelForAgent({ cfg: params.config ?? {}, agentId: params.agentId });
+  const modelRef = {
+    provider: explicitProvider ?? defaults?.provider ?? "",
+    model: explicitModel ?? defaults?.model ?? "",
+  };
   const explicitRuntime =
     normalizeOptionalAgentRuntimeId(params.agentHarnessId) ??
     normalizeOptionalAgentRuntimeId(params.agentHarnessRuntimeOverride);

@@ -1,4 +1,5 @@
 import {
+  type AdmittedRunContext,
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
 } from "../../agents/admitted-run-context.js";
@@ -41,6 +42,7 @@ export function assertCronRuntimeAuthorityCandidate(params: {
 
 /** Owns one prompt admission and its private message grant through settlement. */
 export function prepareCronPromptRunAdmission(params: {
+  admissionSource?: AdmittedRunContext["admissionSource"];
   cfg: OpenClawConfig;
   agentId: string;
   runId: string;
@@ -57,6 +59,7 @@ export function prepareCronPromptRunAdmission(params: {
   const resolveGatewayContext = getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext;
   const basePreparedRunAdmission = prepareAgentRunAdmission({
     operationalRunInstance,
+    admissionSource: params.admissionSource,
     cfg: params.cfg,
     facts: {
       runId,

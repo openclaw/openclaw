@@ -1,6 +1,6 @@
 // Telegram plugin module implements bot native commands.menu test support behavior.
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { expect, vi, type Mock } from "vitest";
+import { expect, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import type { TelegramNativeCommandDeps } from "./bot-native-command-deps.runtime.js";
 import {
@@ -13,7 +13,6 @@ type RegisteredCommand = {
   command: string;
   description: string;
 };
-type UnknownMock = Mock<(...args: unknown[]) => unknown>;
 
 type CreateCommandBotResult = {
   bot: RegisterTelegramNativeCommandsParams["bot"];
@@ -36,18 +35,15 @@ const deliveryMocks = vi.hoisted(() => ({
   deliverReplies: vi.fn<typeof import("./bot/delivery.replies.js").deliverReplies>(async () => ({
     delivered: true,
   })),
-  editMessageTelegram: vi.fn(async () => ({ ok: true as const, messageId: "999", chatId: "100" })),
-  emitTelegramMessageSentHooks: vi.fn(),
 }));
 
 export const listSkillCommandsForAgents = skillCommandMocks.listSkillCommandsForAgents;
 export const deliverReplies = deliveryMocks.deliverReplies;
-export const editMessageTelegram = deliveryMocks.editMessageTelegram;
-export const emitTelegramMessageSentHooks: UnknownMock = deliveryMocks.emitTelegramMessageSentHooks;
 
-vi.mock("./bot/delivery.js", () => ({
+// Vitest hoists this factory before static imports are initialized.
+vi.mock("./bot/delivery.js", async () => ({
+  ...(await import("./bot/delivery.hooks.js")),
   deliverReplies,
-  emitTelegramMessageSentHooks,
 }));
 
 vi.mock("./bot/delivery.replies.js", () => ({
@@ -68,9 +64,6 @@ export function resetNativeCommandMenuMocks() {
   listSkillCommandsForAgents.mockReturnValue([]);
   deliverReplies.mockClear();
   deliverReplies.mockResolvedValue({ delivered: true });
-  editMessageTelegram.mockClear();
-  editMessageTelegram.mockResolvedValue({ ok: true as const, messageId: "999", chatId: "100" });
-  emitTelegramMessageSentHooks.mockClear();
 }
 
 export function createCommandBot(params: CreateCommandBotParams = {}): CreateCommandBotResult {
@@ -108,7 +101,6 @@ export function createNativeCommandTestParams(
       }
       return bot.api.setMyCommands(commandsToRegister);
     }) as TelegramNativeCommandDeps["syncTelegramMenuCommands"],
-    editMessageTelegram,
     sendMessageTelegram: vi.fn(async () => ({ messageId: "999", chatId: "100" })),
   };
   return {

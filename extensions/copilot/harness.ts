@@ -1,7 +1,5 @@
-// Copilot plugin module implements harness behavior.
 import type { CopilotClient } from "@github/copilot-sdk";
 import {
-  buildAgentHookContextChannelFields,
   compactWithSafetyTimeout,
   getModelProviderRequestTransport,
   projectSettledTurnFinalizationAttemptResult,
@@ -19,10 +17,21 @@ import {
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { AttemptParamsLike, ModelRefInputObject } from "./src/attempt-types.js";
+import type {
+  AttemptParamsLike,
+  CopilotAttemptParams,
+  ModelRefInputObject,
+} from "./src/attempt-types.js";
 import type { CopilotSessionConfig } from "./src/attempt.js";
 import { createCopilotByokAuth, resolveCopilotAuth, tokenFingerprint } from "./src/auth-bridge.js";
 import { createCopilotByokProxy } from "./src/byok-proxy.js";
+import {
+  buildCopilotCompactionHookContext,
+  isStaleSdkSessionError,
+  throwIfAborted,
+  type CopilotHistoryCompactResult,
+  type CopilotHistoryCompactSession,
+} from "./src/history-compaction.js";
 import {
   isCopilotByokUnsupportedProviderError,
   resolveCopilotProvider,
@@ -39,13 +48,7 @@ import type {
 type AgentHarnessIsolatedCompletion = NonNullable<AgentHarness["runIsolatedCompletionV2"]>;
 type AgentHarnessIsolatedCompletionParams = Parameters<AgentHarnessIsolatedCompletion>[0];
 type AgentHarnessIsolatedCompletionResult = Awaited<ReturnType<AgentHarnessIsolatedCompletion>>;
-type CopilotSettledTurnFinalizationAttemptParams = Parameters<
-  NonNullable<AgentHarnessV2["finalizeSettledTurn"]>
->[0]["attempt"];
-type CopilotHarnessAttemptParams = (
-  | AgentHarnessAttemptParamsV2
-  | CopilotSettledTurnFinalizationAttemptParams
-) & {
+type CopilotHarnessAttemptParams = CopilotAttemptParams & {
   initialReplayState?: AgentHarnessAttemptParamsV2["initialReplayState"] & {
     journalValidated?: boolean;
     sdkSessionId?: string;
@@ -57,63 +60,23 @@ const COPILOT_PROVIDER_IDS: ReadonlySet<string> = new Set(["github-copilot"]);
 interface CreateCopilotAgentHarnessOptions {
   id?: string;
   label?: string;
-  pluginConfig?: unknown;
   pool?: CopilotClientPool;
   poolOptions?: CopilotClientPoolOptions;
   sessionStore?: CopilotSessionBindingStore;
 }
 
-interface TrackedSession {
-  journalVersion?: 1;
-  sdkSessionId: string;
+interface TrackedSession extends Omit<CopilotSessionBinding, "schemaVersion" | "updatedAt"> {
   client: CopilotClient;
   clientOptions: ClientCreateOptions;
   poolKey: PoolKey;
   sessionConfig: CopilotSessionConfig;
-  // Compatibility fingerprint of the params that created the SDK
-  // session. We only reuse the tracked SDK session when the next
-  // attempt's fingerprint matches — different provider/model/cwd/auth
-  // configurations should start a fresh SDK session rather than resume
-  // one bound to incompatible state. Mismatch falls back to
-  // `createSession` (no resume injection) and the new sdkSessionId
-  // replaces this entry via `onSessionEstablished`.
-  compatKey: string;
-  compactKey: string;
-  authMode: "gitHubToken" | "useLoggedInUser" | "byok";
-  authProfileId?: string;
-  authProfileVersion?: string;
-}
-
-interface CopilotHistoryCompactResult {
-  success: boolean;
-  tokensRemoved: number;
-  messagesRemoved: number;
-  summaryContent?: string;
-  contextWindow?: {
-    tokenLimit: number;
-    currentTokens: number;
-    messagesLength: number;
-    systemTokens?: number;
-    conversationTokens?: number;
-    toolDefinitionsTokens?: number;
-  };
-}
-
-interface CopilotHistoryCompactSession {
-  abort(): Promise<void>;
-  disconnect(): Promise<void>;
-  rpc: {
-    history: {
-      abortManualCompaction(): Promise<{ aborted: boolean }>;
-      compact(params?: { customInstructions?: string }): Promise<CopilotHistoryCompactResult>;
-    };
-  };
 }
 
 export type CopilotSessionBinding = {
   schemaVersion: 2;
   journalVersion?: 1;
   sdkSessionId: string;
+  // A provider/model/cwd/auth change starts a fresh SDK session instead of resuming.
   compatKey: string;
   compactKey: string;
   authMode: "gitHubToken" | "useLoggedInUser" | "byok";
@@ -167,7 +130,6 @@ function sessionAuthMatches(stored: CopilotSessionAuth, current: CopilotSessionA
     return true;
   }
   return (
-    current.authMode === stored.authMode &&
     stored.authProfileId === current.authProfileId &&
     stored.authProfileVersion === current.authProfileVersion
   );
@@ -288,28 +250,9 @@ async function deleteStoredBinding(
   }
 }
 
-function throwIfAborted(signal: AbortSignal | undefined): void {
-  if (!signal?.aborted) {
-    return;
-  }
-  const reason = "reason" in signal ? signal.reason : undefined;
-  if (reason instanceof Error) {
-    throw reason;
-  }
-  const error = reason ? new Error("aborted", { cause: reason }) : new Error("aborted");
-  error.name = "AbortError";
-  throw error;
-}
-
-function isStaleSdkSessionError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return /\b(404|not found|no such session|unknown session|stale|deleted|does not exist)\b/i.test(
-    message,
-  );
-}
-
 async function compactTrackedSdkSession(params: {
   abortSignal?: AbortSignal;
+  assertCurrent: () => void;
   client: CopilotClient;
   customInstructions?: string;
   gitHubToken?: string;
@@ -317,6 +260,7 @@ async function compactTrackedSdkSession(params: {
   sessionConfig: CopilotSessionConfig;
   sdkSessionId: string;
 }): Promise<CopilotHistoryCompactResult> {
+  params.assertCurrent();
   throwIfAborted(params.abortSignal);
   const session = (await params.client.resumeSession(params.sdkSessionId, {
     ...params.sessionConfig,
@@ -329,6 +273,7 @@ async function compactTrackedSdkSession(params: {
     ? { customInstructions: params.customInstructions }
     : undefined;
   try {
+    params.assertCurrent();
     throwIfAborted(params.abortSignal);
     return await session.rpc.history.compact(request);
   } finally {
@@ -340,23 +285,6 @@ async function compactTrackedSdkSession(params: {
   }
 }
 
-// Build a string fingerprint of the attempt params that must agree
-// across turns for SDK-session reuse to be safe. Keep this list
-// conservative: any field whose change would invalidate the SDK
-// session's bound state belongs here. Token / auth profile rotation
-// produces a new fingerprint so we don't replay a session against a
-// stale credential.
-//
-// Auth identity is derived from `resolveCopilotAuth(...)` — the same
-// function `resolvePoolAcquire` uses to build the pool key. That
-// ensures the compat key tracks the EFFECTIVE auth (which can come
-// from the legacy `auth.*` subobject, the contract-resolved
-// top-level `resolvedApiKey` + `authProfileId`, or the env-var
-// fallback) rather than any single one of those raw inputs. The
-// `authProfileVersion` field is a non-secret sha256 fingerprint of
-// the token (see `tokenFingerprint` in `src/auth-bridge.ts`), so
-// rotating the token under the same profile id still invalidates
-// the compat key without ever serializing the raw credential.
 type CopilotCompactParamsLike = Omit<AgentHarnessCompactParams, "model"> &
   Pick<AttemptParamsLike, "auth" | "copilotHome" | "profileVersion"> & {
     model?: string | ModelRefInputObject;
@@ -379,6 +307,8 @@ function computeSessionKey(
   input: CopilotSessionCompatInput,
   options: { includeApi: boolean; includeAuth: boolean },
 ): string {
+  // Match the pool's effective auth resolution; hash tokens so rotation invalidates
+  // replay without retaining the credential itself.
   const attempt = input.kind === "attempt" ? input.params : undefined;
   const compact = input.kind === "compact" ? input.params : undefined;
   const attemptModel = attempt?.model;
@@ -407,14 +337,8 @@ function computeSessionKey(
   const azureApiVersion = normalizeOptionalString(
     modelObj.azureApiVersion ?? modelObj.params?.azureApiVersion,
   );
-  // resolveCopilotAuth can throw when an explicit `auth.gitHubToken`
-  // is supplied without profileId + profileVersion (the existing
-  // pool-key safety invariant). That same error would surface
-  // immediately afterwards from `resolvePoolAcquire` inside
-  // `runCopilotAttempt`, so we don't want to mask it here — but
-  // we also can't include random / time-based data in the compat key
-  // (would break the deterministic equality check). Use a stable
-  // sentinel that will never match any previously-tracked compat key.
+  // Invalid explicit auth fails in resolvePoolAcquire; keep its fingerprint
+  // deterministic here without allowing it to match a valid session.
   let authParts: string[];
   let resolvedAgentId = "";
   let resolvedCopilotHome = "";
@@ -515,20 +439,6 @@ function computeCompactRequestKey(params: CopilotCompactParamsLike): string {
   return computeSessionKey({ kind: "compact", params }, { includeApi: false, includeAuth: false });
 }
 
-function buildCopilotCompactionHookContext(params: AgentHarnessCompactParams) {
-  return {
-    ...(params.runId ? { runId: params.runId } : {}),
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-    sessionId: params.sessionId,
-    workspaceDir: params.workspaceDir,
-    modelProviderId: params.provider,
-    modelId: params.model,
-    trigger: params.trigger,
-    ...buildAgentHookContextChannelFields(params),
-  };
-}
-
 export function createCopilotAgentHarness(
   options?: CreateCopilotAgentHarnessOptions,
 ): AgentHarnessV2 {
@@ -542,10 +452,6 @@ export function createCopilotAgentHarness(
     string,
     Map<Promise<DeferredCompactionCleanupOutcome>, DeferredCompactionCleanup>
   >();
-  // Maps OpenClaw session id (from AgentHarnessAttemptParams.sessionId) to
-  // the SDK session id + client that owns it. Populated by
-  // runCopilotAttempt via the onSessionEstablished callback so that
-  // reset(params) can call client.deleteSession on the right client.
   const trackedSessions = new Map<string, TrackedSession>();
   const resetBlockedStoredSessions = new Set<string>();
 
@@ -634,7 +540,7 @@ export function createCopilotAgentHarness(
     params: CopilotHarnessAttemptParams,
     operation: "attempt" | "settled-tool-finalization",
   ): Promise<AgentHarnessAttemptResult> {
-    const attemptPromise = (async () => {
+    return trackOperation(async () => {
       if (disposed) {
         throw new Error("[copilot] harness has been disposed; cannot start new attempts");
       }
@@ -714,17 +620,11 @@ export function createCopilotAgentHarness(
             // Finalization is a new, isolated turn over settled state, not a
             // replay of the side-effecting prompt. Ignore replayInvalid while
             // still requiring the exact compatible native session above.
-            initialReplayState:
-              operation === "settled-tool-finalization"
-                ? {
-                    ...(resumableBinding?.journalVersion === 1 ? { journalValidated: true } : {}),
-                    sdkSessionId: resumableSessionId,
-                  }
-                : {
-                    ...params.initialReplayState,
-                    ...(resumableBinding?.journalVersion === 1 ? { journalValidated: true } : {}),
-                    sdkSessionId: resumableSessionId,
-                  },
+            initialReplayState: {
+              ...(operation === "attempt" ? params.initialReplayState : undefined),
+              ...(resumableBinding?.journalVersion === 1 ? { journalValidated: true } : {}),
+              sdkSessionId: resumableSessionId,
+            },
           } as CopilotHarnessAttemptParams)
         : params;
 
@@ -733,17 +633,7 @@ export function createCopilotAgentHarness(
         ...(operation === "settled-tool-finalization" ? { operation } : {}),
         onSessionEstablished:
           operation === "attempt" && openclawSessionId
-            ? ({
-                compactionSessionConfig,
-                sdkSessionId,
-                pooledClient,
-                sessionConfig,
-              }: {
-                compactionSessionConfig?: CopilotSessionConfig;
-                sdkSessionId: string;
-                pooledClient: PooledClient;
-                sessionConfig: CopilotSessionConfig;
-              }) =>
+            ? ({ compactionSessionConfig, sdkSessionId, pooledClient, sessionConfig }) =>
                 bindingQueue.enqueue(openclawSessionId, async () => {
                   const tracked: TrackedSession = {
                     sdkSessionId,
@@ -768,15 +658,7 @@ export function createCopilotAgentHarness(
                 })
             : undefined,
         onDeferredCompaction: openclawSessionId
-          ? ({
-              abort,
-              cleanup,
-              sdkSessionId,
-            }: {
-              abort: () => void;
-              cleanup: Promise<DeferredCompactionCleanupOutcome>;
-              sdkSessionId: string;
-            }) =>
+          ? ({ abort, cleanup, sdkSessionId }) =>
               bindingQueue.enqueue(openclawSessionId, async () => {
                 const trackedBinding = trackedSessions.get(openclawSessionId);
                 const storedBinding = await lookupStoredBinding(
@@ -856,19 +738,13 @@ export function createCopilotAgentHarness(
         });
       }
       return result;
-    })();
-    inFlight.add(attemptPromise);
-    try {
-      return await attemptPromise;
-    } finally {
-      inFlight.delete(attemptPromise);
-    }
+    });
   }
 
   async function runIsolatedCompletionV2(
     params: AgentHarnessIsolatedCompletionParams,
   ): Promise<AgentHarnessIsolatedCompletionResult> {
-    const completionPromise = (async () => {
+    return trackOperation(async () => {
       if (disposed) {
         throw new Error("[copilot] harness has been disposed; cannot start isolated completion");
       }
@@ -883,13 +759,7 @@ export function createCopilotAgentHarness(
         }
         return pool;
       });
-    })();
-    inFlight.add(completionPromise);
-    try {
-      return await completionPromise;
-    } finally {
-      inFlight.delete(completionPromise);
-    }
+    });
   }
 
   return {
@@ -1001,11 +871,26 @@ export function createCopilotAgentHarness(
         }
       }),
 
-    compact: (params: AgentHarnessCompactParams): Promise<AgentHarnessCompactResult | undefined> =>
+    compact: (
+      params: AgentHarnessCompactParams &
+        Partial<Pick<AgentHarnessCompactParams<2>, "hostCapabilities">>,
+    ): Promise<AgentHarnessCompactResult | undefined> =>
       trackOperation(async () => {
         if (disposed) {
           return undefined;
         }
+        const hostCapabilities = params.hostCapabilities;
+        if (
+          hostCapabilities?.kind !== "agent-harness-host-capability" ||
+          hostCapabilities.version !== 1 ||
+          typeof hostCapabilities.assertActive !== "function" ||
+          typeof hostCapabilities.retainSourceAuthority !== "function"
+        ) {
+          throw new Error(
+            "This host did not provide compaction source authority. Update OpenClaw before compacting this session.",
+          );
+        }
+        hostCapabilities.assertActive();
         // The SDK owns Copilot history compaction. OpenClaw only resumes
         // the tracked SDK session and calls the session-scoped RPC; durable
         // OpenClaw session/transcript state stays in SQLite, with no marker
@@ -1035,7 +920,6 @@ export function createCopilotAgentHarness(
         const currentCompactKey = computeCompactRequestKey(params);
         const { resolvePoolAcquire } = await import("./src/attempt.js");
         let resolvedPoolAcquire: ReturnType<typeof resolvePoolAcquire> | undefined;
-        let currentAuth: CopilotSessionAuth | undefined;
         try {
           resolvedPoolAcquire = resolvePoolAcquire(params as never);
         } catch (error) {
@@ -1049,9 +933,7 @@ export function createCopilotAgentHarness(
           }
           throw error;
         }
-        if (!currentAuth) {
-          currentAuth = sessionAuthFields(resolvedPoolAcquire.auth);
-        }
+        const currentAuth = sessionAuthFields(resolvedPoolAcquire.auth);
         const compatibleTracked =
           tracked?.compactKey === currentCompactKey && sessionAuthMatches(tracked, currentAuth)
             ? tracked
@@ -1099,10 +981,12 @@ export function createCopilotAgentHarness(
             sessionFile: params.sessionFile,
             ctx: hookContext,
           });
+          hostCapabilities.assertActive();
           compactResult = await compactWithSafetyTimeout(
             (abortSignal) =>
               compactTrackedSdkSession({
                 abortSignal,
+                assertCurrent: hostCapabilities.assertActive,
                 client,
                 customInstructions: params.customInstructions,
                 gitHubToken:

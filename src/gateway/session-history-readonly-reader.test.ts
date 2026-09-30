@@ -1,6 +1,8 @@
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
+import { isSessionNodePayloadSelect } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import {
+  appendTranscriptMessage,
   readLatestSessionTranscriptMessageEvent,
   replaceSessionEntry,
   replaceTranscriptEvents,
@@ -22,6 +24,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { PreparedSessionHistoryReadTarget } from "./session-history-read.types.js";
 import { createReadonlySessionHistoryReader } from "./session-history-readonly-reader.js";
 import { readChatHistoryMessageId } from "./session-history-tail.js";
+import { readSessionHistoryRequest } from "./session-history-worker-reader.js";
 
 async function withHistory(
   read: (fixture: {
@@ -65,6 +68,99 @@ async function withHistory(
   });
 }
 
+it("reuses artifact summaries without payload reads and invalidates after transcript writes", async () => {
+  await withHistory(async ({ target, database }) => {
+    const owner = new OpenClawAgentDatabaseReadOnlyScope();
+    const transcript = target.transcript;
+    const message = (title: string, role = "assistant") => ({
+      role,
+      content: [{ type: "file", title, data: "aGVsbG8=", mimeType: "text/plain" }],
+    });
+    const read = async (assistantOnly = false) => {
+      const result = await owner.run(target.database, () =>
+        readSessionHistoryRequest(
+          {
+            kind: "artifacts",
+            params: {
+              target: transcript,
+              query: {
+                kind: "list",
+                sessionKey: transcript.sessionKey,
+                includeDownloadData: false,
+                ...(assistantOnly ? { messageRole: "assistant" as const } : {}),
+              },
+            },
+          },
+          target,
+        ),
+      );
+      if (result.kind !== "artifacts" || result.result.kind !== "list") {
+        throw new Error("expected artifact list");
+      }
+      return result.result.artifacts;
+    };
+    const replace = async (title: string) => {
+      await replaceTranscriptEvents(transcript, [
+        { type: "session", version: 3, id: transcript.sessionId },
+        { type: "message", id: "artifact", parentId: null, message: message(title) },
+      ]);
+      await waitForSessionTranscriptProjection(transcript);
+    };
+    const prototype: StatementSync = Object.getPrototypeOf(database.db.prepare("SELECT 1"));
+    const payloadReads: string[] = [];
+    // oxlint-disable-next-line typescript/unbound-method -- Forward with the native statement receiver.
+    const iterate = prototype.iterate;
+    const observer = vi.spyOn(prototype, "iterate").mockImplementation(function (
+      this: StatementSync,
+      ...args
+    ) {
+      if (
+        this.sourceSQL.includes("event_json") &&
+        this.sourceSQL.includes("session_transcript_active_events")
+      ) {
+        payloadReads.push(this.sourceSQL);
+      }
+      return iterate.apply(this, args);
+    });
+    try {
+      await replace("first.txt");
+      // Cold canonical admission uses a publication scope, which cannot populate derived caches.
+      await owner.run(target.database, () =>
+        createReadonlySessionHistoryReader(target).readSessionMessageCountAsync(transcript),
+      );
+      const first = await read();
+      expect(first).toMatchObject([
+        { title: "first.txt", sizeBytes: 5, download: { mode: "bytes" } },
+      ]);
+      expect(first[0]).not.toHaveProperty("data");
+      expect(payloadReads.length).toBeGreaterThan(0);
+      payloadReads.length = 0;
+      expect(await read()).toEqual(first);
+      expect(payloadReads).toEqual([]);
+
+      await appendTranscriptMessage(transcript, {
+        eventId: "upload",
+        parentId: "artifact",
+        message: message("uploaded.txt", "user"),
+      });
+      await waitForSessionTranscriptProjection(transcript);
+      expect((await read()).map((a) => a.title)).toEqual(["first.txt", "uploaded.txt"]);
+      expect((await read(true)).map((a) => a.title)).toEqual(["first.txt"]);
+      await replace("replacement.txt");
+      expect((await read()).map((a) => a.title)).toEqual(["replacement.txt"]);
+      await replace("same-length-rewrite.txt");
+      expect((await read()).map((a) => a.title)).toEqual(["same-length-rewrite.txt"]);
+      await replaceTranscriptEvents(transcript, [
+        { type: "session", version: 3, id: transcript.sessionId },
+      ]);
+      expect(await read()).toEqual([]);
+    } finally {
+      observer.mockRestore();
+      owner.close();
+    }
+  });
+});
+
 it.each(["cold", "warm", "policy", "receipt"] as const)(
   "keeps canonical admission and history materialization on one retained snapshot (%s)",
   async (admission) => {
@@ -101,7 +197,8 @@ it.each(["cold", "warm", "policy", "receipt"] as const)(
           const statement = prepare(sql);
           if (
             selectedInTransaction === undefined &&
-            /^select \* from "session_nodes" where "session_key" = /i.test(sql)
+            isSessionNodePayloadSelect(sql) &&
+            / from "session_nodes" where "session_key" = /i.test(sql)
           ) {
             selectedInTransaction = connection.isTransaction;
             // Commit after admission but before the exact row read. The same snapshot
@@ -246,7 +343,14 @@ it.each(["missing", "successor", "retained"] as const)(
 it("keeps canonical key validation on each admitted reader handle", async () => {
   await withHistory(async ({ target, database }) => {
     const reader = createReadonlySessionHistoryReader(target);
-    await reader.readRecentSessionMessagesWithStatsAsync(target.transcript, { maxMessages: 10 });
+    const firstScope = new OpenClawAgentDatabaseReadOnlyScope();
+    try {
+      await firstScope.run(target.database, () =>
+        reader.readRecentSessionMessagesWithStatsAsync(target.transcript, { maxMessages: 10 }),
+      );
+    } finally {
+      firstScope.close();
+    }
     database.db
       .prepare(
         "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) SELECT ?, current_session_id, entry_json, updated_at FROM session_nodes WHERE session_key = ?",
@@ -261,7 +365,7 @@ it("keeps canonical key validation on each admitted reader handle", async () => 
   });
 });
 
-it("observes a committed main-key policy change before a later read", async () => {
+it("revalidates unrelated lineage after a committed main-key policy change", async () => {
   await withHistory(async ({ target, database }) => {
     const scope = {
       agentId: "main",
@@ -272,6 +376,9 @@ it("observes a committed main-key policy change before a later read", async () =
     const reader = createReadonlySessionHistoryReader(target);
     await reader.readRecentSessionMessagesWithStatsAsync(target.transcript, { maxMessages: 10 });
     setCanonicalSqliteSessionMainKey(database, "work");
+    database.db
+      .prepare("UPDATE session_nodes SET parent_session_key = ? WHERE session_key = ?")
+      .run("agent:main:unrecorded-parent", scope.sessionKey);
     await expect(
       reader.readRecentSessionMessagesWithStatsAsync(target.transcript, { maxMessages: 10 }),
     ).rejects.toThrow("openclaw doctor --fix");
@@ -358,26 +465,40 @@ it("keeps display history separate from the current-turn context cutoff", async 
     if (!anchor) {
       throw new Error("expected requested message anchor");
     }
-    const reader = createReadonlySessionHistoryReader(target);
-    const admission = { ...anchor, logicalTurnId: "read-fence", role: "user" as const };
-    const page = await runWithSessionTranscriptReadFence(admission, () => {
-      // Context excludes the admitted turn; display history retains it and validates its identity.
-      expect(
-        readLatestSessionTranscriptMessageEvent({
-          ...target.transcript,
-          storePath: target.database.path,
-        }),
-      ).toBeUndefined();
-      return reader.readRecentSessionMessagesWithStatsAsync(target.transcript, { maxMessages: 10 });
-    });
-    expect(page.messages.map(readChatHistoryMessageId)).toEqual(["requested-message"]);
-    expect(page.totalMessages).toBe(1);
-    await expect(
-      runWithSessionTranscriptReadFence(
-        { ...admission, storePath: `${target.database.path}.other` },
-        () =>
-          reader.readRecentSessionMessagesWithStatsAsync(target.transcript, { maxMessages: 10 }),
-      ),
-    ).rejects.toThrow("different transcript store");
+    const retained = new OpenClawAgentDatabaseReadOnlyScope();
+    try {
+      await retained.run(target.database, async () => {
+        const reader = createReadonlySessionHistoryReader(target);
+        await reader.readRecentSessionMessagesWithStatsAsync(target.transcript, {
+          maxMessages: 10,
+        });
+        const admission = { ...anchor, logicalTurnId: "read-fence", role: "user" as const };
+        const page = await runWithSessionTranscriptReadFence(admission, () => {
+          // Context excludes the admitted turn; display history retains it and validates its identity.
+          expect(
+            readLatestSessionTranscriptMessageEvent({
+              ...target.transcript,
+              storePath: target.database.path,
+            }),
+          ).toBeUndefined();
+          return reader.readRecentSessionMessagesWithStatsAsync(target.transcript, {
+            maxMessages: 10,
+          });
+        });
+        expect(page.messages.map(readChatHistoryMessageId)).toEqual(["requested-message"]);
+        expect(page.totalMessages).toBe(1);
+        await expect(
+          runWithSessionTranscriptReadFence(
+            { ...admission, storePath: `${target.database.path}.other` },
+            () =>
+              reader.readRecentSessionMessagesWithStatsAsync(target.transcript, {
+                maxMessages: 10,
+              }),
+          ),
+        ).rejects.toThrow("different transcript store");
+      });
+    } finally {
+      retained.close();
+    }
   });
 });

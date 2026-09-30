@@ -11,7 +11,6 @@ import {
   rotateAgentRunRegistryLifecycleGeneration,
   validateAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
-import { withInstallationTarget } from "../../infra/installation-target-context.js";
 import { takeMcpToolApprovalBinding } from "../../infra/mcp-tool-approval-binding.js";
 import {
   bindGatewayContextResolver,
@@ -371,31 +370,6 @@ describe("agent harness host capability", () => {
     }
   });
 
-  it("keeps prepared environment access closure-bound", async () => {
-    vi.stubEnv("GH_TOKEN", "");
-    vi.stubEnv("GITHUB_TOKEN", "");
-    const config = { tools: { github: { profileId: "ghp_11111111111111111111111111111111" } } };
-    const { attempt } = await admittedAttempt("run-local-env", { config });
-    const target = { stateDir: "/state", configPath: "/config", defaultWorkspaceDir: "/workspace" };
-    const host = withInstallationTarget(target, () =>
-      createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" }),
-    );
-
-    expect(host.capabilities.preparedEnvironment?.()).toMatchObject({
-      credentialScrubEnv: { GH_TOKEN: "", GITHUB_TOKEN: "" },
-      localIdentityEnv: expect.objectContaining({ GH_CONFIG_DIR: expect.any(String) }),
-      managedLocalIdentity: true,
-      localProcessEnv: {
-        OPENCLAW_STATE_DIR: "/state",
-        OPENCLAW_CONFIG_PATH: "/config",
-        OPENCLAW_WORKSPACE_DIR: "/workspace",
-      },
-    });
-    expect(Object.isFrozen(host.capabilities.preparedEnvironment?.().localProcessEnv)).toBe(true);
-    host.close();
-    expect(() => host.capabilities.preparedEnvironment?.()).toThrow("no longer active");
-  });
-
   it("rejects retained preparation after the admitted Gateway is replaced", async () => {
     const { attempt } = await admittedAttempt("run-prepared-gateway");
     const admitted = {} as GatewayRequestContext;
@@ -433,6 +407,38 @@ describe("agent harness host capability", () => {
 
     expect(preparedExecute).not.toHaveBeenCalled();
   });
+
+  it.each(policyRevocations)(
+    "does not stage reply bytes after $name during a remote read",
+    async ({ revoke }) => {
+      const readStarted = createDeferred();
+      const readResult = createDeferred<Buffer>();
+      const readWorkspaceFile = vi.fn(async () => {
+        readStarted.resolve();
+        return await readResult.promise;
+      });
+      const { attempt, admission } = await admittedAttempt("run-reply-media");
+      const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
+      const prepare = host.capabilities.prepareReplyMedia;
+      if (!prepare) {
+        throw new Error("expected reply media capability");
+      }
+      const request = {
+        kind: "payload" as const,
+        payload: { text: "Artifact ready\nMEDIA:./artifact.txt" },
+        readWorkspaceFile,
+      };
+      const pending = prepare(request);
+      const rejected = expect(pending).rejects.toThrow();
+      await readStarted.promise;
+      await revoke({ host, attempt, admission });
+      readResult.resolve(Buffer.from("remote artifact"));
+      await rejected;
+      await expect(prepare(request)).rejects.toThrow();
+      expect(readWorkspaceFile).toHaveBeenCalledTimes(1);
+      host.close();
+    },
+  );
 
   it("delegates trajectory events and rejects a flush that outlives the capability", async () => {
     const flushStarted = createDeferred();
@@ -567,8 +573,10 @@ describe("agent harness host capability", () => {
   });
 
   it.each(
-    policyRevocations.flatMap((entry) =>
-      (["resolve", "reject"] as const).map((settlement) => Object.assign({ settlement }, entry)),
+    policyRevocations.flatMap((entry, index) =>
+      (index === 0 ? (["resolve", "reject"] as const) : (["resolve"] as const)).map((settlement) =>
+        Object.assign({ settlement }, entry),
+      ),
     ),
   )("rejects a deferred policy $settlement after $name", async ({ revoke, settlement }) => {
     const { attempt, admission } = await admittedAttempt("run-policy-race");
@@ -769,6 +777,7 @@ describe("agent harness host capability", () => {
       expect(payload).toMatchObject({
         mcpTool: { server: "docs", tool: "write_note" },
         toolCallId: "item-1",
+        detail: "Full review evidence",
       });
       expect(payload).not.toHaveProperty("isMcpToolApprovalActive");
       expect(takeMcpToolApprovalBinding({ ...scope, agentId: "other" })).toBeUndefined();
@@ -779,6 +788,7 @@ describe("agent harness host capability", () => {
     await host.capabilities.requestApproval({
       title: "MCP approval",
       description: "Write a note",
+      detail: "Full review evidence",
       severity: "warning",
       toolName: "codex_mcp_tool_approval",
       toolCallId: "item-1",

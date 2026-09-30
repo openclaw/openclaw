@@ -15,9 +15,9 @@ import { repairToolUseResultPairing, stripToolResultDetails } from "./session-tr
 import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-id.js";
 
 /** Default share of context window targeted for compaction chunks. */
-export const BASE_CHUNK_RATIO = 0.4;
+const BASE_CHUNK_RATIO = 0.4;
 /** Lower bound for adaptive compaction chunk sizing. */
-export const MIN_CHUNK_RATIO = 0.15;
+const MIN_CHUNK_RATIO = 0.15;
 /** Buffer for estimateTokens() inaccuracy. */
 export const SAFETY_MARGIN = 1.2;
 const DEFAULT_PARTS = 2;

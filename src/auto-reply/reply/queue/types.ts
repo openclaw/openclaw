@@ -1,6 +1,6 @@
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
-// Shared queue type contracts for admission, drain, and fallback handling.
 import type { QueueMode } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import type { AdmittedRunOperatorAuthority } from "../../../agents/admitted-run-context.js";
 import type { AutoFallbackPrimaryProbe } from "../../../agents/agent-scope.js";
 import type { ExecToolDefaults } from "../../../agents/bash-tools.js";
 import type { CliSessionBindingFacts } from "../../../agents/cli-runner/types.js";
@@ -19,6 +19,7 @@ import type { SessionEntry, SessionToolOverrides } from "../../../config/session
 import type { ReplyToMode } from "../../../config/types.base.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { GroupToolPolicyConfig } from "../../../config/types.tools.js";
+import type { GatewayLocalUserIngress } from "../../../gateway/local-user-ingress.js";
 import type { GatewayUiCommandTarget } from "../../../gateway/ui-command-target.types.js";
 import type { MediaFact } from "../../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
@@ -110,7 +111,13 @@ export function isFollowupRunDeferredError(error: unknown): error is FollowupRun
 }
 
 export type FollowupRun = {
+  /** External-turn eligibility; queued execution refreshes the session-selected profile. */
+  personalBootstrapEligible?: boolean;
   prompt: string;
+  /** Original admitted source; queued execution must not replace it with a backend run ID. */
+  sourceTurnId?: string;
+  /** Original operator capability retained by this turn's queue/run lifecycle. */
+  operatorAuthority?: AdmittedRunOperatorAuthority;
   /** Latest session to claim without rewriting the queued run before store refresh. */
   admissionSessionId?: string;
   /** User-visible prompt body persisted to transcript; excludes runtime-only prompt context. */
@@ -122,6 +129,8 @@ export type FollowupRun = {
   currentInboundAudio?: boolean;
   /** Host-minted participant evidence; raw channel identities never live on this object. */
   channelAdmissionEvidence?: ChannelAdmissionEvidence;
+  /** Frozen original attach evidence; diagnostic only and never restored from durable queue state. */
+  gatewayLocalUserIngress?: GatewayLocalUserIngress;
   /** Explicit current-turn context that should be visible for this run but not persisted as user text. */
   currentInboundContext?: CurrentInboundPromptContext;
   /** Explicit skills resolved from the authenticated inbound message. */
@@ -147,15 +156,12 @@ export type FollowupRun = {
   disableTools?: boolean;
   /** Force individual drain; never merge this run into a collect batch. */
   disableCollectBatching?: boolean;
-  /** The current-turn hook already ran before this steer became a fallback. */
   /** Pending same-turn acceptance while this item remains parked in FIFO order. */
   steerPending?: {
     phase: "waiting" | "injecting";
     predecessor: Promise<boolean>;
     settle: (accepted: boolean) => void;
   };
-  /** Preserves this candidate's position ahead of overflow summaries. */
-  steerAnchor?: true;
   /** Internal marker for the one-shot stranded final recovery retry. */
   strandedReplyRetry?: boolean;
   /** Preserve priority runs when old-item queue overflow eviction runs before drain. */
@@ -189,6 +195,7 @@ export type FollowupRun = {
   /** Chat type for context-aware threading (e.g., DM vs channel). */
   originatingChatType?: string;
   run: {
+    providerReviewAcknowledgment?: import("../../../sessions/provider-review.js").ProviderReviewAcknowledgment;
     agentId: string;
     agentDir: string;
     sessionId: string;
@@ -198,6 +205,7 @@ export type FollowupRun = {
     /** Prepared source delivery ownership; a lost source must not restore host media reads. */
     mediaNormalizationOwner?: "gateway";
     clientCaps?: string[];
+    bootstrapUserProfileId?: string;
     gatewayUiCommandTarget?: GatewayUiCommandTarget;
     toolBindings?: Readonly<Record<string, unknown>>;
     chatType?: ChatType;
@@ -280,7 +288,6 @@ export type FollowupRun = {
     enforceFinalTag?: boolean;
     skipProviderRuntimeHints?: boolean;
     silentExpected?: boolean;
-    allowEmptyAssistantReplyAsSilent?: boolean;
     terminalReplyExpectation?: RunEmbeddedAgentParams["terminalReplyExpectation"];
     suppressNextUserMessagePersistence?: boolean;
     suppressTranscriptOnlyAssistantPersistence?: boolean;
@@ -291,15 +298,19 @@ export type FollowupRun = {
 };
 
 export function isFollowupRunAborted(
-  run: Pick<FollowupRun, "abortSignal" | "queueAbortSignal">,
+  run: Pick<FollowupRun, "abortSignal" | "queueAbortSignal" | "operatorAuthority">,
 ): boolean {
-  return run.abortSignal?.aborted === true || run.queueAbortSignal?.aborted === true;
+  return (
+    run.abortSignal?.aborted === true ||
+    run.queueAbortSignal?.aborted === true ||
+    run.operatorAuthority?.signal?.aborted === true
+  );
 }
 
 export function resolveFollowupAbortSignal(
-  run: Pick<FollowupRun, "abortSignal" | "queueAbortSignal">,
+  run: Pick<FollowupRun, "abortSignal" | "queueAbortSignal" | "operatorAuthority">,
 ): AbortSignal | undefined {
-  const signals = [run.abortSignal, run.queueAbortSignal].filter(
+  const signals = [run.abortSignal, run.queueAbortSignal, run.operatorAuthority?.signal].filter(
     (signal): signal is AbortSignal => signal !== undefined,
   );
   return signals.length > 1 ? AbortSignal.any(signals) : signals[0];

@@ -172,7 +172,7 @@ export async function tombstoneMainRestartRecoveryWithNotice(params: {
         sessionKey: params.sessionKey,
         storePath: params.storePath,
         readConsistency: "latest",
-      }) as SessionEntry | undefined;
+      });
       const state = current?.mainRestartRecovery;
       if (
         !current ||

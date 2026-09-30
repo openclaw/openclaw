@@ -152,7 +152,7 @@ export function meetingTranscriptUtteranceQuery(
 function hasExactMeetingTranscriptUtterance(params: {
   database: DatabaseSync;
   metadataJson: string | null;
-  session: TranscriptSessionDescriptor;
+  session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">;
   utterance: TranscriptUtterance & { id: string };
 }): boolean {
   const utterance = params.utterance;
@@ -190,7 +190,7 @@ export function appendMeetingTranscriptUtterance(params: {
   database: DatabaseSync;
   metadataJson: string | null;
   now: number;
-  session: TranscriptSessionDescriptor;
+  session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">;
   utterance: TranscriptUtterance;
 }): void {
   const { database, session, utterance } = params;
@@ -240,7 +240,7 @@ export function appendMeetingTranscriptUtterance(params: {
   );
 }
 
-function parseOptionalJsonRecord(value: string | null): Record<string, unknown> | undefined {
+export function parseOptionalJsonRecord(value: string | null): Record<string, unknown> | undefined {
   if (!value) {
     return undefined;
   }

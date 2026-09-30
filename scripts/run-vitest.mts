@@ -22,6 +22,7 @@ import {
   resolveVitestCliEntry,
   prepareVitestRuntime,
 } from "./lib/vitest-build-prerequisites.mts";
+import { createVitestCacheSlots, resolveVitestCacheRoot } from "./lib/vitest-cache-slots.mts";
 import {
   hasNonRunVitestSubcommand,
   collectVitestFileFilters,
@@ -37,7 +38,6 @@ import {
   resolveRunVitestSpawnEnv,
   resolveVitestNoOutputTimeoutMs,
   resolveVitestNoOutputHeartbeatMs,
-  resolveVitestCompileCacheSafeEnv,
   resolveVitestConfigArg,
   normalizeVitestConfigPath,
   matchesVitestConfigPath,
@@ -47,7 +47,11 @@ import {
   runVitestCli,
   type exitVitestBySignal,
 } from "./lib/vitest-process.mts";
-import { resolveVitestRuntimeCliSelections } from "./lib/vitest-runtime-selection.mts";
+import {
+  resolveVitestRuntimeCliSelections,
+  shouldPrepareVitestCoreWorkers,
+} from "./lib/vitest-runtime-selection.mts";
+import { resolveVitestTestCommand } from "./lib/vitest-test-runtime.mts";
 import {
   createVitestUnhandledErrorDetector,
   stripVitestAnsi,
@@ -213,7 +217,7 @@ export function resolveVitestSpawnParams(
   platform: NodeJS.Platform = process.platform,
 ): PnpmRunnerParams {
   return {
-    env: resolveVitestProcessEnv(resolveVitestCompileCacheSafeEnv(env)),
+    env: resolveVitestProcessEnv(env),
     detached: shouldUseDetachedVitestProcessGroup(platform),
     stdio: ["inherit", "pipe", "pipe"],
   };
@@ -814,13 +818,14 @@ export function spawnWatchedVitestProcess({
   }
   let timeoutCompletion: Promise<boolean> | null = null;
   const directNodeArgs = resolveDirectNodeVitestArgs(pnpmArgs);
-  if (workerRun && directNodeArgs) {
-    // Preserve Node flags while giving the same owned child its private generation.
-    const cliIndex = directNodeArgs.findIndex((arg) => path.basename(arg) === "vitest.mjs");
+  const testCommand = directNodeArgs ? resolveVitestTestCommand(directNodeArgs, env) : undefined;
+  if (workerRun && testCommand) {
+    // Give either runtime the same owned compiled-subprocess generation.
+    const cliIndex = testCommand.args.findIndex((arg) => path.basename(arg) === "vitest.mjs");
     if (cliIndex < 0) {
       throw new Error("Compiled subprocess owner requires a native Vitest CLI spec");
     }
-    directNodeArgs.splice(
+    testCommand.args.splice(
       cliIndex,
       0,
       path.join(resolveRepoRoot(import.meta.url), "scripts/lib/vitest-worker-bootstrap.mts"),
@@ -843,8 +848,8 @@ export function spawnWatchedVitestProcess({
       }
     : spawnParams;
   const { child, completion: childCompletion } = spawnOwnedVitestProcess({
-    ...(directNodeArgs
-      ? { command: process.execPath, args: directNodeArgs, options: childSpawnParams }
+    ...(testCommand
+      ? { ...testCommand, options: childSpawnParams }
       : createPnpmRunnerSpawnSpec({ pnpmArgs, ...childSpawnParams })),
     homeMode,
   });
@@ -979,22 +984,27 @@ export async function runVitest(
   const invocations = execution
     ? resolveBoundedVitestInvocations(vitestArgs, { env })
     : [vitestArgs];
+  const sourceMode =
+    !execution || execution.options.watch || resolveExplicitVitestMode(vitestArgs) === "watch";
   const config = resolveVitestConfigArg(vitestArgs);
-  const relativeConfig = config ? toRepoRelativeArg(path.resolve(config), repoRoot) : "";
+  const relativeConfig = config
+    ? toRepoRelativeArg(path.resolve(config), repoRoot)
+    : config === null && !sourceMode && process.cwd() === repoRoot
+      ? "vitest.config.ts"
+      : "";
   const invocationEnv =
     invocations.length > 1 && relativeConfig === E2E_VITEST_CONFIG
       ? { ...env, ...(await prepareE2eVitestRuntime(env)) }
       : env;
   // Canonical configs have known project scopes. Custom roots/projects keep
   // their own setup; never infer their runtime selection from a config name.
-  if (
+  const canonicalSelection =
     execution &&
-    config &&
     !hasAlternateVitestRootArg(vitestArgs) &&
     !hasExplicitVitestProjectArg(vitestArgs) &&
     !hasNonRunVitestSubcommand(vitestArgs) &&
-    !hasExplicitDisabledRunFlag(vitestArgs)
-  ) {
+    !hasExplicitDisabledRunFlag(vitestArgs);
+  if (canonicalSelection && relativeConfig) {
     const code = await prepareVitestRuntime(
       invocations.flatMap((cliArgs) =>
         resolveVitestRuntimeCliSelections(relativeConfig, cliArgs, invocationEnv),
@@ -1006,20 +1016,42 @@ export async function runVitest(
       return;
     }
   }
-  const sourceMode =
-    !execution || execution.options.watch || resolveExplicitVitestMode(vitestArgs) === "watch";
   const workers = sourceMode
     ? undefined
     : createVitestWorkerRun(resolveVitestProcessEnv(invocationEnv));
+  const withCacheSlot = createVitestCacheSlots();
   let interrupted: NodeJS.Signals | undefined;
+  let preparingWorkers = false;
   const onSignal = (signal: NodeJS.Signals) => {
     interrupted ??= signal;
+    if (preparingWorkers) {
+      // No borrower can finish admission yet; cancel through the existing owner.
+      void workers?.dispose().catch(() => {});
+    }
   };
   // The invocation outlives child-scoped handlers when admission or final
   // verification is still reading. Retain signal ownership through disposal.
   process.on("SIGINT", onSignal);
   process.on("SIGTERM", onSignal);
   try {
+    if (
+      workers &&
+      canonicalSelection &&
+      config &&
+      invocations.some((args) =>
+        shouldPrepareVitestCoreWorkers(relativeConfig, args, invocationEnv),
+      )
+    ) {
+      preparingWorkers = true;
+      try {
+        await workers.prepare();
+      } finally {
+        preparingWorkers = false;
+      }
+    }
+    if (interrupted) {
+      return;
+    }
     let failedExitCode = 0;
     for (const [index, invocation] of invocations.entries()) {
       const guardedVitestArgs = await resolveExplicitTestFileNoPassArgs(invocation);
@@ -1027,20 +1059,41 @@ export async function runVitest(
       if (invocations.length > 1) {
         console.error("[vitest] bounded process " + (index + 1) + "/" + invocations.length);
       }
-      const handle = spawnWatchedVitestProcess({
-        workerRun: workers,
-        pnpmArgs: [
-          "exec",
-          "node",
-          ...resolveVitestNodeArgs(invocationEnv),
-          vitestCliEntry,
-          ...guardedVitestArgs,
-        ],
-        spawnParams: resolveVitestSpawnParams(spawnEnv),
-        env: spawnEnv,
-      });
-      const { code, signal } = await handle.completion;
-      interrupted ??= handle.getForwardedSignal() ?? signal ?? undefined;
+      const { code, signal } = await withCacheSlot(
+        {
+          config: config ?? "",
+          env: spawnEnv,
+          watchMode: sourceMode,
+          ...(!sourceMode &&
+          config &&
+          !spawnEnv.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH?.trim() &&
+          !hasVitestOption(guardedVitestArgs, "--fsModuleCachePath")
+            ? {
+                cacheAssignment: {
+                  kind: "scheduler" as const,
+                  root: resolveVitestCacheRoot(spawnEnv),
+                },
+              }
+            : {}),
+        },
+        async ({ env: cacheEnv }) => {
+          const handle = spawnWatchedVitestProcess({
+            workerRun: workers,
+            pnpmArgs: [
+              "exec",
+              "node",
+              ...resolveVitestNodeArgs(invocationEnv),
+              vitestCliEntry,
+              ...guardedVitestArgs,
+            ],
+            spawnParams: resolveVitestSpawnParams(cacheEnv),
+            env: cacheEnv,
+          });
+          const result = await handle.completion;
+          return { ...result, signal: handle.getForwardedSignal() ?? result.signal };
+        },
+      );
+      interrupted ??= signal ?? undefined;
       const exitCode = code ?? 1;
       // Ordinary test failures must not hide later files; interruptions stop
       // admission and are re-raised only after the invocation has been disposed.

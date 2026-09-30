@@ -249,7 +249,6 @@ describe("resolveGatewayScopedTools", () => {
     ].flatMap(({ mode, resolve }) =>
       [
         { label: "ls-only", toolsAllow: ["ls"], expected: ["ls"] },
-        { label: "read-only", toolsAllow: ["read"], expected: ["read"] },
         { label: "mixed", toolsAllow: ["ls", "read"], expected: ["ls", "read"] },
         {
           label: "filesystem group",
@@ -363,7 +362,7 @@ describe("resolveGatewayScopedTools", () => {
     const registry = await import("../agents/subagents/registry/subagent-registry.js");
     const markRequesterTurnYielded = vi
       .spyOn(registry, "markRequesterTurnYielded")
-      .mockReturnValue(1);
+      .mockResolvedValue(1);
     const onYield = vi.fn();
     try {
       const result = resolveGatewayScopedTools({

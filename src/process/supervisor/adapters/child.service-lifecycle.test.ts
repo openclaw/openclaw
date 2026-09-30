@@ -7,6 +7,8 @@ import { waitForPidFile } from "../../../../test/helpers/process-wait.js";
 import { createDeferred, withTestTimeout } from "../../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { killPidIfAlive } from "../../../test-utils/process-tree.js";
+import { mockProcessPlatform } from "../../../test-utils/vitest-spies.js";
+import * as relayIntegration from "../../spawn-broker/relay-integration.js";
 import { createProcessSupervisor } from "../supervisor.js";
 import { createChildAdapter } from "./child.js";
 import {
@@ -181,6 +183,8 @@ describeSpawnTransports("service-managed child lifecycle", () => {
       activePids.add(descendantPid);
       expect(isAlive(rootPid) && isAlive(descendantPid)).toBe(true);
       await vi.advanceTimersByTimeAsync(100);
+      // Deadline decisions wait one timer turn for pending child exit notifications.
+      await vi.advanceTimersToNextTimerAsync();
       const exit = await run.wait();
       expect(exit.reason).toBe(timing.reason);
       expect(parsePidPair(exit.stdout)).toEqual([rootPid, descendantPid]);
@@ -227,6 +231,8 @@ describeSpawnTransports("service-managed child lifecycle", () => {
       activePids.add(startedPid);
       expect(isAlive(startedPid)).toBe(true);
       await vi.advanceTimersByTimeAsync(500);
+      // Let the deferred construction deadline decide before awaiting startup settlement.
+      await vi.advanceTimersToNextTimerAsync();
       const run = await pendingRun;
       await expect(run.wait()).resolves.toMatchObject({
         reason: "overall-timeout",
@@ -301,7 +307,7 @@ describeSpawnTransports("service-managed child lifecycle", () => {
       stdinMode: "pipe-closed",
     });
     await new Promise<void>((resolve) => {
-      setTimeout(resolve, 100);
+      adapter.onExit!(() => resolve());
     });
 
     let stdout = "";
@@ -647,9 +653,16 @@ describeSpawnTransports("service-managed child lifecycle", () => {
     await waitFor(() => !isAlive(rootPid) && !isAlive(descendantPid));
   });
 
-  it.each(["SIGTERM", "SIGKILL"] as const)(
-    "keeps cleanup uncertain after %s when an escaped group retains the lineage descriptor",
-    async (signal) => {
+  it.each(
+    (["SIGTERM", "SIGKILL"] as const).flatMap((signal) =>
+      (process.platform === "linux" && !process.versions.bun
+        ? ["process-group", "linux-subreaper"]
+        : ["process-group"]
+      ).map((ownership) => ({ signal, ownership })),
+    ),
+  )(
+    "uses $ownership custody after $signal when an escaped descendant retains lineage",
+    async ({ signal, ownership }) => {
       const descendantScript = `process.send("ready"); setInterval(() => {}, 1000);`;
       const rootScript = `
       const { spawn } = require("node:child_process");
@@ -664,11 +677,29 @@ describeSpawnTransports("service-managed child lifecycle", () => {
         });
       });
     `;
-      const adapter = await startChildAdapter({
-        ownProcessTree: true,
-        argv: [process.execPath, "-e", rootScript],
-        stdinMode: "pipe-closed",
-      });
+      const relayExited = createDeferred();
+      const spawnRelay = relayIntegration.spawnServiceChildRelay;
+      const observeRelay = vi
+        .spyOn(relayIntegration, "spawnServiceChildRelay")
+        .mockImplementation((params) => {
+          const relay = spawnRelay(params);
+          relay.child.once("exit", () => relayExited.resolve());
+          return relay;
+        });
+      // Select the retained POSIX group contract only for its escape-limit case.
+      const groupPlatform =
+        ownership === "process-group" ? mockProcessPlatform("darwin") : undefined;
+      let adapter: Awaited<ReturnType<typeof startChildAdapter>>;
+      try {
+        adapter = await startChildAdapter({
+          ownProcessTree: true,
+          argv: [process.execPath, "-e", rootScript],
+          stdinMode: "pipe-closed",
+        });
+      } finally {
+        observeRelay.mockRestore();
+        groupPlatform?.mockRestore();
+      }
       let output = "";
       adapter.onStdout((chunk) => {
         output += chunk;
@@ -677,14 +708,40 @@ describeSpawnTransports("service-managed child lifecycle", () => {
       const [rootPid, descendantPid] = parsePidPair(output);
       activePids.add(rootPid);
       activePids.add(descendantPid);
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       try {
+        const extinction = adapter.waitForExtinction!();
+        let settled = false;
+        void extinction.then(
+          () => {
+            settled = true;
+          },
+          () => {
+            settled = true;
+          },
+        );
         adapter.kill(signal);
-        await expect(adapter.waitForExtinction!()).rejects.toThrow(
+        // Real relay exit follows the closing acknowledgement; its host deadline is now armed.
+        await relayExited.promise;
+        if (ownership === "linux-subreaper") {
+          // Kernel adoption, unlike PGID membership, retains an escaped child.
+          await expect(extinction).resolves.toBeUndefined();
+          expect(isAlive(descendantPid)).toBe(false);
+          await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
+          return;
+        }
+        expect(isAlive(descendantPid)).toBe(true);
+        expect(settled).toBe(false);
+        await vi.advanceTimersByTimeAsync(4_999);
+        expect(settled).toBe(false);
+        await vi.advanceTimersByTimeAsync(1);
+        await expect(extinction).rejects.toThrow(
           "service child cleanup did not complete before its hard deadline",
         );
         await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
         expect(isAlive(descendantPid)).toBe(true);
       } finally {
+        vi.useRealTimers();
         killPidIfAlive(descendantPid);
         try {
           await waitFor(() => !isAlive(descendantPid));
@@ -864,15 +921,26 @@ describeSpawnTransports("service-managed child lifecycle", () => {
         ${serviceChildHostTransportPrelude()}
         const { createChildAdapter } = await import(${JSON.stringify(childModuleUrl)});
         const { adapter, ready } = await withTransport(() => createChildAdapter({
-          argv: ["/bin/sh", "-c", "sleep 0.05; kill -KILL $PPID; sleep 0.05"],
-          stdinMode: "pipe-closed",
+          argv: ["/bin/sh", "-c", "read -r trigger; kill -KILL $PPID"],
+          stdinMode: "pipe-open",
         }));
         await ready;
-        await new Promise((resolve) => setTimeout(resolve, 200));
+        const identityLost = new Promise((resolve) => {
+          adapter.onError((error, source) => {
+            if (source === "process") resolve(error);
+          });
+        });
+        adapter.stdin.write("trigger\\n");
+        adapter.stdin.end();
+        const observedError = await identityLost;
+        await new Promise((resolve) => setImmediate(resolve));
         try {
           await adapter.wait();
           process.exit(2);
-        } catch {
+        } catch (error) {
+          if (error !== observedError || !error.message.includes("cleanup identity lost")) {
+            throw error;
+          }
           process.exit(0);
         }
       `,

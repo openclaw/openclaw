@@ -5,15 +5,22 @@ import { onTestFinished, vi } from "vitest";
 import { createUpdateProgress } from "../cli/update-cli/progress.js";
 import type { SpawnResult } from "../process/exec.js";
 import { defaultRuntime } from "../runtime.js";
-import type { UpdateStepResult } from "./update-runner-types.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
 export class FakeChild extends EventEmitter {
   pid: number;
+  exitCode: number | null = null;
+  signalCode: NodeJS.Signals | null = null;
+  killed = false;
   stdout = new PassThrough();
   stderr = new PassThrough();
   constructor(pid: number) {
     super();
     this.pid = pid;
+    this.once("close", (code: number | null, signal?: NodeJS.Signals | null) => {
+      this.exitCode = code;
+      this.signalCode = signal ?? null;
+    });
   }
 }
 

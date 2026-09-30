@@ -75,4 +75,3 @@ Deliveroo (WIP, not working yet)
 Notes
 
 - Use `--config /tmp/ordercli.json` for testing.
-- Confirm before any reorder or cart-changing action.

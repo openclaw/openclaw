@@ -1,36 +1,27 @@
+import { isHttpUrl } from "@openclaw/net-policy/url-protocol";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-// Control UI module implements tool display behavior.
 import SHARED_TOOL_DISPLAY_JSON from "../../../../apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json" with { type: "json" };
 import {
   defaultTitle,
   normalizeToolDisplayName,
   resolveToolVerbAndDetailForArgs,
-  type ToolDisplaySpec as ToolDisplaySpecBase,
+  type ToolDisplaySpec,
 } from "../../../../src/agents/tool-display-common.js";
 import type { ToolDetailMode } from "../../../../src/agents/tool-display-exec.js";
 import type { ControlUiEmbedSandboxMode } from "../../../../src/gateway/control-ui-bootstrap-contract.js";
+import { resolveToolDisplayIcon } from "./tool-display-icon.ts";
 
 const A2UI_PATH = "/__openclaw__/a2ui";
 const CANVAS_HOST_PATH = "/__openclaw__/canvas";
 const CANVAS_CAPABILITY_PATH_PREFIX = "/__openclaw__/cap";
 
-type ToolDisplaySpec = ToolDisplaySpecBase & {
-  icon?: string;
-};
-
-type SharedToolDisplaySpec = ToolDisplaySpecBase & {
+type SharedToolDisplaySpec = ToolDisplaySpec & {
   emoji?: string;
-};
-
-type SharedToolDisplayConfig = {
-  version?: number;
-  fallback?: SharedToolDisplaySpec;
-  tools?: Record<string, SharedToolDisplaySpec>;
 };
 
 type ToolDisplay = {
   name: string;
-  icon: ChatToolIconName;
+  icon: ReturnType<typeof resolveToolDisplayIcon>;
   title: string;
   label: string;
   verb?: string;
@@ -38,70 +29,15 @@ type ToolDisplay = {
 };
 
 export type EmbedSandboxMode = ControlUiEmbedSandboxMode;
-type ChatToolIconName = string;
 
-const EMOJI_ICON_MAP: Record<string, ChatToolIconName> = {
-  "🧩": "puzzle",
-  "🛠️": "wrench",
-  "🧰": "wrench",
-  "📖": "fileText",
-  "✍️": "edit",
-  "📝": "penLine",
-  "📎": "paperclip",
-  "🌐": "globe",
-  "📺": "monitor",
-  "🧾": "fileText",
-  "🔐": "settings",
-  "💻": "monitor",
-  "🔌": "plug",
-  "💬": "messageSquare",
-};
-
-function iconForEmoji(emoji?: string): ChatToolIconName {
-  if (!emoji) {
-    return "puzzle";
-  }
-  return EMOJI_ICON_MAP[emoji] ?? "puzzle";
-}
-
-function convertSpec(spec?: SharedToolDisplaySpec): ToolDisplaySpec {
-  return {
-    icon: iconForEmoji(spec?.emoji),
-    title: spec?.title,
-    label: spec?.label,
-    detailKeys: spec?.detailKeys,
-    actions: spec?.actions,
-  };
-}
-
-const SHARED_TOOL_DISPLAY_CONFIG = SHARED_TOOL_DISPLAY_JSON as SharedToolDisplayConfig;
-const FALLBACK = convertSpec(SHARED_TOOL_DISPLAY_CONFIG.fallback ?? { emoji: "🧩" });
-const TOOL_MAP: Record<string, ToolDisplaySpec> = Object.fromEntries(
-  Object.entries(SHARED_TOOL_DISPLAY_CONFIG.tools ?? {}).map(([key, spec]) => [
-    key,
-    convertSpec(spec),
-  ]),
-);
+const FALLBACK = SHARED_TOOL_DISPLAY_JSON.fallback;
+const TOOL_MAP: Record<string, SharedToolDisplaySpec> = SHARED_TOOL_DISPLAY_JSON.tools;
 
 function shortenHomeInString(input: string): string {
-  if (!input) {
-    return input;
-  }
-
   // Browser-safe home shortening: avoid importing Node-only helpers (keeps Vite builds working in Docker/CI).
-  const patterns = [
-    { re: /^\/Users\/[^/]+(\/|$)/, replacement: "~$1" }, // macOS
-    { re: /^\/home\/[^/]+(\/|$)/, replacement: "~$1" }, // Linux
-    { re: /^C:\\Users\\[^\\]+(\\|$)/i, replacement: "~$1" }, // Windows
-  ] as const;
-
-  for (const pattern of patterns) {
-    if (pattern.re.test(input)) {
-      return input.replace(pattern.re, pattern.replacement);
-    }
-  }
-
-  return input;
+  return input
+    .replace(/^\/(?:Users|home)\/[^/]+(\/|$)/, "~$1")
+    .replace(/^[A-Za-z]:\\Users\\[^\\]+(\\|$)/i, "~$1");
 }
 
 export function resolveToolDisplay(params: {
@@ -113,7 +49,7 @@ export function resolveToolDisplay(params: {
   const name = normalizeToolDisplayName(params.name);
   const key = normalizeLowercaseStringOrEmpty(name);
   const spec = TOOL_MAP[key];
-  const icon = spec?.icon ?? FALLBACK.icon ?? "puzzle";
+  const icon = resolveToolDisplayIcon(name);
   const title = spec?.title ?? defaultTitle(name);
   const label = spec?.label ?? title;
   const toolDisplayParts = resolveToolVerbAndDetailForArgs({
@@ -156,10 +92,6 @@ function isCanvasHttpPath(pathname: string): boolean {
   );
 }
 
-function isExternalHttpUrl(entry: URL): boolean {
-  return entry.protocol === "http:" || entry.protocol === "https:";
-}
-
 function sanitizeCanvasEntryUrl(
   rawEntryUrl: string,
   allowExternalEmbedUrls = false,
@@ -167,7 +99,7 @@ function sanitizeCanvasEntryUrl(
   try {
     const entry = new URL(rawEntryUrl, "http://localhost");
     if (entry.origin !== "http://localhost") {
-      if (!allowExternalEmbedUrls || !isExternalHttpUrl(entry)) {
+      if (!allowExternalEmbedUrls || !isHttpUrl(entry)) {
         return undefined;
       }
       return entry.toString();

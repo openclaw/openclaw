@@ -1,8 +1,11 @@
 // Covers bundling rules encoded in the root tsdown config.
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
+import { stripTypeScriptTypes } from "node:module";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { bundledPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
+import type { TsdownPluginOption } from "tsdown";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildPluginSdkPackageExports } from "../../scripts/lib/plugin-sdk-entries.mts";
 import { importFreshModule } from "../../src/plugin-sdk/test-helpers/import-fresh.js";
@@ -26,7 +29,7 @@ type TsdownConfigEntry = {
   outputOptions?: { codeSplitting?: boolean; chunkFileNames?: string };
   outExtensions?: () => { js: string };
   outDir?: string;
-  plugins?: Array<{ name?: string }>;
+  plugins?: TsdownPluginOption;
 };
 
 type TsdownLog = {
@@ -59,6 +62,21 @@ type TsdownExternalFunction = (
 
 function asConfigArray(config: unknown): TsdownConfigEntry[] {
   return Array.isArray(config) ? (config as TsdownConfigEntry[]) : [config as TsdownConfigEntry];
+}
+
+// Keep config assertions aligned with tsdown's nested, async plugin slots.
+async function resolvePluginNames(plugins: TsdownPluginOption): Promise<string[]> {
+  const resolved = await plugins;
+  if (!resolved) {
+    return [];
+  }
+  if (Array.isArray(resolved)) {
+    return (await Promise.all(resolved.map(resolvePluginNames))).flat();
+  }
+  if (!("name" in resolved)) {
+    throw new Error("expected a named plugin in build config assertions");
+  }
+  return [resolved.name];
 }
 
 function entryKeys(config: TsdownConfigEntry): string[] {
@@ -207,7 +225,7 @@ describe("tsdown config", () => {
     expect(cacheKeyGenerator?.({ id: path.resolve(rootDir, "src/index.ts") })).toBeUndefined();
   });
 
-  it("installs schema inlining only on executable runtime graphs", () => {
+  it("installs schema inlining only on executable runtime graphs", async () => {
     const configs = asConfigArray(tsdownConfig);
     const unifiedGraph = requireUnifiedDistGraph();
     const workerGraph = configs.find(
@@ -216,26 +234,38 @@ describe("tsdown config", () => {
     const handoffGraph = configs.find((config) =>
       entryKeys(config).includes("managed-handoff-runtime"),
     );
+    const activationGraph = configs.find((config) =>
+      entryKeys(config).includes("package-update-activation-recovery"),
+    );
     const executableGraphs = new Set([
       unifiedGraph,
       expectDefined(workerGraph, "deploy worker graph"),
+      requireStandaloneRuntimeGraph("worker/file-tool-planning.worker"),
       requireStandaloneRuntimeGraph("worker/image-processor.worker"),
+      requireStandaloneRuntimeGraph("worker/sqlite-store.worker"),
       expectDefined(handoffGraph, "managed handoff graph"),
+      expectDefined(activationGraph, "package activation graph"),
       requireNativeHookRelayGraph(),
       requireStandaloneRuntimeGraph("infra/sqlite-readonly-location.worker"),
+      requireStandaloneRuntimeGraph("infra/sqlite-source-revision.worker"),
       requireStandaloneRuntimeGraph("state/openclaw-state-read.worker"),
       requireStandaloneRuntimeGraph("agents/harness/native-hook-relay-client.worker"),
       requireStandaloneRuntimeGraph("process/spawn-broker/worker"),
+      requireStandaloneRuntimeGraph("state/openclaw-state-lease-heartbeat.worker"),
+      requireStandaloneRuntimeGraph("process/supervisor/service-child-relay"),
+      requireStandaloneRuntimeGraph("process/supervisor/service-child-group-anchor"),
+      requireStandaloneRuntimeGraph("tooling/managed-memory-launcher"),
     ]);
 
     for (const config of configs) {
-      const inlinePlugins =
-        config.plugins?.filter((plugin) => plugin.name === STATE_SCHEMA_INLINE_PLUGIN_NAME) ?? [];
+      const inlinePlugins = (await resolvePluginNames(config.plugins)).filter(
+        (name) => name === STATE_SCHEMA_INLINE_PLUGIN_NAME,
+      );
       expect(inlinePlugins).toHaveLength(executableGraphs.has(config) ? 1 : 0);
     }
   });
 
-  it("isolates relay startup from shared runtime chunks while retaining lazy fallback", () => {
+  it("isolates relay startup from shared runtime chunks while retaining lazy fallback", async () => {
     const relay = requireNativeHookRelayGraph();
     expect(entrySources(relay)).toEqual({
       "native-hook-relay/entry": "src/cli/native-hook-relay-entry.ts",
@@ -245,8 +275,8 @@ describe("tsdown config", () => {
     expect(relay.outputOptions?.codeSplitting).not.toBe(false);
     expect(relay.outputOptions?.chunkFileNames).toBe("native-hook-relay/[name]-[hash].mjs");
     // Only the shared graph may publish the global plugin ownership manifest.
-    expect(relay.plugins).not.toContainEqual(
-      expect.objectContaining({ name: "openclaw:runtime-dependency-ownership" }),
+    expect(await resolvePluginNames(relay.plugins)).not.toContain(
+      "openclaw:runtime-dependency-ownership",
     );
   });
 
@@ -266,7 +296,6 @@ describe("tsdown config", () => {
       "state/openclaw-database-verify.worker",
       "plugins/memory-state",
       "subagent-registry.runtime",
-      "task-registry-control.runtime",
       "link-understanding/apply.runtime",
       "media-understanding/apply.runtime",
       "index",
@@ -295,6 +324,11 @@ describe("tsdown config", () => {
       source: "src/infra/sqlite-readonly-location.worker.ts",
     },
     {
+      label: "raw source revision child",
+      entry: "infra/sqlite-source-revision.worker",
+      source: "src/infra/sqlite-source-revision.worker.ts",
+    },
+    {
       label: "shared-state reader",
       entry: "state/openclaw-state-read.worker",
       source: "src/state/openclaw-state-read.worker.ts",
@@ -309,6 +343,11 @@ describe("tsdown config", () => {
       entry: "process/spawn-broker/worker",
       source: "src/process/spawn-broker/worker.ts",
     },
+    {
+      label: "state lease heartbeat",
+      entry: "state/openclaw-state-lease-heartbeat.worker",
+      source: "src/state/openclaw-state-lease-heartbeat.worker.ts",
+    },
   ])("emits the $label once without sealing its package loaders", ({ entry, source }) => {
     const child = requireStandaloneRuntimeGraph(entry);
     expect(entrySources(child)).toEqual({ [entry]: path.resolve(source) });
@@ -321,6 +360,40 @@ describe("tsdown config", () => {
     const distGraph = requireUnifiedDistGraph();
 
     expect(entrySources(distGraph)["docker-healthcheck"]).toBe("src/docker-healthcheck.ts");
+  });
+
+  it("emits the dist modules referenced by every Docker client", () => {
+    const emittedPaths = new Set(
+      asConfigArray(tsdownConfig)
+        .filter((config) => !(typeof config.dts === "object" && config.dts.emitDtsOnly))
+        .flatMap((config) =>
+          entryKeys(config).map((entry) =>
+            path.resolve(
+              config.outDir ?? "dist",
+              `${entry}${config.outExtensions?.().js ?? ".js"}`,
+            ),
+          ),
+        ),
+    );
+    const clients = ["test/e2e", "scripts/e2e"].flatMap((root) => {
+      const clientRoot = new URL(`../../${root}/`, import.meta.url);
+      return readdirSync(clientRoot, { recursive: true, encoding: "utf8" })
+        .filter((file) => file.endsWith("-docker-client.ts"))
+        .map((file) => new URL(file, clientRoot));
+    });
+    expect(clients.length).toBeGreaterThan(0);
+    for (const clientUrl of clients) {
+      const runtimeSource = stripTypeScriptTypes(readFileSync(clientUrl, "utf8"));
+      // Include literal paths assigned to variables used by dynamic imports, but not erased types.
+      for (const match of runtimeSource.matchAll(
+        /["'`]((?:\.{1,2}\/)+dist\/[^"'`\s]+\.[cm]?js)["'`]/gu,
+      )) {
+        const specifier = expectDefined(match[1], "Docker dist module path");
+        expect(emittedPaths, `${fileURLToPath(clientUrl)}: ${specifier}`).toContain(
+          fileURLToPath(new URL(specifier, clientUrl)),
+        );
+      }
+    }
   });
 
   it("keeps root-package-excluded external plugins out of the root dist graph", () => {

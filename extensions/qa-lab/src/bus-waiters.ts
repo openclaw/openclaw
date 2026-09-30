@@ -7,7 +7,7 @@ import type {
   QaBusWaitForInput,
 } from "./runtime-api.js";
 
-export const DEFAULT_WAIT_TIMEOUT_MS = 5_000;
+const DEFAULT_WAIT_TIMEOUT_MS = 5_000;
 
 export function throwQaBusClosed(): never {
   throw new Error("qa-bus closed");
@@ -59,16 +59,13 @@ export function createQaBusWaiterStore(getSnapshot: () => QaBusStateSnapshot) {
   return {
     reset(reason = "qa-bus reset", terminal = false) {
       readSnapshot = terminal ? throwQaBusClosed : readSnapshot;
-      for (const waiter of waiters) {
-        clearTimeout(waiter.timer);
-        waiter.reject(new Error(reason));
+      for (const pending of [waiters, cursorWaiters]) {
+        for (const waiter of pending) {
+          clearTimeout(waiter.timer);
+          waiter.reject(new Error(reason));
+        }
+        pending.clear();
       }
-      waiters.clear();
-      for (const waiter of cursorWaiters) {
-        clearTimeout(waiter.timer);
-        waiter.reject(new Error(reason));
-      }
-      cursorWaiters.clear();
     },
     settle() {
       if (waiters.size === 0 && cursorWaiters.size === 0) {

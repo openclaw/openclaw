@@ -7,11 +7,8 @@ import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
-import {
-  getDeliveryQueueEntryStatus,
-  loadDeliveryQueueEntry,
-  upsertDeliveryQueueEntry,
-} from "../delivery-queue-sqlite.js";
+import { getDeliveryQueueEntryStatus, loadDeliveryQueueEntry } from "../delivery-queue-sqlite.js";
+import { seedDeliveryQueueEntry } from "../delivery-queue-sqlite.test-support.js";
 import { deliverOutboundPayloadsInternal } from "./deliver.js";
 import {
   LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
@@ -153,7 +150,7 @@ describe("outbound prepared queue migration", () => {
       replyToId: "root-message",
       replyToMode: "batched",
     } satisfies LegacyQueuedDelivery;
-    upsertDeliveryQueueEntry({
+    seedDeliveryQueueEntry({
       queueName: LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
       entry: source,
       stateDir: tmpDir(),
@@ -221,7 +218,7 @@ describe("outbound prepared queue migration", () => {
   it("claims a legacy row before invoking modifiers", async () => {
     const id = "claimed-legacy-delivery";
     const source = legacyEntry(id, "first");
-    upsertDeliveryQueueEntry({
+    seedDeliveryQueueEntry({
       queueName: LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
       entry: source,
       stateDir: tmpDir(),
@@ -284,7 +281,7 @@ describe("outbound prepared queue migration", () => {
     vi.useFakeTimers();
     try {
       const id = "legacy-renewal-failure";
-      upsertDeliveryQueueEntry({
+      seedDeliveryQueueEntry({
         queueName: LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
         entry: legacyEntry(id, "must not replay"),
         stateDir: tmpDir(),
@@ -332,7 +329,7 @@ describe("outbound prepared queue migration", () => {
         operationId: "interrupted-operation",
       },
     } satisfies LegacyQueuedDeliveryPreparation;
-    upsertDeliveryQueueEntry({
+    seedDeliveryQueueEntry({
       queueName: OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
       entry: interrupted,
       stateDir: tmpDir(),
@@ -383,7 +380,7 @@ describe("outbound prepared queue migration", () => {
         operationId: "active-operation",
       },
     } satisfies LegacyQueuedDeliveryPreparation;
-    upsertDeliveryQueueEntry({
+    seedDeliveryQueueEntry({
       queueName: OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
       entry: active,
       stateDir: tmpDir(),
@@ -409,7 +406,7 @@ describe("outbound prepared queue migration", () => {
 
   it("retries setup failures that occur before the first modifier invocation", async () => {
     const id = "legacy-pre-modifier-setup-failure";
-    upsertDeliveryQueueEntry({
+    seedDeliveryQueueEntry({
       queueName: LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
       entry: legacyEntry(id, "retry after setup"),
       stateDir: tmpDir(),
@@ -465,7 +462,7 @@ describe("outbound prepared queue migration", () => {
       warn: (message: string) => warnings.push(message),
       error: vi.fn(),
     };
-    upsertDeliveryQueueEntry({
+    seedDeliveryQueueEntry({
       queueName: LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
       entry: sourceEntry,
       stateDir: tmpDir(),
@@ -530,7 +527,7 @@ describe("outbound prepared queue migration", () => {
 
   it("reconciles a legacy unknown send before modifiers and prepares only when not sent", async () => {
     const id = "legacy-pre-send-reconcile";
-    upsertDeliveryQueueEntry({
+    seedDeliveryQueueEntry({
       queueName: LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
       entry: {
         ...legacyEntry(id, "original"),
@@ -591,7 +588,7 @@ describe("outbound prepared queue migration", () => {
 
   it("settles a reconciled-sent legacy row without rerunning modifiers or provider I/O", async () => {
     const id = "legacy-already-sent";
-    upsertDeliveryQueueEntry({
+    seedDeliveryQueueEntry({
       queueName: LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
       entry: {
         ...legacyEntry(id, "pre-policy"),
@@ -807,7 +804,7 @@ describe("outbound prepared queue migration", () => {
 
   it("dead-letters a partially-sent legacy row even when reconciliation reports not sent", async () => {
     const id = "legacy-partial-not-sent";
-    upsertDeliveryQueueEntry({
+    seedDeliveryQueueEntry({
       queueName: LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
       entry: {
         ...legacyEntry(id, "pre-policy"),
@@ -856,7 +853,7 @@ describe("outbound prepared queue migration", () => {
 
   it("fails unresolved legacy custody payload-free without running modifiers", async () => {
     const id = "legacy-unresolved";
-    upsertDeliveryQueueEntry({
+    seedDeliveryQueueEntry({
       queueName: LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
       entry: {
         ...legacyEntry(id, "pre-policy"),

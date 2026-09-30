@@ -31,6 +31,7 @@ export type DoctorToolSchemaOptions = {
   mode?: HealthCheckContext["mode"];
   env?: NodeJS.ProcessEnv;
   runWithPluginMetadataSnapshot?: PluginMetadataSnapshotScopeRunner;
+  deferInspectionDisposal?: (dispose: () => Promise<void>) => void;
 };
 
 function modelContextFinding(agentId: string, reason: string, deferred = false): HealthFinding {

@@ -33,17 +33,6 @@ vi.mock("openclaw/plugin-sdk/text-chunking", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/text-chunking")>();
   return { ...actual, convertMarkdownTables: mockConvertMarkdownTables };
 });
-vi.mock("./runtime.js", () => ({
-  getFeishuRuntime: () => ({
-    channel: {
-      text: {
-        resolveMarkdownTableMode: vi.fn(() => "preserve"),
-        convertMarkdownTables: vi.fn((text: string) => text),
-      },
-    },
-  }),
-}));
-
 let sendMessageFeishu: typeof import("./send.js").sendMessageFeishu;
 
 const cfg = {} as ClawdbotConfig;

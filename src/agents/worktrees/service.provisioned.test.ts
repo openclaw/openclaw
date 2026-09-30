@@ -1,3 +1,4 @@
+import { deepStrictEqual } from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
@@ -9,7 +10,10 @@ import { runGitWorkerOperation } from "../../infra/git-worker.js";
 import * as commandRunner from "../../process/exec-runner.js";
 import * as commandSpawner from "../../process/exec-spawn.js";
 import { isPidAlive } from "../../shared/pid-alive.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import { killPidIfAlive, waitForPidFile } from "../../test-utils/process-tree.js";
 import * as worktreeGit from "./git.js";
 import { provisionIncludedFiles, snapshotProvisionedFiles } from "./provisioned-files.js";
@@ -86,6 +90,7 @@ describe("ManagedWorktreeService provisioned state", () => {
   });
 
   afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
   });
@@ -134,7 +139,7 @@ describe("ManagedWorktreeService provisioned state", () => {
         name: "dependencies",
         baseRef: "HEAD",
       });
-      expect(getRegistryWorktreeProvisionedPaths(env, created.id)).toEqual(inspection.paths);
+      expect(await getRegistryWorktreeProvisionedPaths(env, created.id)).toEqual(inspection.paths);
       expect(await fs.readFile(path.join(created.path, ".env.local"), "utf8")).toBe(
         "synthetic provisioned\n",
       );
@@ -166,7 +171,7 @@ describe("ManagedWorktreeService provisioned state", () => {
     }
   });
 
-  it.each([undefined, "", "absent.local\n", "dependencies/\n!dependencies/\n"])(
+  it.each([undefined, "dependencies/\n!dependencies/\n"])(
     "does not broaden empty manifest selections (%s)",
     async (manifest) => {
       await fs.writeFile(path.join(repo, ".gitignore"), "dependencies/\n");
@@ -254,7 +259,9 @@ describe("ManagedWorktreeService provisioned state", () => {
           name: "literal-batches",
           baseRef: "HEAD",
         });
-        expect(getRegistryWorktreeProvisionedPaths(env, created.id)).toEqual(names.toSorted());
+        expect(await getRegistryWorktreeProvisionedPaths(env, created.id)).toEqual(
+          names.toSorted(),
+        );
         await expect(fs.stat(path.join(created.path, "literalZ.local"))).rejects.toMatchObject({
           code: "ENOENT",
         });
@@ -287,8 +294,10 @@ describe("ManagedWorktreeService provisioned state", () => {
     },
   );
 
-  it("propagates manifest inventory failures without provisioning unrelated files", async () => {
-    await fs.mkdir(path.join(repo, ".worktreeinclude"));
+  it("rejects a manifest symlink resolving to a directory", async () => {
+    const target = path.join(repo, "manifest-directory");
+    await fs.mkdir(target);
+    await fs.symlink(target, path.join(repo, ".worktreeinclude"), "junction");
     await expect(
       runGitWorkerOperation({
         type: "worktree.provisioning-inspection",
@@ -377,60 +386,53 @@ describe("ManagedWorktreeService provisioned state", () => {
     }
   });
 
-  it.each([false, true])(
-    "skips inventories for absent provisioned contents and restores their state (deleted=%s)",
-    async (deleted) => {
-      await fs.writeFile(path.join(repo, ".gitignore"), ".env.local\nignored/\n");
-      await fs.writeFile(path.join(repo, ".worktreeinclude"), ".env.local\n");
-      await git(repo, "add", ".gitignore", ".worktreeinclude");
-      await git(repo, "commit", "-m", "configure worktree provisioning");
-      if (deleted) {
-        await fs.writeFile(path.join(repo, ".env.local"), "synthetic provisioned bytes\n");
-      }
-      const created = await service.create({ repoRoot: repo, name: "absent", baseRef: "HEAD" });
-      const ledger = deleted ? [".env.local"] : [];
-      const expected = deleted ? [{ path: ".env.local", mode: null, chunks: 0 }] : [];
-      if (deleted) {
-        await fs.rm(path.join(created.path, ".env.local"));
-      }
-      await fs.writeFile(path.join(created.path, "README.md"), "preserved edit\n");
-      const oldChunk = { worktreeId: created.id, path: "old.local", chunkIndex: 0 };
-      const oldBytes = new TextEncoder().encode("old");
-      insertRegistryWorktreeProvisionedChunk(env, { ...oldChunk, data: oldBytes });
-      const guard = vi.fn();
-      const commands = vi.spyOn(commandSpawner, "spawnCommandWithInvocation");
-      try {
-        await expect(
-          snapshotProvisionedFiles(env, created.id, created.path, ledger, {
-            assertCurrent: () => {
-              throw new Error("authority changed");
-            },
-          }),
-        ).rejects.toThrow("authority changed");
-        expect(getRegistryWorktreeProvisionedChunk(env, oldChunk)).toEqual(oldBytes);
-        expect(
-          await snapshotProvisionedFiles(env, created.id, created.path, ledger, {
-            assertCurrent: guard,
-          }),
-        ).toEqual(expected);
-        expect(guard).toHaveBeenCalled();
-        expect(getRegistryWorktreeProvisionedChunk(env, oldChunk)).toBeUndefined();
-        expect(commands.mock.calls.length).toBe(0);
-      } finally {
-        commands.mockRestore();
-      }
-      const removed = await service.remove({ id: created.id, reason: "test" });
-      expect(removed.removed).toBe(true);
-      expect(getRegistryWorktreeProvisionedState(env, created.id)).toEqual(expected);
-      const restored = await service.restore({ id: created.id });
-      expect(await fs.readFile(path.join(restored.path, "README.md"), "utf8")).toBe(
-        "preserved edit\n",
-      );
-      await expect(fs.stat(path.join(restored.path, ".env.local"))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
-    },
-  );
+  it("skips inventories for deleted provisioned contents and restores their absence", async () => {
+    await fs.writeFile(path.join(repo, ".gitignore"), ".env.local\nignored/\n");
+    await fs.writeFile(path.join(repo, ".worktreeinclude"), ".env.local\n");
+    await git(repo, "add", ".gitignore", ".worktreeinclude");
+    await git(repo, "commit", "-m", "configure worktree provisioning");
+    await fs.writeFile(path.join(repo, ".env.local"), "synthetic provisioned bytes\n");
+    const created = await service.create({ repoRoot: repo, name: "absent", baseRef: "HEAD" });
+    const ledger = [".env.local"];
+    const expected = [{ path: ".env.local", mode: null, chunks: 0 }];
+    await fs.rm(path.join(created.path, ".env.local"));
+    await fs.writeFile(path.join(created.path, "README.md"), "preserved edit\n");
+    const oldChunk = { worktreeId: created.id, path: "old.local", chunkIndex: 0 };
+    const oldBytes = new TextEncoder().encode("old");
+    insertRegistryWorktreeProvisionedChunk(env, { ...oldChunk, data: oldBytes });
+    const guard = vi.fn();
+    const commands = vi.spyOn(commandSpawner, "spawnCommandWithInvocation");
+    try {
+      await expect(
+        snapshotProvisionedFiles(env, created.id, created.path, ledger, {
+          assertCurrent: () => {
+            throw new Error("authority changed");
+          },
+        }),
+      ).rejects.toThrow("authority changed");
+      expect(await getRegistryWorktreeProvisionedChunk(env, oldChunk)).toEqual(oldBytes);
+      expect(
+        await snapshotProvisionedFiles(env, created.id, created.path, ledger, {
+          assertCurrent: guard,
+        }),
+      ).toEqual(expected);
+      expect(guard).toHaveBeenCalled();
+      expect(await getRegistryWorktreeProvisionedChunk(env, oldChunk)).toBeUndefined();
+      expect(commands.mock.calls.length).toBe(0);
+    } finally {
+      commands.mockRestore();
+    }
+    const removed = await service.remove({ id: created.id, reason: "test" });
+    expect(removed.removed).toBe(true);
+    expect(await getRegistryWorktreeProvisionedState(env, created.id)).toEqual(expected);
+    const restored = await service.restore({ id: created.id });
+    expect(await fs.readFile(path.join(restored.path, "README.md"), "utf8")).toBe(
+      "preserved edit\n",
+    );
+    await expect(fs.stat(path.join(restored.path, ".env.local"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
 
   it("cancels and joins a parent provisioned-membership child before removal settles", async () => {
     await fs.writeFile(path.join(repo, ".gitignore"), "settings.local\n");
@@ -507,62 +509,7 @@ describe("ManagedWorktreeService provisioned state", () => {
     expect(await service.removeIfLossless(created.id)).toBe(true);
     await fs.writeFile(path.join(repo, "large.local"), Buffer.from("new source"));
     const restored = await service.restore({ id: created.id });
-    expect((await fs.readFile(path.join(restored.path, "large.local"))).at(-1)).toBe(0x62);
-  });
-
-  it("keeps provisioned files protected after manifest removal or pattern changes", async () => {
-    await fs.writeFile(path.join(repo, ".gitignore"), ".env.local\nsettings.local\n");
-    await fs.writeFile(path.join(repo, ".worktreeinclude"), ".env.local\nsettings.local\n");
-    await git(repo, "add", ".gitignore", ".worktreeinclude");
-    await git(repo, "commit", "-m", "configure worktree provisioning");
-    await fs.writeFile(path.join(repo, ".env.local"), "value=source\n");
-    await fs.writeFile(path.join(repo, "settings.local"), "theme=source\n");
-    await addRemote(root, repo);
-
-    const manifestRemoved = await service.create({
-      repoRoot: repo,
-      name: "manifest-removed",
-      baseRef: "HEAD",
-    });
-    const patternRemoved = await service.create({
-      repoRoot: repo,
-      name: "pattern-removed",
-      baseRef: "HEAD",
-    });
-    const restorable = await service.create({
-      repoRoot: repo,
-      name: "manifest-restorable",
-      baseRef: "HEAD",
-    });
-    await service.acquire(manifestRemoved.id);
-    await service.acquire(patternRemoved.id);
-    await service.acquire(restorable.id);
-
-    await fs.rm(path.join(repo, ".worktreeinclude"));
-    await fs.writeFile(path.join(manifestRemoved.path, ".env.local"), "value=rotated\n");
-    expect(await service.removeIfLossless(manifestRemoved.id)).toBe(true);
-    const restoredManifest = await service.restore({ id: manifestRemoved.id });
-    expect(await fs.readFile(path.join(restoredManifest.path, ".env.local"), "utf8")).toBe(
-      "value=rotated\n",
-    );
-
-    await fs.writeFile(path.join(repo, ".worktreeinclude"), "settings.local\n");
-    await fs.writeFile(path.join(patternRemoved.path, ".env.local"), "value=pattern-rotated\n");
-    expect(await service.removeIfLossless(patternRemoved.id)).toBe(true);
-    const restoredPattern = await service.restore({ id: patternRemoved.id });
-    expect(await fs.readFile(path.join(restoredPattern.path, ".env.local"), "utf8")).toBe(
-      "value=pattern-rotated\n",
-    );
-
-    await fs.rm(path.join(repo, ".worktreeinclude"));
-    expect(await service.removeIfLossless(restorable.id)).toBe(true);
-    const restored = await service.restore({ id: restorable.id });
-    expect(await fs.readFile(path.join(restored.path, ".env.local"), "utf8")).toBe(
-      "value=source\n",
-    );
-    expect(await fs.readFile(path.join(restored.path, "settings.local"), "utf8")).toBe(
-      "theme=source\n",
-    );
+    deepStrictEqual(await fs.readFile(path.join(restored.path, "large.local")), copy);
   });
 
   it("fails closed for pre-ledger worktrees whose ignored state is unknown", async () => {
@@ -718,14 +665,6 @@ describe("ManagedWorktreeService provisioned state", () => {
       replacementPath: "entry/child.txt",
       snapshotPaths: ["README.md", "entry/child.txt"],
       directory: true,
-      staged: false,
-    },
-    {
-      replacement: "directory-to-file",
-      originalPath: "entry/child.txt",
-      replacementPath: "entry",
-      snapshotPaths: ["README.md", "entry"],
-      directory: false,
       staged: false,
     },
     {

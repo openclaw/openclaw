@@ -5,6 +5,7 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import * as userProfileReads from "../../state/user-profile-reads.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { initializeSessionReadContext } from "./sessions-read-cache.test-support.js";
 import { sessionSharingHandlers } from "./sessions-sharing.js";
 import { identifiedClient, sessionSharingTestContext } from "./sessions-sharing.test-support.js";
 
@@ -25,6 +26,8 @@ it.each(["session.members.list", "session.members.add"] as const)(
         },
       );
       const client = identifiedClient(owner.id);
+      const requestContext = sessionSharingTestContext(vi.fn());
+      await initializeSessionReadContext(requestContext);
       const ready = createDeferredCore();
       const release = createDeferredCore();
       const enumerate = userProfileReads.listProfiles;
@@ -43,7 +46,7 @@ it.each(["session.members.list", "session.members.add"] as const)(
           sessionKey,
           ...(method === "session.members.add" ? { identityId: member.id } : {}),
         },
-        context: sessionSharingTestContext(vi.fn()),
+        context: requestContext,
         client,
         respond,
       } as never);

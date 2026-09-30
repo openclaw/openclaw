@@ -41,7 +41,6 @@ type PreparedModelRuntimeLeaseContext = {
   getBuildTimeoutMs(): number;
   getGatewayLifecycleActive(): boolean;
   getPendingReplacement(): PreparedModelRuntimeReplacement | undefined;
-  prepareSnapshot(input: PreparedModelRuntimeInput): Promise<PreparedModelRuntimeSnapshot>;
 };
 
 function createPreparedModelRuntimeAdmissionClaim(context: PreparedModelRuntimeLeaseContext) {
@@ -109,13 +108,39 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
   let owner: PreparedModelRuntimeOwner;
   let snapshot: PreparedModelRuntimeSnapshot;
   const admission = createPreparedModelRuntimeAdmissionClaim(context);
+  let lastExternalPublication: Promise<unknown> | undefined;
+  let previousAttempt: readonly unknown[] | undefined;
+  let supersededPublication: PreparedModelRuntimePublicationSupersededError | undefined;
   for (;;) {
     admission.release();
     assertAdmission();
     // Replacement owns publication from synchronous staling through atomic generation commit.
     // Dynamic work arriving inside that window must retry after the new owners become visible.
     const replacement = context.getPendingReplacement();
+    const currentOwner = context.owners.get(key);
+    const attempt = [
+      key,
+      replacement,
+      currentOwner,
+      currentOwner?.generation,
+      currentOwner?.snapshot,
+      currentOwner?.pending,
+      currentOwner?.needsRefresh,
+      lastExternalPublication,
+    ];
+    if (previousAttempt?.every((value, index) => value === attempt[index])) {
+      // Failed construction can retire its owner, hiding supersession from this checkpoint.
+      throw (
+        supersededPublication ??
+        new PreparedModelRuntimeOwnerNotPublishedError(
+          `prepared model runtime lease admission made no publication progress for ${input.agentDir}; retry the request`,
+        )
+      );
+    }
+    previousAttempt = attempt;
+    supersededPublication = undefined;
     if (replacement) {
+      lastExternalPublication = replacement.promise;
       await racePromiseWithAbortSignal(replacement.promise, options.abortSignal);
       if (context.getPendingReplacement()) {
         continue;
@@ -144,6 +169,7 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
           const configuredOwner = resolveConfiguredOwnerPublication(context.owners, input);
           if (configuredOwner.matches || !canActivateConfiglessSetup) {
             if (configuredOwner.pending) {
+              lastExternalPublication = configuredOwner.pending;
               await racePromiseWithAbortSignal(configuredOwner.pending, options.abortSignal);
               continue;
             }
@@ -185,6 +211,7 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
     if (provenance === "run" && context.getGatewayLifecycleActive() && options.pluginGeneration) {
       const configuredOwner = resolveConfiguredOwner(context.owners, input);
       if (configuredOwner?.pending) {
+        lastExternalPublication = configuredOwner.pending;
         await racePromiseWithAbortSignal(
           configuredOwner.pending.catch(() => undefined),
           options.abortSignal,
@@ -276,6 +303,7 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
     if (existing?.pending && ownerGenerationChanged) {
       // Do not supersede active discovery. Wait for its owner to settle, then retry against
       // the published identity so same-generation callers still coalesce.
+      lastExternalPublication = existing.pending;
       await racePromiseWithAbortSignal(
         existing.pending.catch(() => undefined),
         options.abortSignal,
@@ -287,6 +315,7 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
         // Matching callers lease the immutable generation they joined even if a queued
         // mismatched caller publishes the next owner immediately after this one settles.
         admission.claim(key, existing);
+        lastExternalPublication = existing.pending;
         snapshot = await racePromiseWithAbortSignal(existing.pending, options.abortSignal);
         if (existing.snapshot !== snapshot || existing.needsRefresh) {
           continue;
@@ -295,11 +324,19 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
         break;
       }
       if (existing && !staleDynamicOwner && !ownerGenerationChanged) {
-        admission.claim(key, existing);
-        snapshot = await racePromiseWithAbortSignal(
-          context.prepareSnapshot(input),
-          options.abortSignal,
-        );
+        if (existing.needsRefresh) {
+          throw existing.refreshError ?? new Error("prepared model runtime refresh is pending");
+        }
+        if (
+          !existing.snapshot ||
+          (input.readOnly && !preparedModelRuntimeConfigsMatch(existing.input.config, input.config))
+        ) {
+          throw new PreparedModelRuntimeOwnerNotPublishedError(
+            `prepared model runtime owner was not published for ${input.agentDir}`,
+          );
+        }
+        // The exact keyed owner already carries the prepared selection and snapshot.
+        snapshot = existing.snapshot;
       } else {
         // Fresh keys publish a first generation; stale dynamic owners publish a distinct
         // replacement owner because existing leases retain their immutable snapshot, so
@@ -325,6 +362,7 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
     } catch (error) {
       admission.release();
       if (error instanceof PreparedModelRuntimePublicationSupersededError) {
+        supersededPublication = error;
         continue;
       }
       throw error;
@@ -355,10 +393,7 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
       }) === ownerKey({ ...input, loadRuntimePlugins: false, runtimePluginSelections: undefined })
         ? configuredOwner
         : owner;
-    snapshot = capturePreparedModelRuntimeCatalog(
-      snapshot,
-      catalogOwner.snapshot?.readPublishedModels?.(),
-    );
+    snapshot = capturePreparedModelRuntimeCatalog(snapshot, catalogOwner.snapshot);
     const pluginGeneration = owner.pluginGeneration!;
     if (owner.provenance !== provenance) {
       return {

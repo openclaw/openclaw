@@ -43,7 +43,6 @@ import type {
 } from "./attempt-types.js";
 import { createCopilotByokProxy } from "./byok-proxy.js";
 import { attachEventBridge, type SessionLike } from "./event-bridge.js";
-import { createCopilotNativeSubagentTaskMirror } from "./native-subagent-task-mirror.js";
 import { classifyResumeFailure, decideReplayAction } from "./replay-shim.js";
 import type { PooledClient } from "./runtime.js";
 import type { CopilotUserInputBridge } from "./user-input-bridge.js";
@@ -109,11 +108,6 @@ export async function runCopilotExecution(context: {
   let bridge: ReturnType<typeof attachEventBridge> | undefined;
   let transcriptJournal: AttemptTranscriptJournal | undefined;
   let initialSdkUserValidated = false;
-  const nativeSubagentTaskMirror = createCopilotNativeSubagentTaskMirror({
-    agentId: sessionAgentId,
-    now,
-    scope: input.agentHarnessTaskRuntimeScope,
-  });
   let activeRunHandleRef: ReturnType<typeof registerCopilotActiveRun> | undefined;
   let userInputBridgeRef: CopilotUserInputBridge | undefined;
   let cleanupToolBridge: (() => void) | undefined;
@@ -167,7 +161,6 @@ export async function runCopilotExecution(context: {
             aborted: true,
             externalAbort: true,
             messagesSnapshot: messages,
-            now,
             promptError: undefined,
             sdkSessionId: undefined,
           }),
@@ -176,7 +169,6 @@ export async function runCopilotExecution(context: {
       return finishAttempt(
         createResult(input, {
           messagesSnapshot: messages,
-          now,
           promptError: createPromptError(
             "sandbox_resolution_failure",
             `[copilot-attempt] sandbox resolution failed: ${toCopilotError(error).message}`,
@@ -195,7 +187,6 @@ export async function runCopilotExecution(context: {
     return finishAttempt(
       createResult(input, {
         messagesSnapshot: messages,
-        now,
         promptError: createPromptError(
           "sandbox_cwd_override_unsupported",
           "[copilot-attempt] cwd override is not supported for sandboxed Copilot runs; omit cwd or use the agent workspace as cwd",
@@ -234,7 +225,6 @@ export async function runCopilotExecution(context: {
     return finishAttempt(
       createResult(input, {
         messagesSnapshot: messages,
-        now,
         promptError: createPromptError("model_not_supported", toCopilotError(error).message, error),
         sdkSessionId: undefined,
       }),
@@ -266,13 +256,11 @@ export async function runCopilotExecution(context: {
           modelId: modelRef.id,
           agentId: readNonEmptyString(params.agentId) ?? "copilot",
           sessionId: readNonEmptyString(input.sessionId) ?? "copilot-session",
-          sessionKey: readNonEmptyString((input as { sessionKey?: unknown }).sessionKey),
           agentDir: readNonEmptyString(input.agentDir),
           workspaceDir: effectiveWorkspaceDir,
           cwd: effectiveCwd,
           sandbox,
           spawnWorkspaceDir: sandboxAwareSpawnWorkspaceDir,
-          abortSignal: params.abortSignal,
           attemptParams: observeToolTerminal ? { ...input, observeToolTerminal } : input,
           computerContextEpoch,
           sessionRef,
@@ -316,7 +304,6 @@ export async function runCopilotExecution(context: {
       } catch (error: unknown) {
         const result = createResult(input, {
           messagesSnapshot: messages,
-          now,
           promptError: createPromptError(
             "tool_bridge_failure",
             `[copilot-attempt] tool-bridge construction failed: ${toCopilotError(error).message}`,
@@ -430,7 +417,6 @@ export async function runCopilotExecution(context: {
       sessionKey: input.sessionKey,
       onAssistantDelta: settledToolFinalization ? undefined : input.onAssistantDelta,
       onAgentEvent: settledToolFinalization ? undefined : input.onAgentEvent,
-      onNativeSubagentEvent: (event) => nativeSubagentTaskMirror?.handleEvent(event),
       onContextCompacted: () => {
         computerContextEpoch.value += 1;
         delete computerContextEpoch.frameToolCallId;
@@ -592,7 +578,6 @@ export async function runCopilotExecution(context: {
         cleanupToolBridge,
         cleanupByokProxy,
         deleteSessionOnIncompleteCleanup: nativeSessionCreatedFresh && initialUserValidated,
-        finalizeNativeSubagents: () => nativeSubagentTaskMirror?.finalizeActiveRuns(),
         handle,
         pool: deps.pool,
         sdkSessionId,
@@ -616,15 +601,10 @@ export async function runCopilotExecution(context: {
       params.abortSignal?.removeEventListener("abort", onAbort);
     } else {
       await bridge?.awaitCompactionChain();
+      bridge?.detach();
       await bridge?.awaitAgentEventChain();
-      try {
-        nativeSubagentTaskMirror?.finalizeActiveRuns();
-      } catch (error) {
-        promptError ??= toCopilotError(error);
-      }
       cleanupToolBridge?.();
       await cleanupByokProxy?.();
-      bridge?.detach();
       params.abortSignal?.removeEventListener("abort", onAbort);
       if (session) {
         try {

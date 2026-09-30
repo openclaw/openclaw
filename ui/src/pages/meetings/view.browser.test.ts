@@ -37,16 +37,15 @@ function readerProps(): Parameters<typeof renderTranscripts>[0] {
       ],
       loading: false,
       error: null,
-      trimmed: false,
     },
     readerTab: "text",
+    summaryGeneration: { kind: "idle" },
+    onSummaryRetry: vi.fn(),
     exportState: { kind: "idle" },
     onNavigate: vi.fn(),
     onRefresh: vi.fn(),
     onReaderRetry: vi.fn(),
     onReaderTab: vi.fn(),
-    onLoadMore: vi.fn(),
-    onReaderStart: vi.fn(),
     onDownload: vi.fn(),
   };
 }

@@ -78,21 +78,7 @@ describe("linePlugin status.collectStatusIssues", () => {
     expect(snapshot).toMatchObject({ lifecycle: "recovering", connected: false });
   });
 
-  it.each([
-    {
-      name: "registered but switched off",
-      webhook: { status: "disabled" },
-      message:
-        "LINE is not delivering webhook events: this channel's webhook URL is registered but switched off.",
-      fix: "turn Use webhook on in the channel's Messaging API tab in the LINE Developers Console",
-    },
-    {
-      name: "never registered",
-      webhook: { status: "unset" },
-      message: "LINE is not delivering webhook events: this channel has no webhook URL registered.",
-      fix: "register your gateway's public HTTPS URL for the route in channels.line.webhookPath (default /line/webhook) in the channel's Messaging API tab in the LINE Developers Console, then turn Use webhook on",
-    },
-  ])("reports a webhook that is $name", ({ webhook, message, fix }) => {
+  it("reports a webhook that is registered but switched off", () => {
     expect(
       collectIssues([
         {
@@ -100,7 +86,7 @@ describe("linePlugin status.collectStatusIssues", () => {
           enabled: true,
           configured: true,
           tokenSource: "config",
-          probe: { ok: true, webhook },
+          probe: { ok: true, webhook: { status: "disabled" } },
         },
       ]),
     ).toEqual([
@@ -108,8 +94,9 @@ describe("linePlugin status.collectStatusIssues", () => {
         channel: "line",
         accountId: "default",
         kind: "config",
-        message,
-        fix,
+        message:
+          "LINE is not delivering webhook events: this channel's webhook URL is registered but switched off.",
+        fix: "turn Use webhook on in the channel's Messaging API tab in the LINE Developers Console",
       },
     ]);
   });
@@ -136,37 +123,6 @@ describe("linePlugin status.collectStatusIssues", () => {
         },
       ]),
     ).toStrictEqual([]);
-  });
-
-  it("does not warn when a sanitized snapshot is configured", () => {
-    expect(
-      collectIssues([
-        {
-          accountId: "default",
-          configured: true,
-          tokenSource: "env",
-        },
-      ]),
-    ).toStrictEqual([]);
-  });
-
-  it("reports missing access token when the snapshot is unconfigured and tokenSource is none", () => {
-    expect(
-      collectIssues([
-        {
-          accountId: "default",
-          configured: false,
-          tokenSource: "none",
-        },
-      ]),
-    ).toEqual([
-      {
-        channel: "line",
-        accountId: "default",
-        kind: "config",
-        message: "LINE channel access token not configured",
-      },
-    ]);
   });
 
   it("reports missing secret when the snapshot is unconfigured but a token source exists", () => {

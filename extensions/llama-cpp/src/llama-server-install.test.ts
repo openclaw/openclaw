@@ -1,9 +1,11 @@
+import assert from "node:assert/strict";
 import type { ExecFileException } from "node:child_process";
 import { createHash } from "node:crypto";
 import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import * as fileDurability from "@openclaw/fs-safe/durability";
 import JSZip from "jszip";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -15,6 +17,9 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("node:child_process", () => ({ execFile: mocks.execFile }));
+vi.mock("@openclaw/fs-safe/durability", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@openclaw/fs-safe/durability")>()),
+}));
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>()),
   fetchWithSsrFGuard: mocks.fetchWithSsrFGuard,
@@ -27,13 +32,13 @@ vi.mock("./defaults.js", async (importOriginal) => ({
 import {
   LLAMA_SERVER_BUILD,
   LLAMA_SERVER_COMMIT,
+  resolveManagedLlamaServerPaths,
+  selectLlamaServerAsset,
   type LlamaServerAsset,
 } from "./llama-server-assets.js";
 import {
   downloadVerifiedFile,
   ensureLlamaServerInstalled,
-  resolveManagedLlamaServerPaths,
-  selectLlamaServerAsset,
   sha256File,
 } from "./llama-server-install.js";
 
@@ -66,6 +71,22 @@ async function createInstalledServer(): Promise<string> {
   await fs.mkdir(path.dirname(command), { recursive: true });
   await fs.writeFile(command, "");
   return command;
+}
+
+async function createCpuArchive() {
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "llama-cpu-install-")));
+  tempRoots.push(root);
+  mocks.resolveLlamaCppDataDir.mockReturnValue(root);
+  const source = selectLlamaServerAsset("win32", "arm64", { kind: "cpu" });
+  const serverBytes = await new JSZip()
+    .file(source.executable, "server")
+    .generateAsync({ type: "nodebuffer" });
+  const asset: LlamaServerAsset = {
+    ...source,
+    sha256: createHash("sha256").update(serverBytes).digest("hex"),
+  };
+  mockDownload(serverBytes);
+  return { root, asset };
 }
 
 function mockVersionOutput(output: string): void {
@@ -124,23 +145,11 @@ describe("cached file integrity", () => {
     const original = Buffer.from("GGUFverified");
     const digest = createHash("sha256").update(original).digest("hex");
     await fs.writeFile(destination, original);
-    let scans = 0;
-    const createReadStream = nodeFs.createReadStream.bind(nodeFs);
-    vi.spyOn(nodeFs, "createReadStream").mockImplementation((...args) => {
-      scans += 1;
-      return createReadStream(...args);
-    });
-    injectFileHandle((handle) => {
-      const stream = handle.createReadStream.bind(handle);
-      handle.createReadStream = (...args) => {
-        scans += 1;
-        return stream(...args);
-      };
-    });
+    const scans = vi.spyOn(fileDurability, "sha256File");
 
     expect(await sha256File(destination)).toBe(digest);
     expect(await sha256File(destination)).toBe(digest);
-    expect(scans).toBe(1);
+    expect(scans).toHaveBeenCalledTimes(1);
     // Preserve length and mtime: inode/ctime changes must still invalidate verification.
     const previous = await fs.stat(destination);
     const replacement = `${destination}.replacement`;
@@ -152,7 +161,7 @@ describe("cached file integrity", () => {
     expect(await sha256File(destination)).toBe(digest);
     await fs.rm(destination);
     await expect(sha256File(destination)).rejects.toMatchObject({ code: "ENOENT" });
-    expect(scans).toBe(3);
+    expect(scans).toHaveBeenCalledTimes(3);
   });
 
   it.each(["replacement", "cancellation"] as const)(
@@ -163,19 +172,15 @@ describe("cached file integrity", () => {
       await fs.writeFile(destination, Buffer.alloc(2 * 1024 * 1024, 1));
       await fs.writeFile(replacement, "replacement bytes");
       const controller = new AbortController();
-      injectFileHandle((handle) => {
-        const createReadStream = handle.createReadStream.bind(handle);
-        handle.createReadStream = (...args) => {
-          const stream = createReadStream(...args);
-          stream.once("data", () => {
-            if (mode === "cancellation") {
-              controller.abort();
-            } else {
-              nodeFs.renameSync(replacement, destination);
-            }
-          });
-          return stream;
-        };
+      const hashFile = fileDurability.sha256File;
+      vi.spyOn(fileDurability, "sha256File").mockImplementationOnce(async (...args) => {
+        const hashed = hashFile(...args);
+        if (mode === "cancellation") {
+          controller.abort();
+        } else {
+          nodeFs.renameSync(replacement, destination);
+        }
+        return await hashed;
       });
       await expect(sha256File(destination, controller.signal)).rejects.toThrow(
         mode === "cancellation" ? /abort/iu : "File changed during integrity verification",
@@ -198,10 +203,10 @@ describe("cached file integrity", () => {
       destination,
       expectedSha256: digest,
     });
-    const directScan = vi.spyOn(nodeFs, "createReadStream");
+    const scan = vi.spyOn(fileDurability, "sha256File");
     const opened = vi.spyOn(fs, "open");
     expect(await sha256File(destination)).toBe(digest);
-    expect(directScan).not.toHaveBeenCalled();
+    expect(scan).not.toHaveBeenCalled();
     expect(opened).not.toHaveBeenCalled();
   });
 });
@@ -260,7 +265,7 @@ describe("downloadVerifiedFile", () => {
     expect(onProgress.mock.calls.map(([progress]) => progress.downloadedSize)).toEqual([
       1_000_000, 2_000_000, 3_000_000,
     ]);
-    expect(await fs.readFile(destination)).toEqual(payload);
+    assert.deepStrictEqual(await fs.readFile(destination), payload);
     expect(release).toHaveBeenCalledOnce();
   });
 
@@ -365,20 +370,11 @@ describe("ensureLlamaServerInstalled", () => {
     controller.abort();
     await expect(queued).rejects.toMatchObject({ name: "AbortError" });
     versionReply.resolve(
-      `version: 0.1.0-dev (build ${LLAMA_SERVER_BUILD}, commit ${LLAMA_SERVER_COMMIT.slice(0, 9)})`,
+      `version: 0.1.0-dev (build ${LLAMA_SERVER_BUILD}, commit ${LLAMA_SERVER_COMMIT.slice(0, 9)})\nbuilt with test compiler`,
     );
     await expect(first).resolves.toMatchObject({ command });
     await expect(ensureLlamaServerInstalled()).resolves.toMatchObject({ command });
     expect(mocks.execFile).toHaveBeenCalledTimes(2);
-  });
-
-  it("accepts only the pinned build and commit from the version line", async () => {
-    const command = await createInstalledServer();
-    mockVersionOutput(
-      `version: 0.1.0-dev (build ${LLAMA_SERVER_BUILD}, commit ${LLAMA_SERVER_COMMIT.slice(0, 9)})\nbuilt with test compiler`,
-    );
-
-    await expect(ensureLlamaServerInstalled()).resolves.toMatchObject({ command });
   });
 
   it("rejects a different active build even when output mentions the pinned build later", async () => {
@@ -393,18 +389,7 @@ describe("ensureLlamaServerInstalled", () => {
   });
 
   it("uses the wider version timeout only for a freshly extracted CPU ZIP", async () => {
-    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "llama-cpu-install-")));
-    tempRoots.push(root);
-    mocks.resolveLlamaCppDataDir.mockReturnValue(root);
-    const source = selectLlamaServerAsset("win32", "arm64", { kind: "cpu" });
-    const serverBytes = await new JSZip()
-      .file(source.executable, "server")
-      .generateAsync({ type: "nodebuffer" });
-    const asset: LlamaServerAsset = {
-      ...source,
-      sha256: createHash("sha256").update(serverBytes).digest("hex"),
-    };
-    mockDownload(serverBytes);
+    const { root, asset } = await createCpuArchive();
     const calls: Array<{ command: string; args: string[]; timeout?: number }> = [];
     mocks.execFile.mockImplementation(
       (
@@ -442,18 +427,7 @@ describe("ensureLlamaServerInstalled", () => {
   });
 
   it("aborts fresh validation and removes the unpublished CPU ZIP files", async () => {
-    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "llama-cpu-abort-")));
-    tempRoots.push(root);
-    mocks.resolveLlamaCppDataDir.mockReturnValue(root);
-    const source = selectLlamaServerAsset("win32", "arm64", { kind: "cpu" });
-    const serverBytes = await new JSZip()
-      .file(source.executable, "server")
-      .generateAsync({ type: "nodebuffer" });
-    const asset: LlamaServerAsset = {
-      ...source,
-      sha256: createHash("sha256").update(serverBytes).digest("hex"),
-    };
-    mockDownload(serverBytes);
+    const { root, asset } = await createCpuArchive();
     const controller = new AbortController();
     const timeouts: Array<number | undefined> = [];
     mocks.execFile.mockImplementation(

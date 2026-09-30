@@ -1,4 +1,3 @@
-/** Provider alias canonicalization for model catalog rows. */
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
@@ -101,7 +100,6 @@ function buildProviderAliasMap(params: ProviderAliasSource): ReadonlyMap<string,
   return aliases;
 }
 
-/** Builds provider/ref canonicalizers from manifest model-catalog aliases. */
 export function createModelCatalogProviderAliasCanonicalizer(params: ProviderAliasSource): {
   provider: (provider: string) => string;
   ref: <TRef extends { provider: string }>(ref: TRef) => TRef;
@@ -118,12 +116,4 @@ export function createModelCatalogProviderAliasCanonicalizer(params: ProviderAli
       return canonicalProvider === ref.provider ? ref : { ...ref, provider: canonicalProvider };
     },
   };
-}
-
-/** Canonicalizes the provider field on a model reference. */
-export function canonicalizeModelCatalogProviderRef<TRef extends { provider: string }>(
-  ref: TRef,
-  params: ProviderAliasSource,
-): TRef {
-  return createModelCatalogProviderAliasCanonicalizer(params).ref(ref);
 }

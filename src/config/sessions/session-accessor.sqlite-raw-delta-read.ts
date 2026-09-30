@@ -7,13 +7,15 @@ import type {
   SessionTranscriptRawDeltaResult,
 } from "./session-accessor.sqlite-contract.js";
 import type { CurrentTranscriptProjection } from "./session-accessor.sqlite-projection-read.js";
-import type { resolveSqliteTranscriptReadScope } from "./session-accessor.sqlite-scope.js";
+import type { ResolvedTranscriptReadScope } from "./session-accessor.sqlite-scope.js";
 import { readSessionTranscriptHotWatermark } from "./session-accessor.sqlite-transcript-watermark-read.js";
 import { normalizeVisibleMessageLimit } from "./session-accessor.sqlite-visible-cursor.js";
+import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 import {
   resolveSqliteSessionTranscriptReadFence,
   SessionTranscriptReadFenceError,
 } from "./session-transcript-read-fence.js";
+import { transcriptEventJsonSql } from "./transcript-payload.js";
 
 const RAW_TRANSCRIPT_CURSOR_VERSION = 1;
 const DEFAULT_RAW_TRANSCRIPT_MAX_EVENTS = 1_000;
@@ -28,8 +30,6 @@ type RawTranscriptCursor = {
   sessionId: string;
   version: typeof RAW_TRANSCRIPT_CURSOR_VERSION;
 };
-
-type ResolvedTranscriptReadScope = ReturnType<typeof resolveSqliteTranscriptReadScope>;
 
 function encodeRawTranscriptCursor(cursor: RawTranscriptCursor): string {
   return Buffer.from(JSON.stringify(cursor), "utf8").toString("base64url");
@@ -184,7 +184,7 @@ export function readRawDeltaInTransaction(
       .select([
         "seq",
         /* kysely-allow-raw: SQLite byte length avoids fetching or parsing excluded JSON. */
-        sql<number>`OCTET_LENGTH(event_json) + 1`.as("serialized_bytes"),
+        sql<number>`${transcriptEventReadBytesSql()} + 1`.as("serialized_bytes"),
       ])
       .$if(beforeEventSeq !== undefined, (query) => query.where("seq", "<", beforeEventSeq!))
       .orderBy("seq", "asc");
@@ -219,7 +219,7 @@ export function readRawDeltaInTransaction(
       : executeSqliteQuerySync(
           database,
           transcript
-            .select(["event_json", "seq"])
+            .select([transcriptEventJsonSql(database).as("event_json"), "seq"])
             .where("seq", ">", cursor.lastSeq)
             .where("seq", "<=", lastSeq)
             .orderBy("seq", "asc"),

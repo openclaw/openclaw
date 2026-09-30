@@ -22,7 +22,6 @@ import type {
   CronRunTelemetry,
 } from "../types.js";
 import { abortErrorMessage, timeoutErrorMessage } from "./execution-errors.js";
-import { resolveJobPayloadTextForMain } from "./jobs-scheduling.js";
 import type { CronRunDeliveryResult, CronServiceState } from "./state.js";
 import {
   type CronJobExecutionResult,
@@ -228,7 +227,10 @@ async function executeMainSessionCronJob(
     CronRunTelemetry &
     Pick<CronRunDeliveryResult, "delivered" | "deliveryAttempted" | "deliveryError" | "delivery">
 > {
-  const text = resolveJobPayloadTextForMain(job);
+  const text =
+    job.payload.kind === "systemEvent" && typeof job.payload.text === "string"
+      ? job.payload.text.trim()
+      : undefined;
   if (!text) {
     const kind = job.payload.kind;
     return {
@@ -315,7 +317,7 @@ async function executeMainSessionCronJob(
 
 async function executeDetachedCronJob(
   state: CronServiceState,
-  job: CronJob,
+  job: CronStoredJob,
   abortSignal: AbortSignal | undefined,
   options?: ExecuteJobCoreOptions,
 ): Promise<
@@ -391,6 +393,15 @@ async function executeDetachedCronJob(
 
   const res = await state.deps.runIsolatedAgentJob({
     job,
+    admissionSource:
+      job.owner?.sessionKey ||
+      job.owner?.accountId ||
+      job.scheduledToolPolicy?.mode === "account" ||
+      job.payload.externalContentSource ||
+      job.toolsAllowProvenance?.channelRequester ||
+      (job.toolsAllowProvenance && job.toolsAllowProvenance.callerOrigin?.kind !== "local")
+        ? "requester-schedule"
+        : "operator-schedule",
     message: job.payload.message,
     abortSignal,
     onExecutionStarted: options?.onExecutionStarted,
@@ -518,12 +529,4 @@ async function executeScriptCronJob(
     scriptStateChanged: result.stateChanged === true,
     ...(result.stateChanged === true ? { scriptState: result.state } : {}),
   };
-}
-
-/** Clears the currently armed cron timer. */
-export function stopTimer(state: CronServiceState) {
-  if (state.timer) {
-    clearTimeout(state.timer);
-  }
-  state.timer = null;
 }

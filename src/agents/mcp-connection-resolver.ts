@@ -3,7 +3,7 @@
  * Resolved url/headers are credentials — never log, fingerprint, or persist them.
  */
 import crypto from "node:crypto";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { filterStringRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveOpenClawMcpTransportAlias } from "../config/mcp-config-normalize.js";
 import { logWarn } from "../logger.js";
@@ -36,11 +36,6 @@ export const MCP_CONNECTION_REVALIDATE_MS = 5 * 60 * 1000;
  */
 let connectionDigestKey: Buffer | undefined;
 
-function getConnectionDigestKey(): Buffer {
-  connectionDigestKey ??= crypto.randomBytes(32);
-  return connectionDigestKey;
-}
-
 /**
  * Ephemeral keyed digest of resolved connection material for rotation detection.
  * HMAC-SHA256 with a process-local random key — not a plain hash of credentials.
@@ -58,7 +53,7 @@ export function hashMcpResolvedConnections(
       return [serverName, connection.url, headers] as const;
     });
   return crypto
-    .createHmac("sha256", getConnectionDigestKey())
+    .createHmac("sha256", (connectionDigestKey ??= crypto.randomBytes(32)))
     .update(JSON.stringify(tuples))
     .digest("hex");
 }
@@ -202,14 +197,12 @@ export async function resolveRequesterScopedMcpConnections(params: {
     return resolved;
   }
   const resolvers = listMcpServerConnectionResolversByServerName();
+  const agentAccountId = normalizeOptionalString(params.agentAccountId);
+  const messageChannel = normalizeOptionalString(params.messageChannel);
   const ctx: McpServerConnectionResolveContext = {
     requesterSenderId,
-    ...(normalizeOptionalString(params.agentAccountId)
-      ? { agentAccountId: normalizeOptionalString(params.agentAccountId) }
-      : {}),
-    ...(normalizeOptionalString(params.messageChannel)
-      ? { messageChannel: normalizeOptionalString(params.messageChannel) }
-      : {}),
+    ...(agentAccountId ? { agentAccountId } : {}),
+    ...(messageChannel ? { messageChannel } : {}),
   };
   const timeoutMs = MCP_CONNECTION_RESOLVER_TIMEOUT_MS;
   const sortedNames = [...params.serverNames].toSorted((a, b) => a.localeCompare(b));
@@ -224,20 +217,15 @@ export async function resolveRequesterScopedMcpConnections(params: {
         if (!result || typeof result.url !== "string" || result.url.trim().length === 0) {
           return null;
         }
-        const headers =
-          result.headers && isRecord(result.headers)
-            ? Object.fromEntries(
-                Object.entries(result.headers)
-                  .filter(
-                    (headerEntry): headerEntry is [string, string] =>
-                      typeof headerEntry[1] === "string",
-                  )
-                  .toSorted(([a], [b]) => a.localeCompare(b)),
-              )
-            : undefined;
+        const filteredHeaders = filterStringRecord(result.headers);
+        const headers = filteredHeaders
+          ? Object.fromEntries(
+              Object.entries(filteredHeaders).toSorted(([a], [b]) => a.localeCompare(b)),
+            )
+          : undefined;
         const connection = {
           url: result.url.trim(),
-          ...(headers && Object.keys(headers).length > 0 ? { headers } : {}),
+          ...(headers ? { headers } : {}),
         } satisfies McpServerConnectionResolved;
         registerResolvedConnectionSecrets(connection);
         return { serverName, connection };

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
+import { userInfo } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -551,7 +552,9 @@ describe("legacy agent directory migration", () => {
         expect(getAgentDir()).toBe(legacyDir);
         await expect(fs.readdir(canonicalDir)).resolves.toEqual([]);
         if (process.platform !== "win32") {
+          await fs.chown(canonicalDir, -1, userInfo().gid);
           await fs.chmod(canonicalDir, 0o2750);
+          expect((await fs.stat(canonicalDir)).mode & 0o7777).toBe(0o2750);
         }
         const sourceRoot = await fs.realpath(legacyDir);
         const detected = await detect();

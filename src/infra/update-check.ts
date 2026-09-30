@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { runCommandWithTimeout } from "../process/exec.js";
-import { detectPackageManager as detectPackageManagerImpl } from "./detect-package-manager.js";
+import { detectPackageManager } from "./detect-package-manager.js";
 import { createGitCommandError, executeGitCommand } from "./git-exec.js";
 import { compareOpenClawReleaseVersions } from "./npm-registry-spec.js";
 import { readPackageName } from "./package-json.js";
@@ -10,7 +10,6 @@ import { compareValidSemver, normalizeLegacyDotBetaVersion } from "./semver.js";
 import {
   channelToNpmTag,
   DEV_BRANCH,
-  resolveDevUpstreamRefs,
   selectNpmChannelVersion,
   type UpdateChannel,
 } from "./update-channels.js";
@@ -18,7 +17,12 @@ import {
   fetchNpmPackageTargetStatus,
   type NpmMetadataCommandRunner,
 } from "./update-check-package-target.js";
-import { readBuiltRuntimeCommit } from "./update-git-runtime.js";
+import {
+  readGitReceiptFetchTarget,
+  readGitBranchFetchTarget,
+  resolveGitRepositoryMetadata,
+} from "./update-git-metadata.js";
+import { readBuiltRuntimeCommit, readGitRuntimeArtifactStatus } from "./update-git-runtime.js";
 import { detectGlobalInstallManagerForRoot } from "./update-global.js";
 import { updateInstallRootsMatch } from "./update-install-root.js";
 import { UPDATE_NETWORK_TIMEOUT_MS } from "./update-network-budget.js";
@@ -43,12 +47,14 @@ type GitUpdateStatus = {
   upstream: string | null;
   upstreamSource?: "tracking" | "receipt";
   upstreamSha?: string | null;
+  repositoryUrl?: string;
   commitAtMs?: number | null;
   dirty: boolean | null;
   ahead: number | null;
   behind: number | null;
   fetchOk: boolean | null;
   builtSha?: string | null;
+  artifacts?: Awaited<ReturnType<typeof readGitRuntimeArtifactStatus>>;
   countsCached?: true;
   stale?: UpdateFetchFailure;
   error?: string;
@@ -57,12 +63,6 @@ type GitUpdateStatus = {
 export type UpdateInstallIdentity = {
   installKind: "git" | "package" | "unknown";
   git?: Pick<GitUpdateStatus, "branch" | "tag" | "error">;
-};
-
-type GitTrackingTarget = {
-  revision: string;
-  display: string;
-  fetch: "prune" | { remote: string; mergeRef: string };
 };
 
 type DepsStatus = {
@@ -102,6 +102,7 @@ type NpmTagStatus = {
   tag: string;
   version: string | null;
   error?: string;
+  metadata?: Awaited<ReturnType<typeof fetchNpmPackageTargetStatus>>;
 };
 
 export type UpdateCheckResult = {
@@ -134,10 +135,12 @@ function isLoopbackNpmRegistry(raw: string): boolean {
   }
 }
 
-function resolveExtendedStableRegistryTarget(params: {
-  packageName?: string;
-  env?: NodeJS.ProcessEnv;
-}): { registryUrl: string; packageName: string } {
+export function resolveUpdateRegistryTarget(
+  params: {
+    packageName?: string;
+    env?: NodeJS.ProcessEnv;
+  } = {},
+): { registryUrl: string; packageName: string } {
   const env = params.env ?? process.env;
   const packageName = params.packageName?.trim() || PUBLIC_NPM_PACKAGE_NAME;
   const packageSpecOverride = env.OPENCLAW_UPDATE_PACKAGE_SPEC?.trim();
@@ -166,7 +169,7 @@ export async function resolveExtendedStablePackage(params: {
   }
 
   const timeoutMs = params.timeoutMs ?? UPDATE_NETWORK_TIMEOUT_MS;
-  const registryTarget = resolveExtendedStableRegistryTarget(params);
+  const registryTarget = resolveUpdateRegistryTarget(params);
   const selector = await fetchNpmPackageTargetStatus({
     target: "extended-stable",
     timeoutMs,
@@ -218,10 +221,6 @@ async function exists(p: string): Promise<boolean> {
   } catch {
     return false;
   }
-}
-
-async function detectPackageManager(root: string): Promise<PackageManager> {
-  return (await detectPackageManagerImpl(root)) ?? "unknown";
 }
 
 /** Classify installation ownership without reading Git history or dependency state. */
@@ -347,36 +346,9 @@ async function checkGitUpdateStatus(params: {
   if (error) {
     return { ...base, error };
   }
-  const trackingRevisions =
-    branch === "HEAD"
-      ? params.useDetachedDevUpstream
-        ? resolveDevUpstreamRefs(true, [`refs/remotes/origin/${DEV_BRANCH}`])
-        : []
-      : resolveDevUpstreamRefs(false);
-  let tracking: GitTrackingTarget | null = null;
-  for (const revision of trackingRevisions) {
-    const display = await readGit("rev-parse", "--abbrev-ref", "--symbolic-full-name", revision);
-    if (!display) {
-      continue;
-    }
-    let fetch: GitTrackingTarget["fetch"] = "prune";
-    if (branch === "HEAD") {
-      if (revision === `${DEV_BRANCH}@{upstream}`) {
-        const [remote, mergeRef] = await Promise.all([
-          readGit("config", "--get", `branch.${DEV_BRANCH}.remote`),
-          readGit("config", "--get", `branch.${DEV_BRANCH}.merge`),
-        ]);
-        if (!remote || !mergeRef) {
-          continue;
-        }
-        fetch = { remote, mergeRef };
-      } else {
-        fetch = { remote: "origin", mergeRef: `refs/heads/${DEV_BRANCH}` };
-      }
-    }
-    tracking = { revision, display, fetch };
-    break;
-  }
+  const trackingBranch =
+    branch === "HEAD" ? (params.useDetachedDevUpstream ? DEV_BRANCH : null) : branch;
+  let tracking = trackingBranch ? await readGitBranchFetchTarget(readGit, trackingBranch) : null;
 
   const commitAtSeconds = Number.parseInt(commitAtRaw ?? "", 10);
   const commitAtMs = Number.isSafeInteger(commitAtSeconds) ? commitAtSeconds * 1000 : null;
@@ -388,34 +360,82 @@ async function checkGitUpdateStatus(params: {
     params.upstreamFallback?.currentSha.trim().toLowerCase() === sha.toLowerCase()
       ? params.upstreamFallback.upstreamRef.trim() || null
       : null;
-  const upstream = tracking?.display ?? receiptUpstream;
-  const upstreamSource = tracking
+  const receiptTarget = receiptUpstream
+    ? await readGitReceiptFetchTarget(readGit, receiptUpstream, Boolean(params.fetch))
+    : null;
+  // A matching receipt owns the intended upstream even when it cannot resolve.
+  // Only an install with neither configured tracking nor receipt intent uses Dev's default.
+  if (
+    !tracking &&
+    !receiptUpstream &&
+    branch === "HEAD" &&
+    trackingBranch &&
+    (await readGit("remote", "get-url", "--", "origin"))
+  ) {
+    tracking = { remote: "origin", mergeRef: `refs/heads/${trackingBranch}` };
+  }
+  const fetchTarget = tracking ?? receiptTarget;
+  const dirty = dirtyRes && dirtyRes.code === 0 ? dirtyRes.stdout.trim().length > 0 : null;
+  let fetchOk: boolean | null = null;
+  let fetchedCommit: string | null = null;
+  if (params.fetch && fetchTarget) {
+    if (fetchTarget.remote === ".") {
+      fetchOk = true;
+    } else {
+      const exclusions =
+        (await readGit("config", "--get-all", `remote.${fetchTarget.remote}.fetch`))
+          ?.split("\n")
+          .filter((refspec) => refspec.startsWith("^")) ?? [];
+      // Select one source; Git retains configured destination/force policy. Explicit
+      // exclusions and FETCH_HEAD prevent an unfetched old ref from looking fresh.
+      const fetched = await runGit(
+        "fetch",
+        "--quiet",
+        "--no-tags",
+        "--no-prune",
+        "--no-prune-tags",
+        "--no-recurse-submodules",
+        "--",
+        fetchTarget.remote,
+        fetchTarget.mergeRef,
+        ...exclusions,
+      );
+      fetchedCommit =
+        fetched?.code === 0 ? await readGit("rev-parse", "--verify", "FETCH_HEAD^{commit}") : null;
+      fetchOk = fetched?.code === 0 && fetchedCommit !== null;
+    }
+  }
+  // Command-local defaults let Git resolve a fresh SHA-only Dev checkout's own
+  // mapping after fetch, without creating a branch or changing its configuration.
+  const trackingRevision =
+    tracking && trackingBranch
+      ? await readGit(
+          "-c",
+          `branch.${trackingBranch}.remote=${tracking.remote}`,
+          "-c",
+          `branch.${trackingBranch}.merge=${tracking.mergeRef}`,
+          "rev-parse",
+          "--symbolic-full-name",
+          `${trackingBranch}@{upstream}`,
+        )
+      : null;
+  const upstream = trackingRevision
+    ? await readGit("rev-parse", "--abbrev-ref", "--symbolic-full-name", trackingRevision)
+    : receiptUpstream;
+  const upstreamSource = trackingRevision
     ? ("tracking" as const)
     : receiptUpstream
       ? ("receipt" as const)
       : undefined;
-
-  const dirty = dirtyRes && dirtyRes.code === 0 ? dirtyRes.stdout.trim().length > 0 : null;
-
-  const fetchTarget =
-    tracking?.fetch && tracking.fetch !== "prune"
-      ? [
-          "--",
-          tracking.fetch.remote,
-          `+${tracking.fetch.mergeRef}:refs/remotes/${tracking.display}`,
-        ]
-      : ["--prune"];
-  const fetchOk = params.fetch
-    ? (await runGit("fetch", "--quiet", ...fetchTarget))?.code === 0
-    : null;
-
-  // Freeze the post-fetch upstream for both graph queries. Active tracking wins;
-  // a matching successful update receipt keeps intentional detached installs comparable.
-  const upstreamRevision = `${upstreamSource === "tracking" ? tracking?.revision : upstream}^{commit}`;
-  const upstreamCommit =
+  const upstreamRevision = `${trackingRevision ?? receiptTarget?.revision ?? upstream}^{commit}`;
+  let upstreamCommit =
     (!params.fetch || fetchOk === true) && upstream && sha
       ? await readGit("rev-parse", "--verify", upstreamRevision)
       : null;
+  if (params.fetch && fetchTarget?.remote !== "." && upstreamCommit !== fetchedCommit) {
+    upstreamCommit = null;
+  }
+
   const mergeBase = sha && upstreamCommit ? await readGit("merge-base", sha, upstreamCommit) : null;
   const counts =
     sha && upstreamCommit && mergeBase
@@ -432,42 +452,15 @@ async function checkGitUpdateStatus(params: {
     upstream,
     ...(upstreamSource ? { upstreamSource } : {}),
     upstreamSha: upstreamCommit,
+    ...(await resolveGitRepositoryMetadata(readGit, fetchTarget)),
     commitAtMs,
     dirty,
     ahead: parsed ? Number(parsed[1]) : null,
     behind: parsed ? Number(parsed[2]) : null,
     fetchOk,
     builtSha: await readBuiltRuntimeCommit(root),
+    artifacts: await readGitRuntimeArtifactStatus({ root, sha }),
   };
-}
-
-async function resolveDepsMarker(params: { root: string; manager: PackageManager }): Promise<{
-  lockfilePath: string | null;
-  markerPath: string | null;
-}> {
-  const root = params.root;
-  if (params.manager === "pnpm") {
-    return {
-      lockfilePath: path.join(root, "pnpm-lock.yaml"),
-      markerPath: path.join(root, "node_modules", ".modules.yaml"),
-    };
-  }
-  if (params.manager === "bun") {
-    const textLockfilePath = path.join(root, "bun.lock");
-    return {
-      lockfilePath: (await exists(textLockfilePath))
-        ? textLockfilePath
-        : path.join(root, "bun.lockb"),
-      markerPath: path.join(root, "node_modules"),
-    };
-  }
-  if (params.manager === "npm") {
-    return {
-      lockfilePath: path.join(root, "package-lock.json"),
-      markerPath: path.join(root, "node_modules"),
-    };
-  }
-  return { lockfilePath: null, markerPath: null };
 }
 
 async function checkDepsStatus(params: {
@@ -475,126 +468,93 @@ async function checkDepsStatus(params: {
   manager: PackageManager;
 }): Promise<DepsStatus> {
   const root = path.resolve(params.root);
-  const { lockfilePath, markerPath } = await resolveDepsMarker({
-    root,
-    manager: params.manager,
-  });
-
-  if (!lockfilePath || !markerPath) {
+  const manager = params.manager;
+  if (manager === "unknown") {
     return {
-      manager: params.manager,
+      manager,
+      lockfilePath: null,
+      markerPath: null,
       status: "unknown",
-      lockfilePath,
-      markerPath,
       reason: "unknown package manager",
     };
   }
-
+  const lockfile =
+    manager === "pnpm"
+      ? "pnpm-lock.yaml"
+      : manager === "npm"
+        ? "package-lock.json"
+        : (await exists(path.join(root, "bun.lock")))
+          ? "bun.lock"
+          : "bun.lockb";
+  const lockfilePath = path.join(root, lockfile);
+  const markerPath = path.join(
+    root,
+    "node_modules",
+    ...(manager === "pnpm" ? [".modules.yaml"] : []),
+  );
+  const paths = { manager, lockfilePath, markerPath };
   const lockExists = await exists(lockfilePath);
   const markerExists = await exists(markerPath);
   if (!lockExists) {
     return {
-      manager: params.manager,
+      ...paths,
       status: "unknown",
-      lockfilePath,
-      markerPath,
       reason: "lockfile missing",
     };
   }
   if (!markerExists) {
     return {
-      manager: params.manager,
+      ...paths,
       status: "missing",
-      lockfilePath,
-      markerPath,
       reason: "node_modules marker missing",
     };
   }
 
   return {
-    manager: params.manager,
+    ...paths,
     status: "ok",
-    lockfilePath,
-    markerPath,
-  };
-}
-
-async function fetchNpmLatestVersion(params?: {
-  timeoutMs?: number;
-  cwd?: string;
-  env?: NodeJS.ProcessEnv;
-  runCommand?: NpmMetadataCommandRunner;
-}): Promise<RegistryStatus> {
-  const res = await fetchNpmTagVersion({
-    tag: "latest",
-    timeoutMs: params?.timeoutMs,
-    cwd: params?.cwd,
-    env: params?.env,
-    runCommand: params?.runCommand,
-  });
-  return {
-    latestVersion: res.version,
-    error: res.error,
-  };
-}
-
-async function fetchNpmRegistryVersionForChannel(params: {
-  channel: UpdateChannel;
-  timeoutMs?: number;
-  cwd?: string;
-  env?: NodeJS.ProcessEnv;
-  runCommand?: NpmMetadataCommandRunner;
-}): Promise<RegistryStatus> {
-  const res = await resolveNpmChannelTag({
-    channel: params.channel,
-    timeoutMs: params.timeoutMs,
-    cwd: params.cwd,
-    env: params.env,
-    runCommand: params.runCommand,
-  });
-  return {
-    latestVersion: res.version,
-    tag: res.tag,
-    error: res.error,
-    ...(res.reason ? { error: res.reason, reason: res.reason } : {}),
   };
 }
 
 export async function fetchNpmTagVersion(params: {
   tag: string;
+  registryUrl?: string;
+  packageName?: string;
   timeoutMs?: number;
   spec?: string;
   command?: string;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   runCommand?: NpmMetadataCommandRunner;
+  signal?: AbortSignal;
 }): Promise<NpmTagStatus> {
+  const { tag, ...options } = params;
   const res = await fetchNpmPackageTargetStatus({
-    target: params.tag,
-    timeoutMs: params.timeoutMs,
-    spec: params.spec,
-    command: params.command,
-    cwd: params.cwd,
-    env: params.env,
-    runCommand: params.runCommand,
+    ...options,
+    target: tag,
   });
   return {
-    tag: params.tag,
+    tag,
     version: res.version,
     error: res.error,
+    metadata: res,
   };
 }
 
 export async function resolveNpmChannelTag(params: {
   channel: UpdateChannel;
+  registryUrl?: string;
+  packageName?: string;
   timeoutMs?: number;
   command?: string;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   runCommand?: NpmMetadataCommandRunner;
+  signal?: AbortSignal;
 }): Promise<NpmTagStatus & { reason?: ExtendedStableFailureReason }> {
-  const channelTag = channelToNpmTag(params.channel);
-  if (params.channel === "extended-stable") {
+  const { channel, ...options } = params;
+  const channelTag = channelToNpmTag(channel);
+  if (channel === "extended-stable") {
     const resolved = await resolveExtendedStablePackage({
       installKind: "package",
       timeoutMs: params.timeoutMs,
@@ -605,14 +565,10 @@ export async function resolveNpmChannelTag(params: {
   }
   const fetchTag = (tag: string) =>
     fetchNpmTagVersion({
+      ...options,
       tag,
-      timeoutMs: params.timeoutMs,
-      command: params.command,
-      cwd: params.cwd,
-      env: params.env,
-      runCommand: params.runCommand,
     });
-  if (params.channel !== "beta") {
+  if (channel !== "beta") {
     return await fetchTag(channelTag);
   }
 
@@ -651,13 +607,15 @@ export async function checkUpdateStatus(params: {
   const timeoutMs = params.timeoutMs ?? UPDATE_NETWORK_TIMEOUT_MS;
   const resolveRegistryChannel = (status: UpdateInstallIdentity) =>
     params.registryChannel ?? params.resolveRegistryChannel?.(status);
-  const fetchRegistry = (registryChannel: UpdateChannel | undefined) =>
-    registryChannel
-      ? fetchNpmRegistryVersionForChannel({
-          channel: registryChannel,
-          timeoutMs,
-        })
-      : fetchNpmLatestVersion({ timeoutMs });
+  const fetchRegistry = async (channel: UpdateChannel | undefined): Promise<RegistryStatus> => {
+    const result = await resolveNpmChannelTag({ channel: channel ?? "stable", timeoutMs });
+    return {
+      latestVersion: result.version,
+      ...(channel ? { tag: result.tag } : {}),
+      error: result.error,
+      ...(result.reason ? { error: result.reason, reason: result.reason } : {}),
+    };
+  };
   const root = params.root ? path.resolve(params.root) : null;
   if (!root) {
     const registryChannel = resolveRegistryChannel({ installKind: "unknown" });
@@ -691,7 +649,7 @@ export async function checkUpdateStatus(params: {
     };
   }
   const packageManager = isGit
-    ? await detectPackageManager(root)
+    ? ((await detectPackageManager(root)) ?? "unknown")
     : ((await detectGlobalInstallManagerForRoot(
         async (argv, options) => {
           params.signal?.throwIfAborted();

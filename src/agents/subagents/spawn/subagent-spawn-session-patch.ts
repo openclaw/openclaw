@@ -1,110 +1,25 @@
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { buildSessionCreationStamp } from "../../../config/sessions/session-entry-provenance.js";
+import {
+  buildSessionCreationStamp,
+  inheritSessionGitContributorProfileIds,
+} from "../../../config/sessions/session-entry-provenance.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import type { GatewaySessionStoreTargetWithStore } from "../../../gateway/session-utils-store.types.js";
+import { waitForSessionParticipantRecording } from "../../../sessions/session-participant-recording.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.js";
 import { resolveUserPath } from "../../../utils.js";
-import {
-  inheritedToolAllowPatch,
-  inheritedToolDenyPatch,
-  normalizeInheritedToolAllowlist,
-  normalizeInheritedToolDenylist,
-} from "../../inherited-tool-deny.js";
+import { inheritedToolAllowPatch, inheritedToolDenyPatch } from "../../inherited-tool-deny.js";
+import type { resolveSpawnAdmission } from "../../spawn-plan.js";
 import type { PreparedSessionPermissionPolicy } from "../../tool-fs-policy.types.js";
-import { getSubagentSpawnDeps } from "./subagent-spawn-deps.js";
-import { splitModelRef } from "./subagent-spawn-plan.js";
+import { type resolveSubagentModelAndThinkingPlan, splitModelRef } from "./subagent-spawn-plan.js";
 import {
   loadSessionEntry,
-  resolveGatewaySessionStoreTarget,
+  resolveGatewaySessionStoreTargetInWorker,
   upsertSessionEntryCore,
+  withSessionEntryReadOnlyInWorker,
 } from "./subagent-spawn.runtime.js";
-
-function buildDirectChildSessionPatch(patch: Record<string, unknown>): Partial<SessionEntry> {
-  const entry: Partial<SessionEntry> = {};
-  const spawnDepth = patch.spawnDepth;
-  if (typeof spawnDepth === "number" && Number.isFinite(spawnDepth) && spawnDepth >= 0) {
-    entry.spawnDepth = Math.floor(spawnDepth);
-  }
-  if (patch.subagentRole === "orchestrator" || patch.subagentRole === "leaf") {
-    entry.subagentRole = patch.subagentRole;
-  }
-  if (patch.subagentControlScope === "children" || patch.subagentControlScope === "none") {
-    entry.subagentControlScope = patch.subagentControlScope;
-  }
-  if (patch.inheritedToolPolicyVersion === 1) {
-    entry.inheritedToolPolicyVersion = 1;
-  }
-  if (patch.incognito === true) {
-    entry.incognito = true;
-  }
-  for (const key of [
-    "spawnedBy",
-    "completionOwnerSessionKey",
-    "parentSessionKey",
-    "spawnedWorkspaceDir",
-    "spawnedCwd",
-  ] as const) {
-    const value = normalizeOptionalString(patch[key]);
-    if (value) {
-      entry[key] = value;
-    }
-  }
-  const inheritedToolDeny = normalizeInheritedToolDenylist(patch.inheritedToolDeny);
-  if (inheritedToolDeny.length > 0) {
-    entry.inheritedToolDeny = inheritedToolDeny;
-  }
-  const inheritedToolAllow = normalizeInheritedToolAllowlist(patch.inheritedToolAllow);
-  if (inheritedToolAllow.length > 0) {
-    entry.inheritedToolAllow = inheritedToolAllow;
-  }
-  if (typeof patch.thinkingLevel === "string" && patch.thinkingLevel.trim()) {
-    entry.thinkingLevel = patch.thinkingLevel.trim();
-  }
-  const authProfileOverride = normalizeOptionalString(patch.authProfileOverride);
-  if (authProfileOverride) {
-    entry.authProfileOverride = authProfileOverride;
-    entry.authProfileOverrideSource = patch.authProfileOverrideSource === "auto" ? "auto" : "user";
-  }
-  if (patch.fastMode === true || patch.fastMode === false || patch.fastMode === "auto") {
-    entry.fastMode = patch.fastMode;
-  }
-  if (typeof patch.swarmGroupId === "string" && patch.swarmGroupId.trim()) {
-    entry.swarmGroupId = patch.swarmGroupId.trim();
-  }
-  if (patch.swarmCollector === true) {
-    entry.swarmCollector = true;
-  }
-  if (patch.swarmOutputSchema && typeof patch.swarmOutputSchema === "object") {
-    entry.swarmOutputSchema = patch.swarmOutputSchema as Record<string, unknown>;
-  }
-  if (typeof patch.model === "string" && patch.model.trim()) {
-    const { provider, model } = splitModelRef(patch.model.trim());
-    if (model) {
-      entry.model = model;
-      entry.modelOverride = model;
-      entry.modelOverrideSource = patch.modelOverrideSource === "auto" ? "auto" : "user";
-      entry.modelOverrideRouteResolution = "resolved";
-      const fallbackOriginProvider = normalizeOptionalString(
-        patch.modelOverrideFallbackOriginProvider,
-      );
-      const fallbackOriginModel = normalizeOptionalString(patch.modelOverrideFallbackOriginModel);
-      if (fallbackOriginProvider && fallbackOriginModel) {
-        entry.modelOverrideFallbackOriginProvider = fallbackOriginProvider;
-        entry.modelOverrideFallbackOriginModel = fallbackOriginModel;
-      }
-      if (provider) {
-        entry.modelProvider = provider;
-        entry.providerOverride = provider;
-      }
-    }
-  }
-  return entry;
-}
-
-export function loadSubagentConfig() {
-  return getSubagentSpawnDeps().getRuntimeConfig();
-}
 
 export async function createInitialSubagentSession(params: {
   cfg: OpenClawConfig;
@@ -119,65 +34,128 @@ export async function createInitialSubagentSession(params: {
   spawnedWorkspaceDir?: string;
   spawnedCwd?: string;
   sessionPermissionPolicy?: PreparedSessionPermissionPolicy;
-  admissionPatch?: Record<string, unknown>;
+  admissionPatch?: Extract<
+    ReturnType<typeof resolveSpawnAdmission>,
+    { ok: true }
+  >["childSessionPatch"];
   inheritedToolAllowlist?: string[];
   inheritedToolDenylist?: string[];
-  modelPatch: Record<string, unknown>;
+  modelPatch: Partial<
+    Extract<
+      Awaited<ReturnType<typeof resolveSubagentModelAndThinkingPlan>>,
+      { status: "ok" }
+    >["initialSessionPatch"]
+  >;
   swarmGroupId?: string;
   collect: boolean;
   outputSchema?: Record<string, unknown>;
 }): Promise<{ status: "ok"; entry?: SessionEntry } | { status: "error"; error: string }> {
-  const initialChildSessionPatch: Record<string, unknown> = {
-    spawnedBy: params.requesterInternalKey,
-    completionOwnerSessionKey: params.completionOwnerSessionKey,
-    // Navigation and control lineage commit with the creation stamp so a
-    // launch failure cannot leave a durable but parentless child row.
-    parentSessionKey: params.requesterInternalKey,
-    ...(params.spawnedWorkspaceDir ? { spawnedWorkspaceDir: params.spawnedWorkspaceDir } : {}),
-    ...(params.spawnedCwd ? { spawnedCwd: params.spawnedCwd } : {}),
-    ...params.admissionPatch,
+  const { subagentRole, ...admissionPatch } = params.admissionPatch ?? {};
+  const {
+    model: modelRef,
+    modelOverrideSource,
+    modelOverrideFallbackOriginProvider,
+    modelOverrideFallbackOriginModel,
+    ...modelPatch
+  } = params.modelPatch;
+  const { provider, model } = splitModelRef(modelRef);
+  const fallbackOriginProvider = normalizeOptionalString(modelOverrideFallbackOriginProvider);
+  const fallbackOriginModel = normalizeOptionalString(modelOverrideFallbackOriginModel);
+  const initialChildSessionPatch: Partial<SessionEntry> = {
+    ...admissionPatch,
+    ...(subagentRole ? { subagentRole } : {}),
     inheritedToolPolicyVersion: 1,
     ...inheritedToolAllowPatch(params.inheritedToolAllowlist),
     ...inheritedToolDenyPatch(params.inheritedToolDenylist),
-    ...params.modelPatch,
-    ...(params.swarmGroupId ? { swarmGroupId: params.swarmGroupId } : {}),
+    ...modelPatch,
+    ...(model
+      ? {
+          model,
+          modelOverride: model,
+          modelOverrideSource: modelOverrideSource === "auto" ? "auto" : "user",
+          modelOverrideRouteResolution: "resolved",
+          ...(provider ? { modelProvider: provider, providerOverride: provider } : {}),
+          ...(fallbackOriginProvider && fallbackOriginModel
+            ? {
+                modelOverrideFallbackOriginProvider: fallbackOriginProvider,
+                modelOverrideFallbackOriginModel: fallbackOriginModel,
+              }
+            : {}),
+        }
+      : {}),
     ...(params.collect ? { swarmCollector: true } : {}),
     ...(params.outputSchema ? { swarmOutputSchema: params.outputSchema } : {}),
     ...(params.incognito ? { incognito: true } : {}),
   };
+  // Navigation and control lineage commit with the creation stamp so a
+  // launch failure cannot leave a durable but parentless child row.
+  for (const [key, raw] of [
+    ["spawnedBy", params.requesterInternalKey],
+    ["completionOwnerSessionKey", params.completionOwnerSessionKey],
+    ["parentSessionKey", params.requesterInternalKey],
+    ["spawnedWorkspaceDir", params.spawnedWorkspaceDir],
+    ["spawnedCwd", params.spawnedCwd],
+    ["swarmGroupId", params.swarmGroupId],
+  ] as const) {
+    const value = normalizeOptionalString(raw);
+    if (value) {
+      initialChildSessionPatch[key] = value;
+    }
+  }
   try {
-    const parentTarget = resolveGatewaySessionStoreTarget({
+    const parentTarget = await resolveGatewaySessionStoreTargetInWorker({
       cfg: params.cfg,
       key: params.requesterInternalKey,
+      assertActive: params.assertActive,
     });
-    const parentEntry = loadSessionEntry({
-      storePath: parentTarget.storePath,
+    const parentStorePath = parentTarget.readSource?.path ?? parentTarget.storePath;
+    await waitForSessionParticipantRecording({
+      agentId: parentTarget.agentId,
       sessionKey: parentTarget.canonicalKey,
+      storePath: parentStorePath,
     });
+    params.assertActive?.();
+    const parentEntry = await withSessionEntryReadOnlyInWorker(
+      {
+        agentId: parentTarget.agentId,
+        storePath: parentStorePath,
+        sessionKey: parentTarget.canonicalKey,
+      },
+      () => params.assertActive?.(),
+      async (read) => {
+        if (!read.ok) {
+          throw read.error;
+        }
+        return read.value;
+      },
+    );
+    params.assertActive?.();
     // Spawn owns a fresh child lifecycle. Cleanup freezes both fields before
     // launch so it cannot delete a reset successor that reuses the session id.
     const childSessionIdentity = {
       sessionId: randomUUID(),
       lifecycleRevision: randomUUID(),
     };
-    const target = params.incognito
+    const target: Omit<GatewaySessionStoreTargetWithStore, "store"> = params.incognito
       ? {
           agentId: params.targetAgentId,
           canonicalKey: params.childSessionKey,
           storeKeys: [params.childSessionKey],
           storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: params.targetAgentId }),
         }
-      : resolveGatewaySessionStoreTarget({
+      : await resolveGatewaySessionStoreTargetInWorker({
           cfg: params.cfg,
           key: params.childSessionKey,
+          assertActive: params.assertActive,
         });
+    params.assertActive?.();
     const entry = await upsertSessionEntryCore(
       {
-        storePath: target.storePath,
+        storePath: target.readSource?.path ?? target.storePath,
         sessionKey: target.canonicalKey,
       },
       {
-        ...buildDirectChildSessionPatch(initialChildSessionPatch),
+        ...initialChildSessionPatch,
         // Native spawn keeps agent RPC label semantics, not sessions.patch's uniqueness policy.
         ...(params.label ? { label: params.label } : {}),
         ...(params.sessionPermissionPolicy
@@ -199,6 +177,12 @@ export async function createInitialSubagentSession(params: {
         ...buildSessionCreationStamp({
           via: "spawn",
           ...params.creationPolicy,
+          ...(!params.incognito
+            ? {
+                inheritedGitContributorProfileIds:
+                  inheritSessionGitContributorProfileIds(parentEntry),
+              }
+            : {}),
         }),
       },
       {
@@ -206,7 +190,7 @@ export async function createInitialSubagentSession(params: {
           params.assertActive?.();
           if (parentEntry?.skillLibrarySelections) {
             const latest = loadSessionEntry({
-              storePath: parentTarget.storePath,
+              storePath: parentStorePath,
               sessionKey: parentTarget.canonicalKey,
             });
             if (

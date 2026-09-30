@@ -1,7 +1,14 @@
-import { html, type TemplateResult } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
+import { icons } from "../../../components/icons.ts";
 import { scrollState } from "../../../components/scroll-state.ts";
 import "../../../components/tooltip.ts";
 import "../../../styles/chat/selection-annotations.css";
+
+type AttachmentChipRemoval = {
+  label: string;
+  onRemove: (event: Event) => void;
+  disabled: boolean;
+};
 
 export function renderAttachmentChip(options: {
   label: string;
@@ -9,16 +16,26 @@ export function renderAttachmentChip(options: {
   onClick?: () => void;
   onReveal?: () => void;
   keyboardClick?: boolean;
+  removal?: AttachmentChipRemoval;
 }) {
+  const label = html`
+    <span aria-hidden="true">${options.icon}</span>
+    <span
+      class=${options.removal ? "chat-selection-annotations__label" : "chat-attachment-preview-label"}
+      dir="auto"
+      >${options.label}</span
+    >
+  `;
   return html`<span
     class="chat-attachment-thumb chat-attachment-thumb--file chat-selection-annotations__chip"
-    role="button"
-    tabindex="0"
+    role=${options.removal ? nothing : "button"}
+    tabindex=${options.removal ? nothing : "0"}
     @pointerenter=${options.onReveal}
     @focusin=${options.onReveal}
     @click=${options.onClick}
     @keydown=${(event: KeyboardEvent) => {
       if (
+        !options.removal &&
         options.keyboardClick !== false &&
         (event.key === "Enter" || event.key === " ") &&
         event.currentTarget instanceof HTMLElement
@@ -28,10 +45,29 @@ export function renderAttachmentChip(options: {
       }
     }}
   >
-    <span class="chat-attachment-file">
-      <span aria-hidden="true">${options.icon}</span>
-      <span class="chat-attachment-preview-label" dir="auto">${options.label}</span>
-    </span>
+    ${
+      options.removal
+        ? html`<button
+            type="button"
+            class="chat-attachment-file chat-selection-annotations__trigger"
+          >
+            ${label}
+          </button>`
+        : html`<span class="chat-attachment-file">${label}</span>`
+    }
+    ${
+      options.removal
+        ? html`<button
+            type="button"
+            class="chat-selection-annotations__remove"
+            aria-label=${options.removal.label}
+            ?disabled=${options.removal.disabled}
+            @click=${options.removal.onRemove}
+          >
+            ${icons.x}
+          </button>`
+        : nothing
+    }
   </span>`;
 }
 
@@ -42,13 +78,15 @@ export function renderAttachmentPreviewChip(options: {
   content: TemplateResult;
   onReveal?: () => void;
   openOnClick?: boolean;
+  removal?: AttachmentChipRemoval;
 }) {
   return html`<openclaw-tooltip
-    class="chat-comment-preview"
+    class=${options.removal ? "chat-comment-preview chat-comment-preview--editable" : "chat-comment-preview"}
     placement="top-start"
     auto-size
     .describe=${false}
     .openOnClick=${options.openOnClick ?? false}
+    .hoverDismissDelay=${options.removal ? 200 : undefined}
   >
     ${renderAttachmentChip({
       label: options.label,
@@ -56,6 +94,7 @@ export function renderAttachmentPreviewChip(options: {
       onReveal: options.onReveal,
       onClick: options.openOnClick ? options.onReveal : undefined,
       keyboardClick: options.openOnClick ?? false,
+      removal: options.removal,
     })}
     <div
       slot="content"

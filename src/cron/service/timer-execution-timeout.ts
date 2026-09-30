@@ -2,13 +2,12 @@ import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor
 import type { HeartbeatWakeRequest } from "../../infra/heartbeat-wake.js";
 import type { CommandLaneTaskMarker } from "../../process/command-queue.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
-import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
+import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
+import { deliveryContextFromSession } from "../../utils/delivery-context.read.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { CronActiveJobMarker } from "../active-jobs.js";
-import type {
-  CronRunReceiptHandle,
-  CronRunReceiptSettlementDisposition,
-} from "../store/run-receipt-store.js";
+import type { CronRunReceiptSettlementDisposition } from "../store/run-receipt-store.js";
+import type { CronRunReceiptHandle } from "../store/run-receipt.types.js";
 import type {
   CronAgentExecutionPhaseUpdate,
   CronAgentExecutionStarted,
@@ -60,6 +59,7 @@ export type TimedCronRunOutcome = CronJobExecutionResult & {
   activeJobMarker?: CronActiveJobMarker;
   reservationIdentity?: object;
   runReceipt?: CronRunReceiptHandle;
+  runReceiptContext?: OpenClawStateWorkerContext;
   receiptSettlementDisposition?: CronRunReceiptSettlementDisposition;
   startedAt: number;
   endedAt: number;
@@ -113,6 +113,7 @@ export type StartupDeferredJob = {
 };
 
 export type StartupCatchupPlan = {
+  lifecycleGeneration: number;
   candidates: StartupCatchupCandidate[];
   deferredJobs: StartupDeferredJob[];
 };

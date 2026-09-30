@@ -3,6 +3,10 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parseLaneSelection, resolveDockerE2ePlan } from "../../scripts/lib/docker-e2e-plan.mts";
+import {
+  listRecordedFirstHopSourceVersions,
+  updateFirstHopCompatLaneName,
+} from "../../scripts/lib/update-first-hop-lanes.mjs";
 import { planTargetedDockerLaneGroups } from "../../scripts/plan-targeted-docker-lane-groups.mjs";
 import { withTempDir } from "../../src/test-utils/temp-dir.js";
 
@@ -16,7 +20,6 @@ function expandedPlan(
     allowFrozenTargetScenarioOmissions: true,
     includeOpenWebUI: false,
     liveMode: "all",
-    liveRetries: 1,
     orderLanes: (entries) => entries,
     planReleaseAll: false,
     profile: "all",
@@ -51,6 +54,30 @@ describe("scripts/plan-targeted-docker-lane-groups", () => {
       "published-upgrade-survivor-2026.6.34-legacy-operator-state",
       "published-upgrade-survivor-2026.9.4-custom-plugin-siblings",
     ]);
+  });
+
+  it("retains 256 groups and explicitly rejects matrix overflow without dropping coverage", () => {
+    const baselines = Array.from({ length: 256 }, (_, index) => `2026.9.${index + 1}`).join(" ");
+    expect(
+      planTargetedDockerLaneGroups({
+        lanes: "update-migration",
+        upgradeSurvivorBaselines: baselines,
+      }),
+    ).toHaveLength(256);
+    expect(() =>
+      planTargetedDockerLaneGroups({
+        lanes: "update-migration install-smoke",
+        upgradeSurvivorBaselines: baselines,
+      }),
+    ).toThrow("257 jobs, exceeding the GitHub Actions matrix limit of 256");
+    expect(() =>
+      planTargetedDockerLaneGroups({
+        lanes: "update-migration",
+        upgradeSurvivorBaselines: baselines,
+        upgradeSurvivorScenarios:
+          "base plugin-deps-cleanup legacy-operator-state bootstrap-persona",
+      }),
+    ).toThrow("512 jobs, exceeding the GitHub Actions matrix limit of 256");
   });
 
   it.each([
@@ -187,6 +214,25 @@ describe("scripts/plan-targeted-docker-lane-groups", () => {
     ).toEqual(expandedPlan("published-upgrade-survivor", baselines, scenarios).scheduledLanes);
   });
 
+  it("runs each recorded first-hop source as its own job", () => {
+    const firstHopLanes = listRecordedFirstHopSourceVersions().map(updateFirstHopCompatLaneName);
+    expect(firstHopLanes.length).toBeGreaterThan(1);
+    expect(
+      planTargetedDockerLaneGroups({ lanes: "upgrade-survivor update-first-hop-compat" }),
+    ).toEqual([
+      { docker_lanes: "upgrade-survivor", label: "upgrade-survivor" },
+      ...firstHopLanes.map((lane) => ({ docker_lanes: lane, label: lane })),
+    ]);
+    expect(parseLaneSelection("update-first-hop-compat")).toEqual(firstHopLanes);
+    // A family token beside one of its members must not schedule that hop twice.
+    const mixed = `${firstHopLanes[firstHopLanes.length - 1]} update-first-hop-compat`;
+    expect(planTargetedDockerLaneGroups({ lanes: mixed }).map((group) => group.label)).toEqual([
+      firstHopLanes[firstHopLanes.length - 1],
+      ...firstHopLanes.slice(0, -1),
+    ]);
+    expect(parseLaneSelection(mixed)).toHaveLength(firstHopLanes.length);
+  });
+
   it("keeps normal targeted lanes grouped by the configured group size", () => {
     expect(
       planTargetedDockerLaneGroups({
@@ -209,7 +255,7 @@ describe("scripts/plan-targeted-docker-lane-groups", () => {
         lanes:
           "doctor-switch update-channel-switch published-upgrade-survivor plugins-offline plugin-update",
         upgradeSurvivorBaselines:
-          "openclaw@2026.5.3-1 openclaw@2026.5.3 openclaw@2026.5.2 openclaw@2026.4.23",
+          "openclaw@2026.6.11-1 openclaw@2026.6.11 openclaw@2026.6.2 openclaw@2026.6.1",
       }),
     ).toEqual([
       {
@@ -218,23 +264,23 @@ describe("scripts/plan-targeted-docker-lane-groups", () => {
       },
       {
         docker_lanes: "published-upgrade-survivor",
-        label: "published-upgrade-survivor-2026.5.3-1",
-        published_upgrade_survivor_baselines: "openclaw@2026.5.3-1",
+        label: "published-upgrade-survivor-2026.6.11-1",
+        published_upgrade_survivor_baselines: "openclaw@2026.6.11-1",
       },
       {
         docker_lanes: "published-upgrade-survivor",
-        label: "published-upgrade-survivor-2026.5.3",
-        published_upgrade_survivor_baselines: "openclaw@2026.5.3",
+        label: "published-upgrade-survivor-2026.6.11",
+        published_upgrade_survivor_baselines: "openclaw@2026.6.11",
       },
       {
         docker_lanes: "published-upgrade-survivor",
-        label: "published-upgrade-survivor-2026.5.2",
-        published_upgrade_survivor_baselines: "openclaw@2026.5.2",
+        label: "published-upgrade-survivor-2026.6.2",
+        published_upgrade_survivor_baselines: "openclaw@2026.6.2",
       },
       {
         docker_lanes: "published-upgrade-survivor",
-        label: "published-upgrade-survivor-2026.4.23",
-        published_upgrade_survivor_baselines: "openclaw@2026.4.23",
+        label: "published-upgrade-survivor-2026.6.1",
+        published_upgrade_survivor_baselines: "openclaw@2026.6.1",
       },
       { docker_lanes: "plugins-offline plugin-update", label: "plugins-offline--plugin-update" },
     ]);
@@ -244,11 +290,30 @@ describe("scripts/plan-targeted-docker-lane-groups", () => {
     expect(
       planTargetedDockerLaneGroups({
         lanes: "published-upgrade-survivor",
-        upgradeSurvivorBaselines: "openclaw@2026.5.2",
+        upgradeSurvivorBaselines: "openclaw@2026.6.1",
       }),
     ).toEqual([
       { docker_lanes: "published-upgrade-survivor", label: "published-upgrade-survivor" },
     ]);
+  });
+
+  it.each([
+    { upgradeSurvivorBaseline: "2026.5.35" },
+    { upgradeSurvivorBaselines: "2026.5.35" },
+    { lanes: "update-migration", upgradeSurvivorBaselines: "2026.6.1 openclaw@2026.5.35" },
+    {
+      upgradeSurvivorBaseline: "2026.5.35",
+      upgradeSurvivorBaselines: "2026.6.34",
+      upgradeSurvivorScenarios: "base legacy-operator-state",
+      upgradeSurvivorBaselineScope: "legacy-operator-state",
+    },
+  ] as const)("rejects pre-June baselines in planner input %j", (options) => {
+    expect(() =>
+      planTargetedDockerLaneGroups({
+        lanes: "published-upgrade-survivor",
+        ...options,
+      }),
+    ).toThrow("must be 2026.6.1 or newer");
   });
 
   it("extends only groups containing expanded survivor lanes", () => {
@@ -315,19 +380,18 @@ describe("scripts/plan-targeted-docker-lane-groups", () => {
   it.each([
     {
       label: "release baselines",
-      baselines: "2026.7.1-2 2026.7.1-1 2026.6.34 2026.6.33 2026.5.2 2026.4.23 2026.4.15",
+      baselines: "2026.7.1-2 2026.7.1-1 2026.6.34 2026.6.33 2026.6.11 2026.6.2 2026.6.1",
       scenarios: "reported-issues",
     },
     {
       label: "deduped baseline and scenario spellings",
-      baselines: "2026.4.15 openclaw@2026.4.15 2026.4.23",
+      baselines: "2026.6.1 openclaw@2026.6.1 2026.6.2",
       scenarios: "reported-issues base feishu-channel",
     },
     {
       label: "an old single baseline with unsupported scenarios at the end",
-      baselines: "2026.4.15",
-      scenarios:
-        "base feishu-channel tilde-log-path acpx-openclaw-tools-bridge plugin-deps-cleanup",
+      baselines: "2026.6.1",
+      scenarios: "base feishu-channel tilde-log-path legacy-operator-state custom-plugin-siblings",
     },
     { label: "the default baseline", baselines: "", scenarios: "far-reaching" },
   ])("preserves each expanded lane exactly once for $label", ({ baselines, scenarios }) => {
@@ -376,7 +440,7 @@ describe("scripts/plan-targeted-docker-lane-groups", () => {
         join(harnessDir, "assertions.mjs"),
         'console.log(JSON.stringify(["base", "feishu-channel"]));',
       );
-      const baselines = "2026.4.15 2026.4.23";
+      const baselines = "2026.6.1 2026.6.2";
       const scenarios = "reported-issues";
       const lanes = "published-upgrade-survivor";
       const groups = planTargetedDockerLaneGroups({

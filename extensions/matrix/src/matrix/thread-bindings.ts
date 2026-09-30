@@ -1,14 +1,15 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { tryReadJson } from "@openclaw/fs-safe/json";
 import { resolveSessionAgentIdStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { readJsonFileWithFallback } from "openclaw/plugin-sdk/json-store";
 import { resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   registerSessionBindingAdapter,
   resolveThreadBindingFarewellText,
+  resolveThreadBindingLifecycle,
   type SessionBindingAdapter,
   unregisterSessionBindingAdapter,
 } from "openclaw/plugin-sdk/thread-bindings-session-runtime";
@@ -25,7 +26,6 @@ import {
   listBindingsForAccount,
   removeBindingRecord,
   resolveBindingKey,
-  resolveEffectiveBindingExpiry,
   setBindingRecord,
   setMatrixThreadBindingManagerEntry,
   toMatrixBindingTargetKind,
@@ -156,10 +156,7 @@ function normalizeBindingRecord(
 }
 
 async function loadBindingsFromLegacyDisk(filePath: string, accountId: string) {
-  const { value } = await readJsonFileWithFallback<StoredMatrixThreadBindingState | null>(
-    filePath,
-    null,
-  );
+  const value = await tryReadJson<StoredMatrixThreadBindingState>(filePath);
   if (value?.version !== STORE_VERSION || !Array.isArray(value.bindings)) {
     return [];
   }
@@ -511,9 +508,6 @@ export async function createMatrixThreadBindingManager(params: {
 
   let sweepTimer: NodeJS.Timeout | null = null;
   const removeRecords = (records: MatrixThreadBindingRecord[]) => {
-    if (records.length === 0) {
-      return [];
-    }
     return records
       .map((record) => removeBindingRecord(record))
       .filter((record): record is MatrixThreadBindingRecord => Boolean(record));
@@ -658,7 +652,7 @@ export async function createMatrixThreadBindingManager(params: {
       const expired = listBindingsForAccount(params.accountId)
         .map((record) => ({
           record,
-          lifecycle: resolveEffectiveBindingExpiry({
+          lifecycle: resolveThreadBindingLifecycle({
             record,
             defaultIdleTimeoutMs: defaults.idleTimeoutMs,
             defaultMaxAgeMs: defaults.maxAgeMs,

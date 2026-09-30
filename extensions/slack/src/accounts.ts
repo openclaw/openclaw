@@ -60,27 +60,29 @@ export function resolveSlackOperationToken(
   return account.config.userTokenReadOnly === false ? (botToken ?? userToken) : botToken;
 }
 
+export function hasImplicitDefaultSlackAccount(cfg: OpenClawConfig): boolean {
+  const slack = cfg.channels?.slack;
+  const userIdentity = slack?.postAs === "user";
+  return hasSlackAccountCredentials({
+    config: slack ?? {},
+    identityTokenConfigured:
+      hasConfiguredAccountValue(userIdentity ? slack?.userToken : slack?.botToken) ||
+      hasConfiguredAccountValue(
+        userIdentity ? process.env.SLACK_USER_TOKEN : process.env.SLACK_BOT_TOKEN,
+      ),
+    appTokenConfigured:
+      hasConfiguredAccountValue(slack?.appToken) ||
+      hasConfiguredAccountValue(process.env.SLACK_APP_TOKEN),
+  });
+}
+
 const {
   listAccountIds,
   resolveDefaultAccountId,
   resolveAccountConfig: resolveMergedSlackAccountConfig,
 } = createAccountListHelpers<SlackAccountConfig>("slack", {
   nestedObjectKeys: ["botLoopProtection", "presenceEvents", "relay"],
-  hasImplicitDefaultAccount: (cfg) => {
-    const slack = cfg.channels?.slack;
-    const userIdentity = slack?.postAs === "user";
-    return hasSlackAccountCredentials({
-      config: slack ?? {},
-      identityTokenConfigured:
-        hasConfiguredAccountValue(userIdentity ? slack?.userToken : slack?.botToken) ||
-        hasConfiguredAccountValue(
-          userIdentity ? process.env.SLACK_USER_TOKEN : process.env.SLACK_BOT_TOKEN,
-        ),
-      appTokenConfigured:
-        hasConfiguredAccountValue(slack?.appToken) ||
-        hasConfiguredAccountValue(process.env.SLACK_APP_TOKEN),
-    });
-  },
+  hasImplicitDefaultAccount: hasImplicitDefaultSlackAccount,
 });
 export const listSlackAccountIds = listAccountIds;
 export const resolveDefaultSlackAccountId = resolveDefaultAccountId;

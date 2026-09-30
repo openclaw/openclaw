@@ -108,4 +108,4 @@ Translations deploy after the aggregate i18n commit. The finalizer dispatches Gi
 
 A hot docs day should produce many fast English deploys, but only a small number of locale deploys.
 
-If external deploy providers such as Mintlify watch every push, the aggregate i18n commit is the load reducer. Avoid restoring per-locale pushes to `main`.
+The aggregate i18n commit limits publish work to one update. Avoid restoring per-locale pushes to `main`.

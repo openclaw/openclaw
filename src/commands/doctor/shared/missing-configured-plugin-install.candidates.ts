@@ -39,6 +39,7 @@ import {
   CONFIGURED_RUNTIME_PLUGIN_INSTALL_CANDIDATES,
   VERSION_BOUND_RUNTIME_PLUGIN_IDS,
 } from "./configured-runtime-plugin-installs.js";
+import { collectInstalledPluginMissingRequiredDependencies } from "./missing-configured-plugin-install.dependency-health.js";
 import {
   collectConfiguredChannelIds,
   collectConfiguredPluginIds,
@@ -159,15 +160,36 @@ export async function resolveConfiguredPluginInstallContext(params: {
       configuredPluginIds: params.configuredPluginIds,
       currentVersion,
     });
+  const installedPluginMissingRequiredDependencies =
+    await collectInstalledPluginMissingRequiredDependencies({
+      cfg: params.cfg,
+      isRepairTarget: (pluginId) =>
+        isConfiguredPluginRepairTarget({
+          pluginId,
+          configuredPluginIds: params.configuredPluginIds,
+          configuredChannelIds: params.configuredChannelIds,
+          configuredChannelOwnerPluginIds,
+        }),
+      snapshot,
+      installRecords: records,
+      blockedPluginIds: params.blockedPluginIds,
+      resolvePathIdentity,
+    });
   const installedPluginIdsWithRepairablePackages = new Set([
     ...installedPluginIdsWithRepairablePackageDiagnostics,
     ...installedPluginIdsWithStaleVersionBoundRuntimePackages,
+    ...installedPluginMissingRequiredDependencies.keys(),
   ]);
   const officialReplacementPluginIds = new Set(
     collectOfficialReplacementInstallCandidates({
       cfg: params.cfg,
       env: params.env,
-      repairablePluginIds: installedPluginIdsWithRepairablePackages,
+      // Hollow packages need the recorded updater's fresh-generation path, not direct replacement.
+      repairablePluginIds: new Set(
+        [...installedPluginIdsWithRepairablePackages].filter(
+          (pluginId) => !installedPluginMissingRequiredDependencies.has(pluginId),
+        ),
+      ),
       configuredPluginIds: params.configuredPluginIds,
       configuredChannelIds: params.configuredChannelIds,
       configuredChannelOwnerPluginIds,
@@ -229,6 +251,7 @@ export async function resolveConfiguredPluginInstallContext(params: {
     installedPluginIdsWithRepairablePackageDiagnostics,
     installedPluginIdsWithStaleVersionBoundRuntimePackages,
     installedPluginIdsWithRepairablePackages,
+    installedPluginMissingRequiredDependencies,
     officialReplacementPluginIds,
   };
 }
@@ -406,32 +429,6 @@ export function collectDownloadableInstallCandidates(params: {
   );
 }
 
-function addLegacyNpmDeclarationInstallCandidate(params: {
-  candidates: Map<string, DownloadableInstallCandidate>;
-  pluginDir: string;
-  configuredPluginIds: ReadonlySet<string>;
-  missingPluginIds: ReadonlySet<string>;
-  blockedPluginIds?: ReadonlySet<string>;
-}): void {
-  const declaration = readLegacyNpmPluginDeclaration(params.pluginDir);
-  if (!declaration) {
-    return;
-  }
-  if (
-    params.blockedPluginIds?.has(declaration.pluginId) ||
-    (!params.configuredPluginIds.has(declaration.pluginId) &&
-      !params.missingPluginIds.has(declaration.pluginId))
-  ) {
-    return;
-  }
-  params.candidates.set(declaration.pluginId, {
-    pluginId: declaration.pluginId,
-    label: declaration.pluginId,
-    npmSpec: declaration.npmSpec,
-    defaultChoice: "npm",
-  });
-}
-
 function collectLegacyNpmDeclarationInstallCandidates(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -440,6 +437,23 @@ function collectLegacyNpmDeclarationInstallCandidates(params: {
   blockedPluginIds?: ReadonlySet<string>;
 }): DownloadableInstallCandidate[] {
   const candidates = new Map<string, DownloadableInstallCandidate>();
+  const addCandidate = (pluginDir: string) => {
+    const declaration = readLegacyNpmPluginDeclaration(pluginDir);
+    if (
+      !declaration ||
+      params.blockedPluginIds?.has(declaration.pluginId) ||
+      (!params.configuredPluginIds.has(declaration.pluginId) &&
+        !params.missingPluginIds.has(declaration.pluginId))
+    ) {
+      return;
+    }
+    candidates.set(declaration.pluginId, {
+      pluginId: declaration.pluginId,
+      label: declaration.pluginId,
+      npmSpec: declaration.npmSpec,
+      defaultChoice: "npm",
+    });
+  };
   const env = params.env ?? process.env;
   const loadPaths = params.cfg.plugins?.load?.paths;
   if (Array.isArray(loadPaths)) {
@@ -447,13 +461,7 @@ function collectLegacyNpmDeclarationInstallCandidates(params: {
       if (typeof rawPath !== "string" || !rawPath.trim()) {
         continue;
       }
-      addLegacyNpmDeclarationInstallCandidate({
-        candidates,
-        pluginDir: resolveUserPath(rawPath, env),
-        configuredPluginIds: params.configuredPluginIds,
-        missingPluginIds: params.missingPluginIds,
-        blockedPluginIds: params.blockedPluginIds,
-      });
+      addCandidate(resolveUserPath(rawPath, env));
     }
   }
 
@@ -464,13 +472,7 @@ function collectLegacyNpmDeclarationInstallCandidates(params: {
   ]);
   for (const pluginId of configuredOrMissingPluginIds) {
     try {
-      addLegacyNpmDeclarationInstallCandidate({
-        candidates,
-        pluginDir: resolvePluginInstallDir(pluginId, extensionsDir),
-        configuredPluginIds: params.configuredPluginIds,
-        missingPluginIds: params.missingPluginIds,
-        blockedPluginIds: params.blockedPluginIds,
-      });
+      addCandidate(resolvePluginInstallDir(pluginId, extensionsDir));
     } catch {
       continue;
     }

@@ -157,7 +157,6 @@ describe.skipIf(process.platform === "win32")("Gateway spawn broker lifetime", (
           source: "canonical",
           expectedIdentity: readDatabasePathIdentitySync(source).key,
           env: { ...process.env },
-          coordinatorRuntime: { directory: path.join(root, "coordinator"), keepAlive: false },
         });
       const resume = createDeferredCore();
       let runtimeRead: Promise<unknown> | undefined;
@@ -235,7 +234,7 @@ describe.skipIf(process.platform === "win32")("Gateway spawn broker lifetime", (
     }
   });
 
-  it.each(["beforeAdopt", "afterAdopt", "close-before-sidecars"] as const)(
+  nodeIt.each(["beforeAdopt", "afterAdopt", "close-before-sidecars"] as const)(
     "joins an outer CLI admission before broker extinction when core fails at %s",
     async (phase) => {
       await withAgentDatabaseStartupAdmission(async (admission) => {

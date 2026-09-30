@@ -1,5 +1,6 @@
 import {
   CANVAS_DOCUMENT_PREVIEW_MAX_BYTES,
+  WIDGET_HTML_MAX_UTF8_BYTES,
   type CanvasDocumentViewResult,
   ErrorCodes,
   errorShape,
@@ -14,7 +15,6 @@ import { buildBoardWidgetSandboxPath } from "../board-sandbox.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 import { defineValidatedGatewayMethod } from "./validation.js";
 
-const CANVAS_WIDGET_VIEW_MAX_BYTES = 2 * 1024 * 1024;
 const CANVAS_WIDGET_UNAVAILABLE =
   "Canvas widget unavailable; reload the chat or ask the agent to recreate it.";
 const CANVAS_PREVIEW_UNAVAILABLE =
@@ -79,11 +79,11 @@ export const canvasHandlers: GatewayRequestHandlers = {
         invocation,
         async () => {
           const document = await readCanvasDocumentHtmlSource(invocation.params.docId, {
-            maxBytes: CANVAS_WIDGET_VIEW_MAX_BYTES,
+            maxBytes: WIDGET_HTML_MAX_UTF8_BYTES,
           });
           if (
             document.cspSandbox !== "scripts" ||
-            Buffer.byteLength(document.html, "utf8") > CANVAS_WIDGET_VIEW_MAX_BYTES
+            Buffer.byteLength(document.html, "utf8") > WIDGET_HTML_MAX_UTF8_BYTES
           ) {
             throw new Error(CANVAS_WIDGET_UNAVAILABLE);
           }
@@ -105,7 +105,7 @@ export const canvasHandlers: GatewayRequestHandlers = {
           undefined,
           errorShape(
             ErrorCodes.INVALID_REQUEST,
-            "invalid canvas.document.preview params: html must not exceed 256 KiB of UTF-8 data",
+            "invalid canvas.document.preview params: html must not exceed 2 MiB of UTF-8 data",
           ),
         );
         return;

@@ -9,9 +9,12 @@ read_when:
 
 ## Enable code mode
 
-The recommended path is **Settings → Agents & Tools → Labs → Code Mode**. The
-switch takes effect for future agent runs without restarting the Gateway and
-selects the `"auto"` tier.
+When `tools.codeMode` is absent, OpenClaw uses the `"auto"` tier for future
+agent runs. It engages Code Mode only for models marked preferred in the
+provider catalog. No configuration is required for this default.
+
+Use **Settings → Agents & Tools → Labs → Code Mode** to change the global
+setting. Changes apply to future agent runs without restarting the Gateway.
 
 To enable the same tier without the Control UI, set it in config:
 
@@ -34,10 +37,15 @@ To default code mode on for every tool-capable run, regardless of model:
 ```
 
 Object form works too: `tools.codeMode.enabled` accepts the same `false`,
-`true`, and `"auto"` values. Code mode stays off when `tools.codeMode` is
-omitted, `false`, or an object without an explicit `enabled` value, unless an
-agent or model override enables it. Configuring limits or other Code Mode
-options does not enable it.
+`true`, and `"auto"` values. Code Mode stays off for `false` or an authored
+object without an explicit `enabled` value, unless an agent or model override
+enables it. Configuring limits or other Code Mode options does not enable it.
+
+When enabled, Code Mode defaults to Node's `node:vm` executor for trusted
+execution. Select QuickJS in the same settings panel or set
+`tools.codeMode.executor: "quickjs"` for hardened guest isolation. Read
+[Code Mode executors](/tools/code-mode/executors) before choosing: `node:vm`
+is not a security boundary.
 
 See [Automatic per-model activation](/tools/code-mode/configuration#automatic-per-model-activation) for the
 exact semantics and the shipped model list.
@@ -54,6 +62,7 @@ Set explicit limits for tighter bounds:
   tools: {
     codeMode: {
       enabled: true,
+      executor: "quickjs",
       timeoutMs: 10000,
       memoryLimitBytes: 67108864,
       maxOutputBytes: 65536,
@@ -105,7 +114,9 @@ Activation resolves from the first explicit setting in this order:
 1. `agents.entries.<agent>.models["provider/model"].codeMode`.
 2. `agents.entries.<agent>.tools.codeMode.enabled` (or its boolean/`"auto"` shorthand).
 3. `agents.defaults.models["provider/model"].codeMode`.
-4. `tools.codeMode.enabled` (or its shorthand), defaulting to `false`.
+4. `tools.codeMode.enabled` (or its shorthand); a completely absent global
+   setting defaults to `"auto"`, while an authored object without `enabled`
+   defaults to `false`.
 
 In the Control UI, open **Settings → Agents → Agent defaults**, show **Advanced**
 settings, and find **Models** under **Agent Defaults**. Each model has a
@@ -187,7 +198,8 @@ return shipments.filter((shipment) => !shipment.paid).length;
 Every load returns an independent JSON copy. Modifying it does not change the
 saved value. Use `await results.delete(id)` to release capacity. Missing or
 expired references reject with a catchable error. `API.read("results.d.ts")`
-provides the TypeScript declarations; loaded data remains `unknown` until checked.
+provides TypeScript-style documentation; loaded data is declared as `unknown`,
+so inspect its shape before composing it.
 
 References last only for the current agent run and catalog. They survive cell
 completion and `wait`, but not run end, abort, catalog replacement, permission
@@ -237,7 +249,7 @@ one from an unawaited call or timer callback, fails the cell instead of silently
 reporting success. Handlers attached after a suspension still handle their
 original promises.
 
-JavaScript syntax errors, TypeScript transform errors, and uncaught nested tool
+JavaScript syntax errors and uncaught nested tool
 failures become failed `exec` or `wait` results. The model can read the error,
 correct its code, inspect the current state, and continue with the normal tool
 surface. A failed cell does not impose a separate recovery mode or mutation budget.
@@ -273,7 +285,7 @@ With code mode active, the logged model-facing tool names should be `exec` and
 
 [Swarm](/tools/swarm) adds `agents.run()`, `phase()`, and `log()` guest globals
 for orchestrating concurrent sub-agents from Code Mode scripts. Swarm is enabled
-by default; Code Mode remains separately opt-in through `"auto"` or `true`.
+by default; Code Mode activation remains separate.
 Use normal JavaScript control flow for fan-out, decision gates, and structured
 collection.
 

@@ -1,5 +1,4 @@
 import Foundation
-import OpenClawChatUI
 import OpenClawKit
 import OSLog
 
@@ -198,14 +197,12 @@ extension TalkModeRuntime {
         relayGeneration: UInt64,
         status: String?) async -> Bool
     {
-        let ownsFallback = {
-            self.canCommitRecognitionStart(
-                lifecycleGeneration: lifecycleGeneration,
-                recognitionAttempt: recognitionGeneration) &&
-                self.realtimeRelayGeneration == relayGeneration &&
-                self.realtimeRelayStartGeneration == nil && self.realtimeSession == nil
-        }
-        guard ownsFallback() else { return false }
+        guard self.canCommitRecognitionStart(
+            lifecycleGeneration: lifecycleGeneration,
+            recognitionAttempt: recognitionGeneration),
+            self.realtimeRelayGeneration == relayGeneration,
+            self.realtimeRelayStartGeneration == nil, self.realtimeSession == nil
+        else { return false }
         phase = recognitionStarted ? .listening : .idle
         return await self.projectRealtimeRelay(relayGeneration, nil) {
             if recognitionStarted, let status {
@@ -302,8 +299,7 @@ extension TalkModeRuntime {
         try await ownAndStartRealtimeSession(
             session,
             lifecycleGeneration: generation,
-            relayGeneration: relayGeneration,
-            start: { session in try await session.start() })
+            relayGeneration: relayGeneration)
         realtimeSessionReadyAt = Date()
         phase = .listening
         _ = await self.projectRealtimeRelay(relayGeneration, session) {
@@ -457,8 +453,7 @@ extension TalkModeRuntime {
     private func ownAndStartRealtimeSession(
         _ session: RealtimeTalkRelaySession,
         lifecycleGeneration: Int,
-        relayGeneration: UInt64,
-        start: @MainActor @Sendable (RealtimeTalkRelaySession) async throws -> Void) async throws
+        relayGeneration: UInt64) async throws
     {
         // Construction crosses executors. Claim ownership only after every lifecycle and
         // attempt fact is revalidated, then publish before start can suspend.
@@ -472,7 +467,7 @@ extension TalkModeRuntime {
         }
         realtimeSession = session
         do {
-            try await start(session)
+            try await session.start()
         } catch {
             await MainActor.run { session.stop() }
             if realtimeSession === session {
@@ -617,16 +612,10 @@ extension TalkModeRuntime {
               isEnabled,
               !self.isPaused
         else { return }
-        if speaking {
-            phase = .speaking
-            _ = await self.projectRealtimeRelay(relayGeneration, session) {
-                TalkModeController.shared.updatePhase(.speaking)
-            }
-        } else if !isPaused {
-            phase = .listening
-            _ = await self.projectRealtimeRelay(relayGeneration, session) {
-                TalkModeController.shared.updatePhase(.listening)
-            }
+        let phase: TalkModePhase = speaking ? .speaking : .listening
+        self.phase = phase
+        _ = await self.projectRealtimeRelay(relayGeneration, session) {
+            TalkModeController.shared.updatePhase(phase)
         }
     }
 

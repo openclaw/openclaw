@@ -48,18 +48,57 @@ describe("plugin credential inspection authorization", () => {
       undefined,
     );
   });
-  it("rejects read-only access before reading unredacted config", async () => {
-    const options = request();
-    options.client!.connect.scopes = ["operator.read"];
-    expect(await invoke(options)).toHaveBeenCalledWith(
-      false,
+  it("returns only the requested authored literal after an explicit reveal", async () => {
+    mocks.snapshot.mockResolvedValue({
+      hash: "revision",
+      sourceConfig: {
+        plugins: {
+          entries: { example: { config: { key: "synthetic-private", other: "other-private" } } },
+        },
+      },
+    });
+    expect(await invoke(request())).toHaveBeenCalledWith(
+      true,
+      {
+        baseHash: "public:revision",
+        credential: { kind: "literal" },
+      },
       undefined,
-      expect.objectContaining({ code: "INVALID_REQUEST" }),
     );
-    expect(mocks.snapshot).not.toHaveBeenCalled();
+    expect(
+      await invoke(
+        request({
+          params: { pluginId: "example", path, baseHash: "public:revision", reveal: true },
+        }),
+      ),
+    ).toHaveBeenCalledWith(
+      true,
+      {
+        baseHash: "public:revision",
+        credential: { kind: "literal", value: "synthetic-private" },
+      },
+      undefined,
+    );
   });
+  it.each([false, true])(
+    "rejects read-only access before reading config (reveal=%s)",
+    async (reveal) => {
+      const options = request({
+        params: { pluginId: "example", path, baseHash: "public:revision", reveal },
+      });
+      options.client!.connect.scopes = ["operator.read"];
+      expect(await invoke(options)).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({ code: "INVALID_REQUEST" }),
+      );
+      expect(mocks.snapshot).not.toHaveBeenCalled();
+    },
+  );
   it("rejects a connection retired while the snapshot read is pending", async () => {
-    const options = request();
+    const options = request({
+      params: { pluginId: "example", path, baseHash: "public:revision", reveal: true },
+    });
     mocks.snapshot.mockImplementation(async () => {
       options.client!.invalidated = true;
       return { hash: "revision" };
@@ -72,9 +111,15 @@ describe("plugin credential inspection authorization", () => {
     expect(mocks.metadata).not.toHaveBeenCalled();
   });
   it.each([
-    { pluginId: "example", path, baseHash: "old" },
-    { pluginId: "other", path, baseHash: "public:revision" },
-    { pluginId: "example", path: [...path.slice(0, -1), "other"], baseHash: "public:revision" },
+    { pluginId: "example", path, baseHash: "old", reveal: true },
+    { pluginId: "example", path, reveal: true },
+    { pluginId: "other", path, baseHash: "public:revision", reveal: true },
+    {
+      pluginId: "example",
+      path: [...path.slice(0, -1), "other"],
+      baseHash: "public:revision",
+      reveal: true,
+    },
     { pluginId: "example", path, baseHash: "public:revision", resolve: true },
   ])(
     "rejects stale revisions, cross-plugin or arbitrary paths, and extra parameters",

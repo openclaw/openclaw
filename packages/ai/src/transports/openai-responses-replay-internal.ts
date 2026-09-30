@@ -2,6 +2,7 @@ import type { Model } from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ResponseInput } from "openai/resources/responses/responses.js";
 import type { OpenAIResponsesCompactionRejection } from "../provider-options.js";
+import { prepareModelRequestBody } from "./model-request-body.js";
 import type { createOpenAIResponsesClient } from "./openai-responses-client.js";
 import {
   DEFAULT_AZURE_OPENAI_API_VERSION,
@@ -171,8 +172,9 @@ export async function resolveNextResponsesEncryptedContentAttempt<
 export async function createResponsesStreamWithEncryptedContentRetry(params: {
   client: ResponsesClientLike;
   request: OpenAIResponsesRequestParams;
-  requestOptions: { signal?: AbortSignal } | undefined;
+  requestOptions: { signal?: AbortSignal; headers?: Record<string, string> } | undefined;
   model: Model;
+  encodeBody?: ReturnType<typeof prepareModelRequestBody>;
   observePrompt?: NonNullable<ReturnType<typeof createResponsesPromptEgressObserver>>;
   initialAttemptKind?: ResponsesEncryptedContentAttemptKind;
   initialRejectedCompaction?: OpenAIResponsesCompactionRejection;
@@ -189,6 +191,7 @@ export async function createResponsesStreamWithEncryptedContentRetry(params: {
 }): Promise<{
   stream: AsyncIterable<unknown>;
 }> {
+  const encodeBody = params.encodeBody ?? prepareModelRequestBody(undefined);
   const send = async (
     initialAttempt: ResponsesEncryptedContentAttempt<OpenAIResponsesRequestParams>,
   ) => {
@@ -199,9 +202,14 @@ export async function createResponsesStreamWithEncryptedContentRetry(params: {
         egress: "responses-sdk",
         payloadVariant: attempt.kind,
       });
+      const bodyOptions = await encodeBody(attempt.request);
       try {
         const { data, response } = await params.client.responses
-          .create(attempt.request as never, params.requestOptions as never)
+          .create(attempt.request as never, {
+            ...params.requestOptions,
+            ...bodyOptions,
+            headers: { ...bodyOptions.headers, ...params.requestOptions?.headers },
+          })
           .withResponse();
         // Commit a resolved attempt before rejecting a non-stream response.
         commitResponsesEncryptedContentAttempt(attempt, (checkpoint) => {

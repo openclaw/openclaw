@@ -1,46 +1,10 @@
-import {
-  listWhatsAppAccountIds,
-  resolveWhatsAppAccount,
-  createActionGate,
-  type ChannelMessageActionName,
-  type OpenClawConfig,
-  resolveWhatsAppReactionLevel,
-} from "./channel-actions.runtime.js";
+import { createActionGate } from "openclaw/plugin-sdk/channel-actions";
+import type { ChannelMessageActionName } from "openclaw/plugin-sdk/channel-contract";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { listWhatsAppAccountIds, resolveWhatsAppAccount } from "./accounts.js";
+import { resolveWhatsAppReactionLevel } from "./reaction-level.js";
 
-function areWhatsAppAgentReactionsEnabled(params: { cfg: OpenClawConfig; accountId?: string }) {
-  if (!params.cfg.channels?.whatsapp) {
-    return false;
-  }
-  const gate = createActionGate(params.cfg.channels.whatsapp.actions);
-  if (!gate("reactions")) {
-    return false;
-  }
-  return resolveWhatsAppReactionLevel({
-    cfg: params.cfg,
-    accountId: params.accountId,
-  }).agentReactionsEnabled;
-}
-
-function hasAnyWhatsAppAccountWithAgentReactionsEnabled(cfg: OpenClawConfig) {
-  if (!cfg.channels?.whatsapp) {
-    return false;
-  }
-  return listWhatsAppAccountIds(cfg).some((accountId) => {
-    const account = resolveWhatsAppAccount({ cfg, accountId });
-    if (!account.enabled) {
-      return false;
-    }
-    return areWhatsAppAgentReactionsEnabled({
-      cfg,
-      accountId,
-    });
-  });
-}
-
-export function resolveWhatsAppAgentReactionGuidance(params: {
-  cfg: OpenClawConfig;
-  accountId?: string;
-}) {
+function resolveEnabledWhatsAppAgentReactions(params: { cfg: OpenClawConfig; accountId?: string }) {
   if (!params.cfg.channels?.whatsapp) {
     return undefined;
   }
@@ -52,10 +16,32 @@ export function resolveWhatsAppAgentReactionGuidance(params: {
     cfg: params.cfg,
     accountId: params.accountId,
   });
-  if (!resolved.agentReactionsEnabled) {
-    return undefined;
+  return resolved.agentReactionsEnabled ? resolved : undefined;
+}
+
+export function resolveWhatsAppAgentReactionGuidance(params: {
+  cfg: OpenClawConfig;
+  accountId?: string;
+}) {
+  return resolveEnabledWhatsAppAgentReactions(params)?.agentReactionGuidance;
+}
+
+function hasAnyWhatsAppAccountWithAgentReactionsEnabled(cfg: OpenClawConfig) {
+  if (!cfg.channels?.whatsapp) {
+    return false;
   }
-  return resolved.agentReactionGuidance;
+  return listWhatsAppAccountIds(cfg).some((accountId) => {
+    const account = resolveWhatsAppAccount({ cfg, accountId });
+    if (!account.enabled) {
+      return false;
+    }
+    return Boolean(
+      resolveEnabledWhatsAppAgentReactions({
+        cfg,
+        accountId,
+      }),
+    );
+  });
 }
 
 export function describeWhatsAppMessageActions(params: {
@@ -69,10 +55,12 @@ export function describeWhatsAppMessageActions(params: {
   const actions = new Set<ChannelMessageActionName>();
   const canReact =
     params.accountId != null
-      ? areWhatsAppAgentReactionsEnabled({
-          cfg: params.cfg,
-          accountId: params.accountId ?? undefined,
-        })
+      ? Boolean(
+          resolveEnabledWhatsAppAgentReactions({
+            cfg: params.cfg,
+            accountId: params.accountId,
+          }),
+        )
       : hasAnyWhatsAppAccountWithAgentReactionsEnabled(params.cfg);
   if (canReact) {
     actions.add("react");

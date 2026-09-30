@@ -14,7 +14,6 @@ const STRUCTURED_AUTH_HEADER_RE = new RegExp(
   String.raw`${HTTP_AUTH_HEADER_BOUNDARY_PATTERN}(?:Proxy-)?Authorization${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}[ \t]*[:=]${HTTP_AUTH_OPTIONAL_VALUE_WHITESPACE_PATTERN}${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}(${HTTP_AUTH_SCHEME_PATTERN})${HTTP_AUTH_REQUIRED_VALUE_WHITESPACE_PATTERN}`,
   "giu",
 );
-const AUTH_PARAM_NAME_RE = /^[A-Za-z0-9!#$%&'*+.^_`|~-]+/u;
 const AUTH_PARAM_TOKEN_RE = /^[A-Za-z0-9!#$%&'*+.^_`|~-]+/u;
 const AWS_SCOPE_VALUE_RE = /^[A-Za-z0-9!#$%&'*+.^_`|~:/-]+/u;
 
@@ -28,14 +27,17 @@ function skipHorizontalWhitespace(value: string, start: number): number {
   return cursor;
 }
 
-function readSerializedLineEnd(value: string, start: number): number | null {
+function skipSerializedBackslashes(value: string, start: number): number {
   let cursor = start;
-  let slashCount = 0;
-  while (slashCount < 64 && value[cursor] === "\\") {
-    slashCount += 1;
+  while (cursor - start < 64 && value[cursor] === "\\") {
     cursor += 1;
   }
-  if (slashCount === 0) {
+  return cursor;
+}
+
+function readSerializedLineEnd(value: string, start: number): number | null {
+  const cursor = skipSerializedBackslashes(value, start);
+  if (cursor === start) {
     return null;
   }
   if (value[cursor] === "n") {
@@ -44,23 +46,13 @@ function readSerializedLineEnd(value: string, start: number): number | null {
   if (value[cursor] !== "r") {
     return null;
   }
-  cursor += 1;
-  slashCount = 0;
-  while (slashCount < 64 && value[cursor] === "\\") {
-    slashCount += 1;
-    cursor += 1;
-  }
-  return slashCount > 0 && value[cursor] === "n" ? cursor + 1 : null;
+  const lineEnd = skipSerializedBackslashes(value, cursor + 1);
+  return lineEnd > cursor + 1 && value[lineEnd] === "n" ? lineEnd + 1 : null;
 }
 
 function readSerializedTabEnd(value: string, start: number): number | null {
-  let cursor = start;
-  let slashCount = 0;
-  while (slashCount < 64 && value[cursor] === "\\") {
-    slashCount += 1;
-    cursor += 1;
-  }
-  return slashCount > 0 && value[cursor] === "t" ? cursor + 1 : null;
+  const cursor = skipSerializedBackslashes(value, start);
+  return cursor > start && value[cursor] === "t" ? cursor + 1 : null;
 }
 
 function skipAuthWhitespace(value: string, start: number): number {
@@ -91,7 +83,7 @@ function skipAuthWhitespace(value: string, start: number): number {
 }
 
 function readAuthParamName(value: string, start: number): { name: string; end: number } | null {
-  const match = AUTH_PARAM_NAME_RE.exec(value.slice(start));
+  const match = AUTH_PARAM_TOKEN_RE.exec(value.slice(start));
   return match ? { name: match[0].toLowerCase(), end: start + match[0].length } : null;
 }
 
@@ -119,15 +111,11 @@ function isAuthHeaderStart(value: string, index: number): boolean {
     return false;
   }
 
-  let cursor = index + name.length;
-  let slashCount = 0;
-  while (slashCount < 64 && value[cursor] === "\\") {
-    slashCount += 1;
-    cursor += 1;
-  }
+  const quoteStart = index + name.length;
+  let cursor = skipSerializedBackslashes(value, quoteStart);
   if (value[cursor] === '"' || value[cursor] === "'") {
     cursor += 1;
-  } else if (slashCount > 0) {
+  } else if (cursor > quoteStart) {
     return false;
   }
   cursor = skipHorizontalWhitespace(value, cursor);
@@ -187,6 +175,20 @@ function usesAuthParams(scheme: string): boolean {
   return scheme === "digest" || scheme === "hawk" || scheme.startsWith("aws4-");
 }
 
+function isAuthFieldEnd(char: string | undefined): boolean {
+  return (
+    char === undefined ||
+    char === "\r" ||
+    char === "\n" ||
+    char === ";" ||
+    char === "\\" ||
+    char === '"' ||
+    char === "'" ||
+    char === "}" ||
+    char === "]"
+  );
+}
+
 function findAuthFieldEnd(value: string, start: number): number {
   let cursor = start;
   while (cursor < value.length) {
@@ -198,17 +200,7 @@ function findAuthFieldEnd(value: string, start: number): number {
     if (cursor > start && isAuthHeaderStart(value, cursor)) {
       break;
     }
-    const char = value[cursor];
-    if (
-      char === "\r" ||
-      char === "\n" ||
-      char === ";" ||
-      char === "\\" ||
-      char === '"' ||
-      char === "'" ||
-      char === "}" ||
-      char === "]"
-    ) {
+    if (isAuthFieldEnd(value[cursor])) {
       break;
     }
     cursor += 1;
@@ -348,17 +340,7 @@ export function findStructuredAuthParamRanges(value: string): StructuredAuthPara
 
       const separator = skipAuthWhitespace(value, valueEnd);
       if (value[separator] !== ",") {
-        if (
-          value[separator] !== undefined &&
-          value[separator] !== "\r" &&
-          value[separator] !== "\n" &&
-          value[separator] !== ";" &&
-          value[separator] !== "\\" &&
-          value[separator] !== '"' &&
-          value[separator] !== "'" &&
-          value[separator] !== "}" &&
-          value[separator] !== "]"
-        ) {
+        if (!isAuthFieldEnd(value[separator])) {
           const nextParamStart = findNextAuthParamStart(value, separator);
           if (nextParamStart !== null) {
             cursor = nextParamStart;
@@ -385,24 +367,14 @@ export function findStructuredAuthParamRanges(value: string): StructuredAuthPara
 }
 
 export function redactStructuredAuthHeaders(value: string, replacement: string): string {
-  const ranges = findStructuredAuthParamRanges(value);
-  if (ranges.length === 0) {
-    return value;
-  }
-  const merged: StructuredAuthParamRange[] = [];
-  for (const range of ranges) {
-    const previous = merged.at(-1);
-    if (previous && range.start <= previous.end) {
-      previous.end = Math.max(previous.end, range.end);
-    } else {
-      merged.push({ ...range });
-    }
-  }
   const parts: string[] = [];
   let cursor = 0;
-  for (const range of merged) {
-    parts.push(value.slice(cursor, range.start), replacement);
-    cursor = range.end;
+  for (const range of findStructuredAuthParamRanges(value)) {
+    // Ranges follow header order; overlapping credentials share one replacement.
+    if (parts.length === 0 || range.start > cursor) {
+      parts.push(value.slice(cursor, range.start), replacement);
+    }
+    cursor = Math.max(cursor, range.end);
   }
   parts.push(value.slice(cursor));
   return parts.join("");

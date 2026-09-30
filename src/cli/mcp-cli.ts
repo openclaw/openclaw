@@ -1,4 +1,3 @@
-// MCP CLI for configured servers, OAuth auth, diagnostics, and channel MCP serving.
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -9,9 +8,9 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { normalizeCsvOrLooseStringList } from "@openclaw/normalization-core/string-normalization";
 import { Command } from "commander";
-import { buildBundleMcpToolsFromCatalog } from "../agents/agent-bundle-mcp-materialize.js";
-import type { McpToolCatalog } from "../agents/agent-bundle-mcp-types.js";
+import type { SessionMcpRuntime } from "../agents/agent-bundle-mcp-types.js";
 import {
   setConfiguredMcpServer,
   unsetConfiguredMcpServer,
@@ -46,6 +45,7 @@ import { formatCliCommand } from "./command-format.js";
 import { formatCliJsonFailure } from "./failure-output.js";
 import { resolveGatewayAuthOptions } from "./gateway-secret-options.js";
 import { requestExitAfterOneShotOutput } from "./one-shot-exit.js";
+import { collectOption } from "./program/helpers.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 
 const createSessionMcpRuntime = createLazyRuntimeMethod(
@@ -59,16 +59,12 @@ const disposeAllSessionMcpRuntimes = createLazyRuntimeMethod(
 
 function fail(message: string, json?: boolean): never {
   if (json) {
-    printJson(formatCliJsonFailure(message));
+    defaultRuntime.writeJson(formatCliJsonFailure(message));
   } else {
     defaultRuntime.error(message);
   }
   defaultRuntime.exit(1);
   throw new Error(message);
-}
-
-function printJson(value: unknown): void {
-  defaultRuntime.writeJson(value);
 }
 
 async function loadMcpConfig(opts?: { json?: boolean }) {
@@ -128,18 +124,8 @@ type McpServerControlOptions = {
 };
 
 function parseCsvList(value: string | undefined): string[] | undefined {
-  if (!value) {
-    return undefined;
-  }
-  const entries = value
-    .split(",")
-    .map((entry) => entry.trim())
-    .filter((entry) => entry.length > 0);
+  const entries = normalizeCsvOrLooseStringList(value);
   return entries.length > 0 ? entries : undefined;
-}
-
-function collectOption(value: string, previous: string[] = []): string[] {
-  return [...previous, value];
 }
 
 function parseKeyValueEntries(values: readonly string[] | undefined, label: string) {
@@ -210,21 +196,13 @@ function applyMcpTimeoutOptions(
   server: Record<string, unknown>,
   opts: McpServerControlOptions,
 ): void {
-  const requestTimeoutSeconds = parsePositiveNumberOption(opts.timeout, "--timeout");
-  setOptionalField(
-    server,
-    "requestTimeoutMs",
-    requestTimeoutSeconds === undefined ? undefined : requestTimeoutSeconds * 1_000,
-  );
-  const connectionTimeoutSeconds = parsePositiveNumberOption(
-    opts.connectTimeout,
-    "--connect-timeout",
-  );
-  setOptionalField(
-    server,
-    "connectionTimeoutMs",
-    connectionTimeoutSeconds === undefined ? undefined : connectionTimeoutSeconds * 1_000,
-  );
+  for (const [option, field, label] of [
+    ["timeout", "requestTimeoutMs", "--timeout"],
+    ["connectTimeout", "connectionTimeoutMs", "--connect-timeout"],
+  ] as const) {
+    const seconds = parsePositiveNumberOption(opts[option], label);
+    setOptionalField(server, field, seconds === undefined ? undefined : seconds * 1_000);
+  }
 }
 
 function applyMcpOAuthOptions(
@@ -334,19 +312,9 @@ function resolveConfiguredPath(filePath: string, cwd: unknown): string {
   return path.resolve(base, filePath);
 }
 
-async function fileExists(filePath: string): Promise<boolean> {
+async function pathHasType(filePath: string, type: "isFile" | "isDirectory"): Promise<boolean> {
   try {
-    const stat = await fs.stat(filePath);
-    return stat.isFile();
-  } catch {
-    return false;
-  }
-}
-
-async function directoryExists(filePath: string): Promise<boolean> {
-  try {
-    const stat = await fs.stat(filePath);
-    return stat.isDirectory();
+    return (await fs.stat(filePath))[type]();
   } catch {
     return false;
   }
@@ -409,7 +377,6 @@ async function collectMcpDoctorIssues(params: {
   server: Record<string, unknown>;
   probe: boolean;
   config: OpenClawConfig;
-  path: string;
 }): Promise<McpDoctorIssue[]> {
   const issues: McpDoctorIssue[] = [];
   const { name, server } = params;
@@ -428,7 +395,7 @@ async function collectMcpDoctorIssues(params: {
           issue("error", `stdio command not found or not executable: ${resolved.command}`),
         );
       }
-      if (resolved.cwd && !(await directoryExists(resolved.cwd))) {
+      if (resolved.cwd && !(await pathHasType(resolved.cwd, "isDirectory"))) {
         issues.push(issue("error", `stdio cwd does not exist: ${resolved.cwd}`));
       }
     }
@@ -466,7 +433,7 @@ async function collectMcpDoctorIssues(params: {
       }
       if (
         resolved.clientCert &&
-        !(await fileExists(resolveConfiguredPath(resolved.clientCert, "")))
+        !(await pathHasType(resolveConfiguredPath(resolved.clientCert, ""), "isFile"))
       ) {
         issues.push(
           issue("error", `client certificate file does not exist: ${resolved.clientCert}`),
@@ -474,7 +441,7 @@ async function collectMcpDoctorIssues(params: {
       }
       if (
         resolved.clientKey &&
-        !(await fileExists(resolveConfiguredPath(resolved.clientKey, "")))
+        !(await pathHasType(resolveConfiguredPath(resolved.clientKey, ""), "isFile"))
       ) {
         issues.push(issue("error", `client key file does not exist: ${resolved.clientKey}`));
       }
@@ -529,7 +496,7 @@ async function probeMcpServerIssues(params: {
     manifestRegistry: { plugins: [] },
   });
   try {
-    const result = formatMcpProbeResult(await runtime.getCatalog());
+    const result = await readMcpProbeResult(runtime);
     const diagnostic = result.diagnostics[0];
     if (diagnostic) {
       return [issue("error", `probe failed: ${diagnostic.message}`)];
@@ -548,10 +515,10 @@ async function probeMcpServerIssues(params: {
   }
 }
 
-function countConnectedMcpPrincipals(
+async function countConnectedMcpPrincipals(
   name: string,
   server: Record<string, unknown>,
-): number | undefined {
+): Promise<number | undefined> {
   const resolved = resolveMcpTransportConfig(name, server);
   if (
     server.auth !== "oauth" ||
@@ -595,7 +562,7 @@ async function buildMcpStatusEntries(
         const identity = operatorMcpOAuthIdentity(name, resolved.url);
         // Documented `mcp status --json` contract: the six legacy authStatus
         // booleans stay for existing scripts; `state` is the additive shape.
-        const store = readMcpOAuthStoreReadOnly(identity.storeKey);
+        const store = await readMcpOAuthStoreReadOnly(identity.storeKey);
         entry.authStatus = {
           hasTokens: Boolean(store.tokens),
           requiresAuthorization:
@@ -604,32 +571,21 @@ async function buildMcpStatusEntries(
           hasCodeVerifier: Boolean(store.codeVerifier),
           hasDiscoveryState: Boolean(store.discoveryState),
           hasLastAuthorizationUrl: Boolean(store.lastAuthorizationUrl),
-          ...(await readMcpOAuthCredentialsStatus(identity)),
+          ...(await readMcpOAuthCredentialsStatus(identity, store)),
         };
       } else {
-        entry.connectedPrincipals = countConnectedMcpPrincipals(name, server);
+        entry.connectedPrincipals = await countConnectedMcpPrincipals(name, server);
       }
       return entry;
     }),
   );
 }
 
-function formatMcpProbeResult(catalog: McpToolCatalog) {
-  const projectedTools = buildBundleMcpToolsFromCatalog({
-    catalog,
-    createResourceListExecute: () => async () => {
-      throw new Error("probe projection cannot execute MCP resources_list");
-    },
-    createResourceReadExecute: () => async () => {
-      throw new Error("probe projection cannot execute MCP resources_read");
-    },
-    createPromptListExecute: () => async () => {
-      throw new Error("probe projection cannot execute MCP prompts_list");
-    },
-    createPromptGetExecute: () => async () => {
-      throw new Error("probe projection cannot execute MCP prompts_get");
-    },
-  });
+async function readMcpProbeResult(runtime: SessionMcpRuntime) {
+  const { buildBundleMcpToolsFromCatalog } =
+    await import("../agents/agent-bundle-mcp-materialize.js");
+  const catalog = await runtime.getCatalog();
+  const projectedTools = buildBundleMcpToolsFromCatalog({ catalog });
   return {
     generatedAt: new Date(catalog.generatedAt).toISOString(),
     servers: Object.fromEntries(
@@ -708,7 +664,7 @@ function applyMcpProbeInitializeTimeout(server: Record<string, unknown>): Record
 }
 
 function resolveMcpProbeIssue(params: {
-  result: ReturnType<typeof formatMcpProbeResult>;
+  result: Awaited<ReturnType<typeof readMcpProbeResult>>;
   servers: Record<string, Record<string, unknown>>;
   path: string;
 }): string | undefined {
@@ -724,18 +680,11 @@ function resolveMcpProbeIssue(params: {
   return undefined;
 }
 
-function failOnMcpProbeIssues(params: Parameters<typeof resolveMcpProbeIssue>[0]): void {
-  const probeIssue = resolveMcpProbeIssue(params);
-  if (probeIssue) {
-    fail(probeIssue);
-  }
-}
-
 async function probeMcpServersOrFail(params: {
   config: OpenClawConfig;
   servers: Record<string, Record<string, unknown>>;
   path: string;
-}): Promise<ReturnType<typeof formatMcpProbeResult>> {
+}): Promise<Awaited<ReturnType<typeof readMcpProbeResult>>> {
   const probeServers = Object.fromEntries(
     Object.entries(params.servers).map(([name, server]) => [
       name,
@@ -749,8 +698,11 @@ async function probeMcpServersOrFail(params: {
     manifestRegistry: { plugins: [] },
   });
   try {
-    const result = formatMcpProbeResult(await runtime.getCatalog());
-    failOnMcpProbeIssues({ result, servers: params.servers, path: params.path });
+    const result = await readMcpProbeResult(runtime);
+    const probeIssue = resolveMcpProbeIssue({ result, servers: params.servers, path: params.path });
+    if (probeIssue) {
+      fail(probeIssue);
+    }
     return result;
   } finally {
     await runtime.dispose();
@@ -815,12 +767,11 @@ export function registerMcpCli(program: Command) {
     .action(async (opts: { json?: boolean }) => {
       const loaded = await loadMcpConfig(opts);
       if (opts.json) {
-        printJson(loaded.mcpServers);
+        defaultRuntime.writeJson(loaded.mcpServers);
         return;
       }
       const entries = Object.entries(loaded.mcpServers).toSorted(([a], [b]) => a.localeCompare(b));
-      const names = entries.map(([name]) => name);
-      if (names.length === 0) {
+      if (entries.length === 0) {
         defaultRuntime.log(
           `No OpenClaw-managed MCP servers configured in ${loaded.path}. Add one with ${formatCliCommand('openclaw mcp set <name> \'{"command":"uvx","args":["context7-mcp"]}\'')}.`,
         );
@@ -829,7 +780,7 @@ export function registerMcpCli(program: Command) {
       }
       defaultRuntime.log(`OpenClaw-managed MCP servers (${loaded.path}):`);
       for (const [name, server] of entries) {
-        const connectedPrincipals = countConnectedMcpPrincipals(name, server);
+        const connectedPrincipals = await countConnectedMcpPrincipals(name, server);
         const connected =
           connectedPrincipals === undefined
             ? ""
@@ -848,16 +799,14 @@ export function registerMcpCli(program: Command) {
     .action(async (name: string | undefined, opts: { json?: boolean }) => {
       const loaded = await loadMcpConfig(opts);
       const value = name ? requireMcpServer(loaded, name, opts) : loaded.mcpServers;
-      if (opts.json) {
-        printJson(value ?? {});
-        return;
+      if (!opts.json) {
+        defaultRuntime.log(
+          name
+            ? `OpenClaw-managed MCP server "${name}" (${loaded.path}):`
+            : `OpenClaw-managed MCP servers (${loaded.path}):`,
+        );
       }
-      if (name) {
-        defaultRuntime.log(`OpenClaw-managed MCP server "${name}" (${loaded.path}):`);
-      } else {
-        defaultRuntime.log(`OpenClaw-managed MCP servers (${loaded.path}):`);
-      }
-      printJson(value ?? {});
+      defaultRuntime.writeJson(value ?? {});
     });
 
   mcp
@@ -869,7 +818,7 @@ export function registerMcpCli(program: Command) {
       const loaded = await loadMcpConfig(opts);
       const status = await buildMcpStatusEntries(loaded.mcpServers);
       if (opts.json) {
-        printJson({ path: loaded.path, servers: status });
+        defaultRuntime.writeJson({ path: loaded.path, servers: status });
         return;
       }
       if (status.length === 0) {
@@ -943,9 +892,9 @@ export function registerMcpCli(program: Command) {
         manifestRegistry: { plugins: [] },
       });
       try {
-        const result = formatMcpProbeResult(await runtime.getCatalog());
+        const result = await readMcpProbeResult(runtime);
         if (opts.json) {
-          printJson(result);
+          defaultRuntime.writeJson(result);
         } else {
           defaultRuntime.log(`MCP probe (${loaded.path}):`);
           for (const [serverName, server] of Object.entries(result.servers)) {
@@ -988,7 +937,6 @@ export function registerMcpCli(program: Command) {
             name: serverName,
             server,
             config: loaded.config,
-            path: loaded.path,
             probe: Boolean(opts.probe),
           });
           return {
@@ -1012,7 +960,7 @@ export function registerMcpCli(program: Command) {
       }
       const ok = servers.every((server) => server.ok);
       if (opts.json) {
-        printJson({ path: loaded.path, ok, servers });
+        defaultRuntime.writeJson({ path: loaded.path, ok, servers });
         if (!ok) {
           fail("MCP doctor found errors.");
         }

@@ -12,6 +12,7 @@ import {
   writePlugin,
 } from "../plugins/loader.test-fixtures.js";
 import { createPluginCache, retirePluginCache, withPluginCache } from "../plugins/plugin-cache.js";
+import { PluginInstanceDrainTimeoutError } from "../plugins/plugin-instance-error.js";
 import {
   clearActivePluginRegistry,
   disposePluginRegistryInstances,
@@ -249,7 +250,14 @@ it("retains the adopted engine through reload, accepted commit and engine dispos
     vi.useFakeTimers();
     const successor = load();
     let retired = false;
-    rawRetirement = disposePluginRegistryInstances(root, successor).then(() => {
+    rawRetirement = disposePluginRegistryInstances(root, successor).then(async (result) => {
+      const timeout = result.failures[0]?.error;
+      expect(timeout).toBeInstanceOf(PluginInstanceDrainTimeoutError);
+      if (!(timeout instanceof PluginInstanceDrainTimeoutError)) {
+        throw new Error("Expected bounded retirement while the engine consumer is retained");
+      }
+      expect(timeout.forcedRetirement?.retainedConsumerCount).toBeGreaterThan(0);
+      await timeout.settled;
       retired = true;
     });
     const observation = await waitForPluginRegistryRetirement(root, { deferConsumers: true });

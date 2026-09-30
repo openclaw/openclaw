@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ClickClackDiscussionBinding } from "./binding-store.js";
 import { resolveClickClackDiscussionRoute } from "./routing.js";
 import { createHarness } from "./service-test-support.js";
+import { ClickClackDiscussionService } from "./service.js";
 
 function createGatewayEventsHarness() {
   const handlers = new Set<(event: OpenClawPluginSessionsChangedEvent) => void>();
@@ -350,6 +351,30 @@ describe("ClickClack discussion session events", () => {
       // interval poll their bindings would never reconcile renames or archives.
       expect(reconcileAll).toHaveBeenCalled();
     } finally {
+      await harness.service.cleanup();
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not poll persisted bindings until the service starts", async () => {
+    vi.useFakeTimers();
+    const harness = createHarness({ label: "Pre-start" });
+    let service: ClickClackDiscussionService | undefined;
+    try {
+      await harness.service.open("agent:main:pre-start");
+      service = new ClickClackDiscussionService(harness.runtime, {
+        clientFactory: () => harness.client,
+        startTimer: true,
+      });
+      const reconcileAll = vi.spyOn(service, "reconcileAll").mockResolvedValue(undefined);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(reconcileAll).not.toHaveBeenCalled();
+
+      await service.bindGatewayEvents(undefined);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(reconcileAll).toHaveBeenCalled();
+    } finally {
+      await service?.cleanup();
       await harness.service.cleanup();
       vi.useRealTimers();
     }

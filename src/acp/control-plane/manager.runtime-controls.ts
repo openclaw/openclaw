@@ -14,10 +14,9 @@ import {
   withAcpRuntimeErrorBoundary,
 } from "../runtime/errors.js";
 import type { CachedRuntimeState } from "./manager.runtime-handle-cache.js";
-import { createSupersededActorError } from "./manager.runtime-handle-ensure.js";
 import { isAcpOwnerRepairRequired } from "./manager.runtime-owner.js";
 import type { AcpSessionRuntimeOptions, SessionAcpMeta } from "./manager.types.js";
-import { createUnsupportedControlError } from "./manager.utils.js";
+import { assertCurrentAcpActor, createUnsupportedControlError } from "./manager.utils.js";
 import {
   buildRuntimeConfigOptionPairs,
   buildRuntimeControlSignature,
@@ -177,11 +176,10 @@ export async function applyManagerRuntimeControls(params: {
   getCachedRuntimeState: (sessionKey: string) => CachedRuntimeState | null;
   isCurrentActor?: () => boolean;
   onOptionsChanged: (options: AcpSessionRuntimeOptions) => Promise<void>;
+  onModelApplied?: (model: string | undefined) => void;
 }): Promise<void> {
   const isCurrentActor = params.isCurrentActor ?? (() => true);
-  if (!isCurrentActor()) {
-    throw createSupersededActorError(params.sessionKey);
-  }
+  assertCurrentAcpActor(isCurrentActor(), params.sessionKey);
   let options = resolveRuntimeOptionsFromMeta(params.meta);
   const signature = buildRuntimeControlSignature(options);
   const cached = params.getCachedRuntimeState(params.sessionKey);
@@ -195,9 +193,7 @@ export async function applyManagerRuntimeControls(params: {
     handle: params.handle,
     includeStatusConfigOptionKeys: needsConfigOptionKeys,
   });
-  if (!isCurrentActor()) {
-    throw createSupersededActorError(params.sessionKey);
-  }
+  assertCurrentAcpActor(isCurrentActor(), params.sessionKey);
   const backend = params.handle.backend || params.meta.backend;
   const runtimeMode = normalizeText(options.runtimeMode);
   const configOptions = buildRuntimeConfigOptionPairs(options, capabilities.configOptionKeys);
@@ -212,9 +208,7 @@ export async function applyManagerRuntimeControls(params: {
 
   await withAcpRuntimeErrorBoundary({
     run: async () => {
-      if (!isCurrentActor()) {
-        throw createSupersededActorError(params.sessionKey);
-      }
+      assertCurrentAcpActor(isCurrentActor(), params.sessionKey);
       if (runtimeMode) {
         if (!capabilities.controls.includes("session/set_mode") || !params.runtime.setMode) {
           throw createUnsupportedControlError({
@@ -239,9 +233,7 @@ export async function applyManagerRuntimeControls(params: {
           });
         }
         for (const [key, requestedValue] of configOptions) {
-          if (!isCurrentActor()) {
-            throw createSupersededActorError(params.sessionKey);
-          }
+          assertCurrentAcpActor(isCurrentActor(), params.sessionKey);
           // Model changes can clamp or remove unsupported thinking before its turn in the replay.
           const value = key === thinkingConfigKey ? options.thinking : requestedValue;
           if (value === undefined) {
@@ -262,8 +254,16 @@ export async function applyManagerRuntimeControls(params: {
               key,
               value,
             });
-            if (!isCurrentActor()) {
-              throw createSupersededActorError(params.sessionKey);
+            assertCurrentAcpActor(isCurrentActor(), params.sessionKey);
+            if (key === resolveRuntimeConfigOptionKey("model", capabilities.configOptionKeys)) {
+              const applied = result?.configOptions.find((option) => option.id === key);
+              params.onModelApplied?.(
+                result
+                  ? typeof applied?.currentValue === "string"
+                    ? applied.currentValue
+                    : undefined
+                  : value,
+              );
             }
             const accepted = reconcileAcceptedRuntimeOptions(
               options,
@@ -273,15 +273,11 @@ export async function applyManagerRuntimeControls(params: {
             if (!runtimeOptionsEqual(options, accepted)) {
               // Persist each accepted change even if a later control fails.
               await params.onOptionsChanged(accepted);
-              if (!isCurrentActor()) {
-                throw createSupersededActorError(params.sessionKey);
-              }
+              assertCurrentAcpActor(isCurrentActor(), params.sessionKey);
               options = accepted;
             }
           } catch (error) {
-            if (!isCurrentActor()) {
-              throw createSupersededActorError(params.sessionKey);
-            }
+            assertCurrentAcpActor(isCurrentActor(), params.sessionKey);
             if (
               isUnsupportedOptionalTimeoutConfigRejection(key, error) ||
               isRejectedThinkingConfigOption(key, error)
@@ -297,9 +293,7 @@ export async function applyManagerRuntimeControls(params: {
     fallbackMessage: "Could not apply ACP runtime options before turn execution.",
   });
 
-  if (!isCurrentActor()) {
-    throw createSupersededActorError(params.sessionKey);
-  }
+  assertCurrentAcpActor(isCurrentActor(), params.sessionKey);
   if (cached) {
     cached.appliedControlSignature = buildRuntimeControlSignature(options);
   }

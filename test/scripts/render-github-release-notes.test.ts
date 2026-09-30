@@ -231,6 +231,52 @@ describe("GitHub release-note rendering", () => {
     );
   });
 
+  it("prefixes extended-stable notes with immutable regular-stable context", () => {
+    const extendedVersion = "2026.7.35";
+    const extendedTag = `v${extendedVersion}`;
+    const regularStableVersion = "2026.9.5";
+    const changelog = changelogFor("- **PR #123** fix: example.").replaceAll(
+      version,
+      extendedVersion,
+    );
+    const rendered = renderGithubReleaseNotes({
+      changelog,
+      version: extendedVersion,
+      tag: extendedTag,
+      repository,
+      regularStableVersion,
+    });
+
+    expect(
+      rendered.body.startsWith(
+        "This is a gateway-only `extended-stable` release, which is our current equivalent to LTS. " +
+          "This release is OpenClaw from the end of July 2026, plus critical security updates, " +
+          "reliability and performance fixes, and features like new model support. " +
+          "The current latest version of OpenClaw is " +
+          "[2026.9.5](https://github.com/openclaw/openclaw/releases#release-v2026.9.5)\n\n" +
+          "## 2026.7.35",
+      ),
+    ).toBe(true);
+    expect(
+      verifyGithubReleaseNotes({
+        body: rendered.body,
+        changelog,
+        version: extendedVersion,
+        tag: extendedTag,
+        repository,
+        regularStableVersion,
+      }).matches,
+    ).toBe(true);
+    expect(() =>
+      renderGithubReleaseNotes({
+        changelog,
+        version: extendedVersion,
+        tag: extendedTag,
+        repository,
+      }),
+    ).toThrow("regular stable version must be a string");
+  });
+
   it("replaces an oversized contribution record with a tag-pinned link", () => {
     const oversizedRecord = `- **PR #123** ${"record-only-detail ".repeat(9_000)}`;
     const rendered = renderGithubReleaseNotes({

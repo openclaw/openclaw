@@ -8,11 +8,9 @@ import {
   normalizeQaCredentialConvexSiteUrl,
   normalizeQaCredentialEndpointPrefix,
   parseQaCredentialPositiveIntegerEnv,
-  QA_CREDENTIALS_DEFAULT_ENDPOINT_PREFIX,
 } from "./qa-credentials-common.runtime.js";
 import { fingerprintQaCredentialId } from "./qa-credentials-fingerprint.runtime.js";
 
-const DEFAULT_ENDPOINT_PREFIX = QA_CREDENTIALS_DEFAULT_ENDPOINT_PREFIX;
 const DEFAULT_HTTP_TIMEOUT_MS = 15_000;
 const QA_CREDENTIAL_ADMIN_MAX_RESPONSE_BYTES = 1024 * 1024;
 
@@ -83,11 +81,9 @@ type AdminConfig = {
   actorId: string;
   authToken: string;
   addUrl: string;
-  endpointPrefix: string;
   httpTimeoutMs: number;
   listUrl: string;
   removeUrl: string;
-  siteUrl: string;
 };
 
 type AdminBaseOptions = {
@@ -155,7 +151,6 @@ function normalizeConvexSiteUrl(raw: string, env: NodeJS.ProcessEnv): string {
 function normalizeEndpointPrefix(value: string | undefined): string {
   return normalizeQaCredentialEndpointPrefix({
     value,
-    fallback: DEFAULT_ENDPOINT_PREFIX,
     invalidAbsoluteMessage:
       '--endpoint-prefix must be an absolute path like "/qa-credentials/v1" (not //host).',
     invalidSegmentsMessage: '--endpoint-prefix must not contain backslashes or ".." path segments.',
@@ -178,13 +173,6 @@ function resolveAdminAuthToken(env: NodeJS.ProcessEnv): string {
   });
 }
 
-function addQaCredentialDoctorCheck(
-  checks: QaCredentialDoctorCheck[],
-  check: QaCredentialDoctorCheck,
-) {
-  checks.push(check);
-}
-
 function summarizeQaCredentialDoctorStatus(checks: readonly QaCredentialDoctorCheck[]) {
   if (checks.some((check) => check.status === "fail")) {
     return "fail" as const;
@@ -200,77 +188,46 @@ export async function diagnoseQaCredentialBroker(options: AdminBaseOptions = {})
   const checks: QaCredentialDoctorCheck[] = [];
   const siteUrl = options.siteUrl?.trim() || env.OPENCLAW_QA_CONVEX_SITE_URL?.trim();
   const endpointPrefix = options.endpointPrefix?.trim() || env.OPENCLAW_QA_CONVEX_ENDPOINT_PREFIX;
-  let normalizedSiteUrl: string | null = null;
-  let normalizedEndpointPrefix: string | null = null;
-
-  if (!siteUrl) {
-    addQaCredentialDoctorCheck(checks, {
-      name: "OPENCLAW_QA_CONVEX_SITE_URL",
-      status: "fail",
-      details: "missing Convex credential broker site URL",
-    });
-  } else {
+  const checkSetting = (name: string, resolve: () => string) => {
     try {
-      normalizedSiteUrl = normalizeConvexSiteUrl(siteUrl, env);
-      addQaCredentialDoctorCheck(checks, {
-        name: "OPENCLAW_QA_CONVEX_SITE_URL",
-        status: "pass",
-        details: normalizedSiteUrl,
-      });
+      const details = resolve();
+      checks.push({ name, status: "pass", details });
+      return details;
     } catch (error) {
-      addQaCredentialDoctorCheck(checks, {
-        name: "OPENCLAW_QA_CONVEX_SITE_URL",
-        status: "fail",
-        details: formatErrorMessage(error),
-      });
+      checks.push({ name, status: "fail", details: formatErrorMessage(error) });
+      return null;
     }
-  }
-
-  try {
-    normalizedEndpointPrefix = normalizeEndpointPrefix(endpointPrefix);
-    addQaCredentialDoctorCheck(checks, {
-      name: "OPENCLAW_QA_CONVEX_ENDPOINT_PREFIX",
-      status: "pass",
-      details: normalizedEndpointPrefix,
-    });
-  } catch (error) {
-    addQaCredentialDoctorCheck(checks, {
-      name: "OPENCLAW_QA_CONVEX_ENDPOINT_PREFIX",
-      status: "fail",
-      details: formatErrorMessage(error),
-    });
-  }
+  };
+  const normalizedSiteUrl = checkSetting("OPENCLAW_QA_CONVEX_SITE_URL", () => {
+    if (!siteUrl) {
+      throw new Error("missing Convex credential broker site URL");
+    }
+    return normalizeConvexSiteUrl(siteUrl, env);
+  });
+  const normalizedEndpointPrefix = checkSetting("OPENCLAW_QA_CONVEX_ENDPOINT_PREFIX", () =>
+    normalizeEndpointPrefix(endpointPrefix),
+  );
 
   for (const [name, requiredFor] of [
     ["OPENCLAW_QA_CONVEX_SECRET_CI", "live lane leasing"],
     ["OPENCLAW_QA_CONVEX_SECRET_MAINTAINER", "credential add/list/remove"],
   ] as const) {
     const present = Boolean(env[name]?.trim());
-    addQaCredentialDoctorCheck(checks, {
+    checks.push({
       name,
       status: present ? "pass" : "warn",
       details: present ? "set" : `missing; required for ${requiredFor}`,
     });
   }
 
-  try {
+  checkSetting("OPENCLAW_QA_CREDENTIAL_HTTP_TIMEOUT_MS", () => {
     const timeoutMs = parsePositiveIntegerEnv(
       env,
       "OPENCLAW_QA_CREDENTIAL_HTTP_TIMEOUT_MS",
       DEFAULT_HTTP_TIMEOUT_MS,
     );
-    addQaCredentialDoctorCheck(checks, {
-      name: "OPENCLAW_QA_CREDENTIAL_HTTP_TIMEOUT_MS",
-      status: "pass",
-      details: `${timeoutMs}ms`,
-    });
-  } catch (error) {
-    addQaCredentialDoctorCheck(checks, {
-      name: "OPENCLAW_QA_CREDENTIAL_HTTP_TIMEOUT_MS",
-      status: "fail",
-      details: formatErrorMessage(error),
-    });
-  }
+    return `${timeoutMs}ms`;
+  });
 
   if (normalizedSiteUrl && normalizedEndpointPrefix && env.OPENCLAW_QA_CONVEX_SECRET_MAINTAINER) {
     try {
@@ -283,20 +240,20 @@ export async function diagnoseQaCredentialBroker(options: AdminBaseOptions = {})
         siteUrl: normalizedSiteUrl,
         status: "active",
       });
-      addQaCredentialDoctorCheck(checks, {
+      checks.push({
         name: "broker admin/list",
         status: "pass",
         details: `reachable; sampled ${listed.credentials.length} active credential row${listed.credentials.length === 1 ? "" : "s"}`,
       });
     } catch (error) {
-      addQaCredentialDoctorCheck(checks, {
+      checks.push({
         name: "broker admin/list",
         status: "fail",
         details: formatErrorMessage(error),
       });
     }
   } else {
-    addQaCredentialDoctorCheck(checks, {
+    checks.push({
       name: "broker admin/list",
       status: "warn",
       details: "skipped; site URL and maintainer secret are required",
@@ -330,8 +287,6 @@ function resolveAdminConfig(options: AdminBaseOptions): AdminConfig {
   return {
     actorId,
     authToken: resolveAdminAuthToken(env),
-    siteUrl: normalizedSiteUrl,
-    endpointPrefix,
     httpTimeoutMs: parsePositiveIntegerEnv(
       env,
       "OPENCLAW_QA_CREDENTIAL_HTTP_TIMEOUT_MS",
@@ -526,6 +481,6 @@ export async function listQaCredentialSets(options: ListQaCredentialSetsOptions)
   });
   return {
     ...result,
-    credentials: result.credentials.map((credential) => withQaCredentialFingerprint(credential)),
+    credentials: result.credentials.map(withQaCredentialFingerprint),
   };
 }

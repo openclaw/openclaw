@@ -1,16 +1,7 @@
-/**
- * Backend-neutral sandbox runtime handle contracts.
- *
- * Docker, SSH, and future sandbox providers implement these command, exec, and fs-bridge surfaces.
- */
 import type { SandboxFsBridge } from "./fs-bridge.types.js";
 
-/**
- * Backend-neutral sandbox runtime handles used by Docker, SSH, and future sandbox providers.
- */
 export type SandboxBackendId = string;
 
-/** Shell exec specification prepared by a sandbox backend for process launch. */
 export type SandboxBackendExecSpec = {
   argv: string[];
   env: NodeJS.ProcessEnv;
@@ -27,7 +18,6 @@ export type SandboxBackendWorkdirValidation = "host" | "backend";
 export type SandboxBackendWorkdirValidator = (workdir: string) => Promise<string | null>;
 export type SandboxBackendPreparedWorkdirDiscarder = (workdir: string) => void;
 
-/** Parameters for backend-managed shell commands used by fs bridges and probes. */
 export type SandboxBackendCommandParams = {
   script: string;
   args?: string[];
@@ -36,14 +26,12 @@ export type SandboxBackendCommandParams = {
   signal?: AbortSignal;
 };
 
-/** Buffered command result returned by sandbox backend shell helpers. */
 export type SandboxBackendCommandResult = {
   stdout: Buffer;
   stderr: Buffer;
   code: number;
 };
 
-/** Runtime context passed to backend-provided filesystem bridge factories. */
 export type SandboxFsBridgeContext = {
   workspaceDir: string;
   agentWorkspaceDir: string;
@@ -61,7 +49,6 @@ export type SandboxFsBridgeContext = {
   };
 };
 
-/** Live sandbox backend handle for command execution, cleanup, and optional fs bridge creation. */
 export type SandboxBackendHandle = {
   id: SandboxBackendId;
   runtimeId: string;
@@ -98,6 +85,13 @@ export type SandboxBackendHandle = {
     timedOut: boolean;
     token?: unknown;
   }) => Promise<void>;
+  /** Mint termination-only custody while execution is admitted; retained cleanup cannot run arbitrary commands. */
+  prepareProcessCleanup?: (env: Record<string, string>) => {
+    env: Record<string, string>;
+    terminate: () => Promise<void>;
+    /** Interrupt may run guest signal handlers, so it retains ordinary live execution checks. */
+    interrupt: (timeoutMs: number) => Promise<boolean>;
+  };
   runShellCommand(params: SandboxBackendCommandParams): Promise<SandboxBackendCommandResult>;
   createFsBridge?: (params: { sandbox: SandboxFsBridgeContext }) => SandboxFsBridge;
 };

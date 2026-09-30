@@ -1,9 +1,11 @@
 import { Buffer } from "node:buffer";
 import { expect, it } from "vitest";
 import type { ApplicationContext } from "../app/context.ts";
+import { selectChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import {
   ONE_PIXEL_PNG_B64,
   captureUiProof,
+  checkoutBaseRefInput,
   controlUiSessionPath,
   createNewSessionPageE2eSuite,
   installMockGateway,
@@ -173,11 +175,13 @@ suite.define(() => {
         await page
           .locator('wa-popover.new-session-page__checkout-popover [data-value="worktree"]')
           .click();
-        await page.getByLabel("From", { exact: true }).fill("release/proof");
+        await checkoutBaseRefInput(page).fill("release/proof");
         await page.getByLabel("Name", { exact: true }).fill("instant-proof");
         await page.keyboard.press("Escape");
         await page.locator('[data-chat-model-select="true"]').click();
-        await page.locator('[data-chat-model-option="synthetic/synthetic-model"]').click();
+        await selectChatModelOption(
+          page.locator('[data-chat-model-option="synthetic/synthetic-model"]'),
+        );
         await page.locator('[data-chat-permission-select="true"]').click();
         await page.locator('[data-chat-permission-option="full"]').click();
         await page.evaluate(() => {

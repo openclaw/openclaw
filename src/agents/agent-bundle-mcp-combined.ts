@@ -1,6 +1,7 @@
 /** Combined session MCP runtime facade for server and requester partitions. */
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
+import { compareMcpCatalogTools } from "./agent-bundle-mcp-names.js";
 import { getSessionMcpRequestSignal } from "./agent-bundle-mcp-request-context.js";
 import type {
   McpCatalogTool,
@@ -10,14 +11,6 @@ import type {
   SessionMcpRuntime,
 } from "./agent-bundle-mcp-types.js";
 import { recordAgentCleanupFailure } from "./run-cleanup-timeout.js";
-
-function compareCatalogTools(left: McpCatalogTool, right: McpCatalogTool): number {
-  return (
-    left.safeServerName.localeCompare(right.safeServerName) ||
-    left.toolName.localeCompare(right.toolName) ||
-    left.serverName.localeCompare(right.serverName)
-  );
-}
 
 async function loadCurrentCatalog(part: SessionMcpRuntime): Promise<McpToolCatalog> {
   if (part.retiredCatalog) {
@@ -64,9 +57,9 @@ export function mergeMcpToolCatalogs(catalogs: readonly McpToolCatalog[]): McpTo
       diagnostics.push(...catalog.diagnostics);
     }
   }
-  tools.sort(compareCatalogTools);
-  policyTools.sort(compareCatalogTools);
-  sessionDeniedTools.sort(compareCatalogTools);
+  tools.sort(compareMcpCatalogTools);
+  policyTools.sort(compareMcpCatalogTools);
+  sessionDeniedTools.sort(compareMcpCatalogTools);
   return {
     version: 1,
     generatedAt: Math.max(0, ...catalogs.map((catalog) => catalog.generatedAt)),

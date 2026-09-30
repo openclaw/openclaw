@@ -1,5 +1,6 @@
 // ACPX tests cover process reaper plugin behavior.
 import path from "node:path";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { OPENCLAW_ACPX_LEASE_ID_ARG, OPENCLAW_GATEWAY_INSTANCE_ID_ARG } from "./process-lease.js";
 
@@ -13,13 +14,53 @@ vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => ({
 import {
   cleanupOpenClawOwnedAcpxPendingLease,
   cleanupOpenClawOwnedAcpxProcessTree,
-  isOpenClawLeaseAwareAcpxProcessCommand,
   reapStaleOpenClawOwnedAcpxOrphans,
 } from "./process-reaper.js";
 
 const WRAPPER_ROOT = "/tmp/owner's state/acpx";
 const CODEX_WRAPPER_COMMAND = `node ${WRAPPER_ROOT}/codex-acp-wrapper.mjs`;
 const CODEX_WRAPPER_COMMAND_WITH_LEASE = `${CODEX_WRAPPER_COMMAND} --label owner's-choice ${OPENCLAW_ACPX_LEASE_ID_ARG} lease-1 ${OPENCLAW_GATEWAY_INSTANCE_ID_ARG} gateway-1`;
+
+it.each(["inspection", "grace"])(
+  "revalidates cleanup ownership after awaited %s",
+  async (phase) => {
+    const entered = createDeferred<void>();
+    const release = createDeferred<void>();
+    let active = true;
+    const killProcess = vi.fn();
+    const pending = cleanupOpenClawOwnedAcpxProcessTree({
+      rootPid: 101,
+      wrapperRoot: WRAPPER_ROOT,
+      deps: {
+        platform: "linux",
+        killProcess,
+        assertCurrent: () => {
+          if (!active) {
+            throw new Error("cleanup owner closed");
+          }
+        },
+        listProcesses: async () => {
+          if (phase === "inspection") {
+            entered.resolve();
+            await release.promise;
+          }
+          return [{ pid: 101, ppid: 1, command: CODEX_WRAPPER_COMMAND_WITH_LEASE }];
+        },
+        sleep: async () => {
+          entered.resolve();
+          await release.promise;
+        },
+      },
+    });
+    const rejected = expect(pending).rejects.toThrow("cleanup owner closed");
+    await entered.promise;
+    active = false;
+    release.resolve();
+    await rejected;
+    expect(killProcess).toHaveBeenCalledTimes(phase === "grace" ? 1 : 0);
+    expect(killProcess).not.toHaveBeenCalledWith(101, "SIGKILL");
+  },
+);
 const CLAUDE_WRAPPER_COMMAND = `node ${WRAPPER_ROOT}/claude-agent-acp-wrapper.mjs`;
 const PLUGIN_DEPS_CODEX_COMMAND =
   "node /tmp/openclaw/plugin-runtime-deps/node_modules/@agentclientprotocol/codex-acp/dist/index.js";
@@ -97,21 +138,6 @@ describe("process reaper", () => {
       skippedReason: "process-list-unavailable",
     });
     expect(killSpy).not.toHaveBeenCalled();
-  });
-
-  it("only treats generated wrappers as launch-lease aware", () => {
-    expect(
-      isOpenClawLeaseAwareAcpxProcessCommand({
-        command: CODEX_WRAPPER_COMMAND,
-        wrapperRoot: WRAPPER_ROOT,
-      }),
-    ).toBe(true);
-    expect(
-      isOpenClawLeaseAwareAcpxProcessCommand({ command: LOCAL_NODE_MODULES_CODEX_COMMAND }),
-    ).toBe(false);
-    expect(isOpenClawLeaseAwareAcpxProcessCommand({ command: PLUGIN_DEPS_CODEX_COMMAND })).toBe(
-      false,
-    );
   });
 
   it("kills an owned recorded process tree children first", async () => {
@@ -306,31 +332,6 @@ describe("process reaper", () => {
     });
     expect(listProcesses).not.toHaveBeenCalled();
     expect(killProcess).not.toHaveBeenCalled();
-  });
-
-  it("skips recorded pid cleanup when process listing is unavailable", async () => {
-    const killed: Array<{ pid: number; signal: NodeJS.Signals }> = [];
-    const result = await cleanupOpenClawOwnedAcpxProcessTree({
-      rootPid: 200,
-      rootCommand: CODEX_WRAPPER_COMMAND,
-      wrapperRoot: WRAPPER_ROOT,
-      deps: {
-        listProcesses: vi.fn(async () => {
-          throw new Error("ps unavailable");
-        }),
-        killProcess: vi.fn((pid, signal) => {
-          killed.push({ pid, signal });
-        }),
-        sleep: vi.fn(async () => {}),
-      },
-    });
-
-    expect(result).toEqual({
-      inspectedPids: [],
-      terminatedPids: [],
-      skippedReason: "process-list-unavailable",
-    });
-    expect(killed).toStrictEqual([]);
   });
 
   it("does not kill a reused pid when the live command is not OpenClaw-owned", async () => {

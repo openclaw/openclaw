@@ -51,11 +51,7 @@ export function listPluginStateEntries(
   store: PluginStateDatabase,
   params: { pluginId: string; namespace: string },
 ): PluginStateEntry<unknown>[] {
-  const rows = iteratePluginStateEntries(store.db, {
-    pluginId: params.pluginId,
-    namespace: params.namespace,
-    now: Date.now(),
-  });
+  const rows = iteratePluginStateEntries(store.db, { ...params, now: Date.now() });
   const entries: PluginStateEntry<unknown>[] = [];
   let decodeFailure: { error: unknown } | undefined;
   for (const row of rows) {

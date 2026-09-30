@@ -25,6 +25,8 @@ async function runBuiltPluginSingletonSmoke(signal: AbortSignal) {
     loadOpenClawPlugins,
     matchPluginCommand,
     resolvePluginRuntimeLoadContext,
+    setPluginRuntimeLoadContext,
+    withPluginRuntimeGenerationScope,
   } = await import(pathToFileURL(smokeEntryPath).href);
   signal.throwIfAborted();
 
@@ -203,11 +205,6 @@ async function runBuiltPluginSingletonSmoke(signal: AbortSignal) {
     signal.throwIfAborted();
     const { createPluginMetadataSnapshotFixture } =
       await import("../src/plugins/plugin-metadata.test-support.js");
-    signal.throwIfAborted();
-    const { withPluginRuntimeGenerationScope } =
-      await import("../src/plugins/runtime/generation-scope.js");
-    signal.throwIfAborted();
-    const { setPluginRuntimeLoadContext } = await import("../src/plugins/runtime/load-context.js");
     signal.throwIfAborted();
     const artifactPluginId = "build-artifact-selection";
     const artifactSourceRoot = path.join(tempRoot, "extensions", artifactPluginId);

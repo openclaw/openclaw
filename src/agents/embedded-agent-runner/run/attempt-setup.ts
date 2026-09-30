@@ -1,9 +1,7 @@
-/**
- * Resolves workspace, runtime setup, context guards, and startup for an embedded attempt.
- * It may assume dispatch inputs and provider metadata are ready.
- */
 import path from "node:path";
+import { isPathRelativeEscape } from "@openclaw/fs-safe/path";
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
+import type { ModelCompatConfig } from "../../../config/types.models.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
 import { buildContextEngineRuntimeSettings } from "../../../context-engine/runtime-settings.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
@@ -27,6 +25,7 @@ import {
   resolveProviderRuntimePluginHandle,
   type ProviderRuntimePluginHandle,
 } from "../../../plugins/provider-hook-runtime.js";
+import { createStageTimingTracker } from "../../../shared/stage-timing.js";
 import { isHeartbeatLifecycleRunKind } from "../../bootstrap-mode.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import type { EmbeddedContextFile } from "../../embedded-agent-helpers.js";
@@ -53,20 +52,14 @@ import { mapThinkingLevel, mapThinkingLevelForProvider } from "../utils.js";
 import { buildLoopPromptCacheInfo } from "./attempt-context-engine-helpers.js";
 import { configureEmbeddedAttemptHttpRuntime } from "./attempt-http-runtime.js";
 import { buildAfterTurnRuntimeContext } from "./attempt-prompt-helpers.js";
-import { resolveAttemptStreamAuthProfileId } from "./attempt-run-decisions.js";
 import {
   createEmbeddedRunStageSummaryEmitter,
-  createEmbeddedRunStageTracker,
   formatEmbeddedRunStageSummary,
   shouldWarnEmbeddedRunStageSummary,
 } from "./attempt-stage-timing.js";
 import { installHistoryImagePruneContextTransform } from "./history-image-prune.js";
 import type { MidTurnPrecheckRequest } from "./midturn-precheck.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
-
-/**
- * Resolves workspace, sandbox, provider runtime, and phase reporting for an embedded attempt.
- */
 
 type PreparedProviderRuntimePluginHandle = ProviderRuntimePluginHandle & {
   modelId: string;
@@ -78,15 +71,15 @@ export type EmbeddedAttemptSetup = Awaited<ReturnType<typeof prepareEmbeddedAtte
 export async function prepareEmbeddedAttemptSetup(params: EmbeddedRunAttemptParams) {
   // Ultra is a logical orchestration mode, not a provider effort. Preserve it for
   // prompt/status surfaces, then lower only at agent-core and provider boundaries.
-  const agentCoreThinkingLevel = mapThinkingLevel(params.thinkLevel);
-  const providerThinkingLevel = mapThinkingLevelForProvider(params.thinkLevel);
+  const providerThinkingLevel = mapThinkingLevelForProvider(params.thinkLevel, params.model);
+  const agentCoreThinkingLevel = mapThinkingLevel(providerThinkingLevel);
   const proactiveSubagentOrchestration = params.thinkLevel === "ultra";
   configureEmbeddedAttemptHttpRuntime({ timeoutMs: params.timeoutMs });
 
   log.debug(
     `embedded run start: runId=${params.runId} sessionId=${params.sessionId} provider=${params.provider} model=${params.modelId} thinking=${params.thinkLevel} messageChannel=${params.messageChannel ?? params.messageProvider ?? "unknown"}`,
   );
-  const prepStages = createEmbeddedRunStageTracker();
+  const prepStages = createStageTimingTracker(Date.now);
   const emitPrepStageSummary = createEmbeddedRunStageSummaryEmitter({
     label: "prep stages",
     log,
@@ -169,8 +162,6 @@ export async function prepareEmbeddedAttemptSetup(params: EmbeddedRunAttemptPara
   };
 }
 
-/** Installs attempt-local context engine, tool-result, image, and frame guards. */
-
 type PromptCacheRetention = Parameters<typeof buildLoopPromptCacheInfo>[0]["retention"];
 
 export function installEmbeddedAttemptContextGuards(input: {
@@ -226,7 +217,7 @@ export function installEmbeddedAttemptContextGuards(input: {
             getReplay: () => ({
               model: attempt.model,
               sessionId: attempt.sessionId,
-              authProfileId: resolveAttemptStreamAuthProfileId(attempt),
+              authProfileId: attempt.runtimePlan?.auth.forwardedAuthProfileId,
               enabled: input.getCompactionReplayEnabled(),
             }),
             contextTokenBudget,
@@ -241,11 +232,15 @@ export function installEmbeddedAttemptContextGuards(input: {
         }
       : {};
 
+  const cacheTtlCompat: ModelCompatConfig | undefined = attempt.model.compat;
   const contextPruning = attempt.config?.agents?.defaults?.contextPruning;
   // Disabled pruning must not resolve provider hooks and cold-load plugin metadata.
   const cacheTtlSettings =
     contextPruning?.mode === "cache-ttl" &&
-    isCacheTtlEligibleProvider(attempt.provider, attempt.modelId, attempt.model.api)
+    isCacheTtlEligibleProvider(attempt.provider, attempt.modelId, attempt.model.api, {
+      baseUrl: attempt.model.baseUrl,
+      supportsPromptCacheKey: cacheTtlCompat?.supportsPromptCacheKey,
+    })
       ? resolveCacheTtlPruningSettings(contextPruning)
       : undefined;
   const previousCacheTtlTransform = activeSession.agent.transformContext;
@@ -257,11 +252,10 @@ export function installEmbeddedAttemptContextGuards(input: {
     : null;
   if (cacheTtlSettings) {
     activeSession.agent.transformContext = async (messages, signal) => {
-      const transformed = previousCacheTtlTransform
+      const sourceMessages = previousCacheTtlTransform
         ? await previousCacheTtlTransform.call(activeSession.agent, messages, signal)
         : messages;
-      const sourceMessages = Array.isArray(transformed) ? transformed : messages;
-      const projected = pruneExpiredCacheTtlToolResults({
+      return pruneExpiredCacheTtlToolResults({
         messages: sourceMessages,
         settings: cacheTtlSettings,
         contextWindowTokens: contextTokenBudget,
@@ -276,7 +270,6 @@ export function installEmbeddedAttemptContextGuards(input: {
           lastCacheTouchAt = Date.now();
         },
       });
-      return projected;
     };
   }
 
@@ -355,6 +348,7 @@ export function installEmbeddedAttemptContextGuards(input: {
     activeSession.agent,
     {
       workspaceDir: input.effectiveWorkspace,
+      agentWorkspaceDir: attempt.workspaceDir,
       model: attempt.model,
       maxBytes: MAX_IMAGE_BYTES,
       maxDimensionPx: resolveImageSanitizationLimits(attempt.config).maxDimensionPx,
@@ -371,10 +365,9 @@ export function installEmbeddedAttemptContextGuards(input: {
   );
   const previousComputerFrameTransform = activeSession.agent.transformContext;
   activeSession.agent.transformContext = async (messages, signal) => {
-    const transformed = previousComputerFrameTransform
+    const modelContext = previousComputerFrameTransform
       ? await previousComputerFrameTransform.call(activeSession.agent, messages, signal)
       : messages;
-    const modelContext = Array.isArray(transformed) ? transformed : messages;
     invalidateComputerFrameIfMissing({
       contextEpoch: input.computerContextEpoch,
       messages: modelContext,
@@ -420,6 +413,7 @@ export function startEmbeddedAttemptDiagnostics(params: EmbeddedRunAttemptParams
   const runTrace = freezeDiagnosticTraceContext(createChildDiagnosticTraceContext(diagnosticTrace));
   const diagnosticRunBase = {
     runId: params.runId,
+    ...(params.agentId && { agentId: params.agentId }),
     ...(params.sessionKey && { sessionKey: params.sessionKey }),
     ...(params.sessionId && { sessionId: params.sessionId }),
     provider: params.provider,
@@ -459,20 +453,6 @@ export function startEmbeddedAttemptDiagnostics(params: EmbeddedRunAttemptParams
 }
 
 /**
- * Maps bootstrap context files into the attempt workspace.
- */
-
-function isRelativePathInsideOrEqual(relativePath: string): boolean {
-  // `path.relative` returns "" for the workspace root; reject parent escapes and absolute paths.
-  return (
-    relativePath === "" ||
-    (relativePath !== ".." &&
-      !relativePath.startsWith(`..${path.sep}`) &&
-      !path.isAbsolute(relativePath))
-  );
-}
-
-/**
  * Rewrites injected context file paths when a bootstrap assembled in one
  * workspace is replayed in another. Files outside the source workspace keep
  * their original absolute path to avoid manufacturing unsafe relative paths.
@@ -487,10 +467,7 @@ export function remapInjectedContextFilesToWorkspace(params: {
   }
   return params.files.map((file) => {
     const relative = path.relative(params.sourceWorkspaceDir, file.path);
-    // Only files that were inside the source workspace can be safely projected
-    // into the target workspace.
-    const canRemap = isRelativePathInsideOrEqual(relative);
-    return canRemap
+    return !isPathRelativeEscape(relative)
       ? {
           ...file,
           path:

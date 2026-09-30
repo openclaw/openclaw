@@ -1,4 +1,4 @@
-import { vi } from "vitest";
+import { onTestFinished, vi } from "vitest";
 import type {
   SessionCatalogPullRequestSummary,
   SessionsCatalogListResult,
@@ -22,6 +22,7 @@ import type { SessionDataController } from "../components/session-data-controlle
 import type { SessionOrganizerController } from "../components/session-organizer-controller.ts";
 import type { ContextualSidebar } from "../components/sidebar-context-state.ts";
 import type { AgentIdentityCapability } from "../lib/agents/identity.ts";
+import type { GatewayStatus } from "../lib/gateway-status.ts";
 import {
   createSessionCapability,
   type SessionCapability,
@@ -29,6 +30,7 @@ import {
 } from "../lib/sessions/index.ts";
 import { reconcileSessionHistory } from "../lib/sessions/reconcile.ts";
 import { createSessionArchiveState } from "../lib/sessions/session-archive-state.ts";
+import type { SessionRequestClient } from "../lib/sessions/session-capability.ts";
 import { createSessionRowProvenance } from "../lib/sessions/session-row-provenance.ts";
 import { createSidebarContextLifecycle } from "./app-sidebar-context-lifecycle.ts";
 import {
@@ -59,12 +61,9 @@ export type SidebarLifecycleState = HTMLElement & {
   router?: AppSidebarSessionNavigationElement["router"];
   enabledRouteIds?: readonly NavigationRouteId[];
   connected: boolean;
-  offline: boolean;
-  restartPending: boolean;
-  queuedOutboxCount: number;
+  connectionStatus: GatewayStatus | null;
   lastError: string | null;
-  outboxAttentionCountForSession: (sessionKey: string) => number;
-  hasSessionDraft: (sessionKey: string) => boolean;
+  storedOutboxes: AppSidebarSessionNavigationElement["storedOutboxes"];
   terminalAvailable: boolean;
   catalogOpenTarget: "viewer" | "terminal";
   canPairDevice: boolean;
@@ -242,9 +241,11 @@ export function successfulSessionPatch(key: string) {
 
 export function createSessionsHarness(agentId: string, keys: string[]) {
   let state = createSessionState(agentId, keys);
+  let revision = 0;
   let canonicalListRevision = 1;
   const listeners = new Set<(next: SessionState) => void>();
   const notify = () => {
+    revision += 1;
     for (const listener of listeners) {
       listener(state);
     }
@@ -311,6 +312,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     return true;
   });
   let scopedSessions: SessionCapability | null = null;
+  onTestFinished(() => scopedSessions?.dispose());
   const assignOwner = vi.fn<SessionCapability["assignOwner"]>(async (key, owner, options) => {
     const assigned = scopedSessions ? await scopedSessions.assignOwner(key, owner, options) : null;
     if (!assigned || !state.result) {
@@ -329,6 +331,9 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     return assigned;
   });
   const sessions = {
+    get revision() {
+      return revision;
+    },
     get state() {
       return state;
     },
@@ -411,6 +416,14 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     },
     reconcile,
     captureReconcile: () => reconcile,
+    describe: (
+      params: Parameters<SessionCapability["describe"]>[0],
+      options: Parameters<SessionCapability["describe"]>[1],
+    ) =>
+      scopedSessions!.describe(params, {
+        ...options,
+        client: options?.client ? (scopedClients.get(options.client) ?? options.client) : undefined,
+      }),
     observeRow: (...args: Parameters<SessionCapability["observeRow"]>) =>
       scopedSessions!.observeRow(...args),
     inheritRow: (...args: Parameters<SessionCapability["inheritRow"]>) =>
@@ -426,7 +439,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
   } as unknown as SessionCapability;
   let boundGateway: ApplicationGateway | null = null;
   let boundSelection: ApplicationContext["agentSelection"] | null = null;
-  const scopedClients = new WeakMap<GatewayBrowserClient, GatewayBrowserClient>();
+  const scopedClients = new WeakMap<SessionRequestClient, GatewayBrowserClient>();
   sidebarSessionGatewayBindings.set(sessions, (gateway, selection) => {
     if (boundGateway === gateway && boundSelection === selection) {
       return;
@@ -539,7 +552,7 @@ export function createContext(
     invalidate: () => undefined,
     subscribe: () => () => undefined,
   },
-): ApplicationContext<RouteId> {
+): ApplicationContext {
   const selectedAgentId = sessions.state.agentId ?? "main";
   const agents = {
     state: {
@@ -571,9 +584,9 @@ export function createContext(
     scopeUpgrade: hiddenScopeUpgradeCapability,
     overlays: {
       snapshot: { approvalQueue },
-      subscribe: () => () => undefined,
+      subscribe: vi.fn<ApplicationOverlays["subscribe"]>(() => () => undefined),
     } as unknown as ApplicationOverlays,
-  } as unknown as ApplicationContext<RouteId>;
+  } as unknown as ApplicationContext;
 }
 
 export async function mountSidebar(
@@ -589,7 +602,7 @@ export async function mountSidebar(
 }
 
 export async function mountSidebarContext(
-  context: ApplicationContext<RouteId>,
+  context: ApplicationContext,
   variant: SidebarLifecycleState["variant"] = "panel",
   activeRouteId?: RouteId,
 ) {
@@ -614,7 +627,32 @@ export async function mountSidebarContext(
     sidebarWithPreloads.sidebarMenus.preloadMenuRenderer(),
   ]);
   await sidebar.updateComplete;
+  if (sidebar.querySelector("openclaw-channel-avatar")) {
+    await customElements.whenDefined("openclaw-channel-avatar");
+    const channelAvatars = sidebar.querySelectorAll<
+      HTMLElement & { updateComplete: Promise<boolean> }
+    >("openclaw-channel-avatar");
+    await Promise.all(Array.from(channelAvatars, (avatar) => avatar.updateComplete));
+  }
   return { provider, sidebar, context };
+}
+
+export async function mountSessionCatalogSidebar(client: GatewayBrowserClient) {
+  const gateway = createGatewayHarness(client);
+  gateway.publish({
+    hello: {
+      features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
+    } as ApplicationGatewaySnapshot["hello"],
+  });
+  const { sidebar } = await mountSidebar(
+    gateway.gateway,
+    createSessions("main", ["agent:main:main"]),
+  );
+  sidebar.connected = true;
+  await sidebar.updateComplete;
+  await vi.advanceTimersByTimeAsync(0);
+  await sidebar.updateComplete;
+  return { gateway, sidebar };
 }
 
 export const TWO_AGENTS = {

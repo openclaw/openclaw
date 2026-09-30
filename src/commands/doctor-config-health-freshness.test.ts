@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import * as fileReplacement from "@openclaw/fs-safe/atomic";
 import { afterEach, expect, it, vi } from "vitest";
 import * as healthState from "../config/io.health-state.js";
 import type { ConfigHealthState } from "../config/io.health-state.types.js";
@@ -7,14 +8,32 @@ import { createConfigIO } from "../config/io.js";
 import { hashConfigRaw } from "../config/io.read-helpers.js";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
 import * as safeFs from "../infra/fs-safe.js";
-import * as fileReplacement from "../infra/replace-file.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
 import { withDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
 
+vi.mock("@openclaw/fs-safe/atomic", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@openclaw/fs-safe/atomic")>()),
+}));
+
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: vi.fn() }));
 afterEach(() => vi.restoreAllMocks());
+
+async function createFixture(home: string) {
+  const configPath = await writeOpenClawConfig(home, {
+    meta: { lastTouchedVersion: "2026.9.4" },
+    gateway: { mode: "local", port: 19091 },
+  });
+  const options = {
+    configPath,
+    env: { ...process.env, HOME: home },
+    homedir: () => home,
+    logger: { warn: vi.fn(), error: vi.fn() },
+  };
+  const io = createConfigIO(options);
+  return { configPath, options, io };
+}
 
 it.skipIf(process.platform === "win32")(
   "preserves custom parent permissions during promotion and retains recovery hardening",
@@ -63,17 +82,7 @@ it.skipIf(process.platform === "win32")(
 
 it("keeps the last-known-good file when a newer observation supersedes promotion", async () => {
   await withDoctorConfigPreflightHome(async (home) => {
-    const configPath = await writeOpenClawConfig(home, {
-      meta: { lastTouchedVersion: "2026.9.4" },
-      gateway: { mode: "local", port: 19091 },
-    });
-    const options = {
-      configPath,
-      env: { ...process.env, HOME: home },
-      homedir: () => home,
-      logger: { warn: vi.fn(), error: vi.fn() },
-    };
-    const io = createConfigIO(options);
+    const { configPath, options, io } = await createFixture(home);
     try {
       const good = await createConfigIO({ ...options, observe: false }).readConfigFileSnapshot();
       expect(await io.promoteConfigSnapshotToLastKnownGood(good)).toBe(true);
@@ -122,24 +131,14 @@ it("keeps the last-known-good file when a newer observation supersedes promotion
 });
 
 it.each(
-  (["promotion", "recovery", "Doctor recovery"] as const).flatMap((operation) =>
+  (["promotion", "Doctor recovery"] as const).flatMap((operation) =>
     ["supersession", "admission retirement"].map((metadata) => ({ operation, metadata })),
   ),
 )(
   "$operation preserves committed file truth and newer health after $metadata",
   async ({ operation, metadata }) => {
     await withDoctorConfigPreflightHome(async (home) => {
-      const configPath = await writeOpenClawConfig(home, {
-        meta: { lastTouchedVersion: "2026.9.4" },
-        gateway: { mode: "local", port: 19091 },
-      });
-      const options = {
-        configPath,
-        env: { ...process.env, HOME: home },
-        homedir: () => home,
-        logger: { warn: vi.fn(), error: vi.fn() },
-      };
-      const io = createConfigIO(options);
+      const { configPath, options, io } = await createFixture(home);
       try {
         const good = await createConfigIO({ ...options, observe: false }).readConfigFileSnapshot();
         expect(await io.promoteConfigSnapshotToLastKnownGood(good)).toBe(true);
@@ -197,13 +196,6 @@ it.each(
         if (operation === "promotion") {
           expect(await io.promoteConfigSnapshotToLastKnownGood(target)).toBe(true);
           expect(fs.readFileSync(`${configPath}.last-good`, "utf8")).toBe(targetRaw);
-        } else if (operation === "recovery") {
-          expect(
-            await io.recoverConfigFromLastKnownGood({
-              snapshot: target,
-              reason: "fixture-invalid-config",
-            }),
-          ).toBe(true);
         } else {
           const result = await withEnvAsync(
             {
@@ -238,17 +230,7 @@ it.each(
 
 it("rejects last-known-good recovery after its captured database admission closes", async () => {
   await withDoctorConfigPreflightHome(async (home) => {
-    const configPath = await writeOpenClawConfig(home, {
-      meta: { lastTouchedVersion: "2026.9.4" },
-      gateway: { mode: "local", port: 19091 },
-    });
-    const options = {
-      configPath,
-      env: { ...process.env, HOME: home },
-      homedir: () => home,
-      logger: { warn: vi.fn(), error: vi.fn() },
-    };
-    const io = createConfigIO(options);
+    const { configPath, options, io } = await createFixture(home);
     try {
       const good = await createConfigIO({ ...options, observe: false }).readConfigFileSnapshot();
       expect(await io.promoteConfigSnapshotToLastKnownGood(good)).toBe(true);

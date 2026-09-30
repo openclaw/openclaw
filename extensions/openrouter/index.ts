@@ -1,11 +1,13 @@
 import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
+  ProviderDefaultThinkingPolicyContext,
   ProviderReplayPolicy,
   ProviderReplayPolicyContext,
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { findNormalizedProviderValue } from "openclaw/plugin-sdk/provider-auth";
 import { runLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import {
@@ -13,6 +15,7 @@ import {
   DEFAULT_CONTEXT_TOKENS,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
+  getLoadedOpenRouterModelCapabilities,
   getOpenRouterModelCapabilities,
   loadOpenRouterModelCapabilities,
 } from "openclaw/plugin-sdk/provider-stream-family";
@@ -34,6 +37,7 @@ import {
   buildOpenrouterProvider,
   isOpenRouterProxyReasoningUnsupportedModel,
   normalizeOpenRouterBaseUrl,
+  OPENROUTER_BASE_URL,
   resolveOpenRouterApiBaseUrl,
 } from "./provider-catalog.js";
 import { resolveOpenRouterExtraParamsForTransport } from "./provider-routing.js";
@@ -52,6 +56,46 @@ const OPENROUTER_DEFAULT_MAX_TOKENS = 8192;
 const OPENROUTER_FUSION_MODEL_ID = "openrouter/fusion";
 const OPENROUTER_CACHE_TTL_MODEL_FAMILY = /^(?:anthropic|deepseek|moonshot(?:ai)?|z-?ai)\//;
 const MAX_PROMPT_MODEL_ID_DISPLAY_CHARS = 256;
+
+// Configured rows keep their sizing and opt-outs, but the OpenRouter model
+// catalog owns effort capabilities on its canonical transport.
+function isOpenRouterCatalogRoute(route: {
+  api?: string | null;
+  baseUrl?: string | null;
+}): boolean {
+  return (
+    (route.api == null || route.api === "openai-completions") &&
+    // Target-provider resolution may compare routes before normalizing a
+    // legacy URL, so only the exact catalog route can borrow its metadata.
+    (route.baseUrl == null || route.baseUrl === OPENROUTER_BASE_URL)
+  );
+}
+
+function withOpenRouterCatalogThinking(
+  ctx: ProviderDefaultThinkingPolicyContext,
+): ProviderDefaultThinkingPolicyContext {
+  if (
+    ctx.thinkingLevelMap ||
+    ctx.compat?.supportsReasoningEffort !== undefined ||
+    ctx.compat?.supportedReasoningEfforts !== undefined ||
+    !isOpenRouterCatalogRoute(ctx)
+  ) {
+    return ctx;
+  }
+  // Thinking profiles run on synchronous session reads, so they only consume
+  // catalog capabilities already loaded in memory.
+  const capabilities = getLoadedOpenRouterModelCapabilities(
+    normalizeOpenRouterApiModelId(ctx.modelId) ?? ctx.modelId,
+  );
+  if (!capabilities?.compat && !capabilities?.thinkingLevelMap) {
+    return ctx;
+  }
+  return {
+    ...ctx,
+    compat: { ...capabilities.compat, ...ctx.compat },
+    ...(capabilities.thinkingLevelMap ? { thinkingLevelMap: capabilities.thinkingLevelMap } : {}),
+  };
+}
 
 type OpenRouterFusionPromptContext = {
   config?: OpenClawConfig;
@@ -313,7 +357,25 @@ export default defineSingleProviderPluginEntry({
           provider: buildOpenrouterProvider(),
         }),
       },
-      resolveDynamicModel: (ctx) => buildDynamicOpenRouterModel(ctx),
+      resolveDynamicModel: buildDynamicOpenRouterModel,
+      // Resolve the catalog model even when a configured row already exists.
+      preferRuntimeResolvedModel: (ctx) => {
+        const configuredProvider = findNormalizedProviderValue(
+          ctx.config?.models?.providers,
+          PROVIDER_ID,
+        );
+        const requestedId = normalizeOpenRouterApiModelId(ctx.modelId) ?? ctx.modelId;
+        const configuredModel = configuredProvider?.models?.find(
+          (model) => (normalizeOpenRouterApiModelId(model.id) ?? model.id) === requestedId,
+        );
+        return (
+          configuredModel !== undefined &&
+          isOpenRouterCatalogRoute({
+            api: configuredModel.api ?? configuredProvider?.api,
+            baseUrl: configuredModel.baseUrl ?? configuredProvider?.baseUrl,
+          })
+        );
+      },
       prepareDynamicModel: async (ctx) => {
         await loadOpenRouterModelCapabilities(
           normalizeOpenRouterApiModelId(ctx.modelId) ?? ctx.modelId,
@@ -351,7 +413,8 @@ export default defineSingleProviderPluginEntry({
       normalizeToolSchemas: normalizeOpenRouterToolSchemas,
       inspectToolSchemas: inspectOpenRouterToolSchemas,
       resolveReasoningOutputMode: () => "native",
-      resolveThinkingProfile: (ctx) => resolveOpenRouterThinkingProfile(ctx.modelId, ctx),
+      resolveThinkingProfile: (ctx) =>
+        resolveOpenRouterThinkingProfile(ctx.modelId, withOpenRouterCatalogThinking(ctx)),
       isModernModelRef: () => true,
       resolveSystemPromptContribution: resolveOpenRouterFusionPromptContribution,
       extraParamsForTransport: resolveOpenRouterExtraParamsForTransport,
@@ -371,6 +434,7 @@ export default defineSingleProviderPluginEntry({
           baseUrl: ctx.config.models?.providers?.openrouter?.baseUrl,
           request: ctx.config.models?.providers?.openrouter?.request,
           timeoutMs: ctx.timeoutMs,
+          signal: ctx.signal,
           fetchFn: ctx.fetchFn,
         }),
     };

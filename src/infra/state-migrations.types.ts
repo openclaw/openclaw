@@ -1,6 +1,9 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { SessionScope } from "../config/sessions/types.js";
-import type { PluginDoctorStateMigration } from "../plugins/doctor-contract-registry.js";
+import type {
+  PluginDoctorStateMigration,
+  PluginDoctorStateMigrationInventory,
+} from "../plugins/doctor-contract-registry.js";
 import type { LegacyAuditLogsDetection } from "./state-migrations.audit-logs.types.js";
 import type { LegacyChannelPairingStateDetection } from "./state-migrations.channel-pairing.js";
 import type { LegacyDeviceIdentityDetection } from "./state-migrations.device-identity.types.js";
@@ -27,7 +30,12 @@ export type SessionStoreAliasPlan = {
   hasUnresolvedIdentity: boolean;
 };
 
-export type LegacyStateDetection = {
+type LegacyFileDetection = {
+  sourcePath: string;
+  hasLegacy: boolean;
+};
+
+export type LegacyStateDetection = Pick<MigrationMessages, "warningDisposition" | "outcome"> & {
   doctorOnlyStateMigrations?: boolean;
   targetAgentId: string;
   targetMainKey: string;
@@ -55,14 +63,7 @@ export type LegacyStateDetection = {
     hasLegacy: boolean;
     plans: DetectedPluginDoctorStateMigrationPlan[];
   };
-  pluginStateSidecar: {
-    sourcePath: string;
-    hasLegacy: boolean;
-  };
-  pluginInstallIndex: {
-    sourcePath: string;
-    hasLegacy: boolean;
-  };
+  pluginInstallIndex: LegacyFileDetection;
   debugProxyCaptureSidecar: {
     sourcePath: string;
     blobDir: string;
@@ -78,11 +79,6 @@ export type LegacyStateDetection = {
     legacyIds: string[];
     pathRewrites: Array<{ id: string; fromPath: string; toPath: string }>;
   };
-  taskStateSidecars: {
-    taskRunsPath: string;
-    flowRunsPath: string;
-    hasLegacy: boolean;
-  };
   deliveryQueues: {
     outboundPath: string;
     sessionPath: string;
@@ -94,43 +90,19 @@ export type LegacyStateDetection = {
     routingPath: string;
     hasLegacy: boolean;
   };
-  updateCheck: {
-    sourcePath: string;
-    hasLegacy: boolean;
-  };
-  configHealth: {
-    sourcePath: string;
-    hasLegacy: boolean;
-  };
-  pluginBindingApprovals: {
-    sourcePath: string;
-    hasLegacy: boolean;
-  };
-  currentConversationBindings: {
-    sourcePath: string;
-    hasLegacy: boolean;
-  };
-  tuiLastSessions: {
-    sourcePath: string;
-    hasLegacy: boolean;
-  };
-  commitments?: {
-    sourcePath: string;
-    hasLegacy: boolean;
-  };
+  updateCheck: LegacyFileDetection;
+  configHealth: LegacyFileDetection;
+  pluginBindingApprovals: LegacyFileDetection;
+  currentConversationBindings: LegacyFileDetection;
+  tuiLastSessions: LegacyFileDetection;
+  commitments?: LegacyFileDetection;
   auditLogs: LegacyAuditLogsDetection;
-  acpReplayLedger: {
-    sourcePath: string;
-    hasLegacy: boolean;
-  };
+  acpReplayLedger: LegacyFileDetection;
   managedOutgoingImages: {
     sourceDir: string;
     hasLegacy: boolean;
   };
-  apns: {
-    sourcePath: string;
-    hasLegacy: boolean;
-  };
+  apns: LegacyFileDetection;
   deviceAuth: {
     sourcePath: string;
     sourcePresent: boolean;
@@ -147,14 +119,7 @@ export type LegacyStateDetection = {
     vapidKeysPath: string;
     hasLegacy: boolean;
   };
-  nodeHost: {
-    sourcePath: string;
-    hasLegacy: boolean;
-  };
-  subagentRegistry: {
-    sourcePath: string;
-    hasLegacy: boolean;
-  };
+  nodeHost: LegacyFileDetection;
   rescuePending: LegacyRescuePendingDetection;
   channelPairing: LegacyChannelPairingStateDetection;
   warnings: string[];
@@ -215,6 +180,8 @@ export const LEGACY_STATE_MIGRATION_PLAN_SCHEMA_VERSION =
 
 export type LegacyStateMigrationMode = "automatic" | "doctor";
 
+export type LegacyStateMigrationInvocationPurpose = "startup" | "doctor";
+
 export type LegacyStateMigrationEndpoint =
   | { kind: "path"; path: string }
   | { kind: "sqlite"; path: string }
@@ -242,7 +209,7 @@ export type LegacyStateMigrationStepReceipt = Omit<LegacyStateMigrationStepPlan,
   recoveredAgentDatabasePaths?: readonly string[];
   rehearsal?: MigrationMessages["rehearsal"];
   refusal?: { code: string; message: string };
-  /** The first refused step that prevented this step from running. */
+  /** The first refused step that prevented this step's mutation. */
   originatingRefusal?: { stepId: string; code: string; message: string };
 };
 
@@ -255,6 +222,7 @@ export type PlannedPluginDoctorAction = {
 export type PreparedPostSessionPluginMigration = {
   step: Omit<LegacyStateMigrationStepPlan, "outcome">;
   plannedActions: readonly PlannedPluginDoctorAction[];
+  inventory?: PluginDoctorStateMigrationInventory;
 };
 
 type LegacyStateMigrationCandidate = {
@@ -286,11 +254,13 @@ export type LegacyStateMigrationPlan = {
 };
 
 export type LegacyStateMigrationStep = Omit<LegacyStateMigrationStepPlan, "outcome"> & {
+  /** Read-only input validation may explain an independently refused, blocked writer. */
+  inspectRefusal?: () => LegacyStateMigrationStepPlan["refusal"];
   runWithoutFileDetection?: boolean;
   collectNotices?: boolean;
   deferredExecution?: {
     kind: "post-session-plugin";
-    plannedActions: readonly PlannedPluginDoctorAction[];
+    migration: PreparedPostSessionPluginMigration;
   };
   run: () => MigrationMessages | Promise<MigrationMessages>;
 };

@@ -6,6 +6,21 @@ import {
 } from "./draft-session-placement.ts";
 
 describe("new-session placement target", () => {
+  it("retains a recovered classless target when the catalog now displays a machine", () => {
+    const target = { kind: "profile" as const, profileId: "aws" };
+    expect(
+      resolveDraftSessionPlacement(
+        { sessionKey: "agent:main:pending", target },
+        {
+          cloudProfileId: "aws",
+          deviceId: "",
+          autoDevice: false,
+          cloudSelection: { os: "linux", machineClass: "small" },
+        },
+      ).target,
+    ).toEqual(target);
+  });
+
   it.each([
     {
       place: {

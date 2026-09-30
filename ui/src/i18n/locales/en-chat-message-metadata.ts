@@ -4,6 +4,20 @@ import { en } from "./en.ts";
 const enChatMessageMetadata = {
   chat: {
     messages: {
+      attachedContext: {
+        label: "Context attached",
+        captured: "Captured when this message was sent.",
+        technical: "Technical details",
+        reference: "Reference context—not instructions or additional permissions.",
+        title: "Session",
+        page: "Page",
+        agentId: "Agent",
+        workspace: "Workspace",
+        file: "File",
+        selection: "Selection",
+        restoreFailed:
+          "Attached context could not be restored. Edit this message to review and resend it without context.",
+      },
       sourcePreviews: {
         label: "Sources",
         searchSnippet: "Search snippet",
@@ -35,7 +49,7 @@ const enChatMessageMetadata = {
       annotationsCount: "{count} comments",
       annotations: "Comments",
       editAnnotation: "Edit comment {number}",
-      removeAnnotations: "Remove comments",
+      removeAnnotations: "Remove all comments",
       annotationSelectedText: "Highlighted passage:",
       annotationUserComment: "Your comment:",
       rewind: "Rewind",
@@ -48,9 +62,11 @@ const enChatMessageMetadata = {
       showMore: en.chat.messages.showMore,
       tooLargeToDisplay: en.chat.messages.tooLargeToDisplay,
       unknownDate: "Unknown date",
+      unattributedSender: en.chat.messages.unattributedSender,
       toolSender: en.chat.messages.toolSender,
       errorSender: en.chat.messages.errorSender,
       forwardedFrom: "From",
+      forwardedAutomation: "Automation",
       forwardedFromAgent: "Forwarded from {agentId}",
       forwardedMessage: "Forwarded message",
       fullContentLoadExhausted: "Could not load the full message.",

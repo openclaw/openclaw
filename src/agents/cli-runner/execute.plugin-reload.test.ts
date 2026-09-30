@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { CliBackendConfig, CliBackendExecute } from "../../plugins/cli-backend.types.js";
+import { PluginInstanceDrainTimeoutError } from "../../plugins/plugin-instance-error.js";
 import { PluginInstance } from "../../plugins/plugin-instance.js";
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
@@ -43,6 +44,7 @@ async function preparePluginContext(execute: CliBackendExecute): Promise<{
       runId,
     },
     started: Date.now(),
+    startedMonotonicMs: performance.now(),
     workspaceDir: "/tmp",
     backendResolved: { id: "claude-cli", config: backend, bundleMcp: false, pluginId: "anthropic" },
     executionTarget: { kind: "plugin", execute },
@@ -100,11 +102,19 @@ describe("plugin-owned CLI turns across a plugin hot reload", () => {
       },
     );
     let disposal: ReturnType<typeof owner.dispose> | undefined;
+    let settlement: Promise<void> | undefined;
     try {
       await vi.waitFor(() => expect(started).toBe(true));
 
       disposal = owner.dispose();
       await vi.advanceTimersByTimeAsync(5_001);
+      const timeout = (await disposal).errors[0];
+      expect(timeout).toBeInstanceOf(PluginInstanceDrainTimeoutError);
+      if (!(timeout instanceof PluginInstanceDrainTimeoutError)) {
+        throw new Error("Expected bounded retirement while the CLI consumer is retained");
+      }
+      settlement = timeout.settled;
+      expect(timeout.forcedRetirement?.retainedConsumerCount).toBe(1);
       expect(owner.acceptingCalls).toBe(false);
       finish.resolve();
 
@@ -118,13 +128,14 @@ describe("plugin-owned CLI turns across a plugin hot reload", () => {
       await consumer!.run(cleanup);
       expect(cleaned).toBe(true);
       consumer!.release();
-      await expect(disposal).resolves.toEqual({ errors: [] });
+      expect(() => consumer!.run(cleanup)).toThrow("consumer is closed");
+      await settlement;
     } finally {
       // A failed assertion must not strand the iterator or its retained owner.
       finish.resolve();
       consumer?.release();
       admission.close();
-      await Promise.allSettled([run, disposal ?? owner.dispose()]);
+      await Promise.allSettled([run, disposal ?? owner.dispose(), settlement]);
     }
   });
 });

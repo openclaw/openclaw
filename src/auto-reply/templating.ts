@@ -57,6 +57,8 @@ export type ChannelStructuredContextEntry = {
 export type SessionTranscriptContext = {
   chatWindow?: boolean;
   historyLimit: number;
+  /** A platform-selected recent window keeps its configured bound and does not merge transcript rows. */
+  historyKind?: "pending" | "recent";
   beforeTimestampMs?: number;
   minTimestampMs?: number;
   senderLabels?: { assistant: string; user: string };
@@ -311,7 +313,7 @@ export type MsgContext = Partial<CanonicalInboundText> & {
   /** System-attached provenance for the current inbound message. */
   InputProvenance?: InputProvenance;
   /** Internal wake cause, independent of transport, transcript provenance, and execution authority. */
-  InternalTurnSource?: "heartbeat" | "cron" | "exec";
+  InternalTurnSource?: "heartbeat" | "cron" | "exec" | "progress-card-refresh";
   /** Explicit owner allowlist overrides (trusted, configuration-derived). */
   OwnerAllowFrom?: Array<string | number>;
   SenderName?: string;
@@ -530,21 +532,17 @@ function formatTemplateValue(value: unknown): string {
   if (Array.isArray(value)) {
     return value
       .flatMap((entry) => {
-        if (entry == null) {
-          return [];
-        }
-        if (typeof entry === "string") {
-          return [entry];
-        }
-        if (typeof entry === "number" || typeof entry === "boolean" || typeof entry === "bigint") {
+        if (
+          typeof entry === "string" ||
+          typeof entry === "number" ||
+          typeof entry === "boolean" ||
+          typeof entry === "bigint"
+        ) {
           return [String(entry)];
         }
         return [];
       })
       .join(",");
-  }
-  if (typeof value === "object") {
-    return "";
   }
   return "";
 }

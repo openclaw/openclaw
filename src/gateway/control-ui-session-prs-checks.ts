@@ -6,11 +6,7 @@ import type {
   ControlUiSessionPullRequestCheckDetails,
   ControlUiSessionPullRequestCheckStep,
 } from "./control-ui-contract.js";
-import {
-  ControlUiGitHubError,
-  fetchGitHubJson,
-  GITHUB_API_ORIGIN,
-} from "./control-ui-github-api.js";
+import { gitHubPublicApi, type ControlUiGitHubError } from "./github-public-api.js";
 
 const FAILING_CHECK_CONCLUSIONS = new Set([
   "failure",
@@ -49,11 +45,11 @@ export function sessionPullRequestRepositoryApiUrl(target: {
   owner: string;
   repo: string;
 }): string {
-  return `${GITHUB_API_ORIGIN}/repos/${encodeURIComponent(target.owner)}/${encodeURIComponent(target.repo)}`;
+  return `${gitHubPublicApi.GITHUB_API_ORIGIN}/repos/${encodeURIComponent(target.owner)}/${encodeURIComponent(target.repo)}`;
 }
 
 function incomplete(): ControlUiGitHubError {
-  return new ControlUiGitHubError(
+  return new gitHubPublicApi.ControlUiGitHubError(
     502,
     "GitHub CI details were incomplete or changed while loading",
   );
@@ -123,7 +119,7 @@ export async function fetchSessionPullRequestCheckRollup(
   }
   const runs = await fetchSessionPullRequestCheckRuns(
     { ...item, headSha: item.headSha },
-    (url, maxBytes) => fetchGitHubJson(url, fetchImpl, token, maxBytes),
+    (url, maxBytes) => gitHubPublicApi.fetchGitHubJson(url, fetchImpl, token, maxBytes),
   );
   if (runs.length === 0) {
     return undefined;
@@ -175,12 +171,8 @@ function safeCheckLink(value: unknown): string | undefined {
   if (typeof value !== "string" || value.length > 2048) {
     return undefined;
   }
-  try {
-    const url = new URL(value);
-    return url.protocol === "https:" && !url.username && !url.password ? url.href : undefined;
-  } catch {
-    return undefined;
-  }
+  const url = URL.parse(value);
+  return url?.protocol === "https:" && !url.username && !url.password ? url.href : undefined;
 }
 
 type ParsedCheck = { check: ControlUiSessionPullRequestCheck; suiteId?: number };
@@ -320,12 +312,11 @@ export async function fetchSessionPullRequestCheckDetails(
 ): Promise<{ checks: ControlUiSessionPullRequestCheck[]; error?: unknown }> {
   const rows = parseChecks(await fetchSessionPullRequestCheckRuns(target, request), target);
   const priority = { failed: 0, running: 1, passed: 2, skipped: 3 };
-  const orderedRows = rows.toSorted(
-    (a, b) =>
-      priority[a.check.state] - priority[b.check.state] ||
-      a.check.name.localeCompare(b.check.name) ||
-      a.check.id - b.check.id,
-  );
+  const compareChecks = (
+    a: ControlUiSessionPullRequestCheck,
+    b: ControlUiSessionPullRequestCheck,
+  ) => priority[a.state] - priority[b.state] || a.name.localeCompare(b.name) || a.id - b.id;
+  const orderedRows = rows.toSorted((a, b) => compareChecks(a.check, b.check));
   const suites = [
     ...new Set(
       orderedRows
@@ -347,13 +338,13 @@ export async function fetchSessionPullRequestCheckDetails(
     } catch (failure) {
       error = failure;
       // The API boundary owns cooldown. Do not repeatedly enter it for the rest of the suites.
-      if (failure instanceof ControlUiGitHubError && failure.statusCode === 429) {
+      if (failure instanceof gitHubPublicApi.ControlUiGitHubError && failure.statusCode === 429) {
         break;
       }
     }
   }
   if (suites.length > MAX_ACTIONS_SUITES && !error) {
-    error = new ControlUiGitHubError(
+    error = new gitHubPublicApi.ControlUiGitHubError(
       502,
       "Some Actions steps exceeded the CI detail limit; open the job on GitHub",
     );
@@ -366,16 +357,14 @@ export async function fetchSessionPullRequestCheckDetails(
         .toSorted()
         .join(",");
     if (identity(latest) !== identity(rows)) {
-      throw new ControlUiGitHubError(409, "CI jobs were rerun while loading; reopen CI details");
+      throw new gitHubPublicApi.ControlUiGitHubError(
+        409,
+        "CI jobs were rerun while loading; reopen CI details",
+      );
     }
   }
   return {
-    checks: orderedRows
-      .map(({ check }) => details.get(check.id) ?? check)
-      .toSorted(
-        (a, b) =>
-          priority[a.state] - priority[b.state] || a.name.localeCompare(b.name) || a.id - b.id,
-      ),
+    checks: orderedRows.map(({ check }) => details.get(check.id) ?? check).toSorted(compareChecks),
     error,
   };
 }

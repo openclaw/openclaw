@@ -164,6 +164,8 @@ If a run hits a live model-switch handoff, the scheduler retries with the switch
 
 Before an isolated run starts, OpenClaw checks reachable local endpoints for configured `api: "ollama"` and `api: "openai-completions"` providers whose `baseUrl` is loopback, private-network, or `.local`. This preflight walks the job's configured fallback chain and only marks the run `skipped` once every candidate is unreachable; `--fallbacks ""` keeps that walk strict to just the primary model. A down endpoint records the run as `skipped` with a clear error instead of starting a model call. The result is cached for 5 minutes per endpoint (not per job or model), so many due jobs sharing a dead local Ollama/vLLM/SGLang/LM Studio server cost one probe instead of a request storm. Skipped preflight runs do not increment execution-error backoff; set `failureAlert.includeSkipped` to opt into repeated skip alerts.
 
+Client-side preflight timeouts are not cached. The next scheduled run probes the endpoint again instead of inheriting a timeout from another run.
+
 ### Command payloads
 
 Command payloads run deterministic scripts inside the Gateway scheduler without starting a model-backed turn. They execute on the Gateway host, capture stdout/stderr, record the run in the job's run history, and reuse the same `announce`, `webhook`, and `none` delivery modes as agent-turn jobs.
@@ -205,6 +207,8 @@ openclaw automations create "0 * * * *" \
 ```
 
 Use `--script <file|->` to read JavaScript from a file or stdin. The CLI preserves leading and trailing spaces in file paths; quote the path as one shell argument. The timeout defaults to 300 seconds and is capped at 900; the tool budget defaults to 50 calls and is capped at 200. These payload budgets are separate from the smaller trigger-gate evaluation budgets.
+
+Script payloads can call configured MCP server tools as `MCP.<server>.<tool>({ ...input })`, like interactive Code Mode. MCP is opt-in per server: name each server in the job's `toolsAllow` (`--tools`) with an exact tool such as `wispr-flow__search_meetings` or a server-scoped glob such as `wispr-flow__*`. A wildcard `*`, a missing `toolsAllow`, a glob without a server prefix, or a script that never mentions `MCP` starts no server. Within a named server, the owning agent's tool policy still applies. Each run starts its own runtime for the named servers, counts connection time against the script timeout and each call against the tool budget, and retires the runtime when the run ends. A named server that fails to start is absent from `MCP`; if the script then fails, the run error ends with `MCP server "<name>" is unavailable: <reason>`. See [Event triggers](/automation/cron-jobs/schedules#event-triggers-condition-watchers) for the shared details.
 
 The script may return an object with these optional fields:
 
@@ -251,6 +255,10 @@ Agent-turn jobs default to the creating conversation when the create request car
 <AccordionGroup>
   <Accordion title="Main session vs current vs isolated vs custom">
     **Main session** jobs enqueue a system event into the owning agent's main session and optionally wake the heartbeat (`--wake now` or `--wake next-heartbeat`). The event is processed with that session's existing context and last delivery context. Internal automation turns do not extend daily or idle reset freshness; only visible user activity updates session freshness. **Current-session** jobs execute in a detached run session, read a bounded tail of the conversation captured when the job was created, and commit the final visible assistant result back to that exact conversation. **Isolated** jobs run a dedicated agent turn with a fresh session. **Custom sessions** (`session:xxx`) persist context across runs, enabling workflows like daily standups that build on previous summaries.
+
+    `current` binds conversation context and result delivery, not the original agent execution or its worktree. The detached run uses the scheduled agent's workspace and captured tool restrictions. A task-specific checkout path in the prompt does not grant access to it. Before using a job to continue repository work, verify that its execution environment can access the required checkout and tools; otherwise keep the work with its existing execution owner. A result committed to the conversation does not itself resume the original agent.
+
+    Custom-session agent turns use the existing session’s saved workspace and working directory, including its managed worktree. Requester-scoped jobs may use a saved workspace only for their owning conversation; trusted operator-scheduled jobs can target another conversation’s saved workspace. A missing, retired, or mismatched worktree stops the run instead of falling back to the agent’s default workspace. Filesystem containment and the job’s tool restrictions still apply; a path in the job prompt does not grant access. Persistent-session rollover keeps the saved workspace binding, permission mode, containment root, and inherited tool restrictions; detached runs do not inherit this workspace context. A new `session:custom-id` without an existing session starts in the configured agent workspace. Use `delivery: { mode: "none" }` without an external target for quiet named-session work that needs no runner fallback announcement.
 
     Main-session automation events are self-contained system-event reminders. They do not automatically include the default heartbeat prompt or the heartbeat monitor scratch; say it explicitly in the automation event text if a reminder should consult that context.
 

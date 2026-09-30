@@ -28,7 +28,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
-it.each(["idle", "aborted", "retargeted", "empty"] as const)(
+it.each(["retargeted", "empty", "cancel-during-idle", "cancel-during-write"] as const)(
   "admits only pending tool-result cleanup behind the current database writer (%s)",
   async (scenario) => {
     const dir = tempDirs.make("openclaw-tool-flush-admission-");
@@ -60,6 +60,7 @@ it.each(["idle", "aborted", "retargeted", "empty"] as const)(
     const entered = createDeferredCore();
     const release = createDeferredCore();
     const idle = createDeferredCore();
+    const cancellation = new AbortController();
     const heldWriter = runOpenClawAgentWorkerWrite(
       toDatabaseOptions(resolveSqliteReadScope(target)),
       async () => {
@@ -68,30 +69,32 @@ it.each(["idle", "aborted", "retargeted", "empty"] as const)(
       },
     );
     let flush: Promise<void> | undefined;
-    let settled = false;
+    const settled = vi.fn();
     try {
       await entered.promise;
       flush = flushPendingToolResultsAfterIdle({
         agent: { waitForIdle: () => idle.promise },
         sessionManager: manager,
-        ...(scenario === "idle" || scenario === "empty" ? {} : { timeoutMs: 0 }),
+        abortSignal: cancellation.signal,
+        ...(scenario === "retargeted" ? { timeoutMs: 0 } : {}),
       });
-      void flush.then(
-        () => {
-          settled = true;
-        },
-        () => {
-          settled = true;
-        },
-      );
+      void flush.then(settled, settled);
       if (scenario === "empty") {
         await yieldToEventLoop();
-        expect(settled).toBe(false);
+        expect(settled).not.toHaveBeenCalled();
       }
-      idle.resolve();
+      if (scenario === "cancel-during-idle") {
+        cancellation.abort();
+      } else {
+        idle.resolve();
+      }
       await yieldToEventLoop();
+      if (scenario === "cancel-during-write") {
+        cancellation.abort();
+        await yieldToEventLoop();
+      }
       expect(loadTranscriptEventsSync(target)).toEqual(before);
-      expect(settled).toBe(scenario === "empty");
+      expect(settled).toHaveBeenCalledTimes(scenario === "empty" ? 1 : 0);
       if (scenario === "retargeted") {
         manager.setSessionTarget(replacement);
       }

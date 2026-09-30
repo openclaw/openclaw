@@ -13,7 +13,11 @@ import {
   renderCompactSessionMenuNavigationItem,
   type CompactSessionMenuView,
 } from "./session-menu-compact.ts";
-import { renderSessionEditorOptions, renderSessionGroupOptions } from "./session-menu-options.ts";
+import {
+  renderSessionEditorOptions,
+  renderSessionGroupOptions,
+  sessionArchiveShortcut,
+} from "./session-menu-options.ts";
 import type { SessionCreatedActor, SessionOwnerOption } from "./session-owner-chip.ts";
 import { SessionOwnerMenu } from "./session-owner-menu.ts";
 import "../styles/sidebar-menus.css";
@@ -84,6 +88,7 @@ type SessionMenuActionsState = {
   forkDisabled: boolean;
   forkFromLastCompleted: boolean;
   archiveAllowed: boolean;
+  archiveShortcut?: boolean;
   deleteAllowed: boolean;
   groups: readonly string[];
   currentOwner: SessionCreatedActor | null;
@@ -131,10 +136,6 @@ export class SessionMenuActions {
   private actionDisabled(kind: SessionManagementActionKind, extra = false): boolean {
     const state = this.readState();
     return state.disabled || extra || Boolean(state.actionDisabledReasons[kind]);
-  }
-
-  private actionTitle(kind: SessionManagementActionKind): string | typeof nothing {
-    return this.readState().actionDisabledReasons[kind] ?? nothing;
   }
 
   private actionExtraDisabled(kind: SessionManagementActionKind): boolean {
@@ -319,6 +320,8 @@ export class SessionMenuActions {
     icon: TemplateResult,
     options: { shortcut?: string; inline?: boolean; title?: string } = {},
   ) {
+    const state = this.readState();
+    const archiveShortcut = kind === "toggle-archived" ? sessionArchiveShortcut(state) : undefined;
     return html`<wa-dropdown-item
       slot=${options.inline === false ? "submenu" : nothing}
       class=${`session-menu__item${kind === "delete" ? " session-menu__item--destructive" : ""}`}
@@ -328,11 +331,11 @@ export class SessionMenuActions {
       aria-keyshortcuts=${options.shortcut?.toUpperCase() ?? nothing}
       ?data-new-tab-action=${kind === "open-new-tab" || kind === "open-new-window"}
       ?disabled=${this.actionDisabled(kind, this.actionExtraDisabled(kind))}
-      title=${this.readState().actionDisabledReasons[kind] ?? options.title ?? nothing}
+      title=${state.actionDisabledReasons[kind] ?? options.title ?? nothing}
     >
       <span slot="icon" class="session-menu__icon" aria-hidden="true">${icon}</span>
       <span class="session-menu__text">${label}</span>
-      ${options.shortcut ? menuShortcutHint(options.shortcut) : nothing}
+      ${options.shortcut ? menuShortcutHint(options.shortcut, archiveShortcut) : nothing}
     </wa-dropdown-item>`;
   }
 
@@ -354,7 +357,7 @@ export class SessionMenuActions {
     }
     const shortcut = view === "icon" ? "i" : view === "copy" ? "c" : undefined;
     return html`<wa-dropdown-item
-      class="session-menu__item"
+      class=${`session-menu__item${view === "assign-owner" ? " people-menu__submenu" : ""}`}
       ?disabled=${disabled}
       title=${title ?? nothing}
       data-shortcut=${shortcut ?? nothing}
@@ -549,22 +552,12 @@ export class SessionMenuActions {
     return html`
       ${
         state.navigationAllowed
-          ? html`
-              ${this.renderItem(
-                "copy-session-link",
-                t("sessionsView.copySessionLink"),
-                icons.link,
-                {
-                  inline,
-                },
-              )}
-              ${this.renderItem(
-                "copy-session-preview-link",
-                t("sessionsView.copySessionPreviewLink"),
-                icons.link,
-                { inline },
-              )}
-            `
+          ? (
+              [
+                ["copy-session-link", "sessionsView.copySessionLink"],
+                ["copy-session-preview-link", "sessionsView.copySessionPreviewLink"],
+              ] as const
+            ).map(([kind, label]) => this.renderItem(kind, t(label), icons.link, { inline }))
           : nothing
       }
       ${this.renderItem("copy-markdown", t("sessionsView.copyMarkdown"), icons.fileText, {
@@ -579,31 +572,22 @@ export class SessionMenuActions {
     return html`
       ${
         state.navigationAllowed
-          ? html`
-              ${this.renderItem("open-new-tab", t("sessionsView.openNewTab"), icons.externalLink, {
-                inline,
-              })}
-              ${this.renderItem("open-new-window", t("sessionsView.openNewWindow"), icons.monitor, {
-                inline,
-              })}
-            `
+          ? (
+              [
+                ["open-new-tab", "sessionsView.openNewTab", icons.externalLink],
+                ["open-new-window", "sessionsView.openNewWindow", icons.monitor],
+              ] as const
+            ).map(([kind, label, icon]) => this.renderItem(kind, t(label), icon, { inline }))
           : nothing
       }
       ${
         state.splitAllowed
-          ? html`
-              ${this.renderItem("split-right", t("chat.splitView.splitRight"), icons.columns2, {
-                inline,
-              })}
-              ${this.renderItem(
-                "split-below",
-                t("sessionsView.splitBelow"),
-                icons.panelBottomOpen,
-                {
-                  inline,
-                },
-              )}
-            `
+          ? (
+              [
+                ["split-right", "chat.splitView.splitRight", icons.columns2],
+                ["split-below", "sessionsView.splitBelow", icons.panelBottomOpen],
+              ] as const
+            ).map(([kind, label, icon]) => this.renderItem(kind, t(label), icon, { inline }))
           : nothing
       }
       ${state.renderOpenInExtra?.(inline) ?? nothing}
@@ -628,7 +612,7 @@ export class SessionMenuActions {
       categoryClearReturnsToGroups: state.session.categoryClearReturnsToGroups,
       groups: state.groups,
       actionDisabled: (kind) => this.actionDisabled(kind),
-      actionTitle: (kind) => this.actionTitle(kind),
+      actionTitle: (kind) => state.actionDisabledReasons[kind] ?? nothing,
     });
   }
 
@@ -658,7 +642,7 @@ export class SessionMenuActions {
       onBack: this.showIconGrid,
       onInput: this.updateCustomIconValue,
       onApply: this.applyCustomIcon,
-      onGridKeydown: this.handleIconGridKeydown,
+      onGridKeydown: handleAppearanceGridKeydown,
     });
   }
 
@@ -709,8 +693,6 @@ export class SessionMenuActions {
       this.runAction({ kind: "set-icon", icon });
     }
   };
-
-  private readonly handleIconGridKeydown = handleAppearanceGridKeydown;
 
   private readonly focusAppearanceOnOpen = (event: CustomEvent<{ item: HTMLElement }>) => {
     const item = event.currentTarget;

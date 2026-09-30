@@ -83,11 +83,11 @@ describe("chat realtime actions", () => {
       startSpy.mockImplementation(async function (this: RealtimeTalkSession) {
         ids.set(this, `voice-${++creates}`);
       });
-      vi.spyOn(RealtimeTalkSession.prototype, "getVoiceSessionId").mockImplementation(
-        function (this: RealtimeTalkSession) {
-          return ids.get(this);
-        },
-      );
+      vi.spyOn(RealtimeTalkSession.prototype, "getVoiceSessionId").mockImplementation(function (
+        this: RealtimeTalkSession,
+      ) {
+        return ids.get(this);
+      });
       vi.spyOn(RealtimeTalkSession.prototype, "getTransport").mockReturnValue("webrtc");
       if (useSystemDefault) {
         startSpy.mockRejectedValueOnce(new RealtimeTalkSelectedMicrophoneError());
@@ -465,6 +465,19 @@ describe("chat realtime actions", () => {
     expect(state.realtimeTalkVideoStream).toBeNull();
     expect(state.realtimeTalkDetail).toBe("Camera access is blocked");
     expect(state.realtimeTalkCameraError).toBe(true);
+  });
+
+  it("shows microphone input-loss guidance without leaving listening", async () => {
+    const state = createState();
+    await state.toggleRealtimeTalk();
+    const session = inspectSession(state);
+    session.callbacks.onStatus?.("listening");
+
+    session.callbacks.onInputNotice?.("Microphone input recovered; repeat the last part");
+
+    expect(state.realtimeTalkStatus).toBe("listening");
+    expect(state.realtimeTalkActive).toBe(true);
+    expect(state.realtimeTalkInputNotice).toBe("Microphone input recovered; repeat the last part");
   });
 
   it("cycles live cameras in enumeration order and persists the successful switch", async () => {

@@ -500,6 +500,7 @@ async function runGuidedOnboardingFlow(
     // Announced default: apply the same setup plan the conversational "yes"
     // would, then hand off to the hatch instead of parking in the OpenClaw chat.
     const applyProgress = prompter.progress(t("wizard.guided.settingUp"));
+    let failureTitle = t("wizard.guided.setupFailed");
     try {
       if (localSetup?.status === "pending") {
         const ownerSnapshot = await readConfigFileSnapshot();
@@ -542,15 +543,17 @@ async function runGuidedOnboardingFlow(
         ),
       );
       if (applied.lines.length > 0) {
-        await prompter.note(applied.lines.join("\n"), t("wizard.guided.appliedTitle"));
+        await prompter.note(applied.lines.join("\n"), t("wizard.guided.localSetupTitle"));
       }
       if (!applied.workspaceReady) {
+        failureTitle = t("wizard.guided.workspaceSetupFailed");
         throw new Error(
           "The agent workspace could not be prepared. Retry onboarding to finish setup.",
         );
       }
       const gateway = applied.gateway;
       if (gateway.status === "failed") {
+        failureTitle = t("wizard.guided.gatewaySetupFailed");
         throw new Error(gateway.error);
       }
       gatewayExternallyManaged =
@@ -571,7 +574,7 @@ async function runGuidedOnboardingFlow(
       persistedConfig = appliedSnapshot.sourceConfig ?? appliedSnapshot.config;
       applyProgress.stop(t("wizard.guided.setupDone"));
     } catch (error) {
-      applyProgress.stop(t("wizard.guided.testFailed"));
+      applyProgress.stop(failureTitle);
       if (teamCoordinatorId) {
         throw new Error(
           `Onboarding did not complete: ${error instanceof Error ? error.message : String(error)} Run \`openclaw agents list\` to inspect the roster, then retry with the same --workspace after resolving the error.`,
@@ -582,7 +585,7 @@ async function runGuidedOnboardingFlow(
         t("wizard.guided.applyFailedFallback", {
           detail: error instanceof Error ? error.message : String(error),
         }),
-        t("wizard.guided.aiAccessTitle"),
+        failureTitle,
       );
       if (skippedInference) {
         throw error;
@@ -649,7 +652,7 @@ async function runGuidedOnboardingFlow(
         })
       ).nextConfig;
     }
-    recommendationOutcome.commitResult();
+    await recommendationOutcome.commitResult();
   }
   const hatchWorkspace = handoffAgentId
     ? agentWorkspace

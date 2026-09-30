@@ -35,13 +35,13 @@ import {
   isPrivateIpAddress,
   resolvePinnedHostnameWithPolicy,
 } from "openclaw/plugin-sdk/ssrf-runtime";
+import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveBraveMode } from "../web-search-shared.js";
 import {
   type BraveLlmContextResponse,
   mapBraveLlmContextResults,
   normalizeBraveCountry,
   normalizeBraveLanguageParams,
-  resolveBraveConfig,
-  resolveBraveMode,
 } from "./brave-web-search-provider.shared.js";
 
 const DEFAULT_BRAVE_BASE_URL = "https://api.search.brave.com";
@@ -303,8 +303,8 @@ async function runBraveWebSearch(
     },
     "Brave Search API error",
   );
-  const results = Array.isArray(data.web?.results) ? (data.web?.results ?? []) : [];
-  return results.map((entry) => {
+  const results = Array.isArray(data.web?.results) ? data.web.results : [];
+  return results.slice(0, params.count).map((entry) => {
     const description = entry.description ?? "";
     const title = entry.title ?? "";
     const url = entry.url ?? "";
@@ -332,7 +332,7 @@ export async function executeBraveSearch(
     return missingBraveKeyPayload();
   }
 
-  const braveConfig = resolveBraveConfig(searchConfig);
+  const braveConfig = asNonArrayRecord(searchConfig?.brave);
   const braveMode = resolveBraveMode(braveConfig);
   const braveBaseUrl = resolveBraveBaseUrl(braveConfig);
   // One deadline owns classification, transport, response consumption, and cache publication.
@@ -427,33 +427,20 @@ export async function executeBraveSearch(
       braveMode === "llm-context" && dateAfter
         ? (dateBefore ?? new Date().toISOString().slice(0, 10))
         : dateBefore;
-    const cacheKey = buildSearchCacheKey(
-      braveMode === "llm-context"
-        ? [
-            "brave",
-            braveMode,
-            braveBaseUrl,
-            query,
-            country,
-            normalizedLanguage.search_lang,
-            freshness,
-            dateAfter,
-            llmContextDateEnd,
-          ]
-        : [
-            "brave",
-            braveMode,
-            braveBaseUrl,
-            query,
-            resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
-            country,
-            normalizedLanguage.search_lang,
-            normalizedLanguage.ui_lang,
-            freshness,
-            dateAfter,
-            dateBefore,
-          ],
-    );
+    const requestedCount = resolveSearchCount(count, DEFAULT_SEARCH_COUNT);
+    const cacheKey = buildSearchCacheKey([
+      "brave",
+      braveMode,
+      braveBaseUrl,
+      query,
+      requestedCount,
+      country,
+      normalizedLanguage.search_lang,
+      ...(braveMode === "web" ? [normalizedLanguage.ui_lang] : []),
+      freshness,
+      dateAfter,
+      llmContextDateEnd,
+    ]);
     const diagnostics: BraveHttpDiagnostics = { enabled: options?.diagnosticsEnabled === true };
     const cacheTtlMs = resolveSearchCacheTtlMs(searchConfig);
     const cached = readCachedSearchPayload(cacheKey, cacheTtlMs);
@@ -483,7 +470,7 @@ export async function executeBraveSearch(
         : {
             results: await runBraveWebSearch({
               ...request,
-              count: resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
+              count: requestedCount,
               ui_lang: normalizedLanguage.ui_lang,
             }),
             mode: "web" as const,
@@ -492,7 +479,7 @@ export async function executeBraveSearch(
     signal?.throwIfAborted();
     const results =
       response.mode === "llm-context"
-        ? response.results.map((entry) => ({
+        ? response.results.slice(0, requestedCount).map((entry) => ({
             title: entry.title ? wrapWebContent(entry.title, "web_search") : "",
             url: entry.url,
             snippets: entry.snippets.map((snippet) => wrapWebContent(snippet, "web_search")),

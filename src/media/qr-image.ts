@@ -1,6 +1,6 @@
 // QR image helpers generate QR code image files for media delivery.
 import path from "node:path";
-import { tempWorkspace } from "../infra/private-temp-workspace.js";
+import { tempWorkspace } from "@openclaw/fs-safe/temp";
 import { loadQrCodeRuntime } from "./qr-runtime.ts";
 
 const DEFAULT_QR_PNG_SCALE = 6;

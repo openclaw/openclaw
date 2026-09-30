@@ -11,8 +11,8 @@ import type {
 import type { CodexAppServerBindingStore } from "./app-server/session-binding.js";
 import { resolveCodexCatalogCreateSession } from "./session-catalog-create.js";
 import {
-  currentCodexCatalogListDiagnostics,
   createCodexCatalogListScope,
+  startCodexCatalogListTiming,
 } from "./session-catalog-diagnostics.js";
 import type { CodexCatalogHome } from "./session-catalog-homes.js";
 import {
@@ -21,6 +21,7 @@ import {
   runCatalogListInline,
 } from "./session-catalog-list-operation.js";
 import { readCodexSessionTranscript } from "./session-catalog-listing.js";
+import { CodexCatalogNodeSnapshots } from "./session-catalog-node-snapshot.js";
 import {
   CatalogParamsError,
   CODEX_APP_SERVER_THREADS_LIST_COMMAND,
@@ -98,18 +99,14 @@ function toGenericCatalogHost(
     label: host.label,
     kind: host.kind,
     connected: host.connected,
+    ...(host.pending ? { pending: true } : {}),
     ...(host.nodeId ? { nodeId: host.nodeId } : {}),
     sessions: host.sessions.map((session) => {
-      const continuableStatus =
-        !session.archived && (session.status === "idle" || session.status === "notLoaded");
-      const canContinue =
-        (local || host.canContinueCodex === true) &&
-        continuableStatus &&
-        isInteractiveThreadSource(session.source);
-      const canArchive = local && continuableStatus && isInteractiveThreadSource(session.source);
-      const canOpenTerminal =
-        isInteractiveThreadSource(session.source) &&
-        (local ? localTerminalAvailable : host.canOpenTerminalCodex === true);
+      const interactive = isInteractiveThreadSource(session.source);
+      const continuable =
+        interactive &&
+        !session.archived &&
+        (session.status === "idle" || session.status === "notLoaded");
       const name = session.name ?? session.fallbackName;
       return {
         threadId: session.threadId,
@@ -126,9 +123,10 @@ function toGenericCatalogHost(
         ...(session.gitBranch ? { gitBranch: session.gitBranch } : {}),
         archived: session.archived,
         ...(session.sessionKey ? { sessionKey: session.sessionKey } : {}),
-        canContinue,
-        canArchive,
-        canOpenTerminal,
+        canContinue: (local || host.canContinueCodex === true) && continuable,
+        canArchive: local && continuable,
+        canOpenTerminal:
+          interactive && (local ? localTerminalAvailable : host.canOpenTerminalCodex === true),
       };
     }),
     ...(host.nextCursor ? { nextCursor: host.nextCursor } : {}),
@@ -224,25 +222,22 @@ function catalogHostMapper(
   localHomes: readonly CodexCatalogHome[],
 ) {
   return (host: CodexSessionCatalogHost): SessionCatalogHost => {
-    const diagnostics = currentCodexCatalogListDiagnostics();
-    const started = diagnostics ? performance.now() : 0;
+    const finishTiming = startCodexCatalogListTiming("mappingMs");
     try {
+      const localSourceAvailable =
+        localTerminalAvailable &&
+        localHomes.some(
+          (home) => home.hostId === host.hostId && home.appServer.start.transport === "stdio",
+        );
       return {
-        ...toGenericCatalogHost(host, localTerminalAvailable),
+        ...toGenericCatalogHost(host, localSourceAvailable),
         canStartTerminal:
           host.kind === "gateway"
-            ? localTerminalAvailable &&
-              host.hostId === CODEX_LOCAL_SESSION_HOST_ID &&
-              localHomes.some(
-                (home) => home.hostId === host.hostId && home.appServer.start.transport === "stdio",
-              )
+            ? localSourceAvailable && host.hostId === CODEX_LOCAL_SESSION_HOST_ID
             : host.canStartTerminal === true,
       };
     } finally {
-      if (diagnostics && !diagnostics.closed) {
-        diagnostics.fields.mappingMs =
-          (diagnostics.fields.mappingMs ?? 0) + performance.now() - started;
-      }
+      finishTiming();
     }
   };
 }
@@ -310,11 +305,13 @@ function registerCodexSessionCatalog(params: {
     return { ...bound, source: bound.source };
   };
   const checkUpstreamActivity = upstream.createChecker(params);
+  const nodeSnapshots = new CodexCatalogNodeSnapshots();
   const createListOperation: NonNullable<SessionCatalogProvider["createListOperation"]> = (query) =>
     withCatalogListScope(async () => {
       const {
         agentId: requestedAgentId,
         allowProcessHomeFallback,
+        allowPartialResults,
         listNodes,
         onHost,
         waitUntil,
@@ -345,6 +342,8 @@ function registerCodexSessionCatalog(params: {
           signal,
           sessionEntries,
           localHomes,
+          allowPartialResults,
+          nodeSnapshots,
           ...(onHost ? { onHost: mappedHostPublisher(onHost, mapHost) } : {}),
         }),
         mapHost,
@@ -370,6 +369,7 @@ function registerCodexSessionCatalog(params: {
         control,
         hostId: request.hostId,
         threadId: request.threadId,
+        sourceHomeId: request.sourceHomeId,
         cursor: request.cursor,
         limit: request.limit ?? DEFAULT_TRANSCRIPT_PAGE_LIMIT,
         ...(source ? { source } : {}),
@@ -388,6 +388,7 @@ function registerCodexSessionCatalog(params: {
           config,
           hostId: request.hostId,
           threadId: request.threadId,
+          sourceHomeId: request.sourceHomeId,
           clientScopes: request.clientScopes,
         });
       }

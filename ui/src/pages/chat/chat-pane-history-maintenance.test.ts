@@ -10,6 +10,7 @@ import {
   createRenderTestChatPane,
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
+import { subscribeTranscriptScroll } from "./components/chat-transcript-scroll-events.ts";
 import {
   installTranscriptDomMocks,
   mountTestTranscript,
@@ -31,9 +32,13 @@ it.each(["idle measurement", "end-command measurement", "native end clamp"] as c
   "does not request older history or take reader ownership after %s",
   async (movement) => {
     transcriptDomState.measuredRowHeight = 120;
+    // Startup frames and the scroll idle debounce must share the controlled clock.
+    vi.useFakeTimers();
     const context = createInitializationContext();
     context.config.subscribe = () => () => {};
     const pane = createRenderTestChatPane();
+    // Independent scenarios must not restore the previous case's cached reader.
+    pane.paneId = `maintenance-history-${movement}`;
     pane.initialize(context);
     document.body.append(pane);
     await pane.updateComplete;
@@ -58,11 +63,9 @@ it.each(["idle measurement", "end-command measurement", "native end clamp"] as c
       key: `row:${index}`,
       content: html`<div>Message ${index}</div>`,
     }));
-    const { container, renderRows, transcript } = await mountTestTranscript(
-      "maintenance-history",
-      rows,
-      props.transcript,
-    );
+    const mounting = mountTestTranscript("maintenance-history", rows, props.transcript);
+    await vi.advanceTimersByTimeAsync(0);
+    const { container, renderRows, transcript } = await mounting;
     let maximum = 1400;
     Object.defineProperties(container, {
       clientHeight: { configurable: true, value: 600 },
@@ -80,6 +83,12 @@ it.each(["idle measurement", "end-command measurement", "native end clamp"] as c
     for (const observer of resizeObservers) {
       observer.emitTarget(container, 800, 600);
     }
+    let scrolling: boolean | undefined;
+    const stopObserving = subscribeTranscriptScroll(container, (event) => {
+      if (event.type === "offset") {
+        scrolling = event.scrolling;
+      }
+    });
     container.scrollTop = 800;
     container.dispatchEvent(new Event("scroll"));
     renderRows(rows);
@@ -97,8 +106,9 @@ it.each(["idle measurement", "end-command measurement", "native end clamp"] as c
       disconnect() {}
     }
     vi.stubGlobal("IntersectionObserver", HistoryIntersectionObserver);
-    vi.useFakeTimers();
     await vi.advanceTimersByTimeAsync(150);
+    stopObserving();
+    expect(scrolling).toBe(false);
     expect(request).not.toHaveBeenCalled();
     expect(state.chatFollowLocked).toBe(false);
 
@@ -139,7 +149,6 @@ it.each(["idle measurement", "end-command measurement", "native end clamp"] as c
     expect(request).toHaveBeenCalledExactlyOnceWith("chat.history", {
       sessionKey: state.sessionKey,
       limit: 1000,
-      maxBytes: 512 * 1024,
       offset: 2,
     });
     expect(state.chatFollowLocked).toBe(true);

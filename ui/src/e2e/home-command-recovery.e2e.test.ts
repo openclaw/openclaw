@@ -57,6 +57,7 @@ suite.define(() => {
         if (handoff) {
           await page.getByRole("link", { name: "Agents", exact: true }).click();
           await page.waitForURL((url) => url.pathname.endsWith("/agents"));
+          await page.getByRole("region", { name: "Agents", exact: true }).waitFor();
           await page.locator(".sidebar-footer-bar__home").click();
           await dockComposer.waitFor({ state: "visible" });
           await expect.poll(() => dockComposer.inputValue()).toBe("");

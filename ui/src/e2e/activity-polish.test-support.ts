@@ -5,6 +5,7 @@ import {
   defaultControlUiFeatureMethods,
   type ControlUiMockGatewayScenario,
 } from "../test-helpers/control-ui-e2e.ts";
+import { TEST_LINK_READER } from "../test-helpers/link-reader.ts";
 
 export const activityPolishKeys = {
   current: "agent:main:polish-current",
@@ -75,8 +76,14 @@ export function activityPolishFixture(now = Date.now()) {
   const scenario: ControlUiMockGatewayScenario = {
     assistantName: "Roboclaw",
     sessionKey: activityPolishKeys.current,
-    featureMethods: [...defaultControlUiFeatureMethods, SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD],
-    heldMethods: ["sessions.list", "controlUi.githubPreview"],
+    featureMethods: [
+      ...defaultControlUiFeatureMethods,
+      SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+      TEST_LINK_READER.linkReader.previewMethod!,
+      TEST_LINK_READER.linkReader.detailMethod,
+    ],
+    controlUiLinkReaders: [TEST_LINK_READER],
+    heldMethods: ["sessions.list", TEST_LINK_READER.linkReader.previewMethod!],
     methodResponses: {
       "sessions.list": list,
       [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true },

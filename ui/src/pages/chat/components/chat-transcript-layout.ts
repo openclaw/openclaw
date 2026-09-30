@@ -3,6 +3,7 @@ import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
 import { styleMap } from "lit/directives/style-map.js";
+import { transcriptRangeSize, type TranscriptLayoutOwner } from "./chat-transcript-layout-owner.ts";
 
 export type TranscriptRow<T = unknown> =
   | { kind: "item"; key: string; item: T }
@@ -18,6 +19,8 @@ export function renderChatTranscriptLayout<T>({
   captureInteractionResize,
   measureRowRefFor,
   measureRows,
+  layout,
+  headerHeight,
 }: {
   rows: readonly TranscriptRow<T>[];
   renderRow: (row: TranscriptRow<T>) => unknown;
@@ -28,6 +31,8 @@ export function renderChatTranscriptLayout<T>({
   captureInteractionResize: (event: Event) => void;
   measureRowRefFor: (key: string) => (element?: Element) => void;
   measureRows: boolean;
+  layout: TranscriptLayoutOwner;
+  headerHeight: number;
 }): TemplateResult {
   const virtualRows = virtualizer.getVirtualItems();
   return html`
@@ -35,13 +40,11 @@ export function renderChatTranscriptLayout<T>({
       class="chat-thread-inner chat-thread-inner--virtual"
       ?data-measuring-rows=${measureRows}
       ${ref(scrollElementRef)}
+      ${transcriptRangeSize(layout, virtualizer.getTotalSize() + headerHeight)}
       @click=${{ handleEvent: captureInteractionResize, capture: true }}
     >
       ${header}
-      <div
-        class="chat-virtual-sizer"
-        style=${styleMap({ height: `${virtualizer.getTotalSize()}px` })}
-      >
+      <div class="chat-virtual-sizer">
         ${overlay}
         <div
           class="chat-virtual-block"
@@ -75,8 +78,9 @@ export function renderChatTranscriptLayout<T>({
                     virtualRow.index === 0 ? "chat-virtual-row--first" : ""
                   }"
                   style=${styleMap({
-                    // Keep skipped overscan rows at the virtualizer's known size.
-                    containIntrinsicBlockSize: `auto ${virtualRow.size}px`,
+                    // The virtualizer owns measured sizes. Browser-remembered auto
+                    // sizes can lag reflow when a measured row becomes skipped again.
+                    containIntrinsicBlockSize: `${virtualRow.size}px`,
                   })}
                   data-index=${String(virtualRow.index)}
                   data-virtual-row-key=${row.key}

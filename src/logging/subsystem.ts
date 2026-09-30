@@ -1,10 +1,14 @@
 import { expectDefined } from "@openclaw/normalization-core";
-// Subsystem logger helpers create scoped loggers with subsystem-specific filters.
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { Chalk } from "chalk";
 import type { Logger as TsLogger } from "tslog";
 import { clearActiveProgressLine } from "../../packages/terminal-core/src/progress-line.js";
 import { isVerbose } from "../global-state.js";
+import { hasInternalDiagnosticEventInterest } from "../infra/diagnostic-event-listener-presence.js";
+import { areDiagnosticsEnabledForProcess } from "../infra/diagnostic-events.js";
 import { defaultRuntime, type OutputRuntimeEnv, type RuntimeEnv } from "../runtime.js";
 import {
   formatConsoleTimestamp,
@@ -12,7 +16,7 @@ import {
   getConsoleSettings,
   shouldLogSubsystemToConsole,
 } from "./console.js";
-import { type LogLevel, levelToMinLevel } from "./levels.js";
+import { type LogLevel, isLogLevelEnabled } from "./levels.js";
 import { getChildLogger, isFileLogLevelEnabled } from "./logger.js";
 import { redactLogRecordForTransport, redactSensitiveText } from "./redact.js";
 import { loggingState } from "./state.js";
@@ -31,26 +35,6 @@ export type SubsystemLogger = {
   raw: (message: string) => void;
   child: (name: string) => SubsystemLogger;
 };
-
-function normalizeSubsystemLabel(subsystem?: string | null): string {
-  if (typeof subsystem !== "string") {
-    return "unknown";
-  }
-  const normalized = subsystem.trim();
-  return normalized.length > 0 ? normalized : "unknown";
-}
-
-function shouldLogToConsole(level: LogLevel, settings: { level: LogLevel }): boolean {
-  if (level === "silent") {
-    return false;
-  }
-  if (settings.level === "silent") {
-    return false;
-  }
-  const current = levelToMinLevel(level);
-  const min = levelToMinLevel(settings.level);
-  return current >= min;
-}
 
 type ChalkInstance = InstanceType<typeof Chalk>;
 
@@ -146,14 +130,6 @@ const CHANNEL_SUBSYSTEM_PREFIXES = new Set([
   "zalouser",
 ]);
 
-function isChannelSubsystemPrefix(value: string): boolean {
-  const normalized = normalizeLowercaseStringOrEmpty(value);
-  if (!normalized) {
-    return false;
-  }
-  return CHANNEL_SUBSYSTEM_PREFIXES.has(normalized);
-}
-
 function pickSubsystemColor(subsystem: string): (typeof SUBSYSTEM_COLORS)[number] {
   const override = SUBSYSTEM_COLOR_OVERRIDES.get(subsystem);
   if (override) {
@@ -184,7 +160,7 @@ function formatSubsystemForConsole(subsystem: string): string {
   if (first === undefined) {
     return original;
   }
-  if (isChannelSubsystemPrefix(first)) {
+  if (CHANNEL_SUBSYSTEM_PREFIXES.has(normalizeLowercaseStringOrEmpty(first))) {
     return first;
   }
   if (parts.length > SUBSYSTEM_MAX_SEGMENTS) {
@@ -402,7 +378,7 @@ function logToFile(
 }
 
 export function createSubsystemLogger(subsystem: string): SubsystemLogger {
-  const resolvedSubsystem = normalizeSubsystemLabel(subsystem);
+  const resolvedSubsystem = normalizeOptionalString(subsystem) ?? "unknown";
   // Namespace membership is fixed; verbosity and sink settings remain per-message.
   const suppressProbeMessages =
     resolvedSubsystem === "agent/embedded" ||
@@ -410,14 +386,30 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
     resolvedSubsystem === "model-fallback" ||
     resolvedSubsystem.startsWith("model-fallback/");
   let fileChild: TsLogger<LogObj> | undefined;
+  let fileChildWithoutStack: TsLogger<LogObj> | undefined;
   let formatConsoleLine: ReturnType<typeof createConsoleLineFormatter> | undefined;
 
-  const getFileLogger = () => (fileChild ??= getChildLogger({ subsystem: resolvedSubsystem }));
+  const getFileLogger = (level: LogLevel) => {
+    fileChild ??= getChildLogger({ subsystem: resolvedSubsystem });
+    if (
+      level === "error" ||
+      level === "fatal" ||
+      (areDiagnosticsEnabledForProcess() && hasInternalDiagnosticEventInterest("log.record"))
+    ) {
+      return fileChild;
+    }
+    if (!fileChildWithoutStack) {
+      fileChildWithoutStack = fileChild.getSubLogger({ stack: { capture: "off" } });
+      // Preserve the subsystem's logger ancestry across capture variants.
+      fileChildWithoutStack.settings.parentNames = fileChild.settings.parentNames;
+    }
+    return fileChildWithoutStack;
+  };
 
   const emitLog = (level: LogLevel, message: string, meta?: Record<string, unknown>) => {
     const consoleSettings = getConsoleSettings();
     const consoleEnabled =
-      shouldLogToConsole(level, { level: consoleSettings.level }) &&
+      isLogLevelEnabled(level, consoleSettings.level) &&
       shouldLogSubsystemToConsole(resolvedSubsystem);
     const fileEnabled = isFileLogLevelEnabled(level);
     if (!consoleEnabled && !fileEnabled) {
@@ -435,7 +427,7 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
       fileMeta = Object.keys(rest).length > 0 ? rest : undefined;
     }
     if (fileEnabled) {
-      logToFile(getFileLogger(), level, message, fileMeta);
+      logToFile(getFileLogger(level), level, message, fileMeta);
     }
     if (!consoleEnabled) {
       return;
@@ -475,11 +467,11 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
     );
   };
 
-  const logger: SubsystemLogger = {
+  return {
     subsystem: resolvedSubsystem,
     isEnabled(level, target = "any") {
       const isConsoleEnabled =
-        shouldLogToConsole(level, { level: getConsoleSettings().level }) &&
+        isLogLevelEnabled(level, getConsoleSettings().level) &&
         shouldLogSubsystemToConsole(resolvedSubsystem);
       const isFileEnabled = isFileLogLevelEnabled(level);
       if (target === "console") {
@@ -510,11 +502,11 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
     },
     raw(message) {
       if (isFileLogLevelEnabled("info")) {
-        logToFile(getFileLogger(), "info", message, { raw: true });
+        logToFile(getFileLogger("info"), "info", message, { raw: true });
       }
       const consoleSettings = getConsoleSettings();
       if (
-        shouldLogToConsole("info", { level: consoleSettings.level }) &&
+        isLogLevelEnabled("info", consoleSettings.level) &&
         shouldLogSubsystemToConsole(resolvedSubsystem)
       ) {
         if (
@@ -543,7 +535,6 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
       return createSubsystemLogger(`${resolvedSubsystem}/${name}`);
     },
   };
-  return logger;
 }
 
 export function runtimeForLogger(
@@ -552,20 +543,10 @@ export function runtimeForLogger(
 ): OutputRuntimeEnv {
   return {
     log(...args) {
-      logger.info(
-        args
-          .map((arg) => formatRuntimeArg(arg))
-          .join(" ")
-          .trim(),
-      );
+      logger.info(args.map(formatRuntimeArg).join(" ").trim());
     },
     error(...args) {
-      logger.error(
-        args
-          .map((arg) => formatRuntimeArg(arg))
-          .join(" ")
-          .trim(),
-      );
+      logger.error(args.map(formatRuntimeArg).join(" ").trim());
     },
     writeStdout(value) {
       logger.info(value);
@@ -575,11 +556,4 @@ export function runtimeForLogger(
     },
     exit,
   };
-}
-
-export function createSubsystemRuntime(
-  subsystem: string,
-  exit: RuntimeEnv["exit"] = defaultRuntime.exit,
-): OutputRuntimeEnv {
-  return runtimeForLogger(createSubsystemLogger(subsystem), exit);
 }

@@ -54,6 +54,12 @@ A watcher is a session that holds a cursor (`session_watch_cursors`) on a target
 
 Watcher identity must be an agent-qualified session key. Under `session.scope="global"` the shared `global` key is ambiguous across agents, so such sessions get the durable log and `changesSince` but no proactive notices.
 
+A watch also records its watcher's physical store. Changing `session.store` does
+not transfer its queued notices to another conversation with the same key. Older
+watches with unknown store provenance retain history but need fresh registration
+before proactive notices resume. The next group turn registers its ambient watch
+against the current store.
+
 Watches clean themselves up: cursor rows expire with signal-log retention, are removed when the watcher session resets, and are removed with either session. A reset that has committed still clears its watches if a later cleanup step fails. There is no unwatch verb in v1.
 
 Watched Claude, Codex, OpenCode, and Pi sessions adopted from a session catalog are checked for direct upstream human activity on a fixed cadence. Pi monitoring starts after the session is in its append-only v3 format. Detected activity enters the same signal log and watcher flow as other direct human turns.
@@ -107,6 +113,8 @@ The notice tells the watcher exactly what to do. `session_status` with `changesS
 ## Storage and limits
 
 History lives in the shared state database, bounded to 30 days and 50,000 rows. Per-session heads stay monotonic after pruning. Recording is best-effort. A failed append is logged and never fails the originating turn. `stateVersion` is therefore a signal-log head, not a transactional change-data-capture version.
+
+Child-run outcomes are recorded asynchronously, so waiting for the shared database does not block Gateway event handling. Completion joins the recording work, and a replaced or provisional run owner cannot claim the run's first terminal event.
 
 Current limits:
 

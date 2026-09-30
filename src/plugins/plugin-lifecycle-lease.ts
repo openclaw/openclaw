@@ -2,7 +2,6 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { runOutsideOpenClawStateLeaseScope } from "../state/openclaw-state-lease-exclusion.js";
 import {
   OpenClawStateLeaseError,
   withOpenClawStateLease,
@@ -14,14 +13,17 @@ import {
   waitForPluginCacheRetirement,
   withPluginCache,
 } from "./plugin-cache.js";
+import { PLUGIN_LIFECYCLE_LEASE_IDENTITY } from "./plugin-lifecycle-lease-identity.js";
 
-const PLUGIN_LIFECYCLE_LEASE_SCOPE = "core:plugin-lifecycle";
-const PLUGIN_LIFECYCLE_LEASE_KEY = "global";
 const DEFAULT_PLUGIN_LIFECYCLE_LEASE_MS = 5 * 60_000;
 const DEFAULT_PLUGIN_LIFECYCLE_WAIT_MS = 10 * 60_000;
 
 export type PluginLifecycleLeaseContext = OpenClawStateLeaseContext & {
   databasePath: string;
+  /** Original state owner; wrapper identity cannot authorize worker writes. */
+  stateLease: OpenClawStateLeaseContext;
+  /** Live requester checks without synchronous lease SQL inside worker admission. */
+  assertCurrent(): void;
 };
 
 type PluginLifecycleRefusal = { current?: { error: unknown } };
@@ -40,6 +42,8 @@ type PluginLifecycleLeaseOptions = Pick<
   signal?: AbortSignal;
   leaseMs?: number;
   waitMs?: number;
+  /** Opt in only when protected mutations cannot outlive this process. */
+  processBound?: boolean;
   /** Additional live caller authority; never replaces the plugin lease. */
   assertCurrent?: () => void;
 };
@@ -52,7 +56,7 @@ export function hasPluginLifecycleLease(): boolean {
 
 /** Detached observers must acquire ownership rather than borrow their writer's lease. */
 export function runOutsidePluginLifecycleLease<T>(run: () => T): T {
-  return activePluginLifecycleLease.exit(() => runOutsideOpenClawStateLeaseScope(run));
+  return activePluginLifecycleLease.exit(run);
 }
 
 function resolveLifecycleLeaseEnv(env: NodeJS.ProcessEnv | undefined): NodeJS.ProcessEnv {
@@ -94,6 +98,20 @@ export async function withPluginLifecycleLease<T>(
         ? lease
         : {
             ...lease,
+            ...(lease.renew
+              ? {
+                  renew: () =>
+                    assertAuthority(() => {
+                      assertCurrent?.();
+                      lease.renew?.();
+                    }),
+                }
+              : {}),
+            assertCurrent: () =>
+              assertAuthority(() => {
+                assertCurrent?.();
+                lease.assertCurrent();
+              }),
             assertOwned: () =>
               assertAuthority(() => {
                 assertCurrent?.();
@@ -144,8 +162,7 @@ export async function withPluginLifecycleLease<T>(
 
   return await withOpenClawStateLease(
     {
-      scope: PLUGIN_LIFECYCLE_LEASE_SCOPE,
-      key: PLUGIN_LIFECYCLE_LEASE_KEY,
+      ...PLUGIN_LIFECYCLE_LEASE_IDENTITY,
       database: {
         scope: "shared",
         schemaPolicy: options.schemaPolicy,
@@ -157,6 +174,7 @@ export async function withPluginLifecycleLease<T>(
       },
       leaseMs: options.leaseMs ?? DEFAULT_PLUGIN_LIFECYCLE_LEASE_MS,
       waitMs: options.waitMs ?? DEFAULT_PLUGIN_LIFECYCLE_WAIT_MS,
+      processBound: options.processBound,
       ...(options.signal ? { signal: options.signal } : {}),
       leaseLabel: "plugin lifecycle lease",
       operationLabel: "plugins.lifecycle.lease",
@@ -164,7 +182,10 @@ export async function withPluginLifecycleLease<T>(
     async (lease) => {
       const pluginLease: PluginLifecycleLeaseContext = {
         databasePath,
+        stateLease: lease,
+        assertCurrent: () => assertAuthority(() => lease.signal.throwIfAborted()),
         signal: lease.signal,
+        ...(lease.renew ? { renew: () => lease.renew?.() } : {}),
         assertOwned: () => lease.assertOwned(),
         assertOwnedInTransaction: (database) => lease.assertOwnedInTransaction(database),
       };

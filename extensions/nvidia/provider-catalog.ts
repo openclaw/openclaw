@@ -1,4 +1,4 @@
-// Nvidia provider module implements model/runtime integration.
+import type { LookupOptions } from "node:dns";
 import { lookup as dnsLookup } from "node:dns/promises";
 import {
   getCachedLiveProviderModelRows,
@@ -13,7 +13,7 @@ import {
   type LookupFn,
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
 } from "openclaw/plugin-sdk/ssrf-runtime";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asOptionalObjectRecord, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 export const NVIDIA_DEFAULT_MODEL_ID = "nvidia/nemotron-3-ultra-550b-a55b";
@@ -46,24 +46,9 @@ const DEPRECATED_NVIDIA_MODEL_IDS = new Set<string>(
     .map((model) => model.id),
 );
 
-type NvidiaFeaturedModel = {
-  model: string;
-  "model-name": string;
-  context: number;
-  "max-output": number;
-};
-
-type DnsLookupOptions = {
-  all?: boolean;
-  family?: number;
-  hints?: number;
-  order?: "ipv4first" | "ipv6first" | "verbatim";
-  verbatim?: boolean;
-};
-
 const lookupNvidiaFeaturedModelHostname = (async (
   hostname: string,
-  options?: number | DnsLookupOptions,
+  options?: number | LookupOptions,
 ) => {
   if (typeof options === "object" && options !== null) {
     return await dnsLookup(hostname, { ...options, family: 4 });
@@ -81,7 +66,7 @@ export function buildNvidiaProvider(): ModelProviderConfig {
   };
   return {
     ...provider,
-    models: applyNvidiaModelDefaults(provider.models ?? []),
+    models: applyNvidiaModelDefaults(provider.models),
   };
 }
 
@@ -89,7 +74,7 @@ export function buildSelectableNvidiaProvider(): ModelProviderConfig {
   const provider = buildNvidiaProvider();
   return {
     ...provider,
-    models: filterSelectableNvidiaModels(provider.models ?? []),
+    models: provider.models.filter((model) => !DEPRECATED_NVIDIA_MODEL_IDS.has(model.id)),
   };
 }
 
@@ -218,15 +203,11 @@ function applyNvidiaModelDefaults(models: ModelDefinitionConfig[]): ModelDefinit
   );
 }
 
-function filterSelectableNvidiaModels(models: ModelDefinitionConfig[]): ModelDefinitionConfig[] {
-  return models.filter((model) => !DEPRECATED_NVIDIA_MODEL_IDS.has(model.id));
-}
-
 function parseNvidiaFeaturedModel(row: unknown): ModelDefinitionConfig | null {
-  if (!row || typeof row !== "object") {
+  const entry = asOptionalObjectRecord(row);
+  if (!entry) {
     return null;
   }
-  const entry = row as Partial<NvidiaFeaturedModel>;
   if (
     typeof entry.model !== "string" ||
     typeof entry["model-name"] !== "string" ||
@@ -259,7 +240,7 @@ function normalizeNvidiaFeaturedModelId(model: string): string {
   if (
     !trimmed ||
     trimmed.length > FEATURED_MODEL_MAX_ID_LENGTH ||
-    hasWhitespaceOrControlCharacter(trimmed)
+    hasControlCharacter(trimmed, true)
   ) {
     return "";
   }
@@ -278,30 +259,12 @@ function isBoundedPositiveInteger(value: unknown, max: number): value is number 
   return typeof value === "number" && Number.isInteger(value) && value > 0 && value <= max;
 }
 
-function hasWhitespaceOrControlCharacter(value: string): boolean {
+function hasControlCharacter(value: string, includeSpace = false): boolean {
   for (const char of value) {
-    if (isAsciiWhitespaceOrControlCharacter(char)) {
+    const code = char.charCodeAt(0);
+    if (code <= (includeSpace ? 32 : 31) || code === 127) {
       return true;
     }
   }
   return false;
-}
-
-function hasControlCharacter(value: string): boolean {
-  for (const char of value) {
-    if (isControlCharacter(char)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function isControlCharacter(char: string): boolean {
-  const code = char.charCodeAt(0);
-  return code <= 31 || code === 127;
-}
-
-function isAsciiWhitespaceOrControlCharacter(char: string): boolean {
-  const code = char.charCodeAt(0);
-  return code <= 32 || code === 127;
 }

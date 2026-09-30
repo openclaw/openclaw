@@ -1,9 +1,9 @@
 import {
-  createChannelIngressResolver,
   defineStableChannelIngressIdentity,
   type ChannelIngressContextBinding,
   type ResolvedChannelMessageIngress,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
+import { getMatrixRuntime } from "../../runtime.js";
 import { normalizeMatrixAllowList, resolveMatrixAllowListMatch } from "./allowlist.js";
 
 type MatrixMonitorAccessState = {
@@ -79,7 +79,7 @@ export async function resolveMatrixMonitorAccessState(params: {
   });
   const accountId = params.accountId ?? "default";
   const eventKind = params.eventKind ?? "message";
-  const ingress = createChannelIngressResolver({
+  const ingress = getMatrixRuntime().channel.inbound.ingress.createResolver({
     channelId: "matrix",
     accountId,
     identity: matrixIngressIdentity,
@@ -131,28 +131,30 @@ export async function resolveMatrixMonitorCommandAccess(
   const commandAllowFrom = state.isRoom ? [] : state.messageIngress.senderAccess.effectiveAllowFrom;
   const commandGroupAllowFrom =
     state.effectiveRoomUsers.length > 0 ? state.effectiveRoomUsers : state.effectiveGroupAllowFrom;
-  const resolved = await createChannelIngressResolver({
-    channelId: "matrix",
-    accountId: state.accountId,
-    identity: matrixIngressIdentity,
-  }).command({
-    subject: { stableId: state.senderId },
-    conversation: {
-      kind: state.isRoom ? "group" : "direct",
-      id: state.isRoom ? "matrix-room" : "matrix-dm",
-    },
-    dmPolicy: "allowlist",
-    groupPolicy: "allowlist",
-    policy: { groupAllowFromFallbackToAllowFrom: false },
-    allowFrom: commandAllowFrom,
-    groupAllowFrom: commandGroupAllowFrom,
-    command: {
-      useAccessGroups: params.useAccessGroups,
-      allowTextCommands: params.allowTextCommands,
-      hasControlCommand: params.hasControlCommand,
-      groupOwnerAllowFrom: "none",
-      commandGroupAllowFromFallbackToAllowFrom: false,
-    },
-  });
+  const resolved = await getMatrixRuntime()
+    .channel.inbound.ingress.createResolver({
+      channelId: "matrix",
+      accountId: state.accountId,
+      identity: matrixIngressIdentity,
+    })
+    .command({
+      subject: { stableId: state.senderId },
+      conversation: {
+        kind: state.isRoom ? "group" : "direct",
+        id: state.isRoom ? "matrix-room" : "matrix-dm",
+      },
+      dmPolicy: "allowlist",
+      groupPolicy: "allowlist",
+      policy: { groupAllowFromFallbackToAllowFrom: false },
+      allowFrom: commandAllowFrom,
+      groupAllowFrom: commandGroupAllowFrom,
+      command: {
+        useAccessGroups: params.useAccessGroups,
+        allowTextCommands: params.allowTextCommands,
+        hasControlCommand: params.hasControlCommand,
+        groupOwnerAllowFrom: "none",
+        commandGroupAllowFromFallbackToAllowFrom: false,
+      },
+    });
   return resolved.commandAccess;
 }

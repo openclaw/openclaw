@@ -1,6 +1,7 @@
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { transitionMainSessionRecovery } from "../../agents/main-session-recovery/main-session-recovery-state.js";
 import {
@@ -24,6 +25,7 @@ import type {
   UserTurnTranscriptRecorder,
   UserTurnTranscriptTarget,
 } from "../../sessions/user-turn-transcript.types.js";
+import { createReplyOperation } from "./reply-run-registry.js";
 import { createReplyRestartRecoveryClaimController } from "./restart-recovery-claim.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -50,6 +52,129 @@ function createTestAdmission(params: {
 }
 
 describe("createReplyRestartRecoveryClaimController", () => {
+  it.each(["session-retarget", "lifecycle-rotation"] as const)(
+    "does not adopt a recovery claim after %s while its row read is pending",
+    async (change) => {
+      const scope = {
+        agentId: "ops",
+        storePath: path.join(tempDirs.make("openclaw-reply-read-owner-"), "sessions.json"),
+        sessionKey: "global",
+      };
+      const entry: InternalSessionEntry = {
+        sessionId: "original-session",
+        updatedAt: 1,
+        status: "running",
+        restartRecoveryDeliveryRunId: "recovery-run",
+        restartRecoveryBeforeAgentReplyState: "handled-reply",
+      };
+      await replaceSessionEntry(scope, entry);
+      const before = loadSessionEntry(scope);
+      const operation = createReplyOperation({
+        agentId: scope.agentId,
+        sessionKey: scope.sessionKey,
+        sessionId: entry.sessionId,
+        resetTriggered: false,
+      });
+      const setEntry = vi.fn();
+      const controller = createReplyRestartRecoveryClaimController({
+        ...scope,
+        admissionRunId: "recovery-run",
+        lifecycleGeneration: getAgentEventLifecycleGeneration(),
+        getEntry: () => entry,
+        getSessionId: () => operation.sessionId,
+        isRestartAbort: () => false,
+        resolveDeliveryContext: () => undefined,
+        setEntry,
+      });
+      const admission = controller.admitUserTurn();
+      const outcome = admission.then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      try {
+        if (change === "session-retarget") {
+          operation.updateSessionId("successor-session");
+        } else {
+          rotateAgentEventLifecycleGeneration();
+        }
+        const failure = await outcome;
+        if (change === "session-retarget") {
+          expect(failure).toMatchObject({
+            message: "session changed before durable user-turn admission",
+          });
+        } else {
+          expect(isAgentRunStaleLifecycleError(failure)).toBe(true);
+        }
+        expect(setEntry).not.toHaveBeenCalled();
+        expect(loadSessionEntry(scope)).toEqual(before);
+      } finally {
+        await outcome;
+        operation.complete();
+      }
+    },
+  );
+
+  it.each(["global", "unknown"])(
+    "keeps the selected agent through a %s hook checkpoint",
+    async (sessionKey) => {
+      const root = tempDirs.make("openclaw-owned-reply-claim-");
+      const storePath = path.join(root, "sessions.json");
+      const main = { agentId: "main", storePath, sessionKey };
+      const ops = { agentId: "ops", storePath, sessionKey };
+      await replaceSessionEntry(main, { sessionId: "main-session", updatedAt: 1 });
+      const mainBefore = loadSessionEntry(main);
+      let entry: InternalSessionEntry = {
+        sessionId: "ops-session",
+        restartRecoveryDeliveryRunId: "ops-recovery",
+        status: "running",
+        updatedAt: 1,
+      };
+      await replaceSessionEntry(ops, entry);
+      const controller = createReplyRestartRecoveryClaimController({
+        agentId: "ops",
+        admissionRunId: "ops-recovery",
+        lifecycleGeneration: getAgentEventLifecycleGeneration(),
+        getEntry: () => entry,
+        getSessionId: () => "ops-session",
+        isRestartAbort: () => false,
+        resolveDeliveryContext: () => undefined,
+        sessionKey,
+        storePath,
+        setEntry: (next) => {
+          entry = next;
+        },
+      });
+      await expect(controller.admitUserTurn()).resolves.toBe("admitted");
+      const hostSql = observeHostDataSql();
+      try {
+        expect(loadSessionEntry(ops)?.sessionId).toBe("ops-session");
+        expect(hostSql.calls.some((call) => call.mock.calls.length > 0)).toBe(true);
+        hostSql.calls.forEach((call) => call.mockClear());
+        expect(await controller.isArmed()).toBe(false);
+        hostSql.calls.forEach((call) => expect(call).not.toHaveBeenCalled());
+      } finally {
+        hostSql.restore();
+      }
+      await expect(controller.beginBeforeAgentReply()).resolves.toBe(true);
+      await controller.checkpointBeforeAgentReply({
+        state: "handled-reply",
+        pendingFinalDelivery: {
+          intentId: "ops-intent",
+          text: "ops hook reply",
+          deliveries: [{ id: "ops-delivery", state: "prepared" }],
+        },
+      });
+      await controller.clear();
+      expect(loadSessionEntry(ops)).toMatchObject({
+        sessionId: "ops-session",
+        restartRecoveryBeforeAgentReplyState: "handled-reply",
+        pendingFinalDelivery: { intentId: "ops-intent", text: "ops hook reply" },
+      });
+      expect(loadSessionEntry(ops)?.restartRecoveryDeliveryRunId).toBeUndefined();
+      expect(loadSessionEntry(main)).toEqual(mainBefore);
+    },
+  );
+
   it.each([
     { receiptState: undefined, expectedStatus: "done" },
     { receiptState: "terminal-pending" as const, expectedStatus: "failed" },
@@ -71,6 +196,7 @@ describe("createReplyRestartRecoveryClaimController", () => {
       };
       await replaceSessionEntry({ storePath, sessionKey }, entry);
       const controller = createReplyRestartRecoveryClaimController({
+        agentId: "main",
         lifecycleGeneration: getAgentEventLifecycleGeneration(),
         admissionRunId: "recovery-run",
         getEntry: () => entry,
@@ -118,6 +244,7 @@ describe("createReplyRestartRecoveryClaimController", () => {
     };
     await replaceSessionEntry({ storePath, sessionKey }, entry);
     const controller = createReplyRestartRecoveryClaimController({
+      agentId: "main",
       lifecycleGeneration: getAgentEventLifecycleGeneration(),
       admissionRunId: "recovery-run",
       getEntry: () => entry,
@@ -170,6 +297,7 @@ describe("createReplyRestartRecoveryClaimController", () => {
       };
       await replaceSessionEntry(scope, entry);
       const controller = createReplyRestartRecoveryClaimController({
+        agentId: "main",
         lifecycleGeneration:
           interruption === "missing-generation" ? undefined : lifecycleGeneration,
         admissionRunId: "recovery-run",
@@ -286,6 +414,7 @@ describe("createReplyRestartRecoveryClaimController", () => {
     };
     await replaceSessionEntry(scope, entry);
     const controller = createReplyRestartRecoveryClaimController({
+      agentId: "main",
       lifecycleGeneration: getAgentEventLifecycleGeneration(),
       admissionRunId: "recovery-run",
       getEntry: () => entry,
@@ -336,6 +465,7 @@ describe("createReplyRestartRecoveryClaimController", () => {
     };
     await replaceSessionEntry({ storePath, sessionKey }, entry);
     const controller = createReplyRestartRecoveryClaimController({
+      agentId: "main",
       lifecycleGeneration: getAgentEventLifecycleGeneration(),
       admissionRunId: "recovery-run",
       getEntry: () => entry,
@@ -405,6 +535,7 @@ describe("createReplyRestartRecoveryClaimController", () => {
       persistFallback: async () => undefined,
     } satisfies UserTurnTranscriptRecorder;
     const controller = createReplyRestartRecoveryClaimController({
+      agentId: "main",
       lifecycleGeneration: getAgentEventLifecycleGeneration(),
       getEntry: () => entry,
       getSessionId: () => sessionId,
@@ -489,6 +620,7 @@ describe("createReplyRestartRecoveryClaimController", () => {
       persistFallback: async () => undefined,
     } satisfies UserTurnTranscriptRecorder;
     const controller = createReplyRestartRecoveryClaimController({
+      agentId: "main",
       lifecycleGeneration: getAgentEventLifecycleGeneration(),
       getEntry: () => entry,
       getSessionId: () => sessionId,
@@ -584,6 +716,7 @@ describe("createReplyRestartRecoveryClaimController", () => {
       persistFallback: async () => undefined,
     } satisfies UserTurnTranscriptRecorder;
     const controller = createReplyRestartRecoveryClaimController({
+      agentId: "main",
       lifecycleGeneration: getAgentEventLifecycleGeneration(),
       getEntry: () => entry,
       getSessionId: () => sessionId,
@@ -685,6 +818,7 @@ describe("createReplyRestartRecoveryClaimController", () => {
       },
     } satisfies UserTurnTranscriptRecorder;
     const controller = createReplyRestartRecoveryClaimController({
+      agentId: "main",
       lifecycleGeneration: getAgentEventLifecycleGeneration(),
       getEntry: () => entry,
       getSessionId: () => sessionId,

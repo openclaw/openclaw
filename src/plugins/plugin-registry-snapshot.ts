@@ -21,6 +21,7 @@ import { resolvePluginDoctorContractArtifact } from "./doctor-contract-artifact.
 import { safeFileSignature, safeHashFile } from "./installed-plugin-index-hash.js";
 import { hasOptionalMissingPluginManifestFile } from "./installed-plugin-index-manifest.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
+import { preservePluginSourceAdmissions } from "./installed-plugin-index-source-admissions.js";
 import {
   readPersistedInstalledPluginIndexSync,
   type InstalledPluginIndexStoreOptions,
@@ -101,8 +102,9 @@ export function resolveControlPlaneRegistryParams<T extends LoadInstalledPluginI
   };
 }
 
-function canReuseCurrentPluginMetadataSnapshot(params: LoadPluginRegistryParams): boolean {
+export function canReusePluginRegistrySnapshot(params: LoadPluginRegistryParams): boolean {
   return (
+    params.index === undefined &&
     params.allowCurrent !== false &&
     params.preferPersisted !== false &&
     params.stateDir === undefined &&
@@ -116,17 +118,21 @@ function canReuseCurrentPluginMetadataSnapshot(params: LoadPluginRegistryParams)
   );
 }
 
-function loadCurrentPluginRegistrySnapshotResult(
-  params: LoadPluginRegistryParams,
-): PluginRegistrySnapshotResult | undefined {
-  if (!canReuseCurrentPluginMetadataSnapshot(params)) {
+export function getCurrentPluginMetadataSnapshotForRegistry(params: LoadPluginRegistryParams) {
+  if (!canReusePluginRegistrySnapshot(params)) {
     return undefined;
   }
-  const current = getCurrentPluginMetadataSnapshot({
+  return getCurrentPluginMetadataSnapshot({
     config: params.config,
     env: params.env ?? process.env,
     ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
   });
+}
+
+function loadCurrentPluginRegistrySnapshotResult(
+  params: LoadPluginRegistryParams,
+): PluginRegistrySnapshotResult | undefined {
+  const current = getCurrentPluginMetadataSnapshotForRegistry(params);
   if (!current) {
     return undefined;
   }
@@ -575,6 +581,7 @@ function loadPluginRegistrySnapshotWithPreparedValidation(
     });
   }
 
+  preservePluginSourceAdmissions(persistedIndex, derived.index);
   return {
     snapshot: derived.index,
     source: "derived",

@@ -1,13 +1,22 @@
+import { existsSync } from "node:fs";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
-import { listAuditEvents, recordAuditEvent } from "../../audit/audit-event-store.js";
+import { listAuditEvents, recordAuditEventInDatabase } from "../../audit/audit-event-store.js";
+import {
+  configureExecutionIdentityAdmissionSink,
+  enqueueExecutionIdentityContextAtAdmission,
+} from "../../audit/execution-identity-admission.js";
+import { processExecutionIdentityAdmissionWorkInDatabase } from "../../audit/execution-identity-context.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import {
   closeOpenClawStateDatabaseForTest,
   closeOpenClawStateDatabaseAsync,
+  openOpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
 } from "../../state/openclaw-state-db.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { auditHandlers } from "./audit.js";
 
 const tempDirs: string[] = [];
@@ -27,7 +36,88 @@ afterAll(() => {
   cleanupTempDirs(tempDirs);
 });
 
-describe("audit.list padded filters against a real audit store", () => {
+describe("audit methods against a real audit store", () => {
+  it.each([false, true])(
+    "inspects retained execution identity without host SQLite (writable actor: %s)",
+    async (warmActor) => {
+      const database = createDatabaseOptions();
+      process.env.OPENCLAW_STATE_DIR = database.env!.OPENCLAW_STATE_DIR;
+      const clear = configureExecutionIdentityAdmissionSink((work) => {
+        processExecutionIdentityAdmissionWorkInDatabase(work, {
+          ...database,
+          database: openOpenClawStateDatabase(database),
+        });
+        return true;
+      });
+      try {
+        expect(
+          enqueueExecutionIdentityContextAtAdmission(
+            {
+              runId: "inspection-run",
+              agentId: "main",
+              ingress: { kind: "local-cli", boundary: "agent-command.local", state: "present" },
+              runtime: { kind: "embedded" },
+            },
+            { enabled: true, contextId: "inspection-context", executionId: "inspection-execution" },
+          ),
+        ).toBeDefined();
+      } finally {
+        clear();
+      }
+      await closeOpenClawStateDatabaseAsync();
+      if (warmActor) {
+        await listAuditEvents({ database, limit: 1 });
+      }
+      requireNodeSqlite();
+      const counters = observeMainThreadSql({ includeClose: true });
+      const respond = vi.fn();
+      await expectDefined(
+        auditHandlers["audit.run.inspect"],
+        "audit inspection handler",
+      )({
+        params: { executionId: "inspection-execution", decisionLimit: 1 },
+        respond,
+      } as never);
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          run: { runId: "inspection-run", executionId: "inspection-execution", status: "known" },
+          identity: expect.objectContaining({ state: "present" }),
+          decisionDisplays: [
+            expect.objectContaining({ selectorId: "inspection-context:admission" }),
+          ],
+        }),
+      );
+      expect(respond.mock.calls[0]?.[1]).not.toHaveProperty("decisions");
+      counters.expectIdle();
+    },
+  );
+
+  it.each([{ runId: "missing-run" }, { executionId: "missing-execution" }])(
+    "keeps absent state absent during inspection: %j",
+    async (params) => {
+      const database = createDatabaseOptions();
+      const stateDir = expectDefined(database.env?.OPENCLAW_STATE_DIR, "temp state dir");
+      process.env.OPENCLAW_STATE_DIR = stateDir;
+      const respond = vi.fn();
+      await expectDefined(
+        auditHandlers["audit.run.inspect"],
+        "audit inspection handler",
+      )({
+        params,
+        respond,
+      } as never);
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          identity: expect.objectContaining({ state: "unknown" }),
+          decisionDisplays: [],
+        }),
+      );
+      expect(existsSync(path.join(stateDir, "state", "openclaw.sqlite"))).toBe(false);
+    },
+  );
+
   it.each(["audit.list", "audit.activity.list"] as const)(
     "%s returns padded filters without host SQLite",
     async (method) => {
@@ -45,11 +135,11 @@ describe("audit.list padded filters against a real audit store", () => {
         sessionKey: "agent:main:main",
         runId: "run-trim-1",
       };
-      recordAuditEvent(
+      recordAuditEventInDatabase(
         { ...input, sourceSequence: 1, action: "agent.run.started", status: "started" },
-        database,
+        { ...database, database: openOpenClawStateDatabase(database) },
       );
-      const finished = recordAuditEvent(
+      const finished = recordAuditEventInDatabase(
         {
           ...input,
           sourceId: "audit-trim-finished",
@@ -57,7 +147,7 @@ describe("audit.list padded filters against a real audit store", () => {
           action: "agent.run.finished",
           status: "succeeded",
         },
-        database,
+        { ...database, database: openOpenClawStateDatabase(database) },
       );
 
       // Negative control: untrimmed filter values miss the planted row at the store.
@@ -72,14 +162,8 @@ describe("audit.list padded filters against a real audit store", () => {
       ).toEqual([]);
 
       await closeOpenClawStateDatabaseAsync();
-      const native = requireNodeSqlite();
-      const counters = [
-        vi.spyOn(native.DatabaseSync.prototype, "prepare"),
-        vi.spyOn(native.DatabaseSync.prototype, "exec"),
-        ...(["get", "all", "run", "iterate"] as const).map((operation) =>
-          vi.spyOn(native.StatementSync.prototype, operation),
-        ),
-      ];
+      requireNodeSqlite();
+      const counters = observeMainThreadSql();
       const respond = vi.fn();
       await expectDefined(
         auditHandlers[method],
@@ -94,7 +178,7 @@ describe("audit.list padded filters against a real audit store", () => {
         respond,
       } as never);
 
-      expect(counters.map((counter) => counter.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
+      counters.expectIdle();
       expect(respond).toHaveBeenCalledWith(
         true,
         expect.objectContaining({
@@ -119,7 +203,7 @@ describe("audit.list padded filters against a real audit store", () => {
       expect(respond).toHaveBeenCalledWith(true, {
         events: [expect.objectContaining({ action: "agent.run.started" })],
       });
-      expect(counters.map((counter) => counter.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
+      counters.expectIdle();
     },
   );
 });

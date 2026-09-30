@@ -16,6 +16,11 @@ import {
   type ApprovalResolveResult,
   type ApprovalSnapshot,
 } from "../../packages/gateway-protocol/src/index.js";
+import type {
+  ExecApprovalGrantsListResult,
+  ExecApprovalStandingGrant,
+  ExecApprovalsNodeSetParams,
+} from "../../packages/gateway-protocol/src/schema/exec-approvals.js";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import {
@@ -60,18 +65,9 @@ type FileExecApprovalsSnapshot = {
   resolvedDefaults?: Required<ExecApprovalsDefaults>;
 };
 
-type NativeExecApprovalAction = "allow" | "deny" | "prompt";
-type NativeExecApprovalRule = {
-  pattern: string;
-  action: NativeExecApprovalAction;
-  shells?: string[];
-  description?: string;
-  enabled?: boolean;
-};
-type NativeExecApprovalPolicy = {
-  defaultAction?: NativeExecApprovalAction;
-  rules: NativeExecApprovalRule[];
-};
+type NativeExecApprovalPolicy = NonNullable<ExecApprovalsNodeSetParams["native"]>;
+type NativeExecApprovalRule = NativeExecApprovalPolicy["rules"][number];
+type NativeExecApprovalAction = NativeExecApprovalRule["action"];
 type NativeExecApprovalsSnapshot =
   | {
       enabled: true;
@@ -157,7 +153,7 @@ async function resolveTargetNodeId(opts: ExecApprovalsCliOpts): Promise<string |
   if (!raw) {
     return null;
   }
-  return await resolveCliNodeId(opts as NodesRpcOpts, raw);
+  return await resolveCliNodeId(opts, raw);
 }
 
 async function loadSnapshot(
@@ -166,8 +162,7 @@ async function loadSnapshot(
 ): Promise<ExecApprovalsSnapshot> {
   const method = nodeId ? "exec.approvals.node.get" : "exec.approvals.get";
   const params = nodeId ? { nodeId } : {};
-  const snapshot = (await callGatewayFromCli(method, opts, params)) as ExecApprovalsSnapshot;
-  return snapshot;
+  return (await callGatewayFromCli(method, opts, params)) as ExecApprovalsSnapshot;
 }
 
 function loadSnapshotLocal(): ExecApprovalsSnapshot {
@@ -216,7 +211,7 @@ function normalizeNativePolicyInput(value: unknown): NativeExecApprovalPolicy {
   if (!Array.isArray(value.rules)) {
     exitWithError("Host-native exec approvals rules must be an array.");
   }
-  const rules = value.rules?.map((entry, index) => {
+  const rules = value.rules.map((entry, index) => {
     if (!isRecord(entry)) {
       exitWithError(`Host-native exec approval rule ${index + 1} must be an object.`);
     }
@@ -325,7 +320,6 @@ async function loadWritableSnapshotTarget(opts: ExecApprovalsCliOpts): Promise<{
   source: ApprovalsTargetSource;
   targetLabel: string;
   baseHash: string;
-  kind: "file" | "native";
 }> {
   // Writes carry the base hash so gateway/node updates can reject stale snapshots.
   const { snapshot, nodeId, source } = await loadSnapshotTarget(opts);
@@ -339,8 +333,7 @@ async function loadWritableSnapshotTarget(opts: ExecApprovalsCliOpts): Promise<{
   if (!baseHash) {
     exitWithError("Exec approvals hash missing; reload and retry.");
   }
-  const kind = isNativeApprovalsSnapshot(snapshot) ? "native" : "file";
-  return { snapshot, nodeId, source, targetLabel, baseHash, kind };
+  return { snapshot, nodeId, source, targetLabel, baseHash };
 }
 
 type SaveSnapshotTargetedParams = {
@@ -397,6 +390,17 @@ function failApprovalsCommand(err: unknown, opts: ExecApprovalsCliOpts): void {
   }
   defaultRuntime.error(message);
   defaultRuntime.exit(1);
+}
+
+async function runApprovalsAction(
+  opts: ExecApprovalsCliOpts,
+  action: () => Promise<void>,
+): Promise<void> {
+  try {
+    await action();
+  } catch (err) {
+    failApprovalsCommand(err, opts);
+  }
 }
 
 function isApprovalDecision(value: string): value is ApprovalDecision {
@@ -546,22 +550,7 @@ function formatPendingAgentSession(entry: PendingApprovalCliEntry): string {
   return parts.length > 0 ? escapeApprovalTextForTerminal(parts.join(" / ")) : "-";
 }
 
-type StandingGrantCliEntry = {
-  grantId: string;
-  agentId: string;
-  cronJobId: string;
-  cronJobName: string | null;
-  command: string;
-  cwd: string | null;
-  createdAtMs: number;
-  expiresAtMs: number | null;
-  revokedAtMs: number | null;
-  revokedBy: string | null;
-  lastUsedAtMs: number | null;
-  useCount: number;
-};
-
-function describeGrantState(grant: StandingGrantCliEntry, nowMs: number): string {
+function describeGrantState(grant: ExecApprovalStandingGrant, nowMs: number): string {
   if (grant.revokedAtMs !== null) {
     // revokedBy carries the revoking client's self-reported display name;
     // escape it visibly rather than relying on the table's silent strip.
@@ -577,7 +566,7 @@ function describeGrantState(grant: StandingGrantCliEntry, nowMs: number): string
   return "until revoked";
 }
 
-function renderStandingGrants(grants: StandingGrantCliEntry[]): void {
+function renderStandingGrants(grants: ExecApprovalStandingGrant[]): void {
   if (grants.length === 0) {
     defaultRuntime.log(theme.muted("No standing grants."));
     return;
@@ -1113,8 +1102,7 @@ async function saveSnapshot(
 ): Promise<ExecApprovalsSnapshot> {
   const method = nodeId ? "exec.approvals.node.set" : "exec.approvals.set";
   const params = nodeId ? { nodeId, file, baseHash } : { file, baseHash };
-  const snapshot = (await callGatewayFromCli(method, opts, params)) as ExecApprovalsSnapshot;
-  return snapshot;
+  return (await callGatewayFromCli(method, opts, params)) as ExecApprovalsSnapshot;
 }
 
 function resolveAgentKey(value?: string | null): string {
@@ -1122,8 +1110,7 @@ function resolveAgentKey(value?: string | null): string {
 }
 
 function normalizeAllowlistEntry(entry: { pattern?: string } | null): string | null {
-  const pattern = normalizeOptionalString(entry?.pattern) ?? "";
-  return pattern ? pattern : null;
+  return normalizeOptionalString(entry?.pattern) ?? null;
 }
 
 function isEmptyAgent(agent: ExecApprovalsAgent): boolean {
@@ -1149,8 +1136,8 @@ async function loadWritableAllowlistAgent(opts: ExecApprovalsCliOpts) {
     resolveConfiguredAgentId(config, agentKey);
   }
   const target = await loadWritableSnapshotTarget(opts);
-  const { snapshot, kind } = target;
-  if (kind === "native" || !isFileApprovalsSnapshot(snapshot)) {
+  const { snapshot } = target;
+  if (isNativeApprovalsSnapshot(snapshot) || !isFileApprovalsSnapshot(snapshot)) {
     exitWithError(
       "Host-native node approvals do not support allowlist mutations; use approvals set --node with host-native JSON.",
     );
@@ -1169,27 +1156,6 @@ type WritableAllowlistAgentContext = Awaited<ReturnType<typeof loadWritableAllow
 };
 type AllowlistMutation = (context: WritableAllowlistAgentContext) => boolean | Promise<boolean>;
 
-async function runAllowlistMutation(
-  pattern: string,
-  opts: ExecApprovalsCliOpts,
-  mutate: AllowlistMutation,
-): Promise<void> {
-  try {
-    const trimmedPattern = requireTrimmedNonEmpty(pattern, "Pattern required.");
-    const context = await loadWritableAllowlistAgent(opts);
-    const shouldSave = await mutate({ ...context, trimmedPattern });
-    if (!shouldSave) {
-      if (opts.json) {
-        defaultRuntime.writeJson(redactExecApprovals(context.snapshot), 0);
-      }
-      return;
-    }
-    await saveSnapshotTargeted({ ...context, opts });
-  } catch (err) {
-    failApprovalsCommand(err, opts);
-  }
-}
-
 function registerAllowlistMutationCommand(params: {
   allowlist: Command;
   name: "add" | "remove";
@@ -1203,7 +1169,18 @@ function registerAllowlistMutationCommand(params: {
     .option("--gateway", "Force gateway approvals", false)
     .option("--agent <id>", 'Agent id (defaults to "*")')
     .action(async (pattern: string, opts: ExecApprovalsCliOpts) => {
-      await runAllowlistMutation(pattern, opts, params.mutate);
+      await runApprovalsAction(opts, async () => {
+        const trimmedPattern = requireTrimmedNonEmpty(pattern, "Pattern required.");
+        const context = await loadWritableAllowlistAgent(opts);
+        const shouldSave = await params.mutate({ ...context, trimmedPattern });
+        if (!shouldSave) {
+          if (opts.json) {
+            defaultRuntime.writeJson(redactExecApprovals(context.snapshot), 0);
+          }
+          return;
+        }
+        await saveSnapshotTargeted({ ...context, opts });
+      });
     });
   nodesCallOpts(command);
   return command;
@@ -1227,16 +1204,14 @@ export function registerExecApprovalsCli(program: Command) {
     .command("pending")
     .description("List pending exec, plugin, and system-agent approvals")
     .action(async (opts: ExecApprovalsCliOpts) => {
-      try {
+      await runApprovalsAction(opts, async () => {
         const entries = await loadPendingApprovals(opts);
         if (opts.json) {
           defaultRuntime.writeJson({ approvals: entries }, 0);
           return;
         }
         renderPendingApprovals(entries);
-      } catch (err) {
-        failApprovalsCommand(err, opts);
-      }
+      });
     });
   nodesCallOpts(pendingCmd);
 
@@ -1249,11 +1224,9 @@ export function registerExecApprovalsCli(program: Command) {
       "Allow-always on an automation approval: freeze this grant lifetime instead of the configured default",
     )
     .action(async (id: string, decision: string, opts: ExecApprovalsCliOpts) => {
-      try {
+      await runApprovalsAction(opts, async () => {
         await resolvePendingApproval(id, decision, opts);
-      } catch (err) {
-        failApprovalsCommand(err, opts);
-      }
+      });
     });
   nodesCallOpts(resolveCmd);
 
@@ -1265,7 +1238,7 @@ export function registerExecApprovalsCli(program: Command) {
     .description("List standing grants, newest first")
     .option("--limit <n>", "Maximum rows to return (default 200)")
     .action(async (opts: ExecApprovalsCliOpts & { limit?: string }) => {
-      try {
+      await runApprovalsAction(opts, async () => {
         const limit = parseStrictPositiveInteger(opts.limit);
         if (opts.limit !== undefined && limit === undefined) {
           exitWithError("--limit must be a positive integer.");
@@ -1274,22 +1247,20 @@ export function registerExecApprovalsCli(program: Command) {
           "exec.approval.grants.list",
           opts,
           limit !== undefined ? { limit } : {},
-        )) as { grants: StandingGrantCliEntry[] }; // SAFETY: matches ExecApprovalGrantsListResultSchema.
+        )) as ExecApprovalGrantsListResult; // SAFETY: matches ExecApprovalGrantsListResultSchema.
         if (opts.json) {
           defaultRuntime.writeJson(result, 0);
           return;
         }
         renderStandingGrants(result.grants);
-      } catch (err) {
-        failApprovalsCommand(err, opts);
-      }
+      });
     });
   nodesCallOpts(grantsListCmd);
   const grantsRevokeCmd = grants
     .command("revoke <grantId>")
     .description("Revoke a standing grant; the next occurrence prompts again")
     .action(async (grantId: string, opts: ExecApprovalsCliOpts) => {
-      try {
+      await runApprovalsAction(opts, async () => {
         const result = (await callGatewayFromCli("exec.approval.grants.revoke", opts, {
           grantId,
         })) as { outcome: "revoked" | "already-revoked" | "not-found" }; // SAFETY: closed enum from the revoke result schema.
@@ -1304,9 +1275,7 @@ export function registerExecApprovalsCli(program: Command) {
         } else {
           exitWithError(`Grant ${grantId} not found.`);
         }
-      } catch (err) {
-        failApprovalsCommand(err, opts);
-      }
+      });
     });
   nodesCallOpts(grantsRevokeCmd);
 
@@ -1316,7 +1285,7 @@ export function registerExecApprovalsCli(program: Command) {
     .option("--node <node>", "Target node id/name/IP")
     .option("--gateway", "Force gateway approvals", false)
     .action(async (opts: ExecApprovalsCliOpts) => {
-      try {
+      await runApprovalsAction(opts, async () => {
         const { snapshot, nodeId, source } = await loadSnapshotTarget(opts);
         const nativePolicy = isNativeApprovalsSnapshot(snapshot);
         const configLoad = nativePolicy
@@ -1345,9 +1314,7 @@ export function registerExecApprovalsCli(program: Command) {
         const targetLabel = source === "local" ? "local" : nodeId ? `node:${nodeId}` : "gateway";
         renderApprovalsSnapshot(snapshot, targetLabel);
         renderEffectivePolicy({ report: effectivePolicy });
-      } catch (err) {
-        failApprovalsCommand(err, opts);
-      }
+      });
     });
   nodesCallOpts(getCmd, { timeoutMs: APPROVALS_GET_DEFAULT_TIMEOUT_MS });
 
@@ -1359,14 +1326,14 @@ export function registerExecApprovalsCli(program: Command) {
     .option("--file <path>", "Path to JSON file to upload")
     .option("--stdin", "Read JSON from stdin", false)
     .action(async (opts: ExecApprovalsCliOpts) => {
-      try {
+      await runApprovalsAction(opts, async () => {
         if (!opts.file && !opts.stdin) {
           exitWithError("Provide --file or --stdin.");
         }
         if (opts.file && opts.stdin) {
           exitWithError("Use either --file or --stdin (not both).");
         }
-        const { source, nodeId, targetLabel, baseHash, kind } =
+        const { source, nodeId, targetLabel, baseHash, snapshot } =
           await loadWritableSnapshotTarget(opts);
         const raw = opts.stdin ? await readStdin() : await readApprovalsFile(String(opts.file));
         let input: unknown;
@@ -1375,7 +1342,7 @@ export function registerExecApprovalsCli(program: Command) {
         } catch (err) {
           exitWithError(`Failed to parse approvals JSON: ${String(err)}`);
         }
-        if (kind === "native") {
+        if (isNativeApprovalsSnapshot(snapshot)) {
           const native = normalizeNativePolicyInput(input);
           await saveSnapshotTargeted({
             opts,
@@ -1393,9 +1360,7 @@ export function registerExecApprovalsCli(program: Command) {
         const file = input as ExecApprovalsFile;
         file.version = 1;
         await saveSnapshotTargeted({ opts, source, nodeId, file, baseHash, targetLabel });
-      } catch (err) {
-        failApprovalsCommand(err, opts);
-      }
+      });
     });
   nodesCallOpts(setCmd);
 

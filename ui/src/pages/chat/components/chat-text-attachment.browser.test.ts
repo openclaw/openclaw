@@ -61,6 +61,12 @@ describe.runIf(browserMode)("Markdown attachment controls", () => {
     };
     document.addEventListener("keydown", onKey);
     try {
+      await panel.updateComplete;
+      const attachment = expectDefined(
+        panel.querySelector("openclaw-chat-text-attachment"),
+        "Text attachment",
+      );
+      await attachment.updateComplete;
       await expect.poll(() => panel.querySelector("article")).not.toBeNull();
       const raw = expectDefined(
         [...panel.querySelectorAll("button")].find(
@@ -104,10 +110,6 @@ describe.runIf(browserMode)("Markdown attachment controls", () => {
       expect(keys.at(-1)).toEqual({ key: "PageDown", target: reader, trusted: true });
       const refreshResponse = new Response(text);
       refreshed.resolve(refreshResponse);
-      const attachment = expectDefined(
-        panel.querySelector("openclaw-chat-text-attachment"),
-        "Text attachment",
-      );
       await expect.poll(() => refreshResponse.bodyUsed && !refreshResponse.body?.locked).toBe(true);
       await attachment.updateComplete;
       expect(panel.querySelector("pre")).toBe(reader);

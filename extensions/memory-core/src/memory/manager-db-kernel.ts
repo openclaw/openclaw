@@ -1,11 +1,15 @@
 import type { DatabaseSync } from "node:sqlite";
 import {
+  dropMemoryChunkFtsTriggers,
   dropMemoryPathFtsTriggers,
+  ensureMemoryChunkFtsTriggers,
   ensureMemoryChunkProvenance,
   ensureMemoryRecallMetadataSchema,
   ensureMemoryPathFtsTriggers,
   MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE,
   MEMORY_INDEX_PATHS_FTS_TABLE,
+  MEMORY_INDEX_FTS_TABLE,
+  rebuildMemoryChunkFts,
 } from "openclaw/plugin-sdk/memory-core-host-engine-schema";
 import { runSqliteImmediateTransactionSync } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { markMemoryVectorIndexClean } from "./manager-vector-rebuild-state.js";
@@ -43,30 +47,35 @@ export class MemoryIndexRevisionConflictError extends Error {
   override name = "MemoryIndexRevisionConflictError";
 }
 
-function replaceVirtualTable(params: {
-  db: DatabaseSync;
-  tableName: "memory_index_chunks_fts" | "memory_index_chunks_vec";
-  columns: string;
-  ignoreDropErrorWhenSourceMissing?: boolean;
-}): void {
-  const { db, tableName, columns } = params;
+function replaceMemoryVectorTable(db: DatabaseSync): void {
+  const tableName = "memory_index_chunks_vec";
   const createSql = readTableSql(db, MEMORY_REINDEX_SCHEMA, tableName);
   if (!createSql) {
+    // A vector-disabled connection may not have sqlite-vec loaded and cannot
+    // drop an old virtual table. Missing vector metadata forces a strict
+    // rebuild before that table can be queried again.
     try {
       db.exec(`DROP TABLE IF EXISTS main.${tableName}`);
-    } catch (err) {
-      if (!params.ignoreDropErrorWhenSourceMissing) {
-        throw err;
-      }
-    }
+    } catch {}
     return;
   }
   db.exec(`DROP TABLE IF EXISTS main.${tableName}`);
   db.exec(createSql);
   db.exec(
-    `INSERT INTO main.${tableName} (${columns}) ` +
-      `SELECT ${columns} FROM ${MEMORY_REINDEX_SCHEMA}.${tableName}`,
+    `INSERT INTO main.${tableName} (id, embedding) ` +
+      `SELECT id, embedding FROM ${MEMORY_REINDEX_SCHEMA}.${tableName}`,
   );
+}
+
+function replaceMemoryChunkFtsTable(db: DatabaseSync): void {
+  const createSql = readTableSql(db, MEMORY_REINDEX_SCHEMA, MEMORY_INDEX_FTS_TABLE);
+  db.exec(`DROP TABLE IF EXISTS main.${MEMORY_INDEX_FTS_TABLE}`);
+  if (!createSql) {
+    return;
+  }
+  db.exec(createSql);
+  rebuildMemoryChunkFts(db, MEMORY_INDEX_FTS_TABLE);
+  ensureMemoryChunkFtsTriggers(db);
 }
 
 function replaceMemoryPathFtsTable(db: DatabaseSync): void {
@@ -122,6 +131,7 @@ export function publishMemoryDatabaseTables(params: MemoryDatabasePublication): 
         // Bulk source replacement must not fire one FTS5 scan per old row.
         // Restore the schema-owned triggers only after the derived table is replaced.
         dropMemoryPathFtsTriggers(params.targetDb);
+        dropMemoryChunkFtsTriggers(params.targetDb);
         params.targetDb
           .prepare("DELETE FROM main.memory_index_meta WHERE key = ?")
           .run(params.metaKey);
@@ -140,10 +150,10 @@ export function publishMemoryDatabaseTables(params: MemoryDatabasePublication): 
 
         DELETE FROM main.memory_index_chunks;
         INSERT INTO main.memory_index_chunks (
-          id, path, source, start_line, end_line, hash, model, text, embedding, updated_at
+          chunk_rowid, id, path, source, start_line, end_line, hash, model, text, embedding, updated_at
         )
         SELECT
-          id, path, source, start_line, end_line, hash, model, text, embedding, updated_at
+          chunk_rowid, id, path, source, start_line, end_line, hash, model, text, embedding, updated_at
         FROM ${MEMORY_REINDEX_SCHEMA}.memory_index_chunks;
 
         DELETE FROM main.${MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE};
@@ -161,24 +171,12 @@ export function publishMemoryDatabaseTables(params: MemoryDatabasePublication): 
         FROM ${MEMORY_REINDEX_SCHEMA}.memory_index_chunk_provenance;
       `);
 
-        replaceVirtualTable({
-          db: params.targetDb,
-          tableName: "memory_index_chunks_fts",
-          columns: "text, id, path, source, model, start_line, end_line",
-        });
+        replaceMemoryChunkFtsTable(params.targetDb);
         replaceMemoryPathFtsTable(params.targetDb);
         if (publishesPathFts) {
           ensureMemoryPathFtsTriggers(params.targetDb);
         }
-        replaceVirtualTable({
-          db: params.targetDb,
-          tableName: "memory_index_chunks_vec",
-          columns: "id, embedding",
-          // A vector-disabled connection may not have sqlite-vec loaded and cannot
-          // drop an old virtual table. Missing vector metadata forces a strict
-          // rebuild before that table can be queried again.
-          ignoreDropErrorWhenSourceMissing: true,
-        });
+        replaceMemoryVectorTable(params.targetDb);
         if (params.vectorIndexComplete) {
           markMemoryVectorIndexClean(params.targetDb);
         }

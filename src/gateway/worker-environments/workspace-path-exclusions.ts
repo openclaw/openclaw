@@ -1,4 +1,9 @@
+import { compileFunction } from "node:vm";
 import { STAGED_INPUT_PATHS_JS } from "../../media/staged-inputs.js";
+import {
+  MATERIALIZED_SANDBOX_SKILLS_WORKSPACE,
+  MANAGED_SANDBOX_SKILLS_PATH_JS,
+} from "../../shared/sandbox-workspace-paths.js";
 
 const DERIVED_WORKSPACE_DIRECTORY_NAMES = [
   "__pycache__",
@@ -23,11 +28,20 @@ export const WORKER_ATTACHMENT_DIRECTORY_PATTERN =
     `[89ab]${UUID_HEX.repeat(3)}`,
     UUID_HEX.repeat(12),
   ].join("-");
-const WORKER_ATTACHMENT_DIRECTORY_RE = new RegExp(`^${WORKER_ATTACHMENT_DIRECTORY_PATTERN}$`);
 
 // Derived caches and runtime attachment copies are not workspace edits. Keep
 // sync, manifest, divergence, apply, and recovery on this single predicate.
-export function isDerivedWorkspacePath(relativePath: string, retainedInput = false): boolean {
+export const WORKSPACE_PATH_EXCLUSIONS_JS = `
+${STAGED_INPUT_PATHS_JS}
+${MANAGED_SANDBOX_SKILLS_PATH_JS}
+const DERIVED_WORKSPACE_DIRECTORY_NAMES = ${JSON.stringify(DERIVED_WORKSPACE_DIRECTORY_NAMES)};
+const DERIVED_WORKSPACE_FILE_NAMES = ${JSON.stringify(DERIVED_WORKSPACE_FILE_NAMES)};
+const DERIVED_WORKSPACE_FILE_SUFFIXES = ${JSON.stringify(DERIVED_WORKSPACE_FILE_SUFFIXES)};
+const WORKER_ATTACHMENT_DIRECTORY_RE = new RegExp(${JSON.stringify(`^${WORKER_ATTACHMENT_DIRECTORY_PATTERN}$`)});
+function isDerivedWorkspacePath(relativePath, retainedInput = false) {
+  if (isManagedSandboxSkillsPath(relativePath)) {
+    return true;
+  }
   if (retainedInput) {
     return false;
   }
@@ -36,26 +50,22 @@ export function isDerivedWorkspacePath(relativePath: string, retainedInput = fal
   return segments.some(
     (segment) =>
       WORKER_ATTACHMENT_DIRECTORY_RE.exec(segment)?.[0] === segment ||
-      (DERIVED_WORKSPACE_DIRECTORY_NAMES as readonly string[]).includes(segment) ||
-      (DERIVED_WORKSPACE_FILE_NAMES as readonly string[]).includes(segment) ||
+      DERIVED_WORKSPACE_DIRECTORY_NAMES.includes(segment) ||
+      DERIVED_WORKSPACE_FILE_NAMES.includes(segment) ||
       DERIVED_WORKSPACE_FILE_SUFFIXES.some((suffix) => segment.endsWith(suffix)),
   );
-}
+}`;
+
+export const isDerivedWorkspacePath: (relativePath: string, retainedInput?: boolean) => boolean =
+  compileFunction(`${WORKSPACE_PATH_EXCLUSIONS_JS}\nreturn isDerivedWorkspacePath;`)();
 
 export const DERIVED_WORKSPACE_RSYNC_EXCLUDES = [
+  `/${MATERIALIZED_SANDBOX_SKILLS_WORKSPACE}`,
   ...DERIVED_WORKSPACE_DIRECTORY_NAMES,
   ...DERIVED_WORKSPACE_FILE_NAMES,
   ...DERIVED_WORKSPACE_FILE_SUFFIXES.map((suffix) => `*${suffix}`),
   WORKER_ATTACHMENT_DIRECTORY_PATTERN,
 ] as const;
-
-export const WORKSPACE_PATH_EXCLUSIONS_JS = `
-${STAGED_INPUT_PATHS_JS}
-const DERIVED_WORKSPACE_DIRECTORY_NAMES = ${JSON.stringify(DERIVED_WORKSPACE_DIRECTORY_NAMES)};
-const DERIVED_WORKSPACE_FILE_NAMES = ${JSON.stringify(DERIVED_WORKSPACE_FILE_NAMES)};
-const DERIVED_WORKSPACE_FILE_SUFFIXES = ${JSON.stringify(DERIVED_WORKSPACE_FILE_SUFFIXES)};
-const WORKER_ATTACHMENT_DIRECTORY_RE = ${WORKER_ATTACHMENT_DIRECTORY_RE.toString()};
-const isDerivedWorkspacePath = ${isDerivedWorkspacePath.toString()};`;
 
 // Standalone node capture/reset scripts cannot import fs-safe. Read only the
 // bounded regular marker, rejecting parent aliases and binding bytes to its inode.

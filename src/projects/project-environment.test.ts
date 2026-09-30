@@ -49,6 +49,8 @@ vi.mock("../state/openclaw-state-lease.js", () => ({
 }));
 vi.mock("../state/openclaw-state-worker-store.js", () => ({
   executeOpenClawStateWorker: mocks.execute,
+}));
+vi.mock("../state/openclaw-state-lease-worker-storage.js", () => ({
   runWithOpenClawStateLeaseWorker: async (
     _lease: unknown,
     context: unknown,
@@ -70,12 +72,6 @@ vi.mock("../state/openclaw-state-db-cache.js", () => ({
 }));
 vi.mock("../state/openclaw-state-db-async-lifecycle.js", () => ({
   getOpenClawDatabaseMaintenanceScope: () => undefined,
-}));
-vi.mock("../infra/state-database-coordinator.js", () => ({
-  captureStateDatabaseCoordinatorRuntime: () => ({
-    directory: "/synthetic-coordinator",
-    keepAlive: false,
-  }),
 }));
 vi.mock("./project-checkout.js", () => ({
   ProjectCheckoutError: class extends Error {},

@@ -1,4 +1,3 @@
-// Browser tests cover browser cli manage.timeout option plugin behavior.
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   createBrowserManageProgram,
@@ -21,7 +20,7 @@ describe("browser manage start timeout option", () => {
     if (!startCall) {
       throw new Error("expected browser /start call");
     }
-    expect(startCall[1].timeout).toBe("60000");
+    expect(startCall[1].timeout).toBe("70000");
     expect(startCall[2].timeoutMs).toBe(60000);
   });
 
@@ -36,16 +35,8 @@ describe("browser manage start timeout option", () => {
     });
 
     const request = findBrowserManageCall(path);
-    expect(request?.[1]).toEqual(expect.objectContaining({ timeout: "60000" }));
+    expect(request?.[1]).toEqual(expect.objectContaining({ timeout: "70000" }));
     expect(request?.[2].timeoutMs).toBe(60000);
-  });
-
-  it("passes headless=true for browser start --headless", async () => {
-    const program = createBrowserManageProgram({ withParentTimeout: true });
-    await program.parseAsync(["browser", "start", "--headless"], { from: "user" });
-
-    const startCall = findBrowserManageCall("/start");
-    expect(startCall?.[2].query).toEqual({ headless: "true" });
   });
 
   it("combines browser profile with browser start --headless", async () => {

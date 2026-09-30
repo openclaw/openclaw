@@ -35,7 +35,6 @@ import {
   snapshotStructuredInput,
 } from "../agents/harness/structured-input.js";
 import type { SandboxFsBridge } from "../agents/sandbox/fs-bridge.js";
-import { inferToolMetaFromArgsCore } from "../agents/tool-display.js";
 import { createToolPolicyMatcher } from "../agents/tool-policy-match.js";
 import { expandToolGroups } from "../agents/tool-policy-shared.js";
 import {
@@ -46,15 +45,15 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveExecModePolicy } from "../infra/exec-approvals-core.js";
 import { maxAsk, minSecurity } from "../infra/exec-approvals-policy.js";
 import type { ImageContent } from "../llm/types.js";
-import { redactToolDetail } from "../logging/redact.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
-import { truncateUtf16Safe } from "../utils.js";
 
 export { projectAgentActivityItem } from "../agents/agent-activity-presentation.js";
 export { projectAgentToolActivity } from "../infra/agent-activity-events.js";
 
-/** Default truncation limit for user-facing tool progress output. */
-export const TOOL_PROGRESS_OUTPUT_MAX_CHARS = 8_000;
+export {
+  formatToolProgressOutput,
+  TOOL_PROGRESS_OUTPUT_MAX_CHARS,
+} from "../agents/harness/projection-tool-output.js";
 
 /** Core exec mode algebra for plugin-owned policy adapters. */
 export const execPolicy = Object.freeze({ resolveExecModePolicy, minSecurity, maxAsk });
@@ -136,9 +135,9 @@ export { fingerprintResolvedAuthProfileCredential } from "../agents/execution-au
 export type {
   AgentHarnessUserInputAnswers,
   AgentHarnessUserInputOption,
-  AgentHarnessUserInputPromptOptions,
   AgentHarnessUserInputQuestion,
-} from "../agents/harness/user-input-bridge.js";
+} from "../agents/harness/user-input-types.js";
+export type { AgentHarnessUserInputPromptOptions } from "../agents/harness/user-input-bridge.js";
 export type { AgentHarnessQuestionGatewayCall } from "../agents/harness/gateway-question-dispatch.js";
 type EmbeddedRunAttemptParamsBase = Omit<
   CoreEmbeddedRunAttemptParams,
@@ -233,7 +232,7 @@ export { buildAgentRuntimePlan } from "../agents/runtime-plan/build.js";
 export { prepareAgentRuntimeAuth } from "../agents/runtime-plan/prepare-auth.js";
 export { classifyEmbeddedAgentRunResultForModelFallback } from "../agents/embedded-agent-runner/result-fallback-classifier.js";
 export { resolveUserPath } from "../utils.js";
-export { callGatewayTool } from "../agents/tools/gateway.js";
+export { callGatewayTool, readGatewayToolOperatorScopes } from "../agents/tools/gateway.js";
 export { hasGatewayToolRoutingContext } from "../agents/tools/in-process-gateway.js";
 export type { NodeListNode } from "../agents/tools/nodes-utils.js";
 export {
@@ -248,8 +247,14 @@ export {
 } from "../auto-reply/heartbeat-tool-response.js";
 export { isMessagingTool, isMessagingToolSendAction } from "../agents/embedded-agent-messaging.js";
 export {
+  projectPluginMessageDeliveryFact,
+  readEmbeddedMessageDeliveryFact,
+} from "../agents/embedded-agent-message-delivery.js";
+export {
   extractMessagingToolSend,
   extractMessagingToolSendResult,
+  extractMessagingToolSourceReplyPayload,
+  isDeliveredMessagingToolSendToCurrentSource,
 } from "../agents/embedded-agent-messaging-extraction.js";
 export {
   extractToolResultMediaArtifact,
@@ -257,6 +262,7 @@ export {
 } from "../agents/embedded-agent-tool-media.js";
 export {
   extractToolErrorMessage,
+  sanitizeToolArgs,
   sanitizeToolResult,
 } from "../agents/embedded-agent-tool-results.js";
 export {
@@ -266,6 +272,7 @@ export {
   resolveToolResultFailureKind,
   type ToolResultFailureKind,
 } from "../agents/tool-result-error.js";
+export { readToolOperatorHint } from "../agents/tool-operator-hint.js";
 export { normalizeUsage } from "../agents/usage.js";
 export { resolveAgentDir, resolveDefaultAgentDir } from "../agents/agent-scope.js";
 export { resolveSessionAgentIds } from "./agent-scope-runtime.js";
@@ -364,6 +371,7 @@ export async function detectAndLoadAgentHarnessPromptImages(params: {
   prompt: string;
   userTurnTranscriptRecorder?: EmbeddedAgentQueueMessageOptions["userTurnTranscriptRecorder"];
   workspaceDir: string;
+  agentWorkspaceDir?: string;
   model: { input?: string[] };
   existingImages?: ImageContent[];
   imageOrder?: PromptImageOrderEntry[];
@@ -390,6 +398,7 @@ export async function detectAndLoadAgentHarnessPromptImages(params: {
   return detectAndLoadPromptImages({
     prompt: params.prompt,
     workspaceDir: params.workspaceDir,
+    agentWorkspaceDir: params.agentWorkspaceDir,
     model: params.model,
     existingImages: params.existingImages,
     imageOrder: params.imageOrder,
@@ -403,6 +412,14 @@ export async function detectAndLoadAgentHarnessPromptImages(params: {
   });
 }
 
+/** Load static MCP metadata without connecting transports or discovering tools. */
+export async function loadAgentHarnessMcpConfig(
+  params: Parameters<typeof import("../agents/bundle-mcp-config.js").loadStaticBundleMcpConfig>[0],
+): Promise<ReturnType<typeof import("../agents/bundle-mcp-config.js").loadStaticBundleMcpConfig>> {
+  const { loadStaticBundleMcpConfig } = await import("../agents/bundle-mcp-config.js");
+  return loadStaticBundleMcpConfig(params);
+}
+
 /** Load Codex bundle MCP thread config without forcing the heavy config module into SDK imports. */
 export async function loadCodexBundleMcpThreadConfig(
   params: LoadCodexBundleMcpThreadConfigParams,
@@ -411,6 +428,9 @@ export async function loadCodexBundleMcpThreadConfig(
     await import("../agents/codex-mcp-config.js");
   return load(params);
 }
+
+export { decodeHeaderEnvPlaceholder } from "../agents/bundle-mcp-adapter.js";
+export { resolveConfiguredMcpTransport } from "../config/mcp-config-normalize.js";
 
 /** Lazily load the strict MCP proxy client with core-owned framing, startup, and shutdown. */
 export const mcpStdioRuntime = Object.freeze({
@@ -482,8 +502,7 @@ export async function materializeRequesterScopedMcpToolsForHarnessRun(
     >
   >
 > {
-  const shouldLoad = shouldLoadRequesterScopedMcpHarnessRuntime(params);
-  if (!shouldLoad) {
+  if (!shouldLoadRequesterScopedMcpHarnessRuntime(params)) {
     return undefined;
   }
   const { materializeRequesterScopedMcpToolsForHarnessRunCore: materialize } =
@@ -504,6 +523,8 @@ export {
   resolveBootstrapContextForRun,
   resolveBootstrapFilesForRun,
 } from "../agents/bootstrap-files.js";
+export { prepareAgentWorkspaceContext } from "../agents/harness/workspace-context.js";
+export { buildAgentWorkspaceInstructionSnapshot } from "../agents/harness/workspace-instructions.js";
 export type { EmbeddedContextFile } from "../agents/embedded-agent-helpers/context-file.js";
 export { isSubagentSessionKey } from "../routing/session-key.js";
 export {
@@ -549,11 +570,7 @@ export {
   isActiveHarnessContextEngine,
   runHarnessContextEngineMaintenance,
 } from "../agents/harness/context-engine-lifecycle.js";
-// Plugin-owned (`ownsCompaction`) compaction safety timeout. Exposed on the
-// agent-harness-runtime surface so plugin harnesses such as Codex bound their
-// own `ContextEngine.compact()` calls with the exact same finite, host-resolved
-// timeout the built-in embedded-agent runner uses — one shared implementation, no
-// copy-pasted watchdog.
+// Plugin-owned compaction uses the embedded runner's host-resolved safety timeout.
 export {
   compactWithSafetyTimeout,
   compactContextEngineWithSafetyTimeout,
@@ -601,32 +618,7 @@ export {
 export type ToolProgressDetailMode = "explain" | "raw";
 
 /** Infer compact display metadata for one tool invocation from its name and arguments. */
-export function inferToolMetaFromArgs(
-  toolName: string,
-  args: unknown,
-  options?: { detailMode?: ToolProgressDetailMode },
-): string | undefined {
-  return inferToolMetaFromArgsCore(toolName, args, options);
-}
-
-/**
- * Prepare verbose tool output for user-facing progress messages.
- */
-export function formatToolProgressOutput(
-  output: string,
-  options?: { maxChars?: number },
-): string | undefined {
-  const trimmed = output.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  const redacted = redactToolDetail(trimmed);
-  const maxChars = options?.maxChars ?? TOOL_PROGRESS_OUTPUT_MAX_CHARS;
-  if (redacted.length <= maxChars) {
-    return redacted;
-  }
-  return `${truncateUtf16Safe(redacted, maxChars)}\n...(truncated)...`;
-}
+export { inferToolMetaFromArgsCore as inferToolMetaFromArgs } from "../agents/tool-display.js";
 
 /** Inputs used to classify a finished harness turn with little or no visible assistant output. */
 export type AgentHarnessTerminalOutcomeInput = {
@@ -646,9 +638,6 @@ export type AgentHarnessTerminalOutcomeClassification = NonNullable<
  * Classify terminal harness turns that completed without assistant output that
  * should advance fallback. Deliberate silent replies such as NO_REPLY count as
  * intentional output, while whitespace-only text remains fallback-eligible.
- * This is intentionally SDK-level so plugin harness adapters such as Codex
- * preserve the same OpenClaw-owned fallback signals as the built-in OpenClaw path
- * without re-implementing terminal-result policy.
  */
 export function classifyAgentHarnessTerminalOutcome(
   params: AgentHarnessTerminalOutcomeInput,
@@ -656,7 +645,7 @@ export function classifyAgentHarnessTerminalOutcome(
   if (
     !params.turnCompleted ||
     (params.promptError !== undefined && params.promptError !== null) ||
-    hasVisibleAssistantText(params.assistantTexts)
+    params.assistantTexts.some((text) => text.trim().length > 0)
   ) {
     return undefined;
   }
@@ -667,10 +656,6 @@ export function classifyAgentHarnessTerminalOutcome(
     return "reasoning-only";
   }
   return "empty";
-}
-
-function hasVisibleAssistantText(assistantTexts: readonly string[]): boolean {
-  return assistantTexts.some((text) => text.trim().length > 0);
 }
 
 export const toolPolicy = Object.freeze({ createToolPolicyMatcher, expandToolGroups });

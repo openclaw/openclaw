@@ -42,6 +42,7 @@ import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.
 import {
   coerceTransportToolCallArguments,
   finalizeTerminalToolCallArguments,
+  iterateModelStream,
   sanitizeTransportPayloadText,
   transportAbortError,
   type WritableTransportStream,
@@ -70,7 +71,6 @@ export async function consumeAnthropicStream(params: {
   let costModel = model;
   let messageStartPromptUsage: AnthropicPromptUsageSnapshot | undefined;
   let inputTransformations: unknown[] | undefined;
-  const anthropicStream = params.events;
   try {
     const blocks: AnthropicStreamBlock[] = output.content;
     const blockIndexes = new Map<number, number>();
@@ -90,8 +90,10 @@ export async function consumeAnthropicStream(params: {
     const pendingThinkingSignatures = new Map<number, string>();
     const allowReasoningContentReplay =
       managed && resolveProviderEndpoint(model).endpointClass === "xiaomi-native";
-    const reasoningContentThinkingBlocks = new Map<number, number>();
-    const reasoningContentTextBlocks = new Map<number, number>();
+    const reasoningContentBlocks = {
+      thinking: new Map<number, number>(),
+      text: new Map<number, number>(),
+    };
     let sawMessageStart = false;
     let sawMessageStop = false;
     let sawStopReason = false;
@@ -112,7 +114,8 @@ export async function consumeAnthropicStream(params: {
     };
     const eventIndexKey = (eventIndex: unknown) =>
       typeof eventIndex === "number" ? eventIndex : -1;
-    const appendReasoningContentThinkingDelta = (
+    const appendReasoningContentDelta = (
+      kind: "thinking" | "text",
       eventIndex: unknown,
       rawText: unknown,
     ): boolean => {
@@ -123,98 +126,53 @@ export async function consumeAnthropicStream(params: {
       if (text.length === 0) {
         return false;
       }
+      const indexes = reasoningContentBlocks[kind];
       const key = eventIndexKey(eventIndex);
-      let contentIndex = reasoningContentThinkingBlocks.get(key);
+      let contentIndex = indexes.get(key);
       let block = contentIndex === undefined ? undefined : blocks[contentIndex];
-      if (!block || block.type !== "thinking") {
-        block = { type: "thinking", thinking: "", thinkingSignature: "reasoning_content" };
+      if (!block || block.type !== kind) {
+        block =
+          kind === "thinking"
+            ? { type: "thinking", thinking: "", thinkingSignature: "reasoning_content" }
+            : { type: "text", text: "" };
         output.content.push(block);
         contentIndex = output.content.length - 1;
-        reasoningContentThinkingBlocks.set(key, contentIndex);
-        eventSink.push({
-          type: "thinking_start",
-          contentIndex,
-          partial: output,
-        });
+        indexes.set(key, contentIndex);
+        eventSink.push({ type: `${kind}_start`, contentIndex, partial: output });
       }
       if (contentIndex === undefined) {
         return false;
       }
-      appendAssistantThinking(block, text);
-      block.thinkingSignature = "reasoning_content";
-      eventSink.push({
-        type: "thinking_delta",
-        contentIndex,
-        delta: text,
-        partial: output,
-      });
-      return true;
-    };
-    const appendReasoningContentTextDelta = (eventIndex: unknown, rawText: unknown): boolean => {
-      if (typeof rawText !== "string") {
-        return false;
+      if (block.type === "thinking") {
+        appendAssistantThinking(block, text);
+        block.thinkingSignature = "reasoning_content";
+      } else if (block.type === "text") {
+        block.text += text;
       }
-      const text = sanitizeTransportPayloadText(rawText);
-      if (text.length === 0) {
-        return false;
-      }
-      const key = eventIndexKey(eventIndex);
-      let contentIndex = reasoningContentTextBlocks.get(key);
-      let block = contentIndex === undefined ? undefined : blocks[contentIndex];
-      if (!block || block.type !== "text") {
-        block = { type: "text", text: "" };
-        output.content.push(block);
-        contentIndex = output.content.length - 1;
-        reasoningContentTextBlocks.set(key, contentIndex);
-        eventSink.push({
-          type: "text_start",
-          contentIndex,
-          partial: output,
-        });
-      }
-      if (contentIndex === undefined) {
-        return false;
-      }
-      block.text += text;
-      eventSink.push({
-        type: "text_delta",
-        contentIndex,
-        delta: text,
-        partial: output,
-      });
+      eventSink.push({ type: `${kind}_delta`, contentIndex, delta: text, partial: output });
       return true;
     };
     const finishReasoningContentSidecars = (eventIndex: unknown) => {
       const key = eventIndexKey(eventIndex);
-      const thinkingContentIndex = reasoningContentThinkingBlocks.get(key);
-      if (thinkingContentIndex !== undefined) {
-        reasoningContentThinkingBlocks.delete(key);
-        const block = output.content[thinkingContentIndex];
-        if (block?.type === "thinking") {
+      for (const kind of ["thinking", "text"] as const) {
+        const indexes = reasoningContentBlocks[kind];
+        const contentIndex = indexes.get(key);
+        if (contentIndex === undefined) {
+          continue;
+        }
+        indexes.delete(key);
+        const block = output.content[contentIndex];
+        if (block?.type === kind) {
           eventSink.push({
-            type: "thinking_end",
-            contentIndex: thinkingContentIndex,
-            content: block.thinking,
+            type: `${kind}_end`,
+            contentIndex,
+            content: block.type === "thinking" ? block.thinking : block.text,
             partial: output,
           });
         }
       }
-      const textContentIndex = reasoningContentTextBlocks.get(key);
-      if (textContentIndex === undefined) {
-        return;
-      }
-      reasoningContentTextBlocks.delete(key);
-      const block = output.content[textContentIndex];
-      if (block?.type === "text") {
-        eventSink.push({
-          type: "text_end",
-          contentIndex: textContentIndex,
-          content: block.text,
-          partial: output,
-        });
-      }
     };
-    for await (const rawEvent of anthropicStream) {
+    for await (const rawEvent of iterateModelStream(params.events, options.signal)) {
       const event = asRecord(rawEvent);
       // A serving-model fallback replaces the initial snapshot; report only once at completion.
       inputTransformations = readAnthropicInputTransformations(event) ?? inputTransformations;
@@ -310,72 +268,56 @@ export async function consumeAnthropicStream(params: {
           continue;
         }
         pendingThinkingSignatures.delete(index);
-        if (contentBlock?.type === "text") {
-          const text =
-            typeof contentBlock.text === "string"
-              ? sanitizeTransportPayloadText(contentBlock.text)
-              : "";
-          const block: AnthropicStreamBlock = { type: "text", text, index };
+        if (
+          contentBlock?.type === "text" ||
+          contentBlock?.type === "thinking" ||
+          contentBlock?.type === "redacted_thinking"
+        ) {
+          const block: AnthropicStreamBlock =
+            contentBlock.type === "text"
+              ? {
+                  type: "text",
+                  text:
+                    typeof contentBlock.text === "string"
+                      ? sanitizeTransportPayloadText(contentBlock.text)
+                      : "",
+                  index,
+                }
+              : contentBlock.type === "thinking"
+                ? {
+                    type: "thinking",
+                    thinking:
+                      typeof contentBlock.thinking === "string" ? contentBlock.thinking : "",
+                    thinkingSignature:
+                      typeof contentBlock.signature === "string" ? contentBlock.signature : "",
+                    index,
+                  }
+                : {
+                    type: "thinking",
+                    thinking: "[Reasoning redacted]",
+                    thinkingSignature:
+                      typeof contentBlock.data === "string" ? contentBlock.data : "",
+                    redacted: true,
+                    index,
+                  };
+          const kind = block.type;
+          const delta = block.type === "text" ? block.text : block.redacted ? "" : block.thinking;
           output.content.push(block);
           const contentIndex = output.content.length - 1;
           blockIndexes.set(index, contentIndex);
           eventSink.push({
-            type: "text_start",
+            type: `${kind}_start`,
             contentIndex,
             partial: output,
           });
-          if (text.length > 0) {
+          if (delta.length > 0) {
             eventSink.push({
-              type: "text_delta",
+              type: `${kind}_delta`,
               contentIndex,
-              delta: text,
+              delta,
               partial: output,
             });
           }
-          continue;
-        }
-        if (contentBlock?.type === "thinking") {
-          const thinking = typeof contentBlock.thinking === "string" ? contentBlock.thinking : "";
-          const block: AnthropicStreamBlock = {
-            type: "thinking",
-            thinking,
-            thinkingSignature:
-              typeof contentBlock.signature === "string" ? contentBlock.signature : "",
-            index,
-          };
-          output.content.push(block);
-          const contentIndex = output.content.length - 1;
-          blockIndexes.set(index, contentIndex);
-          eventSink.push({
-            type: "thinking_start",
-            contentIndex,
-            partial: output,
-          });
-          if (thinking.length > 0) {
-            eventSink.push({
-              type: "thinking_delta",
-              contentIndex,
-              delta: thinking,
-              partial: output,
-            });
-          }
-          continue;
-        }
-        if (contentBlock?.type === "redacted_thinking") {
-          const block: AnthropicStreamBlock = {
-            type: "thinking",
-            thinking: "[Reasoning redacted]",
-            thinkingSignature: typeof contentBlock.data === "string" ? contentBlock.data : "",
-            redacted: true,
-            index,
-          };
-          output.content.push(block);
-          blockIndexes.set(index, output.content.length - 1);
-          eventSink.push({
-            type: "thinking_start",
-            contentIndex: output.content.length - 1,
-            partial: output,
-          });
           continue;
         }
         if (contentBlock?.type === "tool_use") {
@@ -418,7 +360,8 @@ export async function consumeAnthropicStream(params: {
         let index = eventIndex === undefined ? undefined : blockIndexes.get(eventIndex);
         let block = index === undefined ? undefined : blocks[index];
         if (allowReasoningContentReplay) {
-          const appendedThinking = appendReasoningContentThinkingDelta(
+          const appendedThinking = appendReasoningContentDelta(
+            "thinking",
             event.index,
             delta?.reasoning_content,
           );
@@ -445,7 +388,7 @@ export async function consumeAnthropicStream(params: {
                 });
                 appendedContent = true;
               } else {
-                appendedContent = appendReasoningContentTextDelta(event.index, text);
+                appendedContent = appendReasoningContentDelta("text", event.index, text);
               }
             }
           }
@@ -565,10 +508,7 @@ export async function consumeAnthropicStream(params: {
             content: block.text,
             partial: output,
           });
-          finishReasoningContentSidecars(event.index);
-          continue;
-        }
-        if (block.type === "thinking") {
+        } else if (block.type === "thinking") {
           if (pendingSignature !== undefined) {
             block.thinkingSignature = pendingSignature;
           }
@@ -578,13 +518,10 @@ export async function consumeAnthropicStream(params: {
             content: block.thinking,
             partial: output,
           });
-          finishReasoningContentSidecars(event.index);
-          continue;
-        }
-        if (block.type === "toolCall") {
+        } else if (block.type === "toolCall") {
           sealedToolCalls.push({ block, contentIndex: index });
-          finishReasoningContentSidecars(event.index);
         }
+        finishReasoningContentSidecars(event.index);
         continue;
       }
       if (event.type === "message_delta") {

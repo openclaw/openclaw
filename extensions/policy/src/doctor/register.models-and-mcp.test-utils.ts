@@ -1,7 +1,7 @@
 // Imported by register.test.ts to keep its mocked suite in one Vitest module graph.
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
-import { runDoctorLintChecks, type OpenClawConfig } from "openclaw/plugin-sdk/health";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/health";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { collectPolicyEvidence } from "../policy-state.js";
 import {
@@ -218,9 +218,7 @@ describe("registerPolicyDoctorChecks", () => {
     });
     await fs.writeFile(join(workspaceDir, "AGENTS.md"), "## Tools\n\n### deploy\n", "utf-8");
 
-    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()), {
-      checks: registerChecks(),
-    });
+    const result = await runPolicyDoctorLint(ctx(configPath, cfgWithPolicy()));
 
     expect(result.findings).toEqual([
       expect.objectContaining({
@@ -235,9 +233,7 @@ describe("registerPolicyDoctorChecks", () => {
   it("reports blank requireMetadata policy entries", async () => {
     const configPath = await writePolicyFixture({ tools: { requireMetadata: ["risk", " "] } });
 
-    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()), {
-      checks: registerChecks(),
-    });
+    const result = await runPolicyDoctorLint(ctx(configPath, cfgWithPolicy()));
 
     expect(result.findings).toEqual([
       expect.objectContaining({
@@ -258,11 +254,8 @@ describe("registerPolicyDoctorChecks", () => {
       "utf-8",
     );
 
-    const result = await runDoctorLintChecks(
+    const result = await runPolicyDoctorLint(
       ctx(configPath, cfgWithPolicy({ path: "workspace.policy.jsonc" })),
-      {
-        checks: registerChecks(),
-      },
     );
 
     expect(result.findings).toEqual([
@@ -280,9 +273,7 @@ describe("registerPolicyDoctorChecks", () => {
     });
     await fs.writeFile(join(workspaceDir, "AGENTS.md"), "## Tools\n\n### deploy\n", "utf-8");
 
-    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()), {
-      checks: registerChecks(),
-    });
+    const result = await runPolicyDoctorLint(ctx(configPath, cfgWithPolicy()));
 
     expect(result.findings).toHaveLength(3);
     expect(result.findings).toEqual(
@@ -313,9 +304,7 @@ describe("registerPolicyDoctorChecks", () => {
     const configPath = await writePolicyFixture({ tools: { requireMetadata: ["risk"] } });
     await fs.writeFile(join(workspaceDir, "TOOLS.md"), "### deploy\n", "utf-8");
 
-    const beforeMigration = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()), {
-      checks: registerChecks(),
-    });
+    const beforeMigration = await runPolicyDoctorLint(ctx(configPath, cfgWithPolicy()));
 
     expect(beforeMigration.findings).toEqual([
       expect.objectContaining({
@@ -330,9 +319,7 @@ describe("registerPolicyDoctorChecks", () => {
     await fs.writeFile(join(workspaceDir, "AGENTS.md"), "## Tools\n\n### deploy\n", "utf-8");
     await fs.rm(join(workspaceDir, "TOOLS.md"));
 
-    const afterMigration = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()), {
-      checks: registerChecks(),
-    });
+    const afterMigration = await runPolicyDoctorLint(ctx(configPath, cfgWithPolicy()));
 
     expect(afterMigration.findings).toEqual([
       expect.objectContaining({
@@ -353,9 +340,7 @@ describe("registerPolicyDoctorChecks", () => {
       "utf-8",
     );
 
-    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()), {
-      checks: registerChecks(),
-    });
+    const result = await runPolicyDoctorLint(ctx(configPath, cfgWithPolicy()));
 
     expect(result.findings).toHaveLength(2);
     expect(result.findings).toEqual(
@@ -382,9 +367,7 @@ describe("registerPolicyDoctorChecks", () => {
       "utf-8",
     );
 
-    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()), {
-      checks: registerChecks(),
-    });
+    const result = await runPolicyDoctorLint(ctx(configPath, cfgWithPolicy()));
 
     expect(result.findings).toEqual([]);
   });
@@ -395,25 +378,26 @@ describe("registerPolicyDoctorChecks", () => {
     });
     await fs.writeFile(join(workspaceDir, "AGENTS.md"), "## Tools\n\n- deploy: deploys\n", "utf-8");
 
-    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()), {
-      checks: registerChecks(),
-    });
+    const result = await runPolicyDoctorLint(ctx(configPath, cfgWithPolicy()));
 
     expect(result.findings).toHaveLength(3);
     expect(result.findings).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           checkId: "policy/tools-missing-risk-level",
+          severity: "error",
           path: "AGENTS.md",
           ocPath: "oc://AGENTS.md/tools/deploy",
         }),
         expect.objectContaining({
           checkId: "policy/tools-missing-sensitivity-token",
+          severity: "error",
           path: "AGENTS.md",
           ocPath: "oc://AGENTS.md/tools/deploy",
         }),
         expect.objectContaining({
           checkId: "policy/tools-missing-owner",
+          severity: "error",
           path: "AGENTS.md",
           ocPath: "oc://AGENTS.md/tools/deploy",
         }),
@@ -445,9 +429,7 @@ describe("registerPolicyDoctorChecks", () => {
       "utf-8",
     );
 
-    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()), {
-      checks: registerChecks(),
-    });
+    const result = await runPolicyDoctorLint(ctx(configPath, cfgWithPolicy()));
     const evidence = await collectPolicyEvidence(
       {},
       {
@@ -485,9 +467,7 @@ describe("registerPolicyDoctorChecks", () => {
       "utf-8",
     );
 
-    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()), {
-      checks: registerChecks(),
-    });
+    const result = await runPolicyDoctorLint(ctx(configPath, cfgWithPolicy()));
 
     expect(result.findings).toEqual([
       expect.objectContaining({

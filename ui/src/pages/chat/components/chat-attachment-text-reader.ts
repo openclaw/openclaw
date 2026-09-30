@@ -1,3 +1,4 @@
+import { CANVAS_DOCUMENT_PREVIEW_MAX_BYTES } from "../../../../../packages/gateway-protocol/src/schema/canvas.ts";
 import { readResponseBytesWithinLimit } from "./chat-response-bytes.ts";
 
 const MAX_BYTES = 256 * 1024;
@@ -7,10 +8,11 @@ export async function readAttachmentText(
   src: string,
   sizeBytes: number | undefined,
   signal: AbortSignal,
-  preview: "full" | "excerpt" = "full",
+  preview: "full" | "excerpt" | "html" = "full",
 ): Promise<string> {
   const excerpt = preview === "excerpt";
-  if (!excerpt && sizeBytes !== undefined && sizeBytes > MAX_BYTES) {
+  const maxBytes = preview === "html" ? CANVAS_DOCUMENT_PREVIEW_MAX_BYTES : MAX_BYTES;
+  if (!excerpt && sizeBytes !== undefined && sizeBytes > maxBytes) {
     throw new Error("Text attachment exceeds preview limit");
   }
   const timeoutController = new AbortController();
@@ -25,7 +27,7 @@ export async function readAttachmentText(
       await response.body?.cancel();
       throw new Error("Text attachment unavailable");
     }
-    const bytes = await readResponseBytesWithinLimit(response, MAX_BYTES, { truncate: excerpt });
+    const bytes = await readResponseBytesWithinLimit(response, maxBytes, { truncate: excerpt });
     if (!bytes) {
       throw new Error("Text attachment exceeds preview limit");
     }

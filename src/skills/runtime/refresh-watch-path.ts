@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isPathInside } from "../../infra/path-guards.js";
 import { SKILL_SOURCE_ORIGIN_FILENAME } from "../loading/skill-entry-metadata-path.js";
 
@@ -27,37 +26,6 @@ export function toWatchRoot(raw: string): string {
   return trimmed.length < root.length ? root : trimmed;
 }
 
-function resolveSkillsWatchPath(raw: string): string {
-  if (process.platform !== "win32") {
-    return raw;
-  }
-  const absolute = path.resolve(raw);
-  const root = path.parse(absolute).root;
-  const parts = absolute.slice(root.length).split(path.sep);
-  let cursor = root;
-  let index = 0;
-  // libuv cannot watch 8.3 directory aliases safely. Expand only the ordinary
-  // existing prefix: following a symlink here would bypass followSymlinks:false
-  // and the refresh owner's separate trusted skill-target resolution.
-  for (const part of parts) {
-    const next = path.join(cursor, part);
-    try {
-      if (fs.lstatSync(next).isSymbolicLink()) {
-        break;
-      }
-    } catch {
-      break;
-    }
-    cursor = next;
-    index += 1;
-  }
-  try {
-    return path.join(fs.realpathSync.native(cursor), ...parts.slice(index));
-  } catch {
-    return raw;
-  }
-}
-
 export const DEFAULT_SKILLS_WATCH_IGNORED: RegExp[] = [
   /(^|[\\/])\.git([\\/]|$)/,
   /(^|[\\/])node_modules([\\/]|$)/,
@@ -73,27 +41,8 @@ export const DEFAULT_SKILLS_WATCH_IGNORED: RegExp[] = [
   /(^|[\\/])\.cache([\\/]|$)/,
 ];
 
-function shouldIgnoreSkillsWatchPath(
-  watchPath: string,
-  stats?: { isDirectory?: () => boolean; isSymbolicLink?: () => boolean },
-  usePolling = false,
-): boolean {
-  if (DEFAULT_SKILLS_WATCH_IGNORED.some((re) => re.test(watchPath))) {
-    return true;
-  }
-  if (stats?.isDirectory?.() || stats?.isSymbolicLink?.()) {
-    return false;
-  }
-  if (!stats) {
-    return false;
-  }
-  if (usePolling && isSkillDiscoveryFileWatchPath(watchPath)) {
-    return false;
-  }
-  // Regular files are surfaced through raw directory events below. Letting
-  // chokidar include discovery files here registers per-file watchers and leaks FDs.
-  return true;
-}
+export const isIgnoredSkillsWatchPath = (candidate: string): boolean =>
+  DEFAULT_SKILLS_WATCH_IGNORED.some((pattern) => pattern.test(candidate));
 
 export function isSkillDiscoveryFileWatchPath(watchPath: string): boolean {
   const basename = path.posix.basename(watchPath.replaceAll("\\", "/"));
@@ -102,103 +51,6 @@ export function isSkillDiscoveryFileWatchPath(watchPath: string): boolean {
     (basename === "SKILL.md" || basename === SKILL_SOURCE_ORIGIN_FILENAME) &&
     !DEFAULT_SKILLS_WATCH_IGNORED.some((re) => re.test(watchPath))
   );
-}
-
-export function getRawWatchedPath(details: unknown): string | undefined {
-  return isRecord(details) && typeof details.watchedPath === "string"
-    ? details.watchedPath
-    : undefined;
-}
-
-export function rawPathToString(rawPath: unknown): string | undefined {
-  if (typeof rawPath === "string") {
-    return rawPath || undefined;
-  }
-  if (Buffer.isBuffer(rawPath)) {
-    const decoded = rawPath.toString();
-    return decoded || undefined;
-  }
-  return undefined;
-}
-
-export function resolveRawSkillsWatchPath(rawPath: string, details: unknown): string | undefined {
-  if (path.isAbsolute(rawPath)) {
-    return rawPath;
-  }
-  const watchedPath = getRawWatchedPath(details);
-  return watchedPath ? path.join(watchedPath, rawPath) : undefined;
-}
-
-export function createSkillsWatchPathFilter(root: string, usePolling: boolean) {
-  const directorySymlinks = new Set<string>();
-  const contains = (watchPath: string) =>
-    isPathInside(root, watchPath) || isPathInside(watchPath, root);
-  return {
-    isSupportingPath: (watchPath: string) =>
-      isPathInside(root, watchPath) &&
-      !DEFAULT_SKILLS_WATCH_IGNORED.some((re) => re.test(watchPath)),
-    ignored: (
-      watchPath: string,
-      stats?: { isDirectory?: () => boolean; isSymbolicLink?: () => boolean },
-    ) => {
-      if (shouldIgnoreSkillsWatchPath(watchPath, stats, usePolling) || !contains(watchPath)) {
-        return true;
-      }
-      if (stats?.isSymbolicLink?.()) {
-        try {
-          if (fs.statSync(watchPath).isDirectory()) {
-            // Chokidar reports symlink directories as files and omits stats on unlink.
-            directorySymlinks.add(toWatchRoot(watchPath));
-          }
-        } catch {
-          // A disappearing link retains its last directory identity until unlink.
-        }
-      }
-      return false;
-    },
-    isRelevant: (event: string, changedPath: string) => {
-      const symlinkKey = toWatchRoot(changedPath);
-      const directorySymlink = directorySymlinks.has(symlinkKey);
-      if (event === "unlink") {
-        directorySymlinks.delete(symlinkKey);
-      }
-      return (
-        (isSkillDiscoveryFileWatchPath(changedPath) ||
-          event === "addDir" ||
-          event === "unlinkDir" ||
-          directorySymlink) &&
-        !DEFAULT_SKILLS_WATCH_IGNORED.some((re) => re.test(changedPath)) &&
-        contains(changedPath)
-      );
-    },
-  };
-}
-
-export function resolveSkillsWatcherUsePolling(): boolean {
-  const envPolling = process.env.CHOKIDAR_USEPOLLING;
-  if (envPolling === undefined) {
-    const platform: string = process.platform;
-    // Remove the Bun default after oven-sh/bun#34160 fixes native watcher registration scaling.
-    return platform === "os400" || Boolean(process.versions.bun);
-  }
-  const normalized = envPolling.toLowerCase();
-  return Boolean(normalized) && normalized !== "false" && normalized !== "0";
-}
-
-export function makeSkillsWatchTarget(
-  raw: string,
-  depth: number,
-): { path: string; watchRoot: string; depth: number } {
-  const watchPath = toWatchRoot(resolveSkillsWatchPath(raw));
-  let watchRoot = watchPath;
-  while (!fs.existsSync(watchRoot)) {
-    const parent = path.dirname(watchRoot);
-    if (parent === watchRoot) {
-      break;
-    }
-    watchRoot = parent;
-  }
-  return { path: watchPath, watchRoot: toWatchRoot(watchRoot), depth };
 }
 
 export function readBudgetedDirEntries(

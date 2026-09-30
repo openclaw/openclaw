@@ -34,21 +34,28 @@ export class UpdateSchemaRefusalError extends Error {
       options.cause === undefined
         ? ""
         : ` Deferral failed: ${formatErrorMessage(options.cause).slice(0, 600)}.`;
+    const summary =
+      `Doctor refused update-time schema repair driven by OpenClaw ${updaterVersion}: ` +
+      "this updater reopens the ledger with old code after migration, and version publication could not be deferred safely.";
+    const details = databases
+      .map(
+        (database) =>
+          `${database.kind} database ${database.path}: on-disk schema ${database.foundVersion}, this build's schema ${database.supportedVersion}.`,
+      )
+      .join(" ");
+    const unchanged = `${details}${reason} The blocked schema change was not applied.`;
     super(
-      `Doctor refused update-time schema repair driven by OpenClaw ${updaterVersion}: this updater reopens the ledger with old code after migration, and version publication could not be deferred safely. ` +
-        databases
-          .map(
-            (database) =>
-              `${database.kind} database ${database.path}: on-disk schema ${database.foundVersion}, this build's schema ${database.supportedVersion}.`,
-          )
-          .join(" ") +
-        reason +
-        " The blocked schema change was not applied." +
-        (options.recovery
-          ? `\n${options.recovery.message}`
-          : " Let the updater restore the previous package, then update manually: " +
-            `${commands.join(" && ")}. ` +
-            `Use the package manager that owns this install (pnpm: pnpm add -g --allow-build=openclaw openclaw@${targetVersion}; Bun: bun add -g --trust openclaw@${targetVersion}). On npm 11.15 and earlier, omit --allow-scripts=openclaw.`),
+      options.recovery
+        ? `${summary} ${unchanged}\n${options.recovery.message}`
+        : [
+            // Shipped canaries retain bounded line tails, so keep the reason
+            // separate from database paths and package-manager alternatives.
+            summary,
+            unchanged,
+            "Let the updater restore the previous package and exit. Then use an independent shell with the original service account, package prefix, profile, and state/config overrides.",
+            `Manual update: ${commands.join(" && ")}.`,
+            `Use the package manager that owns this install (pnpm: pnpm add -g --allow-build=openclaw openclaw@${targetVersion}; Bun: bun add -g --trust openclaw@${targetVersion}). On npm 11.15 and earlier, omit --allow-scripts=openclaw.`,
+          ].join("\n"),
       options,
     );
     this.name = "UpdateSchemaRefusalError";

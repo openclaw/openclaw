@@ -1,15 +1,20 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { installLaunchAgent } from "./launchd-install.js";
+import * as exec from "../process/exec.js";
+import { installLaunchAgent, stageLaunchAgent } from "./launchd-install.js";
+import { readLaunchAgentProgramArgumentsFromFile } from "./launchd-plist.js";
+import { decodeLaunchAgentPlistFixture } from "./launchd-plist.test-support.js";
 import {
-  publishLaunchAgentPlist,
   readExistingLaunchAgentPlist,
+  resolveLaunchAgentEnvironmentReadOptions,
   resolveLaunchAgentEnvFilePath,
   resolveLaunchAgentEnvWrapperPath,
   resolveLaunchAgentPlistPath,
+  rewriteLaunchAgentPlistForRestart,
 } from "./launchd-service-files.js";
 
 const native = vi.hoisted(() => ({
@@ -58,6 +63,83 @@ const binaryPlist = Buffer.from(
 );
 
 describe.skipIf(process.platform === "win32")("LaunchAgent file restoration", () => {
+  it("carries the recorded Node and env file through install and restart regeneration", async () => {
+    vi.spyOn(exec, "runExec").mockImplementation(async (file, args, options) => {
+      if (file !== "/usr/bin/plutil" || typeof options !== "object" || !options.input) {
+        throw new Error(`Unexpected native command: ${file}`);
+      }
+      return decodeLaunchAgentPlistFixture(options.input, args[1]);
+    });
+    const home = dirs.make("launchd-reinstall-arguments-");
+    const label = "ai.openclaw.reinstall-test";
+    const env = { HOME: home, OPENCLAW_STATE_DIR: home, OPENCLAW_LAUNCHD_LABEL: label };
+    const programArguments = [
+      "/opt/homebrew/opt/node@24/bin/node",
+      "/opt/openclaw/dist/index.js",
+      "gateway",
+    ];
+    await stageLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+      programArguments,
+      environment: { FIXTURE: "retained" },
+    });
+    const plistPath = resolveLaunchAgentPlistPath(env);
+    await rewriteLaunchAgentPlistForRestart({ env, label, plistPath });
+    const plist = await fs.readFile(plistPath, "utf8");
+    const array =
+      plist.match(/<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/)?.[1] ?? "";
+    const rawArguments = [...array.matchAll(/<string>(.*?)<\/string>/g)].map((match) => match[1]);
+    expect(rawArguments).toEqual([
+      "/bin/sh",
+      resolveLaunchAgentEnvWrapperPath(env, label),
+      resolveLaunchAgentEnvFilePath(env, label),
+      ...programArguments,
+    ]);
+    expect(
+      await readLaunchAgentProgramArgumentsFromFile(plistPath, {
+        ...resolveLaunchAgentEnvironmentReadOptions(env, label),
+        requireEffective: true,
+      }),
+    ).toMatchObject({ programArguments, environment: { FIXTURE: "retained" } });
+  });
+
+  it("executes the installed env wrapper only with its generated readable environment", async () => {
+    const home = dirs.make("launchd-wrapper-input-");
+    const label = "ai.openclaw.wrapper-test";
+    const env = { HOME: home, OPENCLAW_STATE_DIR: home, OPENCLAW_LAUNCHD_LABEL: label };
+    const value = "literal ' value\nsecond line";
+    await stageLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+      programArguments: ["/bin/sh", "-c", 'printf "%s" "$FIXTURE"'],
+      environment: { FIXTURE: value },
+    });
+    const wrapper = resolveLaunchAgentEnvWrapperPath(env, label);
+    const envFile = resolveLaunchAgentEnvFilePath(env, label);
+    const valid = spawnSync(
+      "/bin/sh",
+      [wrapper, envFile, "/bin/sh", "-c", 'printf "%s" "$FIXTURE"'],
+      {
+        encoding: "utf8",
+      },
+    );
+    expect(valid.status).toBe(0);
+    expect(valid.stdout).toBe(value);
+
+    const nonEnv = path.join(home, "not-generated.env");
+    await fs.writeFile(nonEnv, "printf sourced-unexpected-input\n");
+    for (const input of [process.execPath, nonEnv, home, path.join(home, "missing.env")]) {
+      const invalid = spawnSync("/bin/sh", [wrapper, input, "/bin/sh", "-c", "printf started"], {
+        encoding: "utf8",
+      });
+      expect(invalid.status).toBe(78);
+      expect(invalid.stdout).toBe("");
+      expect(invalid.stderr).toContain("Invalid LaunchAgent environment file");
+      expect(invalid.stderr).toContain("openclaw gateway install --force");
+    }
+  });
+
   it("binds rollback bytes and permissions to one file and closes its descriptor", async () => {
     const dir = dirs.make("launchd-snapshot-");
     const plistPath = path.join(dir, "gateway.plist");
@@ -104,7 +186,7 @@ describe.skipIf(process.platform === "win32")("LaunchAgent file restoration", ()
   });
 
   it.each(
-    [0o600, 0o640].flatMap((mode) =>
+    [0o600, 0o640, 0o1600].flatMap((mode) =>
       ["publication ownership", "install activation"].map((failure) => ({ mode, failure })),
     ),
   )(
@@ -147,23 +229,21 @@ describe.skipIf(process.platform === "win32")("LaunchAgent file restoration", ()
         }
         await rename(from, to);
       });
-      const replacement = "synthetic replacement";
       if (failure === "publication ownership") {
         native.ownership.mockImplementation(async () => {
-          if ((await fs.readFile(plistPath, "utf8")) === replacement) {
+          if (!(await fs.readFile(plistPath)).equals(binaryPlist)) {
             throw new Error("synthetic ownership conflict");
           }
         });
       }
+      const install = failure === "publication ownership" ? stageLaunchAgent : installLaunchAgent;
       await expect(
-        failure === "publication ownership"
-          ? publishLaunchAgentPlist({ label, plistPath, contents: replacement })
-          : installLaunchAgent({
-              env,
-              stdout: new PassThrough(),
-              programArguments: ["/usr/bin/node", "/opt/openclaw/openclaw.mjs", "gateway"],
-              environment: { FIXTURE: "replacement" },
-            }),
+        install({
+          env,
+          stdout: new PassThrough(),
+          programArguments: ["/usr/bin/node", "/opt/openclaw/openclaw.mjs", "gateway"],
+          environment: { FIXTURE: "replacement" },
+        }),
       ).rejects.toThrow(
         failure === "publication ownership"
           ? "synthetic ownership conflict"

@@ -82,8 +82,13 @@ function requestWebPushMutationAdmission(
     const resolve = (reference: string | null | undefined) =>
       reference ? selectResolvedUserProfileMetadataById(db, reference)?.id : undefined;
     const original = resolve(profiles.original);
-    const current = resolve(profiles.current);
-    const bound = resolve(boundProfile);
+    const current = profiles.current === profiles.original ? original : resolve(profiles.current);
+    const bound =
+      boundProfile === profiles.original
+        ? original
+        : boundProfile === profiles.current
+          ? current
+          : resolve(boundProfile);
     facts = {
       profileId: current ?? null,
       bindingCurrent:
@@ -569,7 +574,6 @@ export function readPersistedVapidKeyPairInDatabase(
 /** First committed keypair wins so concurrent gateway bootstraps share one signing identity. */
 export function insertVapidKeyPairIfAbsentInDatabase(params: {
   candidate: VapidKeyPair;
-  nowMs: number;
   database: OpenClawStateDatabase;
 }): VapidKeyPair {
   return updateConfigMachineState<VapidKeyPair>(

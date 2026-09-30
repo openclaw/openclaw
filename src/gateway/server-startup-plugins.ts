@@ -13,6 +13,7 @@ import {
 import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import { getRegisteredEmbeddingProvider } from "../plugins/embedding-providers.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "../plugins/installed-plugin-index-install-records.js";
+import { getPluginMetadataSnapshotCache } from "../plugins/plugin-cache.js";
 import { loadPluginLookUpTable } from "../plugins/plugin-lookup-table.js";
 import {
   completePluginMetadataSnapshot,
@@ -35,16 +36,13 @@ import { resolveGatewayStartupPluginActivationConfig } from "./plugin-activation
 import { listGatewayMethods } from "./server-methods-list.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
 import type { GatewayPluginRuntimeClaim } from "./server-plugin-runtime-generation.js";
+import type { GatewayStartupTrace } from "./server-startup-trace.js";
 
 type GatewayPluginBootstrapLog = {
   info: (message: string) => void;
   warn: (message: string) => void;
   error: (message: string) => void;
   debug: (message: string) => void;
-};
-
-type GatewayStartupTrace = {
-  detail: (name: string, metrics: ReadonlyArray<readonly [string, number | string]>) => void;
 };
 
 /** Returns the config snapshot used by channel/plugin startup maintenance. */
@@ -88,6 +86,15 @@ export async function runGatewayStartupMaintenance(params: {
       }),
     ];
     if (!params.minimalTestGateway) {
+      const { migrateLegacyDesktopStreamOptOuts } =
+        await import("../infra/device-pairing-node-desktop-migration.js");
+      const retiredDesktopApprovals =
+        await migrateLegacyDesktopStreamOptOuts(startupMaintenanceConfig);
+      if (retiredDesktopApprovals > 0) {
+        params.log.warn(
+          `Preserved disabled desktop access for ${retiredDesktopApprovals} paired node(s); approve their updated desktop capability to enable sharing.`,
+        );
+      }
       const { runStartupSessionMigration } = await import("./server-startup-session-migration.js");
       startupTasks.push(
         runStartupSessionMigration({
@@ -129,7 +136,7 @@ export async function prepareGatewayPluginBootstrap(params: {
   ambientEnvTriggers?: AmbientEnvTriggerPolicy;
 }) {
   const activationSourceConfig = params.activationSourceConfig ?? params.cfgAtStart;
-  initSubagentRegistry();
+  await initSubagentRegistry();
 
   // Activation uses the pre-runtime source so auto-enable policy cannot be skewed by
   // defaults injected while loading runtime config; runtime-only plugin config still merges in.
@@ -317,7 +324,7 @@ export async function loadGatewayStartupPluginRuntime(params: {
   hostServices?: PluginRegistryParams["hostServices"];
   startupPluginIds: string[];
   pluginLookUpTable?: ReturnType<typeof loadPluginLookUpTable>;
-  startupTrace?: GatewayStartupTrace;
+  startupTrace?: Pick<GatewayStartupTrace, "detail">;
   ambientEnvTriggers?: AmbientEnvTriggerPolicy;
   resolveGatewayContext?: GatewayContextResolver;
   pluginRuntimeClaim?: GatewayPluginRuntimeClaim;
@@ -379,6 +386,12 @@ export async function loadGatewayStartupPluginRuntime(params: {
     ).catch((error: unknown) => {
       params.log.warn(`Memory embedding setup checks failed: ${String(error)}`);
     });
+    const metadata = getPluginRuntimeLoadContext(loaded.pluginRegistry)?.metadataSnapshot;
+    const { settlePluginNativeAdmissions } =
+      await import("../plugins/plugin-native-admission-state.js");
+    await settlePluginNativeAdmissions(
+      metadata ? getPluginMetadataSnapshotCache(metadata) : undefined,
+    );
     return loaded;
   } catch (error) {
     loaded.retireGatewayRuntimeBindings();

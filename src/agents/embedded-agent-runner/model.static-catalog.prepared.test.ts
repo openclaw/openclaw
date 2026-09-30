@@ -8,7 +8,9 @@ import {
 } from "../provider-request-config.js";
 
 const mocks = vi.hoisted(() => ({
-  loadPluginManifestRegistryCore: vi.fn(),
+  rejectMetadataDiscovery: () => {
+    throw new Error("Prepared catalog fixtures must use their supplied plugin metadata snapshot.");
+  },
   normalizePluginDiscoveryResult: vi.fn(),
   resolveActivatableProviderOwnerPluginIds: vi.fn(),
   resolveBundledProviderCompatPluginIds: vi.fn(),
@@ -17,14 +19,19 @@ const mocks = vi.hoisted(() => ({
   runProviderStaticCatalog: vi.fn(),
 }));
 
-vi.mock("../../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../plugins/current-plugin-metadata-snapshot.js")>()),
+vi.mock("../../plugins/current-plugin-metadata-snapshot.js", () => ({
   getCurrentPluginMetadataSnapshot: () => undefined,
   withPluginMetadataSnapshotScope: (_snapshot: unknown, run: () => unknown) => run(),
 }));
 
+// Real snapshot module evaluation publishes readers that would retain this fixture's mocks.
+vi.mock("../../plugins/plugin-metadata-snapshot.js", () => ({
+  resolvePluginMetadataSnapshot: mocks.rejectMetadataDiscovery,
+  loadPluginMetadataSnapshot: mocks.rejectMetadataDiscovery,
+}));
+
 vi.mock("../../plugins/manifest-metadata-scan.js", () => ({
-  listOpenClawPluginManifestMetadata: () => [],
+  listOpenClawPluginManifestMetadata: mocks.rejectMetadataDiscovery,
 }));
 
 vi.mock("../../plugins/manifest-owner-policy.js", () => ({
@@ -32,12 +39,12 @@ vi.mock("../../plugins/manifest-owner-policy.js", () => ({
 }));
 
 vi.mock("../../plugins/manifest-registry.js", () => ({
-  loadPluginManifestRegistryCore: mocks.loadPluginManifestRegistryCore,
+  loadPluginManifestRegistryCore: mocks.rejectMetadataDiscovery,
 }));
 
 vi.mock("../../plugins/manifest.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../plugins/manifest.js")>()),
-  loadPluginManifest: vi.fn(),
+  loadPluginManifest: mocks.rejectMetadataDiscovery,
 }));
 
 vi.mock("../../plugins/providers.js", () => ({
@@ -58,20 +65,11 @@ import {
 } from "./model.static-catalog.js";
 
 const cfg = { plugins: { entries: { google: { enabled: true } } } };
-const provider = {
-  id: "google",
-  pluginId: "google",
-  label: "Google",
-  auth: [],
-  staticCatalog: { run: vi.fn() },
-};
-const unconfiguredProvider = {
-  id: "anthropic",
-  pluginId: "anthropic",
-  label: "Anthropic",
-  auth: [],
-  staticCatalog: { run: vi.fn() },
-};
+function staticProvider(id: string, label: string) {
+  return { id, pluginId: id, label, auth: [], staticCatalog: { run: vi.fn() } };
+}
+const provider = staticProvider("google", "Google");
+const unconfiguredProvider = staticProvider("anthropic", "Anthropic");
 
 function createMetadataSnapshot(
   pluginIds: string[],
@@ -108,52 +106,6 @@ describe("prepared bundled provider static catalogs", () => {
     );
     mocks.resolveBundledProviderCompatPluginIds.mockReturnValue(["google"]);
     mocks.resolveOwningPluginIdsForProviderRef.mockReturnValue(["google"]);
-    mocks.loadPluginManifestRegistryCore.mockReturnValue({
-      plugins: [
-        {
-          id: "google",
-          origin: "bundled",
-          providerDiscoverySource: "/fixtures/google/provider-discovery.ts",
-        },
-      ],
-    });
-  });
-
-  it("keeps provider-scoped lookup on the prepared metadata generation", async () => {
-    const metadataSnapshot = createMetadataSnapshot(["google"]);
-    mocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([provider]);
-    mocks.runProviderStaticCatalog.mockResolvedValue({ marker: "static-result" });
-    mocks.normalizePluginDiscoveryResult.mockReturnValue({
-      google: {
-        models: [{ id: "gemini-3.1-pro-preview", contextWindow: 1_048_576 }],
-      },
-    });
-
-    await expect(
-      loadBundledProviderStaticCatalogContextModels({
-        cfg,
-        metadataSnapshot,
-        providerIds: ["google"],
-      }),
-    ).resolves.toEqual([
-      expect.objectContaining({ id: "gemini-3.1-pro-preview", provider: "google" }),
-    ]);
-
-    expect(mocks.resolveOwningPluginIdsForProviderRef).toHaveBeenCalledWith(
-      expect.objectContaining({ metadataSnapshot }),
-    );
-    expect(mocks.resolveActivatableProviderOwnerPluginIds).toHaveBeenCalledWith(
-      expect.objectContaining({
-        registry: metadataSnapshot.index,
-        manifestRegistry: metadataSnapshot.manifestRegistry,
-      }),
-    );
-    expect(mocks.resolveBundledProviderCompatPluginIds).toHaveBeenCalledWith(
-      expect.objectContaining({ manifestRegistry: metadataSnapshot.manifestRegistry }),
-    );
-    expect(mocks.resolveRuntimePluginDiscoveryProviders).toHaveBeenCalledWith(
-      expect.objectContaining({ pluginMetadataSnapshot: metadataSnapshot }),
-    );
   });
 
   it("keeps nested provider ownership on the prepared metadata generation", async () => {
@@ -181,7 +133,7 @@ describe("prepared bundled provider static catalogs", () => {
         catalogProvider.pluginId === "shared"
           ? {
               nested: {
-                models: [{ id: "model", contextWindow: 256_000 }],
+                models: [{ id: "model", contextWindow: 256_000, contextTokens: 128_000 }],
               },
             }
           : {},
@@ -193,6 +145,7 @@ describe("prepared bundled provider static catalogs", () => {
     });
     await expect(resolveContext({ provider: "outer", modelId: "nested/model" })).resolves.toEqual({
       contextWindow: 256_000,
+      contextTokens: 128_000,
     });
 
     expect(mocks.resolveOwningPluginIdsForProviderRef).toHaveBeenCalledTimes(3);
@@ -270,6 +223,7 @@ describe("prepared bundled provider static catalogs", () => {
     const metadataSnapshot = createMetadataSnapshot(["google"]);
     const models = await loadBundledProviderStaticCatalogContextModels({
       cfg,
+      providerIds: ["google"],
       metadataSnapshot,
       preparedStaticProviderCatalog: {
         entries: [{ provider, result, providerConfigs }],
@@ -372,20 +326,6 @@ describe("prepared bundled provider static catalogs", () => {
 
   it("discovers unconfigured providers when the full catalog is requested", async () => {
     mocks.resolveBundledProviderCompatPluginIds.mockReturnValue(["anthropic", "google"]);
-    mocks.loadPluginManifestRegistryCore.mockReturnValue({
-      plugins: [
-        {
-          id: "anthropic",
-          origin: "bundled",
-          providerDiscoverySource: "/fixtures/anthropic/provider-discovery.ts",
-        },
-        {
-          id: "google",
-          origin: "bundled",
-          providerDiscoverySource: "/fixtures/google/provider-discovery.ts",
-        },
-      ],
-    });
     mocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([unconfiguredProvider]);
     mocks.runProviderStaticCatalog.mockResolvedValue({ marker: "unconfigured-static-result" });
     mocks.normalizePluginDiscoveryResult.mockImplementation(

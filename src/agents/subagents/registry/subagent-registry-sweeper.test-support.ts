@@ -47,7 +47,14 @@ export function createSubagentSweeperHarness(
     }) => 0,
   );
   const completeSubagentRunWithRecovery = vi.fn();
-  const completeCleanupBookkeeping = vi.fn();
+  const completeCleanupBookkeeping = vi.fn<
+    Parameters<typeof createSubagentRegistrySweeper>[0]["completeCleanupBookkeeping"]
+  >(async (params) => {
+    if (params.isCurrent && !params.isCurrent()) {
+      return;
+    }
+    params.discardDelivery?.();
+  });
   const discardTerminalDelivery =
     vi.fn<Parameters<typeof createSubagentRegistrySweeper>[0]["discardTerminalDelivery"]>();
   const emitSubagentEndedHookForRun = vi.fn();
@@ -64,38 +71,14 @@ export function createSubagentSweeperHarness(
     sweepPendingLifecycle: vi.fn(),
     completeSubagentRunWithRecovery,
     getGatewayRecoveryRuntime: () => runtime.current,
-    abandonSubagentRestartRecoveryLaunch: vi.fn(() => true),
-    clearAcceptedSubagentRestartRecovery: vi.fn(() => true),
-    clearPendingSubagentRecoveryNotice: vi.fn(() => true),
-    resumeSettledSubagentRestartRecovery: vi.fn(() => true),
-    replaceSubagentRunAfterSteer: vi.fn(() => true),
-    markSubagentRestartRecoveryLaunchAttempted: vi.fn((params) => ({
-      sessionId: "session-id",
-      sessionMarker: params.sessionMarker,
-      idempotencyKey: params.idempotencyKey,
-      lifecycleGeneration: params.lifecycleGeneration,
-      phase: "attempted" as const,
-    })),
-    markSubagentRestartRecoveryLaunchAccepted: vi.fn((params) => ({
-      sessionId: "session-id",
-      sessionMarker: params.sessionMarker,
-      idempotencyKey: params.idempotencyKey,
-      phase: "accepted" as const,
-    })),
-    markSubagentRestartRecoveryLaunchConsumed: vi.fn((params) => ({
-      sessionId: "session-id",
-      sessionMarker: params.sessionMarker,
-      idempotencyKey: params.idempotencyKey,
-      phase: "consumed" as const,
-    })),
-    reserveSubagentRestartRecoveryLaunch: vi.fn(
-      (params: { idempotencyKey: string }) => params.idempotencyKey,
-    ),
-    resetSubagentRestartRecoveryLaunchAttempt: vi.fn(() => true),
     finalizeInterruptedSubagentRun,
     resumeRequesterSettleWake,
     startSubagentAnnounceCleanupFlow: vi.fn(() => true),
     completeCleanupBookkeeping,
+    isEndedHookOwnerCurrent: (runId, selected) => runs.get(runId) === selected || !runs.has(runId),
+    sessionEffectsHostCurrent: (selected) => selected.execution.suppressSessionEffects !== true,
+    shouldSuppressSessionEffects: async (selected) =>
+      selected.execution.suppressSessionEffects === true,
     discardTerminalDelivery,
     shouldEmitEndedHookForRun: vi.fn(() => false),
     emitSubagentEndedHookForRun,

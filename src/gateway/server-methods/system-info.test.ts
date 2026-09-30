@@ -57,7 +57,7 @@ import { systemHandlers } from "./system.js";
 describe("system.info", () => {
   let sampleTime = Date.now();
   beforeEach(() => {
-    sampleTime += 10_001;
+    sampleTime += 30_001;
     vi.spyOn(Date, "now").mockReturnValue(sampleTime);
     vi.spyOn(os, "platform").mockReturnValue("darwin");
     mocks.runCommandWithTimeout.mockReset().mockImplementation(mountedVolumeOutput);
@@ -67,9 +67,14 @@ describe("system.info", () => {
       frsize: 1024n,
     }));
   });
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    sampleTime = Math.max(sampleTime, Date.now());
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  });
 
   it("returns a schema-valid host resource snapshot", async () => {
+    const readCpus = vi.spyOn(os, "cpus");
     const respond = vi.fn();
     const eventLoop = {
       degraded: false,
@@ -99,15 +104,15 @@ describe("system.info", () => {
       },
     } as unknown as GatewayRequestHandlerOptions;
 
-    await expectDefined(
+    const handler = expectDefined(
       systemHandlers["system.info"],
       'systemHandlers["system.info"] test invariant',
-    )(request);
+    );
+    await handler(request);
     eventLoop.cpuCoreRatio = 0.6;
-    await expectDefined(
-      systemHandlers["system.info"],
-      'systemHandlers["system.info"] test invariant',
-    )(request);
+    readCpus.mockReturnValue([]);
+    vi.mocked(Date.now).mockReturnValue(sampleTime + 1_999);
+    await handler(request);
 
     expect(respond).toHaveBeenCalledTimes(2);
     expect(mocks.runCommandWithTimeout.mock.calls.map(([argv]) => argv)).toEqual([["mount"]]);
@@ -132,13 +137,80 @@ describe("system.info", () => {
       throw new Error("system.info returned an invalid refreshed payload");
     }
     expect(refreshed.eventLoop?.cpuCoreRatio).toBe(0.6);
+    expect(refreshed.cpuCount).toBe(payload.cpuCount);
+    expect(refreshed.cpuModel).toBe(payload.cpuModel);
+    expect(readCpus).not.toHaveBeenCalled();
     expect(refreshed.eventLoop?.cpuBreakdown).toEqual(eventLoop.cpuBreakdown);
     expect(getEventLoopHealth).toHaveBeenCalledTimes(2);
     expect(payload).toHaveProperty("disks", [
       { path: "/", totalBytes: 1_024_000, availableBytes: 409_600 },
       { path: "/Volumes/Data", totalBytes: 2_048_000, availableBytes: 1_536_000 },
     ]);
+
+    sampleTime += 24 * 60 * 60_000;
+    vi.mocked(Date.now).mockReturnValue(sampleTime);
+    await handler(request);
+    expect(readCpus).not.toHaveBeenCalled();
+    expect(respond.mock.calls[2]?.[1]).toMatchObject({
+      cpuCount: payload.cpuCount,
+      cpuModel: payload.cpuModel,
+      eventLoop: { cpuCoreRatio: 0.6 },
+    });
   });
+
+  it.each([false, true])(
+    "bounds state-volume reads, keeps live counters and invalidates on expiry or path change (unavailable=%s)",
+    async (unavailable) => {
+      vi.stubEnv("OPENCLAW_STATE_DIR", "/system-info-first");
+      vi.spyOn(process, "uptime").mockReturnValue(123);
+      vi.spyOn(process, "memoryUsage").mockReturnValue(process.memoryUsage());
+      const freemem = vi.spyOn(os, "freemem").mockReturnValue(1024);
+      const loadavg = vi.spyOn(os, "loadavg").mockReturnValue([1, 2, 3]);
+      const readDisk = vi
+        .spyOn(diskSpace, "tryReadDiskSpace")
+        .mockImplementation((targetPath) =>
+          unavailable
+            ? null
+            : { targetPath, checkedPath: targetPath, totalBytes: 2048, availableBytes: 1024 },
+        );
+      const respond = vi.fn();
+      const request = {
+        params: {},
+        respond,
+        context: { getRuntimeConfig: () => ({}) },
+      } as unknown as GatewayRequestHandlerOptions;
+      const handler = expectDefined(systemHandlers["system.info"], "system.info handler");
+      await handler(request);
+      const initial = respond.mock.calls[0]?.[1];
+      freemem.mockReturnValue(512);
+      loadavg.mockReturnValue([4, 5, 6]);
+      readDisk.mockImplementation((targetPath) => ({
+        targetPath,
+        checkedPath: targetPath,
+        totalBytes: 2048,
+        availableBytes: 256,
+      }));
+      vi.mocked(Date.now).mockReturnValue(sampleTime + 29_999);
+      await handler(request);
+      expect(readDisk).toHaveBeenCalledTimes(1);
+      expect(respond.mock.calls[1]?.[1]).toEqual({
+        ...initial,
+        memoryFreeBytes: 512,
+        loadAverage: [4, 5, 6],
+      });
+      vi.mocked(Date.now).mockReturnValue(sampleTime + 30_000);
+      await handler(request);
+      expect(readDisk).toHaveBeenCalledTimes(2);
+      expect(respond.mock.calls[2]?.[1]).toMatchObject({
+        diskAvailableBytes: 256,
+        diskPath: "/system-info-first",
+      });
+      vi.stubEnv("OPENCLAW_STATE_DIR", "/system-info-second");
+      await handler(request);
+      expect(readDisk).toHaveBeenCalledTimes(3);
+      expect(respond.mock.calls[3]?.[1]).toMatchObject({ diskPath: "/system-info-second" });
+    },
+  );
 
   it.each(["throw", "mount-exit", "statfs-error", "empty"])(
     "preserves the state-directory snapshot only when discovery is unavailable (%s)",

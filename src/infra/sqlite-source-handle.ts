@@ -1,82 +1,32 @@
-// Source readers participate in file exclusion without changing source SQLite state.
+// Native source readers run in an isolated child or an already-drained owner.
 import type { DatabaseSync } from "node:sqlite";
+import { assertStateDatabaseAccessAllowed } from "./gateway-state-owner.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
-import {
-  createSqliteLifecycleAggregateError,
-  runWithSqliteCoordinator,
-} from "./sqlite-coordinator.js";
 import { withSqliteInspectionOperation } from "./sqlite-error-diagnostics.js";
-import { acquireStateDatabaseHandleLease } from "./state-database-coordinator.js";
 
-// A failed native close cannot let GC retire its admission before child exit.
-const unclosedSourceReads = new Set<{
-  database: DatabaseSync;
-  lease: { release: () => void };
-}>();
+// A failed native close remains owned until the reader process exits.
+const unclosedSourceReads = new Set<DatabaseSync>();
 
-export function withSqliteSourceHandle<T>(pathname: string, operation: () => T): T {
-  return runWithSqliteCoordinator(
-    acquireStateDatabaseHandleLease({ databasePath: pathname, busyTimeoutMs: 0 }),
-    "SQLite source read",
-    operation,
-  );
-}
-
-/** Execute only in a child or a drained source scope: native close can release
- * another connection's process-wide POSIX locks. Failed close retains admission. */
+/** Closing a source in its writer's process can release that writer's POSIX locks. */
 export function withSqliteSourceReadDatabase<T>(
   pathname: string,
   inspectionOperation: "source" | "snapshot",
   operation: (database: DatabaseSync) => T,
 ): T {
-  const lease = acquireStateDatabaseHandleLease({ databasePath: pathname, busyTimeoutMs: 0 });
-  let database: DatabaseSync | undefined;
+  assertStateDatabaseAccessAllowed(pathname);
+  const database = withSqliteInspectionOperation(inspectionOperation, () =>
+    openNodeSqliteDatabase(pathname, { readOnly: true }),
+  );
   try {
-    database = withSqliteInspectionOperation(inspectionOperation, () =>
-      openNodeSqliteDatabase(pathname, { readOnly: true }),
-    );
+    assertStateDatabaseAccessAllowed(pathname);
     return operation(database);
   } finally {
     try {
-      database?.close();
+      database.close();
     } finally {
-      // If SQLite still owns a native handle, only process exit can release it.
-      if (!database?.isOpen) {
-        lease.release();
-      } else {
-        unclosedSourceReads.add({ database, lease });
+      if (database.isOpen) {
+        unclosedSourceReads.add(database);
       }
     }
   }
-}
-
-/** The executing source-copy child holds its own lease, including after parent loss. */
-export async function withSqliteSourceHandleAsync<T>(
-  pathname: string,
-  operation: () => Promise<T>,
-): Promise<T> {
-  const lease = acquireStateDatabaseHandleLease({ databasePath: pathname, busyTimeoutMs: 0 });
-  let result: T;
-  try {
-    result = await operation();
-  } catch (error) {
-    try {
-      lease.release();
-    } catch (releaseError) {
-      throw createSqliteLifecycleAggregateError(
-        [error, releaseError],
-        "SQLite source read and handle release both failed",
-        error,
-      );
-    }
-    throw error;
-  }
-  lease.release();
-  return result;
-}
-
-/** Revalidate every caller before it can join process-global snapshot work. */
-export function assertSqliteSourceReadAllowed(pathname: string): void {
-  const lease = acquireStateDatabaseHandleLease({ databasePath: pathname, busyTimeoutMs: 0 });
-  lease.release();
 }

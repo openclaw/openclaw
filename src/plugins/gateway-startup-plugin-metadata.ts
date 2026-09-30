@@ -1,6 +1,8 @@
 // Builds deterministic metadata scopes for startup planning.
+import { getConfiguredDecisionProviderIds } from "../agents/decision-model-setting.js";
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizePluginsConfigWithResolverCore } from "./config-normalization-shared.js";
 import { addRequiredAgentHarnessPluginIds } from "./gateway-startup-plugin-activation.js";
 import {
   addConfiguredActivationPathPluginIds,
@@ -10,7 +12,6 @@ import {
   collectConfiguredStartupChannelIds,
   collectValidationConfiguredRefs,
   collectValidationConfiguredShorthandModelIds,
-  normalizePluginsConfigForInstalledIndex,
   readStartupBundledDiscoveryMode,
   resolveAuthorizedGatewayStartupDreamingPluginIds,
   resolveMemorySlotStartupPluginId,
@@ -34,10 +35,16 @@ export function resolveGatewayStartupMetadataPluginIds(params: {
   const lookup = createInstalledPluginIndexScopeLookup(params.index);
   const activationSourceConfig = params.activationSourceConfig ?? params.config;
   const sameConfig = activationSourceConfig === params.config;
-  const pluginsConfig = normalizePluginsConfigForInstalledIndex(params.config.plugins, lookup);
+  const pluginsConfig = normalizePluginsConfigWithResolverCore(
+    params.config.plugins,
+    lookup.normalizePluginId,
+  );
   const activationSourcePlugins = sameConfig
     ? pluginsConfig
-    : normalizePluginsConfigForInstalledIndex(activationSourceConfig.plugins, lookup);
+    : normalizePluginsConfigWithResolverCore(
+        activationSourceConfig.plugins,
+        lookup.normalizePluginId,
+      );
   if (!pluginsConfig.enabled || !activationSourcePlugins.enabled) {
     return [];
   }
@@ -112,6 +119,12 @@ export function resolveGatewayStartupMetadataPluginIds(params: {
     return undefined;
   }
   lookup.addDirectProviderOwners(scope, configuredProviderIds);
+
+  const decisionProviderIds = configs.flatMap(getConfiguredDecisionProviderIds);
+  if (!lookup.hasProviderContributionOwners(decisionProviderIds)) {
+    return undefined;
+  }
+  lookup.addProviderContributionOwners(scope, decisionProviderIds);
 
   const workerProviderIds = normalizeWorkerProviderIds([
     ...configs.flatMap(collectConfiguredWorkerProviderIds),

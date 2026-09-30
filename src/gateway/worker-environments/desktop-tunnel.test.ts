@@ -2,10 +2,17 @@ import { access, mkdir, mkdtemp, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { WorkerDesktopEndpoint, WorkerSshEndpoint } from "../../plugins/types.js";
-import type { CommandOptions, SpawnResult } from "../../process/exec.js";
+import type { WorkerDesktopEndpoint } from "../../plugins/types.js";
+import type { SpawnResult } from "../../process/exec.js";
 import { createWorkerDesktopTunnels } from "./desktop-tunnel.js";
-import type { WorkerSshProcess, WorkerSshRunner } from "./tunnel-ssh-runner.js";
+import {
+  deferred,
+  fakeRunner as createFakeRunner,
+  resolveIdentity,
+  SSH,
+  success,
+  waitForStarts,
+} from "./tunnel.test-support.js";
 
 const desktopInfo = vi.hoisted(() => vi.fn());
 vi.mock("../../logging/subsystem.js", async (importOriginal) => {
@@ -19,87 +26,13 @@ vi.mock("../../logging/subsystem.js", async (importOriginal) => {
   };
 });
 
-const SSH: WorkerSshEndpoint = {
-  host: "worker.example.test",
-  port: 2202,
-  user: "worker",
-  hostKey: "ssh-ed25519 AAAA",
-  keyRef: { source: "file", provider: "workers", id: "/identity" },
-};
 const DESKTOP: WorkerDesktopEndpoint = {
   protocol: "rfb",
   port: 5900,
   passwordFilePath: "/var/lib/crabbox/vnc.password",
 };
-const resolveIdentity = async () => ({ kind: "path", path: "/keys/worker" }) as const;
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (error: Error) => void;
-  const promise = new Promise<T>((promiseResolve, promiseReject) => {
-    resolve = promiseResolve;
-    reject = promiseReject;
-  });
-  void promise.catch(() => undefined);
-  return { promise, resolve, reject };
-}
-
-class FakeProcess implements WorkerSshProcess {
-  private readonly readyDeferred = deferred<void>();
-  private readonly exitDeferred = deferred<{
-    code: number | null;
-    signal: NodeJS.Signals | null;
-  }>();
-  readonly ready = this.readyDeferred.promise;
-  readonly exited = this.exitDeferred.promise;
-  stopCount = 0;
-  private stopPromise?: Promise<void>;
-
-  becomeReady() {
-    this.readyDeferred.resolve();
-  }
-
-  exit() {
-    this.exitDeferred.resolve({ code: 1, signal: null });
-  }
-
-  stop() {
-    return (this.stopPromise ??= Promise.resolve().then(() => {
-      this.stopCount += 1;
-      this.readyDeferred.reject(new Error("stopped"));
-      this.exitDeferred.resolve({ code: null, signal: "SIGTERM" });
-    }));
-  }
-}
-
-function success(stdout = ""): SpawnResult {
-  return {
-    stdout,
-    stderr: "",
-    code: 0,
-    signal: null,
-    killed: false,
-    termination: "exit",
-  };
-}
-
-function fakeRunner(
-  onRun?: (argv: string[], options: CommandOptions) => Promise<SpawnResult> | SpawnResult,
-) {
-  const starts: Array<{ argv: string[]; options: CommandOptions; process: FakeProcess }> = [];
-  const runs: Array<{ argv: string[]; options: CommandOptions }> = [];
-  const runner: WorkerSshRunner = {
-    start(argv, options) {
-      const process = new FakeProcess();
-      starts.push({ argv, options, process });
-      return process;
-    },
-    async run(argv, options) {
-      runs.push({ argv, options });
-      return (await onRun?.(argv, options)) ?? success("vnc-secret\n");
-    },
-  };
-  return { runner, runs, starts };
+function fakeRunner(onRun?: Parameters<typeof createFakeRunner>[0]) {
+  return createFakeRunner(onRun, { defaultStdout: "vnc-secret\n", deferStop: true });
 }
 
 function readyRunner() {
@@ -118,6 +51,7 @@ function launchApp(
   app: "browser" | "terminal" = "browser",
   ownerEpoch = 1,
   ssh = SSH,
+  args?: string[],
 ) {
   return manager.launchApp({
     environmentId: "worker:one",
@@ -128,6 +62,7 @@ function launchApp(
         ? {
             id: "browser",
             executablePath: "/usr/local/bin/openclaw-worker-browser",
+            ...(args ? { args } : {}),
             cdpPort: 9222,
           }
         : { id: "terminal", executablePath: "/usr/local/bin/openclaw-worker-terminal" },
@@ -147,10 +82,6 @@ function acquire(
     desktop,
     resolveIdentity,
   });
-}
-
-async function waitForStarts(starts: unknown[], count: number) {
-  await vi.waitFor(() => expect(starts).toHaveLength(count), { interval: 1 });
 }
 
 afterEach(() => {
@@ -673,44 +604,47 @@ describe("worker desktop tunnels", () => {
     expect(fake.starts).toEqual([]);
   });
 
-  it("deduplicates one exact no-argument launcher command per app and epoch", async () => {
-    const result = deferred<SpawnResult>();
-    const fake = fakeRunner(async () => await result.promise);
-    const manager = createWorkerDesktopTunnels({ runner: fake.runner });
-
-    const first = launchApp(manager);
-    const second = launchApp(manager);
-    await vi.waitFor(() => expect(fake.runs).toHaveLength(1), { interval: 1 });
-    const run = fake.runs[0]!;
-    expect(run.argv.at(-1)).toBe("'/usr/local/bin/openclaw-worker-browser'");
-    expect(run.argv.at(-1)).not.toContain("9222");
-    expect(run.argv.at(-1)).not.toContain(".cache/openclaw");
-    expect(run.options.timeoutMs).toBeGreaterThan(0);
-    expect(run.options.timeoutMs).toBeLessThanOrEqual(30_000);
-    expect(run.options.signal).toBeInstanceOf(AbortSignal);
-    result.resolve(success());
-
-    await expect(Promise.all([first, second])).resolves.toEqual([undefined, undefined]);
-    await manager.stopAll();
-  });
-
-  it.each(["browser", "terminal"] as const)(
-    "does not replay a %s launch after ambiguous SSH exit 255",
-    async (app) => {
-      const fake = fakeRunner(() => ({
-        ...success(),
-        code: 255,
-        stderr: "connection lost after remote acceptance",
-      }));
+  it.each([{ args: undefined }, { args: ["arg with spaces", "literal;$(text)"] }])(
+    "deduplicates one exact launcher with args $args per app and epoch",
+    async ({ args }) => {
+      const result = deferred<SpawnResult>();
+      const fake = fakeRunner(async () => await result.promise);
       const manager = createWorkerDesktopTunnels({ runner: fake.runner });
 
-      await expect(launchApp(manager, app, 1, { ...SSH, fallbackPorts: [2203] })).rejects.toThrow(
-        "connection lost after remote acceptance",
+      const first = launchApp(manager, "browser", 1, SSH, args);
+      const second = launchApp(manager, "browser", 1, SSH, args);
+      await vi.waitFor(() => expect(fake.runs).toHaveLength(1), { interval: 1 });
+      const run = fake.runs[0]!;
+      expect(run.argv.at(-1)).toBe(
+        "'/usr/local/bin/openclaw-worker-browser'" +
+          (args ? " 'arg with spaces' 'literal;$(text)'" : ""),
       );
-      expect(fake.runs.map(({ argv }) => argv[argv.indexOf("-p") + 1])).toEqual(["2202"]);
+      expect(run.argv.at(-1)).not.toContain("9222");
+      expect(run.argv.at(-1)).not.toContain(".cache/openclaw");
+      expect(run.options.timeoutMs).toBeGreaterThan(0);
+      expect(run.options.timeoutMs).toBeLessThanOrEqual(30_000);
+      expect(run.options.signal).toBeInstanceOf(AbortSignal);
+      result.resolve(success());
+
+      await expect(Promise.all([first, second])).resolves.toEqual([undefined, undefined]);
       await manager.stopAll();
     },
   );
+
+  it("does not replay an app launch after ambiguous SSH exit 255", async () => {
+    const fake = fakeRunner(() => ({
+      ...success(),
+      code: 255,
+      stderr: "connection lost after remote acceptance",
+    }));
+    const manager = createWorkerDesktopTunnels({ runner: fake.runner });
+
+    await expect(
+      launchApp(manager, "browser", 1, { ...SSH, fallbackPorts: [2203] }),
+    ).rejects.toThrow("connection lost after remote acceptance");
+    expect(fake.runs.map(({ argv }) => argv[argv.indexOf("-p") + 1])).toEqual(["2202"]);
+    await manager.stopAll();
+  });
 
   it("aborts pending launchers on matching teardown and fences stale epochs", async () => {
     const signals: AbortSignal[] = [];

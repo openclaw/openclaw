@@ -179,48 +179,21 @@ export function validateRuntimeOptionPatch(
   }
 
   const next: Partial<AcpSessionRuntimeOptions> = {};
-  if (Object.hasOwn(rawPatch, "runtimeMode")) {
-    if (rawPatch.runtimeMode === undefined) {
-      next.runtimeMode = undefined;
-    } else {
-      next.runtimeMode = validateRuntimeModeInput(rawPatch.runtimeMode);
+  function setOption<K extends Exclude<keyof AcpSessionRuntimeOptions, "backendExtras">>(
+    key: K,
+    validate: (value: unknown) => AcpSessionRuntimeOptions[K],
+  ): void {
+    // Own undefined clears an option; missing and inherited fields leave it unchanged.
+    if (Object.hasOwn(rawPatch, key)) {
+      next[key] = rawPatch[key] === undefined ? undefined : validate(rawPatch[key]);
     }
   }
-  if (Object.hasOwn(rawPatch, "model")) {
-    if (rawPatch.model === undefined) {
-      next.model = undefined;
-    } else {
-      next.model = validateRuntimeModelInput(rawPatch.model);
-    }
-  }
-  if (Object.hasOwn(rawPatch, "thinking")) {
-    if (rawPatch.thinking === undefined) {
-      next.thinking = undefined;
-    } else {
-      next.thinking = validateRuntimeThinkingInput(rawPatch.thinking);
-    }
-  }
-  if (Object.hasOwn(rawPatch, "cwd")) {
-    if (rawPatch.cwd === undefined) {
-      next.cwd = undefined;
-    } else {
-      next.cwd = validateRuntimeCwdInput(rawPatch.cwd);
-    }
-  }
-  if (Object.hasOwn(rawPatch, "permissionProfile")) {
-    if (rawPatch.permissionProfile === undefined) {
-      next.permissionProfile = undefined;
-    } else {
-      next.permissionProfile = validateRuntimePermissionProfileInput(rawPatch.permissionProfile);
-    }
-  }
-  if (Object.hasOwn(rawPatch, "timeoutSeconds")) {
-    if (rawPatch.timeoutSeconds === undefined) {
-      next.timeoutSeconds = undefined;
-    } else {
-      next.timeoutSeconds = validateRuntimeTimeoutSecondsInput(rawPatch.timeoutSeconds);
-    }
-  }
+  setOption("runtimeMode", validateRuntimeModeInput);
+  setOption("model", validateRuntimeModelInput);
+  setOption("thinking", validateRuntimeThinkingInput);
+  setOption("cwd", validateRuntimeCwdInput);
+  setOption("permissionProfile", validateRuntimePermissionProfileInput);
+  setOption("timeoutSeconds", validateRuntimeTimeoutSecondsInput);
   if (Object.hasOwn(rawPatch, "backendExtras")) {
     const rawExtras = rawPatch.backendExtras;
     if (rawExtras === undefined) {
@@ -365,57 +338,32 @@ export function buildRuntimeConfigOptionPairs(
 ): Array<[string, string]> {
   const normalized = normalizeRuntimeOptions(options);
   const pairs = new Map<string, string>();
+  const advertisedKeys = buildAdvertisedConfigOptionKeyMap(advertisedConfigOptionKeys);
+  const resolveKey = (key: string) => resolveRuntimeConfigOptionKeyFromMap(key, advertisedKeys);
+  const shouldEmit = (aliases: readonly string[]) =>
+    advertisedKeys.size === 0 || aliases.some((alias) => advertisedKeys.has(alias));
   if (normalized.model) {
-    pairs.set(resolveRuntimeConfigOptionKey("model", advertisedConfigOptionKeys), normalized.model);
+    pairs.set(resolveKey("model"), normalized.model);
   }
-  if (normalized.thinking && shouldEmitThinkingConfigOption(advertisedConfigOptionKeys)) {
-    pairs.set(
-      resolveRuntimeConfigOptionKey("thinking", advertisedConfigOptionKeys),
-      normalized.thinking,
-    );
+  if (normalized.thinking && shouldEmit(RUNTIME_CONFIG_OPTION_ALIASES.thinking)) {
+    pairs.set(resolveKey("thinking"), normalized.thinking);
   }
   if (normalized.permissionProfile) {
-    pairs.set(
-      resolveRuntimeConfigOptionKey("approval_policy", advertisedConfigOptionKeys),
-      normalized.permissionProfile,
-    );
+    pairs.set(resolveKey("approval_policy"), normalized.permissionProfile);
   }
   if (
     typeof normalized.timeoutSeconds === "number" &&
-    shouldEmitTimeoutConfigOption(advertisedConfigOptionKeys)
+    shouldEmit(RUNTIME_CONFIG_OPTION_ALIASES.timeoutSeconds)
   ) {
-    pairs.set(
-      resolveRuntimeConfigOptionKey("timeout", advertisedConfigOptionKeys),
-      String(normalized.timeoutSeconds),
-    );
+    pairs.set(resolveKey("timeout"), String(normalized.timeoutSeconds));
   }
   for (const [key, value] of Object.entries(normalized.backendExtras ?? {})) {
-    const wireKey = resolveRuntimeConfigOptionKey(key, advertisedConfigOptionKeys);
+    const wireKey = resolveKey(key);
     if (!pairs.has(wireKey)) {
       pairs.set(wireKey, value);
     }
   }
   return [...pairs.entries()];
-}
-
-function shouldEmitThinkingConfigOption(advertisedConfigOptionKeys?: readonly string[]): boolean {
-  const advertisedKeys = buildAdvertisedConfigOptionKeyMap(advertisedConfigOptionKeys);
-  return (
-    advertisedKeys.size === 0 ||
-    RUNTIME_CONFIG_OPTION_ALIASES.thinking.some((alias) =>
-      advertisedKeys.has(normalizeLowercaseStringOrEmpty(alias)),
-    )
-  );
-}
-
-function shouldEmitTimeoutConfigOption(advertisedConfigOptionKeys?: readonly string[]): boolean {
-  const advertisedKeys = buildAdvertisedConfigOptionKeyMap(advertisedConfigOptionKeys);
-  return (
-    advertisedKeys.size === 0 ||
-    RUNTIME_CONFIG_OPTION_ALIASES.timeoutSeconds.some((alias) =>
-      advertisedKeys.has(normalizeLowercaseStringOrEmpty(alias)),
-    )
-  );
 }
 
 function buildAdvertisedConfigOptionKeyMap(
@@ -446,9 +394,18 @@ export function resolveRuntimeConfigOptionKey(
   key: string,
   advertisedConfigOptionKeys?: readonly string[],
 ): string {
+  return resolveRuntimeConfigOptionKeyFromMap(
+    key,
+    buildAdvertisedConfigOptionKeyMap(advertisedConfigOptionKeys),
+  );
+}
+
+function resolveRuntimeConfigOptionKeyFromMap(
+  key: string,
+  advertisedKeys: ReadonlyMap<string, string>,
+): string {
   const normalizedKey = normalizeText(key) ?? "";
   const normalizedLookupKey = normalizeLowercaseStringOrEmpty(normalizedKey);
-  const advertisedKeys = buildAdvertisedConfigOptionKeyMap(advertisedConfigOptionKeys);
   if (!normalizedKey || advertisedKeys.size === 0) {
     return normalizedKey;
   }

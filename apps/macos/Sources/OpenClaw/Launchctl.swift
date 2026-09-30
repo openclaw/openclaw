@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 struct LaunchAgentPlistSnapshot: Equatable {
     let programArguments: [String]
@@ -13,22 +14,32 @@ struct LaunchAgentPlistSnapshot: Equatable {
 }
 
 enum LaunchAgentPlist {
+    static var homeDirectoryURL: URL {
+        #if DEBUG
+        if let testingHomeDirectoryURL { return testingHomeDirectoryURL }
+        #endif
+        return FileManager.default.homeDirectoryForCurrentUser
+    }
+
+    #if DEBUG
+    // UI callbacks can outlive the test task's executor context. TestIsolation
+    // owns this override without redirecting Foundation's process-wide home.
+    private static let testingHomeDirectory = Mutex<URL?>(nil)
+    static var testingHomeDirectoryURL: URL? {
+        get { self.testingHomeDirectory.withLock { $0 } }
+        set { self.testingHomeDirectory.withLock { $0 = newValue } }
+    }
+    #endif
+
     static func snapshot(
         url: URL,
         generatedEnvironmentFileURL: URL? = nil,
         generatedEnvironmentWrapperURL: URL? = nil) -> LaunchAgentPlistSnapshot?
     {
-        guard let data = try? Data(contentsOf: url) else { return nil }
-        let rootAny: Any
-        do {
-            rootAny = try PropertyListSerialization.propertyList(
-                from: data,
-                options: [],
-                format: nil)
-        } catch {
-            return nil
-        }
-        guard let root = rootAny as? [String: Any] else { return nil }
+        guard let data = try? Data(contentsOf: url),
+              let root = try? PropertyListSerialization.propertyList(
+                  from: data, options: [], format: nil) as? [String: Any]
+        else { return nil }
         let programArguments = root["ProgramArguments"] as? [String] ?? []
         let inlineEnvironment = root["EnvironmentVariables"] as? [String: String] ?? [:]
         let generatedEnvironment = self.readGeneratedEnvironment(
@@ -40,7 +51,7 @@ enum LaunchAgentPlist {
             .trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
         let stderrPath = (root["StandardErrorPath"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
-        let port = Self.extractFlagInt(programArguments, flag: "--port")
+        let port = Self.extractFlagString(programArguments, flag: "--port").flatMap(Int.init)
         let bind = Self.extractFlagString(programArguments, flag: "--bind")?.lowercased()
         let token = env["OPENCLAW_GATEWAY_TOKEN"]?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
         let password = env["OPENCLAW_GATEWAY_PASSWORD"]?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
@@ -93,11 +104,6 @@ enum LaunchAgentPlist {
                 .replacingOccurrences(of: #"'\''"#, with: "'")
         }
         return environment
-    }
-
-    private static func extractFlagInt(_ args: [String], flag: String) -> Int? {
-        guard let raw = self.extractFlagString(args, flag: flag) else { return nil }
-        return Int(raw)
     }
 
     private static func extractFlagString(_ args: [String], flag: String) -> String? {

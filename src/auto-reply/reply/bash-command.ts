@@ -25,6 +25,7 @@ import type { ReplyPayload } from "../types.js";
 import { buildDisabledCommandReply } from "./command-gates.js";
 import { formatElevatedUnavailableMessage } from "./elevated-unavailable.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
+import type { resolveElevatedPermissions } from "./reply-elevated.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 
 const CHAT_BASH_SCOPE_KEY = "chat:bash";
@@ -38,12 +39,10 @@ type BashRequest =
   | { action: "stop"; sessionId?: string };
 
 type ActiveBashJob =
-  | { state: "starting"; startedAt: number; command: string }
+  | { state: "starting" }
   | {
       state: "running";
       sessionId: string;
-      startedAt: number;
-      command: string;
     };
 
 let activeJob: ActiveBashJob | null = null;
@@ -110,19 +109,6 @@ function parseBashRequest(raw: string): BashRequest | null {
   return { action: "run", command: rest };
 }
 
-function resolveRawCommandBody(params: {
-  ctx: MsgContext;
-  cfg: OpenClawConfig;
-  agentId?: string;
-  isGroup: boolean;
-}) {
-  const source = params.ctx.commandText ?? "";
-  const stripped = stripStructuralPrefixes(source);
-  return params.isGroup
-    ? stripMentions(stripped, params.ctx, params.cfg, params.agentId)
-    : stripped;
-}
-
 function getScopedSession(sessionId: string) {
   const running = getSession(sessionId);
   if (running && running.scopeKey === CHAT_BASH_SCOPE_KEY) {
@@ -142,13 +128,9 @@ function ensureActiveJobState() {
   if (activeJob.state === "starting") {
     return activeJob;
   }
-  const { running, finished } = getScopedSession(activeJob.sessionId);
+  const { running } = getScopedSession(activeJob.sessionId);
   if (running) {
     return activeJob;
-  }
-  if (finished) {
-    activeJob = null;
-    return null;
   }
   activeJob = null;
   return null;
@@ -173,11 +155,7 @@ export async function handleBashChatCommand(params: {
   agentId?: string;
   sessionKey: string;
   isGroup: boolean;
-  elevated: {
-    enabled: boolean;
-    allowed: boolean;
-    failures: Array<{ gate: string; key: string }>;
-  };
+  elevated: ReturnType<typeof resolveElevatedPermissions>;
 }): Promise<ReplyPayload> {
   if (!isCommandFlagEnabled(params.cfg, "bash")) {
     return buildDisabledCommandReply({
@@ -215,12 +193,10 @@ export async function handleBashChatCommand(params: {
     };
   }
 
-  const rawBody = resolveRawCommandBody({
-    ctx: params.ctx,
-    cfg: params.cfg,
-    agentId,
-    isGroup: params.isGroup,
-  }).trim();
+  const stripped = stripStructuralPrefixes(params.ctx.commandText ?? "");
+  const rawBody = (
+    params.isGroup ? stripMentions(stripped, params.ctx, params.cfg, agentId) : stripped
+  ).trim();
   const request = parseBashRequest(rawBody);
   if (!request) {
     return { text: "⚠️ Unrecognized bash request." };
@@ -232,7 +208,7 @@ export async function handleBashChatCommand(params: {
     return buildUsageReply();
   }
 
-  if (request.action === "poll") {
+  if (request.action === "poll" || request.action === "stop") {
     const sessionId =
       normalizeOptionalString(request.sessionId) ||
       (liveJob?.state === "running" ? liveJob.sessionId : "");
@@ -240,50 +216,43 @@ export async function handleBashChatCommand(params: {
       return { text: "⚙️ No active bash job." };
     }
     const { running, finished } = getScopedSession(sessionId);
-    if (running) {
-      const runtimeSec = Math.max(0, Math.floor((Date.now() - running.startedAt) / 1000));
-      const tail = running.tail || "(no output yet)";
-      return {
-        text: [
-          `⚙️ bash still running (session ${formatSessionSnippet(sessionId)}, ${runtimeSec}s).`,
-          formatOutputBlock(tail),
-          "Hint: !stop (or /bash stop)",
-        ].join("\n"),
-      };
-    }
-    if (finished) {
+    if (request.action === "poll") {
+      if (running) {
+        const runtimeSec = Math.max(0, Math.floor((Date.now() - running.startedAt) / 1000));
+        const tail = running.tail || "(no output yet)";
+        return {
+          text: [
+            `⚙️ bash still running (session ${formatSessionSnippet(sessionId)}, ${runtimeSec}s).`,
+            formatOutputBlock(tail),
+            "Hint: !stop (or /bash stop)",
+          ].join("\n"),
+        };
+      }
+      if (finished) {
+        if (activeJob?.state === "running" && activeJob.sessionId === sessionId) {
+          activeJob = null;
+        }
+        const exitLabel = renderExecExitLabel(finished);
+        const prefix = finished.terminalStatus === "completed" ? "⚙️" : "⚠️";
+        return setReplyPayloadMetadata(
+          {
+            text: [
+              `${prefix} bash finished (session ${formatSessionSnippet(sessionId)}).`,
+              `Exit: ${exitLabel}`,
+              formatOutputBlock(finished.aggregated || finished.tail),
+            ].join("\n"),
+          },
+          { onFinalDeliverySuccess: () => acknowledgeNotifyOnExit(finished) },
+        );
+      }
       if (activeJob?.state === "running" && activeJob.sessionId === sessionId) {
         activeJob = null;
       }
-      const exitLabel = renderExecExitLabel(finished);
-      const prefix = finished.terminalStatus === "completed" ? "⚙️" : "⚠️";
-      return setReplyPayloadMetadata(
-        {
-          text: [
-            `${prefix} bash finished (session ${formatSessionSnippet(sessionId)}).`,
-            `Exit: ${exitLabel}`,
-            formatOutputBlock(finished.aggregated || finished.tail),
-          ].join("\n"),
-        },
-        { onFinalDeliverySuccess: () => acknowledgeNotifyOnExit(finished) },
-      );
+      return {
+        text: `⚙️ No bash session found for ${formatSessionSnippet(sessionId)}.`,
+      };
     }
-    if (activeJob?.state === "running" && activeJob.sessionId === sessionId) {
-      activeJob = null;
-    }
-    return {
-      text: `⚙️ No bash session found for ${formatSessionSnippet(sessionId)}.`,
-    };
-  }
 
-  if (request.action === "stop") {
-    const sessionId =
-      normalizeOptionalString(request.sessionId) ||
-      (liveJob?.state === "running" ? liveJob.sessionId : "");
-    if (!sessionId) {
-      return { text: "⚙️ No active bash job." };
-    }
-    const { running } = getScopedSession(sessionId);
     if (!running) {
       if (activeJob?.state === "running" && activeJob.sessionId === sessionId) {
         activeJob = null;
@@ -323,8 +292,6 @@ export async function handleBashChatCommand(params: {
 
   activeJob = {
     state: "starting",
-    startedAt: Date.now(),
-    command: commandText,
   };
 
   try {
@@ -364,8 +331,6 @@ export async function handleBashChatCommand(params: {
       activeJob = {
         state: "running",
         sessionId,
-        startedAt: result.details.startedAt,
-        command: commandText,
       };
       const snippet = formatSessionSnippet(sessionId);
       logVerbose(`Started bash session ${snippet}: ${commandText}`);

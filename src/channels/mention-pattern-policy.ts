@@ -1,9 +1,4 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-/**
- * Mention-pattern policy resolver.
- *
- * Applies provider and conversation allow/deny rules to mention pattern matching.
- */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { MentionPatternsMode, MentionPatternsPolicyConfig } from "../config/types.messages.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -29,21 +24,6 @@ export type ResolvedMentionPatternPolicy = {
   enabled: boolean;
 };
 
-function normalizeIdList(values?: string[]): Set<string> {
-  const normalized = new Set<string>();
-  for (const value of values ?? []) {
-    const next = normalizeOptionalString(value);
-    if (next) {
-      normalized.add(next);
-    }
-  }
-  return normalized;
-}
-
-function isMentionPatternsPolicyConfig(value: unknown): value is MentionPatternsPolicyConfig {
-  return isRecord(value);
-}
-
 function resolveProviderMentionPatternsPolicy(
   cfg: OpenClawConfig | undefined,
   provider: string | undefined,
@@ -53,7 +33,7 @@ function resolveProviderMentionPatternsPolicy(
   }
   const channelConfig = cfg.channels?.[provider];
   const policy = isRecord(channelConfig) ? channelConfig.mentionPatterns : undefined;
-  return isMentionPatternsPolicyConfig(policy) ? policy : undefined;
+  return isRecord(policy) ? policy : undefined;
 }
 
 /**
@@ -62,7 +42,7 @@ function resolveProviderMentionPatternsPolicy(
 export function resolveMentionPatternPolicy(
   params: ResolveMentionPatternPolicyParams,
 ): ResolvedMentionPatternPolicy {
-  const conversationId = normalizeOptionalString(params.conversationId ?? undefined) ?? undefined;
+  const conversationId = normalizeOptionalString(params.conversationId);
   const providerPolicy =
     params.providerPolicy ?? resolveProviderMentionPatternsPolicy(params.cfg, params.provider);
   const effectiveMode =
@@ -70,9 +50,15 @@ export function resolveMentionPatternPolicy(
       ? providerPolicy.mode
       : "allow";
   const allowMatched =
-    conversationId != null && normalizeIdList(providerPolicy?.allowIn).has(conversationId);
+    conversationId != null &&
+    (providerPolicy?.allowIn ?? []).some(
+      (value) => normalizeOptionalString(value) === conversationId,
+    );
   const denyMatched =
-    conversationId != null && normalizeIdList(providerPolicy?.denyIn).has(conversationId);
+    conversationId != null &&
+    (providerPolicy?.denyIn ?? []).some(
+      (value) => normalizeOptionalString(value) === conversationId,
+    );
   // Deny always wins. In allow mode everything is enabled except explicit denies; in deny mode
   // only explicitly allowed conversations are enabled.
   const enabled = effectiveMode === "allow" ? !denyMatched : allowMatched && !denyMatched;

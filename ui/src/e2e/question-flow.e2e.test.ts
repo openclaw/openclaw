@@ -4,6 +4,7 @@ import type { Question, QuestionResolveResult } from "@openclaw/gateway-protocol
 import type { BrowserContext, Page } from "playwright";
 import { beforeEach, afterEach, expect, it } from "vitest";
 import type { SessionsListResult } from "../api/types.ts";
+import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
 import { CHAT_TRANSCRIPT_END_THRESHOLD_PX } from "../pages/chat/scroll.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
@@ -13,6 +14,7 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 import { chatThreadDistanceFromBottom, waitForChatScrollIdle } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { defineQuestionFooterTests } from "./question-footer.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI Gateway question flow",
@@ -117,10 +119,12 @@ async function openQuestionPage(viewport = { height: 900, width: 1440 }, hasTouc
       "question.resolve",
       "sessions.create",
       "sessions.patch",
+      SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
     ],
     historyMessages: historyMessages(),
     methodResponses: {
       "question.list": { questions: [] },
+      [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true },
       "sessions.list": {
         ts: Date.now(),
         path: "",
@@ -398,94 +402,12 @@ suite.define(() => {
     await screenshot(page, "06-question-backscroll-arrow.png");
   });
 
-  it.each([
-    { height: 844, screenshotName: "portrait", width: 390 },
-    { height: 390, screenshotName: "landscape", width: 844 },
-  ])(
-    "joins a collapsed mobile question and composer into one $screenshotName surface",
-    async ({ height, screenshotName, width }) => {
-      const { gateway, page } = await openQuestionPage({ height, width });
-      const prompt = "Which progress note should I use?";
-      await emitRequested(
-        gateway,
-        questionRecord("question-mobile-compound", [
-          {
-            questionId: "progress_note",
-            header: "Progress note",
-            question: prompt,
-            options: [
-              { label: "Concise", description: "Keep the update short." },
-              { label: "Detailed", description: "Include the supporting evidence." },
-            ],
-          },
-        ]),
-      );
-
-      const panel = panelFor(page, prompt);
-      await panel.waitFor();
-      await panel.locator(".chat-question-panel__collapse").click();
-      const shell = page.locator(".agent-chat__composer-shell");
-      const composer = shell.locator(".agent-chat__input");
-      await composer.waitFor();
-      await screenshot(page, `07-question-mobile-compound-${screenshotName}.png`);
-
-      expect(
-        await shell.evaluate((element) => {
-          const collapsedPanel = element.querySelector<HTMLElement>(
-            ".chat-question-panel--collapsed",
-          );
-          const input = element.querySelector<HTMLElement>(".agent-chat__input");
-          if (!collapsedPanel || !input) {
-            throw new Error("expected collapsed question and composer");
-          }
-          const shellBox = element.getBoundingClientRect();
-          const panelBox = collapsedPanel.getBoundingClientRect();
-          const inputBox = input.getBoundingClientRect();
-          return {
-            composerBorder: getComputedStyle(input).borderTopWidth,
-            composerTopCorners: [
-              getComputedStyle(input).borderTopLeftRadius,
-              getComputedStyle(input).borderTopRightRadius,
-            ],
-            joined: Math.abs(panelBox.bottom - inputBox.top) <= 1,
-            panelBorder: getComputedStyle(collapsedPanel).borderTopWidth,
-            rowHeight: Math.round(panelBox.height),
-            shellBorder: getComputedStyle(element).borderTopWidth,
-            shellContainsChildren:
-              panelBox.left >= shellBox.left - 1 &&
-              inputBox.left >= shellBox.left - 1 &&
-              panelBox.right <= shellBox.right + 1 &&
-              inputBox.right <= shellBox.right + 1,
-          };
-        }),
-      ).toEqual({
-        composerBorder: "0px",
-        composerTopCorners: ["0px", "0px"],
-        joined: true,
-        panelBorder: "0px",
-        rowHeight: 48,
-        shellBorder: "1px",
-        shellContainsChildren: true,
-      });
-
-      await composer.locator(".agent-chat__composer-combobox > textarea").focus();
-      await expect
-        .poll(() => composer.evaluate((element) => getComputedStyle(element).boxShadow))
-        .toBe("none");
-      await page.evaluate(() => {
-        document.documentElement.dataset.themeMode = "light";
-      });
-      await expect
-        .poll(() => composer.evaluate((element) => getComputedStyle(element).boxShadow))
-        .toBe("none");
-      await composer.evaluate((element) => {
-        element.classList.add("agent-chat__input--dictating");
-      });
-      await expect
-        .poll(() => composer.evaluate((element) => getComputedStyle(element).boxShadow))
-        .toBe("none");
-    },
-  );
+  defineQuestionFooterTests({
+    openQuestionPage,
+    questionRecord,
+    questionSessionKey,
+    screenshot,
+  });
 
   it("restores the composer and its draft from an authoritative answer without a resolution event", async () => {
     const { gateway, page } = await openQuestionPage();
@@ -719,6 +641,10 @@ suite.define(() => {
     expect(await page.locator("openclaw-app-shell, openclaw-app-sidebar").count()).toBe(0);
     const panel = document.locator("openclaw-chat-question-panel");
     await panel.waitFor();
+    expect(await document.getByRole("heading", { level: 1 }).textContent()).toContain(
+      "Waiting for your answer",
+    );
+    expect(await page.title()).toBe("Waiting for your answer — OpenClaw");
     await screenshot(page, "11-secret-store-ask-pending.png");
     const secretInput = panel.locator('input[type="password"]');
     await secretInput.fill(fakeSecret);
@@ -735,7 +661,12 @@ suite.define(() => {
       answers: { answers: { api_key: [fakeSecret] } },
       secretStoreAllowedHosts: ["api.example.test"],
     });
-    await document.getByRole("heading", { name: "Answered", exact: true }).waitFor();
+    const outcomeHeading = document.getByRole("heading", { name: "Answered", exact: true });
+    await outcomeHeading.waitFor();
+    expect(
+      await outcomeHeading.evaluate((element) => element === element.ownerDocument.activeElement),
+    ).toBe(true);
+    expect(await page.title()).toBe("Answered — OpenClaw");
     expect(await document.textContent()).not.toContain(fakeSecret);
     expect(await document.textContent()).not.toContain("stored");
     expect(new URL(page.url()).pathname).toBe(`/operator/ask/${request.id}`);

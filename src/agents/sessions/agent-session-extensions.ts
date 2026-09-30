@@ -5,14 +5,9 @@ import { ExtensionRunner, type ToolDefinition, wrapRegisteredTools } from "./ext
 import { emitSessionShutdownEvent } from "./extensions/runner.js";
 import type { ResourceExtensionPaths } from "./resource-loader.js";
 import type { SlashCommandInfo } from "./slash-commands.js";
-import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.js";
+import { createSyntheticSourceInfo } from "./source-info.js";
 import { createAllToolDefinitions } from "./tools/index.js";
 import { createToolDefinitionFromAgentTool } from "./tools/tool-definition-wrapper.js";
-
-type ToolDefinitionEntry = {
-  definition: ToolDefinition;
-  sourceInfo: SourceInfo;
-};
 
 export abstract class AgentSessionExtensions extends AgentSessionCompaction {
   async bindExtensions(bindings: ExtensionBindings): Promise<void> {
@@ -264,17 +259,17 @@ export abstract class AgentSessionExtensions extends AgentSessionCompaction {
         sourceInfo: createSyntheticSourceInfo(`<sdk:${definition.name}>`, { source: "sdk" }),
       })),
     ].filter((tool) => isAllowedTool(tool.definition.name));
-    const definitionRegistry = new Map<string, ToolDefinitionEntry>(
-      Array.from(this.baseToolDefinitions.entries())
-        .filter(([name]) => isAllowedTool(name))
-        .map(([name, definition]) => [
+    const builtInTools = Array.from(this.baseToolDefinitions.entries()).map(
+      ([name, definition]) =>
+        [
           name,
           {
             definition,
             sourceInfo: createSyntheticSourceInfo(`<builtin:${name}>`, { source: "builtin" }),
           },
-        ]),
+        ] as const,
     );
+    const definitionRegistry = new Map(builtInTools.filter(([name]) => isAllowedTool(name)));
     for (const tool of allCustomTools) {
       definitionRegistry.set(tool.definition.name, {
         definition: tool.definition,
@@ -282,33 +277,22 @@ export abstract class AgentSessionExtensions extends AgentSessionCompaction {
       });
     }
     this.toolDefinitions = definitionRegistry;
-    this.toolPromptSnippets = new Map(
-      Array.from(definitionRegistry.values())
-        .map(({ definition }) => {
-          const snippet = this.normalizePromptSnippet(definition.promptSnippet);
-          return snippet ? ([definition.name, snippet] as const) : undefined;
-        })
-        .filter((entry): entry is readonly [string, string] => entry !== undefined),
-    );
-    this.toolPromptGuidelines = new Map(
-      Array.from(definitionRegistry.values())
-        .map(({ definition }) => {
-          const guidelines = this.normalizePromptGuidelines(definition.promptGuidelines);
-          return guidelines.length > 0 ? ([definition.name, guidelines] as const) : undefined;
-        })
-        .filter((entry): entry is readonly [string, string[]] => entry !== undefined),
-    );
+    this.toolPromptSnippets = new Map();
+    this.toolPromptGuidelines = new Map();
+    for (const { definition } of definitionRegistry.values()) {
+      const snippet = this.normalizePromptSnippet(definition.promptSnippet);
+      if (snippet) {
+        this.toolPromptSnippets.set(definition.name, snippet);
+      }
+      const guidelines = this.normalizePromptGuidelines(definition.promptGuidelines);
+      if (guidelines.length > 0) {
+        this.toolPromptGuidelines.set(definition.name, guidelines);
+      }
+    }
     const runner = this.currentExtensionRunner;
     const wrappedExtensionTools = wrapRegisteredTools(allCustomTools, runner);
     const wrappedBuiltInTools = wrapRegisteredTools(
-      Array.from(this.baseToolDefinitions.values())
-        .filter((definition) => isAllowedTool(definition.name))
-        .map((definition) => ({
-          definition,
-          sourceInfo: createSyntheticSourceInfo(`<builtin:${definition.name}>`, {
-            source: "builtin",
-          }),
-        })),
+      builtInTools.map(([, tool]) => tool).filter((tool) => isAllowedTool(tool.definition.name)),
       runner,
     );
 

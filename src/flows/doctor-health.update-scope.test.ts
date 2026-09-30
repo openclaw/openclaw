@@ -42,16 +42,14 @@ vi.mock("../commands/doctor-bootstrap-size.js", () => ({
     obs.events.push("bootstrap-size-advice");
   },
 }));
-vi.mock("../gateway/control-ui-github-api.js", () => ({
+vi.mock("../gateway/github-public-api.js", () => ({
   hasConfiguredGitHubApiCredential: () => {
     obs.events.push("github-credential-advice");
     return false;
   },
 }));
-vi.mock("../commands/doctor-state-integrity.js", () => ({
-  collectWorkspaceBackupTip: () => undefined,
-}));
 vi.mock("../commands/doctor-workspace.js", () => ({
+  collectWorkspaceBackupTip: () => undefined,
   MEMORY_SYSTEM_PROMPT: "synthetic",
   shouldSuggestMemorySystem: async () => {
     obs.events.push("workspace-suggestions");

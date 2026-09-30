@@ -1,11 +1,7 @@
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  isPositiveIMessageChatMatch,
-  resolveIMessageChatMatch,
-  type IMessageChatContext,
-} from "./chat-context.js";
+import { resolveIMessageChatMatch, type IMessageChatContext } from "./chat-context.js";
 import { getIMessageRuntime } from "./runtime.js";
 import {
   IMESSAGE_REPLY_CACHE_NAMESPACE,
@@ -58,7 +54,6 @@ type IMessageReplyCacheCounter = { counter: number };
 
 const imessageReplyCacheByMessageId = new Map<string, IMessageReplyCacheEntry>();
 const imessageShortIdToUuid = new Map<string, string>();
-const imessageUuidToShortId = new Map<string, string>();
 let imessageShortIdCounter = 0;
 
 function openReplyCacheStore(): IMessageReplyCacheStore {
@@ -102,7 +97,6 @@ function hydrateRows(entries: IMessageReplyCacheEntry[]): void {
     }
     imessageReplyCacheByMessageId.set(entry.messageId, entry);
     imessageShortIdToUuid.set(entry.shortId, entry.messageId);
-    imessageUuidToShortId.set(entry.messageId, entry.shortId);
   }
 }
 
@@ -219,12 +213,11 @@ export async function rememberIMessageReplyCache(
     return { ...entry, shortId: "" };
   }
 
-  let shortId = imessageUuidToShortId.get(messageId);
+  let shortId = imessageReplyCacheByMessageId.get(messageId)?.shortId;
   const isNewMessage = !shortId;
   if (!shortId) {
     shortId = generateShortId();
     imessageShortIdToUuid.set(shortId, messageId);
-    imessageUuidToShortId.set(messageId, shortId);
   }
 
   const fullEntry = buildReplyCacheEntry(entry, messageId, shortId);
@@ -241,7 +234,6 @@ export async function rememberIMessageReplyCache(
     deletedMessageIds.push(key);
     if (value.shortId) {
       imessageShortIdToUuid.delete(value.shortId);
-      imessageUuidToShortId.delete(key);
     }
   }
   while (imessageReplyCacheByMessageId.size > IMESSAGE_REPLY_CACHE_MAX_ENTRIES) {
@@ -254,7 +246,6 @@ export async function rememberIMessageReplyCache(
     deletedMessageIds.push(oldest);
     if (oldEntry?.shortId) {
       imessageShortIdToUuid.delete(oldEntry.shortId);
-      imessageUuidToShortId.delete(oldest);
     }
   }
 
@@ -413,10 +404,31 @@ export async function isKnownFromMeIMessageMessageId(
   }
   await hydrateFromStoreOnce();
   const cached = imessageReplyCacheByMessageId.get(trimmed);
-  if (!cached || cached.isFromMe !== true || cached.accountId !== ctx.accountId) {
+  if (!cached || cached.isFromMe !== true) {
     return false;
   }
-  return isPositiveIMessageChatMatch(cached, ctx);
+  return resolveCachedResourceBinding(trimmed, { ...ctx, accountId: ctx.accountId }) === "match";
+}
+
+export async function isKnownFromMeIMessageTarget(params: {
+  messageIds: string[];
+  accountId: string;
+  chatId?: number;
+  chatGuid?: string;
+  chatIdentifier?: string;
+  isKnownFromMeMessageId?: (
+    ...args: Parameters<typeof isKnownFromMeIMessageMessageId>
+  ) => boolean | Promise<boolean>;
+}): Promise<boolean> {
+  const { accountId, chatId, chatGuid, chatIdentifier } = params;
+  const ctx = { accountId, chatId, chatGuid, chatIdentifier };
+  const isKnownFromMe = params.isKnownFromMeMessageId ?? isKnownFromMeIMessageMessageId;
+  for (const messageId of params.messageIds) {
+    if (await isKnownFromMe(messageId, ctx)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function buildFromMeError(inputId: string, inputKind: "short" | "uuid"): Error {
@@ -463,7 +475,7 @@ export function findLatestIMessageEntryForChat(
     if (entry.timestamp < cutoff) {
       continue;
     }
-    if (!isPositiveIMessageChatMatch(entry, ctx)) {
+    if (resolveIMessageChatMatch(entry, ctx) !== "match") {
       continue;
     }
     if (!best || entry.timestamp > best.timestamp) {
@@ -495,11 +507,7 @@ function resolveCachedResourceBinding(
   if (entry.accountId !== ctx.accountId) {
     return "mismatch";
   }
-  const chatMatch = resolveIMessageChatMatch(entry, ctx);
-  if (chatMatch !== "match") {
-    return chatMatch;
-  }
-  return "match";
+  return resolveIMessageChatMatch(entry, ctx);
 }
 
 type CurrentMessageChatParams = {

@@ -4,9 +4,10 @@ enum ConnectionTab: CaseIterable, Hashable {
     case connection
     case gateways
     case debug
+    case about
 
     static func available(debugEnabled: Bool) -> [Self] {
-        debugEnabled ? [.connection, .gateways, .debug] : [.connection, .gateways]
+        debugEnabled ? [.connection, .gateways, .debug, .about] : [.connection, .gateways, .about]
     }
 }
 

@@ -6,6 +6,7 @@ import { withWorktreeAllocationLease } from "../agents/worktrees/allocation.js";
 import type { SqliteWorkerAdmissionFactory } from "../infra/sqlite-worker-operation-admission.js";
 import type { SqliteWorkerOperationSettlement } from "../infra/sqlite-worker-operation-settlement.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { OpenClawStateLeaseError } from "../state/openclaw-state-lease-error.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { selectStoredProjectRegistry } from "./project-registry.js";
 import type { ProjectRegistryRecord } from "./project-registry.kernel.js";
@@ -55,39 +56,26 @@ vi.mock("../state/openclaw-state-db-cache.js", () => ({
 vi.mock("../state/openclaw-state-db-async-lifecycle.js", () => ({
   getOpenClawDatabaseMaintenanceScope: () => undefined,
 }));
-vi.mock("../infra/state-database-coordinator.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../infra/state-database-coordinator.js")>();
-  return {
-    StateDatabaseCoordinatorContentionError: actual.StateDatabaseCoordinatorContentionError,
-    captureStateDatabaseCoordinatorRuntime: () => ({
-      directory: "/synthetic-coordinator",
-      keepAlive: false,
-    }),
-  };
-});
 vi.mock("../state/openclaw-state-lease-storage.js", () => ({
+  acquireLease: async () => ({ kind: "acquired", expiresAt: fixture.expiresAt }),
   prepareLeaseDatabase: fixture.forbiddenNative,
   resolveLeaseDatabasePath: () => path.resolve("/synthetic-state/lease.sqlite"),
-  readLeaseDatabase: (_database: unknown, run: () => unknown) => run(),
-  withLeaseWriteTransaction: (_database: unknown, _label: string, run: () => unknown) => run(),
-}));
-vi.mock("../state/openclaw-state-lease-store.js", () => ({
-  acquireOpenClawStateLeaseInTransaction: () => fixture.expiresAt,
-  readOpenClawStateLeaseExpiry: () =>
-    Date.now() < fixture.expiresAt ? fixture.expiresAt : undefined,
-  renewOpenClawStateLeaseInTransaction: () => {
+  verifyOpenClawStateLeaseOwnership: () => {
+    if (Date.now() >= fixture.expiresAt) {
+      throw new OpenClawStateLeaseError("Synthetic lease ownership expired", {
+        code: "OPENCLAW_STATE_LEASE_LOST",
+      });
+    }
+    return fixture.expiresAt;
+  },
+  renewOpenClawStateLease: () => {
     fixture.expiresAt = Date.now() + 30_000;
     return fixture.expiresAt;
   },
-  releaseOpenClawStateLeaseInTransaction: fixture.release,
-}));
-vi.mock("../state/openclaw-state-lease-exclusion.js", () => ({
-  createOpenClawStateLeaseExclusion: () => ({
-    canRelease: () => true,
-    assertIfExcluded: () => false,
-    runWithOwnerScope: (run: () => Promise<unknown>) => run(),
-    drain: async () => {},
-  }),
+  releaseOpenClawStateLeaseBestEffort: async () => {
+    fixture.release();
+  },
+  releaseOpenClawStateLease: fixture.release,
 }));
 vi.mock("../state/openclaw-state-lease-heartbeat.js", () => ({
   startOpenClawStateLeaseHeartbeat: fixture.forbiddenNative,

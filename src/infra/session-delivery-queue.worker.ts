@@ -1,5 +1,10 @@
 import { computeBackoff } from "../../packages/retry/src/index.js";
+import {
+  admitSubagentCompletionInWorker,
+  mutateSubagentCompletionInWorker,
+} from "../agents/subagents/completion/subagent-completion-admission.worker.js";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
+import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import {
   loadDeliveryQueueEntryInDatabase,
   upsertBoundDeliveryQueueEntryInDatabase,
@@ -19,6 +24,8 @@ import {
 } from "./session-delivery-queue.records.js";
 import type { SessionDeliveryWorkerOperations } from "./session-delivery-queue.worker-contract.js";
 import type { SqliteWorkerCommand } from "./sqlite-worker-contract.js";
+import { requestSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
+import { getSqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
 
 function readSessionDelivery(
   database: OpenClawStateDatabase,
@@ -47,20 +54,49 @@ export function executeSessionDeliveryCommand(
       // SAFETY: Only the session namespace reaches this payload transform.
       transform(entry as QueuedSessionDelivery),
     );
+  const finalize = (id: string, status: "completed" | "failed", transition: () => void) => {
+    try {
+      transition();
+    } catch (error) {
+      try {
+        if (readStatus(id) === status) {
+          return;
+        }
+      } catch {
+        // Preserve the transition failure when durable settlement cannot be established.
+      }
+      throw error;
+    }
+  };
 
   switch (command.type) {
+    case "sessionDelivery.mutateSubagentCompletion":
+      return mutateSubagentCompletionInWorker(command.input, database);
+    case "sessionDelivery.admitSubagentCompletion":
+      return admitSubagentCompletionInWorker(command.input, database);
     case "sessionDelivery.enqueue":
-      upsertBoundDeliveryQueueEntryInDatabase(command.input, database);
-      return;
     case "sessionDelivery.enqueueClaimed": {
-      const id = command.input.row.id;
-      const claimed = upsertBoundDeliveryQueueEntryInDatabase(command.input, database);
-      try {
-        return { id, claimed, status: claimed ? "pending" : (readStatus(id) ?? "completed") };
-      } catch {
-        // A failed status read cannot undo the ownership established by the insert conflict.
-        return { id, claimed, status: "unknown" };
-      }
+      return runOpenClawStateWriteTransaction(
+        () => {
+          requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+          const id = command.input.row.id;
+          const claimed = upsertBoundDeliveryQueueEntryInDatabase(command.input, database);
+          if (command.type === "sessionDelivery.enqueue") {
+            requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
+            return undefined;
+          }
+          let status: string;
+          try {
+            status = claimed ? "pending" : (readStatus(id) ?? "completed");
+          } catch {
+            status = "unknown";
+          }
+          requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
+          return { id, claimed, status };
+        },
+        { database, path: database.path, env: getSqliteWorkerStateContext().environment },
+        { operationLabel: command.type },
+      );
     }
     case "sessionDelivery.releaseClaim":
       update(command.input.id, (entry) => ({ ...entry, availableAt: Date.now() }));
@@ -124,7 +160,7 @@ export function executeSessionDeliveryCommand(
     }
     case "sessionDelivery.markSettlement": {
       const id = command.input.row.id;
-      try {
+      return finalize(id, "completed", () => {
         if (
           upsertBoundDeliveryQueueEntryInDatabase(command.input, database) ||
           readStatus(id) === "completed"
@@ -132,32 +168,13 @@ export function executeSessionDeliveryCommand(
           return;
         }
         throw new Error(`Session delivery ${id} is no longer pending`);
-      } catch (error) {
-        try {
-          if (readStatus(id) === "completed") {
-            return;
-          }
-        } catch {
-          // Preserve the original failure when completion cannot be established.
-        }
-        throw error;
-      }
+      });
     }
     case "sessionDelivery.complete": {
       const { id } = command.input;
-      try {
+      return finalize(id, "completed", () => {
         completeDeliveryQueueEntryInDatabase(database, SESSION_DELIVERY_QUEUE_NAME, id);
-      } catch (error) {
-        try {
-          if (readStatus(id) === "completed") {
-            return;
-          }
-        } catch {
-          // Preserve the original failure when completion cannot be established.
-        }
-        throw error;
-      }
-      return;
+      });
     }
     case "sessionDelivery.fail": {
       const { id, error, releaseAttemptOwnership } = command.input;
@@ -196,7 +213,7 @@ export function executeSessionDeliveryCommand(
     }
     case "sessionDelivery.moveToFailed": {
       const { id } = command.input;
-      try {
+      return finalize(id, "failed", () => {
         const entry = readSessionDelivery(database, id);
         if (!entry) {
           throw deliveryQueueEntryNotFoundError(SESSION_DELIVERY_QUEUE_NAME, id);
@@ -208,16 +225,7 @@ export function executeSessionDeliveryCommand(
         if (result.status !== "terminalized") {
           throw deliveryQueueEntryNotFoundError(SESSION_DELIVERY_QUEUE_NAME, id);
         }
-      } catch (error) {
-        try {
-          if (readStatus(id) === "failed") {
-            return;
-          }
-        } catch {
-          // Preserve the original transition failure when durable state is unreadable.
-        }
-        throw error;
-      }
+      });
     }
   }
 }

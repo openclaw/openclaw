@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
 import {
@@ -21,7 +22,7 @@ import {
   resolvePluginPackageEntries,
 } from "../plugins/discovery.js";
 import { INSTALLED_PLUGIN_INDEX_STATE_KEY } from "../plugins/installed-plugin-index-row.js";
-import { loadBundledPluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { loadBundledPluginManifestRegistry } from "../plugins/manifest-registry-build.js";
 import { resolvePackageExtensionEntries } from "../plugins/manifest.js";
 import { pluginCacheRealpathSync } from "../plugins/plugin-cache-files.js";
 import { inspectPluginSourceDependencies } from "../plugins/plugin-generation-source-inspection.js";
@@ -29,7 +30,6 @@ import type { ConfigMachineStateDatabase } from "../state/config-machine-state.j
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import { sha256Hex } from "./crypto-digest.js";
-import { sameFileIdentity } from "./fs-safe-advanced.js";
 import { resolveUserPath } from "./home-dir.js";
 import {
   executeSqliteQuerySync,
@@ -40,12 +40,14 @@ import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
 import { hasNodeErrorCode, isPathInside } from "./path-guards.js";
 import { resolveUpdateCandidatePluginPath } from "./update-candidate-paths.js";
+import type { UpdateCandidatePluginCodeLink } from "./update-candidate-plugin-code-links.js";
 import { resolveUpdateCandidatePluginSourceEntries } from "./update-candidate-plugin-sources.js";
+import { verifyUpdateCandidatePluginTree } from "./update-candidate-plugin-tree-links.js";
+import { UpdateCandidatePluginTreePlanSchema } from "./update-candidate-plugin-tree-schema.js";
 import {
   assertUpdateCandidatePluginCopySource,
   copyUpdateCandidatePluginTrees,
   prepareUpdateCandidatePluginTrees,
-  UpdateCandidatePluginTreePlanSchema,
 } from "./update-candidate-plugin-tree.js";
 import { relocateRuntimePath } from "./update-runtime-relocation.js";
 
@@ -205,6 +207,15 @@ function installRecordsHash(records: Record<string, PluginInstallRecord>): strin
   return sha256Hex(serializePluginInstallRecordMap(records));
 }
 
+async function statPluginLocator(source: string) {
+  return fs.stat(source, { bigint: true }).catch((error: unknown) => {
+    if (hasNodeErrorCode(error, "ENOENT")) {
+      return undefined;
+    }
+    throw error;
+  });
+}
+
 async function readCopiedPluginIndex(shared: string): Promise<
   | {
       value: Record<string, unknown>;
@@ -212,44 +223,42 @@ async function readCopiedPluginIndex(shared: string): Promise<
     }
   | undefined
 > {
-  if (
-    await fs.stat(shared).then(
-      () => true,
-      (error: unknown) => {
-        if (hasNodeErrorCode(error, "ENOENT")) {
-          return false;
-        }
-        throw error;
-      },
-    )
-  ) {
-    const db = openNodeSqliteDatabase(shared, { readOnly: true });
-    try {
-      if (tableExists(db, "config_machine_state")) {
-        const row = executeSqliteQueryTakeFirstSync(
-          db,
-          getNodeSqliteKysely<ConfigMachineStateDatabase>(db)
-            .selectFrom("config_machine_state")
-            .select("value_json")
-            .where("state_key", "=", INSTALLED_PLUGIN_INDEX_STATE_KEY),
-        );
-        if (row) {
-          const parsed: unknown = JSON.parse(row.value_json);
-          if (!isRecord(parsed) || !isRecord(parsed.index)) {
-            throw new Error("Invalid copied plugin index");
-          }
-          const installed = parsePluginInstallRecordMap(parsed.index.installRecords);
-          if (!installed) {
-            throw new Error("Invalid copied plugin install records");
-          }
-          return { value: parsed, records: installed };
-        }
-      }
-    } finally {
-      db.close();
+  const stat = await fs.stat(shared).catch((error: unknown) => {
+    if (hasNodeErrorCode(error, "ENOENT")) {
+      return undefined;
     }
+    throw error;
+  });
+  if (!stat) {
+    return undefined;
   }
-  return undefined;
+  const db = openNodeSqliteDatabase(shared, { readOnly: true });
+  try {
+    if (!tableExists(db, "config_machine_state")) {
+      return undefined;
+    }
+    const row = executeSqliteQueryTakeFirstSync(
+      db,
+      getNodeSqliteKysely<ConfigMachineStateDatabase>(db)
+        .selectFrom("config_machine_state")
+        .select("value_json")
+        .where("state_key", "=", INSTALLED_PLUGIN_INDEX_STATE_KEY),
+    );
+    if (!row) {
+      return undefined;
+    }
+    const parsed: unknown = JSON.parse(row.value_json);
+    if (!isRecord(parsed) || !isRecord(parsed.index)) {
+      throw new Error("Invalid copied plugin index");
+    }
+    const installed = parsePluginInstallRecordMap(parsed.index.installRecords);
+    if (!installed) {
+      throw new Error("Invalid copied plugin install records");
+    }
+    return { value: parsed, records: installed };
+  } finally {
+    db.close();
+  }
 }
 
 /** Inventory reads only private SQLite state and freezes the complete plugin projection. */
@@ -305,12 +314,7 @@ export async function prepareUpdateCandidatePlugins(
       : new Map<string, string>();
   const pluginPaths: Record<string, string> = {};
   for (const source of sources) {
-    const stat = await fs.stat(source, { bigint: true }).catch((error: unknown) => {
-      if (hasNodeErrorCode(error, "ENOENT")) {
-        return undefined;
-      }
-      throw error;
-    });
+    const stat = await statPluginLocator(source);
     if (!stat) {
       // Keep a missing locator private and missing; candidate validation owns the failure.
       pluginPaths[source] = project(source);
@@ -418,7 +422,9 @@ export async function prepareUpdateCandidatePlugins(
 /** Rebind admitted paths only; newer records or locator owners require a fresh inventory. */
 export async function copyUpdateCandidatePlugins(
   plan: UpdateCandidatePluginPlan,
-  params: UpdateCandidatePluginProjectionParams,
+  params: UpdateCandidatePluginProjectionParams & {
+    onCodeLink?: (fact: UpdateCandidatePluginCodeLink) => void;
+  },
 ): Promise<Record<string, string>> {
   const targetStateDir = resolvePathViaExistingAncestorSync(path.resolve(params.targetStateDir));
   if (plan.stateDir !== path.resolve(params.stateDir)) {
@@ -437,12 +443,7 @@ export async function copyUpdateCandidatePlugins(
   }
   const assertBindings = async () => {
     for (const binding of plan.bindings) {
-      const stat = await fs.stat(binding.source, { bigint: true }).catch((error: unknown) => {
-        if (hasNodeErrorCode(error, "ENOENT")) {
-          return undefined;
-        }
-        throw error;
-      });
+      const stat = await statPluginLocator(binding.source);
       const real = stat ? await fs.realpath(binding.source) : null;
       if (
         real !== binding.real ||
@@ -465,12 +466,7 @@ export async function copyUpdateCandidatePlugins(
     const target = rebase(entry.target);
     // Preserve the entry basename/ID while imports use the canonical copied owner.
     const [existing, targetIdentity] = await Promise.all([
-      fs.stat(alias, { bigint: true }).catch((error: unknown) => {
-        if (hasNodeErrorCode(error, "ENOENT")) {
-          return undefined;
-        }
-        throw error;
-      }),
+      statPluginLocator(alias),
       fs.stat(target, { bigint: true }),
     ]);
     // A case-equivalent name can already be this file; unlinking it destroys the target.
@@ -482,6 +478,14 @@ export async function copyUpdateCandidatePlugins(
         alias,
         entry.file ? "file" : process.platform === "win32" ? "junction" : "dir",
       );
+    }
+    if ((await fs.lstat(alias)).isSymbolicLink()) {
+      await verifyUpdateCandidatePluginTree(alias, {
+        privateRoot: targetStateDir,
+        candidateRoot: plan.trees.candidateRoot,
+        hostLinks: new Set(),
+        onCodeLink: params.onCodeLink,
+      });
     }
   }
   if (copied) {

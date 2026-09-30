@@ -13,6 +13,7 @@ import { sha256Base64Url } from "../infra/crypto-digest.js";
 import { prepareMediaCapabilityProviders } from "../plugins/capability-provider-runtime.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { getPluginMetadataSnapshotCache, retainPluginCache } from "../plugins/plugin-cache.js";
+import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
 import {
   getPreparedMessageToolCatalog,
   getPreparedMessageToolCatalogForRegistry,
@@ -64,7 +65,10 @@ import {
   type PreparedInboundRegistryLoader,
 } from "./prepared-model-runtime.inbound-registry.js";
 import { hasSameOAuthProviderGeneration } from "./prepared-model-runtime.oauth-providers.js";
-import { prepareOwnedPluginLoadContext } from "./prepared-model-runtime.plugin-context.js";
+import {
+  prepareOwnedPluginLoadContext,
+  prepareOwnedPluginMetadataSnapshotParams,
+} from "./prepared-model-runtime.plugin-context.js";
 import { createPreparedPluginGeneration } from "./prepared-model-runtime.plugin-generation.js";
 import {
   discardPreparedPluginGeneration,
@@ -156,10 +160,20 @@ export async function prepareWorkspaceBuildGroup(
     );
   reportStage("workspace plugins");
   const pluginMetadataStartedAt = performance.now();
-  const pluginMetadataSnapshot =
-    preparedPluginMetadataSnapshot ??
-    reusablePluginGeneration?.pluginMetadataSnapshot ??
-    prepareOwnedPluginLoadContext(input, env, undefined);
+  let selectedMetadataSnapshot =
+    preparedPluginMetadataSnapshot ?? reusablePluginGeneration?.pluginMetadataSnapshot;
+  if (!selectedMetadataSnapshot) {
+    for (const candidate of inputs) {
+      options.assertCurrent?.(candidate);
+    }
+    selectedMetadataSnapshot = await resolvePluginMetadataSnapshotAsync(
+      prepareOwnedPluginMetadataSnapshotParams(input, env),
+    );
+    for (const candidate of inputs) {
+      options.assertCurrent?.(candidate);
+    }
+  }
+  const pluginMetadataSnapshot = selectedMetadataSnapshot;
   // Raw preparation owns its facts across awaited auth/catalog work. Successful
   // generations acquire their independent borrow before this build scope releases it.
   using _ = {
@@ -262,7 +276,11 @@ export async function prepareWorkspaceBuildGroup(
       options.assertCurrent?.(candidate);
       const { config, agentId } = candidate;
       for (const provider of withAgentRosterFactsBatch(config, () => {
-        const refs = collectPreparedModelRuntimeConfiguredRefs(config, agentId);
+        const refs = collectPreparedModelRuntimeConfiguredRefs(
+          config,
+          agentId,
+          candidate.readOnly ? candidate.runtimePluginSelections : undefined,
+        );
         configuredModelRefs.push(...refs);
         return [
           ...collectPreparedModelRuntimeProviderIds(config, {}, false, refs, agentId),
@@ -288,7 +306,7 @@ export async function prepareWorkspaceBuildGroup(
     ].toSorted((left, right) => left.localeCompare(right));
     const staticProviderCatalogStartedAt = performance.now();
     reportStage("static provider catalog");
-    let preparedStaticProviderCatalog = reusablePluginGeneration
+    let preparedStaticProviderCatalog = reuseRuntimeFacts
       ? reusablePluginGeneration.preparedStaticProviderCatalog
       : catalogMode === "static"
         ? await prepareImplicitProviderStaticCatalog({
@@ -323,7 +341,7 @@ export async function prepareWorkspaceBuildGroup(
         ]),
       });
     }
-    const staticProviderCatalogMs = reusablePluginGeneration
+    const staticProviderCatalogMs = reuseRuntimeFacts
       ? 0
       : performance.now() - staticProviderCatalogStartedAt;
     const preparedSyntheticAuthProviders = preparedStaticProviderCatalog?.providers ?? [];
@@ -375,14 +393,13 @@ export async function prepareWorkspaceBuildGroup(
       options.assertCurrent?.(candidate);
       options.onBeforeAuthCapture?.(candidate);
       agentBaseFacts.push(
-        withAgentRosterFactsBatch(candidate.config, () =>
-          prepareAgentFacts(
-            candidate,
-            catalogMode,
-            ambientCredentials,
-            options.providerDiscoveryProviderIds,
-            options.includeCredentialProviders,
-          ),
+        await prepareAgentFacts(
+          candidate,
+          catalogMode,
+          ambientCredentials,
+          () => options.assertCurrent?.(candidate),
+          options.providerDiscoveryProviderIds,
+          options.includeCredentialProviders,
         ),
       );
     }

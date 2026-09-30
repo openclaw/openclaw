@@ -18,7 +18,9 @@ const DOCKER_E2E_CHUNKS = [
   {
     chunk_id: "package-update-openai",
     label: "package/update OpenAI and recovery",
-    timeout_minutes: 45,
+    // Five weight-3 npm lanes serialize at limit 5: 30m + 30m + 20m + 25m + 43m.
+    // The 10m chat lane overlaps; add 10m for setup/artifacts => 158m, round to 160m.
+    timeout_minutes: 160,
     profiles: "beta minimum stable full",
   },
   {
@@ -36,8 +38,14 @@ const DOCKER_E2E_CHUNKS = [
   {
     chunk_id: "package-update-self-upgrade",
     label: "package/update self-upgrade",
-    timeout_minutes: 60,
-    profiles: "beta minimum stable full",
+    // Six 3500s first-hop lanes need two waves at npm weight limit 5; the 20m
+    // survivor (weight 3) overlaps. 2 x 3500s + 10m setup/artifacts ~= 127m => 130m.
+    timeout_minutes: 130,
+    // Dropped from stable for 2026.9.7 by the release lead under Peter's 2026-09-29
+    // decision: six-way first-hop contention in one job fails deterministically
+    // (jobs 109446149023, 109482109194) while every lane in it passes as a separate
+    // targeted lane. Restore "stable" with the waves change (5aed4315) and #161257.
+    profiles: "beta minimum full",
   },
   {
     chunk_id: "plugins-runtime-plugins",
@@ -179,12 +187,11 @@ const LIVE_DOCKER_SUITES = [
   {
     suite_id: "live-gateway-anthropic-docker-full",
     suite_group: "live-gateway-anthropic-docker",
-    label: "Docker live gateway Anthropic (full advisory)",
+    label: "Docker live gateway Anthropic (full)",
     command:
       'OPENCLAW_LIVE_GATEWAY_THINKING=low OPENCLAW_LIVE_GATEWAY_PROVIDERS=anthropic OPENCLAW_LIVE_GATEWAY_MODELS=anthropic/claude-sonnet-4-6,anthropic/claude-haiku-4-5 OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=90000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=600000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-gateway-models-docker.sh',
     timeout_minutes: 40,
     profile_env_only: false,
-    advisory: true,
     profiles: "full",
   },
   {
@@ -203,39 +210,39 @@ const LIVE_DOCKER_SUITES = [
       'OPENCLAW_LIVE_GATEWAY_PROVIDERS=minimax,minimax-portal OPENCLAW_LIVE_GATEWAY_MODELS=minimax/MiniMax-M3,minimax-portal/MiniMax-M3 OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=90000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=180000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-gateway-models-docker.sh',
     timeout_minutes: 40,
     profile_env_only: false,
-    profiles: "stable full",
+    // Waived from stable for 2026.9.7: MiniMax-M3 intermittently misses the Code Mode
+    // tool-read probe (model behavior, not a tool-result regression). Evidence: FRV
+    // 36534008742, job 109300784027. Restore "stable full" when #161072 is fixed.
+    profiles: "full",
   },
   {
     suite_id: "live-gateway-advisory-docker-deepseek-fireworks",
     suite_group: "live-gateway-advisory-docker",
-    label: "Docker live gateway advisory DeepSeek/Fireworks",
+    label: "Docker live gateway DeepSeek/Fireworks",
     command:
       'OPENCLAW_LIVE_GATEWAY_PROVIDERS=deepseek,fireworks OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=90000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=180000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-gateway-models-docker.sh',
     timeout_minutes: 40,
     profile_env_only: false,
-    advisory: true,
     profiles: "full",
   },
   {
     suite_id: "live-gateway-advisory-docker-opencode-openrouter",
     suite_group: "live-gateway-advisory-docker",
-    label: "Docker live gateway advisory OpenCode/OpenRouter",
+    label: "Docker live gateway OpenCode/OpenRouter",
     command:
       'OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go,openrouter OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=90000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=180000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-gateway-models-docker.sh',
     timeout_minutes: 40,
     profile_env_only: false,
-    advisory: true,
     profiles: "full",
   },
   {
     suite_id: "live-gateway-advisory-docker-xai-zai",
     suite_group: "live-gateway-advisory-docker",
-    label: "Docker live gateway advisory xAI/Z.ai",
+    label: "Docker live gateway xAI/Z.ai",
     command:
       'OPENCLAW_LIVE_GATEWAY_PROVIDERS=xai,zai OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=90000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=180000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-gateway-models-docker.sh',
     timeout_minutes: 40,
     profile_env_only: false,
-    advisory: true,
     profiles: "full",
   },
   {

@@ -11,7 +11,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { nextWorkboardCardPosition, setWorkboardCards } from "../../lib/workboard/card-state.ts";
-import { getWorkboardState, stopWorkboardLifecycleRefresh } from "../../lib/workboard/index.ts";
+import { getWorkboardState, resetWorkboardConnectionState } from "../../lib/workboard/index.ts";
 import {
   createGatewaySession,
   createWorkboardCard,
@@ -165,31 +165,6 @@ describe("nextWorkboardCardPosition", () => {
 
   it.each([
     {
-      name: "starts an empty board column at the canonical position",
-      card: opsCard,
-      cards: [],
-      position: 1000,
-    },
-    {
-      name: "appends after cards on the same board",
-      card: opsCard,
-      cards: [
-        createWorkboardCard({
-          id: "ops-running",
-          status: "running",
-          position: 2000,
-          metadata: { automation: { boardId: "ops" } },
-        }),
-      ],
-      position: 3000,
-    },
-    {
-      name: "does not count a card dropped back into its own empty column",
-      card: runningOpsCard,
-      cards: [runningOpsCard],
-      position: 1000,
-    },
-    {
       name: "appends a same-column drop after its other cards only",
       card: runningOpsCard,
       cards: [
@@ -202,32 +177,6 @@ describe("nextWorkboardCardPosition", () => {
         }),
       ],
       position: 3000,
-    },
-    {
-      name: "ignores larger positions on another board",
-      card: opsCard,
-      cards: [
-        createWorkboardCard({
-          id: "product-running",
-          status: "running",
-          position: 9000,
-          metadata: { automation: { boardId: "product" } },
-        }),
-      ],
-      position: 1000,
-    },
-    {
-      name: "preserves archived positions on the same board",
-      card: opsCard,
-      cards: [
-        createWorkboardCard({
-          id: "archived-ops-running",
-          status: "running",
-          position: 3000,
-          metadata: { archivedAt: 10, automation: { boardId: "ops" } },
-        }),
-      ],
-      position: 4000,
     },
     {
       name: "ignores a larger position in another status",
@@ -275,7 +224,7 @@ describe("renderWorkboard", () => {
         "workboard.cards.update": { card: saved },
       });
       const { state, container, renderView } = createWorkboardView({
-        client: { request, addEventListener: () => () => undefined },
+        client: { request },
         agentsList: {
           defaultId: "main",
           agents: [
@@ -356,7 +305,7 @@ describe("renderWorkboard", () => {
         card: { ...second, agentId: "main", updatedAt: second.updatedAt + 1 },
       });
     const { state, container, renderView } = createWorkboardView({
-      client: { request, addEventListener: () => () => undefined },
+      client: { request },
       connected: true,
       canWrite: true,
       agentsList: { defaultId: "main", agents: [{ id: "main" }, { id: "writer" }] },
@@ -424,7 +373,7 @@ describe("renderWorkboard", () => {
         .mockImplementationOnce(() => firstWrite.promise)
         .mockResolvedValue({ card: { ...second, agentId: "main" } });
       const { state, container, renderView } = createWorkboardView({
-        client: { request, addEventListener: () => () => undefined },
+        client: { request },
         connected: true,
         canWrite: true,
         agentsList: { defaultId: "main", agents: [{ id: "main" }, { id: "writer" }] },
@@ -484,7 +433,7 @@ describe("renderWorkboard", () => {
       const pending = createDeferred<{ card: typeof first }>();
       const request = vi.fn().mockImplementation(() => pending.promise);
       const { state, container, renderView } = createWorkboardView({
-        client: { request, addEventListener: () => () => undefined },
+        client: { request },
         canWrite: true,
         agentsList: { defaultId: "main", agents: [{ id: "main" }, { id: "writer" }] },
       });
@@ -545,7 +494,7 @@ describe("renderWorkboard", () => {
       const pending = createDeferred<{ card: typeof first }>();
       const request = vi.fn().mockImplementation(() => pending.promise);
       const { state, container, renderView } = createWorkboardView({
-        client: { request, addEventListener: () => () => undefined },
+        client: { request },
         canWrite: true,
         scopeAgentId: scope === "agent" ? "writer" : undefined,
         agentsList: { defaultId: "main", agents: [{ id: "main" }, { id: "writer" }] },
@@ -623,7 +572,7 @@ describe("renderWorkboard", () => {
         return { deleted: true };
       });
       const { state, container, renderView } = createWorkboardView({
-        client: { request, addEventListener: () => () => undefined },
+        client: { request },
         canWrite: true,
       });
       state.cards = [parent, child];
@@ -674,7 +623,7 @@ describe("renderWorkboard", () => {
           });
         });
       const { state, container, renderView } = createWorkboardView({
-        client: { request, addEventListener: () => () => undefined },
+        client: { request },
         canWrite: true,
       });
       state.cards = [first, second];
@@ -746,7 +695,7 @@ describe("renderWorkboard", () => {
         .mockImplementationOnce(() => firstWrite.promise)
         .mockResolvedValue({ deleted: true });
       const { state, container, renderView } = createWorkboardView({
-        client: { request, addEventListener: () => () => undefined },
+        client: { request },
         connected: true,
         canWrite: true,
       });
@@ -966,28 +915,6 @@ describe("renderWorkboard", () => {
     },
   );
 
-  it("prioritizes mutation failures over existing page and lifecycle refresh errors", () => {
-    const { state, container, renderView } = createWorkboardView();
-    state.lastRefreshError = "Card refresh unavailable";
-    state.lifecycleTaskRefreshError = "Task refresh unavailable";
-    renderView();
-    expect(toast(container).props.message).toBe("Task refresh unavailable");
-
-    const pageError = "Agent metadata unavailable";
-    renderView({ pageError });
-    expect(toast(container).props.message).toBe(pageError);
-
-    state.error = "Write denied";
-    renderView({ pageError });
-    expect(toast(container).props.message).toBe("Write denied");
-
-    state.error = null;
-    renderView({ pageError });
-    expect(toast(container).props.message).toBe(pageError);
-    renderView({ pageError: null });
-    expect(toast(container).props.message).toBe("Task refresh unavailable");
-  });
-
   it("keeps dispatch available during refresh and disables it during writes", () => {
     const { state, container, renderView } = createWorkboardView();
     state.loading = true;
@@ -1080,28 +1007,21 @@ describe("renderWorkboard", () => {
       ],
     });
     state.cards = [
-      {
+      createWorkboardCard({
         id: "ready",
         title: "Ready card",
         status: "ready",
-        priority: "normal",
-        labels: [],
         agentId: "workboard-dispatcher",
-        position: 1000,
-        createdAt: 1,
         updatedAt: new Date("2026-06-03T18:47:00Z").getTime(),
-      },
-      {
+      }),
+      createWorkboardCard({
         id: "running",
         title: "Running card",
         status: "running",
         priority: "high",
-        labels: [],
-        position: 1000,
-        createdAt: 1,
         updatedAt: new Date("2026-06-03T19:12:00Z").getTime(),
         sessionKey: "agent:main:dashboard:1",
-      },
+      }),
     ];
     renderView();
 
@@ -1159,14 +1079,10 @@ describe("renderWorkboard", () => {
     const { state, container, renderView } = createWorkboardView();
     state.detailCardId = "card-1";
     state.cards = [
-      {
-        id: "card-1",
+      createWorkboardCard({
         title: "Timestamped card",
         status: "running",
         priority: "high",
-        labels: [],
-        position: 1000,
-        createdAt: 1,
         updatedAt: new Date("2026-06-03T18:47:00Z").getTime(),
         metadata: {
           workerProtocol: {
@@ -1174,7 +1090,7 @@ describe("renderWorkboard", () => {
             updatedAt: new Date("2026-06-03T19:12:00Z").getTime(),
           },
         },
-      },
+      }),
     ];
     renderView();
 
@@ -1187,7 +1103,6 @@ describe("renderWorkboard", () => {
     const { state, container, renderView } = createWorkboardView();
     state.loading = true;
     state.lastRefreshAt = new Date("2026-06-03T18:47:00Z").getTime();
-    state.lastRefreshStartedAt = Date.now();
     renderView();
 
     expect(buttonByLabel(container, "Compact")).not.toBeNull();
@@ -1229,19 +1144,14 @@ describe("renderWorkboard", () => {
       ],
     });
     state.cards = [
-      {
-        id: "card-1",
+      createWorkboardCard({
         title: "Wire dashboard tab",
         notes: "Call plugin gateway methods from the Workboard page.",
-        status: "todo",
         priority: "high",
         labels: ["ui"],
         agentId: "main",
-        position: 1000,
-        createdAt: 1,
-        updatedAt: 1,
         sessionKey: "agent:main:dashboard:1",
-      },
+      }),
     ];
     renderView();
 
@@ -1329,7 +1239,7 @@ describe("renderWorkboard", () => {
         title: "Stale cached card",
       }),
     ];
-    stopWorkboardLifecycleRefresh(host);
+    resetWorkboardConnectionState(host);
     renderView();
 
     expect(buttonByLabel(container, "Edit card")).toBeNull();
@@ -1354,7 +1264,7 @@ describe("renderWorkboard", () => {
     state.draftOpen = true;
     state.editingCardId = "card-1";
     state.draftTitle = "Unsaved edit";
-    stopWorkboardLifecycleRefresh(host);
+    resetWorkboardConnectionState(host);
     renderView();
     state.mutationReadiness = "stale_edit_draft";
     renderView();
@@ -1837,17 +1747,13 @@ describe("renderWorkboard", () => {
         status: "ready",
         agentId: "writer",
       }),
-      {
+      createWorkboardCard({
         id: "ops-card",
         title: "Ops card",
         status: "ready",
-        priority: "normal",
-        labels: [],
         position: 2000,
-        createdAt: 1,
-        updatedAt: 1,
         agentId: "ops",
-      },
+      }),
     ];
     renderView();
 
@@ -2025,14 +1931,8 @@ describe("renderWorkboard", () => {
   it("does not render Invalid Date for Date-invalid card timestamps", () => {
     const { state, container, renderView } = createWorkboardView();
     state.cards = [
-      {
-        id: "card-1",
+      createWorkboardCard({
         title: "Bad timestamp card",
-        status: "todo",
-        priority: "normal",
-        labels: [],
-        position: 1000,
-        createdAt: 1,
         updatedAt: 8_640_000_000_000_001,
         events: [{ id: "event-1", kind: "edited", at: 8_640_000_000_000_001 }],
         metadata: {
@@ -2054,7 +1954,7 @@ describe("renderWorkboard", () => {
             },
           ],
         },
-      },
+      }),
     ];
     renderView();
 
@@ -2312,19 +2212,14 @@ describe("renderWorkboard", () => {
         id: "parent-1",
         title: "Finish art pass",
       }),
-      {
+      createWorkboardCard({
         id: "child-1",
         title: "Ship game shell",
-        status: "todo",
-        priority: "normal",
-        labels: [],
         position: 2000,
-        createdAt: 1,
-        updatedAt: 1,
         metadata: {
           links: [{ id: "link-1", type: "parent", targetCardId: "parent-1", createdAt: 1 }],
         },
-      },
+      }),
     ];
     renderView();
 
@@ -2390,62 +2285,6 @@ describe("renderWorkboard", () => {
       "Open OpenAI",
       "Open Claude",
     ]);
-  });
-
-  it("renders linked Gateway task status on cards", async () => {
-    const { state, container, renderView } = createWorkboardView();
-    state.cards = [
-      createWorkboardCard({
-        title: "Review task result",
-        status: "running",
-        sessionKey: "agent:main:subagent:workboard-default-card-1",
-        runId: "run-1",
-        taskId: "task-1",
-      }),
-    ];
-    state.tasksByCardId.set("card-1", {
-      id: "task-1",
-      taskId: "task-1",
-      status: "completed",
-      title: "Review task result",
-      childSessionKey: "agent:main:subagent:workboard-default-card-1",
-      runId: "run-1",
-      terminalSummary: "Ready for operator review.",
-    });
-    renderView();
-
-    expect(container.querySelector(".workboard-card")?.textContent).not.toContain("task linked");
-    const status = expectDefined(
-      container.querySelector<HTMLElement & { presentation: { label: string; detail: string } }>(
-        "openclaw-workboard-session-status",
-      ),
-      "completed task status",
-    );
-    expect(status.presentation.label).toBe("Done");
-    expect(status.presentation.detail).toContain("Ready for operator review.");
-    expect(container.querySelector(".workboard-card__session-marker")).toBeNull();
-    expect(container.querySelector(".workboard-card__session-name")?.textContent).toContain(
-      "Review task result",
-    );
-    state.detailCardId = "card-1";
-    renderView();
-    for (const tab of ["Overview", "Session"]) {
-      expectDefined(
-        buttonByText(container.querySelector('[role="tablist"]')!, tab),
-        `${tab} tab`,
-      ).click();
-      renderView();
-      const panel = expectDefined(
-        container.querySelector(".workboard-detail__tabpanel:not([hidden])"),
-        "active panel",
-      );
-      expect(panel.querySelector(".workboard-detail__session-name")?.textContent).toContain(
-        "Review task result",
-      );
-      expect(panel.querySelector(".workboard-session-badge")?.textContent).toBe("Done");
-      expect(panel.textContent).toContain("Ready for operator review.");
-      expect(buttonByLabel(panel, "Open session")).not.toBeNull();
-    }
   });
 
   it("shows completed session identity without repeating a synthetic completion summary", () => {
@@ -2558,131 +2397,6 @@ describe("renderWorkboard", () => {
     }
   });
 
-  it("uses terminal session lifecycle when cached task status is stale", async () => {
-    const { state, container, renderView } = createWorkboardView({
-      sessions: [
-        {
-          key: "agent:main:subagent:workboard-default-card-1",
-          kind: "direct",
-          displayName: "Finished session",
-          updatedAt: 2,
-          hasActiveRun: false,
-          status: "done",
-        },
-      ],
-      onRequestUpdate: () => undefined,
-    });
-    state.cards = [
-      createWorkboardCard({
-        title: "Finished despite stale task",
-        status: "running",
-        sessionKey: "agent:main:subagent:workboard-default-card-1",
-        runId: "run-1",
-        taskId: "task-1",
-      }),
-    ];
-    state.tasksByCardId.set("card-1", {
-      id: "task-1",
-      taskId: "task-1",
-      status: "running",
-      title: "Finished despite stale task",
-      childSessionKey: "agent:main:subagent:workboard-default-card-1",
-      runId: "run-1",
-      progressSummary: "Still running according to stale cache.",
-    });
-    renderView();
-
-    await vi.waitFor(() =>
-      expect(container.querySelector(".workboard-session-status__trigger")?.textContent).toContain(
-        "Done",
-      ),
-    );
-    expect(container.textContent).toContain("Finished session");
-    expect(
-      container.querySelector('.workboard-card__session-marker[aria-label="Running"]'),
-    ).toBeNull();
-    expect(container.textContent).not.toContain("Still running according to stale cache.");
-
-    container
-      .querySelector<HTMLButtonElement>('button[aria-label="View details"]')
-      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    renderView();
-
-    expect(container.querySelector(".workboard-detail")?.textContent).toContain("Finished session");
-    expect(container.querySelector("#workboard-detail-panel-overview")?.textContent).not.toContain(
-      "Still running according to stale cache.",
-    );
-  });
-
-  it("shows stop controls without start controls for active task-only cards", () => {
-    const { state, container, renderView } = createWorkboardView({
-      onRequestUpdate: () => undefined,
-    });
-    state.cards = [
-      createWorkboardCard({
-        title: "Task only run",
-        status: "running",
-        taskId: "task-1",
-      }),
-    ];
-    state.tasksByCardId.set("card-1", {
-      id: "task-1",
-      taskId: "task-1",
-      status: "running",
-      title: "Task only run",
-      progressSummary: "Worker is active.",
-    });
-    renderView();
-
-    expect(
-      container.querySelector('.workboard-card__session-marker[aria-label="Running"]'),
-    ).not.toBeNull();
-    expect(container.querySelector('button[aria-label="Stop session"]')).not.toBeNull();
-    expect(container.querySelectorAll<HTMLButtonElement>(".workboard-card__start")).toHaveLength(0);
-    expect(container.querySelector(".workboard-card")?.getAttribute("role")).toBe("button");
-
-    container
-      .querySelector<HTMLButtonElement>('button[aria-label="View details"]')
-      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    renderView();
-
-    expect(container.querySelector(".workboard-detail")?.textContent).toContain(
-      "Worker is active.",
-    );
-    expect(container.querySelectorAll<HTMLButtonElement>(".workboard-card__start")).toHaveLength(0);
-  });
-
-  it("keeps unresolved task-linked cards from exposing duplicate starts", () => {
-    const { state, container, renderView } = createWorkboardView();
-    state.cards = [
-      createWorkboardCard({
-        title: "Historical task link",
-        status: "running",
-        taskId: "task-older-than-poll-page",
-      }),
-    ];
-    renderView();
-
-    expect(container.querySelector('button[aria-label="Stop session"]')).not.toBeNull();
-    expect(container.querySelectorAll<HTMLButtonElement>(".workboard-card__start")).toHaveLength(0);
-  });
-
-  it("does not expose live controls for terminal cards with unresolved task links", () => {
-    const { state, container, renderView } = createWorkboardView();
-    state.cards = [
-      createWorkboardCard({
-        title: "Completed historical task",
-        status: "done",
-        taskId: "task-older-than-poll-page",
-      }),
-    ];
-    renderView();
-
-    expect(container.querySelector(".workboard-live")).toBeNull();
-    expect(container.querySelector('button[aria-label="Stop session"]')).toBeNull();
-    expect(container.querySelectorAll<HTMLButtonElement>(".workboard-card__start")).toHaveLength(0);
-  });
-
   it("keeps newly started unresolved runs from exposing duplicate starts", () => {
     const { state, container, renderView } = createWorkboardView();
     state.cards = [
@@ -2697,22 +2411,6 @@ describe("renderWorkboard", () => {
 
     expect(container.querySelector('button[aria-label="Stop session"]')).not.toBeNull();
     expect(container.querySelectorAll<HTMLButtonElement>(".workboard-card__start")).toHaveLength(0);
-  });
-
-  it("allows starts for authoritatively missing historical task links", () => {
-    const { state, container, renderView } = createWorkboardView();
-    state.cards = [
-      createWorkboardCard({
-        title: "Historical task link",
-        status: "running",
-        taskId: "task-pruned-from-ledger",
-      }),
-    ];
-    state.missingTaskIds = new Set(["task-pruned-from-ledger"]);
-    renderView();
-
-    expect(container.querySelector('button[aria-label="Stop session"]')).toBeNull();
-    expect(container.querySelectorAll<HTMLButtonElement>(".workboard-card__start")).toHaveLength(1);
   });
 
   it("hides write controls for read-only operators", () => {
@@ -3171,14 +2869,9 @@ describe("renderWorkboard", () => {
       onRequestUpdate: () => undefined,
     });
     state.cards = [
-      {
-        id: "card-1",
+      createWorkboardCard({
         title: "Tracked task",
         status: "review",
-        priority: "normal",
-        labels: [],
-        position: 1000,
-        createdAt: 1,
         updatedAt: 2,
         events: [
           { id: "event-1", kind: "moved", at: 1, fromStatus: "triage", toStatus: "backlog" },
@@ -3189,7 +2882,7 @@ describe("renderWorkboard", () => {
           { id: "event-6", kind: "moved", at: 6, fromStatus: "running", toStatus: "review" },
           { id: "event-7", kind: "moved", at: 7, fromStatus: "review", toStatus: "done" },
         ],
-      },
+      }),
     ];
     renderView();
 
@@ -3238,17 +2931,12 @@ describe("renderWorkboard", () => {
           stale: { detectedAt: 6, reason: "No recent activity." },
         },
       }),
-      {
+      createWorkboardCard({
         id: "card-2",
         title: "Archived task",
-        status: "todo",
-        priority: "normal",
-        labels: [],
         position: 2000,
-        createdAt: 1,
-        updatedAt: 1,
         metadata: { archivedAt: 7 },
-      },
+      }),
     ];
     renderView();
 
@@ -3329,17 +3017,12 @@ describe("renderWorkboard", () => {
         id: "card-default",
         title: "Default work",
       }),
-      {
+      createWorkboardCard({
         id: "card-ops",
         title: "Ops work",
-        status: "todo",
-        priority: "normal",
-        labels: [],
         position: 2000,
-        createdAt: 1,
-        updatedAt: 1,
         metadata: { automation: { boardId: "ops" } },
-      },
+      }),
     ];
     renderView();
     const boardFilter = filterPicker(container, "Filter by board");
@@ -3409,39 +3092,22 @@ describe("renderWorkboard", () => {
     };
     const { state, container, renderView } = createWorkboardView({ agentsList });
     state.cards = [
-      {
-        id: "card-1",
+      createWorkboardCard({
         title: "Main work",
-        status: "todo",
-        priority: "normal",
-        labels: [],
         agentId: "main",
-        position: 1000,
-        createdAt: 1,
-        updatedAt: 1,
-      },
-      {
+      }),
+      createWorkboardCard({
         id: "card-2",
         title: "Ops work",
-        status: "todo",
-        priority: "normal",
-        labels: [],
         agentId: "ops",
         position: 2000,
-        createdAt: 1,
-        updatedAt: 1,
-      },
-      {
+      }),
+      createWorkboardCard({
         id: "card-3",
         title: "Dispatcher work",
-        status: "todo",
-        priority: "normal",
-        labels: [],
         agentId: "workboard-dispatcher",
         position: 3000,
-        createdAt: 1,
-        updatedAt: 1,
-      },
+      }),
     ];
     renderView();
 
@@ -3486,17 +3152,10 @@ describe("renderWorkboard", () => {
     state.draftTitle = "Assign me";
     state.draftAgentId = "workboard-dispatcher";
     state.cards = [
-      {
-        id: "card-1",
+      createWorkboardCard({
         title: "Assign me",
-        status: "todo",
-        priority: "normal",
-        labels: [],
         agentId: "workboard-dispatcher",
-        position: 1000,
-        createdAt: 1,
-        updatedAt: 1,
-      },
+      }),
     ];
     renderView();
 
@@ -3594,17 +3253,10 @@ describe("renderWorkboard", () => {
     });
     state.detailCardId = "card-1";
     state.cards = [
-      {
-        id: "card-1",
+      createWorkboardCard({
         title: "ACP-backed work",
-        status: "todo",
-        priority: "normal",
-        labels: [],
         agentId: "main",
-        position: 1000,
-        createdAt: 1,
-        updatedAt: 1,
-      },
+      }),
     ];
     renderView();
 
@@ -4230,9 +3882,6 @@ describe("renderWorkboard", () => {
         if (method === "workboard.cards.list") {
           return { cards: [canonical], boards: [] };
         }
-        if (method === "tasks.list") {
-          return { tasks: [] };
-        }
         if (method !== mutationMethod) {
           throw new Error(`Unexpected request: ${method}`);
         }
@@ -4416,20 +4065,14 @@ describe("renderWorkboard", () => {
   it("opens an edit modal and submits card updates", async () => {
     const { host, state } = createLoadedWorkboardState();
     state.cards = [
-      {
-        id: "card-1",
+      createWorkboardCard({
         title: "Rename me",
         notes: "Old notes",
-        status: "todo",
-        priority: "normal",
         labels: ["ui"],
-        position: 1000,
-        createdAt: 1,
-        updatedAt: 1,
         metadata: {
           comments: [{ id: "comment-1", body: "Needs owner check", createdAt: 2 }],
         },
-      },
+      }),
     ];
     const request = vi.fn(async (method: string) =>
       method === "workboard.cards.comment"

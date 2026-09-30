@@ -1,7 +1,9 @@
-// Discord plugin module owns sender provenance for its in-memory history window.
+// Discord owns the disposable ingress/media projection; REST owns recent history.
 import type { ContextVisibilityMode } from "openclaw/plugin-sdk/config-contracts";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { filterSupplementalContextItems } from "openclaw/plugin-sdk/security-runtime";
+import type { Message } from "../internal/discord.js";
+import { resolveDiscordMessageStickers } from "./message-forwarded.js";
 import type { DiscordSenderIdentity } from "./sender-identity.js";
 
 type DiscordHistorySenderProvenance = Readonly<{
@@ -13,6 +15,7 @@ type DiscordHistorySenderProvenance = Readonly<{
 
 export type DiscordHistoryEntry = HistoryEntry & {
   senderProvenance: DiscordHistorySenderProvenance;
+  mediaIds?: readonly string[];
 };
 
 export function createDiscordHistorySenderProvenance(params: {
@@ -45,4 +48,11 @@ export function filterDiscordHistoryEntriesForContext(params: {
       Boolean(entry.senderProvenance) && params.isSenderAllowed(entry.senderProvenance),
   });
   return { entries: filtered.items, omitted: filtered.omitted };
+}
+
+export function resolveDiscordHistoryMediaIds(message: Message): string[] {
+  return [
+    ...(message.attachments ?? []).map((attachment) => `attachment:${attachment.id}`),
+    ...resolveDiscordMessageStickers(message).map((sticker) => `sticker:${sticker.id}`),
+  ];
 }

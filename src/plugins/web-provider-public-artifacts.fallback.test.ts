@@ -1,23 +1,34 @@
 /** Tests web provider fallback loading from bundled public artifacts. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createPluginMetadataSnapshotFixture } from "./plugin-metadata.test-support.js";
+import type { PluginWebFetchProviderEntry, PluginWebSearchProviderEntry } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
-  loadPluginMetadataSnapshot: vi.fn(),
-  resolvePluginMetadataSnapshot: vi.fn(),
-  resolveBundledExplicitWebSearchProvidersFromPublicArtifacts: vi.fn(() => null),
-  resolveBundledExplicitWebFetchProvidersFromPublicArtifacts: vi.fn(() => null),
-  loadBundledWebSearchProviderEntriesFromDir: vi.fn(),
-  loadBundledWebFetchProviderEntriesFromDir: vi.fn(),
-  readBundledDiscoveryMode: vi.fn<() => "compat" | "allowlist">(),
+  loadPluginMetadataSnapshot:
+    vi.fn<typeof import("./plugin-metadata-snapshot.js").loadPluginMetadataSnapshot>(),
+  resolvePluginMetadataSnapshot:
+    vi.fn<typeof import("./plugin-metadata-snapshot.js").resolvePluginMetadataSnapshot>(),
+  resolveBundledExplicitWebSearchProvidersFromPublicArtifacts:
+    vi.fn<
+      typeof import("./web-provider-public-artifacts.explicit.js").resolveBundledExplicitWebSearchProvidersFromPublicArtifacts
+    >(),
+  resolveBundledExplicitWebFetchProvidersFromPublicArtifacts:
+    vi.fn<
+      typeof import("./web-provider-public-artifacts.explicit.js").resolveBundledExplicitWebFetchProvidersFromPublicArtifacts
+    >(),
+  readBundledDiscoveryModeMemoized:
+    vi.fn<typeof import("./bundled-discovery-state.js").readBundledDiscoveryModeMemoized>(),
 }));
 
-vi.mock("./plugin-metadata-snapshot.js", () => ({
+vi.mock("./plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./plugin-metadata-snapshot.js")>()),
   loadPluginMetadataSnapshot: mocks.loadPluginMetadataSnapshot,
   resolvePluginMetadataSnapshot: mocks.resolvePluginMetadataSnapshot,
 }));
 
-vi.mock("./bundled-discovery-state.js", () => ({
-  readBundledDiscoveryMode: mocks.readBundledDiscoveryMode,
+vi.mock("./bundled-discovery-state.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./bundled-discovery-state.js")>()),
+  readBundledDiscoveryModeMemoized: mocks.readBundledDiscoveryModeMemoized,
 }));
 
 vi.mock("./web-provider-resolution-shared.js", async (importOriginal) => ({
@@ -32,8 +43,6 @@ vi.mock("./web-provider-public-artifacts.explicit.js", () => ({
     mocks.resolveBundledExplicitWebSearchProvidersFromPublicArtifacts,
   resolveBundledExplicitWebFetchProvidersFromPublicArtifacts:
     mocks.resolveBundledExplicitWebFetchProvidersFromPublicArtifacts,
-  loadBundledWebSearchProviderEntriesFromDir: mocks.loadBundledWebSearchProviderEntriesFromDir,
-  loadBundledWebFetchProviderEntriesFromDir: mocks.loadBundledWebFetchProviderEntriesFromDir,
 }));
 
 const {
@@ -41,182 +50,179 @@ const {
   resolveBundledWebSearchProvidersFromPublicArtifacts,
 } = await import("./web-provider-public-artifacts.js");
 
+function createProvider(pluginId: string, id = pluginId) {
+  return {
+    id,
+    pluginId,
+    label: id,
+    hint: `${id} fixture`,
+    envVars: [],
+    placeholder: "fixture-key",
+    signupUrl: "https://example.com",
+    credentialPath: `plugins.entries.${pluginId}.config.apiKey`,
+    getCredentialValue: () => undefined,
+    setCredentialValue: () => {},
+    createTool: () => null,
+  } satisfies PluginWebSearchProviderEntry & PluginWebFetchProviderEntry;
+}
+
+const searchProvider = createProvider("fallback-search");
+const fetchProvider = createProvider("fallback-fetch");
+const env = { OPENCLAW_STATE_DIR: "/tmp/web-provider-profile" };
+const snapshot = createPluginMetadataSnapshotFixture({
+  plugins: [
+    { id: "fallback-search", contracts: { webSearchProviders: ["fallback-search"] } },
+    { id: "fallback-fetch", contracts: { webFetchProviders: ["fallback-fetch"] } },
+  ],
+});
+
 describe("web provider public artifact manifest fallback", () => {
   beforeEach(() => {
-    mocks.readBundledDiscoveryMode.mockReturnValue("allowlist");
-    vi.clearAllMocks();
-    mocks.loadPluginMetadataSnapshot.mockReturnValue({
-      diagnostics: [],
-      plugins: [
-        {
-          id: "fallback-search",
-          origin: "bundled",
-          rootDir: "/tmp/fallback-search",
-          contracts: { webSearchProviders: ["fallback-search"] },
-        },
-        {
-          id: "fallback-fetch",
-          origin: "bundled",
-          rootDir: "/tmp/fallback-fetch",
-          contracts: { webFetchProviders: ["fallback-fetch"] },
-        },
-      ],
-    });
-    mocks.resolvePluginMetadataSnapshot.mockImplementation(
-      (params?: { pluginMetadataSnapshot?: unknown }) =>
-        params?.pluginMetadataSnapshot ?? mocks.loadPluginMetadataSnapshot(params),
+    vi.resetAllMocks();
+    mocks.readBundledDiscoveryModeMemoized.mockReturnValue("allowlist");
+    mocks.loadPluginMetadataSnapshot.mockReturnValue(snapshot);
+    mocks.resolvePluginMetadataSnapshot.mockImplementation((params) =>
+      mocks.loadPluginMetadataSnapshot(params),
     );
-    mocks.loadBundledWebSearchProviderEntriesFromDir.mockReturnValue([
-      { id: "fallback-search", pluginId: "fallback-search" },
+    mocks.resolveBundledExplicitWebSearchProvidersFromPublicArtifacts.mockReturnValue([
+      searchProvider,
     ]);
-    mocks.loadBundledWebFetchProviderEntriesFromDir.mockReturnValue([
-      { id: "fallback-fetch", pluginId: "fallback-fetch" },
+    mocks.resolveBundledExplicitWebFetchProvidersFromPublicArtifacts.mockReturnValue([
+      fetchProvider,
     ]);
   });
 
-  it("reuses the candidate manifest registry for bundled web-search artifact fallback", () => {
-    const providers = resolveBundledWebSearchProvidersFromPublicArtifacts({ config: {} });
+  it("reuses prepared web-search owners without another manifest scan", () => {
+    const providers = resolveBundledWebSearchProvidersFromPublicArtifacts({
+      config: {},
+      env,
+      manifestRecords: snapshot.plugins,
+    });
 
-    expect(providers).toEqual([{ id: "fallback-search", pluginId: "fallback-search" }]);
-    expect(mocks.loadPluginMetadataSnapshot).toHaveBeenCalledOnce();
-    expect(mocks.loadBundledWebSearchProviderEntriesFromDir).toHaveBeenCalledWith({
-      dirName: "fallback-search",
-      pluginId: "fallback-search",
+    expect(providers).toEqual([searchProvider]);
+    expect(mocks.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
+    expect(
+      mocks.resolveBundledExplicitWebSearchProvidersFromPublicArtifacts,
+    ).toHaveBeenCalledExactlyOnceWith({
+      onlyPluginIds: ["fallback-search"],
+      env,
+      manifestRecords: snapshot.plugins,
     });
   });
 
-  it("reuses the candidate manifest registry for bundled web-fetch artifact fallback", () => {
-    const providers = resolveBundledWebFetchProvidersFromPublicArtifacts({ config: {} });
+  it("reuses the candidate manifest registry for bundled web-fetch artifacts", () => {
+    const providers = resolveBundledWebFetchProvidersFromPublicArtifacts({ config: {}, env });
 
-    expect(providers).toEqual([{ id: "fallback-fetch", pluginId: "fallback-fetch" }]);
+    expect(providers).toEqual([fetchProvider]);
     expect(mocks.loadPluginMetadataSnapshot).toHaveBeenCalledOnce();
-    expect(mocks.loadBundledWebFetchProviderEntriesFromDir).toHaveBeenCalledWith({
-      dirName: "fallback-fetch",
-      pluginId: "fallback-fetch",
+    expect(
+      mocks.resolveBundledExplicitWebFetchProvidersFromPublicArtifacts,
+    ).toHaveBeenCalledExactlyOnceWith({
+      onlyPluginIds: ["fallback-fetch"],
+      env,
+      manifestRecords: snapshot.plugins,
     });
   });
 
-  it("keeps explicit bundled web-search public artifact candidates inside allowlist discovery", () => {
-    const resolveExplicitWebSearchProviders =
-      mocks.resolveBundledExplicitWebSearchProvidersFromPublicArtifacts as unknown as {
-        mockImplementation: (
-          implementation: (params: {
-            onlyPluginIds: readonly string[];
-          }) => { id: string; pluginId: string }[],
-        ) => void;
-      };
-    resolveExplicitWebSearchProviders.mockImplementation((params) =>
-      params.onlyPluginIds.map((pluginId) => ({ id: pluginId, pluginId })),
-    );
+  it("loads an allowlisted named web-search provider without a manifest scan", () => {
+    const providers = resolveBundledWebSearchProvidersFromPublicArtifacts({
+      config: { plugins: { allow: ["fallback-search"] } },
+      onlyPluginIds: ["blocked-search", "fallback-search"],
+      env,
+    });
+
+    expect(providers).toEqual([searchProvider]);
+    expect(mocks.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
+    expect(
+      mocks.resolveBundledExplicitWebSearchProvidersFromPublicArtifacts,
+    ).toHaveBeenCalledExactlyOnceWith({
+      onlyPluginIds: ["fallback-search"],
+      env,
+      manifestRecords: undefined,
+    });
+  });
+
+  it("retries a named miss through the same batch with discovered owners", () => {
+    mocks.resolveBundledExplicitWebSearchProvidersFromPublicArtifacts.mockReturnValueOnce(null);
 
     const providers = resolveBundledWebSearchProvidersFromPublicArtifacts({
-      config: {
-        plugins: {
-          allow: ["fallback-search"],
-        },
-      },
-      onlyPluginIds: ["blocked-search", "fallback-search"],
+      config: {},
+      onlyPluginIds: ["fallback-search"],
+      env,
     });
 
-    expect(providers).toEqual([{ id: "fallback-search", pluginId: "fallback-search" }]);
-    expect(mocks.resolveBundledExplicitWebSearchProvidersFromPublicArtifacts).toHaveBeenCalledWith({
-      onlyPluginIds: ["fallback-search"],
-    });
+    expect(providers).toEqual([searchProvider]);
+    expect(mocks.loadPluginMetadataSnapshot).toHaveBeenCalledOnce();
+    expect(mocks.resolveBundledExplicitWebSearchProvidersFromPublicArtifacts.mock.calls).toEqual([
+      [{ onlyPluginIds: ["fallback-search"], env, manifestRecords: undefined }],
+      [{ onlyPluginIds: ["fallback-search"], env, manifestRecords: snapshot.plugins }],
+    ]);
   });
 
   it("keeps deprecated bundledDiscovery compat discovery outside plugin allowlists", () => {
-    mocks.readBundledDiscoveryMode.mockReturnValue("compat");
-    const resolveExplicitWebSearchProviders =
-      mocks.resolveBundledExplicitWebSearchProvidersFromPublicArtifacts as unknown as {
-        mockImplementation: (
-          implementation: (params: {
-            onlyPluginIds: readonly string[];
-          }) => { id: string; pluginId: string }[],
-        ) => void;
-      };
-    resolveExplicitWebSearchProviders.mockImplementation((params) =>
-      params.onlyPluginIds.map((pluginId) => ({ id: pluginId, pluginId })),
-    );
+    mocks.readBundledDiscoveryModeMemoized.mockReturnValue("compat");
 
     const providers = resolveBundledWebSearchProvidersFromPublicArtifacts({
-      config: {
-        plugins: {
-          allow: ["some-other-plugin"],
-        },
-      },
+      config: { plugins: { allow: ["some-other-plugin"] } },
       onlyPluginIds: ["fallback-search"],
+      env,
     });
 
-    expect(providers).toEqual([{ id: "fallback-search", pluginId: "fallback-search" }]);
-    expect(mocks.resolveBundledExplicitWebSearchProvidersFromPublicArtifacts).toHaveBeenCalledWith({
+    expect(providers).toEqual([searchProvider]);
+    expect(mocks.readBundledDiscoveryModeMemoized).toHaveBeenCalledWith(env);
+    expect(
+      mocks.resolveBundledExplicitWebSearchProvidersFromPublicArtifacts,
+    ).toHaveBeenCalledExactlyOnceWith({
       onlyPluginIds: ["fallback-search"],
+      env,
+      manifestRecords: undefined,
     });
   });
 
   it("keeps manifest bundled web-fetch public artifact candidates inside allowlist discovery", () => {
-    mocks.loadPluginMetadataSnapshot.mockReturnValueOnce({
-      diagnostics: [],
+    const fetchSnapshot = createPluginMetadataSnapshotFixture({
       plugins: [
-        {
-          id: "blocked-fetch",
-          origin: "bundled",
-          rootDir: "/tmp/blocked-fetch",
-          contracts: { webFetchProviders: ["blocked-fetch"] },
-        },
-        {
-          id: "fallback-fetch",
-          origin: "bundled",
-          rootDir: "/tmp/fallback-fetch",
-          contracts: { webFetchProviders: ["fallback-fetch"] },
-        },
+        { id: "blocked-fetch", contracts: { webFetchProviders: ["blocked-fetch"] } },
+        { id: "fallback-fetch", contracts: { webFetchProviders: ["fallback-fetch"] } },
       ],
     });
+    mocks.loadPluginMetadataSnapshot.mockReturnValueOnce(fetchSnapshot);
 
     const providers = resolveBundledWebFetchProvidersFromPublicArtifacts({
-      config: {
-        plugins: {
-          allow: ["fallback-fetch"],
-        },
-      },
+      config: { plugins: { allow: ["fallback-fetch"] } },
+      env,
     });
 
-    expect(providers).toEqual([{ id: "fallback-fetch", pluginId: "fallback-fetch" }]);
-    expect(mocks.loadBundledWebFetchProviderEntriesFromDir).toHaveBeenCalledOnce();
-    expect(mocks.loadBundledWebFetchProviderEntriesFromDir).toHaveBeenCalledWith({
-      dirName: "fallback-fetch",
-      pluginId: "fallback-fetch",
+    expect(providers).toEqual([fetchProvider]);
+    expect(
+      mocks.resolveBundledExplicitWebFetchProvidersFromPublicArtifacts,
+    ).toHaveBeenCalledExactlyOnceWith({
+      onlyPluginIds: ["fallback-fetch"],
+      env,
+      manifestRecords: fetchSnapshot.plugins,
     });
   });
 
   it("matches bundled web-search candidates through provider alias allowlist entries", () => {
-    mocks.resolveBundledExplicitWebSearchProvidersFromPublicArtifacts.mockReturnValueOnce(null);
-    mocks.loadPluginMetadataSnapshot.mockReturnValueOnce({
-      diagnostics: [],
-      plugins: [
-        {
-          id: "google",
-          origin: "bundled",
-          rootDir: "/tmp/google",
-          contracts: { webSearchProviders: ["gemini"] },
-        },
-      ],
+    const googleSnapshot = createPluginMetadataSnapshotFixture({
+      plugins: [{ id: "google", contracts: { webSearchProviders: ["gemini"] } }],
     });
-    mocks.loadBundledWebSearchProviderEntriesFromDir.mockReturnValueOnce([
-      { id: "gemini", pluginId: "google" },
-    ]);
+    const gemini = createProvider("google", "gemini");
+    mocks.loadPluginMetadataSnapshot.mockReturnValueOnce(googleSnapshot);
+    mocks.resolveBundledExplicitWebSearchProvidersFromPublicArtifacts.mockReturnValueOnce([gemini]);
 
     const providers = resolveBundledWebSearchProvidersFromPublicArtifacts({
-      config: {
-        plugins: {
-          allow: ["google-gemini-cli"],
-        },
-      },
+      config: { plugins: { allow: ["google-gemini-cli"] } },
+      env,
     });
 
-    expect(providers).toEqual([{ id: "gemini", pluginId: "google" }]);
-    expect(mocks.loadBundledWebSearchProviderEntriesFromDir).toHaveBeenCalledWith({
-      dirName: "google",
-      pluginId: "google",
+    expect(providers).toEqual([gemini]);
+    expect(
+      mocks.resolveBundledExplicitWebSearchProvidersFromPublicArtifacts,
+    ).toHaveBeenCalledExactlyOnceWith({
+      onlyPluginIds: ["google"],
+      env,
+      manifestRecords: googleSnapshot.plugins,
     });
   });
 });

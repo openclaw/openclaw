@@ -1,12 +1,17 @@
-// Process supervisor manages long-running child and PTY process lifecycles.
 import crypto from "node:crypto";
 import { performance } from "node:perf_hooks";
 import { expectDefined } from "@openclaw/normalization-core";
-import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import {
+  asPositiveFiniteNumber,
+  resolveIntegerOption,
+  resolveOptionalIntegerOption,
+  resolveTimerTimeoutMs,
+} from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
+import { setProcessTimeout } from "../process-deadline.js";
 import { createChildAdapter } from "./adapters/child.js";
 import { createPtyAdapter } from "./adapters/pty.js";
 import { GRACEFUL_CANCEL_TIMEOUT_MS } from "./cancellation-policy.js";
@@ -54,20 +59,6 @@ const loadSupervisorLogRuntime = createLazyRuntimeModule(
   () => import("./supervisor-log.runtime.js"),
 );
 
-function normalizeTimeoutDuration(value?: number): number | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
-    return undefined;
-  }
-  return Math.max(1, Math.floor(value));
-}
-
-function clampCapturedOutputChars(value?: number): number {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
-    return DEFAULT_MAX_CAPTURED_OUTPUT_CHARS;
-  }
-  return Math.max(256, Math.floor(value));
-}
-
 function appendCapturedOutput(
   current: string,
   chunk: string,
@@ -85,26 +76,6 @@ function appendCapturedOutput(
 
 function isTimeoutReason(reason: TerminationReason) {
   return reason === "overall-timeout" || reason === "no-output-timeout";
-}
-
-function resolveElapsedTimeoutReason(params: {
-  nowMs: number;
-  overallTimeoutDeadlineMs: number | null;
-  noOutputTimeoutDeadlineMs: number | null;
-}): TerminationReason | null {
-  if (
-    params.overallTimeoutDeadlineMs !== null &&
-    params.nowMs >= params.overallTimeoutDeadlineMs &&
-    (params.noOutputTimeoutDeadlineMs === null ||
-      params.nowMs < params.noOutputTimeoutDeadlineMs ||
-      params.overallTimeoutDeadlineMs <= params.noOutputTimeoutDeadlineMs)
-  ) {
-    return "overall-timeout";
-  }
-  return params.noOutputTimeoutDeadlineMs !== null &&
-    params.nowMs >= params.noOutputTimeoutDeadlineMs
-    ? "no-output-timeout"
-    : null;
 }
 
 export function createProcessSupervisor(): ProcessSupervisor & {
@@ -294,7 +265,11 @@ export function createProcessSupervisor(): ProcessSupervisor & {
     let forceKillTimer: NodeJS.Timeout | null = null;
     let cancelRequested = false;
     const captureOutput = input.captureOutput !== false;
-    const maxCapturedOutputChars = clampCapturedOutputChars(input.maxCapturedOutputChars);
+    const maxCapturedOutputChars = resolveIntegerOption(
+      asPositiveFiniteNumber(input.maxCapturedOutputChars),
+      DEFAULT_MAX_CAPTURED_OUTPUT_CHARS,
+      { min: 256 },
+    );
 
     const setForcedReason = (reason: TerminationReason) => {
       if (forcedReason || resultSettled) {
@@ -328,13 +303,13 @@ export function createProcessSupervisor(): ProcessSupervisor & {
     owner.cancel = requestCancel;
 
     const createDeadline = (reason: "overall-timeout" | "no-output-timeout", value?: number) => {
-      const durationMs = normalizeTimeoutDuration(value);
+      const durationMs = resolveOptionalIntegerOption(asPositiveFiniteNumber(value), { min: 1 });
       let deadlineMs: number | null = null;
-      let timer: NodeJS.Timeout | undefined;
+      let timer: ReturnType<typeof setProcessTimeout> | undefined;
       // Re-arm bounded intervals: a long deadline must not overflow Node's timer cap.
       const schedule = (remainingMs: number, deadline: number) => {
         const intervalMs = resolveTimerTimeoutMs(remainingMs, 1);
-        timer = setTimeout(() => {
+        timer = setProcessTimeout(() => {
           if (resultSettled) {
             return;
           }
@@ -354,11 +329,11 @@ export function createProcessSupervisor(): ProcessSupervisor & {
           if (!durationMs || resultSettled) {
             return;
           }
-          clearTimeout(timer);
+          timer?.clear();
           deadlineMs = performance.now() + durationMs;
           schedule(durationMs, deadlineMs);
         },
-        clear: () => clearTimeout(timer),
+        clear: () => timer?.clear(),
       };
     };
     const overallDeadline = createDeadline("overall-timeout", input.timeoutMs);
@@ -366,6 +341,16 @@ export function createProcessSupervisor(): ProcessSupervisor & {
     const touchOutput = () => {
       lastOutputAtMs = Date.now();
       outputDeadline.reset();
+    };
+    const settleResult = (adapter?: SpawnProcessAdapter) => {
+      resultSettled = true;
+      outputCompletion.resolve();
+      overallDeadline.clear();
+      outputDeadline.clear();
+      detachOutput();
+      if (cleanupSettled) {
+        adapter?.dispose();
+      }
     };
 
     try {
@@ -382,43 +367,36 @@ export function createProcessSupervisor(): ProcessSupervisor & {
       };
       overallDeadline.reset();
       outputDeadline.reset();
+      const construction = {
+        assertCurrent: input.assertCurrent,
+        beforeSpawn: input.beforeSpawn,
+        cwd: input.cwd,
+        env: input.env,
+        abortSignal: constructionAbort.signal,
+        onSpawnCleanup,
+      };
       const startupPromise =
         input.mode === "pty"
           ? createPtyAdapter({
-              assertCurrent: input.assertCurrent,
-              beforeSpawn: input.beforeSpawn,
+              ...construction,
               shell: expectDefined(input.argv[0], "spawn executable"),
               args: input.argv.slice(1),
-              cwd: input.cwd,
-              env: input.env,
-              abortSignal: constructionAbort.signal,
-              onSpawnCleanup,
             }).then((adapter) => ({ adapter, ready: Promise.resolve() }))
           : input.mode === "anchored-shell"
             ? createChildAdapter({
-                assertCurrent: input.assertCurrent,
-                beforeSpawn: input.beforeSpawn,
+                ...construction,
                 anchoredShellCommand: input.command,
-                cwd: input.cwd,
-                env: input.env,
-                abortSignal: constructionAbort.signal,
-                onSpawnCleanup,
               })
             : createChildAdapter({
-                assertCurrent: input.assertCurrent,
-                beforeSpawn: input.beforeSpawn,
+                ...construction,
                 ...(requireProcessTree && !external ? { ownProcessTree: true as const } : {}),
                 argv: resolvedArgs ? [...input.argv, ...resolvedArgs] : input.argv,
                 argv0: input.argv0,
-                cwd: input.cwd,
-                env: input.env,
                 exactEnv: input.exactEnv,
                 windowsVerbatimArguments: input.windowsVerbatimArguments,
                 input: input.input,
                 stdinMode: input.stdinMode,
                 secretInput: input.secretInput,
-                abortSignal: constructionAbort.signal,
-                onSpawnCleanup,
               });
       const nativeExtinctionPromise = startupPromise
         .then(
@@ -500,14 +478,7 @@ export function createProcessSupervisor(): ProcessSupervisor & {
         },
       );
       const settleAbortedConstruction = (reason: TerminationReason) => {
-        resultSettled = true;
-        outputCompletion.resolve();
-        overallDeadline.clear();
-        outputDeadline.clear();
-        detachOutput();
-        if (cleanupSettled) {
-          ownedAdapter?.dispose();
-        }
+        settleResult(ownedAdapter);
         return settleConstructionResult(reason, cleanup.promise, { ...captured, lastOutputAtMs });
       };
       let startup: Awaited<typeof startupPromise>;
@@ -520,17 +491,6 @@ export function createProcessSupervisor(): ProcessSupervisor & {
         return settleAbortedConstruction(forcedReason);
       }
       const adapter = startup.adapter;
-
-      const settleResult = () => {
-        resultSettled = true;
-        outputCompletion.resolve();
-        overallDeadline.clear();
-        outputDeadline.clear();
-        detachOutput();
-        if (cleanupSettled) {
-          adapter.dispose();
-        }
-      };
 
       const withOutputFence =
         <Chunk>(deliver?: (chunk: Chunk) => void, recordsOutput = true) =>
@@ -572,7 +532,7 @@ export function createProcessSupervisor(): ProcessSupervisor & {
         if (error === constructionAbortError && forcedReason) {
           return settleAbortedConstruction(forcedReason);
         }
-        settleResult();
+        settleResult(adapter);
         throw error;
       }
 
@@ -616,13 +576,8 @@ export function createProcessSupervisor(): ProcessSupervisor & {
       const waitOutcome = Promise.allSettled([
         (async (): Promise<RunExit> => {
           const result = await adapter.wait();
-          const deadlineReason = resolveElapsedTimeoutReason({
-            nowMs: performance.now(),
-            overallTimeoutDeadlineMs: overallDeadline.deadlineMs,
-            noOutputTimeoutDeadlineMs: outputDeadline.deadlineMs,
-          });
-          const terminalReason = forcedReason ?? deadlineReason;
-          settleResult();
+          const terminalReason = forcedReason;
+          settleResult(adapter);
 
           const reason: TerminationReason =
             terminalReason ?? (result.signal != null ? ("signal" as const) : ("exit" as const));
@@ -639,7 +594,7 @@ export function createProcessSupervisor(): ProcessSupervisor & {
           return exit;
         })().finally(() => {
           if (!resultSettled) {
-            settleResult();
+            settleResult(adapter);
           }
         }),
       ]);
@@ -681,11 +636,7 @@ export function createProcessSupervisor(): ProcessSupervisor & {
       }
       return managedRun;
     } catch (err) {
-      resultSettled = true;
-      outputCompletion.resolve();
-      overallDeadline.clear();
-      outputDeadline.clear();
-      detachOutput();
+      settleResult();
       const { warnProcessSupervisorSpawnFailure } = await loadSupervisorLogRuntime();
       warnProcessSupervisorSpawnFailure(`spawn failed: runId=${runId} reason=${String(err)}`);
       throw err;

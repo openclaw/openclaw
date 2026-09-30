@@ -2,19 +2,23 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { CONFIG_AUDIT_MAX_ENTRIES, CONFIG_AUDIT_SCOPE } from "../config/io.audit.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
+import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { SYSTEM_AGENT_AUDIT_SCOPE } from "../system-agent/audit.js";
+import * as fsSafe from "./fs-safe.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
 import { createSqliteAuditRecordStore } from "./sqlite-audit-record-store.js";
 import { openLegacyAuditRawCheckpointStore } from "./state-migrations.audit-checkpoints.js";
+import { readLegacyAuditSourceSnapshot } from "./state-migrations.audit-recovery.js";
 import {
   AuditMigrationFixture,
   buildAuditScrubbedContent,
   configAuditRecord,
   failArchiveHardening,
   failSecondScrubWrite,
+  FIRST_AUDIT_SCRUB_BYTE,
   systemAuditEvent,
   withAuditMigrationFixture,
   writeAuditRestoreJournal,
@@ -63,6 +67,10 @@ describe("legacy core audit log migration", () => {
       const rawArchivedConfig = await fs.readFile(`${configPath}.migrated.raw`, "utf8");
       expect(rawArchivedConfig).not.toContain("must-redact");
       expect(rawArchivedConfig.trim()).toBe("");
+      expect(Buffer.byteLength(rawArchivedConfig)).toBe(
+        Buffer.byteLength(`${JSON.stringify(unredactedConfigRecord)}\n`),
+      );
+      await expect(fs.access(audit.config.restore)).rejects.toMatchObject({ code: "ENOENT" });
       if (process.platform !== "win32") {
         expect((await fs.stat(`${configPath}.migrated`)).mode & 0o777).toBe(0o600);
         expect((await fs.stat(`${configPath}.migrated.raw`)).mode & 0o777).toBe(0o600);
@@ -175,31 +183,6 @@ describe("legacy core audit log migration", () => {
     });
   });
 
-  it("restores a moved scrub journal before parsing an interrupted archive", async () => {
-    await withAuditMigrationFixture(async (audit) => {
-      const { raw, restore } = audit.config;
-      const originalRecord = configAuditRecord("restart-redaction-marker");
-      const originalContent = `${JSON.stringify(originalRecord)}\n`;
-      const damagedContent = Buffer.from(originalContent, "utf8");
-      buildAuditScrubbedContent(damagedContent.length)
-        .subarray(0, Math.floor(damagedContent.length / 2))
-        .copy(damagedContent);
-      await audit.seedRawArchive(audit.config, damagedContent);
-      await writeAuditRestoreJournal(raw, Buffer.from(originalContent, "utf8"), {
-        restoredBytes: 0,
-        scrubbedBytes: Math.floor(damagedContent.length / 2),
-      });
-
-      const result = await audit.migrate();
-
-      expect(result.warnings).toEqual([]);
-      await expect(fs.access(restore)).rejects.toMatchObject({ code: "ENOENT" });
-      await expect(fs.readFile(raw, "utf8")).resolves.not.toContain("restart-redaction-marker");
-      expect(audit.configRecords()).toHaveLength(1);
-      expect(audit.detect().hasLegacy).toBe(false);
-    });
-  });
-
   it("discards a stale restore journal while recovering a post-checkpoint append", async () => {
     await withAuditMigrationFixture(async (audit) => {
       const { raw, restore, source } = audit.system;
@@ -223,25 +206,6 @@ describe("legacy core audit log migration", () => {
         ["token", "redaction-marker"].join("="),
       );
       await expect(fs.access(restore)).rejects.toMatchObject({ code: "ENOENT" });
-    });
-  });
-
-  it("does not replay a scrub journal over a same-inode replacement archive", async () => {
-    await withAuditMigrationFixture(async (audit) => {
-      const { raw, restore } = audit.system;
-      const originalContent = `${JSON.stringify(systemAuditEvent("original archive"))}\n`;
-      const replacementContent = `${JSON.stringify(
-        systemAuditEvent("replacement archive", { timestamp: "2026-07-04T00:00:00.000Z" }),
-      )}\n`;
-      await audit.seedRawArchive(audit.system, originalContent);
-      await writeAuditRestoreJournal(raw, Buffer.from(originalContent, "utf8"));
-      await fs.writeFile(raw, replacementContent);
-
-      const result = await audit.migrate();
-
-      expect(result.warnings.join("\n")).toContain("no longer matches its restore journal target");
-      await expect(fs.readFile(raw, "utf8")).resolves.toBe(replacementContent);
-      await fs.access(restore);
     });
   });
 
@@ -448,12 +412,15 @@ describe("legacy core audit log migration", () => {
   it("leaves malformed audit sources in place without partial imports", async () => {
     await withAuditMigrationFixture(async (audit) => {
       const { source } = audit.system;
-      await audit.write(source, "{bad json\n");
+      const sourceBytes = `${JSON.stringify(systemAuditEvent("valid prefix"))}\n{bad json\n`;
+      await audit.write(source, sourceBytes);
       const detected = audit.detect();
 
       const result = await audit.migrate(detected);
+
+      expect(result.changes).toEqual([]);
       expect(result.warnings.join("\n")).toContain("Failed reading system-agent audit log");
-      await fs.access(source);
+      await expect(fs.readFile(source, "utf8")).resolves.toBe(sourceBytes);
       expect(audit.systemEntries()).toEqual([]);
     });
   });
@@ -551,27 +518,37 @@ describe("legacy core audit log migration", () => {
         argv: ["openclaw", "config", "set", "later", "value"],
       });
 
-      let settled = false;
-      const migration = audit.migrate().finally(() => {
-        settled = true;
-      });
-      for (let attempt = 0; attempt < 500; attempt += 1) {
-        try {
-          await fs.access(source);
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-            break;
-          }
-          throw error;
+      const recreateSource = vi.fn(() => audit.appendJsonLines(source, [retainedRecord]));
+      const openRoot = fsSafe.root;
+      const restorers: Array<() => void> = [];
+      const rootSpy = vi.spyOn(fsSafe, "root").mockImplementation(async (rootPath, defaults) => {
+        const root = await openRoot(rootPath, defaults);
+        if (rootPath === audit.stateDir) {
+          const move = root.move.bind(root);
+          const moveSpy = vi.spyOn(root, "move").mockImplementation(async (...args) => {
+            const result = await move(...args);
+            if (
+              path.resolve(rootPath, args[0]) === source &&
+              path.resolve(rootPath, args[1]) === audit.config.claim
+            ) {
+              await recreateSource();
+            }
+            return result;
+          });
+          restorers.push(() => moveSpy.mockRestore());
         }
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
+        return root;
+      });
+      let first: Awaited<ReturnType<typeof audit.migrate>>;
+      try {
+        first = await audit.migrate();
+      } finally {
+        for (const restore of restorers.toReversed()) {
+          restore();
+        }
+        rootSpy.mockRestore();
       }
-      expect(settled).toBe(false);
-      await audit.appendJsonLines(source, [retainedRecord]);
-
-      const first = await migration;
+      expect(recreateSource).toHaveBeenCalledOnce();
       expect(first.warnings.join("\n")).toContain("An old writer recreated config audit log");
       await expect(fs.readFile(source, "utf8")).resolves.toBe(
         `${JSON.stringify(retainedRecord)}\n`,
@@ -620,4 +597,267 @@ describe("legacy core audit log migration", () => {
       }
     },
   );
+});
+
+describe("legacy audit recovery byte handling", () => {
+  it("reads legacy audit sources larger than the ordinary read limit", async () => {
+    await withAuditMigrationFixture(async (audit) => {
+      const original = Buffer.alloc(16 * 1024 * 1024 + 1, " ");
+      original.write("legacy audit archive\n");
+      await audit.write(audit.system.raw, original);
+
+      const snapshot = await readLegacyAuditSourceSnapshot(
+        await fsSafe.root(audit.stateDir),
+        "audit/system-agent.jsonl.migrated.raw",
+      );
+
+      expect(snapshot.rawBytes.equals(original)).toBe(true);
+      expect(snapshot.size).toBe(original.length);
+    });
+  });
+
+  it("uses original byte offsets when decoded audit text contains replacement characters", async () => {
+    await withAuditMigrationFixture(async (audit) => {
+      const { raw: rawPath, source: sourcePath } = audit.system;
+      const original = Buffer.concat([
+        Buffer.from(
+          '{"timestamp":"2026-07-03T00:00:00.000Z","operation":"gateway.restart","summary":"',
+        ),
+        Buffer.from([0x80]),
+        Buffer.from('"}'),
+      ]);
+      await audit.write(sourcePath, original);
+
+      const migrated = await audit.migrate();
+
+      expect(migrated.warnings).toEqual([]);
+      const blanked = await fs.readFile(rawPath);
+      expect(blanked).toHaveLength(original.length);
+      expect(blanked.every((byte) => byte === 0x20 || byte === 0x09)).toBe(true);
+
+      await audit.appendJsonLines(rawPath, [
+        systemAuditEvent("later", { timestamp: "2026-07-04T00:00:00.000Z" }),
+      ]);
+      const recovered = await audit.migrate();
+
+      expect(recovered.warnings).toEqual([]);
+      expect(audit.systemSummaries()).toEqual(["�", "later"]);
+    });
+  });
+
+  it("upgrades a legacy nonzero raw checkpoint to the blank append pad", async () => {
+    await withAuditMigrationFixture(async (audit) => {
+      const { raw: rawPath, source: sourcePath } = audit.system;
+      await audit.writeJsonLines(sourcePath, [systemAuditEvent("original")]);
+      await audit.migrate();
+      const legacyRaw = Buffer.concat([
+        Buffer.from(
+          '{"timestamp":"2026-07-03T00:00:00.000Z","operation":"gateway.restart","summary":"',
+        ),
+        Buffer.from([0x80]),
+        Buffer.from('"}\n'),
+      ]);
+      await fs.writeFile(rawPath, legacyRaw);
+      const legacyStat = await fs.stat(rawPath);
+      const checkpointStore = openLegacyAuditRawCheckpointStore(audit.stateDir);
+      const checkpoint = checkpointStore.entries()[0]!;
+      checkpointStore.upsert(checkpoint.key, {
+        ...checkpoint.value,
+        dev: legacyStat.dev,
+        ino: legacyStat.ino,
+        mtimeMs: legacyStat.mtimeMs,
+        size: legacyStat.size,
+        contentHash: createHash("sha256").update(legacyRaw.toString("utf8")).digest("hex"),
+        recordCount: 1,
+      });
+
+      const detected = audit.detect();
+      expect(detected.hasLegacy).toBe(true);
+      const result = await audit.migrate(detected);
+
+      expect(result.warnings).toEqual([]);
+      expect(
+        openLegacyAuditRawCheckpointStore(audit.stateDir).entries()[0]?.value.recordCount,
+      ).toBe(0);
+    });
+  });
+
+  it("does not confuse an older prefix checkpoint with a later scrub generation", async () => {
+    await withAuditMigrationFixture(async (audit) => {
+      const { raw: rawPath, restore: restorePath, source: sourcePath } = audit.system;
+      await audit.writeJsonLines(sourcePath, [systemAuditEvent("original")]);
+      await audit.migrate();
+      await audit.appendJsonLines(rawPath, [
+        systemAuditEvent("later", { timestamp: "2026-07-04T00:00:00.000Z" }),
+      ]);
+      const interruptedRaw = await fs.readFile(rawPath);
+      await writeAuditRestoreJournal(rawPath, interruptedRaw, {
+        restoredBytes: 0,
+        scrubbedBytes: interruptedRaw.length,
+      });
+      await fs.writeFile(rawPath, buildAuditScrubbedContent(interruptedRaw.length));
+
+      const result = await audit.migrate();
+
+      expect(result.warnings).toEqual([]);
+      expect(audit.systemSummaries()).toEqual(["original", "later"]);
+      await expect(fs.access(restorePath)).rejects.toMatchObject({ code: "ENOENT" });
+    });
+  });
+
+  it("does not replay a scrub journal over an equal-width space redaction", async () => {
+    await withAuditMigrationFixture(async (audit) => {
+      const { raw: rawPath, restore: restorePath } = audit.system;
+      const originalContent = `${JSON.stringify(systemAuditEvent("secret archive value"))}\n`;
+      const replacementContent = originalContent.replace("secret archive value", " ".repeat(20));
+      await audit.seedRawArchive(audit.system, replacementContent);
+      await writeAuditRestoreJournal(rawPath, Buffer.from(originalContent, "utf8"));
+
+      const result = await audit.migrate();
+
+      expect(result.warnings.join("\n")).toContain("no longer matches its restore journal target");
+      await expect(fs.readFile(rawPath, "utf8")).resolves.toBe(replacementContent);
+      await fs.access(restorePath);
+    });
+  });
+
+  it("resumes a one-byte scrub interruption using exact journal progress", async () => {
+    await withAuditMigrationFixture(async (audit) => {
+      const { raw: rawPath, restore: restorePath } = audit.system;
+      const originalContent = `${JSON.stringify(systemAuditEvent("original archive"))}\n`;
+      const replacementBytes = Buffer.from(originalContent);
+      replacementBytes[0] = FIRST_AUDIT_SCRUB_BYTE;
+      await audit.seedRawArchive(audit.system, replacementBytes);
+      await writeAuditRestoreJournal(rawPath, Buffer.from(originalContent), {
+        restoredBytes: 0,
+        scrubbedBytes: 1,
+      });
+
+      const result = await audit.migrate();
+
+      expect(result.warnings).toEqual([]);
+      expect((await fs.readFile(rawPath, "utf8")).trim()).toBe("");
+      await expect(fs.access(restorePath)).rejects.toMatchObject({ code: "ENOENT" });
+    });
+  });
+
+  it("resumes restoration after an interrupted rollback write", async () => {
+    await withAuditMigrationFixture(async (audit) => {
+      const { raw: rawPath, restore: restorePath } = audit.system;
+      const originalContent = `${JSON.stringify(systemAuditEvent("restore after restart"))}\n`;
+      const originalBytes = Buffer.from(originalContent, "utf8");
+      const interruptedRestore = buildAuditScrubbedContent(originalBytes.length);
+      originalBytes.subarray(0, Math.floor(originalBytes.length / 2)).copy(interruptedRestore);
+      await audit.seedRawArchive(audit.system, interruptedRestore);
+      await writeAuditRestoreJournal(rawPath, originalBytes, {
+        restoredBytes: Math.floor(originalBytes.length / 2),
+        scrubbedBytes: originalBytes.length,
+      });
+
+      const result = await audit.migrate();
+
+      expect(result.warnings).toEqual([]);
+      expect(audit.systemSummaries()).toEqual(["restore after restart"]);
+      await expect(fs.access(restorePath)).rejects.toMatchObject({ code: "ENOENT" });
+    });
+  });
+
+  it("retries raw archive recovery when sanitized archive hardening fails", async () => {
+    await withAuditMigrationFixture(async (audit) => {
+      const { raw, sanitized, source } = audit.system;
+      await audit.writeJsonLines(source, [systemAuditEvent("before archive")]);
+      await audit.migrate();
+      await audit.appendJsonLines(raw, [systemAuditEvent("later row")]);
+      const chmodSpy = failArchiveHardening(audit, sanitized, "simulated recovery chmod failure");
+
+      let failed: Awaited<ReturnType<typeof audit.migrate>>;
+      try {
+        failed = await audit.migrate();
+      } finally {
+        chmodSpy.mockRestore();
+      }
+
+      expect(failed.changes).toEqual([]);
+      expect(failed.warnings.join("\n")).toContain(
+        "Failed securing sanitized system-agent audit log",
+      );
+      expect(audit.detect().sources).toMatchObject([{ storage: "raw-archive" }]);
+
+      const recovered = await audit.migrate();
+      expect(recovered.warnings).toEqual([]);
+      expect(audit.systemSummaries()).toEqual(["before archive", "later row"]);
+      const sanitizedRows = await audit.readJsonLines<{ summary: string }>(sanitized);
+      expect(sanitizedRows.map((row) => row.summary)).toEqual(["before archive", "later row"]);
+      expect(audit.detect().sources).toEqual([]);
+    });
+  });
+
+  it("completes a verified partial sanitized tail after an interrupted write", async () => {
+    await withAuditMigrationFixture(async (audit) => {
+      const { raw, sanitized, source } = audit.system;
+      const event = (day: string, summary: string) =>
+        systemAuditEvent(summary, { timestamp: `2026-07-${day}T00:00:00.000Z` });
+      await audit.writeJsonLines(source, [event("01", "before archive")]);
+      await audit.migrate();
+      const firstLater = event("02", "first later row");
+      const secondLater = event("03", "second later row");
+      await audit.appendJsonLines(raw, [firstLater, secondLater]);
+      // Simulate a stopped sanitized write: the durable checkpoint prefix plus
+      // one complete candidate row is a byte-for-byte prefix of the desired file.
+      await audit.appendJsonLines(sanitized, [firstLater]);
+
+      const recovered = await audit.migrate();
+
+      expect(recovered.warnings).toEqual([]);
+      expect(audit.systemSummaries()).toEqual([
+        "before archive",
+        "first later row",
+        "second later row",
+      ]);
+      const sanitizedRows = await audit.readJsonLines<{ summary: string }>(sanitized);
+      expect(sanitizedRows.map((row) => row.summary)).toEqual([
+        "before archive",
+        "first later row",
+        "second later row",
+      ]);
+    });
+  });
+
+  it("preserves identical appends and blocks checkpointless whitespace ambiguity", async () => {
+    await withAuditMigrationFixture(async (audit) => {
+      const { raw, sanitized, source } = audit.system;
+      const event = systemAuditEvent("Repeated operation");
+      await audit.write(source, `${JSON.stringify(event)}\n\n${JSON.stringify(event)}\n`);
+      await audit.migrate();
+      await audit.appendJsonLines(raw, [event]);
+
+      const recovered = await audit.migrate();
+
+      expect(recovered.warnings).toEqual([]);
+      expect(audit.systemSummaries()).toEqual([
+        "Repeated operation",
+        "Repeated operation",
+        "Repeated operation",
+      ]);
+      const sanitizedRows = (await fs.readFile(sanitized, "utf8")).trim().split("\n");
+      expect(sanitizedRows).toHaveLength(3);
+
+      runOpenClawStateWriteTransaction(
+        (database) => {
+          database.db
+            .prepare("DELETE FROM diagnostic_events WHERE scope = ?")
+            .run("migration.legacy-audit-raw");
+        },
+        { env: audit.env },
+      );
+      await audit.appendJsonLines(raw, [event]);
+      const ambiguous = await audit.migrate();
+      expect(ambiguous.changes).toEqual([]);
+      expect(ambiguous.warnings).toEqual([
+        expect.stringContaining("checkpointless raw archive begins with ambiguous whitespace"),
+      ]);
+      expect(audit.systemEntries()).toHaveLength(3);
+      expect((await fs.readFile(sanitized, "utf8")).trim().split("\n")).toHaveLength(3);
+    });
+  });
 });

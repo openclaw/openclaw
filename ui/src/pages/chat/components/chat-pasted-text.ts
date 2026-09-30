@@ -1,9 +1,10 @@
-import type { PropertyValues } from "lit";
+import { html, type PropertyValues, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
 import { OpenClawLightDomContentsElement } from "../../../lit/openclaw-element.ts";
+import { renderCompactAttachmentFile } from "./chat-attachment-file.ts";
 import { renderAttachmentChip } from "./chat-attachment-preview-chip.ts";
 import { readAttachmentText } from "./chat-attachment-text-reader.ts";
 import type { AssistantAttachmentItem, AttachmentItem } from "./chat-message-media.ts";
@@ -36,6 +37,8 @@ class ChatPastedText extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) sizeBytes?: number;
   @property({ attribute: false }) scope = "";
   @property({ attribute: false }) onOpen?: () => void;
+  @property({ attribute: false }) composerAction?: TemplateResult;
+  @property({ attribute: false }) composerRemoveAction?: TemplateResult;
   @state() private excerpt = "";
   private key = "";
   private loading?: AbortController;
@@ -85,6 +88,21 @@ class ChatPastedText extends OpenClawLightDomContentsElement {
   }
 
   protected override render() {
+    if (this.composerAction) {
+      return html`<div
+        class="chat-attachment-thumb chat-attachment-thumb--file chat-attachment-thumb--pasted-text"
+      >
+        ${renderCompactAttachmentFile(
+          { id: this.scope, mimeType: "text/plain" },
+          {
+            label: this.excerpt || t("chat.attachments.pastedText"),
+            metadata: this.composerAction,
+            onOpen: this.onOpen,
+          },
+        )}
+        ${this.composerRemoveAction}
+      </div>`;
+    }
     return renderAttachmentChip({
       label: this.excerpt || t("chat.attachments.pastedText"),
       icon: icons.fileText,

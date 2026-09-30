@@ -174,12 +174,6 @@ function metadataEntryFor(
   return entry;
 }
 
-function waitForMetadataRetry(delayMs: number): Promise<void> {
-  return new Promise((resolve) => {
-    globalThis.setTimeout(resolve, delayMs);
-  });
-}
-
 async function requestChatMetadata(
   client: GatewayBrowserClient,
   params: ChatMetadataParams,
@@ -217,7 +211,9 @@ async function requestChatMetadata(
       }
 
       latestStartupError = requestError;
-      await waitForMetadataRetry(Math.min(retryAfterMs, retryRemainingMs));
+      await new Promise<void>((resolve) => {
+        globalThis.setTimeout(resolve, Math.min(retryAfterMs, retryRemainingMs));
+      });
     }
   }
 }
@@ -225,6 +221,7 @@ async function requestChatMetadata(
 function catalogProjectionKey(
   models: ModelCatalogResult["models"],
   accountSelection: ModelCatalogResult["accountSelection"],
+  modelSelectionPolicy: ModelCatalogResult["modelSelectionPolicy"],
 ) {
   // Metadata omits direct-picker policy, including on alternate runtime choices.
   return stableStringify([
@@ -239,6 +236,7 @@ function catalogProjectionKey(
         : {}),
     })),
     accountSelection,
+    modelSelectionPolicy,
   ]);
 }
 
@@ -253,7 +251,7 @@ function preparePublication(
     isCurrent,
     publish: (result) => {
       // Legacy/startup responses can carry models. The direct catalog is their only UI owner.
-      const { models, accountSelection, ...metadata } = result;
+      const { models, accountSelection, modelSelectionPolicy, ...metadata } = result;
       if (isCurrent()) {
         let catalogChanged = false;
         if (entry.validateCatalog) {
@@ -264,8 +262,12 @@ function preparePublication(
           if (
             !catalog ||
             models === undefined ||
-            catalogProjectionKey(models, accountSelection) !==
-              catalogProjectionKey(catalog.models, catalog.accountSelection)
+            catalogProjectionKey(models, accountSelection, modelSelectionPolicy) !==
+              catalogProjectionKey(
+                catalog.models,
+                catalog.accountSelection,
+                catalog.modelSelectionPolicy,
+              )
           ) {
             invalidateModelCatalogCache(client, entry.scope);
             catalogChanged = true;
@@ -306,12 +308,7 @@ function beginChatMetadataRequest(
     notifyChatMetadataListeners(entry, { type: "loading" });
     return queued.promise;
   }
-  let resolve!: (result: ChatMetadataResult) => void;
-  let reject!: (error: unknown) => void;
-  const promise = new Promise<ChatMetadataResult>((accept, fail) => {
-    resolve = accept;
-    reject = fail;
-  });
+  const { promise, resolve, reject } = createDeferredCore<ChatMetadataResult>();
   let started = false;
   let retryDeadlineAt = startupRetryDeadlineAt;
   let queueDeadlineTimer: ReturnType<typeof setTimeout> | undefined;

@@ -158,6 +158,51 @@ function validate(
 }
 
 describe("full release validation evidence", () => {
+  it.each([3, 4])("accepts bound Windows Node advisory evidence in manifest v%s", (version) => {
+    const job = {
+      name: "checks-windows-node-test-2",
+      status: "completed",
+      conclusion: "failure",
+      url: "https://example.invalid/job",
+    };
+    const advisory = {
+      class: "windows-node-ci",
+      child: "normalCi",
+      job: job.name,
+      conclusion: "failure",
+      runId: "456",
+      url: job.url,
+    };
+    const manifest = {
+      version,
+      childRuns: { normalCi: "456" },
+      childEvidence: { normalCi: { runId: "456", jobs: [job] } },
+      advisoryJobs: [advisory],
+    };
+    expect(validate({}, manifest).result.source).toBe("sha-pinned-main");
+    for (const changed of [
+      { class: "windows" },
+      { child: "releaseChecksCandidate" },
+      { job: "macos-node" },
+      { job: "cross_os_release_checks / Windows / packaged upgrade" },
+      { runId: "789" },
+    ]) {
+      expect(() =>
+        validate({}, { ...manifest, advisoryJobs: [{ ...advisory, ...changed }] }),
+      ).toThrow(/advisory jobs differ/u);
+    }
+    expect(() => validate({}, { ...manifest, advisoryJobs: [] })).toThrow(/advisory jobs differ/u);
+    expect(validate({}, { version, advisoryJobs: [] }).result.source).toBe("sha-pinned-main");
+  });
+
+  it.each([
+    { validationInputs: { laneWaiver: "approved" } },
+    { publishInputs: { stableSoakWaiver: "approved" } },
+    { validationInputs: { knownFlakyJobsJson: '["checks-windows-node-test-2"]' } },
+  ])("rejects retired waiver inputs before accepting direct evidence: %j", (inputs) => {
+    expect(() => validate({}, inputs)).toThrow(/waivers|knownFlakyJobsJson/u);
+  });
+
   it("keeps historical recovery outside new selection validation", () => {
     const expectedPublicationSelection = vi.fn(() => {
       throw new Error("new selection was evaluated");
@@ -546,6 +591,27 @@ describe("full release validation evidence", () => {
     } else {
       expect(isTrustedMainAncestor).not.toHaveBeenCalled();
     }
+  });
+
+  it("rejects direct monthly-branch evidence under a protected publisher", () => {
+    const branch = "extended-stable/2026.6.33";
+    expect(() =>
+      validateFullReleaseValidationEvidence({
+        run: releaseRun({ head_branch: branch }),
+        manifest: releaseManifest({
+          workflowRef: branch,
+          workflowFullRef: `refs/heads/${branch}`,
+          targetRef: "v2026.6.35",
+        }),
+        expectedRepository: "openclaw/openclaw",
+        expectedRunId: "123",
+        expectedTargetSha: targetSha,
+        expectedWorkflowBranch: branch,
+        expectedTrustedWorkflowFullRef: `refs/tags/release-publish/${workflowSha.slice(0, 12)}-123`,
+        expectedTrustedWorkflowSha: workflowSha,
+        isTrustedMainAncestor: () => false,
+      }),
+    ).toThrow("must use a canonical release-ci producer branch");
   });
 
   it("rejects direct main evidence outside current main", () => {

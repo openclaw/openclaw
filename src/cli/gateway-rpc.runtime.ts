@@ -11,7 +11,7 @@ import type { GatewayRpcOpts } from "./gateway-rpc.types.js";
 import { parseTimeoutMsWithFallback } from "./parse-timeout.js";
 import { withProgress } from "./progress.js";
 
-type CallGatewayFromCliRuntimeExtra = {
+export type GatewayRpcExtraOptions = {
   clientName?: Parameters<typeof callGateway>[0]["clientName"];
   mode?: Parameters<typeof callGateway>[0]["mode"];
   deviceIdentity?: Parameters<typeof callGateway>[0]["deviceIdentity"];
@@ -19,6 +19,10 @@ type CallGatewayFromCliRuntimeExtra = {
   expectFinal?: boolean;
   progress?: boolean;
   scopes?: Parameters<typeof callGateway>[0]["scopes"];
+  sharedStateMode?: Parameters<typeof callGateway>[0]["sharedStateMode"];
+};
+
+type CallGatewayFromCliRuntimeExtra = GatewayRpcExtraOptions & {
   defaultTimeoutMs?: number;
   timeoutMs?: number | null;
   label?: string;
@@ -27,7 +31,6 @@ type CallGatewayFromCliRuntimeExtra = {
     typeof callGateway
   >[0]["requiredStoredDeviceAuthScopes"];
   requireLocalBackendSharedAuth?: boolean;
-  sharedStateMode?: Parameters<typeof callGateway>[0]["sharedStateMode"];
 };
 
 type GatewayCliTransportRpcOpts = Omit<GatewayRpcOpts, "timeout"> & {
@@ -89,6 +92,7 @@ export async function callGatewayFromCliRuntime<T = Record<string, unknown>>(
         useStoredDeviceAuth: extra?.useStoredDeviceAuth,
         requiredStoredDeviceAuthScopes: extra?.requiredStoredDeviceAuthScopes,
         requireLocalBackendSharedAuth: extra?.requireLocalBackendSharedAuth,
+        allowLocalBackendAuthNone: extra?.clientName === undefined && extra?.mode === undefined,
         sharedStateMode: extra?.sharedStateMode,
         signal: extra?.signal,
         timeoutMs,

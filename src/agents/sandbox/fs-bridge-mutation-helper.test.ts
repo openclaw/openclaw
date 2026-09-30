@@ -3,11 +3,11 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
 import {
   GUEST_FILESYSTEM_CREATE_EXISTS_EXIT_CODE,
   GUEST_FILESYSTEM_PYTHON,
-} from "../../infra/guest-filesystem.js";
+} from "@openclaw/fs-safe/guest";
+import { describe, expect, it } from "vitest";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { buildPinnedMutationPlan } from "./fs-bridge-mutation-helper.js";
 
@@ -76,6 +76,11 @@ const FORCED_EXDEV_MUTATION_PYTHON = GUEST_FILESYSTEM_PYTHON.replace(
 const FORCED_COPY_FAILURE_MUTATION_PYTHON = GUEST_FILESYSTEM_PYTHON.replace(
   "        copy_completed = True",
   "        raise OSError(errno.ENOSPC, 'forced copy failure')\n        copy_completed = True",
+);
+
+const FIFO_READ_WATCHDOG_MUTATION_PYTHON = GUEST_FILESYSTEM_PYTHON.replace(
+  "def read_file_impl(parent_fd, basename, max_bytes):",
+  "def read_file_impl(parent_fd, basename, max_bytes):\n    import signal\n    signal.alarm(1)",
 );
 
 const FORCED_CREATE_FAILURE_MUTATION_PYTHON = GUEST_FILESYSTEM_PYTHON.replace(
@@ -545,13 +550,15 @@ describe("sandbox pinned mutation helper", () => {
       await fs.mkdir(workspace, { recursive: true });
       expect(spawnSync("mkfifo", [fifoPath]).status).toBe(0);
 
+      expect(FIFO_READ_WATCHDOG_MUTATION_PYTHON).not.toBe(GUEST_FILESYSTEM_PYTHON);
       const result = spawnSync(
         "python3",
-        ["-c", GUEST_FILESYSTEM_PYTHON, "read", workspace, "", "live.pipe"],
+        ["-c", FIFO_READ_WATCHDOG_MUTATION_PYTHON, "read", workspace, "", "live.pipe"],
         {
           encoding: "utf8",
           stdio: ["pipe", "pipe", "pipe"],
-          timeout: 1_000,
+          // Bound startup and cleanup separately from the one-second read watchdog.
+          timeout: 10_000,
           killSignal: "SIGKILL",
         },
       );

@@ -1,4 +1,3 @@
-// Comfy plugin module implements workflow runtime behavior.
 import { randomInt } from "node:crypto";
 import fs from "node:fs/promises";
 import { bufferToBlobPart } from "openclaw/plugin-sdk/blob-runtime";
@@ -82,9 +81,6 @@ type ComfyStatusResponse = {
   message?: string;
   error?: string;
 };
-type ComfyNetworkPolicy = {
-  apiPolicy?: SsrFPolicy;
-};
 type ComfyApiKeyResolution =
   | {
       status: "available";
@@ -108,7 +104,7 @@ type ComfyGeneratedAsset = {
   buffer: Buffer;
   mimeType: string;
   fileName: string;
-  nodeId: string;
+  metadata: { nodeId: string; promptId: string };
 };
 
 type ComfyWorkflowResult = {
@@ -132,24 +128,16 @@ function getComfyConfig(cfg?: OpenClawConfig): { config: ComfyProviderConfig; pa
   return { config: isRecord(legacyConfig) ? legacyConfig : {}, path: "models.providers.comfy" };
 }
 
-function stripNestedCapabilityConfig(config: ComfyProviderConfig): ComfyProviderConfig {
-  const next = { ...config };
-  delete next.image;
-  delete next.video;
-  delete next.music;
-  return next;
-}
-
 function getComfyCapabilityConfig(
   config: ComfyProviderConfig,
   capability: ComfyCapability,
 ): ComfyProviderConfig {
-  const shared = stripNestedCapabilityConfig(config);
+  const shared = { ...config };
+  delete shared.image;
+  delete shared.video;
+  delete shared.music;
   const nested = config[capability];
-  if (!isRecord(nested)) {
-    return shared;
-  }
-  return { ...shared, ...nested };
+  return isRecord(nested) ? { ...shared, ...nested } : shared;
 }
 
 function resolveComfyMode(config: ComfyProviderConfig): ComfyMode {
@@ -292,29 +280,28 @@ function resolveComfyNetworkPolicy(params: {
   allowPrivateNetwork: boolean;
   explicitAllowPrivateNetwork: boolean;
   mode: ComfyMode;
-}): ComfyNetworkPolicy {
+}): SsrFPolicy | undefined {
   let parsed: URL;
   try {
     parsed = new URL(params.baseUrl);
   } catch {
-    return {};
+    return undefined;
   }
 
   const hostname = normalizeOptionalLowercaseString(parsed.hostname) ?? "";
   if (!hostname) {
-    return {};
+    return undefined;
   }
   const localHostnamePolicy: SsrFPolicy | undefined =
     params.mode === "local" ? { hostnameAllowlist: [hostname] } : undefined;
-  const hostnameOnlyPolicy = localHostnamePolicy ? { apiPolicy: localHostnamePolicy } : {};
   if (!params.allowPrivateNetwork) {
-    return hostnameOnlyPolicy;
+    return localHostnamePolicy;
   }
   // Local mode auto-trusts loopback/IP targets and Compose-style single-label
   // service names; public-looking FQDNs require the operator's explicit
   // allowPrivateNetwork opt-in.
   if (!params.explicitAllowPrivateNetwork && params.mode !== "local") {
-    return {};
+    return undefined;
   }
   if (
     !params.explicitAllowPrivateNetwork &&
@@ -322,18 +309,17 @@ function resolveComfyNetworkPolicy(params: {
     !isPrivateOrLoopbackHost(hostname) &&
     !isSingleLabelServiceHostname(hostname)
   ) {
-    return hostnameOnlyPolicy;
+    return localHostnamePolicy;
   }
 
   const originPolicy = ssrfPolicyFromHttpBaseUrlAllowedOrigin(params.baseUrl);
   if (!originPolicy) {
-    return hostnameOnlyPolicy;
+    return localHostnamePolicy;
   }
 
-  return {
-    apiPolicy:
-      params.mode === "local" ? mergeSsrFPolicies(originPolicy, localHostnamePolicy) : originPolicy,
-  };
+  return params.mode === "local"
+    ? mergeSsrFPolicies(originPolicy, localHostnamePolicy)
+    : originPolicy;
 }
 
 function isSingleLabelServiceHostname(hostname: string): boolean {
@@ -366,22 +352,6 @@ async function readJsonResponse<T>(params: {
   }
 }
 
-function resolveFileExtension(params: { fileName?: string; mimeType?: string }): string {
-  const extension = extensionForMime(params.mimeType);
-  if (extension) {
-    return extension.slice(1);
-  }
-  const fileName = params.fileName?.trim();
-  if (!fileName) {
-    return "bin";
-  }
-  const dotIndex = fileName.lastIndexOf(".");
-  if (dotIndex < 0 || dotIndex === fileName.length - 1) {
-    return "bin";
-  }
-  return fileName.slice(dotIndex + 1);
-}
-
 async function uploadInputImage(params: {
   baseUrl: string;
   headers: Headers;
@@ -397,7 +367,7 @@ async function uploadInputImage(params: {
     "image",
     new Blob([bufferToBlobPart(params.image.buffer)], { type: params.image.mimeType }),
     normalizeOptionalString(params.image.fileName) ||
-      `input.${resolveFileExtension({ mimeType: params.image.mimeType })}`,
+      `input.${extensionForMime(params.image.mimeType)?.slice(1) || "bin"}`,
   );
   form.set("type", "input");
   form.set("overwrite", "true");
@@ -571,7 +541,7 @@ async function downloadOutputFile(params: {
   mode: ComfyMode;
   capability: ComfyCapability;
   maxBytes: number;
-}): Promise<{ buffer: Buffer; mimeType: string }> {
+}): Promise<{ buffer: Buffer; mimeType: string; fileName: string }> {
   const fileName =
     normalizeOptionalString(params.file.filename) || normalizeOptionalString(params.file.name);
   if (!fileName) {
@@ -618,7 +588,7 @@ async function downloadOutputFile(params: {
           new Error(`${downloadLabel} stalled after ${chunkTimeoutMs}ms`),
       },
     );
-    return { buffer, mimeType };
+    return { buffer, mimeType, fileName };
   } finally {
     await firstResponse.release();
   }
@@ -800,7 +770,7 @@ export async function runComfyWorkflow(params: {
       baseUrl: normalizedBaseUrl,
       headers: new Headers(headers),
       timeoutMs,
-      policy: networkPolicy.apiPolicy,
+      policy: networkPolicy,
       dispatcherPolicy,
       image: params.inputImage,
       mode,
@@ -829,7 +799,7 @@ export async function runComfyWorkflow(params: {
       body: JSON.stringify(submitPayload),
     },
     timeoutMs,
-    policy: networkPolicy.apiPolicy,
+    policy: networkPolicy,
     dispatcherPolicy,
     auditContext: `comfy-${params.capability}-generate`,
     errorPrefix: "Comfy workflow submit failed",
@@ -846,7 +816,7 @@ export async function runComfyWorkflow(params: {
     headers: new Headers(headers),
     timeoutMs,
     pollIntervalMs,
-    policy: networkPolicy.apiPolicy,
+    policy: networkPolicy,
     dispatcherPolicy,
     mode,
   });
@@ -869,29 +839,21 @@ export async function runComfyWorkflow(params: {
   const assets: ComfyGeneratedAsset[] = [];
   const outputKind = params.capability === "music" ? "audio" : params.capability;
   const maxOutputBytes = resolveGeneratedMediaMaxBytes(params.cfg, outputKind);
-  let assetIndex = 0;
   for (const output of outputFiles) {
     const downloaded = await downloadOutputFile({
       baseUrl: normalizedBaseUrl,
       headers: new Headers(headers),
       timeoutMs,
-      policy: networkPolicy.apiPolicy,
+      policy: networkPolicy,
       dispatcherPolicy,
       file: output.file,
       mode,
       capability: params.capability,
       maxBytes: maxOutputBytes,
     });
-    assetIndex += 1;
-    const originalName =
-      normalizeOptionalString(output.file.filename) || normalizeOptionalString(output.file.name);
     assets.push({
-      buffer: downloaded.buffer,
-      mimeType: downloaded.mimeType,
-      fileName:
-        originalName ||
-        `${params.capability}-${assetIndex}.${resolveFileExtension({ mimeType: downloaded.mimeType })}`,
-      nodeId: output.nodeId,
+      ...downloaded,
+      metadata: { nodeId: output.nodeId, promptId },
     });
   }
 

@@ -44,9 +44,11 @@ describe("whole-batch tool-loop admission", () => {
     async (name, args, detector) => {
       const state = getDiagnosticSessionState(ctx);
       const warningCounts: number[] = [];
+      const warningAgents: Array<string | undefined> = [];
       const unsubscribe = onDiagnosticEvent((event) => {
         if (event.type === "tool.loop" && event.action === "warn") {
           warningCounts.push(event.count);
+          warningAgents.push(event.agentId);
         }
       });
       const result = { content: [{ type: "text", text: "unchanged" }], details: {} };
@@ -70,6 +72,7 @@ describe("whole-batch tool-loop admission", () => {
           });
         }
         expect(warningCounts).toEqual([10]);
+        expect(warningAgents).toEqual(["main"]);
         expect(state.toolCallHistory).toHaveLength(20);
         expect(new Set(state.toolCallHistory?.map((entry) => entry.resultHash)).size).toBe(1);
         await expect(

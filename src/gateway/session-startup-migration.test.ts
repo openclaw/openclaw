@@ -10,7 +10,7 @@ import {
   persistSessionTranscriptTurn,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
-import * as archiveWorker from "../config/sessions/session-accessor.sqlite-archive.js";
+import * as canonicalWorker from "../config/sessions/session-accessor.sqlite-canonical-worker-pool.js";
 import {
   resolveSqliteReadScope,
   toDatabaseOptions,
@@ -22,8 +22,10 @@ import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/sessi
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as gatewayLock from "../infra/gateway-lock.js";
 import * as gatewayOwner from "../infra/gateway-owner-lease.js";
+import * as stateOwner from "../infra/gateway-state-owner.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
-import * as coordinator from "../infra/state-database-coordinator.js";
+import { hasPersistedOpenClawAgentCanonicalValidation } from "../state/openclaw-agent-canonical-validation-receipt.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -70,7 +72,7 @@ describe("runStartupSessionMigration", () => {
       for (const agentId of agentIds) {
         openOpenClawAgentDatabase({ agentId, env });
       }
-      const started = vi.spyOn(archiveWorker, "createSqliteTranscriptArchiveWorker");
+      const started = vi.spyOn(canonicalWorker, "startCanonicalValidationTask");
       try {
         for (let boot = 0; boot < 2; boot++) {
           await closeOpenClawAgentDatabasesAsync();
@@ -87,8 +89,16 @@ describe("runStartupSessionMigration", () => {
               }),
             );
             expect(read).toEqual({ kind: "complete", value: undefined });
+            expect(
+              withOpenClawAgentDatabaseReadOnly(hasPersistedOpenClawAgentCanonicalValidation, {
+                agentId,
+                env,
+              }),
+            ).toMatchObject({ found: true, value: true });
           }
-          expect(started).toHaveBeenCalledTimes(boot === 0 ? agentCount : 0);
+          expect(started.mock.calls.map(([, options]) => options.agentId).toSorted()).toEqual(
+            boot === 0 ? agentIds : [],
+          );
           expect(log.warn).not.toHaveBeenCalled();
         }
       } finally {
@@ -115,10 +125,10 @@ describe("runStartupSessionMigration", () => {
       await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
       await runStartupSessionMigration({ cfg, env, log: makeLog() });
-      const started = vi.spyOn(archiveWorker, "createSqliteTranscriptArchiveWorker");
+      const started = vi.spyOn(canonicalWorker, "startCanonicalValidationTask");
       const open = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
       const lifecycle = vi
-        .spyOn(coordinator, "hasGatewayLifecycleCoordinator")
+        .spyOn(stateOwner, "hasActiveGatewayStateOwner")
         .mockReturnValue(gatewayActive);
       const lock = vi.spyOn(gatewayLock, "readActiveGatewayLockIdentity").mockResolvedValue({
         pid: process.pid,

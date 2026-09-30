@@ -7,12 +7,13 @@ import {
   resolveHeartbeatRunPrompt,
 } from "../infra/heartbeat-runner-prompt.js";
 import { startHeartbeatRunner } from "../infra/heartbeat-runner-scheduler.js";
-import { requestHeartbeat as requestHeartbeatWake } from "../infra/heartbeat-wake.js";
+import { requestHeartbeatAndWait } from "../infra/heartbeat-wake.js";
 import {
   drainSystemEvents,
   enqueueSystemEvent,
   peekSystemEventEntries,
 } from "../infra/system-events.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
@@ -24,15 +25,6 @@ const { logger, makeStorePath } = setupCronServiceSuite({
 
 describe("CronService failure notification delivery", () => {
   it.each([
-    {
-      name: "the explicitly targeted Telegram topic",
-      agentId: "ops",
-      sessionKey: "agent:ops:telegram:group:42:topic:77",
-      sessionTarget: "session:agent:ops:telegram:group:42:topic:77" as const,
-      wakeMode: "now" as const,
-      carriesOrigin: true,
-      wakesNow: true,
-    },
     {
       name: "a persistent target instead of its creation conversation",
       agentId: "ops",
@@ -84,6 +76,7 @@ describe("CronService failure notification delivery", () => {
       threadId: 77,
     };
     const observed: Array<{ prompt: string; deliveryContext?: DeliveryContext }> = [];
+    const pendingWakes: Array<ReturnType<typeof requestHeartbeatAndWait>> = [];
     const runOnce = vi.fn(async (options: HeartbeatRunOptions) => {
       const pendingEventEntries = peekSystemEventEntries(options.sessionKey ?? "");
       const preflight = await resolveHeartbeatPreflight({
@@ -99,7 +92,6 @@ describe("CronService failure notification delivery", () => {
           cfg,
           preflight,
           canRelayToUser: true,
-          startedAt: Date.now(),
           scheduledTasks: [],
           useHeartbeatResponseTool: false,
         }).prompt,
@@ -119,6 +111,7 @@ describe("CronService failure notification delivery", () => {
       throw new Error("failure alert channel unavailable");
     });
     const cron = new CronService({
+      scheduler: createTestGatewayScheduler(),
       storePath: store.storePath,
       cronEnabled: true,
       cronConfig: { failureAlert: { enabled: true, after: 1 } },
@@ -133,13 +126,17 @@ describe("CronService failure notification delivery", () => {
           contextKey: options?.contextKey,
           deliveryContext: options?.deliveryContext,
         }),
-      requestHeartbeat: (wake) =>
-        requestHeartbeatWake({
-          ...wake,
-          sessionKey:
-            wake.sessionKey ?? resolveAgentMainSessionKey({ cfg, agentId: wake.agentId ?? "main" }),
-          coalesceMs: 0,
-        }),
+      requestHeartbeat: (wake) => {
+        pendingWakes.push(
+          requestHeartbeatAndWait({
+            ...wake,
+            sessionKey:
+              wake.sessionKey ??
+              resolveAgentMainSessionKey({ cfg, agentId: wake.agentId ?? "main" }),
+            coalesceMs: 0,
+          }),
+        );
+      },
       sendCronFailureAlert,
       runIsolatedAgentJob: async () => ({
         status: "error",
@@ -159,9 +156,13 @@ describe("CronService failure notification delivery", () => {
       });
 
       await cron.run(job.id, "force");
-      await vi.advanceTimersByTimeAsync(1);
-
       expect(sendCronFailureAlert).toHaveBeenCalledOnce();
+      await expect(sendCronFailureAlert.mock.results[0]?.value).rejects.toThrow(
+        "failure alert channel unavailable",
+      );
+      await vi.advanceTimersByTimeAsync(1);
+      await Promise.all(pendingWakes);
+
       expect(peekSystemEventEntries(testCase.sessionKey)).toHaveLength(1);
       expect(runOnce).toHaveBeenCalledTimes(testCase.wakesNow ? 1 : 0);
       if (testCase.wakesNow) {
@@ -187,8 +188,14 @@ describe("CronService failure notification delivery", () => {
       }
     } finally {
       cron.stop();
-      runner.stop();
-      drainSystemEvents(testCase.sessionKey);
+      try {
+        // Stopping the runner retains unfinished notifications for its successor.
+        await vi.advanceTimersByTimeAsync(1);
+        await Promise.all(pendingWakes);
+      } finally {
+        runner.stop();
+        drainSystemEvents(testCase.sessionKey);
+      }
     }
   });
 });

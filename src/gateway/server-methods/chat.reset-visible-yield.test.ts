@@ -554,6 +554,8 @@ describe("visible yielded session continuation", () => {
             tools: {
               profile: "full",
               codeMode: false,
+              // The scripted lifecycle proof also asserts direct publication tools after resume.
+              toolSearch: false,
               allow: [
                 "sessions_spawn",
                 "sessions_yield",
@@ -678,16 +680,13 @@ describe("visible yielded session continuation", () => {
           writableEnded: false,
           fixtureStopping: false,
         });
-        const tasks = await gateway.client.request<{
-          tasks: Array<{ runId: string; status: string }>;
-        }>("tasks.list", { agentId: "main" });
-        record("public-cancelled-tasks", { tasks });
-        expect(tasks.tasks.find((task) => task.runId === requester?.runId)).toMatchObject({
-          status: "cancelled",
-        });
-        expect(tasks.tasks.find((task) => task.runId === child?.runId)).toMatchObject({
-          status: "cancelled",
-        });
+        for (const receipt of [requester, child]) {
+          expect(receipt).toBeDefined();
+          const run = receipt ? subagentRuns.get(receipt.runId) : undefined;
+          expect(run?.execution).toMatchObject({ status: "terminal" });
+          expect(run?.endedReason).toBe("subagent-killed");
+        }
+        record("native-runs-cancelled");
       } finally {
         record("fixture-cleanup-start", { fixtureErrors, unexpectedInference });
         stopping = true;

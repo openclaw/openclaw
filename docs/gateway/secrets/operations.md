@@ -136,6 +136,8 @@ If you save a plan instead of applying during `configure`, apply that saved plan
     - Precedence shadowing (SQLite auth profiles taking priority over `openclaw.json` refs).
     - Store residue (a stored name still has an equivalent plaintext value in config).
 
+    Initially missing generated `models.json` files are skipped. When reading an existing file, audit enforces a 5 MiB limit and reports leaf symlinks, non-regular files, and read or parse failures as `REF_UNRESOLVED`. Parse diagnostics identify the file without echoing its contents.
+
     Exec note: by default, audit skips exec SecretRef resolvability checks to avoid command side effects. Use `openclaw secrets audit --allow-exec` to execute exec providers during audit.
 
     Header residue note: sensitive provider header detection is name-heuristic based (common auth/credential header names and fragments such as `authorization`, `x-api-key`, `token`, `secret`, `password`, and `credential`).

@@ -1,4 +1,3 @@
-/** Runs prompt assembly, admission, submission, and prompt-local recovery. */
 import { formatErrorMessage } from "../../../infra/errors.js";
 import {
   mergeAgentRunAttemptTerminal,
@@ -100,8 +99,7 @@ export async function runEmbeddedAttemptPromptPhase(
   const { withOwnedTranscriptWrite } = input.sessionLock;
   const { diagnosticTrace, runTrace } = input.diagnostics;
   const { systemPromptReport, runtimeInfo } = prepared.systemPrompt;
-  // Hook phases retain the prompt snapshot prepared before assembly.
-  const systemPromptText = sessionRuntimeState.systemPromptText;
+  let systemPromptText = sessionRuntimeState.systemPromptText;
   const toolSearchCompacted = prepared.toolCatalog.toolSearch.compacted;
   let skipPromptSubmission = false;
   let leasedSteering: PromptAssemblyResult["leasedSteering"];
@@ -129,8 +127,8 @@ export async function runEmbeddedAttemptPromptPhase(
     });
     leasedSteering = undefined;
   };
-  const handleMidTurnPrecheckRequest = (request: MidTurnPrecheckRequest) => {
-    const outcome = handleEmbeddedAttemptMidTurnPrecheck({
+  const handleMidTurnPrecheckRequest = async (request: MidTurnPrecheckRequest) => {
+    const outcome = await handleEmbeddedAttemptMidTurnPrecheck({
       attempt,
       request,
       sessionAgentId,
@@ -165,12 +163,20 @@ export async function runEmbeddedAttemptPromptPhase(
       systemPromptText,
       setActiveSessionSystemPrompt,
       applyPromptBuildToolsAllow: (toolsAllow) => {
-        return promptToolPolicy.apply(toolsAllow).activeToolNames;
+        // Hook authority follows reachable capabilities, not just provider-visible controls.
+        return promptToolPolicy.apply(toolsAllow).callableToolNames;
+      },
+      prepareSystemPrompt: async (currentSystemPrompt) => {
+        const refresh = await prepared.systemPrompt.prepareToolPrompt?.(
+          promptToolPolicy.current.effectiveTools,
+        );
+        return refresh ? refresh(currentSystemPrompt) : currentSystemPrompt;
       },
       setLeasedSteering: (lease) => {
         leasedSteering = lease;
       },
     });
+    systemPromptText = sessionRuntimeState.systemPromptText;
     if (prepared.toolCatalog.emptyExplicitToolAllowlistError) {
       setFailure(prepared.toolCatalog.emptyExplicitToolAllowlistError, "precheck");
       skipPromptSubmission = true;
@@ -306,7 +312,6 @@ export async function runEmbeddedAttemptPromptPhase(
         imageCount: imageResult.images.length,
         llmBoundaryPromptForPrecheck: promptContext.llmBoundaryPromptForPrecheck,
         promptForModel: promptContext.promptForModel,
-        promptSubmissionRuntimeOnly: promptContext.promptSubmission.runtimeOnly,
         reserveTokens,
         sessionMessages: activeSession.messages,
         skipPromptSubmission,
@@ -484,12 +489,12 @@ export async function runEmbeddedAttemptPromptPhase(
   const pendingMidTurnPrecheckRequest = contextGuards.takePendingMidTurnPrecheckRequest();
   if (pendingMidTurnPrecheckRequest) {
     await withOwnedTranscriptWrite(() =>
-      withSessionManagerWrite(sessionManager, () => {
+      withSessionManagerWrite(sessionManager, async () => {
         removeTrailingMidTurnPrecheckAssistantError({ activeSession, sessionManager });
         const terminal = projectAgentRunAttemptTerminal(input.state.terminal);
         if (!promptState.preflightRecovery && terminal.promptErrorSource !== "precheck") {
           setFailure(null, null);
-          handleMidTurnPrecheckRequest(pendingMidTurnPrecheckRequest);
+          await handleMidTurnPrecheckRequest(pendingMidTurnPrecheckRequest);
         }
       }),
     );

@@ -1,4 +1,3 @@
-// Tlon plugin module implements history behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { asNullableRecord as asRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -87,12 +86,7 @@ async function fetchChannelHistory(
         const essay = asRecord(itemRecord?.essay) ?? asRecord(replyPostSet?.essay);
         const seal = asRecord(itemRecord?.seal) ?? asRecord(replyPostSet?.seal);
 
-        return {
-          author: typeof essay?.author === "string" ? essay.author : "unknown",
-          content: extractMessageText(essay?.content || []),
-          timestamp: typeof essay?.sent === "number" ? essay.sent : Date.now(),
-          id: typeof seal?.id === "string" ? seal.id : undefined,
-        } as TlonHistoryEntry;
+        return createHistoryEntryFromMemo({ memo: essay, seal });
       })
       .filter((msg) => msg.content);
 
@@ -136,6 +130,28 @@ export function createChannelHistoryCache() {
       return await fetchChannelHistory(api, channelNest, count, runtime);
     },
   };
+}
+
+export async function fetchThreadRootAuthor(
+  api: { scry: (path: string) => Promise<unknown> },
+  channelNest: string,
+  parentId: string,
+  runtime?: RuntimeEnv,
+): Promise<string | null> {
+  // Keep remote identifiers within the authenticated channel-post namespace.
+  if (!/^chat\/~?[a-z-]+\/[a-z0-9-]+$/i.test(channelNest) || !/^\d+(?:\.\d{3})*$/.test(parentId)) {
+    return null;
+  }
+  try {
+    const data = asRecord(
+      await api.scry(`/channels/v4/${channelNest}/posts/post/id/${formatUd(parentId)}.json`),
+    );
+    const essay = asRecord(data?.essay);
+    return typeof essay?.author === "string" ? essay.author : null;
+  } catch (error: unknown) {
+    runtime?.log?.(`[tlon] Could not identify thread root author: ${formatErrorMessage(error)}`);
+    return null;
+  }
 }
 
 /**

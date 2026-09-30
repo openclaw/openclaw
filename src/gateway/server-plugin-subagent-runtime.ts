@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { assertOperatorModelAllowed } from "../agents/admitted-run-context.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import type { ModelRef } from "../agents/model-ref-shared.js";
 import type { AgentWaitResult } from "../agents/run-wait.types.js";
@@ -211,102 +212,137 @@ export function createGatewaySubagentRuntime(
           "Plugin background completion requires a plugin identity and Gateway binding.",
         );
       }
-      const execution = prepareInProcessAgentExecution({
+      const execution = await prepareInProcessAgentExecution({
         agentId: params.agentId,
         pluginRuntimeOwnerId: pluginId,
         resolveGatewayContext,
       });
-      const assertCurrent = () => {
+      try {
+        const assertCurrent = () => {
+          runtimeLifetime?.throwIfAborted();
+          execution.assertCurrent();
+        };
         runtimeLifetime?.throwIfAborted();
-        execution.assertCurrent();
-      };
-      runtimeLifetime?.throwIfAborted();
-      await execution.authorize();
-      assertCurrent();
-      authorizeModelOverride(params);
-      const signals = [params.signal, runtimeLifetime, execution.signal].filter(
-        (signal): signal is AbortSignal => signal !== undefined,
-      );
-      // Preserve subagent authority while sharing the sessionless inference owner.
-      // Queueing must not outlive the Gateway instance that admitted the plugin.
-      return await createBackgroundWorkOwner({
-        owner: `plugin:${pluginId}`,
-        maxConcurrent: 3,
-      }).enqueue(
-        async (signal) => {
-          assertCurrent();
-          const [
-            { resolveConfiguredAgentId },
-            { resolveSimpleCompletionSelectionForAgent },
-            { runIsolatedCompletion },
-            { finalizePluginLlmCompletion },
-          ] = await Promise.all([
-            import("../agents/agent-scope.js"),
-            import("../agents/simple-completion-runtime.js"),
-            import("../agents/isolated-completion.js"),
-            import("../plugins/runtime/runtime-llm.runtime.js"),
-          ]);
-          await execution.authorize();
-          assertCurrent();
-          signal.throwIfAborted();
-          const { policy } = authorizeModelOverride(params);
-          const cfg = execution.context.getRuntimeConfig();
-          const agentId = resolveConfiguredAgentId(cfg, params.agentId);
-          const selection = resolveSimpleCompletionSelectionForAgent({
-            cfg,
-            agentId,
-            modelRef: params.model,
-          });
-          if (!selection) {
-            throw new Error(`No model configured for agent ${agentId}.`);
-          }
-          assertPluginSubagentModelAllowed(
-            policy,
-            { provider: selection.provider, model: selection.modelId },
-            pluginId,
-            selection.profileId,
-          );
-          const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 30_000);
-          const runSignal = AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]);
-          // Hold capacity through runtime cleanup; a response-only abort race would
-          // admit another completion while the previous model still unwinds.
-          const result = await execution.run(() =>
-            runIsolatedCompletion({
-              config: cfg,
+        await execution.authorize();
+        assertCurrent();
+        authorizeModelOverride(params);
+        const signals = [params.signal, runtimeLifetime, execution.signal].filter(
+          (signal): signal is AbortSignal => signal !== undefined,
+        );
+        // Preserve subagent authority while sharing the sessionless inference owner.
+        // Queueing must not outlive the Gateway instance that admitted the plugin.
+        return await createBackgroundWorkOwner({
+          owner: `plugin:${pluginId}`,
+          maxConcurrent: 3,
+        }).enqueue(
+          async (signal) => {
+            assertCurrent();
+            const [
+              { resolveConfiguredAgentId },
+              { resolveSimpleCompletionSelectionForAgent },
+              { runIsolatedCompletion },
+              { runWithModelFallback },
+              { finalizePluginLlmCompletion },
+            ] = await Promise.all([
+              import("../agents/agent-scope.js"),
+              import("../agents/simple-completion-runtime.js"),
+              import("../agents/isolated-completion.js"),
+              import("../agents/model-fallback-runner.js"),
+              import("../plugins/runtime/runtime-llm.runtime.js"),
+            ]);
+            await execution.authorize();
+            assertCurrent();
+            signal.throwIfAborted();
+            const { policy } = authorizeModelOverride(params);
+            const cfg = execution.context.getRuntimeConfig();
+            const agentId = resolveConfiguredAgentId(cfg, params.agentId);
+            const explicitOverride = Boolean(params.model?.trim());
+            const selection = resolveSimpleCompletionSelectionForAgent({
+              cfg,
               agentId,
-              provider: selection.provider,
-              model: selection.modelId,
-              authProfileId: selection.profileId,
-              systemPrompt: params.extraSystemPrompt ?? "",
-              prompt: params.message,
-              timeoutMs,
-              abortSignal: runSignal,
-              assertCurrent,
-            }),
-          );
-          runSignal.throwIfAborted();
-          assertCurrent();
-          signal.throwIfAborted();
-          finalizePluginLlmCompletion({
-            cfg,
-            hostPluginId: pluginId,
-            rawUsage: result.usage,
-            result: {
-              text: result.text,
-              provider: result.provider,
-              model: result.model,
-              agentId,
-              execution: { mode: "isolated-agent-runtime", owner: result.owner },
-              audit: { caller: { kind: "plugin", id: pluginId } },
-            },
-          });
-          return { text: result.text };
-        },
-        { abortSignal: signals.length ? AbortSignal.any(signals) : undefined },
-      );
+              modelRef: params.model,
+            });
+            if (!selection) {
+              throw new Error(`No model configured for agent ${agentId}.`);
+            }
+            assertPluginSubagentModelAllowed(
+              policy,
+              { provider: selection.provider, model: selection.modelId },
+              pluginId,
+              selection.profileId,
+            );
+            const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 30_000);
+            const runSignal = AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]);
+            // Hold capacity through runtime cleanup; a response-only abort race would
+            // admit another completion while the previous model still unwinds.
+            const fallbackResult = await execution.run(() =>
+              runWithModelFallback({
+                cfg,
+                agentId,
+                provider: selection.provider,
+                model: selection.modelId,
+                operatorAuthority: execution.operatorAuthority,
+                abortSignal: runSignal,
+                skipAuthProfileRuntime: true,
+                requestedRouteResolution: "resolved",
+                ...(explicitOverride ? { fallbacksOverride: [] } : {}),
+                run: async (provider, model) => {
+                  assertCurrent();
+                  signal.throwIfAborted();
+                  runSignal.throwIfAborted();
+                  const isSelectedPrimary =
+                    provider === selection.provider && model === selection.modelId;
+                  const result = await runIsolatedCompletion({
+                    config: cfg,
+                    agentId,
+                    provider,
+                    model,
+                    authProfileId: isSelectedPrimary ? selection.profileId : undefined,
+                    operatorAuthority: execution.operatorAuthority,
+                    systemPrompt: params.extraSystemPrompt ?? "",
+                    prompt: params.message,
+                    timeoutMs,
+                    abortSignal: runSignal,
+                    assertCurrent,
+                  });
+                  runSignal.throwIfAborted();
+                  assertCurrent();
+                  signal.throwIfAborted();
+                  assertOperatorModelAllowed(execution.operatorAuthority, result);
+                  return result;
+                },
+              }),
+            );
+            runSignal.throwIfAborted();
+            assertCurrent();
+            signal.throwIfAborted();
+            const result = fallbackResult.result;
+            assertOperatorModelAllowed(execution.operatorAuthority, result);
+            finalizePluginLlmCompletion({
+              cfg,
+              hostPluginId: pluginId,
+              rawUsage: result.usage,
+              result: {
+                text: result.text,
+                provider: result.provider,
+                model: result.model,
+                agentId,
+                execution: { mode: "isolated-agent-runtime", owner: result.owner },
+                audit: { caller: { kind: "plugin", id: pluginId } },
+              },
+            });
+            return { text: result.text };
+          },
+          { abortSignal: signals.length ? AbortSignal.any(signals) : undefined },
+        );
+      } finally {
+        execution.release();
+      }
     },
     async run(request) {
       const params = { ...request };
+      const assertCurrent = params.assertCurrent;
+      assertCurrent?.();
       if (params.disableTools === true && (params.toolsAlsoAllow?.length ?? 0) > 0) {
         throw new Error("Tool-free plugin subagent runs cannot request additive tools.");
       }
@@ -323,7 +359,7 @@ export function createGatewaySubagentRuntime(
         toolsAlsoAllow: params.toolsAlsoAllow,
       });
       const { allowOverride, allowSyntheticModelOverride, policy } = authorizeModelOverride(params);
-      let sessionMutationCommitGuard: (() => void) | undefined;
+      let sessionMutationCommitGuard = assertCurrent;
       if (policy) {
         const context = getInProcessGatewayRequestContext(resolveGatewayContext);
         if (!context) {
@@ -331,6 +367,7 @@ export function createGatewaySubagentRuntime(
         }
         const cfg = context.getRuntimeConfig();
         sessionMutationCommitGuard = () => {
+          assertCurrent?.();
           runtimeLifetime?.throwIfAborted();
           if (
             getInProcessGatewayRequestContext(resolveGatewayContext) !== context ||

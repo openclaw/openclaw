@@ -1,9 +1,4 @@
-import {
-  monitorEventLoopDelay,
-  performance,
-  PerformanceObserver,
-  type PerformanceEntry,
-} from "node:perf_hooks";
+import { performance } from "node:perf_hooks";
 import { afterEach, describe, expect, it } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { prepareContextWindowCaches } from "../agents/context-cache-projection.js";
@@ -12,12 +7,9 @@ import { resetContextWindowCacheForTest } from "../agents/context-runtime-state.
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../agents/prepared-model-runtime.test-support.js";
 import { initializeManagedWorktreeTestRepository } from "../agents/worktrees/service.test-support.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import { connectGatewayClient, disconnectGatewayClient } from "./test-helpers.e2e.js";
-import {
-  getGatewayTestPort,
-  installGatewayTestHooks,
-  startTestGatewayServer,
-} from "./test-helpers.js";
+import { installGatewayTestHooks, startTestGatewayServer } from "./test-helpers.js";
 
 installGatewayTestHooks();
 const repositories = createTempDirTracker();
@@ -41,9 +33,10 @@ describe("Gateway context cache remote proof", () => {
         contextWindow: baseWindow + (index % 17),
         maxTokens: 8_192,
       }));
-    const port = await getGatewayTestPort();
     const token = "context-prewarm-proof-token";
-    const server = await startTestGatewayServer(port, {
+    const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+    const { port } = portClaim;
+    const server = await startTestGatewayServer(portClaim, {
       bind: "loopback",
       auth: { mode: "token", token },
       controlUiEnabled: false,
@@ -119,19 +112,6 @@ describe("Gateway context cache remote proof", () => {
         heartbeatGaps.push(now - lastHeartbeatAt);
         lastHeartbeatAt = now;
       }, 20);
-      const delayMonitor = monitorEventLoopDelay({ resolution: 20 });
-      delayMonitor.enable();
-      const eluStart = performance.eventLoopUtilization();
-      const cpuStart = process.cpuUsage();
-      const memoryStart = process.memoryUsage();
-      const resourceStart = process.resourceUsage();
-      const gcDurationsMs: number[] = [];
-      const gcObserver = new PerformanceObserver((list) => {
-        for (const entry of list.getEntries() as PerformanceEntry[]) {
-          gcDurationsMs.push(entry.duration);
-        }
-      });
-      gcObserver.observe({ entryTypes: ["gc"] });
       const latencies = {
         healthz: [] as number[],
         readyz: [] as number[],
@@ -205,33 +185,11 @@ describe("Gateway context cache remote proof", () => {
       await new Promise<void>((resolve) => {
         setTimeout(resolve, 40);
       });
-      const elu = performance.eventLoopUtilization(performance.eventLoopUtilization(), eluStart);
-      const cpu = process.cpuUsage(cpuStart);
-      const memoryEnd = process.memoryUsage();
-      const resourceEnd = process.resourceUsage();
-      delayMonitor.disable();
       clearInterval(heartbeat);
-      gcObserver.disconnect();
 
       const result = {
         modelCount,
         maxHeartbeatGapMs: Math.max(...heartbeatGaps),
-        delayMaxMs: delayMonitor.max / 1_000_000,
-        delayP99Ms: delayMonitor.percentile(99) / 1_000_000,
-        eventLoopUtilization: elu.utilization,
-        cpu: { userMs: cpu.user / 1_000, systemMs: cpu.system / 1_000 },
-        memory: {
-          rssStartMiB: memoryStart.rss / 1024 / 1024,
-          rssEndMiB: memoryEnd.rss / 1024 / 1024,
-          heapUsedStartMiB: memoryStart.heapUsed / 1024 / 1024,
-          heapUsedEndMiB: memoryEnd.heapUsed / 1024 / 1024,
-          maxRssDeltaMiB: (resourceEnd.maxRSS - resourceStart.maxRSS) / 1024,
-        },
-        gc: {
-          count: gcDurationsMs.length,
-          totalMs: gcDurationsMs.reduce((total, duration) => total + duration, 0),
-          maxMs: Math.max(0, ...gcDurationsMs),
-        },
         maxHealthzMs: Math.max(...latencies.healthz),
         maxReadyzMs: Math.max(...latencies.readyz),
         maxHealthRpcMs: Math.max(...latencies.healthRpc),
@@ -251,14 +209,6 @@ describe("Gateway context cache remote proof", () => {
             windows: caches.contextWindowCache.size,
           };
         })(),
-        publishedOwner: {
-          configuredModelCount: Object.values(publishedOwner.config.models?.providers ?? {}).reduce(
-            (count, provider) => count + (provider.models?.length ?? 0),
-            0,
-          ),
-          catalogEntryCount: publishedOwner.modelCatalog.entries.length,
-          staticEntryCount: publishedOwner.modelCatalog.staticEntries?.length ?? 0,
-        },
         sharedBare: contextModule.lookupContextTokens("shared-model", {
           allowAsyncLoad: false,
           skipRuntimeConfigLoad: true,

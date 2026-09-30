@@ -75,6 +75,7 @@ import {
   runTrustedToolPolicies,
 } from "../trusted-tool-policy.js";
 import { registerHostHookFixture, registerTrustedHostHookFixture } from "./host-hook-fixture.js";
+import { hostHookUiProjection } from "./test-helpers/host-hook-ui-projection.js";
 
 async function waitForPluginEventHandlers(): Promise<void> {
   await new Promise<void>((resolve) => {
@@ -341,9 +342,7 @@ describe("host-hook fixture plugin contract", () => {
         activationSource: "default",
       }),
       register(api) {
-        api.registerAgentToolResultMiddleware(async (event) => ({ result: event.result }), {
-          runtimes: ["codex"],
-        });
+        api.registerAgentToolResultMiddleware(async (event) => ({ result: event.result }));
       },
     });
 
@@ -2514,35 +2513,7 @@ describe("host-hook fixture plugin contract", () => {
     expect(ok).toBe(true);
     expect(error).toBeUndefined();
     expect(validatePluginsUiDescriptorsResult(payload)).toBe(true);
-    expect(payload).toEqual({
-      ok: true,
-      generation: getActivePluginRegistryVersion(),
-      methods: ["plugins.uiDescriptors", "plugins.sessionAction"],
-      controlUiTabs: [],
-      controlUiWidgetKinds: [
-        { pluginId: "session", kind: "session:report", label: "Report" },
-        { pluginId: "session", kind: "session:progress", label: "Session progress" },
-        { pluginId: "session", kind: "session:website", label: "Website" },
-      ],
-      pluginSurfaceUrls: {},
-      descriptors: [
-        {
-          id: "admin-panel",
-          pluginId: "host-hook-fixture",
-          pluginName: "Host Hook Fixture",
-          surface: "settings",
-          label: "Admin panel",
-          requiredScopes: ["operator.admin"],
-        },
-        {
-          id: "approval-panel",
-          pluginId: "host-hook-fixture",
-          pluginName: "Host Hook Fixture",
-          surface: "session",
-          label: "Approval panel",
-        },
-      ],
-    });
+    expect(payload).toEqual(hostHookUiProjection(getActivePluginRegistryVersion()));
   });
 
   it("enforces command requiredScopes for gateway clients and command owners", async () => {

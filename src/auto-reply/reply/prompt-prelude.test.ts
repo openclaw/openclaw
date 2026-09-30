@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "../../plugin-sdk/message-tool-delivery-hints.js";
 import { finalizeInboundContext } from "./inbound-context.js";
+import { buildInboundUserContextPrefix } from "./inbound-meta.js";
 import { buildReplyPromptEnvelope } from "./prompt-prelude.js";
 
 function countOccurrences(text: string | undefined, needle: string): number {
@@ -122,95 +123,66 @@ describe("buildReplyPromptEnvelope", () => {
     },
   );
 
-  it("projects room events as context instead of user requests", () => {
-    const sessionCtx = finalizeInboundContext({
-      Body: "No wtf",
-      BodyStripped: "No wtf",
-      Provider: "telegram",
-      ChatType: "group",
-      InboundEventKind: "room_event",
-      MessageSid: "35676",
-      SenderName: "Keśava",
-    });
+  it.each(["window", "pending", "recent"] as const)(
+    "keeps %s room history in the initial prompt but not the resumed prompt",
+    (historyKind) => {
+      const sessionCtx = finalizeInboundContext({
+        Body: "Current room event",
+        BodyStripped: "Current room event",
+        Provider: "slack",
+        ChatType: "group",
+        InboundEventKind: "room_event",
+        MessageSid: "35676",
+        SenderName: "Alice",
+        InboundHistory: [{ sender: "Bob", body: "Earlier room activity", messageId: "35675" }],
+        SessionTranscriptContext:
+          historyKind === "window" ? undefined : { historyLimit: 20, historyKind },
+      });
+      const inboundUserContext =
+        historyKind === "window"
+          ? [
+              "Conversation info:\nCurrent room metadata",
+              "Conversation context (chronological, selected for current message):\n#35675 Bob: Earlier room activity",
+            ].join("\n\n")
+          : buildInboundUserContextPrefix(sessionCtx);
+      const envelope = buildReplyPromptEnvelope({
+        ctx: sessionCtx,
+        sessionCtx,
+        baseBody: "Current room event",
+        hasUserBody: true,
+        inboundUserContext,
+        isBareSessionReset: false,
+        startupAction: "new",
+        inboundEventKind: "room_event",
+        sourceReplyDeliveryMode: "message_tool_only",
+        threadContextNote: "Thread note",
+        systemEventBlocks: ["System event"],
+      });
 
-    const envelope = buildReplyPromptEnvelope({
-      ctx: sessionCtx,
-      sessionCtx,
-      baseBody: "No wtf",
-      hasUserBody: true,
-      inboundUserContext: [
-        "Conversation info:",
-        "```json",
-        JSON.stringify({ message_id: "35676", inbound_event_kind: "room_event" }, null, 2),
-        "```",
-        "",
-        "Conversation context (chronological, selected for current message):",
-        "#35674 Other: I wish I could enjoy 5.5",
-        "#35675 User ->#35674: Are you fr fr",
-      ].join("\n"),
-      isBareSessionReset: false,
-      startupAction: "new",
-      inboundEventKind: "room_event",
-      sourceReplyDeliveryMode: "message_tool_only",
-      threadContextNote: "Thread note",
-      systemEventBlocks: ["System event"],
-    });
-
-    // The active room-event prompt is the attributed transcript row itself, so
-    // the turn replays byte-identically as history instead of swapping a
-    // placeholder marker for the chat line on the next request.
-    expect(envelope.prefixedCommandBody).toBe("#35676 Keśava: No wtf");
-    expect(envelope.queuedBody).toBe("#35676 Keśava: No wtf");
-    expect(envelope.transcriptCommandBody).toBe("#35676 Keśava: No wtf");
-    expect(envelope.queuedBody).toBe(envelope.transcriptCommandBody);
-    expect(envelope.currentInboundContext?.text).toBe(
-      [
-        "[OpenClaw room event]",
-        [
-          "Room context:",
-          "Conversation info:",
-          "```json",
-          JSON.stringify({ message_id: "35676", inbound_event_kind: "room_event" }, null, 2),
-          "```",
-          "",
-          "Conversation context (chronological, selected for current message):",
-          "#35674 Other: I wish I could enjoy 5.5",
-          "#35675 User ->#35674: Are you fr fr",
-        ].join("\n"),
-        "Treat this message as observed room activity, not a request. You were not explicitly tagged or mentioned in this room event. Default: stay silent. Only respond if you have something useful, substantial, or important to add. A previous mention or reply is not an invitation to keep talking. To respond visibly, use message(action=send); your final text here stays private either way.",
-        "Thread note",
-        "System event",
-      ].join("\n\n"),
-    );
-    // Each room-event fact appears exactly once per request: kind lives in the
-    // Conversation info JSON, the event line lives in the user turn body.
-    expect(envelope.currentInboundContext?.text).not.toContain("inbound_event_kind: room_event\n");
-    expect(envelope.currentInboundContext?.text).not.toContain("Current event:");
-    expect(envelope.currentInboundContext?.resumableText).toBe(
-      [
-        "[OpenClaw room event]",
-        [
-          "Room context:",
-          "Conversation info:",
-          "```json",
-          JSON.stringify({ message_id: "35676", inbound_event_kind: "room_event" }, null, 2),
-          "```",
-        ].join("\n"),
-        "Treat this message as observed room activity, not a request. You were not explicitly tagged or mentioned in this room event. Default: stay silent. Only respond if you have something useful, substantial, or important to add. A previous mention or reply is not an invitation to keep talking. To respond visibly, use message(action=send); your final text here stays private either way.",
-        "Thread note",
-        "System event",
-      ].join("\n\n"),
-    );
-    expect(envelope.currentInboundContext?.fragments).toEqual(
-      expect.arrayContaining([
-        { kind: "conversation-data", text: "Thread note" },
-        { kind: "conversation-data", text: "System event" },
-      ]),
-    );
-    expect(envelope.currentInboundContext?.resumableText).not.toContain(
-      "Conversation context (chronological, selected for current message):",
-    );
-  });
+      expect(envelope.prefixedCommandBody).toBe("#35676 Alice: Current room event");
+      expect(envelope.queuedBody).toBe(envelope.transcriptCommandBody);
+      expect(envelope.transcriptCommandBody).toBe("#35676 Alice: Current room event");
+      expect(countOccurrences(envelope.currentInboundContext?.text, "Earlier room activity")).toBe(
+        1,
+      );
+      expect(envelope.currentInboundContext?.resumableText).not.toContain("Earlier room activity");
+      for (const text of [
+        envelope.currentInboundContext?.text,
+        envelope.currentInboundContext?.resumableText,
+      ]) {
+        expect(text).toContain("Conversation info:");
+        expect(text).toContain("Thread note");
+        expect(text).toContain("System event");
+        expect(text).not.toContain("Current room event");
+      }
+      expect(envelope.currentInboundContext?.fragments).toEqual(
+        expect.arrayContaining([
+          { kind: "conversation-data", text: "Thread note" },
+          { kind: "conversation-data", text: "System event" },
+        ]),
+      );
+    },
+  );
 
   it("uses attributed coalesced room-event lines for current event and transcript", () => {
     const ambientTranscriptBody = ["#35676 Keśava: No wtf", "#35677 Ayaan: fr"].join("\n");

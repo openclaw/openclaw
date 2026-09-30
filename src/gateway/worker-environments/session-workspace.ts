@@ -1,7 +1,5 @@
-import {
-  getSessionRepositoryWorkspaceStore,
-  type SessionRepositoryWorkspaceRecord,
-} from "../../state/session-repository-workspaces.js";
+import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
+import type { SessionRepositoryWorkspaceRecord } from "../../state/session-repository-workspaces.types.js";
 import {
   recoverSessionRepositoryCheckpoint,
   stageSessionRepositoryCheckpoint,
@@ -28,13 +26,19 @@ export function createWorkerWorkspaceReconcileRequest(params: {
   remoteWorkspaceDir: string;
   baseManifestRef: string;
   journal: WorkerLocalWorkspaceReconcileRequest["journal"];
-  stagedResult: NonNullable<WorkerLocalWorkspaceReconcileRequest["stagedResult"]>;
+  stagedResult: WorkerLocalWorkspaceReconcileRequest["stagedResult"];
   assertCurrent: () => void;
 }): WorkerWorkspaceReconcileRequest {
   const { workspace, remoteWorkspaceDir, baseManifestRef, journal, stagedResult } = params;
   if (workspace.kind === "local") {
     return {
-      source: { kind: "local", path: workspace.path, journal, stagedResult },
+      source: {
+        kind: "local",
+        path: workspace.path,
+        journal,
+        stagedResult,
+        assertCurrent: params.assertCurrent,
+      },
       remoteWorkspaceDir,
       baseManifestRef,
     };
@@ -49,6 +53,7 @@ export function createWorkerWorkspaceReconcileRequest(params: {
     baseManifestRef: workspace.repository.baseManifestHash,
     source: {
       kind: "repository",
+      authorize: params.assertCurrent,
       referenceManifestRef: workspace.repository.manifestHash,
       prepareCheckpoint: async (payload) => {
         const prepared = await stageSessionRepositoryCheckpoint({
@@ -66,7 +71,8 @@ export function createWorkerWorkspaceReconcileRequest(params: {
             params.assertCurrent();
             // The immutable ref is discoverable if the process stops between
             // checkpoint acceptance and recording its pending-result pointer.
-            stagedResult.record(prepared.checkpointRef);
+            await stagedResult.record(prepared.checkpointRef);
+            params.assertCurrent();
             journal.commit(payload.currentManifestRef);
             return accepted;
           },

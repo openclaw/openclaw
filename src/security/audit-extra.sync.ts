@@ -1,5 +1,3 @@
-import { expectDefined } from "@openclaw/normalization-core";
-// Runs synchronous extra security audit checks.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -24,31 +22,15 @@ import { resolveAllowedAgentIds } from "../gateway/hooks-policy.js";
 import {
   DEFAULT_DANGEROUS_NODE_COMMANDS,
   listDangerousPluginNodeCommands,
-  resolveNodeCommandAllowlist,
+  resolveNodePairingCommandAllowlist,
 } from "../gateway/node-command-policy.js";
 import { listEffectiveGroupRouteBindings } from "../routing/resolve-route.js";
+import { levenshteinDistance } from "../shared/levenshtein-distance.js";
 import { collectAuditModelRefs } from "./audit-model-refs.js";
+import type { SecurityAuditFinding } from "./audit.types.js";
 import { GATEWAY_CONTROL_PLANE_TOOLS } from "./dangerous-tools.js";
 
-/**
- * Synchronous security audit collector functions.
- *
- * These functions analyze config-based security properties without I/O.
- */
-
-type SecurityAuditFinding = {
-  checkId: string;
-  severity: "info" | "warn" | "critical";
-  title: string;
-  detail: string;
-  remediation?: string;
-};
-
-type HooksHardeningAuditOptions = {
-  gatewayAuthOverride?: Pick<GatewayAuthConfig, "mode" | "token" | "password">;
-};
-
-type GatewayHttpNoAuthAuditOptions = {
+type GatewayAuthAuditOptions = {
   gatewayAuthOverride?: Pick<GatewayAuthConfig, "mode" | "token" | "password">;
 };
 
@@ -57,14 +39,6 @@ type GatewayAuthSharedSecretReuse = {
   label: GatewayAuthSharedSecretLabel;
   source: "config" | "override";
 };
-type ActiveGatewaySharedSecret = {
-  label: GatewayAuthSharedSecretLabel;
-  value?: string;
-};
-
-// --------------------------------------------------------------------------
-// Helpers
-// --------------------------------------------------------------------------
 
 function isProbablySyncedPath(p: string): boolean {
   const s = p.toLowerCase();
@@ -100,23 +74,21 @@ function formatHooksTokenReuseDetail(reusedGatewayAuthLabel: GatewayAuthSharedSe
   return "hooks.token matches gateway.auth token; compromise of hooks expands blast radius to the Gateway API.";
 }
 
-function listActiveGatewaySharedSecrets(auth: ResolvedGatewayAuth): ActiveGatewaySharedSecret[] {
-  if (auth.mode === "token") {
-    return [{ label: "gateway auth token", value: auth.token }];
-  }
-  if (auth.mode === "password" || auth.mode === "trusted-proxy") {
-    return [{ label: "gateway auth password", value: auth.password }];
-  }
-  return [];
-}
-
 function findGatewayAuthLabelMatchingHooksToken(params: {
   hooksToken: string;
   auth: ResolvedGatewayAuth;
 }): GatewayAuthSharedSecretLabel | undefined {
-  return listActiveGatewaySharedSecrets(params.auth).find(
-    (candidate) => normalizeOptionalString(candidate.value) === params.hooksToken,
-  )?.label;
+  const { auth, hooksToken } = params;
+  if (auth.mode === "token" && normalizeOptionalString(auth.token) === hooksToken) {
+    return "gateway auth token";
+  }
+  if (
+    (auth.mode === "password" || auth.mode === "trusted-proxy") &&
+    normalizeOptionalString(auth.password) === hooksToken
+  ) {
+    return "gateway auth password";
+  }
+  return undefined;
 }
 
 function findHooksTokenGatewayAuthReuse(params: {
@@ -179,7 +151,14 @@ function isGptModel(id: string): boolean {
 }
 
 function isGpt5OrHigher(id: string): boolean {
-  return /\bgpt-5(?:\b|[.-])/i.test(id);
+  // Numeric generation comparison so newer majors (gpt-6, gpt-10, gpt-20+)
+  // are not misread as below the GPT-5 threshold; gpt-35-turbo is the Azure
+  // GPT-3.5 alias, not a generation, and stays flagged (#139751).
+  const generation = /\bgpt-(\d+)(?:\b|[.-])/i.exec(id)?.[1];
+  if (generation === undefined) {
+    return false;
+  }
+  return generation !== "35" && Number.parseInt(generation, 10) >= 5;
 }
 
 function isClaudeModel(id: string): boolean {
@@ -225,62 +204,21 @@ function listKnownNodeCommands(cfg: OpenClawConfig): Set<string> {
   const platformNodes = [
     { platform: "ios", deviceFamily: "iPhone" },
     { platform: "android", deviceFamily: "Android" },
-    {
-      platform: "macos",
-      deviceFamily: "Mac",
-      approvedCommands: [
-        "system.run",
-        "system.run.prepare",
-        "system.which",
-        "browser.proxy",
-        "browser.proxy.upload.v1",
-        "screen.snapshot",
-      ],
-    },
-    {
-      platform: "linux",
-      deviceFamily: "Linux",
-      approvedCommands: [
-        "system.run",
-        "system.run.prepare",
-        "system.which",
-        "browser.proxy",
-        "browser.proxy.upload.v1",
-      ],
-    },
-    {
-      platform: "windows",
-      deviceFamily: "Windows",
-      approvedCommands: [
-        "system.run",
-        "system.run.prepare",
-        "system.which",
-        "browser.proxy",
-        "browser.proxy.upload.v1",
-        "screen.snapshot",
-      ],
-    },
+    { platform: "macos", deviceFamily: "Mac" },
+    { platform: "linux", deviceFamily: "Linux" },
+    { platform: "windows", deviceFamily: "Windows" },
     { platform: "unknown" },
   ];
-  for (const node of platformNodes) {
-    const allow = resolveNodeCommandAllowlist(baseCfg, node);
-    for (const cmd of allow) {
+  for (const commands of [
+    ...platformNodes.map((node) => resolveNodePairingCommandAllowlist(baseCfg, node)),
+    resolveNodePairingCommandAllowlist(baseCfg, { caps: ["talk"] }),
+    DEFAULT_DANGEROUS_NODE_COMMANDS,
+  ]) {
+    for (const cmd of commands) {
       const normalized = normalizeNodeCommand(cmd);
       if (normalized) {
         out.add(normalized);
       }
-    }
-  }
-  for (const cmd of resolveNodeCommandAllowlist(baseCfg, { caps: ["talk"] })) {
-    const normalized = normalizeNodeCommand(cmd);
-    if (normalized) {
-      out.add(normalized);
-    }
-  }
-  for (const cmd of DEFAULT_DANGEROUS_NODE_COMMANDS) {
-    const normalized = normalizeNodeCommand(cmd);
-    if (normalized) {
-      out.add(normalized);
     }
   }
   return out;
@@ -304,37 +242,6 @@ function looksLikeNodeCommandPattern(value: string): boolean {
   return /\s/.test(value) || value.includes("group:");
 }
 
-function editDistance(a: string, b: string): number {
-  if (a === b) {
-    return 0;
-  }
-  if (!a) {
-    return b.length;
-  }
-  if (!b) {
-    return a.length;
-  }
-
-  const dp: number[] = Array.from({ length: b.length + 1 }, (_, j) => j);
-
-  for (let i = 1; i <= a.length; i++) {
-    let prev = expectDefined(dp[0], "dp entry at 0");
-    dp[0] = i;
-    for (let j = 1; j <= b.length; j++) {
-      const temp = dp[j];
-      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
-      dp[j] = Math.min(
-        expectDefined(dp[j], "dp entry at j") + 1,
-        expectDefined(dp[j - 1], "dp entry at j 1") + 1,
-        prev + cost,
-      );
-      prev = expectDefined(temp, "audit extra.sync temp");
-    }
-  }
-
-  return expectDefined(dp[b.length], "dp entry at b.length");
-}
-
 function suggestKnownNodeCommands(unknown: string, known: Set<string>): string[] {
   const needle = unknown.trim();
   if (!needle) {
@@ -352,7 +259,7 @@ function suggestKnownNodeCommands(unknown: string, known: Set<string>): string[]
 
   // Fuzzy: Levenshtein over a small-ish known set.
   const ranked = Array.from(known)
-    .map((cmd) => ({ cmd, d: editDistance(needle, cmd) }))
+    .map((cmd) => ({ cmd, d: levenshteinDistance(needle, cmd) }))
     .toSorted((a, b) => a.d - b.d || a.cmd.localeCompare(b.cmd));
 
   const best = ranked[0]?.d ?? Infinity;
@@ -568,10 +475,6 @@ function collectControlPlaneToolExposureContexts(cfg: OpenClawConfig): string[] 
   return exposedContexts;
 }
 
-// --------------------------------------------------------------------------
-// Exported collectors
-// --------------------------------------------------------------------------
-
 export function collectSyncedFolderFindings(params: {
   stateDir: string;
   configPath: string;
@@ -621,7 +524,7 @@ export function collectSecretsInConfigFindings(cfg: OpenClawConfig): SecurityAud
 export function collectHooksHardeningFindings(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
-  options: HooksHardeningAuditOptions = {},
+  options: GatewayAuthAuditOptions = {},
 ): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   if (cfg.hooks?.enabled !== true) {
@@ -767,7 +670,7 @@ export function collectGatewayHttpSessionKeyOverrideFindings(
 export function collectGatewayHttpNoAuthFindings(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv,
-  options: GatewayHttpNoAuthAuditOptions = {},
+  options: GatewayAuthAuditOptions = {},
 ): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
@@ -961,9 +864,6 @@ export function collectSandboxDangerousConfigFindings(cfg: OpenClawConfig): Secu
       });
     }
   }
-
-  // CDP source range is now auto-derived at runtime from the Docker network gateway
-  // for all bridge-like networks, so an unset cdpSourceRange is no longer a security gap.
 
   return findings;
 }

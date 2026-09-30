@@ -1,9 +1,13 @@
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { ArtifactDownloadResult, GatewaySessionRow } from "../../api/types.ts";
-import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
+import type { GatewaySessionRow } from "../../api/types.ts";
+import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
+import {
+  resolveControlUiFollowUpMode,
+  resolveControlUiServerQueueMode,
+} from "../../lib/chat/follow-up-mode.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import type { ChatState } from "./chat-state-contract.ts";
+import type { ChatPageHost } from "./chat-state-host.ts";
 
 type SelectedSessionProjectionState = {
   chatEffectiveQueueMode?: GatewaySessionRow["effectiveQueueMode"];
@@ -27,7 +31,6 @@ export function applySelectedSessionProjection(
 }
 
 const MAX_TRACKED_SESSION_ROWS = 256;
-const CHAT_ARTIFACT_DOWNLOAD_TIMEOUT_MS = 30_000;
 
 export class SessionParticipationTracker {
   private readonly lastBlocked = new Map<string, boolean>();
@@ -82,34 +85,6 @@ export class SessionParticipationTracker {
   }
 }
 
-export function resolveAssistantAttachmentAuthToken(state: {
-  hello?: { auth?: { deviceToken?: string | null } | null } | null;
-  password?: string | null;
-  settings?: { token?: string | null } | null;
-}) {
-  return resolveControlUiAuthToken(state);
-}
-
-export async function resolveChatArtifactDownload(
-  state: { connected: boolean; client?: GatewayBrowserClient | null },
-  params: { sessionKey: string; artifactId: string },
-): Promise<{ url: string; expiresAt?: string } | null> {
-  if (!state.connected || !state.client) {
-    return null;
-  }
-  const result = await state.client.request<ArtifactDownloadResult | null>(
-    "artifacts.download",
-    params,
-    { timeoutMs: CHAT_ARTIFACT_DOWNLOAD_TIMEOUT_MS },
-  );
-  const url = typeof result?.url === "string" ? result.url.trim() : "";
-  if (!url) {
-    return null;
-  }
-  const expiresAt = typeof result?.expiresAt === "string" ? result.expiresAt.trim() : undefined;
-  return { url, ...(expiresAt ? { expiresAt } : {}) };
-}
-
 export function dismissChatError(state: {
   chatError?: string | null;
   lastError: string | null;
@@ -127,4 +102,20 @@ export function initialHistorySubmitState(state: ChatState, unavailable: boolean
     submitDisabledReason: unavailable ? (failure ?? t("chat.thread.loading")) : null,
     submitPending: unavailable && historyLoad.phase !== "failed",
   };
+}
+
+export function resolveChatPaneFollowUpMode(
+  state: Pick<ChatPageHost, "settings" | "chatEffectiveQueueMode" | "chatQueueModeOverride">,
+  session: GatewaySessionRow | undefined,
+  runtimeConfig: ApplicationContext["runtimeConfig"]["state"],
+) {
+  return resolveControlUiFollowUpMode(
+    state.settings.chatFollowUpMode,
+    resolveControlUiServerQueueMode(runtimeConfig.configSnapshot?.runtimeConfig, {
+      configNeedsApply: runtimeConfig.configNeedsApply,
+      effectiveMode: state.chatEffectiveQueueMode,
+      sessionMetadataLoaded: session !== undefined || state.chatEffectiveQueueMode !== undefined,
+      sessionMode: state.chatQueueModeOverride,
+    }),
+  );
 }

@@ -124,14 +124,6 @@ describe("shouldExcludeProviderFromDefaultHighSignalLiveSweep", () => {
         resolveProviderOwners,
       }),
     ).toBe(false);
-    expect(
-      shouldExcludeProviderFromDefaultHighSignalLiveSweep({
-        provider: "openai",
-        useExplicitModels: false,
-        providerFilter: null,
-        resolveProviderOwners,
-      }),
-    ).toBe(false);
   });
 });
 

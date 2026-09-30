@@ -1,7 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { identityPreferences } from "./draft-worktree-preferences.test-support.ts";
-import { patchNewSessionPreference } from "./preferences.ts";
+import { replaceBrowserPreference } from "./preferences.ts";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -11,7 +11,7 @@ afterEach(() => {
 
 it("does not restore an accepted name when an older first-load browser migration commits last", async () => {
   expect(
-    patchNewSessionPreference("ws://gateway.example", "main", {
+    replaceBrowserPreference("ws://gateway.example", "main", {
       workspace: "/repo",
       folder: "/repo",
       worktree: true,
@@ -72,10 +72,10 @@ function seedBrowserPreferences(extraAgents = 0) {
     baseRef: "main",
     worktreeName: "first-task",
   };
-  expect(patchNewSessionPreference("ws://gateway.example", "main", preference)).toBe(true);
+  expect(replaceBrowserPreference("ws://gateway.example", "main", preference)).toBe(true);
   for (let index = 0; index < extraAgents; index += 1) {
     expect(
-      patchNewSessionPreference(
+      replaceBrowserPreference(
         "ws://gateway.example",
         `agent-${String(index).padStart(2, "0")}`,
         preference,

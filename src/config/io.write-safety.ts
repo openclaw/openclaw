@@ -1,19 +1,65 @@
-import fs from "node:fs";
+import type fs from "node:fs";
 import path from "node:path";
+import {
+  replaceFileAtomicSync,
+  type ReplaceFileAtomicDestinationState,
+} from "@openclaw/fs-safe/atomic";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { isMissingPathError } from "../infra/errors.js";
-import { replaceFileAtomicSync } from "../infra/replace-file.js";
 import { isPathInside } from "../security/scan-paths.js";
 import { isRecord } from "../utils.js";
 import { hashConfigIncludeRaw } from "./includes.js";
 import { stampConfigWriteMetadata } from "./io.meta.js";
 import { hashConfigRaw, parseConfigJson5 } from "./io.read-helpers.js";
-import type { ConfigWriteOptions, NormalizedConfigIoDeps } from "./io.types.js";
+import type { NormalizedConfigIoDeps } from "./io.read.types.js";
+import type { ConfigWriteOptions } from "./io.types.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
 import { resolveStateDir } from "./paths.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
+import { createConfigWriteAuthorityGuard } from "./write-authority.js";
 import { captureConfigWriteLockGuard } from "./write-lock.js";
+
+export type ConfigFileWritePathSnapshot = {
+  targetPath: string;
+  entries: Array<
+    | { path: string; kind: "missing-directory" }
+    | { path: string; kind: "existing"; dev: string; ino: string; link?: string }
+  >;
+};
+
+/** The captured path facts survive an update's delegated finalizer; they grant no write authority. */
+export function assertConfigFileWritePathSnapshot(
+  snapshot: ConfigFileWritePathSnapshot,
+  ioFs: typeof fs,
+): void {
+  const conflict = () =>
+    new ConfigMutationConflictError("included config target changed since last load", {
+      retryable: false,
+    });
+  for (const expected of snapshot.entries) {
+    const stat = ioFs.lstatSync(expected.path, { bigint: true, throwIfNoEntry: false });
+    if (expected.kind === "missing-directory") {
+      if (stat && !stat.isDirectory()) {
+        throw conflict();
+      }
+      continue;
+    }
+    if (
+      !stat ||
+      stat.dev.toString() !== expected.dev ||
+      stat.ino.toString() !== expected.ino ||
+      (expected.link === undefined
+        ? !stat.isDirectory()
+        : !stat.isSymbolicLink() || ioFs.readlinkSync(expected.path) !== expected.link)
+    ) {
+      throw conflict();
+    }
+  }
+  if (ioFs.lstatSync(snapshot.targetPath, { throwIfNoEntry: false })?.isSymbolicLink()) {
+    throw conflict();
+  }
+}
 
 /** Pin path lookups without pinning the regular file this write will replace. */
 export function captureConfigFileWritePathProof(
@@ -27,7 +73,9 @@ export function captureConfigFileWritePathProof(
   >();
   const visited = new Set<string>();
   const conflict = () =>
-    new ConfigMutationConflictError("included config target changed since last load");
+    new ConfigMutationConflictError("included config target changed since last load", {
+      retryable: false,
+    });
   const remember = (entry: string, stat: fs.BigIntStats | undefined, link?: string) => {
     if (!facts.has(entry)) {
       facts.set(
@@ -77,33 +125,31 @@ export function captureConfigFileWritePathProof(
   }
   capture(filePath);
   capture(targetPath);
-  const assertCurrent = () => {
-    for (const [entry, expected] of facts) {
-      const stat = ioFs.lstatSync(entry, { bigint: true, throwIfNoEntry: false });
-      if (expected.kind === "missing-directory") {
-        if (stat && !stat.isDirectory()) {
-          throw conflict();
-        }
-        continue;
-      }
-      if (
-        !stat ||
-        stat.dev !== expected.dev ||
-        stat.ino !== expected.ino ||
-        (expected.link === undefined
-          ? !stat.isDirectory()
-          : !stat.isSymbolicLink() || ioFs.readlinkSync(entry) !== expected.link)
-      ) {
-        throw conflict();
-      }
-    }
-    if (ioFs.lstatSync(targetPath, { throwIfNoEntry: false })?.isSymbolicLink()) {
-      throw conflict();
-    }
+  const snapshot: ConfigFileWritePathSnapshot = {
+    targetPath,
+    entries: [...facts].map(([entry, fact]) =>
+      fact.kind === "missing-directory"
+        ? { path: entry, kind: fact.kind }
+        : {
+            path: entry,
+            kind: fact.kind,
+            dev: fact.dev.toString(),
+            ino: fact.ino.toString(),
+            link: fact.link,
+          },
+    ),
   };
+  const assertCurrent = () => assertConfigFileWritePathSnapshot(snapshot, ioFs);
   assertCurrent();
-  return { path: filePath, assertCurrent };
+  return { path: filePath, snapshot, assertCurrent };
 }
+
+type ConfigFileWriteIdentity = Pick<fs.BigIntStats, "dev" | "ino">;
+
+export type ConfigFileWriteRollbackProof = {
+  assertCurrent: () => void;
+  publicationIdentity: ConfigFileWriteIdentity | null;
+};
 
 type ConfigPermissionHardeningParams = {
   deps: Pick<NormalizedConfigIoDeps, "fs"> & { logger: Pick<typeof console, "warn"> };
@@ -138,90 +184,144 @@ export function chmodConfigBestEffortSync(params: ConfigPermissionHardeningParam
   }
 }
 
-/** Fence shared atomic-write effects without blocking cleanup of owned temporary files. */
-export function createGuardedConfigFileSystem(
+/** Keep config conflicts and compensation policy outside the atomic file owner. */
+export function createConfigFileWriteGuard(
   configPath: string,
   fsModule: typeof fs,
   assertCurrent?: () => void,
   publication?: {
+    publicationIdentity?: ConfigFileWriteIdentity | null;
     snapshot: Pick<ConfigFileSnapshot, "path" | "exists" | "raw" | "readError">;
     includeGraph: { hashes: Record<string, string>; targets: Record<string, string> };
     onRootRemoved?: () => void;
+    onRootPublished?: () => void;
     preserveDirectoryMode?: boolean;
     targetPathProof?: ReturnType<typeof captureConfigFileWritePathProof>;
   },
-): typeof fs {
-  if (!assertCurrent && !publication) {
-    return fsModule;
-  }
+) {
   const includePathProofs = new Map(
-    Object.entries(publication?.includeGraph.targets ?? {})
-      .filter(([, target]) => target === configPath)
-      .map(([includePath, target]) => [
-        includePath,
-        publication?.targetPathProof?.path === includePath
-          ? publication.targetPathProof
-          : captureConfigFileWritePathProof(includePath, target, fsModule),
-      ]),
+    Object.entries(publication?.includeGraph.targets ?? {}).map(([includePath, target]) => [
+      includePath,
+      publication?.targetPathProof?.path === includePath
+        ? publication.targetPathProof
+        : captureConfigFileWritePathProof(includePath, target, fsModule),
+    ]),
   );
-  let expectedPublication = publication;
-  const assertPublication = () => {
-    assertCurrent?.();
-    if (expectedPublication) {
-      assertBaseSnapshotStillCurrent(
-        expectedPublication.snapshot,
-        configPath,
-        fsModule,
-        expectedPublication.includeGraph,
-        includePathProofs,
-      );
+  let expectedSnapshot = publication?.snapshot;
+  let publishedIdentity = publication?.publicationIdentity;
+  const authority = createConfigWriteAuthorityGuard(assertCurrent);
+  let refusal: { error: unknown } | undefined;
+  const current = () => {
+    if (refusal) {
+      throw refusal.error;
+    }
+    authority();
+  };
+  const assertPublishedIdentity = () => {
+    publication?.targetPathProof?.assertCurrent();
+    if (publishedIdentity === undefined) {
+      return;
+    }
+    const entry = fsModule.lstatSync(configPath, { bigint: true, throwIfNoEntry: false });
+    if (
+      publishedIdentity === null
+        ? entry !== undefined
+        : !entry ||
+          entry.dev !== publishedIdentity.dev ||
+          entry.ino !== publishedIdentity.ino ||
+          !entry.isFile() ||
+          entry.nlink !== 1n
+    ) {
+      throw new ConfigMutationConflictError("config publication identity changed", {
+        retryable: false,
+      });
     }
   };
-  return {
+  const assertBeforeMutation = () => {
+    try {
+      current();
+      assertPublishedIdentity();
+      if (expectedSnapshot) {
+        assertBaseSnapshotStillCurrent(
+          expectedSnapshot,
+          configPath,
+          fsModule,
+          publication?.includeGraph,
+          includePathProofs,
+        );
+      }
+    } catch (error) {
+      // A transient path/hash failure also revokes the rest of this publication.
+      refusal ??= { error };
+      throw refusal.error;
+    }
+  };
+  const onDestinationState = (state: ReplaceFileAtomicDestinationState) => {
+    publishedIdentity = state.state === "removed" ? null : { dev: state.dev, ino: state.ino };
+    if (state.state === "published") {
+      expectedSnapshot = undefined;
+      publication?.onRootPublished?.();
+    } else {
+      // Our own removal/create replaces the old root bytes; include inputs stay pinned.
+      expectedSnapshot = publication && {
+        ...publication.snapshot,
+        exists: state.state === "writing",
+        raw: null,
+      };
+      publication?.onRootRemoved?.();
+    }
+  };
+  const captureRollbackProof = (assertOwner: () => void): ConfigFileWriteRollbackProof => {
+    const assertRollbackOwner = () => {
+      assertOwner();
+      publication?.targetPathProof?.assertCurrent();
+    };
+    assertRollbackOwner();
+    assertPublishedIdentity();
+    if (publishedIdentity === undefined) {
+      throw new ConfigMutationConflictError("config write has no publication to roll back", {
+        retryable: false,
+      });
+    }
+    // Recovery owns later transitions and uses the enclosing owner's current authority.
+    return { assertCurrent: assertRollbackOwner, publicationIdentity: publishedIdentity };
+  };
+  let stagedIdentity: ConfigFileWriteIdentity | undefined;
+  const fileSystem: typeof fs = {
     ...fsModule,
-    mkdirSync: new Proxy(fsModule.mkdirSync, {
+    writeFileSync: new Proxy(fsModule.writeFileSync, {
       apply(target, thisArg, args) {
-        assertPublication();
-        return Reflect.apply(target, thisArg, args);
+        const result = Reflect.apply(target, thisArg, args);
+        if (typeof args[0] === "number") {
+          stagedIdentity = fsModule.fstatSync(args[0], { bigint: true });
+        }
+        return result;
       },
     }),
-    fchmodSync: (fd, mode) => {
-      assertCurrent?.();
-      if (publication?.preserveDirectoryMode && fsModule.fstatSync(fd).isDirectory()) {
-        return;
+    renameSync(source, destination) {
+      fsModule.renameSync(source, destination);
+      if (destination === configPath && stagedIdentity) {
+        // fs-safe's verified receipt arrives later; a successful rename already needs recovery.
+        onDestinationState({ state: "published", path: configPath, ...stagedIdentity });
       }
-      return fsModule.fchmodSync(fd, mode);
     },
-    renameSync: (source, destination) => {
-      if (destination === configPath) {
-        assertPublication();
-      } else {
-        assertCurrent?.();
-      }
-      return fsModule.renameSync(source, destination);
-    },
-    rmSync: (filePath, options) => {
-      if (filePath === configPath) {
-        assertPublication();
-      }
-      fsModule.rmSync(filePath, options);
-      if (filePath === configPath && expectedPublication) {
-        if (expectedPublication.snapshot.exists) {
-          expectedPublication.onRootRemoved?.();
+    ...(publication?.preserveDirectoryMode
+      ? {
+          fchmodSync: (fd, mode) => {
+            if (!fsModule.fstatSync(fd).isDirectory()) {
+              fsModule.fchmodSync(fd, mode);
+            }
+          },
         }
-        // Only this successful removal advances the captured root expectation.
-        expectedPublication = {
-          ...expectedPublication,
-          snapshot: { ...expectedPublication.snapshot, exists: false, raw: null },
-        };
-      }
-    },
-    openSync: (filePath, flags, mode) => {
-      if (filePath === configPath) {
-        assertPublication();
-      }
-      return fsModule.openSync(filePath, flags, mode);
-    },
+      : {}),
+  };
+  return {
+    fileSystem,
+    assertCurrent: current,
+    assertBeforeMutation,
+    onDestinationState,
+    assertPublishedIdentity,
+    captureRollbackProof,
   };
 }
 
@@ -241,12 +341,16 @@ export function assertBaseSnapshotStillCurrent(
     try {
       const expectedTarget = includeGraph?.targets[includePath];
       if (!expectedTarget) {
-        throw new ConfigMutationConflictError("included config target changed since last load");
+        throw new ConfigMutationConflictError("included config target changed since last load", {
+          retryable: false,
+        });
       }
       const pathProof = includePathProofs?.get(includePath);
       pathProof?.assertCurrent();
       if (!pathProof && path.normalize(ioFs.realpathSync(includePath)) !== expectedTarget) {
-        throw new ConfigMutationConflictError("included config target changed since last load");
+        throw new ConfigMutationConflictError("included config target changed since last load", {
+          retryable: false,
+        });
       }
       // Aliases of the file being published share its owned-removal expectation below.
       if (expectedTarget === configPath) {
@@ -316,6 +420,8 @@ export async function tightenStateDirPermissionsIfNeeded(params: {
   }
 }
 
+export type ConfigFileRollbackPublication = (publish: () => void, didMutate: () => boolean) => void;
+
 export async function rollbackConfigFileWriteIfUnchanged(params: {
   configPath: string;
   previousSnapshot: Pick<ConfigFileSnapshot, "path" | "exists" | "raw" | "readError">;
@@ -325,6 +431,8 @@ export async function rollbackConfigFileWriteIfUnchanged(params: {
   destinationHardlinks?: "reject";
   fsModule: typeof fs;
   assertCurrent?: () => void;
+  publicationIdentity?: ConfigFileWriteIdentity | null;
+  withPublication?: ConfigFileRollbackPublication;
 }): Promise<boolean> {
   // Restore the original target, even when another config path is now selected.
   // The captured owner and committed hash, not current selection, authorize compensation.
@@ -343,31 +451,50 @@ export async function rollbackConfigFileWriteIfUnchanged(params: {
   if (hashConfigRaw(currentRaw) !== params.committedHash) {
     return false;
   }
-  if (params.previousSnapshot.exists && typeof params.previousSnapshot.raw === "string") {
-    replaceFileAtomicSync({
-      filePath: params.configPath,
-      content: params.previousSnapshot.raw,
-      dirMode: 0o700,
-      mode: 0o600,
-      copyFallbackOnPermissionError: true,
-      syncTempFile: params.durable,
-      syncParentDir: params.durable,
-      destinationHardlinks: params.destinationHardlinks,
-      fileSystem: createGuardedConfigFileSystem(params.configPath, params.fsModule, assertCurrent, {
-        snapshot: { ...params.previousSnapshot, exists: currentRaw !== null, raw: currentRaw },
-        includeGraph: { hashes: {}, targets: {} },
-        preserveDirectoryMode: params.preserveDirectoryMode,
-      }),
-    });
-    return true;
-  }
-  if (params.previousSnapshot.exists) {
+  const previousRaw = params.previousSnapshot.exists ? params.previousSnapshot.raw : undefined;
+  if (params.previousSnapshot.exists && typeof previousRaw !== "string") {
     return false;
   }
-  createGuardedConfigFileSystem(params.configPath, params.fsModule, assertCurrent, {
+  let mutated = false;
+  const guard = createConfigFileWriteGuard(params.configPath, params.fsModule, assertCurrent, {
+    publicationIdentity: params.publicationIdentity,
     snapshot: { ...params.previousSnapshot, exists: currentRaw !== null, raw: currentRaw },
     includeGraph: { hashes: {}, targets: {} },
-  }).rmSync(params.configPath, { force: true });
+    preserveDirectoryMode: params.preserveDirectoryMode,
+    onRootPublished: () => {
+      mutated = true;
+    },
+    onRootRemoved: () => {
+      mutated = true;
+    },
+  });
+  const publish = () => {
+    if (typeof previousRaw === "string") {
+      replaceFileAtomicSync({
+        filePath: params.configPath,
+        content: previousRaw,
+        dirMode: 0o700,
+        mode: 0o600,
+        copyFallbackOnPermissionError: true,
+        syncTempFile: params.durable,
+        syncParentDir: params.durable,
+        destinationHardlinks: params.destinationHardlinks,
+        throwOnCleanupError: true,
+        fileSystem: guard.fileSystem,
+        assertBeforeMutation: guard.assertBeforeMutation,
+        onDestinationState: guard.onDestinationState,
+      });
+      return;
+    }
+    guard.assertBeforeMutation();
+    params.fsModule.rmSync(params.configPath, { force: true });
+    mutated = true;
+  };
+  if (params.withPublication) {
+    params.withPublication(publish, () => mutated);
+  } else {
+    publish();
+  }
   return true;
 }
 
@@ -449,14 +576,6 @@ export function formatConfigArtifactTimestamp(ts: string): string {
   return ts.replaceAll(":", "-").replaceAll(".", "-");
 }
 
-export function stampConfigVersion(
-  cfg: OpenClawConfig,
-  version?: string,
-  previousConfig?: unknown,
-): OpenClawConfig {
-  return stampConfigWriteMetadata(cfg, new Date().toISOString(), version, previousConfig);
-}
-
 export function resolveConfigSizeBaselineBytes(params: {
   raw: string | null;
   json5: { parse: (value: string) => unknown };
@@ -471,7 +590,11 @@ export function resolveConfigSizeBaselineBytes(params: {
     return rawBytes;
   }
   const canonical = JSON.stringify(
-    stampConfigVersion(parsed.parsed as OpenClawConfig, params.lastTouchedVersionOverride),
+    stampConfigWriteMetadata(
+      parsed.parsed as OpenClawConfig,
+      undefined,
+      params.lastTouchedVersionOverride,
+    ),
     null,
     2,
   )

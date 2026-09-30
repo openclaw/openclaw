@@ -42,10 +42,10 @@ defineDiscordVoiceTests(
         const oversized = opening === "oversized";
         const prefix = oversized ? "Do not" : dispatch === "control" ? "please" : "Opening context";
         const openingFrames = oversized ? 300 : 50;
-        cli
-          .mockReset()
-          .mockResolvedValueOnce({ stdout: "", stderr: "" })
-          .mockResolvedValue({ stdout: suffix, stderr: "" });
+        cli.mockReset().mockImplementation(async (_command: string, [filePath]: string[]) => {
+          const wav = await fs.readFile(filePath!);
+          return { stdout: wav[44] === 1 ? "" : suffix, stderr: "" };
+        });
         const provider = vi.fn(async ({ buffer, model }: { buffer: Buffer; model?: string }) => {
           if (model === "unavailable-stt") {
             throw new Error("synthetic model unavailable");
@@ -143,14 +143,24 @@ defineDiscordVoiceTests(
         const wavSizes: number[] = [];
         const wavPaths: string[] = [];
         const results: Awaited<ReturnType<typeof transcribeAudioFile>>[] = [];
+        const suffixTranscribed = createDeferred<void>();
         transcribeAudioFileMock.mockImplementation(async (params) => {
           wavPaths.push(params.filePath);
-          wavSizes.push((await fs.stat(params.filePath)).size);
+          const wav = await fs.readFile(params.filePath);
+          wavSizes.push(wav.length);
+          const isOpening = wav[44] === 1;
+          // Uncaptured conversation and captured audio may finish out of order.
+          if (opening === "empty CLI" && isOpening) {
+            await suffixTranscribed.promise;
+          }
           const result = await withPluginRuntimeGenerationScope(
             { metadataSnapshot, pluginRegistry: registry },
             () => transcribeAudioFile(params),
           );
-          results.push(result);
+          results[oversized || isOpening ? 0 : 1] = result;
+          if (!isOpening) {
+            suffixTranscribed.resolve();
+          }
           return result;
         });
         const recorded = createDeferred<void>();
@@ -176,7 +186,7 @@ defineDiscordVoiceTests(
             expect(stream.destroyed).toBe(true);
             expect(transcribeAudioFileMock).not.toHaveBeenCalled();
             getSessionConnection(entry).receiver.subscribe.mockReturnValueOnce(recordingStream);
-            entry.connection.receiver.speaking.users.set("u-owner", Date.now());
+            entry.audio.speakingUsers.add("u-owner");
           } else {
             await openingDecoded.promise;
           }

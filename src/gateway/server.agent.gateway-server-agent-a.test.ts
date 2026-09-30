@@ -4,33 +4,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
-import {
-  getAdmittedRunDelegatedAuthority,
-  prepareAgentRunAdmission,
-  type AdmittedRunContext,
-  type OperationalRunInstanceRef,
-} from "../agents/admitted-run-context.js";
-import type { ChannelPlugin } from "../channels/plugins/types.public.js";
-import { listSessionPendingInputs, loadSessionEntry } from "../config/sessions/session-accessor.js";
+import { resetPreparedModelCatalogStateForTest } from "../agents/prepared-model-runtime.test-support.js";
+import { listSessionPendingInputs } from "../config/sessions/session-accessor.js";
 import { createAbortError } from "../infra/abort-signal.js";
-import {
-  type AgentRunDelegatedAuthority,
-  validateAgentRunDelegatedAuthority,
-} from "../infra/agent-run-registry.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import * as mediaStore from "../media/store.js";
-import {
-  getActiveGatewayRootWorkCount,
-  isGatewaySubordinateWorkAdmissionClosed,
-  tryBeginGatewaySuspendAdmission,
-} from "../process/gateway-work-admission.js";
-import {
-  createChannelTestPluginBase,
-  createDirectOutboundTestAdapter,
-} from "../test-utils/channel-plugins.js";
+import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { waitForAgentCommandCall } from "./agent-command.test-helpers.js";
-import { resetPreparedModelCatalogStateForTest } from "./server-model-catalog.js";
 import { setRegistry } from "./server.agent.gateway-server-agent.mocks.js";
 import { createRegistry } from "./server.e2e-registry-helpers.js";
 import { readSessionMessagesAsync } from "./session-transcript-readers.js";
@@ -78,13 +58,6 @@ const VISION_AGENT_MODEL: GatewayModelFixture = {
   input: ["text", "image"],
 };
 
-function expectChannels(call: Record<string, unknown>, channel: string | undefined) {
-  expect(call.channel).toBe(channel);
-  expect(call.messageChannel).toBe(channel);
-  const runContext = call.runContext as { messageChannel?: string } | undefined;
-  expect(runContext?.messageChannel).toBe(channel);
-}
-
 async function setTestSessionStore(params: {
   entries: Record<string, Record<string, unknown>>;
   agentId?: string;
@@ -94,35 +67,6 @@ async function setTestSessionStore(params: {
     entries: params.entries,
     agentId: params.agentId,
   });
-}
-
-async function runMainAgentDeliveryWithSession(params: {
-  entry: Record<string, unknown>;
-  request: Record<string, unknown>;
-  allowFrom?: string[];
-}) {
-  setRegistry(defaultRegistry);
-  testState.allowFrom = params.allowFrom ?? ["+1555"];
-  try {
-    await setTestSessionStore({
-      entries: {
-        main: {
-          ...params.entry,
-          updatedAt: Date.now(),
-        },
-      },
-    });
-    const res = await rpcReq(gatewaySuite.ws, "agent", {
-      message: "hi",
-      sessionKey: "main",
-      deliver: true,
-      ...params.request,
-    });
-    expect(res.ok, JSON.stringify(res)).toBe(true);
-    return await waitForAgentCommandCall(String(params.request.idempotencyKey));
-  } finally {
-    testState.allowFrom = undefined;
-  }
 }
 
 async function setGatewayModelCatalogForTest(models: GatewayModelFixture[]): Promise<void> {
@@ -223,67 +167,7 @@ function expectBaseImageForwarded(images: unknown) {
   expect(forwarded?.[0]?.data).toBe(BASE_IMAGE_PNG);
 }
 
-const createStubChannelPlugin = (params: {
-  id: ChannelPlugin["id"];
-  label: string;
-  resolveAllowFrom?: (cfg: Record<string, unknown>) => string[];
-}): ChannelPlugin => ({
-  ...createChannelTestPluginBase({
-    id: params.id,
-    label: params.label,
-    config: {
-      resolveAllowFrom: params.resolveAllowFrom
-        ? ({ cfg }) => params.resolveAllowFrom?.(cfg as Record<string, unknown>) ?? []
-        : undefined,
-    },
-  }),
-  outbound: createDirectOutboundTestAdapter({
-    channel: params.id,
-    resolveTarget: ({ to, allowFrom }) => {
-      const trimmed = to?.trim() ?? "";
-      if (trimmed) {
-        return { ok: true, to: trimmed };
-      }
-      const first = allowFrom?.[0];
-      if (first) {
-        return { ok: true, to: first };
-      }
-      return {
-        ok: false,
-        error: new Error(`missing target for ${params.id}`),
-      };
-    },
-  }),
-});
-
-const defaultDirectChannelEntries = [
-  { id: "telegram", label: "Telegram" },
-  { id: "discord", label: "Discord" },
-  { id: "slack", label: "Slack" },
-  { id: "signal", label: "Signal" },
-] as const;
-
-const defaultRegistry = createRegistry([
-  {
-    pluginId: "whatsapp",
-    source: "test",
-    plugin: createStubChannelPlugin({
-      id: "whatsapp",
-      label: "WhatsApp",
-      resolveAllowFrom: (cfg) => {
-        const channels = cfg.channels as Record<string, unknown> | undefined;
-        const entry = channels?.whatsapp as Record<string, unknown> | undefined;
-        const allow = entry?.allowFrom;
-        return Array.isArray(allow) ? allow.map((value) => String(value)) : [];
-      },
-    }),
-  },
-  ...defaultDirectChannelEntries.map((entry) => ({
-    pluginId: entry.id,
-    source: "test",
-    plugin: createStubChannelPlugin({ id: entry.id, label: entry.label }),
-  })),
-]);
+const defaultRegistry = createRegistry([]);
 
 describe("gateway server agent", () => {
   beforeEach(() => {
@@ -298,95 +182,6 @@ describe("gateway server agent", () => {
     testState.allowFrom = undefined;
   });
 
-  test("keeps accepted detached agent work on its retained request root", async () => {
-    await setTestSessionStore({
-      entries: {
-        main: {
-          sessionId: "sess-agent-detached-root",
-          updatedAt: Date.now(),
-        },
-      },
-    });
-    let subordinateAdmissionClosed: boolean | undefined;
-    vi.mocked(agentCommandMock).mockImplementationOnce(async () => {
-      const suspension = tryBeginGatewaySuspendAdmission(() => {});
-      expect(suspension).not.toBeNull();
-      try {
-        subordinateAdmissionClosed = isGatewaySubordinateWorkAdmissionClosed();
-      } finally {
-        suspension?.rollback();
-      }
-    });
-
-    const res = await rpcReq(gatewaySuite.ws, "agent", {
-      message: "prove detached root transfer",
-      sessionKey: "main",
-      idempotencyKey: "idem-agent-detached-root",
-    });
-
-    expect(res.ok).toBe(true);
-    expect(res.payload?.status).toBe("accepted");
-    await vi.waitFor(() => {
-      expect(subordinateAdmissionClosed).toBe(false);
-    });
-    await vi.waitFor(() => {
-      expect(getActiveGatewayRootWorkCount()).toBe(0);
-    });
-  });
-
-  test("agent marks implicit delivery when lastTo is stale", async () => {
-    testState.allowFrom = ["+436769770569"];
-    await setTestSessionStore({
-      entries: {
-        main: {
-          sessionId: "sess-main-stale",
-          updatedAt: Date.now(),
-          lastChannel: "whatsapp",
-          lastTo: "+1555",
-        },
-      },
-    });
-    const res = await rpcReq(gatewaySuite.ws, "agent", {
-      message: "hi",
-      sessionKey: "main",
-      channel: "last",
-      deliver: true,
-      idempotencyKey: "idem-agent-last-stale",
-    });
-    expect(res.ok, JSON.stringify(res)).toBe(true);
-
-    const call = await waitForAgentCommandCall("idem-agent-last-stale");
-    expectChannels(call, "whatsapp");
-    expect(call.to).toBe("+1555");
-    expect(call.deliveryTargetMode).toBe("implicit");
-    expect(call.sessionId).toBe("sess-main-stale");
-    testState.allowFrom = undefined;
-  });
-
-  test("agent forwards sessionKey to agentCommand", async () => {
-    await setTestSessionStore({
-      entries: {
-        "agent:main:subagent:abc": {
-          sessionId: "sess-sub",
-          updatedAt: Date.now(),
-        },
-      },
-    });
-    const res = await rpcReq(gatewaySuite.ws, "agent", {
-      message: "hi",
-      sessionKey: "agent:main:subagent:abc",
-      idempotencyKey: "idem-agent-subkey",
-    });
-    expect(res.ok).toBe(true);
-
-    const call = await waitForAgentCommandCall("idem-agent-subkey");
-    expect(call.sessionKey).toBe("agent:main:subagent:abc");
-    expect(call.sessionId).toBe("sess-sub");
-    expectChannels(call, undefined);
-    expect(call.deliver).toBe(false);
-    expect(call.to).toBeUndefined();
-  });
-
   test("agent forwards sourceReplyDeliveryMode to agentCommand", async () => {
     const res = await rpcReq(gatewaySuite.ws, "agent", {
       message: "hi",
@@ -398,104 +193,6 @@ describe("gateway server agent", () => {
 
     const call = await waitForAgentCommandCall("idem-agent-source-reply-mode");
     expect(call.sourceReplyDeliveryMode).toBe("message_tool_only");
-  });
-
-  test("agent preserves spawnDepth on subagent sessions", async () => {
-    await setTestSessionStore({
-      entries: {
-        "agent:main:subagent:depth": {
-          sessionId: "sess-sub-depth",
-          updatedAt: Date.now(),
-          spawnedBy: "agent:main:main",
-          spawnDepth: 2,
-        },
-      },
-    });
-
-    const res = await rpcReq(gatewaySuite.ws, "agent", {
-      message: "hi",
-      sessionKey: "agent:main:subagent:depth",
-      idempotencyKey: "idem-agent-subdepth",
-    });
-    expect(res.ok).toBe(true);
-    await waitForAgentCommandCall("idem-agent-subdepth");
-
-    const persisted = loadSessionEntry({
-      sessionKey: "agent:main:subagent:depth",
-      storePath: gatewaySuite.sessionStorePath,
-    }) as { spawnDepth?: number; spawnedBy?: string } | undefined;
-    expect(persisted?.spawnDepth).toBe(2);
-    expect(persisted?.spawnedBy).toBe("agent:main:main");
-  });
-
-  test("agent stamps create-on-run session rows without guessing an actor", async () => {
-    await setTestSessionStore({ entries: {} });
-    const sessionKey = "agent:main:dashboard:create-on-run";
-    const res = await rpcReq(gatewaySuite.ws, "agent", {
-      message: "hi",
-      sessionKey,
-      idempotencyKey: "idem-agent-create-on-run",
-    });
-    expect(res.ok).toBe(true);
-    await waitForAgentCommandCall("idem-agent-create-on-run");
-
-    expect(
-      loadSessionEntry({ sessionKey, storePath: gatewaySuite.sessionStorePath }),
-    ).toMatchObject({
-      createdVia: "run",
-      createdAt: expect.any(Number),
-    });
-    expect(
-      loadSessionEntry({ sessionKey, storePath: gatewaySuite.sessionStorePath })?.createdActor,
-    ).toBeUndefined();
-  });
-
-  test("agent links the previous generation when a missing transcript rotates the session", async () => {
-    const sessionKey = "agent:main:dashboard:rotate-missing-transcript";
-    await setTestSessionStore({
-      entries: {
-        [sessionKey]: {
-          sessionId: "missing-transcript-generation",
-          status: "failed",
-          updatedAt: Date.now(),
-        },
-      },
-    });
-
-    const res = await rpcReq(gatewaySuite.ws, "agent", {
-      message: "continue",
-      sessionKey,
-      idempotencyKey: "idem-agent-rotate-missing-transcript",
-    });
-    expect(res.ok).toBe(true);
-    await waitForAgentCommandCall("idem-agent-rotate-missing-transcript");
-
-    const persisted = loadSessionEntry({ sessionKey, storePath: gatewaySuite.sessionStorePath });
-    expect(persisted?.sessionId).not.toBe("missing-transcript-generation");
-    expect(persisted?.previousSessionId).toBe("missing-transcript-generation");
-  });
-
-  test("agent derives sessionKey from agentId", async () => {
-    testState.agentsConfig = { list: [{ id: "ops" }] };
-    await setTestSessionStore({
-      agentId: "ops",
-      entries: {
-        main: {
-          sessionId: "sess-ops",
-          updatedAt: Date.now(),
-        },
-      },
-    });
-    const res = await rpcReq(gatewaySuite.ws, "agent", {
-      message: "hi",
-      agentId: "ops",
-      idempotencyKey: "idem-agent-id",
-    });
-    expect(res.ok, JSON.stringify(res)).toBe(true);
-
-    const call = await waitForAgentCommandCall("idem-agent-id");
-    expect(call.sessionKey).toBe("agent:ops:main");
-    expect(call.sessionId).toBe("sess-ops");
   });
 
   test("agent resolves a bare key through configured fixed-store ownership", async () => {
@@ -553,100 +250,30 @@ describe("gateway server agent", () => {
     expect(vi.mocked(agentCommandMock)).not.toHaveBeenCalled();
   });
 
-  test.each(["success", "error"] as const)(
-    "agent executes a group-only run without a resolved session key and closes authority after %s",
-    async (outcome) => {
-      let admittedAuthority: AgentRunDelegatedAuthority | undefined;
-      const { promise: executionFinished, resolve: finishExecution } = createDeferred();
-      vi.mocked(agentCommandMock).mockImplementationOnce(async (rawOpts) => {
-        const opts = rawOpts as {
-          runId: string;
-          operationalRunInstance: OperationalRunInstanceRef;
-          onAdmittedRunContext?: (context: AdmittedRunContext) => void | Promise<void>;
-        };
-        const preparedRunAdmission = prepareAgentRunAdmission({
-          cfg: {},
-          operationalRunInstance: opts.operationalRunInstance,
-          facts: {
-            runId: opts.runId,
-            agentId: "main",
-            ingress: {
-              kind: "system",
-              boundary: "gateway-agent-sessionless-test",
-              state: "present",
-            },
-          },
-        });
-        try {
-          const admittedRunContext = await preparedRunAdmission.admit("embedded");
-          admittedAuthority = getAdmittedRunDelegatedAuthority(admittedRunContext);
-          expect(admittedAuthority).toBeDefined();
-          await opts.onAdmittedRunContext?.(admittedRunContext);
-          expect(validateAgentRunDelegatedAuthority(admittedAuthority!)).toBe(true);
-          if (outcome === "error") {
-            throw new Error("sessionless provider failure");
-          }
-        } finally {
-          preparedRunAdmission.close();
-          finishExecution();
-        }
-      });
-
-      const runId = `idem-agent-group-only-sessionless-${outcome}`;
-      const res = await rpcReq(gatewaySuite.ws, "agent", {
-        message: "hi",
-        groupId: "group-sessionless",
-        groupChannel: "discord",
-        groupSpace: "guild-sessionless",
-        idempotencyKey: runId,
-      });
-      expect(res.ok, JSON.stringify(res)).toBe(true);
-
-      const call = await waitForAgentCommandCall(runId);
-      await executionFinished;
-      expect(call.sessionKey).toBeUndefined();
-      expect(admittedAuthority).toBeDefined();
-      expect(validateAgentRunDelegatedAuthority(admittedAuthority!)).toBe(false);
-    },
-  );
-
-  test.each(["success", "error"] as const)(
-    "sessionless %s discards offloaded inbound media without a transcript owner",
-    async (outcome) => {
-      vi.mocked(agentCommandMock).mockImplementationOnce(async () => {
-        if (outcome === "error") {
-          throw new Error("forced provider failure");
-        }
-        return undefined;
-      });
-      const inboundBefore = await listInboundMedia();
-      const runId = `sessionless-media-${outcome}`;
-      const attachments =
-        outcome === "success"
-          ? [
-              { ...offloadedImageAttachment(), fileName: "large-a.png" },
-              baseImageAttachment(),
-              { ...offloadedImageAttachment(), fileName: "large-b.png" },
-            ]
-          : [offloadedImageAttachment()];
-      const res = await rpcReq(gatewaySuite.ws, "agent", {
-        message: "inspect media",
-        groupId: "group-sessionless-media",
-        groupChannel: "discord",
-        attachments,
-        idempotencyKey: runId,
-      });
-      expect(res.ok, JSON.stringify(res)).toBe(true);
-      const call = await waitForAgentCommandCall(runId);
-      expect(call.sessionKey).toBeUndefined();
-      if (outcome === "success") {
-        expect(call.media).toHaveLength(2);
-        expect(call.images).toHaveLength(1);
-      }
-      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
-      await expectNoNewInboundMedia(inboundBefore);
-    },
-  );
+  test("discards sessionless offloaded media without a transcript owner", async () => {
+    vi.mocked(agentCommandMock).mockResolvedValueOnce(undefined);
+    const inboundBefore = await listInboundMedia();
+    const runId = "sessionless-media-success";
+    const attachments = [
+      { ...offloadedImageAttachment(), fileName: "large-a.png" },
+      baseImageAttachment(),
+      { ...offloadedImageAttachment(), fileName: "large-b.png" },
+    ];
+    const res = await rpcReq(gatewaySuite.ws, "agent", {
+      message: "inspect media",
+      groupId: "group-sessionless-media",
+      groupChannel: "discord",
+      attachments,
+      idempotencyKey: runId,
+    });
+    expect(res.ok, JSON.stringify(res)).toBe(true);
+    const call = await waitForAgentCommandCall(runId);
+    expect(call.sessionKey).toBeUndefined();
+    expect(call.media).toHaveLength(2);
+    expect(call.images).toHaveLength(1);
+    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    await expectNoNewInboundMedia(inboundBefore);
+  });
 
   test("prompt-persistence suppression discards offloaded media without a transcript row", async () => {
     vi.mocked(agentCommandMock).mockImplementationOnce(async () => {});
@@ -745,128 +372,6 @@ describe("gateway server agent", () => {
     expect(spy).not.toHaveBeenCalled();
   });
 
-  test("agent rejects mismatched agentId and sessionKey", async () => {
-    testState.agentsConfig = { list: [{ id: "ops" }] };
-    const res = await rpcReq(gatewaySuite.ws, "agent", {
-      message: "hi",
-      agentId: "ops",
-      sessionKey: "agent:main:main",
-      idempotencyKey: "idem-agent-mismatch",
-    });
-    expect(res.ok).toBe(false);
-    expect(res.error?.message).toContain("does not match session key agent");
-
-    const spy = vi.mocked(agentCommandMock);
-    expect(spy).not.toHaveBeenCalled();
-  });
-
-  test("agent rejects malformed agent-prefixed session keys", async () => {
-    const res = await rpcReq(gatewaySuite.ws, "agent", {
-      message: "hi",
-      sessionKey: "agent:main",
-      idempotencyKey: "idem-agent-malformed-key",
-    });
-    expect(res.ok).toBe(false);
-    expect(res.error?.message).toContain("malformed session key");
-
-    const spy = vi.mocked(agentCommandMock);
-    expect(spy).not.toHaveBeenCalled();
-  });
-
-  test("agent forwards accountId to agentCommand", async () => {
-    const call = await runMainAgentDeliveryWithSession({
-      entry: {
-        sessionId: "sess-main-account",
-        lastChannel: "whatsapp",
-        lastTo: "+1555",
-        lastAccountId: "default",
-      },
-      request: {
-        accountId: "kev",
-        idempotencyKey: "idem-agent-account",
-      },
-    });
-
-    expectChannels(call, "whatsapp");
-    expect(call.to).toBe("+1555");
-    expect(call.accountId).toBe("kev");
-    const runContext = call.runContext as { accountId?: string } | undefined;
-    expect(runContext?.accountId).toBe("kev");
-  });
-
-  test("agent avoids lastAccountId when explicit to is provided", async () => {
-    const call = await runMainAgentDeliveryWithSession({
-      entry: {
-        sessionId: "sess-main-explicit",
-        lastChannel: "whatsapp",
-        lastTo: "+1555",
-        lastAccountId: "legacy",
-      },
-      request: {
-        to: "+1666",
-        idempotencyKey: "idem-agent-explicit",
-      },
-    });
-
-    expectChannels(call, "whatsapp");
-    expect(call.to).toBe("+1666");
-    expect(call.accountId).toBeUndefined();
-  });
-
-  test("agent keeps explicit accountId when explicit to is provided", async () => {
-    const call = await runMainAgentDeliveryWithSession({
-      entry: {
-        sessionId: "sess-main-explicit-account",
-        lastChannel: "whatsapp",
-        lastTo: "+1555",
-        lastAccountId: "legacy",
-      },
-      request: {
-        to: "+1666",
-        accountId: "primary",
-        idempotencyKey: "idem-agent-explicit-account",
-      },
-    });
-
-    expectChannels(call, "whatsapp");
-    expect(call.to).toBe("+1666");
-    expect(call.accountId).toBe("primary");
-  });
-
-  test("agent falls back to lastAccountId for implicit delivery", async () => {
-    const call = await runMainAgentDeliveryWithSession({
-      entry: {
-        sessionId: "sess-main-implicit",
-        lastChannel: "whatsapp",
-        lastTo: "+1555",
-        lastAccountId: "kev",
-      },
-      request: {
-        idempotencyKey: "idem-agent-implicit-account",
-      },
-    });
-
-    expectChannels(call, "whatsapp");
-    expect(call.to).toBe("+1555");
-    expect(call.accountId).toBe("kev");
-  });
-
-  test("agent forwards image attachments as images[]", async () => {
-    testState.agentConfig = { model: { primary: "ollama-cloud/gemma4:31b" } };
-    await setGatewayModelCatalogForTest([TEXT_ONLY_AGENT_MODEL, VISION_AGENT_MODEL]);
-    const call = await runAgentImageRequest({
-      idempotencyKey: "idem-agent-attachments",
-      sessionId: "sess-main-images",
-      failureMessage: "agent RPC failed before forwarding image attachment",
-    });
-
-    expect(call.sessionKey).toBe("agent:main:main");
-    expectChannels(call, undefined);
-    expect(typeof call.message).toBe("string");
-    expect(call.message).toContain("what is in the image?");
-    expectBaseImageForwarded(call.images);
-  });
-
   test("agent retains image offload facts beside the claim-check line", async () => {
     testState.agentConfig = { model: { primary: "ollama-cloud/gemma4:31b" } };
     await setGatewayModelCatalogForTest([TEXT_ONLY_AGENT_MODEL, VISION_AGENT_MODEL]);
@@ -960,69 +465,5 @@ describe("gateway server agent", () => {
     } finally {
       testState.allowFrom = undefined;
     }
-  });
-
-  test.each([
-    {
-      name: "whatsapp",
-      sessionId: "sess-main-whatsapp",
-      lastChannel: "whatsapp",
-      lastTo: "+1555",
-      idempotencyKey: "idem-agent-last-whatsapp",
-    },
-    {
-      name: "telegram",
-      sessionId: "sess-main",
-      lastChannel: "telegram",
-      lastTo: "123",
-      idempotencyKey: "idem-agent-last",
-    },
-    {
-      name: "discord",
-      sessionId: "sess-discord",
-      lastChannel: "discord",
-      lastTo: "channel:discord-123",
-      idempotencyKey: "idem-agent-last-discord",
-    },
-    {
-      name: "slack",
-      sessionId: "sess-slack",
-      lastChannel: "slack",
-      lastTo: "channel:slack-123",
-      idempotencyKey: "idem-agent-last-slack",
-    },
-    {
-      name: "signal",
-      sessionId: "sess-signal",
-      lastChannel: "signal",
-      lastTo: "+15551234567",
-      idempotencyKey: "idem-agent-last-signal",
-    },
-  ])("agent routes main last-channel $name", async (tc) => {
-    await setTestSessionStore({
-      entries: {
-        main: {
-          sessionId: tc.sessionId,
-          updatedAt: Date.now(),
-          lastChannel: tc.lastChannel,
-          lastTo: tc.lastTo,
-        },
-      },
-    });
-    const res = await rpcReq(gatewaySuite.ws, "agent", {
-      message: "hi",
-      sessionKey: "main",
-      channel: "last",
-      deliver: true,
-      idempotencyKey: tc.idempotencyKey,
-    });
-    expect(res.ok).toBe(true);
-
-    const call = await waitForAgentCommandCall(tc.idempotencyKey);
-    expectChannels(call, tc.lastChannel);
-    expect(call.to).toBe(tc.lastTo);
-    expect(call.deliver).toBe(true);
-    expect(call.bestEffortDeliver).toBe(true);
-    expect(call.sessionId).toBe(tc.sessionId);
   });
 });

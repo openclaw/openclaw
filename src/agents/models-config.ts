@@ -40,7 +40,6 @@ import {
   replacePersistedPluginModelCatalogs,
   type PersistedPluginModelCatalog,
 } from "./plugin-model-catalog.js";
-import type { ProviderCatalogInventoryCapture } from "./provider-model-membership.js";
 
 type ModelsConfigPluginMetadataSnapshot = Pick<
   PluginMetadataSnapshot,
@@ -60,7 +59,6 @@ type EnsureOpenClawModelsJsonOptions = {
 
 type PlanOpenClawModelsJsonSourceOptions = EnsureOpenClawModelsJsonOptions & {
   authStore?: AuthProfileStore;
-  providerCatalogInventory?: ProviderCatalogInventoryCapture;
 };
 
 type PlannedOpenClawModelsJsonSource = Readonly<{
@@ -297,8 +295,6 @@ export async function ensureOpenClawModelsJson(
   }
 
   const pending = MODELS_JSON_STATE.writeQueue.enqueue(targetPath, async () => {
-    // Ensure config env vars (e.g. AWS_PROFILE, AWS_ACCESS_KEY_ID) are
-    // are available to provider discovery without mutating process.env.
     const existingModelsFile = await readExistingModelsFile(targetPath);
     const plan = await planOpenClawModelsJson({
       context,
@@ -307,20 +303,14 @@ export async function ensureOpenClawModelsJson(
       pluginCatalogs: loadPersistedPluginModelCatalogsReadOnly(agentDir),
     });
 
-    if (plan.action === "skip") {
+    if (plan.action !== "write") {
       const wrotePluginCatalog = writePluginCatalogsForModelsJson({
         agentDir,
         pluginCatalogWrites: plan.pluginCatalogWrites,
       });
-      return { agentDir, wrote: wrotePluginCatalog };
-    }
-
-    if (plan.action === "noop") {
-      const wrotePluginCatalog = writePluginCatalogsForModelsJson({
-        agentDir,
-        pluginCatalogWrites: plan.pluginCatalogWrites,
-      });
-      await ensureModelsFileModeForModelsJson(targetPath);
+      if (plan.action === "noop") {
+        await ensureModelsFileModeForModelsJson(targetPath);
+      }
       return { agentDir, wrote: wrotePluginCatalog };
     }
 
@@ -365,11 +355,8 @@ export async function planOpenClawModelsJsonSource(
   agentDirOverride?: string,
   options: PlanOpenClawModelsJsonSourceOptions = {},
 ): Promise<PlannedOpenClawModelsJsonSource> {
-  const { authStore, providerCatalogInventory } = options;
-  const context = {
-    ...(await prepareModelsConfigContext(config, agentDirOverride, options)),
-    providerCatalogInventory,
-  };
+  const { authStore } = options;
+  const context = await prepareModelsConfigContext(config, agentDirOverride, options);
   const { agentDir } = context;
   const existingModelsFile = await readExistingModelsFile(path.join(agentDir, "models.json"));
   const existingPluginCatalogs = loadPersistedPluginModelCatalogsReadOnly(agentDir);

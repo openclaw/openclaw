@@ -6,8 +6,6 @@ import {
   buildAgentRunTerminalReplySnapshot,
   normalizeAgentRunTerminalReplySnapshot,
 } from "../../agents/agent-run-terminal-reply.js";
-import { hasCommittedMessagingToolDeliveryEvidence } from "../../agents/embedded-agent-runner/delivery-evidence.js";
-import { hasIntentionalTerminalCompletion } from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
 import {
   CODE_MODE_MCP_CATALOG_MISS_MESSAGE,
   isEmbeddedRunTerminalToolFailure,
@@ -42,11 +40,8 @@ import {
   deriveSessionTotalTokens,
   hasNonzeroUsage,
 } from "./run.runtime.js";
-import type { RunCronAgentTurnResult } from "./run.types.js";
+import type { CronExecutionResult, RunCronAgentTurnResult } from "./run.types.js";
 import { cleanupCronRunSessionAfterRun } from "./session-cleanup.js";
-
-type CronExecutionRuntime = typeof import("./run-executor.runtime.js");
-type CronExecutionResult = Awaited<ReturnType<CronExecutionRuntime["executeCronRun"]>>;
 
 const cronContextRuntimeLoader = createLazyImportLoader(() => import("./run-context.runtime.js"));
 
@@ -288,13 +283,6 @@ export async function finalizeCronRun(params: {
       ...telemetry,
     });
   };
-  const failPendingPresentationWarningUnlessDelivered = (delivered?: boolean) => {
-    if (pendingPresentationWarningError && delivered !== true) {
-      hasFatalErrorPayload = true;
-      embeddedRunError = pendingPresentationWarningError;
-    }
-  };
-
   const acceptedSessionSpawn = hasAcceptedSessionSpawn(finalRunResult.acceptedSessionSpawns);
   const heartbeatOnlyResponse =
     prepared.deliveryRequested && !hasFatalErrorPayload && deliveryDisposition.kind !== "visible";
@@ -335,42 +323,10 @@ export async function finalizeCronRun(params: {
       sourceDeliveryOutcome,
     });
   }
-  const hasCommittedTerminalProgress =
-    hasCommittedMessagingToolDeliveryEvidence(finalRunResult) ||
-    finalRunResult.didSendDeterministicApprovalPrompt === true ||
-    acceptedSessionSpawn ||
-    (finalRunResult.successfulCronAdds ?? 0) > 0;
   const hasIntentionalSilentReply =
     finalRunResult.meta?.terminalReplyKind === "silent-empty" ||
     isSilentReplyPayloadText(finalRunResult.meta?.finalAssistantRawText) ||
     isSilentReplyPayloadText(finalRunResult.meta?.finalAssistantVisibleText);
-  if (
-    prepared.deliveryRequested &&
-    !hasFatalErrorPayload &&
-    !sourceDeliveryOutcome.satisfiesSourceDelivery &&
-    !hasCommittedTerminalProgress &&
-    !hasIntentionalSilentReply &&
-    !hasIntentionalTerminalCompletion(finalRunResult) &&
-    deliveryPayloads.length === 0 &&
-    normalizeOptionalString(synthesizedText) === undefined
-  ) {
-    await queueSourceSessionMessageToolAwareness?.();
-    const error = "cron isolated run completed without a final assistant payload";
-    return prepared.withRunSession({
-      status: "error",
-      error,
-      summary: error,
-      outputText: error,
-      replyDisposition,
-      delivered: false,
-      deliveryAttempted: false,
-      diagnostics: mergeCronRunDiagnostics(
-        runDiagnostics,
-        createCronRunDiagnosticsFromError("agent-run", error),
-      ),
-      ...telemetry,
-    });
-  }
   if (hasFatalStructuredErrorPayload && prepared.deliveryRequested) {
     // Structured run error payloads belong in cron state and failure alerts,
     // not the normal completion announce path where provider JSON can leak.
@@ -391,7 +347,7 @@ export async function finalizeCronRun(params: {
   }
   // Dispatch owns transcript cleanup from here; a thrown delivery error must retain it too.
   params.markCronRunSessionCleanupHandled();
-  const { dispatchCronDelivery, resolveCronDeliveryBestEffort } = await loadCronDeliveryRuntime();
+  const { dispatchCronDelivery } = await loadCronDeliveryRuntime();
   const deliveryResult = await dispatchCronDelivery({
     cfgWithAgentDefaults: prepared.cfgWithAgentDefaults,
     deps: prepared.input.deps,
@@ -419,7 +375,7 @@ export async function finalizeCronRun(params: {
     spawnOnlyHandoff,
     sourceDeliveryOutcome,
     queueSourceSessionMessageToolAwareness,
-    deliveryBestEffort: resolveCronDeliveryBestEffort(prepared.input.job),
+    deliveryBestEffort: prepared.input.job.delivery?.bestEffort === true,
     deliveryPayloadHasStructuredContent,
     deliveryPayloads,
     synthesizedText,
@@ -444,6 +400,9 @@ export async function finalizeCronRun(params: {
     summary = deliveryResult.summary;
     outputText = deliveryResult.outputText;
   }
-  failPendingPresentationWarningUnlessDelivered(deliveryResult.delivered);
+  if (pendingPresentationWarningError && deliveryResult.delivered !== true) {
+    hasFatalErrorPayload = true;
+    embeddedRunError = pendingPresentationWarningError;
+  }
   return resolveRunOutcome({ ...deliveryResult, delivery: deliveryTrace });
 }

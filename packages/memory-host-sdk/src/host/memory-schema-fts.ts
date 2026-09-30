@@ -96,6 +96,9 @@ function dropMismatchedFtsTable(params: {
   if (params.tableName === MEMORY_INDEX_PATHS_FTS_TABLE) {
     dropMemoryPathFtsTriggers(params.db);
   }
+  if (params.tableName === MEMORY_INDEX_FTS_TABLE) {
+    dropMemoryChunkFtsTriggers(params.db);
+  }
   params.db.exec(`DROP TABLE ${params.tableName}`);
 }
 
@@ -138,13 +141,62 @@ export const MEMORY_PATH_FTS_TRIGGER_DEFINITIONS = [
   },
 ] as const;
 
+/** Canonical chunks own the optional body index; every mutation addresses its rowid. */
+export const MEMORY_CHUNK_FTS_TRIGGER_DEFINITIONS = [
+  {
+    name: "memory_index_chunks_fts_after_insert",
+    sql: `
+      CREATE TRIGGER IF NOT EXISTS main.memory_index_chunks_fts_after_insert
+      AFTER INSERT ON ${MEMORY_INDEX_CHUNKS_TABLE}
+      BEGIN
+        INSERT INTO ${MEMORY_INDEX_FTS_TABLE} (rowid, text, id, path, source, model, start_line, end_line)
+        VALUES (NEW.chunk_rowid, NEW.text, NEW.id, NEW.path, NEW.source, NEW.model, NEW.start_line, NEW.end_line);
+      END;
+    `,
+  },
+  {
+    name: "memory_index_chunks_fts_after_update",
+    sql: `
+      CREATE TRIGGER IF NOT EXISTS main.memory_index_chunks_fts_after_update
+      AFTER UPDATE OF chunk_rowid, text, id, path, source, model, start_line, end_line ON ${MEMORY_INDEX_CHUNKS_TABLE}
+      BEGIN
+        DELETE FROM ${MEMORY_INDEX_FTS_TABLE} WHERE rowid = OLD.chunk_rowid;
+        INSERT INTO ${MEMORY_INDEX_FTS_TABLE} (rowid, text, id, path, source, model, start_line, end_line)
+        VALUES (NEW.chunk_rowid, NEW.text, NEW.id, NEW.path, NEW.source, NEW.model, NEW.start_line, NEW.end_line);
+      END;
+    `,
+  },
+  {
+    name: "memory_index_chunks_fts_after_delete",
+    sql: `
+      CREATE TRIGGER IF NOT EXISTS main.memory_index_chunks_fts_after_delete
+      AFTER DELETE ON ${MEMORY_INDEX_CHUNKS_TABLE}
+      BEGIN
+        DELETE FROM ${MEMORY_INDEX_FTS_TABLE} WHERE rowid = OLD.chunk_rowid;
+      END;
+    `,
+  },
+] as const;
+
+export function dropMemoryChunkFtsTriggers(db: DatabaseSync): void {
+  for (const trigger of MEMORY_CHUNK_FTS_TRIGGER_DEFINITIONS) {
+    db.exec(`DROP TRIGGER IF EXISTS main.${trigger.name}`);
+  }
+}
+
+export function ensureMemoryChunkFtsTriggers(db: DatabaseSync): void {
+  for (const trigger of MEMORY_CHUNK_FTS_TRIGGER_DEFINITIONS) {
+    db.exec(trigger.sql);
+  }
+}
+
 export function rebuildMemoryChunkFts(db: DatabaseSync, ftsTable: string): void {
   db.exec(`
     DELETE FROM ${ftsTable};
     INSERT INTO ${ftsTable} (
-      text, id, path, source, model, start_line, end_line
+      rowid, text, id, path, source, model, start_line, end_line
     )
-    SELECT text, id, path, source, model, start_line, end_line
+    SELECT chunk_rowid, text, id, path, source, model, start_line, end_line
     FROM ${MEMORY_INDEX_CHUNKS_TABLE};
   `);
 }
@@ -190,8 +242,21 @@ export function ensureMemoryChunkFtsSchema(params: {
       .get() as { canonical_count: number; derived_count: number };
     // FTS is fully derived. A cardinality mismatch proves that an ordinary
     // schema ensure cannot leave the populated index untouched.
-    if (rowCounts.canonical_count !== rowCounts.derived_count) {
+    const canonical = params.ftsTable === MEMORY_INDEX_FTS_TABLE;
+    const hasRowidMaintenance =
+      !canonical ||
+      MEMORY_CHUNK_FTS_TRIGGER_DEFINITIONS.every((trigger) =>
+        params.db
+          .prepare("SELECT 1 FROM sqlite_schema WHERE type = 'trigger' AND name = ?")
+          .get(trigger.name),
+      );
+    // Pre-rowid indexes can have matching counts but unrelated FTS identities.
+    // Installing their maintenance contract owns the one-time identity rebuild.
+    if (!hasRowidMaintenance || rowCounts.canonical_count !== rowCounts.derived_count) {
       rebuildMemoryChunkFts(params.db, params.ftsTable);
+    }
+    if (canonical) {
+      ensureMemoryChunkFtsTriggers(params.db);
     }
     params.db.exec("RELEASE ensure_memory_index_chunks_fts");
   } catch (err) {
@@ -212,6 +277,7 @@ export function dropDisabledMemoryFts(db: DatabaseSync, ftsTable: string, enable
   db.exec(`DROP TABLE IF EXISTS ${MEMORY_INDEX_PATHS_FTS_TABLE}`);
 
   if (ftsTable === MEMORY_INDEX_FTS_TABLE) {
+    dropMemoryChunkFtsTriggers(db);
     db.exec(`DROP TABLE IF EXISTS ${ftsTable}`);
   }
 }

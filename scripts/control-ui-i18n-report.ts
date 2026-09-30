@@ -1,8 +1,8 @@
-// Control Ui I18N Report script supports OpenClaw repository automation.
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { requireOptionArgument } from "./lib/arg-utils.mts";
 
 const ROOT = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const I18N_ASSETS_DIR = path.join(ROOT, "ui/src/i18n/.i18n");
@@ -104,20 +104,17 @@ export function parseArgs(argv: string[]): ReportArgs {
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--surface") {
-      args.surface = readOptionValue(argv, (index += 1), arg);
+      args.surface = requireOptionArgument(argv, index++, arg);
       continue;
     }
     if (arg === "--locale") {
-      args.locale = parseLocale(readOptionValue(argv, (index += 1), arg));
+      args.locale = parseLocale(requireOptionArgument(argv, index++, arg));
       continue;
     }
     if (arg === "--top") {
-      const raw = readOptionValue(argv, (index += 1), arg);
-      if (!/^[1-9][0-9]*$/.test(raw)) {
-        throw new Error(`--top must be a positive integer: ${raw}`);
-      }
+      const raw = requireOptionArgument(argv, index++, arg);
       const top = Number.parseInt(raw, 10);
-      if (!Number.isSafeInteger(top)) {
+      if (!/^[1-9][0-9]*$/.test(raw) || !Number.isSafeInteger(top)) {
         throw new Error(`--top must be a positive integer: ${raw}`);
       }
       args.top = top;
@@ -126,14 +123,6 @@ export function parseArgs(argv: string[]): ReportArgs {
     throw new Error(`unknown argument: ${arg}\n${usage()}`);
   }
   return args;
-}
-
-function readOptionValue(argv: string[], index: number, flag: string) {
-  const value = argv[index];
-  if (!value || value.startsWith("-")) {
-    throw new Error(`${flag} requires a value`);
-  }
-  return value;
 }
 
 function parseLocale(locale: string) {
@@ -148,7 +137,7 @@ export function filterRawCopyEntries(entries: RawCopyBaselineEntry[], surface?: 
     return entries;
   }
   const normalized = normalizeToken(surface);
-  return entries.filter((entry) => pathTokens(entry.path).some((token) => token === normalized));
+  return entries.filter((entry) => pathTokens(entry.path).includes(normalized));
 }
 
 export function summarizeRawCopy(entries: RawCopyBaselineEntry[], top: number): RawCopySummary {
@@ -162,18 +151,13 @@ export function summarizeRawCopy(entries: RawCopyBaselineEntry[], top: number): 
 
   const rankedPaths = [...byPath.entries()]
     .map(([entryPath, count]) => ({ count, path: entryPath }))
-    .toSorted(compareCountThenName((entry) => entry.path));
+    .toSorted((left, right) => right.count - left.count || left.path.localeCompare(right.path));
 
   return {
     entries: entries.length,
     occurrences,
     topPaths: rankedPaths.slice(0, top),
   };
-}
-
-function compareCountThenName<T>(nameOf: (value: T) => string) {
-  return (left: T & { count: number }, right: T & { count: number }) =>
-    right.count - left.count || nameOf(left).localeCompare(nameOf(right));
 }
 
 function pathTokens(repoPath: string) {
@@ -197,87 +181,51 @@ export function filterTranslationKeysBySurface(keys: string[], surface?: string)
     return keys;
   }
   const normalized = normalizeToken(surface);
-  return keys.filter((key) =>
-    key.split(".").some((part) => surfaceTokens(part).some((token) => token === normalized)),
-  );
+  return keys.filter((key) => surfaceTokens(key).includes(normalized));
 }
 
-export function formatReport(input: ReportInput) {
+export function formatReport({ locale, rawCopy, surface }: ReportInput) {
+  const scope = surface ? formatSurfaceLabel(surface) : "Control UI";
   const lines = [
     "Control UI i18n baseline report",
-    `Scope: ${formatSurfaceLabel(input.surface)}, ${
-      input.locale ? formatLocaleLabel(input.locale.meta.locale) : "no locale selected"
+    `Scope: ${formatSurfaceLabel(surface)}, ${
+      locale ? formatLocaleLabel(locale.meta.locale) : "no locale selected"
     }`,
     "Based on: current raw-copy baseline and locale metadata. Not a drift check.",
     "",
     "Current i18n state",
-    `  Hardcoded UI text outside i18n: ${input.rawCopy.entries} pieces in code, ${input.rawCopy.occurrences} total occurrences.`,
-    ...formatLocaleState(input.locale),
+    `  Hardcoded UI text outside i18n: ${rawCopy.entries} pieces in code, ${rawCopy.occurrences} total occurrences.`,
+    locale
+      ? `  Existing ${locale.meta.locale} translation keys (all Control UI): ${locale.meta.translatedKeys}/${locale.meta.totalKeys} filled, ${formatFallbackCount(locale.meta.fallbackKeys.length)}.`
+      : "  Existing translation keys: not checked. Add --locale <code> to include them.",
     "",
     "Current issue",
-    ...formatIssueLines(input),
+    rawCopy.entries === 0
+      ? `  No hardcoded UI text found in ${scope}.`
+      : `  ${scope} still has UI text written directly in code.`,
+    !locale
+      ? "  Locale-specific gaps were not checked."
+      : locale.fallbackKeysInScope.length === 0
+        ? `  No ${locale.meta.locale} locale problems found in this scope.`
+        : `  ${locale.meta.locale} has ${formatMissingKeyCount(locale.fallbackKeysInScope.length)}.`,
     "",
     "Focus modules",
-    ...formatTopPathLines(input.rawCopy.topPaths),
+    ...(rawCopy.topPaths.length === 0
+      ? ["  none"]
+      : rawCopy.topPaths.map(
+          (entry) => `  ${entry.count} ${formatPathLabel(entry.path)}: ${entry.path}`,
+        )),
     "",
     "Next steps",
-    ...formatNextStepLines(input),
+    ...(rawCopy.entries === 0
+      ? ["  No module work needed for hardcoded text in this scope."]
+      : [
+          "  Move text from the focus modules into translation keys.",
+          "  Do not hand-edit generated locale, translation memory, or i18n metadata files.",
+          "  Run pnpm ui:i18n:sync after adding translation keys.",
+        ]),
   ];
-
   return `${lines.join("\n")}\n`;
-}
-
-function formatLocaleState(locale?: LocaleSummary) {
-  if (!locale) {
-    return ["  Existing translation keys: not checked. Add --locale <code> to include them."];
-  }
-  return [
-    `  Existing ${locale.meta.locale} translation keys (all Control UI): ${locale.meta.translatedKeys}/${locale.meta.totalKeys} filled, ${formatFallbackCount(locale.meta.fallbackKeys.length)}.`,
-  ];
-}
-
-function formatIssueLines(input: ReportInput) {
-  const scope = input.surface ? formatSurfaceLabel(input.surface) : "Control UI";
-  const lines: string[] = [];
-
-  if (input.rawCopy.entries === 0) {
-    lines.push(`  No hardcoded UI text found in ${scope}.`);
-  } else {
-    lines.push(`  ${scope} still has UI text written directly in code.`);
-  }
-
-  if (!input.locale) {
-    lines.push("  Locale-specific gaps were not checked.");
-    return lines;
-  }
-
-  if (input.locale.fallbackKeysInScope.length === 0) {
-    lines.push(`  No ${input.locale.meta.locale} locale problems found in this scope.`);
-    return lines;
-  }
-
-  lines.push(
-    `  ${input.locale.meta.locale} has ${formatMissingKeyCount(input.locale.fallbackKeysInScope.length)}.`,
-  );
-  return lines;
-}
-
-function formatNextStepLines(input: ReportInput) {
-  if (input.rawCopy.entries === 0) {
-    return ["  No module work needed for hardcoded text in this scope."];
-  }
-  return [
-    "  Move text from the focus modules into translation keys.",
-    "  Do not hand-edit generated locale, translation memory, or i18n metadata files.",
-    "  Run pnpm ui:i18n:sync after adding translation keys.",
-  ];
-}
-
-function formatTopPathLines(entries: Array<{ count: number; path: string }>) {
-  if (entries.length === 0) {
-    return ["  none"];
-  }
-  return entries.map((entry) => `  ${entry.count} ${formatPathLabel(entry.path)}: ${entry.path}`);
 }
 
 function formatMissingKeyCount(count: number) {
@@ -289,10 +237,7 @@ function formatFallbackCount(count: number) {
 }
 
 function formatSurfaceLabel(surface?: string) {
-  if (!surface) {
-    return "all Control UI";
-  }
-  return toTitleWords(surface);
+  return surface ? toTitleWords(surface) : "all Control UI";
 }
 
 function formatLocaleLabel(locale: string) {

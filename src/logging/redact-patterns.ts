@@ -18,6 +18,10 @@ const AUTH_QUERY_KEYS = String.raw`access[-_]?token|auth[-_]?token|hook[-_]?toke
 const FORM_BODY_FIRST_PAIR_KEYS = String.raw`${AUTH_QUERY_KEYS}|app[-_]?secret|credential|${PAYMENT_CREDENTIAL_QUERY_KEYS}`;
 const STANDALONE_ASSIGNMENT_SECRET_KEYS = String.raw`access_token|refresh_token|id_token|auth[-_]?token|hook[-_]?token|api[-_]?key|client[-_]?secret|app[-_]?secret|private[-_]?key|authorization|jwt|token|secret|password|pass|passwd|credential|${PAYMENT_CREDENTIAL_QUERY_KEYS}`;
 const CONFIG_ASSIGNMENT_SECRET_KEYS = String.raw`access[-_]?token|refresh[-_]?token|id[-_]?token|auth[-_]?token|hook[-_]?token|api[-_]?(?:key|secret)|client[-_]?secret|app[-_]?secret|private[-_]?key|secret[-_]?key|key[-_]?material|authorization|jwt|token|secret|password|passphrase|pass|passwd|credential|${PAYMENT_CREDENTIAL_QUERY_KEYS}`;
+// Bare `pass` is ordinary prose far more often than a key ("tests now pass: older clients"), so the
+// generic unquoted colon form skips it; BARE_PASS_ASSIGNMENT_MATCHER keeps config-shaped `pass:` masked, and
+// `pass=`, `pass = `, namespaced, prefixed, and quoted forms are unchanged.
+const CONFIG_COLON_ASSIGNMENT_SECRET_KEYS = String.raw`access[-_]?token|refresh[-_]?token|id[-_]?token|auth[-_]?token|hook[-_]?token|api[-_]?(?:key|secret)|client[-_]?secret|app[-_]?secret|private[-_]?key|secret[-_]?key|key[-_]?material|authorization|jwt|token|secret|password|passphrase|passwd|credential|${PAYMENT_CREDENTIAL_QUERY_KEYS}`;
 const CONFIG_DIRECT_ASSIGNMENT_SECRET_KEYS = String.raw`access-token|refresh-token|id-token|auth-token|hook-token|api[-_]?(?:key|secret)|secret[-_]?key|key[-_]?material|passphrase`;
 const CONFIG_PREFIXED_PASSWORD_ASSIGNMENT_SECRET_KEYS = String.raw`password|passphrase|pass|passwd`;
 const CLI_SECRET_FLAG_KEYS = String.raw`${AWS_SECRET_ACCESS_KEY_FIELD_KEYS}|api[-_]?key|hook[-_]?token|access[-_]?token|refresh[-_]?token|id[-_]?token|token|secret|password|passwd|credential|private[-_]?key|client[-_]?secret|${PAYMENT_CREDENTIAL_QUERY_KEYS}`;
@@ -70,7 +74,7 @@ const STANDALONE_ASSIGNMENT_QUOTED_REDACT_PATTERN = String.raw`(^|[\s,;({\["])(?
 const STANDALONE_ASSIGNMENT_REDACT_PATTERN = String.raw`(^|[\s,;({\["])(?:${STANDALONE_ASSIGNMENT_SECRET_KEYS})=(["'\x60]?[^\s&#"'\x60<>]+)`;
 const CONFIG_QUOTED_ASSIGNMENT_SECRET_KEYS = String.raw`access[-_]?token|refresh[-_]?token|id[-_]?token|auth[-_]?token|hook[-_]?token|api[-_]?(?:key|secret)|secret[-_]?key|key[-_]?material|authorization|jwt|token|secret|password|passphrase|pass|passwd|${PAYMENT_CREDENTIAL_QUERY_KEYS}`;
 const CONFIG_QUOTED_ASSIGNMENT_REDACT_PATTERN = String.raw`/(^|[\s,{])(?:(?:${CONFIG_QUOTED_ASSIGNMENT_SECRET_KEYS})(?:\s*:\s*|\s+=\s*|=\s*)|[a-z0-9][a-z0-9._-]{0,79}[-_](?:${CONFIG_PREFIXED_PASSWORD_ASSIGNMENT_SECRET_KEYS})\s*[:=]\s*|[a-z0-9_.-]{1,80}\.(?:${CONFIG_ASSIGNMENT_SECRET_KEYS})\s*[:=]\s*)(["'\x60])((?:(?!\2)[^\r\n])+)\2/g`;
-const CONFIG_ASSIGNMENT_REDACT_PATTERN = String.raw`/(^|[\s,{])(?:${CONFIG_ASSIGNMENT_SECRET_KEYS})(?:\s*:\s*|\s+=\s*|=\s+)([^\s#"'\x60<>]+)/g`;
+const CONFIG_ASSIGNMENT_REDACT_PATTERN = String.raw`/(^|[\s,{])(?:(?:${CONFIG_COLON_ASSIGNMENT_SECRET_KEYS})\s*:\s*|(?:${CONFIG_ASSIGNMENT_SECRET_KEYS})(?:\s+=\s*|=\s+))([^\s#"'\x60<>]+)/g`;
 const CONFIG_DIRECT_ASSIGNMENT_REDACT_PATTERN = String.raw`/(^|[\s,{])(?:${CONFIG_DIRECT_ASSIGNMENT_SECRET_KEYS})=([^\s#"'\x60<>]+)/g`;
 const CONFIG_PREFIXED_PASSWORD_ASSIGNMENT_REDACT_PATTERN = String.raw`/(^|[\s,{])[a-z0-9][a-z0-9._-]{0,79}[-_](?:${CONFIG_PREFIXED_PASSWORD_ASSIGNMENT_SECRET_KEYS})\s*[:=]\s*([^\s#"'\x60<>]+)/g`;
 const CONFIG_NAMESPACED_ASSIGNMENT_REDACT_PATTERN = String.raw`/(^|[\s,{])[a-z0-9_.-]{1,80}\.(?:${CONFIG_ASSIGNMENT_SECRET_KEYS})\s*[:=]\s*([^\s#"'\x60<>]+)/g`;
@@ -96,13 +100,23 @@ function isAwsValueCharacter(char: string): boolean {
 
 const AWS_SECRET_ACCESS_KEY_VALUE_RE =
   /(?=[A-Za-z0-9/+=]{0,39}[A-Z])(?=[A-Za-z0-9/+=]{0,39}[a-z])(?=[A-Za-z0-9/+=]{0,39}[0-9/+=])(?=[A-Za-z0-9/+=]{0,39}[G-Zg-z/+=])[A-Za-z0-9/+=]{40}/u;
+const AWS_SECRET_ACCESS_KEY_RUN_RE = /[A-Za-z0-9/+=]{40}/u;
+
+function couldMatchAwsSecretAccessKey(text: string): boolean {
+  // Reject short word runs before the value rule retries its lookaheads at every character.
+  return (
+    text.length >= 40 &&
+    AWS_SECRET_ACCESS_KEY_RUN_RE.test(text) &&
+    AWS_SECRET_ACCESS_KEY_VALUE_RE.test(text)
+  );
+}
 
 const AWS_VALUE_WHITESPACE_RE = /\s/;
 const AWS_URL_SCHEME_CHARACTER_RE = /[A-Za-z0-9+.-]/;
 const AWS_URL_SCHEME_START_RE = /[A-Za-z]/;
 
 function* matchAwsSecretAccessKeys(text: string): Iterable<RedactMatch> {
-  if (!AWS_SECRET_ACCESS_KEY_VALUE_RE.test(text)) {
+  if (!couldMatchAwsSecretAccessKey(text)) {
     return;
   }
   type UrlContext = {
@@ -253,7 +267,87 @@ function* matchAwsSecretAccessKeys(text: string): Iterable<RedactMatch> {
 export const AWS_SECRET_ACCESS_KEY_MATCHER = Object.freeze({
   source: "aws-secret-access-key",
   exec: matchAwsSecretAccessKeys,
-  couldMatch: (text: string) => AWS_SECRET_ACCESS_KEY_VALUE_RE.test(text),
+  couldMatch: couldMatchAwsSecretAccessKey,
+});
+
+// Bare `pass:` reads as prose only when a plain word or number and one space precede it on a line that
+// carries no assignment before it ("The tests now pass: older clients", "12 pass: 0 fail"). A spaced
+// `key: value` phrase earlier on the line is how prose introduces lists ("Release notes: all suites
+// pass: nothing else changed"), so it is not an assignment; an inline `user: bot pass: x` record is the
+// accepted cost, while `user=bot pass: x` and `user:bot pass: x` stay records. Every other
+// position is a record start and masks exactly like the generic assignment rule did: line or text start,
+// YAML `- `, punctuation, tabs, or an inline `key=value` / `key:value` field of any spacing or length.
+// Namespaced (`smtp.pass:`) and prefixed (`db-pass:`, `db_pass:`) keys belong to their own patterns but
+// still make their line a record, as does any other credential key with a colon in any letter case
+// (`password: x pass: y`, `Authorization: Bearer x pass: y`);
+// `pass` inside another word (`bypass:`) is not a key. Whitespace around
+// the colon may include line breaks, as in the generic rule, so YAML explicit keys and indented
+// continuations stay covered. One forward pass classifies every key, so the cost is linear in the text
+// regardless of line length or key count.
+const BARE_PASS_KEY_PATTERN = String.raw`(?<![A-Za-z0-9])(pass|${CONFIG_COLON_ASSIGNMENT_SECRET_KEYS})\s*:\s*`;
+const BARE_PASS_VALUE_PATTERN = String.raw`[^\s#"'\x60<>]+`;
+const ASCII_WORD_CHAR_RE = /[A-Za-z0-9]/;
+const INLINE_WHITESPACE_RE = /[ \t\r\n]/;
+
+function* matchBarePassAssignments(text: string): Iterable<RedactMatch> {
+  const keys = [...text.matchAll(new RegExp(BARE_PASS_KEY_PATTERN, "gi"))];
+  if (keys.length === 0) {
+    return;
+  }
+  const valueRe = new RegExp(BARE_PASS_VALUE_PATTERN, "y");
+  let next = 0;
+  let assignmentSeen = false;
+  for (let index = 0; index < text.length; index++) {
+    const key = keys[next];
+    if (!key) {
+      return;
+    }
+    if (index === key.index) {
+      next++;
+      const before = text[index - 1] ?? "";
+      const owned = key[1] !== "pass" || before === "." || before === "-" || before === "_";
+      const prose =
+        !owned &&
+        !assignmentSeen &&
+        before === " " &&
+        ASCII_WORD_CHAR_RE.test(text[index - 2] ?? "");
+      if (!prose) {
+        // A key, this rule's or a namespaced one's, makes the rest of its value's line a record, so a
+        // second `pass:` masks too. Skip the key so a line break after its colon does not reset that.
+        assignmentSeen = true;
+        let end = index + key[0].length;
+        if (!owned) {
+          valueRe.lastIndex = end;
+          const value = valueRe.exec(text)?.[0];
+          if (value) {
+            end += value.length;
+            yield { match: text.slice(index, end), groups: [value], input: text, offset: index };
+          }
+        }
+        // Keys inside the skipped span were consumed as value text.
+        let following = keys[next];
+        while (following && following.index < end) {
+          next++;
+          following = keys[next];
+        }
+        index = end - 1;
+        continue;
+      }
+    }
+    const char = text[index];
+    if (char === "\n" || char === "\r") {
+      assignmentSeen = false;
+    } else if (char === "=") {
+      assignmentSeen = true;
+    } else if (char === ":" && !INLINE_WHITESPACE_RE.test(text[index + 1] ?? " ")) {
+      assignmentSeen = true;
+    }
+  }
+}
+
+const BARE_PASS_ASSIGNMENT_MATCHER = Object.freeze({
+  source: "bare-pass-assignment",
+  exec: matchBarePassAssignments,
 });
 const TELEGRAM_BOT_TOKEN_REDACT_PATTERN = String.raw`\bbot(\d{6,}:[A-Za-z0-9_-]{20,})\b`;
 const TELEGRAM_TOKEN_REDACT_PATTERN = String.raw`\b(\d{6,}:[A-Za-z0-9_-]{20,})\b`;
@@ -303,7 +397,7 @@ export const CHUNK_UNSAFE_PATTERN_SOURCES = new Set([
   ...HTTP_AUTH_HEADER_REDACT_PATTERNS,
 ]);
 
-const DEFAULT_REDACT_FIELD_PATTERNS: readonly string[] = [
+const DEFAULT_REDACT_FIELD_PATTERNS: readonly RedactPattern[] = [
   ENV_ASSIGNMENT_REDACT_PATTERN,
   ESCAPED_ENV_ASSIGNMENT_REDACT_PATTERN,
   STRUCTURED_JSON_SECRET_REDACT_PATTERN,
@@ -326,6 +420,8 @@ const DEFAULT_REDACT_FIELD_PATTERNS: readonly string[] = [
   STANDALONE_ASSIGNMENT_REDACT_PATTERN,
   CONFIG_QUOTED_ASSIGNMENT_REDACT_PATTERN,
   CONFIG_ASSIGNMENT_REDACT_PATTERN,
+  // Runs where the generic rule handled bare `pass:`, before the namespaced and prefixed rules.
+  BARE_PASS_ASSIGNMENT_MATCHER,
   CONFIG_DIRECT_ASSIGNMENT_REDACT_PATTERN,
   CONFIG_PREFIXED_PASSWORD_ASSIGNMENT_REDACT_PATTERN,
   CONFIG_NAMESPACED_ASSIGNMENT_REDACT_PATTERN,
@@ -426,13 +522,9 @@ export const VENDOR_TOKEN_REDACT_PATTERNS: readonly string[] = [
   TELEGRAM_TOKEN_REDACT_PATTERN,
 ];
 
-export const DEFAULT_REDACT_STRING_PATTERNS: readonly string[] = [
+export const DEFAULT_REDACT_PATTERNS: readonly RedactPattern[] = [
   ...DEFAULT_REDACT_FIELD_PATTERNS,
   ...VENDOR_TOKEN_REDACT_PATTERNS,
-];
-
-export const DEFAULT_REDACT_PATTERNS: readonly RedactPattern[] = [
-  ...DEFAULT_REDACT_STRING_PATTERNS,
   AWS_SECRET_ACCESS_KEY_MATCHER,
 ];
 
@@ -451,10 +543,16 @@ export const TOOL_PAYLOAD_AMBIGUOUS_ASSIGNMENT_PATTERNS = new Set([
   CONFIG_NAMESPACED_ASSIGNMENT_REDACT_PATTERN,
 ]);
 
+/** Programmatic counterparts of the ambiguous assignment rules: kept out of tool payloads, preserved in source. */
+export const AMBIGUOUS_ASSIGNMENT_MATCHERS: ReadonlySet<RedactPattern> = new Set([
+  BARE_PASS_ASSIGNMENT_MATCHER,
+]);
+
 // Tool output commonly contains source code. Keep key-name matching in logs, direct `.env` reads,
 // and payment JSON; other model-visible text relies on registered and recognizable secret values.
 export const TOOL_PAYLOAD_REDACT_PATTERNS: readonly RedactPattern[] =
-  DEFAULT_REDACT_PATTERNS.filter(
-    (pattern) =>
-      typeof pattern !== "string" || !TOOL_PAYLOAD_AMBIGUOUS_ASSIGNMENT_PATTERNS.has(pattern),
+  DEFAULT_REDACT_PATTERNS.filter((pattern) =>
+    typeof pattern === "string"
+      ? !TOOL_PAYLOAD_AMBIGUOUS_ASSIGNMENT_PATTERNS.has(pattern)
+      : !AMBIGUOUS_ASSIGNMENT_MATCHERS.has(pattern),
   );

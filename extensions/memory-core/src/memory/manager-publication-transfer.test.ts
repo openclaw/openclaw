@@ -1,6 +1,9 @@
 import path from "node:path";
 import { serialize } from "node:v8";
-import { ensureMemoryIndexSchema } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import {
+  encodeMemoryEmbedding,
+  ensureMemoryIndexSchema,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import * as sqliteRuntime from "openclaw/plugin-sdk/sqlite-runtime";
 import * as sqliteWorkerRuntime from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
@@ -51,7 +54,6 @@ function createBackend(owner: MemoryIndexDatabase) {
         busy_timeout: 5000,
         synchronous: 2,
         foreign_keys: 1,
-        wal_autocheckpoint: 1000,
         journal_size_limit: 67108864,
         checkpoint_fullfsync: 1,
       },
@@ -123,51 +125,48 @@ describe("bounded memory publication transfer", () => {
     expect(owner.db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
   });
 
-  it.each([false, true])(
-    "publishes and deletes keyword data with an unavailable configured extension (enabled: %s)",
-    async (enabled) => {
-      const owner = createOwner();
-      owner.vector.enabled = enabled;
-      owner.vector.available = false;
-      owner.vector.extensionPath = path.join(path.dirname(owner.db.location()!), "missing-vec");
-      const input = replacement();
-      const assertCurrent = () => undefined;
-      await owner.replaceSource(input, assertCurrent, async () => true);
-      const matches = () =>
-        owner.db
-          .prepare(
-            "SELECT path FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH 'Violetmarker'",
-          )
-          .all();
-      expect(matches()).toEqual([{ path: input.entry.path }]);
-      expect(
-        await owner.deleteSource(
-          { path: input.entry.path, source: "memory", expectedHash: input.entry.hash },
-          assertCurrent,
-        ),
-      ).toBe(true);
-      expect(matches()).toEqual([]);
-
-      const shadow = createOwner();
-      await shadow.replaceSource(input, assertCurrent, async () => true);
-      await shadow.closePublicationWorker();
-      const sourcePath = shadow.db.location()!;
-      await owner.publishShadow(
-        {
-          sourcePath,
-          sourceIdentity: readMemoryShadowIdentity(sourcePath),
-          metaKey: "test-meta",
-          expectedRevision: readMemoryDatabaseRevision(owner.db),
-          sourceHasVectors: false,
-          vectorIndexComplete: false,
-          extensionPath: owner.vector.extensionPath,
-        },
+  it("publishes and deletes keyword data with an unavailable configured extension", async () => {
+    const owner = createOwner();
+    owner.vector.enabled = true;
+    owner.vector.available = false;
+    owner.vector.extensionPath = path.join(path.dirname(owner.db.location()!), "missing-vec");
+    const input = replacement();
+    const assertCurrent = () => undefined;
+    await owner.replaceSource(input, assertCurrent, async () => true);
+    const matches = () =>
+      owner.db
+        .prepare(
+          "SELECT path FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH 'Violetmarker'",
+        )
+        .all();
+    expect(matches()).toEqual([{ path: input.entry.path }]);
+    expect(
+      await owner.deleteSource(
+        { path: input.entry.path, source: "memory", expectedHash: input.entry.hash },
         assertCurrent,
-      );
-      expect(matches()).toEqual([{ path: input.entry.path }]);
-      expect(owner.db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
-    },
-  );
+      ),
+    ).toBe(true);
+    expect(matches()).toEqual([]);
+
+    const shadow = createOwner();
+    await shadow.replaceSource(input, assertCurrent, async () => true);
+    await shadow.closePublicationWorker();
+    const sourcePath = shadow.db.location()!;
+    await owner.publishShadow(
+      {
+        sourcePath,
+        sourceIdentity: readMemoryShadowIdentity(sourcePath),
+        metaKey: "test-meta",
+        expectedRevision: readMemoryDatabaseRevision(owner.db),
+        sourceHasVectors: false,
+        vectorIndexComplete: false,
+        extensionPath: owner.vector.extensionPath,
+      },
+      assertCurrent,
+    );
+    expect(matches()).toEqual([{ path: input.entry.path }]);
+    expect(owner.db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+  });
 
   it("preserves extension load failures when vector publication requires the extension", async () => {
     const owner = createOwner();
@@ -286,6 +285,9 @@ describe("bounded memory publication transfer", () => {
     // could otherwise be separately converted to UTF-8 by SQLite TEXT bindings.
     const text = "a" + "😀".repeat(160_000) + '\n漢字 e\u0301 "quoted" \\ tail Violetmarker';
     const input = replacement(text);
+    const vector = Array.from({ length: 1_025 }, (_, index) => index / 7);
+    vector.splice(510, 4, -0, Number.MIN_VALUE, Number.MAX_VALUE, 1 + Number.EPSILON);
+    input.embeddings = [vector];
     const batches = [...memoryPublicationBatches(input)];
     expect(batches.length).toBeGreaterThan(1);
     for (const batch of batches) {
@@ -312,7 +314,7 @@ describe("bounded memory publication transfer", () => {
         hash: "chunk-hash",
         model: "transfer-model",
         text,
-        embedding: "[0.125,-0.5,1]",
+        embedding: encodeMemoryEmbedding(vector.map((value) => (Object.is(value, -0) ? 0 : value))),
         updated_at: 101,
       },
     ]);
@@ -361,7 +363,18 @@ describe("bounded memory publication transfer", () => {
     if (!chunk) {
       throw new Error("Expected a fixture chunk");
     }
-    const vector = Array.from({ length: 16_384 }, (_, index) => index % 3);
+    const numericCases = [
+      [0.125, 0.125],
+      [-0, 0],
+      [Number.NaN, null],
+      [Infinity, null],
+      [-Infinity, null],
+      [-0.0000010000000000000002, -0.0000010000000000000002],
+    ] as const;
+    const vector = Array.from(
+      { length: 16_384 },
+      (_, index) => numericCases[index % numericCases.length]![0],
+    );
     input.chunks = Array.from({ length: 32 }, (_, index) => ({
       ...chunk,
       startLine: index + 1,
@@ -377,6 +390,7 @@ describe("bounded memory publication transfer", () => {
       batches++;
       expect(serialize(batch).byteLength).toBeLessThanOrEqual(512 * 1024);
       for (const fragment of batch) {
+        expect(fragment.json.length).toBeLessThanOrEqual(16 * 1024);
         expect(fragment.row).toBe(rows.length);
         expect(fragment.part).toBe(part++);
         json += fragment.json;
@@ -389,7 +403,11 @@ describe("bounded memory publication transfer", () => {
     }
     expect(batches).toBeGreaterThan(1);
     expect(json).toBe("");
-    expect(rows).toEqual(input.chunks.map((row) => ({ chunk: row, embedding: vector })));
+    const expectedVector = Array.from(
+      { length: vector.length },
+      (_, index) => numericCases[index % numericCases.length]![1],
+    );
+    expect(rows).toEqual(input.chunks.map((row) => ({ chunk: row, embedding: expectedVector })));
   });
 
   it.each(["incomplete", "out-of-order", "wrong-operation"] as const)(

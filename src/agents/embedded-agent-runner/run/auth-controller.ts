@@ -1,6 +1,3 @@
-/**
- * Coordinates provider auth, profile rotation, and runtime auth refresh.
- */
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import type { Model } from "../../../llm/types.js";
@@ -24,6 +21,7 @@ import { FailoverError, resolveFailoverStatus } from "../../failover-error.js";
 import { shouldUseTransientCooldownProbeSlot } from "../../failover-policy.js";
 import { getFailoverErrorCode } from "../../failover/error.js";
 import { renderAuthProfileFailoverCopy } from "../../failover/user-copy.js";
+import { resolveProviderModelAuthPolicy } from "../../model-auth-policy.js";
 import {
   getApiKeyForModelCore,
   MissingProviderAuthError,
@@ -155,19 +153,6 @@ export function createEmbeddedRunAuthController(params: {
   const baseRuntimeModel = state.models.runtime;
   const baseEffectiveModel = state.models.effective;
 
-  const commitPreparedModel = (
-    preparedModel:
-      | Awaited<ReturnType<NonNullable<typeof params.prepareModelForAuthProfile>>>
-      | undefined,
-  ) => {
-    preparedModel?.commit();
-    if (preparedModel?.authRequirement) {
-      return;
-    }
-    state.models.runtime = baseRuntimeModel;
-    state.models.effective = baseEffectiveModel;
-  };
-
   const applyPreparedRuntimeRequestOverrides = (paramsForApply: {
     runtimeModel: Model;
     preparedAuth: {
@@ -190,10 +175,6 @@ export function createEmbeddedRunAuthController(params: {
       paramsForApply.preparedAuth,
     );
   };
-
-  const hasRefreshableRuntimeAuth = () => Boolean(state.runtimeAuthState?.sourceApiKey.trim());
-
-  const nextRuntimeAuthGeneration = () => (state.runtimeAuthState?.generation ?? 0) + 1;
 
   const prepareRuntimeAuthForModel = async (prepareParams: {
     runtimeModel: Model;
@@ -329,7 +310,7 @@ export function createEmbeddedRunAuthController(params: {
       return;
     }
     const runtimeModel = state.models.runtime;
-    if (!hasRefreshableRuntimeAuth()) {
+    if (!runtimeAuthState.sourceApiKey.trim()) {
       params.log.warn(
         `Skipping runtime auth refresh scheduling for ${runtimeModel.provider}; source credential missing.`,
       );
@@ -384,10 +365,9 @@ export function createEmbeddedRunAuthController(params: {
   const resolveAuthProfileFailoverReason = (failoverParams: {
     allInCooldown: boolean;
     message: string;
-    profileIds?: Array<string | undefined>;
   }): FailoverReason => {
     if (failoverParams.allInCooldown) {
-      const profileIds = (failoverParams.profileIds ?? params.profileCandidates).filter(
+      const profileIds = params.profileCandidates.filter(
         (id): id is string => typeof id === "string" && id.length > 0,
       );
       return (
@@ -397,10 +377,7 @@ export function createEmbeddedRunAuthController(params: {
         }) ?? "unknown"
       );
     }
-    const classified = classifyFailoverReason(failoverParams.message, {
-      provider: params.provider,
-    });
-    return classified ?? "auth";
+    return classifyFailoverReason(failoverParams.message, { provider: params.provider }) ?? "auth";
   };
 
   const recordOAuthRefreshFailure = async (
@@ -456,13 +433,14 @@ export function createEmbeddedRunAuthController(params: {
     const messageForReason =
       failoverParams.message?.trim() ||
       (failoverParams.error ? formatErrorMessage(failoverParams.error).trim() : "");
+    const code = failoverParams.error ? getFailoverErrorCode(failoverParams.error) : undefined;
     const reason = resolveAuthProfileFailoverReason({
       allInCooldown: failoverParams.allInCooldown,
       message: messageForReason,
-      profileIds: params.profileCandidates,
     });
     const message =
       failoverParams.message?.trim() ||
+      (code === "selected_auth_profile_unavailable" ? messageForReason : undefined) ||
       renderAuthProfileFailoverCopy({
         reason,
         provider,
@@ -495,8 +473,8 @@ export function createEmbeddedRunAuthController(params: {
         provider,
         model: modelId,
         authMode,
-        status: resolveFailoverStatus(reason),
-        code: failoverParams.error ? getFailoverErrorCode(failoverParams.error) : undefined,
+        status: resolveFailoverStatus(reason, code),
+        code,
         authProfileFailure: { allInCooldown: failoverParams.allInCooldown },
         cause: failoverParams.error,
       });
@@ -507,36 +485,31 @@ export function createEmbeddedRunAuthController(params: {
     throw new Error(message);
   };
 
-  const resolveApiKeyForCandidate = async (
-    candidate?: string,
-    model = state.models.runtime,
-    allowAuthProfileFallback?: boolean,
-  ) => {
-    return getApiKeyForModelCore({
-      model,
+  const applyApiKeyInfo = async (candidate?: string, attemptIndex?: number): Promise<void> => {
+    const preparedModel = await params.prepareModelForAuthProfile?.(candidate, attemptIndex);
+    const apiKeyInfo = await getApiKeyForModelCore({
+      model: preparedModel?.runtimeModel ?? state.models.runtime,
       cfg: params.config,
       profileId: candidate,
       store: params.authStore,
       agentDir: params.agentDir,
       workspaceDir: params.workspaceDir,
       lockedProfile: candidate != null && candidate === params.lockedProfileId,
-      allowAuthProfileFallback,
+      allowAuthProfileFallback: preparedModel?.allowAuthProfileFallback,
       secretSentinels: true,
     });
-  };
-
-  const applyApiKeyInfo = async (candidate?: string, attemptIndex?: number): Promise<void> => {
-    const preparedModel = await params.prepareModelForAuthProfile?.(candidate, attemptIndex);
-    const apiKeyInfo = await resolveApiKeyForCandidate(
-      candidate,
-      preparedModel?.runtimeModel,
-      preparedModel?.allowAuthProfileFallback,
-    );
     if (
       preparedModel?.authRequirement &&
       !providerModelRouteAcceptsAuthMode({
         requirement: preparedModel.authRequirement,
         mode: apiKeyInfo.mode ?? (apiKeyInfo.apiKey ? "api-key" : undefined),
+        authRequirement: resolveProviderModelAuthPolicy({
+          provider: preparedModel.runtimeModel.provider,
+          mode: apiKeyInfo.mode,
+          authFlow: apiKeyInfo.authFlow,
+          api: preparedModel.runtimeModel.api,
+          baseUrl: preparedModel.runtimeModel.baseUrl,
+        }).authRequirement,
       })
     ) {
       throw new Error(
@@ -545,91 +518,59 @@ export function createEmbeddedRunAuthController(params: {
     }
     // Preserve the checked source even when resolution fails before route commit.
     state.apiKeyInfo = apiKeyInfo;
-    const resolvedProfileId = apiKeyInfo.profileId ?? candidate;
-    if (!apiKeyInfo.apiKey) {
-      if (apiKeyInfo.mode !== "aws-sdk") {
-        const runtimeModel = preparedModel?.runtimeModel ?? state.models.runtime;
-        throw new MissingProviderAuthError(runtimeModel.provider, apiKeyInfo);
-      }
-      commitPreparedModel(preparedModel);
-      // AWS SDK auth via IMDS / instance role / ECS task role: no explicit API
-      // key is available but the SDK default credential chain can resolve
-      // credentials at runtime.  We must still call setRuntimeApiKey so that
-      // OpenClaw runtime's authStorage considers the provider authenticated.  Try
-      // prepareProviderRuntimeAuth first (it can sign requests and return a
-      // short-lived token); fall back to a sentinel value when the provider
-      // plugin does not implement runtime auth preparation.
-      const runtimeModel = state.models.runtime;
-      const AWS_SDK_AUTH_SENTINEL = "__aws_sdk_auth__";
-      try {
-        const preparedAuth = await prepareRuntimeAuthForModel({
-          runtimeModel,
-          apiKey: AWS_SDK_AUTH_SENTINEL,
-          authMode: apiKeyInfo.mode,
-          profileId: apiKeyInfo.profileId,
-        });
-        applyPreparedRuntimeRequestOverrides({ runtimeModel, preparedAuth: preparedAuth ?? {} });
-        if (preparedAuth?.apiKey) {
-          clearRuntimeAuthRefreshTimer();
-          params.authStorage.setRuntimeApiKey(runtimeModel.provider, preparedAuth.apiKey);
-          state.runtimeAuthState = {
-            generation: nextRuntimeAuthGeneration(),
-            sourceApiKey: AWS_SDK_AUTH_SENTINEL,
-            authMode: apiKeyInfo.mode,
-            profileId: resolvedProfileId,
-            expiresAt: preparedAuth.expiresAt,
-          };
-          if (preparedAuth.expiresAt) {
-            scheduleRuntimeAuthRefresh();
-          }
-          state.lastProfileId = resolvedProfileId;
-          return;
-        }
-      } catch (error) {
-        params.log.warn(
-          `prepareProviderRuntimeAuth failed for ${runtimeModel.provider}, falling back to sentinel: ${formatErrorMessage(error)}`,
-        );
-      }
-      // No runtime auth plugin resolved a real credential.  Inject the
-      // sentinel so OpenClaw runtime's hasConfiguredAuth() passes and the AWS SDK default
-      // credential chain handles actual request signing.
-      clearRuntimeAuthRefreshTimer();
-      params.authStorage.setRuntimeApiKey(runtimeModel.provider, AWS_SDK_AUTH_SENTINEL);
-      state.runtimeAuthState = null;
-      state.lastProfileId = resolvedProfileId;
-      return;
+    const usesAwsSdkChain = !apiKeyInfo.apiKey && apiKeyInfo.mode === "aws-sdk";
+    if (!apiKeyInfo.apiKey && !usesAwsSdkChain) {
+      const runtimeModel = preparedModel?.runtimeModel ?? state.models.runtime;
+      throw new MissingProviderAuthError(runtimeModel.provider, apiKeyInfo);
     }
-    commitPreparedModel(preparedModel);
-    let runtimeAuthHandled = false;
+    preparedModel?.commit();
+    if (!preparedModel?.authRequirement) {
+      state.models.runtime = baseRuntimeModel;
+      state.models.effective = baseEffectiveModel;
+    }
     const runtimeModel = state.models.runtime;
-    const preparedAuth = await prepareRuntimeAuthForModel({
-      runtimeModel,
-      apiKey: apiKeyInfo.apiKey,
-      authMode: apiKeyInfo.mode,
-      profileId: apiKeyInfo.profileId,
-    });
-    applyPreparedRuntimeRequestOverrides({ runtimeModel, preparedAuth: preparedAuth ?? {} });
-    if (preparedAuth?.apiKey) {
-      clearRuntimeAuthRefreshTimer();
-      params.authStorage.setRuntimeApiKey(runtimeModel.provider, preparedAuth.apiKey);
-      state.runtimeAuthState = {
-        generation: nextRuntimeAuthGeneration(),
-        sourceApiKey: apiKeyInfo.apiKey,
+    // AWS's default credential chain has no explicit key. The sentinel admits
+    // runtime auth preparation or, without a plugin token, SDK request signing.
+    const sourceApiKey = apiKeyInfo.apiKey || "__aws_sdk_auth__";
+    const profileId = usesAwsSdkChain ? (apiKeyInfo.profileId ?? candidate) : apiKeyInfo.profileId;
+    let runtimeAuthHandled = false;
+    try {
+      const preparedAuth = await prepareRuntimeAuthForModel({
+        runtimeModel,
+        apiKey: sourceApiKey,
         authMode: apiKeyInfo.mode,
         profileId: apiKeyInfo.profileId,
-        expiresAt: preparedAuth.expiresAt,
-      };
-      if (preparedAuth.expiresAt) {
-        scheduleRuntimeAuthRefresh();
+      });
+      applyPreparedRuntimeRequestOverrides({ runtimeModel, preparedAuth: preparedAuth ?? {} });
+      if (preparedAuth?.apiKey) {
+        clearRuntimeAuthRefreshTimer();
+        params.authStorage.setRuntimeApiKey(runtimeModel.provider, preparedAuth.apiKey);
+        state.runtimeAuthState = {
+          generation: (state.runtimeAuthState?.generation ?? 0) + 1,
+          sourceApiKey,
+          authMode: apiKeyInfo.mode,
+          profileId,
+          expiresAt: preparedAuth.expiresAt,
+        };
+        if (preparedAuth.expiresAt) {
+          scheduleRuntimeAuthRefresh();
+        }
+        runtimeAuthHandled = true;
       }
-      runtimeAuthHandled = true;
+    } catch (error) {
+      if (!usesAwsSdkChain) {
+        throw error;
+      }
+      params.log.warn(
+        `prepareProviderRuntimeAuth failed for ${runtimeModel.provider}, falling back to sentinel: ${formatErrorMessage(error)}`,
+      );
     }
     if (!runtimeAuthHandled) {
       clearRuntimeAuthRefreshTimer();
-      params.authStorage.setRuntimeApiKey(runtimeModel.provider, apiKeyInfo.apiKey);
+      params.authStorage.setRuntimeApiKey(runtimeModel.provider, sourceApiKey);
       state.runtimeAuthState = null;
     }
-    state.lastProfileId = apiKeyInfo.profileId;
+    state.lastProfileId = profileId;
   };
 
   const advanceAuthProfile = async (): Promise<boolean> => {

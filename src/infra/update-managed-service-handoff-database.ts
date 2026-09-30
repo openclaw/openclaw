@@ -1,18 +1,20 @@
 import fs, { type BigIntStats, type Stats } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync as HandoffDatabase } from "node:sqlite";
+import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import { sql } from "kysely";
-import {
-  requireDirectorySync,
-  syncDirectorySync,
-  type DirectoryReceipt,
-} from "./directory-durability.js";
+import { requireDirectorySync, syncDirectorySync } from "./directory-durability.js";
+import { hasErrnoCode } from "./errno.js";
 import { acquireFileLockSyncWithRetry } from "./file-lock-sync.js";
-import { sameFileIdentity } from "./fs-safe-advanced.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  getNodeSqliteKysely,
+  prepareSqliteQuerySync,
+} from "./kysely-sync.js";
 import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "./node-sqlite.js";
 import { setSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
 import {
+  createExistingSqliteRollbackReader,
   withExistingSqliteRollbackDatabase,
   type ExistingSqliteTransaction,
 } from "./sqlite-existing-database.js";
@@ -20,6 +22,7 @@ import {
   runSqliteImmediateTransactionSync,
   type SqliteTransactionOptions,
 } from "./sqlite-transaction.js";
+import type { ManagedUpdateLeaseDatabaseIdentity } from "./update-managed-service-handoff-identity.js";
 import { quarantineManagedHandoffStore } from "./update-managed-service-handoff-store-repair.js";
 import { createPrivateWindowsFile } from "./windows-private-directory.js";
 
@@ -42,17 +45,7 @@ function initializeLeaseSchema(db: HandoffDatabase): void {
   );
 }
 
-function errorCode(error: unknown): string | undefined {
-  return error && typeof error === "object" && "code" in error && typeof error.code === "string"
-    ? error.code
-    : undefined;
-}
-
-export type ManagedUpdateLeaseDatabaseIdentity = Readonly<{
-  databasePath: string;
-  databaseIdentity: string;
-  parentIdentity: string;
-}>;
+export type { ManagedUpdateLeaseDatabaseIdentity } from "./update-managed-service-handoff-identity.js";
 
 function assertPath(stat: Stats | BigIntStats, kind: "directory" | "file") {
   if (
@@ -114,7 +107,16 @@ function assertSamePath(
   }
 }
 
-function createMissingDatabaseFile(databasePath: string, parentReceipt: DirectoryReceipt): void {
+type HandoffDirectoryReceipt = {
+  path: string;
+  realPath: string;
+  identity: BigIntStats;
+};
+
+function createMissingDatabaseFile(
+  databasePath: string,
+  parentReceipt: HandoffDirectoryReceipt,
+): void {
   let descriptor: number | undefined;
   try {
     descriptor =
@@ -129,7 +131,7 @@ function createMissingDatabaseFile(databasePath: string, parentReceipt: Director
             0o600,
           );
   } catch (error) {
-    if (errorCode(error) !== "EEXIST") {
+    if (!hasErrnoCode(error, "EEXIST")) {
       throw error;
     }
   }
@@ -149,8 +151,13 @@ function createMissingDatabaseFile(databasePath: string, parentReceipt: Director
         ? fs.lstatSync(databasePath)
         : fs.lstatSync(databasePath, { bigint: true });
     assertSamePath(currentIdentity, identity, "file");
-    assertSamePath(fs.lstatSync(parentReceipt.path), parentReceipt.identity, "directory");
-    requireDirectorySync(syncDirectorySync(parentReceipt), "Managed handoff lease directory");
+    assertSamePath(
+      fs.lstatSync(parentReceipt.path, { bigint: true }),
+      parentReceipt.identity,
+      "directory",
+    );
+    const directorySync = syncDirectorySync(parentReceipt);
+    requireDirectorySync(directorySync, "Managed handoff lease directory");
   } finally {
     if (descriptor !== undefined) {
       fs.closeSync(descriptor);
@@ -180,8 +187,8 @@ export function captureManagedUpdateLeaseDatabaseIdentity(
   databasePath: string,
 ): ManagedUpdateLeaseDatabaseIdentity {
   const canonical = fs.realpathSync(databasePath);
-  const file = fs.lstatSync(canonical);
-  const parent = fs.lstatSync(path.dirname(canonical));
+  const file = fs.lstatSync(canonical, { bigint: true });
+  const parent = fs.lstatSync(path.dirname(canonical), { bigint: true });
   assertPath(file, "file");
   assertPath(parent, "directory");
   return Object.freeze({
@@ -213,6 +220,24 @@ export function createManagedHandoffLeaseDatabase(
     throw new Error("managed handoff lease database path changed");
   }
   const existingTransactions = new WeakMap<HandoffDatabase, ExistingSqliteTransaction>();
+  const validations = new WeakMap<HandoffDatabase, () => void>();
+  const existingOptions = existingIdentity
+    ? {
+        busyTimeoutMs: 5000,
+        assertIdentity: () => assertManagedUpdateLeaseDatabaseIdentity(existingIdentity),
+        validate: (db: HandoffDatabase) => {
+          let validate = validations.get(db);
+          if (!validate) {
+            validate = prepareSqliteQuerySync<void, LeaseTable>(db, () =>
+              leaseQueries(db).selectFrom("managed_update_handoffs").selectAll().limit(0),
+            );
+            validations.set(db, validate);
+          }
+          validate();
+        },
+      }
+    : undefined;
+  let readExisting: ReturnType<typeof createExistingSqliteRollbackReader> | undefined;
   /**
    * The store keeps its directory at 0700, so drift on a directory we own is its
    * own interrupted work. Ownership and type stay the temp-root resolver's call.
@@ -247,7 +272,7 @@ export function createManagedHandoffLeaseDatabase(
    * databases and defeating the lock this store exists to provide. The decision
    * is therefore retaken under the lock, where the replacement is visible.
    */
-  function recoverUnadoptableStore(target: string, parent: DirectoryReceipt): void {
+  function recoverUnadoptableStore(target: string, parent: HandoffDirectoryReceipt): void {
     if (!observeUnadoptable(target)) {
       return;
     }
@@ -274,29 +299,18 @@ export function createManagedHandoffLeaseDatabase(
   }
 
   function withDatabase<T>(write: boolean, operation: (db: HandoffDatabase) => T): T {
-    if (existingIdentity) {
-      return withExistingSqliteRollbackDatabase(
-        databasePath,
-        {
-          write,
-          busyTimeoutMs: 5000,
-          assertIdentity: () => assertManagedUpdateLeaseDatabaseIdentity(existingIdentity),
-          validate: (db) => {
-            executeSqliteQuerySync(
-              db,
-              leaseQueries(db).selectFrom("managed_update_handoffs").selectAll().limit(0),
-            );
-          },
-        },
-        (db, transact) => {
-          existingTransactions.set(db, transact);
-          try {
-            return operation(db);
-          } finally {
-            existingTransactions.delete(db);
-          }
-        },
-      );
+    if (existingOptions) {
+      const run = (db: HandoffDatabase, transact: ExistingSqliteTransaction) => {
+        existingTransactions.set(db, transact);
+        try {
+          return operation(db);
+        } finally {
+          existingTransactions.delete(db);
+        }
+      };
+      return !write && readExisting
+        ? readExisting(run)
+        : withExistingSqliteRollbackDatabase(databasePath, { ...existingOptions, write }, run);
     }
     const dir = path.dirname(databasePath);
     if (write) {
@@ -312,7 +326,7 @@ export function createManagedHandoffLeaseDatabase(
       fs.chmodSync(dir, 0o700);
     }
     recoverDirectoryMode(dir);
-    const directoryIdentity = fs.lstatSync(dir);
+    const directoryIdentity = fs.lstatSync(dir, { bigint: true });
     assertPath(directoryIdentity, "directory");
     // syncDirectorySync verifies ordinary realpath spelling. Windows native
     // realpath can expand an 8.3 alias differently without changing the directory.
@@ -335,7 +349,7 @@ export function createManagedHandoffLeaseDatabase(
       { readOnly: !write },
     );
     try {
-      assertSamePath(fs.lstatSync(dir), directoryIdentity, "directory");
+      assertSamePath(fs.lstatSync(dir, { bigint: true }), directoryIdentity, "directory");
       assertSamePath(fs.lstatSync(databasePath), databaseIdentity, "file");
       setSqliteBusyTimeout(db, 5000);
       if (write) {
@@ -350,6 +364,21 @@ export function createManagedHandoffLeaseDatabase(
     }
   }
   return Object.assign(withDatabase, {
+    retainReadConnection(this: void) {
+      if (!existingOptions || readExisting) {
+        throw new Error("Existing SQLite reader requires an unretained identity-bound store.");
+      }
+      const reader = createExistingSqliteRollbackReader(databasePath, existingOptions);
+      readExisting = reader;
+      return {
+        [Symbol.dispose]() {
+          if (readExisting === reader) {
+            readExisting = undefined;
+          }
+          reader[Symbol.dispose]();
+        },
+      };
+    },
     transact<T>(db: HandoffDatabase, operation: () => T, options: SqliteTransactionOptions): T {
       const assertCurrent = () => {
         if (existingIdentity) {

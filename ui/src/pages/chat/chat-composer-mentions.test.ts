@@ -1,166 +1,57 @@
-import type { UsersMentionableResult } from "@openclaw/gateway-protocol";
-import { nothing, render } from "lit";
-import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { HumanMention } from "../../lib/chat/chat-types.ts";
-import { updateHumanMentions } from "../../lib/chat/human-mentions.ts";
 /* @vitest-environment jsdom */
-import { NewSessionComposerTextareaController } from "../new-session/composer-controller.ts";
-import { renderNewSessionComposer } from "../new-session/composer.ts";
+import type { UsersMentionableResult } from "@openclaw/gateway-protocol";
+import { render } from "lit";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import {
-  createComposerProps,
-  findPrimaryButton,
-  resetComposerFixture,
-} from "./chat-composer.test-support.ts";
+  composerFixture,
+  people,
+  resetMentionComposerFixture,
+} from "./chat-composer-mentions.test-support.ts";
+import { createComposerProps, findPrimaryButton } from "./chat-composer.test-support.ts";
 import { renderChatComposer } from "./components/chat-composer.ts";
-import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
 
-const people: UsersMentionableResult = {
-  users: [
-    { profileId: "profile-alex-online", displayName: "Alex", online: true },
-    { profileId: "profile-alex-offline", displayName: "Alex", online: false },
-  ],
-  truncated: false,
-};
-const controllers: NewSessionComposerTextareaController[] = [];
+afterEach(resetMentionComposerFixture);
 
-afterEach(async () => {
-  controllers.splice(0).forEach((controller) => controller.disconnect());
-  await resetComposerFixture();
-});
-
-function composerFixture(
-  kind: "chat" | "new-session",
-  initial = "",
-  initialMentions: readonly HumanMention[] = [],
-  submitDisabledReason?: string,
-) {
-  vi.useFakeTimers();
-  onTestFinished(installChatComposerPickerDismissal(document));
+it("keeps ordinary edits around a selected person off the pane render path", () => {
   const container = document.createElement("div");
-  document.body.append(container);
-  const client = new GatewayBrowserClient({ url: "ws://gateway.test" });
-  const request = vi.spyOn(client, "request").mockResolvedValue(people);
-  const eventListeners = new Set<Parameters<GatewayBrowserClient["addEventListener"]>[0]>();
-  vi.spyOn(client, "addEventListener").mockImplementation((listener) => {
-    eventListeners.add(listener);
-    return () => eventListeners.delete(listener);
+  let draft = "@Alex ";
+  let mentions: readonly HumanMention[] = [{ profileId: "alex", start: 0, end: 5 }];
+  const props = createComposerProps({
+    draft,
+    mentions,
+    getDraft: () => draft,
+    getMentions: () => mentions,
+    onDraftChange: (next, selected: readonly HumanMention[] = mentions) => {
+      draft = next;
+      mentions = selected;
+    },
   });
-  const controller = new NewSessionComposerTextareaController();
-  controllers.push(controller);
-  let draft = initial;
-  let mentions = initialMentions;
-  let ownerKey = "sender-one";
-  let unsupported = false;
-  const send = vi.fn();
-  const abort = vi.fn();
-  const slashCommand = vi.fn();
-  const onInput = (next: string, selected?: readonly HumanMention[]) => {
-    mentions = selected ?? updateHumanMentions(draft, next, mentions);
-    draft = next;
-  };
-  const props = createComposerProps();
-  const renderCurrent = () => {
-    const directory = {
-      client,
-      ownerKey,
-      params: kind === "chat" ? { sessionKey: "agent:main:chat" } : { agentId: "main" },
-    };
-    render(
-      kind === "chat"
-        ? renderChatComposer({
-            ...props,
-            submitDisabledReason,
-            draft,
-            mentions,
-            getDraft: () => draft,
-            getMentions: () => mentions,
-            mentionDirectory: unsupported ? undefined : directory,
-            mentionsUnsupported: unsupported,
-            onDraftChange: onInput,
-            onRequestUpdate: renderCurrent,
-            onSlashCommand: slashCommand,
-            canAbort: true,
-            onAbort: abort,
-            onSend: () => send({ draft, mentions }),
-          })
-        : renderNewSessionComposer({
-            renderCritters: () => nothing,
-            message: draft,
-            mentions,
-            getMentions: () => mentions,
-            mentionDirectory: directory,
-            attachments: [],
-            getAttachments: () => [],
-            canSubmit: true,
-            pendingAttachmentReads: 0,
-            readSignal: new AbortController().signal,
-            requiresModifier: false,
-            requestUpdate: renderCurrent,
-            submitting: false,
-            textareaController: controller,
-            onAttachmentsChange: () => undefined,
-            onPendingReadsChange: () => undefined,
-            onInput: (next, selected) => {
-              onInput(next, selected);
-              renderCurrent();
-            },
-            onSubmit: () => send({ draft, mentions }),
-          }),
-      container,
-    );
-  };
-  renderCurrent();
+  const redraw = vi.fn(() => render(renderChatComposer({ ...props, draft, mentions }), container));
+  props.onRequestUpdate = redraw;
+  render(renderChatComposer(props), container);
   const textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
-  const edit = (
-    next: string,
-    options: { start?: number; end?: number; inputType?: string; data?: string | null } = {},
-  ) => {
-    const inputType = options.inputType ?? "insertText";
-    textarea.setSelectionRange(
-      options.start ?? textarea.value.length,
-      options.end ?? options.start ?? textarea.value.length,
-    );
+  const edit = (value: string, start: number, end = start) => {
+    textarea.setSelectionRange(start, end);
     textarea.dispatchEvent(
-      new InputEvent("beforeinput", { bubbles: true, inputType, data: options.data ?? next }),
+      new InputEvent("beforeinput", { bubbles: true, inputType: "insertText" }),
     );
-    textarea.value = next;
-    textarea.setSelectionRange(next.length, next.length);
-    textarea.dispatchEvent(
-      new InputEvent("input", { bubbles: true, inputType, data: options.data ?? next }),
-    );
-    renderCurrent();
+    textarea.value = value;
+    textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
   };
-  const pressKey = (key: string, extra: KeyboardEventInit = {}) => {
-    const event = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key, ...extra });
-    textarea.dispatchEvent(event);
-    renderCurrent();
-    return event;
-  };
-  return {
-    container,
-    request,
-    edit,
-    key: pressKey,
-    send,
-    abort,
-    slashCommand,
-    value: () => ({ draft, mentions }),
-    emitEvent: (event: "presence" | "sessions.changed") => {
-      for (const listener of eventListeners) {
-        listener({ type: "event", event, payload: { sessionKey: "agent:main:unrelated" } });
-      }
-    },
-    replaceOwner: () => {
-      ownerKey = "sender-two";
-      renderCurrent();
-    },
-    setUnsupported: () => {
-      unsupported = true;
-      renderCurrent();
-    },
-  };
-}
+
+  edit("@Alex please review", 6);
+  edit("Ask @Alex please review", 0);
+  expect(redraw).not.toHaveBeenCalled();
+  expect(draft).toBe("Ask @Alex please review");
+  expect(mentions).toEqual([{ profileId: "alex", start: 4, end: 9 }]);
+  expect(container.querySelector(".composer-context-strip__person-name")?.textContent).toBe("Alex");
+
+  edit("Ask @Alix please review", 7, 8);
+  expect(redraw).toHaveBeenCalledOnce();
+  expect(mentions).toEqual([]);
+  expect(container.querySelector(".composer-context-strip")).toBeNull();
+});
 
 describe("chat inline commands with human mentions", () => {
   it("sends an ordinary message with its recipient while history loads", () => {
@@ -234,7 +125,7 @@ describe.each(["chat", "new-session"] as const)("%s human mentions", (kind) => {
         selected?.id,
       );
     }
-    for (const key of ["Home", "End"]) {
+    for (const key of ["ArrowUp", "ArrowDown", "Home", "End"]) {
       for (const modifier of ["shiftKey", "altKey", "ctrlKey", "metaKey"]) {
         expect(view.key(key, { [modifier]: true }).defaultPrevented).toBe(false);
         expect(view.container.querySelector('[role="option"][aria-selected="true"]')).toBe(
@@ -319,10 +210,14 @@ describe.each(["chat", "new-session"] as const)("%s human mentions", (kind) => {
       retry!.click();
       await vi.advanceTimersByTimeAsync(150);
       expect(view.request).toHaveBeenCalledTimes(2);
-      expect(view.request).toHaveBeenLastCalledWith("users.mentionable", {
-        ...(kind === "chat" ? { sessionKey: "agent:main:chat" } : { agentId: "main" }),
-        query: "Al",
-      });
+      expect(view.request).toHaveBeenLastCalledWith(
+        "users.mentionable",
+        {
+          ...(kind === "chat" ? { sessionKey: "agent:main:chat" } : { agentId: "main" }),
+          query: "Al",
+        },
+        { timeoutMs: 15_000 },
+      );
       if (next === "close") {
         view.key("Escape");
       } else if (next === "owner change") {
@@ -360,10 +255,14 @@ describe.each(["chat", "new-session"] as const)("%s human mentions", (kind) => {
     view.emitEvent("presence");
     view.edit("@Al", { data: "l" });
     await vi.advanceTimersByTimeAsync(150);
-    expect(view.request).toHaveBeenCalledExactlyOnceWith("users.mentionable", {
-      ...(kind === "chat" ? { sessionKey: "agent:main:chat" } : { agentId: "main" }),
-      query: "Al",
-    });
+    expect(view.request).toHaveBeenCalledExactlyOnceWith(
+      "users.mentionable",
+      {
+        ...(kind === "chat" ? { sessionKey: "agent:main:chat" } : { agentId: "main" }),
+        query: "Al",
+      },
+      { timeoutMs: 15_000 },
+    );
     view.emitEvent("sessions.changed");
     resolve(people);
     await vi.advanceTimersByTimeAsync(0);
@@ -428,13 +327,121 @@ describe.each(["chat", "new-session"] as const)("%s human mentions", (kind) => {
       view.edit("@steipete", { data: "steipete".slice(prefix.length) });
       await vi.advanceTimersByTimeAsync(150);
 
-      expect(view.request).toHaveBeenLastCalledWith("users.mentionable", {
-        ...(kind === "chat" ? { sessionKey: "agent:main:chat" } : { agentId: "main" }),
-        query: "steipete",
-      });
+      expect(view.request).toHaveBeenLastCalledWith(
+        "users.mentionable",
+        {
+          ...(kind === "chat" ? { sessionKey: "agent:main:chat" } : { agentId: "main" }),
+          query: "steipete",
+        },
+        { timeoutMs: 15_000 },
+      );
       expect(view.request).toHaveBeenCalledTimes(2);
       expect(view.container.querySelectorAll('[role="option"]')).toHaveLength(2);
       expect(view.value().mentions).toEqual([]);
+      view.key("Enter");
+      expect(view.value()).toEqual({
+        draft: "@Peter Steinberger ",
+        mentions: [{ profileId: "profile-peter", start: 0, end: 18 }],
+      });
+      expect(view.send).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["debouncing", "in flight"])(
+    "ends a bare @ search on space while %s and keeps subsequent prose as text",
+    async (phase) => {
+      const prefix = "Please review the proposal and keep the literal symbol ";
+      const suffix = " in the final explanation without notifying anyone";
+      const view = composerFixture(kind, `${prefix}${suffix}`);
+      let resolve: ((result: UsersMentionableResult) => void) | undefined;
+      view.request.mockImplementation(
+        () =>
+          new Promise<UsersMentionableResult>((done) => {
+            resolve = done;
+          }),
+      );
+      view.edit(`${prefix}@${suffix}`, {
+        start: prefix.length,
+        caret: prefix.length + 1,
+        data: "@",
+      });
+      expect(view.container.querySelector(".mention-menu")).not.toBeNull();
+      if (phase === "in flight") {
+        await vi.advanceTimersByTimeAsync(150);
+      }
+      view.edit(`${prefix}@ ${suffix}`, {
+        start: prefix.length + 1,
+        caret: prefix.length + 2,
+        data: " ",
+      });
+      expect(view.container.querySelector(".mention-menu")).toBeNull();
+      resolve?.(people);
+      const draft = `${prefix}@ as plain text${suffix}`;
+      view.edit(draft, {
+        start: prefix.length + 2,
+        caret: prefix.length + "@ as plain text".length,
+        data: "as plain text",
+      });
+      await vi.advanceTimersByTimeAsync(150);
+      expect(view.container.querySelector(".mention-menu")).toBeNull();
+      expect(view.request).toHaveBeenCalledTimes(phase === "in flight" ? 1 : 0);
+      view.key("Enter");
+      expect(view.send).toHaveBeenCalledExactlyOnceWith({ draft, mentions: [] });
+    },
+  );
+
+  it.each(["pointerup", "keyup", "forward selection", "backward selection"])(
+    "closes the picker after %s moves beyond the active mention",
+    async (eventType) => {
+      const prefix = "Please review ";
+      const suffix = "the written instructions and leave the rest unchanged";
+      const view = composerFixture(kind, `${prefix}${suffix}`);
+      const draft = `${prefix}@${suffix}`;
+      view.edit(draft, { start: prefix.length, caret: prefix.length + 1, data: "@" });
+      const textarea = view.container.querySelector("textarea")!;
+      const selecting = eventType.endsWith("selection");
+      textarea.setSelectionRange(
+        selecting ? prefix.length + 1 : draft.length,
+        draft.length,
+        eventType === "backward selection" ? "backward" : "forward",
+      );
+      textarea.dispatchEvent(
+        eventType === "keyup" || selecting
+          ? new KeyboardEvent("keyup", { bubbles: true, key: "End", shiftKey: selecting })
+          : new Event("pointerup", { bubbles: true }),
+      );
+      await vi.advanceTimersByTimeAsync(150);
+      expect(view.container.querySelector(".mention-menu")).toBeNull();
+      expect(view.request).not.toHaveBeenCalled();
+      view.key("Enter");
+      expect(view.send).toHaveBeenCalledExactlyOnceWith({ draft, mentions: [] });
+    },
+  );
+
+  it.each(["earlier name part", "original end", "edited name part"])(
+    "selects the whole full-name target from %s",
+    async (position) => {
+      const view = composerFixture(kind);
+      const draft = "@Peter Steinberger";
+      view.request.mockResolvedValue({
+        users: [{ profileId: "profile-peter", displayName: "Peter Steinberger", online: true }],
+        truncated: false,
+      });
+      view.edit(draft);
+      await vi.advanceTimersByTimeAsync(150);
+      const textarea = view.container.querySelector("textarea")!;
+      const carets =
+        position === "original end" ? ["@Peter".length, draft.length] : ["@Peter".length];
+      for (const caret of carets) {
+        textarea.setSelectionRange(caret, caret);
+        textarea.dispatchEvent(new Event("pointerup", { bubbles: true }));
+        await vi.advanceTimersByTimeAsync(150);
+        expect(view.container.querySelector(".mention-menu")).not.toBeNull();
+      }
+      if (position === "edited name part") {
+        view.edit("@Peterx Steinberger", { start: 6, caret: 7, data: "x" });
+        await vi.advanceTimersByTimeAsync(150);
+      }
       view.key("Enter");
       expect(view.value()).toEqual({
         draft: "@Peter Steinberger ",
@@ -461,10 +468,14 @@ describe.each(["chat", "new-session"] as const)("%s human mentions", (kind) => {
       expect(view.container.querySelectorAll('[role="option"]')).toHaveLength(1);
       expect(view.value().mentions).toEqual([]);
     }
-    expect(view.request).toHaveBeenLastCalledWith("users.mentionable", {
-      ...(kind === "chat" ? { sessionKey: "agent:main:chat" } : { agentId: "main" }),
-      query: "Peter Steinberger",
-    });
+    expect(view.request).toHaveBeenLastCalledWith(
+      "users.mentionable",
+      {
+        ...(kind === "chat" ? { sessionKey: "agent:main:chat" } : { agentId: "main" }),
+        query: "Peter Steinberger",
+      },
+      { timeoutMs: 15_000 },
+    );
     expect(view.key(key).defaultPrevented).toBe(true);
     expect(view.send).not.toHaveBeenCalled();
     expect(view.value()).toEqual({

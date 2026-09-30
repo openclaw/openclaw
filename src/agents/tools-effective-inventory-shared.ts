@@ -37,10 +37,10 @@ export function disambiguateEffectiveToolLabels(
   for (const entry of entries) {
     counts.set(entry.label, (counts.get(entry.label) ?? 0) + 1);
   }
-  return entries.map((entry) => {
-    if ((counts.get(entry.label) ?? 0) < 2) {
-      return entry;
+  for (const entry of entries) {
+    if ((counts.get(entry.label) ?? 0) > 1) {
+      entry.label = `${entry.label} (${resolveSuffix(entry)})`;
     }
-    return { ...entry, label: `${entry.label} (${resolveSuffix(entry)})` };
-  });
+  }
+  return entries;
 }

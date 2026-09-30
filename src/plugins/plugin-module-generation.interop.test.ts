@@ -3,55 +3,83 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { createJiti } from "jiti";
-import { afterEach, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { createPluginCache, withPluginCache } from "./plugin-cache.js";
+import { describe, expect, it } from "vitest";
 import { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
-import { bindPluginInstanceModuleLoader } from "./plugin-instance-module-loader.js";
-import { PluginInstance } from "./plugin-instance.js";
+import { createPluginModuleGenerationTestHarness } from "./plugin-module-generation.test-support.js";
 
-const temp = useAutoCleanupTempDirTracker(afterEach);
-const instances: PluginInstance[] = [];
-afterEach(async () => {
-  for (const instance of instances.splice(0).toReversed()) {
-    await instance.dispose();
-  }
-});
-function fixture(files: Record<string, string>) {
-  const root = temp.make("plugin-native-interop-");
-  for (const [name, source] of Object.entries(files)) {
-    const filename = path.join(root, name);
-    fs.mkdirSync(path.dirname(filename), { recursive: true });
-    fs.writeFileSync(filename, source);
-  }
-  return root;
-}
-function host(rootDir: string, standalone = false) {
-  let instance: PluginInstance | undefined;
-  return {
-    load(entry: string): unknown {
-      const source = path.join(rootDir, entry);
-      if (!instance) {
-        instance = new PluginInstance("interop-fixture");
-        instances.push(instance);
-        const owner = instance;
-        withPluginCache(createPluginCache(), () =>
-          bindPluginInstanceModuleLoader({
-            instance: owner,
-            origin: "config",
-            source,
-            rootDir,
-            standalone,
-          }),
-        );
-      }
-      return instance.loadModule(source);
-    },
-    dispose: () => instance?.dispose(),
-  };
-}
+const { temp, fixture, host } = createPluginModuleGenerationTestHarness();
 
 describe("native plugin generation interop", () => {
+  it.each(["", "@fixture/"])(
+    "preserves %ssibling dependency assets across nested installs and generations",
+    async (scope) => {
+      const readerName = `${scope}asset-reader`;
+      const platformName = `${scope}platform`;
+      const installs = [
+        ["", "1.0.0"],
+        ["nested/", "2.0.0"],
+      ] as const;
+      const files: Record<string, string> = {
+        "entry.cjs": `const root = require(${JSON.stringify(readerName)});
+          const nested = require('./nested/entry.cjs');
+          exports.read = () => [root.read(), nested.read()];`,
+        "nested/entry.cjs": `module.exports = require(${JSON.stringify(readerName)});`,
+      };
+      for (const [prefix, version] of installs) {
+        files[`${prefix}package.json`] = JSON.stringify({
+          dependencies: { [readerName]: version },
+        });
+        files[`${prefix}node_modules/${readerName}/package.json`] = JSON.stringify({
+          name: readerName,
+          version,
+          main: "index.cjs",
+          optionalDependencies: { [platformName]: version },
+        });
+        files[`${prefix}node_modules/${readerName}/index.cjs`] = `
+          const fs = require('node:fs');
+          const path = require('node:path');
+          exports.read = () => fs.readFileSync(path.join(__dirname, '../platform/vec0.so'), 'utf8');`;
+        files[`${prefix}node_modules/${platformName}/package.json`] = JSON.stringify({
+          name: platformName,
+          version,
+        });
+        files[`${prefix}node_modules/${platformName}/vec0.so`] = `before-${version}`;
+      }
+      const root = fixture(files);
+      type Plugin = { read(): string[] };
+      const entry = path.join(root, "entry.cjs");
+      const before = ["before-1.0.0", "before-2.0.0"];
+      expect((createRequire(entry)(entry) as Plugin).read()).toEqual(before);
+      const firstHost = host(root);
+      const first = firstHost.load("entry.cjs") as Plugin;
+      expect(first.read()).toEqual(before);
+      for (const [prefix, version] of installs) {
+        fs.writeFileSync(
+          path.join(root, `${prefix}node_modules/${platformName}/vec0.so`),
+          `after-${version}`,
+        );
+      }
+      const second = host(root).load("entry.cjs") as Plugin;
+      const after = ["after-1.0.0", "after-2.0.0"];
+      expect(second.read()).toEqual(after);
+      fs.rmSync(root, { recursive: true, force: true });
+      expect(first.read()).toEqual(before);
+      expect(second.read()).toEqual(after);
+      await firstHost.dispose();
+      expect(second.read()).toEqual(after);
+    },
+  );
+
+  it("resolves an ancestor dependency alias matching a noninstalled plugin directory", () => {
+    const root = fixture({
+      "shared/package.json": '{"dependencies":{"shared":"npm:actual-shared@1.0.0"}}',
+      "shared/entry.cjs": "module.exports = require('shared');",
+      "node_modules/shared/package.json": '{"name":"actual-shared","main":"index.cjs"}',
+      "node_modules/shared/index.cjs": "exports.value = 42;",
+    });
+    expect(host(path.join(root, "shared")).load("entry.cjs")).toMatchObject({ value: 42 });
+  });
+
   it.each([true, false])(
     "preserves native-addon package-root detection (declared loader: %s)",
     (declared) => {
@@ -348,6 +376,25 @@ describe("native plugin generation interop", () => {
     const current = host(root).load("entry.ts") as typeof legacy;
     expect((await current.load()).read()).toEqual(["first", "first"]);
   });
+
+  it.each(["static", "dynamic"])(
+    "preserves native TypeScript JSON import attributes (%s)",
+    async (mode) => {
+      const url = JSON.stringify(
+        `data:application/json,${encodeURIComponent(JSON.stringify({ value: 42, mode }))}`,
+      );
+      const root = fixture({
+        "package.json": '{"type":"module"}',
+        "entry.mjs": 'export { read } from "./value.mts";',
+        "value.mts":
+          mode === "static"
+            ? `import data from ${url} with { type: "json" }; export const read = async () => data.value;`
+            : `export const read = async () => (await import(${url}, { with: { type: "json" } })).default.value;`,
+      });
+      const plugin = host(root, true).load("entry.mjs") as { read(): Promise<number> };
+      await expect(plugin.read()).resolves.toBe(42);
+    },
+  );
 
   it.each(["sync", "async", "native"])(
     "keeps %s TypeScript metadata and assets with captured source",
@@ -783,6 +830,54 @@ describe("native plugin generation interop", () => {
       }
     },
   );
+
+  it("exposes named exports from native CommonJS TypeScript with transformed imports", () => {
+    const root = fixture({
+      "package.json": '{"type":"commonjs"}',
+      "entry.mjs": 'export { value } from "./peer.ts";',
+      "peer.ts":
+        'import path from "node:path"; export const value = path.basename("/probe/answer");',
+    });
+    expect(host(root).load("entry.mjs")).toMatchObject({ value: "answer" });
+  });
+
+  it("preserves native TypeScript value scopes and erased declarations", () => {
+    const root = fixture({
+      "package.json": '{"type":"module"}',
+      "entry.mjs": `export { value as enumeration } from "./enum.ts";
+        export { value as namespace } from "./namespace.ts";
+        export { value as merged } from "./merged.ts";
+        export { value as erased } from "./erased.ts";`,
+      "enum.ts": `enum __filename { Answer = 42 }
+        enum Values { __dirname = 42, Answer = __dirname }
+        export const value = [__filename.Answer, Values.Answer];`,
+      "namespace.ts": `namespace __dirname { export const Answer = 42 }
+        export const value = __dirname.Answer;`,
+      "merged.ts": `namespace Values {
+          export const __filename = 40;
+          export namespace Nested { export const __dirname = 41 }
+        }
+        namespace Values {
+          export const answer = __filename + 2;
+          export namespace Nested { export const answer = __dirname + 1 }
+        }
+        export const value = [Values.answer, Values.Nested.answer];`,
+      "erased.ts": `import type require = require("missing-type-only-package");
+        interface __filename {}
+        type __dirname = unknown;
+        export const value = [
+          require("node:path").basename(__filename),
+          require("node:path").basename(import.meta.filename),
+          typeof __dirname,
+        ];`,
+    });
+    expect(host(root).load("entry.mjs")).toMatchObject({
+      enumeration: [42, 42],
+      namespace: 42,
+      merged: [42, 42],
+      erased: ["erased.ts", "erased.ts", "string"],
+    });
+  });
 
   it.each([
     ["explicit", "dep.mjs", "commonjs"],

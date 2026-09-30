@@ -305,10 +305,10 @@ not offered.
 
 When an exec or plugin approval request originates from a deliverable chat surface, that same chat
 can approve it with `/approve` by default. This applies to Slack, Matrix, Microsoft Teams, and
-similar deliverable chats, in addition to the existing Web UI and terminal UI flows, using the
-normal channel auth model for that conversation. If the originating chat can already send commands
-and receive replies, approval requests no longer need a separate native delivery adapter just to
-stay pending.
+similar deliverable chats, using the normal channel auth model for that conversation. The Web UI
+supports both approval kinds; the terminal UI supports plugin approvals only. If the originating
+chat can already send commands and receive replies, approval requests no longer need a separate
+native delivery adapter just to stay pending.
 
 Discord, Telegram, and QQ bot also support same-chat `/approve`, but those channels still use their
 resolved approver list for authorization even when native approval delivery is disabled.

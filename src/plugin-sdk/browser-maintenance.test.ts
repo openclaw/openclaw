@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 
 const closeTrackedBrowserTabsForSessionsImpl = vi.hoisted(() => vi.fn());
 const tryLoadActivatedBundledPluginPublicSurfaceModule = vi.hoisted(() => vi.fn());
@@ -48,6 +49,7 @@ describe("browser maintenance", () => {
       realRealpathSyncNative(candidate),
     );
     tryLoadActivatedBundledPluginPublicSurfaceModule.mockResolvedValue({
+      supportsSessionEntryCurrent: true,
       closeTrackedBrowserTabsForSessions: closeTrackedBrowserTabsForSessionsImpl,
     });
   });
@@ -142,13 +144,130 @@ describe("browser maintenance", () => {
     expect(closeTrackedBrowserTabsForSessionsImpl).toHaveBeenCalledTimes(1);
   });
 
-  it("delegates cleanup through the browser maintenance surface", async () => {
+  it("does not dispatch cleanup after its owner changes during plugin activation", async () => {
+    const { promise, resolve } = createDeferred();
+    tryLoadActivatedBundledPluginPublicSurfaceModule.mockImplementationOnce(async () => {
+      await promise;
+      return { closeTrackedBrowserTabsForSessions: closeTrackedBrowserTabsForSessionsImpl };
+    });
+    const { closeTrackedBrowserTabsForSessions } = await import("./browser-maintenance.js");
+    let current = true;
+    const cleanup = closeTrackedBrowserTabsForSessions({
+      sessionKeys: ["agent:main:test"],
+      isCurrent: () => current,
+    });
+    expect(tryLoadActivatedBundledPluginPublicSurfaceModule).toHaveBeenCalledOnce();
+    current = false;
+    resolve();
+    await expect(cleanup).resolves.toBe(0);
+    expect(closeTrackedBrowserTabsForSessionsImpl).not.toHaveBeenCalled();
+  });
+
+  it("rechecks the owner after asynchronous cleanup preparation", async () => {
+    const entered = createDeferred();
+    const release = createDeferred();
+    const { closeTrackedBrowserTabsForSessions } = await import("./browser-maintenance.js");
+    let current = true;
+    const prepareCurrent = vi.fn(async () => {
+      entered.resolve();
+      await release.promise;
+      return true;
+    });
+    const cleanup = closeTrackedBrowserTabsForSessions({
+      sessionKeys: ["agent:main:test"],
+      isCurrent: () => current,
+      prepareCurrent,
+    });
+    try {
+      await Promise.race([entered.promise, cleanup]);
+      expect(prepareCurrent).toHaveBeenCalledOnce();
+      expect(closeTrackedBrowserTabsForSessionsImpl).not.toHaveBeenCalled();
+      current = false;
+      release.resolve();
+      await expect(cleanup).resolves.toBe(0);
+      expect(closeTrackedBrowserTabsForSessionsImpl).not.toHaveBeenCalled();
+    } finally {
+      release.resolve();
+      await cleanup;
+    }
+  });
+
+  it.each(["prepared", "native"] as const)(
+    "keeps legacy cleanup usable but refuses an unsupported %s session check",
+    async (kind) => {
+      closeTrackedBrowserTabsForSessionsImpl.mockResolvedValue(2);
+      tryLoadActivatedBundledPluginPublicSurfaceModule.mockResolvedValue({
+        closeTrackedBrowserTabsForSessions: closeTrackedBrowserTabsForSessionsImpl,
+      });
+      const { closeTrackedBrowserTabsForSessions } = await import("./browser-maintenance.js");
+      const sessionKeys = ["agent:main:test"];
+      await expect(closeTrackedBrowserTabsForSessions({ sessionKeys })).resolves.toBe(2);
+      const prepareCurrent = vi.fn(async () => true);
+      const assertCurrent = vi.fn();
+      const onWarn = vi.fn();
+      await expect(
+        closeTrackedBrowserTabsForSessions({
+          sessionKeys,
+          ...(kind === "prepared"
+            ? { prepareCurrent }
+            : {
+                prepareCurrent,
+                sessionEntryCurrent: {
+                  source: {
+                    agentId: "main",
+                    path: "/synthetic/agent.sqlite",
+                    sessionKey: sessionKeys[0]!,
+                    databaseIdentity: "synthetic-source",
+                  },
+                  assertCurrent,
+                },
+              }),
+          onWarn,
+        }),
+      ).resolves.toBe(0);
+      expect(closeTrackedBrowserTabsForSessionsImpl).toHaveBeenCalledOnce();
+      expect(prepareCurrent).not.toHaveBeenCalled();
+      expect(assertCurrent).not.toHaveBeenCalled();
+      expect(onWarn).toHaveBeenCalledExactlyOnceWith(
+        "browser cleanup unavailable: update the Browser plugin to support session-current cleanup",
+      );
+    },
+  );
+
+  it("refuses an unpaired native session check from an untyped caller", async () => {
+    const { closeTrackedBrowserTabsForSessions } = await import("./browser-maintenance.js");
+    const onWarn = vi.fn();
+    await expect(
+      Reflect.apply(closeTrackedBrowserTabsForSessions, undefined, [
+        {
+          sessionKeys: ["agent:main:test"],
+          sessionEntryCurrent: {
+            source: {
+              agentId: "main",
+              path: "/synthetic/agent.sqlite",
+              sessionKey: "agent:main:test",
+              databaseIdentity: "synthetic-source",
+            },
+            assertCurrent: vi.fn(),
+          },
+          onWarn,
+        },
+      ]),
+    ).resolves.toBe(0);
+    expect(tryLoadActivatedBundledPluginPublicSurfaceModule).not.toHaveBeenCalled();
+    expect(closeTrackedBrowserTabsForSessionsImpl).not.toHaveBeenCalled();
+    expect(onWarn).toHaveBeenCalledExactlyOnceWith(
+      "browser cleanup unavailable: sessionEntryCurrent requires prepareCurrent",
+    );
+  });
+
+  it.each([undefined, () => true])("delegates cleanup with owner guard %s", async (isCurrent) => {
     closeTrackedBrowserTabsForSessionsImpl.mockResolvedValue(2);
 
     const { closeTrackedBrowserTabsForSessions } = await import("./browser-maintenance.js");
 
     await expect(
-      closeTrackedBrowserTabsForSessions({ sessionKeys: ["agent:main:test"] }),
+      closeTrackedBrowserTabsForSessions({ sessionKeys: ["agent:main:test"], isCurrent }),
     ).resolves.toBe(2);
     expect(tryLoadActivatedBundledPluginPublicSurfaceModule).toHaveBeenCalledWith({
       dirName: "browser",
@@ -156,6 +275,7 @@ describe("browser maintenance", () => {
     });
     expect(closeTrackedBrowserTabsForSessionsImpl).toHaveBeenCalledWith({
       sessionKeys: ["agent:main:test"],
+      isCurrent,
     });
   });
 

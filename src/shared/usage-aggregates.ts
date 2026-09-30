@@ -10,12 +10,20 @@ import type {
 } from "../infra/session-cost-usage.types.js";
 import type { SessionUsageEntry, SessionsUsageAggregates } from "./usage-types.js";
 
+export const UNKNOWN_USAGE_CREATOR_KEY = '["unknown"]';
+
 type LatencyAccumulator = {
   count: number;
   sum: number;
   min: number;
   max: number;
   p95Max: number;
+};
+
+type CreatorUsage = NonNullable<SessionsUsageAggregates["byCreator"]>[number];
+type CreatorAccumulator = Omit<CreatorUsage, "daily" | "sessionActivity"> & {
+  daily: Map<string, CostUsageTotals>;
+  sessionActivity: Map<string, CreatorUsage["sessionActivity"][number]>;
 };
 
 /** Builds a collision-free identity while preserving legacy missing-as-unknown grouping. */
@@ -98,7 +106,9 @@ export function createUsageAggregateAccumulator() {
   const providers = new Map<string, SessionModelUsage>();
   const agents = new Map<string, CostUsageTotals>();
   const channels = new Map<string, CostUsageTotals>();
+  const creators = new Map<string, CreatorAccumulator>();
   const days = new Map<string, SessionsUsageAggregates["daily"][number]>();
+  const costDays = new Map<string, CostUsageTotals>();
   const dailyLatency = new Map<string, LatencyAccumulator>();
   const dailyModels = new Map<string, SessionDailyModelUsage>();
   const latency = createLatencyAccumulator();
@@ -118,14 +128,18 @@ export function createUsageAggregateAccumulator() {
     usage,
     agentId,
     channel,
-  }: Pick<SessionUsageEntry, "usage" | "agentId" | "channel">) {
+    createdActor,
+    creatorKey = UNKNOWN_USAGE_CREATOR_KEY,
+  }: Pick<SessionUsageEntry, "usage" | "agentId" | "channel" | "createdActor" | "creatorKey">) {
     if (!usage) {
       return;
     }
     addCostUsageTotals(totals, usage);
     longestSessionDurationMs = Math.max(longestSessionDurationMs, usage.durationMs ?? 0);
     // Discovery can include recently modified transcripts with no activity in the requested range.
-    if (usage.firstActivity !== undefined || (usage.messageCounts?.total ?? 0) > 0) {
+    const countedSession =
+      usage.firstActivity !== undefined || (usage.messageCounts?.total ?? 0) > 0;
+    if (countedSession) {
       sessionCount += 1;
     }
     if (usage.messageCounts) {
@@ -145,6 +159,30 @@ export function createUsageAggregateAccumulator() {
     }
     mergeGroupedTotals(agents, agentId, usage);
     mergeGroupedTotals(channels, channel, usage);
+    const creator = creators.get(creatorKey) ?? {
+      key: creatorKey,
+      ...(createdActor ? { actor: createdActor } : {}),
+      totals: createEmptyCostUsageTotals(),
+      sessionCount: 0,
+      daily: new Map<string, CostUsageTotals>(),
+      sessionActivity: new Map<string, CreatorUsage["sessionActivity"][number]>(),
+    };
+    addCostUsageTotals(creator.totals, usage);
+    if (countedSession) {
+      creator.sessionCount += 1;
+      const dates = [
+        ...new Set([
+          ...(usage.activityDates ?? []),
+          ...(usage.dailyBreakdown?.map(({ date }) => date) ?? []),
+          ...(usage.dailyMessageCounts?.map(({ date }) => date) ?? []),
+        ]),
+      ].toSorted();
+      const key = JSON.stringify(dates);
+      const activity = creator.sessionActivity.get(key) ?? { dates, sessionCount: 0 };
+      activity.sessionCount += 1;
+      creator.sessionActivity.set(key, activity);
+    }
+    creators.set(creatorKey, creator);
     if (usage.latency && usage.latency.count > 0) {
       mergeLatency(latency, usage.latency);
     }
@@ -157,6 +195,8 @@ export function createUsageAggregateAccumulator() {
       const existing = getDay(day.date);
       existing.tokens += day.tokens;
       existing.cost += day.cost;
+      mergeGroupedTotals(costDays, day.date, day);
+      mergeGroupedTotals(creator.daily, day.date, day);
     }
     for (const day of usage.dailyMessageCounts ?? []) {
       const existing = getDay(day.date);
@@ -204,6 +244,24 @@ export function createUsageAggregateAccumulator() {
         channel,
         totals: groupTotals,
       })).toSorted((a, b) => b.totals.totalCost - a.totals.totalCost),
+      byCreator: Array.from(creators.values(), ({ daily, sessionActivity, ...creator }) => ({
+        ...creator,
+        daily: Array.from(daily, ([date, dayTotals]) => ({ date, ...dayTotals })).toSorted((a, b) =>
+          a.date.localeCompare(b.date),
+        ),
+        sessionActivity: Array.from(sessionActivity.values()).toSorted((a, b) =>
+          a.dates.join(",").localeCompare(b.dates.join(",")),
+        ),
+      })).toSorted(
+        (a, b) =>
+          b.totals.totalCost - a.totals.totalCost ||
+          b.totals.totalTokens - a.totals.totalTokens ||
+          a.key.localeCompare(b.key),
+      ),
+      costDaily: Array.from(costDays, ([date, groupTotals]) => ({
+        date,
+        ...groupTotals,
+      })).toSorted((a, b) => a.date.localeCompare(b.date)),
       latency: latency.count > 0 ? summarizeLatency(latency) : undefined,
       dailyLatency: Array.from(dailyLatency, ([date, value]) => ({
         date,

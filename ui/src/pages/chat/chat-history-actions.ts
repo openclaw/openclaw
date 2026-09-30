@@ -22,6 +22,7 @@ import { chatAttachmentDraftSignature } from "./durable-composer-persistence.ts"
 import { reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
 import { clearChatMessagesFromCache } from "./session-message-cache.ts";
+import type { SessionSnapshotInvalidationReason } from "./session-snapshot-invalidation-events.ts";
 
 type ClearChatHistoryState = ChatHistoryHost &
   Parameters<typeof reconcileChatRunLifecycle>[0] &
@@ -62,14 +63,15 @@ function hasAbortableChatSessionRun(state: ClearChatHistoryState): boolean {
 }
 
 function clearCachedChatMessagesForSession(
-  state: ClearChatHistoryState,
+  state: ChatState,
   sessionKey: string,
   agentId?: string,
+  reason?: SessionSnapshotInvalidationReason,
 ) {
   if (!state.chatMessagesBySession) {
     return;
   }
-  clearChatMessagesFromCache(state.chatMessagesBySession, state, { sessionKey, agentId });
+  clearChatMessagesFromCache(state.chatMessagesBySession, state, { sessionKey, agentId }, reason);
 }
 
 function ownsClearChatView(state: ClearChatHistoryState, owner: ClearChatViewOwner): boolean {
@@ -82,12 +84,7 @@ function ownsClearChatView(state: ClearChatHistoryState, owner: ClearChatViewOwn
 
 function clearPostResetBranchPrecondition(
   state: ClearChatHistoryState,
-  target: {
-    client: NonNullable<ClearChatHistoryState["client"]>;
-    connectionEpoch: number;
-    sessionKey: string;
-    agentId?: string;
-  },
+  target: ClearChatViewOwner,
   history: ChatHistoryResult | undefined,
 ) {
   if (
@@ -163,11 +160,7 @@ export async function clearChatHistory(
         resetChatHistoryProjection(state, agentParams.agentId);
         const history = await loadChatHistory(state);
         historyRefreshed = Boolean(history);
-        clearPostResetBranchPrecondition(
-          state,
-          { client, connectionEpoch, sessionKey, agentId: agentParams.agentId },
-          history,
-        );
+        clearPostResetBranchPrecondition(state, originalViewOwner, history);
       }
       if (ownsClearChatView(state, feedbackOwner)) {
         setChatError(
@@ -206,11 +199,7 @@ export async function clearChatHistory(
     clearRunStatus: !hadActiveRun,
   });
   const history = await loadChatHistory(state);
-  clearPostResetBranchPrecondition(
-    state,
-    { client, connectionEpoch, sessionKey, agentId: agentParams.agentId },
-    history,
-  );
+  clearPostResetBranchPrecondition(state, originalViewOwner, history);
   if (ownsClearChatView(state, originalViewOwner)) {
     scheduleChatScroll(state);
   }
@@ -239,6 +228,7 @@ export async function rewindChatHistory(
       state.chatAttachments,
       state.chatGoalDraftMode,
       state.chatMentions,
+      state.chatReplyTarget,
     );
   const composerSignature = readComposer();
   const attachmentReadSignal = attachmentReads.readSignal;
@@ -246,12 +236,7 @@ export async function rewindChatHistory(
   try {
     const result = await state.sessions.rewind(sessionKey, entryId, agentParams);
     const editorText = result.editorText ?? "";
-    if (state.chatMessagesBySession) {
-      clearChatMessagesFromCache(state.chatMessagesBySession, state, {
-        sessionKey,
-        agentId: agentParams.agentId,
-      });
-    }
+    clearCachedChatMessagesForSession(state, sessionKey, agentParams.agentId, "cache-eviction");
     if (viewMatches()) {
       resetChatHistoryProjection(state, agentParams.agentId);
       await Promise.all([loadChatHistory(state), loadChatBranches(state)]);
@@ -266,6 +251,7 @@ export async function rewindChatHistory(
       draft: editorText,
       mentions: [],
       goalMode: null,
+      replyTarget: null,
       expectedDraftRevision: loadChatComposerCommittedDraftRevision(
         state,
         sessionKey,
@@ -276,6 +262,7 @@ export async function rewindChatHistory(
       return null;
     }
     state.chatGoalDraftMode = null;
+    state.chatReplyTarget = null;
     state.chatAttachments = replaceChatAttachmentsFromEditor(
       state.chatAttachments,
       result.editorAttachments,
@@ -312,12 +299,7 @@ export async function switchChatHistoryBranch(
   const viewIsCurrent = () => connectionIsCurrent() && viewMatches();
   try {
     await state.sessions.switchBranch(sessionKey, leafEntryId, agentParams);
-    if (state.chatMessagesBySession) {
-      clearChatMessagesFromCache(state.chatMessagesBySession, state, {
-        sessionKey,
-        agentId: agentParams.agentId,
-      });
-    }
+    clearCachedChatMessagesForSession(state, sessionKey, agentParams.agentId, "cache-eviction");
     if (!viewMatches()) {
       return false;
     }

@@ -9,6 +9,10 @@ import { createDesktopSessionRegistry } from "./session-registry.js";
 const servers: net.Server[] = [];
 const sockets: net.Socket[] = [];
 
+function createPendingStream(registry: ReturnType<typeof createDesktopSessionRegistry>) {
+  return registry.createStream({ sourceKey: "node:one", ownerEpoch: 1, onStopped: () => {} });
+}
+
 afterEach(async () => {
   vi.useRealTimers();
   for (const socket of sockets.splice(0)) {
@@ -62,25 +66,21 @@ describe("RFB attachments", () => {
     });
     await registry.activate({ sourceKey: "node:two", ownerEpoch: 1 });
     const stream = new PassThrough();
-    const reservation = registry.reserveObserver("node:one", 1);
-    if (!reservation) {
-      throw new Error("expected observer reservation");
-    }
-    const attachment = registry.publishStream({
-      sourceKey: "node:one",
-      ownerEpoch: 1,
-      stream,
-      reservation,
-    });
+    const pending = createPendingStream(registry);
+    expect(pending.reserve()).toBe(true);
+    const invocation = createDeferredCore<{ error?: { message?: string } }>();
+    await pending.connect(
+      { attached: Promise.resolve({ stream }), cancel: () => {} },
+      () => invocation.promise,
+    );
+    const attachment = pending.publish();
     if (!attachment) {
       throw new Error("expected stream attachment");
     }
     try {
-      expect(registry.hasPendingStream("node:one", attachment)).toBe(true);
-      expect(registry.hasPendingStream("node:two", attachment)).toBe(false);
       expect(registry.claimStream("node:two", attachment)).toBeUndefined();
       expect(stream.destroyed).toBe(false);
-      expect(registry.hasPendingStream("node:one", attachment)).toBe(true);
+      expect(registry.hasActivity("node:one", 1)).toBe(true);
 
       if (closed) {
         const streamClosed = new Promise<void>((resolve) => {
@@ -91,10 +91,12 @@ describe("RFB attachments", () => {
       }
 
       expect(registry.claimStream("node:one", attachment)).toBe(closed ? undefined : stream);
-      expect(registry.hasPendingStream("node:one", attachment)).toBe(false);
+      expect(registry.hasActivity("node:one", 1)).toBe(false);
       expect(registry.claimStream("node:one", attachment)).toBeUndefined();
     } finally {
       stream.destroy();
+      invocation.resolve({});
+      await pending.stop();
       await registry.stopAll();
     }
   });
@@ -154,7 +156,7 @@ describe("RFB attachments", () => {
       await setImmediate();
       expect(completed).toEqual([]);
       expect(reentrantStop).toBeDefined();
-      expect(registry.reserveObserver("node:one", 1)).toBeUndefined();
+      expect(createPendingStream(registry).reserve()).toBe(false);
     } finally {
       release.resolve();
       await Promise.all([first, second, reentrantStop]);
@@ -194,12 +196,12 @@ describe("RFB attachments", () => {
   it("bounds pending observer reservations before streams are started", async () => {
     const registry = createDesktopSessionRegistry();
     await registry.activate({ sourceKey: "node:one", ownerEpoch: 1 });
-    const reservations = Array.from({ length: 8 }, () => registry.reserveObserver("node:one", 1));
-    expect(reservations.every(Boolean)).toBe(true);
-    expect(registry.reserveObserver("node:one", 1)).toBeUndefined();
+    const pending = Array.from({ length: 8 }, () => createPendingStream(registry));
+    expect(pending.every((stream) => stream.reserve())).toBe(true);
+    expect(createPendingStream(registry).reserve()).toBe(false);
 
-    reservations[0]?.release();
-    expect(registry.reserveObserver("node:one", 1)).toBeDefined();
+    await pending[0]?.stop();
+    expect(createPendingStream(registry).reserve()).toBe(true);
     await registry.stopAll();
   });
 
@@ -218,7 +220,7 @@ describe("RFB attachments", () => {
       );
       await expect(registry.stopAll()).rejects.toBe(failure);
       expect(start).not.toHaveBeenCalled();
-      expect(registry.reserveObserver("node:one", 1)).toBeUndefined();
+      expect(createPendingStream(registry).reserve()).toBe(false);
     } finally {
       teardown.mockResolvedValue(undefined);
       await registry.stopAll();
@@ -308,14 +310,12 @@ describe("RFB attachments", () => {
     const teardown = vi.fn(async () => undefined);
     const registry = createDesktopSessionRegistry({ lingerMs: 25 });
     await registry.activate({ sourceKey: "node:one", ownerEpoch: 1, teardown });
-    const reservation = registry.reserveObserver("node:one", 1);
-    if (!reservation) {
-      throw new Error("expected observer reservation");
-    }
+    const pending = createPendingStream(registry);
+    expect(pending.reserve()).toBe(true);
     await vi.advanceTimersByTimeAsync(100);
     expect(teardown).not.toHaveBeenCalled();
 
-    reservation.release();
+    await pending.stop();
     await vi.advanceTimersByTimeAsync(25);
     expect(teardown).toHaveBeenCalled();
   });
@@ -330,15 +330,14 @@ describe("RFB attachments", () => {
       control: false,
       close: () => {},
     });
-    const reservation = registry.reserveObserver("node:one", 1);
-    if (!observer || !reservation) {
-      throw new Error("expected observer and reservation");
-    }
-    observer.release();
+    const pending = createPendingStream(registry);
+    expect(pending.reserve()).toBe(true);
+    expect(observer).toBeDefined();
+    observer?.release();
     await vi.advanceTimersByTimeAsync(100);
     expect(teardown).not.toHaveBeenCalled();
 
-    reservation.release();
+    await pending.stop();
     await vi.advanceTimersByTimeAsync(25);
     expect(teardown).toHaveBeenCalled();
   });

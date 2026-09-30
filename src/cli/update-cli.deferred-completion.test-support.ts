@@ -13,9 +13,14 @@ export const syncPluginsForUpdateChannel = vi.fn();
 export const updateNpmInstalledPlugins = vi.fn();
 export const loadInstalledPluginIndexInstallRecords = vi.fn();
 export const pathExists = vi.fn();
-export const spawn = vi.fn();
+const spawn = vi.fn();
+export const observeUpdateGatewayReadiness =
+  vi.fn<typeof import("./update-cli/update-command-readiness.js").observeUpdateGatewayReadiness>();
 const { defaultRuntime: runtimeCapture, resetRuntimeCapture } = createCliRuntimeCapture();
 const sqliteHostPlatform = process.platform;
+const sourceRuntimeCompletion = vi.hoisted(() =>
+  vi.fn<typeof import("./update-cli/update-command-runtime.js").completeSourceUpdateRuntime>(),
+);
 
 vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
@@ -30,9 +35,13 @@ vi.mock("../runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../runtime.js")>()),
   defaultRuntime: runtimeCapture,
 }));
-vi.mock("../infra/update-runner.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../infra/update-runner.js")>()),
-  runGatewayUpdate: vi.fn(),
+vi.mock("../infra/update-runner-git.js", () => ({
+  updateGitCheckout: vi.fn(),
+}));
+// Runtime publication has its own fixture; this suite owns deferred completion and config writes.
+vi.mock("./update-cli/update-command-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-cli/update-command-runtime.js")>()),
+  completeSourceUpdateRuntime: sourceRuntimeCompletion,
 }));
 vi.mock("../infra/update-check.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/update-check.js")>()),
@@ -116,6 +125,12 @@ vi.mock("../daemon/gateway-entrypoint.js", async (importOriginal) => {
   };
 });
 
+vi.mock("./update-cli/update-command-readiness.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-cli/update-command-readiness.js")>()),
+  observeUpdateGatewayReadiness: (...args: Parameters<typeof observeUpdateGatewayReadiness>) =>
+    observeUpdateGatewayReadiness(...args),
+}));
+
 vi.mock("./update-cli/update-command-post-plugin-readiness.js", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("./update-cli/update-command-post-plugin-readiness.js")>();
@@ -159,13 +174,18 @@ vi.mock("../plugins/update.js", async (importOriginal) => {
 });
 
 vi.mock("../commands/doctor/shared/post-core-plugin-convergence.js", () => ({
-  runPostCorePluginConvergence: vi.fn(async (params: { baselineInstallRecords?: unknown }) => ({
-    changes: [],
-    warnings: [],
-    errored: false,
-    smokeFailures: [],
-    installRecords: params.baselineInstallRecords ?? {},
-  })),
+  runPostCorePluginConvergence: vi.fn(
+    async (params: { cfg: OpenClawConfig; baselineInstallRecords?: unknown }) => ({
+      config: params.cfg,
+      configChanges: [],
+      installedPluginIdRecovery: new Map(),
+      changes: [],
+      warnings: [],
+      errored: false,
+      smokeFailures: [],
+      installRecords: params.baselineInstallRecords ?? {},
+    }),
+  ),
 }));
 
 const nodeSqlite = await import("../infra/node-sqlite.js");
@@ -173,8 +193,9 @@ const windowsPrivateDirectory = await import("../infra/windows-private-directory
 const { createTempHomeEnv } = await import("../test-utils/temp-home.js");
 const existingHostUri = nodeSqlite.resolveExistingSqliteFileUri;
 const immutableHostUri = nodeSqlite.resolveImmutableSqliteFileUri;
-export const { runGatewayUpdate } = await import("../infra/update-runner.js");
-export const { runExec, runCommandWithTimeout } = await import("../process/exec.js");
+export const { updateGitCheckout } = await import("../infra/update-runner-git.js");
+const { runExec, runCommandWithTimeout } = await import("../process/exec.js");
+export { runExec };
 export const { defaultRuntime, ExitError } = await import("../runtime.js");
 export const { readConfigFileSnapshot, replaceConfigFile, mutateConfigFileWithRetry } =
   await import("../config/config.js");
@@ -319,6 +340,8 @@ export function installDeferredCompletionFixture() {
       errored: boolean;
     }> = {},
   ) => ({
+    configChanges: [],
+    installedPluginIdRecovery: new Map(),
     changes: [],
     warnings: [],
     errored: false,
@@ -413,37 +436,11 @@ export function installDeferredCompletionFixture() {
   ): Promise<void> =>
     fs.writeFile(filePath, `${JSON.stringify(value)}${trailingNewline ? "\n" : ""}`, "utf-8");
 
-  const setupPostCoreConfigFixture = async (params: {
-    backupConfig?: OpenClawConfig;
-    postDoctorConfig: OpenClawConfig;
-    preUpdateConfig?: OpenClawConfig;
-    snapshotSuffix?: ".bak" | ".pre-update";
-    preserveParsed?: boolean;
-  }) => {
-    const tempDir = createCaseDir("openclaw-update");
-    const configPath = path.join(tempDir, "openclaw.json");
-    await fs.mkdir(tempDir, { recursive: true });
-    if (params.preUpdateConfig) {
-      await writeJsonFixture(
-        `${configPath}${params.snapshotSuffix ?? ".pre-update"}`,
-        params.preUpdateConfig,
-      );
-    }
-    if (params.backupConfig) {
-      await writeJsonFixture(`${configPath}.bak`, params.backupConfig);
-    }
-    await writeJsonFixture(configPath, params.postDoctorConfig);
-    mockPostDoctorSnapshot(configPath, params.postDoctorConfig, {
-      preserveParsed: params.preserveParsed,
-    });
-    mockNoopPostUpdatePluginConvergence();
-    return { tempDir, configPath };
-  };
-
   beforeEach(async () => {
     tempHome = await createTempHomeEnv("openclaw-deferred-completion-");
     fixtureRoot = dirs.make("openclaw-deferred-completion-fixtures-");
     vi.resetAllMocks();
+    sourceRuntimeCompletion.mockResolvedValue({ changed: false });
     resetRuntimeCapture();
     for (const key of [
       "OPENCLAW_COMPATIBILITY_HOST_VERSION",
@@ -458,6 +455,22 @@ export function installDeferredCompletionFixture() {
     readPackageVersion.mockResolvedValue("1.0.0");
     vi.mocked(defaultRuntime.exit).mockImplementation(() => {});
     vi.mocked(readConfigFileSnapshot).mockResolvedValue(baseSnapshot);
+    // Finalization failure observes the fixture's absent Gateway without contacting the host.
+    observeUpdateGatewayReadiness.mockImplementation(async ({ gatewayPort, assertCurrent }) => {
+      assertCurrent?.();
+      return {
+        health: {
+          healthy: false,
+          waitOutcome: "stopped-free",
+          runtime: { status: "stopped" },
+          portUsage: { port: gatewayPort, status: "free", listeners: [], hints: [] },
+          staleGatewayPids: [],
+        },
+        readyz: false,
+        http: undefined,
+        launchAgentRecovery: null,
+      };
+    });
     setupConfigMutationWithRetryMock();
     loadInstalledPluginIndexInstallRecords.mockResolvedValue({});
     syncPluginsForUpdateChannel.mockImplementation(async ({ config }) => pluginSyncResult(config));
@@ -466,20 +479,19 @@ export function installDeferredCompletionFixture() {
     );
     const entrypoint = path.join(process.cwd(), "dist", "index.js");
     pathExists.mockImplementation(async (candidate: string) => candidate === entrypoint);
-    // Child completion may invoke only Doctor, config validation, and the parent's start probe.
+    // Child completion may invoke only Doctor and config validation.
     vi.mocked(runExec).mockImplementation(async (file, args) => {
       if (file === process.execPath && (args[1] === "doctor" || args[1] === "config")) {
         return { stdout: "", stderr: "" };
-      }
-      if (file === "ps") {
-        return { stdout: new Date(Date.now() - 1000).toString(), stderr: "" };
       }
       throw new Error(`Unexpected completion process: ${file}`);
     });
     vi.mocked(runCommandWithTimeout).mockRejectedValue(
       new Error("Completion must not run a core install"),
     );
-    vi.mocked(runGatewayUpdate).mockRejectedValue(new Error("Completion must not run core update"));
+    vi.mocked(updateGitCheckout).mockRejectedValue(
+      new Error("Completion must not run core update"),
+    );
     spawn.mockImplementation(() => {
       throw new Error("Completion must not spawn core update");
     });
@@ -534,6 +546,5 @@ export function installDeferredCompletionFixture() {
     mockPostDoctorSnapshot,
     runPostCoreUpdate,
     lastReplaceConfigCall,
-    setupPostCoreConfigFixture,
   };
 }

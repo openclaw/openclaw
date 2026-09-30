@@ -617,7 +617,6 @@ describe("createEmbeddedRunAuthController", () => {
     const harness = createMutableAuthControllerHarness();
     mocks.getApiKeyForModelCore.mockRejectedValue(
       Object.assign(new Error("selected profile missing"), {
-        status: 401,
         code: "selected_auth_profile_unavailable",
       }),
     );
@@ -634,6 +633,8 @@ describe("createEmbeddedRunAuthController", () => {
     expect(error).toMatchObject({
       reason: "auth",
       code: "selected_auth_profile_unavailable",
+      status: undefined,
+      message: "selected profile missing",
       authProfileFailure: { allInCooldown: false },
     });
     expect(mocks.getApiKeyForModelCore.mock.calls.map(([params]) => params.profileId)).toEqual([

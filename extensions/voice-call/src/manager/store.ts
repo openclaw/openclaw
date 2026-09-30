@@ -428,13 +428,6 @@ export async function loadActiveCallsFromStore(
   } catch (err) {
     console.error("[voice-call] Failed to read SQLite call records:", err);
   }
-  if (calls.length === 0) {
-    return {
-      activeCalls: new Map(),
-      providerCallIdMap: new Map(),
-      processedEventIds: new Set(),
-    };
-  }
   const callMap = new Map<CallId, CallRecord>();
   for (const call of calls) {
     // Reinsert so iteration follows the latest retained snapshot for each call.

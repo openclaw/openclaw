@@ -6,6 +6,17 @@ import {
   releaseChatAttachmentPayloads,
 } from "./attachment-payload-store.ts";
 
+export function createStagedAttachment(id: string): ChatAttachment {
+  const file = new File(["%PDF-1.4\n"], "brief.pdf", { type: "application/pdf" });
+  const attachment = registerChatAttachmentPayload({
+    attachment: { id, mimeType: file.type, fileName: file.name, sizeBytes: file.size },
+    dataUrl: "data:application/pdf;base64,JVBERi0xLjQK",
+    file,
+  });
+  onTestFinished(() => releaseChatAttachmentPayloads([attachment]));
+  return attachment;
+}
+
 export function createDeliveryAttachmentBatch() {
   const sources = [
     {

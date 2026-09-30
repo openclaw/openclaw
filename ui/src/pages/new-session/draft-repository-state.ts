@@ -70,14 +70,17 @@ export class DraftRepositoryController {
     return this.worktreeValue;
   }
 
+  get preferenceWorktree(): boolean {
+    return this.worktreeValue || this.preferredWorktreeRestore;
+  }
+
   get worktreeName(): string {
     return this.worktreeNameValue;
   }
 
   get baseRef(): string {
-    // Discovery supplies defaults; reconnects never rewrite the operator's selection.
-    const repository = this.repositoryValue.kind === "git" ? this.repositoryValue : undefined;
-    return this.baseRefOverride ?? (repository?.defaultBranch || repository?.headBranch || "");
+    // An omitted ref lets the Gateway fetch its default; discovery is only a suggestion.
+    return this.baseRefOverride ?? "";
   }
 
   get remoteRepository(): SessionCreateParams["repository"] {
@@ -335,7 +338,8 @@ export class DraftRepositoryController {
           this.callbacks.persistPreference({ worktree: false });
         }
       }
-    } else if (this.preferredWorktreeRestore && !this.worktreeSelectedByUser && this.available()) {
+    } else if (this.preferredWorktreeRestore && !this.worktreeSelectedByUser) {
+      // Failed discovery cannot revoke isolation intent; the submit gate checks availability.
       this.worktreeValue = true;
     }
     this.preferredWorktreeRestore = false;

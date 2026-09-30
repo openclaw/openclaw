@@ -24,7 +24,7 @@ describe("resolveDaemonInstallRuntimeInputs", () => {
             runtime: "node",
             devMode: false,
           }),
-        ).resolves.toEqual({ devMode: false, runtimePath: pinned });
+        ).resolves.toEqual({ devMode: false, runtime: "node", runtimePath: pinned });
       } finally {
         fs.rmSync(root, { recursive: true, force: true });
       }
@@ -74,6 +74,7 @@ describe("resolveDaemonInstallRuntimeInputs", () => {
       }),
     ).resolves.toEqual({
       devMode: false,
+      runtime: "node",
       runtimePath: "/custom/node",
     });
   });
@@ -139,6 +140,12 @@ describe("resolveDaemonServicePathDirs openclaw discovery", () => {
         fs.mkdirSync(path.dirname(otherEntrypoint), { recursive: true });
         fs.writeFileSync(activeEntrypoint, "");
         fs.writeFileSync(otherEntrypoint, "");
+        for (const entrypoint of [activeEntrypoint, otherEntrypoint]) {
+          fs.writeFileSync(
+            path.join(path.dirname(entrypoint), "package.json"),
+            '{"name":"openclaw"}',
+          );
+        }
         fs.symlinkSync(otherEntrypoint, path.join(binDir, "openclaw"));
 
         expect(

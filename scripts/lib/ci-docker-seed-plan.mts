@@ -1,17 +1,28 @@
 import { isTestOnlyPath } from "./changed-path-facts.mjs";
 
+const MAIN_DOCKER_SEED_LANES = ["published-upgrade-survivor"] as const;
+const RELEASE_ONLY_DOCKER_SEED_LANES = [
+  "mcp-channels",
+  "cron-mcp-cleanup",
+  "mcp-code-mode-gateway",
+  "update-channel-switch",
+  "fleet-cache",
+] as const;
+
+export function resolveDockerSeedLanes(options: { includeReleaseOnly: boolean }) {
+  return options.includeReleaseOnly
+    ? [...MAIN_DOCKER_SEED_LANES, ...RELEASE_ONLY_DOCKER_SEED_LANES]
+    : [...MAIN_DOCKER_SEED_LANES];
+}
+
+// PR owner selection reuses the established Docker lane map; main keeps its
+// independent published-upgrade tripwire and full validation keeps every lane.
 const MCP_DOCKER_SEED_LANES = [
   "mcp-channels",
   "cron-mcp-cleanup",
   "mcp-code-mode-gateway",
 ] as const;
-const DOCKER_SEED_LANE_ORDER = [
-  ...MCP_DOCKER_SEED_LANES,
-  "update-channel-switch",
-  "fleet-cache",
-  "published-upgrade-survivor",
-] as const;
-type DockerSeedLane = (typeof DOCKER_SEED_LANE_ORDER)[number];
+type DockerSeedLane = ReturnType<typeof resolveDockerSeedLanes>[number];
 const DOCKER_SEED_LANES_BY_PATH: Readonly<Record<string, readonly DockerSeedLane[]>> = {
   ".github/workflows/ci.yml": [...MCP_DOCKER_SEED_LANES, "published-upgrade-survivor"],
   "scripts/e2e/cron-mcp-cleanup-seed.ts": ["cron-mcp-cleanup"],
@@ -25,6 +36,8 @@ const DOCKER_SEED_LANES_BY_PATH: Readonly<Record<string, readonly DockerSeedLane
   "scripts/e2e/update-channel-switch-docker.sh": ["update-channel-switch"],
   "scripts/lib/changed-path-facts.mjs": [...MCP_DOCKER_SEED_LANES, "published-upgrade-survivor"],
   "scripts/lib/ci-docker-seed-plan.mts": [...MCP_DOCKER_SEED_LANES, "published-upgrade-survivor"],
+  "src/agents/embedded-agent-runner/run/attempt-bundle-tools.ts": ["mcp-code-mode-gateway"],
+  "src/agents/runtime-plan/tools.ts": ["mcp-code-mode-gateway"],
 };
 // Keep the whole state owner: both schema-version constants and future migrations
 // must exercise an installed release's updater before they reach main.
@@ -48,5 +61,5 @@ export function resolveChangedDockerSeedLanes(changedPaths: string[]) {
       selected.add(lane);
     }
   }
-  return DOCKER_SEED_LANE_ORDER.filter((lane) => selected.has(lane));
+  return resolveDockerSeedLanes({ includeReleaseOnly: true }).filter((lane) => selected.has(lane));
 }

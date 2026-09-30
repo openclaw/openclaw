@@ -156,16 +156,12 @@ func buildOpenClawChatSwarmGroups(
 
     var byGroup: [String: [Entry]] = [:]
     for row in sessions {
-        guard let groupID = row.swarmGroupId?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !groupID.isEmpty,
+        guard let groupID = ChatPayloadDecoding.trimmedNonEmptyString(row.swarmGroupId),
               SelfContainedSwarmHelpers.belongsToParent(row, groupID: groupID, matchesParent: matchesParent),
               let status = SelfContainedSwarmHelpers.status(row)
         else { continue }
         let label = [row.label, row.displayName, row.derivedTitle, row.key]
-            .compactMap { value -> String? in
-                let normalized = value?.trimmingCharacters(in: .whitespacesAndNewlines)
-                return normalized?.isEmpty == false ? normalized : nil
-            }
+            .compactMap(ChatPayloadDecoding.trimmedNonEmptyString)
             .first ?? row.key
         byGroup[groupID, default: []].append(Entry(
             phase: row.swarmPhase?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -261,8 +257,7 @@ enum SelfContainedSwarmHelpers {
         {
             return matchesParent(parent)
         }
-        let kind = ChatPayloadDecoding.trimmedNonEmptyString(event.kind)
-        if kind == "phase" || kind == "log" {
+        if self.isActivityNote(event) {
             guard let sessionKey = ChatPayloadDecoding.trimmedNonEmptyString(event.sessionKey) else { return false }
             return matchesParent(sessionKey)
         }

@@ -7,11 +7,9 @@ import {
 } from "../../infra/kysely-sync.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { readLegacyCompactionHistory } from "./legacy-compaction-history.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
-import {
-  parseSessionEntryJson,
-  sessionEntryMetadataJson,
-} from "./session-accessor.sqlite-status.js";
+import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
 import {
   isRecentSessionMaintenanceEntry,
   isSessionEntryDiskBudgetEvictable,
@@ -32,7 +30,7 @@ export function collectSessionStateIdsForEntry(entry: SessionEntry): string[] {
   for (const sessionId of entry.usageFamilySessionIds ?? []) {
     add(sessionId);
   }
-  for (const checkpoint of entry.compactionCheckpoints ?? []) {
+  for (const checkpoint of readLegacyCompactionHistory(entry)) {
     add(checkpoint.sessionId);
     add(checkpoint.preCompaction.sessionId);
     add(checkpoint.postCompaction.sessionId);
@@ -61,7 +59,7 @@ export function addRetainedWindowSessionReferences(
       "session_nodes.updated_at",
       "session_nodes.pinned_at",
     ])
-    .$if(diskBudget !== undefined, (projection) => projection.select(sessionEntryMetadataJson))
+    .$if(diskBudget !== undefined, (projection) => projection.select("session_nodes.entry_json"))
     .where((eb) =>
       eb.or([
         eb("session_nodes.archived_at", "is not", null),
@@ -94,16 +92,14 @@ export function addRetainedWindowSessionReferences(
 }
 
 export function collectRecentSessionHistoryIds(params: {
-  database: OpenClawAgentDatabase;
+  database: Pick<OpenClawAgentDatabase, "db">;
   preserveRecentMs?: number | null;
 }): Set<string> {
   if (params.preserveRecentMs == null) {
     return new Set();
   }
   const db = getNodeSqliteKysely<
-    Pick<OpenClawAgentKyselyDatabase, "session_nodes" | "session_windows"> & {
-      pragma_encoding: { encoding: string };
-    }
+    Pick<OpenClawAgentKyselyDatabase, "session_nodes" | "session_windows">
   >(params.database.db);
   const rows = executeSqliteQuerySync(
     params.database.db,
@@ -114,18 +110,9 @@ export function collectRecentSessionHistoryIds(params: {
         "session_nodes.current_session_id",
         "session_nodes.session_key",
         "session_nodes.updated_at",
+        "session_nodes.entry_json",
         "session_windows.session_id",
-      ])
-      .select((eb) =>
-        // UTF-16 JSON projection can change identity code points; retain its original TEXT.
-        eb
-          .case()
-          .when(eb(eb.selectFrom("pragma_encoding").select("encoding"), "=", "UTF-8"))
-          .then(sessionEntryMetadataJson.expression)
-          .else(eb.ref("session_nodes.entry_json"))
-          .end()
-          .as("entry_json"),
-      ),
+      ]),
   ).rows;
   return new Set(
     rows.flatMap((row) => {

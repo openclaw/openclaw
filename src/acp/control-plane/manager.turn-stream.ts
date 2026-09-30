@@ -164,23 +164,35 @@ export async function consumeAcpTurnStream(params: {
     // Submission readiness and terminal cleanup are independent backend-owned turn boundaries.
     const turn = params.runtime.startTurn(params.turn);
     let promptReadinessOpen = true;
+    let promptNotificationStarted = false;
     const readinessPromise = turn.promptStarted?.then(
       async () => {
-        if (!promptReadinessOpen) {
+        if (!promptReadinessOpen || !params.eventGate.open) {
           return { kind: "prompt-start-closed" as const };
         }
-        await params.onPromptStarted?.({ authoritative: true });
+        promptNotificationStarted = true;
+        try {
+          await params.onPromptStarted?.({ authoritative: true });
+        } catch (error) {
+          return { kind: "prompt-start-error" as const, error };
+        }
         return { kind: "prompt-started" as const };
       },
       (error: unknown) => ({ kind: "prompt-start-error" as const, error }),
     );
     const resultPromise = turn.result.then(
-      (result) => {
+      async (result) => {
         promptReadinessOpen = false;
+        if (promptNotificationStarted) {
+          await readinessPromise;
+        }
         return { kind: "result" as const, result };
       },
-      (error: unknown) => {
+      async (error: unknown) => {
         promptReadinessOpen = false;
+        if (promptNotificationStarted) {
+          await readinessPromise;
+        }
         return { kind: "result-error" as const, error };
       },
     );

@@ -10,6 +10,7 @@ import {
 import { delimiter, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { landingSnapshotQuery } from "./pr-merge-snapshot.test-support.js";
 import { validReview, writeReviewArtifacts } from "./pr-review-artifact-fixture.js";
 import { copyPrWrapperSources } from "./pr-wrapper.test-support.js";
 
@@ -122,6 +123,14 @@ function fixture() {
       },
     },
   };
+  const pullResponse = (baseRef: string) =>
+    JSON.stringify({
+      number: 123,
+      html_url: `${repo.url}/pull/123`,
+      base: { ref: baseRef, repo: repoAuthority },
+      head: { sha: "" },
+    });
+  const snapshotCall = `${owner}\tapi graphql --hostname github.com -H Cache-Control: max-age=0 -f owner=fixture -f name=repo -F number=123 -f ${landingSnapshotQuery} --include`;
   const calls = join(root, "calls.log");
   const gh = join(bin, "gh");
   writeFileSync(
@@ -129,19 +138,21 @@ function fixture() {
     `#!/bin/sh
 printf '%s\\t%s\\n' "$(git rev-parse --show-toplevel)" "$*" >> '${calls}'
 case "$1 $2" in
-  "browse --no-browser") printf '%s\\n' '${repo.url}' ;;
+  "browse ") printf '%s\\n' '${repo.url}' ;;
   "api --hostname")
     case "$4" in
-      repos/fixture/repo) printf '%s\\n' '${JSON.stringify(repoAuthority)}' ;;
       repos/fixture/repo/pulls/123)
         if [ "$(git rev-parse --show-toplevel)" = '${owner}' ]; then
-          printf '%s\\n' '{"base":{"ref":"owner-release"},"head":{"sha":""}}'
+          printf '%s\\n' '${pullResponse("owner-release")}'
         else
-          printf '%s\\n' '{"base":{"ref":"caller-release"},"head":{"sha":""}}'
+          printf '%s\\n' '${pullResponse("caller-release")}'
         fi ;;
+      repos/fixture/repo/pulls/123/files?per_page=100) printf '%s\\n' '[[]]' ;;
       *) echo "Unexpected GitHub operation: $*" >&2; exit 99 ;;
     esac ;;
-  "api graphql") printf '%s\\n' '${JSON.stringify(response)}' ;;
+  "api graphql")
+    case " $* " in *" --include "*) printf 'HTTP/2.0 200 OK\\n\\n' ;; esac
+    printf '%s\\n' '${JSON.stringify(response)}' ;;
   *) echo "Unexpected GitHub operation: $*" >&2; exit 99 ;;
 esac
 `,
@@ -167,6 +178,7 @@ esac
     landed,
     intent,
     record,
+    snapshotCall,
     git,
     run,
     readCalls,
@@ -202,11 +214,11 @@ describePosix("native PR wrapper repository ownership", () => {
       expect(readFileSync(f.capture, "utf8")).toBe("retained capture\n");
       expect(f.git(f.caller, ["show-ref"])).toBe(callerRefs);
       expect(f.git(f.owner, ["for-each-ref", "--format=%(refname)", lockRef])).toBe("");
-      expect(f.readCalls()).toHaveLength(5);
-      expect(f.readCalls().slice(0, 3)).toEqual([
-        `${f.owner}\tbrowse --no-browser`,
-        `${f.owner}\tapi --hostname github.com repos/fixture/repo -H Cache-Control: max-age=0`,
-        `${f.owner}\tapi --hostname github.com repos/fixture/repo -H Cache-Control: max-age=0`,
+      expect(f.readCalls()).toEqual([
+        `${f.owner}\tbrowse`,
+        `${f.owner}\tapi --hostname github.com repos/fixture/repo/pulls/123 -H Cache-Control: max-age=0`,
+        f.snapshotCall,
+        f.snapshotCall,
       ]);
       expect(f.readCalls().every((call) => call.startsWith(`${f.owner}\t`))).toBe(true);
       expect(f.readCalls().some((call) => call.includes("pr merge") || call.includes("POST"))).toBe(
@@ -236,9 +248,8 @@ describePosix("native PR wrapper repository ownership", () => {
     expect(f.git(f.caller, ["rev-parse", outcomeRef])).toBe(f.intent);
     expect(readFileSync(f.capture, "utf8")).toBe("retained capture\n");
     expect(f.readCalls()).toEqual([
-      `${f.owner}\tbrowse --no-browser`,
-      `${f.owner}\tapi --hostname github.com repos/fixture/repo -H Cache-Control: max-age=0`,
-      `${f.owner}\tapi --hostname github.com repos/fixture/repo -H Cache-Control: max-age=0`,
+      `${f.owner}\tbrowse`,
+      `${f.owner}\tapi --hostname github.com repos/fixture/repo/pulls/123 -H Cache-Control: max-age=0`,
     ]);
   });
 
@@ -263,18 +274,17 @@ describePosix("native PR wrapper repository ownership", () => {
         command === "ci-dispatch"
           ? "missing remote headRefName/headRefOid metadata"
           : command === "review-init"
-            ? "Invalid PR identity for #123: expected complete base/head OIDs and refs before reading checks."
+            ? "did not include a head SHA"
             : "targets owner-release",
       );
       expect(f.readCalls()).toEqual([
+        `${f.owner}\tbrowse`,
+        `${f.owner}\tapi --hostname github.com repos/fixture/repo/pulls/123 -H Cache-Control: max-age=0`,
         ...(command === "review-init"
           ? [
-              `${f.owner}\tbrowse --no-browser`,
-              `${f.owner}\tapi --hostname github.com repos/fixture/repo -H Cache-Control: max-age=0`,
+              `${f.owner}\tapi --hostname github.com repos/fixture/repo/pulls/123/files?per_page=100 --paginate --slurp -H Cache-Control: max-age=0`,
             ]
           : []),
-        `${f.owner}\tbrowse --no-browser`,
-        `${f.owner}\tapi --hostname github.com repos/fixture/repo/pulls/123`,
       ]);
       expect(f.git(f.owner, ["rev-parse", outcomeRef])).toBe(f.intent);
       expect(f.git(f.owner, ["for-each-ref", "--format=%(refname)", lockRef])).toBe("");

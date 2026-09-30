@@ -1,7 +1,8 @@
 import type { EventEmitter } from "node:events";
-import { Worker, type WorkerOptions } from "node:worker_threads";
+import type { WorkerOptions } from "node:worker_threads";
 import { isVitestRuntimeEnv } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { createCpuTrackedWorker } from "../infra/worker-cpu.js";
 
 const SYSTEM_CA_WARMUP_TIMEOUT_MS = 10_000;
 const SYSTEM_CA_WORKER_SOURCE = String.raw`
@@ -72,9 +73,9 @@ export async function warmMacOSSystemCaOffMainThread(
 
   let worker: SystemCaWarmupWorker;
   try {
-    worker = (
-      options.createWorker ?? ((source, workerOptions) => new Worker(source, workerOptions))
-    )(SYSTEM_CA_WORKER_SOURCE, { eval: true });
+    worker = (options.createWorker ?? createCpuTrackedWorker)(SYSTEM_CA_WORKER_SOURCE, {
+      eval: true,
+    });
   } catch (error) {
     // CA prewarming is an optimization. Node can still load trust settings lazily.
     const reason = isWorkerPermissionDenied(error)

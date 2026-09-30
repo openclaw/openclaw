@@ -8,6 +8,7 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isCodexAppServerRequestTimeoutError, type CodexAppServerClient } from "./client.js";
+import { fingerprintCodexPolicy } from "./config-policy-json.js";
 import type { CodexPluginDestructiveApprovalMode } from "./config.js";
 import { readCodexMcpToolConnectorId } from "./mcp-tool-metadata.js";
 import { buildCodexAppApprovalOverrides } from "./plugin-app-approval-overrides.js";
@@ -15,7 +16,6 @@ import {
   buildCodexPluginAppsConfigPatchFromPolicyContext,
   buildPluginAppPolicyContext,
   disableUnlistedCodexApps,
-  stringifyCodexPluginPolicy,
   type CodexAppPolicyContextEntry,
   type CodexPluginThreadConfig,
   type PluginAppPolicyContext,
@@ -559,22 +559,16 @@ export function intersectCodexPluginThreadConfigWithScheduledAuthority(
       }),
     );
   }
-  const fingerprint = crypto
-    .createHash("sha256")
-    .update(
-      stringifyCodexPluginPolicy({
-        version: 1,
-        namespace: CODEX_SCHEDULED_APP_AUTHORITY_NAMESPACE,
-        authority: scheduled,
-        inputFingerprint: config.inputFingerprint,
-        policyContext,
-        configPatch,
-      }),
-    )
-    .digest("hex");
   return {
     ...config,
-    fingerprint,
+    fingerprint: fingerprintCodexPolicy({
+      version: 1,
+      namespace: CODEX_SCHEDULED_APP_AUTHORITY_NAMESPACE,
+      authority: scheduled,
+      inputFingerprint: config.inputFingerprint,
+      policyContext,
+      configPatch,
+    }),
     configPatch,
     provisionalAppIds: Object.keys(apps).toSorted(),
     policyContext,
@@ -660,15 +654,10 @@ export function buildScheduledCodexAppAuthorityInputFingerprint(
   if (!scheduled) {
     return baseFingerprint;
   }
-  return crypto
-    .createHash("sha256")
-    .update(
-      stringifyCodexPluginPolicy({
-        version: 1,
-        namespace: CODEX_SCHEDULED_APP_AUTHORITY_NAMESPACE,
-        baseFingerprint,
-        authority: scheduled,
-      }),
-    )
-    .digest("hex");
+  return fingerprintCodexPolicy({
+    version: 1,
+    namespace: CODEX_SCHEDULED_APP_AUTHORITY_NAMESPACE,
+    baseFingerprint,
+    authority: scheduled,
+  });
 }

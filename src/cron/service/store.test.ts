@@ -6,20 +6,29 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { setupCronServiceSuite } from "../service.test-harness.js";
 import * as cronStoreModule from "../store.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import {
-  claimCronRunReceiptInDatabase,
   CronRunReceiptConflictError,
-  finishCronRunReceipt,
+  finishCronRunReceiptAsync,
   prepareCronRunReceiptClaim,
 } from "../store/run-receipt-store.js";
+import { claimCronRunReceiptInDatabaseForTest } from "../store/run-receipt-store.test-support.js";
 import type { CronJob } from "../types.js";
 import { findJobOrThrow } from "./jobs-scheduling.js";
-import { cronRunReceiptMutationHooks } from "./run-receipts.js";
+import { cronNotificationJob, type CronNotificationIntent } from "./notification-intents.js";
+import { prepareCronRunReceiptOwnerMutation } from "./run-receipts.js";
 import { createCronServiceState } from "./state.js";
-import { ensureLoaded, persist, persistOrRestore, snapshotStoreForRollback } from "./store.js";
+import {
+  ensureLoaded,
+  persist,
+  persistOrRestore,
+  snapshotStoreForRollback,
+  captureCronJobMutationSource,
+  persistCronJobMutation,
+} from "./store.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({
   prefix: "cron-service-store-seam",
@@ -44,6 +53,7 @@ async function expectPathMissing(targetPath: string): Promise<void> {
 
 function createStoreTestState(storePath: string, onEvent = vi.fn()) {
   return createCronServiceState({
+    scheduler: createTestGatewayScheduler(),
     storePath,
     cronEnabled: true,
     log: logger,
@@ -70,6 +80,10 @@ function createReloadCronJob(params?: Partial<CronJob>): CronJob {
     ...params,
   };
 }
+function createPostPersistNotification(job = createReloadCronJob()): CronNotificationIntent {
+  return { kind: "auto-disabled", job: cronNotificationJob(job), text: "auto-disabled notice" };
+}
+
 describe("cron service store seam coverage", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -95,9 +109,9 @@ describe("cron service store seam coverage", () => {
       })
       .mockResolvedValue(loaded(second));
 
-    await ensureLoaded(state, { skipRecompute: true });
+    await ensureLoaded(state);
     expect(state.store?.jobs[0]?.id).toBe("before-write");
-    await ensureLoaded(state, { skipRecompute: true });
+    await ensureLoaded(state);
     expect(state.store?.jobs[0]?.id).toBe("after-write");
     expect(read).toHaveBeenCalledTimes(2);
   });
@@ -105,9 +119,11 @@ describe("cron service store seam coverage", () => {
   it("does not drain post-persist notifications when there is no store to write", async () => {
     const { storePath } = await makeStorePath();
     const state = createStoreTestState(storePath);
-    const notify = vi.fn();
+    const notify = vi.mocked(state.deps.enqueueSystemEvent);
 
-    await expect(persist(state, { postPersistNotifications: [notify] })).resolves.toBe(false);
+    await expect(
+      persist(state, { postPersistNotifications: [createPostPersistNotification()] }),
+    ).resolves.toBe(false);
 
     expect(notify).not.toHaveBeenCalled();
   });
@@ -118,7 +134,7 @@ describe("cron service store seam coverage", () => {
       const { storePath } = await makeStorePath();
       await writeSingleJobStore(storePath, createReloadCronJob());
       const state = createStoreTestState(storePath);
-      await ensureLoaded(state, { skipRecompute: true });
+      await ensureLoaded(state);
       const snapshot = snapshotStoreForRollback(state);
       findJobOrThrow(state, "reload-cron-expr-job").name = "first save";
       const withLaterWrite = async <Value>(save: Promise<Value>): Promise<Value> => {
@@ -143,12 +159,12 @@ describe("cron service store seam coverage", () => {
         await persistOrRestore(state, snapshot);
       }
       expect(state.store?.jobs[0]?.name).toBe("first save");
-      await ensureLoaded(state, { skipRecompute: true });
+      await ensureLoaded(state);
       expect(state.store?.jobs[0]?.name).toBe("later committed save");
     },
   );
 
-  it("loads stored jobs, recomputes next runs, and does not rewrite the store on load", async () => {
+  it("loads stored jobs without schedule repair or rewriting the store", async () => {
     const { storePath } = await makeStorePath();
 
     await writeSingleJobStore(storePath, {
@@ -181,9 +197,10 @@ describe("cron service store seam coverage", () => {
     expect(job.delivery?.mode).toBe("announce");
     expect(job.delivery?.channel).toBe("telegram");
     expect(job.delivery?.to).toBe("123");
-    expect(job?.state.nextRunAtMs).toBe(STORE_TEST_NOW + 60_000);
+    expect(job.state.nextRunAtMs).toBeUndefined();
 
     const persistedJob = (await loadCronStore(storePath)).jobs[0];
+    expect(persistedJob?.state.nextRunAtMs).toBeUndefined();
     const persistedPayload = persistedJob?.payload as
       | { kind?: string; message?: string }
       | undefined;
@@ -246,7 +263,7 @@ describe("cron service store seam coverage", () => {
     ).run(legacyMissingPayload.id);
     const state = createStoreTestState(storePath);
 
-    await ensureLoaded(state, { skipRecompute: true });
+    await ensureLoaded(state);
 
     const expectedActiveJobIds = [legacyValid.id, legacyValidTrigger.id, surviving.id];
     expect(state.store?.jobs.map((job) => job.id)).toEqual(expectedActiveJobIds);
@@ -290,7 +307,7 @@ describe("cron service store seam coverage", () => {
     db.prepare("UPDATE cron_jobs SET state_json = ? WHERE job_id = ?").run("[]", malformedState.id);
     const state = createStoreTestState(storePath);
 
-    await ensureLoaded(state, { skipRecompute: true });
+    await ensureLoaded(state);
 
     expect(state.store?.jobs.map((job) => job.id)).toEqual([surviving.id]);
     expect((await loadCronStore(storePath)).jobs.map((job) => job.id)).toEqual([surviving.id]);
@@ -361,7 +378,7 @@ describe("cron service store seam coverage", () => {
     ).run(invalidTimestampJson, invalidStagger.id);
     const state = createStoreTestState(storePath);
 
-    await ensureLoaded(state, { skipRecompute: true });
+    await ensureLoaded(state);
 
     expect(state.store?.jobs.map((job) => job.id)).toEqual([
       disabledUnsatisfiableInterval.id,
@@ -413,7 +430,7 @@ describe("cron service store seam coverage", () => {
       .run(JSON.stringify(MAX_DATE_TIMESTAMP_MS + 1), invalidState.id);
     const state = createStoreTestState(storePath);
 
-    await ensureLoaded(state, { skipRecompute: true });
+    await ensureLoaded(state);
 
     expect(state.store?.jobs.map((job) => job.id)).toEqual([surviving.id]);
     expect(cronStoreModule.loadCronQuarantinedJobs(storePath)).toEqual([
@@ -438,7 +455,7 @@ describe("cron service store seam coverage", () => {
     );
     const onEvent = vi.fn();
     const state = createStoreTestState(storePath, onEvent);
-    await ensureLoaded(state, { skipRecompute: true });
+    await ensureLoaded(state);
     const job = findJobOrThrow(state, "durable-wake-job");
     job.state.nextRunAtMs = changedNextRunAtMs;
 
@@ -482,8 +499,8 @@ describe("cron service store seam coverage", () => {
     const { storePath } = await makeStorePath();
     await writeSingleJobStore(storePath, createReloadCronJob());
     const state = createStoreTestState(storePath);
-    await ensureLoaded(state, { skipRecompute: true });
-    const notify = vi.fn();
+    await ensureLoaded(state);
+    const notify = vi.mocked(state.deps.enqueueSystemEvent);
     const order: string[] = [];
     const saveCronJobsStoreWithRevision = cronStoreModule.saveCronJobsStoreWithRevision;
     vi.spyOn(cronStoreModule, "saveCronJobsStoreWithRevision")
@@ -494,8 +511,10 @@ describe("cron service store seam coverage", () => {
         order.push("persist");
         return committed;
       });
-    notify.mockImplementation(() => order.push("notify"));
-    const postPersistNotifications = [notify];
+    notify.mockImplementation(() => {
+      order.push("notify");
+    });
+    const postPersistNotifications = [createPostPersistNotification()];
 
     await expect(persist(state, { stateOnly: true, postPersistNotifications })).rejects.toThrow(
       "disk full",
@@ -515,18 +534,21 @@ describe("cron service store seam coverage", () => {
     const nextRunAtMs = STORE_TEST_NOW + 120_000;
     await writeSingleJobStore(storePath, createReloadCronJob());
     const state = createStoreTestState(storePath);
-    await ensureLoaded(state, { skipRecompute: true });
+    await ensureLoaded(state);
     const snapshot = snapshotStoreForRollback(state);
     const job = findJobOrThrow(state, "reload-cron-expr-job");
     job.state.nextRunAtMs = nextRunAtMs;
     const siblingNotify = vi.fn();
+    vi.mocked(state.deps.enqueueSystemEvent)
+      .mockImplementationOnce(() => {
+        throw new Error("notification failed");
+      })
+      .mockImplementationOnce(siblingNotify);
 
     await persistOrRestore(state, snapshot, {
       postPersistNotifications: [
-        () => {
-          throw new Error("notification failed");
-        },
-        siblingNotify,
+        createPostPersistNotification(job),
+        createPostPersistNotification(job),
       ],
     });
 
@@ -549,7 +571,7 @@ describe("cron service store seam coverage", () => {
     );
     const onEvent = vi.fn();
     const state = createStoreTestState(storePath, onEvent);
-    await ensureLoaded(state, { skipRecompute: true });
+    await ensureLoaded(state);
     const job = findJobOrThrow(state, "suppressed-scheduled-job");
 
     job.state.nextRunAtMs = suppressedNextRunAtMs;
@@ -584,7 +606,7 @@ describe("cron service store seam coverage", () => {
     );
     const onEvent = vi.fn();
     const state = createStoreTestState(storePath, onEvent);
-    await ensureLoaded(state, { skipRecompute: true });
+    await ensureLoaded(state);
     if (!state.store) {
       throw new Error("expected loaded cron store");
     }
@@ -636,7 +658,7 @@ describe("cron service store seam coverage", () => {
     );
     const onEvent = vi.fn();
     const state = createStoreTestState(storePath, onEvent);
-    await ensureLoaded(state, { skipRecompute: true });
+    await ensureLoaded(state);
     if (!state.store) {
       throw new Error("expected loaded cron store");
     }
@@ -687,7 +709,7 @@ describe("cron service store seam coverage", () => {
     );
     const onEvent = vi.fn();
     const state = createStoreTestState(storePath, onEvent);
-    await ensureLoaded(state, { skipRecompute: true });
+    await ensureLoaded(state);
     const job = findJobOrThrow(state, "quarantine-retry-job");
     job.state.nextRunAtMs = changedNextRunAtMs;
     state.pendingQuarantineConfigJobs = [
@@ -696,8 +718,8 @@ describe("cron service store seam coverage", () => {
     const saveStore = vi
       .spyOn(cronStoreModule, "saveCronJobsStoreWithRevision")
       .mockRejectedValueOnce(new Error("quarantine unavailable"));
-    const notify = vi.fn();
-    const postPersistNotifications = [notify];
+    const notify = vi.mocked(state.deps.enqueueSystemEvent);
+    const postPersistNotifications = [createPostPersistNotification()];
 
     await persist(state, { stateOnly: true, postPersistNotifications });
 
@@ -740,21 +762,27 @@ describe("cron service store seam coverage", () => {
     const job = createReloadCronJob({ id: "quarantined-receipt-conflict", agentId: "alpha" });
     await saveCronStore(storePath, { version: 1, jobs: [job] });
     const state = createStoreTestState(storePath);
-    await ensureLoaded(state, { skipRecompute: true });
+    await ensureLoaded(state);
     const prepared = prepareCronRunReceiptClaim({
+      observed: undefined,
       storePath,
       job,
       agentId: "alpha",
       startedAtMs: STORE_TEST_NOW,
     });
     const receipt = runOpenClawStateWriteTransaction(({ db }) =>
-      claimCronRunReceiptInDatabase({
+      claimCronRunReceiptInDatabaseForTest({
         database: db,
         prepared,
         resolveAgentId: (current) => current.agentId!,
       }),
     );
     const snapshot = snapshotStoreForRollback(state);
+    const ownerMutation = await prepareCronRunReceiptOwnerMutation({
+      state,
+      previousJob: job,
+      nextJob: { ...job, agentId: "beta" },
+    });
     findJobOrThrow(state, job.id).agentId = "beta";
     state.pendingQuarantineConfigJobs = [
       { sourceIndex: 0, reason: "invalid-schedule", job: { id: "quarantined-job" } },
@@ -762,19 +790,25 @@ describe("cron service store seam coverage", () => {
 
     try {
       await expect(
-        persistOrRestore(state, snapshot, {
-          transactionHooks: cronRunReceiptMutationHooks({
-            state,
+        persistCronJobMutation({
+          state,
+          source: captureCronJobMutationSource(state),
+          previous: snapshot.store!,
+          next: state.store!,
+          method: "cron.update",
+          assertCurrent: ownerMutation?.assertCurrent,
+          receiptMutation: {
             jobId: job.id,
-            ownerChanged: true,
+            owner: ownerMutation?.prepared,
             triggerStateChanged: false,
-          }),
+            scheduleChanged: false,
+          },
         }),
       ).rejects.toBeInstanceOf(CronRunReceiptConflictError);
       expect((await loadCronStore(storePath)).jobs[0]?.agentId).toBe("alpha");
       expect(state.pendingQuarantineConfigJobs).toHaveLength(1);
     } finally {
-      finishCronRunReceipt({
+      await finishCronRunReceiptAsync({
         handle: receipt,
         status: "superseded",
         finishedAtMs: STORE_TEST_NOW + 1,
@@ -867,7 +901,7 @@ describe("cron service store seam coverage", () => {
 
     const state = createStoreTestState(storePath);
 
-    await ensureLoaded(state, { skipRecompute: true });
+    await ensureLoaded(state);
 
     const job = findJobOrThrow(state, "opaque-session-target-job");
     expect(job.sessionTarget).toBe(sessionTarget);

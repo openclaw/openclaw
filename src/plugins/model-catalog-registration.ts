@@ -1,8 +1,5 @@
 // Registers plugin-provided models into the model catalog.
-import type {
-  UnifiedModelCatalogEntry,
-  UnifiedModelCatalogSource,
-} from "@openclaw/model-catalog-core/model-catalog-types";
+import type { UnifiedModelCatalogSource } from "@openclaw/model-catalog-core/model-catalog-types";
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import { uniqueValues } from "../../packages/normalization-core/src/string-normalization.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
@@ -10,22 +7,6 @@ import type { PluginRecord, PluginRegistry } from "./registry-types.js";
 import type { UnifiedModelCatalogProviderPlugin } from "./types.js";
 
 type UnifiedModelCatalogHook = NonNullable<UnifiedModelCatalogProviderPlugin["staticCatalog"]>;
-
-function mergeCatalogHookResults(
-  source: UnifiedModelCatalogSource,
-  left: readonly UnifiedModelCatalogEntry[] | null | undefined,
-  right: readonly UnifiedModelCatalogEntry[] | null | undefined,
-): readonly UnifiedModelCatalogEntry[] | null {
-  const rows = [...(left ?? []), ...(right ?? [])];
-  if (rows.length === 0) {
-    return null;
-  }
-  const mergedRows: UnifiedModelCatalogEntry[] = [];
-  for (const row of rows) {
-    mergedRows.push({ ...row, source });
-  }
-  return mergedRows;
-}
 
 function mergeModelCatalogHooks(
   source: UnifiedModelCatalogSource,
@@ -40,7 +21,12 @@ function mergeModelCatalogHooks(
   }
   return async (ctx) => {
     const [leftRows, rightRows] = await Promise.all([left(ctx), right(ctx)]);
-    return mergeCatalogHookResults(source, leftRows, rightRows);
+    const rows = [...(leftRows ?? []), ...(rightRows ?? [])];
+    const mergedRows: typeof rows = [];
+    for (const row of rows) {
+      mergedRows.push({ ...row, source });
+    }
+    return mergedRows.length ? mergedRows : null;
   };
 }
 

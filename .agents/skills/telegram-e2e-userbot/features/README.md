@@ -86,6 +86,46 @@ held, then release it after the behavior checkpoint:
 }
 ```
 
+For a definite transport rejection, use `telegramApiReject`. It rejects one
+matching request before forwarding it to Telegram, with a non-retriable synthetic
+Bot API 400. `skip` counts matching requests; optional `bodyIncludes` matches the
+raw request body, so an ASCII final marker can select the final send rather than
+the progress message. The summary records method, occurrence, and
+`upstreamForwarded: false` in `scenario.telegramApiRequestRejections`; an empty
+list means the fault did not fire and cannot support a failure claim.
+
+```json
+{
+  "actions": [
+    { "type": "telegramApiReject", "method": "sendMessage", "bodyIncludes": "FINAL_MARKER" },
+    { "type": "send", "atMs": 1000, "text": "Reply exactly FINAL_MARKER" }
+  ]
+}
+```
+
+For flood control, add `retryAfter` (seconds): the proxy answers with Bot API
+429 `Too Many Requests` and `parameters.retry_after`. `times` (default 1)
+rejects that many consecutive matching requests before the control disarms.
+`retryAfter: 0` returns a bare 429 without `parameters.retry_after`. The summary's
+`scenario.telegramApiRequestLog` lists every proxied Bot API call except
+`getUpdates` as `{ method, at, status, chat }`, where `chat` is only
+`private` or `group` (never an id), so a run can show that no call reached Telegram
+inside a flood window.
+
+```json
+{
+  "type": "telegramApiReject",
+  "method": "sendMessage",
+  "bodyIncludes": "FINAL_MARKER",
+  "times": 3,
+  "retryAfter": 5
+}
+```
+
+Select `deleteMessage` without a body filter to reject the next cleanup deletion.
+Use the existing hold/release controls for accepted-but-unacknowledged delivery;
+a pre-upstream rejection does not model uncertainty.
+
 Follow-up drain controls hold one session callback at a known point, then
 release it after the behavior checkpoint:
 

@@ -4,6 +4,7 @@ export type { Generated, Selectable } from "kysely";
 export { runQueuedStoreWrite, type StoreWriterQueue } from "../shared/store-writer-queue.js";
 export {
   openSqliteWorkerStore,
+  runSqliteWorkerStoreOperation,
   runSqliteWorkerStoreWrite,
   SqliteWorkerError,
   type SqliteWorkerBackend,
@@ -26,6 +27,7 @@ export {
 } from "../state/openclaw-agent-db.js";
 export { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 export { withOpenClawAgentDatabaseWrite } from "../state/openclaw-agent-db-write.js";
+export { runOpenClawAgentWriteAdmission } from "../state/openclaw-agent-write-admission.js";
 export { assertOpenClawAgentDatabaseForMaintenance } from "../state/openclaw-agent-db-maintenance.js";
 export { ensureOpenClawAgentStandingIntentsSchema } from "../state/openclaw-agent-standing-intents-schema.js";
 export {

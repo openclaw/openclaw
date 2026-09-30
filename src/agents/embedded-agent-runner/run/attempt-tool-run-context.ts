@@ -4,8 +4,9 @@ import {
   freezeDiagnosticTraceContext,
   type DiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
+import type { EmbeddedRunTrigger } from "../../run-trigger.js";
 import { mergeForcedEmbeddedAttemptToolsAllow } from "./attempt-tool-construction-plan.js";
-import type { EmbeddedRunTrigger, RunEmbeddedAgentParams } from "./params.js";
+import type { RunEmbeddedAgentParams } from "./params.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type AttemptToolRunFacts = Pick<

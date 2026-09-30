@@ -292,7 +292,9 @@ final class GatewaysMainMenu: NSObject, NSMenuDelegate {
             isPrimary: gateway.isPrimary,
             isFrontmost: AppNavigationActions.selectedGatewayTarget == gateway.target,
             shortcutNumber: gateway.shortcutNumber,
-            health: facts?.health ?? gateway.health,
+            // Probes still supply latency/version and health for unopened targets;
+            // a live dashboard owns connection health when its authority differs.
+            health: dashboard.dashboardHealth(for: gateway.target) ?? facts?.health ?? gateway.health,
             version: facts?.version,
             buildId: facts?.buildId,
             endpointLabel: labels?.endpointLabel,
@@ -304,18 +306,15 @@ final class GatewaysMainMenu: NSObject, NSMenuDelegate {
             browserSessionExpiresAt: profile?.browserSessionExpiresAt,
             lastSeen: facts?.lastSeen,
             isProbing: self.store.isProbing(gateway.target))
+        let activate = { [weak self, weak item] in
+            guard let self, let item else { return }
+            item.menu?.cancelTracking()
+            self.openGateway(item)
+        }
         let card = GatewayMenuCard(model: model, now: now)
             .contentShape(Rectangle())
-            .onTapGesture { [weak self, weak item] in
-                guard let self, let item else { return }
-                item.menu?.cancelTracking()
-                self.openGateway(item)
-            }
-            .accessibilityAction { [weak self, weak item] in
-                guard let self, let item else { return }
-                item.menu?.cancelTracking()
-                self.openGateway(item)
-            }
+            .onTapGesture(perform: activate)
+            .accessibilityAction(.default, activate)
         StatusMenuRenderer.configureHostedView(item, rootView: card, highlights: true)
     }
 

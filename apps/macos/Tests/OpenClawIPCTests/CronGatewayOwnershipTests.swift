@@ -141,9 +141,11 @@ struct CronGatewayOwnershipTests {
             do {
                 let inactive = scenario.hasPrefix("inactive")
                 let replacePrimary = scenario != "inactive same route"
+                await control?.refreshEndpoint(reason: "test setup")
+                await store.refreshJobs()
                 store.start()
-                try await self
-                    .waitUntil { store.summary.jobs.count == 1 && control?.state == .connected }
+                try #require(store.summary.jobs.count == 1)
+                try #require(control?.state == .connected)
                 #expect(store.summary.jobs.first?.name == "Gateway A")
                 #expect(store.summary.total == 1)
                 let requestCount = fixture.requests.value.count
@@ -217,7 +219,7 @@ struct CronGatewayOwnershipTests {
             #expect(GatewayDiscoveryPreferences.deviceAuthGatewayID(root: root) != nil)
             let expected = MacChatTranscriptCache.gatewayID(
                 mode: transport == "local" ? .local : .remote,
-                localStateDir: OpenClawConfigFile.stateDirURL(),
+                localStateDir: OpenClawPaths.stateDirURL,
                 remoteTransport: transport == "direct" ? .direct : .ssh,
                 directURL: URL(string: "ws://127.0.0.1:49301"),
                 sshTarget: "user@gateway.test",

@@ -1,4 +1,3 @@
-// `openclaw plugins inspect`: renders plugin registry shape, capabilities, policy, diagnostics, and install records.
 import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { listAgentIds } from "../agents/agent-scope-config.js";
@@ -25,7 +24,6 @@ import { formatCliJsonFailure } from "./failure-output.js";
 import { quietPluginJsonLogger } from "./plugins-json-logger.js";
 import { formatPluginBundleFormat, formatPluginStatus } from "./plugins-list-format.js";
 
-/** Options accepted by `openclaw plugins inspect`. */
 export type PluginInspectOptions = {
   json?: boolean;
   all?: boolean;
@@ -56,87 +54,38 @@ function formatGlobalPluginDiagnostics(diagnostics: readonly PluginDiagnostic[])
   return lines.join("");
 }
 
-function formatInspectSection(title: string, lines: string[]): string[] {
-  if (lines.length === 0) {
-    return [];
-  }
-  return ["", theme.muted(`${title}:`), ...lines];
-}
-
-function formatCapabilityKinds(
-  capabilities: Array<{
-    kind: string;
-  }>,
-): string {
-  if (capabilities.length === 0) {
-    return "-";
-  }
-  return capabilities.map((entry) => entry.kind).join(", ");
-}
-
-function formatHookSummary(params: { typedHookCount: number; customHookCount: number }): string {
-  const parts: string[] = [];
-  if (params.typedHookCount > 0) {
-    parts.push(`${params.typedHookCount} typed`);
-  }
-  if (params.customHookCount > 0) {
-    parts.push(`${params.customHookCount} custom`);
-  }
-  return parts.length > 0 ? parts.join(", ") : "-";
-}
-
 function formatInstallLines(install: PluginInstallRecord | undefined): string[] {
   if (!install) {
     return [];
   }
   const lines = [`Source: ${install.source}`];
-  if (install.spec) {
-    lines.push(`Spec: ${install.spec}`);
-  }
-  if (install.sourcePath) {
-    lines.push(`Source path: ${shortenHomePath(install.sourcePath)}`);
-  }
-  if (install.installPath) {
-    lines.push(`Install path: ${shortenHomePath(install.installPath)}`);
-  }
-  if (install.version) {
-    lines.push(`Recorded version: ${install.version}`);
-  }
-  if (install.clawhubPackage) {
-    lines.push(`ClawHub package: ${install.clawhubPackage}`);
-  }
-  if (install.clawhubChannel) {
-    lines.push(`ClawHub channel: ${install.clawhubChannel}`);
-  }
-  if (install.artifactKind) {
-    lines.push(`Artifact kind: ${install.artifactKind}`);
-  }
-  if (install.artifactFormat) {
-    lines.push(`Artifact format: ${install.artifactFormat}`);
-  }
-  if (install.npmIntegrity) {
-    lines.push(`Npm integrity: ${install.npmIntegrity}`);
-  }
-  if (install.npmShasum) {
-    lines.push(`Npm shasum: ${install.npmShasum}`);
-  }
-  if (install.npmTarballName) {
-    lines.push(`Npm tarball: ${install.npmTarballName}`);
-  }
-  if (install.clawpackSha256) {
-    lines.push(`ClawPack sha256: ${install.clawpackSha256}`);
-  }
-  if (install.clawpackSpecVersion !== undefined) {
-    lines.push(`ClawPack spec: ${install.clawpackSpecVersion}`);
-  }
-  if (install.clawpackManifestSha256) {
-    lines.push(`ClawPack manifest sha256: ${install.clawpackManifestSha256}`);
-  }
-  if (install.clawpackSize !== undefined) {
-    lines.push(`ClawPack size: ${install.clawpackSize} bytes`);
-  }
-  if (install.installedAt) {
-    lines.push(`Installed at: ${install.installedAt}`);
+  for (const [label, value] of [
+    ["Spec", install.spec],
+    ["Source path", install.sourcePath ? shortenHomePath(install.sourcePath) : undefined],
+    ["Install path", install.installPath ? shortenHomePath(install.installPath) : undefined],
+    ["Recorded version", install.version],
+    ["ClawHub package", install.clawhubPackage],
+    ["ClawHub channel", install.clawhubChannel],
+    ["Artifact kind", install.artifactKind],
+    ["Artifact format", install.artifactFormat],
+    ["Npm integrity", install.npmIntegrity],
+    ["Npm shasum", install.npmShasum],
+    ["Npm tarball", install.npmTarballName],
+    ["ClawPack sha256", install.clawpackSha256],
+    [
+      "ClawPack spec",
+      install.clawpackSpecVersion === undefined ? undefined : String(install.clawpackSpecVersion),
+    ],
+    ["ClawPack manifest sha256", install.clawpackManifestSha256],
+    [
+      "ClawPack size",
+      install.clawpackSize === undefined ? undefined : `${install.clawpackSize} bytes`,
+    ],
+    ["Installed at", install.installedAt],
+  ]) {
+    if (value) {
+      lines.push(`${label}: ${value}`);
+    }
   }
   return lines;
 }
@@ -204,7 +153,10 @@ export async function runPluginsInspectCommand(
           inspect.plugin.name && inspect.plugin.name !== inspect.plugin.id ? inspect.plugin.id : "",
         Status: formatPluginStatus(inspect.plugin, runtimeInspect),
         Shape: inspect.shape,
-        Capabilities: formatCapabilityKinds(inspect.capabilities),
+        Capabilities:
+          inspect.capabilities.length > 0
+            ? inspect.capabilities.map((entry) => entry.kind).join(", ")
+            : "-",
         Compatibility:
           inspect.compatibility.length > 0
             ? inspect.compatibility
@@ -212,10 +164,13 @@ export async function runPluginsInspectCommand(
                 .join(", ")
             : "none",
         Bundle: inspect.bundleCapabilities.length > 0 ? inspect.bundleCapabilities.join(", ") : "-",
-        Hooks: formatHookSummary({
-          typedHookCount: inspect.typedHooks.length,
-          customHookCount: inspect.customHooks.length,
-        }),
+        Hooks:
+          [
+            inspect.typedHooks.length > 0 ? `${inspect.typedHooks.length} typed` : "",
+            inspect.customHooks.length > 0 ? `${inspect.customHooks.length} custom` : "",
+          ]
+            .filter(Boolean)
+            .join(", ") || "-",
       }));
       return renderTable({
         width: tableWidth,
@@ -350,6 +305,11 @@ function formatPluginInspection(
   }
 
   const lines: string[] = [];
+  const appendSection = (title: string, content: string[]) => {
+    if (content.length > 0) {
+      lines.push("", theme.muted(`${title}:`), ...content);
+    }
+  };
   lines.push(theme.heading(inspect.plugin.name || inspect.plugin.id));
   if (inspect.plugin.name && inspect.plugin.name !== inspect.plugin.id) {
     lines.push(theme.muted(`id: ${inspect.plugin.id}`));
@@ -384,76 +344,62 @@ function formatPluginInspection(
   if (inspect.bundleCapabilities.length > 0) {
     lines.push(`${theme.muted("Bundle capabilities:")} ${inspect.bundleCapabilities.join(", ")}`);
   }
-  lines.push(
-    ...formatInspectSection(
-      "Capabilities",
-      inspect.capabilities.map(
-        (entry) => `${entry.kind}: ${entry.ids.length > 0 ? entry.ids.join(", ") : "(registered)"}`,
-      ),
+  appendSection(
+    "Capabilities",
+    inspect.capabilities.map(
+      (entry) => `${entry.kind}: ${entry.ids.length > 0 ? entry.ids.join(", ") : "(registered)"}`,
     ),
   );
-  lines.push(
-    ...formatInspectSection(
-      "Typed hooks",
-      inspect.typedHooks.map((entry) =>
-        entry.priority == null ? entry.name : `${entry.name} (priority ${entry.priority})`,
-      ),
+  appendSection(
+    "Typed hooks",
+    inspect.typedHooks.map((entry) =>
+      entry.priority == null ? entry.name : `${entry.name} (priority ${entry.priority})`,
     ),
   );
-  lines.push(
-    ...formatInspectSection(
-      "Compatibility warnings",
-      inspect.compatibility.map(formatPluginCompatibilityNotice),
+  appendSection(
+    "Compatibility warnings",
+    inspect.compatibility.map(formatPluginCompatibilityNotice),
+  );
+  appendSection(
+    "Custom hooks",
+    inspect.customHooks.map((entry) => `${entry.name}: ${entry.events.join(", ")}`),
+  );
+  appendSection(
+    "Tools",
+    inspect.tools.map((entry) => {
+      const names = entry.names.length > 0 ? entry.names.join(", ") : "(anonymous)";
+      return entry.optional ? `${names} [optional]` : names;
+    }),
+  );
+  appendSection("Commands", inspect.commands);
+  appendSection("CLI commands", inspect.cliCommands);
+  appendSection("Services", inspect.services);
+  appendSection("Gateway discovery", inspect.gatewayDiscoveryServices);
+  appendSection("Gateway methods", inspect.gatewayMethods ?? []);
+  appendSection(
+    "MCP servers",
+    inspect.mcpServers.map((entry) =>
+      entry.unsupported ? `${entry.name} (unsupported transport)` : entry.name,
     ),
   );
-  lines.push(
-    ...formatInspectSection(
-      "Custom hooks",
-      inspect.customHooks.map((entry) => `${entry.name}: ${entry.events.join(", ")}`),
-    ),
-  );
-  lines.push(
-    ...formatInspectSection(
-      "Tools",
-      inspect.tools.map((entry) => {
-        const names = entry.names.length > 0 ? entry.names.join(", ") : "(anonymous)";
-        return entry.optional ? `${names} [optional]` : names;
-      }),
-    ),
-  );
-  lines.push(...formatInspectSection("Commands", inspect.commands));
-  lines.push(...formatInspectSection("CLI commands", inspect.cliCommands));
-  lines.push(...formatInspectSection("Services", inspect.services));
-  lines.push(...formatInspectSection("Gateway discovery", inspect.gatewayDiscoveryServices));
-  lines.push(...formatInspectSection("Gateway methods", inspect.gatewayMethods ?? []));
-  lines.push(
-    ...formatInspectSection(
-      "MCP servers",
-      inspect.mcpServers.map((entry) =>
-        entry.unsupported ? `${entry.name} (unsupported transport)` : entry.name,
-      ),
-    ),
-  );
-  lines.push(
-    ...formatInspectSection(
-      "LSP servers",
-      inspect.lspServers.map((entry) =>
-        entry.hasStdioTransport ? entry.name : `${entry.name} (unsupported transport)`,
-      ),
+  appendSection(
+    "LSP servers",
+    inspect.lspServers.map((entry) =>
+      entry.hasStdioTransport ? entry.name : `${entry.name} (unsupported transport)`,
     ),
   );
   if (inspect.httpRouteCount > 0) {
-    lines.push(...formatInspectSection("HTTP routes", [String(inspect.httpRouteCount)]));
+    appendSection("HTTP routes", [String(inspect.httpRouteCount)]);
   }
   const policyLines: string[] = [];
-  if (typeof inspect.policy.allowPromptInjection === "boolean") {
-    policyLines.push(`allowPromptInjection: ${inspect.policy.allowPromptInjection}`);
-  }
-  if (typeof inspect.policy.allowConversationAccess === "boolean") {
-    policyLines.push(`allowConversationAccess: ${inspect.policy.allowConversationAccess}`);
-  }
-  if (typeof inspect.policy.allowModelOverride === "boolean") {
-    policyLines.push(`allowModelOverride: ${inspect.policy.allowModelOverride}`);
+  for (const key of [
+    "allowPromptInjection",
+    "allowConversationAccess",
+    "allowModelOverride",
+  ] as const) {
+    if (typeof inspect.policy[key] === "boolean") {
+      policyLines.push(`${key}: ${inspect.policy[key]}`);
+    }
   }
   if (inspect.policy.hasAllowedModelsConfig) {
     policyLines.push(
@@ -464,14 +410,12 @@ function formatPluginInspection(
       }`,
     );
   }
-  lines.push(...formatInspectSection("Policy", policyLines));
-  lines.push(
-    ...formatInspectSection(
-      "Diagnostics",
-      inspect.diagnostics.map((entry) => `${entry.level.toUpperCase()}: ${entry.message}`),
-    ),
+  appendSection("Policy", policyLines);
+  appendSection(
+    "Diagnostics",
+    inspect.diagnostics.map((entry) => `${entry.level.toUpperCase()}: ${entry.message}`),
   );
-  lines.push(...formatInspectSection("Install", formatInstallLines(install)));
+  appendSection("Install", formatInstallLines(install));
   if (inspect.plugin.error) {
     const label =
       inspect.plugin.status === "error" ? theme.error("Error:") : theme.muted("Reason:");

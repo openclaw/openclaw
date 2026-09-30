@@ -1,3 +1,6 @@
+import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtime.js";
+
+installDiscordIngressTestRuntime();
 // Discord tests cover monitor plugin behavior.
 import { ChannelType } from "discord-api-types/v10";
 import { resolveCommandAuthorization } from "openclaw/plugin-sdk/command-auth-native";
@@ -664,12 +667,6 @@ describe("discord component interactions", () => {
       title: "blocks buttons on disabled guild channels",
       guildId: "g1",
       interactionId: "interaction-guild-disabled",
-      guildEntries: { g1: { channels: { "guild-channel": { enabled: false } } } },
-    },
-    {
-      title: "blocks buttons on denied guild channels",
-      guildId: "g1",
-      interactionId: "interaction-guild-denied",
       guildEntries: { g1: { channels: { "guild-channel": { enabled: false } } } },
     },
   ])("$title", async ({ guildId, interactionId, guildEntries }) => {

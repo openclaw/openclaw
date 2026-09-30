@@ -1,5 +1,6 @@
 import { createHook } from "node:async_hooks";
 import { createHash } from "node:crypto";
+import { addAbortListener } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
@@ -14,7 +15,10 @@ import { withWorkspaceHashMemo, workspaceStatIdentity } from "./workspace-hash-m
 import { MAX_WORKSPACE_INVENTORY_TOTAL_BYTES } from "./workspace-inventory-limits.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+});
 
 it.each(["before traversal", "during traversal", "root resolution", "safe-root setup"] as const)(
   "rejects an empty inventory aborted %s",
@@ -74,17 +78,21 @@ it.each(["before traversal", "during traversal", "root resolution", "safe-root s
   },
 );
 
-it.each(["metadata", "files"] as const)(
+it.for(["metadata", "files"] as const)(
   "bounds pending promise resources while %s operations are blocked",
-  async (phase) => {
+  async (phase, { signal }) => {
     const root = await fs.realpath(tempDirs.make("workspace-inventory-pending-"));
     const files = Array.from({ length: 512 }, (_, index) => `file-${index}.txt`);
     await Promise.all(files.map((file) => fs.writeFile(path.join(root, file), "inside")));
     const gate = createDeferred();
+    const allStarted = createDeferred();
     let started = 0;
     const pause = async (target: unknown) => {
       if (String(target).startsWith(root + path.sep)) {
         started++;
+        if (started === 4) {
+          allStarted.resolve();
+        }
         await gate.promise;
       }
     };
@@ -117,12 +125,15 @@ it.each(["metadata", "files"] as const)(
       baseCommit: null,
       includePaths: new Set(files),
     });
+    const cancelWait = addAbortListener(signal, () => allStarted.reject(signal.reason));
     try {
-      await vi.waitFor(() => expect(started).toBe(4));
+      await Promise.race([allStarted.promise, scan]);
+      expect(started).toBe(4);
       // Observe queued resources, not limiter internals: idle paths must not
       // each retain a promise graph while the active I/O is blocked.
       expect(pendingPromises.size).toBeLessThan(files.length);
     } finally {
+      cancelWait[Symbol.dispose]();
       hook.disable();
       gate.resolve();
       await Promise.allSettled([scan]);
@@ -415,7 +426,8 @@ it("reserves aggregate inventory bytes even when every file hits the hash memo",
   expect(metrics).toMatchObject({ contentHashCount: 0, memoHitCount: 1 });
 });
 
-it("bounds scratch memory across concurrent inventories and skips reads on memo hits", async () => {
+it("bounds active fallback scratch across inventories and skips reads on memo hits", async () => {
+  vi.stubEnv("FS_SAFE_NATIVE_MODE", "off");
   const roots = await Promise.all(
     [0, 1].map(() => fs.realpath(tempDirs.make("workspace-inventory-scratch-"))),
   );
@@ -436,7 +448,7 @@ it("bounds scratch memory across concurrent inventories and skips reads on memo 
           };
         }),
       );
-      return { root, files, memo: new Map<string, string>(), buffers: new Set<Buffer>() };
+      return { root, files, memo: new Map<string, string>() };
     }),
   );
   const activeBuffers = new Set<Buffer>();
@@ -452,9 +464,18 @@ it("bounds scratch memory across concurrent inventories and skips reads on memo 
         if (!Buffer.isBuffer(buffer)) {
           throw new Error("Expected a caller-owned inventory buffer");
         }
-        expect(activeBuffers.has(buffer)).toBe(false);
+        expect(
+          [...activeBuffers].every(
+            (active) =>
+              active.buffer !== buffer.buffer ||
+              active.byteOffset + active.byteLength <= buffer.byteOffset ||
+              buffer.byteOffset + buffer.byteLength <= active.byteOffset,
+          ),
+        ).toBe(true);
         activeBuffers.add(buffer);
-        fixture.buffers.add(buffer);
+        expect(
+          [...activeBuffers].reduce((bytes, active) => bytes + active.byteLength, 0),
+        ).toBeLessThanOrEqual(2 * 1024 * 1024);
         readCount++;
         try {
           return await read(...readArgs);
@@ -482,11 +503,7 @@ it("bounds scratch memory across concurrent inventories and skips reads on memo 
         }))
         .toSorted((left, right) => left.path.localeCompare(right.path)),
     );
-    expect(
-      [...fixture.buffers].reduce((bytes, buffer) => bytes + buffer.byteLength, 0),
-    ).toBeLessThanOrEqual(1024 * 1024);
   }
-  expect([...fixtures[0]!.buffers].some((buffer) => fixtures[1]!.buffers.has(buffer))).toBe(false);
   const coldReadCount = readCount;
   expect(coldReadCount).toBeGreaterThan(0);
   expect(await Promise.all(fixtures.map(capture))).toEqual(manifests);
@@ -520,7 +537,7 @@ it.each(["", "\u0000binary\u00ff"])(
 );
 
 it.each(["inventory", "fixed limit", "captured contents"] as const)(
-  "preserves the %s diagnosis when a file grows during its read",
+  "preserves the %s diagnosis when a file grows after its opened size is captured",
   async (mode) => {
     const root = await fs.realpath(tempDirs.make("workspace-inventory-growing-file-"));
     const target = path.join(root, "growing.txt");
@@ -529,10 +546,11 @@ it.each(["inventory", "fixed limit", "captured contents"] as const)(
     vi.spyOn(fs, "open").mockImplementation(async (...args) => {
       const handle = await open(...args);
       if (String(args[0]) === target) {
-        const read = handle.read.bind(handle);
-        vi.spyOn(handle, "read").mockImplementationOnce(async (...readArgs) => {
+        const stat = handle.stat.bind(handle);
+        vi.spyOn(handle, "stat").mockImplementationOnce(async (...statArgs) => {
+          const opened = await stat(...statArgs);
           await fs.appendFile(target, "b");
-          return await read(...readArgs);
+          return opened;
         });
       }
       return handle;

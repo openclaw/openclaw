@@ -1,8 +1,9 @@
 import type { DatabaseSync, StatementSync } from "node:sqlite";
-import type {
-  MemoryChunk,
-  MemoryEntryProvenance,
-  MemorySource,
+import {
+  encodeMemoryEmbedding,
+  type MemoryChunk,
+  type MemoryEntryProvenance,
+  type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-indexing";
 import {
   compileSqliteQueryBindings,
@@ -26,7 +27,7 @@ type ChunkDatabase = {
     hash: string;
     model: string;
     text: string;
-    embedding: string;
+    embedding: Uint8Array;
     updated_at: number;
   };
   memory_index_chunk_recall_metadata: {
@@ -61,7 +62,7 @@ export function createMemoryChunkWriter(
         hash: parameter((row) => row.chunk.hash),
         model: context.model,
         text: parameter((row) => row.chunk.text),
-        embedding: parameter((row) => JSON.stringify(row.embedding)),
+        embedding: parameter((row) => encodeMemoryEmbedding(row.embedding)),
         updated_at: context.now,
       })
       .onConflict((conflict) =>

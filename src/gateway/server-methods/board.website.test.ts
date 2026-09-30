@@ -1,14 +1,22 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { createDashboardTool } from "../../agents/tools/dashboard-tool.js";
 import type { InProcessGatewayCaller } from "../../agents/tools/in-process-gateway.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import { createBoardHarness } from "./board.test-support.js";
 
 const sessionKey = "agent:main:website";
 
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
 });
 
@@ -57,6 +65,7 @@ describe("website dashboard authoring", () => {
       ],
     });
 
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
     const reloaded = await invoke("board.get", { sessionKey });
     const board = reloaded.mock.calls[0]?.[1];

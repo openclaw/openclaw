@@ -1,8 +1,3 @@
-/**
- * sessions_history built-in tool.
- *
- * Reads bounded, redacted session transcript history after session visibility filtering.
- */
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type } from "typebox";
@@ -34,6 +29,7 @@ import {
   readToolStringParam,
   ToolInputError,
 } from "./common.js";
+import { wrapGatewayPersonalToolExecution } from "./gateway-caller-context.js";
 import {
   callAgentToolGatewayRequest,
   type AgentToolGatewayRequestCaller,
@@ -53,12 +49,26 @@ import {
 } from "./sessions-helpers.js";
 
 const SessionsHistoryToolSchema = Type.Object({
+  user: Type.Optional(
+    Type.String({
+      description:
+        "The person's requester_profile.id, required when several people have steered this turn.",
+    }),
+  ),
   sessionKey: ChatHistoryParamsSchema.properties.sessionKey,
   limit: ChatHistoryParamsSchema.properties.limit,
-  offset: ChatHistoryParamsSchema.properties.offset,
+  offset: Type.With(ChatHistoryParamsSchema.properties.offset, {
+    description:
+      "Plain-pagination offset. Ignored when messageId is set; limit still bounds anchored history.",
+  }),
   pendingBefore: ChatHistoryParamsSchema.properties.pendingBefore,
-  messageId: ChatHistoryParamsSchema.properties.messageId,
-  sessionId: ChatHistoryParamsSchema.properties.sessionId,
+  messageId: Type.With(ChatHistoryParamsSchema.properties.messageId, {
+    description: "Return history around this message id. Ignores offset; limit bounds the window.",
+  }),
+  sessionId: Type.With(ChatHistoryParamsSchema.properties.sessionId, {
+    description:
+      "Transcript session id that owns messageId. Requires messageId; omit for the latest tail.",
+  }),
   includeTools: Type.Optional(Type.Boolean()),
 });
 
@@ -81,6 +91,7 @@ const SessionsHistoryOutputSchema = Type.Union([
       nextOffset: Type.Optional(Type.Number()),
       hasMore: Type.Optional(Type.Boolean()),
       totalMessages: Type.Optional(Type.Number()),
+      windowReset: Type.Optional(Type.Boolean()),
       pendingInputs: Type.Optional(ChatPendingInputsPageSchema),
     },
     { additionalProperties: false },
@@ -98,7 +109,10 @@ const SESSIONS_HISTORY_MAX_BYTES = 80 * 1024;
 const SESSIONS_HISTORY_TEXT_MAX_CHARS = 4000;
 const SESSIONS_HISTORY_PENDING_MAX_BYTES = 4096;
 type ChatHistoryPaginationMetadata = Partial<
-  Record<"offset" | "nextOffset" | "totalMessages", number> & { hasMore: boolean }
+  Record<"offset" | "nextOffset" | "totalMessages", number> & {
+    hasMore: boolean;
+    windowReset: boolean;
+  }
 >;
 
 function truncateHistoryText(
@@ -120,41 +134,6 @@ function truncateHistoryText(
   return { text: `${cut}\n…(truncated)…`, truncated: true, redacted };
 }
 
-function sanitizeHistoryContentBlock(
-  block: unknown,
-  maxChars: number,
-): {
-  block: unknown;
-  truncated: boolean;
-  redacted: boolean;
-} {
-  if (!block || typeof block !== "object") {
-    return { block, truncated: false, redacted: false };
-  }
-  const entry = { ...(block as Record<string, unknown>) };
-  let truncated = false;
-  let redacted = false;
-  if (typeof entry.text === "string") {
-    const res = truncateHistoryText(entry.text, maxChars);
-    entry.text = res.text;
-    truncated ||= res.truncated;
-    redacted ||= res.redacted;
-  }
-  if (entry.type === "thinking" && typeof entry.thinking === "string") {
-    const res = truncateHistoryText(entry.thinking, maxChars);
-    entry.thinking = res.text;
-    truncated ||= res.truncated;
-    redacted ||= res.redacted;
-  }
-  if (typeof entry.partialJson === "string") {
-    const res = truncateHistoryText(entry.partialJson, maxChars);
-    entry.partialJson = res.text;
-    truncated ||= res.truncated;
-    redacted ||= res.redacted;
-  }
-  return { block: entry, truncated, redacted };
-}
-
 function sanitizeHistoryMessage(
   message: unknown,
   maxChars = SESSIONS_HISTORY_TEXT_MAX_CHARS,
@@ -169,36 +148,40 @@ function sanitizeHistoryMessage(
   const entry = { ...(message as Record<string, unknown>) };
   let truncated = false;
   let redacted = false;
+  const sanitizeText = (text: string) => {
+    const result = truncateHistoryText(text, maxChars);
+    truncated ||= result.truncated;
+    redacted ||= result.redacted;
+    return result.text;
+  };
   // Tool result details often contain very large nested payloads.
-  if ("details" in entry) {
-    delete entry.details;
-    truncated = true;
-  }
-  if ("usage" in entry) {
-    delete entry.usage;
-    truncated = true;
-  }
-  if ("cost" in entry) {
-    delete entry.cost;
-    truncated = true;
+  for (const field of ["details", "usage", "cost"]) {
+    if (field in entry) {
+      delete entry[field];
+      truncated = true;
+    }
   }
 
   if (typeof entry.content === "string") {
-    const res = truncateHistoryText(entry.content, maxChars);
-    entry.content = res.text;
-    truncated ||= res.truncated;
-    redacted ||= res.redacted;
+    entry.content = sanitizeText(entry.content);
   } else if (Array.isArray(entry.content)) {
-    const updated = entry.content.map((block) => sanitizeHistoryContentBlock(block, maxChars));
-    entry.content = updated.map((item) => item.block);
-    truncated ||= updated.some((item) => item.truncated);
-    redacted ||= updated.some((item) => item.redacted);
+    entry.content = entry.content.map((block: unknown) => {
+      if (!block || typeof block !== "object") {
+        return block;
+      }
+      const content = { ...(block as Record<string, unknown>) };
+      const fields =
+        content.type === "thinking" ? ["text", "thinking", "partialJson"] : ["text", "partialJson"];
+      for (const field of fields) {
+        if (typeof content[field] === "string") {
+          content[field] = sanitizeText(content[field]);
+        }
+      }
+      return content;
+    });
   }
   if (typeof entry.text === "string") {
-    const res = truncateHistoryText(entry.text, maxChars);
-    entry.text = res.text;
-    truncated ||= res.truncated;
-    redacted ||= res.redacted;
+    entry.text = sanitizeText(entry.text);
   }
   return { message: entry, truncated, redacted };
 }
@@ -257,26 +240,13 @@ function enforceSessionsHistoryHardCap(params: {
 }
 
 function readHistoryMessageSeq(message: unknown): number | undefined {
-  if (!message || typeof message !== "object" || Array.isArray(message)) {
-    return undefined;
-  }
-  const meta = (message as Record<string, unknown>)["__openclaw"];
-  if (!meta || typeof meta !== "object" || Array.isArray(meta)) {
-    return undefined;
-  }
-  const seq = (meta as Record<string, unknown>).seq;
-  return asPositiveSafeInteger(seq);
+  const meta = asOptionalRecord(asOptionalRecord(message)?.["__openclaw"]);
+  return asPositiveSafeInteger(meta?.seq);
 }
 
 function readHistoryMessageId(message: unknown): string | undefined {
-  if (!message || typeof message !== "object" || Array.isArray(message)) {
-    return undefined;
-  }
-  const meta = (message as Record<string, unknown>)["__openclaw"];
-  if (!meta || typeof meta !== "object" || Array.isArray(meta)) {
-    return undefined;
-  }
-  const id = (meta as Record<string, unknown>).id;
+  const meta = asOptionalRecord(asOptionalRecord(message)?.["__openclaw"]);
+  const id = meta?.id;
   return typeof id === "string" && id.length > 0 ? id : undefined;
 }
 
@@ -350,12 +320,7 @@ function resolveSessionsHistoryPaginationMetadata(params: {
   if (params.requestedMessageId) {
     return typeof result?.totalMessages === "number" ? { totalMessages: result.totalMessages } : {};
   }
-  const offset =
-    typeof result?.offset === "number"
-      ? result.offset
-      : params.requestedOffset !== undefined
-        ? params.requestedOffset
-        : undefined;
+  const offset = typeof result?.offset === "number" ? result.offset : params.requestedOffset;
   if (offset === undefined) {
     return {};
   }
@@ -409,7 +374,7 @@ export function createSessionsHistoryTool(opts?: {
     description: describeSessionsHistoryTool({ sessionLinkBase: opts?.sessionLinkBase }),
     parameters: SessionsHistoryToolSchema,
     outputSchema: SessionsHistoryOutputSchema,
-    execute: async (_toolCallId, args) => {
+    execute: wrapGatewayPersonalToolExecution(async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const gatewayCall = opts?.callGateway ?? callAgentToolGatewayRequest;
       const sessionKeyParam = readToolStringParam(params, "sessionKey", {
@@ -590,12 +555,13 @@ export function createSessionsHistoryTool(opts?: {
         contentTruncated,
         contentRedacted,
         bytes: hardened.bytes + (pending?.bytes ?? 0),
+        ...(result?.windowReset ? { windowReset: true } : {}),
         ...(pending ? { pendingInputs: pending.pendingInputs } : {}),
         ...(opts?.sessionLinkBase
           ? { sessionLinkRule: describeSessionLinkRule(opts.sessionLinkBase) }
           : {}),
         ...pagination,
       });
-    },
+    }),
   };
 }

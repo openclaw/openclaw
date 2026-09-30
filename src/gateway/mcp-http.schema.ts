@@ -1,5 +1,3 @@
-// MCP loopback tool schema projection.
-// Converts gateway-scoped tools into MCP tools/list-compatible schemas.
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { logWarn } from "../logger.js";
@@ -7,12 +5,8 @@ import type { resolveGatewayScopedTools } from "./tool-resolution.js";
 
 const MCP_LOOPBACK_LOG_PREFIX = "mcp-loopback";
 
-// MCP loopback schema projection adapts gateway tool definitions into MCP
-// tools/list entries. It flattens provider-hostile union schemas into object
-// schemas because some MCP clients cannot render anyOf/oneOf controls.
 export type McpLoopbackTool = ReturnType<typeof resolveGatewayScopedTools>["tools"][number];
 
-/** MCP tools/list schema entry derived from a gateway loopback tool. */
 export type McpToolSchemaEntry = {
   name: string;
   description: string | undefined;
@@ -27,7 +21,6 @@ function readLoopbackToolField(tool: McpLoopbackTool, key: "name" | "description
   }
 }
 
-/** Safely reads and normalizes a loopback tool name from plugin-provided tool objects. */
 export function readMcpLoopbackToolName(tool: McpLoopbackTool): string | undefined {
   const value = readLoopbackToolField(tool, "name");
   if (typeof value !== "string") {
@@ -128,11 +121,11 @@ function flattenUnionSchema(
 ): Record<string, unknown> {
   // MCP clients vary in union-schema support. Merge only safe object variants
   // and keep common required fields so generated forms remain usable.
-  const variants = (raw.anyOf ?? raw.oneOf) as unknown[] | undefined;
+  const variants = raw.anyOf ?? raw.oneOf;
   if (!Array.isArray(variants) || variants.length === 0) {
     return raw;
   }
-  const mergedProps = Object.create(null) as Record<string, unknown>;
+  const mergedProps = Object.create(null) as Record<string, boolean | Record<string, unknown>>;
   const requiredSets: Set<string>[] = [];
   for (const variant of variants) {
     if (variant === true) {
@@ -155,36 +148,24 @@ function flattenUnionSchema(
           mergedProps[key] = schema;
           continue;
         }
-        const existing = mergedProps[key];
-        const incoming = schema;
-        if (existing === true || incoming === true) {
+        const existing = mergedProps[key]!;
+        if (existing === true || schema === true) {
           mergedProps[key] = true;
           continue;
         }
         if (existing === false) {
-          mergedProps[key] = incoming;
+          mergedProps[key] = schema;
           continue;
         }
-        if (incoming === false) {
+        if (schema === false) {
           continue;
         }
-        if (areSchemaValuesEquivalent(existing, incoming)) {
-          continue;
-        }
-        if (!isRecord(existing) || !isRecord(incoming)) {
-          if (existing !== incoming) {
-            warnSchemaOnce(
-              `${MCP_LOOPBACK_LOG_PREFIX}: conflicting schema definitions for "${toolName}.${key}", keeping the first variant`,
-            );
-          }
-          continue;
-        }
-        if (isDeepStrictEqual(existing, incoming)) {
+        if (areSchemaValuesEquivalent(existing, schema)) {
           continue;
         }
         // A prior const merge becomes an enum. Treat both as one literal family
         // so later union variants cannot silently disappear based on ordering.
-        const mergedLiterals = mergeLiteralSchemas(existing, incoming);
+        const mergedLiterals = mergeLiteralSchemas(existing, schema);
         if (mergedLiterals) {
           mergedProps[key] = mergedLiterals;
           continue;
@@ -263,13 +244,8 @@ function areSchemaValuesEquivalent(
   );
 }
 
-// Loopback schemas are rebuilt on every cache miss (per session/owner context and
-// after TTL expiry), so raw logWarn would repeat the same field warning endlessly.
-// Dedupe on the full message: distinct (tool, field, reason) still each warn once,
-// but rebuilds collapse to one line. Named per tool.field so a conflict in one tool
-// no longer suppresses a genuinely different conflict on the same field name in
-// another tool. Bounded by the process-stable universe of loopback tool + field
-// names (gateway tool metadata does not change without restart or explicit reload).
+// Deduplicate by tool, field, and reason across per-session schema cache misses.
+// Tool metadata stays stable until restart or explicit reload.
 const emittedSchemaWarnings = new Set<string>();
 
 function warnSchemaOnce(message: string) {
@@ -280,7 +256,6 @@ function warnSchemaOnce(message: string) {
   logWarn(message);
 }
 
-/** Builds MCP-compatible tool schemas for loopback-visible gateway tools. */
 export function buildMcpToolSchema(tools: McpLoopbackTool[]): McpToolSchemaEntry[] {
   return tools.flatMap((tool) => {
     const name = readMcpLoopbackToolName(tool);

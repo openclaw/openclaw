@@ -1,5 +1,4 @@
-// Logbook plugin config resolution: clamps operator input into safe runtime bounds.
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export type LogbookConfig = {
   captureEnabled: boolean;
@@ -27,7 +26,7 @@ function clampNumber(value: unknown, fallback: number, min: number, max: number)
 }
 
 export function resolveLogbookConfig(raw: unknown): LogbookConfig {
-  const value = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  const value = asRecord(raw);
   return {
     captureEnabled: value.captureEnabled !== false,
     captureIntervalSeconds: clampNumber(

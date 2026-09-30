@@ -1,5 +1,5 @@
 import { truncateUtf16Safe } from "../../utils.js";
-import type { AgentHarnessUserInputQuestion } from "./user-input-bridge.js";
+import type { AgentHarnessUserInputQuestion } from "./user-input-types.js";
 
 type StructuredInputScalar = string | number | boolean | null;
 export type StructuredInputValue =

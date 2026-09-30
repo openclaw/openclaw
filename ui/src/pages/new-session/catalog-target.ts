@@ -12,12 +12,18 @@ import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import type { SessionCapability } from "../../lib/sessions/session-capability.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import type { ChatModelPickerTargetGroup } from "../chat/components/chat-model-picker-options.ts";
-import { newSessionLocationFromSearch, type NewSessionRouteData } from "./location.ts";
+import type { NewSessionRouteData } from "./location.ts";
+import { newSessionModelLocationFromSearch } from "./model-location.ts";
 
 registerNewSessionSetupEnglish();
 
-function draftRouteKey(requestedAgentId: string, catalogId: string, group: string): string {
-  return JSON.stringify([requestedAgentId, catalogId, group]);
+function draftRouteKey(
+  requestedAgentId: string,
+  catalogId: string,
+  group: string,
+  model?: string,
+): string {
+  return JSON.stringify([requestedAgentId, catalogId, group, ...(model ? [model] : [])]);
 }
 
 /**
@@ -27,12 +33,32 @@ function draftRouteKey(requestedAgentId: string, catalogId: string, group: strin
  * would make that fill-in look like a navigation and discard the draft.
  */
 export function routeKey(data?: NewSessionRouteData): string {
-  return draftRouteKey(data?.requestedAgentId ?? "", data?.catalogId ?? "", data?.group ?? "");
+  return draftRouteKey(
+    data?.requestedAgentId ?? "",
+    data?.catalogId ?? "",
+    data?.group ?? "",
+    data?.requestedModel,
+  );
 }
 
 export function routeKeyFromSearch(search: string): string {
-  const location = newSessionLocationFromSearch(search);
-  return draftRouteKey(location.agentId, location.catalogId, location.group ?? "");
+  const location = newSessionModelLocationFromSearch(search);
+  return draftRouteKey(
+    location.agentId,
+    location.catalogId,
+    location.group ?? "",
+    location.requestedModel,
+  );
+}
+
+export function requestedModelForAgent(
+  data: NewSessionRouteData | undefined,
+  agentId: string,
+): string | undefined {
+  return !data?.requestedAgentId ||
+    normalizeAgentId(data.requestedAgentId) === normalizeAgentId(agentId)
+    ? data?.requestedModel
+    : undefined;
 }
 
 export function isTarget(data?: NewSessionRouteData): boolean {
@@ -218,13 +244,11 @@ type CatalogTargetDiscoveryState =
       status: "loading";
       owner: CatalogTargetOwner;
       controller: AbortController;
-      requestId: number;
     }
   | { status: "ready"; owner: CatalogTargetOwner; targets: CatalogCreateTarget[] }
   | { status: "error"; owner: CatalogTargetOwner };
 
 export class CatalogTargetDiscovery {
-  private requestId = 0;
   private state: CatalogTargetDiscoveryState = { status: "idle" };
 
   constructor(private readonly notify: () => void) {}
@@ -232,7 +256,6 @@ export class CatalogTargetDiscovery {
   clear() {
     const previous = this.state;
     this.state = { status: "idle" };
-    this.requestId += 1;
     if (previous.status === "loading") {
       previous.controller.abort();
     }
@@ -243,8 +266,8 @@ export class CatalogTargetDiscovery {
 
   private startRequest(owner: CatalogTargetOwner) {
     const controller = new AbortController();
-    const requestId = ++this.requestId;
-    this.state = { status: "loading", owner, controller, requestId };
+    const pending = { status: "loading", owner, controller } as const;
+    this.state = pending;
     this.notify();
     void owner.client
       .request<SessionsCatalogListResult>(
@@ -254,8 +277,7 @@ export class CatalogTargetDiscovery {
       )
       .then(
         (result) => {
-          const active = this.state;
-          if (active.status !== "loading" || active.requestId !== requestId) {
+          if (this.state !== pending) {
             return;
           }
           this.state = {
@@ -268,8 +290,7 @@ export class CatalogTargetDiscovery {
           this.notify();
         },
         () => {
-          const active = this.state;
-          if (active.status !== "loading" || active.requestId !== requestId) {
+          if (this.state !== pending) {
             return;
           }
           this.state = { status: "error", owner };
@@ -351,7 +372,7 @@ function renderTarget(data?: NewSessionRouteData) {
     title=${ready ? t("newSession.nativeTerminalHint") : t("newSession.catalogUnavailable")}
   >
     <span class="new-session-page__target-icon" aria-hidden="true">${icons.terminal}</span>
-    <span>${label}</span>
+    <span class="new-session-page__trigger-label">${label}</span>
   </span>`;
 }
 

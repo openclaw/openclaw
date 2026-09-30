@@ -1,4 +1,20 @@
 export const MAX_RELEASE_ARTIFACT_BYTES: number;
+export const WINDOWS_NODE_CI_ADVISORY: {
+  readonly id: "windows-node-ci";
+  readonly child: "normalCi";
+  readonly jobNamePattern: RegExp;
+  readonly aggregateJob: "checks-windows";
+};
+export interface ReleaseAdvisoryJob {
+  class: "windows-node-ci";
+  child: "normalCi";
+  job: string;
+  conclusion: string;
+  runId: string;
+  url: string;
+}
+export function releaseAdvisoryJobs(children: ReleaseRecord[]): ReleaseAdvisoryJob[];
+export function validateReleaseManifestAdvisoryJobs(manifest: unknown): ReleaseAdvisoryJob[];
 export const SPLIT_CHANGELOG_EVIDENCE_REUSE_POLICY: "split-changelog-release-v1";
 export function isSplitChangelogEvidenceDelta(paths: unknown, version: unknown): boolean;
 export function classifyReleaseChangelogEvidenceComparison(
@@ -38,6 +54,7 @@ export interface ReleaseChild extends ReleaseRecord {
   runId: string;
 }
 export interface ReleaseExecutionPlan extends ReleaseRecord {
+  sha256: string;
   sourceAdmissionContract?: "1";
   sourceAdmission?: import("./full-release-publication-contract.mjs").PublicationSourceFact | null;
   publicationAdmissionContract?: "1";
@@ -106,11 +123,7 @@ export function composeReleaseChildAttemptEvidence(input: {
   run: ReleaseRecord;
 }): ReleaseRecord;
 
-export function terminalPolicyPass(
-  child: ReleaseRecord,
-  releaseProfile: string,
-  workflowRef: string,
-): boolean;
+export function terminalPolicyPass(child: ReleaseRecord): boolean;
 
 export function classifyReleaseSnapshot(input: ReleaseRecord): ReleaseStateArtifact;
 export function releasePlanGateFailures(gates: ReleaseRecord[]): ReleaseRecord[];
@@ -120,6 +133,7 @@ export function validateReleaseStateArtifact(
   expected?: Record<string, unknown>,
   expectedMode?: string,
 ): ReleaseStateArtifact;
+export function validateRetiredReleaseRetryFields(value: ReleaseRecord): void;
 export function verifyReleaseStateArtifacts(
   executionPlanPayload: unknown,
   decisionPayload: unknown,

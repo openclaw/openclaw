@@ -1,4 +1,3 @@
-// Perplexity provider module implements model/runtime integration.
 import {
   createWebSearchProviderContractFields,
   mergeScopedSearchConfig,
@@ -6,7 +5,7 @@ import {
   type WebSearchProviderPlugin,
 } from "openclaw/plugin-sdk/provider-web-search-config-contract";
 import {
-  isRecord,
+  asNonArrayRecord,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -17,8 +16,6 @@ const DEFAULT_PERPLEXITY_MODEL = "perplexity/sonar-pro";
 
 const PERPLEXITY_CREDENTIAL_PATH = "plugins.entries.perplexity.config.webSearch.apiKey";
 const PERPLEXITY_ONBOARDING_SCOPES: Array<"text-inference"> = ["text-inference"];
-const PERPLEXITY_KEY_PREFIXES = ["pplx-"];
-const OPENROUTER_KEY_PREFIXES = ["sk-or-"];
 
 export type PerplexityTransport = "search_api" | "chat_completions";
 export type PerplexityConfig = {
@@ -79,20 +76,6 @@ export function resolvePerplexityWebSearchRuntimeMetadata(
   };
 }
 
-function inferPerplexityBaseUrlFromApiKey(apiKey?: string): "direct" | "openrouter" | undefined {
-  if (!apiKey) {
-    return undefined;
-  }
-  const normalized = normalizeLowercaseStringOrEmpty(apiKey);
-  if (PERPLEXITY_KEY_PREFIXES.some((prefix) => normalized.startsWith(prefix))) {
-    return "direct";
-  }
-  if (OPENROUTER_KEY_PREFIXES.some((prefix) => normalized.startsWith(prefix))) {
-    return "openrouter";
-  }
-  return undefined;
-}
-
 export function isDirectPerplexityBaseUrl(baseUrl: string): boolean {
   try {
     return (
@@ -104,8 +87,7 @@ export function isDirectPerplexityBaseUrl(baseUrl: string): boolean {
 }
 
 export function resolvePerplexityConfig(searchConfig?: Record<string, unknown>): PerplexityConfig {
-  const perplexity = searchConfig?.perplexity;
-  return isRecord(perplexity) ? (perplexity as PerplexityConfig) : {};
+  return asNonArrayRecord(searchConfig?.perplexity);
 }
 
 export function hasPerplexityLegacyOverride(perplexity?: PerplexityConfig): boolean {
@@ -121,7 +103,7 @@ export function resolvePerplexityRuntime(
   const baseUrl =
     normalizeOptionalString(perplexity?.baseUrl) ||
     (auth.source === "perplexity_env" ||
-    (auth.source === "config" && inferPerplexityBaseUrlFromApiKey(auth.apiKey) !== "openrouter")
+    (auth.source === "config" && !normalizeLowercaseStringOrEmpty(auth.apiKey).startsWith("sk-or-"))
       ? PERPLEXITY_DIRECT_BASE_URL
       : DEFAULT_PERPLEXITY_BASE_URL);
   return {

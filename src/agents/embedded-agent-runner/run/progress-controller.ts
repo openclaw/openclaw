@@ -1,7 +1,4 @@
-import {
-  FAST_MODE_AUTO_PROGRESS_KIND,
-  type ReplyPayload,
-} from "../../../auto-reply/reply-payload.js";
+import { FAST_MODE_AUTO_PROGRESS_KIND } from "../../../auto-reply/reply-payload.js";
 import { emitAgentActivityEvent } from "../../../infra/agent-activity-events.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { resolveFastModeModelAutoOnSeconds } from "../../../shared/fast-mode.js";
@@ -108,14 +105,6 @@ export function createEmbeddedRunProgressController(params: {
     fastModeAutoProgressState.offAnnounced = true;
     await emitFastModeAutoProgress(next);
   };
-  const notifyToolResult = async (payload: ReplyPayload) => {
-    await params.attempt.onToolResult?.(payload);
-  };
-  const notifyAgentEvent = async (
-    event: Parameters<NonNullable<RunEmbeddedAgentParams["onAgentEvent"]>>[0],
-  ) => {
-    await params.attempt.onAgentEvent?.(event);
-  };
   const resolveAttemptFastMode = (): boolean | undefined => {
     const resolved = resolveFastModeForElapsed({
       mode: params.attempt.fastMode,
@@ -130,24 +119,21 @@ export function createEmbeddedRunProgressController(params: {
     }
     return resolveAttemptFastMode();
   };
-  const maybeEmitFastModeAutoReset = async () => {
-    if (
-      params.attempt.fastMode !== "auto" ||
-      !fastModeAutoProgressState.offAnnounced ||
-      fastModeAutoProgressState.resetAnnounced
-    ) {
-      return;
-    }
-    fastModeAutoProgressState.resetAnnounced = true;
-    await emitFastModeAutoProgress({
-      enabled: true,
-      elapsedSeconds: 0,
-      fastAutoOnSeconds: fastModeAutoOnSeconds,
-    });
-  };
   const maybeEmitFastModeAutoResetBestEffort = async () => {
     try {
-      await maybeEmitFastModeAutoReset();
+      if (
+        params.attempt.fastMode !== "auto" ||
+        !fastModeAutoProgressState.offAnnounced ||
+        fastModeAutoProgressState.resetAnnounced
+      ) {
+        return;
+      }
+      fastModeAutoProgressState.resetAnnounced = true;
+      await emitFastModeAutoProgress({
+        enabled: true,
+        elapsedSeconds: 0,
+        fastAutoOnSeconds: fastModeAutoOnSeconds,
+      });
     } catch (error) {
       log.warn(`embedded run fast mode auto reset progress failed: ${formatErrorMessage(error)}`);
     }
@@ -159,10 +145,8 @@ export function createEmbeddedRunProgressController(params: {
     fastModeStartedAtMs,
     maybeAnnounceFastModeAutoOff,
     maybeEmitFastModeAutoResetBestEffort,
-    notifyAgentEvent,
     notifyExecutionPhase,
     notifyRunProgress,
-    notifyToolResult,
     resolveAttemptFastModeParam,
   };
 }

@@ -1,9 +1,10 @@
 import { consume } from "@lit/context";
 import { css, html, nothing, unsafeCSS } from "lit";
 import { property, state } from "lit/decorators.js";
-import type { RouteId } from "../../../app-route-paths.ts";
+import type { ControlUiLinkPreview } from "../../../../../src/gateway/control-ui-contract.js";
 import { applicationContext, type ApplicationContext } from "../../../app/context.ts";
 import { resolveControlUiAuthToken } from "../../../app/control-ui-auth.ts";
+import { postNativeExternalLink } from "../../../app/native-link-routing.ts";
 import { isBrowserPanelAvailable } from "../../../app/panel-availability.ts";
 import { browserTabKey, readBrowserTabTarget } from "../../../components/browser/browser-target.ts";
 import { icons } from "../../../components/icons.ts";
@@ -13,7 +14,9 @@ import { t } from "../../../i18n/index.ts";
 import { loadBrowserTabThumbnail } from "../../../lib/chat/browser-tab-preview.ts";
 import type { ToolPreview } from "../../../lib/chat/tool-cards.ts";
 import { copyToClipboard } from "../../../lib/clipboard.ts";
-import { openExternalUrlSafe } from "../../../lib/open-external-url.ts";
+import { canCallGatewayMethod } from "../../../lib/gateway-methods.ts";
+import { loadLinkPreview } from "../../../lib/link-preview.ts";
+import { openExternalUrlSafe, resolveSafeExternalUrl } from "../../../lib/open-external-url.ts";
 import { OpenClawLitElement } from "../../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../../lit/subscriptions-controller.ts";
 import sessionMenuStyles from "../../../styles/session-menu.css?inline";
@@ -21,13 +24,21 @@ import sessionMenuStyles from "../../../styles/session-menu.css?inline";
 class OpenClawBrowserTabCard extends OpenClawLitElement {
   @consume({ context: applicationContext, subscribe: true })
   @property({ attribute: false })
-  context?: ApplicationContext<RouteId>;
+  context?: ApplicationContext;
   @property({ attribute: false }) preview?: Extract<ToolPreview, { kind: "browser-tab" }>;
   @property({ attribute: false }) revision?: string;
   @property({ type: Boolean }) latest = false;
 
   @state() private thumbnailSrc?: string;
+  @state() private pagePreview?: ControlUiLinkPreview;
   private requestIdentity?: { client: unknown; key: string };
+  private pageIdentity?: {
+    client: unknown;
+    url: string;
+    generation: number;
+    recoveryScope: string;
+  };
+  private readonly failedImages = new Set<string>();
 
   private readonly subscriptions = new SubscriptionsController(this);
   constructor() {
@@ -35,6 +46,14 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
     this.subscriptions.watch(
       () => this.context?.gateway,
       (gateway, notify) => gateway.subscribe(notify),
+    );
+    this.subscriptions.watch(
+      () => this.context?.config,
+      (config, notify) => config.subscribe(notify),
+    );
+    this.subscriptions.watch(
+      () => this.context?.theme,
+      (theme, notify) => theme.subscribe(notify),
     );
   }
 
@@ -68,6 +87,11 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
         object-fit: cover;
         object-position: top;
       }
+      .shot.social img {
+        aspect-ratio: 1.91;
+        object-fit: contain;
+        object-position: center;
+      }
       .bar {
         position: relative;
         display: flex;
@@ -81,12 +105,25 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
       }
       .icon {
         display: flex;
-        flex: 0 0 16px;
+        flex: 0 0 20px;
+        align-items: center;
+        justify-content: center;
         color: var(--muted);
       }
-      .icon svg {
+      .icon svg,
+      .icon img {
         width: 16px;
         height: 16px;
+      }
+      .icon img {
+        box-sizing: border-box;
+        width: 20px;
+        height: 20px;
+        padding: 2px;
+        object-fit: contain;
+        /* Site icons are often dark on transparent; retain their colors on a light plate. */
+        background: var(--button-icon-bg);
+        border-radius: 4px;
       }
       .identity {
         display: grid;
@@ -144,10 +181,78 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
         width: 16px;
         height: 16px;
       }
+      .shot[data-new-tab-action],
+      .actions button[data-new-tab-action] {
+        cursor: pointer;
+      }
     `,
   ];
 
+  private get canLoadPagePreview() {
+    return Boolean(
+      this.context?.config.current.automaticallyFetchFavicons &&
+      canCallGatewayMethod(
+        this.context.gateway.snapshot,
+        "controlUi.linkPreview",
+        "operator.read",
+        {
+          requireAdvertisement: false,
+        },
+      ),
+    );
+  }
+
+  private updatePagePreview() {
+    const client = this.context?.gateway.snapshot.client;
+    const url = this.preview?.url;
+    if (!this.canLoadPagePreview || !client || !url) {
+      this.pageIdentity = undefined;
+      this.pagePreview = undefined;
+      return;
+    }
+    if (this.pagePreviewCurrent) {
+      return;
+    }
+    const identity = {
+      client,
+      url,
+      generation: client.connectionGeneration,
+      recoveryScope: client.recoveryScope,
+    };
+    this.pageIdentity = identity;
+    this.pagePreview = undefined;
+    this.failedImages.clear();
+    void loadLinkPreview(client, url).then((preview) => {
+      // Recycled transcript cards and connection/config changes retire the old
+      // request; its result must never become another page's preview.
+      if (this.isConnected && this.pageIdentity === identity && this.pagePreviewCurrent) {
+        this.pagePreview = preview;
+      }
+    });
+  }
+
+  private get pagePreviewCurrent(): boolean {
+    const identity = this.pageIdentity;
+    const client = this.context?.gateway.snapshot.client;
+    return Boolean(
+      identity &&
+      client &&
+      this.canLoadPagePreview &&
+      identity.client === client &&
+      identity.url === this.preview?.url &&
+      identity.generation === client.connectionGeneration &&
+      identity.recoveryScope === client.recoveryScope,
+    );
+  }
+
+  override disconnectedCallback() {
+    this.pageIdentity = undefined;
+    this.pagePreview = undefined;
+    super.disconnectedCallback();
+  }
+
   override updated() {
+    this.updatePagePreview();
     const preview = this.preview;
     const context = this.context;
     const snapshot = context?.gateway.snapshot;
@@ -194,6 +299,25 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
     });
   }
 
+  private get opensExternally() {
+    return this.context?.theme.settings.openLinksExternally === true;
+  }
+
+  private readonly open = () => {
+    if (this.opensExternally) {
+      this.openExternal();
+    } else {
+      this.openPanel();
+    }
+  };
+
+  private openExternal() {
+    const url = resolveSafeExternalUrl(this.preview?.url ?? "", window.location.href);
+    if (url && !postNativeExternalLink(url)) {
+      openExternalUrlSafe(url);
+    }
+  }
+
   private readonly openPanel = () => {
     const browserTab = readBrowserTabTarget(this.preview);
     if (!browserTab) {
@@ -216,7 +340,9 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
     if (event.detail.item.value === "copy-url") {
       void copyToClipboard(url, () => this.isConnected && this.preview?.url === url);
     } else if (event.detail.item.value === "open-new-tab") {
-      openExternalUrlSafe(url);
+      this.openExternal();
+    } else if (event.detail.item.value === "open-within-openclaw") {
+      this.openPanel();
     }
   };
 
@@ -230,39 +356,69 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
       this.requestIdentity?.key === JSON.stringify([browserTabKey(preview), this.revision])
         ? this.thumbnailSrc
         : undefined;
+    const page = this.pagePreviewCurrent ? this.pagePreview : undefined;
+    const favicon = page?.faviconDataUrl;
+    const image =
+      currentImage && !this.failedImages.has(currentImage) ? currentImage : page?.imageDataUrl;
     let host = preview.url;
     try {
       host = new URL(preview.url ?? "").host || preview.url;
     } catch {
       // Internal page URLs can have no host; keep the supplied label.
     }
-    const title = preview.title?.trim() || host || t("browser.title");
+    const title = preview.title?.trim() || page?.title || host || t("browser.title");
     const label = preview.url ? `${title} — ${preview.url}` : title;
     return html`
       <div class="card">
         ${
-          currentImage
+          image && !this.failedImages.has(image)
             ? html`
                 <button
                   type="button"
-                  class="shot"
+                  class=${image === currentImage ? "shot" : "shot social"}
                   aria-label=${label}
-                  title=${t("browser.openPanel")}
-                  @click=${this.openPanel}
+                  title=${this.opensExternally ? t("browser.openExternal") : t("browser.openPanel")}
+                  ?data-new-tab-action=${this.opensExternally}
+                  @click=${this.open}
                 >
-                  <img src=${currentImage} alt="" />
+                  <img
+                    src=${image}
+                    alt=""
+                    @error=${() => {
+                      this.failedImages.add(image);
+                      this.requestUpdate();
+                    }}
+                  />
                 </button>
               `
             : nothing
         }
         <div class="bar">
-          <span class="icon" aria-hidden="true">${icons.globe}</span>
+          <span class="icon" aria-hidden="true"
+            >${
+              favicon && !this.failedImages.has(favicon)
+                ? html`<img
+                    src=${favicon}
+                    alt=""
+                    @error=${() => {
+                      this.failedImages.add(favicon);
+                      this.requestUpdate();
+                    }}
+                  />`
+                : icons.globe
+            }</span
+          >
           <span class="identity">
             <span class="title">${title}</span>
             ${preview.url ? html`<span class="url">${preview.url}</span>` : nothing}
           </span>
           <span class="actions">
-            <button type="button" title=${t("browser.openPanel")} @click=${this.openPanel}>
+            <button
+              type="button"
+              title=${this.opensExternally ? t("browser.openExternal") : t("browser.openPanel")}
+              ?data-new-tab-action=${this.opensExternally}
+              @click=${this.open}
+            >
               ${t("browser.open")}
             </button>
             <wa-dropdown
@@ -284,11 +440,15 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
                 <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.copy}</span>
                 ${t("browser.copyUrl")}
               </wa-dropdown-item>
-              <wa-dropdown-item class="session-menu__item" value="open-new-tab" data-new-tab-action>
+              <wa-dropdown-item
+                class="session-menu__item"
+                value=${this.opensExternally ? "open-within-openclaw" : "open-new-tab"}
+                ?data-new-tab-action=${!this.opensExternally}
+              >
                 <span slot="icon" class="session-menu__icon" aria-hidden="true"
-                  >${icons.externalLink}</span
+                  >${this.opensExternally ? icons.globe : icons.externalLink}</span
                 >
-                ${t("browser.openNewTab")}
+                ${this.opensExternally ? t("browser.openWithinOpenClaw") : t("browser.openNewTab")}
               </wa-dropdown-item>
             </wa-dropdown>
           </span>

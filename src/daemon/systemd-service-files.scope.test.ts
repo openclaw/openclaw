@@ -16,7 +16,10 @@ vi.mock("./systemd-exec.js", async (original) => ({
 }));
 vi.mock("./systemd-scope.js", () => ({ findInstalledSystemdGatewayScope: findScope }));
 
-import { readSystemdServiceExecStart } from "./systemd-service-files.js";
+import {
+  readSystemdServiceCommandLocation,
+  readSystemdServiceExecStart,
+} from "./systemd-service-files.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const env = { HOME: "/home/caller", OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway" };
@@ -27,6 +30,8 @@ let assignments: string[];
 let unset: string[];
 let managerChanges: boolean;
 let ownerReads: number;
+let fileSpecs: [string, boolean][];
+let loaded: boolean;
 
 const success = (stdout: string): ExecResult => ({
   code: 0,
@@ -52,6 +57,8 @@ beforeEach(async () => {
   unset = [];
   managerChanges = false;
   ownerReads = 0;
+  fileSpecs = [];
+  loaded = true;
   vi.spyOn(os, "userInfo").mockReturnValue({
     username: "gateway",
     uid: 2001,
@@ -70,6 +77,14 @@ beforeEach(async () => {
     }
     if (args.includes("GetUnit") || args.includes("LoadUnit")) {
       expect(args.at(-1)).toBe(target.unitName);
+      if (!loaded) {
+        return {
+          code: 1,
+          termination: "exit",
+          stdout: "",
+          stderr: `Call failed: Unit ${target.unitName} not loaded.`,
+        };
+      }
       return success(
         JSON.stringify(property("o", ["/org/freedesktop/systemd1/unit/openclaw_2eservice"])),
       );
@@ -84,7 +99,7 @@ beforeEach(async () => {
       ]),
       WorkingDirectory: property("s", "/home/gateway"),
       Environment: property("as", assignments),
-      EnvironmentFiles: property("a(sb)", []),
+      EnvironmentFiles: property("a(sb)", fileSpecs),
       UnsetEnvironment: property("as", unset),
       User: property("s", serviceUser),
     };
@@ -104,6 +119,98 @@ beforeEach(async () => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("system-scope effective command", () => {
+  it("reads loaded artifact location without resolving protected service credentials", async () => {
+    const protectedFile = path.join(path.dirname(target.unitPath), "protected-service.env");
+    fileSpecs = [[protectedFile, false]];
+    const readFile = fs.readFile;
+    const reads = vi.spyOn(fs, "readFile").mockImplementation(async (file, ...args) => {
+      if (file === protectedFile) {
+        throw Object.assign(new Error("protected fixture"), { code: "EACCES" });
+      }
+      return readFile(file, ...args);
+    });
+    await expect(readSystemdServiceCommandLocation(env, target)).resolves.toEqual({
+      kind: "command",
+      command: {
+        programArguments: ["/usr/bin/openclaw", "gateway"],
+        workingDirectory: "/home/gateway",
+        sourcePath: target.unitPath,
+      },
+    });
+    expect(reads.mock.calls.some(([file]) => file === protectedFile)).toBe(false);
+    expect(
+      systemBus.mock.calls.some(
+        ([args]) =>
+          args.includes("Environment") ||
+          args.includes("EnvironmentFiles") ||
+          args.includes("LoadUnit"),
+      ),
+    ).toBe(false);
+    await expect(
+      readSystemdServiceExecStart(env, {
+        requireEffective: true,
+        requireLoaded: true,
+        systemdReadTarget: target,
+      }),
+    ).rejects.toMatchObject({ code: "EACCES" });
+  });
+
+  it("reads a different-account system service location without touching its environment", async () => {
+    serviceUser = "other";
+    const protectedFile = path.join(path.dirname(target.unitPath), "protected-service.env");
+    fileSpecs = [[protectedFile, false]];
+    const readFile = fs.readFile;
+    const reads = vi.spyOn(fs, "readFile").mockImplementation(async (file, ...args) => {
+      if (file === protectedFile) {
+        throw Object.assign(new Error("protected fixture"), { code: "EACCES" });
+      }
+      return readFile(file, ...args);
+    });
+
+    await expect(readSystemdServiceCommandLocation(env, target)).resolves.toEqual({
+      kind: "command",
+      command: {
+        programArguments: ["/usr/bin/openclaw", "gateway"],
+        workingDirectory: "/home/gateway",
+        sourcePath: target.unitPath,
+      },
+    });
+    expect(reads.mock.calls.some(([file]) => file === protectedFile)).toBe(false);
+    expect(systemBus.mock.calls.some(([args]) => args.includes("User"))).toBe(false);
+    await expect(
+      readSystemdServiceExecStart(env, {
+        requireEffective: true,
+        requireLoaded: true,
+        systemdReadTarget: target,
+      }),
+    ).rejects.toMatchObject({ reason: "systemd-account-refused" });
+    expect(reads.mock.calls.some(([file]) => file === protectedFile)).toBe(false);
+  });
+
+  it("distinguishes an unloaded runtime from an absent installed service", async () => {
+    loaded = false;
+    await expect(readSystemdServiceCommandLocation(env, target)).resolves.toEqual({
+      kind: "not-loaded",
+    });
+    await expect(
+      readSystemdServiceExecStart(env, {
+        requireEffective: true,
+        requireLoaded: true,
+        systemdReadTarget: target,
+      }),
+    ).rejects.toThrow("Effective systemd service command");
+    expect(systemBus.mock.calls.some(([args]) => args.includes("LoadUnit"))).toBe(false);
+  });
+
+  it("does not turn unavailable native metadata into an unloaded runtime", async () => {
+    systemBus.mockResolvedValue({
+      code: 1,
+      termination: "exit",
+      stdout: "",
+      stderr: "native metadata unavailable",
+    });
+    await expect(readSystemdServiceCommandLocation(env, target)).rejects.toThrow();
+  });
   it.each([false, true])(
     "reads the selected system unit with discovered target=%s",
     async (discover) => {
@@ -135,7 +242,10 @@ describe("system-scope effective command", () => {
       if (user === "2001") {
         await expect(command).resolves.toMatchObject({ environment: { HOME: "/home/gateway" } });
       } else {
-        await expect(command).rejects.toThrow("run Doctor as the service's User= account");
+        await expect(command).rejects.toMatchObject({
+          reason: "systemd-account-refused",
+          message: expect.stringContaining("run Doctor as the service's User= account"),
+        });
         await expect(readSystemdServiceExecStart(env)).resolves.toMatchObject({
           sourcePath: target.unitPath,
         });
@@ -146,7 +256,11 @@ describe("system-scope effective command", () => {
   it.each(["uid", "replacement"])("rejects an unverified system manager: %s", async (fault) => {
     managerUid = fault === "uid" ? 2001 : 0;
     managerChanges = fault === "replacement";
-    await expect(readSystemdServiceExecStart(env, { requireEffective: true })).rejects.toThrow();
+    await expect(
+      readSystemdServiceExecStart(env, { requireEffective: true }),
+    ).rejects.toMatchObject({
+      reason: "systemd-manager-changed",
+    });
   });
 
   it.each(["HOME", "HOME=/home/gateway"])(

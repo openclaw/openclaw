@@ -14,7 +14,7 @@ afterEach(() => {
 });
 
 it.each([false, true])(
-  "consumes the accepted name while preserving a newer model and thinking selection, identity=%s",
+  "consumes the accepted name while preserving newer model controls, identity=%s",
   async (identified) => {
     const prefs = identityPreferences(identified, async () => ({
       models: [
@@ -56,7 +56,10 @@ it.each([false, true])(
     )!;
     thinking.value = "1";
     thinking.dispatchEvent(new Event("change", { bubbles: true }));
-    const selected = { model: "openai/gpt-5.6-sol", thinkingLevel: "high" };
+    renderControl(control, next.context)
+      .querySelector<HTMLButtonElement>("[data-chat-speed-toggle]")!
+      .click();
+    const selected = { model: "openai/gpt-5.6-sol", thinkingLevel: "high", fastMode: true };
     await vi.waitFor(() => expect(prefs.stored()).toMatchObject(selected));
     admitted.resolve({
       key: "agent:main:dashboard:first",
@@ -68,6 +71,7 @@ it.each([false, true])(
     expect(loadNewSessionPreference("ws://gateway.example", "main")?.worktreeName).toBeUndefined();
     expect(control.selected).toBe(selected.model);
     expect(control.thinkingLevel).toBe(selected.thinkingLevel);
+    expect(control.fastMode).toBe(selected.fastMode);
   },
 );
 
@@ -361,6 +365,77 @@ it.each(["name", "base"])(
       expect(next.place.worktreeName).toBe("next-task");
     }
     expect(concurrentWrites).toBe(1);
+  },
+);
+
+it("does not drain queued Gateway edits into a newer disconnected browser choice", async () => {
+  const prefs = identityPreferences();
+  const first = prefs.make();
+  await prefs.ready(first);
+  const started = createDeferred();
+  const release = createDeferred();
+  prefs.beforeSave.mockImplementationOnce(async () => {
+    started.resolve();
+    await release.promise;
+  });
+  const writes = vi.spyOn(first.gateway, "persistPreference");
+  first.place.setBaseRef("release");
+  await started.promise;
+  try {
+    first.place.setWorktreeName("queued-task");
+    first.context.gateway.snapshot.phase = "reconnecting";
+    first.gateway.synchronize(first.context.gateway);
+    first.place.setWorktreeName("new-local-task");
+    expect(loadNewSessionPreference("ws://gateway.example", "main")).toMatchObject({
+      worktreeName: "new-local-task",
+    });
+  } finally {
+    release.resolve();
+    await Promise.all(writes.mock.results.map((result) => result.value));
+  }
+  expect(loadNewSessionPreference("ws://gateway.example", "main")).toMatchObject({
+    worktreeName: "new-local-task",
+  });
+});
+
+it.each([false, true])(
+  "publishes only a committed disposed-owner edit and drops its queued successor, conflict=%s",
+  async (conflict) => {
+    const prefs = identityPreferences();
+    const first = prefs.make();
+    await prefs.ready(first);
+    const observer = prefs.make(first.context.gateway);
+    await prefs.ready(observer);
+    const started = createDeferred();
+    const release = createDeferred();
+    prefs.beforeSave.mockImplementationOnce(async () => {
+      started.resolve();
+      await release.promise;
+    });
+    const saving = first.gateway.persistPreference("main", "/repo", { baseRef: "release" });
+    await started.promise;
+    const queued = first.gateway.persistPreference("main", "/repo", {
+      worktreeName: "queued-task",
+    });
+    try {
+      first.gateway.disconnect();
+      if (conflict) {
+        await prefs.publish(observer, { baseRef: "external-base" });
+      }
+    } finally {
+      release.resolve();
+      await Promise.all([saving, queued]);
+    }
+    const baseRef = conflict ? "external-base" : "release";
+    expect(prefs.stored()).toMatchObject({ baseRef, worktreeName: "first-task" });
+    expect(prefs.beforeSave).toHaveBeenCalledTimes(conflict ? 2 : 1);
+    expect(observer.gateway.readPreference("main")?.baseRef).toBe(conflict ? "main" : "release");
+    // Confirmed defaults refresh the projection, not another open draft’s active fields.
+    expect(observer.place.baseRef).toBe("main");
+    const next = prefs.make(first.context.gateway);
+    await prefs.ready(next);
+    expect(next.place.baseRef).toBe(baseRef);
+    expect(next.place.worktreeName).toBe("first-task");
   },
 );
 

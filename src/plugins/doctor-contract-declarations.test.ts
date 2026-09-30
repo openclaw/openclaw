@@ -2,7 +2,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { resolvePluginDoctorContractArtifact } from "./doctor-contract-artifact.js";
 import { coercePluginDoctorContractModule } from "./doctor-contract-module.js";
-import { loadBundledPluginManifestRegistry } from "./manifest-registry.js";
+import { loadBundledPluginManifestRegistry } from "./manifest-registry-build.js";
 import type { PluginManifestDoctorContract } from "./manifest-types.js";
 
 const DOCTOR_CONTRACT_SURFACES = [

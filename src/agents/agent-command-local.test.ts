@@ -4,27 +4,71 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { promisify } from "node:util";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
+import type { GatewaySchedulerClock } from "../infra/gateway-scheduler.js";
+import {
+  getBoundLegacyPluginSdkResourceHost,
+  LegacyPluginSdkResourceHost,
+} from "../plugins/legacy-sdk-resource-host.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { clearActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { getPluginRuntimeGenerationRegistry } from "../plugins/runtime/generation-scope.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
+import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import {
+  acquireSessionMcpRuntime,
+  disposeAllSessionMcpRuntimes,
+  peekSessionMcpRuntime,
+  releaseSessionMcpRuntime,
+} from "./agent-bundle-mcp-manager-api.js";
+import { unopenedMcpConfig } from "./agent-bundle-mcp-manager.test-support.js";
+import { SESSION_MCP_RUNTIME_MANAGER_KEY } from "./agent-bundle-mcp-runtime-shared.js";
+import type { SessionMcpRuntimeLease } from "./agent-bundle-mcp-types.js";
 import { runLocalAgentCommand } from "./agent-command-local.js";
+import { buildPreparedCliRunContext } from "./cli-runner.test-helpers.js";
+import {
+  settleCliPreparationError,
+  settlePreparedCliRun,
+} from "./cli-runner/cli-run-settlement.js";
+import type { AgentCommandOpts } from "./command/types.js";
 import {
   bindActiveOperatorTurnAuthority,
   type CronCreatorAuthorityCapability,
 } from "./cron-creator-authority-context.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "./prepared-model-runtime.test-support.js";
 
-const mocks = vi.hoisted(() => ({
-  prepare: vi.fn(),
-  resolveDeps: vi.fn(async () => ({})),
-}));
+const mocks = vi.hoisted(() => {
+  const scheduler: { clock?: GatewaySchedulerClock } = {};
+  return {
+    prepare: vi.fn(),
+    resolveDeps: vi.fn(async () => ({})),
+    resolveTransport: vi.fn(),
+    scheduler,
+  };
+});
+
+vi.mock("../infra/gateway-scheduler.js", async (importOriginal) => {
+  const { GatewayScheduler } =
+    await importOriginal<typeof import("../infra/gateway-scheduler.js")>();
+  return {
+    GatewayScheduler: class extends GatewayScheduler {
+      constructor(options: ConstructorParameters<typeof GatewayScheduler>[0] = {}) {
+        super({ ...options, clock: options.clock ?? mocks.scheduler.clock });
+      }
+    },
+  };
+});
 
 vi.mock("./command/prepare.js", () => ({
   prepareAgentCommandExecution: mocks.prepare,
@@ -34,11 +78,22 @@ vi.mock("./command/runtime-loaders.js", () => ({
   resolveAgentCommandDeps: mocks.resolveDeps,
 }));
 
+vi.mock("./mcp-transport.js", () => ({ resolveMcpTransport: mocks.resolveTransport }));
+
 let state: OpenClawTestState;
+let clock: ReturnType<typeof createGatewaySchedulerClock>;
 beforeEach(async () => {
+  await disposeAllSessionMcpRuntimes();
+  // A drained manager still retains the previous file's transport loader.
+  Reflect.deleteProperty(globalThis, SESSION_MCP_RUNTIME_MANAGER_KEY);
+  clock = createGatewaySchedulerClock();
+  mocks.scheduler.clock = clock.clock;
   state = await createOpenClawTestState({ label: "local-command-authority" });
 });
 afterEach(async () => {
+  await disposeAllSessionMcpRuntimes();
+  Reflect.deleteProperty(globalThis, SESSION_MCP_RUNTIME_MANAGER_KEY);
+  mocks.resolveTransport.mockReset();
   await resetPreparedModelRuntimeSnapshotsForTest();
   await clearActivePluginRegistry();
   await state.cleanup();
@@ -54,6 +109,321 @@ function createPrepared(senderIsOwner: boolean) {
     workspaceDir: state.workspaceDir,
   };
 }
+
+async function createMcpPeer(label: string) {
+  const server = new McpServer({ name: label, version: "1" });
+  server.registerTool("probe", {}, async () => ({ content: [{ type: "text", text: label }] }));
+  const [transport, peer] = InMemoryTransport.createLinkedPair();
+  await server.connect(peer);
+  mocks.resolveTransport.mockReturnValueOnce({
+    transport,
+    description: label,
+    transportType: "stdio",
+    connectionTimeoutMs: 1_000,
+    requestTimeoutMs: 1_000,
+    supportsParallelToolCalls: true,
+  });
+  return { server, transport };
+}
+
+async function exerciseMcpRuntime(sessionId: string, text: string) {
+  const lease = await acquireSessionMcpRuntime({
+    sessionId,
+    workspaceDir: state.workspaceDir,
+    cfg: unopenedMcpConfig,
+  });
+  try {
+    expect((await lease.runtime.getCatalog()).tools.map((tool) => tool.toolName)).toEqual([
+      "probe",
+    ]);
+    await expect(lease.runtime.callTool("fixture", "probe", {})).resolves.toMatchObject({
+      content: [{ type: "text", text }],
+    });
+    return lease.runtime;
+  } finally {
+    await releaseSessionMcpRuntime(lease);
+  }
+}
+
+describe("runLocalAgentCommand MCP transport settlement", () => {
+  it.each([
+    { name: "owned success", borrowed: false, cleanup: false, preparationFailure: false },
+    {
+      name: "owned revoked preparation",
+      borrowed: false,
+      cleanup: false,
+      preparationFailure: true,
+    },
+    { name: "borrowed retained", borrowed: true, cleanup: false, preparationFailure: false },
+    { name: "borrowed cleanup", borrowed: true, cleanup: true, preparationFailure: false },
+  ])("settles $name without retiring another session", async (scenario) => {
+    const survivor = await createMcpPeer("survivor");
+    const commandPeer = await createMcpPeer("command");
+    const survivorClock = createGatewaySchedulerClock();
+    const scheduler = createTestGatewayScheduler(survivorClock.clock);
+    const host = new LegacyPluginSdkResourceHost();
+    host.bindScheduler(scheduler);
+    const closeStarted = createDeferred();
+    const finishClose = createDeferred();
+    const closeTransport = commandPeer.transport.close.bind(commandPeer.transport);
+    vi.spyOn(commandPeer.transport, "close").mockImplementationOnce(async () => {
+      closeStarted.resolve();
+      await finishClose.promise;
+      await closeTransport();
+    });
+    const revoked = new Error("preparation authority revoked");
+    const result = { payloads: [{ text: "done" }], meta: { durationMs: 1 } };
+    let settled = false;
+    let command: ReturnType<typeof settlePreparedCliRun> | undefined;
+    try {
+      const retained = await host.run(() => exerciseMcpRuntime("survivor-mcp", "survivor"));
+      const maintenance = vi.fn();
+      scheduler.schedule({ id: "survivor-maintenance", delayMs: 10, run: maintenance });
+      mocks.prepare.mockImplementationOnce(async (opts: AgentCommandOpts) => ({
+        ...createPrepared(false),
+        opts,
+      }));
+      const run = () =>
+        runLocalAgentCommand({
+          opts: { message: "test", runId: "run-local", cleanupBundleMcpOnRunEnd: scenario.cleanup },
+          runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+          run: async (prepared) => {
+            const context = buildPreparedCliRunContext({
+              sessionId: "command-mcp",
+              runId: prepared.runId,
+              workspaceDir: state.workspaceDir,
+            });
+            context.params.cleanupBundleMcpOnRunEnd = prepared.opts.cleanupBundleMcpOnRunEnd;
+            if (scenario.preparationFailure) {
+              await exerciseMcpRuntime("command-mcp", "command");
+              await settleCliPreparationError(new Error("preparation failed"), {
+                ...context.params,
+                assertCurrent: () => {
+                  throw revoked;
+                },
+              });
+              throw new Error("Revoked preparation unexpectedly settled");
+            }
+            return await settlePreparedCliRun({
+              context,
+              run: async () => {
+                await exerciseMcpRuntime("command-mcp", "command");
+                return result;
+              },
+            });
+          },
+        }).finally(() => {
+          settled = true;
+        });
+      command = scenario.borrowed ? host.run(run) : run();
+      void command.catch(() => undefined);
+      const retires = !scenario.borrowed || scenario.cleanup;
+      if (retires) {
+        await Promise.race([closeStarted.promise, command.catch(() => undefined)]);
+        expect(settled).toBe(false);
+        finishClose.resolve();
+      }
+      if (scenario.preparationFailure) {
+        await expect(command).rejects.toBe(revoked);
+      } else {
+        await expect(command).resolves.toEqual(result);
+      }
+      if (retires) {
+        expect(peekSessionMcpRuntime({ sessionId: "command-mcp" })).toBeUndefined();
+        await expect(
+          commandPeer.transport.send({
+            jsonrpc: "2.0",
+            method: "notifications/initialized",
+          }),
+        ).rejects.toThrow("Not connected");
+      } else {
+        await expect(
+          peekSessionMcpRuntime({ sessionId: "command-mcp" })?.callTool("fixture", "probe", {}),
+        ).resolves.toMatchObject({ content: [{ type: "text", text: "command" }] });
+      }
+      await expect(retained.callTool("fixture", "probe", {})).resolves.toMatchObject({
+        content: [{ type: "text", text: "survivor" }],
+      });
+      await survivorClock.advanceBy(10);
+      expect(maintenance).toHaveBeenCalledOnce();
+    } finally {
+      finishClose.resolve();
+      await command?.catch(() => undefined);
+      await disposeAllSessionMcpRuntimes();
+      await scheduler.stop();
+      await host.close();
+      await Promise.all([survivor.server.close(), commandPeer.server.close()]);
+    }
+  });
+});
+
+describe("runLocalAgentCommand resource lifetime", () => {
+  it.each([
+    { outcome: "success", cleanupFails: false },
+    { outcome: "preparation failure", cleanupFails: false },
+    { outcome: "execution failure", cleanupFails: false },
+    { outcome: "success", cleanupFails: true },
+    { outcome: "preparation failure", cleanupFails: true },
+    { outcome: "execution failure", cleanupFails: true },
+  ])(
+    "joins owned resources after $outcome (cleanup failure=$cleanupFails) and cancels their scheduled work",
+    async ({ outcome, cleanupFails }) => {
+      const releaseStarted = createDeferred();
+      const finishRelease = createDeferred();
+      const failure = new Error(outcome);
+      const cleanupFailure = new Error("resource release failed");
+      const maintenance = vi.fn();
+      let host: LegacyPluginSdkResourceHost | undefined;
+      let acquired: SessionMcpRuntimeLease | undefined;
+      mocks.prepare.mockImplementationOnce(async () => {
+        const currentHost = getBoundLegacyPluginSdkResourceHost();
+        if (!currentHost) {
+          throw new Error("Local command did not bind its resource host");
+        }
+        const lease = await acquireSessionMcpRuntime({
+          sessionId: "local-mcp",
+          workspaceDir: state.workspaceDir,
+          cfg: unopenedMcpConfig,
+        });
+        host = currentHost;
+        acquired = lease;
+        host.adopt(lease.runtime, {
+          release: async () => {
+            releaseStarted.resolve();
+            await finishRelease.promise;
+            await releaseSessionMcpRuntime(lease);
+            if (cleanupFails) {
+              throw cleanupFailure;
+            }
+          },
+        });
+        host.scheduler.schedule({ id: "local-maintenance", delayMs: 10, run: maintenance });
+        if (outcome === "preparation failure") {
+          throw failure;
+        }
+        return createPrepared(false);
+      });
+      let settled = false;
+      const command = runLocalAgentCommand({
+        opts: { message: "test", runId: "run-local" },
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        run: async () => {
+          if (outcome === "execution failure") {
+            throw failure;
+          }
+          return "done";
+        },
+      }).finally(() => {
+        settled = true;
+      });
+      void command.catch(() => undefined);
+      try {
+        await Promise.race([releaseStarted.promise, command]);
+        expect(settled).toBe(false);
+        expect(acquired?.runtime.activeLeases).toBe(1);
+        expect(clock.armedAtMs).toBeNull();
+        await clock.advanceBy(10);
+        expect(maintenance).not.toHaveBeenCalled();
+
+        finishRelease.resolve();
+        if (cleanupFails && outcome !== "success") {
+          await expect(command).rejects.toMatchObject({
+            errors: [failure, expect.objectContaining({ errors: [cleanupFailure] })],
+            cause: expect.objectContaining({ errors: [cleanupFailure] }),
+          });
+        } else if (cleanupFails) {
+          await expect(command).rejects.toMatchObject({ errors: [cleanupFailure] });
+        } else if (outcome === "success") {
+          await expect(command).resolves.toBe("done");
+        } else {
+          await expect(command).rejects.toBe(failure);
+        }
+        expect(acquired?.runtime.activeLeases).toBe(0);
+        expect(() => host?.assertOpen()).toThrow("Plugin SDK resource host is closed");
+      } finally {
+        finishRelease.resolve();
+        await command.catch(() => undefined);
+        acquired?.releaseLease();
+        await host?.close().catch(() => undefined);
+      }
+    },
+  );
+
+  it("rejects borrowed commands before preparation after scheduler retirement", async () => {
+    const scheduler = createTestGatewayScheduler(clock.clock);
+    const host = new LegacyPluginSdkResourceHost();
+    host.bindScheduler(scheduler);
+    const run = vi.fn(async () => "done");
+    mocks.resolveDeps.mockClear();
+    mocks.prepare.mockClear();
+    mocks.prepare.mockResolvedValue(createPrepared(false));
+    try {
+      await scheduler.stop();
+      await expect(
+        host.run(() =>
+          runLocalAgentCommand({
+            opts: { message: "test", runId: "run-local" },
+            runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+            run,
+          }),
+        ),
+      ).rejects.toBe(scheduler.signal.reason);
+      expect(mocks.resolveDeps).not.toHaveBeenCalled();
+      expect(mocks.prepare).not.toHaveBeenCalled();
+      expect(run).not.toHaveBeenCalled();
+      expect(() => host.assertOpen()).not.toThrow();
+    } finally {
+      mocks.prepare.mockReset();
+      await host.close();
+      await scheduler.stop();
+    }
+  });
+
+  it("borrows the enclosing host without closing its resources or scheduler", async () => {
+    const scheduler = createTestGatewayScheduler(clock.clock);
+    const host = new LegacyPluginSdkResourceHost();
+    host.bindScheduler(scheduler);
+    let acquired: SessionMcpRuntimeLease | undefined;
+    const maintenance = vi.fn();
+    mocks.prepare.mockResolvedValueOnce(createPrepared(false));
+    try {
+      await host.run(() =>
+        runLocalAgentCommand({
+          opts: { message: "test", runId: "run-local" },
+          runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+          run: async () => {
+            const currentHost = getBoundLegacyPluginSdkResourceHost();
+            if (!currentHost) {
+              throw new Error("Local command lost its enclosing resource host");
+            }
+            const lease = await acquireSessionMcpRuntime({
+              sessionId: "borrowed-mcp",
+              workspaceDir: state.workspaceDir,
+              cfg: unopenedMcpConfig,
+            });
+            acquired = lease;
+            currentHost.adopt(lease.runtime, { release: () => releaseSessionMcpRuntime(lease) });
+            currentHost.scheduler.schedule({
+              id: "borrowed-maintenance",
+              delayMs: 10,
+              run: maintenance,
+            });
+          },
+        }),
+      );
+      expect(() => host.assertOpen()).not.toThrow();
+      expect(acquired?.runtime.activeLeases).toBe(1);
+      await clock.advanceBy(10);
+      expect(maintenance).toHaveBeenCalledOnce();
+      await host.close();
+      expect(acquired?.runtime.activeLeases).toBe(0);
+    } finally {
+      acquired?.releaseLease();
+      await scheduler.stop();
+      await host.close();
+    }
+  });
+});
 
 describe("runLocalAgentCommand operator authority", () => {
   it("binds local authority to the exact admitted operator run and revokes it at settlement", async () => {
@@ -122,7 +492,6 @@ it("keeps runtime memory registrations through local command preparation", async
     },
   });
 });
-
 describe("agent command static capabilities", () => {
   const cases = [
     { inventory: "empty", contextTokens: 1_000_000, thinking: "medium" },

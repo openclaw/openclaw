@@ -1,4 +1,3 @@
-// Microsoft plugin module implements tts behavior.
 import { statSync, writeFileSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";

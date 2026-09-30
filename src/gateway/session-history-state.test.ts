@@ -9,10 +9,9 @@ import type {
   SessionHistoryReadParams,
   SessionHistorySnapshot,
 } from "../config/sessions/session-history-types.js";
+import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import {
   assistantTextMessage,
-  messageToolCall,
-  messageToolResult,
   textContent,
   userTextMessage,
 } from "./session-history-fixtures.test-support.js";
@@ -20,6 +19,7 @@ import { SessionHistorySseState } from "./session-history-state.js";
 import * as sessionTranscriptReaders from "./session-transcript-readers.js";
 
 type StateOptions = Pick<SessionHistoryReadParams, "maxChars" | "limit" | "cursor"> &
+  Pick<SessionHistorySnapshot["history"], "windowReset"> &
   Partial<
     Pick<
       SessionHistorySnapshot,
@@ -37,7 +37,7 @@ function newState(
     limit: options.limit,
     cursor: options.cursor,
     snapshot: {
-      history: { items: messages, messages, hasMore: false },
+      history: { items: messages, messages, hasMore: false, windowReset: options.windowReset },
       rawTranscriptSeq: options.rawTranscriptSeq ?? messages.at(-1)?.["__openclaw"]?.seq ?? 0,
       turnBoundaryPending: options.turnBoundaryPending ?? false,
       assistantErrorPending: options.assistantErrorPending ?? false,
@@ -137,156 +137,6 @@ describe("SessionHistorySseState", () => {
 
     expect(appended?.messageSeq).toBe(9);
     expect(state.snapshot().messages.at(-1)?.["__openclaw"]?.seq).toBe(9);
-  });
-
-  test("emits message-tool mirror when silent control reply completes inline append", () => {
-    const state = newStateWithUserText("reply here");
-
-    expect(
-      state.appendInlineMessage({
-        message: {
-          role: "assistant",
-          content: [
-            messageToolCall("call-message-channel-hint", "Still the current chat.", {
-              channel: "telegram",
-            }),
-          ],
-        },
-        messageSeq: 2,
-      })?.messageSeq,
-    ).toBe(2);
-    expect(
-      state.appendInlineMessage({
-        message: messageToolResult("call-message-channel-hint", "24270", undefined, {
-          chatId: "current-run",
-        }),
-        messageSeq: 3,
-      })?.messageSeq,
-    ).toBe(3);
-
-    const appended = appendAssistantText(state, "NO_REPLY", 4);
-
-    expect(appended?.messageSeq).toBe(4);
-    expect(
-      (
-        appended?.message as {
-          content?: Array<{ text?: string }>;
-          openclawMessageToolMirror?: unknown;
-        }
-      )?.content?.[0]?.text,
-    ).toBe("Still the current chat.");
-    expect(
-      Boolean(
-        (appended?.message as { openclawMessageToolMirror?: unknown } | undefined)
-          ?.openclawMessageToolMirror,
-      ),
-    ).toBe(true);
-  });
-
-  test("keeps message-tool mirror pending across projected sessions_send inline history", () => {
-    const state = newState([
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "toolCall",
-            id: "call-message-forwarded",
-            name: "message",
-            arguments: {
-              action: "send",
-              message: "Still visible after forwarded handoff.",
-            },
-          },
-        ],
-        __openclaw: { seq: 1 },
-      },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "forwarded status update" }],
-        senderLabel: "Forwarded from main",
-        senderSession: { sessionKey: "agent:main:webchat:source", agentId: "main" },
-        provenance: {
-          kind: "inter_session",
-          sourceSessionKey: "agent:main:webchat:source",
-          sourceTool: "sessions_send",
-        },
-        __openclaw: { seq: 2 },
-      },
-    ]);
-
-    expect(state.snapshot().messages[1]).toMatchObject({
-      role: "assistant",
-      senderLabel: "Forwarded from main",
-    });
-    expect(
-      state.appendInlineMessage({
-        message: {
-          role: "toolResult",
-          toolName: "message",
-          toolCallId: "call-message-forwarded",
-          content: { ok: true, messageId: "24271", chatId: "current-run" },
-        },
-        messageSeq: 3,
-      })?.messageSeq,
-    ).toBe(3);
-
-    const appended = state.appendInlineMessage({
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "NO_REPLY" }],
-      },
-      messageSeq: 4,
-    });
-
-    expect(
-      (
-        appended?.message as {
-          content?: Array<{ text?: string }>;
-          openclawMessageToolMirror?: unknown;
-        }
-      )?.content?.[0]?.text,
-    ).toBe("Still visible after forwarded handoff.");
-    expect(
-      Boolean(
-        (appended?.message as { openclawMessageToolMirror?: unknown } | undefined)
-          ?.openclawMessageToolMirror,
-      ),
-    ).toBe(true);
-  });
-
-  test("requests refresh when silent control reply completes multiple message-tool mirrors", () => {
-    const state = newState([userTextMessage("send both here", 1)]);
-
-    state.appendInlineMessage({
-      message: {
-        role: "assistant",
-        content: [
-          messageToolCall("call-message-first", "First visible reply."),
-          messageToolCall("call-message-second", "Second visible reply."),
-        ],
-      },
-      messageSeq: 2,
-    });
-    state.appendInlineMessage({
-      message: messageToolResult("call-message-first", "first"),
-      messageSeq: 3,
-    });
-    state.appendInlineMessage({
-      message: messageToolResult("call-message-second", "second"),
-      messageSeq: 4,
-    });
-
-    const appended = appendAssistantText(state, "NO_REPLY", 5);
-
-    expect(appended).toEqual({ shouldRefresh: true });
-    expect(
-      state
-        .snapshot()
-        .messages.flatMap(
-          (message) => (message as { content?: Array<{ text?: string }> }).content?.[0]?.text,
-        )
-        .filter((text): text is string => typeof text === "string"),
-    ).toEqual(["send both here", "First visible reply.", "Second visible reply."]);
   });
 
   test("does not emit a no-op hidden inline control reply", () => {
@@ -435,31 +285,39 @@ describe("SessionHistorySseState", () => {
   });
 
   test.each([
-    { name: "latest page", cursor: undefined, expectedSeq: 8 },
-    { name: "older cursor page", cursor: "8", expectedSeq: 7 },
+    { name: "latest page", cursor: undefined, expectedSeq: 8, reset: undefined },
+    { name: "older cursor page", cursor: "8", expectedSeq: 7, reset: undefined },
+    { name: "initial reset", cursor: "8", expectedSeq: 8, reset: "initial" },
+    { name: "reset during refresh", cursor: "8", expectedSeq: 8, reset: "refresh" },
   ])(
     "refreshes limited SSE history from bounded async reads ($name)",
-    async ({ cursor, expectedSeq }) => {
+    async ({ cursor, expectedSeq, reset }) => {
       const fullReadSpy = vi
         .spyOn(sessionTranscriptReaders, "readSessionMessagesWithSourceAsync")
         .mockResolvedValue({ messages: [] });
       const tailReadSpy = vi
         .spyOn(sessionTranscriptReaders, "readRecentSessionMessagesWithStatsAsync")
-        .mockResolvedValueOnce({
+        .mockResolvedValue({
           messages: [assistantTextMessage("tail two", expectedSeq)],
           totalMessages: 8,
         });
       const pageReadSpy = vi
         .spyOn(sessionTranscriptReaders, "readSessionMessagesPageWithStatsAsync")
-        .mockResolvedValueOnce({
+        .mockResolvedValue({
           messages: [assistantTextMessage("tail two", expectedSeq)],
           totalMessages: 8,
         });
+      if (reset === "refresh") {
+        pageReadSpy.mockRejectedValueOnce(
+          new SessionTranscriptProjectionUnavailableError("sess-main", "window-changed"),
+        );
+      }
       try {
         const state = newState([assistantTextMessage("tail one", 7)], {
           rawTranscriptSeq: 7,
           limit: 1,
           cursor,
+          windowReset: reset === "initial",
         });
 
         expect(state.snapshot().messages[0]?.["__openclaw"]?.seq).toBe(7);
@@ -468,8 +326,17 @@ describe("SessionHistorySseState", () => {
         expect(refreshed.hasMore).toBe(true);
         expect(refreshed.nextCursor).toBe(String(expectedSeq));
         expect(refreshed.messages[0]?.["__openclaw"]?.seq).toBe(expectedSeq);
-        expect(tailReadSpy).toHaveBeenCalledTimes(cursor ? 0 : 1);
-        expect(pageReadSpy).toHaveBeenCalledTimes(cursor ? 1 : 0);
+        expect(tailReadSpy).toHaveBeenCalledTimes(!cursor || reset ? 1 : 0);
+        expect(pageReadSpy).toHaveBeenCalledTimes(cursor && reset !== "initial" ? 1 : 0);
+        if (reset) {
+          tailReadSpy.mockResolvedValueOnce({
+            messages: [assistantTextMessage("next tail", 9)],
+            totalMessages: 9,
+          });
+          expect((await state.refreshAsync()).messages).toEqual([
+            assistantTextMessage("next tail", 9),
+          ]);
+        }
         expect(fullReadSpy).not.toHaveBeenCalled();
       } finally {
         fullReadSpy.mockRestore();

@@ -8,7 +8,7 @@ import {
 } from "./app-server/session-binding.js";
 import { assertCodexArchiveDescendantsUnowned } from "./app-server/thread-archive-guard.js";
 import { isAdoptionSessionKeyForThread, requireIdleThread } from "./session-catalog-adoption.js";
-import { runSessionActionExclusive } from "./session-catalog-node-adoption.js";
+import { catalogSessionActions } from "./session-catalog-node-adoption.js";
 import { CatalogParamsError, CODEX_LOCAL_SESSION_HOST_ID } from "./session-catalog-parsing.js";
 import type { CodexSessionCatalogControl } from "./session-catalog-types.js";
 
@@ -76,7 +76,7 @@ export async function archiveLocalCodexSession(params: {
   sourceHomeId?: string;
   allowLegacy?: boolean;
 }): Promise<{ archived: true }> {
-  return await runSessionActionExclusive(
+  return await catalogSessionActions.enqueue(
     sessionCatalogAdoptedSourceKey(params.hostId ?? CODEX_LOCAL_SESSION_HOST_ID, params.threadId),
     async () => {
       return await params.bindingStore.withThreadArchiveFence(async () => {

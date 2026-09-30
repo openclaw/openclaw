@@ -1,11 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
+import { retainSessionListForegroundWork } from "../../gateway/session-projection-work.js";
 import {
   createSessionRowProjection,
   type SessionRowProjection,
 } from "../../gateway/session-row-projection.js";
+import { resolveSessionStoreKey } from "../../gateway/session-store-key.js";
 import { listProjectedSessions } from "../../gateway/session-utils-list.js";
+import { createGatewaySessionEntryReader } from "../../gateway/session-utils-store-lookup.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import {
   inspectAgentDatabaseAdmission,
@@ -21,8 +24,10 @@ import { assertOpenClawDatabasesReady } from "../../state/openclaw-database-pref
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { loadCombinedSessionStoreForGatewayCore } from "./combined-store-gateway.js";
+import * as sessionAccessor from "./session-accessor.js";
 import {
   listSessionEntriesReadOnly,
+  deleteSessionEntryLifecycle,
   persistSessionTranscriptTurn,
   replaceSessionEntrySync,
 } from "./session-accessor.js";
@@ -338,9 +343,15 @@ it("keeps fixed-store ownership out of separate registered and suffixed database
 it.each([
   { name: "physical sentinel", parent: "global", model: "qwen3:14b", source: "inherited" },
   {
-    name: "qualified main alias",
+    name: "literal main parent",
     parent: "agent:main:main",
-    model: "qwen3:8b",
+    model: "qwen3:4b",
+    source: "inherited",
+  },
+  {
+    name: "literal configured-main parent",
+    parent: "agent:main:home",
+    model: "qwen3:30b",
     source: "inherited",
   },
   {
@@ -357,11 +368,11 @@ it.each([
     source: null,
   },
 ] as const)(
-  "keeps $name model facts separate from displayed lineage",
+  "keeps $name model facts bound to stored lineage",
   async ({ name, parent, model, source }) => {
     await withOpenClawTestState({ label: "combined-parent-model" }, async () => {
       const cfg: OpenClawConfig = {
-        session: { scope: "global" },
+        session: { scope: "global", mainKey: "home" },
         agents: {
           entries: { main: { default: true }, work: {} },
           defaults: { model: { primary: "ollama/llama3.1:8b" } },
@@ -369,6 +380,8 @@ it.each([
       };
       const parents: Array<[string, string, string]> = [
         ["main", "global", "qwen3:8b"],
+        ["main", "agent:main:main", "qwen3:4b"],
+        ["main", "agent:main:home", "qwen3:30b"],
         ["main", "agent:main:global", "qwen3:32b"],
       ];
       if (name !== "missing physical parent") {
@@ -400,7 +413,7 @@ it.each([
             modelProvider: "ollama",
             model,
             modelOverrideSource: source,
-            parentSessionKey: parent === "agent:main:main" ? "global" : parent,
+            parentSessionKey: parent,
           });
           const searched = await listProjectedSessions({
             projection,
@@ -409,6 +422,165 @@ it.each([
           expect(searched.sessions.some((row) => row.key === key)).toBe(true);
         }
       });
+    });
+  },
+);
+
+it.each(["global", "per-sender"] as const)(
+  "selects a later stored parent before its current alias in %s views",
+  async (scope) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const cfg: OpenClawConfig = {
+        session: { scope, mainKey: "work" },
+        agents: {
+          entries: { alpha: { default: true }, main: {} },
+          defaults: { model: { primary: "ollama/llama3.1:8b" } },
+        },
+      };
+      await state.writeConfig(cfg);
+      state.applyEnv();
+      const parent = "agent:main:main";
+      const alias = scope === "global" ? "global" : "agent:main:work";
+      const key = "agent:alpha:dashboard:child";
+      const child = {
+        sessionId: "child",
+        updatedAt: 2,
+        status: "running" as const,
+        parentSessionKey: parent,
+        spawnedBy: parent,
+      };
+      const writeParent = (sessionKey: string, model: string) =>
+        replaceSessionEntrySync(
+          { agentId: "main", sessionKey },
+          {
+            sessionId: sessionKey,
+            updatedAt: 1,
+            providerOverride: "ollama",
+            modelOverride: model,
+            modelOverrideSource: "user",
+            modelOverrideRouteResolution: "resolved",
+          },
+        );
+      replaceSessionEntrySync({ agentId: "alpha", sessionKey: key }, child);
+      writeParent(alias, "qwen3:8b");
+      writeParent(parent, "qwen3:32b");
+      expect(resolveSessionStoreKey({ cfg, sessionKey: parent })).toBe(alias);
+      const release = retainSessionListForegroundWork();
+      try {
+        await withResidentRows(cfg, async (projection) => {
+          const check = async (model: string, literal: boolean) => {
+            const displayParent = literal || scope !== "global" ? parent : "global";
+            for (const opts of [{}, { agentId: "alpha" }]) {
+              // Alpha loads first; both the full inventory and a missing-owner exact join agree.
+              const combined = loadCombinedSessionStoreForGatewayCore(cfg, opts);
+              expect(combined.store[key]).toMatchObject({
+                parentSessionKey: displayParent,
+                spawnedBy: displayParent,
+              });
+              const reads = vi.spyOn(sessionAccessor, "loadExactSessionEntryCandidates");
+              try {
+                const source = combined.targetsBySessionKey.get(key)!;
+                expect(source.readSourceEntry(parent)?.modelOverride).toBe(model);
+                const firstReads = reads.mock.calls.length;
+                if (scope === "global") {
+                  expect(firstReads).toBe(0);
+                }
+                expect(source.readSourceEntry(parent)?.modelOverride).toBe(model);
+                expect(reads.mock.calls).toHaveLength(firstReads);
+              } finally {
+                reads.mockRestore();
+              }
+              const list = await listProjectedSessions({ projection, opts });
+              expect(list.sessions.find((row) => row.key === key)).toMatchObject({
+                parentSessionKey: displayParent,
+                spawnedBy: displayParent,
+                model,
+                modelOverrideSource: "inherited",
+              });
+            }
+            const read = createGatewaySessionEntryReader({
+              cfg,
+              agentId: "alpha",
+              store: { [key]: child },
+            });
+            expect(read(parent)?.modelOverride).toBe(model);
+            const filtered = await listProjectedSessions({
+              projection,
+              opts: { spawnedBy: displayParent },
+            });
+            expect(filtered.sessions.map((row) => row.key)).toContain(key);
+            const children =
+              projection.snapshot({ agentId: "main", key: literal ? parent : alias }).row
+                ?.childSessions ?? [];
+            if (literal || scope === "global") {
+              expect(children).toContain(key);
+            } else {
+              // Per-sender navigation keeps the missing literal address, even with model fallback.
+              expect(children).not.toContain(key);
+            }
+            if (literal) {
+              expect(
+                projection.snapshot({ agentId: "main", key: alias }).row?.childSessions ?? [],
+              ).not.toContain(key);
+            }
+          };
+          await check("qwen3:32b", true);
+          writeParent(alias, "qwen3:14b");
+          await check("qwen3:32b", true);
+          await deleteSessionEntryLifecycle({
+            agentId: "main",
+            storePath: projection.capture({ agentId: "main", key: parent })!.storeTarget.storePath,
+            archiveTranscript: false,
+            target: { canonicalKey: parent, storeKeys: [parent] },
+          });
+          await check("qwen3:14b", false);
+          writeParent(alias, "qwen3:8b");
+          await check("qwen3:8b", false);
+          writeParent(parent, "qwen3:32b");
+          await check("qwen3:32b", true);
+        });
+      } finally {
+        release();
+      }
+    });
+  },
+);
+
+it.each([false, true])(
+  "retains scoped removed-default alias selection (present=%s)",
+  async (present) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const cfg: OpenClawConfig = {
+        agents: { entries: { ops: { default: true }, work: {} } },
+      };
+      await state.writeConfig(cfg);
+      state.applyEnv();
+      if (present) {
+        replaceSessionEntrySync(
+          { agentId: "ops", sessionKey: "agent:ops:main" },
+          { sessionId: "replacement-owner", updatedAt: 1, modelOverride: "qwen3:8b" },
+        );
+      }
+      const key = "agent:work:dashboard:child";
+      replaceSessionEntrySync(
+        { agentId: "work", sessionKey: key },
+        { sessionId: "child", updatedAt: 1, parentSessionKey: "agent:main:main" },
+      );
+      const scoped = loadCombinedSessionStoreForGatewayCore(cfg, { agentId: "work" });
+      expect(scoped.store[key]?.parentSessionKey).toBe("agent:main:main");
+      const source = scoped.targetsBySessionKey.get(key)!;
+      expect(source.readSourceEntry("agent:main:main")?.sessionId).toBe(
+        present ? "replacement-owner" : undefined,
+      );
+      const reads = vi.spyOn(sessionAccessor, "loadExactSessionEntryCandidates");
+      try {
+        expect(source.readSourceEntry("agent:main:main")?.sessionId).toBe(
+          present ? "replacement-owner" : undefined,
+        );
+        expect(reads).not.toHaveBeenCalled();
+      } finally {
+        reads.mockRestore();
+      }
     });
   },
 );
@@ -524,7 +696,7 @@ it.for([false, true])(
 );
 
 it.for(["main", "unknown", "global"])(
-  "resolves global lineage aliases without folding sentinels (mainKey=%s)",
+  "keeps qualified lineage separate from physical sentinels (mainKey=%s)",
   async (mainKey) => {
     await withOpenClawTestState({ label: "combined-store-global-lineage" }, async (state) => {
       const storePath = state.statePath("shared.sqlite");
@@ -538,14 +710,15 @@ it.for(["main", "unknown", "global"])(
       };
       const database = openOpenClawAgentDatabase({ agentId: "main", path: storePath });
       setCanonicalSqliteSessionMainKey(database, mainKey);
-      for (const sessionKey of ["global", "unknown"]) {
+      const qualifiedParent = `agent:ops:${mainKey}`;
+      for (const sessionKey of ["global", "unknown", qualifiedParent]) {
         replaceSessionEntrySync(
           { agentId: "ops", sessionKey, storePath },
           { sessionId: `parent-${sessionKey}`, updatedAt: Date.now() },
         );
       }
       for (const [name, parentSessionKey, parentSessionId] of [
-        ["alias", `agent:ops:${mainKey}`, "parent-global"],
+        ["qualified", qualifiedParent, `parent-${qualifiedParent}`],
         ["global", "global", "parent-global"],
         ["unknown", "unknown", "parent-unknown"],
       ] as const) {
@@ -563,7 +736,8 @@ it.for(["main", "unknown", "global"])(
       }
       await withResidentRows(cfg, async (projection) => {
         for (const [spawnedBy, children] of [
-          ["global", ["alias", "global"]],
+          [qualifiedParent, ["qualified"]],
+          ["global", ["global"]],
           ["unknown", ["unknown"]],
         ] as const) {
           const selected = await listProjectedSessions({

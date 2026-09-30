@@ -166,7 +166,7 @@ export function createOpenAICompletionsToolCallDeltaNormalizer(): (
     }
 
     const functionCall = delta.function_call;
-    if (sawModernToolCall) {
+    if (sawModernToolCall || (!functionCall && !pendingLegacyToolCall)) {
       return [{ delta: ordinaryDelta, toolCalls: [] }];
     }
 

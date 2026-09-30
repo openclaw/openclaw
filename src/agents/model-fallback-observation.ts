@@ -291,6 +291,7 @@ export function logModelFallbackDecision(
 }
 
 export type ModelFallbackChainStopReason =
+  | "provider_review_continuation"
   | "agent_run_terminal_timeout"
   | "idle_timeout_circuit_breaker"
   | "command_lane_task_timeout"
