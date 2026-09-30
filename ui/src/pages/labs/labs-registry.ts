@@ -50,21 +50,26 @@ function readConfiguredFeatureEnabled(
     : Object.keys(raw).some((key) => key !== "enabled");
 }
 
+const BOOLEAN_GATE = {
+  onValue: true,
+  offValue: false,
+  activeValues: [true],
+  readEnabled: null,
+  enableAlso: null,
+  resetScope: "gate",
+} as const;
+
 export const LAB_FEATURES = [
   {
+    ...BOOLEAN_GATE,
     id: "decisionAssistance",
     title: () => t("labsPage.decisionAssistance.title"),
     description: () => t("labsPage.decisionAssistance.description"),
     docsUrl: "https://docs.openclaw.ai/concepts/experimental-features#decision-assistance",
     configPath: ["agents", "defaults", "experimental", "decisionAssistance"],
-    onValue: true,
-    offValue: false,
-    activeValues: [true],
-    readEnabled: null,
-    enableAlso: null,
-    resetScope: "gate",
   },
   {
+    ...BOOLEAN_GATE,
     id: "codeMode",
     title: () => t("labsPage.codeMode.title"),
     description: () => t("labsPage.codeMode.description"),
@@ -73,7 +78,6 @@ export const LAB_FEATURES = [
     // The on position writes the "auto" tier, never `true`: Labs offers
     // Auto/Off, and force-on for unevaluated models stays a config-only choice.
     onValue: "auto",
-    offValue: false,
     activeValues: [true, "auto"],
     // Mirrors resolveCodeModeConfig: absence inherits auto; authored objects opt in.
     readEnabled: (raw) =>
@@ -81,18 +85,14 @@ export const LAB_FEATURES = [
       raw === true ||
       raw === "auto" ||
       (isRecord(raw) && (raw.enabled === true || raw.enabled === "auto")),
-    enableAlso: null,
-    resetScope: "gate",
   },
   {
+    ...BOOLEAN_GATE,
     id: "toolSearch",
     title: () => t("labsPage.toolSearch.title"),
     description: () => t("labsPage.toolSearch.description"),
     docsUrl: "https://docs.openclaw.ai/tools/tool-search",
     configPath: ["tools", "toolSearch", "enabled"],
-    onValue: true,
-    offValue: false,
-    activeValues: [true],
     // Mirrors resolveToolSearchConfig: unauthored config is on, while explicit
     // booleans and objects retain their own enablement semantics.
     readEnabled: (raw) => raw === undefined || readConfiguredFeatureEnabled(raw, [true]),
@@ -102,43 +102,29 @@ export const LAB_FEATURES = [
     resetScope: "parent",
   },
   {
+    ...BOOLEAN_GATE,
     id: "customPluginUi",
     title: () => t("labsPage.customPluginUi.title"),
     description: () => t("labsPage.customPluginUi.description"),
     docsUrl: "https://docs.openclaw.ai/plugins/feature-plugins",
     configPath: ["gateway", "controlUi", "experimental", "customPlugins"],
-    onValue: true,
-    offValue: false,
-    activeValues: [true],
-    readEnabled: null,
-    enableAlso: null,
-    resetScope: "gate",
   },
   {
+    ...BOOLEAN_GATE,
     id: "hostDesktop",
     title: () => t("labsPage.hostDesktop.title"),
     description: () => t("labsPage.hostDesktop.description"),
     docsUrl: "https://docs.openclaw.ai/gateway/configuration-reference#desktop",
     configPath: ["desktop", "host", "enabled"],
-    onValue: true,
-    offValue: false,
-    activeValues: [true],
-    readEnabled: null,
-    enableAlso: null,
     resetScope: null,
   },
   {
+    ...BOOLEAN_GATE,
     id: "workerDesktop",
     title: () => t("labsPage.workerDesktop.title"),
     description: () => t("labsPage.workerDesktop.description"),
     docsUrl: "https://docs.openclaw.ai/gateway/cloud-workers#desktop-interactive",
     configPath: ["cloudWorkers", "desktop"],
-    onValue: true,
-    offValue: false,
-    activeValues: [true],
-    readEnabled: null,
-    enableAlso: null,
-    resetScope: "gate",
   },
 ] as const satisfies readonly LabFeature[];
 

@@ -370,9 +370,7 @@ export function validateExplicitPluginConfig(params: {
         selectedMemoryPluginId = pluginId;
       }
     }
-    const shouldReplacePluginConfig = entryHasConfig || (applyDefaults && enabled);
-    const shouldValidate = enabled || entryHasConfig;
-    if (shouldValidate) {
+    if (enabled || entryHasConfig) {
       if (record.configSchema) {
         const result = validatePreparedPluginSchemaValue(
           {
@@ -395,7 +393,7 @@ export function validateExplicitPluginConfig(params: {
               allowedValuesHiddenCount: error.allowedValuesHiddenCount,
             });
           }
-        } else if (shouldReplacePluginConfig) {
+        } else if (entryHasConfig || (applyDefaults && enabled)) {
           let nextValue = result.value as Record<string, unknown>;
           const nativeCatalog =
             record.setup?.nativeSessionCatalog ??
@@ -418,10 +416,7 @@ export function validateExplicitPluginConfig(params: {
           }
           params.replacePluginEntryConfig(pluginId, nextValue);
         }
-      } else if (record.format === "bundle") {
-        // Compatible bundles currently expose no native OpenClaw config schema.
-        // Treat them as schema-less capability packs rather than failing validation.
-      } else {
+      } else if (record.format !== "bundle") {
         issues.push({
           path: `plugins.entries.${pluginId}`,
           message: `plugin schema missing for ${pluginId}`,

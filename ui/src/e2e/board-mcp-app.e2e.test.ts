@@ -496,23 +496,29 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
       await appContent.waitFor();
       await page.screenshot({ path: `${artifactDir}/fullscreen-dashboard.png` });
     }
+    // Measure the frame on every poll: a viewport resize settles the board
+    // layout asynchronously, so a size read before polling can be stale.
     const expectHostDimensions = async () => {
       const frame = page.locator("mcp-app-view iframe");
-      const dimensions = await frame.evaluate((element) => {
-        const rect = element.getBoundingClientRect();
-        return { width: Math.round(rect.width), height: Math.round(rect.height) };
-      });
       await expect
-        .poll(async () =>
-          JSON.parse(
+        .poll(async () => {
+          const size = await frame.evaluate((element) => {
+            const rect = element.getBoundingClientRect();
+            return { width: Math.round(rect.width), height: Math.round(rect.height) };
+          });
+          const reported = JSON.parse(
             (await page
               .frameLocator("mcp-app-view iframe")
               .frameLocator("iframe")
               .locator("html")
               .getAttribute("data-host-dimensions")) ?? "null",
-          ),
-        )
-        .toEqual(dimensions);
+          ) as { width?: number; height?: number } | null;
+          return { size, reported };
+        })
+        .toSatisfy(
+          ({ size, reported }) =>
+            reported?.width === size.width && reported?.height === size.height,
+        );
     };
     expect(await frameInsets()).toEqual({ top: 0, bottom: 0, bodyHeightGap: 0 });
     await expectHostDimensions();

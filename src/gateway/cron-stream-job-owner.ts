@@ -1,6 +1,6 @@
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { errorBackoffMs } from "../cron/service/jobs-scheduling.js";
-import { cronStreamScheduleKey } from "../cron/stream-schedule.js";
+import { CronStreamSourceRetirementError, cronStreamScheduleKey } from "../cron/stream-schedule.js";
 import type { CronJob, CronJobState } from "../cron/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { GatewayScheduledJob, GatewayScheduler } from "../infra/gateway-scheduler.js";
@@ -499,6 +499,13 @@ export class CronStreamJobOwner {
 
     let retirementError: unknown;
     if (stopRequiresSourceRetirement(reason)) {
+      const adoptRetiredIdentity = (identity: string) => {
+        const retiredJob = {
+          ...this.job,
+          state: { ...this.job.state, streamSourceIdentity: identity },
+        };
+        this.adoptJob(retiredJob, this.scheduleKey, identity);
+      };
       try {
         const retiredIdentity = await this.params.retireSource(
           this.job.id,
@@ -506,14 +513,18 @@ export class CronStreamJobOwner {
           this.sourceIdentity,
         );
         if (retiredIdentity !== undefined) {
-          const retiredJob = {
-            ...this.job,
-            state: { ...this.job.state, streamSourceIdentity: retiredIdentity },
-          };
-          this.adoptJob(retiredJob, this.scheduleKey, retiredIdentity);
+          adoptRetiredIdentity(retiredIdentity);
         }
       } catch (error) {
-        // Teardown continues, but the caller still sees the failed durable fence.
+        if (
+          error instanceof CronStreamSourceRetirementError &&
+          error.retirement.jobId === this.job.id &&
+          error.retirement.scheduleKey === this.scheduleKey &&
+          error.retirement.previousIdentity === this.sourceIdentity
+        ) {
+          adoptRetiredIdentity(error.retirement.identity);
+        }
+        // Reconcile a known retirement before final status; the original failure still reaches the caller.
         retirementError = error;
       }
     }

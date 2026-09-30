@@ -79,37 +79,31 @@ function resolveAgentHarnessOwnerPluginIds(
 function isProviderConfigured(cfg: OpenClawConfig, providerId: string): boolean {
   const normalized = normalizeProviderId(providerId);
   const profiles = cfg.auth?.profiles;
-  if (profiles && typeof profiles === "object") {
-    for (const profile of Object.values(profiles)) {
-      if (!isRecord(profile)) {
-        continue;
-      }
-      const provider = normalizeProviderId(profile.provider ?? "");
-      if (provider === normalized) {
-        return true;
-      }
-    }
+  if (
+    profiles &&
+    typeof profiles === "object" &&
+    Object.values(profiles).some(
+      (profile) => isRecord(profile) && normalizeProviderId(profile.provider ?? "") === normalized,
+    )
+  ) {
+    return true;
   }
 
   const providerConfig = cfg.models?.providers;
-  if (providerConfig && typeof providerConfig === "object") {
-    for (const key of Object.keys(providerConfig)) {
-      if (normalizeProviderId(key) === normalized) {
-        return true;
-      }
-    }
+  if (
+    providerConfig &&
+    typeof providerConfig === "object" &&
+    Object.keys(providerConfig).some((key) => normalizeProviderId(key) === normalized)
+  ) {
+    return true;
   }
 
-  for (const { value: ref } of collectConfiguredModelRefs(cfg, {
-    includeChannelModelOverrides: false,
-  })) {
-    const provider = extractProviderFromModelRef(ref);
-    if (provider && provider === normalized) {
-      return true;
-    }
-  }
-
-  return false;
+  return collectConfiguredModelRefs(cfg, { includeChannelModelOverrides: false }).some(
+    ({ value: ref }) => {
+      const provider = extractProviderFromModelRef(ref);
+      return Boolean(provider) && provider === normalized;
+    },
+  );
 }
 
 function hasPluginOwnedToolConfig(cfg: OpenClawConfig, plugin: PluginManifestRecord): boolean {
@@ -182,10 +176,8 @@ function hasConfiguredVoiceProviderSelection(cfg: OpenClawConfig): boolean {
 }
 
 function hasConfiguredPluginConfigEntry(cfg: OpenClawConfig): boolean {
-  const entries = asOptionalObjectRecord(cfg.plugins?.entries);
-  return (
-    entries !== undefined &&
-    Object.values(entries).some((entry) => isRecord(entry) && isRecord(entry.config))
+  return Object.values(asOptionalObjectRecord(cfg.plugins?.entries) ?? {}).some(
+    (entry) => isRecord(entry) && isRecord(entry.config),
   );
 }
 
@@ -205,18 +197,14 @@ function toolPolicyReferencesBrowser(value: unknown): boolean {
 }
 
 function hasBrowserToolReference(cfg: OpenClawConfig): boolean {
-  if (toolPolicyReferencesBrowser(cfg.tools)) {
-    return true;
-  }
-  return listAgentEntries(cfg).some((entry) => toolPolicyReferencesBrowser(entry.tools));
+  return (
+    toolPolicyReferencesBrowser(cfg.tools) ||
+    listAgentEntries(cfg).some((entry) => toolPolicyReferencesBrowser(entry.tools))
+  );
 }
 
 function collectConfiguredPluginEntryIds(cfg: OpenClawConfig): string[] {
-  const entries = asOptionalObjectRecord(cfg.plugins?.entries);
-  if (!entries) {
-    return [];
-  }
-  return Object.keys(entries)
+  return Object.keys(asOptionalObjectRecord(cfg.plugins?.entries) ?? {})
     .map((pluginId) => pluginId.trim())
     .filter((pluginId) => pluginId && !isPluginEntryExplicitlyDisabled(cfg, pluginId));
 }
@@ -238,10 +226,7 @@ function hasBrowserSetupAutoEnableRelevantConfig(cfg: OpenClawConfig): boolean {
 }
 
 function hasAcpxSetupAutoEnableRelevantConfig(cfg: OpenClawConfig): boolean {
-  if (isPluginEntryExplicitlyDisabled(cfg, "acpx")) {
-    return false;
-  }
-  if (!isRecord(cfg.acp)) {
+  if (isPluginEntryExplicitlyDisabled(cfg, "acpx") || !isRecord(cfg.acp)) {
     return false;
   }
   const backend = normalizeOptionalLowercaseString(cfg.acp.backend);
@@ -526,28 +511,23 @@ export function resolvePluginAutoEnableManifestRegistry(params: {
   if (!configMayNeedPluginManifestRegistry(params.config)) {
     return EMPTY_PLUGIN_MANIFEST_REGISTRY;
   }
-  const currentSnapshot = getCurrentPluginMetadataSnapshot({
+  let snapshot = getCurrentPluginMetadataSnapshot({
     config: params.config,
     env: params.env,
     allowWorkspaceScopedSnapshot: true,
   });
-  const policyCompatibleCurrentSnapshot =
-    currentSnapshot ??
-    (() => {
-      if (normalizePluginsConfig(params.config.plugins).loadPaths.length !== 0) {
-        return undefined;
-      }
-      const snapshot = getCurrentPluginMetadataSnapshot({
-        env: params.env,
-        allowWorkspaceScopedSnapshot: true,
-        requireDefaultDiscoveryContext: true,
-      });
-      return snapshot?.policyHash === resolveInstalledPluginIndexPolicyHash(params.config)
-        ? snapshot
-        : undefined;
-    })();
+  if (!snapshot && normalizePluginsConfig(params.config.plugins).loadPaths.length === 0) {
+    const candidate = getCurrentPluginMetadataSnapshot({
+      env: params.env,
+      allowWorkspaceScopedSnapshot: true,
+      requireDefaultDiscoveryContext: true,
+    });
+    if (candidate?.policyHash === resolveInstalledPluginIndexPolicyHash(params.config)) {
+      snapshot = candidate;
+    }
+  }
   return (
-    policyCompatibleCurrentSnapshot?.manifestRegistry ??
+    snapshot?.manifestRegistry ??
     loadPluginMetadataSnapshot({
       config: params.config,
       env: params.env,

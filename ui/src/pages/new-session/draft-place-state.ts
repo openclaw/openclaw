@@ -282,19 +282,7 @@ export class DraftPlaceState {
     );
   }
 
-  private findDevice(deviceId: string) {
-    return this.devices().find((device) => device.deviceId === deviceId);
-  }
-
-  devicePlacementReady(): boolean {
-    return this.devicePlacement().ready;
-  }
-
-  devicePlacementDisabledReason(): string | undefined {
-    return this.devicePlacement().disabledReason;
-  }
-
-  private devicePlacement() {
+  devicePlacement() {
     return resolveSelectedDevicePlacement(this.devices(), this.gateway.environments, this);
   }
 
@@ -610,7 +598,8 @@ export class DraftPlaceState {
       return;
     }
     if (
-      (deviceId && this.findDevice(deviceId)?.selectable !== true) ||
+      (deviceId &&
+        this.devices().find((device) => device.deviceId === deviceId)?.selectable !== true) ||
       (autoDevice && !this.devices().some((device) => device.selectable))
     ) {
       return;

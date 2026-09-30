@@ -14,6 +14,7 @@ import {
   readStoreAllowFromForDmPolicy,
   resolveDmGroupAccessWithLists,
 } from "../plugin-sdk/channel-access-compat.js";
+import type { resolveCommandAuthorizedFromAuthorizers } from "./command-gating.js";
 import type { ChannelId } from "./plugins/types.public.js";
 export type { AccessGroupMembershipResolver } from "../plugin-sdk/access-groups.js";
 
@@ -21,11 +22,7 @@ export type { AccessGroupMembershipResolver } from "../plugin-sdk/access-groups.
 export type DirectDmCommandAuthorizationRuntime = {
   shouldComputeCommandAuthorized: (rawBody: string, cfg: OpenClawConfig) => boolean;
   /** @deprecated Command authorization is resolved by channel ingress. Kept for runtime injection compatibility. */
-  resolveCommandAuthorizedFromAuthorizers?: (params: {
-    useAccessGroups: boolean;
-    authorizers: Array<{ configured: boolean; allowed: boolean }>;
-    modeWhenAccessGroupsOff?: "allow" | "deny" | "configured";
-  }) => boolean;
+  resolveCommandAuthorizedFromAuthorizers?: typeof resolveCommandAuthorizedFromAuthorizers;
 };
 
 /**
