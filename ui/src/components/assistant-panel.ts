@@ -77,6 +77,8 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
   @state() private homeStarted = false;
   private pendingPrimaryPane: ChatPaneElement | null = null;
   @state() private destination: AssistantDestination = "custodian";
+  /** Built-in target a plugin dock replaced; restored when that dock closes. */
+  private builtInDestination: "home" | "custodian" = "custodian";
   private publishedSessionKey: string | null = null;
   private readonly contentLoader = new LazyCustomElementRequestController(this);
   @property({ type: Number }) minimizeRequestId = 0;
@@ -167,6 +169,7 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
         );
       } catch {}
       this.destination = saved?.destination === "home" ? "home" : "custodian";
+      this.builtInDestination = this.destination;
     }
     if (this.context?.gateway.snapshot.phase === "connected") {
       // Roster/hello disappear during reconnect; keep the captured Home identity with its outbox.
@@ -361,6 +364,9 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
   }
 
   openSession(params: Parameters<AssistantDockOwner["openSession"]>[0], activation: object): void {
+    if (typeof this.destination === "string") {
+      this.builtInDestination = this.destination;
+    }
     this.openDestination({ kind: "session", params: structuredClone(params), activation });
   }
 
@@ -430,9 +436,9 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
     this.dockLayout.setOpen(open);
     this.claimInput(open ? "dock" : "page");
     if (!open && typeof this.destination !== "string") {
-      // Closing discards the activation-owned target; it must not restore Home or Ask.
-      this.destination = "home";
-      this.persistTarget();
+      // Closing discards the activation-owned target without reopening a dock; the
+      // operator's built-in Home/Ask choice and its persisted value stay untouched.
+      this.destination = this.builtInDestination;
     }
     this.publishSessionKey();
   }

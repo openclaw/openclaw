@@ -250,6 +250,22 @@ describe("assistant panel", () => {
       context.assistantDock.close(activation);
       await panel.updateComplete;
       expect(panel.assistantPanelOpen).toBe(false);
+      // The built-in choice the plugin dock replaced survives its close, persisted and live.
+      const builtIn = eventName === HOME_PANEL_TOGGLE_EVENT ? "home" : "custodian";
+      const storedTargets = Array.from({ length: localStorage.length }, (_, index) =>
+        localStorage.key(index),
+      )
+        .filter((key) => key?.startsWith("openclaw.assistant.panel.target.v1:"))
+        .map((key) => JSON.parse(localStorage.getItem(key ?? "") ?? "null")?.destination);
+      expect(storedTargets).toEqual([builtIn]);
+      window.dispatchEvent(new CustomEvent(eventName));
+      await panel.updateComplete;
+      expect(panel.assistantPanelOpen).toBe(true);
+      expect(context.assistantDock.openSessionKey).toBeNull();
+      expect(panel.querySelector("openclaw-custodian-surface") === null).toBe(builtIn === "home");
+      window.dispatchEvent(new CustomEvent(eventName));
+      await panel.updateComplete;
+      expect(panel.assistantPanelOpen).toBe(false);
       panel.pageRouteId = "appearance";
       await panel.updateComplete;
       expect(panel.assistantPanelOpen).toBe(false);
