@@ -107,7 +107,7 @@ function buildResumeMessage(
   return base;
 }
 
-type MainSessionResumeResult = "started" | "settled" | "skipped" | "failed";
+type MainSessionResumeResult = "started" | "settled" | "skipped" | "failed" | "capacity-deferred";
 
 function readInterruptedRunId(entry: SessionEntry): string | undefined {
   const runs = entry.restartRecoveryRuns;
@@ -488,7 +488,10 @@ async function resumeMainSessionWithinAdmission(
     if (!dispatchOutcome) {
       dispatchStarted = false;
       await rollbackReservation("cancel_reservation");
-      return "skipped";
+      // The sole capacity slot was occupied; this session should retry without
+      // consuming an attempt, unlike other skips (ineligible, already handled,
+      // deferred delivery) that are terminal for their rows.
+      return "capacity-deferred";
     }
     ({ dispatchAccepted, executionStarted, preStartAbortAttempted, preStartAbortConfirmed } =
       dispatchOutcome.observation);

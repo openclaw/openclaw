@@ -27,7 +27,13 @@ import {
   recoverStore,
 } from "./main-session-restart-recovery-store.js";
 
-type RecoveryCounts = { started: number; settled: number; failed: number; skipped: number };
+type RecoveryCounts = {
+  started: number;
+  settled: number;
+  failed: number;
+  skipped: number;
+  capacityDeferred?: number;
+};
 const STARTUP_RECOVERY_MAX_ACTIVE_RUNS = 1;
 
 async function runRecoveryRetries(params: {
@@ -94,7 +100,7 @@ export async function recoverRestartAbortedMainSessions(params: {
   gatewayRuntime: GatewayRecoveryRuntime;
   recoveryCapacity?: ReturnType<typeof createMainSessionRecoveryCapacity>;
 }): Promise<RecoveryCounts> {
-  const result = { started: 0, settled: 0, failed: 0, skipped: 0 };
+  const result: RecoveryCounts = { started: 0, settled: 0, failed: 0, skipped: 0 };
   const handledSessionKeys = params.handledSessionKeys ?? new Set<string>();
 
   for (const target of await discoverRestartRecoveryStoreTargets({
@@ -118,6 +124,7 @@ export async function recoverRestartAbortedMainSessions(params: {
     result.settled += storeResult.settled;
     result.failed += storeResult.failed;
     result.skipped += storeResult.skipped;
+    result.capacityDeferred = (result.capacityDeferred ?? 0) + (storeResult.capacityDeferred ?? 0);
   }
 
   if (result.started > 0 || result.settled > 0 || result.failed > 0) {
@@ -362,7 +369,12 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
         if (result.failed === 0 && result.skipped === 0) {
           return true;
         }
-        if (result.failed === 0 && result.skipped > 0) {
+        // Only capacity-deferred rows should retry without consuming an
+        // attempt. Other skips (ineligible, already handled, deferred
+        // delivery) are terminal for their rows and must consume the bounded
+        // retry budget, otherwise the startup sweep re-scans them forever.
+        const capacityDeferred = result.capacityDeferred ?? 0;
+        if (result.failed === 0 && capacityDeferred > 0 && result.skipped === capacityDeferred) {
           return "skip";
         }
         if (finalAttempt && exhaustedTargets.size > 0) {
