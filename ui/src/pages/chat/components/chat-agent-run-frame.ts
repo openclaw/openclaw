@@ -20,7 +20,7 @@ import {
   type StreamGroupPart,
 } from "./chat-message.ts";
 import { renderChatSourcePreviews } from "./chat-source-previews.ts";
-import { renderBrowserTabPreviews } from "./chat-tool-cards.ts";
+import { renderWorkGroupBrowserTabPreviews } from "./chat-tool-cards.ts";
 
 type MessageGroupRenderOptions = Parameters<typeof renderMessageGroup>[1];
 
@@ -72,6 +72,12 @@ export function renderAgentRunFrame(frame: AgentRunFrameRenderItem, opts: AgentR
   const bodyParts = frame.parts.flatMap<BodyPart>((part) =>
     part.kind === "stream-run" ? part.parts : [part],
   );
+  const workPreviews = renderWorkGroupBrowserTabPreviews(
+    frame.parts.flatMap((part) =>
+      part.kind === "work-group" && !opts.isWorkExpanded(part.key) ? [part] : [],
+    ),
+    opts.renderGroupOptions(shell),
+  );
   const frameContent = [
     repeat(
       bodyParts,
@@ -91,10 +97,7 @@ export function renderAgentRunFrame(frame: AgentRunFrameRenderItem, opts: AgentR
               expanded,
               onToggle: () => opts.onToggleWork(part.key, expanded),
               presentation: "continuation",
-              browserTabPreviews: renderBrowserTabPreviews(
-                part.groups,
-                opts.renderGroupOptions(shell),
-              ),
+              browserTabPreviews: workPreviews.get(part.key),
             })}
             ${expanded ? part.groups.map(renderFrameGroup) : nothing}
           `;
@@ -105,7 +108,7 @@ export function renderAgentRunFrame(frame: AgentRunFrameRenderItem, opts: AgentR
             ? renderActivityGroup(part.groups, opts.renderGroupOptions(firstGroup), "continuation")
             : nothing;
         }
-        return renderFrameGroup(part);
+        return html`${renderFrameGroup(part)}${workPreviews.get(part.key) ?? nothing}`;
       },
     ),
     actionOwner

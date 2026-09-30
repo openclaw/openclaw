@@ -1,4 +1,3 @@
-/** Validation and normalization for ACP session runtime options and config controls. */
 import { isAbsolute } from "node:path";
 import type { AcpRuntimeConfigOptionResult } from "@openclaw/acp-core/runtime/types";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
@@ -383,7 +382,7 @@ function buildAdvertisedConfigOptionKeyMap(
 function resolveRuntimeConfigOptionAliases(key: string): readonly string[] {
   const normalizedKey = normalizeLowercaseStringOrEmpty(key);
   for (const aliases of Object.values(RUNTIME_CONFIG_OPTION_ALIASES)) {
-    if (aliases.some((alias) => normalizeLowercaseStringOrEmpty(alias) === normalizedKey)) {
+    if (aliases.some((alias) => alias === normalizedKey)) {
       return aliases;
     }
   }
@@ -434,15 +433,10 @@ export function inferRuntimeOptionPatchFromConfigOption(
   if (isThinkingConfigKey(normalizedKey)) {
     return { thinking: validateRuntimeThinkingInput(validated.value) };
   }
-  if (
-    normalizedKey === "approval_policy" ||
-    normalizedKey === "permission_profile" ||
-    normalizedKey === "permissions" ||
-    normalizedKey === "permission_mode"
-  ) {
+  if (RUNTIME_CONFIG_OPTION_ALIASES.permissionProfile.some((alias) => alias === normalizedKey)) {
     return { permissionProfile: validateRuntimePermissionProfileInput(validated.value) };
   }
-  if (normalizedKey === "timeout" || normalizedKey === "timeout_seconds") {
+  if (RUNTIME_CONFIG_OPTION_ALIASES.timeoutSeconds.some((alias) => alias === normalizedKey)) {
     return { timeoutSeconds: parseRuntimeTimeoutSecondsInput(validated.value) };
   }
   if (normalizedKey === "cwd") {

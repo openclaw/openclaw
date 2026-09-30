@@ -310,14 +310,6 @@ export function resolveMessagingToolPayloadDedupe(
         )
       : [],
   );
-  const hasTargetTextEvidence = sentTargets.some(
-    (target) => typeof target.text === "string" && Boolean(target.text.trim()),
-  );
-  const hasTargetMediaUrlEvidence = sentTargets.some(
-    (target) =>
-      Array.isArray(target.mediaUrls) &&
-      target.mediaUrls.some((url) => typeof url === "string" && Boolean(url.trim())),
-  );
   const allTargetsMatchRoute = matchingRoute && matchingTargets.length === sentTargets.length;
 
   return {
@@ -325,8 +317,8 @@ export function resolveMessagingToolPayloadDedupe(
     matchingRoute,
     routeSentTexts,
     routeSentMediaUrls,
-    useGlobalSentTextEvidenceFallback: allTargetsMatchRoute && !hasTargetTextEvidence,
-    useGlobalSentMediaUrlEvidenceFallback: allTargetsMatchRoute && !hasTargetMediaUrlEvidence,
+    useGlobalSentTextEvidenceFallback: allTargetsMatchRoute && routeSentTexts.length === 0,
+    useGlobalSentMediaUrlEvidenceFallback: allTargetsMatchRoute && routeSentMediaUrls.length === 0,
   };
 }
 

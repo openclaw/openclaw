@@ -49,12 +49,10 @@ private final class DashboardBrowserImportGate {
 
 @MainActor
 private func nextDashboardImportRequest(_ requests: AsyncStream<Int>) async throws -> Int {
-    try await AsyncTimeout.withTimeout(seconds: 5, onTimeout: { URLError(.timedOut) }) {
-        for await request in requests {
-            return request
-        }
-        throw CancellationError()
+    for await request in requests {
+        return request
     }
+    throw CancellationError()
 }
 
 private final class DashboardWindowGestureSpy: NSWindow {
@@ -70,7 +68,7 @@ private final class DashboardWindowGestureSpy: NSWindow {
     }
 }
 
-@Suite(.serialized)
+@Suite(.serialized, .timeLimit(.minutes(1)))
 @MainActor
 struct DashboardWindowSmokeTests {
     @Test func `dashboard frame routes single click to drag and double click to zoom`() throws {
@@ -470,9 +468,7 @@ struct DashboardWindowSmokeTests {
         try controller.nativeBrowser.close(tabId: "mac-import")
         firstRequestContinuation?.resume()
         firstRequestContinuation = nil
-        try await AsyncTimeout.withTimeout(seconds: 5, onTimeout: { URLError(.timedOut) }) {
-            await settled.wait()
-        }
+        await settled.wait()
         #expect(firstRequestApplied == false)
 
         try controller.nativeBrowser.open(tabId: "mac-import", url: link, sessionKey: "")

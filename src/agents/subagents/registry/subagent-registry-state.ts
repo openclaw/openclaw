@@ -76,7 +76,8 @@ const persistedSubagentMaintenanceRunsReadCache: SubagentRunsCache<SubagentRunMa
   captureAdmission: captureSubagentFactsAdmission,
   load: () => loadSubagentMaintenanceRunsFromSqlite(),
   copy: projectSubagentRunForMaintenance,
-  project: projectSubagentRunForMaintenance,
+  // Maintenance consumes live rows synchronously into keys; only published facts need copies.
+  project: (entry) => entry,
 };
 
 // Read caches deliberately advance on failed best-effort writes. Keep notification facts

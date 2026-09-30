@@ -158,10 +158,7 @@ export function stripHeartbeatToken(
   raw?: string,
   opts: { mode?: StripHeartbeatMode; maxAckChars?: number } = {},
 ) {
-  if (!raw) {
-    return { shouldSkip: true, text: "", didStrip: false };
-  }
-  const trimmed = raw.trim();
+  const trimmed = raw?.trim();
   if (!trimmed) {
     return { shouldSkip: true, text: "", didStrip: false };
   }

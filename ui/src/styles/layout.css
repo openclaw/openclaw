@@ -4989,6 +4989,21 @@ html.openclaw-native-macos:not(.openclaw-native-nav):not(.openclaw-native-web-ch
   min-width: 0;
 }
 
+.sidebar-session-tool {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 14px;
+  width: 14px;
+  height: 14px;
+  color: var(--muted);
+}
+
+.sidebar-session-tool > svg {
+  width: 14px;
+  height: 14px;
+}
+
 .sidebar-recent-session__title-row {
   display: flex;
   align-items: center;

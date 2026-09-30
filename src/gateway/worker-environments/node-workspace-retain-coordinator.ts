@@ -70,9 +70,8 @@ function bundleStatusTargetForNode(options: NodeWorkspaceRetainCoordinatorOption
 
 function snapshotBundleHashesForNode(
   options: NodeWorkspaceRetainCoordinatorOptions,
-  nodeId: string,
+  environments: ReturnType<typeof nodeEnvironments>,
 ): string[] {
-  const environments = nodeEnvironments(options, nodeId);
   const environmentIds = new Set(environments.map((environment) => environment.environmentId));
   return listRetainedWorkerBundleHashes({
     environments,
@@ -183,20 +182,23 @@ export function createNodeWorkspaceRetainCoordinator(
     const bundleRetention = options.bundleRetention;
     const bundleRetentionSupported =
       node.workerHost.bundleRetention === NODE_WORKER_BUNDLE_RETENTION_VERSION;
-    let currentBuild =
-      bundleRetentionSupported &&
-      bundleRetention &&
-      !bundleRetention.isEnvironmentOwnedNode(node.nodeId)
-        ? await bundleRetention.currentBuild()
+    let bundlePreparationError: string | undefined;
+    const currentBuild =
+      bundleRetentionSupported && bundleRetention
+        ? await bundleRetention.currentBuild().catch((error: unknown) => {
+            bundlePreparationError = error instanceof Error ? error.message : String(error);
+            return undefined;
+          })
         : undefined;
-    if (bundleRetention?.isEnvironmentOwnedNode(node.nodeId)) {
-      currentBuild = undefined;
-    }
+    const hostBuild =
+      bundleRetention && !bundleRetention.isEnvironmentOwnedNode(node.nodeId)
+        ? currentBuild
+        : undefined;
     const isCurrent = () =>
       !stopped &&
       transport === currentTransport &&
       currentTransport.isCurrent(node) &&
-      (!currentBuild || !bundleRetention!.isEnvironmentOwnedNode(node.nodeId));
+      (!hostBuild || !bundleRetention!.isEnvironmentOwnedNode(node.nodeId));
 
     if (!isCurrent()) {
       return;
@@ -220,15 +222,21 @@ export function createNodeWorkspaceRetainCoordinator(
         }
       }
     }
-    // Installation can finish before provisioning publishes its receipt. Do not acknowledge
-    // the node's pending-install protection with an incomplete bundle reachability snapshot.
-    const bundleRetentionReady = !nodeEnvironments(options, node.nodeId).some(
-      (environment) => environment.state === "provisioning",
-    );
+    const environments = nodeEnvironments(options, node.nodeId);
+    // Provisioning and refresh install before recording receipts. Keep the current build until
+    // every live environment records it, so an acknowledged generation cannot prune it.
+    const retainCurrentBuild =
+      currentBuild &&
+      (hostBuild ||
+        environments.some(
+          (environment) =>
+            !isTerminalWorkerEnvironmentState(environment.state) &&
+            environment.bootstrapReceipt?.bundleHash !== currentBuild.bundleHash,
+        ));
     const retainedBundleHashes = [
       ...new Set([
-        ...snapshotBundleHashesForNode(options, node.nodeId),
-        ...(currentBuild ? [currentBuild.bundleHash] : []),
+        ...snapshotBundleHashesForNode(options, environments),
+        ...(retainCurrentBuild ? [currentBuild.bundleHash] : []),
       ]),
     ].toSorted();
     const bundleStatusSupported =
@@ -253,7 +261,7 @@ export function createNodeWorkspaceRetainCoordinator(
       Buffer.byteLength(JSON.stringify(retentionInput), "utf8") <=
         NODE_WORKER_RETAIN_REQUEST_MAX_BYTES;
     const bundleStatusTarget = bundleStatusSupported
-      ? (currentBuild ?? bundleStatusTargetForNode(options, node.nodeId))
+      ? (hostBuild ?? bundleStatusTargetForNode(options, node.nodeId))
       : undefined;
     const statusInput =
       bundleStatusTarget && retainedBundleHashes.includes(bundleStatusTarget.bundleHash)
@@ -264,7 +272,7 @@ export function createNodeWorkspaceRetainCoordinator(
       Buffer.byteLength(JSON.stringify(statusInput), "utf8") <=
         NODE_WORKER_RETAIN_REQUEST_MAX_BYTES;
     const input =
-      bundleRetentionSupported && bundleRetentionReady && bundleHashesFit
+      bundleRetentionSupported && bundlePreparationError === undefined && bundleHashesFit
         ? statusInput && statusInputFits
           ? statusInput
           : retentionInput
@@ -276,7 +284,9 @@ export function createNodeWorkspaceRetainCoordinator(
     ) {
       currentTransport.acceptBundleStatus?.(node, undefined);
     }
-    if (bundleRetentionSupported && !bundleHashesFit) {
+    if (bundlePreparationError !== undefined) {
+      options.warn(`Node bundle retention skipped (${node.nodeId}): ${bundlePreparationError}`);
+    } else if (bundleRetentionSupported && !bundleHashesFit) {
       options.warn(
         `Node bundle retention skipped (${node.nodeId}): ${retainedBundleHashes.length} retained hashes exceed the bounded maintenance request`,
       );
@@ -329,7 +339,7 @@ export function createNodeWorkspaceRetainCoordinator(
         const bundleStatus = retained.bundleStatus;
         const requestedBundleHash = input.bundleStatusHash;
         const currentStatusTarget = requestedBundleHash
-          ? (currentBuild ?? bundleStatusTargetForNode(options, node.nodeId))
+          ? (hostBuild ?? bundleStatusTargetForNode(options, node.nodeId))
           : undefined;
         const statusTargetMatches =
           currentStatusTarget != null &&

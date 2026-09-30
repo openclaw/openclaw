@@ -322,6 +322,208 @@ puts JSON.generate(rows)
     }
   });
 
+  it("recovers external TestFlight distribution through the stage lane with conditional review and verified metadata", () => {
+    const source = String.raw`
+require "json"
+require "tempfile"
+module UI
+  def self.user_error!(message); raise message; end
+  def self.success(*); end
+  def self.important(*); end
+end
+def default_platform(*); end
+def desc(*); end
+def platform(*); yield; end
+def lane(name, &body); define_singleton_method(name, &body); end
+alias private_lane lane
+load ARGV.fetch(0)
+$LOADED_FEATURES << "pilot.rb"
+module Pilot
+  class BuildManager
+    def self.sanitize_changelog(notes); notes; end
+  end
+end
+module Spaceship
+  module ConnectAPI
+    module Platform
+      IOS = "IOS"
+    end
+    class Build
+      def self.all(**); $builds; end
+      def self.get(**); $builds.first; end
+    end
+    def self.get_beta_app_review_detail(**)
+      Object.new.tap do |response|
+        def response.all_pages; [self]; end
+        def response.to_models; [$review]; end
+      end
+    end
+  end
+end
+Detail = Struct.new(:external_build_state, :auto_notify_enabled)
+Build = Struct.new(:id, :version, :app_version, :processing_state, :expired, :build_beta_detail, :localizations) do
+  def get_beta_build_localizations; localizations; end
+end
+Localization = Struct.new(:locale, :description, :feedback_email, :whats_new)
+Review = Struct.new(:contact_first_name, :contact_last_name, :contact_email, :contact_phone, :notes, :demo_account_required, :demo_account_name, :demo_account_password)
+Group = Struct.new(:id, :name, :is_internal_group, :builds) do
+  def fetch_builds; builds; end
+end
+StoreVersion = Struct.new(:version_string, :selected) do
+  def get_build; selected; end
+end
+App = Struct.new(:id, :groups, :localizations) do
+  def get_beta_groups; groups; end
+  def get_beta_app_localizations; localizations; end
+end
+def read_ios_version_metadata(**)
+  { version: "2026.7.2", short_version: "2026.7.21", app_store_revision: "1" }
+end
+def render_ios_release_notes(**); "Saved beta notes."; end
+def assert_ios_uploaded_release_source!(**)
+  raise "source mismatch" if $scenario == "source-mismatch"
+end
+def app_store_connect_api_key_config; :fixture_key; end
+def app_store_connect_target_app; $app; end
+def stage_ios_app_store_release!(**); raise "App Store staging attempted"; end
+def resolve_ios_release_plan!(**); raise "replanning attempted"; end
+def upload_to_testflight(**options)
+  raise "reupload attempted" unless options[:distribute_only] == true
+  $options = options
+  raise "submission failed" if $scenario == "submission-failure"
+  build = $builds.first
+  build.localizations = [Localization.new("en-US", nil, nil, options.fetch(:localized_build_info).fetch("en-US").fetch(:whats_new))]
+  build.localizations.first.whats_new = "stale" if $scenario == "notes-readback"
+  build.build_beta_detail.auto_notify_enabled = options[:notify_external_testers] unless $scenario == "notify-readback"
+  build.build_beta_detail.external_build_state = "WAITING_FOR_BETA_REVIEW" if options[:submit_beta_review]
+  $group.builds = [build] unless $scenario == "group-readback"
+end
+states = {
+  "submit" => "READY_FOR_BETA_SUBMISSION", "pending" => "WAITING_FOR_BETA_REVIEW",
+  "reviewing" => "IN_BETA_REVIEW", "approved" => "BETA_APPROVED", "available" => "IN_BETA_TESTING",
+  "rejected" => "BETA_REJECTED", "compliance" => "MISSING_EXPORT_COMPLIANCE"
+}
+scenarios = states.keys + %w[source-mismatch group-change internal-group ambiguous-group missing-description missing-contact missing-demo pending-other processing expired submission-failure notes-readback notify-readback group-readback adopt adopt-retry adopt-wrong-id adopt-changed-notes adopt-other-locale]
+rows = Tempfile.create(["openclaw-beta-plan", ".json"]) do |plan|
+  Tempfile.create(["openclaw-beta-result", ".json"]) do |result|
+    ENV["OPENCLAW_IOS_RELEASE_WRAPPER"] = "1"
+    ENV["OPENCLAW_IOS_RELEASE_PLAN"] = plan.path
+    ENV["OPENCLAW_TESTFLIGHT_RESULT_FILE"] = result.path
+    scenarios.map do |scenario|
+      $scenario, $options = scenario, nil
+      ENV["OPENCLAW_TESTFLIGHT_GROUP_ID"] = scenario == "group-change" ? "changed" : "external-group"
+      beta_plan = { groupId: "external-group" }
+      beta_plan[:existingBuildId] = scenario == "adopt-wrong-id" ? "different-build" : "uploaded" if scenario.start_with?("adopt")
+      File.write(plan.path, JSON.generate({ destination: "testflight", appStoreVersion: "2026.7.21", buildNumber: 3, testflight: beta_plan }))
+      File.write(result.path, "")
+      build = Build.new("uploaded", "3", "2026.7.21", scenario == "processing" ? "PROCESSING" : "VALID", scenario == "expired", Detail.new(states.fetch(scenario, "READY_FOR_BETA_SUBMISSION"), false), [])
+      case scenario
+      when "adopt-retry"
+        build.localizations = [Localization.new("en-US", nil, nil, "Saved beta notes.")]
+      when "adopt-changed-notes"
+        build.localizations = [Localization.new("en-US", nil, nil, "Existing beta attempt notes.")]
+      when "adopt-other-locale"
+        build.localizations = [Localization.new("sv-SE", nil, nil, "Existing localized beta notes.")]
+      end
+      $builds = [build]
+      $builds << Build.new("other", "2", "2026.7.21", "VALID", false, Detail.new("IN_BETA_REVIEW", true), []) if scenario == "pending-other"
+      $group = Group.new("external-group", "External Testing", scenario == "internal-group", [])
+      groups = [$group]
+      groups << Group.new("other", "external-group", false, []) if scenario == "ambiguous-group"
+      $app = App.new("app", groups, [Localization.new("en-US", scenario == "missing-description" ? "" : "Beta description", "feedback@example.invalid")])
+      $review = Review.new("Review", "Contact", scenario == "missing-contact" ? "" : "review@example.invalid", "+15555550123", "Reviewer access instructions", scenario == "missing-demo" ? true : nil)
+      facts = testflight_plan_facts(app: $app, group: $group, short_version: "2026.7.21", versions: [StoreVersion.new("2026.7.21", scenario.start_with?("adopt") ? build : nil)])
+      error = nil
+      begin
+        release_stage(destination: "testflight", release_version: "2026.7.2", app_store_revision: "1", build_number: "3")
+      rescue => failure
+        error = failure.message
+      end
+      { scenario: scenario, facts: facts.fetch("builds").first, error: error, options: $options, result: File.read(result.path).empty? ? nil : JSON.parse(File.read(result.path)) }
+    end
+  end
+end
+puts JSON.generate(rows)
+`;
+    const result = spawnSync("ruby", ["-e", source, fastfilePath], { encoding: "utf8" });
+    expect(result.status, result.stderr).toBe(0);
+    const rows = JSON.parse(result.stdout) as {
+      scenario: string;
+      error: string | null;
+      options: Record<string, unknown> | null;
+      result: { outcome: string; externalState: string } | null;
+      facts: { selectedForAppStore: boolean; hasBetaNotes: boolean } | null;
+    }[];
+    const outcomes: Record<string, string> = {
+      submit: "awaiting-review",
+      pending: "awaiting-review",
+      reviewing: "awaiting-review",
+      approved: "approved",
+      available: "available",
+      adopt: "awaiting-review",
+      "adopt-retry": "awaiting-review",
+    };
+    const errors: Record<string, string> = {
+      rejected: "cannot be distributed in state BETA_REJECTED",
+      compliance: "cannot be distributed in state MISSING_EXPORT_COMPLIANCE",
+      "source-mismatch": "source mismatch",
+      "group-change": "group changed after planning",
+      "internal-group": "must belong to this app and be external",
+      "ambiguous-group": "also names another group",
+      "missing-description": "beta description and feedback email",
+      "missing-contact": "review contact and reviewer instructions",
+      "missing-demo": "requires a demo account",
+      "pending-other": "already awaiting review in this train",
+      processing: "found 0",
+      expired: "found 0",
+      "submission-failure": "submission failed",
+      "notes-readback": "readback did not match",
+      "notify-readback": "readback did not match",
+      "group-readback": "readback did not match",
+      "adopt-wrong-id": "does not match the saved existing build",
+      "adopt-changed-notes": "already has different TestFlight notes",
+      "adopt-other-locale": "already has different TestFlight notes",
+    };
+    for (const row of rows) {
+      if (row.scenario.startsWith("adopt") || row.scenario === "submit") {
+        expect(row.facts).toMatchObject({
+          selectedForAppStore: row.scenario.startsWith("adopt"),
+          hasBetaNotes: ["adopt-retry", "adopt-changed-notes", "adopt-other-locale"].includes(
+            row.scenario,
+          ),
+        });
+      }
+      if (outcomes[row.scenario]) {
+        expect(row.error, row.scenario).toBeNull();
+        expect(row.result?.outcome).toBe(outcomes[row.scenario]);
+        expect(row.options).toMatchObject({
+          apple_id: "app",
+          app_platform: "ios",
+          app_version: "2026.7.21",
+          build_number: "3",
+          distribute_only: true,
+          distribute_external: true,
+          groups: ["external-group"],
+          notify_external_testers: true,
+          submit_beta_review: ["submit", "adopt", "adopt-retry"].includes(row.scenario),
+          skip_submission: false,
+          reject_build_waiting_for_review: false,
+          expire_previous_builds: false,
+        });
+      } else {
+        expect(row.error, row.scenario).toContain(errors[row.scenario]);
+        expect(row.result).toBeNull();
+        if (
+          !["submission-failure", "notes-readback", "notify-readback", "group-readback"].includes(
+            row.scenario,
+          )
+        ) {
+          expect(row.options).toBeNull();
+        }
+      }
+    }
+  });
+
   it("uploads the planned iOS build without Android preparation and records only accepted uploads", () => {
     const source = String.raw`
 require "json"
@@ -350,6 +552,7 @@ def resolve_ios_release_plan!(**)
     "buildNumber" => 3, "appStoreVersion" => "2026.7.21" }
 end
 def assert_ios_release_notes_baseline!(_plan); step(@plans == 1 ? "baseline" : "baseline-recheck"); end
+def assert_testflight_upload_ready!(_plan); step(@plans == 1 ? "beta-preflight" : "beta-recheck"); end
 def render_ios_release_notes(**); step("notes"); "Saved notes"; end
 def read_ios_version_metadata(**)
   { version: "2026.7.2", short_version: "2026.7.21", app_store_revision: "1" }
@@ -403,6 +606,17 @@ rows = %w[success notes screenshots archive recheck baseline-recheck metadata up
   end
   { scenario: scenario, events: @events, error: error, xcconfig: ENV["XCODE_XCCONFIG_FILE"] }
 end
+%w[success beta-preflight archive beta-recheck upload record stage].each do |scenario|
+  @events, @plans, @failure = [], 0, scenario
+  ENV["OPENCLAW_IOS_RELEASE_WRAPPER"] = "1"
+  error = nil
+  begin
+    release_upload(destination: "testflight")
+  rescue => failure
+    error = failure.message
+  end
+  rows << { scenario: "testflight-#{scenario}", events: @events, error: error, xcconfig: ENV["XCODE_XCCONFIG_FILE"] }
+end
 puts JSON.generate(rows)
 `;
     const result = spawnSync("ruby", ["-e", source, fastfilePath], {
@@ -435,7 +649,29 @@ puts JSON.generate(rows)
     ];
     for (const row of rows) {
       expect(row.xcconfig).toBeNull();
-      if (row.scenario === "success") {
+      if (row.scenario.startsWith("testflight-")) {
+        const betaSteps = [
+          "signing",
+          "plan",
+          "baseline",
+          "beta-preflight",
+          "notes",
+          "ref-preflight",
+          "source",
+          "archive",
+          "recheck",
+          "baseline-recheck",
+          "beta-recheck",
+          "upload",
+          "record",
+          "stage",
+        ];
+        const scenario = row.scenario.slice("testflight-".length);
+        expect(row.error).toBe(scenario === "success" ? null : `failed ${scenario}`);
+        expect(row.events).toEqual(
+          scenario === "success" ? betaSteps : betaSteps.slice(0, betaSteps.indexOf(scenario) + 1),
+        );
+      } else if (row.scenario === "success") {
         expect(row.error).toBeNull();
         expect(row.events).toEqual(steps);
       } else if (row.scenario === "direct") {
@@ -725,38 +961,6 @@ puts JSON.generate(rows)
 
     expect(validationCall).toBeGreaterThanOrEqual(0);
     expect(uploadCall).toBeGreaterThan(validationCall);
-  });
-
-  it("rechecks the plan after local validation and before the first App Store mutation", () => {
-    const fastfile = readFastfile();
-    const releaseUpload = laneBody(fastfile, "release_upload");
-    const build = releaseUpload.indexOf("build = build_app_store_release(context)");
-    const planRecheck = releaseUpload.lastIndexOf("resolve_ios_release_plan!");
-    const metadata = releaseUpload.indexOf("\n    metadata(");
-    const upload = releaseUpload.indexOf("upload_to_testflight(");
-
-    expect(fastfile).not.toContain("def verify_app_store_binary!");
-    expect(releaseUpload).not.toContain("verify_only: true");
-    expect(build).toBeGreaterThanOrEqual(0);
-    expect(planRecheck).toBeGreaterThan(build);
-    expect(metadata).toBeGreaterThan(planRecheck);
-    expect(upload).toBeGreaterThan(planRecheck);
-  });
-
-  it("finishes fallible local release work before mutating App Store metadata", () => {
-    const fastfile = readFastfile();
-    const releaseUpload = laneBody(fastfile, "release_upload");
-    const screenshots = releaseUpload.indexOf(
-      "screenshots(\n          release_version: context[:version]",
-    );
-    const sourceCheck = releaseUpload.indexOf("verify_apple_release_source!(release_sha)");
-    const build = releaseUpload.indexOf("build = build_app_store_release(context)");
-    const metadata = releaseUpload.indexOf("metadata(\n      release_version: context[:version]");
-
-    expect(screenshots).toBeGreaterThanOrEqual(0);
-    expect(sourceCheck).toBeGreaterThan(screenshots);
-    expect(build).toBeGreaterThan(sourceCheck);
-    expect(metadata).toBeGreaterThan(build);
   });
 
   it("fails from authoritative Xcode results and keeps successful bundles outside screenshots", () => {

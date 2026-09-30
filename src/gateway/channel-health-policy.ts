@@ -3,29 +3,7 @@
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import type { ChannelAccountSnapshot, ChannelId } from "../channels/plugins/types.public.js";
 
-type ChannelHealthSnapshot = {
-  running?: boolean;
-  connected?: boolean;
-  enabled?: boolean;
-  configured?: boolean;
-  linked?: boolean;
-  restartPending?: boolean;
-  busy?: boolean;
-  activeRuns?: number;
-  lastRunActivityAt?: number | null;
-  activeRunStartedAt?: number | null;
-  lastEventAt?: number | null;
-  lastConnectedAt?: number | null;
-  lastDisconnect?: ChannelAccountSnapshot["lastDisconnect"];
-  lastTransportActivityAt?: number | null;
-  lastStartAt?: number | null;
-  reconnectAttempts?: number;
-  mode?: string;
-  ingressUnavailable?: true;
-  lifecycle?: "starting" | "ready" | "recovering" | "blocked" | "stopped";
-  healthState?: string;
-  terminalDisconnect?: boolean;
-};
+type ChannelHealthSnapshot = Omit<ChannelAccountSnapshot, "accountId">;
 
 type ChannelHealthEvaluationReason =
   | "healthy"

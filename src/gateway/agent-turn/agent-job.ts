@@ -649,7 +649,7 @@ function addAgentRunWaiter(runId: string, waiter: AgentJobWaiter): () => void {
   };
 }
 
-function selectedSnapshot(snapshot: AgentRunObservation): AgentJobObservation {
+export function projectAgentJobObservation(snapshot: AgentJobObservation): AgentJobObservation {
   return {
     session: snapshot.session,
     status: snapshot.status,
@@ -682,7 +682,7 @@ export async function waitForAgentJob(params: {
     afterVersion,
   });
   if (cached) {
-    return selectedSnapshot(cached);
+    return projectAgentJobObservation(cached);
   }
   const signal = getAsyncWorkSignal();
   if (params.timeoutMs <= 0 || signal?.aborted) {
@@ -716,7 +716,7 @@ export async function waitForAgentJob(params: {
         afterVersion,
       });
       if (snapshot) {
-        finish(selectedSnapshot(snapshot));
+        finish(projectAgentJobObservation(snapshot));
       }
     };
     removeWaiter = addAgentRunWaiter(params.runId, onWake);
@@ -728,7 +728,7 @@ export async function waitForAgentJob(params: {
           finish(
             !pending.timer ||
               isStickyAgentRunTerminalOutcome(terminalOutcomeFromSnapshot(pendingError))
-              ? selectedSnapshot(pendingError)
+              ? projectAgentJobObservation(pendingError)
               : createPendingErrorTimeoutSnapshot(pendingError),
           );
           return;
@@ -739,7 +739,7 @@ export async function waitForAgentJob(params: {
           pendingTimeout.version > afterVersion &&
           terminalOutcomeFromSnapshot(pendingTimeout)?.reason === "hard_timeout"
         ) {
-          finish(selectedSnapshot(pendingTimeout));
+          finish(projectAgentJobObservation(pendingTimeout));
           return;
         }
       }

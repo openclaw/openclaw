@@ -31,11 +31,8 @@ export function shouldFallbackToStructuredRawRedaction(params: {
   try {
     const parsed = JSON5.parse(params.redactedRaw);
     const restored = params.restoreParsed(parsed);
-    if (!restored.ok) {
-      return true;
-    }
     // Raw replacement is only safe when parsing and restoring produces the original config shape.
-    return !isDeepStrictEqual(restored.result, params.originalConfig);
+    return !restored.ok || !isDeepStrictEqual(restored.result, params.originalConfig);
   } catch {
     return true;
   }

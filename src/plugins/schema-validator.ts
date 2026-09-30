@@ -56,10 +56,6 @@ const annotationOnlyFormats = [
   "uuid",
 ] as const;
 
-function fingerprintSchema(schema: JsonSchemaValue): string {
-  return JSON.stringify(schema);
-}
-
 function schemaHasDefaults(schema: unknown): boolean {
   if (!schema || typeof schema !== "object") {
     return false;
@@ -201,7 +197,7 @@ function normalizeErrorPath(instancePath: string | undefined): string {
   const path = Pointer.Indices(instancePath ?? "")
     .join(".")
     .replace(/\//g, ".");
-  return path && path.length > 0 ? path : "<root>";
+  return path || "<root>";
 }
 
 function appendPathSegment(path: string, segment: string): string {
@@ -394,7 +390,7 @@ export function validateJsonSchemaValue(params: {
   applyDefaults?: boolean;
   cache?: boolean;
 }): { ok: true; value: unknown } | { ok: false; errors: JsonSchemaValidationError[] } {
-  const schemaKey = params.cacheKey ?? fingerprintSchema(params.schema);
+  const schemaKey = params.cacheKey ?? JSON.stringify(params.schema);
   const cacheKey = params.applyDefaults ? `${schemaKey}::defaults` : schemaKey;
   let cached = params.cache === false ? undefined : schemaCache.get(cacheKey);
   if (!cached || cached.schema !== params.schema) {
@@ -404,7 +400,7 @@ export function validateJsonSchemaValue(params: {
     }
   }
   const schemaFingerprint =
-    !cached || cached.schema !== params.schema ? fingerprintSchema(params.schema) : undefined;
+    !cached || cached.schema !== params.schema ? JSON.stringify(params.schema) : undefined;
   if (
     !cached ||
     (cached.schema !== params.schema && cached.schemaFingerprint !== schemaFingerprint)
@@ -414,7 +410,7 @@ export function validateJsonSchemaValue(params: {
       hasDefaults: params.applyDefaults ? schemaHasDefaults(params.schema) : false,
       validate,
       schema: params.schema,
-      schemaFingerprint: schemaFingerprint ?? fingerprintSchema(params.schema),
+      schemaFingerprint: schemaFingerprint ?? JSON.stringify(params.schema),
     };
     if (params.cache !== false) {
       schemaCache.set(cacheKey, cached);

@@ -80,27 +80,6 @@ function formatControlUiBuildDate(
   }).format(date);
 }
 
-function copyButtonLabel(state: AboutCommitCopyState): string {
-  if (state === "copying") {
-    return t("aboutPage.copyingCommit");
-  }
-  if (state === "copied") {
-    return t("aboutPage.copiedCommit");
-  }
-  if (state === "error") {
-    return t("aboutPage.copyCommitFailed");
-  }
-  return t("aboutPage.copyCommit");
-}
-
-function copyStatus(state: AboutCommitCopyState): string {
-  return state === "copied"
-    ? t("aboutPage.copiedCommit")
-    : state === "error"
-      ? t("aboutPage.copyCommitFailed")
-      : "";
-}
-
 function renderUnavailable() {
   return html`<span class="muted">${t("aboutPage.unavailable")}</span>`;
 }
@@ -131,7 +110,14 @@ function renderCommit(props: AboutProps) {
   if (!commit) {
     return renderUnavailable();
   }
-  const label = copyButtonLabel(props.copyState);
+  const label = t(
+    {
+      idle: "aboutPage.copyCommit",
+      copying: "aboutPage.copyingCommit",
+      copied: "aboutPage.copiedCommit",
+      error: "aboutPage.copyCommitFailed",
+    }[props.copyState],
+  );
   return html`
     <span class="about-commit">
       <code dir="ltr" title=${commit}>${commit.slice(0, SHORT_COMMIT_LENGTH)}</code>
@@ -148,7 +134,9 @@ function renderCommit(props: AboutProps) {
           <span aria-hidden="true">${props.copyState === "copied" ? icons.check : icons.copy}</span>
         </button>
       </openclaw-tooltip>
-      <span class="sr-only" role="status" aria-live="polite">${copyStatus(props.copyState)}</span>
+      <span class="sr-only" role="status" aria-live="polite"
+        >${props.copyState === "copied" || props.copyState === "error" ? label : ""}</span
+      >
     </span>
   `;
 }

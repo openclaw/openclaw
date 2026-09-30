@@ -2,7 +2,6 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionGitHubPublicationResult } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import { prepareGitCoauthorAttribution } from "../agents/git-coauthor-attribution.js";
-import type { PreparedGitHubPublicationIdentity } from "../agents/github-tool-identity.js";
 import { resolveControlUiSessionUrl } from "../config/control-ui-link-base.js";
 import { gitNullConfigPath } from "../infra/git-exec.js";
 import type { GitHubPublicationExecutionRow } from "../state/github-publication-read.types.js";
@@ -168,10 +167,7 @@ export async function reconcileGitHubPublication<Row extends PublicationRow>(par
 
 export async function executeGitHubPublication<Row extends PublicationRow>(params: {
   initial: Row;
-  identity?: {
-    prepare: () => Promise<PreparedGitHubPublicationIdentity>;
-    isCurrent: (identity: PreparedGitHubPublicationIdentity) => boolean;
-  };
+  identity?: GitHubPublicationIdentityOwner;
   target?: { pushRepository: string; repository: string; baseBranch: string };
   recordEffect?: (
     effect: "push" | "pull_request",
