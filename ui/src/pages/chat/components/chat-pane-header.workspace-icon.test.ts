@@ -3,6 +3,7 @@
 import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
+import { notifyBrowserAuthRestored } from "../../../app/browser-http.ts";
 import {
   mockWorkspaceIconFetch,
   mountChatPaneHeader,
@@ -233,6 +234,84 @@ describe("chat pane workspace chip icon", () => {
       mounted.container,
     );
     await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(2));
+  });
+
+  it("does not repeat a rejected project icon request when the header rerenders", async () => {
+    const fetchSpy = mockWorkspaceIconFetch().mockResolvedValue({
+      ok: false,
+      status: 401,
+    } as Response);
+    const workspaceIcon = {
+      routeUrl: "/__openclaw__/workspace-icon/agent%3Amain%3Arejected",
+      authTokens: ["token"],
+      authReady: true,
+    };
+    const mounted = mountHeader({ workspaceIcon });
+    const element = mounted.container.querySelector("openclaw-workspace-icon") as
+      | (HTMLElement & { updateComplete?: Promise<unknown>; requestUpdate(): void })
+      | null;
+
+    await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
+    await element?.updateComplete;
+
+    // Eight ordinary rerenders mirror the reported reload: the rejected
+    // credential and URL are unchanged, so only the initial request may exist.
+    for (let i = 0; i < 8; i += 1) {
+      render(
+        html`${renderChatPaneHeader({
+          ...mounted.props,
+          title: `Updated title ${i}`,
+          workspaceIcon,
+        })}`,
+        mounted.container,
+      );
+      const live = mounted.container.querySelector("openclaw-workspace-icon") as
+        | (HTMLElement & { updateComplete?: Promise<unknown>; requestUpdate(): void })
+        | null;
+      live?.requestUpdate();
+      await live?.updateComplete;
+      await Promise.resolve();
+      await Promise.resolve();
+    }
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(mounted.container.querySelector(".workspace-icon")).toBeNull();
+    expect(mounted.container.querySelector(".chat-pane__workspace-chip svg")).not.toBeNull();
+  });
+
+  it("re-fetches a rejected project icon after browser auth is restored", async () => {
+    const png = new Blob([new Uint8Array([1, 2, 3])], { type: "image/png" });
+    const fetchSpy = mockWorkspaceIconFetch()
+      .mockResolvedValueOnce({ ok: false, status: 401 } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        blob: async () => png,
+      } as unknown as Response);
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:workspace-icon-restored");
+    const workspaceIcon = {
+      routeUrl: "/__openclaw__/workspace-icon/agent%3Amain%3Arestored",
+      authTokens: ["token"],
+      authReady: true,
+    };
+    const mounted = mountHeader({ workspaceIcon });
+    const element = mounted.container.querySelector("openclaw-workspace-icon") as
+      | (HTMLElement & { updateComplete?: Promise<unknown> })
+      | null;
+
+    await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
+    await element?.updateComplete;
+    expect(mounted.container.querySelector(".workspace-icon")).toBeNull();
+
+    // A verified session recovery drops the retained rejection; the next render
+    // is allowed exactly one fresh request and can then serve the blob.
+    notifyBrowserAuthRestored();
+    await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(2));
+    await element?.updateComplete;
+
+    expect(mounted.container.querySelector<HTMLImageElement>(".workspace-icon")?.src).toBe(
+      "blob:workspace-icon-restored",
+    );
   });
 
   it("retries the next credential when a stale token is rejected", async () => {

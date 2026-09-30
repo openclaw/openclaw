@@ -9,6 +9,8 @@ type AvatarRouteEntry = {
   retryTimer: ReturnType<typeof setTimeout> | undefined;
   retryAttempts: number;
   retryEligibleAt: number | undefined;
+  /** A 401/403 for every candidate credential; retained until auth is restored or the key changes. */
+  authRejected: boolean;
 };
 
 /** Bound protected avatar fetches so a stalled Gateway route cannot pin UI state forever. */
@@ -93,6 +95,7 @@ async function fetchAvatarRoute(
   let blobUrl: string | null = null;
   let notFound = false;
   let retryDelayMs: number | undefined;
+  let authRejected = false;
   try {
     // Ordered credential recovery: a saved token can be stale while the session's
     // password is valid, so a rejected credential falls through to the next one
@@ -109,8 +112,10 @@ async function fetchAvatarRoute(
       notFound = response.status === 404;
       retryDelayMs = retryUnavailable ? retryAfterMs(response) : undefined;
       if (response.status !== 401 && response.status !== 403) {
+        authRejected = false;
         break;
       }
+      authRejected = true;
     }
   } catch {
     // A missing image leaves the owning view's existing text/mascot fallback visible.
@@ -148,6 +153,14 @@ async function fetchAvatarRoute(
       }
       return;
     }
+    if (authRejected) {
+      // Every candidate credential was rejected. Retain the entry so ordinary
+      // rerenders reuse this rejection instead of re-issuing the same protected
+      // request; a changed credential changes the key, and a verified session
+      // recovery invalidates retained rejections below.
+      entry.authRejected = true;
+      return;
+    }
     // Avatar misses stay retryable because a later identity publication may make the route valid.
     deleteEntry(key, entry);
     return;
@@ -172,6 +185,19 @@ export class AuthenticatedAvatarRouteLoader implements ReactiveController {
       this.host.requestUpdate();
     }
   };
+  private readonly onAuthRestored = () => {
+    // A verified session recovery can make a previously rejected route valid.
+    // Drop retained rejections so the next resolve starts one fresh request.
+    if (this.connected) {
+      for (const key of this.keys) {
+        const entry = sharedAvatarRoutes.get(key);
+        if (entry?.authRejected) {
+          deleteEntry(key, entry);
+        }
+      }
+    }
+    this.onUpdate();
+  };
 
   constructor(
     private readonly host: ReactiveControllerHost,
@@ -182,7 +208,7 @@ export class AuthenticatedAvatarRouteLoader implements ReactiveController {
 
   hostConnected() {
     this.connected = true;
-    this.stopAuthRecovery ??= subscribeBrowserAuthRestored(this.onUpdate);
+    this.stopAuthRecovery ??= subscribeBrowserAuthRestored(this.onAuthRestored);
     this.host.requestUpdate();
   }
 
@@ -237,6 +263,7 @@ export class AuthenticatedAvatarRouteLoader implements ReactiveController {
         retryTimer: undefined,
         retryAttempts: 0,
         retryEligibleAt: undefined,
+        authRejected: false,
       };
       sharedAvatarRoutes.set(key, entry);
       void fetchAvatarRoute(key, url, authTokens, cacheNotFound, retryUnavailable, entry);

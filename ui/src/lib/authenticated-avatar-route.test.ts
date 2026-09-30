@@ -1,5 +1,6 @@
 import type { ReactiveControllerHost } from "lit";
 import { afterEach, expect, it, vi, type Mock } from "vitest";
+import { notifyBrowserAuthRestored } from "../app/browser-http.ts";
 import { AuthenticatedAvatarRouteLoader } from "./authenticated-avatar-route.ts";
 
 afterEach(() => {
@@ -210,5 +211,94 @@ it("falls through to the next credential when the first is rejected", async () =
   expect(loader.resolve("/avatar/main", ["stale-token", "session-password"])).toBe(
     "blob:recovered-avatar",
   );
+  loader.reset();
+});
+
+it("retains a rejected route instead of re-requesting on ordinary resolves", async () => {
+  const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 401 } as Response);
+  vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+  const loader = createLoader(vi.fn());
+
+  for (let i = 0; i < 8; i += 1) {
+    expect(
+      loader.withActiveRoutes(() => loader.resolve("/avatar/forbidden", ["stale-token"])),
+    ).toBeNull();
+    await Promise.resolve();
+    await Promise.resolve();
+  }
+
+  // Eight resolves must collapse to the one initial request; the rejected
+  // credential and URL are unchanged, so nothing new needs fetching.
+  expect(fetchMock).toHaveBeenCalledOnce();
+  loader.reset();
+});
+
+it("fetches again when the credential list changes after a rejection", async () => {
+  vi.stubGlobal(
+    "URL",
+    class extends URL {
+      static override createObjectURL = vi.fn(() => "blob:changed-credential");
+      static override revokeObjectURL = vi.fn();
+    },
+  );
+  const fetchMock = vi
+    .fn()
+    .mockResolvedValueOnce({ ok: false, status: 401 })
+    .mockResolvedValueOnce({ ok: true, blob: async () => new Blob(["avatar"]) });
+  vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+  const onUpdate = vi.fn();
+  const loader = createLoader(onUpdate);
+
+  expect(loader.resolve("/avatar/changing", ["stale-token"])).toBeNull();
+  await Promise.resolve();
+  await Promise.resolve();
+  expect(loader.resolve("/avatar/changing", ["stale-token"])).toBeNull();
+  await Promise.resolve();
+  expect(fetchMock).toHaveBeenCalledOnce();
+
+  // A changed credential list keys a different entry, so recovery is allowed.
+  expect(
+    loader.withActiveRoutes(() =>
+      loader.resolve("/avatar/changing", ["stale-token", "session-password"]),
+    ),
+  ).toBeNull();
+  await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+  await vi.waitFor(() => expect(onUpdate).toHaveBeenCalledOnce());
+  expect(loader.resolve("/avatar/changing", ["stale-token", "session-password"])).toBe(
+    "blob:changed-credential",
+  );
+  loader.reset();
+});
+
+it("invalidates a retained rejection when browser auth is restored", async () => {
+  vi.stubGlobal(
+    "URL",
+    class extends URL {
+      static override createObjectURL = vi.fn(() => "blob:auth-restored");
+      static override revokeObjectURL = vi.fn();
+    },
+  );
+  const fetchMock = vi
+    .fn()
+    .mockResolvedValueOnce({ ok: false, status: 401 })
+    .mockResolvedValueOnce({ ok: true, blob: async () => new Blob(["avatar"]) });
+  vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+  const onUpdate = vi.fn();
+  const loader = createLoader(onUpdate);
+
+  expect(loader.resolve("/avatar/recovering", ["token"])).toBeNull();
+  await Promise.resolve();
+  await Promise.resolve();
+  expect(loader.resolve("/avatar/recovering", ["token"])).toBeNull();
+  await Promise.resolve();
+  expect(fetchMock).toHaveBeenCalledOnce();
+
+  // A verified session recovery drops the retained rejection; the next render
+  // is allowed exactly one fresh request and can then serve the blob.
+  notifyBrowserAuthRestored();
+  expect(loader.resolve("/avatar/recovering", ["token"])).toBeNull();
+  await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+  await vi.waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(2));
+  expect(loader.resolve("/avatar/recovering", ["token"])).toBe("blob:auth-restored");
   loader.reset();
 });
