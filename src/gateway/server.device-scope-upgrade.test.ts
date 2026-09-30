@@ -268,7 +268,7 @@ describe("live device scope upgrade", () => {
       },
     });
     expect(result.error?.message).toContain("openclaw dashboard");
-    expect(result.error?.retryable).not.toBe(true);
+    expect(result.error).not.toMatchObject({ retryable: true });
     expect(result.payload).toBeUndefined();
     expect(
       (await devicePairing.getPairedDevice(limited.deviceId))?.tokens?.operator?.scopes,
