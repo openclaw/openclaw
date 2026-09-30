@@ -1,4 +1,10 @@
-import type { AnyMessageContent, MiscMessageGenerationOptions, WAMessage, WASocket } from "baileys";
+import {
+  WAMessageStubType,
+  type AnyMessageContent,
+  type MiscMessageGenerationOptions,
+  type WAMessage,
+  type WASocket,
+} from "baileys";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import { resolveInboundDebounceMs } from "openclaw/plugin-sdk/channel-inbound-debounce";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -482,6 +488,12 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
       return;
     }
     for (const msg of upsert.messages ?? []) {
+      if (!msg.message && msg.messageStubType === WAMessageStubType.CIPHERTEXT) {
+        // Baileys re-emits the decrypted copy under the same key after a
+        // placeholder resend; admitting the stub would complete that key first.
+        logWhatsAppVerbose(options.verbose, `Skipping undecrypted message ${msg.key?.id}`);
+        continue;
+      }
       rememberBaileysMessage(msg.key?.remoteJid, msg.key?.id, msg.message);
 
       const receiveOrder = nextReceiveOrder++;
