@@ -328,16 +328,16 @@ describe("persisted reply_to_guid reflection window", () => {
     installIMessageStateRuntimeForTest();
   });
 
-  it("does not match a persisted parent/body pair after the reflection window", () => {
+  it("does not match a persisted parent/body pair after the reflection window", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-08T12:00:00Z"));
     const scope = "default:imessage:+15555550123";
-    rememberPersistedIMessageEcho({ scope, text: "Hello", messageId: "GUID-A" });
+    await rememberPersistedIMessageEcho({ scope, text: "Hello", messageId: "GUID-A" });
 
     // Within the reflection window: the strict reply_to_guid match succeeds.
     vi.advanceTimersByTime(2_000);
     expect(
-      hasPersistedIMessageEcho({
+      await hasPersistedIMessageEcho({
         scope,
         text: "Hello",
         messageId: "GUID-A",
@@ -350,7 +350,7 @@ describe("persisted reply_to_guid reflection window", () => {
     // is not dropped hours later.
     vi.advanceTimersByTime(3_000);
     expect(
-      hasPersistedIMessageEcho({
+      await hasPersistedIMessageEcho({
         scope,
         text: "Hello",
         messageId: "GUID-A",
@@ -360,6 +360,6 @@ describe("persisted reply_to_guid reflection window", () => {
 
     // Exact outbound-GUID matching (no requireMessageIdTextMatch) still honors
     // the full 12h retention so reconnect re-emits are still recognized.
-    expect(hasPersistedIMessageEcho({ scope, messageId: "GUID-A" })).toBe(true);
+    expect(await hasPersistedIMessageEcho({ scope, messageId: "GUID-A" })).toBe(true);
   });
 });

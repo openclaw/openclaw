@@ -162,8 +162,8 @@ const results = [];
 // Scenario 5: persisted cache requireMessageIdTextMatch — same text
 {
   const pscope = "persisted-test-same";
-  rememberPersistedIMessageEcho({ scope: pscope, text: "Hello", messageId: "GUID-A" });
-  const hit = hasPersistedIMessageEcho({
+  await rememberPersistedIMessageEcho({ scope: pscope, text: "Hello", messageId: "GUID-A" });
+  const hit = await hasPersistedIMessageEcho({
     scope: pscope,
     text: "Hello",
     messageId: "GUID-A",
@@ -180,8 +180,8 @@ const results = [];
 // Scenario 6: persisted cache requireMessageIdTextMatch — different text
 {
   const pscope = "persisted-test-diff";
-  rememberPersistedIMessageEcho({ scope: pscope, text: "Hello", messageId: "GUID-A" });
-  const hit = hasPersistedIMessageEcho({
+  await rememberPersistedIMessageEcho({ scope: pscope, text: "Hello", messageId: "GUID-A" });
+  const hit = await hasPersistedIMessageEcho({
     scope: pscope,
     text: "Goodbye",
     messageId: "GUID-A",
