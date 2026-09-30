@@ -429,7 +429,7 @@ describe("media migration of canonical SQLite transcript archives", () => {
     }
   });
 
-  it("retains a normalized pending blob after publication fails and recovers on the next pass", async () => {
+  it("keeps a failed archive publication pending and recovers on the next pass", async () => {
     const f = fixture();
     const originalFile = fs.readFileSync(f.archivePath);
     const renameSync = fs.renameSync;
@@ -453,7 +453,9 @@ describe("media migration of canonical SQLite transcript archives", () => {
     expect(fs.readFileSync(f.archivePath)).toEqual(originalFile);
 
     expect((await migrateLegacyMediaPersistence({ env: f.env })).warnings).toEqual([]);
-    expectCanonical(f.read());
-    expect(fs.readFileSync(f.archivePath)).toEqual(Buffer.from(pending.archive_blob));
+    const recovered = f.read();
+    expectCanonical(recovered);
+    expect(recovered.published_at).toBe(publishedAt);
+    expect(fs.readFileSync(f.archivePath)).toEqual(Buffer.from(recovered.archive_blob));
   });
 });

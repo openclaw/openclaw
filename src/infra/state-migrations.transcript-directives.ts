@@ -36,7 +36,9 @@ import {
 } from "./state-migrations.media-persistence-targets.js";
 import {
   migrateTranscriptDirectiveArchives,
+  recoverPendingTranscriptArchivePublication,
   TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE,
+  transcriptDirectiveArchiveRecoveryPending,
   transcriptDirectiveArchivesNeedMigration,
 } from "./state-migrations.transcript-directives-archives.js";
 import {
@@ -326,7 +328,12 @@ async function migrateAgentDatabase(
     assertOpenClawAgentDatabaseForMaintenance(database, params);
     const cursor = readMigrationCursor(database, params.pathname);
     if (cursor.phase === "complete") {
-      return { archivedTranscripts: 0, transcriptSessions: 0, warnings: [] };
+      const warnings = recoverPendingTranscriptArchivePublication({
+        agentId: params.agentId,
+        database,
+        pathname: params.pathname,
+      });
+      return { archivedTranscripts: 0, transcriptSessions: 0, warnings };
     }
     const owner = createMigrationDatabaseHandle(database, params.agentId, params.pathname);
     const transcriptSessions =
@@ -384,7 +391,7 @@ function agentDatabaseNeedsTranscriptDirectiveMigration(params: {
     }
     const cursor = readMigrationCursor(database, params.pathname);
     if (cursor.phase === "complete") {
-      return false;
+      return transcriptDirectiveArchiveRecoveryPending(database);
     }
     if (
       cursor.phase === "transcripts" &&
