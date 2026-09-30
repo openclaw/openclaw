@@ -18,6 +18,7 @@ export type BundledPluginSource = {
   npmSpec?: string;
   version?: string;
   configSchema?: Record<string, unknown>;
+  contextEngineIds?: readonly string[];
   requiresConfig?: boolean;
 };
 
@@ -128,6 +129,7 @@ export function resolveBundledPluginSources(params: {
       localPath: candidate.rootDir,
       npmSpec,
       version,
+      ...(manifest.contextEngineIds ? { contextEngineIds: manifest.contextEngineIds } : {}),
       ...(isRecord(manifest.configSchema) ? { configSchema: manifest.configSchema } : {}),
       requiresConfig: pluginConfigSchemaHasRequiredFields(manifest.configSchema),
     });

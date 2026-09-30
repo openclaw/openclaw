@@ -89,10 +89,28 @@ export function resolveSlotSelection(slotKey: PluginSlotKey, value: unknown): Sl
   return normalized === null ? { kind: "off" } : { kind: "pinned", pluginId: normalized };
 }
 
+/** Retained declarations support cleanup even when the manifest cannot be read. */
+export function resolveRetainedContextEngineIds(
+  config: OpenClawConfig,
+  pluginId: string,
+  removedPluginIds: readonly string[] = [pluginId],
+): string[] {
+  const owners = Object.values(config.plugins?.installs ?? {}).flatMap((record) =>
+    Object.entries(record.contextEngineIdsByPlugin ?? {}),
+  );
+  const declarations = owners.filter(([id]) => id === pluginId);
+  const ids = declarations.length ? declarations.flatMap(([, values]) => values) : [pluginId];
+  return [...new Set(ids)].filter(
+    (id) =>
+      !owners.some(([owner, values]) => !removedPluginIds.includes(owner) && values.includes(id)),
+  );
+}
+
 /** Resets every slot currently owned by a plugin to its implicit default. */
 export function resetPluginSlotsToDefaults(
   slots: PluginSlotsConfig | undefined,
   pluginId: string,
+  contextEngineIds?: readonly string[],
 ): PluginSlotsConfig | undefined {
   if (!slots) {
     return slots;
@@ -100,7 +118,8 @@ export function resetPluginSlotsToDefaults(
   const next = { ...slots };
   let changed = false;
   for (const slotKey of PLUGIN_SLOT_KEYS) {
-    if (slots[slotKey] !== pluginId) {
+    const ownedIds = slotKey === "contextEngine" ? (contextEngineIds ?? [pluginId]) : [pluginId];
+    if (!ownedIds.includes(slots[slotKey] ?? "")) {
       continue;
     }
     delete next[slotKey];
@@ -120,12 +139,15 @@ export function applyExclusiveSlotSelection(params: {
   config: OpenClawConfig;
   selectedId: string;
   selectedKind?: PluginKind | PluginKind[];
+  contextEngineIds?: readonly string[];
+  legacyContextEngineOwnerId?: string;
 }): SlotSelectionResult {
   const slotKeys = slotKeysForPluginKind(params.selectedKind);
   if (slotKeys.length === 0) {
     return { config: params.config, warnings: [], changed: false };
   }
 
+  const warnings: string[] = [];
   const pluginsConfig = params.config.plugins ?? {};
   let anyChanged = false;
   const entries = { ...pluginsConfig.entries };
@@ -133,8 +155,32 @@ export function applyExclusiveSlotSelection(params: {
 
   for (const slotKey of slotKeys) {
     const prevSlot = slots[slotKey];
-    const nextSlot =
-      params.selectedId === defaultSlotIdForKey(slotKey) ? undefined : params.selectedId;
+    let selectedSlotId = params.selectedId;
+    if (slotKey === "contextEngine" && params.contextEngineIds !== undefined) {
+      const engineIds = params.contextEngineIds;
+      const onlyEngineId = engineIds[0];
+      if (prevSlot && engineIds.includes(prevSlot)) {
+        continue;
+      }
+      if (engineIds.length !== 1 || !onlyEngineId) {
+        warnings.push(
+          `Plugin "${params.selectedId}" declares multiple context engines. Set plugins.slots.contextEngine explicitly to one of: ${engineIds.join(", ")}. The current selection is unchanged.`,
+        );
+        continue;
+      }
+      if (
+        prevSlot &&
+        prevSlot !== defaultSlotIdForKey(slotKey) &&
+        (prevSlot !== params.selectedId || params.legacyContextEngineOwnerId !== params.selectedId)
+      ) {
+        warnings.push(
+          `Preserved explicit context engine selection "${prevSlot}". To use "${params.selectedId}", set plugins.slots.contextEngine to "${engineIds[0]}".`,
+        );
+        continue;
+      }
+      selectedSlotId = onlyEngineId;
+    }
+    const nextSlot = selectedSlotId === defaultSlotIdForKey(slotKey) ? undefined : selectedSlotId;
     if (nextSlot === undefined) {
       delete slots[slotKey];
     } else {
@@ -147,7 +193,7 @@ export function applyExclusiveSlotSelection(params: {
   }
 
   if (!anyChanged) {
-    return { config: params.config, warnings: [], changed: false };
+    return { config: params.config, warnings, changed: false };
   }
 
   const { slots: _previousSlots, ...pluginsWithoutSlots } = pluginsConfig;
@@ -161,7 +207,7 @@ export function applyExclusiveSlotSelection(params: {
         entries,
       },
     },
-    warnings: [],
+    warnings,
     changed: true,
   };
 }

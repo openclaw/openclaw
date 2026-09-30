@@ -49,7 +49,9 @@ it("captures configured registration before awaiting the fallback factory", asyn
   );
   registerContextEngineInRegistry(registry, "selected", factory("original"), "plugin:fixture");
   const pending = withPluginRuntimeRegistryScope(registry, () =>
-    resolveLogicalTurnContextEngines({ plugins: { slots: { contextEngine: "selected" } } }),
+    resolveLogicalTurnContextEngines({
+      plugins: { entries: { fixture: { enabled: true } }, slots: { contextEngine: "selected" } },
+    }),
   );
   registerContextEngineInRegistry(registry, "selected", factory("replacement"), "plugin:fixture", {
     allowSameOwnerRefresh: true,
@@ -236,7 +238,9 @@ it.each([
   if (mode !== "raw-view") {
     viewSource.attach(copiedView);
   }
-  const config = { plugins: { slots: { contextEngine: "selected" } } };
+  const config = {
+    plugins: { entries: { [plugin.id]: { enabled: true } }, slots: { contextEngine: "selected" } },
+  };
   const cleanupScope = createAgentCleanupScope();
   const parent = new AsyncWorkScope();
   const foreign = new AsyncWorkScope();
@@ -496,7 +500,9 @@ it("disposes a shared engine once while releasing both factory source claims", a
     registerContextEngineInRegistry(registry, "legacy", () => engine, "core");
     registerContextEngineInRegistry(registry, "selected", () => engine, "plugin:fixture");
   });
-  const config = { plugins: { slots: { contextEngine: "selected" } } };
+  const config = {
+    plugins: { entries: { fixture: { enabled: true } }, slots: { contextEngine: "selected" } },
+  };
   const resolution = await withPluginRuntimeRegistryScope(registry, () =>
     resolveLogicalTurnContextEngines(config),
   );

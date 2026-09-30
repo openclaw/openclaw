@@ -335,7 +335,12 @@ describe("resolvePluginRuntimeLoadContext", () => {
     const env = { HOME: "/tmp/openclaw-home", PRIVATE_CONTEXT_TEST: envSentinel };
     const context = resolvePluginRuntimeLoadContext({ config, env });
     const registry = createEmptyPluginRegistry();
-    setPluginRuntimeLoadContext(registry, context, "original-registration");
+    const selectedContextEngine = { engineId: "synthetic", owner: "plugin:original" };
+    setPluginRuntimeLoadContext(
+      registry,
+      { ...context, selectedContextEngine },
+      "original-registration",
+    );
     const bound = getPluginRuntimeLoadContext(registry);
     expect(bound).toMatchObject(context);
     expect(bound?.config).toBe(config);
@@ -346,12 +351,14 @@ describe("resolvePluginRuntimeLoadContext", () => {
     const reboundContext = {
       ...context,
       workspaceDir: "/rebound-workspace",
+      selectedContextEngine: { engineId: "synthetic", owner: "plugin:replacement" },
       env: { ...env, PRIVATE_CONTEXT_TEST: `${envSentinel}-rebound` },
     };
     setPluginRuntimeLoadContext(copy, reboundContext, "replacement-registration");
     expect(getPluginRuntimeLoadContext(copy)).toMatchObject({
       ...reboundContext,
       registrationConfigKey: "original-registration",
+      selectedContextEngine,
     });
     expect(getPluginRuntimeLoadContext(copy)?.env).toBe(reboundContext.env);
     expect(getPluginRuntimeLoadContext(registry)).toBe(bound);

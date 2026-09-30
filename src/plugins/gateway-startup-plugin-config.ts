@@ -197,18 +197,21 @@ export function resolveMemorySlotStartupPluginId(params: {
 }
 
 export function resolveContextEngineSlotStartupPluginId(params: {
+  records: readonly { id: string; contextEngineIds?: readonly string[] }[];
   activationSourceConfig: OpenClawConfig;
   activationSourcePlugins: NormalizedPluginsConfig;
   normalizePluginId: (pluginId: string) => string;
 }): string | undefined {
-  const { activationSourceConfig, activationSourcePlugins, normalizePluginId } = params;
-  const configuredSlot = activationSourceConfig.plugins?.slots?.contextEngine?.trim();
+  const { activationSourcePlugins, normalizePluginId } = params;
+  const configuredSlot = activationSourcePlugins.slots.contextEngine;
   if (!configuredSlot) {
     return undefined;
   }
   return resolveSelectedContextEnginePluginIdFromConfig(
     activationSourcePlugins,
-    normalizePluginId(configuredSlot),
+    configuredSlot,
+    params.records,
+    normalizePluginId,
   );
 }
 
@@ -293,20 +296,28 @@ export function addConfiguredSlotPluginIds(
     activationSourceConfig: OpenClawConfig;
     activationSourcePlugins: NormalizedPluginsConfig;
     lookup: InstalledPluginIndexScopeLookup;
+    index: InstalledPluginIndex;
   },
 ): void {
-  for (const resolveSlot of [
-    resolveMemorySlotStartupPluginId,
-    resolveContextEngineSlotStartupPluginId,
-  ]) {
-    const pluginId = resolveSlot({
-      activationSourceConfig: params.activationSourceConfig,
-      activationSourcePlugins: params.activationSourcePlugins,
-      normalizePluginId: params.lookup.normalizePluginId,
-    });
-    if (pluginId) {
-      target.add(pluginId);
-    }
+  const memorySlot = resolveMemorySlotStartupPluginId({
+    activationSourceConfig: params.activationSourceConfig,
+    activationSourcePlugins: params.activationSourcePlugins,
+    normalizePluginId: params.lookup.normalizePluginId,
+  });
+  if (memorySlot) {
+    target.add(memorySlot);
+  }
+  const contextEngineSlot = resolveContextEngineSlotStartupPluginId({
+    records: params.index.plugins.map((plugin) => ({
+      id: plugin.pluginId,
+      contextEngineIds: plugin.contextEngineIds,
+    })),
+    activationSourceConfig: params.activationSourceConfig,
+    activationSourcePlugins: params.activationSourcePlugins,
+    normalizePluginId: params.lookup.normalizePluginId,
+  });
+  if (contextEngineSlot) {
+    target.add(contextEngineSlot);
   }
 }
 

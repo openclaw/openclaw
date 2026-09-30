@@ -1,3 +1,7 @@
+import {
+  resolveEligibleContextEngineDeclaredOwners,
+  withContextEngineOwner,
+} from "./config-state.js";
 import { discoverOpenClawPlugins } from "./discovery.js";
 import type { PluginLoadCacheContext } from "./loader-load-context.js";
 import { buildProvenanceIndex, warnWhenAllowlistIsOpen } from "./loader-provenance.js";
@@ -45,6 +49,27 @@ export function resolvePluginLoadDiscovery(params: {
       installRecords:
         Object.keys(context.installRecords).length > 0 ? context.installRecords : undefined,
     });
+  const contextEngineOwners =
+    context.metadataSnapshot?.registryIndex.plugins.map((plugin) => ({
+      id: plugin.pluginId,
+      contextEngineIds: plugin.contextEngineIds,
+    })) ?? manifestRegistry.plugins;
+  const selectedEngineId = context.normalized.slots.contextEngine;
+  const selectedOwners = resolveEligibleContextEngineDeclaredOwners(
+    context.normalized,
+    selectedEngineId,
+    contextEngineOwners,
+  ).pluginIds;
+  if (selectedOwners.length > 1) {
+    throw new Error(
+      `Context engine "${selectedEngineId}" has ambiguous declared owners: ${selectedOwners.toSorted().join(", ")}. Select an engine with a unique plugin owner.`,
+    );
+  }
+  context.normalized = withContextEngineOwner(context.normalized, contextEngineOwners);
+  context.activationSource = {
+    ...context.activationSource,
+    plugins: withContextEngineOwner(context.activationSource.plugins, contextEngineOwners),
+  };
   params.diagnostics.push(...manifestRegistry.diagnostics);
   warnWhenAllowlistIsOpen({
     emitWarning: params.emitWarning,

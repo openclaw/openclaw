@@ -252,7 +252,10 @@ async function resolvePluginArtifactCapabilityConsent(params: {
   previousRecord?: PluginInstallRecord;
   mode?: "install" | "update";
   enabled: boolean;
-}): Promise<PluginAcceptedDeclaredSurface | undefined> {
+}): Promise<{
+  declared?: PluginAcceptedDeclaredSurface;
+  contextEngineIdsByPlugin: Record<string, string[]>;
+}> {
   const artifactContext = { config: params.config, currentArtifactDir: params.currentArtifactDir };
   const { declared, manifest } = inspectPluginCapabilityArtifact(
     params.artifactDir,
@@ -301,11 +304,11 @@ async function resolvePluginArtifactCapabilityConsent(params: {
     await params.beforePersistentEffect?.();
   }
   // Interactive consent yields; re-read the final stage so a replaced artifact cannot inherit it.
-  const { declared: finalDeclared, manifest: finalManifest } = inspectPluginCapabilityArtifact(
-    params.artifactDir,
-    params.env,
-    artifactContext,
-  );
+  const {
+    declared: finalDeclared,
+    manifest: finalManifest,
+    contextEngineIdsByPlugin,
+  } = inspectPluginCapabilityArtifact(params.artifactDir, params.env, artifactContext);
   const finalToken = computeDeclaredSurfaceHash(finalDeclared);
   if (
     !acknowledgment ||
@@ -322,7 +325,10 @@ async function resolvePluginArtifactCapabilityConsent(params: {
   }
   pendingPluginCapabilityReviews.delete(params.pluginId);
   // Provenance alone is not operator acceptance; an explicit review is.
-  return !official && (params.enabled || acceptanceCurrent) ? finalDeclared : undefined;
+  return {
+    declared: !official && (params.enabled || acceptanceCurrent) ? finalDeclared : undefined,
+    contextEngineIdsByPlugin,
+  };
 }
 
 /** Bind artifact consent to verified staged bytes and carry acceptance into the record commit. */
@@ -359,7 +365,10 @@ export function createManagedPluginArtifactConsentHandler(params: {
       }
     }
   }
-  const pendingAcceptedSurfaces = new Map<string, PluginAcceptedDeclaredSurface | undefined>();
+  const pendingAcceptedSurfaces = new Map<
+    string,
+    Awaited<ReturnType<typeof resolvePluginArtifactCapabilityConsent>>
+  >();
   return {
     onBeforePluginArtifactCommit: async (
       artifact: PluginInstallArtifactConsentRequest,
@@ -418,13 +427,18 @@ export function createManagedPluginArtifactConsentHandler(params: {
       pendingAcceptedSurfaces.set(artifact.pluginId, declared);
     },
     applyAcceptedSurface: (pluginId, record) => {
-      const declared = pendingAcceptedSurfaces.get(pluginId);
-      if (!pendingAcceptedSurfaces.has(pluginId)) {
+      const reviewed = pendingAcceptedSurfaces.get(pluginId);
+      if (!reviewed) {
         throw new ManagedPluginLifecycleError(
           `Plugin "${pluginId}" did not expose its verified artifact for capability review.`,
         );
       }
-      return declared ? acceptManagedPluginDeclaredSurface(record, declared) : record;
+      const next = { ...record };
+      delete next.contextEngineIdsByPlugin;
+      if (Object.keys(reviewed.contextEngineIdsByPlugin).length > 0) {
+        next.contextEngineIdsByPlugin = structuredClone(reviewed.contextEngineIdsByPlugin);
+      }
+      return reviewed.declared ? acceptManagedPluginDeclaredSurface(next, reviewed.declared) : next;
     },
   };
 }

@@ -8,6 +8,7 @@ export type PluginRuntimeLoadContextState = {
   loaderCacheIdentity?: Readonly<{ requestKey: string; resolvedKey: string }>;
   preferBuiltPluginArtifacts?: boolean;
   declaredProviderOwners: DeclaredProviderOwnerIndex;
+  selectedContextEngine?: Readonly<{ engineId: string; owner: string | null }>;
 };
 
 // Keep private config/env out of diagnostic traversal while registry spreads
@@ -32,4 +33,13 @@ export function getPluginRuntimeLoadContextState(
 ): PluginRuntimeLoadContextState | undefined {
   // SAFETY: Only the owning setter writes this private registry slot.
   return (registry as ContextCarrier | undefined)?.[pluginRuntimeLoadContext]?.();
+}
+
+/** Reads the canonical owner captured before plugin registration, without rediscovery. */
+export function getSelectedContextEngineOwner(
+  registry: object,
+  engineId: string,
+): string | null | undefined {
+  const selected = getPluginRuntimeLoadContextState(registry)?.selectedContextEngine;
+  return selected?.engineId === engineId ? selected.owner : undefined;
 }

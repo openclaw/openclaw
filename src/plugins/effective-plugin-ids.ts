@@ -153,6 +153,16 @@ export function resolveEffectivePluginIds(params: {
   const contextEnginePluginId = resolveSelectedContextEnginePluginIdFromConfig(
     plugins,
     plugins.slots.contextEngine,
+    plugins.enabled && plugins.slots.contextEngine && plugins.slots.contextEngine !== "legacy"
+      ? (
+          prepared ??
+          loadManifestMetadataSnapshot({
+            config: effectiveConfig,
+            env: params.env,
+            workspaceDir: params.workspaceDir,
+          })
+        ).plugins
+      : [],
   );
   if (contextEnginePluginId) {
     ids.add(contextEnginePluginId);

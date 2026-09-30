@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveSelectedContextEnginePluginId } from "./config-state.js";
 import { isBundledManifestOwner } from "./manifest-owner-policy.js";
 import {
   loadPluginMetadataSnapshot,
@@ -24,6 +25,11 @@ export async function applySlotSelectionForPlugin(
   if (!plugin) {
     return { config, warnings: [] };
   }
+  // Reconstruct legacy ownership without letting a plugin-ID match displace a declared owner.
+  const legacyContextEngineOwnerId = resolveSelectedContextEnginePluginId(
+    config,
+    metadataSnapshot.plugins.map((entry) => (entry.id === plugin.id ? { id: entry.id } : entry)),
+  );
   if (!plugin.kind && !isBundledManifestOwner(plugin)) {
     // Bundled manifests own slot declarations. Only legacy external plugins need
     // runtime kind inspection; enabling a bundled non-slot plugin must not execute its module.
@@ -43,6 +49,8 @@ export async function applySlotSelectionForPlugin(
           config,
           selectedId: plugin.id,
           selectedKind: runtimePlugin?.kind ?? plugin.kind,
+          contextEngineIds: plugin.contextEngineIds,
+          legacyContextEngineOwnerId,
         });
         return { config: result.config, warnings: result.warnings };
       },
@@ -53,6 +61,8 @@ export async function applySlotSelectionForPlugin(
     config,
     selectedId: plugin.id,
     selectedKind: plugin.kind,
+    contextEngineIds: plugin.contextEngineIds,
+    legacyContextEngineOwnerId,
   });
   return { config: result.config, warnings: result.warnings };
 }

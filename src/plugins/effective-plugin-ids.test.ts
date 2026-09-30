@@ -117,6 +117,9 @@ describe("resolveEffectivePluginIds", () => {
   });
 
   it("includes a selected context-engine slot even when omitted from explicit allow and entries", () => {
+    mocks.loadManifestMetadataSnapshot.mockReturnValue(
+      createPluginMetadataSnapshotFixture({ plugins: [{ id: "lossless-claw" }] }),
+    );
     expect(
       resolve({
         plugins: {
@@ -134,7 +137,10 @@ describe("resolveEffectivePluginIds", () => {
     mocks.listPotentialConfiguredChannelIds.mockReturnValue(["test-channel"]);
     mocks.loadManifestMetadataSnapshot.mockReturnValue(
       createPluginMetadataSnapshotFixture({
-        plugins: [{ id: "bundled-channel-owner", channels: ["test-channel"] }],
+        plugins: [
+          { id: "early-context" },
+          { id: "bundled-channel-owner", channels: ["test-channel"] },
+        ],
       }),
     );
     mocks.resolveConfiguredChannelPluginIds.mockImplementation(({ config }) => {
@@ -148,6 +154,20 @@ describe("resolveEffectivePluginIds", () => {
     expect(resolve({ plugins: { slots: { contextEngine: "early-context" } } })).toEqual([
       "early-context",
     ]);
+  });
+
+  it("preloads the declared owner, not the engine identifier", () => {
+    mocks.loadManifestMetadataSnapshot.mockReturnValue(
+      createPluginMetadataSnapshotFixture({
+        plugins: [{ id: "vendor-plugin", contextEngineIds: ["Canonical-Engine"] }],
+      }),
+    );
+    expect(resolve({ plugins: { slots: { contextEngine: "Canonical-Engine" } } })).toEqual([]);
+    expect(
+      resolve({
+        plugins: { allow: ["vendor-plugin"], slots: { contextEngine: "Canonical-Engine" } },
+      }),
+    ).toEqual(["vendor-plugin"]);
   });
 
   it("keeps the built-in legacy context engine out of plugin preload ids", () => {
@@ -187,6 +207,9 @@ describe("resolveEffectivePluginIds", () => {
   ] satisfies Array<{ name: string; plugins: NonNullable<OpenClawConfig["plugins"]> }>)(
     "does not preload a selected context-engine slot when $name",
     ({ plugins }) => {
+      mocks.loadManifestMetadataSnapshot.mockReturnValue(
+        createPluginMetadataSnapshotFixture({ plugins: [{ id: "lossless-claw" }] }),
+      );
       expect(resolve({ plugins })).toStrictEqual([]);
     },
   );

@@ -27,6 +27,7 @@ export function createPluginMetadataSnapshotFixture(
     plugins: Array<Partial<PluginManifestRecord> & Pick<PluginManifestRecord, "id">>;
     diagnostics?: PluginManifestRegistry["diagnostics"];
   } = { plugins: [] },
+  policyHash = "test-policy",
 ): PluginMetadataSnapshot {
   const plugins = registry.plugins.map(createPluginManifestRecordFixture);
   const manifestRegistry = { plugins, diagnostics: registry.diagnostics ?? [] };
@@ -35,11 +36,12 @@ export function createPluginMetadataSnapshotFixture(
     hostContractVersion: "test",
     compatRegistryVersion: "test",
     migrationVersion: 1,
-    policyHash: "test-policy",
+    policyHash,
     generatedAtMs: 0,
     installRecords: {},
     plugins: plugins.map((plugin) => ({
       pluginId: plugin.id,
+      contextEngineIds: plugin.contextEngineIds,
       origin: plugin.origin,
       manifestPath: plugin.manifestPath,
       manifestHash: "test-manifest",
@@ -53,7 +55,7 @@ export function createPluginMetadataSnapshotFixture(
     diagnostics: manifestRegistry.diagnostics,
   };
   const snapshot: Parameters<typeof rebasePluginMetadataSnapshotManifestRegistry>[0] = {
-    policyHash: "test-policy",
+    policyHash,
     index,
     registryIndex: index,
     registryDiagnostics: [],

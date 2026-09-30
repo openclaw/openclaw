@@ -37,6 +37,7 @@ type PluginActivationDecision = PluginActivationStateLike & {
 };
 
 type PluginActivationConfigLike = {
+  contextEngineOwnerId?: string | null;
   enabled: boolean;
   allow: readonly string[];
   deny: readonly string[];
@@ -110,7 +111,11 @@ function resolveExplicitPluginSelectionShared<TRootConfig>(params: {
   if (params.config.slots.memory === params.id) {
     return "selected-memory-slot";
   }
-  if (params.config.slots.contextEngine === params.id) {
+  if (
+    (params.config.contextEngineOwnerId !== undefined
+      ? params.config.contextEngineOwnerId
+      : params.config.slots.contextEngine) === params.id
+  ) {
     return "selected-context-engine-slot";
   }
   if (params.origin !== "bundled" && params.config.allow.includes(policyId)) {
@@ -195,7 +200,11 @@ export function resolvePluginActivationDecisionShared<TRootConfig>(params: {
   if (params.config.slots.memory === params.id) {
     return decision("explicit", { explicitlyEnabled: true, cause: "selected-memory-slot" });
   }
-  if (params.config.slots.contextEngine === params.id) {
+  if (
+    (params.config.contextEngineOwnerId !== undefined
+      ? params.config.contextEngineOwnerId
+      : params.config.slots.contextEngine) === params.id
+  ) {
     return decision("explicit", { explicitlyEnabled: true, cause: "selected-context-engine-slot" });
   }
   if (

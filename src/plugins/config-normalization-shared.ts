@@ -8,6 +8,8 @@ import { normalizeSlotValue, resolveSlotSelection } from "./slots.js";
 
 /** Canonical plugin config shape consumed by runtime policy and loaders. */
 export type NormalizedPluginsConfig = {
+  /** Prepared metadata owner; null means the engine has no unambiguous permitted owner. */
+  contextEngineOwnerId?: string | null;
   enabled: boolean;
   allow: string[];
   deny: string[];

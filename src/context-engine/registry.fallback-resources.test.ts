@@ -115,7 +115,9 @@ it.each([
   let cleanup: Promise<void> | undefined;
   try {
     engine = await withPluginRuntimeRegistryScope(registry, () =>
-      resolveContextEngine({ plugins: { slots: { contextEngine: selectedId } } }),
+      resolveContextEngine({
+        plugins: { entries: { fixture: { enabled: true } }, slots: { contextEngine: selectedId } },
+      }),
     );
     if (mode !== "unused") {
       operation = withPluginRuntimeRegistryScope(registry, () => engine!.assemble(params));
@@ -258,7 +260,9 @@ it.each(["missing", "factory", "guarded"] as const)(
     try {
       const resolve = () =>
         withPluginRuntimeRegistryScope(registry, () =>
-          resolveContextEngine({ plugins: { slots: { contextEngine: id } } }),
+          resolveContextEngine({
+            plugins: { entries: { fixture: { enabled: true } }, slots: { contextEngine: id } },
+          }),
         );
       if (mode === "guarded") {
         engine = await resolve();

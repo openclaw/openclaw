@@ -1,6 +1,8 @@
 // Caller-owned handles adopt root runtime context engines without full plugin setup.
 import { describe, expect, it } from "vitest";
+import { projectPluginContributions } from "../plugins/registry-contributions.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { bindPluginRuntimeLoadContextState } from "../plugins/runtime/load-context-state.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { adoptRuntimeContextEngineRegistrations, type ContextEngineFactory } from "./registry.js";
 
@@ -164,4 +166,33 @@ describe("adoptRuntimeContextEngineRegistrations", () => {
 
     expect(adoptRuntimeContextEngineRegistrations(scoped, root)).toBe(scoped);
   });
+});
+
+// A retained or full-only factory cannot bypass the target generation's selected owner.
+it.each(["adopt", "retain"] as const)("enforces prepared ownership during %s", (operation) => {
+  const root = registryWithPluginEngine({
+    pluginId: "existing-engine",
+    engineId: "existing-engine",
+    lifecycle: "runtime",
+  });
+  for (const owner of ["plugin:new-owner", "plugin:existing-engine", null]) {
+    const target = createEmptyPluginRegistry();
+    target.plugins.push(...root.plugins);
+    bindPluginRuntimeLoadContextState(target, {
+      activationInputFingerprint: "synthetic",
+      activationResultFingerprint: "synthetic",
+      controlPlaneFingerprint: "synthetic",
+      registrationConfigKey: "synthetic",
+      declaredProviderOwners: new Map(),
+      selectedContextEngine: { engineId: "existing-engine", owner },
+    });
+    let result = target;
+    if (operation === "adopt") {
+      result = adoptRuntimeContextEngineRegistrations(target, root);
+    } else {
+      projectPluginContributions(root, root.plugins[0]!, target);
+    }
+    expect(result.contextEngines.has("existing-engine")).toBe(owner === "plugin:existing-engine");
+    expect(root.contextEngines.has("existing-engine")).toBe(true);
+  }
 });

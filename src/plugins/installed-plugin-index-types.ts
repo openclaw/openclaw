@@ -57,6 +57,8 @@ export type InstalledPluginPackageChannelInfo = PluginPackageChannel;
 /** One manifest-backed plugin entry in the generated installed plugin index. */
 export type InstalledPluginIndexRecord = {
   pluginId: string;
+  /** Retained manifest ownership; readable even when plugin files are unavailable. */
+  contextEngineIds?: readonly string[];
   packageName?: string;
   packageVersion?: string;
   /**
