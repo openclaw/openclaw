@@ -15,7 +15,7 @@ import { t } from "../../../i18n/index.ts";
 import { OpenClawLitElement } from "../../../lit/openclaw-element.ts";
 
 export type MessageReactionAction = (messageId: string, emoji: string, remove: boolean) => void;
-export type MessageReactionPlacement = "bottom-start" | "bottom-end";
+type MessageReactionPlacement = "bottom-start" | "bottom-end";
 
 const QUICK_REACTIONS = ["👍", "❤️", "🎉", "👀", "🚀", "😂"] as const;
 const TOOLTIP_NAME_LIMIT = 3;
