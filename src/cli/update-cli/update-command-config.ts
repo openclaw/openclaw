@@ -400,9 +400,7 @@ export async function readUpdateChannelConfig(
 }
 
 /** Preserve authored bytes during target admission; the projection grants no write authority. */
-async function planUpdateChannelLegacyConfig(
-  snapshot: ConfigFileSnapshot,
-): Promise<{
+async function planUpdateChannelLegacyConfig(snapshot: ConfigFileSnapshot): Promise<{
   configSnapshot: ConfigFileSnapshot;
   legacyConfigPlan?: LegacyConfigUpdatePlan;
 }> {
