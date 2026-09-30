@@ -242,13 +242,6 @@ function catalogHostMapper(
   };
 }
 
-function mappedHostPublisher(
-  onHost: (host: SessionCatalogHost) => void,
-  mapHost: (host: CodexSessionCatalogHost) => SessionCatalogHost,
-) {
-  return (host: CodexSessionCatalogHost) => onHost(mapHost(host));
-}
-
 function mapCatalogListOperation(
   operation: ReturnType<typeof createCodexSessionCatalogListOperation>,
   mapHost: (host: CodexSessionCatalogHost) => SessionCatalogHost,
@@ -344,7 +337,7 @@ function registerCodexSessionCatalog(params: {
           localHomes,
           allowPartialResults,
           nodeSnapshots,
-          ...(onHost ? { onHost: mappedHostPublisher(onHost, mapHost) } : {}),
+          ...(onHost ? { onHost: (host: CodexSessionCatalogHost) => onHost(mapHost(host)) } : {}),
         }),
         mapHost,
       );

@@ -39,17 +39,11 @@ export class TerminalOutputCoalescer {
   }
 
   flush(): void {
-    if (this.timer) {
-      clearTimeout(this.timer);
-      this.timer = null;
+    const chunks = this.chunks;
+    this.clear();
+    if (chunks.length > 0) {
+      this.emit(chunks.join(""));
     }
-    if (this.chunks.length === 0) {
-      return;
-    }
-    const data = this.chunks.join("");
-    this.chunks = [];
-    this.bufferedBytes = 0;
-    this.emit(data);
   }
 
   clear(): void {

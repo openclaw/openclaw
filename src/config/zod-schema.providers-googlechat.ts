@@ -1,17 +1,13 @@
 // Defines Google Chat provider schema fragments.
 import { z } from "zod";
+import { refineChannelDmPolicy } from "../channels/plugins/config-schema.js";
 import {
   ChannelBotLoopProtectionSchema,
   ChannelDangerouslyAllowNameMatchingSchema,
   buildChannelAllowBotsSchema,
   buildChannelAccountSchemaParts,
 } from "./zod-schema.channel-messaging-common.js";
-import {
-  ChannelDeliveryStreamingConfigSchema,
-  SecretRefSchema,
-  requireAllowlistAllowFrom,
-  requireOpenAllowFrom,
-} from "./zod-schema.core.js";
+import { ChannelDeliveryStreamingConfigSchema, SecretRefSchema } from "./zod-schema.core.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
 const GoogleChatDmSchema = z
@@ -64,43 +60,8 @@ export const GoogleChatConfigSchema = GoogleChatAccountSchemaBase.extend({
   accounts: z.record(z.string(), GoogleChatAccountSchemaBase.optional()).optional(),
   defaultAccount: z.string().optional(),
 }).superRefine((value, ctx) => {
-  requireOpenAllowFrom({
-    policy: value.dmPolicy,
-    allowFrom: value.allowFrom,
-    ctx,
-    path: ["allowFrom"],
-    message:
-      'channels.googlechat.dmPolicy="open" requires channels.googlechat.allowFrom to include "*"',
-  });
-  requireAllowlistAllowFrom({
-    policy: value.dmPolicy,
-    allowFrom: value.allowFrom,
-    ctx,
-    path: ["allowFrom"],
-    message:
-      'channels.googlechat.dmPolicy="allowlist" requires channels.googlechat.allowFrom to contain at least one sender ID',
-  });
-  for (const [accountId, account] of Object.entries(value.accounts ?? {})) {
-    if (!account) {
-      continue;
-    }
-    const effectivePolicy = account.dmPolicy ?? value.dmPolicy;
-    const effectiveAllowFrom = account.allowFrom ?? value.allowFrom;
-    requireOpenAllowFrom({
-      policy: effectivePolicy,
-      allowFrom: effectiveAllowFrom,
-      ctx,
-      path: ["accounts", accountId, "allowFrom"],
-      message:
-        'channels.googlechat.accounts.*.dmPolicy="open" requires channels.googlechat.accounts.*.allowFrom (or channels.googlechat.allowFrom) to include "*"',
-    });
-    requireAllowlistAllowFrom({
-      policy: effectivePolicy,
-      allowFrom: effectiveAllowFrom,
-      ctx,
-      path: ["accounts", accountId, "allowFrom"],
-      message:
-        'channels.googlechat.accounts.*.dmPolicy="allowlist" requires channels.googlechat.accounts.*.allowFrom (or channels.googlechat.allowFrom) to contain at least one sender ID',
-    });
+  refineChannelDmPolicy({ channelId: "googlechat", value, ctx });
+  for (const accountId of Object.keys(value.accounts ?? {})) {
+    refineChannelDmPolicy({ channelId: "googlechat", value, accountId, ctx });
   }
 });

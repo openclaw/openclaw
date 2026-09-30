@@ -1,6 +1,7 @@
 // Coordinates parsed reply directives before get-reply executes commands or agents.
 import {
   normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { listAgentEntries } from "../../agents/agent-scope.js";
@@ -277,11 +278,9 @@ export async function resolveReplyDirectives(params: {
   sessionCtx.Body = cleanedBody;
   sessionCtx.BodyStripped = cleanedBody;
 
-  const messageProviderKey = normalizeOptionalString(sessionCtx.Provider)
-    ? normalizeLowercaseStringOrEmpty(sessionCtx.Provider)
-    : normalizeOptionalString(ctx.Provider)
-      ? normalizeLowercaseStringOrEmpty(ctx.Provider)
-      : "";
+  const messageProviderKey =
+    normalizeOptionalLowercaseString(sessionCtx.Provider) ??
+    normalizeLowercaseStringOrEmpty(ctx.Provider);
   const elevated = resolveElevatedPermissions({
     cfg,
     agentId,
@@ -440,9 +439,7 @@ export async function resolveReplyDirectives(params: {
   const isModelInfoDirective =
     directives.hasModelDirective &&
     directives.modelDirectiveSource !== "alias" &&
-    ["status", "list"].includes(
-      normalizeLowercaseStringOrEmpty(normalizeOptionalString(directives.rawModelDirective)),
-    );
+    ["status", "list"].includes(normalizeLowercaseStringOrEmpty(directives.rawModelDirective));
   const effectiveModelDirective = isModelInfoDirective ? undefined : directives.rawModelDirective;
 
   const inlineStatusRequested = hasInlineStatus && canInterpretMessageDirectives;

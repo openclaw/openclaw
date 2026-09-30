@@ -1,11 +1,10 @@
-/** Applies workspace plugin allow/deny config before manifest records reach control-plane decisions. */
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 
 type PluginEntriesConfig = NonNullable<NonNullable<OpenClawConfig["plugins"]>["entries"]>;
 
-/** Normalizes plugin ids used in config allow/deny/entry lists. */
 export function normalizePluginConfigId(id: unknown): string {
   return normalizeOptionalLowercaseString(id) ?? "";
 }
@@ -18,16 +17,14 @@ function findPluginConfigEntry(
   entries: PluginEntriesConfig | undefined,
   pluginId: string,
 ): { enabled?: boolean } | undefined {
-  if (!entries || typeof entries !== "object" || Array.isArray(entries)) {
+  if (!isRecord(entries)) {
     return undefined;
   }
   for (const [key, value] of Object.entries(entries)) {
     if (normalizePluginConfigId(key) !== pluginId) {
       continue;
     }
-    return value && typeof value === "object" && !Array.isArray(value)
-      ? (value as { enabled?: boolean })
-      : {};
+    return isRecord(value) ? value : {};
   }
   return undefined;
 }

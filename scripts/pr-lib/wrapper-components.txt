@@ -401,6 +401,7 @@ src/config/includes.ts
 src/config/io.audit.ts
 src/config/io.clobber-snapshot.ts
 src/config/io.context.ts
+src/config/io.effects.ts
 src/config/io.factory.ts
 src/config/io.health-state.kernel.ts
 src/config/io.health-state.ts

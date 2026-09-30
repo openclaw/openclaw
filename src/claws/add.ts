@@ -3,7 +3,7 @@ import { lstat, mkdir, rmdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { coerceErrorMessage } from "@openclaw/normalization-core";
 import { findOverlappingWorkspaceAgentIds } from "../agents/agent-delete-safety.js";
-import { listAgentEntries } from "../agents/agent-scope.js";
+import { listAgentEntries, toAgentEntriesRecord } from "../agents/agent-scope.js";
 import { transformConfigFileWithRetry } from "../config/config.js";
 import type { AgentConfig } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -15,12 +15,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { recordAgentProvenance } from "../state/agent-provenance.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { resolveUserPath } from "../utils.js";
-import {
-  hasUnsupportedMutationActions,
-  planWithPackageActions,
-  sameCommittedAgent,
-  statusAtLeast,
-} from "./add-plan-helpers.js";
+import { planWithPackageActions, sameCommittedAgent, statusAtLeast } from "./add-plan-helpers.js";
 import { ClawBootstrapWriteError, seedClawPackageBootstrap } from "./bootstrap.js";
 import {
   ClawCronInstallError,
@@ -147,12 +142,6 @@ export async function applyClawAddPlan(
 ): Promise<ClawAddResult> {
   if (plan.blockers.length > 0) {
     throw new ClawAddMutationError("plan_blocked", "The Claw add plan contains blockers.");
-  }
-  if (hasUnsupportedMutationActions(plan)) {
-    throw new ClawAddMutationError(
-      "unsupported_components",
-      "This build cannot add one or more declared Claw component kinds.",
-    );
   }
   if (options.consentPlanIntegrity !== (options.resumePlan?.planIntegrity ?? plan.planIntegrity)) {
     throw new ClawAddMutationError(
@@ -421,7 +410,7 @@ export async function applyClawAddPlan(
         ...config,
         agents: {
           ...config.agents,
-          entries: Object.fromEntries(agentsToPreserve.map(({ id, ...entry }) => [id, entry])),
+          entries: toAgentEntriesRecord(agentsToPreserve),
         },
       };
       const normalizedAgentId = normalizeAgentId(plan.agent.finalId);
@@ -462,9 +451,7 @@ export async function applyClawAddPlan(
         ...config,
         agents: {
           ...config.agents,
-          entries: Object.fromEntries(
-            [...agentsToPreserve, plan.agent.config].map(({ id, ...entry }) => [id, entry]),
-          ),
+          entries: toAgentEntriesRecord([...agentsToPreserve, plan.agent.config]),
         },
       };
       return nextConfig;

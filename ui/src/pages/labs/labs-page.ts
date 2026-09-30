@@ -67,14 +67,6 @@ class LabsPage extends OpenClawLightDomElement {
     return resolveEditableSnapshotConfig(snapshot);
   }
 
-  private featureEnabled(feature: LabFeature): boolean {
-    const pending = this.pendingValues[feature.id];
-    if (typeof pending === "boolean") {
-      return pending;
-    }
-    return resolveLabFeatureState(this.editableConfig(), feature).enabled;
-  }
-
   private decisionPreferenceKnown(): boolean {
     const configState = this.context?.runtimeConfig.state;
     return (
@@ -227,6 +219,7 @@ class LabsPage extends OpenClawLightDomElement {
       });
     }
     const featureState = resolveLabFeatureState(this.editableConfig(), feature);
+    const pending = this.pendingValues[feature.id];
     const canToggle = this.canToggle();
     const defaultDescription = renderSettingsDefaultDescription(
       featureState.defaultEnabled ? t("common.enabled") : t("common.disabled"),
@@ -248,7 +241,7 @@ class LabsPage extends OpenClawLightDomElement {
       ${renderSettingsToggleRow({
         title,
         description,
-        checked: this.featureEnabled(feature),
+        checked: typeof pending === "boolean" ? pending : featureState.enabled,
         disabled: !canToggle,
         onChange: (enabled) => this.setFeatureEnabled(feature, enabled),
       })}

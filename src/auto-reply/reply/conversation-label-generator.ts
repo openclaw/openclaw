@@ -50,12 +50,6 @@ type ConversationLabelFallbackParams = ConversationLabelParams & {
   utilityOnly?: boolean;
 };
 
-type ResolvedLabelParams = ConversationLabelParams & {
-  agentId: string;
-  timeoutMs: number;
-  maxLength: number;
-};
-
 function resolvePositiveInteger(value: number | undefined, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) && value > 0
     ? Math.floor(value)
@@ -100,13 +94,16 @@ function resolveAttemptKey(
 }
 
 async function runLabelAttempts(
-  params: ResolvedLabelParams & {
+  params: ConversationLabelParams & {
+    agentId: string;
     attempts: readonly ConversationLabelAttempt[];
     /** Selections that must not run even when an attempt resolves onto them. */
     skipAttempts?: readonly ConversationLabelAttempt[];
     normalizeLabel?: (label: string) => string | null;
   },
 ): Promise<string | null> {
+  const timeoutMs = resolvePositiveInteger(params.timeoutMs, TIMEOUT_MS);
+  const maxLength = resolvePositiveInteger(params.maxLength, DEFAULT_MAX_LABEL_LENGTH);
   const assertCurrent = () => {
     params.assertCurrent?.();
     params.operatorAuthority?.assertCurrent();
@@ -153,7 +150,7 @@ async function runLabelAttempts(
           "Do not describe your own capabilities or limitations.",
         ].join(" "),
         prompt: params.userMessage,
-        timeoutMs: params.timeoutMs,
+        timeoutMs,
         abortSignal: params.abortSignal,
         assertCurrent: params.assertCurrent,
         ...(params.operatorAuthority ? { operatorAuthority: params.operatorAuthority } : {}),
@@ -167,7 +164,7 @@ async function runLabelAttempts(
         .flatMap((delta) => (delta.kind === "text" ? [delta.text] : []))
         .join("")
         .trim();
-      const label = truncateUtf16Safe(visibleText, params.maxLength) || null;
+      const label = truncateUtf16Safe(visibleText, maxLength) || null;
       const normalized = label && params.normalizeLabel ? params.normalizeLabel(label) : label;
       if (normalized) {
         return normalized;
@@ -196,13 +193,7 @@ export async function generateConversationLabel(
         { useUtilityModel: true, phase: "utility" },
         { useUtilityModel: false, phase: "primary fallback" },
       ];
-  return await runLabelAttempts({
-    ...params,
-    agentId,
-    attempts,
-    timeoutMs: resolvePositiveInteger(params.timeoutMs, TIMEOUT_MS),
-    maxLength: resolvePositiveInteger(params.maxLength, DEFAULT_MAX_LABEL_LENGTH),
-  });
+  return await runLabelAttempts({ ...params, agentId, attempts });
 }
 
 /** Tries an explicit utility model once, then the regular model once when needed. */
@@ -244,7 +235,5 @@ export async function generateConversationLabelWithFallback(
     // resolves onto the primary model is skipped instead of spending on it.
     attempts: params.utilityOnly ? utilityAttempts : [...utilityAttempts, regularAttempt],
     ...(params.utilityOnly ? { skipAttempts: [regularAttempt] } : {}),
-    timeoutMs: resolvePositiveInteger(params.timeoutMs, TIMEOUT_MS),
-    maxLength: resolvePositiveInteger(params.maxLength, DEFAULT_MAX_LABEL_LENGTH),
   });
 }
