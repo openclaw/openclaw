@@ -2402,7 +2402,7 @@ src/infra/kysely-sync-cache-state.ts	1
 src/infra/kysely-sync.ts	7
 src/infra/net/fetch-guard.ts	2
 src/infra/net/form-data.ts	2
-src/infra/net/node-proxy-agent.ts	2
+src/infra/net/node-proxy-agent.ts	1
 src/infra/net/proxy-fetch.ts	2
 src/infra/net/proxy/proxy-validation.ts	1
 src/infra/net/runtime-fetch.ts	5
