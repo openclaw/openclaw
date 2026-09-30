@@ -81,6 +81,29 @@ export function isAnimatedWebpBuffer(buffer: Buffer): boolean {
   );
 }
 
+/** Confirm PNG is still without treating a truncated or capped scan as proof. */
+export function isStillPngBuffer(buffer: Buffer): boolean {
+  if (readImageProbeFromHeader(buffer)?.format !== "png") {
+    return false;
+  }
+  let offset = 8;
+  for (let chunks = 0; chunks < 512 && offset + 12 <= buffer.length; chunks += 1) {
+    const end = offset + 12 + buffer.readUInt32BE(offset);
+    if (end > buffer.length) {
+      return false;
+    }
+    const type = buffer.toString("ascii", offset + 4, offset + 8);
+    if (type === "acTL" || type === "IEND") {
+      return false;
+    }
+    if (type === "IDAT") {
+      return true;
+    }
+    offset = end;
+  }
+  return false;
+}
+
 function wrapRastermillUnavailable(operation: string, error: unknown): never {
   if (error instanceof RastermillUnavailableError) {
     throw new ImageProcessorUnavailableError(operation, error.message, error.causes);

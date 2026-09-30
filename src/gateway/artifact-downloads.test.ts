@@ -1,6 +1,7 @@
 import { ServerResponse } from "node:http";
+import { crc32 } from "node:zlib";
 import { expect, it, vi } from "vitest";
-import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
+import { createNoisyPngBuffer, createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { createImageProcessor } from "../media/image-processor.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -9,6 +10,8 @@ import {
 } from "./artifact-download-projection.js";
 import { createArtifactDownload, handleArtifactDownloadHttpRequest } from "./artifact-downloads.js";
 import { createGatewayRequest as createRequest } from "./hooks-test-helpers.js";
+import { ANIMATED_GIF_BYTES, APNG_BYTES } from "./http-image.test-support.js";
+import { encodeImageThumbnail } from "./managed-image-thumbnail-cache.js";
 import type { ArtifactRecord } from "./server-methods/artifacts-content.js";
 import type { GatewayClient } from "./server-methods/client-types.js";
 
@@ -31,6 +34,14 @@ function createClient(signal = new AbortController().signal): GatewayClient {
       client: { id: "test", version: "test", platform: "test", mode: "test" },
     },
   };
+}
+
+function apngWithLargeMetadata(): Buffer {
+  const chunk = Buffer.alloc(1024 * 1024 + 32, 0x61);
+  chunk.writeUInt32BE(chunk.length - 12);
+  chunk.write("tEXtcomment\0", 4, "ascii");
+  chunk.writeUInt32BE(crc32(chunk.subarray(4, -4)), chunk.length - 4);
+  return Buffer.concat([APNG_BYTES.subarray(0, 33), chunk, APNG_BYTES.subarray(33)]);
 }
 
 it.each(["current", "source", "connection", "expiry"] as const)(
@@ -95,18 +106,41 @@ it.each(["current", "source", "connection", "expiry"] as const)(
   },
 );
 
-it.each(["image", "file", "invalid-image"] as const)(
+it.each(["image", "file", "invalid-image", "gif", "apng", "apng-metadata", "compact"] as const)(
   "serves best-effort HTTP thumbnails and preserves original downloads (%s)",
   async (kind) => {
     const source =
       kind === "image"
         ? createSolidPngBuffer(1600, 800, { r: 24, g: 64, b: 128 })
-        : Buffer.from("original");
+        : kind === "gif"
+          ? ANIMATED_GIF_BYTES
+          : kind === "apng"
+            ? APNG_BYTES
+            : kind === "apng-metadata"
+              ? apngWithLargeMetadata()
+              : kind === "compact"
+                ? (
+                    await createImageProcessor().encode(createNoisyPngBuffer(32, 32), {
+                      format: "jpeg",
+                      quality: 10,
+                    })
+                  ).data
+                : Buffer.from("original");
+    if (kind === "compact") {
+      expect((await encodeImageThumbnail(source)).byteLength).toBeGreaterThan(source.byteLength);
+    }
     const artifact: ArtifactRecord = {
       id: "artifact_transcript_image_fixture",
       type: kind === "file" ? "file" : "image",
       title: "fixture",
-      mimeType: kind === "file" ? "text/plain" : "image/png",
+      mimeType:
+        kind === "file"
+          ? "text/plain"
+          : kind === "gif"
+            ? "image/gif"
+            : kind === "compact"
+              ? "image/jpeg"
+              : "image/png",
       download: { mode: "bytes" },
       data: source.toString("base64"),
     };
@@ -156,8 +190,9 @@ it.each(["image", "file", "invalid-image"] as const)(
     if (kind === "image") {
       expect(await createImageProcessor().probe(bytes)).toMatchObject({ width: 1200, height: 600 });
       expect(bytes).not.toEqual(new Uint8Array(source));
+      expect(bytes.byteLength).toBeLessThan(source.byteLength);
     } else {
-      expect(bytes).toEqual(new Uint8Array(source));
+      expect(Buffer.from(bytes).equals(source)).toBe(true);
     }
     const head = await fetch("?variant=thumbnail", "HEAD");
     expect(head.end).toHaveBeenCalledExactlyOnceWith(undefined);

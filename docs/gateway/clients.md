@@ -238,8 +238,10 @@ keeps its existing URL download path.
 
 Append `?variant=thumbnail` to an inline HTTPS download URL for a best-effort
 PNG preview, bounded to 1200 pixels on its longest side without upscaling.
-Non-image artifacts, unknown variants, and encoding failures return the original
-bytes. Check the response MIME type: a thumbnail is `image/png` even when the
+Only identified still PNG, JPEG, and WebP images are eligible. GIFs, APNGs,
+animated WebP, other formats, unknown variants, and encoding failures retain
+the original bytes, as do PNG previews that are not smaller than the source.
+Check the response MIME type: a thumbnail is `image/png` even when the
 artifact uses another image format. Omit the query for full-size downloads;
 the RPC schema and WebSocket base64 response are unchanged.
 
