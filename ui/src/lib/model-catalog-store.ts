@@ -208,13 +208,9 @@ function createModelCatalogRequest(params: {
   let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
   let started = false;
   let requestSent = false;
-  const rejectTimeout = (timeout: number) =>
+  const rejectTimeout = (timeoutMs: number) =>
     pending.reject(
-      new GatewayProtocolRequestTimeoutError({
-        method: "models.list",
-        timeoutMs: timeout,
-        requestSent,
-      }),
+      new GatewayProtocolRequestTimeoutError({ method: "models.list", timeoutMs, requestSent }),
     );
   const canRetry = () =>
     !pending.settled &&
