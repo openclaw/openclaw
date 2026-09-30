@@ -850,7 +850,6 @@ extensions/reef/src/registration-state.ts	3
 extensions/reef/src/setup.ts	3
 extensions/reef/src/state.ts	3
 extensions/reef/src/transport.ts	3
-extensions/searxng/src/config.ts	1
 extensions/signal/src/accounts.ts	3
 extensions/signal/src/approval-handler.runtime.ts	2
 extensions/signal/src/approval-reactions.ts	1
@@ -928,7 +927,6 @@ extensions/synology-chat/src/setup-surface.ts	3
 extensions/synology-chat/src/test-http-utils.ts	6
 extensions/synology-chat/src/webhook-handler.ts	1
 extensions/talk-voice/index.ts	1
-extensions/tavily/src/config.ts	1
 extensions/teams-meetings/src/transports/teams-meetings-urls.ts	1
 extensions/telegram/src/account-selection.ts	1
 extensions/telegram/src/account-throttler.ts	2
