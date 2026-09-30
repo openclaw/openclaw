@@ -431,27 +431,14 @@ final class RootSidebarModel {
                 // Failed subscriptions and ended streams use the same retry budget.
             }
             failureCount += 1
-            guard await self.waitForSessionEventRetry(
-                failureCount: failureCount,
-                retryDelays: retryDelays,
-                sleep: sleep)
-            else { return }
-        }
-    }
-
-    private static func waitForSessionEventRetry(
-        failureCount: Int,
-        retryDelays: [Duration],
-        sleep: @MainActor (Duration) async throws -> Void) async -> Bool
-    {
-        let delay = retryDelays.isEmpty
-            ? .zero
-            : retryDelays[min(max(0, failureCount - 1), retryDelays.count - 1)]
-        do {
-            try await sleep(delay)
-            return !Task.isCancelled
-        } catch {
-            return false
+            let delay = retryDelays.isEmpty
+                ? .zero
+                : retryDelays[min(failureCount - 1, retryDelays.count - 1)]
+            do {
+                try await sleep(delay)
+            } catch {
+                return
+            }
         }
     }
 
@@ -476,6 +463,24 @@ final class RootSidebarModel {
 
     func reportSessionError(_ error: any Error) {
         self.sessionErrorText = error.localizedDescription
+    }
+
+    func performSessionMutation(
+        appModel: NodeAppModel,
+        resetActiveSessionKey: String?,
+        _ operation: @escaping CommandSessionActions.Mutation)
+    {
+        Task {
+            do {
+                try await operation(appModel.makeChatTransport())
+                if resetActiveSessionKey == appModel.chatSessionKey {
+                    appModel.focusChatSession(nil)
+                }
+                await self.refreshSessions(appModel: appModel)
+            } catch {
+                self.reportSessionError(error)
+            }
+        }
     }
 
     static func tokenUsageSummary(

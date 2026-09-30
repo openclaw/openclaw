@@ -584,15 +584,9 @@ private actor LocalFixtureChatStore {
     }
 
     private var fixtureModelSelectionTarget: String {
-        let arguments = ProcessInfo.processInfo.arguments
-        guard let index = arguments.firstIndex(of: "--openclaw-model-selection-target"),
-              arguments.indices.contains(index + 1)
-        else {
-            return self.fixture.modelSelectionTarget
-        }
-        switch arguments[index + 1] {
-        case "session", "agent", "global": return arguments[index + 1]
-        default: return self.fixture.modelSelectionTarget
+        switch AppLaunchArguments.value(for: "--openclaw-model-selection-target") {
+        case let value? where ["session", "agent", "global"].contains(value): value
+        default: self.fixture.modelSelectionTarget
         }
     }
 

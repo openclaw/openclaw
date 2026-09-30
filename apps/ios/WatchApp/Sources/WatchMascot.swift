@@ -25,14 +25,3 @@ struct WatchMascot: View {
         .accessibilityHidden(true)
     }
 }
-
-func watchInboxMascotMood(
-    hasSnapshot: Bool,
-    hasApprovals: Bool,
-    hasChats: Bool) -> OpenClawMascotMood
-{
-    if hasApprovals { return .attentive }
-    if !hasSnapshot { return .thinking }
-    if !hasChats { return .sleepy }
-    return .idle
-}

@@ -4007,17 +4007,17 @@ extension NodeAppModel {
             token: token,
             bootstrapToken: bootstrapToken,
             password: password,
-            hasStoredOperatorToken: allowStoredDeviceAuth && self.hasStoredGatewayRoleToken(
+            hasStoredOperatorToken: allowStoredDeviceAuth && self.storedGatewayRoleToken(
                 "operator",
-                gatewayID: deviceAuthGatewayID))
+                gatewayID: deviceAuthGatewayID) != nil)
     }
 
-    private func hasStoredGatewayRoleToken(_ role: String, gatewayID: String) -> Bool {
-        guard let identity = DeviceIdentityStore.loadOrCreatePersisted() else { return false }
+    private func storedGatewayRoleToken(_ role: String, gatewayID: String) -> DeviceAuthEntry? {
+        guard let identity = DeviceIdentityStore.loadOrCreatePersisted() else { return nil }
         return DeviceAuthStore.loadToken(
             deviceId: identity.deviceId,
             role: role,
-            gatewayID: gatewayID) != nil
+            gatewayID: gatewayID)
     }
 
     nonisolated static func shouldStartOperatorGatewayLoop(
@@ -4026,19 +4026,17 @@ extension NodeAppModel {
         password: String?,
         hasStoredOperatorToken: Bool) -> Bool
     {
-        let trimmedToken = token?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !trimmedToken.isEmpty {
-            return true
-        }
-        let trimmedPassword = password?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !trimmedPassword.isEmpty {
-            return true
-        }
+        if self.hasSharedGatewayCredential(token: token, password: password) { return true }
         let trimmedBootstrapToken = bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !trimmedBootstrapToken.isEmpty {
             return false
         }
         return hasStoredOperatorToken
+    }
+
+    private nonisolated static func hasSharedGatewayCredential(token: String?, password: String?) -> Bool {
+        token?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ||
+            password?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
     }
 
     private func currentGatewayReconnectAuth(
@@ -4067,8 +4065,7 @@ extension NodeAppModel {
         bootstrapToken: String?,
         password: String?) -> Bool
     {
-        token?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false &&
-            password?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false &&
+        !self.hasSharedGatewayCredential(token: token, password: password) &&
             bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
     }
 
@@ -4949,18 +4946,10 @@ extension NodeAppModel {
         password: String?,
         forceTalkPermissionUpgradeRequest: Bool = false) -> Bool
     {
-        let storedOperatorScopes = DeviceIdentityStore.loadOrCreatePersisted()
-            .flatMap { identity in
-                DeviceAuthStore.loadToken(
-                    deviceId: identity.deviceId,
-                    role: "operator",
-                    gatewayID: gatewayID)
-            }?
-            .scopes ?? []
-        return Self.shouldRequestOperatorApprovalScope(
+        Self.shouldRequestOperatorApprovalScope(
             token: token,
             password: password,
-            storedOperatorScopes: storedOperatorScopes,
+            storedOperatorScopes: self.storedGatewayRoleToken("operator", gatewayID: gatewayID)?.scopes ?? [],
             forceTalkPermissionUpgradeRequest: forceTalkPermissionUpgradeRequest)
     }
 
@@ -4973,15 +4962,8 @@ extension NodeAppModel {
         if forceTalkPermissionUpgradeRequest {
             return storedOperatorScopes.contains("operator.approvals")
         }
-        let trimmedToken = token?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !trimmedToken.isEmpty {
-            return true
-        }
-        let trimmedPassword = password?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !trimmedPassword.isEmpty {
-            return true
-        }
-        return storedOperatorScopes.contains("operator.approvals")
+        return self.hasSharedGatewayCredential(token: token, password: password) ||
+            storedOperatorScopes.contains("operator.approvals")
     }
 
     private func shouldRequestOperatorAdminScope(
@@ -4990,18 +4972,10 @@ extension NodeAppModel {
         password: String?,
         forceTalkPermissionUpgradeRequest: Bool = false) -> Bool
     {
-        let storedOperatorScopes = DeviceIdentityStore.loadOrCreatePersisted()
-            .flatMap { identity in
-                DeviceAuthStore.loadToken(
-                    deviceId: identity.deviceId,
-                    role: "operator",
-                    gatewayID: gatewayID)
-            }?
-            .scopes ?? []
-        return Self.shouldRequestOperatorAdminScope(
+        Self.shouldRequestOperatorAdminScope(
             token: token,
             password: password,
-            storedOperatorScopes: storedOperatorScopes,
+            storedOperatorScopes: self.storedGatewayRoleToken("operator", gatewayID: gatewayID)?.scopes ?? [],
             forceTalkPermissionUpgradeRequest: forceTalkPermissionUpgradeRequest)
     }
 
@@ -5014,15 +4988,8 @@ extension NodeAppModel {
         if forceTalkPermissionUpgradeRequest {
             return false
         }
-        let trimmedToken = token?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !trimmedToken.isEmpty {
-            return true
-        }
-        let trimmedPassword = password?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !trimmedPassword.isEmpty {
-            return true
-        }
-        return storedOperatorScopes.contains("operator.admin")
+        return self.hasSharedGatewayCredential(token: token, password: password) ||
+            storedOperatorScopes.contains("operator.admin")
     }
 
     private func makeOperatorConnectOptions(
@@ -5128,15 +5095,8 @@ extension NodeAppModel {
             return
         }
         let gatewayID = config.nodeOptions.deviceAuthGatewayID ?? config.effectiveStableID
-        self.hasOperatorAdminScope = DeviceIdentityStore.loadOrCreatePersisted()
-            .flatMap { identity in
-                DeviceAuthStore.loadToken(
-                    deviceId: identity.deviceId,
-                    role: "operator",
-                    gatewayID: gatewayID)
-            }?
-            .scopes
-            .contains("operator.admin") == true
+        self.hasOperatorAdminScope = self.storedGatewayRoleToken("operator", gatewayID: gatewayID)?
+            .scopes.contains("operator.admin") == true
     }
 }
 
@@ -5390,18 +5350,17 @@ extension NodeAppModel {
     private func applyPendingForegroundNodeActions(
         _ actions: [PendingForegroundNodeAction],
         trigger: String,
-        routeContext: GatewaySessionRouteContext? = nil,
-        shouldContinue: @MainActor @Sendable () -> Bool = { true }) async
+        routeContext: GatewaySessionRouteContext,
+        shouldContinue: @MainActor @Sendable () -> Bool) async
     {
+        let gatewayStableID = routeContext.gatewayStableID
         for action in actions {
             guard shouldContinue() else { return }
-            if let routeContext {
-                guard await self.isCurrentGatewaySessionRoute(
-                    routeContext,
-                    session: self.nodeGateway,
-                    shouldContinue: shouldContinue)
-                else { return }
-            }
+            guard await self.isCurrentGatewaySessionRoute(
+                routeContext,
+                session: self.nodeGateway,
+                shouldContinue: shouldContinue)
+            else { return }
             guard !self.isBackgrounded else {
                 self.pendingActionLogger.info(
                     "Pending action replay paused trigger=\(trigger, privacy: .public): app backgrounded")
@@ -5411,38 +5370,32 @@ extension NodeAppModel {
                 id: action.id,
                 command: action.command,
                 paramsJSON: action.paramsJSON)
-            let gatewayStableID = routeContext?.gatewayStableID
-            let alreadyCompleted = gatewayStableID.map {
-                self.completedPendingForegroundActionIDsByGateway[$0]?.contains(action.id) == true
-            } ?? false
+            let alreadyCompleted = self.completedPendingForegroundActionIDsByGateway[gatewayStableID]?
+                .contains(action.id) == true
             if !alreadyCompleted {
                 let result = await handleInvoke(
                     req,
-                    gatewayStableID: gatewayStableID ?? self.connectedGatewayID)
+                    gatewayStableID: gatewayStableID)
                 self.pendingActionLogger
                     .info("pending replay trigger=\(trigger, privacy: .public) id=\(action.id, privacy: .public)")
                 self.pendingActionLogger.info("pending replay ok=\(result.ok, privacy: .public)")
                 self.pendingActionLogger.info("pending replay command=\(action.command, privacy: .public)")
                 guard result.ok else { return }
-                if let gatewayStableID {
-                    // The gateway queue is connection-independent. Remember successful local
-                    // execution until its source gateway accepts the ACK so reconnects cannot replay it.
-                    self.completedPendingForegroundActionIDsByGateway[gatewayStableID, default: []]
-                        .insert(action.id)
-                }
+                // The gateway queue is connection-independent. Remember successful local
+                // execution until its source gateway accepts the ACK so reconnects cannot replay it.
+                self.completedPendingForegroundActionIDsByGateway[gatewayStableID, default: []]
+                    .insert(action.id)
                 guard shouldContinue() else { return }
             }
             let acked = await ackPendingForegroundNodeAction(
                 id: action.id,
                 trigger: trigger,
                 command: action.command,
-                routeContext: routeContext)
+                gatewayStableID: gatewayStableID)
             guard acked else { return }
-            if let gatewayStableID {
-                self.removeCompletedPendingForegroundActionID(
-                    action.id,
-                    gatewayStableID: gatewayStableID)
-            }
+            self.removeCompletedPendingForegroundActionID(
+                action.id,
+                gatewayStableID: gatewayStableID)
         }
     }
 
@@ -5492,29 +5445,23 @@ extension NodeAppModel {
         id: String,
         trigger: String,
         command: String,
-        routeContext: GatewaySessionRouteContext?) async -> Bool
+        gatewayStableID: String) async -> Bool
     {
         do {
-            let expectedRoute: GatewayNodeSessionRoute?
-            if let routeContext {
-                guard GatewayStableIdentifier.matches(
+            guard GatewayStableIdentifier.matches(
+                self.activeGatewayConnectConfig?.effectiveStableID,
+                gatewayStableID),
+                let currentRoute = await self.nodeGateway.currentRoute(),
+                GatewayStableIdentifier.matches(
                     self.activeGatewayConnectConfig?.effectiveStableID,
-                    routeContext.gatewayStableID),
-                    let currentRoute = await self.nodeGateway.currentRoute(),
-                    GatewayStableIdentifier.matches(
-                        self.activeGatewayConnectConfig?.effectiveStableID,
-                        routeContext.gatewayStableID)
-                else { return false }
-                expectedRoute = currentRoute
-            } else {
-                expectedRoute = nil
-            }
+                    gatewayStableID)
+            else { return false }
             let paramsJSON = try Self.encodePayload(NodePendingAckParams(ids: [id]))
             _ = try await self.nodeGateway.request(
                 method: "node.pending.ack",
                 paramsJSON: paramsJSON,
                 timeoutSeconds: 6,
-                ifCurrentRoute: expectedRoute)
+                ifCurrentRoute: currentRoute)
             return true
         } catch {
             self.pendingActionLogger
@@ -5572,24 +5519,17 @@ extension NodeAppModel {
         }
         self.pendingPersistedExecApprovalReadbacks.sort(
             by: Self.persistedExecApprovalReadbackSortsBefore)
-        var restoredPushes = Set<ExecApprovalPushKey>()
-        self.pendingWatchExecApprovalRecoveryPushes = (state.pendingApprovalPushes ?? [])
-            .filter { push in
+        func restorePushes(_ pushes: [ApprovalNotificationPrompt]?) -> [ApprovalNotificationPrompt] {
+            var seen = Set<ExecApprovalPushKey>()
+            return (pushes ?? []).filter { push in
                 guard push.gatewayDeviceId?.isEmpty != true,
                       let pushKey = Self.execApprovalPushKey(push)
                 else { return false }
-                return restoredPushes.insert(pushKey).inserted
-            }
-            .sorted(by: Self.execApprovalPushSortsBefore)
-        var restoredResolvedPushes = Set<ExecApprovalPushKey>()
-        self.pendingExecApprovalResolvedPushes = (state.pendingResolvedPushes ?? [])
-            .filter { push in
-                guard push.gatewayDeviceId?.isEmpty != true,
-                      let pushKey = Self.execApprovalPushKey(push)
-                else { return false }
-                return restoredResolvedPushes.insert(pushKey).inserted
-            }
-            .sorted(by: Self.execApprovalPushSortsBefore)
+                return seen.insert(pushKey).inserted
+            }.sorted(by: Self.execApprovalPushSortsBefore)
+        }
+        self.pendingWatchExecApprovalRecoveryPushes = restorePushes(state.pendingApprovalPushes)
+        self.pendingExecApprovalResolvedPushes = restorePushes(state.pendingResolvedPushes)
         var restoredReplyIDs = Set<String>()
         self.pendingWatchExecApprovalResolutions = Array((state.pendingResolutions ?? []).filter { event in
             let replyID = event.replyId.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -7492,18 +7432,11 @@ extension NodeAppModel {
             shouldContinue: shouldContinue)
         else { return false }
 
+        let terminal: ExecApprovalTerminalResult
         switch readback {
-        case let .terminal(terminal):
-            guard terminal.kind == approvalKind else { return false }
-            self.markPendingExecApprovalTerminal(
-                terminal,
-                alreadyResolved: true)
-            if hadApprovalSurface {
-                await self.publishWatchExecApprovalTerminal(
-                    terminal,
-                    gatewayStableID: currentGatewayStableID,
-                    source: "another-reviewer")
-            }
+        case let .terminal(result):
+            guard result.kind == approvalKind else { return false }
+            terminal = result
         case let .loaded(prompt):
             guard ApprovalKind(rawValue: prompt.kind ?? "") == approvalKind else { return false }
             // A delayed or duplicate resolved signal cannot override the canonical
@@ -7521,26 +7454,24 @@ extension NodeAppModel {
             }
             return true
         case .stale:
-            let terminal = ExecApprovalTerminalResult(
+            terminal = ExecApprovalTerminalResult(
                 id: approvalID,
                 kind: approvalKind,
                 verdict: .resolvedUnknown,
                 resolvedAtMs: Int64(Date().timeIntervalSince1970 * 1000))
-            self.markPendingExecApprovalTerminal(
-                terminal,
-                alreadyResolved: true)
-            if hadApprovalSurface {
-                await self.publishWatchExecApprovalTerminal(
-                    terminal,
-                    gatewayStableID: currentGatewayStableID,
-                    source: "another-reviewer")
-            }
         case let .failed(message):
             self.watchExecApprovalLogger.error(
                 "approval terminal readback failed id=\(approvalID, privacy: .public)")
             self.watchExecApprovalLogger.error(
                 "approval terminal readback error=\(message, privacy: .public)")
             return false
+        }
+        self.markPendingExecApprovalTerminal(terminal, alreadyResolved: true)
+        if hadApprovalSurface {
+            await self.publishWatchExecApprovalTerminal(
+                terminal,
+                gatewayStableID: currentGatewayStableID,
+                source: "another-reviewer")
         }
         guard await self.canApplyExecApprovalResolvedState(
             routeContext: routeContext,
