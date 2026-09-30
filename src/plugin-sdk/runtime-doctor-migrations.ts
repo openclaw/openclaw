@@ -419,34 +419,34 @@ export function defineLegacyJsonStateMigration<TSource>(params: {
   };
   toRows: (source: TSource) => readonly { key: string; value: unknown }[];
 }): PluginDoctorStateMigration {
-  const readSource = async (filePath: string) => {
-    let source: TSource | null;
+  const readSource = async (filePath: string): Promise<TSource | null> => {
     try {
-      source = params.parse(JSON.parse(await fs.readFile(filePath, "utf8")) as unknown);
+      return params.parse(JSON.parse(await fs.readFile(filePath, "utf8")) as unknown);
     } catch (error) {
       if (!hasErrnoCode(error, "ENOENT")) {
         throw error;
       }
       return null;
     }
-    if (!source) {
-      return null;
-    }
-    const rows = params.toRows(source);
-    return rows.length > 0
-      ? {
-          rows,
-          description: params.describeEntries(source, { filePath, namespace: params.namespace }),
-        }
-      : null;
   };
+  const describe = (source: TSource, filePath: string) =>
+    params.describeEntries(source, { filePath, namespace: params.namespace });
 
   return {
     id: params.id,
     label: params.label,
     async detectLegacyState({ stateDir }) {
-      const source = await readSource(params.resolvePath(stateDir));
-      return source ? { preview: source.description.preview } : null;
+      const filePath = params.resolvePath(stateDir);
+      const source = await readSource(filePath);
+      if (!source) {
+        return null;
+      }
+      const rows = params.toRows(source);
+      if (rows.length === 0) {
+        return null;
+      }
+      const description = describe(source, filePath);
+      return { preview: description.preview };
     },
     async migrateLegacyState({ stateDir, context }) {
       const changes: string[] = [];
@@ -456,7 +456,11 @@ export function defineLegacyJsonStateMigration<TSource>(params: {
       if (!source) {
         return { changes, warnings };
       }
-      const { rows, description } = source;
+      const rows = params.toRows(source);
+      if (rows.length === 0) {
+        return { changes, warnings };
+      }
+      const description = describe(source, filePath);
       const store = context.openPluginStateKeyedStore<unknown>({
         namespace: params.namespace,
         maxEntries: params.maxEntries,

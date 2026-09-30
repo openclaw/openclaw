@@ -62,7 +62,7 @@ export function describeWebSearchProviderContracts(pluginId: string) {
   for (const providerId of providerIds) {
     describe(`${pluginId}:${providerId} web search contract`, () => {
       const resolveEntry = () => {
-        const entry = resolveProviders().find((entry) => entry.provider.id === providerId);
+        const entry = resolveProviders().find((candidate) => candidate.provider.id === providerId);
         if (!entry) {
           throw new Error(
             `web search provider contract entry missing for ${pluginId}:${providerId}`,
