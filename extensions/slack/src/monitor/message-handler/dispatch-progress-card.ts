@@ -105,7 +105,7 @@ export function createSlackDraftProgressCardRuntime(params: {
 
   const finalize = async (
     status: Exclude<DraftProgressCardState, "working">,
-    snapshot = params.getSnapshot(),
+    options: { snapshot?: ChannelProgressDraftCompositorSnapshot; postIfMissing?: boolean } = {},
   ): Promise<boolean> => {
     if (!params.draftStream || !params.enabled) {
       return false;
@@ -116,12 +116,19 @@ export function createSlackDraftProgressCardRuntime(params: {
       return true;
     }
     await params.draftStream.flush();
-    const channelId = params.draftStream.channelId();
-    const messageId = params.draftStream.messageId();
+    const snapshot = options.snapshot ?? params.getSnapshot();
+    let channelId = params.draftStream.channelId();
+    let messageId = params.draftStream.messageId();
+    const blocks = resolvePresentation(snapshot, terminalStatus);
+    if ((!channelId || !messageId) && terminalStatus === "error" && options.postIfMissing) {
+      params.draftStream.update({ text: buildSlackCompleteBlocksFallbackText(blocks), blocks });
+      await params.draftStream.flush();
+      channelId = params.draftStream.channelId();
+      messageId = params.draftStream.messageId();
+    }
     if (!channelId || !messageId) {
       return false;
     }
-    const blocks = resolvePresentation(snapshot, terminalStatus);
     // Nothing left to show (e.g. only a resolved approval): delete here so every
     // closeout path, including failures without a final reply, drops stale rows.
     if (blocks.length === 0) {

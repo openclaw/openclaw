@@ -344,7 +344,8 @@ Slack-only:
 - Native and draft preview streaming suppress block replies for that turn, so a
   Slack reply is streamed by one delivery path only.
 - A successful turn with no visible reply still deletes its draft card. A
-  failed no-reply turn keeps its progress card, marked Failed.
+  failed no-reply turn keeps its progress card, marked Failed, or posts a plain
+  Failed card if none appeared while working.
 
 ### Mattermost
 

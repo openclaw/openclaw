@@ -642,7 +642,7 @@ export function createSlackProgressRuntime(runtimeParams: {
     if (useNativeProgressStreaming) {
       await finishNativeProgressTurn(completionChunks);
     } else {
-      await progressCard.finalize("success", priorSnapshot);
+      await progressCard.finalize("success", { snapshot: priorSnapshot });
       await previewLifecycle.cleanup();
       draftStream?.forceNewMessage();
       await dropDetachedProgressCards();
