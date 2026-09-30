@@ -84,6 +84,7 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
         (input.command.storePath === undefined || typeof input.command.storePath === "string") &&
         Array.isArray(input.command.jobIds) &&
         input.command.jobIds.every((id) => typeof id === "string")) ||
+      (input.command.type === "cron.quarantine" && typeof input.command.storeKey === "string") ||
       (input.command.type === "cron.currentReceipt" &&
         isRecord(input.command.handle) &&
         typeof input.command.handle.receiptId === "string" &&

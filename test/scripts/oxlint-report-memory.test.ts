@@ -26,6 +26,8 @@ it.for([false, true].flatMap((evidence) => [0, 1].map((status) => ({ evidence, s
   "bounds advisory capture, preserves warnings, and respects stdout backpressure: %j",
   async ({ evidence, status }) => {
     const root = createTempDir("oxlint-report-memory-");
+    // Keep advisory-report locks local even under an ancestor checkout.
+    fs.mkdirSync(path.join(root, ".git"));
     const config = path.join(root, "config.json");
     fs.writeFileSync(config, JSON.stringify({ rules: { "max-lines": "error" } }));
     const summary = path.join(root, "summary.md");
@@ -80,6 +82,7 @@ it.for([false, true].flatMap((evidence) => [0, 1].map((status) => ({ evidence, s
         "Individual advisory annotations and static evidence were skipped",
       );
       expect(fs.readdirSync(root).filter((name) => name !== ".artifacts")).toEqual([
+        ".git",
         "config.json",
         "summary.md",
       ]);
