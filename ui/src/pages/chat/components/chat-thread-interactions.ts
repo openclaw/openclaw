@@ -183,6 +183,7 @@ export type ChatThreadProps = ChatSendStatusActions & {
   onOpenSidebar?: (content: SidebarContent) => void;
   onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
   onOpenSessionLink?: (target: SessionLinkTarget) => void;
+  onNavigate?: (routeId: "cron", options: { search: string }) => void;
   onRequestOpenImage?: () => number;
   onOpenImage?: (item: ImageLightboxItem, requestVersion?: number) => void;
   onAssistantAttachmentLoaded?: () => void;

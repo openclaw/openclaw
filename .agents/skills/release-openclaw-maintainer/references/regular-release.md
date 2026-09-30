@@ -170,9 +170,14 @@ Manual tag creation remains the fallback. The push may print a
 tag still exists: verify with `gh api repos/openclaw/openclaw/git/ref/tags/<tag>`
 and, only if missing, create it with
 `gh api -X POST repos/openclaw/openclaw/git/refs -f ref=refs/tags/<tag> -f sha=<tooling-sha>`.
+Run the candidate from a clean tracked worktree whose HEAD is the Release SHA,
+with its frozen dependencies installed. The helper creates and relaunches trusted
+Tooling SHA code itself; starting in the tooling checkout fails the target HEAD check.
 Then consume existing validation against the untagged Release SHA:
 
 ```bash
+git worktree add --detach /private/tmp/openclaw-candidate-<version> <release-sha>
+cd /private/tmp/openclaw-candidate-<version> && pnpm install --frozen-lockfile
 pnpm release:candidate -- \
   --tag <tag> \
   --target-sha <release-sha> \
@@ -184,6 +189,12 @@ pnpm release:candidate -- \
   --plugin-sdk-api-acknowledgement <reviewed-8-character-digest> \
   --skip-dispatch
 ```
+
+If `pnpm` stalls on the global store lock, check for another agent running
+`pnpm store prune` (`pgrep -fl 'pnpm.*store.*prune'`). With dependencies already
+installed, bypass the pnpm launcher using `node --import ./scripts/tsx.mjs scripts/release-candidate-checklist.mts ...`
+or `node --import ./scripts/tsx.mjs scripts/release-publish-preflight.mts ...`
+with the same helper arguments. A dependency install still needs the lock.
 
 Match channel, route, and profile to the frozen validation selection. The
 channel and route default to `beta` and `normal`; final versions require
@@ -315,7 +326,10 @@ prove availability. The parent's
 `Complete publish workflows` step polls the registry document for the version
 under the target dist-tag (bounded 10 minutes), then dispatches the
 `sync_beta_to_stable` ledger sync through a release-ledger app token and waits
-for it before verification; if its summary reports the token unavailable,
+up to 50 minutes (`RELEASE_NPM_DIST_TAG_SYNC_TIMEOUT_SECONDS`) before verification.
+Status changes and five-minute heartbeats identify the run. A still-running sync
+fails explicitly without judging the beta floor; inspect that run before resuming.
+If its summary reports the token unavailable,
 dispatch the sync by hand before the verify runs. For manual work, poll the
 registry yourself before the sync or verification. Run postpublish
 verification from a checkout of the Release SHA (a newer tooling checkout

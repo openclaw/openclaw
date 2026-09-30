@@ -285,7 +285,7 @@ function normalizeOpenAIFastMode(value: unknown): boolean | undefined {
     return normalizeOpenAIFastMode((value as () => unknown)());
   }
   const fastMode = normalizeFastMode(value);
-  return fastMode === "auto" ? undefined : fastMode;
+  return fastMode === "auto" ? undefined : fastMode === "ultrafast" ? true : fastMode;
 }
 
 /** @deprecated OpenAI provider-owned stream helper; do not use from third-party plugins. */

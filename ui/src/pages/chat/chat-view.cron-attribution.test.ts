@@ -75,7 +75,7 @@ describe("recorded automation input attribution", () => {
         "automation input",
       );
       const source = forwarded.querySelector<HTMLAnchorElement>("a.markdown-session-link");
-      expect(source?.dataset.sessionKey).toBe(sourceSessionKey);
+      expect(source?.getAttribute("href")).toBe("/automations?job=daily&run=execution");
       expect(source?.querySelector(".session-label")?.textContent).toBe("Daily report");
       expect(source?.querySelector(".session-link-icon svg")?.namespaceURI).toBe(
         "http://www.w3.org/2000/svg",

@@ -232,6 +232,7 @@ describe("lazy protocol validators", () => {
     } as const;
     expectAccepted(validateSessionsPatchManyParams, [
       { targets: [target], patch: fullPatch },
+      { targets: [target], patch: { fastMode: "ultrafast" } },
       {
         targets: Array.from({ length: 100 }, (_, index) => ({
           key: `agent:main:patch-${index}`,
@@ -926,6 +927,7 @@ describe("validateChatSendParams", () => {
 
     expectAccepted(validateChatSendParams, [
       base,
+      { ...base, fastMode: "ultrafast" },
       {
         ...base,
         expectedSessionRoutingContract: "per-sender|main|main",

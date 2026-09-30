@@ -3,7 +3,6 @@ import type {
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
 import type { LiveModelCatalogFetchGuard } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
-import type { ProviderCatalogOutcome } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-entry";
 import {
   buildFamilyForwardCompatModel,
@@ -62,6 +61,11 @@ import {
   normalizeOpenAIModelRouteId,
   resolveOpenAICodexReasoningEfforts,
 } from "./model-route-contract.js";
+import {
+  type OpenAILiveProviderCatalog,
+  projectOpenAICatalog,
+  readOpenAICodexServiceTiers,
+} from "./model-service-tiers.js";
 import {
   buildOpenAIChatGPTAuthMethodRuns,
   buildOpenAICodexProviderHooks,
@@ -162,11 +166,6 @@ function buildOpenAIManifestModelsForBaseUrl(baseUrl: string): ModelDefinitionCo
   );
 }
 
-type OpenAILiveProviderCatalog = {
-  provider: ModelProviderConfig;
-  outcome?: ProviderCatalogOutcome;
-};
-
 function buildOpenAIStaticPlatformProviderConfig(
   apiKey?: string,
   baseUrl = resolveOpenAIDefaultBaseUrl(),
@@ -176,20 +175,6 @@ function buildOpenAIStaticPlatformProviderConfig(
     api: "openai-responses",
     ...(apiKey ? { apiKey } : {}),
     models: buildOpenAIManifestModelsForBaseUrl(baseUrl),
-  };
-}
-
-function projectOpenAICatalog(catalog: OpenAILiveProviderCatalog, profileId?: string) {
-  const scopedProfileId = profileId?.trim();
-  return {
-    providers: { [PROVIDER_ID]: catalog.provider },
-    ...(catalog.outcome
-      ? {
-          outcomes: [
-            scopedProfileId ? { ...catalog.outcome, profileId: scopedProfileId } : catalog.outcome,
-          ],
-        }
-      : {}),
   };
 }
 
@@ -455,6 +440,7 @@ async function buildOpenAICodexLiveProviderConfig(params: {
     const models = rows
       .map((row) => buildOpenAICodexModelFromLiveRow(row, catalogRuntime))
       .filter((model): model is ModelDefinitionConfig => Boolean(model));
+    const modelServiceTiers = readOpenAICodexServiceTiers(rows);
     // A successful account-scoped response is authoritative even when all
     // rows are hidden; static hints must not invent subscription access.
     return {
@@ -464,7 +450,11 @@ async function buildOpenAICodexLiveProviderConfig(params: {
         auth: "oauth",
         models,
       },
-      outcome: { provider: PROVIDER_ID, status: "ready" },
+      outcome: {
+        provider: PROVIDER_ID,
+        status: "ready",
+        ...(modelServiceTiers.length ? { modelServiceTiers } : {}),
+      },
     };
   } catch (error) {
     if (

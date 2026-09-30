@@ -1,4 +1,3 @@
-// Defines local desktop config parsing and generated field metadata.
 import path from "node:path";
 import { z } from "zod";
 import { projectConfigFieldMetadata } from "./schema.field-metadata.js";

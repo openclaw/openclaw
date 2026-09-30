@@ -72,6 +72,10 @@
               {
                 "const": "auto",
                 "type": "string"
+              },
+              {
+                "const": "ultrafast",
+                "type": "string"
               }
             ]
           },

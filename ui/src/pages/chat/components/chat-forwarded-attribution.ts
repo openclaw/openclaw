@@ -1,6 +1,7 @@
 // Attribution row for forwarded agent and automation messages.
 import { html, nothing } from "lit";
 import "./chat-attribution.css";
+import { pathForRoute } from "../../../app-route-paths.ts";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
@@ -12,6 +13,7 @@ registerChatMessageMetadataEnglish();
 
 type ForwardedAttributionOptions = Parameters<typeof renderForwardedAvatar>[1] & {
   mainKey?: string;
+  basePath?: string;
   linkSource?: boolean;
   updateCount?: number;
   showAvatar?: boolean;
@@ -30,7 +32,9 @@ export function renderForwardedAttribution(
 ) {
   const sourceSessionKey = group.senderSession?.sessionKey;
   const sourceParsed = sourceSessionKey ? parseAgentSessionKey(sourceSessionKey) : null;
-  const sourceIsCronRun = /^cron:[^:]+:run:[^:]+$/u.test(sourceParsed?.rest ?? "");
+  const sourceCronRun = /^cron:([^:]+):run:([^:]+)$/u.exec(sourceParsed?.rest ?? "");
+  const cronJobId = sourceCronRun?.[1];
+  const cronRunSessionId = sourceCronRun?.[2];
   const sourceIsSubagent = isSubagentSessionKey(sourceSessionKey);
   const sourceIsOtherAgent =
     !sourceIsSubagent &&
@@ -51,7 +55,7 @@ export function renderForwardedAttribution(
   );
   const sourceLabel =
     group.senderSession?.label ??
-    (sourceIsCronRun
+    (sourceCronRun
       ? t("chat.messages.forwardedAutomation")
       : sourceIsMainSession
         ? sourceAgentDisplayName
@@ -62,24 +66,26 @@ export function renderForwardedAttribution(
     sourceIsOtherAgent && opts.updateCount === undefined && opts.showAvatar !== false
       ? renderForwardedAvatar(sourceParsed.agentId, opts)
       : nothing;
-  const sourceLink = sourceIsCronRun
-    ? html`<a
-        class="markdown-session-link markdown-session-link--titled markdown-session-link--automation"
-        role="link"
-        tabindex="0"
-        data-session-key=${linkableSourceKey}
-        ><span class="session-link-icon" aria-hidden="true">${icons.clock}</span
-        ><span class="session-label" .textContent=${sourceLabel}></span
-      ></a>`
-    : html`<a
-        class="markdown-session-link${sourceLabel ? " markdown-session-link--titled" : ""}${
-          sourceIsOtherAgent && sourceIsMainSession ? " markdown-session-link--agent" : ""
-        }"
-        role="link"
-        tabindex="0"
-        data-session-key=${linkableSourceKey}
-        ><span class="session-label" .textContent=${sourceLabel ?? linkableSourceKey}></span
-      ></a>`;
+  const sourceLink =
+    cronJobId && cronRunSessionId
+      ? html`<a
+          class="markdown-session-link markdown-session-link--titled markdown-session-link--automation"
+          role="link"
+          tabindex="0"
+          href=${`${pathForRoute("cron", opts.basePath)}?${new URLSearchParams({ job: cronJobId, run: cronRunSessionId })}`}
+          data-cron-run-link
+          ><span class="session-link-icon" aria-hidden="true">${icons.clock}</span
+          ><span class="session-label" .textContent=${sourceLabel}></span
+        ></a>`
+      : html`<a
+          class="markdown-session-link${sourceLabel ? " markdown-session-link--titled" : ""}${
+            sourceIsOtherAgent && sourceIsMainSession ? " markdown-session-link--agent" : ""
+          }"
+          role="link"
+          tabindex="0"
+          data-session-key=${linkableSourceKey}
+          ><span class="session-label" .textContent=${sourceLabel ?? linkableSourceKey}></span
+        ></a>`;
   const from =
     opts.updateCount === undefined
       ? t("chat.messages.forwardedFrom")
@@ -97,8 +103,8 @@ export function renderForwardedAttribution(
           ? // The titler may replace the initial label. Its .textContent binding
             // keeps Lit text parts out of it. A group's source never changes: messages are
             // immutable and grouping splits on senderSession, so no keyed
-            // remount is needed. Gateway labels, cron fallbacks, and main-session
-            // agent names pre-title the source; the titler still stamps the href.
+            // remount is needed. Session sources use the titler for their href;
+            // completed cron runs belong to automation history instead.
             html`<span>${from}</span>
               ${
                 sourceIsOtherAgent

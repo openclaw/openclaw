@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { Bot } from "grammy";
 import type { LanguageCode } from "grammy/types";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -252,7 +253,8 @@ export function buildCappedTelegramMenuCommands(params: {
     maxCommands,
     maxTotalChars,
   });
-  rememberCappedTelegramMenuResult(cacheKey, result);
+  cappedTelegramMenuCache.set(cacheKey, result);
+  pruneMapToMaxSize(cappedTelegramMenuCache, TELEGRAM_MENU_RESULT_CACHE_MAX);
   return result;
 }
 
@@ -354,20 +356,6 @@ function updateTelegramCommandLocalizationDigest(
   for (const [locale, description] of entries) {
     updateTelegramCommandDigestField(digest, locale);
     updateTelegramCommandDigestField(digest, description);
-  }
-}
-
-function rememberCappedTelegramMenuResult(
-  key: string,
-  result: ReturnType<typeof buildUncachedCappedTelegramMenuCommands>,
-): void {
-  cappedTelegramMenuCache.set(key, result);
-  if (cappedTelegramMenuCache.size <= TELEGRAM_MENU_RESULT_CACHE_MAX) {
-    return;
-  }
-  const oldestKey = cappedTelegramMenuCache.keys().next().value;
-  if (oldestKey) {
-    cappedTelegramMenuCache.delete(oldestKey);
   }
 }
 

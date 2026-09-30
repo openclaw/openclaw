@@ -27,6 +27,7 @@ import {
   publicationIntentInputs,
   publicationSourceContract,
 } from "../../scripts/full-release-publication-contract.mjs";
+import { stripLeadingPackageManagerSeparator } from "../../scripts/lib/arg-utils.mts";
 import { parsePluginReleaseSelection } from "../../scripts/lib/plugin-npm-release.ts";
 import { splitChangelog } from "../../scripts/lib/release-changelog.mjs";
 import { releaseBranchForTag } from "../../scripts/lib/release-context.mjs";
@@ -37,6 +38,11 @@ import {
 } from "../../scripts/lib/release-publish-preflight-interface.mts";
 import { classifyReleaseTrain, parseReleaseVersion } from "../../scripts/lib/release-version.mjs";
 import { validateReleaseButtonInputs } from "../../scripts/openclaw-release-ready.mjs";
+import {
+  PluginSdkApiAcknowledgementError,
+  createPluginSdkApiReleaseEvidence,
+  validatePluginSdkApiReleaseEvidence,
+} from "../../scripts/plugin-sdk-api-release-evidence.mjs";
 import {
   buildReleaseCandidateState,
   buildPublishCommand,
@@ -240,8 +246,15 @@ describe("release candidate checklist", () => {
     preflightFailure?: boolean;
     workflowSha?: string;
     savedToolingTag?: string;
+    sdkAcknowledgement?: string;
   }>([
     { tag: "v2026.9.1", pin: "2026.9.1", expected: "passed", failedRegistry: "" },
+    ...["", "deadbeef", "f4b495f3"].map((sdkAcknowledgement) => ({
+      tag: "v2026.9.1",
+      pin: "2026.9.1",
+      expected: "passed",
+      sdkAcknowledgement,
+    })),
     {
       tag: "v2026.9.1",
       pin: "2026.9.1",
@@ -338,7 +351,7 @@ describe("release candidate checklist", () => {
       preflightFailure: true,
     })),
   ])(
-    "consumes producer-qualified registry plans ($failedRegistry; $registryAdmission) and records Android evidence for $tag ($pin; $launch; $distTag; $publicationRoute; workflow SHA=$workflowSha; preflight failure=$preflightFailure)",
+    "consumes producer-qualified registry plans ($failedRegistry; $registryAdmission) and records Android evidence for $tag ($pin; $launch; $distTag; $publicationRoute; workflow SHA=$workflowSha; preflight failure=$preflightFailure; SDK=$sdkAcknowledgement)",
     async ({
       tag,
       pin,
@@ -353,6 +366,7 @@ describe("release candidate checklist", () => {
       preflightFailure = false,
       workflowSha,
       savedToolingTag,
+      sdkAcknowledgement,
     }) => {
       const { root: targetRoot, git } = candidateGitFixture({
         "package.json": JSON.stringify({ version: tag.slice(1) }),
@@ -365,7 +379,7 @@ describe("release candidate checklist", () => {
         join(targetRoot, "apps/android/version.json"),
         JSON.stringify({ version: "2099.1.1" }),
       );
-      const options = parseArgs([
+      const candidateArgv = [
         "--tag",
         tag,
         "--publication-route",
@@ -382,7 +396,11 @@ describe("release candidate checklist", () => {
         ...(workflowSha
           ? ["--workflow-sha", workflowSha]
           : ["--publish-workflow-ref", publishWorkflowRef]),
-      ]);
+        ...(sdkAcknowledgement ? ["--plugin-sdk-api-acknowledgement", sdkAcknowledgement] : []),
+        "--output-dir",
+        `${targetRoot}/evidence 'quoted' $(literal)`,
+      ];
+      const options = parseArgs(candidateArgv);
       if (failedRegistry) {
         options.fullReleaseRunId = "";
         options.skipDispatch = false;
@@ -398,6 +416,7 @@ describe("release candidate checklist", () => {
         source.match(/^function publicationSelectionForChecklist\([\s\S]*?^\}/mu)?.[0] ?? "";
       const savedTagReader =
         source.match(/^function savedPublishWorkflowRef\([\s\S]*?^\}/mu)?.[0] ?? "";
+      const shellQuote = source.match(/^function shellQuote\([\s\S]*?^\}/mu)?.[0] ?? "";
       const log = vi.fn();
       const stages: string[] = [];
       const writeState = vi.fn<(path: string, state: unknown) => void>(
@@ -435,12 +454,27 @@ describe("release candidate checklist", () => {
       if (savedState) {
         writeFileSync(statePath, JSON.stringify(savedState));
       }
+      const sdkPayload = {
+        entrypointsAdded: [],
+        entrypointsRemoved: [],
+        exports: sdkAcknowledgement === undefined ? [] : [{ change: "added", exportName: "send" }],
+      };
+      const sdkEvidence = createPluginSdkApiReleaseEvidence({
+        baseRef: "v2026.8.1",
+        baseSha: "a".repeat(40),
+        headSha: targetSha,
+        workflowSha: targetSha,
+        diff: {
+          ...sdkPayload,
+          digest: createHash("sha256").update(JSON.stringify(sdkPayload)).digest("hex"),
+        },
+      });
       const npmManifest = {
         tarballName: "openclaw.tgz",
         tarballSha256: "fixture-digest",
         corePackageTarballs: [],
         dependencyTarballs: [],
-        pluginSdkApi: {},
+        pluginSdkApi: sdkEvidence,
       };
       const fullManifest = {
         workflowName: "Full Release Validation",
@@ -503,10 +537,14 @@ describe("release candidate checklist", () => {
       const dispatches: Record<string, string>[] = [];
       const completion = runInNewContext(
         stripNodeTypeScriptTypes(
-          `${android}\n${selectPublication}\n${savedTagReader}\n${main}\nmain();`,
+          `${android}\n${selectPublication}\n${savedTagReader}\n${shellQuote}\n${main}\nmain();`,
         ),
         {
-          process: { argv: [], cwd: () => targetRoot, env: {} },
+          process: {
+            argv: ["node", "scripts/release-candidate-checklist.mts", ...candidateArgv],
+            cwd: () => targetRoot,
+            env: {},
+          },
           console: { log, warn: log },
           TOOLING_ROOT: "/trusted/tooling",
           PUBLISH_TOOLING_TAG_PATTERN: /^release-publish\/[a-f0-9]{12}-[1-9][0-9]*$/u,
@@ -577,7 +615,7 @@ describe("release candidate checklist", () => {
                 ? npmManifest
                 : file.endsWith("full-release-validation-manifest.json")
                   ? fullManifest
-                  : {},
+                  : sdkEvidence,
           authenticateFullReleaseValidationEvidence: async () => {
             stages.push("authenticate");
             if (registryAdmission && failedRegistry) {
@@ -590,7 +628,9 @@ describe("release candidate checklist", () => {
           isDeepStrictEqual,
           sha256: () => "fixture-digest",
           validatePreflightManifest: () => {},
-          validatePluginSdkApiReleaseEvidence: () => ({ status: "passed" }),
+          validatePluginSdkApiReleaseEvidence,
+          PluginSdkApiAcknowledgementError,
+          stripLeadingPackageManagerSeparator,
           validateFullManifest: () => stages.push("evidence-validated"),
           preflightCorePackageTarballs,
           preflightDependencyTarballs,
@@ -622,6 +662,31 @@ describe("release candidate checklist", () => {
           writeFileSync,
         },
       );
+      if (sdkAcknowledgement !== undefined && sdkAcknowledgement !== "f4b495f3") {
+        const error = await completion.catch((cause: Error) => cause);
+        expect(error.message).toContain(
+          "Plugin SDK API changes require acknowledgement digest f4b495f3",
+        );
+        expect(error.message).toContain("Review the Plugin SDK API diff before rerunning.");
+        const command = error.message.split("\n").at(-1);
+        const decoded = execFileSync(
+          "bash",
+          ["-c", `pnpm() { printf '%s\\0' "$@"; }\n${command}`],
+          { encoding: "utf8", timeout: 10_000 },
+        )
+          .split("\0")
+          .filter(Boolean);
+        expect(decoded.slice(0, 2)).toEqual(["release:candidate", "--"]);
+        expect(parseArgs(decoded.slice(2))).toEqual({
+          ...parseArgs(candidateArgv),
+          pluginSdkApiAcknowledgement: "f4b495f3",
+        });
+        expect(stages).toEqual(["wait", "wait", "authenticate"]);
+        expect(generatedChecks).not.toHaveBeenCalled();
+        expect(preflight).not.toHaveBeenCalled();
+        expect(publishCommand).not.toHaveBeenCalled();
+        return;
+      }
       if (workflowSha && workflowSha !== toolingSha) {
         await expect(completion).rejects.toThrow(
           `--workflow-sha ${workflowSha} does not match tooling checkout ${toolingSha}`,
@@ -885,6 +950,9 @@ describe("release candidate checklist", () => {
     const owner = source.match(/^function runFromTrustedTooling\([\s\S]*?^\}/mu)?.[0];
     const jsonReader = source.match(/^function readJson\([\s\S]*?^\}/mu)?.[0];
     const ancestry = source.match(/^function gitIsAncestor\([\s\S]*?^\}/mu)?.[0];
+    const cleanupWarning = vi.fn();
+    let toolingRoot = "";
+    let toolingAdminDir = "";
     const installs = vi.fn(
       (_command: string, args: string[], options: Parameters<typeof run>[2]) => {
         expect(args).toEqual([
@@ -894,6 +962,11 @@ describe("release candidate checklist", () => {
           "--prefer-offline",
         ]);
         const root = options?.cwd ?? "";
+        toolingRoot = root;
+        toolingAdminDir = run("git", ["rev-parse", "--absolute-git-dir"], {
+          cwd: root,
+          capture: true,
+        }).trim();
         expect(root).not.toBe(targetRoot);
         expect(existsSync(join(root, "node_modules"))).toBe(false);
         expect(run("git", ["rev-parse", "HEAD"], { cwd: root, capture: true }).trim()).toBe(
@@ -914,7 +987,6 @@ describe("release candidate checklist", () => {
         return "";
       },
     );
-    let toolingRoot = "";
     let childOutput = "";
     const execute = () =>
       runInNewContext(
@@ -926,7 +998,12 @@ describe("release candidate checklist", () => {
           mkdirSync,
           mkdtempSync,
           readFileSync,
-          rmSync,
+          rmSync: (...args: Parameters<typeof rmSync>) => {
+            rmSync(...args);
+            if (scenario === "child failure") {
+              throw new Error("fixture cleanup failed");
+            }
+          },
           symlinkSync,
           createRequire,
           pathToFileURL,
@@ -934,7 +1011,7 @@ describe("release candidate checklist", () => {
           join,
           isRecord,
           process,
-          console,
+          console: { ...console, warn: cleanupWarning },
           targetRoot,
           workflowSha,
           argv: [scenario === "child failure" ? "--fail" : "--help"],
@@ -976,13 +1053,17 @@ describe("release candidate checklist", () => {
       expect(execute).toThrow("fixture install failed");
     } else if (scenario === "child failure") {
       expect(execute).toThrow("trusted release candidate tooling failed with 7");
+      expect(cleanupWarning).toHaveBeenCalledWith(
+        expect.stringContaining("fixture cleanup failed"),
+      );
     } else {
       execute();
       expect(JSON.parse(childOutput)).toEqual({ parsed: { ready: true }, cwd: targetRoot });
     }
     expect(installs).toHaveBeenCalledTimes(1);
     if (toolingRoot) {
-      expect(existsSync(toolingRoot)).toBe(false);
+      expect(existsSync(dirname(toolingRoot))).toBe(false);
+      expect(existsSync(toolingAdminDir)).toBe(false);
     }
     expect(git("worktree", "list", "--porcelain").match(/^worktree /gmu)).toHaveLength(1);
     expect(existsSync(join(installedModules, "yaml"))).toBe(true);

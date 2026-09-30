@@ -59,6 +59,8 @@ Provider authentication status is shared across views and refreshes after accoun
 
 The sidebar loads automation status once per connection and refreshes after automation or configuration changes. Failed reads retry once per minute while the tab is visible and stop retrying after success. Overdue warnings advance on a local deadline without polling the Gateway. Hidden tabs catch up when visible; returning to an unchanged tab does not poll automations. Command palette searches reuse their automation inventory on the same connection until one of those changes or a reconnect.
 
+For messages forwarded from an automation, the **From** link opens that automation's History tab and highlights the originating run. Open the run's transcript from History when needed.
+
 Thinking, speed, and context-window changes stay synchronized across panes showing the same session. While a change is pending, the latest selection remains visible. A rejected change restores the latest confirmed value. Delayed events from a replaced session leave the current transcript and unsent draft intact.
 
 While an agent works, completed commentary or preambles appear inline in the
@@ -147,6 +149,8 @@ access. On plain HTTP LAN addresses or browsers without the camera API, choose
 mobile camera capture without silently substituting a picker for the preview;
 your browser decides whether it shows a camera or a file picker. If access is denied,
 allow the site in your browser and operating-system camera settings and retry.
+The explicit **Use device camera** option also remains available after a preview
+request fails, including permission denial; it never opens automatically.
 If no camera is available, choose **Upload photo** instead.
 
 The camera stops when you capture a photo, close the dialog, or leave its draft.

@@ -190,7 +190,7 @@ export async function buildControlledSubagentRunsReadContext(
   const select = (snapshot: Map<string, SubagentRunReadRecord>) => {
     const index = buildSubagentRunReadIndexFromRuns({
       runs: snapshot,
-      inMemoryRuns: subagentRuns.values(),
+      inMemoryRuns: [...snapshot.keys()].flatMap((id) => subagentRuns.get(id) ?? []),
     });
     const visible = [...index.latestRunsByChildSessionKey.values()].filter((entry) =>
       isSubagentRunVisibleToSession(entry, key, agentId, cfg),
@@ -203,17 +203,25 @@ export async function buildControlledSubagentRunsReadContext(
         .map((entry) => entry.childSessionKey),
     };
   };
-  return withSubagentRunReadSnapshot(subagentRuns, select, (selection, snapshot) => {
-    const visibleIds = new Set(selection.runIds);
-    const runs = [...snapshot.values()].filter((entry) => visibleIds.has(entry.runId));
-    const list = captureSubagentListReadContext(runs, selection.index, snapshot, recentMinutes);
-    return {
-      runs: list.view.latest,
-      list,
-      getExecutionObservation: (entry: SubagentRunRecord) =>
-        observeSubagentExecution(entry, getSubagentRunsForRequesterSession(entry.childSessionKey)),
-    };
-  });
+  return withSubagentRunReadSnapshot(
+    subagentRuns,
+    select,
+    (selection, snapshot) => {
+      const visibleIds = new Set(selection.runIds);
+      const runs = [...snapshot.values()].filter((entry) => visibleIds.has(entry.runId));
+      const list = captureSubagentListReadContext(runs, selection.index, snapshot, recentMinutes);
+      return {
+        runs: list.view.latest,
+        list,
+        getExecutionObservation: (entry: SubagentRunRecord) =>
+          observeSubagentExecution(
+            entry,
+            getSubagentRunsForRequesterSession(entry.childSessionKey),
+          ),
+      };
+    },
+    { sessionKeys: [key], descendants: true },
+  );
 }
 
 /** Cancellation consumes current ownership facts without hydrating retained result payloads. */

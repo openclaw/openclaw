@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   readMemoryEntryOriginsInDatabase,
   type MemoryEntryOrigin,
@@ -27,7 +28,6 @@ import {
   ensureMemorySessionTombstones,
   memorySessionTombstonesExist,
 } from "./memory-session-tombstones.js";
-import { memoryCpuProcessEntrypoints } from "./memory/manager-cpu-entrypoints.js";
 import { extractPromotionKeys } from "./short-term-promotion-memory-write.js";
 
 export type { MemoryEntryOrigin };
@@ -56,6 +56,10 @@ type MemoryOriginDatabase = {
 // Four bindings per row stay below SQLite's historical 999-variable default.
 const TOMBSTONE_INSERT_BATCH_SIZE = 128;
 const ensuredDatabases = new WeakSet<DatabaseSync>();
+// Lazy: the runtime-api graph must not statically reach the manager sidecar modules.
+const loadMemoryCpuProcessEntrypoints = createLazyRuntimeModule(
+  () => import("./memory/manager-cpu-entrypoints.js"),
+);
 type OriginDatabaseOptions = ReturnType<typeof captureOriginDatabaseOptions>;
 
 function captureOriginDatabaseOptions(agentId: string) {
@@ -68,6 +72,8 @@ async function executeOriginCommand<Key extends keyof MemoryEntryOriginOperation
   command: { type: Key; input: MemoryEntryOriginOperations[Key]["input"] },
   assertOriginal?: () => void,
 ): Promise<MemoryEntryOriginOperations[Key]["output"]> {
+  const { memoryCpuProcessEntrypoints } = await loadMemoryCpuProcessEntrypoints();
+  const moduleUrl = resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.entryOrigins);
   assertOriginal?.();
   return runOpenClawAgentWriteAdmission(
     options,
@@ -83,7 +89,7 @@ async function executeOriginCommand<Key extends keyof MemoryEntryOriginOperation
             options,
             db,
             {
-              moduleUrl: resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.entryOrigins),
+              moduleUrl,
               input: undefined,
             },
           );

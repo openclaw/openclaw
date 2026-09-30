@@ -121,8 +121,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/workspace-sqlite-safety.test.ts",
   "src/agents/workspace-state-read.worker.test.ts",
   "src/agents/workspace-state-store.test.ts",
-  "src/agents/workspace.attestation-survival.test.ts",
-  "src/agents/workspace.provisioning.test.ts",
   "src/agents/workspace.test.ts",
   "src/system-agent/operations.roles.test.ts",
   "src/system-agent/setup-apply.concurrency.test.ts",

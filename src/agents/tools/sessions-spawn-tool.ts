@@ -241,7 +241,9 @@ function createSessionsSpawnToolSchema(params: {
               description: "JSON Schema for the child's structured result; requires collect=true.",
             }),
           ),
-          fastMode: Type.Optional(Type.Union([Type.Boolean(), Type.Literal("auto")])),
+          fastMode: Type.Optional(
+            Type.Union([Type.Boolean(), Type.Literal("auto"), Type.Literal("ultrafast")]),
+          ),
           groupId: Type.Optional(
             Type.String({
               description: "Groups parallel collector children; requires collect=true.",
@@ -607,7 +609,10 @@ export function createSessionsSpawnTool(opts?: SessionsSpawnToolOptions): AnyAge
                 ? (params.outputSchema as Record<string, unknown>)
                 : undefined,
             fastMode:
-              params.fastMode === true || params.fastMode === false || params.fastMode === "auto"
+              params.fastMode === true ||
+              params.fastMode === false ||
+              params.fastMode === "auto" ||
+              params.fastMode === "ultrafast"
                 ? params.fastMode
                 : undefined,
             groupId: readToolStringParam(params, "groupId"),
