@@ -77,6 +77,11 @@ For providers that discover their default model at initialization, plain status
 defers model identity checks until that model is known. Use `--deep` to initialize
 the provider and verify the model and provider settings against the existing index.
 
+Session eligibility excludes unindexed transcripts whose parsed content is
+entirely system-generated, matching the indexer's admission rules. These
+transcripts do not keep status dirty; later user content makes them eligible
+for indexing again.
+
 ## `memory index`
 
 ```bash
