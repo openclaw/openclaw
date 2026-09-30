@@ -276,13 +276,13 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
         return try OpenClawChatGatewayPayloadCodec.decodeSessionsList(res, agentID: agentID)
     }
 
-    func listChildSessions(parentKey: String) async throws -> [OpenClawChatSessionEntry] {
+    func listChildSessions(parentKey: String) async throws -> OpenClawChatChildSessionsResult {
         try await self.listChildSessions(parentKey: parentKey, ifCurrentRoute: nil)
     }
 
     private func listChildSessions(
         parentKey: String,
-        ifCurrentRoute route: GatewayNodeSessionRoute?) async throws -> [OpenClawChatSessionEntry]
+        ifCurrentRoute route: GatewayNodeSessionRoute?) async throws -> OpenClawChatChildSessionsResult
     {
         try await OpenClawChatChildSessionPager.collect { offset in
             let request = OpenClawChatGatewayRequests.sessionsList(
