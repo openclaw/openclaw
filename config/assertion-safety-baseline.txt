@@ -2879,6 +2879,7 @@ src/state/openclaw-agent-db-permissions.ts	1
 src/state/openclaw-agent-db-registry-listing.ts	2
 src/state/openclaw-agent-db-session-migrations.ts	1
 src/state/openclaw-agent-db-session-provenance.ts	1
+src/state/openclaw-agent-standing-intents-schema.ts	1
 src/state/openclaw-database-verify.worker.ts	1
 src/state/openclaw-quarantine-store.ts	2
 src/state/openclaw-schema-versions.ts	7
