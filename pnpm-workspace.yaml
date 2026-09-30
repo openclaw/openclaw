@@ -77,6 +77,7 @@ overrides:
   # Keep the cooled HTML converter security fix while Mailparser is rolled back.
   "mailparser@3.9.15>html-to-text": 10.0.1
   "mailauth@5.0.2>nodemailer": 10.0.8
+  "mailauth@5.0.2>joi": 18.2.9
   "mailauth@5.0.2>undici": 8.10.2
   "mailparser@3.9.15>nodemailer": 10.0.8
   minimatch: 10.2.6

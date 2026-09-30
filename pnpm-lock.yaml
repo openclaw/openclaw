@@ -130,6 +130,7 @@ overrides:
   ip-address: 10.5.0
   mailparser@3.9.15>html-to-text: 10.0.1
   mailauth@5.0.2>nodemailer: 10.0.8
+  mailauth@5.0.2>joi: 18.2.9
   mailauth@5.0.2>undici: 8.10.2
   mailparser@3.9.15>nodemailer: 10.0.8
   minimatch: 10.2.6
@@ -7104,8 +7105,8 @@ packages:
     resolution: {integrity: sha512-AC/7JofJvZGrrneWNaEnJeOLUx+JlGt7tNa0wZiRPT4MY1wmfKjt2+6O2p2uz2+skll8OZZmJMNqeke7kKbNgQ==}
     hasBin: true
 
-  joi@18.2.3:
-    resolution: {integrity: sha512-N5A3KTWQpPWT4ExxxPlUx7WmykGXRzhNidWhV41d6Abu9YfI2NyWCJuxdPnslJCPWtbRpSVOWSnSS6GakLM/Rg==}
+  joi@18.2.9:
+    resolution: {integrity: sha512-2mD929bUVKUhOLQQEVhlf6EZ0Mlo0DeRb5MO7cViR9AXLtBauuccEtB1py9Ocxpo/P7ucnh442iY/iOwrh3IQw==}
     engines: {node: '>= 20'}
 
   jose@4.15.9:
@@ -14140,7 +14141,7 @@ snapshots:
 
   jiti@2.7.0: {}
 
-  joi@18.2.3:
+  joi@18.2.9:
     dependencies:
       '@hapi/address': 5.1.1
       '@hapi/formula': 3.0.2
@@ -14512,7 +14513,7 @@ snapshots:
       commander: 15.0.0
       fast-xml-parser: 5.11.0
       ipaddr.js: 2.5.0
-      joi: 18.2.3
+      joi: 18.2.9
       libmime: 5.4.1
       nodemailer: 10.0.8
       punycode.js: 2.3.1
