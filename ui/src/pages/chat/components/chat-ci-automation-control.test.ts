@@ -109,6 +109,33 @@ async function setup() {
 }
 
 describe("CI automation popup scope", () => {
+  it.each(["identity", "connection", "read scope"])(
+    "settles a visible popup without %s until its prerequisites change",
+    async (missing) => {
+      const h = await setup();
+      if (missing === "identity") {
+        await h.paint("");
+      } else if (missing === "connection") {
+        h.setSnapshot({ ...h.gateway.snapshot, phase: "reconnecting" });
+      } else {
+        h.setSnapshot({
+          ...h.gateway.snapshot,
+          hello: {
+            type: "hello-ok",
+            protocol: 1,
+            auth: { role: "operator", scopes: ["operator.sessions.read"] },
+          },
+        });
+      }
+      await h.element.updateComplete;
+      await h.open();
+      await h.element.updateComplete;
+      expect(await h.element.updateComplete).toBe(true);
+      expect(h.request).not.toHaveBeenCalled();
+      expect(h.checkbox().closest("fieldset")?.disabled).toBe(true);
+    },
+  );
+
   it("ignores a delayed inventory after session replacement", async () => {
     const h = await setup();
     const oldRead = createDeferred<ReturnType<typeof inventory>>();

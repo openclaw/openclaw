@@ -105,10 +105,33 @@ describe("CI automation API adapter", () => {
     expect(rpc.request.mock.calls.every(([method]) => method === "cron.list")).toBe(true);
   });
 
-  it("leaves unrelated session automations alone", async () => {
+  it("retains selected-PR jobs across reset without adopting another PR or old archive", async () => {
     const rpc = client();
-    rpc.request.mockResolvedValueOnce(page([job("autoFix", { declarationKey: "daily-briefing" })]));
-    expect(await loadCiAutomationJobs(rpc.client, target, signal())).toEqual({});
+    const fix = job("autoFix");
+    const merge = job("autoMerge");
+    const anotherPr = job("autoMerge", {
+      ...ciAutomationJobSpec({ ...target, number: 43 }, "autoMerge"),
+      id: "other-pr",
+    });
+    rpc.request.mockResolvedValueOnce(
+      page([
+        fix,
+        merge,
+        anotherPr,
+        job("autoArchive"),
+        job("autoFix", { declarationKey: "daily-briefing" }),
+      ]),
+    );
+    const replacement = { ...target, sessionId: "replacement" };
+    const jobs = await loadCiAutomationJobs(rpc.client, replacement, signal());
+    expect(jobs).toEqual({ autoFix: fix, autoMerge: merge });
+    rpc.request.mockResolvedValueOnce({ ...merge, enabled: false });
+    await setCiAutomationEnabled(rpc.client, replacement, "autoMerge", false, jobs.autoMerge);
+    expect(rpc.request).toHaveBeenLastCalledWith("cron.update", {
+      id: merge.id,
+      expectedConfigRevision: merge.configRevision,
+      patch: { enabled: false },
+    });
   });
 
   it("creates the selected declarative job and keeps its returned identity", async () => {

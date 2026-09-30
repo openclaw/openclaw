@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { CronAddParamsSchema } from "../../../packages/gateway-protocol/src/schema/cron.js";
 import {
   CI_AUTOMATION_OPTIONS,
-  ciAutomationDeclarationPrefix,
+  ciAutomationDeclarationKey,
   ciAutomationJobMatches,
   ciAutomationJobSpec,
   type CiAutomationOption,
@@ -29,20 +29,22 @@ function message(option: CiAutomationOption): string {
 
 describe("PR automation recipes", () => {
   it("bounds declaration keys and separates every ownership dimension and action", () => {
-    const prefix = ciAutomationDeclarationPrefix(target);
-    expect(ciAutomationDeclarationPrefix({ ...target })).toBe(prefix);
-    expect(ciAutomationDeclarationPrefix({ ...target, owner: "OpenClaw", repo: "OpenClaw" })).toBe(
-      prefix,
-    );
+    const prefix = ciAutomationDeclarationKey(target, "autoMerge");
+    expect(ciAutomationDeclarationKey({ ...target }, "autoMerge")).toBe(prefix);
+    expect(
+      ciAutomationDeclarationKey({ ...target, owner: "OpenClaw", repo: "OpenClaw" }, "autoMerge"),
+    ).toBe(prefix);
     const variants: CiAutomationTarget[] = [
       { ...target, agentId: "other" },
       { ...target, sessionKey: "agent:main:dashboard:task-b" },
-      { ...target, sessionId: "replacement-session" },
       { ...target, owner: "other" },
       { ...target, repo: "other" },
       { ...target, number: 124 },
     ];
-    const prefixes = [prefix, ...variants.map(ciAutomationDeclarationPrefix)];
+    const prefixes = [
+      prefix,
+      ...variants.map((variant) => ciAutomationDeclarationKey(variant, "autoMerge")),
+    ];
     expect(new Set(prefixes).size).toBe(prefixes.length);
     const keys = CI_AUTOMATION_OPTIONS.map((option) =>
       ciAutomationJobSpec({ ...target, sessionKey: "long-session:".repeat(200) }, option),
@@ -55,9 +57,9 @@ describe("PR automation recipes", () => {
   });
 
   it("uses an unambiguous tuple rather than concatenating target identifiers", () => {
-    expect(ciAutomationDeclarationPrefix({ ...target, owner: "a:b", repo: "c" })).not.toBe(
-      ciAutomationDeclarationPrefix({ ...target, owner: "a", repo: "b:c" }),
-    );
+    expect(
+      ciAutomationDeclarationKey({ ...target, owner: "a:b", repo: "c" }, "autoMerge"),
+    ).not.toBe(ciAutomationDeclarationKey({ ...target, owner: "a", repo: "b:c" }, "autoMerge"));
   });
 
   it.each(CI_AUTOMATION_OPTIONS)("binds %s to its intended execution owner", (option) => {
@@ -97,6 +99,13 @@ describe("PR automation recipes", () => {
     expect(ciAutomationJobMatches(job, { ...target, number: 124 }, "autoFix")).toBe(false);
     expect(
       ciAutomationJobMatches(job, { ...target, sessionId: "replacement-session" }, "autoFix"),
+    ).toBe(true);
+    expect(
+      ciAutomationJobMatches(
+        ciAutomationJobSpec(target, "autoArchive"),
+        { ...target, sessionId: "replacement-session" },
+        "autoArchive",
+      ),
     ).toBe(false);
     const archive = ciAutomationJobSpec(target, "autoArchive");
     expect(
@@ -119,15 +128,18 @@ describe("PR automation recipes", () => {
   });
 
   it("separates repair, landing, and guarded archive instructions", () => {
-    for (const option of CI_AUTOMATION_OPTIONS) {
-      expect(message(option)).toContain(JSON.stringify(target.sessionId));
-      expect(message(option)).toContain("never adopt the replacement session");
+    for (const option of ["autoFix", "autoMerge"] as const) {
+      expect(message(option)).not.toContain(JSON.stringify(target.sessionId));
+      expect(message(option)).toContain("A conversation reset does not change the selected PR");
     }
     expect(message("autoFix")).toContain("must not merge or close the PR");
     const merge = message("autoMerge");
     expect(merge).toContain("must not fix code or comments");
     expect(merge).toContain("A passing CI rollup alone is not readiness");
+    expect(merge).toContain("neither authorize merging them nor block this PR");
     const archive = message("autoArchive");
+    expect(archive).toContain(JSON.stringify(target.sessionId));
+    expect(archive).toContain("never archive the replacement");
     expect(archive).toContain("expectedSessionId set to the captured sessionId above");
     expect(archive).toContain(
       "If a repair or other work is active, defer rather than interrupt it",

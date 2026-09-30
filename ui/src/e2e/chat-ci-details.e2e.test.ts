@@ -276,7 +276,7 @@ describe("chat CI job and step details", () => {
     await server?.close();
   });
 
-  it("saves exact-session automation toggles and reconciles an uncertain write", async () => {
+  it("saves selected-PR automation toggles and reconciles an uncertain write", async () => {
     const fix = automationJob("autoFix");
     const merge = automationJob("autoMerge", false);
     const { page, gateway, publish } = await setup({ automationJobs: [fix, merge] });
@@ -338,6 +338,55 @@ describe("chat CI job and step details", () => {
     await expect.poll(() => autoArchive.isEnabled()).toBe(true);
     expect(await autoArchive.isChecked()).toBe(true);
     expect(await autoFix.isChecked()).toBe(false);
+  });
+
+  it("creates auto-merge only for the PR whose popup was opened", async () => {
+    const { page, gateway, sessionKey } = await setup();
+    const other = {
+      ...pullRequest,
+      number: 123457,
+      url: "https://github.com/openclaw/openclaw/pull/123457",
+    };
+    await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
+      sessions: {
+        [sessionKey]: { pullRequests: [other, pullRequest], rateLimited: false, status: "ready" },
+      },
+    });
+    const selected = page
+      .locator(".chat-pr")
+      .filter({ has: page.locator(`a.chat-pr__link[href="${pullRequest.url}"]`) });
+    await selected.locator(".chat-pr__checks-pill").click();
+    const toggle = selected.getByRole("checkbox", { name: "Auto-merge when ready" });
+    await expect.poll(() => toggle.isEnabled()).toBe(true);
+    await gateway.deferNext("cron.add");
+    await toggle.click();
+    const add = await gateway.waitForRequest("cron.add");
+    const merge = automationJob("autoMerge");
+    expect(add.params).toEqual(
+      ciAutomationJobSpec(
+        {
+          agentId: "main",
+          sessionKey,
+          sessionId: automationSessionId,
+          owner: pullRequest.owner,
+          repo: pullRequest.repo,
+          number: pullRequest.number,
+        },
+        "autoMerge",
+      ),
+    );
+    await gateway.setMethodResponse("cron.list", automationInventory([merge]));
+    await gateway.resolveDeferred("cron.add", { job: merge });
+    await expect.poll(() => toggle.isChecked()).toBe(true);
+    await page.keyboard.press("Escape");
+    const unselected = page
+      .locator(".chat-pr")
+      .filter({ has: page.locator(`a.chat-pr__link[href="${other.url}"]`) });
+    await unselected.locator(".chat-pr__checks-pill").click();
+    const otherToggle = unselected.getByRole("checkbox", { name: "Auto-merge when ready" });
+    await expect.poll(() => otherToggle.isEnabled()).toBe(true);
+    expect(await otherToggle.isChecked()).toBe(false);
+    expect(await gateway.getRequests("cron.add")).toHaveLength(1);
   });
 
   it("shows stored automation state without checks and enforces read-only access", async () => {

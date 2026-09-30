@@ -3,7 +3,7 @@ import type { CronJob, CronJobsListResult } from "../api/types.ts";
 import { assertCanonicalCronJobsCursor, readCanonicalCronJobsPage } from "./cron/jobs.ts";
 import {
   CI_AUTOMATION_OPTIONS,
-  ciAutomationDeclarationPrefix,
+  ciAutomationDeclarationKey,
   ciAutomationJobMatches,
   ciAutomationJobSpec,
   type CiAutomationOption,
@@ -19,7 +19,10 @@ export async function loadCiAutomationJobs(
   signal: AbortSignal,
 ): Promise<CiAutomationJobs> {
   const jobs: CiAutomationJobs = {};
-  const prefix = ciAutomationDeclarationPrefix(target);
+  const declarations = CI_AUTOMATION_OPTIONS.map((option) => ({
+    option,
+    key: ciAutomationDeclarationKey(target, option),
+  }));
   let offset = 0;
   let revision: string | undefined;
   do {
@@ -42,11 +45,12 @@ export async function loadCiAutomationJobs(
     }
     revision = page.snapshotRevision;
     for (const job of page.jobs) {
-      if (!job.declarationKey?.startsWith(prefix)) {
+      const declaration = declarations.find(({ key }) => job.declarationKey === key);
+      if (!declaration) {
         continue;
       }
-      const option = CI_AUTOMATION_OPTIONS.find((key) => job.declarationKey === prefix + key);
-      if (!option || !ciAutomationJobMatches(job, target, option) || jobs[option]) {
+      const { option } = declaration;
+      if (!ciAutomationJobMatches(job, target, option) || jobs[option]) {
         throw new Error(
           "This CI automation was changed. Review it in Automations before continuing.",
         );
