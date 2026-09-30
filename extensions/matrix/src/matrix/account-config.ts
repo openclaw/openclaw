@@ -114,6 +114,7 @@ export function resolveMatrixAccountConfig(params: {
 }): MatrixConfig {
   const accountId = normalizeAccountId(params.accountId);
   const base = resolveMatrixBaseConfig(params.cfg);
+  const accountConfig = findMatrixAccountConfig(params.cfg, accountId);
   const merged = resolveMergedAccountConfig<MatrixConfig>({
     channelConfig: base,
     accounts: params.cfg.channels?.matrix?.accounts as
@@ -121,9 +122,27 @@ export function resolveMatrixAccountConfig(params: {
       | undefined,
     accountId,
     normalizeAccountId,
-    nestedObjectKeys: ["dm", "actions", "execApprovals", "botLoopProtection"],
+    // Existing account streaming objects replace channel defaults. Only the new
+    // account room map opts into inheriting defaults for room-only overrides.
+    nestedObjectKeys: [
+      "dm",
+      "actions",
+      "execApprovals",
+      "botLoopProtection",
+      ...(accountConfig?.streaming?.rooms !== undefined ? ["streaming"] : []),
+    ],
   });
-  const accountConfig = findMatrixAccountConfig(params.cfg, accountId);
+  const streamingRooms = {
+    ...base.streaming?.rooms,
+  };
+  for (const [roomId, entry] of Object.entries(accountConfig?.streaming?.rooms ?? {})) {
+    const inherited = streamingRooms[roomId];
+    streamingRooms[roomId] = {
+      ...inherited,
+      ...entry,
+      ...(entry.progress ? { progress: { ...inherited?.progress, ...entry.progress } } : {}),
+    };
+  }
   const groups = mergeMatrixRoomEntries(
     selectInheritedMatrixRoomEntries({
       entries: base.groups,
@@ -144,6 +163,9 @@ export function resolveMatrixAccountConfig(params: {
   const { groups: _ignoredGroups, rooms: _ignoredRooms, ...rest } = merged;
   return {
     ...rest,
+    ...(Object.keys(streamingRooms).length > 0
+      ? { streaming: { ...merged.streaming, rooms: streamingRooms } }
+      : {}),
     ...(groups ? { groups } : {}),
     ...(rooms ? { rooms } : {}),
   };

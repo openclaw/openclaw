@@ -51,6 +51,23 @@ describe("Matrix group policy", () => {
     expect(resolveMatrixGroupToolPolicy(params)).toBeUndefined();
   });
 
+  it("preserves wildcard tool denial in a room with a streaming override", () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          groups: { "*": { tools: { deny: ["exec"] } } },
+          streaming: {
+            mode: "progress" as const,
+            rooms: { "!room:example.org": { mode: "off" as const } },
+          },
+        },
+      },
+    };
+    expect(resolveMatrixGroupToolPolicy({ cfg, groupId: "!room:example.org" })).toEqual({
+      deny: ["exec"],
+    });
+  });
+
   it("projects autoReply ahead of requireMention", () => {
     const cfg = {
       channels: {

@@ -4,11 +4,8 @@ import type {
   OpenClawConfig,
 } from "openclaw/plugin-sdk/config-contracts";
 import type { z } from "zod";
-import type {
-  matrixRoomSchema,
-  matrixStreamingSchema,
-  MatrixConfigSchema,
-} from "./config-schema.js";
+import type { matrixRoomSchema, MatrixConfigSchema } from "./config-schema.js";
+import type { matrixStreamingSchema } from "./streaming-schema.js";
 
 type MatrixConfigSchemaValue = z.infer<typeof MatrixConfigSchema>;
 

@@ -3,7 +3,8 @@ import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { normalizeCompatibilityConfig } from "./doctor-contract.js";
+import { legacyConfigRules, normalizeCompatibilityConfig } from "../config-doctor-api.js";
+import { MatrixConfigSchema } from "./config-schema.js";
 import { cleanStaleMatrixPluginConfig, collectMatrixInstallPathWarnings } from "./doctor.js";
 
 describe("matrix doctor", () => {
@@ -369,5 +370,164 @@ describe("matrix doctor streaming alias migration", () => {
     const second = normalizeCompatibilityConfig({ cfg: first.config });
     expect(second.changes).toEqual([]);
     expect(second.config).toBe(first.config);
+  });
+});
+
+describe("matrix doctor account streaming upgrade", () => {
+  it.each([
+    { preview: { toolProgress: false } },
+    { progress: { commentary: true } },
+    { rooms: { "!kept:example.org": { mode: "off" } } },
+    { rooms: { "!kept:example.org": { progress: { commentary: false } } } },
+  ])("leaves valid mode-less account streaming unchanged: %j", (streaming) => {
+    const cfg = {
+      channels: {
+        matrix: { streaming: { mode: "progress" }, accounts: { work: { streaming } } },
+      },
+    };
+    expect(MatrixConfigSchema.safeParse(cfg.channels.matrix).success).toBe(true);
+    const result = normalizeCompatibilityConfig({ cfg: cfg as never });
+    expect(result.changes).toEqual([]);
+    expect(result.config).toBe(cfg);
+  });
+
+  it.each([
+    { rooms: { "*": { mode: "off" } } },
+    { unsupportedOption: true, rooms: { "!kept:example.org": { mode: "partial" } } },
+  ])("preserves missing-mode off fallback while repairing account streaming: %j", (legacy) => {
+    const cfg = {
+      channels: {
+        matrix: {
+          streaming: { mode: "progress" },
+          accounts: { work: { streaming: { preview: { toolProgress: false }, ...legacy } } },
+        },
+      },
+    };
+    const result = normalizeCompatibilityConfig({ cfg: cfg as never });
+    const streaming = result.config.channels?.matrix?.accounts?.work?.streaming;
+    expect(streaming).toEqual({
+      mode: "off",
+      preview: { toolProgress: false },
+      rooms: "unsupportedOption" in legacy ? { "!kept:example.org": { mode: "partial" } } : {},
+    });
+    expect(MatrixConfigSchema.safeParse(result.config.channels?.matrix).success).toBe(true);
+    expect(normalizeCompatibilityConfig({ cfg: result.config }).changes).toEqual([]);
+  });
+
+  it("repairs formerly accepted account settings through the registered config contract", () => {
+    const room = "!kept:example.org";
+    const cfg = {
+      channels: {
+        matrix: {
+          streaming: { mode: "progress", rooms: { [room]: { mode: "off" } } },
+          accounts: {
+            work: {
+              accessToken: "test-token",
+              unrelatedOption: true,
+              groups: { "*": { tools: { deny: ["message"] } } },
+              streaming: {
+                mode: "quiet",
+                unsupportedOption: true,
+                preview: { toolProgress: false, ignoredOption: true },
+                rooms: {
+                  "*": { mode: "off" },
+                  "#alias:example.org": { mode: "off" },
+                  [room]: { mode: "partial", ignoredOption: true },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+    const before = structuredClone(cfg);
+    expect(MatrixConfigSchema.safeParse(cfg.channels.matrix).success).toBe(false);
+    expect(
+      legacyConfigRules.some(
+        (rule) =>
+          rule.path.join(".") === "channels.matrix.accounts" &&
+          rule.match?.(cfg.channels.matrix.accounts),
+      ),
+    ).toBe(true);
+    const result = normalizeCompatibilityConfig({ cfg: cfg as never });
+    const matrix = result.config.channels?.matrix;
+    expect(MatrixConfigSchema.safeParse(matrix).success).toBe(true);
+    expect(matrix?.accounts?.work).toEqual({
+      ...before.channels.matrix.accounts.work,
+      streaming: {
+        mode: "quiet",
+        preview: { toolProgress: false },
+        rooms: { [room]: { mode: "partial" } },
+      },
+    });
+    expect(matrix?.streaming).toEqual(before.channels.matrix.streaming);
+    expect(cfg).toEqual(before);
+    expect(result.changes.join("\n")).toContain("accounts.work.streaming.unsupportedOption");
+    const second = normalizeCompatibilityConfig({ cfg: result.config });
+    expect(second.changes).toEqual([]);
+    expect(second.config).toBe(result.config);
+  });
+
+  it("retains supported commentary while pruning invalid commentary leaves", () => {
+    const result = normalizeCompatibilityConfig({
+      cfg: {
+        channels: {
+          matrix: {
+            accounts: {
+              work: {
+                streaming: {
+                  progress: { commentary: true },
+                  rooms: {
+                    "!kept:example.org": { mode: "progress", progress: { commentary: false } },
+                    "!invalid:example.org": { mode: "off", progress: { commentary: "false" } },
+                  },
+                },
+              },
+            },
+          },
+        },
+      } as never,
+    });
+    expect(result.config.channels?.matrix?.accounts?.work?.streaming).toEqual({
+      mode: "off",
+      progress: { commentary: true },
+      rooms: {
+        "!kept:example.org": { mode: "progress", progress: { commentary: false } },
+        "!invalid:example.org": { mode: "off", progress: {} },
+      },
+    });
+    expect(MatrixConfigSchema.safeParse(result.config.channels?.matrix).success).toBe(true);
+    expect(normalizeCompatibilityConfig({ cfg: result.config }).changes).toEqual([]);
+  });
+
+  it("keeps valid nested leaves and the prior off fallback when account values are invalid", () => {
+    const result = normalizeCompatibilityConfig({
+      cfg: {
+        channels: {
+          matrix: {
+            streaming: { mode: "progress" },
+            accounts: {
+              work: {
+                streaming: {
+                  mode: "unsupported",
+                  block: { enabled: true, coalesce: { minChars: -1, maxChars: 500 } },
+                  progress: { maxLines: 0, labels: ["kept", 42], toolProgress: false },
+                  preview: "invalid",
+                  rooms: { "!invalid-mode:example.org": { mode: "unsupported" } },
+                },
+              },
+            },
+          },
+        },
+      } as never,
+    });
+    const matrix = result.config.channels?.matrix;
+    expect(MatrixConfigSchema.safeParse(matrix).success).toBe(true);
+    expect(matrix?.accounts?.work?.streaming).toEqual({
+      mode: "off",
+      block: { enabled: true, coalesce: { maxChars: 500 } },
+      progress: { labels: ["kept"], toolProgress: false },
+      rooms: {},
+    });
   });
 });

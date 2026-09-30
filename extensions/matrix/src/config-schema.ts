@@ -1,6 +1,5 @@
 import {
   AllowFromListSchema,
-  BlockStreamingCoalesceSchema,
   buildChannelConfigSchema,
   buildGroupEntrySchema,
   buildNestedDmConfigSchema,
@@ -12,6 +11,7 @@ import {
 import { buildSecretInputSchema } from "openclaw/plugin-sdk/secret-input";
 import { z } from "zod";
 import { matrixChannelConfigUiHints } from "./config-ui-hints.js";
+import { matrixStreamingSchema, retiredMatrixStreamingMessage } from "./streaming-schema.js";
 
 const matrixActionSchema = z
   .object({
@@ -74,37 +74,6 @@ const matrixNetworkSchema = z
   .strict()
   .optional();
 
-export const matrixStreamingSchema = z
-  .object({
-    mode: z.enum(["partial", "quiet", "progress", "off"]).optional(),
-    chunkMode: z.enum(["length", "newline"]).optional(),
-    block: z
-      .object({
-        enabled: z.boolean().optional(),
-        coalesce: BlockStreamingCoalesceSchema.optional(),
-      })
-      .strict()
-      .optional(),
-    progress: z
-      .object({
-        label: z.union([z.string(), z.literal(false)]).optional(),
-        labels: z.array(z.string()).optional(),
-        maxLines: z.number().int().positive().optional(),
-        maxLineChars: z.number().int().positive().optional(),
-        toolProgress: z.boolean().optional(),
-        commandText: z.enum(["raw", "status"]).optional(),
-      })
-      .strict()
-      .optional(),
-    preview: z
-      .object({
-        toolProgress: z.boolean().optional(),
-      })
-      .strict()
-      .optional(),
-  })
-  .strict();
-
 const retiredMatrixAccountStreamingKeys = [
   "streamMode",
   "chunkMode",
@@ -113,18 +82,11 @@ const retiredMatrixAccountStreamingKeys = [
   "draftChunk",
 ] as const;
 
-function hasCanonicalMatrixAccountStreaming(account: unknown): boolean {
+function hasNoRetiredMatrixAccountStreamingKeys(account: unknown): boolean {
   if (typeof account !== "object" || account === null || Array.isArray(account)) {
     return true;
   }
-  if (retiredMatrixAccountStreamingKeys.some((key) => Object.hasOwn(account, key))) {
-    return false;
-  }
-  if (!Object.hasOwn(account, "streaming")) {
-    return true;
-  }
-  const streaming = (account as { streaming?: unknown }).streaming;
-  return typeof streaming === "object" && streaming !== null && !Array.isArray(streaming);
+  return !retiredMatrixAccountStreamingKeys.some((key) => Object.hasOwn(account, key));
 }
 
 export const MatrixConfigSchema = z.object({
@@ -144,11 +106,11 @@ export const MatrixConfigSchema = z.object({
           requireMentionInBotThreads: z.boolean().optional(),
           accessToken: buildSecretInputSchema().optional(),
           password: buildSecretInputSchema().optional(),
+          streaming: matrixStreamingSchema.optional(),
         })
         .passthrough()
-        .refine(hasCanonicalMatrixAccountStreaming, {
-          message:
-            'flat or scalar streaming values are no longer supported; use streaming.* and run "openclaw doctor --fix"',
+        .refine(hasNoRetiredMatrixAccountStreamingKeys, {
+          message: retiredMatrixStreamingMessage,
         }),
     )
     .optional(),

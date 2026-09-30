@@ -9,6 +9,7 @@ import {
   resolveMatrixAccount,
 } from "./accounts.js";
 import type { MatrixStoredCredentials } from "./credentials-state.js";
+import { resolveMatrixStreamingMode } from "./monitor/streaming.js";
 
 const loadMatrixCredentialsMock = vi.hoisted(() =>
   vi.fn<(env?: NodeJS.ProcessEnv, accountId?: string | null) => MatrixStoredCredentials | null>(
@@ -160,6 +161,97 @@ function configWithMatrix(matrix: MatrixConfig): CoreConfig {
 }
 
 describe("resolveMatrixAccount", () => {
+  it.each([
+    {},
+    { preview: { toolProgress: false } },
+    { block: { enabled: true } },
+    { progress: { commentary: true } },
+    { mode: "quiet" as const, preview: { toolProgress: false } },
+  ])("preserves account streaming replacement without an account room map: %j", (streaming) => {
+    const channelRooms = { "!channel:example.org": { mode: "partial" as const } };
+    const cfg: CoreConfig = {
+      channels: {
+        matrix: {
+          streaming: {
+            mode: "progress",
+            preview: { toolProgress: true },
+            block: { enabled: false },
+            rooms: channelRooms,
+          },
+          accounts: { work: { streaming } },
+        },
+      },
+    };
+    const resolved = resolveMatrixAccount({ cfg, accountId: "work" }).config.streaming;
+    expect(resolved).toEqual({ ...streaming, rooms: channelRooms });
+    expect(resolveMatrixStreamingMode(resolved)).toBe(resolveMatrixStreamingMode(streaming));
+    delete cfg.channels!.matrix!.streaming!.rooms;
+    expect(resolveMatrixAccount({ cfg, accountId: "work" }).config.streaming).toEqual(streaming);
+  });
+
+  it("keeps channel streaming defaults when an account adds only a room override", () => {
+    const cfg: CoreConfig = {
+      channels: {
+        matrix: {
+          streaming: { mode: "progress", preview: { toolProgress: false } },
+          accounts: { work: { streaming: { rooms: { "!room:example.org": { mode: "off" } } } } },
+        },
+      },
+    };
+    expect(resolveMatrixAccount({ cfg, accountId: "work" }).config.streaming).toEqual({
+      mode: "progress",
+      preview: { toolProgress: false },
+      rooms: { "!room:example.org": { mode: "off" } },
+    });
+  });
+
+  it("inherits channel room streaming overrides with account defaults and room overrides", () => {
+    const cfg: CoreConfig = {
+      channels: {
+        matrix: {
+          streaming: {
+            mode: "progress",
+            rooms: {
+              "!base:example.org": { mode: "off" },
+              "!shared:example.org": { mode: "partial" },
+            },
+          },
+          accounts: {
+            work: {
+              streaming: { mode: "quiet", rooms: { "!shared:example.org": { mode: "off" } } },
+            },
+          },
+        },
+      },
+    };
+    expect(resolveMatrixAccount({ cfg, accountId: "work" }).config.streaming).toEqual({
+      mode: "quiet",
+      rooms: { "!base:example.org": { mode: "off" }, "!shared:example.org": { mode: "off" } },
+    });
+  });
+
+  it.each([{ progress: { commentary: true } }, { mode: "quiet" as const }, {}])(
+    "merges account room leaves without erasing inherited delivery settings: %j",
+    (override) => {
+      const cfg: CoreConfig = {
+        channels: {
+          matrix: {
+            streaming: {
+              mode: "progress",
+              rooms: {
+                "!room:example.org": { mode: "off", progress: { commentary: false } },
+              },
+            },
+            accounts: { work: { streaming: { rooms: { "!room:example.org": override } } } },
+          },
+        },
+      };
+      expect(resolveMatrixAccount({ cfg, accountId: "work" }).config.streaming?.rooms).toEqual({
+        "!room:example.org": { mode: "off", progress: { commentary: false }, ...override },
+      });
+    },
+  );
+
   let prevEnv: Record<string, string | undefined> = {};
 
   beforeEach(() => {

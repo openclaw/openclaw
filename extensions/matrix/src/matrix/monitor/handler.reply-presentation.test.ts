@@ -2,7 +2,7 @@ import { shouldAckReaction } from "openclaw/plugin-sdk/channel-feedback";
 import { createTypingCallbacks } from "openclaw/plugin-sdk/channel-outbound";
 // Matrix tests cover the handler's reply presentation wiring.
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import type { GetReplyOptions, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { prepareMatrixReplyPayload } from "../../outbound.js";
 import { installMatrixMonitorTestRuntime } from "../../test-runtime.js";
@@ -20,7 +20,7 @@ const sendMessageMatrixMock = vi.hoisted(() =>
 );
 const editMessageMatrixMock = vi.hoisted(() => vi.fn(async () => "$edited"));
 const sendSingleTextMessageMatrixMock = vi.hoisted(() =>
-  vi.fn(async () => ({ messageId: "$draft1", roomId: "!room" })),
+  vi.fn(async (..._args: unknown[]) => ({ messageId: "$draft1", roomId: "!room" })),
 );
 const reactMatrixMessageMock = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => {}));
 
@@ -245,6 +245,231 @@ describe("matrix monitor handler reply presentation", () => {
       draftController.cancelProgressDraft();
       typingCallbacks.onCleanup?.();
       finalizeLive.mockRestore();
+    }
+  });
+
+  it("does not admit an allowlist room with only a streaming override", async () => {
+    const dispatchInboundMessage = vi.fn();
+    const { handler } = createMatrixHandlerTestHarness({
+      accountConfig: {
+        streaming: { mode: "off", rooms: { "!denied:example.org": { mode: "progress" } } },
+      },
+      groupPolicy: "allowlist",
+      isDirectMessage: false,
+      roomsConfig: { "!allowed:example.org": { requireMention: false } },
+      dispatchInboundMessage,
+    });
+    await handler(
+      "!denied:example.org",
+      createMatrixTextMessageEvent({ eventId: "$denied", body: "hello" }),
+    );
+    expect(dispatchInboundMessage).not.toHaveBeenCalled();
+    expect(sendSingleTextMessageMatrixMock).not.toHaveBeenCalled();
+    expect(sendMessageMatrixMock).not.toHaveBeenCalled();
+    expect(reactMatrixMessageMock).not.toHaveBeenCalled();
+    expect(deliverMatrixRepliesMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      mode: "progress",
+      commentary: false,
+      roomCommentary: true,
+      roomId: "!override:example.org",
+      expected: true,
+    },
+    {
+      mode: "progress",
+      commentary: true,
+      roomCommentary: false,
+      roomId: "!override:example.org",
+      expected: false,
+    },
+    {
+      mode: "progress",
+      commentary: false,
+      roomCommentary: true,
+      roomId: "!other:example.org",
+      expected: false,
+    },
+    {
+      mode: "progress",
+      commentary: true,
+      roomCommentary: undefined,
+      roomId: "!override:example.org",
+      expected: true,
+    },
+    {
+      mode: "partial",
+      commentary: true,
+      roomCommentary: true,
+      roomId: "!override:example.org",
+      expected: false,
+    },
+    {
+      mode: "off",
+      commentary: true,
+      roomCommentary: true,
+      roomId: "!override:example.org",
+      expected: undefined,
+    },
+  ] as const)(
+    "routes effective room commentary to the real draft: %j",
+    async ({ mode, commentary, roomCommentary, roomId, expected }) => {
+      const captured = createDeferred<GetReplyOptions>();
+      const runGate = createDeferred<void>();
+      const { handler } = createMatrixHandlerTestHarness({
+        accountConfig: {
+          streaming: {
+            mode,
+            progress: { commentary, label: false },
+            rooms: { "!override:example.org": { progress: { commentary: roomCommentary } } },
+          },
+        },
+        streaming: mode,
+        previewToolProgressEnabled: mode === "partial",
+        roomsConfig: { "*": { requireMention: false } },
+        dispatchInboundMessage: vi.fn(async (args: { replyOptions?: GetReplyOptions }) => {
+          captured.resolve(args.replyOptions ?? {});
+          await runGate.promise;
+          return { queuedFinal: true, counts: { final: 1, block: 0, tool: 0 } };
+        }) as never,
+      });
+      const handlerDone = handler(
+        roomId,
+        createMatrixTextMessageEvent({ eventId: "$commentary", body: "hello" }),
+      );
+      try {
+        const options = await captured.promise;
+        expect(options.commentaryProgressEnabled).toBe(expected);
+        if (mode === "progress") {
+          await options.onItemEvent?.({
+            itemId: "preamble-1",
+            kind: "preamble",
+            phase: "end",
+            progressText: "COMMENTARY-ROOM-PROOF",
+          });
+          if (!expected) {
+            await options.onPlanUpdate?.({
+              phase: "update",
+              steps: [{ step: "Read-only proof", status: "in_progress" }],
+            });
+          }
+          const body = sendSingleTextMessageMatrixMock.mock.calls.at(-1)?.[1] as string;
+          expect(body).toContain("COMMENTARY-ROOM-PROOF");
+          expect(body.includes("_COMMENTARY-ROOM-PROOF_")).toBe(expected);
+        }
+      } finally {
+        runGate.resolve();
+        await handlerDone;
+      }
+    },
+  );
+
+  it.each([
+    {
+      name: "disables account previews in an overridden room",
+      accountMode: "partial",
+      roomMode: "off",
+      roomId: "!override:example.org",
+      isDirectMessage: false,
+      expectedMode: "off",
+    },
+    {
+      name: "keeps account previews in another room",
+      accountMode: "partial",
+      roomMode: "off",
+      roomId: "!other:example.org",
+      isDirectMessage: false,
+      expectedMode: "partial",
+    },
+    {
+      name: "enables quiet previews in an overridden room",
+      accountMode: "off",
+      roomMode: "quiet",
+      roomId: "!override:example.org",
+      isDirectMessage: false,
+      expectedMode: "quiet",
+    },
+    {
+      name: "keeps final-only delivery in another room",
+      accountMode: "off",
+      roomMode: "quiet",
+      roomId: "!other:example.org",
+      isDirectMessage: false,
+      expectedMode: "off",
+    },
+    {
+      name: "uses an exact DM room override",
+      accountMode: "off",
+      roomMode: "quiet",
+      roomId: "!override:example.org",
+      isDirectMessage: true,
+      expectedMode: "quiet",
+    },
+    {
+      name: "disables account progress drafts in an overridden room",
+      accountMode: "progress",
+      roomMode: "off",
+      roomId: "!override:example.org",
+      isDirectMessage: false,
+      expectedMode: "off",
+    },
+    {
+      name: "enables progress drafts in an overridden room",
+      accountMode: "off",
+      roomMode: "progress",
+      roomId: "!override:example.org",
+      isDirectMessage: false,
+      expectedMode: "progress",
+    },
+  ] as const)("$name", async ({ accountMode, roomMode, roomId, isDirectMessage, expectedMode }) => {
+    const captured = createDeferred<GetReplyOptions>();
+    const runGate = createDeferred<void>();
+    const { handler } = createMatrixHandlerTestHarness({
+      accountConfig: {
+        streaming: { mode: accountMode, rooms: { "!override:example.org": { mode: roomMode } } },
+      },
+      streaming: accountMode,
+      previewToolProgressEnabled: accountMode === "partial",
+      roomsConfig: {
+        "*": { requireMention: false },
+      },
+      isDirectMessage,
+      dispatchInboundMessage: vi.fn(async (args: { replyOptions?: GetReplyOptions }) => {
+        captured.resolve(args.replyOptions ?? {});
+        await runGate.promise;
+        return { queuedFinal: true, counts: { final: 1, block: 0, tool: 0 } };
+      }) as never,
+    });
+    const handlerDone = handler(
+      roomId,
+      createMatrixTextMessageEvent({ eventId: "$room-mode", body: "hello" }),
+    );
+    try {
+      const replyOptions = await captured.promise;
+      if (expectedMode === "off") {
+        expect(replyOptions.onPartialReply).toBeUndefined();
+        expect(replyOptions.onPlanUpdate).toBeUndefined();
+        expect(replyOptions.onToolStart).toBeUndefined();
+        expect(sendSingleTextMessageMatrixMock).not.toHaveBeenCalled();
+      } else if (expectedMode === "progress") {
+        expect(replyOptions.onPlanUpdate).toBeTypeOf("function");
+        expect(replyOptions.onToolStart).toBeTypeOf("function");
+      } else {
+        const sent = createDeferred<string>();
+        sendSingleTextMessageMatrixMock.mockImplementationOnce(async (...args: unknown[]) => {
+          sent.resolve(args[0] as string);
+          return { messageId: "$draft1", roomId };
+        });
+        expect(replyOptions.onPartialReply).toBeTypeOf("function");
+        expect(replyOptions.onToolStart).toBeTypeOf("function");
+        await replyOptions.onPartialReply?.({ text: "Interim answer" });
+        expect(await sent.promise).toBe(roomId);
+      }
+    } finally {
+      runGate.resolve();
+      await handlerDone;
     }
   });
 });

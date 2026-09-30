@@ -22,12 +22,7 @@ import {
   resolveThreadBindingMaxAgeMsForChannel,
 } from "openclaw/plugin-sdk/thread-bindings-runtime";
 import { getMatrixRuntime } from "../../runtime.js";
-import type {
-  CoreConfig,
-  MatrixStreamingConfig,
-  MatrixStreamingMode,
-  ReplyToMode,
-} from "../../types.js";
+import type { CoreConfig, ReplyToMode } from "../../types.js";
 import { resolveMatrixAccountConfig } from "../account-config.js";
 import { resolveConfiguredMatrixBotUserIds } from "../accounts.js";
 import {
@@ -56,6 +51,10 @@ import { createMatrixRoomInfoResolver } from "./room-info.js";
 import { resolveMatrixRoomConfig } from "./rooms.js";
 import { runMatrixStartupMaintenance } from "./startup.js";
 import { createMatrixMonitorStatusController } from "./status.js";
+import {
+  resolveMatrixPreviewToolProgressEnabled,
+  resolveMatrixStreamingMode,
+} from "./streaming.js";
 import { createMatrixMonitorSyncLifecycle } from "./sync-lifecycle.js";
 import { createMatrixMonitorTaskRunner, getMatrixMonitorTaskSignal } from "./task-runner.js";
 
@@ -69,28 +68,6 @@ type MonitorMatrixOpts = {
   accountId?: string | null;
   setStatus?: (next: import("openclaw/plugin-sdk/channel-contract").ChannelAccountSnapshot) => void;
 };
-
-type MatrixStreamingInput = MatrixStreamingConfig | undefined;
-
-function resolveMatrixStreamingMode(streaming: MatrixStreamingInput): MatrixStreamingMode {
-  const mode = streaming?.mode;
-  if (mode === "partial" || mode === "quiet" || mode === "progress") {
-    return mode;
-  }
-  return "off";
-}
-
-function resolveMatrixPreviewToolProgressEnabled(streaming: MatrixStreamingInput): boolean {
-  const mode = resolveMatrixStreamingMode(streaming);
-  if (mode === "off") {
-    return false;
-  }
-  if (mode === "progress") {
-    // Progress drafts are quiet unless the operator opts into the tool log.
-    return streaming?.progress?.toolProgress ?? streaming?.preview?.toolProgress ?? false;
-  }
-  return streaming?.preview?.toolProgress ?? true;
-}
 
 const DEFAULT_MEDIA_MAX_MB = 20;
 

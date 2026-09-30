@@ -23,6 +23,32 @@ Matrix reply streaming is opt-in. `streaming.mode` controls how OpenClaw deliver
 }
 ```
 
+To change the mode or commentary lane for selected rooms, use `channels.matrix.streaming.rooms.<roomId>`. Other rooms keep the channel or account settings:
+
+```json5
+{
+  channels: {
+    matrix: {
+      streaming: {
+        mode: "progress",
+        progress: { commentary: true },
+        rooms: {
+          "!quiet:example.org": { mode: "off" },
+          "!live:example.org": { mode: "partial" },
+          "!status:example.org": { progress: { commentary: false } },
+        },
+      },
+    },
+  },
+}
+```
+
+Each room supports `mode` and `progress.commentary`; other progress options, `streaming.preview`, and `streaming.block` still come from the channel or account. Overrides use exact, case-sensitive room IDs for both group rooms and DMs. Account-level `streaming.rooms` entries merge with channel entries for the same room, with account values winning for each setting. A commentary-only account room override therefore preserves the channel's room mode. An empty room entry inherits its settings. These delivery settings do not admit rooms or replace wildcard tool restrictions: configure room access separately in `groups` or `rooms`.
+
+An account's `streaming` object without its own `rooms` map retains the existing replacement behavior: it replaces channel streaming defaults, and an omitted mode stays `off`. An account that supplies `streaming.rooms` inherits unspecified channel streaming defaults, so a room-only override retains the channel mode elsewhere. Channel room entries apply in either case, with account room entries taking precedence.
+
+Channel and account streaming settings use the same validation. Doctor and the updater recognize an account's previously accepted unsupported streaming values. Run `openclaw doctor --fix` to repair them with the normal configuration backup: supported nested settings and literal room overrides are retained, unknown or invalid leaves and wildcard/alias streaming keys are removed, and a missing or invalid account mode in a repaired object keeps its prior `off` fallback. Valid account streaming objects are not rewritten. Access-policy wildcards in `groups` or `rooms` are separate and remain unchanged. Run `openclaw config validate` before restarting the gateway. To assign an override removed during repair, add the intended literal room ID under `streaming.rooms` with `off`, `partial`, `quiet`, or `progress`.
+
 To keep live answer previews but hide interim tool/progress lines:
 
 ```json5
@@ -40,7 +66,7 @@ To keep live answer previews but hide interim tool/progress lines:
 }
 ```
 
-The full config accepts `{ mode, chunkMode, block, preview, progress }`:
+The full config accepts `{ mode, rooms, chunkMode, block, preview, progress }`:
 
 ```json5
 {
@@ -54,6 +80,7 @@ The full config accepts `{ mode, chunkMode, block, preview, progress }`:
           maxLines: 8, // max rolling progress lines (default: 8)
           maxLineChars: 120, // max chars per line before truncation (default: 120)
           toolProgress: true, // rolling tool log in the progress draft (default: false)
+          commentary: true, // interleaved model commentary (default: false)
         },
       },
     },
@@ -66,6 +93,7 @@ The full config accepts `{ mode, chunkMode, block, preview, progress }`:
 - `progress.maxLines`: max rolling progress lines kept in the draft; older lines are trimmed past this.
 - `progress.maxLineChars`: max characters per compact progress line before truncation.
 - `progress.toolProgress`: when `true`, live tool/progress activity, including tool failures, appears in the draft. The default `false` keeps the draft to its headline, commentary, plan milestones, and approval requests. Intermediate tool failures and nonzero command exits are hidden; terminal task errors still use normal error delivery.
+- `progress.commentary`: when `true`, completed model preambles appear as interleaved commentary lines in a `progress` draft. It defaults to `false` and also accepts an exact-room override at `streaming.rooms.<roomId>.progress.commentary`. With the lane disabled, a preamble can still supply the status headline; this setting does not suppress all commentary messages. It has no effect when the selected room mode is `off`, `partial`, or `quiet`.
 
 | `streaming.mode`  | Behavior                                                                                                                                                                                                                                                                                     |
 | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

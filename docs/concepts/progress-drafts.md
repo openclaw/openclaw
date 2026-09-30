@@ -283,6 +283,12 @@ pre-tool commentary/preamble narration (💬, for example "I'll check... then
 [Streaming and chunking](/concepts/streaming#commentary-progress-lane) for the
 shared config shape across channels.
 
+Matrix supports the channel/account toggle and an exact-room override at
+`channels.matrix.streaming.rooms.<roomId>.progress.commentary`. Omitted room
+values inherit the channel/account setting. See
+[Matrix message behavior](/channels/matrix/messaging) for account precedence and
+the distinction between the commentary lane and status headline.
+
 With the commentary lane enabled, preambles render only as those interleaved
 💬 lines; the status headline below stays out of the way so the lane keeps its
 documented shape.
@@ -426,7 +432,7 @@ remain available in the session transcript.
 | Channel         | Progress transport                     | Notes                                                                                                                                                     |
 | --------------- | -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Discord         | Send one message, then edit it.        | `progress` is explicit opt-in; the status draft is deleted after the final answer lands.                                                                  |
-| Matrix          | Send one event, then edit it.          | Account-level streaming config controls account-level drafts.                                                                                             |
+| Matrix          | Send one event, then edit it.          | Channel or account mode applies by default; `streaming.rooms.<roomId>.mode` can override it for one room.                                                 |
 | Microsoft Teams | Native Teams stream in personal chats. | `streaming.mode: "block"` maps to Teams block delivery instead.                                                                                           |
 | Slack           | Native stream or editable draft post.  | Card style is the default; `progress.style: "compact"` uses a temporary text draft, deleted after the final answer is delivered.                          |
 | Telegram        | Send one message, then edit it.        | If a message lands between the progress draft and the answer, the draft reposts below it (post-new-then-delete-old) instead of scroll-jumping the client. |
