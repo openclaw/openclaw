@@ -376,7 +376,7 @@ export type SubagentRegistryPostimageResult = {
   publication: SubagentRegistryPublication;
 };
 
-function replaceSubagentRunRecord(entry: SubagentRunRecord, value: SubagentRunRecord): void {
+export function replaceSubagentRunRecord(entry: SubagentRunRecord, value: SubagentRunRecord): void {
   for (const key of Object.keys(entry)) {
     Reflect.deleteProperty(entry, key);
   }

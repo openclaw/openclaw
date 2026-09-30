@@ -76,7 +76,7 @@ const persistedSubagentSessionListRunsReadCache: SubagentRunsCache<SubagentRunRe
 const persistedSubagentMaintenanceRunsReadCache: SubagentRunsCache<SubagentRunMaintenanceRecord> = {
   state: {},
   captureAdmission: captureSubagentFactsAdmission,
-  load: () => loadSubagentMaintenanceRunsFromSqlite(),
+  load: loadSubagentMaintenanceRunsFromSqlite,
   copy: projectSubagentRunForMaintenance,
   // Maintenance consumes live rows synchronously into keys; only published facts need copies.
   project: (entry) => entry,
@@ -563,14 +563,15 @@ export function getSubagentSessionListRunsSnapshotForRead(
   return getSubagentRunsSnapshot(inMemoryRuns, persistedSubagentSessionListRunsReadCache);
 }
 
-function getSubagentSessionTreeSnapshot<T extends SubagentRunReadRecord>(
+/** Exact rows share the owner snapshot while projecting only their complete requester trees. */
+export function getSubagentSessionListRunsSnapshotForSessions(
   inMemoryRuns: Map<string, SubagentRunRecord>,
   sessionKeys: readonly string[],
-  cache: SubagentRunsCache<T>,
-): Map<string, T> {
+): Map<string, SubagentRunReadRecord> {
   if (!sessionKeys.some((key) => key.trim())) {
     return new Map();
   }
+  const cache = persistedSubagentSessionListRunsReadCache;
   const cached = shouldReadPersistedSubagentRuns() ? getPersistedSubagentRunsSnapshot(cache) : null;
   const lookup = cached ? getSessionListLookup(cache, cached) : undefined;
   const indexed = lookup?.selectSessions(sessionKeys, inMemoryRuns.values());
@@ -590,18 +591,6 @@ function getSubagentSessionTreeSnapshot<T extends SubagentRunReadRecord>(
     },
     matches: (entry) => selected.has(entry.childSessionKey.trim()),
   });
-}
-
-/** Exact rows share the owner snapshot while projecting only their complete requester trees. */
-export function getSubagentSessionListRunsSnapshotForSessions(
-  inMemoryRuns: Map<string, SubagentRunRecord>,
-  sessionKeys: readonly string[],
-): Map<string, SubagentRunReadRecord> {
-  return getSubagentSessionTreeSnapshot(
-    inMemoryRuns,
-    sessionKeys,
-    persistedSubagentSessionListRunsReadCache,
-  );
 }
 
 export function getSubagentRunsSnapshotForController(
