@@ -16,6 +16,8 @@ const TRACKING_URL = /^https:\/\/github\.com\/openclaw\/openclaw\/(issues|pull)\
 const execFileAsync = promisify(execFile);
 
 export const RECORDED_FLAKE_DENIED_JOB_PATTERNS = Object.freeze([
+  // Policy-advisory windows-node-ci shards need no receipt or receipt lookup.
+  /^checks-windows-node-/u,
   /ci[- _/]gate/iu,
   /seal|evidence/iu,
   /build[- _]artifacts/iu,
@@ -400,9 +402,17 @@ export async function loadFlakeClassifications({
     id(parentRunId) && attempt(parentRunAttempt) && /^[a-f0-9]{40}$/u.test(targetSha),
     "loader requires exact parent and candidate bindings",
   );
+  // Receipts postdate their child run; scoping to its lifetime keeps unrelated history out of the bound.
+  const childRun = await api(`actions/runs/${child.runId}`, { signal });
+  requireValue(
+    String(childRun.id) === String(child.runId) &&
+      typeof childRun.created_at === "string" &&
+      /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/u.test(childRun.created_at),
+    "CI child run identity differs",
+  );
   const runs = await pages(
     api,
-    `actions/workflows/full-release-flake-classification.yml/runs?event=workflow_dispatch&branch=main&status=success`,
+    `actions/workflows/full-release-flake-classification.yml/runs?event=workflow_dispatch&branch=main&status=success&created=%3E%3D${childRun.created_at}`,
     "workflow_runs",
     signal,
   );

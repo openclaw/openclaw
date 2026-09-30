@@ -320,6 +320,36 @@ describe("authenticated FRV flake classification", () => {
   });
 });
 
+describe("receipt discovery scope", () => {
+  it("skips lookups for policy-advisory Windows shards and scopes discovery to the child run", async () => {
+    const windowsJob = { ...fixture().job, name: "checks-windows-node-3" };
+    const api = vi.fn<FlakeApi>(async (path) => {
+      if (path === "actions/runs/200") {
+        return { id: 200, created_at: "2026-09-29T10:00:00Z" };
+      }
+      return { total_count: 0, workflow_runs: [] };
+    });
+    const request = { api, parentRunId: "100", parentRunAttempt: 1, targetSha };
+    await expect(
+      loadFlakeClassifications({
+        ...request,
+        child: { key: "normalCi", runId: "200", jobs: [windowsJob] },
+      }),
+    ).resolves.toEqual({});
+    expect(api).not.toHaveBeenCalled();
+    await expect(
+      loadFlakeClassifications({
+        ...request,
+        child: { key: "normalCi", runId: "200", jobs: [fixture().job] },
+      }),
+    ).resolves.toEqual({});
+    expect(api.mock.calls.map(([path]) => path)).toEqual([
+      "actions/runs/200",
+      "actions/workflows/full-release-flake-classification.yml/runs?event=workflow_dispatch&branch=main&status=success&created=%3E%3D2026-09-29T10:00:00Z&per_page=100&page=1",
+    ]);
+  });
+});
+
 describe("CI gate receipt log", () => {
   it("parses only emitted entries and retains skipped, cancelled, and missing outcomes for policy rejection", () => {
     const entries = parseFlakeGateEntries(

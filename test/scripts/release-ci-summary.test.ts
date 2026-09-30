@@ -3837,7 +3837,13 @@ describe("release CI summary child correlation", () => {
         triggering_actor: { login: receipt.classifiedBy },
       };
       const api = vi.fn(async (path: string) => {
-        if (path.startsWith("actions/workflows/full-release-flake-classification.yml/runs?")) {
+        if (path === `actions/runs/${selected.runId}`) {
+          return { id: Number(selected.runId), created_at: "2026-09-29T10:00:00Z" };
+        }
+        if (
+          path.startsWith("actions/workflows/full-release-flake-classification.yml/runs?") &&
+          path.includes("&created=%3E%3D2026-09-29T10:00:00Z&")
+        ) {
           return { total_count: 1, workflow_runs: [producer] };
         }
         if (path === "actions/runs/890") {
