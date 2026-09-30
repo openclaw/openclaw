@@ -5,6 +5,7 @@ import { resetAgentRunRegistryForTest } from "../../infra/agent-run-registry.js"
 import { withInstallationTarget } from "../../infra/installation-target-context.js";
 import * as gatewayCliShim from "../../infra/openclaw-cli-shim.js";
 import { createAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
+import * as localGitHub from "../github-local-environment.js";
 import { createAdmittedHostCapabilityTestFixture } from "./host-capability.test-support.js";
 
 afterEach(() => {
@@ -69,6 +70,38 @@ describe("prepared harness tool environment", () => {
     } finally {
       host.closeHost();
       host.closeAdmission();
+    }
+  });
+
+  it("binds local GitHub preparation to the exact admitted host lifetime", async () => {
+    const prepare = vi
+      .spyOn(localGitHub, "prepareLocalGitHubEnvironment")
+      .mockImplementation(async (params) => {
+        params.assertCurrent();
+        return undefined;
+      });
+    const host = await createAdmittedHostCapabilityTestFixture({
+      runId: "local-github",
+      agentId: "main",
+      sessionKey: "agent:main:local-github",
+      config: {},
+    });
+    try {
+      const request = { assertCurrent: vi.fn(), signal: new AbortController().signal };
+      await host.hostCapabilities.prepareLocalCommandEnvironment?.(request);
+      const captured = prepare.mock.calls[0]![0];
+      expect(captured.admittedRunContext).toBe(host.admittedRunContext);
+      expect(request.assertCurrent).toHaveBeenCalledOnce();
+      host.closeHost();
+      expect(captured.signal.aborted).toBe(true);
+      expect(() => captured.assertCurrent()).toThrow("no longer active");
+      await expect(host.hostCapabilities.prepareLocalCommandEnvironment?.(request)).rejects.toThrow(
+        "no longer active",
+      );
+    } finally {
+      host.closeHost();
+      host.closeAdmission();
+      prepare.mockRestore();
     }
   });
 

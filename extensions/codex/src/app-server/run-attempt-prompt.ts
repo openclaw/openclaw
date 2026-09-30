@@ -442,7 +442,10 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
   };
   let parentLocalEgress = false;
   const parentLocalContext = {
-    turnScopedDeveloperInstructions: workspaceBootstrapContext.turnScopedDeveloperInstructions,
+    turnScopedDeveloperInstructions: joinPresentSections(
+      workspaceBootstrapContext.turnScopedDeveloperInstructions,
+      connection.localGitHubInstructions,
+    ),
     memoryCollaborationInstructions: workspaceBootstrapContext.memoryCollaborationInstructions,
   };
   // Observability view of the whole developer surface the model sees (reports,

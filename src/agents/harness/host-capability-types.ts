@@ -119,6 +119,19 @@ export type AgentHarnessHostCapabilities = Readonly<{
   }>;
   /** Closure-bound non-secret maps prepared before harness placement. */
   preparedEnvironment?: () => AgentHarnessPreparedEnvironment;
+  /** Host-owned local command environment; never install it on the shared harness process. */
+  prepareLocalCommandEnvironment?: (params: {
+    assertCurrent: () => void;
+    signal: AbortSignal;
+  }) => Promise<
+    | {
+        env: Readonly<Record<string, string>>;
+        instructions: string;
+        assertCurrent: () => void;
+        dispose: () => Promise<void>;
+      }
+    | undefined
+  >;
   /** Current bounded presence hint; physical activity does not identify the message source. */
   activeComputerContext?: () => string;
   /** Applies the exact host caller binding to a plugin-built tool surface. */

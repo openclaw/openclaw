@@ -7,7 +7,9 @@ import {
 } from "../../infra/installation-target-context.js";
 import { applyPathPrepend, findPathKey, normalizePathPrepend } from "../../infra/path-prepend.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../../secrets/runtime-state.js";
+import type { AdmittedRunContext } from "../admitted-run-context.js";
 import { resolveSessionAgentIdStrict } from "../agent-scope.js";
+import { prepareLocalGitHubEnvironment } from "../github-local-environment.js";
 import { prepareGitHubToolEnvironment } from "../github-tool-identity.js";
 import { resolveExecToolConfig } from "../lazy-exec-tool.js";
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
@@ -72,4 +74,32 @@ export function prepareAgentHarnessEnvironment(params: {
     ...(localProcessEnv ? { localProcessEnv } : {}),
     ...(localToolEnv ? { localToolEnv, localToolPathPrepend } : {}),
   });
+}
+
+/** Keep environment preparation and native placement under the same host lifetime. */
+export function bindHarnessEnvironment(
+  params: Parameters<typeof prepareAgentHarnessEnvironment>[0] & {
+    admittedRunContext: AdmittedRunContext;
+    assertActive: () => void;
+    signal: AbortSignal;
+  },
+): Pick<AgentHarnessHostCapabilities, "preparedEnvironment" | "prepareLocalCommandEnvironment"> {
+  const prepared = prepareAgentHarnessEnvironment(params);
+  return {
+    preparedEnvironment: () => {
+      params.assertActive();
+      return prepared;
+    },
+    prepareLocalCommandEnvironment: (request) =>
+      prepareLocalGitHubEnvironment({
+        admittedRunContext: params.admittedRunContext,
+        agentId: params.agentId,
+        config: params.config,
+        assertCurrent: () => {
+          params.assertActive();
+          request.assertCurrent();
+        },
+        signal: AbortSignal.any([request.signal, params.signal]),
+      }),
+  };
 }

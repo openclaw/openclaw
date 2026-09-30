@@ -285,6 +285,15 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
       }
     }
   }
+  if (nativeToolSurfaceEnabled) {
+    const github = await connection.prepareLocalGitHub();
+    if (github) {
+      // Per-run shell policy is separate from the shared app-server environment.
+      connection.shellEnvironment = { ...connection.shellEnvironment, ...github.env };
+      connection.disableLoginShell = true;
+      connection.localGitHubInstructions = github.instructions;
+    }
+  }
   const configuredMcpSurface = scheduledConfiguredMcpSurface
     ? "scheduled"
     : !nativeToolSurfaceEnabled && bundleMcpThreadConfig.staticServerNames.length > 0

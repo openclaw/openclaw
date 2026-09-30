@@ -171,6 +171,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/codex/src/app-server/native-subagent-inventory.retirement.test.ts",
   "extensions/codex/src/app-server/native-subagent-inventory.settlement.test.ts",
   "extensions/codex/src/app-server/native-subagent-inventory.test.ts",
+  "extensions/codex/src/app-server/run-attempt-connection.github.test.ts",
   "extensions/codex/src/app-server/run-attempt-connection.environment.test.ts",
   "extensions/codex/src/app-server/side-question.test.ts",
   "extensions/codex/src/app-server/side-question.execution.test.ts",

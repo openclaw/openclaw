@@ -9,6 +9,44 @@ title: "Configuration — GitHub identity for agent tools"
 
 `tools.github` selects the shared managed GitHub CLI identity used by agent execution, and defines which execution paths receive its credential.
 
+## Gateway-local GitHub App credentials
+
+When the existing Gateway App issuer is configured, authenticated local Codex
+native runs receive an isolated, owner-only `gh` profile containing a short-lived
+installation token. This includes main sessions without a repository workspace.
+The existing installation's repositories, permissions, and branch protections
+remain authoritative. A configured System or per-agent `tools.github` identity keeps its
+managed identity instead. An unavailable trusted sign-in binding keeps unrelated
+native turns working with their existing environment. No interactive login or shared system OAuth fallback
+is used for an App-backed run.
+
+This opt-in path requires the admitted operator's canonical profile to contain
+exactly one trusted `github:<configured-host>:<account-id>` sign-in binding. The
+Gateway verifies that immutable ID through the configured GitHub API and supplies
+the resulting human login separately as `GITHUB_USER_LOGIN` and run
+instructions. The token's actor is the App installation; `@me` and `gh api user`
+must not be used to identify the requesting human.
+
+Incognito sessions do not receive this App grant: retained incognito threads
+cannot refresh the shell profile on every run. Ordinary incognito chat and its
+existing credential behavior are unchanged; no unused installation token is issued.
+
+The profile path and Git helper reach native commands through the per-run shell
+policy, never through the shared app-server process environment. App signing
+material and the Gateway bootstrap password are cleared from that command
+overlay. Existing execution approvals and current operator/session authority
+still apply. The verified profile email supplies Git author and committer metadata. The token
+renews before expiry while the same run, operator, and binding remain current.
+Cancellation, profile binding removal, authority loss, exhausted renewal, and run
+finalization revoke the token and remove the profile; transient cleanup failures
+warn and can retry without changing a completed turn. Detached commands keep their existing
+process lifecycle; the App token closes with the owning run. This revokes the App
+grant, not independently configured native keyring credentials. As with ordinary
+native shell execution, use a dedicated OS user or sandbox for host-account
+isolation.
+Removing the issuer configuration prevents subsequent grants; already-issued
+grants retain these same bounded cleanup and expiry rules.
+
 ## `tools.github`
 
 GitHub CLI identity is native by default. When `tools.github` is omitted, local agent tools, the Codex harness, and Agent Settings follow normal `gh` resolution: `GH_TOKEN` or `GITHUB_TOKEN` from the Gateway process takes precedence, followed by the runtime user's `gh` keyring/config. The Git author comes from the selected agent's workspace.
@@ -66,6 +104,8 @@ An operator can configure `GITHUB_APP_ID`, `GITHUB_INSTALLATION_ID`, and `GITHUB
 OpenClaw sandboxes, ordinary node-host exec, and Codex `remote-exec` placements still do not receive the Gateway's managed GitHub credentials. The `github_publish` tool remains available for remote-exec sessions: it records a bounded publication request without credentials or repository authority. After the exact workspace result is reconciled and accepted, the Gateway commits remaining changes as the verified effective GitHub user, pushes the authoritative session branch through a one-shot HTTPS credential helper, and creates or reuses a draft pull request.
 
 Publication may wait until the requesting turn finishes and its workspace is accepted. Its result is appended to the session transcript; this does not start another agent turn. When the authorized task also includes review, CI repair, or landing, the agent must arrange a separate continuation before ending the requesting turn. A draft PR or publication receipt does not complete a landing request.
+
+Eligible Gateway-local Codex native commands can use a separate installation-wide App token under their own run lifetime, including in a main session without a repository workspace. A verified GitHub account binding identifies the requesting signed-in user but does not reduce the App token to that person's repository permissions; operators should install the App only where this broader native-command authority is intended. The command receives a private `gh` profile and the requesting user's verified login; the shared Codex app-server process does not receive the token. Incognito, sandbox, remote, proxy, and supervision placements do not receive this local grant. The Gateway revokes it and removes the profile when the run ends, loses authority, or expires.
 
 Gateway-hosted agents check publication availability for ordinary messages and internal continuations, including when a subagent finishes after the requester yields. The check uses the current session workspace and GitHub identity. If publication is unavailable, `github_identity_status` remains available to explain identity setup or reconnection needs, subject to the session's tool policy. Standalone local runs and runs with tools disabled do not expose these managed publication tools.
 
