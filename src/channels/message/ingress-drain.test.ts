@@ -294,7 +294,10 @@ describe("channel ingress drain", () => {
       });
 
       expect(await drain.drainOnce()).toEqual({ started: 1 });
-      await vi.waitFor(() => expect(drain.activeLaneKeys()).toEqual(new Set()));
+      // Settle the dispatch task, then read the lane state through its
+      // completion signal instead of polling.
+      await drain.waitForIdle();
+      expect(drain.activeLaneKeys()).toEqual(new Set());
 
       await queue.enqueue("second", { text: "second" }, { laneKey: "shared" });
       expect(await drain.drainOnce()).toEqual({ started: 1 });
