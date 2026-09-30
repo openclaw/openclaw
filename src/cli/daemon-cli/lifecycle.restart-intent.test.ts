@@ -72,6 +72,7 @@ function publishServingOwner(
     kind: "systemd",
     name: "openclaw-gateway.service",
   },
+  host = hostname(),
 ) {
   const { db } = openOpenClawStateDatabase();
   const now = Date.now();
@@ -86,7 +87,7 @@ function publishServingOwner(
     now + 60_000,
     now,
     JSON.stringify({
-      owner: { pid, host: hostname(), startedAt: 1 },
+      owner: { pid, host, startedAt: 1 },
       port: 18789,
       mode,
       supervisor,
@@ -243,6 +244,37 @@ it.each([
     }
   },
 );
+
+it("names recorded hostname drift and points at safe restart without signaling", async () => {
+  vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+  vi.spyOn(processOwners, "readStateLeaseProcessOwnerStatus").mockReturnValue("unknown");
+  const { db } = openOpenClawStateDatabase();
+  const coordinator = acquireServingStateOwner();
+  try {
+    publishServingOwner(
+      process.pid,
+      "supervised",
+      { kind: "systemd", name: "openclaw-gateway.service" },
+      "old-mac.local",
+    );
+    service.readRuntime.mockResolvedValue({ status: "running", pid: process.pid });
+
+    await expect(runServiceRestart(createGatewayServiceRunArgs())).rejects.toThrow("__exit__:1");
+
+    const output = lifecycleRuntimeLogs.join("\n");
+    expect(output).toContain("Recorded serving host");
+    expect(output).toContain("old-mac.local");
+    expect(output).toContain("does not match this host");
+    expect(output).toContain("openclaw gateway restart --safe");
+    expect(output).toContain("Gateway was not signaled");
+    expect(service.restart).not.toHaveBeenCalled();
+    expect(db.prepare("SELECT count(*) AS count FROM gateway_restart_intent").get()).toEqual({
+      count: 0,
+    });
+  } finally {
+    coordinator.release();
+  }
+});
 
 it.each([true, false])(
   "refuses a recovered service restart when command inspection fails (json=%s)",

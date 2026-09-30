@@ -22,6 +22,7 @@ import {
 import { renderSystemdUnavailableHints } from "../../daemon/systemd-hints.js";
 import { isSystemdUserServiceAvailable } from "../../daemon/systemd.js";
 import { isGatewaySecretRefUnavailableError } from "../../gateway/credentials.js";
+import { GatewayRestartPreparationError } from "../../infra/restart-intent-error.js";
 import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
 import { isWSL } from "../../infra/wsl.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -672,6 +673,14 @@ export async function runServiceRestart(params: {
       throw err;
     }
     const hints = params.renderStartHints();
+    if (
+      err instanceof GatewayRestartPreparationError &&
+      err.reason === "serving-owner" &&
+      err.detail?.includes("does not match this host")
+    ) {
+      // Diagnosis only. Native mutation stays refused; --safe is the documented RPC recovery.
+      hints.unshift(formatCliCommand("openclaw gateway restart --safe"));
+    }
     fail(`${params.serviceNoun} restart failed: ${String(err)}`, hints);
     return false;
   }
