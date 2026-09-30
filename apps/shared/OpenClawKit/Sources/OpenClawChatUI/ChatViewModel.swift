@@ -152,14 +152,39 @@ public final class OpenClawChatViewModel {
 
     public private(set) var toolActivities: [OpenClawChatPendingToolCall] = []
     private(set) var timelineRevision: UInt64 = 0
-    public internal(set) var sessions: [OpenClawChatSessionEntry] = [] {
-        didSet {
-            syncContextUsageFraction()
-            syncActiveSessionRunIDsFromCurrentSession()
+    var legacySessions: [OpenClawChatSessionEntry] = []
+    public internal(set) var sessions: [OpenClawChatSessionEntry] {
+        get {
+            self.sidebarData?.conversationRows(agentID: self.currentSessionSnapshot().deliveryAgentID) ?? self
+                .legacySessions
+        }
+        set {
+            if let sidebarData {
+                sidebarData.replaceConversationRows(newValue, agentID: self.currentSessionSnapshot().deliveryAgentID)
+            } else {
+                self.legacySessions = newValue
+                self.syncContextUsageFraction()
+                self.syncActiveSessionRunIDsFromCurrentSession()
+            }
         }
     }
 
-    public internal(set) var swarmSessions: [OpenClawChatSessionEntry] = []
+    public internal(set) var sidebarData: OpenClawChatSessionSidebarData?
+
+    var legacySwarmSessions: [OpenClawChatSessionEntry] = []
+    var swarmRowIDs: [String] = []
+    public internal(set) var swarmSessions: [OpenClawChatSessionEntry] {
+        get {
+            self.sidebarData.map { self.swarmActivityState.decorate($0.project(self.swarmRowIDs)) } ?? self
+                .legacySwarmSessions
+        }
+        set {
+            if let owner = self.sidebarData {
+                self.swarmRowIDs = owner.receive(newValue, read: owner.beginRead())
+            } else { self.legacySwarmSessions = newValue }
+        }
+    }
+
     var activeSwarmGroups: [OpenClawChatSwarmGroup] = []
     var swarmActivityState = OpenClawChatSwarmActivityState()
     @ObservationIgnored
@@ -592,6 +617,7 @@ public final class OpenClawChatViewModel {
         self.cancelHistoryInvalidationRefresh()
         self.retireQuestionAuthority()
         self.isTransportDetached = true
+        self.sidebarData?.invalidate(clear: true)
         let transport = self.transport
         Task { await transport.releaseActiveSessionSubscription() }
         self.sourcePreviewState.invalidate()
@@ -677,7 +703,7 @@ public final class OpenClawChatViewModel {
         let contractRoutingChanged = contractChanged &&
             (usesMutableContractRouting(for: sessionRoutingContract) ||
                 self.usesMutableContractRouting(for: nextContract))
-        if agentChanged {
+        if agentChanged, self.sidebarData == nil {
             self.sessions = ChatSessionSidebarModel.clearingForeignGlobalObserverDigest(
                 in: self.sessions,
                 activeAgentId: self.explicitSessionAgentID ??
@@ -1038,6 +1064,7 @@ extension OpenClawChatViewModel {
             let metadataGeneration = self.sessionMetadataGeneration
             let settingsPatchRevision = self.settingsPatchRevisionsByTarget[target, default: 0]
             let successfulSettingsPatchRequestID = self.lastSuccessfulSettingsPatchRequestIDsByTarget[target]
+            let sidebarRead = self.sidebarData?.beginRead()
             let res: OpenClawChatSessionsListResponse
             do {
                 res = try await self.transport.listSessions(
@@ -1073,6 +1100,7 @@ extension OpenClawChatViewModel {
                 }
                 continue
             }
+            if let sidebarData, sidebarRead?.scope != sidebarData.scopeRevision { continue }
             self.latestAppliedSessionsFetchRequestID = sessionsFetchRequestID
             let organized = OpenClawChatSessionListOrganizer.organize(res.sessions)
             for session in organized {
@@ -1083,7 +1111,11 @@ extension OpenClawChatViewModel {
                         agentID: session.agentId),
                     unread: session.unread)
             }
-            self.sessions = self.applyingLocalUnreadOverrides(to: organized)
+            if let sidebarData, let sidebarRead {
+                sidebarData.receive(organized, read: sidebarRead, replacingAgent: session.deliveryAgentID ?? "")
+            } else {
+                self.sessions = self.applyingLocalUnreadOverrides(to: organized)
+            }
             self.sessionDefaults = res.defaults
             self.restoreOverlappingSettingsPatch(
                 requestID: overlappingSuccessfulSettingsPatchRequestID,
@@ -1182,7 +1214,7 @@ extension OpenClawChatViewModel {
         self.advanceSessionGeneration()
         self.clearSessionOwnedState()
         if self.currentSessionSnapshot().deliveryAgentID != (nextAgentID ?? encodedAgentID ?? self.activeAgentId) {
-            self.sessions = []
+            if self.sidebarData == nil { self.sessions = [] }
             self.hasAppliedLiveSessions = false
             self.swarmEnabled = false
             self.resetSwarmProgress()
@@ -1414,6 +1446,10 @@ extension OpenClawChatViewModel {
         target: ModelPatchTarget,
         operation: @escaping @MainActor (OpenClawChatSessionSettingsRouteLease?) async -> Void)
     {
+        let rosterOwner = self.sidebarData
+        let rosterScope = rosterOwner?.scopeRevision
+        let rosterTarget = rosterOwner?.row(
+            key: target.canonicalSessionKey, agentID: target.agentID ?? self.currentSessionSnapshot().deliveryAgentID)
         let previousPatchTail = self.settingsPatchTailsByTarget[target]
         let previousTail = previousPatchTail?.task
         let previousRouteLeaseTask = previousPatchTail?.routeLeaseTask
@@ -1428,6 +1464,7 @@ extension OpenClawChatViewModel {
             await previousTail?.value
             guard let self else { return }
             await operation(routeLease)
+            rosterOwner?.settleSettingsWrite(target: rosterTarget, scope: rosterScope)
             self.endSettingsPatch(for: target)
             self.finishSettingsPatchTail(requestID: requestID, target: target)
         }
