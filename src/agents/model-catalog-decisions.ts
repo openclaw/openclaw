@@ -111,6 +111,12 @@ function createModelsListEntryEvaluator(params: {
   runtimeId?: string,
 ) => Promise<ModelAuthAvailabilityEvaluation> {
   const pending = new Map<string, Promise<ModelAuthAvailabilityEvaluation>>();
+  // A large configured model list evaluates every entry in the same microtask
+  // batch, starving the event loop for the whole scan (#observed on 2026.9.4).
+  // Yielding back to the loop every ~8ms keeps concurrent I/O responsive
+  // without changing any evaluation result, only when it becomes available.
+  let evaluationTail: Promise<unknown> = Promise.resolve();
+  let batchStartedAt = performance.now();
   return (entry, routeVariants, runtimeId) => {
     const identity = openAIModelCatalogRoutePolicy.resolveIdentity(entry);
     const observedRoutes = (routeVariants ?? [entry]).map(({ api, baseUrl }) => ({ api, baseUrl }));
@@ -125,7 +131,13 @@ function createModelsListEntryEvaluator(params: {
     if (cached) {
       return cached;
     }
-    const next = Promise.resolve().then((): ModelAuthAvailabilityEvaluation => {
+    const next = evaluationTail.then(async (): Promise<ModelAuthAvailabilityEvaluation> => {
+      if (performance.now() - batchStartedAt >= 8) {
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        batchStartedAt = performance.now();
+      }
       const defaultProfileId = params.preferredProfilesByProvider?.get(
         normalizeProviderId(entry.provider),
       );
@@ -171,6 +183,10 @@ function createModelsListEntryEvaluator(params: {
           }
         : resolved;
     });
+    evaluationTail = next.then(
+      () => undefined,
+      () => undefined,
+    );
     pending.set(cacheKey, next);
     return next;
   };
