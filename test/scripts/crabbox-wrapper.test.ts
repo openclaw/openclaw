@@ -2498,6 +2498,7 @@ describe("scripts/crabbox-wrapper", () => {
       ...testHomeEnv(home),
       XDG_STATE_HOME: stateRoot,
       CODEX_THREAD_ID: "private-fixture-session",
+      OPENCLAW_FAKE_GIT_HEAD_SHA: "d".repeat(40),
       OPENCLAW_TESTBOX_LEASE_STATE_DIR: stateDir,
       OPENCLAW_FAKE_CRABBOX_TIMING_LEASE_ID: id,
     };

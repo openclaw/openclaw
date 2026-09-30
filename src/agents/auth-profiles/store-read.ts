@@ -143,6 +143,31 @@ export function createAuthProfileStoreReadRuntime(host: StoreReadHost) {
     return step.value;
   }
 
+  function* readInheritedAuthProfileStore(
+    options: LoadAuthProfileStoreOptions,
+    env?: NodeJS.ProcessEnv,
+  ): AuthProfileStoreReadSequence<AuthProfileStore | undefined> {
+    let inherited: Result<AuthProfileStore, unknown>;
+    try {
+      inherited = {
+        ok: true,
+        value: yield* readAuthProfileStore({ agentDir: options.inheritedAuthDir, options }),
+      };
+    } catch (error) {
+      inherited = { ok: false, error };
+    }
+    return loadInheritedAuthProfileStore(
+      () => {
+        if (!inherited.ok) {
+          throw inherited.error;
+        }
+        return inherited.value;
+      },
+      options.inheritedAuthDir,
+      env ?? getScopedAuthProfileEnv(),
+    );
+  }
+
   function* resolveRuntimeAuthProfileStore(
     agentDir?: string,
     options?: Pick<
@@ -263,28 +288,7 @@ export function createAuthProfileStoreReadRuntime(host: StoreReadHost) {
       );
     }
 
-    let inherited: Result<AuthProfileStore, unknown>;
-    try {
-      inherited = {
-        ok: true,
-        value: yield* readAuthProfileStore({
-          agentDir: options.inheritedAuthDir,
-          options,
-        }),
-      };
-    } catch (error) {
-      inherited = { ok: false, error };
-    }
-    const mainStore = loadInheritedAuthProfileStore(
-      () => {
-        if (!inherited.ok) {
-          throw inherited.error;
-        }
-        return inherited.value;
-      },
-      options.inheritedAuthDir,
-      env ?? getScopedAuthProfileEnv(),
-    );
+    const mainStore = yield* readInheritedAuthProfileStore(options, env);
     return mergeLocalAuthProfileStoreWithInheritedStore(store, mainStore);
   }
 
@@ -441,28 +445,7 @@ export function createAuthProfileStoreReadRuntime(host: StoreReadHost) {
       return stripRuntimeExternalProfileMetadata(store);
     }
 
-    let inherited: Result<AuthProfileStore, unknown>;
-    try {
-      inherited = {
-        ok: true,
-        value: yield* readAuthProfileStore({
-          agentDir: effectiveOptions.inheritedAuthDir,
-          options: effectiveOptions,
-        }),
-      };
-    } catch (error) {
-      inherited = { ok: false, error };
-    }
-    const mainStore = loadInheritedAuthProfileStore(
-      () => {
-        if (!inherited.ok) {
-          throw inherited.error;
-        }
-        return inherited.value;
-      },
-      effectiveOptions.inheritedAuthDir,
-      env ?? getScopedAuthProfileEnv(),
-    );
+    const mainStore = yield* readInheritedAuthProfileStore(effectiveOptions, env);
     return stripRuntimeExternalProfileMetadata(
       mainStore
         ? mergeAuthProfileStores(mainStore, store, { preserveBaseRuntimeExternalProfiles: true })

@@ -1,3 +1,4 @@
+import type { ClawHubPublicationState } from "./lib/clawhub-publication-state.mjs";
 export const FULL_RELEASE_SOURCE_ADMISSION_CONTRACT: "1";
 export const FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT: "1";
 export type ValidationPurpose =
@@ -108,6 +109,7 @@ export interface PublicationClawHubObservation {
   state: {
     packageExists: boolean;
     alreadyPublished: boolean;
+    publication?: ClawHubPublicationState;
     hasTrustedPublisher: boolean;
     trustedPublisher: {
       provider: string | null;
@@ -118,7 +120,12 @@ export interface PublicationClawHubObservation {
   };
 }
 export interface PublicationPlanningSummary {
-  all: Array<{ name: string; version: string; alreadyPublished: boolean }>;
+  all: Array<{
+    name: string;
+    version: string;
+    alreadyPublished: boolean;
+    publication?: ClawHubPublicationState;
+  }>;
   candidates: string[];
   skippedPublished: string[];
   warnings: string[];
@@ -141,6 +148,8 @@ export interface PublicationObservationCollection {
     clawhub: PublicationPlanningSummary & {
       bootstrapCandidates: string[];
       missingTrustedPublisher: string[];
+      pendingPublication?: string[];
+      failedPublication?: string[];
     };
   };
 }

@@ -527,7 +527,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       ]);
       expect(gateway?.groups.map((group) => group.env?.OPENCLAW_VITEST_MAX_WORKERS)).toEqual([
         "2",
-        "8",
+        "2",
       ]);
       const parallelJobs = jobs.filter((job) => job !== gateway);
       expect(parallelJobs.map((job) => job.planConcurrency)).toEqual([2, 2]);
@@ -1274,43 +1274,49 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     },
   );
 
-  it("retains isolated Gateway timing history recorded under its former job cap", () => {
-    const owner = "agentic-gateway-server-isolated";
-    const configs = [
-      "test/vitest/vitest.gateway-server-isolated.config.ts",
-      "test/vitest/vitest.gateway-database-workers.config.ts",
-    ];
-    const restore = selectFixtureProjects((config) => configs.includes(config));
-    try {
-      const previous: Record<string, number> = { [owner]: 100 };
-      vi.spyOn(testTimings, "readCompactGroupTimings").mockImplementation((profile) =>
-        profile === "blacksmith" ? previous : { [owner]: 100 },
-      );
-      const options = { compactMode: "push" as const, runnerBackend: "hybrid" };
-      const initial = createNodeTestShardBundles(options).flatMap((job) => job.groups);
-      expect(initial).toHaveLength(2);
-      const legacy = createCompactSplitTimingGeneration({
-        configs,
-        parentShardName: owner,
-        stripes: initial.map((group) => group.includePatterns!),
-      });
-      for (const [index, key] of legacy.timingKeys.entries()) {
-        previous[key] = 247 + index;
+  it.each([undefined, "8"])(
+    "retains isolated Gateway timing history (previous workers=%s)",
+    (previousWorkers) => {
+      const owner = "agentic-gateway-server-isolated";
+      const configs = [
+        "test/vitest/vitest.gateway-server-isolated.config.ts",
+        "test/vitest/vitest.gateway-database-workers.config.ts",
+      ];
+      const restore = selectFixtureProjects((config) => configs.includes(config));
+      try {
+        const previous: Record<string, number> = { [owner]: 100 };
+        vi.spyOn(testTimings, "readCompactGroupTimings").mockImplementation((profile) =>
+          profile === "blacksmith" ? previous : { [owner]: 100 },
+        );
+        const options = { compactMode: "push" as const, runnerBackend: "hybrid" };
+        const initial = createNodeTestShardBundles(options).flatMap((job) => job.groups);
+        expect(initial.map((group) => group.env?.OPENCLAW_VITEST_MAX_WORKERS)).toEqual(["2", "2"]);
+        const legacy = createCompactSplitTimingGeneration({
+          configs,
+          env: previousWorkers ? { OPENCLAW_VITEST_MAX_WORKERS: previousWorkers } : undefined,
+          parentShardName: owner,
+          stripes: initial.map((group) => group.includePatterns!),
+        });
+        for (const [index, key] of legacy.timingKeys.entries()) {
+          previous[key] = 247 + index;
+        }
+        const expanded = createNodeTestShardBundles(options);
+        expect(
+          expanded.reduce(
+            (sum, job) => sum + expectDefined(job.predictedSeconds, "compact job prediction"),
+            0,
+          ),
+        ).toBeGreaterThanOrEqual(495);
+        expect(
+          expanded
+            .flatMap((job) => job.groups.flatMap((group) => group.includePatterns!))
+            .toSorted(),
+        ).toEqual(initial.flatMap((group) => group.includePatterns!).toSorted());
+      } finally {
+        restore();
       }
-      const expanded = createNodeTestShardBundles(options);
-      expect(
-        expanded.reduce(
-          (sum, job) => sum + expectDefined(job.predictedSeconds, "compact job prediction"),
-          0,
-        ),
-      ).toBeGreaterThanOrEqual(495);
-      expect(
-        expanded.flatMap((job) => job.groups.flatMap((group) => group.includePatterns!)).toSorted(),
-      ).toEqual(initial.flatMap((group) => group.includePatterns!).toSorted());
-    } finally {
-      restore();
-    }
-  });
+    },
+  );
 
   it.each(["hybrid", "github"])(
     "gates Gateway method workers without changing complete coverage (%s)",

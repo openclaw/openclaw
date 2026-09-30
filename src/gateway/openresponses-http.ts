@@ -48,10 +48,8 @@ import {
   authorizeOpenAiCompatibleHttpSession,
   getBearerToken,
   getHeader,
-  isAgentSelectionRequiredError,
-  isGatewaySessionKeyOverrideError,
-  isInvalidGatewayModelError,
-  isUnknownGatewayAgentError,
+  isGatewayAgentRequestError,
+  isGatewayRequestContextError,
   resolveAgentIdForRequest,
   resolveGatewayRequestContext,
   resolveOpenAiCompatModelOverride,
@@ -220,11 +218,7 @@ export async function handleOpenResponsesHttpRequest(
   try {
     agentId = resolveAgentIdForRequest({ req, model });
   } catch (err) {
-    if (
-      isAgentSelectionRequiredError(err) ||
-      isInvalidGatewayModelError(err) ||
-      isUnknownGatewayAgentError(err)
-    ) {
+    if (isGatewayAgentRequestError(err)) {
       sendInvalidRequest(res, err.message);
       return true;
     }
@@ -369,12 +363,7 @@ export async function handleOpenResponsesHttpRequest(
       useMessageChannelHeader: true,
     });
   } catch (err) {
-    if (
-      isAgentSelectionRequiredError(err) ||
-      isUnknownGatewayAgentError(err) ||
-      isInvalidGatewayModelError(err) ||
-      isGatewaySessionKeyOverrideError(err)
-    ) {
+    if (isGatewayRequestContextError(err)) {
       sendInvalidRequest(res, err.message);
       return true;
     }

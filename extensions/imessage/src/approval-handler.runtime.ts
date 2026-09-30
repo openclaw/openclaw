@@ -4,7 +4,6 @@ import {
   buildChannelApprovalResolvedText,
   type ChannelApprovalKind,
   createChannelApprovalNativeRuntimeAdapter,
-  type PendingApprovalView,
   resolvePreparedApprovalAccountId,
 } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { buildChannelApprovalNativeTargetKey } from "openclaw/plugin-sdk/approval-native-runtime";
@@ -13,11 +12,6 @@ import {
   buildApprovalReactionPendingContent,
 } from "openclaw/plugin-sdk/approval-reaction-runtime";
 import type { ExecApprovalReplyDecision } from "openclaw/plugin-sdk/approval-reply-runtime";
-import type {
-  ExecApprovalRequest,
-  PluginApprovalRequest,
-  SystemAgentApprovalRequest,
-} from "openclaw/plugin-sdk/approval-runtime";
 import { createActionGate } from "openclaw/plugin-sdk/channel-actions";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
@@ -55,7 +49,6 @@ const DEFAULT_PROBE_TIMEOUT_MS = 5_000;
 // gap keeps a poll posted second from sorting above the approval it follows.
 const APPROVAL_POLL_ORDERING_DELAY_MS = 1_100;
 
-type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest | SystemAgentApprovalRequest;
 type IMessagePendingDelivery = {
   /** Prompt text carrying the tapback hint; used when no poll will be sent. */
   text: string;
@@ -92,28 +85,6 @@ type PendingIMessageApprovalEntry = {
 type IMessageFinalPayload = {
   text: string;
 };
-
-function buildPendingPayload(params: {
-  request: ApprovalRequest;
-  approvalKind: ChannelApprovalKind;
-  nowMs: number;
-  view: PendingApprovalView;
-}): IMessagePendingDelivery {
-  const pendingContent = buildApprovalReactionPendingContent({
-    request: params.request,
-    view: params.view as never,
-    nowMs: params.nowMs,
-  });
-  return {
-    text: pendingContent.reactionPayload.text ?? "",
-    // The native poll owns the primary controls. Manual commands stay in the
-    // details message because bridge capability cannot prove recipient support.
-    // Same bold headers and labels as the tapback prompt (#85954): both are
-    // delivered through the attributed-body send path.
-    pollText: buildApprovalNativeControlsPromptText({ view: params.view, nowMs: params.nowMs }),
-    allowedDecisions: pendingContent.reactionPayload.allowedDecisions,
-  };
-}
 
 type IMessageApprovalTargetTransport = "imessage" | "sms" | "unknown";
 
@@ -498,8 +469,15 @@ export const imessageApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
     shouldHandle: ({ context }) => Boolean(context),
   },
   presentation: {
-    buildPendingPayload: ({ request, approvalKind, nowMs, view }) =>
-      buildPendingPayload({ request, approvalKind, nowMs, view }),
+    buildPendingPayload: ({ request, nowMs, view }) => {
+      const { reactionPayload } = buildApprovalReactionPendingContent({ request, view, nowMs });
+      return {
+        text: reactionPayload.text ?? "",
+        // Native polls own the controls; manual commands remain for older recipients.
+        pollText: buildApprovalNativeControlsPromptText({ view, nowMs }),
+        allowedDecisions: reactionPayload.allowedDecisions,
+      };
+    },
     buildResolvedResult: ({ request, resolved, view }) => ({
       kind: "update",
       payload: { text: buildChannelApprovalResolvedText({ request, resolved, view }) },

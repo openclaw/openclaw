@@ -7,8 +7,6 @@ import {
 } from "./execa-protocol.js";
 import type { SpawnBrokerHost } from "./host.js";
 
-export type { CommandSubprocess } from "./execa-types.js";
-
 const SERIALIZABLE_OPTIONS = new Set([
   "buffer",
   "cancelSignal",

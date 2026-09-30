@@ -374,12 +374,6 @@ async function executeVerbose(
   );
 }
 
-function formatFastModeOptions(session: GatewaySessionRow | undefined): string {
-  return t("chat.commandResults.fast.options", {
-    seconds: String(session?.fastAutoOnSeconds ?? 60),
-  });
-}
-
 async function executeFast(
   sessionKey: string,
   args: string,
@@ -393,7 +387,9 @@ async function executeFast(
       return {
         content: formatDirectiveOptions(
           resolveChatFastModeStatus(session),
-          formatFastModeOptions(session),
+          t("chat.commandResults.fast.options", {
+            seconds: String(session?.fastAutoOnSeconds ?? 60),
+          }),
         ),
       };
     } catch (err) {

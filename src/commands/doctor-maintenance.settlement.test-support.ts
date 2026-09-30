@@ -107,6 +107,10 @@ vi.mock("../infra/gateway-owner-lease.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/gateway-owner-lease.js")>()),
   readGatewayOwnerLease: boundary.owner,
 }));
+vi.mock("./doctor-maintenance-inspection.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./doctor-maintenance-inspection.js")>()),
+  readDoctorGatewayOwnerLease: boundary.owner,
+}));
 vi.mock("../infra/gateway-lock.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/gateway-lock.js")>()),
   acquireGatewayLock: boundary.gatewayAcquire,

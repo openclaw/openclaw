@@ -35,6 +35,9 @@ export function captureCommand(command: OpenClawStateReadCommand): OpenClawState
   if (command.type === "cron.jobNames") {
     return { ...command, jobIds: [...command.jobIds] };
   }
+  if (command.type === "cron.quarantine") {
+    return { type: command.type, storeKey: command.storeKey };
+  }
   if (command.type === "githubPublication.sharedObservation") {
     return {
       type: command.type,
@@ -97,6 +100,15 @@ export function captureCommand(command: OpenClawStateReadCommand): OpenClawState
         conversationId,
         ...(parentConversationId !== undefined ? { parentConversationId } : {}),
       },
+    };
+  }
+  if (command.type === "cron.currentReceipt") {
+    const { receiptId, storeKey, jobId, agentId, ownerPid, ownerStartTime } = command.handle;
+    return {
+      type: command.type,
+      handle: { receiptId, storeKey, jobId, agentId, ownerPid, ownerStartTime },
+      includeJob: command.includeJob,
+      includeAvailability: command.includeAvailability,
     };
   }
   if (command.type === "cron.observeRunRecovery") {
@@ -238,6 +250,9 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
       bytes + Buffer.byteLength(command.storePath ?? "", "utf8"),
     );
   }
+  if (command.type === "cron.quarantine") {
+    return bytes + Buffer.byteLength(command.storeKey, "utf8");
+  }
   if (command.type === "githubPublication.sharedObservation") {
     return bytes + Buffer.byteLength(JSON.stringify(command.input), "utf8");
   }
@@ -303,6 +318,9 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
         0,
       )
     );
+  }
+  if (command.type === "cron.currentReceipt") {
+    return bytes + Buffer.byteLength(JSON.stringify(command.handle), "utf8") + 2;
   }
   if (command.type === "cron.observeRunRecovery") {
     return command.proposals.reduce(

@@ -11,7 +11,6 @@ import { acquireWithWait } from "../infra/acquire-with-wait.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { assertLegacyGatewayStoppedForMaintenance } from "../infra/gateway-lock-legacy.js";
 import { readActiveGatewayLockIdentity } from "../infra/gateway-lock.js";
-import { readGatewayOwnerLease } from "../infra/gateway-owner-lease.js";
 import { GATEWAY_SERVICE_STOP_TIMEOUT_MS } from "../infra/gateway-shutdown-budget.js";
 import { GatewayStateOwnerContentionError } from "../infra/gateway-state-owner.js";
 import { DoctorUnreadableStateDatabaseError } from "../infra/state-repair-message.js";
@@ -20,7 +19,6 @@ import { DoctorMaintenanceRefusalError, UpdateDoctorError } from "../infra/updat
 import { createUpdateFailureFact, type UpdateFailureFact } from "../infra/update-failure-facts.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { resolveCommandProcessSignal, withCommandProcessScope } from "../process/exec-spawn.js";
-import { openDoctorStateSchemaReadAdmission } from "../state/openclaw-state-db-doctor-schema.js";
 import {
   assertDoctorAgentLeaseAdmission,
   preflightExternalDoctorAgentLease,
@@ -30,6 +28,7 @@ import { holdDoctorMaintenanceExit } from "./doctor-maintenance-exit.js";
 import {
   assertDoctorMaintenanceInspection,
   classifyDoctorMaintenanceRefusal,
+  readDoctorGatewayOwnerLease,
   readDoctorMaintenanceRecoveryConfig,
 } from "./doctor-maintenance-inspection.js";
 import {
@@ -456,17 +455,17 @@ export async function beginDoctorMaintenance(
           }
           // A running managed Gateway legitimately owns this state until its
           // service is stopped. Any other holder is knowable before that mutation.
-          const servingOwner = readGatewayOwnerLease({
-            env,
-            current: true,
-            openStateSchemaReadAdmission: openDoctorStateSchemaReadAdmission,
-          });
+          const observationSignal = resolveCommandProcessSignal(exit.signal) ?? exit.signal;
+          const servingOwner = await readDoctorGatewayOwnerLease(env, observationSignal);
           const legacyGatewayLock = servingOwner
             ? undefined
             : await readActiveGatewayLockIdentity({
                 env: inspection.serviceEnv ?? env,
                 requireInspection: true,
               });
+          observationSignal.throwIfAborted();
+          assertCallerCurrent?.();
+          assertUpdateAdmissionReadCurrent?.();
           if (
             !inspection.running ||
             !(

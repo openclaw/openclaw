@@ -8,6 +8,14 @@ title: "Updating"
 
 Keep OpenClaw up to date.
 
+App-owned packages declare their update owner in `openclaw-install-owner.json`
+at the package root. For `owner: "macos-app"`, update OpenClaw.app through its
+app updater to update the bundled Gateway and runtime together. `openclaw update`,
+`openclaw update repair`, and Gateway update requests return the marker's update
+hint without changing the package or stopping the Gateway; background checks
+skip package-registry updates. Missing or invalid markers retain normal install
+behavior, with a warning for an invalid marker.
+
 For Docker, Podman, and Kubernetes image replacements, see
 [Upgrading container images](/install/docker#upgrading-container-images). The
 image entrypoint runs Doctor before starting the Gateway and exits if mounted

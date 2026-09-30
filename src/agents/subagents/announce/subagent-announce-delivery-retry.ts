@@ -114,12 +114,6 @@ function hasWriterClaimReboundAnnounceError(error: unknown): boolean {
   return hasAnnounceErrorMatch(error, isWriterClaimReboundAnnounceError);
 }
 
-function isTransientFailoverAnnounceError(error: unknown): boolean {
-  return (
-    isFailoverError(error) && (error.reason === "overloaded" || (error.attempts?.length ?? 0) > 0)
-  );
-}
-
 function isPermanentNonWriterAnnounceError(error: unknown): boolean {
   return hasAnnounceErrorMatch(
     error,
@@ -154,7 +148,10 @@ function isTransientAnnounceDeliveryError(error: unknown): boolean {
   }
 
   return hasAnnounceErrorMatch(error, (candidate) => {
-    if (isTransientFailoverAnnounceError(candidate)) {
+    if (
+      isFailoverError(candidate) &&
+      (candidate.reason === "overloaded" || (candidate.attempts?.length ?? 0) > 0)
+    ) {
       return true;
     }
     const message = summarizeDeliveryError(candidate);
@@ -215,10 +212,6 @@ export async function waitForAnnounceRetryDelay(ms: number, signal?: AbortSignal
   });
 }
 
-function resolveDirectAnnounceTransientRetryDelaysMs() {
-  return isFastTestRuntimeEnv() ? ([8, 16, 32] as const) : ([5_000, 10_000, 20_000] as const);
-}
-
 export async function runAnnounceDeliveryWithRetry<T>(params: {
   operation: string;
   signal?: AbortSignal;
@@ -226,7 +219,9 @@ export async function runAnnounceDeliveryWithRetry<T>(params: {
   isAttemptAllowed?: () => boolean;
   run: () => Promise<T>;
 }): Promise<T> {
-  const retryDelaysMs = resolveDirectAnnounceTransientRetryDelaysMs();
+  const retryDelaysMs = isFastTestRuntimeEnv()
+    ? ([8, 16, 32] as const)
+    : ([5_000, 10_000, 20_000] as const);
   for (const [retryIndex, delayMs] of retryDelaysMs.entries()) {
     if (params.prepareAttempt && !(await params.prepareAttempt())) {
       throw new SourceOwnerChangedError();

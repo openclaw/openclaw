@@ -584,14 +584,11 @@ async function scanGatewayServices(
       const selected =
         normalizeWindowsTaskIdentity(name) === normalizeWindowsTaskIdentity(resolveTaskName(env));
       const knownTask = selected || isOpenClawGatewayTaskName(name) || isLegacyLabel(name);
-      // A stopped unrelated task cannot hold the checkout's live dist. Keep unknown,
-      // queued, and running tasks fail-closed when their command cannot be read.
-      const mayHoldLiveGateway = task.state !== 1 && task.state !== 3;
       const launcherReference = actionArgv.some((argv) =>
         argv.some((arg) => /\.(?:bat|cmd|vbs)$/i.test(arg) && detectLauncherGatewayMarker(arg)),
       );
       if (!task.actions?.length) {
-        if ((requireComplete && mayHoldLiveGateway) || knownTask) {
+        if (knownTask) {
           errors.push({ source: name, message: "Scheduled Task action could not be inspected." });
         }
         continue;
@@ -608,7 +605,7 @@ async function scanGatewayServices(
       if (
         requireComplete &&
         task.actions.length > 1 &&
-        (hasGatewayAction || (hasLauncherAction && (mayHoldLiveGateway || knownTask)))
+        (hasGatewayAction || (hasLauncherAction && (knownTask || launcherReference)))
       ) {
         errors.push({
           source: name,
@@ -617,9 +614,7 @@ async function scanGatewayServices(
         continue;
       }
       let marker = hasGatewayAction ? "openclaw" : (actionMarkers.find(Boolean) ?? null);
-      let gateway = actionArgv.some(
-        (argv, index) => actionMarkers[index] === "openclaw" && hasGatewaySubcommandArg(argv),
-      );
+      let gateway = hasGatewayAction;
       let profile =
         actionArgv.length === 1
           ? resolveWindowsServiceCommandProfile({ programArguments: actionArgv[0]! })
@@ -639,7 +634,7 @@ async function scanGatewayServices(
               },
             },
           );
-          if (requireComplete && mayHoldLiveGateway && !command) {
+          if (!command && (knownTask || recognizableLauncher)) {
             throw new Error("Registered launcher disappeared during inspection.");
           }
           profile = command ? resolveWindowsServiceCommandProfile(command) : undefined;
@@ -664,7 +659,8 @@ async function scanGatewayServices(
             recordDeadline();
             break;
           }
-          if ((requireComplete && mayHoldLiveGateway) || knownTask || recognizableLauncher) {
+          // Native liveness alone does not make a foreign task an OpenClaw owner.
+          if (knownTask || recognizableLauncher) {
             errors.push({
               source: name,
               message: "Scheduled Task launcher could not be inspected.",

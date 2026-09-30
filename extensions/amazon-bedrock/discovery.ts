@@ -23,6 +23,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
+  normalizeSortedUniqueTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   loadBedrockControlPlaneSdk,
@@ -173,18 +174,6 @@ type BedrockDiscoveryCacheEntry = {
 };
 
 const discoveryCache = new Map<string, BedrockDiscoveryCacheEntry>();
-
-function normalizeProviderFilter(filter?: string[]): string[] {
-  if (!filter || filter.length === 0) {
-    return [];
-  }
-  const normalized = new Set(
-    filter
-      .map((entry) => normalizeOptionalLowercaseString(entry))
-      .filter((entry): entry is string => Boolean(entry)),
-  );
-  return Array.from(normalized).toSorted();
-}
 
 function includesTextModalities(modalities?: Array<string>): boolean {
   return (modalities ?? []).some((entry) => normalizeOptionalLowercaseString(entry) === "text");
@@ -405,7 +394,9 @@ export async function discoverBedrockModels(params: {
     0,
     Math.floor(params.config?.refreshInterval ?? DEFAULT_REFRESH_INTERVAL_SECONDS),
   );
-  const providerFilter = normalizeProviderFilter(params.config?.providerFilter);
+  const providerFilter = normalizeSortedUniqueTrimmedStringList(
+    params.config?.providerFilter?.map(normalizeOptionalLowercaseString),
+  );
   const defaultContextWindow = resolveDefaultContextWindow(params.config);
   const defaultMaxTokens = resolveDefaultMaxTokens(params.config);
   const cacheKey = JSON.stringify({

@@ -1,4 +1,3 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionsAssignOwnerResult } from "../../../packages/gateway-protocol/src/index.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import {
@@ -30,14 +29,12 @@ export async function assignSessionToolOwner(
   }
   assertCallerCurrent?.("sessions.assignOwner");
   const ownerType = readToolStringParam(params, "ownerType", { required: true });
-  const ownerId = normalizeOptionalString(
-    readToolStringParam(params, "ownerId", { required: true }),
-  );
-  if ((ownerType !== "human" && ownerType !== "agent") || !ownerId) {
+  const ownerId = readToolStringParam(params, "ownerId", { required: true });
+  if (ownerType !== "human" && ownerType !== "agent") {
     throw new ToolInputError("assign_owner requires ownerType and ownerId");
   }
   const { agentId, key, requesterAgentId, requesterSessionKey } = await options.resolveTarget(
-    normalizeOptionalString(readToolStringParam(params, "sessionKey")),
+    readToolStringParam(params, "sessionKey"),
   );
   const result = await options.gatewayRequest<SessionsAssignOwnerResult>({
     method: "sessions.assignOwner",

@@ -145,6 +145,8 @@ export async function compileNativeProject({
           // emit result for declaration errors without a second preflight.
           noEmitOnError: false,
           noCheck: false,
+          // Parallel emit can give shared inferred properties different readonly modifiers.
+          ...(emit ? { singleThreaded: true } : {}),
         },
       }),
     );

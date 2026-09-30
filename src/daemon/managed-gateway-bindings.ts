@@ -202,7 +202,6 @@ export async function discoverManagedGatewayBindings(
     if (options.requireComplete || hasCommandProcessCleanupError(error)) {
       throw error;
     }
-    return results;
   }
 
   return results;

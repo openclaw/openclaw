@@ -56,32 +56,6 @@ function createRegistry(handlers: GatewayRequestHandlers) {
 }
 
 describe("subagent announce Gateway instance dispatch", () => {
-  it("delivers a detached announce through its explicit instance resolver", async () => {
-    const context = createContext({
-      agent: ({ respond }) => respond(true, { raw: true }),
-    });
-    const idempotencyKey = "detached-subagent-announce";
-    context.dedupe.set(`agent:${idempotencyKey}`, {
-      ts: Date.now(),
-      ok: true,
-      payload: { runId: "announce-run", status: "ok", summary: "delivered" },
-    });
-
-    await expect(
-      dispatchSubagentAnnounceAgent(
-        {
-          message: "Process one completed child result.",
-          idempotencyKey,
-        },
-        {
-          expectFinal: true,
-          forceSyntheticClient: true,
-          resolveGatewayContext: () => context,
-        },
-      ),
-    ).resolves.toEqual({ runId: "announce-run", status: "ok", summary: "delivered" });
-  });
-
   it("delivers through a lifecycle-fenced instance resolver scope", async () => {
     const context = createContext({
       agent: ({ respond }) => respond(true, { raw: true }),

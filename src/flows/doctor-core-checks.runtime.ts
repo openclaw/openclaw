@@ -5,12 +5,15 @@ import { collectUnavailableAgentSkills } from "../commands/doctor-skills-core.js
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isNodeRuntime } from "../daemon/runtime-binary.js";
 import { resolveNodeRuntimeInfo } from "../daemon/runtime-paths.js";
+import { summarizeGatewayServiceLayout } from "../daemon/service-layout.js";
 import {
   getSystemdCgroupHygieneSummary,
   type GatewayServiceRuntime,
 } from "../daemon/service-runtime.js";
 import { resolveGatewayService, readGatewayServiceState } from "../daemon/service.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { formatInstallOwnerMessage, readInstallOwner } from "../infra/install-owner.js";
+import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import {
   formatLocalAudioSelection,
   inspectLocalAudioSelection,
@@ -74,6 +77,11 @@ export async function collectGatewayDaemonFindings(
   }
   const service = resolveGatewayService();
   const state = await readGatewayServiceState(service, { env: process.env });
+  const layout = await summarizeGatewayServiceLayout(state.command);
+  const serviceOwner = await readInstallOwner(
+    layout?.packageRootReal ?? layout?.packageRoot ?? null,
+  );
+  const ownerHint = serviceOwner ? formatInstallOwnerMessage(serviceOwner) : undefined;
   const findings: HealthFinding[] = [];
   if (state.loadState.status === "unknown") {
     findings.push({
@@ -83,12 +91,26 @@ export async function collectGatewayDaemonFindings(
       path: state.command?.sourcePath,
       target: service.label,
       fixHint:
+        ownerHint ??
         service.unsupportedReason ??
         "Run `openclaw gateway status --deep`, restore service-manager access, and retry.",
     });
     return findings;
   }
   if (!state.installed) {
+    const owner = await readInstallOwner(
+      await resolveOpenClawPackageRoot({ moduleUrl: import.meta.url, argv1: process.argv[1] }),
+    );
+    if (owner) {
+      return [
+        {
+          checkId: "core/doctor/gateway-daemon",
+          severity: "info",
+          message: formatInstallOwnerMessage(owner),
+          target: owner.displayName,
+        },
+      ];
+    }
     findings.push({
       checkId: "core/doctor/gateway-daemon",
       severity: "warning",
@@ -115,12 +137,14 @@ export async function collectGatewayDaemonFindings(
         target: nodePath,
         ...(runtime.status !== "supported"
           ? {
-              fixHint: [
-                ...(runtime.status === "unsupported"
-                  ? [formatUnsupportedNodeVersionMessage(runtime.version)]
-                  : []),
-                "Repair the Node runtime, then run `openclaw gateway install`.",
-              ].join("\n"),
+              fixHint:
+                ownerHint ??
+                [
+                  ...(runtime.status === "unsupported"
+                    ? [formatUnsupportedNodeVersionMessage(runtime.version)]
+                    : []),
+                  "Repair the Node runtime, then run `openclaw gateway install`.",
+                ].join("\n"),
             }
           : {}),
       });
@@ -133,7 +157,7 @@ export async function collectGatewayDaemonFindings(
       message: "Gateway service is installed but not loaded.",
       path: state.command?.sourcePath,
       target: service.label,
-      fixHint: "Start the installed service with `openclaw gateway start`.",
+      fixHint: ownerHint ?? "Start the installed service with `openclaw gateway start`.",
     });
   }
   const status = gatewayRuntimeStatus(state.runtime);
@@ -167,7 +191,7 @@ export async function collectGatewayDaemonFindings(
       message: "Gateway service supervision metadata is missing.",
       path: state.command?.sourcePath,
       target: service.label,
-      fixHint: state.runtime.detail ?? "Reinstall or reload the Gateway service.",
+      fixHint: ownerHint ?? state.runtime.detail ?? "Reinstall or reload the Gateway service.",
     });
   }
   const hygiene = getSystemdCgroupHygieneSummary(state.runtime?.systemd);

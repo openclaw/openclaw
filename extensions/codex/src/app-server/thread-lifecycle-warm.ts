@@ -68,7 +68,6 @@ type CodexLiveThreadReleaseParams = {
   abandonClient?: () => Promise<void>;
   lifecycleTiming: CodexThreadLifecycleTimingTracker;
   threadId: string;
-  cause?: unknown;
   assertCurrent?: () => void;
 };
 
@@ -104,7 +103,7 @@ export async function releaseCodexConsumedLiveThread(
   if (released) {
     return;
   }
-  return await abandonCodexLiveThreadRelease(options, options.cause);
+  return await abandonCodexLiveThreadRelease(options);
 }
 
 async function abandonCodexLiveThreadRelease(

@@ -40,6 +40,6 @@ export class NavDrawerSwipeLoader {
   }
 
   closed(): void {
-    this.owner?.closed();
+    this.owner?.reset();
   }
 }

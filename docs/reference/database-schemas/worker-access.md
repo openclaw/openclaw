@@ -91,6 +91,15 @@ the caller rechecks its original executor and requester before continuing schema
 inspection, native stop, or publication. Accepted writes retain the same signal
 settlement owner; other phase callers keep their current contracts until migrated.
 
+Service preparation awaits that bound phase operation before native stop and
+rechecks the original service and executor authority after the receipt. Current-core
+finalization retains its requester checks; package compensation retains its existing
+executor-only authority. The local mutable admission joins an accepted rollback
+operation before signal settlement and seals new rollback admission during shutdown.
+It does not retain an unbounded forward command. Fresh receiving processes keep
+their existing lifecycle owner. Stored records, schemas, and recovery policy are
+unchanged.
+
 Candidate Doctor records a predecessor Gateway stop through the same writer and
 joins the receipt before continuing maintenance, including when native stop
 verification fails afterward. Only a completed receipt in the original running
@@ -99,8 +108,16 @@ Finalization reads that receipt through the read worker and rechecks its current
 owner before inspecting and adopting the stopped service. Receipt encoding,
 restart policy, and older-driver behavior are unchanged.
 
+After state-owner contention, Doctor observes the serving Gateway lease through
+the existing read worker using its captured installation path and environment.
+This finite read retains Doctor's private schema admission and never bootstraps a
+missing or older database. It refreshes process liveness and rechecks cancellation
+and caller authority after the read settles, before considering a service stop.
+Lease acquisition, transactional checks, and the later foreground retry loop
+retain their synchronous owners.
+
 The installed updater still owns its first upgrade hop. Shipped synchronous
-ledger APIs, effect guards, general command progress, and finalization writes
+ledger APIs, effect guards, general command progress, and other finalization writes
 remain with their existing owners until their separate worker cutovers.
 
 Plugin requirement batches prepare their final installed index through the existing
@@ -234,9 +251,19 @@ and closes before replying, without creating, registering, or migrating a store.
 The existing pool transports the primary error message, not native error identity
 or nested cause metadata.
 Callers retain their captured paths and recheck write authority after awaited
-planning. Synchronous ingestion filters consume prepared tombstones. Forget's
-live lineage rechecks and supplied-connection mutation transactions retain their
-existing owner. Session policy metadata reads and cold bootstrap also remain separate.
+planning. Synchronous ingestion filters consume prepared tombstones. Forget retains
+its supplied database borrow while the connection-bound worker rereads live lineage,
+commits tombstones, and purges derived index rows in separate transactions under one
+writer turn. Optional schema preparation commits before those transactions. Origin
+rows are removed only after derived-state and filesystem cleanup succeeds. Failed
+or uncertain native results stop the remaining phases without replaying writes;
+an explicit retry still uses the durable tombstones and retained lineage. Index
+planning and vector inspection use the same retrieval worker and captured store
+target. Indexed memory text stays with that reader; the host receives only selected
+chunk identities, source paths, and counts. Preview remains noncreating, and native
+vector inspection closes its probe and read-only connection before replying.
+Session policy metadata reads and cold bootstrap remain separate. Schemas, stored
+formats, and update behavior are unchanged.
 
 Generated embedding-cache publication uses the existing memory publication worker
 and the captured published database, including during a shadow rebuild. Its native
@@ -245,9 +272,11 @@ capacity and writing vectors. Conflicting dimensions invalidate the generation
 before its writer turn releases, even when clearing fails or loses its reply;
 the error still propagates without replay. Bounded staging retains one vector row
 at a time and preserves cache binary values. Source-file inspection remains on the
-host. Cache reads and pruning, the published-generation guard for shadow source
-writes, and cold opening remain separate work. Schemas, cache retention, and stored
-formats are unchanged.
+host. Cache pruning uses that same worker for its live count and oldest-row deletion,
+with a transaction recheck before each batch of at most 100 rows. The host releases
+admission and yields between batches; only definite pre-entry lock failures retry.
+Cache reads, the published-generation guard for shadow source writes, and cold
+opening remain separate work. Schemas, cache retention, and stored formats are unchanged.
 
 The exported `OpenClawAgentSqliteWorkerStore` type retains its `run` and `close`
 contract for existing adapters. The factory's inferred return type additionally
@@ -319,6 +348,13 @@ candidate order and skips every durable pending result or journal. Per-candidate
 environment and move checks remain live, and reclaim rechecks idle policy,
 session work, and the exact placement before draining. Those synchronous guards
 remain separate migration work; suspension policy and teardown are unchanged.
+
+Disk-space monitoring discovers placement identities in the same reader, then
+hydrates their current records through the existing placement projection. Probe
+order remains the database's session-ID order. Live row checks still prune old
+observations and reject samples from an owner replaced during a tunnel probe;
+those synchronous checks remain separate migration work. Disk-pressure thresholds,
+probe limits, and notification behavior are unchanged.
 
 Worker session-tool grants and operation journals use the same shared-state
 writer. The placement authority owner publishes committed tool grants and fences

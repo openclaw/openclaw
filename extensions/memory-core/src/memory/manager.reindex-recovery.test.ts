@@ -8,15 +8,10 @@ import {
   resolveSessionTranscriptsDirForAgent,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
-import {
-  encodeMemoryEmbedding,
-  requireNodeSqlite,
-} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { encodeMemoryEmbedding } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { registerEmbeddingProvider } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
-import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { withSessionTranscriptWriteLock } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runtime";
 import * as sqliteRuntime from "openclaw/plugin-sdk/sqlite-runtime";
 import {
@@ -30,7 +25,11 @@ import type { EmbeddingProvider } from "./embeddings.js";
 import { memoryCpuProcessEntrypoints } from "./manager-cpu-entrypoints.js";
 import { resetMemoryDatabase } from "./manager-db.js";
 import { memoryPublicationFaultEntrypoint } from "./manager-publication-fault-entrypoint.test-support.js";
-import { observePublishedReservations } from "./manager-publication-observer.test-support.js";
+import {
+  observePublishedReservations,
+  observePublishedSql,
+  reservePublishedWriter,
+} from "./manager-publication-observer.test-support.js";
 import { waitForMemoryReindexLock } from "./manager-reindex-lock.js";
 import type { MemoryIndexMeta } from "./manager-reindex-state.js";
 import type { MemoryIndexManager } from "./manager.js";
@@ -167,28 +166,6 @@ describe("memory manager reindex recovery", () => {
     }
     manager = result.manager as unknown as MemoryIndexManager;
     return manager;
-  }
-
-  async function reservePublishedWriter(mutate?: () => void | Promise<void>) {
-    const target = {
-      agentId: "main",
-      sessionKey: "agent:main:cache-admission",
-      sessionId: "cache-admission",
-    };
-    await upsertSessionEntry({
-      ...target,
-      entry: { sessionId: target.sessionId, updatedAt: Date.now() },
-    });
-    const entered = createDeferred<void>();
-    const released = createDeferred<void>();
-    const done = withSessionTranscriptWriteLock(target, async () => {
-      entered.resolve();
-      await released.promise;
-      await mutate?.();
-    });
-    void done.catch(() => undefined);
-    await Promise.race([entered.promise, done]);
-    return { done, release: released.resolve };
   }
 
   it("retries both sources without force after a late shadow failure", async () => {
@@ -595,28 +572,19 @@ describe("memory manager reindex recovery", () => {
     const memoryManager = await openManager(cfg);
     await memoryManager.sync({ reason: "cli", force: true });
     const harness = memoryManager as unknown as ReindexHarness;
-    const { StatementSync } = requireNodeSqlite();
-    const statements = new WeakMap<object, string>();
-    const prepare = harness.db.prepare.bind(harness.db);
-    vi.spyOn(harness.db, "prepare").mockImplementation((sql) => {
-      const statement = prepare(sql);
-      statements.set(statement, sql);
-      return statement;
-    });
-    const run = vi.spyOn(StatementSync.prototype, "run");
+    const observed = observePublishedSql(harness.db);
     const cacheWrites = () =>
-      run.mock.contexts.flatMap((statement) => {
-        if (!(statement instanceof StatementSync)) {
-          return [];
-        }
-        const sql = statements.get(statement);
-        return sql && /(?:INSERT INTO|DELETE FROM|UPDATE) ["`]?memory_embedding_cache\b/i.test(sql)
-          ? [sql]
-          : [];
-      });
+      observed
+        .calls()
+        .filter(
+          ({ method, sql }) =>
+            method === "run" &&
+            /(?:INSERT INTO|DELETE FROM|UPDATE) ["`]?memory_embedding_cache\b/i.test(sql),
+        )
+        .map(({ sql }) => sql);
     harness.db.prepare("UPDATE memory_embedding_cache SET updated_at = updated_at WHERE 0").run();
     expect(cacheWrites()).toHaveLength(1);
-    run.mockClear();
+    observed.clear();
     const published = harness.db.prepare("SELECT text FROM memory_index_chunks").all();
     await fs.writeFile(memoryPath, "replacement beta");
     const metadata = vi.spyOn(harness, "writeMeta").mockImplementationOnce(() => {
@@ -628,6 +596,7 @@ describe("memory manager reindex recovery", () => {
     );
     expect(harness.db.prepare("SELECT text FROM memory_index_chunks").all()).toEqual(published);
     expect(cacheWrites()).toEqual([]);
+    observed.restore();
     metadata.mockRestore();
     const paidInputs = embeddingCalls.flat();
     expect(paidInputs).toContain("replacement beta");
@@ -778,16 +747,42 @@ describe("memory manager reindex recovery", () => {
   it("bounds the canonical cache after a successful all-cache-hit rebuild", async () => {
     const { memoryManager, harness, newest } = await createOversizedPublishedCache();
     embeddingCalls = [];
+    const observed = observePublishedSql(harness.db);
+    const counts = () =>
+      observed
+        .calls()
+        .filter(({ sql }) =>
+          /^\s*SELECT\s+COUNT\s*\(\s*\*\s*\)[\s\S]*?\bFROM\s+["`]?memory_embedding_cache\b/i.test(
+            sql,
+          ),
+        );
+    const deletes = () =>
+      observed
+        .calls()
+        .filter(({ sql }) => /^\s*DELETE\s+FROM\s+["`]?memory_embedding_cache\b/i.test(sql));
+    try {
+      expect(
+        harness.db.prepare("SELECT COUNT(*) AS c FROM memory_embedding_cache WHERE 0").get(),
+      ).toEqual({ c: 0 });
+      expect(harness.db.prepare("DELETE FROM memory_embedding_cache WHERE 0").run().changes).toBe(
+        0,
+      );
+      expect([counts().length, deletes().length]).toEqual([1, 1]);
+      observed.clear();
 
-    await memoryManager.sync({ reason: "cli", force: true });
+      await memoryManager.sync({ reason: "cli", force: true });
 
-    expect(embeddingCalls).toEqual([]);
-    expect(harness.db.prepare("SELECT * FROM memory_embedding_cache ORDER BY hash").all()).toEqual(
-      newest,
-    );
-    expect(harness.db.prepare("SELECT text FROM memory_index_chunks").all()).toEqual([
-      { text: "published alpha" },
-    ]);
+      expect(embeddingCalls).toEqual([]);
+      expect(
+        harness.db.prepare("SELECT * FROM memory_embedding_cache ORDER BY hash").all(),
+      ).toEqual(newest);
+      expect(harness.db.prepare("SELECT text FROM memory_index_chunks").all()).toEqual([
+        { text: "published alpha" },
+      ]);
+      expect({ counts: counts(), deletes: deletes() }).toEqual({ counts: [], deletes: [] });
+    } finally {
+      observed.restore();
+    }
   });
 
   it("leaves even an oversized published cache untouched when a full rebuild fails", async () => {

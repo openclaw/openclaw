@@ -112,7 +112,6 @@ export abstract class AgentSessionBase {
 
   protected sessionModelRegistry: ModelRegistry;
 
-  // Tool registry for extension getTools/setTools
   protected toolRegistry: Map<string, AgentTool> = new Map();
   protected toolDefinitions: Map<string, ToolDefinitionEntry> = new Map();
   protected toolPromptSnippets: Map<string, string> = new Map();
@@ -560,7 +559,7 @@ export abstract class AgentSessionBase {
   protected reconnectToAgent(): void {
     if (this.unsubscribeAgent) {
       return;
-    } // Already connected
+    }
     this.unsubscribeAgent = this.agent.subscribe(this.handleAgentEvent);
   }
 
@@ -583,9 +582,7 @@ export abstract class AgentSessionBase {
       }
     }
 
-    this.currentExtensionRunner.invalidate(
-      "This extension ctx is stale after session replacement or reload. Do not use a captured api or command ctx after ctx.newSession(), ctx.fork(), ctx.switchSession(), or ctx.reload(). For newSession, fork, and switchSession, move post-replacement work into withSession and use the ctx passed to withSession. For reload, do not use the old ctx after await ctx.reload().",
-    );
+    this.currentExtensionRunner.invalidate();
     this.disconnectFromAgent();
     this.eventListeners = [];
     if (this.cleanupProviderSessionResourcesOnDispose) {
@@ -747,18 +744,7 @@ export abstract class AgentSessionBase {
   }
 
   protected normalizePromptGuidelines(guidelines: string[] | undefined): string[] {
-    if (!guidelines || guidelines.length === 0) {
-      return [];
-    }
-
-    const unique = new Set<string>();
-    for (const guideline of guidelines) {
-      const normalized = guideline.trim();
-      if (normalized.length > 0) {
-        unique.add(normalized);
-      }
-    }
-    return Array.from(unique);
+    return [...new Set(guidelines?.map((guideline) => guideline.trim()).filter(Boolean))];
   }
 
   protected collectActiveToolPromptMetadata(toolNames: string[]): ActiveToolPromptMetadata {

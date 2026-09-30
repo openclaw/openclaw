@@ -83,20 +83,6 @@ function mergeStreamingConfig(base: unknown, override: unknown): unknown {
   return merged;
 }
 
-function mergeStreamingEntry(
-  base: AcpParentProgressStreamingConfig,
-  override: StreamingCompatEntry | undefined,
-): StreamingCompatEntry {
-  if (!override) {
-    return base;
-  }
-  return {
-    ...base,
-    ...override,
-    streaming: mergeStreamingConfig(base.streaming, override.streaming),
-  };
-}
-
 function resolveParentProgressStreamingEntry(params: {
   cfg: OpenClawConfig | undefined;
   deliveryContext: DeliveryContext | undefined;
@@ -118,17 +104,13 @@ function resolveParentProgressStreamingEntry(params: {
     channelId,
     normalizeAccountId,
   );
-  return mergeStreamingEntry(channelCfg, accountCfg);
-}
-
-function resolveParentProgressCommentary(params: {
-  cfg: OpenClawConfig | undefined;
-  deliveryContext: DeliveryContext | undefined;
-}): boolean {
-  return resolveChannelStreamingProgressCommentary(
-    resolveParentProgressStreamingEntry(params),
-    true,
-  );
+  return accountCfg
+    ? {
+        ...channelCfg,
+        ...accountCfg,
+        streaming: mergeStreamingConfig(channelCfg.streaming, accountCfg.streaming),
+      }
+    : channelCfg;
 }
 
 export function startAcpSpawnParentStreamRelay(params: {
@@ -295,10 +277,13 @@ export function startAcpSpawnParentStreamRelay(params: {
     scheduleLogFlush();
   };
   const shouldSurfaceUpdates = params.surfaceUpdates !== false;
-  const shouldRelayProgressCommentary = resolveParentProgressCommentary({
-    cfg: params.cfg,
-    deliveryContext: params.deliveryContext,
-  });
+  const shouldRelayProgressCommentary = resolveChannelStreamingProgressCommentary(
+    resolveParentProgressStreamingEntry({
+      cfg: params.cfg,
+      deliveryContext: params.deliveryContext,
+    }),
+    true,
+  );
   const acpProjectionSettings = resolveAcpProjectionSettings(params.cfg ?? {});
   const eventRouting = params.eventRouting ?? {
     mainKey: params.mainKey,
@@ -393,9 +378,7 @@ export function startAcpSpawnParentStreamRelay(params: {
     if (disposed || flushTimer || streamFlushMs <= 0) {
       return;
     }
-    flushTimer = setTimeout(() => {
-      flushPending();
-    }, streamFlushMs);
+    flushTimer = setTimeout(flushPending, streamFlushMs);
     flushTimer.unref?.();
   };
 

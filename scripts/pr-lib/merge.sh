@@ -87,7 +87,7 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/crabbox-merge-bypass.sh"
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/merge-outcome.sh"
 
 verify_prior_ci_admin() {
-  local pr="$1" head="$2" actor proof review_ci
+  local pr="$1" head="$2" expected_proof="${3:-$MERGE_PRIOR_CI_PROOF}" actor proof review_ci
   [ "${MERGE_REPO_HOST:-}" = github.com ] || { echo "Prior-CI admin admission currently requires github.com." >&2; return 1; }
   actor=$(pr_gh_writer_login "$MERGE_REPO_HOST") || return 1
   proof=$(node "$script_parent_dir/pr-lib/merge-prior-ci.mjs" verify "$MERGE_ADMIN_EVIDENCE" "$MERGE_REPO_NAME" "$pr" "$head" "$actor" "$PR_MAIN_SHA") || return 1
@@ -101,7 +101,7 @@ verify_prior_ci_admin() {
     echo "A failing review cannot use the prior-success conflict-resolution exception." >&2
     return 1
   fi
-  if [ -n "$MERGE_PRIOR_CI_PROOF" ] && [ "$MERGE_PRIOR_CI_PROOF" != "$proof" ]; then
+  if [ -n "$expected_proof" ] && [ "$expected_proof" != "$proof" ]; then
     echo "Prior-CI admin evidence or authority changed during admission; no merge requested." >&2
     return 1
   fi
@@ -596,6 +596,7 @@ merge_run() {
   local MERGE_USE_PRIOR_CI_ADMIN=false
   local MERGE_PRIOR_CI_REST_OBSERVATION=false
   local MERGE_PRIOR_CI_RECALCULATED=false
+  local MERGE_PRIOR_CI_REMATERIALIZE_MAIN=""
   if [ -n "$MERGE_ADMIN_EVIDENCE" ] || [ "$confirmed_admin" = true ]; then
     [ -n "$MERGE_ADMIN_EVIDENCE" ] && [ "$confirmed_admin" = true ] && [ "$auto_merge_requested" = false ] &&
       [ -z "$legacy_directory$refusal_directory" ] && [ "$cancel_auto" = false ] &&
@@ -1022,18 +1023,35 @@ merge_run() {
     require_correction_publication_gates "$pr" "$(pr_git rev-parse HEAD)" || return 1
   fi
   if [ "$MERGE_USE_PRIOR_CI_ADMIN" = true ]; then
-    # Materialize forward main before the last live authority verification.
-    merge_outcome_stable "$pr" || return 1
-    verify_prior_ci_admin "$pr" "$PREP_HEAD_SHA" || return 1
-    if [ "$MERGE_PRIOR_CI_REST_OBSERVATION" != true ]; then
+    local authority_round authority_result expected_prior_ci_proof="$MERGE_PRIOR_CI_PROOF"
+    for authority_round in 1 2 3; do
+      # Retain only the equality fingerprint, never a prior live authority decision.
+      MERGE_PRIOR_CI_PROOF=""
+      merge_outcome_stable "$pr" false requalify-prior-ci || return 1
+      verify_prior_ci_admin "$pr" "$PREP_HEAD_SHA" "$expected_prior_ci_proof" || return 1
+      [ "$MERGE_PRIOR_CI_REST_OBSERVATION" != true ] || break
       # GraphQL retains its post-authority stability check without fetching.
       # REST already brackets policy and main before the final authority check.
       MERGE_PRIOR_CI_RECALCULATED=false
-      GIT_NO_LAZY_FETCH=1 merge_outcome_stable "$pr" true || return 1
+      authority_result=0
+      GIT_NO_LAZY_FETCH=1 merge_outcome_stable "$pr" true requalify-prior-ci || authority_result=$?
+      if [ "$authority_result" -eq 75 ] && [ -n "$MERGE_PRIOR_CI_REMATERIALIZE_MAIN" ]; then
+        MERGE_PRIOR_CI_PROOF=""
+        if [ "$authority_round" -eq 3 ]; then
+          merge_outcome_stop "prior-CI main kept advancing after 3 authority rounds; stopped before intent/dispatch"
+          return 1
+        fi
+        echo "Requalifying prior-CI admission after main $MERGE_PRIOR_CI_REMATERIALIZE_MAIN (round $((authority_round + 1))/3)."
+        # The previous authority decision is discarded before any materialization.
+        verify_prior_ci_main_advance "$MERGE_PRIOR_CI_OBSERVED_MAIN" "$MERGE_PRIOR_CI_REMATERIALIZE_MAIN" || return 1
+        continue
+      fi
+      [ "$authority_result" -eq 0 ] || return 1
       if [ "$MERGE_PRIOR_CI_REST_OBSERVATION" = true ] || [ "$MERGE_PRIOR_CI_RECALCULATED" = true ]; then
         verify_prior_ci_admin "$pr" "$PREP_HEAD_SHA" || return 1
       fi
-    fi
+      break
+    done
     # No awaited operation may replace the operator's bytes after validation.
     node "$script_parent_dir/pr-lib/merge-prior-ci.mjs" unchanged \
       "$MERGE_ADMIN_EVIDENCE" "$(printf '%s\n' "$MERGE_PRIOR_CI_PROOF" | jq -r .evidenceSha256)" >/dev/null || return 1

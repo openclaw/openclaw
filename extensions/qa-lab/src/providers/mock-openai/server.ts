@@ -4,7 +4,6 @@ import { once } from "node:events";
 import { createServer } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
 import { format as formatUrl } from "node:url";
-import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   closeQaHttpServer,
   dispatchQaHttpRequest,
@@ -122,6 +121,7 @@ import {
   extractEmbeddingInputTexts,
   buildDeterministicEmbedding,
 } from "./mock-openai-contracts.js";
+import { planCronFailureRepairTurn } from "./mock-openai-cron-failure-repair.js";
 import {
   extractExactReplyDirective,
   extractExactMarkerDirective,
@@ -164,7 +164,8 @@ import {
   extractToolOutputStructuredError,
   extractToolOutputCallId,
   extractAllToolOutputText,
-  extractUserTextAfterLatestToolOutput,
+  extractFollowthroughEvidenceText,
+  normalizeResponsesInput,
   buildSlackMpimHistoryReply,
   extractUserTurnTexts,
   extractInstructionsText,
@@ -337,16 +338,6 @@ const QA_REPEATED_REQUEST_STALL_ATTEMPT = 5;
 const QA_STALLED_TURN_RESPONSE_PAUSE_MS = 8_000;
 const QA_STALLED_TURN_STALLED_RESPONSE_PAUSE_MS = 90_000;
 
-function normalizeResponsesInput(value: unknown): ResponsesInputItem[] {
-  if (Array.isArray(value)) {
-    return value.map(asOptionalRecord).filter((item) => item !== undefined);
-  }
-  if (typeof value === "string") {
-    return [{ role: "user", content: [{ type: "input_text", text: value }] }];
-  }
-  return [];
-}
-
 function resolveCompactionSummaryFaultMode(params: {
   allInputText: string;
   requestKind: MockOpenAiRequestKind;
@@ -385,12 +376,6 @@ function buildMemoryGetArgs(result: Record<string, unknown>) {
         ? Math.max(1, result.endLine)
         : 1;
   return { path: result.path, from, lines: 4 };
-}
-
-function extractFollowthroughEvidenceText(input: ResponsesInputItem[]): string {
-  return [extractAllToolOutputText(input), extractUserTextAfterLatestToolOutput(input)]
-    .filter(Boolean)
-    .join("\n");
 }
 
 const PERSONAL_FOLLOWTHROUGH_FIXTURES = [
@@ -547,6 +532,10 @@ async function buildResponsesPayload(
   }
   const compactionRetryScenarioActive =
     scenarioState.compactionRetryActive || hasCompactionRetryMarker;
+  const cronFailureRepairTurn = planCronFailureRepairTurn(prompt, input);
+  if (cronFailureRepairTurn) {
+    return cronFailureRepairTurn;
+  }
   // The queued followup carries the stalled prompt in transcript history, so
   // current-turn dispatch must win before the persistent recovery fixture.
   if (QA_REPEATED_REQUEST_QUEUED_REPLY_PROMPT_RE.test(prompt)) {
@@ -1213,25 +1202,21 @@ async function buildResponsesPayload(
       return buildAssistantEvents(slackChartMatch[2]);
     }
   }
-  if (QA_MESSAGE_DECISION_SUPPRESSION_PROMPT_RE.test(allInputText)) {
+  const suppressMessageDecision = QA_MESSAGE_DECISION_SUPPRESSION_PROMPT_RE.test(allInputText);
+  if (suppressMessageDecision || QA_MESSAGE_DECISION_SEND_PROMPT_RE.test(allInputText)) {
     if (!hasCompletedToolOutput && hasDeclaredTool(body, "message")) {
       return buildToolCallEventsWithArgs("message", {
         action: "send",
-        message:
-          "Delivery: Final assistant text is not automatically delivered in this run. Use the `message` tool to send user-visible output.",
-      });
-    }
-    if (hasCompletedToolOutput) {
-      return buildAssistantEvents("NO_REPLY");
-    }
-  }
-  if (QA_MESSAGE_DECISION_SEND_PROMPT_RE.test(allInputText)) {
-    if (!hasCompletedToolOutput && hasDeclaredTool(body, "message")) {
-      return buildToolCallEventsWithArgs("message", {
-        action: "send",
-        message: "QA-MESSAGE-DELIVERY-OK",
-        final: true,
-        presentation: { blocks: [{ type: "text", text: "QA-MESSAGE-DELIVERY-OK" }] },
+        ...(suppressMessageDecision
+          ? {
+              message:
+                "Delivery: Final assistant text is not automatically delivered in this run. Use the `message` tool to send user-visible output.",
+            }
+          : {
+              message: "QA-MESSAGE-DELIVERY-OK",
+              final: true,
+              presentation: { blocks: [{ type: "text", text: "QA-MESSAGE-DELIVERY-OK" }] },
+            }),
       });
     }
     if (hasCompletedToolOutput) {

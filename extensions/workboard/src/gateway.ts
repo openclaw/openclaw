@@ -1,4 +1,6 @@
 import type { WorkboardCard } from "@openclaw/workboard-contract";
+import { readStringParam } from "openclaw/plugin-sdk/core";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenClawPluginApi } from "../api.js";
 import { redactClaimToken } from "./card-redaction.js";
 import {
@@ -18,12 +20,41 @@ import {
   registerWorkboardWorkspaceCardMethods,
   registerWorkboardWorkspaceWorkflowMethods,
 } from "./gateway-workspace-methods.js";
+import type { WorkboardSessionsBoardService } from "./sessions-board.js";
 import { resolveWorkboardSqliteWorkerModuleUrl } from "./sqlite-store-paths.js";
 import { registerWorkboardStoreLifecycle } from "./store-lifecycle.js";
 import { WorkboardStore } from "./store.js";
 
 const READ_SCOPE = "operator.read" as const;
 const WRITE_SCOPE = "operator.write" as const;
+
+/**
+ * Interactive Sessions-board writes wait in the store's mutation queue, so the
+ * caller's full Gateway authority (transport, role/scope/profile authorization,
+ * in-process lifetime) is rechecked immediately before the SQLite write.
+ */
+function sessionsBoardCaller(
+  context: Pick<
+    GatewayMethodContext,
+    | "hasCurrentClientAuthority"
+    | "sessionMutationAuthorization"
+    | "sessionAccessAuthority"
+    | "sessionMutationCommitGuard"
+    | "signal"
+  >,
+) {
+  return {
+    assertCurrent() {
+      context.signal?.throwIfAborted();
+      if (context.hasCurrentClientAuthority?.() === false) {
+        throw new Error("Caller authority is no longer active.");
+      }
+      context.sessionAccessAuthority?.assertCurrent();
+      context.sessionMutationAuthorization?.assertCurrent();
+      context.sessionMutationCommitGuard?.();
+    },
+  };
+}
 
 function redactDiagnosticsRows(result: Awaited<ReturnType<WorkboardStore["diagnostics"]>>) {
   return {
@@ -53,6 +84,7 @@ function cardMutation(
 export function registerWorkboardGatewayMethods(params: {
   api: OpenClawPluginApi;
   store?: WorkboardStore;
+  sessionsBoard?: Pick<WorkboardSessionsBoardService, "read" | "update" | "move" | "refresh">;
 }) {
   const { api: hostApi } = params;
   const assertUploadsAllowed = (client: GatewayMethodContext["client"]) => {
@@ -93,19 +125,17 @@ export function registerWorkboardGatewayMethods(params: {
   const dispatchCards = createWorkboardDispatchHandler({
     api,
     store,
-    redactCard: redactClaimToken,
   });
 
   registerWorkboardResultMethods(api, [
     [
       "workboard.cards.list",
       READ_SCOPE,
-      async ({ params: requestParams }) =>
-        await listWorkboardCards(store, requestParams.boardId, redactClaimToken),
+      async ({ params: requestParams }) => await listWorkboardCards(store, requestParams.boardId),
     ],
   ]);
 
-  registerWorkboardWorkspaceCardMethods({ api, store, redactCard: redactClaimToken });
+  registerWorkboardWorkspaceCardMethods({ api, store });
 
   api.registerGatewayMethod(
     "workboard.cards.start",
@@ -172,7 +202,7 @@ export function registerWorkboardGatewayMethods(params: {
     cardMutation("unblock", (id) => store.unblock(id)),
   ]);
 
-  registerWorkboardWorkspaceBulkMethod({ api, store, redactCard: redactClaimToken });
+  registerWorkboardWorkspaceBulkMethod({ api, store });
 
   registerWorkboardResultMethods(api, [
     [
@@ -203,7 +233,56 @@ export function registerWorkboardGatewayMethods(params: {
     ["workboard.boards.list", READ_SCOPE, () => store.listBoards()],
   ]);
 
-  registerWorkboardWorkspaceBoardMethod({ api, store, redactCard: redactClaimToken });
+  registerWorkboardWorkspaceBoardMethod({ api, store });
+
+  const sessionsBoard = () => {
+    if (!params.sessionsBoard) {
+      throw new Error("Sessions board service is unavailable.");
+    }
+    return params.sessionsBoard;
+  };
+  registerWorkboardResultMethods(api, [
+    [
+      "workboard.sessionsBoard.read",
+      READ_SCOPE,
+      ({ params: input }) =>
+        sessionsBoard().read(readStringParam(input, "boardId", { required: true })),
+    ],
+    [
+      "workboard.sessionsBoard.update",
+      WRITE_SCOPE,
+      async (context: GatewayMethodContext) => {
+        const input = context.params;
+        const boardId = readStringParam(input, "boardId", { required: true });
+        if (!isRecord(input.patch)) {
+          throw new Error("patch must be an object.");
+        }
+        return {
+          board: await sessionsBoard().update(boardId, input.patch, sessionsBoardCaller(context)),
+        };
+      },
+    ],
+    [
+      "workboard.sessionsBoard.move",
+      WRITE_SCOPE,
+      (context: GatewayMethodContext) =>
+        sessionsBoard().move(
+          readStringParam(context.params, "boardId", { required: true }),
+          readStringParam(context.params, "sessionKey", { required: true }),
+          readStringParam(context.params, "columnId", { required: true }),
+          sessionsBoardCaller(context),
+        ),
+    ],
+    [
+      "workboard.sessionsBoard.refresh",
+      WRITE_SCOPE,
+      (context: GatewayMethodContext) =>
+        sessionsBoard().refresh(
+          readStringParam(context.params, "boardId", { required: true }),
+          sessionsBoardCaller(context),
+        ),
+    ],
+  ]);
 
   registerWorkboardResultMethods(api, [
     [
@@ -233,7 +312,7 @@ export function registerWorkboardGatewayMethods(params: {
     ],
   ]);
 
-  registerWorkboardWorkspaceWorkflowMethods({ api, store, redactCard: redactClaimToken });
+  registerWorkboardWorkspaceWorkflowMethods({ api, store });
 
   registerWorkboardResultMethods(api, [
     [

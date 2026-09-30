@@ -602,7 +602,6 @@ export async function refreshXaiOAuthCredential(
   }
   const tokenEndpoint = await resolveXaiOAuthRefreshTokenEndpoint(credential, options);
   const tokens = await requestXaiOAuthRefresh(tokenEndpoint, refreshToken, options);
-  const identity = resolveXaiOAuthIdentity(tokens);
   return {
     ...credential,
     type: "oauth",
@@ -611,9 +610,7 @@ export async function refreshXaiOAuthCredential(
     refresh: tokens.refreshToken ?? refreshToken,
     ...(tokens.expires ? { expires: tokens.expires } : {}),
     ...(tokens.idToken ? { idToken: tokens.idToken } : {}),
-    ...(identity.email ? { email: identity.email } : {}),
-    ...(identity.displayName ? { displayName: identity.displayName } : {}),
-    ...(identity.accountId ? { accountId: identity.accountId } : {}),
+    ...resolveXaiOAuthIdentity(tokens),
     tokenEndpoint,
     issuer: XAI_OAUTH_ISSUER,
   };

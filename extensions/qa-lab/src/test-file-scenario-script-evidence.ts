@@ -197,12 +197,7 @@ export async function readScriptProducerEvidence(params: {
     return {
       producerArtifact: {
         kind: "producer-evidence",
-        path: resolveScriptProducerArtifactPath({
-          evidenceDir: path.dirname(evidencePath),
-          repoRoot: params.repoRoot,
-          artifactPath: path.resolve(evidencePath),
-          explicitBase: true,
-        }),
+        path: toRepoArtifactPath(params.repoRoot, evidencePath),
         source: "script",
         sha256: createHash("sha256").update(captured.bytes).digest("hex"),
       },

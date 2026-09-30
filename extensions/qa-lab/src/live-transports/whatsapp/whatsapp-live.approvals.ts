@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { WhatsAppQaDriverSession } from "@openclaw/whatsapp/api.js";
 import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
+import type { QaGatewayChild } from "../../gateway-child.js";
 import {
   requestLiveQaApproval,
   resolveLiveQaApprovalDecision,
@@ -11,7 +12,6 @@ import type {
   WhatsAppObservedMessage,
   WhatsAppQaApprovalDecision,
   WhatsAppQaApprovalScenarioRun,
-  WhatsAppQaGateway,
   WhatsAppQaScenarioMetadata,
 } from "./whatsapp-live.contracts.js";
 import {
@@ -133,7 +133,7 @@ async function waitForWhatsAppApprovalMessage(params: {
 
 export async function runWhatsAppApprovalScenario(params: {
   driver: WhatsAppQaDriverSession;
-  gateway: WhatsAppQaGateway;
+  gateway: QaGatewayChild;
   observedMessages: WhatsAppObservedMessage[];
   run: WhatsAppQaApprovalScenarioRun;
   scenario: WhatsAppQaScenarioMetadata;

@@ -66,16 +66,9 @@ export async function loadReferenceAssets(params: {
   signal?: AbortSignal;
 }): Promise<LoadedMediaToolReference<VideoGenerationSourceAsset>[]> {
   const loaded = await loadMediaToolReferences<VideoGenerationSourceAsset>({
-    inputs: params.inputs,
+    ...params,
     toolName: "video_generate",
-    expectedKind: params.expectedKind,
     sandbox: params.sandboxConfig,
-    workspaceDir: params.workspaceDir,
-    cwd: params.cwd,
-    fsPolicy: params.fsPolicy,
-    maxBytes: params.maxBytes,
-    ssrfPolicy: params.ssrfPolicy,
-    signal: params.signal,
     mapMedia: (media) => ({
       buffer: media.buffer,
       mimeType: "mimeType" in media ? media.mimeType : media.contentType,

@@ -15,6 +15,8 @@ import {
 import { canCopySessionMarkdown } from "../../lib/sessions/session-menu-navigation.ts";
 import { pluginSessionMenuActions } from "../../plugins/control-ui-actions.ts";
 
+type SessionsPageMenuAction = Exclude<SessionMenuAction, { kind: "snooze" | "wake" }>;
+
 export function renderSessionManagementMenu(params: {
   context: ApplicationContext;
   row: GatewaySessionRow;
@@ -24,7 +26,7 @@ export function renderSessionManagementMenu(params: {
   groups: string[];
   work: SessionMenuWork | null;
   onClose: () => void;
-  onAction: (action: SessionMenuAction) => void;
+  onAction: (action: SessionsPageMenuAction) => void;
 }) {
   const { context, row } = params;
   const gateway = context.gateway.snapshot;
@@ -48,6 +50,7 @@ export function renderSessionManagementMenu(params: {
         sessionId: normalizeOptionalString(row.sessionId) ?? null,
         pinned: row.pinned === true,
         pinnable,
+        snoozedUntil: row.snoozedUntil ?? null,
         unread: row.unread === true,
         hiddenFromInvolvingMe: row.hiddenFromInvolvingMe,
         archived: row.archived === true,
@@ -78,7 +81,12 @@ export function renderSessionManagementMenu(params: {
       .work=${params.work}
       .pluginActions=${pluginSessionMenuActions(context.plugins, row)}
       .onClose=${params.onClose}
-      .onAction=${params.onAction}
+      .onAction=${(action: SessionMenuAction) => {
+        // Snooze controls belong to the sidebar; the page retains its existing action contract.
+        if (action.kind !== "snooze" && action.kind !== "wake") {
+          params.onAction(action);
+        }
+      }}
     ></openclaw-session-menu>
   `;
 }

@@ -314,6 +314,10 @@ type SessionEntryCore = SessionRestartRecoveryState &
     archiveReason?: SessionEntryArchiveReason;
     /** Timestamp (ms) when the session was pinned for quick access. */
     pinnedAt?: number;
+    /** Epoch ms wake time; suppresses the active session in sidebar lists until then. */
+    snoozedUntil?: number;
+    /** Server-stamped epoch ms when the current snooze was set. */
+    snoozedAt?: number;
     /** Timestamp (ms) when an operator client last marked the session read. */
     lastReadAt?: number;
     /** Agent-declared sidebar presence; projection drops it after expiresAt. */

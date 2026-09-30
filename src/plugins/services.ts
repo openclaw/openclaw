@@ -1,6 +1,8 @@
 import { STATE_DIR } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { runOutsideOperatorToolGatewayAuthority } from "../gateway/operator-tool-gateway-authority.js";
 import { getGatewayProcessInstanceId } from "../gateway/process-instance.js";
+import { createScheduledGatewayRunner } from "../gateway/scheduled-run-gateway-context.js";
 import type { GatewayPluginEventBroadcastFn } from "../gateway/server-broadcast-types.js";
 import {
   emitTrustedDiagnosticEventWithPrivateData,
@@ -491,6 +493,9 @@ async function startPreparedPluginServices({
     const { health, revoke } = createPluginServiceHealthReporter(entry);
     lease.retain(revoke);
     const runtime = getPluginRegistryRuntime(registry);
+    const runServiceStart = createScheduledGatewayRunner(
+      runtime ? getGatewayContextResolver(runtime) : undefined,
+    );
     const getCron = getCronService
       ? createPluginServiceCronGetter({
           getCron: getCronService,
@@ -638,11 +643,17 @@ async function startPreparedPluginServices({
         try {
           ownedService.startupConsumer = instance?.retainConsumer();
           const start = () => service.start(serviceContext);
-          await withPluginHttpRouteRegistry(
-            registry,
-            () =>
-              ownedService.startupConsumer ? ownedService.startupConsumer.run(start) : start(),
-            lease,
+          // Reload may originate in an RPC or tool; background work captures
+          // service-owned Gateway/worker context, never that caller's authority.
+          await runOutsideOperatorToolGatewayAuthority(() =>
+            runServiceStart(async () =>
+              withPluginHttpRouteRegistry(
+                registry,
+                () =>
+                  ownedService.startupConsumer ? ownedService.startupConsumer.run(start) : start(),
+                lease,
+              ),
+            ),
           );
         } finally {
           // Failed-start rollback waits on raw work, never on the rollback that follows it.

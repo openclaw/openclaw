@@ -555,13 +555,62 @@ verify_prior_ci_main_advance() {
   [ "$main" != "$previous" ] || [ "$main" != "$PR_MAIN_SHA" ] || return 0
   if [ "$local_only" = true ]; then
     # The CLI switch fails closed on Git versions that ignore the environment variable.
-    local GIT_NO_LAZY_FETCH=1 revision
+    local GIT_NO_LAZY_FETCH=1 revision role git_diagnostic git_exit missing_main="" missing_diagnostic="" query_output query_error
     export GIT_NO_LAZY_FETCH
-    for revision in "$previous" "$main" "$PR_MAIN_SHA"; do
-      pr_git --no-lazy-fetch cat-file -e "$revision^{commit}" 2>/dev/null || {
-        merge_outcome_stop "final prior-CI main cannot be verified with local-only Git; no fetch after authority verification"; return 1;
-      }
+    for role in previous-main reread-main verified-main; do
+      case "$role" in
+        previous-main) revision="$previous" ;;
+        reread-main) revision="$main" ;;
+        verified-main) revision="$PR_MAIN_SHA" ;;
+      esac
+      if git_diagnostic=$(pr_git --no-lazy-fetch cat-file -e "$revision^{commit}" 2>&1 >/dev/null); then
+        continue
+      else
+        git_exit=$?
+      fi
+      # Redact complete bounded input before clipping; never print raw reporting failures.
+      git_diagnostic=$(
+        unset PNPM_CONFIG_MODULES_DIR pnpm_config_modules_dir npm_config_modules_dir
+        printf '%s' "$git_diagnostic" | TSX_TSCONFIG_PATH="$script_parent_dir/../tsconfig.json" \
+          node --import "$script_parent_dir/tsx.mjs" --input-type=module -e '
+        import { pathToFileURL } from "node:url";
+        const chunks = [];
+        let bytes = 0;
+        for await (const chunk of process.stdin) {
+          bytes += chunk.length;
+          if (bytes <= 8192) chunks.push(chunk);
+          else chunks.length = 0;
+        }
+        let diagnostic = "[Git diagnostic exceeded 8192 bytes]";
+        if (bytes <= 8192) {
+          const { redactSensitiveText } = await import(pathToFileURL(process.argv[1]).href);
+          diagnostic = redactSensitiveText(Buffer.concat(chunks).toString("utf8"), { mode: "tools" })
+            .replace(/\s+/g, " ").trim().slice(0, 512) || "[Git produced no diagnostic]";
+        }
+        process.stdout.write(JSON.stringify(diagnostic));
+        ' "$script_parent_dir/../src/logging/redact.ts" 2>/dev/null
+      ) || git_diagnostic='"[Git diagnostic unavailable]"'
+      if [ "${4:-}" = requalify-prior-ci ] && [ "$role" = reread-main ] && [ "$main" != "$previous" ]; then
+        # A failed peeled lookup alone also means corruption or denied access.
+        # Only Git's successful raw-object missing response can invalidate this round.
+        query_error=$(mktemp .local/merge-main-query.XXXXXX) || return 1
+        if query_output=$(printf '%s\n' "$main" | pr_git --no-lazy-fetch cat-file --batch-check='%(objectname) %(objecttype)' 2>"$query_error") &&
+          [ ! -s "$query_error" ] && [ "$query_output" = "$main missing" ]; then
+          missing_main="$main"
+          missing_diagnostic="role=$role oid=$revision git-exit=$git_exit diagnostic=$git_diagnostic"
+        fi
+        rm -f "$query_error" || return 1
+        [ -z "$missing_main" ] || continue
+      fi
+      merge_outcome_stop "final prior-CI main cannot be verified with local-only Git; role=$role oid=$revision git-exit=$git_exit diagnostic=$git_diagnostic; no fetch after authority verification"
+      return 1
     done
+    if [ -n "$missing_main" ]; then
+      # Both old pins passed before the caller may leave the local-only window.
+      MERGE_PRIOR_CI_REMATERIALIZE_MAIN="$missing_main"
+      echo "Prior-CI local-only main unavailable: $missing_diagnostic; returning to pre-authority qualification without intent/dispatch" >&2
+      return 75
+    fi
   else
     merge_outcome_require_main "$previous" || return 1
     merge_outcome_require_main "$main" || return 1
@@ -606,7 +655,18 @@ merge_outcome_stable() {
         ' >/dev/null; then
         if [ "${MERGE_USE_PRIOR_CI_ADMIN:-false}" = true ]; then
           main=$(printf '%s\n' "$reread" | jq -r .main) || return 1
-          verify_prior_ci_main_advance "$previous_main" "$main" "$local_only" || return 1
+          local proof_main="$previous_main" advance_result=0
+          if [ "${3:-}" = requalify-prior-ci ] && [ "$local_only" != true ] && [ -n "${MERGE_PRIOR_CI_REMATERIALIZE_MAIN:-}" ]; then
+            # Keep the known projection while requiring descent from the tip
+            # that invalidated the previous authority window.
+            proof_main="$MERGE_PRIOR_CI_REMATERIALIZE_MAIN"
+          fi
+          verify_prior_ci_main_advance "$proof_main" "$main" "$local_only" "${3:-}" || advance_result=$?
+          if [ "$advance_result" -ne 0 ]; then
+            [ "$advance_result" -eq 75 ] && [ -n "${MERGE_PRIOR_CI_REMATERIALIZE_MAIN:-}" ] && return 75
+            return 1
+          fi
+          MERGE_PRIOR_CI_REMATERIALIZE_MAIN=""
           MERGE_PRIOR_CI_OBSERVED_MAIN="$main"
           if printf '%s\n' "$reread" | jq -e '.pr.mergeable == "UNKNOWN" or .pr.mergeStateStatus == "UNKNOWN"' >/dev/null; then
             if [ "$observation_attempt" -eq 3 ]; then

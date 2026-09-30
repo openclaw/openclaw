@@ -116,15 +116,8 @@ function stripLmstudioStoredAuthConfig(cfg: OpenClawConfig): OpenClawConfig {
   };
 }
 
-function resolvePositiveInteger(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    const normalized = Math.floor(value);
-    return normalized > 0 ? normalized : undefined;
-  }
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
+function resolvePositiveInteger(value: string | undefined): number | undefined {
+  const trimmed = value?.trim();
   if (!trimmed || !/^\d+$/.test(trimmed)) {
     return undefined;
   }
@@ -139,16 +132,17 @@ function buildLmstudioSetupProviderConfig(params: {
   headers: ModelProviderConfig["headers"] | undefined;
   models: ModelDefinitionConfig[];
 }): ModelProviderConfig {
-  const existingWithoutAuth = params.existingProvider
-    ? (({ auth: _auth, apiKey: _apiKey, ...rest }) => rest)(params.existingProvider)
-    : undefined;
-  const sharedWithoutAuth = params.sharedProvider
-    ? (({ auth: _auth, apiKey: _apiKey, ...rest }) => rest)(params.sharedProvider)
-    : undefined;
+  const {
+    auth: _auth,
+    apiKey: _apiKey,
+    ...provider
+  } = {
+    ...params.existingProvider,
+    ...params.sharedProvider,
+  };
   const resolvedAuth = resolveLmstudioProviderAuthMode(params.apiKey);
   return {
-    ...existingWithoutAuth,
-    ...sharedWithoutAuth,
+    ...provider,
     baseUrl: params.baseUrl,
     api: params.sharedProvider?.api ?? params.existingProvider?.api ?? "openai-completions",
     ...(resolvedAuth ? { auth: resolvedAuth } : {}),

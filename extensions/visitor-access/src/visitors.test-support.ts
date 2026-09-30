@@ -209,6 +209,9 @@ export function visitorFixture(
   const runtime: Pick<PluginRuntime, "gateway" | "config"> = {
     gateway: {
       isAvailable: async () => true,
+      async readSessionFacts() {
+        throw new Error("Unexpected session facts request");
+      },
       async request() {
         throw new Error("Expected a mocked Gateway request");
       },

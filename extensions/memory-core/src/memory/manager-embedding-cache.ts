@@ -91,6 +91,38 @@ export function loadMemoryEmbeddingCache(params: {
   return out;
 }
 
+export function countMemoryEmbeddingCache(database: DatabaseSync): number {
+  const db = getNodeSqliteKysely<EmbeddingCacheDatabase>(database);
+  const result = executeSqliteQuerySync(
+    database,
+    db.selectFrom("memory_embedding_cache").select((eb) => eb.fn.countAll<number>().as("count")),
+  );
+  return result.rows[0]!.count;
+}
+
+/** The caller holds the write transaction; another purge may have reduced the cache. */
+export function pruneMemoryEmbeddingCache(database: DatabaseSync, maxEntries: number): void {
+  const excess = countMemoryEmbeddingCache(database) - maxEntries;
+  if (excess <= 0) {
+    return;
+  }
+  const db = getNodeSqliteKysely<EmbeddingCacheDatabase>(database);
+  executeSqliteQuerySync(
+    database,
+    db
+      .deleteFrom("memory_embedding_cache")
+      .where(
+        "rowid",
+        "in",
+        db
+          .selectFrom("memory_embedding_cache")
+          .select("rowid")
+          .orderBy("updated_at", "asc")
+          .limit(Math.min(excess, 100)),
+      ),
+  );
+}
+
 /** Discard ambiguous vector spaces without removing unrelated provider caches or index rows. */
 export function clearMemoryEmbeddingCacheIdentities(
   database: DatabaseSync,

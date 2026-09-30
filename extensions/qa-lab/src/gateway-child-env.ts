@@ -98,7 +98,6 @@ export function buildQaRuntimeEnv(params: {
     OPENCLAW_NO_RESPAWN: "1",
     OPENCLAW_TEST_FAST: "1",
     OPENCLAW_EMBEDDED_ABORT_SETTLE_TIMEOUT_MS: "2000",
-    OPENCLAW_QA_PARENT_PID: String(process.pid),
     OPENCLAW_QA_TEMP_ROOT: params.tempRoot,
     ...(params.stagedBundledPluginsRoot
       ? { OPENCLAW_QA_STAGED_RUNTIME_ROOT: params.stagedBundledPluginsRoot }
@@ -139,6 +138,7 @@ export function buildQaRuntimeEnv(params: {
   // as the QA CLI; caller patches cannot disable either half of that contract.
   normalizedEnv.OPENCLAW_BUILD_PRIVATE_QA = "1";
   normalizedEnv.OPENCLAW_ENABLE_PRIVATE_QA_CLI = "1";
+  normalizedEnv.OPENCLAW_GATEWAY_HOST_LIFELINE = "stdin";
   // Parent shell startup controls must be removed after caller patches so no
   // launcher or runtime child can import them before its own allowlist runs.
   delete normalizedEnv[QA_LIVE_ANTHROPIC_SETUP_TOKEN_ENV];

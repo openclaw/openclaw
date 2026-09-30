@@ -383,33 +383,23 @@ export async function readCodexStatusProbes(
   config?: AuthProfileOrderConfig,
   agentDir?: string,
 ) {
+  const options = { config, agentDir };
   const [models, account, limits, mcps, skills] = await Promise.all([
     safeValue(() => listCodexAppServerModels(requestOptions(pluginConfig, 20, config, agentDir))),
     safeCodexControlRequest(
       pluginConfig,
       CODEX_CONTROL_METHODS.account,
       { refreshToken: false },
-      { config, agentDir },
+      options,
     ),
-    safeCodexControlRequest(pluginConfig, CODEX_CONTROL_METHODS.rateLimits, undefined, {
-      config,
-      agentDir,
-    }),
+    safeCodexControlRequest(pluginConfig, CODEX_CONTROL_METHODS.rateLimits, undefined, options),
     safeCodexControlRequest(
       pluginConfig,
       CODEX_CONTROL_METHODS.listMcpServers,
       { limit: 100 },
-      { config, agentDir },
+      options,
     ),
-    safeCodexControlRequest(
-      pluginConfig,
-      CODEX_CONTROL_METHODS.listSkills,
-      {},
-      {
-        config,
-        agentDir,
-      },
-    ),
+    safeCodexControlRequest(pluginConfig, CODEX_CONTROL_METHODS.listSkills, {}, options),
   ]);
 
   return { models, account, limits, mcps, skills };

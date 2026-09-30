@@ -75,6 +75,7 @@ if (tool === "installer") {
         udid: mode.includes("slim") ? "11111111-2222-3333-4444-555555555555" : "watch-fixture" }
     ] } }));
   } else if (args[1] === "bootstatus" && mode.endsWith("boot-failed")) {
+    console.error("Intentional simulator boot failure");
     process.exit(23);
   } else if (args[1] === "install" && !existsSync(args[3])) {
     process.exit(24);
@@ -163,7 +164,7 @@ if (tool === "installer") {
 }
 
 describe.skipIf(process.platform === "win32")("SimSlim workflow admission", () => {
-  it("prewarms and slims the exact iPhone before building and testing", () => {
+  it("prewarms and slims the build's exact iPhone before testing", () => {
     const { result, commands } = runSimulatorStep("voice-slim", [
       prepareStep,
       buildStep,
@@ -176,7 +177,7 @@ describe.skipIf(process.platform === "win32")("SimSlim workflow admission", () =
       expect(args[1]).toBe("11111111-2222-3333-4444-555555555555");
     }
     expect(commands.indexOf(slim[1]!)).toBeLessThan(
-      commands.findIndex(({ tool }) => tool === "pnpm"),
+      commands.findIndex(({ tool }) => tool === "xcodebuild"),
     );
     expect(
       commands.filter(({ tool, args }) => tool === "xcrun" && args[1] === "bootstatus"),
@@ -190,14 +191,15 @@ describe.skipIf(process.platform === "win32")("SimSlim workflow admission", () =
     expect(commands.some(({ tool }) => tool === "pnpm")).toBe(true);
   });
 
-  it.each(["install", "on", "verify", "boot"])("stops before builds on %s failure", (mode) => {
+  it.each(["install", "on", "verify", "boot"])("stops before XCTest on %s failure", (mode) => {
     const { result, commands } = runSimulatorStep(`voice-slim-${mode}-failed`, [
       prepareStep,
       buildStep,
       voiceStep,
     ]);
     expect(result.status).toBe(23);
-    expect(commands.some(({ tool }) => tool === "pnpm" || tool === "xcodebuild")).toBe(false);
+    expect(commands.some(({ tool }) => tool === "pnpm")).toBe(true);
+    expect(commands.some(({ tool }) => tool === "xcodebuild")).toBe(false);
   });
 });
 
@@ -301,14 +303,16 @@ describe.skipIf(process.platform === "win32")("iOS voice cleanup workflow", () =
     );
   });
 
-  it("stops before compilation and XCTest when the selected iPhone cannot boot", () => {
+  it("fails after the overlapping build without XCTest when the selected iPhone cannot boot", () => {
     const { result, commands } = runSimulatorStep("voice-boot-failed", [
       prepareStep,
       buildStep,
       voiceStep,
     ]);
     expect(result.status).toBe(23);
-    expect(commands.every((command) => command.tool === "xcrun")).toBe(true);
+    expect(commands.some((command) => command.tool === "pnpm")).toBe(true);
+    expect(commands.some((command) => command.tool === "xcodebuild")).toBe(false);
+    expect(result.stdout).toContain("Intentional simulator boot failure");
   });
 
   it.each([
@@ -366,7 +370,7 @@ describe.skipIf(process.platform === "win32")("iOS Access simulator workflow", (
     expect(iosStep?.if).toContain("matrix.phase == 'smoke'");
     expect(iosStep?.if).toContain("needs.preflight.outputs.compatibility_target != 'true'");
     expect(workflow.jobs["ios-build"]?.env?.IOS_CI_PHASE).toBe("${{ matrix.phase }}");
-    const { result, commands } = runSimulatorStep("voice", [prepareStep, iosStep]);
+    const { result, commands } = runSimulatorStep("voice", [prepareStep, buildStep, iosStep]);
     expect(result.status, result.stderr).toBe(0);
     const tests = commands.filter((command) => command.tool === "xcodebuild");
     expect(tests).toHaveLength(1);
@@ -382,7 +386,7 @@ describe.skipIf(process.platform === "win32")("iOS Access simulator workflow", (
   });
 
   it("keeps full lifecycle and UI tests alongside Access tests in full validation", () => {
-    const { result, commands } = runSimulatorStep("voice", [prepareStep, iosStep], {
+    const { result, commands } = runSimulatorStep("voice", [prepareStep, buildStep, iosStep], {
       IOS_CI_PHASE: "tests",
     });
     expect(result.status, result.stderr).toBe(0);
@@ -405,9 +409,13 @@ describe.skipIf(process.platform === "win32")("iOS Access simulator workflow", (
   });
 
   it("fails on auth test errors before attempting later UI tests", () => {
-    const { result, commands } = runSimulatorStep("voice-tests-failed", [prepareStep, iosStep], {
-      IOS_CI_PHASE: "tests",
-    });
+    const { result, commands } = runSimulatorStep(
+      "voice-tests-failed",
+      [prepareStep, buildStep, iosStep],
+      {
+        IOS_CI_PHASE: "tests",
+      },
+    );
     expect(result.status).toBe(25);
     expect(commands.filter((command) => command.tool === "xcodebuild")).toHaveLength(1);
   });

@@ -136,37 +136,21 @@ function captureHistoryRequest(request: SessionHistoryWorkerRequest): SessionHis
         params: { target: capturedTarget, query: structuredClone(request.params.query) },
       };
     }
+    const captureOptions = <T>(options: T) => ({
+      target: capturedTarget,
+      options: structuredClone(options),
+    });
     if (request.kind === "message-page") {
-      return {
-        kind: request.kind,
-        params: { target: capturedTarget, options: structuredClone(request.params.options) },
-      };
+      return { kind: request.kind, params: captureOptions(request.params.options) };
     }
     if (request.kind === "around-id") {
-      return {
-        kind: request.kind,
-        params: { target: capturedTarget, options: structuredClone(request.params.options) },
-      };
+      return { kind: request.kind, params: captureOptions(request.params.options) };
     }
     if (request.kind === "source-messages") {
-      return {
-        kind: request.kind,
-        params: { target: capturedTarget, options: structuredClone(request.params.options) },
-      };
+      return { kind: request.kind, params: captureOptions(request.params.options) };
     }
     if (request.kind === "recent-page") {
-      return {
-        kind: request.kind,
-        params: { target: capturedTarget, options: structuredClone(request.params.options) },
-      };
-    }
-    if (request.kind === "transcript-binding") {
-      return {
-        kind: request.kind,
-        params: {
-          target: capturedTarget,
-        },
-      };
+      return { kind: request.kind, params: captureOptions(request.params.options) };
     }
     if (request.kind === "conversation-binding") {
       return {
@@ -174,7 +158,11 @@ function captureHistoryRequest(request: SessionHistoryWorkerRequest): SessionHis
         params: { target: capturedTarget, conversationRef: request.params.conversationRef },
       };
     }
-    if (request.kind === "message-count" || request.kind === "reactions") {
+    if (
+      request.kind === "transcript-binding" ||
+      request.kind === "message-count" ||
+      request.kind === "reactions"
+    ) {
       return { kind: request.kind, params: { target: capturedTarget } };
     }
     if (request.kind === "message-by-id") {
@@ -525,9 +513,8 @@ export async function readSessionHistoryPageInWorker(
         },
       };
     });
-    const assertCurrent = () => acquired.assertCurrent();
+    const { assertCurrent, result } = acquired;
     assertCurrent();
-    const result = acquired.result;
     if (result.kind !== capturedRequest.kind) {
       throw new Error("Session history worker returned the wrong page type");
     }

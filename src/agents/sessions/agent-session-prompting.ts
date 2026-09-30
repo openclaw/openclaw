@@ -185,7 +185,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     const preparedCompactionBudget = takePromptCompactionRequestBudget(options);
     const expandPromptTemplates = options?.expandPromptTemplates ?? true;
     const preflightResult = options?.preflightResult;
-    let messages: AgentMessage[] | undefined;
+    let messages: AgentMessage[];
 
     try {
       // Handle extension commands first (execute immediately, even during streaming)
@@ -337,10 +337,6 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
       throw error;
     }
 
-    if (!messages) {
-      return;
-    }
-
     preflightResult?.(true);
     await this.runAgentPrompt(messages);
   }
@@ -362,15 +358,14 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
 
     try {
       await command.handler(args, ctx);
-      return true;
     } catch (err) {
       this.currentExtensionRunner.emitError({
         extensionPath: `command:${commandName}`,
         event: "command",
         error: err instanceof Error ? err.message : String(err),
       });
-      return true;
     }
+    return true;
   }
 
   /**

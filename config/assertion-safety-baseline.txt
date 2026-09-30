@@ -186,7 +186,7 @@ extensions/comfy/workflow-runtime.ts	2
 extensions/copilot-proxy/index.ts	1
 extensions/copilot/harness.ts	8
 extensions/copilot/src/attempt-config.ts	10
-extensions/copilot/src/attempt-execution.ts	3
+extensions/copilot/src/attempt-execution.ts	2
 extensions/copilot/src/attempt-finalize.ts	2
 extensions/copilot/src/attempt-prepare.ts	4
 extensions/copilot/src/attempt-transcript-journal.ts	22
@@ -404,7 +404,7 @@ extensions/google-meet/src/cli-space-commands.ts	3
 extensions/google-meet/src/meet-api.ts	1
 extensions/google-meet/src/transports/chrome-create.ts	1
 extensions/google/cli-backend-auth.runtime.ts	1
-extensions/google/cli-backend-isolated-auth.runtime.ts	5
+extensions/google/cli-backend-isolated-auth.runtime.ts	3
 extensions/google/cli-backend.ts	1
 extensions/google/embedding-batch.ts	3
 extensions/google/music-generation-provider.ts	1
@@ -425,7 +425,7 @@ extensions/imessage/src/accounts.ts	4
 extensions/imessage/src/actions-contract.ts	1
 extensions/imessage/src/actions.runtime.ts	2
 extensions/imessage/src/actions.ts	1
-extensions/imessage/src/approval-handler.runtime.ts	2
+extensions/imessage/src/approval-handler.runtime.ts	1
 extensions/imessage/src/approval-polls.ts	6
 extensions/imessage/src/approval-reaction-poller.ts	1
 extensions/imessage/src/approval-reactions.ts	2
@@ -699,8 +699,7 @@ extensions/openai/index.ts	2
 extensions/openai/native-web-search.ts	1
 extensions/openai/openai-chatgpt-oauth-token.runtime.ts	1
 extensions/openai/provider-policy-api.ts	2
-extensions/openai/realtime-voice-bridge.ts	3
-extensions/openai/realtime-voice-session-policy.ts	2
+extensions/openai/realtime-voice-bridge.ts	1
 extensions/opencode-go/stream-termination.ts	4
 extensions/opencode/provider-catalog.ts	2
 extensions/opencode/session-catalog-plugin.ts	1
@@ -1063,7 +1062,7 @@ extensions/whatsapp/src/security-fix.ts	2
 extensions/whatsapp/src/session-errors.ts	15
 extensions/whatsapp/src/session.ts	1
 extensions/whatsapp/src/setup-finalize.ts	2
-extensions/whatsapp/src/targets-runtime.ts	2
+extensions/whatsapp/src/targets-runtime.ts	1
 extensions/workboard/browser/lib/workboard/metadata-contract-normalization.ts	1
 extensions/workboard/browser/lib/workboard/normalization.ts	5
 extensions/workboard/browser/pages/workboard/view-card-actions.ts	2
@@ -1437,7 +1436,7 @@ src/agents/embedded-agent-runner/thinking-replay-repair.ts	1
 src/agents/embedded-agent-runner/thinking.ts	19
 src/agents/embedded-agent-runner/tool-call-argument-decoding.ts	3
 src/agents/embedded-agent-runner/tool-result-char-estimator.ts	7
-src/agents/embedded-agent-runner/tool-result-context-guard.ts	9
+src/agents/embedded-agent-runner/tool-result-context-guard.ts	8
 src/agents/embedded-agent-runner/tool-result-truncation.ts	12
 src/agents/embedded-agent-runner/tool-schema-runtime.ts	1
 src/agents/embedded-agent-runner/transcript-rewrite.ts	2
@@ -1542,11 +1541,11 @@ src/agents/sessions/agent-session-tree.ts	1
 src/agents/sessions/agent-session-utils.ts	1
 src/agents/sessions/auth-storage.ts	3
 src/agents/sessions/extensions/loader.ts	7
-src/agents/sessions/extensions/runner.ts	15
+src/agents/sessions/extensions/runner.ts	14
 src/agents/sessions/extensions/types.ts	1
 src/agents/sessions/keybindings.ts	2
-src/agents/sessions/model-registry.ts	12
-src/agents/sessions/package-manager.ts	3
+src/agents/sessions/model-registry.ts	9
+src/agents/sessions/package-manager.ts	2
 src/agents/sessions/resolve-config-value.ts	1
 src/agents/sessions/sdk.ts	2
 src/agents/sessions/session-manager-codec.ts	5
@@ -1593,7 +1592,6 @@ src/agents/tool-search-transcript.ts	1
 src/agents/tools-effective-inventory-build.ts	2
 src/agents/tools-effective-inventory.ts	4
 src/agents/tools/agents-wait-tool.ts	1
-src/agents/tools/ask-user-tool-normalization.ts	1
 src/agents/tools/ask-user-tool.ts	3
 src/agents/tools/automations-tool-name.ts	1
 src/agents/tools/chat-history-text.ts	3
@@ -1658,7 +1656,7 @@ src/auto-reply/chunk.ts	1
 src/auto-reply/command-auth.ts	3
 src/auto-reply/command-turn-context.ts	1
 src/auto-reply/commands-registry.ts	1
-src/auto-reply/heartbeat-filter.ts	3
+src/auto-reply/heartbeat-filter.ts	2
 src/auto-reply/heartbeat-tool-response.ts	2
 src/auto-reply/reply.directive.directive-behavior.e2e-mocks.ts	1
 src/auto-reply/reply/acp-reset-target.ts	2
@@ -1743,7 +1741,6 @@ src/channels/message/ingress-claim-owner.ts	1
 src/channels/message/ingress-drain.ts	1
 src/channels/message/ingress-monitor.ts	3
 src/channels/message/outbound-bridge.ts	1
-src/channels/model-overrides.ts	1
 src/channels/plugins/account-config-mutation.ts	1
 src/channels/plugins/account-helpers.ts	6
 src/channels/plugins/acp-configured-binding-consumer.ts	1
@@ -1759,7 +1756,7 @@ src/channels/plugins/contracts/outbound-payload-testkit.ts	4
 src/channels/plugins/contracts/trace/delivery-trace.ts	1
 src/channels/plugins/dm-access.ts	3
 src/channels/plugins/helpers.ts	3
-src/channels/plugins/legacy-config.ts	4
+src/channels/plugins/legacy-config.ts	2
 src/channels/plugins/message-action-discovery.ts	1
 src/channels/plugins/message-action-dispatch.ts	3
 src/channels/plugins/package-state-probes.ts	2
@@ -1837,7 +1834,6 @@ src/cli/dns-cli.ts	3
 src/cli/exec-approvals-cli.ts	9
 src/cli/exec-policy-cli.ts	1
 src/cli/gateway-cli/dev.ts	1
-src/cli/gateway-cli/qa-parent-watchdog.ts	3
 src/cli/gateway-cli/register.ts	4
 src/cli/gateway-cli/run.ts	5
 src/cli/gateway-cli/suspend-cli.ts	2
@@ -1862,7 +1858,6 @@ src/cli/program/message/helpers.ts	1
 src/cli/program/message/register.permissions-search.ts	2
 src/cli/program/preaction.ts	1
 src/cli/program/program-context.ts	2
-src/cli/program/register-lazy-command.ts	1
 src/cli/program/register.agent-turn.ts	1
 src/cli/program/register.audit.ts	12
 src/cli/program/register.configure.ts	1
@@ -2040,7 +2035,7 @@ src/config/plugin-auto-enable.shared.ts	1
 src/config/plugin-install-record-map.ts	1
 src/config/plugins-allowlist.ts	1
 src/config/redact-snapshot.ts	4
-src/config/runtime-overrides.ts	2
+src/config/runtime-overrides.ts	1
 src/config/runtime-snapshot.ts	1
 src/config/runtime-source-projection.ts	4
 src/config/schema.ts	1
@@ -2130,7 +2125,7 @@ src/daemon/schtasks-install.ts	2
 src/daemon/schtasks-process.ts	1
 src/daemon/schtasks-runtime.ts	4
 src/daemon/systemd-exec.ts	2
-src/daemon/systemd-install.ts	2
+src/daemon/systemd-install.ts	1
 src/daemon/systemd-lifecycle.ts	2
 src/daemon/systemd-runtime.ts	1
 src/entry.compile-cache.ts	2
@@ -2292,7 +2287,7 @@ src/gateway/stale-install.ts	1
 src/gateway/system-ca-warmup.ts	1
 src/gateway/talk/handlers/index.ts	3
 src/gateway/talk/relay/session-create.ts	1
-src/gateway/talk/session-config.ts	5
+src/gateway/talk/session-config.ts	4
 src/gateway/terminal/node-relay.ts	1
 src/gateway/test-http-response.ts	4
 src/gateway/test-temp-config.ts	1
@@ -2304,7 +2299,7 @@ src/gateway/worker-environments/inference-control.ts	1
 src/gateway/worker-environments/inference-runtime.ts	2
 src/gateway/worker-environments/live-event-projection.ts	1
 src/gateway/worker-environments/node-worker-workspace-fallback.ts	2
-src/gateway/worker-environments/placement-state.ts	3
+src/gateway/worker-environments/placement-state.ts	2
 src/gateway/worker-environments/placement-store.ts	1
 src/gateway/worker-environments/service-validation.ts	2
 src/gateway/worker-environments/state.ts	1
@@ -2555,7 +2550,7 @@ src/model-catalog/bundled-catalog-stamp.ts	1
 src/model-catalog/remote-overlay.ts	1
 src/model-picker/apply-session-model-selection.ts	1
 src/node-host/config.ts	1
-src/node-host/invoke-agent-cli-claude-params.ts	4
+src/node-host/invoke-agent-cli-claude-params.ts	1
 src/node-host/invoke-agent-cli-claude.ts	1
 src/node-host/invoke-payload.ts	3
 src/node-host/invoke.ts	1
@@ -2608,7 +2603,6 @@ src/plugin-sdk/provider-onboard.ts	3
 src/plugin-sdk/provider-stream-shared.ts	14
 src/plugin-sdk/provider-stream.ts	1
 src/plugin-sdk/provider-tools.ts	4
-src/plugin-sdk/qa-channel-protocol.ts	1
 src/plugin-sdk/qa-runtime.ts	5
 src/plugin-sdk/reply-payload.ts	2
 src/plugin-sdk/runtime-store.ts	2
@@ -2697,13 +2691,13 @@ src/plugins/plugin-command-execution.ts	1
 src/plugins/plugin-command-runtime.ts	1
 src/plugins/plugin-metadata-snapshot.runtime.ts	2
 src/plugins/plugin-package-update.ts	1
-src/plugins/plugin-peer-link.ts	3
+src/plugins/plugin-peer-link.ts	2
 src/plugins/plugin-sdk-native-resolver.ts	1
 src/plugins/prepared-message-tool-catalog.ts	1
 src/plugins/provider-auth-choice-helpers.ts	10
 src/plugins/provider-catalog-result.ts	7
 src/plugins/provider-discovery.runtime.ts	2
-src/plugins/provider-discovery.ts	2
+src/plugins/provider-discovery.ts	1
 src/plugins/provider-model-compat.ts	6
 src/plugins/provider-openai-chatgpt-oauth.ts	1
 src/plugins/provider-policy-surface.ts	1
@@ -2769,7 +2763,7 @@ src/secrets/runtime-command-secrets.ts	4
 src/secrets/runtime-config-collectors-core.ts	7
 src/secrets/runtime-config-collectors-memory.ts	1
 src/secrets/runtime-config-collectors-sandbox.ts	2
-src/secrets/runtime-fast-path.ts	2
+src/secrets/runtime-fast-path.ts	1
 src/secrets/runtime-gateway-auth-surfaces.ts	1
 src/secrets/runtime-openai-file-fixture.test-helper.ts	1
 src/secrets/runtime-owner-assignments.ts	1

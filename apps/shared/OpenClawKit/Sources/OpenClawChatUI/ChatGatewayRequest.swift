@@ -328,6 +328,32 @@ public enum OpenClawChatGatewayRequests {
     public static func patchSessionSettings(
         sessionKey: String,
         agentID: String?,
+        patch: OpenClawChatSessionSettingsPatch,
+        supportsSessionSettingsContract: Bool,
+        supportsSessionSettingsCAS: Bool) throws -> OpenClawChatGatewayRequest
+    {
+        guard !patch.requiresSessionSettingsContract || supportsSessionSettingsContract,
+              !patch.requiresSessionSettingsCAS || supportsSessionSettingsCAS
+        else { throw OpenClawChatTransportSendError.notDispatched }
+        return self.patchSessionSettings(
+            sessionKey: sessionKey,
+            agentID: agentID,
+            expectedSessionID: patch.expectedSessionID,
+            expectedPermissionMode: patch.expectedPermissionMode,
+            expectedToolOverrides: patch.expectedToolOverrides,
+            model: patch.model,
+            thinkingLevel: patch.thinkingLevel,
+            fastMode: patch.fastMode,
+            verboseLevel: patch.verboseLevel,
+            permissionMode: patch.permissionMode,
+            toolOverrides: patch.toolOverrides,
+            supportsSessionSettingsContract: supportsSessionSettingsContract,
+            supportsSessionSettingsCAS: supportsSessionSettingsCAS)
+    }
+
+    public static func patchSessionSettings(
+        sessionKey: String,
+        agentID: String?,
         expectedSessionID: String? = nil,
         expectedPermissionMode: OpenClawChatPermissionMode?? = nil,
         expectedToolOverrides: OpenClawChatSessionToolOverrides?? = nil,

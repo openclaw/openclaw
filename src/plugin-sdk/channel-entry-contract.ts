@@ -545,28 +545,25 @@ export function defineBundledChannelEntry<TPlugin = ChannelPlugin>({
         registerCliMetadata?.(api);
         return;
       }
+      const profile = createProfiler({ pluginId: id, source: importMetaUrl });
       if (api.registrationMode === "tool-discovery") {
-        const profile = createProfiler({ pluginId: id, source: importMetaUrl });
         profile("bundled-register:registerFull", () => registerFull?.(api));
         profile("bundled-register:registerCapabilities", () => registerCapabilities?.(api));
         return;
       }
-      const profile = createProfiler({ pluginId: id, source: importMetaUrl });
       const channelPlugin = profile("bundled-register:loadChannelPlugin", loadChannelPlugin);
       profile("bundled-register:registerChannel", () =>
         api.registerChannel({ plugin: channelPlugin as ChannelPlugin }),
       );
       profile("bundled-register:setChannelRuntime", () => setChannelRuntime?.(api.runtime));
-      if (api.registrationMode === "discovery") {
-        profile("bundled-register:registerCliMetadata", () => registerCliMetadata?.(api));
-        profile("bundled-register:registerCapabilities", () => registerCapabilities?.(api));
-        return;
-      }
-      if (api.registrationMode !== "full") {
+      const registrationMode = api.registrationMode;
+      if (registrationMode !== "discovery" && registrationMode !== "full") {
         return;
       }
       profile("bundled-register:registerCliMetadata", () => registerCliMetadata?.(api));
-      profile("bundled-register:registerFull", () => registerFull?.(api));
+      if (registrationMode === "full") {
+        profile("bundled-register:registerFull", () => registerFull?.(api));
+      }
       profile("bundled-register:registerCapabilities", () => registerCapabilities?.(api));
     },
     loadChannelPlugin,
@@ -614,7 +611,7 @@ export function defineBundledChannelSetupEntry<TPlugin = ChannelPlugin>({
       loadBundledEntryExportSync<TPlugin>(importMetaUrl, plugin, options),
     ...(secrets
       ? {
-          loadSetupSecrets: (options) =>
+          loadSetupSecrets: (options?: BundledEntryModuleLoadOptions) =>
             loadBundledEntryExportSync<ChannelPlugin["secrets"] | undefined>(
               importMetaUrl,
               secrets,

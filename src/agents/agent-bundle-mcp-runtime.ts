@@ -1154,7 +1154,6 @@ function createServerMcpRuntime(
 }
 
 export const testing = {
-  buildMcpClientCapabilities,
   async resetSessionMcpRuntimeManager() {
     await disposeAllSessionMcpRuntimes();
     setBundleMcpCatalogListTimeoutMsForTest();
@@ -1162,9 +1161,6 @@ export const testing = {
   },
   getCachedSessionIds() {
     return getSessionMcpRuntimeManagerForTesting().listSessionIds();
-  },
-  getCachedRuntimeKeys() {
-    return getSessionMcpRuntimeManagerForTesting().listRuntimeKeys();
   },
   getBookkeepingSizes(manager: SessionMcpRuntimeManager): Record<string, number> {
     const sizes = (

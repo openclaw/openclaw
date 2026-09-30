@@ -36,10 +36,6 @@ type RuntimeSendOpts = {
   textMode?: "markdown" | "html";
 };
 
-function resolveRuntimeThreadId(opts: RuntimeSendOpts): string | number | undefined {
-  return opts.messageThreadId ?? opts.threadId ?? opts.threadTs ?? undefined;
-}
-
 function resolveRuntimeReplyToId(opts: RuntimeSendOpts): string | undefined {
   const raw = opts.replyToMessageId ?? opts.replyToId;
   return raw == null ? undefined : normalizeOptionalString(String(raw));
@@ -53,7 +49,7 @@ export function createChannelOutboundRuntimeSend(params: {
   return {
     sendMessage: async (to: string, text: string, opts: RuntimeSendOpts = {}) => {
       const outbound = await loadChannelOutboundAdapter(params.channelId);
-      const threadId = resolveRuntimeThreadId(opts);
+      const threadId = opts.messageThreadId ?? opts.threadId ?? opts.threadTs ?? undefined;
       const replyToId = resolveRuntimeReplyToId(opts);
       // Build context lazily so text/media/block branches share identical delivery metadata.
       const buildContext = () => ({

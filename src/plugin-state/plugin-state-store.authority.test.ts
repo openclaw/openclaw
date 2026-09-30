@@ -106,6 +106,9 @@ describe("action-bound plugin state", () => {
           };
           const gateway: PluginRuntime["gateway"] = {
             isAvailable: async () => true,
+            async readSessionFacts() {
+              throw new Error("Unexpected session facts request");
+            },
             async request() {
               throw new Error("Unexpected Gateway request");
             },

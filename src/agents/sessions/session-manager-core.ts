@@ -582,15 +582,11 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
     for (const entry of entries) {
       const node = nodeMap.get(entry.id)!;
       const parentId = this.resolveCanonicalParentId(entry.parentId);
-      if (parentId === null || parentId === entry.id) {
-        roots.push(node);
+      const parent = parentId !== null && parentId !== entry.id ? nodeMap.get(parentId) : undefined;
+      if (parent) {
+        parent.children.push(node);
       } else {
-        const parent = nodeMap.get(parentId);
-        if (parent) {
-          parent.children.push(node);
-        } else {
-          roots.push(node);
-        }
+        roots.push(node);
       }
     }
     const stack = [...roots];

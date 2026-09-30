@@ -25,6 +25,7 @@ import {
   validateActionsArtifactProducerJob,
 } from "./lib/actions-artifact-archive.mjs";
 import { readBoundedResponseText } from "./lib/bounded-response.mjs";
+import { classifyClawHubPublication } from "./lib/clawhub-publication-state.mjs";
 import { isRecord } from "./lib/record-shared.mjs";
 import { runReleaseToolingGh, verifyReleaseToolingIdentity } from "./release-tooling-identity.mjs";
 
@@ -318,11 +319,43 @@ export function isPreparedClawHubTrustedPublisher(publisher) {
   );
 }
 
-async function preparedPackageIsPublished(entry, fetchImpl) {
+async function preparedPackagePublication(entry, fetchImpl) {
   const packageUrl = `https://clawhub.ai/api/v1/packages/${encodeURIComponent(entry.packageName)}`;
   const publisherRepair =
     "Complete bootstrap or trusted-publisher repair through the existing Plugin ClawHub New owner before preparing again.";
   const signal = AbortSignal.timeout(30_000);
+  const versionUrl = `${packageUrl}/versions/${encodeURIComponent(entry.version)}`;
+  let publication;
+  for (const suffix of ["/publication", ""]) {
+    const response = await fetchImpl(`${versionUrl}${suffix}`, { signal });
+    if (response.status === 200 && suffix) {
+      publication = classifyClawHubPublication(
+        JSON.parse(
+          await readBoundedResponseText(response, "Prepared ClawHub publication", 64 * 1024, {
+            signal,
+          }),
+        ),
+        { name: entry.packageName, version: entry.version },
+      );
+      if (publication) {
+        break;
+      }
+    } else {
+      await response.body?.cancel().catch(() => undefined);
+      if (response.status !== 200 && response.status !== 404) {
+        throw new Error(
+          `Cannot resolve prepared ClawHub version ${entry.packageName}@${entry.version}: HTTP ${response.status}.`,
+        );
+      }
+      if (!suffix) {
+        publication = { state: response.status === 200 ? "published" : "absent" };
+        break;
+      }
+    }
+  }
+  if (publication.state === "pending" || publication.state === "failed") {
+    return publication;
+  }
   const publisherResponse = await fetchImpl(`${packageUrl}/trusted-publisher`, { signal });
   if (!publisherResponse.ok) {
     await publisherResponse.body?.cancel().catch(() => undefined);
@@ -343,32 +376,22 @@ async function preparedPackageIsPublished(entry, fetchImpl) {
       `Prepared ClawHub trusted publisher is missing or mismatched for ${entry.packageName}. ${publisherRepair}`,
     );
   }
-  const response = await fetchImpl(`${packageUrl}/versions/${encodeURIComponent(entry.version)}`, {
-    signal,
-  });
-  await response.body?.cancel().catch(() => undefined);
-  if (response.status === 404) {
-    return false;
-  }
-  if (response.status === 200) {
-    return true;
-  }
-  throw new Error(
-    `Cannot resolve prepared ClawHub version ${entry.packageName}@${entry.version}: HTTP ${response.status}.`,
-  );
+  return publication;
 }
 export async function resolvePreparedClawHubMatrix(options) {
   const manifest = await downloadPreparedClawHubRelease(options);
   const matrix = [];
   for (let index = 0; index < manifest.packages.length; index += 8) {
     const entries = await Promise.allSettled(
-      manifest.packages.slice(index, index + 8).map(async (entry) =>
-        Object.assign(selectionEntry(entry), {
+      manifest.packages.slice(index, index + 8).map(async (entry) => {
+        const publication = await preparedPackagePublication(entry, options.fetchImpl ?? fetch);
+        return Object.assign(selectionEntry(entry), {
           artifactName: entry.artifactName,
-          alreadyPublished: await preparedPackageIsPublished(entry, options.fetchImpl ?? fetch),
+          alreadyPublished: publication.state === "published",
+          publication,
           prepared: entry,
-        }),
-      ),
+        });
+      }),
     );
     for (const result of entries) {
       if (result.status === "fulfilled") {

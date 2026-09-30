@@ -17,6 +17,7 @@ import { isRecord as isJsonRecord } from "../../packages/normalization-core/src/
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.ts";
 import { readPublicationArtifactArchive, sha256Digest } from "./actions-artifact-archive.mjs";
 import { readBoundedResponseText } from "./bounded-response.mjs";
+import { collectPublishableCorePackages } from "./npm-core-release-packages.mjs";
 import { resolveNpmJsonEntries } from "./npm-json-output.mts";
 import { npmRegistryReadbackDeadline } from "./npm-publish-plan.mjs";
 import { collectClawHubPublishablePluginPackages } from "./plugin-clawhub-release.ts";
@@ -1952,16 +1953,23 @@ export async function verifyBetaRelease(
     diagnostic.start("coreNpm");
     const openclawNpm = await verifyNpmPackage("openclaw", args.version, args.distTag);
     diagnostic.observeNpmPublication({ stage: "coreNpm" });
-    const coreBetaFloorError = await readNpmBetaFloorError("openclaw", args.version);
-    if (coreBetaFloorError !== undefined) {
-      betaFloorErrors.push({ scope: { stage: "coreNpm" }, message: coreBetaFloorError });
-      diagnostic.fail(createNpmBetaFloorError([coreBetaFloorError]));
-    } else {
+    const corePackages = collectPublishableCorePackages(rootDir);
+    // Core versions can be reused without retagging; only enforce their beta floor.
+    for (const name of ["openclaw", ...corePackages.map((pkg) => pkg.name)]) {
+      const error = await readNpmBetaFloorError(name, args.version);
+      if (error !== undefined) {
+        betaFloorErrors.push({ scope: { stage: "coreNpm" }, message: error });
+        diagnostic.fail(createNpmBetaFloorError([error]));
+      }
+    }
+    const coreBetaFloorFailed = betaFloorErrors.length > 0;
+    if (!coreBetaFloorFailed) {
       diagnostic.success("coreNpm");
       lines.push(`openclaw npm OK: ${args.version} (${args.distTag})`);
+      lines.push(`core npm beta floors OK: ${corePackages.length}`);
     }
 
-    if (!args.skipPostpublish && coreBetaFloorError === undefined) {
+    if (!args.skipPostpublish && !coreBetaFloorFailed) {
       diagnostic.start("postpublish");
       const postpublishVerifier = resolveOpenClawNpmPostpublishVerifier(
         rootDir,

@@ -40,6 +40,12 @@ const SessionsPatchMutationProperties = {
   ttlMinutes: Type.Optional(Type.Integer({ minimum: 1, maximum: 120 })),
   archived: Type.Optional(Type.Boolean()),
   pinned: Type.Optional(Type.Boolean()),
+  snoozedUntil: Type.Optional(
+    Type.Union([Type.Integer({ minimum: 1 }), Type.Null()], {
+      description:
+        "Epoch ms wake time that hides the session from active lists until then; null wakes it.",
+    }),
+  ),
   unread: Type.Optional(
     Type.Boolean({ description: "Set true to mark unread; false records the session as read." }),
   ),

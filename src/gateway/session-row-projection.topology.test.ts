@@ -580,7 +580,14 @@ it("starts a new topology read after healthy integrity confirmation without revi
       );
       await applyOpenClawDatabaseVerificationResults({
         env: state.env,
-        targets: [{ kind: "state", label: "OpenClaw state database", path: database.path }],
+        targets: [
+          {
+            kind: "state",
+            label: "OpenClaw state database",
+            path: database.path,
+            check: "quick",
+          },
+        ],
         results: [
           { path: database.path, ok: false, error: "stale terminal result", terminal: true },
         ],

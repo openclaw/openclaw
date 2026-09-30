@@ -330,7 +330,7 @@ async function runDoctorHealthFlowWithResult(
         await import("../commands/doctor/shared/plugin-runtime-symlinks.js");
       const { noteStartupOptimizationHints } = await import("../commands/doctor-platform-notes.js");
       await maybeRepairUiProtocolFreshness(doctorRuntime, prompter);
-      noteSourceInstallIssues(root);
+      await noteSourceInstallIssues(root);
       await noteStalePluginRuntimeSymlinks(root);
       noteStartupOptimizationHints();
 

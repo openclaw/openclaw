@@ -213,6 +213,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/session-utils.queued-collector-narrow-abort.test.ts",
   "src/gateway/session-utils.queued-collector.test.ts",
   "src/gateway/session-utils.single-row-cache.test.ts",
+  "src/gateway/session-utils.snooze.test.ts",
   "src/gateway/session-utils.subagent-payloads.test.ts",
   "src/gateway/session-utils.subagent.test.ts",
   "src/gateway/session-utils.test.ts",

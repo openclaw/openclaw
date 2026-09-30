@@ -347,10 +347,7 @@ export const PLUGIN_COMPAT_RECORDS = [
     docsPath: "/plugins/hooks",
     surfaces: ["before_tool_call block result", "before_tool_call approval result"],
     diagnostics: ["hook runner contract probe"],
-    tests: [
-      "src/plugins/hooks.security.test.ts",
-      "src/agents/agent-tools.before-tool-call.e2e.test.ts",
-    ],
+    tests: ["src/agents/agent-tools.before-tool-call.e2e.test.ts"],
   },
   {
     code: "hook.llm-observer.privacy-payload",

@@ -17,6 +17,12 @@ import type {
   ControlUiSessionPrReadContext,
   ControlUiSessionPrTarget,
 } from "./control-ui-session-pr-read.js";
+import {
+  createControlUiSessionPrSnapshotRead,
+  pushedSnapshot,
+  UNAVAILABLE_SNAPSHOT,
+  type LoadSessionPullRequests,
+} from "./control-ui-session-pr-snapshot-read.js";
 import { withControlUiSessionPrSource } from "./control-ui-session-pr-source.js";
 import type { ControlUiSessionPullRequestsParams } from "./control-ui-session-prs.js";
 import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
@@ -24,12 +30,6 @@ import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
 const CONTROL_UI_SESSION_PR_POLL_INTERVAL_MS = 60_000;
 const CONTROL_UI_SESSION_PR_REFRESH_INTERVAL_MS = 10_000;
 const CONTROL_UI_SESSION_PR_LOAD_CONCURRENCY = 4;
-
-type LoadSessionPullRequests = (
-  params: ControlUiSessionPullRequestsParams,
-  cacheSignal: AbortSignal | undefined,
-  read: ControlUiSessionPrReadContext,
-) => Promise<ControlUiSessionPullRequests>;
 
 type WatchedKeyState = {
   connIds: Set<string>;
@@ -56,6 +56,7 @@ type SubscriptionDeps = {
 };
 
 type ControlUiSessionPullRequestSubscriptions = {
+  read: ReturnType<typeof createControlUiSessionPrSnapshotRead>;
   replace: (
     connId: string,
     sessionKeys: readonly string[],
@@ -76,19 +77,6 @@ async function loadSessionPullRequests(
   const { loadControlUiSessionPullRequests } = await import("./control-ui-session-prs.js");
   return loadControlUiSessionPullRequests(params, { cacheSignal, read });
 }
-
-function pushedSnapshot(result: ControlUiSessionPullRequests): ControlUiSessionPullRequestSnapshot {
-  return {
-    ...result,
-    status: result.status ?? (result.rateLimited ? "rate-limited" : "ready"),
-  };
-}
-
-const UNAVAILABLE_SNAPSHOT: ControlUiSessionPullRequestSnapshot = {
-  pullRequests: [],
-  rateLimited: false,
-  status: "unavailable",
-};
 
 function parseSessionKeys(value: unknown): string[] | null {
   if (!Array.isArray(value) || value.length > CONTROL_UI_SESSION_PULL_REQUESTS_MAX_KEYS) {
@@ -748,5 +736,11 @@ export function createControlUiSessionPullRequestSubscriptions(
     return stopPromise;
   };
 
-  return { replace, unsubscribe, pollNow, stop };
+  return {
+    read: createControlUiSessionPrSnapshotRead({ scope, limit, withSource, load }),
+    replace,
+    unsubscribe,
+    pollNow,
+    stop,
+  };
 }

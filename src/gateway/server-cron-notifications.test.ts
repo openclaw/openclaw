@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as createVoidDeferred } from "../../test/helpers/promise.js";
 import type { CliDeps } from "../cli/deps.types.js";
+import { CRON_AGENT_SELECTION_REQUIRED_MESSAGE } from "../cron/agent-id.js";
 import type { CronJob } from "../cron/types.js";
 import type { GuardedFetchOptions } from "../infra/net/fetch-guard.js";
 import {
@@ -40,10 +41,14 @@ import {
 } from "./server-cron-notifications.js";
 
 const sendGatewayCronFailureAlert = (
-  params: Omit<Parameters<typeof sendGatewayCronFailureAlertBase>[0], "onDeliverySettled">,
+  params: Omit<
+    Parameters<typeof sendGatewayCronFailureAlertBase>[0],
+    "onDeliverySettled" | "routing"
+  >,
 ) =>
   sendGatewayCronFailureAlertBase({
     ...params,
+    routing: { defaultAgentId: "main" },
     onDeliverySettled: async () => {},
   });
 
@@ -113,6 +118,73 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
     resetGatewayWorkAdmission();
     setActiveDegradedSecretOwners([]);
   });
+
+  it.each([
+    {
+      name: "captured default",
+      jobAgentId: undefined,
+      defaultAgentId: "alpha",
+      recipient: "alpha",
+    },
+    {
+      name: "explicit job owner",
+      jobAgentId: "gamma",
+      defaultAgentId: "alpha",
+      recipient: "gamma",
+    },
+    {
+      name: "captured absence",
+      jobAgentId: undefined,
+      defaultAgentId: undefined,
+      recipient: undefined,
+    },
+  ])(
+    "routes a failure alert using $name instead of the live default",
+    async ({ jobAgentId, defaultAgentId, recipient }) => {
+      const job = createWebhookJob({ mode: "announce", channel: "discord", to: "channel:ops" });
+      job.agentId = jobAgentId;
+      job.sessionKey = "agent:session-owner:main";
+      const resolveCronAgent = vi.fn((requested?: string | null) => ({
+        agentId: requested ?? "beta",
+        cfg: {},
+      }));
+      const onDeliverySettled = vi.fn(async () => {});
+      const delivery = sendGatewayCronFailureAlertBase({
+        deps: {} as CliDeps,
+        logger: { warn: vi.fn() },
+        resolveCronAgent,
+        job,
+        routing: defaultAgentId ? { defaultAgentId } : {},
+        payload: { text: "cron failed" },
+        channel: "discord",
+        to: "channel:ops",
+        mode: "announce",
+        onDeliverySettled,
+      });
+      if (recipient) {
+        await delivery;
+        expect(resolveCronAgent).toHaveBeenCalledExactlyOnceWith(recipient);
+        expect(mocks.sendCronAnnouncePayloadStrict).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ agentId: recipient }),
+        );
+        expect(onDeliverySettled).toHaveBeenCalledExactlyOnceWith({
+          delivered: true,
+          status: "delivered",
+        });
+      } else {
+        await expect(delivery).rejects.toThrow(CRON_AGENT_SELECTION_REQUIRED_MESSAGE);
+        expect(resolveCronAgent).not.toHaveBeenCalled();
+        expect(mocks.sendCronAnnouncePayloadStrict).not.toHaveBeenCalled();
+        expect(mocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
+        expect(onDeliverySettled).toHaveBeenCalledExactlyOnceWith({
+          delivered: false,
+          status: "not-delivered",
+          error: CRON_AGENT_SELECTION_REQUIRED_MESSAGE,
+        });
+      }
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+    },
+  );
 
   it("independently admits detached completion webhook delivery", async () => {
     const deferred = createVoidDeferred();
@@ -309,6 +381,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
     });
 
     await sendGatewayCronFailureAlertBase({
+      routing: { defaultAgentId: "main" },
       deps: {} as CliDeps,
       logger: { warn: vi.fn() },
       resolveCronAgent: () => ({ agentId: "main", cfg: {} }),
@@ -407,35 +480,6 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
     );
   });
 
-  it("keeps failure webhook messages stable and adds structured runAtMs", async () => {
-    const runAtMs = Date.parse("2026-01-15T15:30:00.000Z");
-    const job = createCompletionWebhookJob();
-
-    await sendGatewayCronFailureAlert({
-      deps: {} as CliDeps,
-      logger: { warn: vi.fn() },
-      resolveCronAgent: () => ({
-        agentId: "main",
-        cfg: { agents: { defaults: { userTimezone: "America/New_York" } } },
-      }),
-      job,
-      payload: { text: "cron failed" },
-      runAtMs,
-      channel: "last",
-      mode: "webhook",
-      to: "https://example.invalid/cron",
-      ssrfPolicy: webhookSsrfPolicy,
-    });
-
-    expectWebhookSsrfPolicy();
-    expect(webhookRequestBody()).toEqual({
-      jobId: job.id,
-      jobName: job.name,
-      message: "cron failed",
-      runAtMs,
-    });
-  });
-
   it.each([
     { name: "missing", to: undefined },
     { name: "invalid", to: "ftp://example.invalid/failure" },
@@ -504,6 +548,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
           channel: "last",
           mode: "webhook",
           to: "https://example.invalid/failure",
+          routing: { defaultAgentId: "main" },
           onDeliverySettled,
         }),
       ).rejects.toThrow(errorMessage);
@@ -660,6 +705,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
     const job = createWebhookJob({ mode: "announce", channel: "discord", to: "channel:ops" });
 
     const delivery = sendGatewayCronFailureAlertBase({
+      routing: { defaultAgentId: "main" },
       deps: {} as CliDeps,
       logger: { warn: vi.fn() },
       resolveCronAgent: () => ({ agentId: "main", cfg: {} }),
@@ -723,6 +769,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
         const job = createWebhookJob({ mode: "announce", channel: "discord", to: "channel:ops" });
 
         const delivery = sendGatewayCronFailureAlertBase({
+          routing: { defaultAgentId: "main" },
           deps: {} as CliDeps,
           logger: { warn: vi.fn() },
           resolveCronAgent: () => ({ agentId: "main", cfg: {} }),

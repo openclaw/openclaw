@@ -274,6 +274,8 @@ describe("Gateway catalog worker pool", () => {
         renewal = original.loadFullModelCatalog!({ refresh: true });
         void renewal.catch(() => undefined);
         await expect.poll(() => fs.readFileSync(fixture.marker, "utf8")).not.toBe(before);
+        // The foreground deadline returns retained data while acquisition stays behind the barrier.
+        await expect(renewal).resolves.toBe(accepted);
         const worker = spawned[0]!;
         const custody = {
           pid: process.pid,
@@ -362,11 +364,24 @@ describe("Gateway catalog worker pool", () => {
         expect(failures).toEqual([]);
         resume();
         fs.rmSync(`${fixture.marker}.hold`);
-        await expect(renewal).rejects.toMatchObject({
-          name: "WorkerTaskError",
-          code: "unavailable",
+        await expect(
+          loadPreparedModelRuntimeAuth(original, { providerIds: [PROVIDER_ID] }),
+        ).rejects.toThrow("superseded");
+        // A real request on the replacement joins recovery before checking its publication.
+        const auth = await loadPreparedModelRuntimeAuth(replacement, {
+          providerIds: [PROVIDER_ID],
         });
+        expect(auth?.authStore.profiles[`${PROVIDER_ID}:default`]).toEqual(
+          originalStore.profiles[`${PROVIDER_ID}:default`],
+        );
         const recovered = await loadCompletedFullCatalog(replacement);
+        await expect
+          .poll(() => getPreparedModelCatalogWorkerPoolSnapshot())
+          .toMatchObject({
+            workers: 1,
+            activeTasks: 0,
+            pendingTasks: 0,
+          });
         expect(current()).toBe(replacement);
         expect(recovered.entries).toEqual(accepted.entries);
         expect(getPreparedModelFullCatalogAuth(recovered)?.credentials).toEqual(
