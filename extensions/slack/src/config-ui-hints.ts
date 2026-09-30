@@ -62,6 +62,10 @@ export const slackChannelConfigUiHints = {
     },
     progress: { labels: "openclaw" },
   }),
+  "streaming.progress.toolProgress": {
+    label: "Slack Progress Tool Lines",
+    help: "Show individual tool activity, including intermediate failures, in progress drafts (default: false). Native cards add a task row per tool call. Block Kit cards add tool activity, the plan checklist, and tool/file/time totals while working; finished cards retain only file diff totals. Default Block Kit cards show commentary and text, approval requests, and available session links. Terminal task errors use normal error delivery.",
+  },
   joinIntro: {
     label: "Slack Channel Join Introduction",
     help: "Post one brief, room-specific introduction when the bot joins an allowed Slack channel (default: true). Account settings override the channel-wide setting.",

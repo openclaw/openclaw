@@ -316,8 +316,15 @@ Slack-only:
   intervals; attention and completion flush immediately. The card appears only
   for turns that do real work, so plain questions are answered without one.
   `streaming.progress.nativeTaskCards: false` falls back to the Block Kit
-  session card, which finalizes to success or error and posts the assistant's
-  final text as a separate message.
+  session card. By default, it shows commentary and text, including italic
+  narration and reasoning, actionable approval requests, and a plain title only
+  when explicitly configured. Finished cards keep the **Open in OpenClaw** or
+  **Open work session** link when available. `streaming.progress.toolProgress: true`
+  adds tool activity, the plan checklist, intermediate error and recovery rows,
+  and tool/file/time totals while working; finished detailed cards retain only
+  file diff totals. Neither mode adds emoji, bold text, or status headings. Empty
+  working cards are skipped, and empty finished cards leave the last posted card
+  unchanged. The assistant's final text and failures use normal delivery.
 - Cards include **Open in OpenClaw** only when the session is actually openable:
   `gateway.publicOrigin` is set and `gateway.controlUi.enabled` is not `false`.
 - Without a reply thread, default `progress` turns leave only the final answer
@@ -333,7 +340,7 @@ Slack-only:
 - Native and draft preview streaming suppress block replies for that turn, so a
   Slack reply is streamed by one delivery path only.
 - A successful turn with no visible reply still deletes its draft card. A
-  failed no-reply turn retains the card in its error state.
+  failed no-reply turn retains its progress card.
 
 ### Mattermost
 

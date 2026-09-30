@@ -16,10 +16,7 @@ import {
 } from "../../progress-blocks.js";
 import { truncateSlackText } from "../../truncate.js";
 import { escapeSlackMrkdwn } from "../mrkdwn.js";
-import {
-  combineProgressHeadlineAndExplanation,
-  resolveStructuredProgressLines,
-} from "./dispatch-progress-render.js";
+import { resolveStructuredProgressLines } from "./dispatch-progress-render.js";
 import type { SlackDispatchSetup } from "./dispatch-setup.js";
 import { finalizeSlackPreviewEdit } from "./preview-finalize.js";
 
@@ -31,6 +28,7 @@ export function createSlackDraftProgressCardRuntime(params: {
   setup: Pick<SlackDispatchSetup, "account" | "cfg" | "ctx" | "prepared" | "slackClient">;
   draftStream: ReturnType<typeof createSlackDraftStream> | undefined;
   enabled: boolean;
+  detailed: boolean;
   progressWorkCounter: ReturnType<typeof createChannelProgressWorkCounter> | undefined;
   explicitTitle: string | undefined;
   maxLineChars: number;
@@ -86,39 +84,22 @@ export function createSlackDraftProgressCardRuntime(params: {
     snapshot: ChannelProgressDraftCompositorSnapshot,
     state: DraftProgressCardState,
   ) => {
-    const title = params.explicitTitle ?? snapshot.statusHeadline;
-    const titleFormat = params.explicitTitle ? undefined : snapshot.statusHeadlineFormat;
-    const narration = params.explicitTitle
-      ? snapshot.statusHeadlineFormat === "plain" || snapshot.planExplanationFormat === "plain"
-        ? [
-            ...(snapshot.statusHeadline &&
-            (snapshot.statusHeadline !== snapshot.planExplanation ||
-              snapshot.statusHeadlineFormat !== snapshot.planExplanationFormat)
-              ? [{ text: snapshot.statusHeadline, format: snapshot.statusHeadlineFormat }]
-              : []),
-            ...(snapshot.planExplanation
-              ? [{ text: snapshot.planExplanation, format: snapshot.planExplanationFormat }]
-              : []),
-          ]
-        : combineProgressHeadlineAndExplanation(snapshot.statusHeadline, snapshot.planExplanation)
-      : snapshot.planExplanation &&
-          (snapshot.planExplanation !== title || snapshot.planExplanationFormat !== titleFormat)
-        ? [{ text: snapshot.planExplanation, format: snapshot.planExplanationFormat }]
-        : undefined;
-    const workCounter = state === "working" ? params.progressWorkCounter : undefined;
-    const sessionLinks = state === "working" ? [] : resolveSessionLinks();
+    const narration = [
+      { text: snapshot.statusHeadline ?? "", format: snapshot.statusHeadlineFormat },
+      { text: snapshot.planExplanation ?? "", format: snapshot.planExplanationFormat },
+    ];
     return buildSlackProgressCardBlocks({
       state,
-      title,
-      titleFormat,
+      detailed: params.detailed,
+      title: params.explicitTitle,
       narration,
       plan: snapshot.plan,
       lines: resolveStructuredProgressLines(snapshot.lines),
       maxLineChars: params.maxLineChars,
       diffStat: snapshot.diffStat,
-      toolCalls: workCounter?.toolCalls,
-      elapsedSeconds: workCounter?.elapsedSeconds,
-      sessionLinks,
+      toolCalls: params.progressWorkCounter?.toolCalls,
+      elapsedSeconds: params.progressWorkCounter?.elapsedSeconds,
+      sessionLinks: state === "working" ? [] : resolveSessionLinks(),
     });
   };
 
@@ -140,10 +121,17 @@ export function createSlackDraftProgressCardRuntime(params: {
     if (!channelId || !messageId) {
       return false;
     }
+    const blocks = resolvePresentation(snapshot, terminalStatus);
+    // Nothing left to show (e.g. only a resolved approval): delete here so every
+    // closeout path, including failures without a final reply, drops stale rows.
+    if (blocks.length === 0) {
+      await params.draftStream.clear();
+      finalStatus = terminalStatus;
+      return true;
+    }
     await params.draftStream.seal();
     try {
       const finalized = await params.draftStream.finalizeMessage(messageId, async () => {
-        const blocks = resolvePresentation(snapshot, terminalStatus);
         await finalizeSlackPreviewEdit({
           client: slackClient,
           token: ctx.botToken,

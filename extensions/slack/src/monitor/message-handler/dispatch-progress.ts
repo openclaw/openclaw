@@ -13,6 +13,7 @@ import {
 import type { ReplyDispatchKind, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
+import { buildSlackCompleteBlocksFallbackText } from "../../blocks-fallback.js";
 import { createSlackDraftStream } from "../../draft-stream.js";
 import { formatSlackError } from "../../errors.js";
 import { SLACK_EDIT_TEXT_MAX_BYTES, SLACK_TEXT_LIMIT } from "../../limits.js";
@@ -144,6 +145,7 @@ export function createSlackProgressRuntime(runtimeParams: {
     setup: { account, cfg, ctx, prepared, slackClient },
     draftStream,
     enabled: useDraftProgressCard,
+    detailed: previewToolProgressEnabled,
     progressWorkCounter: previewToolProgressEnabled ? progressWorkCounter : undefined,
     explicitTitle: explicitProgressTitle,
     maxLineChars: progressDraftMaxLineChars,
@@ -378,6 +380,18 @@ export function createSlackProgressRuntime(runtimeParams: {
         // draft between deltas, leaving a word fragment visible until cleanup.
         return false;
       }
+      const cardBlocks = useDraftProgressCard
+        ? progressCard.resolvePresentation(snapshot, "working")
+        : undefined;
+      if (cardBlocks?.length === 0) {
+        // Hidden state (e.g. a plan in the default card) can outlive the last visible
+        // row; delete the card rather than leave a resolved approval on screen.
+        if (draftStream.messageId()) {
+          await draftStream.clear();
+          draftStream.forceNewMessage();
+        }
+        return false;
+      }
       draftStream.update(
         preambleOnlyProgress
           ? {
@@ -387,10 +401,10 @@ export function createSlackProgressRuntime(runtimeParams: {
                 ? { blocks: buildSlackProgressTextBlocks(snapshot.preparedBlocks) }
                 : {}),
             }
-          : useDraftProgressCard
+          : cardBlocks
             ? {
-                text: previewText,
-                blocks: progressCard.resolvePresentation(snapshot, "working"),
+                text: buildSlackCompleteBlocksFallbackText(cardBlocks),
+                blocks: cardBlocks,
               }
             : snapshot.preparedBlocks
               ? { text: previewText, blocks: buildSlackProgressTextBlocks(snapshot.preparedBlocks) }
