@@ -1534,6 +1534,36 @@ describe("doctor legacy state migrations", () => {
     expect(fs.existsSync(targetPath)).toBe(false);
   });
 
+  it("keeps default exec approvals in place during automatic state migration", async () => {
+    const root = makeDoctorStateDir();
+    const stateDir = path.join(root, "custom-state");
+    const sourcePath = path.join(root, ".openclaw", "exec-approvals.json");
+    const targetPath = path.join(stateDir, "exec-approvals.json");
+    writeJson5(sourcePath, {
+      version: 1,
+      socket: {
+        token: "legacy-token",
+      },
+      defaults: {
+        security: "deny",
+      },
+    });
+    const sourceRaw = fs.readFileSync(sourcePath, "utf8");
+
+    const result = await autoMigrateLegacyState({
+      cfg: {},
+      env: { OPENCLAW_STATE_DIR: stateDir } as NodeJS.ProcessEnv,
+      homedir: () => root,
+      log: { info: vi.fn(), warn: vi.fn() },
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).not.toContain(`Migrated exec approvals → ${targetPath}`);
+    expect(fs.readFileSync(sourcePath, "utf8")).toBe(sourceRaw);
+    expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(false);
+    expect(fs.existsSync(targetPath)).toBe(false);
+  });
+
   it("classifies already-migrated symlink mirrors without warnings", async () => {
     const flatRoot = makeDoctorStateDir();
     const flat = ensureLegacyAndTargetStateDirs(flatRoot);

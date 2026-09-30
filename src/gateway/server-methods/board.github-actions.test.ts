@@ -493,21 +493,28 @@ describe("board authenticated GitHub Actions", () => {
     expect(actionCalls()).toHaveLength(4);
   });
 
-  it("rejects changed session ownership across an awaited fetch", async () => {
-    const started = createDeferred();
-    const release = createDeferred();
-    actions = async () => {
-      started.resolve();
-      await release.promise;
-      return json(result);
-    };
-    const { read } = await reader();
-    const pending = read();
-    await started.promise;
-    config.agents = { entries: { other: { default: true } } };
-    release.resolve();
-    expect((await pending).mock.calls[0]?.[0]).toBe(false);
-  });
+  it.each(["session ownership", "token"] as const)(
+    "rejects changed %s across an awaited fetch",
+    async (changed) => {
+      const started = createDeferred();
+      const release = createDeferred();
+      actions = async () => {
+        started.resolve();
+        await release.promise;
+        return json(result);
+      };
+      const { read } = await reader();
+      const pending = read();
+      await started.promise;
+      if (changed === "token") {
+        await writeCredential("system", profileId, "synthetic-rotated-token");
+      } else {
+        config.agents = { entries: { other: { default: true } } };
+      }
+      release.resolve();
+      expect((await pending).mock.calls[0]?.[0]).toBe(false);
+    },
+  );
 
   it("isolates a removed leader from the surviving shared read and rechecks cached authority", async () => {
     const removed = "leader";

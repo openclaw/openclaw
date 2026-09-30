@@ -1201,6 +1201,12 @@ const agentCases: Array<{
     expected: "anthropic/ops-model",
     choice: "__keep__",
   },
+  {
+    name: "explicit primary manual choice",
+    model: "anthropic/ops-model",
+    expected: "anthropic/ops-model",
+    choice: "__manual__",
+  },
   { name: "inherited primary", expected: "openai/global-model", choice: "__keep__" },
 ];
 it.each(agentCases)(

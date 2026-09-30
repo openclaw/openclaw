@@ -1462,6 +1462,14 @@ printf 'status=%s\\n' "$status"
     expect(existsSync(fixture.markerPath)).toBe(false);
     expect(existsSync(outputPath)).toBe(false);
   });
+
+  it("executes and cleans the non-root installer after curl succeeds", () => {
+    const fixture = runNonrootInstallerFixture(0);
+
+    expect(fixture.result.status, fixture.result.stderr).toBe(0);
+    expect(existsSync(fixture.markerPath)).toBe(true);
+    expect(existsSync(readFileSync(fixture.outputPathCapture, "utf8"))).toBe(false);
+  });
 });
 
 describe("install-sh E2E runner", () => {
