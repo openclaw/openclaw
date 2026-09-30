@@ -216,6 +216,9 @@ export async function handleBashChatCommand(params: {
       return { text: "⚙️ No active bash job." };
     }
     const { running, finished } = getScopedSession(sessionId);
+    if (!running && activeJob?.state === "running" && activeJob.sessionId === sessionId) {
+      activeJob = null;
+    }
     if (request.action === "poll") {
       if (running) {
         const runtimeSec = Math.max(0, Math.floor((Date.now() - running.startedAt) / 1000));
@@ -229,9 +232,6 @@ export async function handleBashChatCommand(params: {
         };
       }
       if (finished) {
-        if (activeJob?.state === "running" && activeJob.sessionId === sessionId) {
-          activeJob = null;
-        }
         const exitLabel = renderExecExitLabel(finished);
         const prefix = finished.terminalStatus === "completed" ? "⚙️" : "⚠️";
         return setReplyPayloadMetadata(
@@ -245,18 +245,12 @@ export async function handleBashChatCommand(params: {
           { onFinalDeliverySuccess: () => acknowledgeNotifyOnExit(finished) },
         );
       }
-      if (activeJob?.state === "running" && activeJob.sessionId === sessionId) {
-        activeJob = null;
-      }
       return {
         text: `⚙️ No bash session found for ${formatSessionSnippet(sessionId)}.`,
       };
     }
 
     if (!running) {
-      if (activeJob?.state === "running" && activeJob.sessionId === sessionId) {
-        activeJob = null;
-      }
       return {
         text: `⚙️ No running bash job found for ${formatSessionSnippet(sessionId)}.`,
       };
@@ -276,7 +270,6 @@ export async function handleBashChatCommand(params: {
     };
   }
 
-  // request.action === "run"
   if (liveJob) {
     const label =
       liveJob.state === "running" ? formatSessionSnippet(liveJob.sessionId) : "starting";
@@ -339,7 +332,6 @@ export async function handleBashChatCommand(params: {
       };
     }
 
-    // Completed in foreground.
     activeJob = null;
     const exitDetails =
       result.details?.status === "completed" || result.details?.status === "failed"

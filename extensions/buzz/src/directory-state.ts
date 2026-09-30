@@ -1,6 +1,7 @@
 import type { Event } from "nostr-tools";
 import type { ChannelDirectoryEntry } from "openclaw/plugin-sdk/directory-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { safeParseJson, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { applyBuzzDirectoryQueryAndLimit } from "./directory-query.js";
 import { isNewerBuzzRevision } from "./event-order.js";
 import type { BuzzMentionMember } from "./mentions.js";
@@ -37,14 +38,8 @@ type BuzzDirectoryRoom = {
 };
 
 function normalizeBoundedString(value: unknown, maxChars: number): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  return truncateUtf16Safe(trimmed, maxChars);
+  const trimmed = normalizeOptionalString(value);
+  return trimmed ? truncateUtf16Safe(trimmed, maxChars) : undefined;
 }
 
 function readPreferredString(params: {
@@ -68,14 +63,8 @@ function parseBuzzDirectoryProfileEvent(event: Event): BuzzDirectoryProfile | un
   if (event.kind !== BUZZ_PROFILE_KIND || !HEX_PUBLIC_KEY_PATTERN.test(publicKey)) {
     return undefined;
   }
-  let content: Record<string, unknown>;
-  try {
-    const parsed: unknown = JSON.parse(event.content);
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-      return undefined;
-    }
-    content = parsed as Record<string, unknown>;
-  } catch {
+  const content = safeParseJson<unknown>(event.content);
+  if (!isRecord(content)) {
     return undefined;
   }
   return {

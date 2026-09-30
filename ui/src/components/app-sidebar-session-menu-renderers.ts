@@ -334,9 +334,9 @@ export function renderSidebarSessionSortMenu(params: {
   ownerFilterId: string | null;
   involvingMe: boolean;
   selfOwnerId: string | null;
-  /** Any Filters row differs from its default, so Reset has work to do. */
-  filtersChanged: boolean;
-  onResetFilters: () => void;
+  /** Any visible Filters or Display setting differs from its default. */
+  settingsChanged: boolean;
+  onReset: () => void;
   onGroupingChange: (grouping: SidebarSessionsGrouping) => void;
   onSortModeChange: (mode: SidebarSessionSortMode) => void;
   onStatusFilterChange: (statusFilter: SidebarSessionStatusFilter) => void;
@@ -407,7 +407,7 @@ export function renderSidebarSessionSortMenu(params: {
           <div class="sidebar-session-menu-heading">
             <h3 id="sidebar-sessions-filters-label">${t("chat.sidebar.menuFilters")}</h3>
             ${
-              params.filtersChanged
+              params.settingsChanged
                 ? html`<button
                     type="button"
                     id="sidebar-sessions-reset"
@@ -419,7 +419,7 @@ export function renderSidebarSessionSortMenu(params: {
                           '#sidebar-sessions-status wa-radio[value="active"]',
                         )
                         ?.focus();
-                      params.onResetFilters();
+                      params.onReset();
                     }}
                   >
                     ${t("common.reset")}

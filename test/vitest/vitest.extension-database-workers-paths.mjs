@@ -253,7 +253,6 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/diffs/src/store.cleanup.test.ts",
   "extensions/diffs/src/store.test.ts",
   "extensions/diffs/src/tool.test.ts",
-  "extensions/diffs/src/tool-render-output.test.ts",
   "extensions/device-pair/notify.test.ts",
   "extensions/discord/src/monitor/model-picker-preferences.test.ts",
   "extensions/discord/src/monitor/presence-cooldown-store.test.ts",

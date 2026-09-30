@@ -756,9 +756,11 @@ final class DashboardManager {
                         configuration: configuration,
                         target: target,
                         present: false)
-                } else if needsRefresh {
+                } else if needsRefresh, controller.documentHost.legacyNativeCredentials?.isCurrent() != true {
                     // Same-principal reconnects retain the page but replace its
                     // socket-owned projections before an old observer can retire them.
+                    // A catalog refresh on the current socket keeps them, so it cannot
+                    // refuse that document's native challenges in flight.
                     controller.documentHost.nativeGatewayAuthProvider = configuration.nativeAuthProvider
                     controller.documentHost.legacyNativeCredentials = configuration.legacyNativeCredentials
                 }

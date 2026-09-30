@@ -5,9 +5,6 @@ import type { QueueDropPolicy } from "./types.js";
 /** Normalizes user-entered queue mode aliases from directives/config. */
 export function normalizeQueueMode(raw?: string): QueueMode | undefined {
   const cleaned = normalizeOptionalLowercaseString(raw);
-  if (!cleaned) {
-    return undefined;
-  }
   if (cleaned === "interrupt" || cleaned === "interrupts" || cleaned === "abort") {
     return "interrupt";
   }
@@ -42,9 +39,6 @@ export function normalizePersistedQueueMode(raw?: string): QueueMode | undefined
 /** Normalizes queue drop policy aliases from directives/config. */
 export function normalizeQueueDropPolicy(raw?: string): QueueDropPolicy | undefined {
   const cleaned = normalizeOptionalLowercaseString(raw);
-  if (!cleaned) {
-    return undefined;
-  }
   if (cleaned === "old" || cleaned === "oldest") {
     return "old";
   }

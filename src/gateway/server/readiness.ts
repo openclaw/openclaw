@@ -67,12 +67,8 @@ export function createStartupChecker(deps: GatewayStartupStateDeps): StartupChec
 function shouldIgnoreReadinessFailure(
   accountSnapshot: ChannelAccountSnapshot,
   health: ChannelHealthEvaluation,
-  autostartSuppressed: boolean,
 ): boolean {
   if (health.reason === "unmanaged" || health.reason === "stale-socket") {
-    return true;
-  }
-  if (autostartSuppressed && health.reason === "not-running") {
     return true;
   }
   // Channel restarts spend time in backoff with running=false before the next
@@ -183,10 +179,7 @@ export function createReadinessChecker(
           }
           continue;
         }
-        if (
-          !health.healthy &&
-          !shouldIgnoreReadinessFailure(accountSnapshot, health, autostartSuppressed)
-        ) {
+        if (!health.healthy && !shouldIgnoreReadinessFailure(accountSnapshot, health)) {
           failing.push(channelId);
           break;
         }

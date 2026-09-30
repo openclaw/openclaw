@@ -178,7 +178,6 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
       connected: snapshot.phase === "connected",
       hello: snapshot.hello,
       configSnapshot: this.context.runtimeConfig.state.configSnapshot,
-      applySessionKey: snapshot.sessionKey,
       selectedAgentId: this.selectedAgentId,
     });
   }
@@ -198,7 +197,6 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
     } else {
       this.dreaming.connected = snapshot.phase === "connected";
       this.dreaming.hello = snapshot.hello;
-      this.dreaming.applySessionKey = snapshot.sessionKey;
     }
     if (snapshot.phase === "connected" && this.selectedAgentId && replaceState) {
       void this.loadAll();

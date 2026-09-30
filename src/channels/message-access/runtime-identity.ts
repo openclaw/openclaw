@@ -5,13 +5,16 @@ import {
   type IdentifierAuthentication,
 } from "./identifier-authentication.js";
 import type {
-  ChannelIngressAdapter,
   ChannelIngressIdentityDescriptor,
   ChannelIngressIdentityField,
   ChannelIngressIdentitySubjectInput,
   StableChannelIngressIdentityParams,
 } from "./runtime-types.js";
-import type { NormalizedIngressEntry, NormalizedIngressSubject } from "./types.js";
+import type {
+  InternalChannelIngressAdapter,
+  NormalizedIngressEntry,
+  NormalizedIngressSubject,
+} from "./types.js";
 
 type ResolvedIdentityField = Required<Pick<ChannelIngressIdentityField, "key" | "kind">> &
   Omit<ChannelIngressIdentityField, "key" | "kind">;
@@ -143,7 +146,7 @@ function adapterEntry(params: {
 
 export function createIdentityAdapter(
   identity: ChannelIngressIdentityDescriptor,
-): ChannelIngressAdapter {
+): InternalChannelIngressAdapter {
   const fields = identityFields(identity);
   const isWildcardEntry = identity.isWildcardEntry ?? ((value: string) => value === "*");
   return {

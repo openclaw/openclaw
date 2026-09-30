@@ -30,12 +30,6 @@ function requireValue<T>(value: T | undefined, label: string): T {
   return value;
 }
 
-type UpdateCliScenario = {
-  name: string;
-  run: () => Promise<void>;
-  assert: () => void;
-};
-
 const expectUpdateCallChannel = (channel: string) => {
   const call = vi.mocked(updateGitCheckout).mock.calls[0]?.[0];
   expect(call?.opts.channel).toBe(channel);
@@ -272,5 +266,4 @@ export {
   setupConfigMutationWithRetryMock,
   spawnCall,
   syncPluginCall,
-  type UpdateCliScenario,
 };

@@ -253,11 +253,11 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
   const session = mainRow ? host.projectHomeSession(mainRow, agentId) : null;
   const attention = session?.attention ?? host.resolveSessionAttention({ key: mainKey, agentId });
   const attentionLabel = sessionAttentionTooltipLabel(attention);
-  const outboxAttentionCount = host.outboxAttentionCountForSession(mainKey);
+  const outboxAttentionCount = host.storedOutboxes?.attentionCountForSession(mainKey) ?? 0;
   const active =
     isSessionRouteId(host.activeRouteId) &&
     areUiSessionKeysEquivalent(host.getRouteSessionKey(), mainKey);
-  const hasComposerDraft = host.hasSessionDraft(mainKey);
+  const hasComposerDraft = host.storedOutboxes?.hasSessionDraft(mainKey) ?? false;
   const ownRun = mainRow ? isSessionRunActive(mainRow) : false;
   const subagentsWorking = (session?.runningChildCount ?? 0) > 0;
   const running = ownRun || subagentsWorking;

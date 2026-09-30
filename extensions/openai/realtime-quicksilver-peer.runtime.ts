@@ -200,8 +200,7 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
     if (this.closed || this.inputInFlight || this.pendingAudio.length === 0) {
       return;
     }
-    const audio = Buffer.alloc(this.pendingAudio.length);
-    this.pendingAudio.readInto(audio);
+    const audio = this.pendingAudio.take();
     this.inputInFlight = true;
     this.post({ type: "audio", audio }, [audio.buffer]);
   }

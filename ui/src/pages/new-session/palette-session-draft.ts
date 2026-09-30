@@ -21,7 +21,7 @@ import {
   handleChatAttachmentPaste,
   renderAttachmentPreview,
 } from "../chat/components/chat-attachments.ts";
-import { ConnectMachineSetupState, renderConnectMachineDialog } from "./connect-machine-dialog.ts";
+import { ConnectMachineSetupState } from "./connect-machine-dialog.ts";
 import { NewSessionDraftController } from "./draft-controller.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import { resolveNewSessionMentionDirectory } from "./mention-directory.ts";
@@ -416,21 +416,13 @@ export class PaletteSessionDraft implements ReactiveController {
   }
 
   renderAuxiliary() {
-    return renderConnectMachineDialog({
-      open: this.connectMachine.open && this.read().open && (this.draft?.place.isAdmin() ?? false),
-      loading: this.connectMachine.loading,
-      error: this.connectMachine.error,
-      setup: this.connectMachine.setup,
-      onRefresh: () => void this.connectMachine.refresh(),
-      onClose: () => {
-        this.connectMachine.close();
-        this.host.requestUpdate();
-      },
-      onManageDevices: () => {
+    return this.connectMachine.render(
+      this.read().open && (this.draft?.place.isAdmin() ?? false),
+      () => {
         this.callbacks.onClose();
         this.read().context?.navigate("devices");
       },
-    });
+    );
   }
 
   private bindOwner(url: string, scope: string) {

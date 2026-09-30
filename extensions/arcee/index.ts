@@ -1,7 +1,3 @@
-/**
- * Arcee AI provider plugin entry. It supports direct Arcee auth and OpenRouter
- * routing while normalizing OpenRouter model ids and base URLs.
- */
 import { buildOpenAICompatibleLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import {
   readConfiguredProviderCatalogEntries,
@@ -72,7 +68,6 @@ function normalizeArceeResolvedModel<T extends { baseUrl?: string; id: string }>
   };
 }
 
-/** Provider entry for Arcee direct and OpenRouter-backed models. */
 export default defineSingleProviderPluginEntry({
   id: PROVIDER_ID,
   name: "Arcee AI Provider",
