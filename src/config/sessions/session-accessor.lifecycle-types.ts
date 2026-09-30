@@ -8,7 +8,11 @@ import type { SessionResetBoundaryRequest } from "./session-reset-boundary-event
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 /** Reset is an append: an empty transcript needs the caller's workspace for its header. */
-export type SessionResetBoundaryWrite = SessionResetBoundaryRequest & { cwd: string };
+export type SessionResetBoundaryWrite = SessionResetBoundaryRequest & {
+  /** Caller-prepared identity when a lifecycle consumer must reopen this exact window. */
+  boundaryId?: string;
+  cwd: string;
+};
 
 export type SessionLifecycleArtifactCleanupParams = {
   agentId?: string;

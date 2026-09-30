@@ -239,13 +239,27 @@ tasks still require explicit `openclawBuildCommit` and
 `openclawBuildTimestamp` properties so signed artifacts remain reproducible.
 
 Android release archives use the pinned version in `apps/android/version.json`.
-Run **Android Store Release** from `main` without input parameters, or run
+Run **Android Store Release** from `main` with the default `release` operation, or run
 `pnpm android:release:upload` from a clean local `main` matching `origin/main`.
 The pipeline selects unused phone and Wear build numbers from Google Play and
 generates OpenAI release notes from changes since each form factor's public
 release. It saves the plan and notes as release artifacts and uploads the selected
 clean source commit. Tracked version defaults and notes stay unchanged; the flow
 creates no preparation commits or follow-up PRs.
+
+For daily Google Play Internal testing builds, the same workflow runs at
+**7:00 AM Pacific** using the `America/Los_Angeles` time zone, including daylight
+saving changes. Scheduled runs require the repository variable
+`ANDROID_INTERNAL_ENABLED=true` and use the `android-internal` environment.
+They upload the phone and Wear builds and generated notes to `internal` and
+`wear:internal`, without capturing screenshots or changing the store listing.
+Production promotion remains manual.
+
+To run this distribution manually, choose `operation=internal` from `main`, or
+run `pnpm android:release:upload -- --destination internal` from a clean local
+`main` matching `origin/main`. Manual runs work while the schedule is disabled.
+See [daily Internal testing setup](VERSIONING.md#daily-internal-testing) for the
+environment, credentials, and enablement steps.
 
 For local preparation or inspection:
 

@@ -278,16 +278,19 @@ async function loadPluginCliMetadataRegistryWithContext(
     params?.primaryCommand,
   );
   prepared.assertCurrent();
-  const registry = await (prepared.metadataRegistry ??= prepared.withCache(() =>
-    loadOpenClawPluginCliRegistry(
-      buildPluginRuntimeLoadOptions(prepared.context, {
-        ...loaderOptions,
-        // The prepared record owns reuse; process caching can retain another generation's registrars.
-        cache: false,
-        ...(onlyPluginIds && onlyPluginIds.length > 0 ? { onlyPluginIds } : {}),
-      }),
-    ),
-  ));
+  const registry = await (prepared.metadataRegistry ??= prepared.withCache(() => {
+    const options = buildPluginRuntimeLoadOptions(prepared.context, {
+      ...loaderOptions,
+      // The prepared record owns reuse; process caching can retain another generation's registrars.
+      cache: false,
+      ...(onlyPluginIds && onlyPluginIds.length > 0 ? { onlyPluginIds } : {}),
+    });
+    return prepared.resources
+      ? prepared.resources.acquire(() =>
+          acquirePluginRegistryForInspection({ ...options, mode: "cli-metadata" }),
+        )
+      : loadOpenClawPluginCliRegistry(options);
+  }));
   prepared.assertCurrent();
   return registry;
 }

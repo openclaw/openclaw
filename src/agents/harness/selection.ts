@@ -53,13 +53,11 @@ import {
   runAgentHarnessLifecycleAttempt,
   runAgentHarnessLifecycleFinalization,
 } from "./lifecycle.js";
-import type { AgentHarnessPolicy } from "./policy.js";
 import {
   buildAgentHarnessSelectionDecision,
   resolveAgentHarnessSelectionDecision,
   type AgentHarnessSelectionParams,
   type AgentHarnessSelectionDecisionParams,
-  type AgentHarnessSelectionCandidate,
   type AgentHarnessSelectionDecision as AgentHarnessSelectionFact,
   type AgentHarnessPreparedModelProvider,
 } from "./selection-decision.js";
@@ -201,12 +199,17 @@ export async function runAgentHarnessAttempt(
   // redirect its transcript or credentials through a second support decision.
   const selection =
     nativeSessionRuntime?.auth === "native"
-      ? buildSelectionDecision({
+      ? {
+          ...buildAgentHarnessSelectionDecision({
+            harness: isBuiltInOpenClawAgentHarness(nativeSessionRuntime.harness)
+              ? undefined
+              : nativeSessionRuntime.harness,
+            policy: { runtime: nativeSessionRuntime.harness.id, runtimeSource: "model" },
+            selectedReason: "forced_plugin",
+            candidates: [],
+          }),
           harness: nativeSessionRuntime.harness,
-          policy: { runtime: nativeSessionRuntime.harness.id, runtimeSource: "model" },
-          selectedReason: "forced_plugin",
-          candidates: [],
-        })
+        }
       : selectPreparedAgentHarness(params);
   const harness = selection.harness;
   const nativeOwnsModel = nativeSessionRuntime?.auth === "native";
@@ -693,21 +696,6 @@ function appendPluginHarnessToolPolicyPrompt(existing: string | undefined, promp
     return prompt;
   }
   return trimmed.includes(prompt) ? trimmed : `${trimmed}\n\n${prompt}`;
-}
-
-function buildSelectionDecision(params: {
-  harness: AgentHarness;
-  policy: AgentHarnessPolicy;
-  selectedReason: AgentHarnessSelectionDecision["selectedReason"];
-  candidates: AgentHarnessSelectionCandidate[];
-}): AgentHarnessSelectionDecision {
-  return {
-    ...buildAgentHarnessSelectionDecision({
-      ...params,
-      harness: isBuiltInOpenClawAgentHarness(params.harness) ? undefined : params.harness,
-    }),
-    harness: params.harness,
-  };
 }
 
 function logAgentHarnessSelection(

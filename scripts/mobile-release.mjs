@@ -261,8 +261,8 @@ function prepareAndUpload(root, platform, recovery, releaseArgs, destination) {
   if (isGithubActions) {
     const eventAllowed =
       process.env.GITHUB_EVENT_NAME === "workflow_dispatch" ||
-      (platform === "ios" &&
-        destination === "testflight" &&
+      (((platform === "ios" && destination === "testflight") ||
+        (platform === "android" && destination === "internal")) &&
         process.env.GITHUB_EVENT_NAME === "schedule");
     if (
       !eventAllowed ||
@@ -271,7 +271,7 @@ function prepareAndUpload(root, platform, recovery, releaseArgs, destination) {
       sourceSha !== process.env.GITHUB_SHA
     ) {
       throw new Error(
-        "CI releases require the exact workflow_dispatch commit on openclaw/openclaw main; scheduled events are accepted only for iOS TestFlight.",
+        "CI releases require the exact workflow_dispatch commit on openclaw/openclaw main; scheduled events are accepted only for iOS TestFlight or Android internal testing.",
       );
     }
   } else if (git(root, "branch", "--show-current") !== "main") {
@@ -331,6 +331,7 @@ function prepareAndUpload(root, platform, recovery, releaseArgs, destination) {
         { stdio: "inherit" },
       );
       plan = JSON.parse(fs.readFileSync(planPath, "utf8"));
+      plan.destination = destination;
     }
     plan.sourceSha = sourceSha;
     fs.writeFileSync(planPath, `${JSON.stringify(plan, null, 2)}\n`, { mode: 0o600 });
@@ -420,7 +421,7 @@ function prepareAndUpload(root, platform, recovery, releaseArgs, destination) {
       [
         `scripts/${platform}-release-upload.sh`,
         ...(stageExisting ? ["--stage-only"] : []),
-        ...(platform === "ios" ? uploadArgs(plan) : []),
+        ...(platform === "ios" ? uploadArgs(plan) : ["--destination", destination]),
       ],
       source,
       {
@@ -474,7 +475,7 @@ function runCli() {
   const args = process.argv.slice(2);
   if (args.includes("--help") || args.includes("-h")) {
     console.log(
-      "Usage: node scripts/mobile-release.mjs run --platform ios|android [--destination app-store|testflight] [--recovery-dir <directory>]\n       node scripts/mobile-release.mjs stage --platform ios --recovery-dir <directory>\nRun prepares notes and uploads unchanged main source. TestFlight is iOS-only. Stage recovers the saved iOS destination without uploading again or making Git commits.",
+      "Usage: node scripts/mobile-release.mjs run --platform ios|android [--destination <destination>] [--recovery-dir <directory>]\n       node scripts/mobile-release.mjs stage --platform ios --recovery-dir <directory>\nDestinations: iOS app-store (default) or testflight; Android play-store (default) or internal. Run prepares notes and uploads unchanged main source. Stage recovers the saved iOS destination without uploading again or making Git commits.",
     );
     return;
   }
@@ -522,12 +523,13 @@ function runCli() {
   }
   if (
     destination !== undefined &&
-    (platform !== "ios" ||
-      operation !== "run" ||
-      !["app-store", "testflight"].includes(destination))
+    (operation !== "run" ||
+      !(platform === "ios" ? ["app-store", "testflight"] : ["play-store", "internal"]).includes(
+        destination,
+      ))
   ) {
     throw new Error(
-      "Choose --destination app-store or testflight for an iOS run; recovery uses the saved destination.",
+      "Choose --destination app-store or testflight for iOS, or play-store or internal for Android; recovery uses the saved destination.",
     );
   }
   if (operation === "stage" && (platform !== "ios" || !recovery)) {
@@ -551,7 +553,13 @@ function runCli() {
   if (operation === "stage") {
     stageIos(root, recovery);
   } else {
-    prepareAndUpload(root, platform, recovery, releaseArgs, destination ?? "app-store");
+    prepareAndUpload(
+      root,
+      platform,
+      recovery,
+      releaseArgs,
+      destination ?? (platform === "ios" ? "app-store" : "play-store"),
+    );
   }
 }
 

@@ -184,6 +184,8 @@ export type SubagentRegistryWriteOptions = {
   context: OpenClawStateWorkerContext;
   assertCurrent?: () => void;
   onCommitted?: () => void;
+  /** Admit native persistence and publication after staged rows have been captured. */
+  withPublication?: (publish: () => Promise<void>) => Promise<void>;
   retireRunIds?: readonly string[];
   pendingKillClaim?: SubagentRunRecord;
 };
@@ -286,54 +288,56 @@ export async function persistSubagentRegistryChangesAsync(
         deleteRunIds: runIds.filter((runId) => !snapshot.has(runId)),
       };
       const { context } = options;
-      await runOpenClawStateWorkerOperation(
-        context,
-        async (scope) => {
-          const receipt = await scope.execute({ type: "subagents.persistChanges", input: write });
-          if (receipt.writeId !== write.writeId) {
-            throw new Error("Queued registry acknowledgement identifies another write");
-          }
-          acknowledged = true;
-          try {
-            authority.assertDatabase();
-          } catch (error) {
-            throw new SubagentRegistryWriteError("committed", error, "superseded");
-          }
-          const currentIds = authority.currentRunIds();
-          if (currentIds.length > 0) {
-            publish(snapshot, currentIds);
-          }
-        },
-        {
-          assertCurrent: authority.assertCurrent,
-          createAdmission: () => {
-            let phase: "waiting" | "transaction" | "commit" = "waiting";
-            return {
-              nativeLocations: [
-                context.admission.databasePath,
-                context.admission.identity.canonicalPath,
-              ],
-              admission: createSqliteWorkerOperationAdmission((request, grant) => {
-                if (
-                  request.facts !== write.writeId ||
-                  !(
-                    (phase === "waiting" && request.stage === "transaction") ||
-                    (phase === "transaction" && request.stage === "commit")
-                  )
-                ) {
-                  throw new Error("Queued registry write authority requested out of order");
-                }
-                authority.assertCurrent();
-                if (!grant()) {
-                  throw new Error("Queued registry write authority expired");
-                }
-                phase = request.stage === "transaction" ? "transaction" : "commit";
-                commitGranted = phase === "commit";
-              }),
-            };
+      const persist = () =>
+        runOpenClawStateWorkerOperation(
+          context,
+          async (scope) => {
+            const receipt = await scope.execute({ type: "subagents.persistChanges", input: write });
+            if (receipt.writeId !== write.writeId) {
+              throw new Error("Queued registry acknowledgement identifies another write");
+            }
+            acknowledged = true;
+            try {
+              authority.assertDatabase();
+            } catch (error) {
+              throw new SubagentRegistryWriteError("committed", error, "superseded");
+            }
+            const currentIds = authority.currentRunIds();
+            if (currentIds.length > 0) {
+              publish(snapshot, currentIds);
+            }
           },
-        },
-      );
+          {
+            assertCurrent: authority.assertCurrent,
+            createAdmission: () => {
+              let phase: "waiting" | "transaction" | "commit" = "waiting";
+              return {
+                nativeLocations: [
+                  context.admission.databasePath,
+                  context.admission.identity.canonicalPath,
+                ],
+                admission: createSqliteWorkerOperationAdmission((request, grant) => {
+                  if (
+                    request.facts !== write.writeId ||
+                    !(
+                      (phase === "waiting" && request.stage === "transaction") ||
+                      (phase === "transaction" && request.stage === "commit")
+                    )
+                  ) {
+                    throw new Error("Queued registry write authority requested out of order");
+                  }
+                  authority.assertCurrent();
+                  if (!grant()) {
+                    throw new Error("Queued registry write authority expired");
+                  }
+                  phase = request.stage === "transaction" ? "transaction" : "commit";
+                  commitGranted = phase === "commit";
+                }),
+              };
+            },
+          },
+        );
+      await (options.withPublication ? options.withPublication(persist) : persist());
     } catch (error) {
       if (acknowledged && error instanceof SubagentRegistryWriteError) {
         throw error;
@@ -376,7 +380,7 @@ export type SubagentRegistryPostimageResult = {
   publication: SubagentRegistryPublication;
 };
 
-function replaceSubagentRunRecord(entry: SubagentRunRecord, value: SubagentRunRecord): void {
+export function replaceSubagentRunRecord(entry: SubagentRunRecord, value: SubagentRunRecord): void {
   for (const key of Object.keys(entry)) {
     Reflect.deleteProperty(entry, key);
   }
@@ -560,6 +564,7 @@ export async function publishSubagentRunPostimages(params: {
   assertCurrent: () => void;
   /** An acknowledged native mutation can retain target custody after its caller retires. */
   assertPublicationCurrent?: () => void;
+  withPublication?: SubagentRegistryWriteOptions["withPublication"];
   onPublished?: () => void;
 }): Promise<SubagentRegistryPostimageResult> {
   const selected = [...params.previous].map(([entry, previous]) => ({
@@ -589,6 +594,7 @@ export async function publishSubagentRunPostimages(params: {
       params.context,
       {
         pendingKillClaim: params.pendingKillClaim,
+        withPublication: params.withPublication,
         retireRunIds: selected.filter(({ retire }) => retire).map(({ entry }) => entry.runId),
         assertCurrent() {
           params.assertCurrent();

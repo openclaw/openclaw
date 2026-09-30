@@ -126,17 +126,18 @@ async function acquireRegistryResources(
         .filter((instance) => !rollbackInstances.has(instance))
         .map((instance) => instance.dispose()),
     );
+    const failures: unknown[] = results.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : result.value.errors,
+    );
     for (const instance of instances) {
       releasePluginCacheInstance(instance, cache);
     }
     try {
-      await retirePluginCache(cache);
+      const retired = await retirePluginCache(cache);
+      failures.push(...retired.failures.map((failure) => failure.error));
     } catch (reason) {
-      results.push({ status: "rejected", reason });
+      failures.push(reason);
     }
-    const failures = results.flatMap((result) =>
-      result.status === "rejected" ? [result.reason] : [],
-    );
     if (failures.length) {
       throw new PluginRuntimeCloseRetainedError(
         new AggregateError(failures, "Plugin inspection instances failed to retire"),

@@ -8,6 +8,7 @@ import { registerAcpSessionResetControls } from "../../acp/control-plane/manager
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import type { InternalHookEvent } from "../../hooks/internal-hooks.js";
 import { resetSystemEventsForTest } from "../../infra/system-events.js";
+import type { HookRunner } from "../../plugins/hooks.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { flushPendingSessionsChangedEvents } from "../server-methods/session-change-event.js";
@@ -142,8 +143,8 @@ const beforeResetHookMocks = vi.hoisted(() => ({
 }));
 
 const sessionLifecycleHookMocks = vi.hoisted(() => ({
-  runSessionEnd: vi.fn(async () => {}),
-  runSessionStart: vi.fn(async () => {}),
+  runSessionEnd: vi.fn<HookRunner["runSessionEnd"]>(async () => {}),
+  runSessionStart: vi.fn<HookRunner["runSessionStart"]>(async () => {}),
 }));
 
 const subagentLifecycleHookMocks = vi.hoisted(() => ({
@@ -157,6 +158,7 @@ const beforeResetHookState = vi.hoisted(() => ({
 const sessionLifecycleHookState = vi.hoisted(() => ({
   hasSessionEndHook: true,
   hasSessionStartHook: true,
+  runner: undefined as HookRunner | undefined,
 }));
 
 const subagentLifecycleHookState = vi.hoisted(() => ({
@@ -248,17 +250,20 @@ vi.mock("../../plugins/hook-runner-global.js", async () => {
   );
   return {
     ...actual,
-    getGlobalHookRunner: vi.fn(() => ({
-      hasHooks: (hookName: string) =>
-        (hookName === "subagent_ended" && subagentLifecycleHookState.hasSubagentEndedHook) ||
-        (hookName === "before_reset" && beforeResetHookState.hasBeforeResetHook) ||
-        (hookName === "session_end" && sessionLifecycleHookState.hasSessionEndHook) ||
-        (hookName === "session_start" && sessionLifecycleHookState.hasSessionStartHook),
-      runBeforeReset: beforeResetHookMocks.runBeforeReset,
-      runSessionEnd: sessionLifecycleHookMocks.runSessionEnd,
-      runSessionStart: sessionLifecycleHookMocks.runSessionStart,
-      runSubagentEnded: subagentLifecycleHookMocks.runSubagentEnded,
-    })),
+    getGlobalHookRunner: vi.fn(
+      () =>
+        sessionLifecycleHookState.runner ?? {
+          hasHooks: (hookName: string) =>
+            (hookName === "subagent_ended" && subagentLifecycleHookState.hasSubagentEndedHook) ||
+            (hookName === "before_reset" && beforeResetHookState.hasBeforeResetHook) ||
+            (hookName === "session_end" && sessionLifecycleHookState.hasSessionEndHook) ||
+            (hookName === "session_start" && sessionLifecycleHookState.hasSessionStartHook),
+          runBeforeReset: beforeResetHookMocks.runBeforeReset,
+          runSessionEnd: sessionLifecycleHookMocks.runSessionEnd,
+          runSessionStart: sessionLifecycleHookMocks.runSessionStart,
+          runSubagentEnded: subagentLifecycleHookMocks.runSubagentEnded,
+        },
+    ),
   };
 });
 
@@ -345,6 +350,7 @@ function createGatewaySessionsTestHarness(startServer: boolean, setup?: GatewayS
     sessionLifecycleHookMocks.runSessionStart.mockClear();
     sessionLifecycleHookState.hasSessionEndHook = true;
     sessionLifecycleHookState.hasSessionStartHook = true;
+    sessionLifecycleHookState.runner = undefined;
     subagentLifecycleHookMocks.runSubagentEnded.mockClear();
     subagentLifecycleHookState.hasSubagentEndedHook = true;
     threadBindingMocks.unbindThreadBindingsBySessionKey.mockClear();
@@ -680,6 +686,10 @@ export function isInternalHookEvent(value: unknown): value is InternalHookEvent 
     typeof candidate.context === "object" &&
     candidate.context !== null
   );
+}
+
+export function setSessionLifecycleHookRunnerForTest(runner: HookRunner | undefined): void {
+  sessionLifecycleHookState.runner = runner;
 }
 
 export {

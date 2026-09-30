@@ -8,6 +8,23 @@ import {
 } from "../model-selection.js";
 import { normalizeProviderModelIdWithRuntime } from "../provider-model-normalization.runtime.js";
 
+const OVERRIDE_VALUE_MAX_LENGTH = 256;
+
+export function normalizeExplicitOverrideInput(raw: string, kind: "provider" | "model"): string {
+  const trimmed = raw.trim();
+  const label = kind === "provider" ? "Provider" : "Model";
+  if (!trimmed) {
+    throw new Error(`${label} override must be non-empty.`);
+  }
+  if (trimmed.length > OVERRIDE_VALUE_MAX_LENGTH) {
+    throw new Error(`${label} override exceeds ${String(OVERRIDE_VALUE_MAX_LENGTH)} characters.`);
+  }
+  if (/\p{Cc}/u.test(trimmed)) {
+    throw new Error(`${label} override contains invalid control characters.`);
+  }
+  return trimmed;
+}
+
 export function normalizeAgentCommandModelRef(
   cfg: OpenClawConfig,
   provider: string,
