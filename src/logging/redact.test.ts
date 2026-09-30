@@ -2188,5 +2188,12 @@ describe("redactSensitiveLines", () => {
       "normal log line",
     ]);
   });
+
+  it("keeps a large plus-joined run linear through the data-URL guard", () => {
+    const input = `${"a+".repeat(50_000)}pass\u200Bword=opaque-value-1234567890`;
+    const started = performance.now();
+    expect(redactSensitiveText(input, { mode: "tools" })).toBe(input);
+    expect(performance.now() - started).toBeLessThan(1_000);
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
