@@ -1258,13 +1258,13 @@ describe("installPluginFromClawHub", () => {
         files: [manifestFile],
       });
       const result = await installPluginFromClawHub({ spec: "clawhub:demo" });
-      expectInstallFailureFields(
-        result,
-        CLAWHUB_INSTALL_ERROR_CODE.ARCHIVE_INTEGRITY_MISMATCH,
-        expect.stringMatching(
+      expect(result).toMatchObject({
+        ok: false,
+        code: CLAWHUB_INSTALL_ERROR_CODE.ARCHIVE_INTEGRITY_MISMATCH,
+        error: expect.stringMatching(
           /^ClawHub archive fallback verification rejected the downloaded archive: archive entry /,
         ),
-      );
+      });
       expect(installExtractedArchiveMock).not.toHaveBeenCalled();
     },
   );
