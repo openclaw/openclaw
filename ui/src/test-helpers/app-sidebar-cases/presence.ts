@@ -337,10 +337,18 @@ describe("AppSidebar viewer presence", () => {
     expect([...card.querySelectorAll("h3")].map((heading) => heading.textContent)).toEqual([
       "Recent sessions",
     ]);
-    expect(document.activeElement?.getAttribute("href")).toBe(sessionLink.getAttribute("href"));
-    expect(document.activeElement?.closest("section")?.querySelector("h3")?.textContent).toBe(
-      "Recent sessions",
-    );
+    // The initially empty recent selection cannot admit a new link mid-open,
+    // even when it leaves Viewing now. Reopening takes a fresh selection.
+    expect(card.querySelector(".person-activity-card__session")).toBeNull();
+    expect(document.activeElement).toBe(button);
+    button.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    button.blur();
+    button.focus();
+    await sidebar.updateComplete;
+    const recentLink = document.querySelector<HTMLAnchorElement>(".person-activity-card__session")!;
+    expect(recentLink.getAttribute("href")).toBe(sessionLink.getAttribute("href"));
+    expect(recentLink.closest("section")?.querySelector("h3")?.textContent).toBe("Recent sessions");
+    recentLink.focus();
     sessions.publishList({ result: { ...result, sessions: [], count: 0 } });
     await sidebar.updateComplete;
     expect(document.activeElement).toBe(button);

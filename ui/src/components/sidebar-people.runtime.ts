@@ -20,7 +20,10 @@ import {
   hovercardBootstrapIntentActive,
   remainingHovercardOpenDelay,
 } from "./lazy-hovercard-registration.ts";
-import { renderPersonActivityCard } from "./person-activity-card.ts";
+import {
+  renderPersonActivityCard,
+  type PersonActivityCardSelection,
+} from "./person-activity-card.ts";
 import { personActivityRouting } from "./person-activity-link.ts";
 import { createPortaledHovercard, PortaledHovercardController } from "./portaled-hovercard.ts";
 
@@ -35,6 +38,7 @@ export class SidebarPeopleRuntime {
     gateway: ApplicationGateway;
     client: GatewayBrowserClient | null;
   } | null = null;
+  private cardSelection: PersonActivityCardSelection | undefined;
   private readonly portal = new PortaledHovercardController(() => this.close(), 100);
   private readonly observer = new MutationObserver(() => this.sync());
   private lastOpenAt = -Infinity;
@@ -237,6 +241,7 @@ export class SidebarPeopleRuntime {
     this.portal.renderContents(card, () =>
       render(
         renderPersonActivityCard({
+          selection: (this.cardSelection ??= {}),
           user,
           sessionData: data,
           watchAgentId: resolveUiDefaultAgentId(defaults),
@@ -338,6 +343,7 @@ export class SidebarPeopleRuntime {
     document.removeEventListener("focusin", this.outsideInteraction, true);
     document.removeEventListener("keydown", this.outsideKey, true);
     this.portal.reset();
+    this.cardSelection = undefined;
     this.active?.trigger.setAttribute("aria-haspopup", "dialog");
     this.active?.trigger.setAttribute("aria-expanded", "false");
     this.active = null;

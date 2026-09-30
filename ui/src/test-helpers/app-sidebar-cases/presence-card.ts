@@ -2,11 +2,156 @@ import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { focusSidebarPersonWithKeyboard } from "../app-sidebar-setup.ts";
 import { createGatewayHarness, createSessionsHarness, mountSidebar } from "../app-sidebar.ts";
+import { settleLitElement } from "../lit-settle.ts";
 import "../../components/app-sidebar.ts";
 
 await import("../../components/viewer-facepile.ts");
 
 describe("AppSidebar person activity card", () => {
+  it("holds recent links and focus through activity, retires missing links, and refreshes on reopen", async () => {
+    const gateway = createGatewayHarness({ instanceId: "self" } as GatewayBrowserClient);
+    const sessions = createSessionsHarness(
+      "research",
+      [1, 2, 3, 4].map((n) => `agent:research:recent-${n}`),
+    );
+    const result = sessions.sessions.state.result!;
+    const now = Date.now();
+    result.sessions.forEach((row, index) => {
+      row.label = `Task ${index + 1}`;
+      row.updatedAt = now - index * 1000;
+      row.owner = {
+        actor: { type: "human", id: "alice", identity: { type: "profile", id: "alice" } },
+      };
+    });
+    sessions.publishList({ result });
+    const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
+    sidebar.connected = true;
+    gateway.publishEvent("presence", {
+      presence: [
+        {
+          instanceId: "alice-tab",
+          mode: "webchat",
+          ts: now,
+          user: { id: "alice", identity: { type: "profile", id: "alice" }, name: "Alice" },
+          watchedSessions: [],
+        },
+      ],
+    });
+    await settleLitElement(sidebar);
+    const trigger = sidebar.querySelector<HTMLElement>(".sidebar-online__person")!;
+    focusSidebarPersonWithKeyboard(trigger);
+    await vi.dynamicImportSettled();
+    await settleLitElement(sidebar);
+    const links = () =>
+      Array.from(document.querySelectorAll<HTMLAnchorElement>(".person-activity-card__session"));
+    const initial = links();
+    expect(initial.map((link) => link.getAttribute("href"))).toEqual(
+      [1, 2, 3].map((n) => `/chat/research/recent-${n}`),
+    );
+    initial[2]!.focus();
+    const updated = result.sessions.map((row, index) => ({
+      ...row,
+      updatedAt: now + index * 1000,
+    }));
+    sessions.publishList({ result: { ...result, sessions: updated } });
+    await settleLitElement(sidebar);
+    expect(links()).toEqual(initial);
+    expect(document.activeElement).toBe(initial[2]);
+    expect(initial[2]!.querySelector("time")?.dateTime).toBe(new Date(now + 2000).toISOString());
+
+    // Missing authorized roster members disappear; new activity must not fill their places.
+    sessions.publishList({
+      result: {
+        ...result,
+        sessions: updated.filter((row) => row.key !== "agent:research:recent-3"),
+      },
+    });
+    await settleLitElement(sidebar);
+    expect(links()).toEqual(initial.slice(0, 2));
+    expect(document.activeElement).toBe(trigger);
+    sessions.publishList({ result: { ...result, sessions: updated } });
+    await settleLitElement(sidebar);
+    expect(links()).toEqual(initial.slice(0, 2));
+
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(document.querySelector(".person-activity-hovercard")).toBeNull();
+    trigger.blur();
+    trigger.focus();
+    await settleLitElement(sidebar);
+    expect(links().map((link) => link.getAttribute("href"))).toEqual(
+      [4, 3, 2].map((n) => `/chat/research/recent-${n}`),
+    );
+  });
+
+  it.each([false, true])(
+    "waits for loading, but preserves a known empty selection (loaded: %s)",
+    async (loaded) => {
+      const gateway = createGatewayHarness({ instanceId: "self" } as GatewayBrowserClient);
+      const sessions = createSessionsHarness("research", ["agent:research:new"]);
+      const result = sessions.sessions.state.result!;
+      const row = {
+        ...result.sessions[0]!,
+        owner: {
+          actor: {
+            type: "human" as const,
+            id: "alice",
+            identity: { type: "profile" as const, id: "alice" },
+          },
+        },
+      };
+      sessions.publishList({ result: loaded ? { ...result, sessions: [] } : null });
+      const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
+      sidebar.connected = true;
+      gateway.publishEvent("presence", {
+        presence: [
+          {
+            instanceId: "alice-tab",
+            mode: "webchat",
+            ts: Date.now(),
+            user: { id: "alice", identity: { type: "profile", id: "alice" }, name: "Alice" },
+            watchedSessions: [],
+          },
+        ],
+      });
+      await settleLitElement(sidebar);
+      const trigger = sidebar.querySelector<HTMLElement>(".sidebar-online__person")!;
+      focusSidebarPersonWithKeyboard(trigger);
+      await vi.dynamicImportSettled();
+      await settleLitElement(sidebar);
+      expect(document.querySelector(".person-activity-hovercard")).not.toBeNull();
+      expect(document.querySelector(".person-activity-card__session")).toBeNull();
+      sessions.publishList({ result: { ...result, sessions: [row] } });
+      await settleLitElement(sidebar);
+      expect(document.querySelectorAll(".person-activity-card__session")).toHaveLength(
+        loaded ? 0 : 1,
+      );
+      if (loaded) {
+        document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+        trigger.blur();
+        trigger.focus();
+        await settleLitElement(sidebar);
+      }
+      expect(document.querySelector(".person-activity-card__session")?.getAttribute("href")).toBe(
+        "/chat/research/new",
+      );
+      sessions.publishList({
+        result: {
+          ...result,
+          sessions: [
+            {
+              ...row,
+              owner: {
+                actor: { ...row.owner.actor, id: "bob", identity: { type: "profile", id: "bob" } },
+              },
+            },
+          ],
+        },
+      });
+      await settleLitElement(sidebar);
+      expect(document.querySelector(".person-activity-card__session")).toBeNull();
+    },
+  );
+
   it("projects only visible sessions and reported facts without guessing timing or devices", async () => {
     const gateway = createGatewayHarness({ instanceId: "self" } as GatewayBrowserClient);
     const sessions = createSessionsHarness("research", [

@@ -32,7 +32,10 @@ import {
   renderIdentityAvatarImage,
   resolveIdentityAvatarView,
 } from "./identity-avatar-view.ts";
-import { renderPersonActivityCard } from "./person-activity-card.ts";
+import {
+  renderPersonActivityCard,
+  type PersonActivityCardSelection,
+} from "./person-activity-card.ts";
 import { observePersonActivityData } from "./person-activity-data.ts";
 import { personActivityRouting } from "./person-activity-link.ts";
 import { createPortaledHovercard, PortaledHovercardController } from "./portaled-hovercard.ts";
@@ -53,6 +56,7 @@ class PersonReference extends OpenClawLightDomContentsElement {
     getGateway: () => this.context.value?.gateway,
     invalidateRequests: () => this.close(),
   });
+  private cardSelection: PersonActivityCardSelection | undefined;
   private readonly portal = new PortaledHovercardController(() => this.close());
   private stopRoute: (() => void) | undefined;
   private person: PresenceViewer | null | undefined;
@@ -112,6 +116,7 @@ class PersonReference extends OpenClawLightDomContentsElement {
     document.removeEventListener("focusin", this.outside, true);
     document.removeEventListener("keydown", this.escape, true);
     this.portal.reset();
+    this.cardSelection = undefined;
     this.person = undefined;
     this.trigger?.setAttribute("aria-expanded", "false");
     this.trigger?.setAttribute("aria-haspopup", "dialog");
@@ -247,6 +252,7 @@ class PersonReference extends OpenClawLightDomContentsElement {
       render(
         user && context
           ? renderPersonActivityCard({
+              selection: (this.cardSelection ??= {}),
               user,
               sessionData: data,
               watchAgentId: resolveUiDefaultAgentId(defaults),

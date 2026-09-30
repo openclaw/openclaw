@@ -31,8 +31,12 @@ import "./elapsed-time.ts";
 import "./viewer-facepile.ts";
 
 type ScopedSession = { row: GatewaySessionRow; agentId: string };
+/** Per-open presentation state: identities only, never retained session facts or access. */
+export type PersonActivityCardSelection = { recentSessionKeys?: string[] };
+
 type PersonCardInput = {
   user: PresenceViewer;
+  selection: PersonActivityCardSelection;
   sessionData: PersonActivityData | undefined;
   watchAgentId: string;
   mainKey: string;
@@ -269,23 +273,45 @@ export function renderPersonActivityCard(input: PersonCardInput) {
       unique.set(key, session);
     }
   }
-  const sessions = [...unique.values()].toSorted(
-    (a, b) =>
-      (b.row.updatedAt ?? 0) - (a.row.updatedAt ?? 0) ||
-      sessionIdentity(a.row.key, a.agentId, input).localeCompare(
-        sessionIdentity(b.row.key, b.agentId, input),
-      ),
-  );
-  const viewing = sessions.filter(({ row, agentId }) =>
-    watched.has(sessionIdentity(row.key, agentId, input)),
-  );
-  const recent = sessions.filter(
-    ({ row, agentId }) =>
-      !watched.has(sessionIdentity(row.key, agentId, input)) &&
-      [row.owner?.actor, row.createdActor].some((actor) =>
+  const newestFirst = (a: ScopedSession, b: ScopedSession) =>
+    (b.row.updatedAt ?? 0) - (a.row.updatedAt ?? 0) ||
+    sessionIdentity(a.row.key, a.agentId, input).localeCompare(
+      sessionIdentity(b.row.key, b.agentId, input),
+    );
+  const viewing: ScopedSession[] = [];
+  const recent = new Map<string, ScopedSession>();
+  for (const [key, session] of unique) {
+    if (watched.has(key)) {
+      viewing.push(session);
+    } else if (
+      [session.row.owner?.actor, session.row.createdActor].some((actor) =>
         presenceMatchesProfile(user, actor?.identity),
-      ),
-  );
+      )
+    ) {
+      recent.set(key, session);
+    }
+  }
+  viewing.sort(newestFirst);
+  const { selection, sessionData } = input;
+  // Wait for a roster if the card opens during loading. Once admitted, even an
+  // empty selection stays fixed until the next open; activity must not move links.
+  if (
+    !selection.recentSessionKeys &&
+    (sessionData?.sessionsResult ||
+      Object.values(sessionData?.sessionResultsByAgent ?? {}).some(Boolean))
+  ) {
+    selection.recentSessionKeys = [...recent.values()]
+      .toSorted(newestFirst)
+      .slice(0, 3)
+      .map(({ row, agentId }) => sessionIdentity(row.key, agentId, input));
+  }
+  // Reconcile against current authorized facts on every update. Retire removed
+  // or ineligible links without backfilling, so they cannot reappear mid-hover.
+  selection.recentSessionKeys = selection.recentSessionKeys?.filter((key) => recent.has(key));
+  const selectedRecent = (selection.recentSessionKeys ?? []).flatMap((key) => {
+    const session = recent.get(key);
+    return session ? [session] : [];
+  });
   return html`<div class="person-activity-card">
     ${renderPersonCardHeader(
       user,
@@ -336,7 +362,7 @@ export function renderPersonActivityCard(input: PersonCardInput) {
             </div>
           </dl>`
     }
-    ${renderSessions(viewing, input, false)}${renderSessions(recent, input, true)}
+    ${renderSessions(viewing, input, false)}${renderSessions(selectedRecent, input, true)}
     ${renderPersonCardActivity(user, input.routing)}
   </div>`;
 }
