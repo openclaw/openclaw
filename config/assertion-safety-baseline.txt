@@ -409,11 +409,9 @@ extensions/github-copilot/stream.ts	3
 extensions/github-copilot/usage.ts	1
 extensions/google-meet/index.ts	1
 extensions/google-meet/src/calendar.ts	1
-extensions/google-meet/src/cli-doctor.ts	1
-extensions/google-meet/src/cli-runtime-commands.ts	4
+extensions/google-meet/src/cli-runtime-commands.ts	1
 extensions/google-meet/src/cli-space-commands.ts	3
 extensions/google-meet/src/meet-api.ts	1
-extensions/google-meet/src/plugin-registration.ts	1
 extensions/google-meet/src/transports/chrome-create.ts	1
 extensions/google/cli-backend-auth.runtime.ts	1
 extensions/google/cli-backend-isolated-auth.runtime.ts	5

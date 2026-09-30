@@ -2,7 +2,6 @@ import {
   GatewayClient,
   startGatewayClientWhenEventLoopReady,
 } from "openclaw/plugin-sdk/gateway-runtime";
-// Google Meet keeps its labels/config; core owns the voicecall.* delegation contract.
 import {
   createMeetingVoiceCallGateway,
   joinMeetingViaVoiceCallGateway,
@@ -11,7 +10,7 @@ import {
   type MeetingVoiceCallGatewayClient,
   type MeetingVoiceCallSurface,
 } from "openclaw/plugin-sdk/meeting-runtime";
-import type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
+import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { GoogleMeetConfig } from "./config.js";
 
 const GOOGLE_MEET_VOICE_CALL_SURFACE: MeetingVoiceCallSurface = {
@@ -88,17 +87,11 @@ export function createVoiceCallGateway(params: {
   });
 }
 
-export async function joinMeetViaVoiceCallGateway(params: {
-  config: GoogleMeetConfig;
-  gateway: MeetingVoiceCallGateway;
-  dialInNumber: string;
-  dtmfSequence?: string;
-  logger?: RuntimeLogger;
-  message?: string;
-  requesterSessionKey?: string;
-  agentId?: string;
-  sessionKey?: string;
-}): Promise<{ callId: string; dtmfSent: boolean; introSent: boolean }> {
+export async function joinMeetViaVoiceCallGateway(
+  params: Omit<Parameters<typeof joinMeetingViaVoiceCallGateway>[0], "config" | "surface"> & {
+    config: GoogleMeetConfig;
+  },
+): Promise<{ callId: string; dtmfSent: boolean; introSent: boolean }> {
   return await joinMeetingViaVoiceCallGateway({
     ...params,
     config: params.config.voiceCall,

@@ -6,7 +6,6 @@ import { listGoogleMeetCalendarEvents, type GoogleMeetCalendarLookupResult } fro
 import {
   formatDuration,
   formatOptional,
-  type GoogleMeetExportManifest,
   type GoogleMeetExportRequest,
   type GoogleMeetExportWarning,
   writeStdoutLine,
@@ -17,57 +16,35 @@ import type {
   GoogleMeetLatestConferenceRecordResult,
 } from "./meet-api.js";
 
-export function renderArtifactsSummary(result: GoogleMeetArtifactsResult): string {
-  const lines: string[] = [];
-  if (result.input) {
-    lines.push(`input: ${result.input}`);
+function appendArtifactSummary(
+  lines: string[],
+  entry: GoogleMeetArtifactsResult["artifacts"][number],
+): void {
+  if (entry.smartNotesError) {
+    lines.push(`smart notes warning: ${entry.smartNotesError}`);
   }
-  if (result.space) {
-    lines.push(`space: ${result.space.name}`);
+  for (const recording of entry.recordings) {
+    lines.push(`- recording: ${recording.name}`);
   }
-  lines.push(`conference records: ${result.conferenceRecords.length}`);
-  for (const entry of result.artifacts) {
-    lines.push("");
-    lines.push(`record: ${entry.conferenceRecord.name}`);
-    lines.push(`started: ${formatOptional(entry.conferenceRecord.startTime)}`);
-    lines.push(`ended: ${formatOptional(entry.conferenceRecord.endTime)}`);
-    lines.push(`participants: ${entry.participants.length}`);
-    lines.push(`recordings: ${entry.recordings.length}`);
-    lines.push(`transcripts: ${entry.transcripts.length}`);
-    lines.push(
-      `transcript entries: ${entry.transcriptEntries.reduce(
-        (count, transcript) => count + transcript.entries.length,
-        0,
-      )}`,
-    );
-    lines.push(`smart notes: ${entry.smartNotes.length}`);
-    if (entry.smartNotesError) {
-      lines.push(`smart notes warning: ${entry.smartNotesError}`);
-    }
-    for (const recording of entry.recordings) {
-      lines.push(`- recording: ${recording.name}`);
-    }
-    for (const transcript of entry.transcripts) {
-      lines.push(`- transcript: ${transcript.name}`);
-      if (transcript.documentTextError) {
-        lines.push(`- transcript document body warning: ${transcript.documentTextError}`);
-      }
-    }
-    for (const transcriptEntries of entry.transcriptEntries) {
-      if (transcriptEntries.entriesError) {
-        lines.push(
-          `- transcript entries warning: ${transcriptEntries.transcript}: ${transcriptEntries.entriesError}`,
-        );
-      }
-    }
-    for (const smartNote of entry.smartNotes) {
-      lines.push(`- smart note: ${smartNote.name}`);
-      if (smartNote.documentTextError) {
-        lines.push(`- smart note document body warning: ${smartNote.documentTextError}`);
-      }
+  for (const transcript of entry.transcripts) {
+    lines.push(`- transcript: ${transcript.name}`);
+    if (transcript.documentTextError) {
+      lines.push(`- transcript document body warning: ${transcript.documentTextError}`);
     }
   }
-  return `${lines.join("\n")}\n`;
+  for (const transcriptEntries of entry.transcriptEntries) {
+    if (transcriptEntries.entriesError) {
+      lines.push(
+        `- transcript entries warning: ${transcriptEntries.transcript}: ${transcriptEntries.entriesError}`,
+      );
+    }
+  }
+  for (const smartNote of entry.smartNotes) {
+    lines.push(`- smart note: ${smartNote.name}`);
+    if (smartNote.documentTextError) {
+      lines.push(`- smart note document body warning: ${smartNote.documentTextError}`);
+    }
+  }
 }
 
 function renderAttendance(result: GoogleMeetAttendanceResult, markdown: boolean): string {
@@ -182,32 +159,40 @@ function appendArtifactDocuments(
   }
 }
 
-export function renderArtifactsMarkdown(result: GoogleMeetArtifactsResult): string {
-  const lines: string[] = ["# Google Meet Artifacts"];
+function renderArtifacts(result: GoogleMeetArtifactsResult, markdown: boolean): string {
+  const lines: string[] = markdown ? ["# Google Meet Artifacts"] : [];
+  const field = (label: string, value: string | number) => {
+    lines.push(`${markdown ? label : label.toLowerCase()}: ${value}`);
+  };
   if (result.input) {
-    lines.push(`Input: ${result.input}`);
+    field("Input", result.input);
   }
   if (result.space) {
-    lines.push(`Space: ${result.space.name}`);
+    field("Space", result.space.name);
   }
-  lines.push("");
-  lines.push(`Conference records: ${result.conferenceRecords.length}`);
+  if (markdown) {
+    lines.push("");
+  }
+  field("Conference records", result.conferenceRecords.length);
   for (const entry of result.artifacts) {
-    lines.push("");
-    lines.push(`## ${entry.conferenceRecord.name}`);
-    lines.push(`Started: ${formatOptional(entry.conferenceRecord.startTime)}`);
-    lines.push(`Ended: ${formatOptional(entry.conferenceRecord.endTime)}`);
-    lines.push("");
-    lines.push(`Participants: ${entry.participants.length}`);
-    lines.push(`Recordings: ${entry.recordings.length}`);
-    lines.push(`Transcripts: ${entry.transcripts.length}`);
-    lines.push(
-      `Transcript entries: ${entry.transcriptEntries.reduce(
-        (count, transcript) => count + transcript.entries.length,
-        0,
-      )}`,
+    lines.push("", `${markdown ? "##" : "record:"} ${entry.conferenceRecord.name}`);
+    field("Started", formatOptional(entry.conferenceRecord.startTime));
+    field("Ended", formatOptional(entry.conferenceRecord.endTime));
+    if (markdown) {
+      lines.push("");
+    }
+    field("Participants", entry.participants.length);
+    field("Recordings", entry.recordings.length);
+    field("Transcripts", entry.transcripts.length);
+    field(
+      "Transcript entries",
+      entry.transcriptEntries.reduce((count, transcript) => count + transcript.entries.length, 0),
     );
-    lines.push(`Smart notes: ${entry.smartNotes.length}`);
+    field("Smart notes", entry.smartNotes.length);
+    if (!markdown) {
+      appendArtifactSummary(lines, entry);
+      continue;
+    }
     const warnings = collectGoogleMeetArtifactWarnings({
       conferenceRecords: [entry.conferenceRecord],
       artifacts: [entry],
@@ -255,6 +240,14 @@ export function renderArtifactsMarkdown(result: GoogleMeetArtifactsResult): stri
     appendArtifactDocuments(lines, "Smart Notes", entry.smartNotes);
   }
   return `${lines.join("\n")}\n`;
+}
+
+export function renderArtifactsSummary(result: GoogleMeetArtifactsResult): string {
+  return renderArtifacts(result, false);
+}
+
+export function renderArtifactsMarkdown(result: GoogleMeetArtifactsResult): string {
+  return renderArtifacts(result, true);
 }
 
 function neutralizeSpreadsheetFormulaCell(text: string): string {
@@ -404,7 +397,7 @@ export function buildGoogleMeetExportManifest(params: {
   tokenSource?: "cached-access-token" | "refresh-token";
   calendarEvent?: GoogleMeetCalendarLookupResult;
   zipFile?: string;
-}): GoogleMeetExportManifest {
+}) {
   const transcriptEntryCount = params.artifacts.artifacts.reduce(
     (count, entry) =>
       count +
