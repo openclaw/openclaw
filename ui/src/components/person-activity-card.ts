@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { Directive, directive } from "lit/directive.js";
 import { keyed } from "lit/directives/keyed.js";
 import { repeat } from "lit/directives/repeat.js";
 import type { GatewaySessionRow } from "../api/types.ts";
@@ -31,12 +32,8 @@ import "./elapsed-time.ts";
 import "./viewer-facepile.ts";
 
 type ScopedSession = { row: GatewaySessionRow; agentId: string };
-/** Per-open presentation state: identities only, never retained session facts or access. */
-export type PersonActivityCardSelection = { recentSessionKeys?: string[] };
-
 type PersonCardInput = {
   user: PresenceViewer;
-  selection: PersonActivityCardSelection;
   sessionData: PersonActivityData | undefined;
   watchAgentId: string;
   mainKey: string;
@@ -46,35 +43,37 @@ type PersonCardInput = {
 };
 
 /** Loaded, caller-visible roster facts, paired with their owning list scope. */
-function loadedPresenceSessions(data: PersonActivityData | undefined): ScopedSession[] {
+function loadedPresenceSessions(input: PersonCardInput): Map<string, ScopedSession> {
+  const sessions = new Map<string, ScopedSession>();
+  const data = input.sessionData;
   if (!data) {
-    return [];
+    return sessions;
   }
   const lists = [
-    { agentId: data.sessionsAgentId, result: data.sessionsResult },
-    ...Object.entries(data.sessionResultsByAgent).map(([agentId, result]) => ({
-      agentId,
-      result,
-    })),
+    [data.sessionsAgentId, data.sessionsResult?.sessions] as const,
+    ...Object.entries(data.sessionResultsByAgent).map(
+      ([agentId, result]) => [agentId, result.sessions] as const,
+    ),
+    ...Object.entries(data.childSessionRowsByParent)
+      .filter(([parent]) => data.loadedChildSessionKeys.has(parent))
+      .map(
+        ([parent, rows]) =>
+          [parseAgentSessionKey(parent)?.agentId ?? data.sessionsAgentId, rows] as const,
+      ),
   ];
-  const roots = lists.flatMap(({ agentId, result }) =>
-    agentId
-      ? (result?.sessions ?? []).map((row) => ({
-          row,
-          agentId: parseAgentSessionKey(row.key)?.agentId ?? row.agentId ?? agentId,
-        }))
-      : [],
-  );
-  const children = Object.entries(data.childSessionRowsByParent).flatMap(([parent, rows]) => {
-    const agentId = parseAgentSessionKey(parent)?.agentId ?? data.sessionsAgentId;
-    return agentId && data.loadedChildSessionKeys.has(parent)
-      ? rows.map((row) => ({
-          row,
-          agentId: parseAgentSessionKey(row.key)?.agentId ?? row.agentId ?? agentId,
-        }))
-      : [];
-  });
-  return [...roots, ...children];
+  for (const [scope, rows] of lists) {
+    if (!scope) {
+      continue;
+    }
+    for (const row of rows ?? []) {
+      const agentId = parseAgentSessionKey(row.key)?.agentId ?? row.agentId ?? scope;
+      const key = sessionIdentity(row.key, agentId, input);
+      if (!sessions.has(key)) {
+        sessions.set(key, { row, agentId });
+      }
+    }
+  }
+  return sessions;
 }
 
 function sessionIdentity(key: string, agentId: string, input: PersonCardInput): string {
@@ -213,44 +212,21 @@ function renderSessions(
   </section>`;
 }
 
-function renderPersonCardHeader(user: PresenceViewer, detail: unknown = nothing) {
-  const label = presenceUserLabel(user, t("presence.card.person"));
-  return html` <header class="person-activity-card__header">
-    <openclaw-viewer-avatar
-      .user=${user}
-      .markAsViewer=${false}
-      variant="footer"
-      aria-hidden="true"
-    ></openclaw-viewer-avatar>
-    <div>
-      <h2>${label.name}</h2>
-      ${detail}
-    </div>
-  </header>`;
+// Lit discards this state with the card root; callers need no selection cache or reset path.
+class PersonActivityCard extends Directive {
+  recentSessionKeys?: string[];
+
+  render(input: PersonCardInput) {
+    return renderCard(input, this);
+  }
 }
 
-function renderPersonCardActivity(user: PresenceViewer, routing: PersonActivityRouting) {
-  const activity = personActivityLink(
-    user.identity?.id,
-    routing,
-    presenceUserLabel(user, t("presence.card.person")).name,
-  );
-  return html` ${
-    activity
-      ? html`<footer>
-          <a href=${activity.href} @click=${activity.open}
-            >${t("presence.card.viewActivity")}<span aria-hidden="true"
-              >${icons.chevronRight}</span
-            ></a
-          >
-        </footer>`
-      : nothing
-  }`;
-}
+export const renderPersonActivityCard = directive(PersonActivityCard);
 
-export function renderPersonActivityCard(input: PersonCardInput) {
+function renderCard(input: PersonCardInput, selection: PersonActivityCard) {
   const { user } = input;
   const label = presenceUserLabel(user, t("presence.card.person"));
+  const activityLink = personActivityLink(user.identity?.id, input.routing, label.name);
   // Undefined means presence has not been observed; an empty snapshot means offline.
   const observed = user.entries !== undefined;
   const offline = user.entries?.length === 0;
@@ -265,73 +241,66 @@ export function renderPersonActivityCard(input: PersonCardInput) {
   const watched = new Set(
     user.watchedSessions.map((key) => sessionIdentity(key, input.watchAgentId, input)),
   );
-  const unique = new Map<string, ScopedSession>();
-  // Presence keys are only hints. Intersect the authorized roster before producing any text or href.
-  for (const session of loadedPresenceSessions(input.sessionData)) {
-    const key = sessionIdentity(session.row.key, session.agentId, input);
-    if (!unique.has(key)) {
-      unique.set(key, session);
-    }
-  }
+  const unique = loadedPresenceSessions(input);
   const newestFirst = (a: ScopedSession, b: ScopedSession) =>
     (b.row.updatedAt ?? 0) - (a.row.updatedAt ?? 0) ||
     sessionIdentity(a.row.key, a.agentId, input).localeCompare(
       sessionIdentity(b.row.key, b.agentId, input),
     );
-  const viewing: ScopedSession[] = [];
-  const recent = new Map<string, ScopedSession>();
-  for (const [key, session] of unique) {
-    if (watched.has(key)) {
-      viewing.push(session);
-    } else if (
-      [session.row.owner?.actor, session.row.createdActor].some((actor) =>
+  const viewing = [...watched].flatMap((key) => unique.get(key) ?? []).toSorted(newestFirst);
+  const { sessionData } = input;
+  const recent = (
+    selection.recentSessionKeys?.flatMap((key) => unique.get(key) ?? []) ?? [...unique.values()]
+  ).filter(
+    ({ row, agentId }) =>
+      !watched.has(sessionIdentity(row.key, agentId, input)) &&
+      [row.owner?.actor, row.createdActor].some((actor) =>
         presenceMatchesProfile(user, actor?.identity),
-      )
-    ) {
-      recent.set(key, session);
-    }
+      ),
+  );
+  if (!selection.recentSessionKeys) {
+    recent.sort(newestFirst);
   }
-  viewing.sort(newestFirst);
-  const { selection, sessionData } = input;
-  // Wait for a roster if the card opens during loading. Once admitted, even an
-  // empty selection stays fixed until the next open; activity must not move links.
+  // Capture once a roster exists; thereafter retire ineligible identities without backfilling.
   if (
-    !selection.recentSessionKeys &&
-    (sessionData?.sessionsResult ||
-      Object.values(sessionData?.sessionResultsByAgent ?? {}).some(Boolean))
+    selection.recentSessionKeys ||
+    sessionData?.sessionsResult ||
+    Object.keys(sessionData?.sessionResultsByAgent ?? {}).length
   ) {
-    selection.recentSessionKeys = [...recent.values()]
-      .toSorted(newestFirst)
+    selection.recentSessionKeys = recent
       .slice(0, 3)
       .map(({ row, agentId }) => sessionIdentity(row.key, agentId, input));
   }
-  // Reconcile against current authorized facts on every update. Retire removed
-  // or ineligible links without backfilling, so they cannot reappear mid-hover.
-  selection.recentSessionKeys = selection.recentSessionKeys?.filter((key) => recent.has(key));
-  const selectedRecent = (selection.recentSessionKeys ?? []).flatMap((key) => {
-    const session = recent.get(key);
-    return session ? [session] : [];
-  });
   return html`<div class="person-activity-card">
-    ${renderPersonCardHeader(
-      user,
-      observed
-        ? html` <span
-            class="person-activity-card__status ${
-              offline
-                ? "person-activity-card__status--offline"
-                : `person-activity-card__status--${activity}`
-            }"
-            ><span aria-hidden="true"></span>${
-              offline
-                ? t("presence.offline")
-                : onlineSince === undefined
-                  ? t("presence.rosterTitle")
-                  : html`${t("presence.card.onlineFor")} ${elapsed(onlineSince, "minute-compact")}`
-            }${!offline && activity !== "unknown" ? html` · ${t(activity === "active" ? "presence.active" : "presence.idle")}` : nothing}</span
-          >`
-        : nothing,
-    )}
+    <header class="person-activity-card__header">
+      <openclaw-viewer-avatar
+        .user=${user}
+        .markAsViewer=${false}
+        variant="footer"
+        aria-hidden="true"
+      ></openclaw-viewer-avatar>
+      <div>
+        <h2>${label.name}</h2>
+        ${
+          observed
+            ? html` <span
+                class="person-activity-card__status ${
+                  offline
+                    ? "person-activity-card__status--offline"
+                    : `person-activity-card__status--${activity}`
+                }"
+                ><span aria-hidden="true"></span>${
+                  offline
+                    ? t("presence.offline")
+                    : onlineSince === undefined
+                      ? t("presence.rosterTitle")
+                      : [t("presence.card.onlineFor"), " ", elapsed(onlineSince, "minute-compact")]
+                }${!offline && activity !== "unknown" ? html` · ${t(activity === "active" ? "presence.active" : "presence.idle")}` : nothing}</span
+              >`
+            : nothing
+        }
+      </div>
+    </header>
     ${label.isSharedOwner ? html`<p class="person-activity-card__hint person-activity-card__muted">${t("presence.sharedOwner.hint")}</p>` : nothing}
     ${
       !observed || offline
@@ -362,7 +331,17 @@ export function renderPersonActivityCard(input: PersonCardInput) {
             </div>
           </dl>`
     }
-    ${renderSessions(viewing, input, false)}${renderSessions(selectedRecent, input, true)}
-    ${renderPersonCardActivity(user, input.routing)}
+    ${renderSessions(viewing, input, false)}${renderSessions(selection.recentSessionKeys ? recent : [], input, true)}
+    ${
+      activityLink
+        ? html`<footer>
+            <a href=${activityLink.href} @click=${activityLink.open}
+              >${t("presence.card.viewActivity")}<span aria-hidden="true"
+                >${icons.chevronRight}</span
+              ></a
+            >
+          </footer>`
+        : nothing
+    }
   </div>`;
 }

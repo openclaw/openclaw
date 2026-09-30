@@ -8,151 +8,7 @@ import "../../components/app-sidebar.ts";
 await import("../../components/viewer-facepile.ts");
 
 describe("AppSidebar person activity card", () => {
-  it("holds recent links and focus through activity, retires missing links, and refreshes on reopen", async () => {
-    const gateway = createGatewayHarness({ instanceId: "self" } as GatewayBrowserClient);
-    const sessions = createSessionsHarness(
-      "research",
-      [1, 2, 3, 4].map((n) => `agent:research:recent-${n}`),
-    );
-    const result = sessions.sessions.state.result!;
-    const now = Date.now();
-    result.sessions.forEach((row, index) => {
-      row.label = `Task ${index + 1}`;
-      row.updatedAt = now - index * 1000;
-      row.owner = {
-        actor: { type: "human", id: "alice", identity: { type: "profile", id: "alice" } },
-      };
-    });
-    sessions.publishList({ result });
-    const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
-    sidebar.connected = true;
-    gateway.publishEvent("presence", {
-      presence: [
-        {
-          instanceId: "alice-tab",
-          mode: "webchat",
-          ts: now,
-          user: { id: "alice", identity: { type: "profile", id: "alice" }, name: "Alice" },
-          watchedSessions: [],
-        },
-      ],
-    });
-    await settleLitElement(sidebar);
-    const trigger = sidebar.querySelector<HTMLElement>(".sidebar-online__person")!;
-    focusSidebarPersonWithKeyboard(trigger);
-    await vi.dynamicImportSettled();
-    await settleLitElement(sidebar);
-    const links = () =>
-      Array.from(document.querySelectorAll<HTMLAnchorElement>(".person-activity-card__session"));
-    const initial = links();
-    expect(initial.map((link) => link.getAttribute("href"))).toEqual(
-      [1, 2, 3].map((n) => `/chat/research/recent-${n}`),
-    );
-    initial[2]!.focus();
-    const updated = result.sessions.map((row, index) => ({
-      ...row,
-      updatedAt: now + index * 1000,
-    }));
-    sessions.publishList({ result: { ...result, sessions: updated } });
-    await settleLitElement(sidebar);
-    expect(links()).toEqual(initial);
-    expect(document.activeElement).toBe(initial[2]);
-    expect(initial[2]!.querySelector("time")?.dateTime).toBe(new Date(now + 2000).toISOString());
-
-    // Missing authorized roster members disappear; new activity must not fill their places.
-    sessions.publishList({
-      result: {
-        ...result,
-        sessions: updated.filter((row) => row.key !== "agent:research:recent-3"),
-      },
-    });
-    await settleLitElement(sidebar);
-    expect(links()).toEqual(initial.slice(0, 2));
-    expect(document.activeElement).toBe(trigger);
-    sessions.publishList({ result: { ...result, sessions: updated } });
-    await settleLitElement(sidebar);
-    expect(links()).toEqual(initial.slice(0, 2));
-
-    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-    expect(document.querySelector(".person-activity-hovercard")).toBeNull();
-    trigger.blur();
-    trigger.focus();
-    await settleLitElement(sidebar);
-    expect(links().map((link) => link.getAttribute("href"))).toEqual(
-      [4, 3, 2].map((n) => `/chat/research/recent-${n}`),
-    );
-  });
-
-  it.each([false, true])(
-    "waits for loading, but preserves a known empty selection (loaded: %s)",
-    async (loaded) => {
-      const gateway = createGatewayHarness({ instanceId: "self" } as GatewayBrowserClient);
-      const sessions = createSessionsHarness("research", ["agent:research:new"]);
-      const result = sessions.sessions.state.result!;
-      const row = {
-        ...result.sessions[0]!,
-        owner: {
-          actor: {
-            type: "human" as const,
-            id: "alice",
-            identity: { type: "profile" as const, id: "alice" },
-          },
-        },
-      };
-      sessions.publishList({ result: loaded ? { ...result, sessions: [] } : null });
-      const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
-      sidebar.connected = true;
-      gateway.publishEvent("presence", {
-        presence: [
-          {
-            instanceId: "alice-tab",
-            mode: "webchat",
-            ts: Date.now(),
-            user: { id: "alice", identity: { type: "profile", id: "alice" }, name: "Alice" },
-            watchedSessions: [],
-          },
-        ],
-      });
-      await settleLitElement(sidebar);
-      const trigger = sidebar.querySelector<HTMLElement>(".sidebar-online__person")!;
-      focusSidebarPersonWithKeyboard(trigger);
-      await vi.dynamicImportSettled();
-      await settleLitElement(sidebar);
-      expect(document.querySelector(".person-activity-hovercard")).not.toBeNull();
-      expect(document.querySelector(".person-activity-card__session")).toBeNull();
-      sessions.publishList({ result: { ...result, sessions: [row] } });
-      await settleLitElement(sidebar);
-      expect(document.querySelectorAll(".person-activity-card__session")).toHaveLength(
-        loaded ? 0 : 1,
-      );
-      if (loaded) {
-        document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-        trigger.blur();
-        trigger.focus();
-        await settleLitElement(sidebar);
-      }
-      expect(document.querySelector(".person-activity-card__session")?.getAttribute("href")).toBe(
-        "/chat/research/new",
-      );
-      sessions.publishList({
-        result: {
-          ...result,
-          sessions: [
-            {
-              ...row,
-              owner: {
-                actor: { ...row.owner.actor, id: "bob", identity: { type: "profile", id: "bob" } },
-              },
-            },
-          ],
-        },
-      });
-      await settleLitElement(sidebar);
-      expect(document.querySelector(".person-activity-card__session")).toBeNull();
-    },
-  );
-
-  it("projects only visible sessions and reported facts without guessing timing or devices", async () => {
+  it("projects authorized facts and keeps recent links stable until reopening", async () => {
     const gateway = createGatewayHarness({ instanceId: "self" } as GatewayBrowserClient);
     const sessions = createSessionsHarness("research", [
       "watched",
@@ -162,9 +18,10 @@ describe("AppSidebar person activity card", () => {
       ...[1, 2, 3, 4].map((n) => `agent:research:recent-${n}`),
     ]);
     const result = sessions.sessions.state.result!;
+    const now = Date.now();
     result.sessions.forEach((row, index) => {
       row.label = row.key === "global" ? "Research global" : `Visible ${index}`;
-      row.updatedAt = Date.now() - index * 60_000;
+      row.updatedAt = now - index * 60_000;
       if (index === 2) {
         row.participants = [{ identity: { type: "profile", id: "alice" }, label: "Alice" }];
       }
@@ -177,33 +34,22 @@ describe("AppSidebar person activity card", () => {
         };
       }
     });
-    sessions.publishList({ result });
+    sessions.publishList({ result: null });
     const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
     sidebar.connected = true;
     gateway.publishEvent("presence", {
       presence: [
-        { deviceFamily: "Mac", platform: "MacIntel", mode: "webchat" },
-        { deviceFamily: "Mac", platform: "MacIntel", mode: "webchat" },
-        { deviceFamily: "iPad", platform: "MacIntel", mode: "webchat" },
-        { deviceFamily: "Mac", platform: "MacARM64", mode: "webchat" },
-        { deviceFamily: "Windows", platform: "win32", mode: "webchat" },
-        {
-          deviceFamily: "Mac",
-          platform: "macos",
-          mode: "ui",
-          clientId: "openclaw-tui",
-          host: "openclaw-macos",
-        },
-        {
-          deviceFamily: "Mac",
-          platform: "macos",
-          mode: "ui",
-          clientId: "openclaw-macos",
-          host: "openclaw-tui",
-        },
-        { platform: "linux", mode: "ui", host: "openclaw-tui" },
-        { platform: "freebsd", mode: "cli" },
-      ].map(({ deviceFamily, platform, mode, clientId, host }, tab) => ({
+        // Family, platform, mode, client ID, misleading host. Duplicate tabs collapse.
+        ["Mac", "MacIntel", "webchat"],
+        ["Mac", "MacIntel", "webchat"],
+        ["iPad", "MacIntel", "webchat"],
+        ["Mac", "MacARM64", "webchat"],
+        ["Windows", "win32", "webchat"],
+        ["Mac", "macos", "ui", "openclaw-tui", "openclaw-macos"],
+        ["Mac", "macos", "ui", "openclaw-macos", "openclaw-tui"],
+        [undefined, "linux", "ui", undefined, "openclaw-tui"],
+        [undefined, "freebsd", "cli"],
+      ].map(([deviceFamily, platform, mode, clientId, host], tab) => ({
         ts: Date.now() - 500_000,
         lastInputSeconds: 3,
         instanceId: `private-tab-${tab}`,
@@ -224,13 +70,14 @@ describe("AppSidebar person activity card", () => {
       })),
     });
     await sidebar.updateComplete;
-    focusSidebarPersonWithKeyboard(sidebar.querySelector<HTMLElement>(".sidebar-online__person")!);
-    // Focus loads its interaction owner before the card can render.
+    const trigger = sidebar.querySelector<HTMLElement>(".sidebar-online__person")!;
+    focusSidebarPersonWithKeyboard(trigger);
     await vi.dynamicImportSettled();
-    await vi.waitFor(() =>
-      expect(document.querySelector(".person-activity-hovercard")).not.toBeNull(),
-    );
+    await settleLitElement(sidebar);
     const card = document.querySelector<HTMLElement>(".person-activity-hovercard")!;
+    expect(card.querySelector(".person-activity-card__session")).toBeNull();
+    sessions.publishList({ result });
+    await settleLitElement(sidebar);
     expect(card.querySelectorAll("dt")).toHaveLength(2);
     expect(card.querySelector(".person-activity-card__status")?.textContent?.trim()).toBe("Online");
     const facts = card.querySelectorAll("dd");
@@ -268,5 +115,64 @@ describe("AppSidebar person activity card", () => {
       expect(card.outerHTML).not.toContain(hidden);
     }
     expect(card.querySelectorAll("[data-viewer-id]")).toHaveLength(0);
+
+    const links = () =>
+      Array.from(
+        document.querySelectorAll<HTMLAnchorElement>(
+          ".person-activity-hovercard section:last-of-type a",
+        ),
+      );
+    const publish = async (rows: typeof result.sessions) => {
+      sessions.publishList({ result: { ...result, sessions: rows } });
+      await settleLitElement(sidebar);
+    };
+    const initial = links();
+    initial[2]!.focus();
+    const updated = structuredClone(result.sessions);
+    updated.forEach((row, index) => {
+      row.updatedAt = now + index * 1000;
+    });
+    await publish(updated);
+    expect(links()).toEqual(initial);
+    expect(document.activeElement).toBe(initial[2]);
+    expect(initial[2]!.querySelector("time")?.dateTime).toBe(new Date(now + 6000).toISOString());
+
+    await publish(updated.filter((row) => row.key !== "agent:research:recent-3"));
+    expect(links()).toEqual(initial.slice(0, 2));
+    expect(document.activeElement).toBe(trigger);
+    await publish(updated);
+    expect(links()).toEqual(initial.slice(0, 2));
+    await publish(
+      updated.map((row) =>
+        row.key === "agent:research:recent-2"
+          ? {
+              ...row,
+              owner: {
+                actor: { type: "human", id: "bob", identity: { type: "profile", id: "bob" } },
+              },
+            }
+          : row,
+      ),
+    );
+    expect(links()).toEqual(initial.slice(0, 1));
+    await publish(updated);
+    expect(links()).toEqual(initial.slice(0, 1));
+
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(document.querySelector(".person-activity-hovercard")).toBeNull();
+    await publish([]);
+    trigger.blur();
+    trigger.focus();
+    await settleLitElement(sidebar);
+    expect(links()).toHaveLength(0);
+    await publish(updated);
+    expect(links()).toHaveLength(0);
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    trigger.blur();
+    trigger.focus();
+    await settleLitElement(sidebar);
+    expect(links().map((link) => link.getAttribute("href"))).toEqual(
+      [4, 3, 2].map((n) => `/chat/research/recent-${n}`),
+    );
   });
 });

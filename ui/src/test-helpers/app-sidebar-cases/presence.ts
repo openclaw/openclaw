@@ -279,19 +279,12 @@ describe("AppSidebar viewer presence", () => {
     const gateway = createGatewayHarness({ instanceId: "self" } as GatewayBrowserClient);
     const sessions = createSessionsHarness("main", ["agent:main:work"]);
     const result = sessions.sessions.state.result!;
-    sessions.publishList({
-      result: {
-        ...result,
-        sessions: result.sessions.map((row) => ({
-          ...row,
-          createdActor: {
-            type: "human" as const,
-            id: "alice",
-            identity: { type: "profile" as const, id: "alice" },
-          },
-        })),
-      },
-    });
+    result.sessions[0]!.createdActor = {
+      type: "human",
+      id: "alice",
+      identity: { type: "profile", id: "alice" },
+    };
+    sessions.publishList({ result });
     const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
     sidebar.connected = true;
     const now = Date.now();
@@ -348,14 +341,6 @@ describe("AppSidebar viewer presence", () => {
     const recentLink = document.querySelector<HTMLAnchorElement>(".person-activity-card__session")!;
     expect(recentLink.getAttribute("href")).toBe(sessionLink.getAttribute("href"));
     expect(recentLink.closest("section")?.querySelector("h3")?.textContent).toBe("Recent sessions");
-    recentLink.focus();
-    sessions.publishList({ result: { ...result, sessions: [], count: 0 } });
-    await sidebar.updateComplete;
-    expect(document.activeElement).toBe(button);
-    button.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-    expect(document.querySelector(".person-activity-hovercard")).toBeNull();
-    expect(document.activeElement).toBe(button);
-    expect(button.getAttribute("aria-expanded")).toBe("false");
   });
 
   it("expires activity when the deadline passes during rendering", async () => {
