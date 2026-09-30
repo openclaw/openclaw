@@ -1364,9 +1364,9 @@ class SessionsPage extends OpenClawLightDomElement {
             }
             void this.runSessionMutation(scope, async () => {
               const assigned = await scope.sessions.assignOwner(row.key, action.owner);
-              if (!assigned && this.isRequestScopeCurrent(scope)) {
-                return scope.sessions.state.error ?? undefined;
-              }
+              return assigned || !this.isRequestScopeCurrent(scope)
+                ? undefined
+                : (scope.sessions.state.error ?? undefined);
             });
             break;
           }
