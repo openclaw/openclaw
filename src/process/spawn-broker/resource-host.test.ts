@@ -1,3 +1,4 @@
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { expect, it, vi } from "vitest";
 import { encodeNativeWorkerFailure } from "../../infra/worker-native-error.js";
 import { BrokerResourceClaims } from "./resource-host.js";
@@ -38,6 +39,43 @@ const capacityCases = [
   { dimension: "messages", payload: "", count: 4 },
   { dimension: "bytes", payload: "x".repeat(700), count: 1 },
 ];
+
+it("retains both async disposal failures delivered by the native resource broker", async () => {
+  const { claims, capture, callbacks } = fixture();
+  const lease = capture(1);
+  const body = new Error("resource operation failed");
+  const cleanup = new Error("resource cleanup failed");
+  const run = async () => {
+    await using resource = {
+      [Symbol.asyncDispose]: async () => {
+        throw cleanup;
+      },
+    };
+    void resource;
+    throw body;
+  };
+  const failure: unknown = await run().catch((error: unknown) => error);
+  lease.receive({ type: "resource-ready", id: 1, pid: 42, generation: 1 });
+  lease.receive({ type: "resource-created", id: 1 });
+  try {
+    lease.receive(
+      structuredClone({
+        type: "resource-failed" as const,
+        id: 1,
+        error: encodeNativeWorkerFailure(failure),
+      }),
+    );
+    expect(callbacks.failed).toHaveBeenCalledOnce();
+    const [reported] = callbacks.failed.mock.calls[0]!;
+    expect(formatErrorMessage(reported, { redact: (text) => text })).toContain(
+      "resource cleanup failed | resource operation failed",
+    );
+  } finally {
+    lease.receive({ type: "resource-closed", id: 1, requestId: 0 });
+    lease.release();
+  }
+  expect(claims.size).toBe(0);
+});
 
 it.each(capacityCases)(
   "reclaims outbound $dimension after repeated proven no-dispatch abandonment",
