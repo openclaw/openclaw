@@ -175,4 +175,33 @@ describe("sessions.subscribe", () => {
       undefined,
     );
   });
+
+  it("rejects invalid list params before registering events", async () => {
+    const subscribeSessionEvents = vi.fn();
+    const respond = vi.fn();
+    sessionsListHandler.mockClear();
+
+    await expectDefined(
+      sessionSubscriptionHandlers["sessions.subscribe"],
+      'sessionSubscriptionHandlers["sessions.subscribe"] test invariant',
+    )({
+      req: { id: "req-subscribe-invalid", method: "sessions.subscribe" } as never,
+      params: { activityPulseBoundaries: [1, 1] },
+      respond,
+      context: { subscribeSessionEvents } as unknown as GatewayRequestContext,
+      client: { connId: "control-ui-1" } as never,
+      isWebchatConnect: () => false,
+    } satisfies GatewayRequestHandlerOptions);
+
+    expect(subscribeSessionEvents).not.toHaveBeenCalled();
+    expect(sessionsListHandler).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining("activityPulseBoundaries: must be strictly ascending"),
+      }),
+    );
+  });
 });

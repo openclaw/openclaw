@@ -95,10 +95,7 @@ function hasGatewayTokenCandidate(params: {
   if (envToken) {
     return true;
   }
-  if (
-    typeof params.authOverride?.token === "string" &&
-    params.authOverride.token.trim().length > 0
-  ) {
+  if (normalizeOptionalString(params.authOverride?.token)) {
     return true;
   }
   const token = createGatewayCredentialPlan({
@@ -106,21 +103,6 @@ function hasGatewayTokenCandidate(params: {
     env: params.env,
   }).localToken;
   return token.hasSecretRef || Boolean(token.value);
-}
-
-function hasGatewayTokenOverrideCandidate(params: { authOverride?: GatewayAuthConfig }): boolean {
-  return (
-    typeof params.authOverride?.token === "string" && params.authOverride.token.trim().length > 0
-  );
-}
-
-function hasGatewayPasswordOverrideCandidate(params: {
-  authOverride?: GatewayAuthConfig;
-}): boolean {
-  return (
-    typeof params.authOverride?.password === "string" &&
-    params.authOverride.password.trim().length > 0
-  );
 }
 
 /** Ensure startup has effective Gateway auth, generating only an ephemeral token if needed. */
@@ -151,6 +133,10 @@ export async function ensureGatewayStartupAuth(params: {
     resolutionEvaluated && typeof params.cfg.gateway?.auth?.token === "string";
   const passwordAlreadySubstituted =
     resolutionEvaluated && typeof params.cfg.gateway?.auth?.password === "string";
+  const hasTokenOverride =
+    Boolean(normalizeOptionalString(params.authOverride?.token)) || tokenAlreadySubstituted;
+  const hasPasswordOverride =
+    Boolean(normalizeOptionalString(params.authOverride?.password)) || passwordAlreadySubstituted;
   // Resolve only refs that can satisfy the effective mode; inactive refs stay
   // as refs so startup does not require unrelated secret providers.
   const [resolvedTokenRefValue, resolvedPasswordRefValue] = await Promise.all([
@@ -158,12 +144,8 @@ export async function ensureGatewayStartupAuth(params: {
       cfg: params.cfg,
       env,
       mode: explicitMode,
-      hasTokenOverride:
-        hasGatewayTokenOverrideCandidate({ authOverride: params.authOverride }) ||
-        tokenAlreadySubstituted,
-      hasPasswordOverride:
-        hasGatewayPasswordOverrideCandidate({ authOverride: params.authOverride }) ||
-        passwordAlreadySubstituted,
+      hasTokenOverride,
+      hasPasswordOverride,
       hasTokenFallback: Boolean(trimToUndefined(env.OPENCLAW_GATEWAY_TOKEN)),
       hasPasswordFallback: Boolean(
         credentialPlan.envPassword ||
@@ -175,12 +157,8 @@ export async function ensureGatewayStartupAuth(params: {
       cfg: params.cfg,
       env,
       mode: explicitMode,
-      hasPasswordOverride:
-        hasGatewayPasswordOverrideCandidate({ authOverride: params.authOverride }) ||
-        passwordAlreadySubstituted,
-      hasTokenOverride:
-        hasGatewayTokenOverrideCandidate({ authOverride: params.authOverride }) ||
-        tokenAlreadySubstituted,
+      hasPasswordOverride,
+      hasTokenOverride,
       hasPasswordFallback: Boolean(trimToUndefined(env.OPENCLAW_GATEWAY_PASSWORD)),
       hasTokenFallback: hasGatewayTokenCandidate({
         cfg: params.cfg,

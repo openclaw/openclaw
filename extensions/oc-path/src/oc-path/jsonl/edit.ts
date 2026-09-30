@@ -15,7 +15,7 @@ import {
   unquoteSeg,
 } from "../oc-path.js";
 import type { JsonlAst, JsonlLine } from "./ast.js";
-import { emitJsonl } from "./emit.js";
+import { renderJsonl } from "./emit.js";
 import { pickJsonlLineIndex } from "./line.js";
 
 type JsonlEditResult =
@@ -128,7 +128,7 @@ function renderEditedJsonl(
     lines,
     ...(ast.lineEnding !== undefined ? { lineEnding: ast.lineEnding } : {}),
   };
-  return { ...next, raw: emitJsonl(next, { mode: "render", fileNameForGuard: fileName }) };
+  return { ...next, raw: renderJsonl(next, fileName) };
 }
 
 /** Append a value as the next line. Line numbers are substrate-assigned. */

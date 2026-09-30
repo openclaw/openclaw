@@ -210,30 +210,30 @@ function parseConfigSetCommand(
   return body.trim() ? { valid: false } : undefined;
 }
 
-function parseConfigReadPath(
+function parseConfigReadCommand(
   input: string,
+  kind: "config-get" | "config-unset" | "config-schema",
   prefixPattern: RegExp,
-  options: { allowEmpty: boolean; allowRoot?: boolean },
-): { path?: string; valid: true } | { valid: false } | undefined {
+): SystemAgentOperation | undefined {
   const prefix = input.match(prefixPattern)?.[0];
   if (!prefix) {
     return undefined;
   }
   const path = input.slice(prefix.length).trim();
-  if (!path) {
-    return options.allowEmpty ? { valid: true } : { valid: false };
-  }
-  if (options.allowRoot && path === ".") {
-    return { path, valid: true };
+  if (kind === "config-schema" && (!path || path === ".")) {
+    return { kind, ...(path ? { path } : {}) };
   }
   try {
-    parseConfigSetPath(path);
-    return isSystemAgentSensitiveConfigPathEmbedding(path)
-      ? { valid: false }
-      : { path, valid: true };
+    if (path) {
+      parseConfigSetPath(path);
+      if (!isSystemAgentSensitiveConfigPathEmbedding(path)) {
+        return { kind, path };
+      }
+    }
   } catch {
-    return { valid: false };
+    // Malformed paths stay on the host instead of entering the assistant prompt.
   }
+  return { kind: "none", message: INVALID_CONFIG_SET_MESSAGE };
 }
 
 function parseConfigSetRefCommand(input: string):
@@ -340,29 +340,15 @@ export function parseSystemAgentOperation(input: string): SystemAgentOperation {
       value: configSet.value,
     };
   }
-  const configUnset = parseConfigReadPath(trimmed, CONFIG_UNSET_PREFIX_RE, { allowEmpty: false });
-  if (configUnset?.valid && configUnset.path) {
-    return { kind: "config-unset", path: configUnset.path };
-  }
-  if (configUnset && !configUnset.valid) {
-    return { kind: "none", message: INVALID_CONFIG_SET_MESSAGE };
-  }
-  const configGet = parseConfigReadPath(trimmed, CONFIG_GET_PREFIX_RE, { allowEmpty: false });
-  if (configGet?.valid && configGet.path) {
-    return { kind: "config-get", path: configGet.path };
-  }
-  if (configGet && !configGet.valid) {
-    return { kind: "none", message: INVALID_CONFIG_SET_MESSAGE };
-  }
-  const configSchema = parseConfigReadPath(trimmed, CONFIG_SCHEMA_PREFIX_RE, {
-    allowEmpty: true,
-    allowRoot: true,
-  });
-  if (configSchema?.valid) {
-    return { kind: "config-schema", ...(configSchema.path ? { path: configSchema.path } : {}) };
-  }
-  if (configSchema && !configSchema.valid) {
-    return { kind: "none", message: INVALID_CONFIG_SET_MESSAGE };
+  for (const [kind, prefix] of [
+    ["config-unset", CONFIG_UNSET_PREFIX_RE],
+    ["config-get", CONFIG_GET_PREFIX_RE],
+    ["config-schema", CONFIG_SCHEMA_PREFIX_RE],
+  ] as const) {
+    const parsed = parseConfigReadCommand(trimmed, kind, prefix);
+    if (parsed) {
+      return parsed;
+    }
   }
   const pluginSearchMatch = trimmed.match(PLUGIN_SEARCH_RE);
   if (pluginSearchMatch?.groups?.query?.trim()) {
@@ -507,11 +493,11 @@ function trimShellishToken(value: string | undefined): string | undefined {
 function normalizePluginInstallSpec(spec: string, source: string | undefined): string {
   const trimmed = spec.trim();
   const normalizedSource = source?.toLowerCase();
-  if (normalizedSource === "npm" && !trimmed.toLowerCase().startsWith("npm:")) {
-    return `npm:${trimmed}`;
-  }
-  if (normalizedSource === "clawhub" && !trimmed.toLowerCase().startsWith("clawhub:")) {
-    return `clawhub:${trimmed}`;
+  if (
+    (normalizedSource === "npm" || normalizedSource === "clawhub") &&
+    !trimmed.toLowerCase().startsWith(`${normalizedSource}:`)
+  ) {
+    return `${normalizedSource}:${trimmed}`;
   }
   return trimmed;
 }

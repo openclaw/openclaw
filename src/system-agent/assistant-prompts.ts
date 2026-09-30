@@ -1,5 +1,5 @@
 // System-agent prompts drive the OpenClaw conversation with typed-command output.
-import { extractBalancedJsonPrefix } from "@openclaw/normalization-core";
+import { extractBalancedJsonPrefix, safeParseJsonRecord } from "@openclaw/normalization-core";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { SystemAgentGreetingFacts } from "./greeting.js";
 import type { SystemAgentOverview } from "./overview.js";
@@ -264,19 +264,10 @@ export function parseSystemAgentAssistantPlanText(
   }
   // Model output may wrap JSON in prose; extraction stays narrow and validation happens after.
   const jsonText = extractBalancedJsonPrefix(text, { openers: ["{"] })?.json;
-  if (!jsonText) {
+  const record = jsonText ? safeParseJsonRecord(jsonText) : undefined;
+  if (!record) {
     return null;
   }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(jsonText);
-  } catch {
-    return null;
-  }
-  if (!parsed || typeof parsed !== "object") {
-    return null;
-  }
-  const record = parsed as Record<string, unknown>;
   const command = typeof record.command === "string" ? record.command.trim() : "";
   const reply = typeof record.reply === "string" ? record.reply.trim() : "";
   // Pure-chat replies are valid; a plan needs at least one of reply/command.

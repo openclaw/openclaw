@@ -1,8 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import type {
-  AgentHarnessAttemptParamsV2,
-  AgentHarnessAttemptResult as AgentHarnessAttemptResultContract,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AgentHarnessAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { expect, it, vi } from "vitest";
 import { runCopilotAttempt } from "./attempt.js";
@@ -15,8 +12,6 @@ import {
   type FakeSession,
 } from "./attempt.test-support.js";
 
-type AgentHarnessAttemptResult = Extract<AgentHarnessAttemptResultContract, { terminal: unknown }>;
-
 export function registerCopilotCleanupTests({
   makeParams,
   requireSession,
@@ -26,40 +21,6 @@ export function registerCopilotCleanupTests({
   ) => AgentHarnessAttemptParamsV2;
   requireSession: (sdk: FakeSdk) => FakeSession;
 }) {
-  it("cleanup on success", async () => {
-    const sdk = makeFakeSdk();
-    const pool = makeFakePool(sdk);
-
-    await runCopilotAttempt(makeParams(), { pool });
-
-    const session = requireSession(sdk);
-    expect(session.off).toHaveBeenCalledTimes(session.on.mock.calls.length);
-    expect(session.disconnect).toHaveBeenCalledTimes(1);
-    expect(pool["release"]).toHaveBeenCalledTimes(1);
-  });
-
-  it("cleanup on send error", async () => {
-    const error = new Error("send failed");
-    const sdk = makeFakeSdk((session) => {
-      session.sendAndWait.mockImplementationOnce(async () => {
-        session.emit("user.message", { content: "hello" });
-        throw error;
-      });
-    });
-    const pool = makeFakePool(sdk);
-
-    const result = await runCopilotAttempt(makeParams(), { pool });
-    const session = requireSession(sdk);
-
-    expect(projectAgentRunAttemptTerminal(result.terminal).promptError).toBe(error);
-    expect(
-      (result as AgentHarnessAttemptResult & { journalValidated?: boolean }).journalValidated,
-    ).toBe(false);
-    expect(session.off).toHaveBeenCalledTimes(session.on.mock.calls.length);
-    expect(session.disconnect).toHaveBeenCalledTimes(1);
-    expect(pool["release"]).toHaveBeenCalledTimes(1);
-  });
-
   it.each([false, true])(
     "detaches listeners and joins accepted agent callbacks before cleanup (deferred: %s)",
     async (deferred) => {

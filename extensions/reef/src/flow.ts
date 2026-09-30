@@ -87,12 +87,8 @@ function buildLegacyDeliveryIndex(
   return candidates;
 }
 
-const reefMessageIds = createMonotonicUlidFactory();
-
 /** Reserves a protocol-valid id before recipient-visible Reef delivery starts. */
-export function prepareReefMessageId(): string {
-  return reefMessageIds();
-}
+export const prepareReefMessageId = createMonotonicUlidFactory();
 
 /** Local policy or trust rejection that is safe to retire without retrying. */
 class ReefOutboundRejectedError extends Error {

@@ -1,4 +1,3 @@
-/** Resolves runtime policy session keys distinct from transcript session keys. */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -84,7 +83,6 @@ function isMainSessionAlias(params: {
   );
 }
 
-/** Resolves the session key used for sandbox/tool/runtime policy lookups. */
 export function resolveRuntimePolicySessionKey(params: {
   agentId?: string;
   cfg?: OpenClawConfig;
@@ -111,14 +109,11 @@ export function resolveRuntimePolicySessionKey(params: {
     : (parseAgentSessionKey(sessionKey)?.agentId ??
       normalizeOptionalString(params.agentId) ??
       normalizeOptionalString(params.ctx?.AgentId));
-  if (!agentId) {
-    return sessionKey;
-  }
-  if (!isMainSessionAlias({ cfg: params.cfg, agentId, sessionKey })) {
-    return sessionKey;
-  }
-
-  if (normalizeChatType(params.ctx?.ChatType) !== "direct") {
+  if (
+    !agentId ||
+    !isMainSessionAlias({ cfg: params.cfg, agentId, sessionKey }) ||
+    normalizeChatType(params.ctx?.ChatType) !== "direct"
+  ) {
     return sessionKey;
   }
   const channel = resolvePolicyChannel(params.ctx);

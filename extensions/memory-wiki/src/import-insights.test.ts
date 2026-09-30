@@ -3,7 +3,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { compileMemoryWikiVault } from "./compile.js";
-import { listMemoryWikiImportInsights, projectMemoryWikiImportInsight } from "./import-insights.js";
+import { loadMemoryWikiCompiledDashboards } from "./compiled-cache.js";
+import { projectMemoryWikiImportInsight } from "./import-insights.js";
 import { renderWikiMarkdown, scanWikiPageSummary } from "./markdown.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
@@ -97,7 +98,7 @@ describe("projectMemoryWikiImportInsight", () => {
   });
 });
 
-describe("listMemoryWikiImportInsights", () => {
+describe("compiled import insights", () => {
   it("clusters ChatGPT import pages by topic and extracts digest fields", async () => {
     const { rootDir, config } = await createVault({
       prefix: "memory-wiki-import-insights-",
@@ -187,7 +188,7 @@ describe("listMemoryWikiImportInsights", () => {
       fs.unlink(path.join(rootDir, "sources", "chatgpt-health.md")),
     ]);
 
-    const result = await listMemoryWikiImportInsights(config);
+    const { importInsights: result } = await loadMemoryWikiCompiledDashboards(config);
 
     expect(result.sourceType).toBe("chatgpt");
     expect(result.totalItems).toBe(2);
@@ -284,7 +285,7 @@ describe("listMemoryWikiImportInsights", () => {
 
     await compileMemoryWikiVault(config);
 
-    const result = await listMemoryWikiImportInsights(config);
+    const { importInsights: result } = await loadMemoryWikiCompiledDashboards(config);
 
     const item = result.clusters[0]?.items[0];
     expect(item?.summary).toBe(`${"a".repeat(178)}…`);

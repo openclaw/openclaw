@@ -1,10 +1,11 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 /** Execute the workflow's native Node manifest with runtime dependencies forbidden. */
 export function runDependencyFreePreflight(
-  source: string,
+  entrypoint: URL,
   directory: string,
   nodeExecPath: string,
 ) {
@@ -16,10 +17,6 @@ export function runDependencyFreePreflight(
 import { isBuiltin, registerHooks } from "node:module";
 registerHooks({
   resolve(specifier, context, nextResolve) {
-    // CI materializes these unchanged trusted helpers under its harness checkout.
-    if (specifier.startsWith("./.ci-harness/")) {
-      specifier = "./" + specifier.slice("./.ci-harness/".length);
-    }
     if (!isBuiltin(specifier) && !specifier.startsWith(".") &&
         !specifier.startsWith("file:") && !specifier.startsWith("/")) {
       throw new Error("Unexpected preflight dependency: " + specifier);
@@ -40,9 +37,8 @@ registerHooks({
       delete env[key];
     }
   }
-  const result = spawnSync(nodeExecPath, ["--import", preload, "--input-type=module"], {
+  const result = spawnSync(nodeExecPath, ["--import", preload, fileURLToPath(entrypoint)], {
     cwd: process.cwd(),
-    input: source,
     encoding: "utf8",
     timeout: 30_000,
     killSignal: "SIGKILL",

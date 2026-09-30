@@ -9,6 +9,7 @@ import {
 } from "../agents/agent-delete-databases.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { clawCronGatewayJobMatchesRef, deleteClawCronRef, markClawCronRefRemoved } from "./cron.js";
+import { digestClawValue } from "./digest.js";
 import {
   clawBootstrapStateBlocksRemove,
   planClawBootstrapRemoval,
@@ -42,11 +43,7 @@ import { readClawStatus } from "./lifecycle-status.js";
 import { clawMcpRemovalSelector, planClawMcpServerRemoval } from "./mcp.js";
 import { clawMonitorSnapshotSchema } from "./monitor-cleanup-contract.js";
 import { applyClawPackageRemovalPhase } from "./package-remove-phase.js";
-import {
-  filterReferencedCleanup,
-  projectClawPackageRemovePlan,
-  digestClawRemovalState,
-} from "./package-remove-plan.js";
+import { filterReferencedCleanup, projectClawPackageRemovePlan } from "./package-remove-plan.js";
 import { planClawPackageRemovals } from "./package-remove.js";
 import { CLAW_OUTPUT_STABILITY } from "./types.js";
 
@@ -412,7 +409,7 @@ export async function buildClawRemovePlan(
     stability: CLAW_OUTPUT_STABILITY,
     dryRun: true,
     mutationAllowed: false,
-    planIntegrity: digestClawRemovalState(planIdentity),
+    planIntegrity: digestClawValue(planIdentity),
     target,
     ...(record ? { agentId: record.install.agentId } : {}),
     actions,

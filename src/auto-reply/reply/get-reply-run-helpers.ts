@@ -1,12 +1,9 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { EmbeddedFullAccessBlockedReason } from "../../agents/embedded-agent-runner/types.js";
-import { normalizeChatType } from "../../channels/chat-type.js";
 import { updateAmbientTranscriptWatermark } from "../../config/sessions/ambient-transcript-watermark.js";
 import { isImageMediaFact, type MediaFact } from "../../media/media-facts.js";
 import type { UserTurnInput } from "../../sessions/user-turn-transcript.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
-import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import type { ElevatedLevel } from "../thinking.js";
 import type { ReplyExecOverrides } from "./get-reply-exec-overrides.js";
@@ -132,28 +129,6 @@ export async function updateRoomEventAmbientTranscriptWatermark(params: {
     timestampMs: params.sessionCtx.AmbientTranscriptTimestampMs,
     expectedSessionId: params.expectedSessionId,
   });
-}
-
-export function resolvePromptSilentReplyConversationType(params: {
-  ctx: Pick<
-    MsgContext,
-    "ChatType" | "CommandSource" | "CommandTargetSessionKey" | "CommandTurn" | "SessionKey"
-  >;
-  inboundSessionKey?: string;
-}): SilentReplyConversationType | undefined {
-  const sourceSessionKey = params.inboundSessionKey ?? params.ctx.SessionKey;
-  const commandTargetSessionKey = resolveCommandTurnTargetSessionKey(params.ctx);
-  if (commandTargetSessionKey && commandTargetSessionKey !== sourceSessionKey) {
-    return undefined;
-  }
-  const chatType = normalizeChatType(params.ctx.ChatType);
-  if (chatType === "direct") {
-    return "direct";
-  }
-  if (chatType === "group" || chatType === "channel") {
-    return "group";
-  }
-  return undefined;
 }
 
 export function buildExecOverridePromptHint(params: {

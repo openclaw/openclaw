@@ -518,7 +518,7 @@ function isCurrentSessionCatalogRequest(
 
 export async function archiveSessionCatalog(
   owner: SessionCatalogDataOwner & {
-    readonly pendingCatalogArchives: Set<string>;
+    pendingCatalogArchives: ReadonlySet<string>;
     isSessionMutationScopeCurrent(scope: SidebarSessionMutationScope): boolean;
     invalidateSessionCatalogs(): void;
   },
@@ -527,7 +527,7 @@ export async function archiveSessionCatalog(
 ): Promise<void> {
   const generation = scope.catalogGeneration;
   const key = buildCatalogSessionKey(params);
-  owner.pendingCatalogArchives.add(key);
+  owner.pendingCatalogArchives = new Set([...owner.pendingCatalogArchives, key]);
   owner.requestSessionDataUpdate();
   try {
     await scope.client.request("sessions.catalog.archive", params);
@@ -538,7 +538,9 @@ export async function archiveSessionCatalog(
     }
   } finally {
     if (generation === owner.sessionScopeGeneration) {
-      owner.pendingCatalogArchives.delete(key);
+      owner.pendingCatalogArchives = new Set(
+        [...owner.pendingCatalogArchives].filter((entry) => entry !== key),
+      );
       owner.requestSessionDataUpdate();
     }
   }

@@ -1,6 +1,9 @@
 import { hasOnlyAssistantReasoningContent } from "@openclaw/ai/internal/shared";
 import { isProviderRefusalAssistantError } from "@openclaw/llm-core/diagnostics";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import {
@@ -139,6 +142,13 @@ export function resolveIncompleteTurnPayloadText(params: {
   }
 
   const { promptError } = projectAgentRunAttemptTerminal(params.attempt.terminal);
+  if (
+    !promptError &&
+    assistant?.stopReason === "error" &&
+    assistant.errorCode === "incomplete_tool_call"
+  ) {
+    return formatUserFacingAssistantErrorText(assistant);
+  }
   const failureFacts = promptError
     ? resolveReplyFailoverFacts(promptError, formatErrorMessage(promptError))
     : undefined;
@@ -245,24 +255,14 @@ export const TRUNCATED_REPLY_NOTICE_TEXT =
 
 function readMessageTextContent(message: AgentMessage): string | undefined {
   const content = (message as { content?: unknown }).content;
-  if (typeof content === "string") {
-    const trimmed = content.trim();
-    return trimmed || undefined;
-  }
-  const text = collectTextContentBlocks(content)
-    .map((item) => item.trim())
-    .filter((item) => item.length > 0)
-    .join("\n");
-  return text || undefined;
-}
-
-function readToolResultAggregatedText(message: AgentMessage): string | undefined {
-  const aggregated = (message as { details?: { aggregated?: unknown } }).details?.aggregated;
-  if (typeof aggregated !== "string") {
-    return undefined;
-  }
-  const trimmed = aggregated.trim();
-  return trimmed || undefined;
+  return normalizeOptionalString(
+    typeof content === "string"
+      ? content
+      : collectTextContentBlocks(content)
+          .map((item) => item.trim())
+          .filter((item) => item.length > 0)
+          .join("\n"),
+  );
 }
 
 function hasTrailingSilentToolResult(messages: readonly AgentMessage[]): boolean {
@@ -276,7 +276,11 @@ function hasTrailingSilentToolResult(messages: readonly AgentMessage[]): boolean
       if ((message as { isError?: boolean }).isError === true) {
         return false;
       }
-      const text = readMessageTextContent(message) ?? readToolResultAggregatedText(message);
+      const text =
+        readMessageTextContent(message) ??
+        normalizeOptionalString(
+          (message as { details?: { aggregated?: unknown } }).details?.aggregated,
+        );
       return isSilentReplyText(text, SILENT_REPLY_TOKEN);
     }
     if (role === "assistant" && !readMessageTextContent(message)) {
