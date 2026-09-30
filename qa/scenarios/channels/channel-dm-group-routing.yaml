@@ -43,7 +43,7 @@ flow:
             conversation:
               id: { ref: config.dmConversationId }
               kind: direct
-            senderId: driver
+            senderId: { ref: config.dmConversationId }
             senderName: QA Driver
             text:
               expr: "`Reply exactly: ${config.dmMarker}`"
