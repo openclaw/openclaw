@@ -198,6 +198,10 @@ export abstract class AgentSessionBase {
       : await run();
   }
 
+  private eventMayWriteSession(event: AgentEvent): boolean {
+    return event.type === "message_end" || this.currentExtensionRunner.hasHandlers(event.type);
+  }
+
   /**
    * Hooks resolve the current extension runner at execution time so reloads
    * need no reinstall. Wrappers only adapt registered tools to extension context.
@@ -329,7 +333,7 @@ export abstract class AgentSessionBase {
         reason !== null &&
         (reason as { turnHandoff?: unknown }).turnHandoff === true;
     }
-    if (event.type === "message_end" || this.currentExtensionRunner.hasHandlers(event.type)) {
+    if (this.eventMayWriteSession(event)) {
       await this.runWithSessionWriteSettlement(
         async () => await this.handleAgentEventUnlocked(event),
       );
