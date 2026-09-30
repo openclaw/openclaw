@@ -275,6 +275,28 @@ export type WorkboardLaunchState =
       reason: string;
     });
 
+export type WorkboardHandoffGate = "not-required" | "pending" | "approved";
+
+export type WorkboardDeliveryStatus =
+  | "not-requested"
+  | "pending"
+  | "delivered"
+  | "failed"
+  | "empty";
+
+/** Canonical current answer for a card. Older comments remain history. */
+export type WorkboardHandoff = {
+  summary: string;
+  updatedAt: number;
+  needsUser?: string;
+  previewUrl?: string;
+  verifiedAt?: number;
+  approval?: WorkboardHandoffGate;
+  uat?: WorkboardHandoffGate;
+  deliveryStatus?: WorkboardDeliveryStatus;
+  deliveryReceipt?: string;
+};
+
 export type WorkboardAutomation = {
   tenant?: string;
   boardId?: string;
@@ -291,6 +313,7 @@ export type WorkboardAutomation = {
   dispatchCount?: number;
   lastDispatchAt?: number;
   launch?: WorkboardLaunchState;
+  handoff?: WorkboardHandoff;
 };
 
 export type WorkboardBoardMetadata = {

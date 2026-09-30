@@ -10,6 +10,29 @@
   --workboard-control-radius: 7px;
 }
 
+.workboard-detail__current-answer {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+}
+
+.workboard-detail__current-summary {
+  margin: 0;
+  color: var(--text-strong);
+  white-space: pre-wrap;
+}
+
+.workboard-detail__needs-user {
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-3);
+  border-inline-start: 3px solid var(--warning);
+  background: color-mix(in srgb, var(--warning) 10%, transparent);
+}
+
 .workboard-heading {
   display: flex;
   flex-shrink: 0;

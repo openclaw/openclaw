@@ -4,6 +4,7 @@ import type {
   WorkboardArtifact,
   WorkboardCard,
   WorkboardClaim,
+  WorkboardHandoff,
   WorkboardMetadata,
   WorkboardNotification,
   WorkboardRunAttempt,
@@ -39,6 +40,7 @@ import type {
   WorkboardDecomposeChildInput,
   WorkboardDecomposeInput,
   WorkboardHeartbeatInput,
+  WorkboardHandoffInput,
   WorkboardMutationScope,
   WorkboardProofInput,
   WorkboardReassignInput,
@@ -53,6 +55,7 @@ import {
   normalizeArtifact,
   normalizeAutomation,
   normalizeBoundedString,
+  normalizeHandoff,
   normalizeProofInput,
   normalizeStatus,
   normalizeStringList,
@@ -72,6 +75,33 @@ function assertClaimIdentity(claim: WorkboardClaim, input: WorkboardHeartbeatInp
 }
 
 export class WorkboardWorkflowStore extends WorkboardPromoteStore {
+  async recordHandoff(
+    id: string,
+    input: WorkboardHandoffInput,
+    scope?: WorkboardMutationScope | null,
+  ): Promise<WorkboardCard> {
+    return await this.enqueueMutation(async () => {
+      const existing = await this.requireCard(id);
+      assertCanMutateClaimedCard(existing, scope === null ? undefined : scope);
+      const now = Math.max(Date.now(), existing.updatedAt + 1);
+      const summary = normalizeBoundedString(input.summary, undefined, 2000, "handoff summary");
+      if (!summary) {
+        throw new Error("handoff summary is required.");
+      }
+      const handoff = normalizeHandoff({ ...input, summary, updatedAt: now });
+      if (!handoff) {
+        throw new Error("handoff is invalid.");
+      }
+      return await this.updateCard(id, {
+        ...(input.sourceUrl !== undefined ? { sourceUrl: input.sourceUrl } : {}),
+        metadata: {
+          ...existing.metadata,
+          automation: { ...existing.metadata?.automation, handoff },
+        },
+      });
+    });
+  }
+
   async claim(
     id: string,
     input: WorkboardClaimInput,
@@ -272,6 +302,12 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
           .filter((artifact): artifact is WorkboardArtifact => artifact !== null)
           .slice(-MAX_CARD_ARTIFACTS)
       : [];
+    const requestedHandoff =
+      input.handoff && typeof input.handoff === "object" && !Array.isArray(input.handoff)
+        ? normalizeHandoff({ ...input.handoff, summary, updatedAt: now })
+        : undefined;
+    const handoff = requestedHandoff ?? existing.metadata?.automation?.handoff;
+    this.assertCompletionConsistency(existing, handoff, proof, artifacts);
     const metadata = clearDiagnostics(existing.metadata, ["missing_proof"]);
     const notification: WorkboardNotification = {
       id: randomUUID(),
@@ -301,6 +337,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
               ...metadata.automation,
               summary,
               createdCardIds,
+              ...(handoff ? { handoff } : {}),
             },
             metadata.automation,
           ),
@@ -324,6 +361,48 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
         preserveProofId: proofId ?? proof?.id,
       },
     );
+  }
+
+  private assertCompletionConsistency(
+    card: WorkboardCard,
+    handoff: WorkboardHandoff | undefined,
+    proof: ReturnType<typeof normalizeProofInput> | undefined,
+    artifacts: readonly WorkboardArtifact[],
+  ): void {
+    if (!handoff) {
+      return;
+    }
+    if (handoff.needsUser) {
+      throw new Error("card still needs user input; clear handoff needsUser before completion.");
+    }
+    if (handoff.approval === "pending") {
+      throw new Error("card still requires approval.");
+    }
+    if (handoff.uat === "pending") {
+      throw new Error("card still requires UAT.");
+    }
+    if (handoff.deliveryStatus === "failed" || handoff.deliveryStatus === "pending") {
+      throw new Error(`final answer delivery is ${handoff.deliveryStatus}.`);
+    }
+    const passedProof = [proof, ...(card.metadata?.proof ?? [])]
+      .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry))
+      .findLast((entry) => entry.status === "passed");
+    const hasEvidence = Boolean(
+      passedProof ||
+      artifacts.length ||
+      card.metadata?.artifacts?.length ||
+      card.metadata?.attachments?.length,
+    );
+    if (!hasEvidence) {
+      throw new Error("card requires passed proof or an artifact before completion.");
+    }
+    const latestAttempt = card.metadata?.attempts?.at(-1);
+    if (latestAttempt?.status === "failed" || latestAttempt?.status === "blocked") {
+      const failureAt = latestAttempt.endedAt ?? latestAttempt.startedAt;
+      if (!passedProof || passedProof.createdAt <= failureAt) {
+        throw new Error("latest attempt failed or blocked without newer passed proof.");
+      }
+    }
   }
 
   protected buildBlockedCardPatch(

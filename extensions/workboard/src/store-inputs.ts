@@ -51,7 +51,7 @@ export type WorkboardUpdateCardOptions = {
   ownerSlot?: { ownerId: string; now: number };
   preserveProofId?: string;
 };
-export type WorkboardCommentInput = { body?: unknown };
+export type WorkboardCommentInput = { body?: unknown; kind?: unknown };
 export type WorkboardLinkInput = {
   type?: unknown;
   targetCardId?: unknown;
@@ -127,6 +127,18 @@ export type WorkboardCompleteInput = {
   proofId?: unknown;
   artifacts?: unknown;
   createdCardIds?: unknown;
+  handoff?: unknown;
+};
+export type WorkboardHandoffInput = {
+  summary?: unknown;
+  needsUser?: unknown;
+  previewUrl?: unknown;
+  verifiedAt?: unknown;
+  approval?: unknown;
+  uat?: unknown;
+  deliveryStatus?: unknown;
+  deliveryReceipt?: unknown;
+  sourceUrl?: unknown;
 };
 export type WorkboardBlockInput = {
   ownerId?: unknown;

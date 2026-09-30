@@ -27,7 +27,6 @@ import {
   type WorkboardExecutionMode,
   type WorkboardLink,
   type WorkboardLinkType,
-  type WorkboardLaunchState,
   type WorkboardMetadata,
   type WorkboardNotification,
   type WorkboardNotificationKind,
@@ -59,13 +58,16 @@ import {
   MAX_CARD_PROOF,
   MAX_CARD_WORKER_LOGS,
 } from "./store-constants.js";
+import { normalizeHandoff } from "./store-handoff-normalizer.js";
 import type {
   WorkboardAttachmentInput,
   WorkboardBoardInput,
   WorkboardNotificationSubscribeInput,
   WorkboardProofInput,
 } from "./store-inputs.js";
+import { normalizeLaunchState } from "./store-launch-normalizer.js";
 import { isAbsoluteWorkspacePath } from "./workspace-path.js";
+export { normalizeHandoff } from "./store-handoff-normalizer.js";
 
 export function normalizeBoardId(value: unknown, fallback?: string): string | undefined {
   const raw = normalizeBoundedString(value, fallback, 80, "board id");
@@ -485,6 +487,9 @@ export function normalizeAutomation(
   const launch = normalizeLaunchState(
     options.allowLaunchState && Object.hasOwn(record, "launch") ? record.launch : fallback.launch,
   );
+  const handoff = Object.hasOwn(record, "handoff")
+    ? normalizeHandoff(record.handoff)
+    : fallback.handoff;
   const next = removeUndefinedAutomationFields({
     ...(tenant ? { tenant } : {}),
     ...(boardId ? { boardId } : {}),
@@ -501,57 +506,9 @@ export function normalizeAutomation(
     ...(dispatchCount ? { dispatchCount } : {}),
     ...(lastDispatchAt ? { lastDispatchAt } : {}),
     ...(launch ? { launch } : {}),
+    ...(handoff ? { handoff } : {}),
   });
   return Object.keys(next).length ? next : undefined;
-}
-
-function normalizeLaunchTimestamp(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0
-    ? Math.trunc(value)
-    : undefined;
-}
-
-function normalizeLaunchString(value: unknown, maxLength: number): string | undefined {
-  const normalized = normalizeOptionalString(value);
-  return normalized && normalized.length <= maxLength ? normalized : undefined;
-}
-
-function normalizeLaunchState(value: unknown): WorkboardLaunchState | undefined {
-  if (!isRecord(value)) {
-    return undefined;
-  }
-  const requestedSessionKey = normalizeLaunchString(value.requestedSessionKey, 240);
-  const provisionalRunId = normalizeLaunchString(value.provisionalRunId, 160);
-  const preparedAt = normalizeLaunchTimestamp(value.preparedAt);
-  if (!requestedSessionKey || !provisionalRunId || preparedAt === undefined) {
-    return undefined;
-  }
-  const identity = { requestedSessionKey, provisionalRunId, preparedAt };
-  if (value.phase === "prepared") {
-    return { phase: "prepared", ...identity };
-  }
-  if (value.phase === "accepted") {
-    const acceptedAt = normalizeLaunchTimestamp(value.acceptedAt);
-    const acceptedSessionKey = normalizeLaunchString(value.acceptedSessionKey, 240);
-    const acceptedRunId = normalizeLaunchString(value.acceptedRunId, 160);
-    return acceptedAt === undefined || !acceptedSessionKey
-      ? undefined
-      : {
-          phase: "accepted",
-          ...identity,
-          acceptedAt,
-          acceptedSessionKey,
-          ...(acceptedRunId ? { acceptedRunId } : {}),
-        };
-  }
-  if (value.phase === "failed") {
-    const failedAt = normalizeLaunchTimestamp(value.failedAt);
-    const reason = normalizeLaunchString(value.reason, 800);
-    return failedAt === undefined || !reason
-      ? undefined
-      : { phase: "failed", ...identity, failedAt, reason };
-  }
-  return undefined;
 }
 
 export function deriveChildIdempotencyKey(

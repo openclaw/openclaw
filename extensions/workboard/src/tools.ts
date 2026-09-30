@@ -247,6 +247,12 @@ export function createWorkboardTools(params: {
       parameters: strictObject({
         title: Type.String({ description: "Card title." }),
         notes: Type.Optional(Type.String({ description: "Card notes or acceptance criteria." })),
+        sourceUrl: Type.Optional(
+          Type.String({
+            description:
+              "Canonical originating conversation or request URL. Required for user-originated intake.",
+          }),
+        ),
         status: Type.Optional(Type.String({ description: "Initial status." })),
         priority: Type.Optional(Type.String({ description: "low, normal, high, or urgent." })),
         labels: Type.Optional(Type.Array(Type.String(), { description: "Card labels." })),
@@ -384,11 +390,54 @@ export function createWorkboardTools(params: {
       parameters: strictObject({
         id: cardIdField(),
         body: Type.String({ description: "Comment body." }),
+        kind: Type.Optional(
+          Type.Union([Type.Literal("note"), Type.Literal("failure-feedback")], {
+            description:
+              "Use failure-feedback only for material unresolved user-reported failure; it reopens a done card for review.",
+          }),
+        ),
         token: ScopedClaimTokenField,
       }),
       execute: async (_toolCallId, rawParams) => {
         const { record, id, scope } = await readScopedCardToolParams(rawParams);
-        return redactedCardResult(await store.addComment(id, { body: record.body }, scope));
+        return redactedCardResult(
+          await store.addComment(id, { body: record.body, kind: record.kind }, scope),
+        );
+      },
+    },
+    {
+      name: "workboard_handoff",
+      label: "Workboard Handoff",
+      description:
+        "Replace the canonical current answer for a card. This supersedes older handoffs without deleting history.",
+      parameters: strictObject({
+        id: cardIdField(),
+        token: ScopedClaimTokenField,
+        summary: Type.String({ description: "Current result or latest answer." }),
+        needsUser: Type.Optional(
+          Type.String({ description: "One concrete unanswered user action or decision." }),
+        ),
+        previewUrl: Type.Optional(Type.String({ description: "Current preview or result URL." })),
+        verifiedAt: Type.Optional(
+          Type.Number({ description: "Verification time in Unix epoch milliseconds." }),
+        ),
+        approval: Type.Optional(
+          Type.String({ description: "not-required, pending, or approved." }),
+        ),
+        uat: Type.Optional(Type.String({ description: "not-required, pending, or approved." })),
+        deliveryStatus: Type.Optional(
+          Type.String({ description: "not-requested, pending, delivered, failed, or empty." }),
+        ),
+        deliveryReceipt: Type.Optional(
+          Type.String({ description: "Message or delivery receipt identifier." }),
+        ),
+        sourceUrl: Type.Optional(
+          Type.String({ description: "Canonical originating conversation URL." }),
+        ),
+      }),
+      execute: async (_toolCallId, rawParams) => {
+        const { record, id, scope } = await readScopedCardToolParams(rawParams);
+        return redactedCardResult(await store.recordHandoff(id, record, scope));
       },
     },
     {
@@ -463,6 +512,18 @@ export function createWorkboardTools(params: {
         ),
         createdCardIds: Type.Optional(
           Type.Array(Type.String(), { description: "Cards created during this run." }),
+        ),
+        handoff: Type.Optional(
+          strictObject({
+            summary: Type.String({ description: "Canonical current result." }),
+            needsUser: Type.Optional(Type.String()),
+            previewUrl: Type.Optional(Type.String()),
+            verifiedAt: Type.Optional(Type.Number()),
+            approval: Type.Optional(Type.String()),
+            uat: Type.Optional(Type.String()),
+            deliveryStatus: Type.Optional(Type.String()),
+            deliveryReceipt: Type.Optional(Type.String()),
+          }),
         ),
       }),
       execute: async (_toolCallId, rawParams) => {

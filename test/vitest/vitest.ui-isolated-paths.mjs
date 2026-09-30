@@ -2,6 +2,7 @@
 // Tests in this list depend on module singletons or custom-element registration
 // matching the current registry, so they need a fresh graph in the isolated lane.
 export const uiIsolatedTestFiles = [
+  "extensions/workboard/browser/pages/workboard/view-card-current-answer.test.ts",
   "ui/src/app/app-host.server-prefs.test.ts",
   "ui/src/app/bootstrap.gateway-credentials.test.ts",
   "ui/src/app/bootstrap.test.ts",

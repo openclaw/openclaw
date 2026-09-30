@@ -60,6 +60,68 @@ export function renderDetailRow(label: string, value: unknown) {
   `;
 }
 
+export function renderCurrentAnswer(card: WorkboardCard, linkedSessionKey?: string) {
+  const handoff = card.metadata?.automation?.handoff;
+  const latestComment = card.metadata?.comments?.findLast((comment) => comment.body.trim());
+  const completedAt = Math.max(
+    card.completedAt ?? 0,
+    card.metadata?.notifications
+      ?.filter((entry) => entry.kind === "completed")
+      .reduce((latest, entry) => Math.max(latest, entry.createdAt), 0) ?? 0,
+  );
+  const newerLegacyUpdate =
+    !handoff && latestComment && latestComment.createdAt > completedAt ? latestComment : undefined;
+  const latestPassedProof = card.metadata?.proof?.findLast((proof) => proof.status === "passed");
+  const previewUrl =
+    handoff?.previewUrl ??
+    card.metadata?.artifacts?.findLast((artifact) => artifact.url)?.url ??
+    latestPassedProof?.url;
+  const summary =
+    handoff?.summary ??
+    newerLegacyUpdate?.body ??
+    card.metadata?.automation?.summary ??
+    card.metadata?.notifications?.findLast((entry) => entry.message.trim())?.message ??
+    latestComment?.body;
+  const needsUser =
+    handoff?.needsUser ??
+    (card.status === "blocked" || card.status === "review" ? latestComment?.body : undefined);
+  const verifiedAt = handoff?.verifiedAt ?? latestPassedProof?.createdAt;
+  if (!summary && !needsUser && !previewUrl && !card.sourceUrl && !linkedSessionKey) {
+    return nothing;
+  }
+  return html`<section class="workboard-detail__section workboard-detail__current-answer">
+    <h3>${t("workboard.detailCurrentAnswer")}</h3>
+    ${summary ? html`<p class="workboard-detail__current-summary">${summary}</p>` : nothing}
+    ${
+      needsUser
+        ? html`<div class="workboard-detail__needs-user">
+            <strong>${t("workboard.detailNeedsUser")}</strong><span>${needsUser}</span>
+          </div>`
+        : nothing
+    }
+    <div class="workboard-detail__technical-properties">
+      ${renderDetailRow(t("workboard.fieldStatus"), card.status)}
+      ${renderDetailRow(t("workboard.detailVerified"), formatUpdatedTime(verifiedAt))}
+      ${renderDetailRow(t("workboard.detailDelivery"), handoff?.deliveryStatus)}
+      ${renderDetailRow(t("workboard.fieldSession"), linkedSessionKey)}
+    </div>
+    ${
+      previewUrl
+        ? html`<a href=${previewUrl} target="_blank" rel="noreferrer"
+            >${t("workboard.detailCurrentPreview")}</a
+          >`
+        : nothing
+    }
+    ${
+      card.sourceUrl
+        ? html`<a href=${card.sourceUrl} target="_blank" rel="noreferrer"
+            >${t("workboard.detailOriginalConversation")}</a
+          >`
+        : nothing
+    }
+  </section>`;
+}
+
 function renderDetailList(title: string, values: readonly string[]) {
   const entries = values.map((value) => value.trim()).filter(Boolean);
   if (entries.length === 0) {

@@ -32,11 +32,7 @@ import {
   renderStartExecutionButton,
   renderStopCardAction,
 } from "./view-card-actions.ts";
-import {
-  renderDependencyDetailList,
-  renderDetailRow,
-  renderTechnicalDetails,
-} from "./view-card-detail-records.ts";
+import * as detailRecords from "./view-card-detail-records.ts";
 import { renderCardDiscardDialog } from "./view-card-modal.ts";
 import {
   formatEventLabel,
@@ -200,7 +196,7 @@ export function renderCardDetailsPanel(props: WorkboardProps) {
   const board = state.boards.find((entry) => entry.id === boardId);
   const events = (card.events ?? []).toReversed();
   const dependencies = getWorkboardDependencyState(card, state.cards);
-  const technicalDetails = renderTechnicalDetails(
+  const technicalDetails = detailRecords.renderTechnicalDetails(
     card,
     task,
     linkedSessionKey,
@@ -450,13 +446,13 @@ export function renderCardDetailsPanel(props: WorkboardProps) {
                           </strong>`
                     }
                   </div>
-                  ${renderDetailRow(
+                  ${detailRecords.renderDetailRow(
                     t("workboard.detailUpdated"),
                     formatUpdatedTime(card.updatedAt),
                   )}
                   ${
                     state.boardFilter === WORKBOARD_ALL_BOARDS_FILTER
-                      ? renderDetailRow(
+                      ? detailRecords.renderDetailRow(
                           t("workboard.detailBoard"),
                           workboardBoardName(board ?? { id: boardId }),
                         )
@@ -468,6 +464,7 @@ export function renderCardDetailsPanel(props: WorkboardProps) {
                   </div>
                 </aside>
                 <div class="workboard-detail__content">
+                  ${detailRecords.renderCurrentAnswer(card, linkedSessionKey)}
                   ${renderInlineText(props, card, "notes", busy, !writable || archived)}
                   <section
                     class="workboard-detail__execution ${
@@ -554,12 +551,12 @@ export function renderCardDetailsPanel(props: WorkboardProps) {
                           <h3>${t("workboard.detailCardAutomation")}</h3>
                           ${automation?.summary ? html`<p>${automation.summary}</p>` : nothing}
                           ${visibleAutomationFields.map(([label, value]) =>
-                            renderDetailRow(label, value),
+                            detailRecords.renderDetailRow(label, value),
                           )}
                         </section>`
                       : nothing
                   }
-                  ${renderDependencyDetailList(dependencies)}
+                  ${detailRecords.renderDependencyDetailList(dependencies)}
                 </div>
               </div>
             </section>

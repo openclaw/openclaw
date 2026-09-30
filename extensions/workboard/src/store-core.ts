@@ -31,12 +31,13 @@ import {
   updateEvent,
   appendEvent,
 } from "./store-card-helpers.js";
+import { buildCommentPatch } from "./store-comment.js";
 import {
   invertWorkboardCardMutation,
   invertWorkboardWorkspaceMutation,
   sameWorkboardCardState,
 } from "./store-compensation.js";
-import { MAX_CARD_COMMENTS, MAX_CARD_WORKER_LOGS, POSITION_STEP } from "./store-constants.js";
+import { MAX_CARD_WORKER_LOGS, POSITION_STEP } from "./store-constants.js";
 import type {
   WorkboardBoardInput,
   WorkboardBoardSummary,
@@ -956,12 +957,11 @@ export class WorkboardCoreStore extends WorkboardStoreRuntime {
       throw new Error("comment body is required.");
     }
     const comment = { id: randomUUID(), body, createdAt: now };
-    return await this.updateMetadata(id, (existing) => {
-      assertCanMutateClaimedCard(existing, scope);
-      return {
-        ...existing.metadata,
-        comments: [...(existing.metadata?.comments ?? []), comment].slice(-MAX_CARD_COMMENTS),
-      };
+    return await this.enqueueMutation(async () => {
+      const result = await this.updateLatestCard(id, (existing) =>
+        buildCommentPatch(existing, comment, input.kind, scope),
+      );
+      return result.card;
     });
   }
 

@@ -2,6 +2,7 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   WorkboardAutomation,
   WorkboardDiagnosticAction,
+  WorkboardHandoff,
   WorkboardWorkspace,
   WorkboardWorkspaceAccess,
 } from "./types.ts";
@@ -54,6 +55,44 @@ export function normalizeAutomation(value: unknown): WorkboardAutomation | undef
   const workspaceAccess = normalizeWorkspaceAccess(value.workspaceAccess);
   const skills = normalizeStringArray(value.skills);
   const createdCardIds = normalizeStringArray(value.createdCardIds);
+  const handoff: WorkboardHandoff | undefined =
+    isRecord(value.handoff) &&
+    typeof value.handoff.summary === "string" &&
+    typeof value.handoff.updatedAt === "number"
+      ? {
+          summary: value.handoff.summary,
+          updatedAt: value.handoff.updatedAt,
+          ...(typeof value.handoff.needsUser === "string"
+            ? { needsUser: value.handoff.needsUser }
+            : {}),
+          ...(typeof value.handoff.previewUrl === "string"
+            ? { previewUrl: value.handoff.previewUrl }
+            : {}),
+          ...(typeof value.handoff.verifiedAt === "number"
+            ? { verifiedAt: value.handoff.verifiedAt }
+            : {}),
+          ...(value.handoff.approval === "not-required" ||
+          value.handoff.approval === "pending" ||
+          value.handoff.approval === "approved"
+            ? { approval: value.handoff.approval }
+            : {}),
+          ...(value.handoff.uat === "not-required" ||
+          value.handoff.uat === "pending" ||
+          value.handoff.uat === "approved"
+            ? { uat: value.handoff.uat }
+            : {}),
+          ...(value.handoff.deliveryStatus === "not-requested" ||
+          value.handoff.deliveryStatus === "pending" ||
+          value.handoff.deliveryStatus === "delivered" ||
+          value.handoff.deliveryStatus === "failed" ||
+          value.handoff.deliveryStatus === "empty"
+            ? { deliveryStatus: value.handoff.deliveryStatus }
+            : {}),
+          ...(typeof value.handoff.deliveryReceipt === "string"
+            ? { deliveryReceipt: value.handoff.deliveryReceipt }
+            : {}),
+        }
+      : undefined;
   const automation: WorkboardAutomation = {
     ...(typeof value.tenant === "string" ? { tenant: value.tenant } : {}),
     ...(typeof value.boardId === "string" ? { boardId: value.boardId } : {}),
@@ -73,6 +112,7 @@ export function normalizeAutomation(value: unknown): WorkboardAutomation | undef
     ...(createdCardIds.length ? { createdCardIds } : {}),
     ...(typeof value.dispatchCount === "number" ? { dispatchCount: value.dispatchCount } : {}),
     ...(typeof value.lastDispatchAt === "number" ? { lastDispatchAt: value.lastDispatchAt } : {}),
+    ...(handoff ? { handoff } : {}),
   };
   return Object.keys(automation).length ? automation : undefined;
 }
