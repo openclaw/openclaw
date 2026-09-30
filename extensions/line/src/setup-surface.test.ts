@@ -12,7 +12,7 @@ import {
 import type { WizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
 import { waitForAbortSignal } from "openclaw/plugin-sdk/runtime-env";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime, ResolvedLineAccount } from "../api.js";
 import { linePlugin } from "./channel.js";
 import { lineGatewayAdapter } from "./gateway.js";
@@ -20,9 +20,21 @@ import { stubLineApiFetch } from "./probe.test-support.js";
 import { setLineRuntime } from "./runtime.js";
 import { lineSetupWizard } from "./setup-surface.js";
 
+const monitorLineProvider = vi.hoisted(() =>
+  vi.fn<
+    (opts: Parameters<typeof import("./monitor.js").monitorLineProvider>[0]) => Promise<void>
+  >(),
+);
+vi.mock("./monitor.js", () => ({ monitorLineProvider }));
+
 afterEach(() => {
+  monitorLineProvider.mockReset();
   vi.unstubAllGlobals();
   vi.useRealTimers();
+});
+afterAll(() => {
+  vi.doUnmock("./monitor.js");
+  vi.resetModules();
 });
 
 const lineConfigure = createPluginSetupWizardConfigure(linePlugin);
@@ -135,19 +147,12 @@ describe("linePlugin status.probeAccount", () => {
 
 function createRuntime() {
   const providerStarted = createDeferred<void>();
-  const monitorLineProvider = vi.fn(
-    async (opts: Parameters<typeof import("./monitor.js").monitorLineProvider>[0]) => {
-      providerStarted.resolve();
-      await waitForAbortSignal(opts.abortSignal);
-    },
-  );
+  monitorLineProvider.mockImplementation(async (opts) => {
+    providerStarted.resolve();
+    await waitForAbortSignal(opts.abortSignal);
+  });
 
   const runtime = {
-    channel: {
-      line: {
-        monitorLineProvider,
-      },
-    },
     logging: {
       shouldLogVerbose: () => false,
     },

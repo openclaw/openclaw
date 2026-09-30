@@ -8,7 +8,7 @@ import { chunkMarkdownText as chunkMarkdownTextForLine } from "openclaw/plugin-s
 import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
 import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../api.js";
-import { resolveLineAccount } from "./accounts.js";
+import { createQuickReply } from "./auto-reply-delivery.test-helpers.js";
 import { linePlugin } from "./channel.js";
 import { createRuntime, lineResult } from "./channel.sendPayload.test-support.js";
 import { resolveLineGroupRequireMention } from "./group-policy.js";
@@ -139,7 +139,7 @@ it("sends oversized tables in source order with quick replies on the final card"
   );
   expect(mocks.pushMessagesLine).toHaveBeenCalledExactlyOnceWith(
     to,
-    [expect.objectContaining({ altText: "Code", quickReply: { items: ["Continue"] } })],
+    [expect.objectContaining({ altText: "Code", quickReply: createQuickReply("Continue") })],
     expect.any(Object),
   );
   expect(mocks.pushTextMessageWithQuickReplies).not.toHaveBeenCalled();
@@ -169,7 +169,7 @@ it("keeps a degraded location in the quick-reply inline batch", async () => {
     {
       type: "text",
       text: "Meet here\n35.6895, 139.6917",
-      quickReply: { items: ["Continue"] },
+      quickReply: createQuickReply("Continue"),
     },
   ]);
   expect(mocks.pushTextMessageWithQuickReplies).not.toHaveBeenCalled();
@@ -261,7 +261,7 @@ it("preserves inline batch receipts and bounds the Flex alternative text", async
   expectBatch(
     [
       { type: "flex", altText: "a".repeat(1500), contents: { type: "bubble" } },
-      expect.objectContaining({ type: "location", quickReply: { items: ["Confirm"] } }),
+      expect.objectContaining({ type: "location", quickReply: createQuickReply("Confirm") }),
     ],
     "line:group:C123",
   );
@@ -319,7 +319,7 @@ it.each([
         originalContentUrl: videoUrl,
         previewImageUrl,
         ...tracking,
-        quickReply: { items: ["One"] },
+        quickReply: createQuickReply("One"),
       },
     ],
     target,
@@ -331,7 +331,7 @@ it.each([
   [audioUrl, { type: "audio", originalContentUrl: audioUrl, duration: 60000 }],
 ] as const)("validates and infers inline quick-reply media from %s", async (url, message) => {
   await inlineMedia(url);
-  expectBatch([{ ...message, quickReply: { items: ["One"] } }]);
+  expectBatch([{ ...message, quickReply: createQuickReply("One") }]);
   expect(ssrfMocks.resolvePinnedHostnameWithPolicy).toHaveBeenCalledWith("example.com", {
     policy: { allowPrivateNetwork: false },
   });
@@ -504,7 +504,6 @@ const pairingCfg = lineConfig({
 });
 
 it("pushes the approval from the approved account", async () => {
-  mocks.resolveLineAccount.mockImplementation(resolveLineAccount);
   await linePlugin.pairing!.notifyApproval!({
     cfg: pairingCfg,
     id: "U-paired",
