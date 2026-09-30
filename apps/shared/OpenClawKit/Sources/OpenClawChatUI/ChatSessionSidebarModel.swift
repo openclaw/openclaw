@@ -554,12 +554,12 @@ public enum ChatSessionSidebarModel {
         return ChatPayloadDecoding.trimmedNonEmptyString(session.lastRunError)
     }
 
-    private static func isRunning(_ session: OpenClawChatSessionEntry) -> Bool {
+    static func isRunning(_ session: OpenClawChatSessionEntry) -> Bool {
         session.hasActiveRun == true ||
             session.status?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "running"
     }
 
-    private static func isNewer(
+    static func isNewer(
         _ candidate: OpenClawChatSessionObserverDigest,
         than previous: OpenClawChatSessionObserverDigest) -> Bool
     {

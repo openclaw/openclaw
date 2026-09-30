@@ -14,7 +14,7 @@ import { findJobOrThrow } from "./jobs-scheduling.js";
 import { locked } from "./locked.js";
 import { emitCronRunFinished } from "./ops-run-preparation.js";
 import { runCronRuntimeMutation } from "./runtime-mutation.js";
-import { applyCronRuntimeRowsToState } from "./runtime-store.js";
+import { applyCronRuntimeRowsToState } from "./runtime-publication.js";
 import type { CronServiceState } from "./state.js";
 import {
   captureCronJobMutationSource,

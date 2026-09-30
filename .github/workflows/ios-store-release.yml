@@ -106,8 +106,7 @@ jobs:
   qualify:
     if: >-
       github.ref == 'refs/heads/main' && github.repository == 'openclaw/openclaw' &&
-      ((github.event_name == 'schedule' && vars.IOS_TESTFLIGHT_ENABLED == 'true') ||
-      (github.event_name == 'workflow_dispatch' && (inputs.operation == 'release' || inputs.operation == 'testflight')))
+      github.event_name == 'workflow_dispatch' && inputs.operation == 'release'
     permissions:
       actions: read
       contents: read
@@ -122,9 +121,11 @@ jobs:
     name: Prepare and upload iOS release
     needs: qualify
     if: >-
+      !cancelled() &&
       github.ref == 'refs/heads/main' && github.repository == 'openclaw/openclaw' &&
       ((github.event_name == 'schedule' && vars.IOS_TESTFLIGHT_ENABLED == 'true') ||
-      (github.event_name == 'workflow_dispatch' && (inputs.operation == 'release' || inputs.operation == 'testflight')))
+      (github.event_name == 'workflow_dispatch' &&
+      (inputs.operation == 'testflight' || (inputs.operation == 'release' && needs.qualify.result == 'success'))))
     permissions:
       contents: write
     runs-on: xcode-27-xlarge

@@ -59,6 +59,8 @@ Provider authentication status is shared across views and refreshes after accoun
 
 The sidebar loads automation status once per connection and refreshes after automation or configuration changes. Failed reads retry once per minute while the tab is visible and stop retrying after success. Overdue warnings advance on a local deadline without polling the Gateway. Hidden tabs catch up when visible; returning to an unchanged tab does not poll automations. Command palette searches reuse their automation inventory on the same connection until one of those changes or a reconnect.
 
+For messages forwarded from an automation, the **From** link opens that automation's History tab and highlights the originating run. Open the run's transcript from History when needed.
+
 Thinking, speed, and context-window changes stay synchronized across panes showing the same session. While a change is pending, the latest selection remains visible. A rejected change restores the latest confirmed value. Delayed events from a replaced session leave the current transcript and unsent draft intact.
 
 While an agent works, completed commentary or preambles appear inline in the
@@ -78,6 +80,13 @@ Consecutive tool activity shares one expandable log, including when background
 work resumes in a new run. Visible messages, media, and conversation markers
 keep their place and separate logs; live response text and the working indicator
 stay outside the log. Grouping changes only the presentation, not the transcript.
+
+Inter-session messages appear as compact **updates from** activity rows instead
+of chat bubbles. Consecutive updates from the same source share one row; other
+messages and conversation markers keep them separate. Select the row to show
+the original messages and timestamps in one step, or select the source name to
+open that session. Search results and reply navigation reveal the matching
+messages. This changes only presentation, not stored messages or run ownership.
 
 When an incoming message causes an unstarted tool call to be skipped, its card
 and work summary show **Skipped**, including after reloading the conversation.

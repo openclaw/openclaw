@@ -236,6 +236,14 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
     }, 2000);
   };
 
+  /** What people and agents add around a shared transcript: suggestions and reactions. */
+  protected collaborationChatProps(connected: boolean, archived: boolean, multiIdentity: boolean) {
+    return {
+      ...this.suggestionChatProps(connected, archived, multiIdentity),
+      ...this.reactionChatProps(),
+    };
+  }
+
   protected suggestionChatProps(connected: boolean, archived: boolean, multiIdentity: boolean) {
     const gatewaySnapshot = this.context.gateway.snapshot;
     const auth = gatewaySnapshot.hello?.auth ?? null;

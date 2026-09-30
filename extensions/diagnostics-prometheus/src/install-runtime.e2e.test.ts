@@ -291,6 +291,7 @@ describe("diagnostics-prometheus managed install runtime", () => {
           diagnostics: { enabled: true },
           gateway: {
             mode: "local",
+            controlUi: { enabled: false },
             bind: "loopback",
             port: gatewayPort,
             trustedProxies: ["127.0.0.1"],

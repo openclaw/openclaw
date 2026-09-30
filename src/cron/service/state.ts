@@ -45,6 +45,7 @@ import type { CronJobsSortBy, CronSortDir } from "./list-page-types.js";
 import type {
   CronNotificationIntent,
   CronNotificationJob,
+  CronNotificationRouting,
   ResolvedFailureAlert,
 } from "./notification-intents.js";
 
@@ -248,6 +249,7 @@ export type CronServiceDeps = {
   }) => void | Promise<void>;
   sendCronFailureAlert?: (params: {
     job: CronNotificationJob;
+    routing: CronNotificationRouting;
     payload: ReplyPayload;
     runAtMs?: number;
     channel: CronMessageChannel;

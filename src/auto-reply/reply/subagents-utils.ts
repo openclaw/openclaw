@@ -1,4 +1,3 @@
-// Shared subagent helpers for routing, labels, and transcript text.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeRunStatusText } from "../../agents/run-status-text.js";
 import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry-read.js";

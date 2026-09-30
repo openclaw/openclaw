@@ -843,6 +843,7 @@ const EXCLUSIVE_COMPACT_GROUP_RE =
 // An indivisible file above this budget must not acquire additional work.
 const COMPACT_EXCLUSIVE_JOB_SECONDS = 150;
 const COMPACT_HYBRID_SERIAL_CLI_JOB_SECONDS = 250;
+const COMPACT_SERIAL_CLI_GROUP_NAME_RE = /^agentic-cli(?:(?:-process)?-hosted-\d+)?$/u;
 
 export function isExclusiveCompactShardName(shardName: string): boolean {
   return EXCLUSIVE_COMPACT_GROUP_RE.test(shardName);
@@ -2793,6 +2794,7 @@ function createNodeTestShardsForOwners(
   owners: readonly (typeof fullSuiteVitestShards)[number][],
   options: NodeTestPlanOptions,
   toolingOnly = false,
+  preparedChangedTestPlans?: ReturnType<typeof buildVitestRunPlans>,
 ): NodeTestShard[] {
   const includeReleaseOnlyPluginShards = options.includeReleaseOnlyPluginShards ?? true;
   const includeProofTests =
@@ -2805,14 +2807,15 @@ function createNodeTestShardsForOwners(
     isRuntimeTestFileIncluded(file, options);
   const changedTestPlans = includeReleaseOnlyPluginShards
     ? []
-    : (options.changedPaths ?? [])
+    : (preparedChangedTestPlans ??
+      (options.changedPaths ?? [])
         .filter(
           (file) =>
             isTestFileTarget(file) &&
             !file.endsWith(".live.test.ts") &&
             statSync(file, { throwIfNoEntry: false })?.isFile(),
         )
-        .flatMap((file) => buildVitestRunPlans([file]));
+        .flatMap((file) => buildVitestRunPlans([file])));
 
   return owners.flatMap((shard) => {
     if (
@@ -4128,7 +4131,10 @@ export function packNodeTestGroups<Group>(
 export function createSelectedNodeTestShardBundles(
   targets: readonly string[],
   options: Pick<NodeTestPlanOptions, "runnerBackend"> &
-    RuntimeTestSelection & { onFallback?: (reason: string) => void } = {},
+    RuntimeTestSelection & {
+      onFallback?: (reason: string) => void;
+      preparedTestPlans?: ReadonlyMap<string, ReturnType<typeof buildVitestRunPlans>>;
+    } = {},
 ): CompactNodeTestShard[] | null {
   if (options.runnerBackend === "runson") {
     const selected = createSelectedNodeTestShardBundles(targets, {
@@ -4141,8 +4147,9 @@ export function createSelectedNodeTestShardBundles(
     targets.filter((file) => !isCiProofTestFile(file) && isRuntimeTestFileIncluded(file, options)),
   );
   const configs = new Map<string, string>();
+  const changedTestPlans: ReturnType<typeof buildVitestRunPlans> = [];
   for (const target of selected) {
-    const plans = buildVitestRunPlans([target]);
+    const plans = options.preparedTestPlans?.get(target) ?? buildVitestRunPlans([target]);
     const exactFilter =
       plans.length === 1 &&
       plans[0]!.forwardedArgs.length === 1 &&
@@ -4168,6 +4175,9 @@ export function createSelectedNodeTestShardBundles(
       return null;
     }
     configs.set(target, config);
+    if (!target.endsWith(".live.test.ts")) {
+      changedTestPlans.push(...plans);
+    }
   }
   if (selected.size === 0) {
     return targets.length > 0 ? [] : null;
@@ -4183,6 +4193,7 @@ export function createSelectedNodeTestShardBundles(
       includeProofTests: false,
     },
     tooling.size === selected.size,
+    changedTestPlans,
   );
   const owners = new Set<NodeTestShard>();
   for (const target of tooling) {
@@ -4401,7 +4412,7 @@ function packSelectedNodeTestJobs(
       return runnerBackend === "hybrid" &&
         !first.pretestBuildMode &&
         bin.every((job) => job.predictedSeconds! <= COMPACT_EXCLUSIVE_JOB_SECONDS) &&
-        groups.every((group) => /^agentic-cli(?:-process-hosted-\d+)?$/u.test(group.shard_name))
+        groups.every((group) => COMPACT_SERIAL_CLI_GROUP_NAME_RE.test(group.shard_name))
         ? COMPACT_HYBRID_SERIAL_CLI_JOB_SECONDS
         : COMPACT_EXCLUSIVE_JOB_SECONDS;
     }
@@ -4879,7 +4890,7 @@ function createCompactNodeTestShardBundles(
           (entry) =>
             !entry.requiresDist &&
             !entry.pretestBuildMode &&
-            /^agentic-cli(?:-process-hosted-\d+)?$/u.test(entry.shard_name) &&
+            COMPACT_SERIAL_CLI_GROUP_NAME_RE.test(entry.shard_name) &&
             estimateBinSeconds([entry]) <= COMPACT_EXCLUSIVE_JOB_SECONDS,
         );
       // Hosted preparation exceeds the exclusive test budget by itself. Share

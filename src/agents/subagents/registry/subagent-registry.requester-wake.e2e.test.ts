@@ -625,7 +625,7 @@ describe("requester settle wake product flow", () => {
           onYield: () => {},
         }).execute(`yield-${requesterTurnRunId}`, {});
         expect(result).toMatchObject({
-          details: { status: accepted.length > 0 ? "yielded" : "error" },
+          details: { status: accepted.length > 0 ? "yielded" : "nothing_pending" },
         });
         if (runtime === "native") {
           const harnessSelection = await import("../../harness/selection.js");

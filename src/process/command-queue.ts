@@ -560,6 +560,7 @@ export function enqueueCommandInLane<T>(
       queuedAheadAtEnqueue: 0,
       activeAheadAtEnqueue: 0,
       taskIdentity: opts?.taskIdentity ? { ...opts.taskIdentity } : undefined,
+      sessionTarget: opts?.sessionTarget ? { ...opts.sessionTarget } : undefined,
       taskTimeoutMs: clampPositiveTimerTimeoutMs(opts?.taskTimeoutMs),
       taskTimeoutProgressAtMs: opts?.taskTimeoutProgressAtMs,
       taskTimeoutSubscribe: opts?.taskTimeoutSubscribe,
@@ -666,11 +667,41 @@ export function getTotalQueueSize() {
   return total;
 }
 
-export function clearCommandLane(lane: string = CommandLane.Main) {
+type CommandLaneEntryFilter = (target: CommandQueueEnqueueOptions["sessionTarget"]) => boolean;
+
+function selectQueuedCommandEntries(state: LaneState, matches: CommandLaneEntryFilter) {
+  const entries: QueueEntry[] = [];
+  for (const queue of [state.queue.foreground, state.queue.normal, state.queue.background]) {
+    for (let entry = queue.head; entry; entry = entry.next) {
+      if (matches(entry.sessionTarget)) {
+        entries.push(entry);
+      }
+    }
+  }
+  return entries;
+}
+
+export function countQueuedCommandsInLane(lane: string, matches: CommandLaneEntryFilter): number {
+  const state = getQueueState().lanes.get(normalizeLane(lane));
+  return state ? selectQueuedCommandEntries(state, matches).length : 0;
+}
+
+export function clearCommandLane(
+  lane: string = CommandLane.Main,
+  matches?: CommandLaneEntryFilter,
+) {
   const cleaned = normalizeLane(lane);
   const state = getQueueState().lanes.get(cleaned);
   if (!state) {
     return 0;
+  }
+  if (matches) {
+    const entries = selectQueuedCommandEntries(state, matches);
+    for (const entry of entries) {
+      removeLaneQueueEntry(state.queue, entry);
+      entry.reject(new CommandLaneClearedError(cleaned));
+    }
+    return entries.length;
   }
   const removed = state.queue.length;
   let entry: QueueEntry | undefined;

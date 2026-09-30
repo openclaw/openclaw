@@ -1,6 +1,6 @@
 import { DatabaseSync, StatementSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
-import { withTestTimeout } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import {
   loadSessionEntryReadOnly,
   replaceSessionEntrySync,
@@ -172,7 +172,7 @@ it("serves overlapping cold descriptions within bounded placement-read admission
   });
 });
 
-it.each([
+it.for([
   {
     name: "serves more than 128 descriptions without joining inputs beyond reader capacity",
     count: 160,
@@ -187,7 +187,7 @@ it.each([
     accepted: 128,
     maxPendingBytes: undefined,
   },
-])("$name", async ({ count, idLength, accepted, maxPendingBytes }) => {
+])("$name", async ({ count, idLength, accepted, maxPendingBytes }, { signal }) => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const fixture = await heldPlacementReads(count, {
       sessionId: (index) => `placement-${index}-${"x".repeat(idLength)}`,
@@ -222,17 +222,28 @@ it.each([
     };
     try {
       describe(fixture.rows[0]!);
-      await withTestTimeout(fixture.entered.promise, 2_000, "First placement read did not enter");
+      // Bind waits to the test signal so a stall still releases the held placement reads.
+      await withinTest(
+        awaitGateBeforeSettlement(
+          fixture.entered.promise,
+          requests[0]!.completion,
+          "First placement read did not enter",
+        ),
+        signal,
+      );
       describe(fixture.rows[1]!);
-      await withTestTimeout(
-        fixture.atCapacity.promise,
-        2_000,
-        "Second placement read did not enter",
+      await withinTest(
+        awaitGateBeforeSettlement(
+          fixture.atCapacity.promise,
+          requests[1]!.completion,
+          "Second placement read did not enter",
+        ),
+        signal,
       );
       for (const row of fixture.rows.slice(2)) {
         describe(row);
       }
-      await withTestTimeout(allSelected.promise, 2_000, "Description burst was not selected");
+      await withinTest(allSelected.promise, signal);
       fixture.release.resolve();
       expect(await Promise.all(pending)).toEqual(
         requests.map((_, index) => [
@@ -271,7 +282,9 @@ it.each([
   });
 });
 
-it("reuses settled exact placement facts while archived row preparation is completing", async () => {
+it("reuses settled exact placement facts while archived row preparation is completing", async ({
+  signal,
+}) => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const fixture = await heldPlacementReads(1);
     const row = fixture.rows[0]!;
@@ -292,7 +305,14 @@ it("reuses settled exact placement facts while archived row preparation is compl
     try {
       await fixture.entered.promise;
       fixture.release.resolve();
-      await withTestTimeout(prepared.promise, 2_000, "Exact row preparation did not enter");
+      await withinTest(
+        awaitGateBeforeSettlement(
+          prepared.promise,
+          request.completion,
+          "Exact row preparation did not enter",
+        ),
+        signal,
+      );
       expect(request.respond).not.toHaveBeenCalled();
       await fixture.projection.ensureMaterialized();
       expect(fixture.readProjection.mock.calls).toEqual([[[row.sessionId]]]);
@@ -366,7 +386,9 @@ it.each([
   },
 );
 
-it("serves an exact description while an unrelated bulk placement refresh is held", async () => {
+it("serves an exact description while an unrelated bulk placement refresh is held", async ({
+  signal,
+}) => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const placements = createWorkerSessionPlacementStore();
     const rows: PlacementRow[] = [];
@@ -435,7 +457,14 @@ it("serves an exact description while an unrelated bulk placement refresh is hel
       reportPlacementTransition(undefined, bulkRow.placement);
       const bulk = projection.ensureMaterialized();
       pending.push(Promise.allSettled([bulk]));
-      await withTestTimeout(bulkEntered.promise, 2_000, "Bulk placement refresh did not enter");
+      await withinTest(
+        awaitGateBeforeSettlement(
+          bulkEntered.promise,
+          bulk,
+          "Bulk placement refresh did not enter",
+        ),
+        signal,
+      );
       replaceSessionEntrySync(
         { agentId: "main", sessionKey: exactRow.key },
         { sessionId: exactRow.sessionId, updatedAt: 2, label: "Fresh exact description" },
@@ -459,11 +488,7 @@ it("serves an exact description while an unrelated bulk placement refresh is hel
         }),
       );
       pending.push(Promise.allSettled([description]));
-      await withTestTimeout(
-        description,
-        2_000,
-        "Exact description waited for an unrelated bulk placement refresh",
-      );
+      await withinTest(description, signal);
       expect(respond).toHaveBeenCalledExactlyOnceWith(true, {
         session: expect.objectContaining({
           key: exactRow.key,

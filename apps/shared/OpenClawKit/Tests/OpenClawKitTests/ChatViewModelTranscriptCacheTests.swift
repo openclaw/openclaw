@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 import OpenClawKit
 import Testing
 @testable import OpenClawChatUI
@@ -279,6 +280,40 @@ struct ChatViewModelTranscriptCacheTests {
         #expect(
             await cache.loadTranscript(sessionKey: "main")
                 .flatMap { $0.content.compactMap(\.text) } == ["canonical answer"])
+    }
+
+    @Test @MainActor func `late cache prepaint cannot replace a live transient roster row`() async throws {
+        func rows(_ label: String, date: Int) throws -> [OpenClawChatSessionEntry] {
+            try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: Data(#"""
+            {"sessions":[{"key":"agent:main:thread","agentId":"main","sessionId":"thread","label":"\#(label)","updatedAt":\#(date)}]}
+            """#.utf8)).sessions
+        }
+        let (started, startedSignal) = AsyncStream<Void>.makeStream()
+        let (release, releaseSignal) = AsyncStream<Void>.makeStream()
+        let (painted, paintedSignal) = AsyncStream<Void>.makeStream()
+        let cache = try TestTranscriptCache(sessions: rows("Cached", date: 10), loadSessionsHook: {
+            startedSignal.yield(())
+            for await _ in release {
+                break
+            }
+        })
+        let transport = GatedHistoryChatTransport { key, _ in historyPayload(sessionKey: key) }
+        let vm = makeViewModel(transport: transport, activeAgentID: "main", cache: cache, load: false)
+        defer { vm.detachTransport() }
+        vm.enableSidebarData()
+        let owner = try #require(vm.sidebarData)
+        vm.paintFromCacheIfNeeded(session: vm.currentSessionSnapshot())
+        for await _ in started {
+            break
+        }
+        let refs = try owner.receive(rows("Live query", date: 20), read: owner.beginRead())
+        withObservationTracking { _ = vm.sessions } onChange: { paintedSignal.yield(()) }
+        releaseSignal.yield(())
+        for await _ in painted {
+            break
+        }
+        #expect(owner.project(refs).first?.label == "Live query")
+        #expect(vm.sessions.first?.label == "Live query")
     }
 
     @Test func `stale cached sessions never overwrite live empty session list`() async throws {

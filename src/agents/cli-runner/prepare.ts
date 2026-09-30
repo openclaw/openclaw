@@ -1341,14 +1341,9 @@ async function prepareCliRunContextWithinReadFence(
       sessionId: params.sessionId,
       runId: params.runId,
       agentId: policyAgentId,
-      agentDir,
       agentAccountId: params.agentAccountId,
       messageProvider: params.messageProvider ?? params.messageChannel,
       messageChannel: params.messageChannel,
-      chatType: runtimeChatType,
-      currentChannelId: params.currentChannelId,
-      currentThreadTs: params.currentThreadTs,
-      currentMessageId: params.currentMessageId,
       groupId: params.groupId,
       groupChannel: params.groupChannel,
       groupSpace: params.groupSpace,
@@ -1360,10 +1355,8 @@ async function prepareCliRunContextWithinReadFence(
       senderIsOwner: params.senderIsOwner,
       modelProvider,
       modelId,
-      modelContextWindowTokens: contextWindowInfo.tokens,
       workspaceDir,
       cwd,
-      skillsSnapshot: params.skillsSnapshot,
       sandboxToolPolicy: sandboxStatus.sandboxed ? sandboxStatus.toolPolicy : undefined,
       runtimeToolAllowlist: runtimeToolsAllowPolicy,
       inheritRuntimeToolAllowlist: true,
@@ -2033,7 +2026,6 @@ async function prepareCliRunContextWithinReadFence(
       bindPreparedParams(preparedParams);
       return { ...buildPreparedContext(preparedParams), hadSessionFile: false };
     }
-    ensureContextEnginesInitialized();
     // Context remains session-owned. Trusted helper runs may borrow a different
     // agentDir only for model/auth execution.
     const contextEngineAgentDir = resolveAgentDir(runConfig, sessionAgentId);
@@ -2062,6 +2054,7 @@ async function prepareCliRunContextWithinReadFence(
     } else {
       const trackDisposal = captureAsyncWorkTracker();
       const ownedEngine = await resolveContextEngine(runConfig, {
+        initialize: ensureContextEnginesInitialized,
         agentDir: contextEngineAgentDir,
         workspaceDir,
       });

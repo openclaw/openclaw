@@ -723,11 +723,11 @@ export function nextWakeAtMs(state: CronServiceState) {
 }
 
 /** Applies one canonical server-authored authority envelope to a tool-bearing job. */
-export function hasActiveCronRun(job: Pick<CronJob, "id" | "state">) {
+export function hasActiveCronRun(job: Pick<CronJob, "id" | "state">, activeInProcess?: boolean) {
   return (
     typeof job.state.queuedAtMs === "number" ||
     typeof job.state.runningAtMs === "number" ||
-    isCronJobActive(job.id)
+    (activeInProcess ?? isCronJobActive(job.id))
   );
 }
 

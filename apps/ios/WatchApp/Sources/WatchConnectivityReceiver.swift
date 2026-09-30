@@ -11,7 +11,6 @@ enum WatchReplyDeliveryState: Equatable {
 
 struct WatchReplySendResult: Equatable {
     var delivery: WatchReplyDeliveryState
-    var transport: String
     var errorMessage: String?
     var requiresCanonicalReadback: Bool
 
@@ -249,7 +248,6 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
                 try await sendReachableWatchMessage(payload, with: session, isolation: isolation)
                 return WatchReplySendResult(
                     delivery: .delivered,
-                    transport: "sendMessage",
                     errorMessage: nil,
                     requiresCanonicalReadback: false)
             } catch {
@@ -263,7 +261,6 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
         _ = session.transferUserInfo(payload)
         return WatchReplySendResult(
             delivery: .queued,
-            transport: "transferUserInfo",
             errorMessage: nil,
             requiresCanonicalReadback: requiresCanonicalReadback)
     }
@@ -273,7 +270,6 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
         // The closed notSent state lets callers safely offer an immediate retry.
         WatchReplySendResult(
             delivery: .notSent,
-            transport: "none",
             errorMessage: error.localizedDescription,
             requiresCanonicalReadback: false)
     }

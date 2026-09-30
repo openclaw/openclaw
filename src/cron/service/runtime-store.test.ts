@@ -14,7 +14,12 @@ import {
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { readCronRunHistoryPageForTests } from "../run-history.test-support.js";
 import { CronService } from "../service.js";
-import { loadCronJobsStoreWithConfigJobs, loadCronStore, saveCronStore } from "../store.js";
+import {
+  loadCronJobsStoreWithConfigJobs,
+  loadCronStore,
+  noteCronJobsStoreCommit,
+  saveCronStore,
+} from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import {
   assertCronRunReceiptCurrent,
@@ -23,9 +28,10 @@ import {
   prepareCronRunReceiptClaim,
 } from "../store/run-receipt-store.js";
 import { claimCronRunReceiptInDatabaseForTest } from "../store/run-receipt-store.test-support.js";
+import { mutateCronRuntimeRowsInDatabase } from "../store/runtime-rows.kernel.js";
 import type { CronStoredJob } from "../types.js";
 import { stop } from "./ops-lifecycle.js";
-import { applyCronRuntimeRowsToState, commitCronRuntimeRows } from "./runtime-store.js";
+import { applyCronRuntimeRowsToState } from "./runtime-publication.js";
 import { armTimer } from "./timer.js";
 
 const runtimeStoreFixtures = setupCronRegressionFixtures({ prefix: "cron-runtime-store-" });
@@ -90,10 +96,6 @@ describe("cron runtime row publication", () => {
     }
     // Allow short row metadata without fetching another copy of each description.
     const textBudget = payloadBytes + 256 * materializedRows.length;
-    const state = createCronRegressionState({
-      storePath,
-      runIsolatedAgentJob: vi.fn(),
-    });
     // A large missing-ID set must not hit SQLite's bound-parameter limit or widen the read.
     const targets = [
       "row-9",
@@ -107,19 +109,25 @@ describe("cron runtime row publication", () => {
     const reads = trackCronRowReads();
     let committed: string[];
     try {
-      committed = commitCronRuntimeRows({
-        state,
-        jobIds: targets,
-        operationLabel: "cron.selected-row-proof",
-        mutate: ({ jobs: current }) => {
-          expect(current.get("row-8")?.runtimeAuthorityRecoveryRequired).toBe(true);
-          expect(current.get("row-2")?.runtimeAuthority).toEqual(jobs[2]!.runtimeAuthority);
-          for (const job of current.values()) {
-            job.state.lastError = "selected-row-marker";
-          }
-          return { value: [...current.keys()], upsertJobIds: current.keys() };
-        },
-      });
+      const result = runOpenClawStateWriteTransaction(({ db }) =>
+        mutateCronRuntimeRowsInDatabase({
+          database: db,
+          storeKey,
+          jobIds: new Set(targets),
+          mutate: ({ jobs: current }) => {
+            expect(current.get("row-8")?.runtimeAuthorityRecoveryRequired).toBe(true);
+            expect(current.get("row-2")?.runtimeAuthority).toEqual(jobs[2]!.runtimeAuthority);
+            for (const job of current.values()) {
+              job.state.lastError = "selected-row-marker";
+            }
+            return { value: [...current.keys()], upsertJobIds: current.keys() };
+          },
+        }),
+      );
+      committed = result.value;
+      if (result.changed) {
+        noteCronJobsStoreCommit(storeKey);
+      }
       expect(committed).toEqual(["row-2", "row-8", "row-9"]);
       // Include the malformed target and UTF-8 binding collision, but no unrelated job rows.
       expect(reads.rowCounts.jobs).toBeLessThanOrEqual(5);
@@ -161,12 +169,14 @@ describe("cron runtime row publication", () => {
     const emptyReads = trackCronRowReads();
     try {
       expect(
-        commitCronRuntimeRows({
-          state,
-          jobIds: [],
-          operationLabel: "cron.empty-row-proof",
-          mutate: ({ jobs: current }) => ({ value: current.size }),
-        }),
+        runOpenClawStateWriteTransaction(({ db }) =>
+          mutateCronRuntimeRowsInDatabase({
+            database: db,
+            storeKey,
+            jobIds: new Set(),
+            mutate: ({ jobs: current }) => ({ value: current.size }),
+          }),
+        ).value,
       ).toBe(0);
       expect(emptyReads.rowCounts).toEqual({ jobs: 0, authorities: 0 });
     } finally {

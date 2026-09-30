@@ -204,12 +204,8 @@ export abstract class AgentSessionBase {
   }
 
   /**
-   * Install tool hooks once on the Agent instance.
-   *
-   * The callbacks read `this.currentExtensionRunner` at execution time, so extension reload swaps in the
-   * new runner without reinstalling hooks. Extension-specific tool wrappers are still used to adapt
-   * registered tool execution to the extension context. Tool call and tool result interception now
-   * happens here instead of in wrappers.
+   * Hooks resolve the current extension runner at execution time so reloads
+   * need no reinstall. Wrappers only adapt registered tools to extension context.
    */
   protected installAgentToolHooks(): void {
     this.agent.beforeToolCall = async ({ toolCall, args }) => {
@@ -423,7 +419,6 @@ export abstract class AgentSessionBase {
       }
       // Other message types (bashExecution, compactionSummary, branchSummary) are persisted elsewhere
 
-      // Track assistant message for auto-compaction (checked on agent_end)
       if (event.message.role === "assistant") {
         this.lastAssistantMessage = event.message;
       }
@@ -463,7 +458,6 @@ export abstract class AgentSessionBase {
     return this.agent.state.messages.findLast((message) => message.role === "assistant");
   }
 
-  /** Emit extension events based on agent events */
   private async emitExtensionEvent(event: AgentEvent): Promise<boolean> {
     if (event.type === "agent_start") {
       this.turnIndex = 0;
@@ -629,17 +623,12 @@ export abstract class AgentSessionBase {
     return this.retryCount;
   }
 
-  /**
-   * Get the names of currently active tools.
-   * Returns the names of tools currently set on the agent.
-   */
+  /** Names of the tools currently set on the agent. */
   getActiveToolNames(): string[] {
     return this.agent.state.tools.map((t) => t.name);
   }
 
-  /**
-   * Get all configured tools with name, description, parameter schema, and source metadata.
-   */
+  /** All configured tools with their schema and source metadata. */
   getAllTools(): ToolInfo[] {
     return Array.from(this.toolDefinitions.values()).map(({ definition, sourceInfo }) => ({
       name: definition.name,

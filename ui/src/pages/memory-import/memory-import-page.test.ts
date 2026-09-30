@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { MigrationsMemoryApplyResult } from "../../../../packages/gateway-protocol/src/schema/migrations.js";
 import { createDeferredCore } from "../../../../src/shared/deferred.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
@@ -15,6 +16,20 @@ type MemoryImportPageElement = HTMLElement & {
 
 function waitForMemoryImport(assertion: () => void) {
   return vi.waitFor(assertion, { interval: 1 });
+}
+
+async function openImportConfirmation(page: MemoryImportPageElement) {
+  await waitForMemoryImport(() =>
+    expect(
+      page.querySelector<HTMLButtonElement>("[data-test-id='memory-import-provider-button']"),
+    ).not.toBeNull(),
+  );
+  page.querySelector<HTMLButtonElement>("[data-test-id='memory-import-provider-button']")?.click();
+  await waitForMemoryImport(() =>
+    expect(
+      page.querySelector<HTMLButtonElement>("[data-test-id='memory-import-confirm']"),
+    ).not.toBeNull(),
+  );
 }
 
 function createPlan(agentId = "research") {
@@ -55,6 +70,23 @@ function createPlan(agentId = "research") {
         ],
       },
     ],
+  };
+}
+
+function createApplyResult(): MigrationsMemoryApplyResult {
+  return {
+    providerId: "codex",
+    source: "/tmp/codex",
+    summary: {
+      total: 1,
+      planned: 0,
+      migrated: 1,
+      skipped: 0,
+      conflicts: 0,
+      errors: 0,
+      sensitive: 0,
+    },
+    items: [{ id: "memory:codex:MEMORY.md", status: "migrated" }],
   };
 }
 
@@ -242,19 +274,7 @@ describe("MemoryImportPage", () => {
     });
     const page = await mountPage(createContext(request));
 
-    await waitForMemoryImport(() =>
-      expect(
-        page.querySelector<HTMLButtonElement>("[data-test-id='memory-import-provider-button']"),
-      ).not.toBeNull(),
-    );
-    page
-      .querySelector<HTMLButtonElement>("[data-test-id='memory-import-provider-button']")
-      ?.click();
-    await waitForMemoryImport(() =>
-      expect(
-        page.querySelector<HTMLButtonElement>("[data-test-id='memory-import-confirm']"),
-      ).not.toBeNull(),
-    );
+    await openImportConfirmation(page);
     page.querySelector<HTMLButtonElement>("[data-test-id='memory-import-confirm']")?.click();
 
     await waitForMemoryImport(() => expect(request).toHaveBeenCalledTimes(3));
@@ -274,39 +294,13 @@ describe("MemoryImportPage", () => {
         return createPlan();
       }
       if (method === "migrations.memory.apply") {
-        return {
-          providerId: "codex",
-          source: "/tmp/codex",
-          summary: {
-            total: 1,
-            planned: 0,
-            migrated: 1,
-            skipped: 0,
-            conflicts: 0,
-            errors: 0,
-            sensitive: 0,
-          },
-          items: [{ id: "memory:codex:MEMORY.md", status: "migrated" }],
-          reportDir: "/tmp/migration-report",
-        };
+        return { ...createApplyResult(), reportDir: "/tmp/migration-report" };
       }
       throw new Error(`unexpected method: ${method}`);
     });
     const page = await mountPage(createContext(request));
 
-    await waitForMemoryImport(() =>
-      expect(
-        page.querySelector<HTMLButtonElement>("[data-test-id='memory-import-provider-button']"),
-      ).not.toBeNull(),
-    );
-    page
-      .querySelector<HTMLButtonElement>("[data-test-id='memory-import-provider-button']")
-      ?.click();
-    await waitForMemoryImport(() =>
-      expect(
-        page.querySelector<HTMLButtonElement>("[data-test-id='memory-import-confirm']"),
-      ).not.toBeNull(),
-    );
+    await openImportConfirmation(page);
     page.querySelector<HTMLButtonElement>("[data-test-id='memory-import-confirm']")?.click();
 
     await waitForMemoryImport(() => expect(request).toHaveBeenCalledTimes(3));
@@ -329,38 +323,13 @@ describe("MemoryImportPage", () => {
         if (applyRequests === 1) {
           throw new Error("response lost");
         }
-        return {
-          providerId: "codex",
-          source: "/tmp/codex",
-          summary: {
-            total: 1,
-            planned: 0,
-            migrated: 1,
-            skipped: 0,
-            conflicts: 0,
-            errors: 0,
-            sensitive: 0,
-          },
-          items: [{ id: "memory:codex:MEMORY.md", status: "migrated" }],
-        };
+        return createApplyResult();
       }
       throw new Error(`unexpected method: ${method}`);
     });
     const page = await mountPage(createContext(request));
 
-    await waitForMemoryImport(() =>
-      expect(
-        page.querySelector<HTMLButtonElement>("[data-test-id='memory-import-provider-button']"),
-      ).not.toBeNull(),
-    );
-    page
-      .querySelector<HTMLButtonElement>("[data-test-id='memory-import-provider-button']")
-      ?.click();
-    await waitForMemoryImport(() =>
-      expect(
-        page.querySelector<HTMLButtonElement>("[data-test-id='memory-import-confirm']"),
-      ).not.toBeNull(),
-    );
+    await openImportConfirmation(page);
     page.querySelector<HTMLButtonElement>("[data-test-id='memory-import-confirm']")?.click();
     await waitForMemoryImport(() => expect(page.textContent).toContain("response lost"));
     page.querySelector<HTMLButtonElement>("[data-test-id='memory-import-confirm']")?.click();
@@ -382,17 +351,7 @@ describe("MemoryImportPage", () => {
     const context = createContext(request);
     const page = await mountPage(context);
 
-    await waitForMemoryImport(() =>
-      expect(
-        page.querySelector<HTMLButtonElement>("[data-test-id='memory-import-provider-button']"),
-      ).not.toBeNull(),
-    );
-    page
-      .querySelector<HTMLButtonElement>("[data-test-id='memory-import-provider-button']")
-      ?.click();
-    await waitForMemoryImport(() =>
-      expect(page.querySelector("[data-test-id='memory-import-confirm']")).not.toBeNull(),
-    );
+    await openImportConfirmation(page);
 
     context.gateway.snapshot.phase = "stopped";
     page.requestUpdate();
@@ -409,20 +368,7 @@ describe("MemoryImportPage", () => {
   });
 
   it("preserves an attempted import key across a gateway disconnect", async () => {
-    const result = {
-      providerId: "codex",
-      source: "/tmp/codex",
-      summary: {
-        total: 1,
-        planned: 0,
-        migrated: 1,
-        skipped: 0,
-        conflicts: 0,
-        errors: 0,
-        sensitive: 0,
-      },
-      items: [{ id: "memory:codex:MEMORY.md", status: "migrated" }],
-    };
+    const result = createApplyResult();
     let finishFirstApply!: (value: typeof result) => void;
     let applyRequests = 0;
     const request = vi.fn(async (method: string, _params?: unknown) => {
@@ -443,17 +389,7 @@ describe("MemoryImportPage", () => {
     const context = createContext(request);
     const page = await mountPage(context);
 
-    await waitForMemoryImport(() =>
-      expect(
-        page.querySelector<HTMLButtonElement>("[data-test-id='memory-import-provider-button']"),
-      ).not.toBeNull(),
-    );
-    page
-      .querySelector<HTMLButtonElement>("[data-test-id='memory-import-provider-button']")
-      ?.click();
-    await waitForMemoryImport(() =>
-      expect(page.querySelector("[data-test-id='memory-import-confirm']")).not.toBeNull(),
-    );
+    await openImportConfirmation(page);
     page.querySelector<HTMLButtonElement>("[data-test-id='memory-import-confirm']")?.click();
     await waitForMemoryImport(() => expect(request).toHaveBeenCalledTimes(2));
     const firstApply = request.mock.calls[1]?.[1] as { idempotencyKey?: string } | undefined;
@@ -504,19 +440,7 @@ describe("MemoryImportPage", () => {
     mutableContext.agents.state.agentsList.agents.push({ id: "writer", name: "Writer" });
     const page = await mountPage(context);
 
-    await waitForMemoryImport(() =>
-      expect(
-        page.querySelector<HTMLButtonElement>("[data-test-id='memory-import-provider-button']"),
-      ).not.toBeNull(),
-    );
-    page
-      .querySelector<HTMLButtonElement>("[data-test-id='memory-import-provider-button']")
-      ?.click();
-    await waitForMemoryImport(() =>
-      expect(
-        page.querySelector<HTMLButtonElement>("[data-test-id='memory-import-confirm']"),
-      ).not.toBeNull(),
-    );
+    await openImportConfirmation(page);
 
     mutableContext.agentSelection.state.selectedId = "writer";
     page.querySelector<HTMLButtonElement>("[data-test-id='memory-import-confirm']")?.click();

@@ -1,4 +1,3 @@
-// Input-mode parsing helpers for `openclaw config set` values, refs, providers, and batches.
 import fs from "node:fs";
 import {
   normalizeOptionalString,
@@ -132,7 +131,7 @@ export function resolveConfigSetMode(
         : "value";
 }
 
-function parseJson5Raw(raw: string, label: string): unknown {
+export function parseConfigMutationJson5(raw: string, label: string): unknown {
   let parsed: unknown;
   try {
     parsed = JSON5.parse(raw);
@@ -144,7 +143,7 @@ function parseJson5Raw(raw: string, label: string): unknown {
 }
 
 function parseBatchEntries(raw: string, sourceLabel: string): ConfigSetBatchEntry[] {
-  const parsed = parseJson5Raw(raw, sourceLabel);
+  const parsed = parseConfigMutationJson5(raw, sourceLabel);
   if (!Array.isArray(parsed)) {
     throw new Error(`${sourceLabel} must be a JSON array.`);
   }

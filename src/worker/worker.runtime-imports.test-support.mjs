@@ -14,7 +14,7 @@ const { rawDataToString } = await import(websocketDataUrl);
 assert(["rejected", "cancelled", "import-error", "accepted"].includes(mode));
 const previousStateDir = process.env.OPENCLAW_STATE_DIR;
 const previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
-const names = ["embedded", "inference"];
+const names = ["embedded", "inference", "bootstrap"];
 const importsStarted = new Map(names.map((name) => [name, Promise.withResolvers()]));
 const importsFinished = new Map(names.map((name) => [name, Promise.withResolvers()]));
 const work = [];
@@ -24,8 +24,8 @@ process.on("worker-import:finished", (name, stateDir) =>
 );
 process.on("worker-import:work", (name) => work.push(name));
 
-// Each child has a fresh native ESM cache. Only the two lazy modules are replaced;
-// the runtime, connection, abort controller, and environment cleanup remain real.
+// The runtime, connection, abort controller, and environment cleanup remain real.
+// Controlled preparation proves both imports and workspace reads join admission cleanup.
 const hooks = registerHooks({
   resolve(specifier, context, nextResolve) {
     const name =
@@ -33,22 +33,28 @@ const hooks = registerHooks({
         ? {
             "embedded-agent.runtime.js": "embedded",
             "inference-stream.runtime.js": "inference",
+            "workspace.js": "bootstrap",
           }[new URL(specifier, context.parentURL).pathname.split("/").at(-1)]
         : undefined;
     if (!name) {
       return nextResolve(specifier, context);
     }
-    const exported =
-      name === "embedded" ? "runWorkerEmbeddedTurn" : "createWorkerInferenceStreamAdapter";
-    const source = `
-      import { once } from "node:events";
+    const preparation = `
       const released = once(process, "worker-import:release:${name}");
       process.emit("worker-import:started", "${name}");
       const [reject] = await released;
       process.emit("worker-import:finished", "${name}", process.env.OPENCLAW_STATE_DIR);
       if (reject) throw new Error("embedded import failed");
-      export function ${exported}() { process.emit("worker-import:work", "${name}"); }
     `;
+    const source =
+      `import { once } from "node:events";` +
+      (name === "bootstrap"
+        ? `export const DEFAULT_AGENTS_FILENAME = "AGENTS.md";
+         export async function loadWorkspaceBootstrapFiles() { ${preparation} return []; }`
+        : `${preparation}
+         export function ${name === "embedded" ? "runWorkerEmbeddedTurn" : "createWorkerInferenceStreamAdapter"}() {
+           process.emit("worker-import:work", "${name}");
+         }`);
     return { url: `data:text/javascript,${encodeURIComponent(source)}`, shortCircuit: true };
   },
 });
@@ -61,7 +67,7 @@ gateway.on("connection", (socket) => {
   socket.once("close", () => disconnected.resolve());
   socket.on("message", (data) => {
     const frame = JSON.parse(rawDataToString(data));
-    assert.equal(frame.method, "connect", "No runtime RPC is expected from the controlled turn");
+    assert.equal(frame.method, "connect", "No turn RPC is expected from the controlled turn");
     connected.resolve({ socket, frame });
   });
 });
@@ -129,7 +135,11 @@ try {
   assert.deepEqual(work, []);
   if (mode === "accepted") {
     release("inference");
-    await importsFinished.get("inference").promise;
+    release("bootstrap");
+    await Promise.all([
+      importsFinished.get("inference").promise,
+      importsFinished.get("bootstrap").promise,
+    ]);
     await setImmediate();
     assert.deepEqual(work, [], "Resolved imports must not execute the turn before hello");
     assert.equal(settled, false);
@@ -158,6 +168,17 @@ try {
         ok: true,
         payload: {
           type: "worker-hello-ok",
+          toolSurface: {
+            generation: "import-surface",
+            tools: [],
+            policy: {
+              workspaceOnly: false,
+              readOnly: false,
+              applyPatchEnabled: true,
+              applyPatchWorkspaceOnly: true,
+              imageSanitization: {},
+            },
+          },
           environmentId: descriptor.admission.environmentId,
           sessionId: descriptor.admission.sessionId,
           ownerEpoch: 1,
@@ -181,6 +202,11 @@ try {
     assert((await stat(runtimeStateDir)).isDirectory());
     release("inference");
     assert.equal(await importsFinished.get("inference").promise, runtimeStateDir);
+    await setImmediate();
+    assert.equal(settled, false, "Cleanup must also join the pending workspace read");
+    assert.equal(process.env.OPENCLAW_STATE_DIR, runtimeStateDir);
+    release("bootstrap");
+    assert.equal(await importsFinished.get("bootstrap").promise, runtimeStateDir);
   }
   const outcome = await run;
   if (mode === "accepted") {

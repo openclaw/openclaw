@@ -5,6 +5,7 @@ import {
   resolveOutboundSendDep,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
+import { waitForAbortSignal } from "openclaw/plugin-sdk/runtime-env";
 import {
   listEnabledIMessageAccounts,
   resolveIMessageAccount,
@@ -115,12 +116,7 @@ export async function startIMessageGatewayAccount(
     ctx.log?.info?.(
       `[${account.accountId}] skipping watcher: duplicate iMessage source; using account "${ownerAccountId}"`,
     );
-    if (ctx.abortSignal.aborted) {
-      return;
-    }
-    await new Promise<void>((resolve) => {
-      ctx.abortSignal.addEventListener("abort", () => resolve(), { once: true });
-    });
+    await waitForAbortSignal(ctx.abortSignal);
     return;
   }
   const statusSink = createAccountStatusSink({

@@ -78,6 +78,16 @@ catalog reads return retained rows while the existing inventory owner refreshes
 the provider in the background. `ttlMs: 0` still disables response caching and
 does not record an expiry for this renewal path.
 
+A successful authenticated outcome may include private `modelServiceTiers`
+observations: `{ modelId, runtimeId, api, baseUrl, serviceTiers }` rows bound to
+that outcome's `profileId`. Supply only tier IDs explicitly advertised by the
+account's successful response; never copy them from static seeds or native
+fallback catalogs. The host matches the selected profile, model, route, and
+runtime before projecting `serviceTiers` on a public model choice. Account tier
+maps never appear in public `providerOutcomes`. Missing, failed, stale, or
+mismatched observations leave support unknown. This metadata does not authorize
+execution or guarantee upstream fulfillment.
+
 Public metadata requests declare `authentication: "none"` in discovery
 options. The prepared request then has no credential or profile identity;
 its cache key is independent of the configured inference credential.

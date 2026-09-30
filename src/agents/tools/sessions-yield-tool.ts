@@ -4,8 +4,8 @@ import type { UnsettledRequesterChild } from "../subagents/registry/subagent-reg
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readToolStringParam } from "./common.js";
 
-const NO_PENDING_CHILD_COMPLETION_ERROR =
-  'No pending child completion is owned by this turn. If the assigned work is complete, return its result normally. An unfinished subagent waiting for an incoming continuation must explicitly set waitFor: "message".';
+const NO_PENDING_CHILD_COMPLETION_MESSAGE =
+  'No pending child completion is owned by this turn, so there is nothing to yield for. Background tool runs (image/video/music generation) are not child sessions: their results arrive as a later turn on their own. If the assigned work is complete, return its result normally, or end this turn. An unfinished subagent waiting for an incoming continuation must explicitly set waitFor: "message".';
 
 export type SessionsYieldClaimResult =
   | boolean
@@ -79,7 +79,7 @@ export function createSessionsYieldTool(opts?: {
     // tool must stay visible even when tool search compacts the catalog.
     catalogMode: "direct-only",
     description:
-      'End this turn for pending child completion events; this is not a final-result submission. Return completed work normally. An unfinished subagent waiting for an incoming continuation must set waitFor:"message". Collector runs require explicit collection instead. acknowledgment can send a waiting reply for an otherwise-silent interactive parent.',
+      'End this turn for pending child completion events; this is not a final-result submission. Not for tool results or background tool runs (image/video/music generation, async tools): those arrive automatically once you end your response. Return completed work normally. An unfinished subagent waiting for an incoming continuation must set waitFor:"message". Collector runs require explicit collection instead. acknowledgment can send a waiting reply for an otherwise-silent interactive parent.',
     parameters: SessionsYieldToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -114,10 +114,14 @@ export function createSessionsYieldTool(opts?: {
           pendingChildren: claim.pendingChildren,
         });
       }
+      if (typeof claim === "object") {
+        return jsonResult({ status: "error", error: claim.error });
+      }
       if (claim !== true) {
+        // Advisory, not a failure: the model keeps the turn and nothing the user asked for failed.
         return jsonResult({
-          status: "error",
-          error: typeof claim === "object" ? claim.error : NO_PENDING_CHILD_COMPLETION_ERROR,
+          status: "nothing_pending",
+          message: NO_PENDING_CHILD_COMPLETION_MESSAGE,
         });
       }
       // The runtime owns the actual pause/end-turn behavior; this tool records intent.

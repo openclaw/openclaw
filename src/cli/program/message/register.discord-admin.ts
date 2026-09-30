@@ -1,4 +1,3 @@
-// Discord-style admin command registration for roles, channels, members, events, and moderation.
 import type { Command } from "commander";
 import type { MessageCliHelpers } from "./helpers.js";
 

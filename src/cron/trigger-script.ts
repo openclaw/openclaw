@@ -247,7 +247,6 @@ async function prepareTriggerRuntime(
           sessionKey,
           runId: admitted.operationalRunInstance.runId,
           agentId,
-          agentDir,
           workspaceDir: effectiveWorkspace,
           cwd: effectiveWorkspace,
           spawnWorkspaceDir: workspaceDir,

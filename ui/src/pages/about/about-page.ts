@@ -31,14 +31,10 @@ class AboutPage extends OpenClawLightDomElement {
 
   override disconnectedCallback() {
     this.subscriptions.clear();
-    if (this.copyResetTimer !== null) {
-      globalThis.clearTimeout(this.copyResetTimer);
-      this.copyResetTimer = null;
-    }
-    if (this.waveResetTimer !== null) {
-      globalThis.clearTimeout(this.waveResetTimer);
-      this.waveResetTimer = null;
-    }
+    globalThis.clearTimeout(this.copyResetTimer ?? undefined);
+    this.copyResetTimer = null;
+    globalThis.clearTimeout(this.waveResetTimer ?? undefined);
+    this.waveResetTimer = null;
     super.disconnectedCallback();
   }
 

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import type { CloudWorkerProfileConfig } from "../../config/types.cloud-workers.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
@@ -99,7 +100,16 @@ describe("worker placement idle suspension", () => {
     const active = await harness.service.dispatch(REQUEST);
 
     nowMs += 59_999;
-    await idleSweep.sweep();
+    const sql = observeHostDataSql();
+    try {
+      expect(placements.get(REQUEST.sessionId)?.state).toBe("active");
+      expect(sql.queries.length).toBeGreaterThan(0);
+      const beforeSweep = sql.queries.length;
+      await idleSweep.sweep();
+      expect(sql.queries.slice(beforeSweep)).toEqual([]);
+    } finally {
+      sql.restore();
+    }
     expect(placements.get(REQUEST.sessionId)?.state).toBe("active");
     expect(harness.environments.destroy).not.toHaveBeenCalled();
 
@@ -243,7 +253,7 @@ describe("worker placement idle suspension", () => {
         }
       } else if (kind === "reconciling-result") {
         const basePack = Buffer.from("idle workspace journal");
-        placements.beginWorkspaceReconciliation(
+        await placements.beginWorkspaceReconciliation(
           {
             sessionId: active.sessionId,
             environmentId: active.environmentId,

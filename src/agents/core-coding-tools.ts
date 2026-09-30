@@ -145,16 +145,6 @@ function wrapWorkspaceSkillRead(
   };
 }
 
-function guardHostWorkspaceTool(
-  tool: AnyAgentTool,
-  options: Pick<CoreCodingToolsOptions, "codingRoot" | "containmentRoot">,
-): AnyAgentTool {
-  return wrapToolWorkspaceRootGuardWithOptions(tool, options.containmentRoot, {
-    resolutionCwd: options.codingRoot,
-    normalizeGuardedPathParams: true,
-  });
-}
-
 type CoreCodingToolsOptions = {
   abortSignal?: AbortSignal;
   attachmentReadRoot?: string;
@@ -235,6 +225,22 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
   // the container workspace. Both sets reuse the same effective selection.
   const sandboxReadMounts = sandboxFileMounts;
 
+  const guardWorkspaceTool = (tool: AnyAgentTool) =>
+    options.workspaceOnly
+      ? wrapToolWorkspaceRootGuardWithOptions(
+          tool,
+          sandboxRoot ?? options.containmentRoot,
+          sandboxRoot
+            ? {
+                containerMounts: sandboxWorkspaceMounts,
+                containerWorkdir: sandbox.containerWorkdir,
+                bridge: sandboxFsBridge,
+                normalizeGuardedPathParams: true,
+              }
+            : { resolutionCwd: options.codingRoot, normalizeGuardedPathParams: true },
+        )
+      : tool;
+
   const base: AnyAgentTool[] = [];
   if (options.includeBaseCodingTools) {
     const readDirectory = sandboxFsBridge?.readDirectory?.bind(sandboxFsBridge);
@@ -261,20 +267,7 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
         modelBudget: resolveToolResultBudget(options.modelContextWindowTokens),
       });
       // Skill-content read exceptions do not grant directory enumeration outside the workspace.
-      const guardedLs = options.workspaceOnly
-        ? wrapToolWorkspaceRootGuardWithOptions(
-            ls,
-            sandboxRoot ?? options.containmentRoot,
-            sandboxRoot
-              ? {
-                  containerMounts: sandboxWorkspaceMounts,
-                  containerWorkdir: sandbox.containerWorkdir,
-                  bridge: sandboxFsBridge,
-                  normalizeGuardedPathParams: true,
-                }
-              : { resolutionCwd: options.codingRoot, normalizeGuardedPathParams: true },
-          )
-        : ls;
+      const guardedLs = guardWorkspaceTool(ls);
       // Resolve the default directory before the guard as well as execution.
       base.push(
         sandboxRoot
@@ -342,13 +335,8 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
     );
     if (!options.readOnly && !sandboxRoot) {
       for (const createTool of [createHostWorkspaceEditTool, createHostWorkspaceWriteTool]) {
-        const tool = createTool(options.codingRoot, {
-          containmentRoot: options.containmentRoot,
-          workspaceOnly: options.workspaceOnly,
-          memoryWriteProvenance: options.memoryWriteProvenance,
-          abortSignal: options.abortSignal,
-        });
-        base.push(options.workspaceOnly ? guardHostWorkspaceTool(tool, options) : tool);
+        const tool = createTool(options.codingRoot, options);
+        base.push(guardWorkspaceTool(tool));
       }
     }
   }
@@ -360,20 +348,9 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
       memoryWriteProvenance: options.memoryWriteProvenance,
       abortSignal: options.abortSignal,
     };
-    for (const tool of [
-      createSandboxedEditTool(toolOptions),
-      createSandboxedWriteTool(toolOptions),
-    ]) {
-      base.push(
-        options.workspaceOnly
-          ? wrapToolWorkspaceRootGuardWithOptions(tool, sandboxRoot, {
-              containerMounts: sandboxWorkspaceMounts,
-              containerWorkdir: sandbox.containerWorkdir,
-              bridge: sandboxFsBridge,
-              normalizeGuardedPathParams: true,
-            })
-          : tool,
-      );
+    for (const createTool of [createSandboxedEditTool, createSandboxedWriteTool]) {
+      const tool = createTool(toolOptions);
+      base.push(guardWorkspaceTool(tool));
     }
   }
   options.recordToolPrepStage?.("base-coding-tools");

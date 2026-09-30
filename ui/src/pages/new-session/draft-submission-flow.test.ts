@@ -281,7 +281,6 @@ describe("DraftSubmissionFlow", () => {
         requestedAgentId: "main",
         catalogId: "codex",
         catalogLabel: "Codex",
-        model: "",
         startTerminal: true,
         terminalHosts: [{ hostId: "gateway:local", label: "Local" }],
       },

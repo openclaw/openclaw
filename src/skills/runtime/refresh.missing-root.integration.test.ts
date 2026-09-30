@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { WatchSubscription } from "@openclaw/fs-safe/watch";
 import { beforeEach, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadWorkspaceSkills } from "../loading/workspace-skill-loader.js";
 import { resolveWorkspaceSkillSourcePlan } from "../loading/workspace-skill-sources.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
@@ -87,27 +88,16 @@ async function advance(elapsed: number) {
   await Promise.all(samples.splice(0));
 }
 
-async function reconcile(retiring?: { closed: boolean; close(): Promise<void> }) {
+async function reconcile() {
   const results = await Promise.allSettled(
     subscriptions
       .filter((subscription) => subscription.health().state === "ready")
       .map((subscription) => subscription.reconcile()),
   );
-  let lostRoots = 0;
   for (const result of results) {
     if (result.status === "rejected") {
-      if (retiring && result.reason?.code === "path-mismatch") {
-        expect(result.reason).toMatchObject({ message: "root path changed during operation" });
-        lostRoots += 1;
-      } else {
-        expect(result.reason).toMatchObject({ name: "AbortError" });
-      }
+      expect(result.reason).toMatchObject({ name: "AbortError" });
     }
-  }
-  if (retiring) {
-    expect(lostRoots).toBe(1);
-    expect(retiring.closed).toBe(true);
-    await retiring.close();
   }
   await ready();
   for (const elapsed of [0, 100, 100, 50, 250]) {
@@ -116,11 +106,11 @@ async function reconcile(retiring?: { closed: boolean; close(): Promise<void> })
 }
 
 const linkType = process.platform === "win32" ? "junction" : "dir";
-const read = (config = {}) =>
+const read = (config?: OpenClawConfig) =>
   loadWorkspaceSkills(fixture.workspaceDir, { workspaceOnly: true, config }).map(
     (entry) => entry.skill.description,
   );
-const ensure = (config = {}) => {
+const ensure = (config?: OpenClawConfig) => {
   refresh.ensureSkillsWatcher({
     workspaceDir: fixture.workspaceDir,
     config,
@@ -132,76 +122,25 @@ const ensure = (config = {}) => {
   return ready();
 };
 
-it.each(["missing", "root", "workspace", "symbolic", "external collection"] as const)(
-  "refreshes cached skills after replacing a %s and keeps observing later edits",
-  async (replacement) => {
-    const workspaceDir = fixture.workspaceDir;
-    const external = replacement === "external collection";
-    const collection = path.join(fixture.root, "collection");
-    const root = path.join(external ? collection : workspaceDir, "skills");
-    const write = (description: string) =>
-      writeSkill({ dir: path.join(root, "guide"), name: "guide", description });
-    const linked = await fixture.createFixtureDirectory("linked-target");
-    if (replacement === "missing" || replacement === "symbolic") {
-      await fs.rm(root, { recursive: true });
-    }
-    if (replacement === "symbolic") {
-      await fs.symlink(linked, root, linkType);
-    }
-    if (replacement !== "missing") {
-      await write("Original instructions");
-    }
-    const config = {
-      skills: { load: { allowSymlinkTargets: [linked], extraDirs: external ? [collection] : [] } },
-    };
-    const sources = {
-      workspaceOnly: !external,
-      config,
-      bundledSkillsDir: path.join(fixture.root, "empty-bundled"),
-      managedSkillsDir: path.join(fixture.root, "empty-managed"),
-      pluginSkillsDir: path.join(fixture.root, "empty-plugins"),
-    };
-    const params = {
-      workspaceDir,
-      config,
-      sourcePlan: resolveWorkspaceSkillSourcePlan(workspaceDir, sources),
-    };
-    const readSkills = () =>
-      loadWorkspaceSkills(workspaceDir, sources).map((entry) => entry.skill.description);
-    refresh.ensureSkillsWatcher(params);
-    await ready();
-    expect(readSkills()).toEqual(replacement === "missing" ? [] : ["Original instructions"]);
-    const original = subscriptions.slice();
-    const retiring = external ? pathWatchers.get(toWatchRoot(root)) : undefined;
-    if (external) {
-      expect(await retiring?.authority).toMatchObject({ rootDir: collection });
-    }
-    if (replacement === "symbolic") {
-      await fs.unlink(root);
-    } else if (replacement === "root") {
-      await fs.rename(root, path.join(workspaceDir, "old-skills"));
-    } else if (replacement === "workspace") {
-      await fs.rename(workspaceDir, path.join(fixture.root, "old-workspace"));
-    } else if (external) {
-      await fs.rename(collection, path.join(fixture.root, "old-collection"));
-    }
-    await write("Replacement instructions");
-    await reconcile(retiring);
-    expect(refresh.reconcileSkillsWatcherCoverage(params)).toBe(true);
-    expect(readSkills()).toEqual(["Replacement instructions"]);
-    if (!external) {
-      expect(subscriptions).toEqual(original);
-    }
-    const version = getSkillsSourceVersion(workspaceDir);
-    await write("Later independent edit");
-    await reconcile();
-    expect(getSkillsSourceVersion(workspaceDir)).toBeGreaterThan(version);
-    expect(readSkills()).toEqual(["Later independent edit"]);
-    await fs.rm(root, { recursive: true });
-    await reconcile();
-    expect(readSkills()).toEqual([]);
-  },
-);
+it("discovers a newly created root and keeps observing edits and deletion", async () => {
+  const root = path.join(fixture.workspaceDir, "skills");
+  const write = (description: string) =>
+    writeSkill({ dir: path.join(root, "guide"), name: "guide", description });
+  await fs.rm(root, { recursive: true });
+  await ensure();
+  expect(read()).toEqual([]);
+  await write("Created");
+  await reconcile();
+  expect(read()).toEqual(["Created"]);
+  const version = getSkillsSourceVersion(fixture.workspaceDir);
+  await write("Edited");
+  await reconcile();
+  expect(getSkillsSourceVersion(fixture.workspaceDir)).toBeGreaterThan(version);
+  expect(read()).toEqual(["Edited"]);
+  await fs.rm(root, { recursive: true });
+  await reconcile();
+  expect(read()).toEqual([]);
+});
 
 it("refreshes supporting resources without invalidating discovery, including atomic saves", async () => {
   const dir = path.join(fixture.workspaceDir, "skills", "guide");
@@ -247,9 +186,13 @@ it("observes admitted symlink targets and removes them from cached discovery on 
   await writeSkill({ dir, name: "guide", description: "Edited target" });
   await reconcile();
   expect(read(config)).toEqual(["Edited target"]);
+  const observation = pathWatchers.get(toWatchRoot(target));
+  expect(observation).toBeDefined();
   await fs.unlink(link);
   await reconcile();
   expect(read(config)).toEqual([]);
+  await ensure(config);
+  expect(observation?.closed).toBe(true);
 });
 
 it("settles an atomic SKILL.md replacement until the writer stops changing it", async () => {

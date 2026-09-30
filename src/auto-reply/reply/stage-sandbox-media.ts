@@ -18,7 +18,10 @@ import { normalizeScpRemoteHost, normalizeScpRemotePath } from "../../infra/scp-
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { resolveChannelRemoteInboundAttachmentRoots } from "../../media/channel-inbound-roots.js";
 import { normalizeMediaFacts } from "../../media/media-facts.js";
-import { resolveInboundMediaReference } from "../../media/media-reference.js";
+import {
+  buildInboundMediaUriFromPath,
+  resolveInboundMediaReference,
+} from "../../media/media-reference.js";
 import {
   STAGED_INPUT_MAX_BYTES,
   ensureStagedInputDirectory,
@@ -98,7 +101,7 @@ export async function stageSandboxMedia(params: {
 
   const usedNames = new Set<string>();
   const staged = new Map<number, string>();
-  const stagedUrlAliases = new Set<number>();
+  const stagedUrls = new Map<number, string>();
   const inputDirectory = stagedInputDirectory(crypto.randomUUID());
   let stagingReady = false;
   const prepareDestination = async () => {
@@ -163,15 +166,21 @@ export async function stageSandboxMedia(params: {
     // For sandbox use relative path, for remote cache use absolute path
     const stagedPath = sandbox ? relativeDest : dest;
     staged.set(entry.index, stagedPath);
-    if (
-      await isUrlAliasForStagedSource({
-        url: media[entry.index]?.url,
-        sourcePath: entry.path,
-        source,
-        mediaRemoteHost: ctx.MediaRemoteHost,
-      })
-    ) {
-      stagedUrlAliases.add(entry.index);
+    const originalUrl = media[entry.index]?.url;
+    const rewritesUrl = await isUrlAliasForStagedSource({
+      url: originalUrl,
+      sourcePath: entry.path,
+      source,
+      mediaRemoteHost: ctx.MediaRemoteHost,
+    });
+    // Keep the managed original fetchable after history redacts the runner's
+    // private staged path. A remote host's path is not a local store reference.
+    const inboundUri =
+      !ctx.MediaRemoteHost && (!originalUrl || rewritesUrl)
+        ? buildInboundMediaUriFromPath(source)
+        : undefined;
+    if (inboundUri || rewritesUrl) {
+      stagedUrls.set(entry.index, inboundUri ?? stagedPath);
     }
   }
 
@@ -189,7 +198,7 @@ export async function stageSandboxMedia(params: {
       nextMedia[index] = {
         ...fact,
         path: stagedPath,
-        ...(stagedUrlAliases.has(index) ? { url: stagedPath } : {}),
+        ...(stagedUrls.has(index) ? { url: stagedUrls.get(index) } : {}),
         workspaceDir: effectiveWorkspaceDir,
         staged: true,
       };

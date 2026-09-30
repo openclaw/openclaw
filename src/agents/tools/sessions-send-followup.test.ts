@@ -9,10 +9,8 @@ import type {
   FollowupRequest,
   FollowupCompletionOwner,
 } from "../subagents/completion/session-followup-completion.types.js";
-import {
-  prepareSessionsSendFollowup,
-  startSessionsSendFollowup,
-} from "./sessions-send-followup.js";
+import { prepareSessionsSendFollowup } from "./sessions-send-followup-custody.js";
+import { startSessionsSendFollowup } from "./sessions-send-followup.js";
 import { startSessionsSendReplyFlow } from "./sessions-send-reply-flow.js";
 vi.mock("./sessions-send-reply-flow.js", () => ({ startSessionsSendReplyFlow: vi.fn() }));
 const mocks = vi.hoisted(() => ({

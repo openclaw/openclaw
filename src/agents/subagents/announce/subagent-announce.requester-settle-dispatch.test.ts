@@ -41,6 +41,10 @@ import {
 import { sendSubagentAnnounceDirectly } from "./subagent-announce-direct-delivery.js";
 import { setSubagentAnnounceDeliveryDepsForTest } from "./subagent-announce-overrides.test-support.js";
 import type { createRequesterDescendantReader } from "./subagent-announce.requester-settle-descendants.js";
+import {
+  REQUESTER_KEY,
+  settledChild,
+} from "./subagent-announce.requester-settle-dispatch.test-support.js";
 
 const readDescendantFacts = vi.hoisted(() =>
   vi.fn<
@@ -65,9 +69,12 @@ const registryRead = vi.hoisted(() => ({
       return 0;
     },
   ),
-  getLatestLiveSubagentRunByChildSessionKey: vi.fn<() => SubagentRunRecord | undefined>(
-    () => undefined,
-  ),
+  getLatestLiveSubagentRunByChildSessionKey: vi.fn<
+    (
+      sessionKey: string,
+      matches?: (entry: SubagentRunRecord) => boolean,
+    ) => SubagentRunRecord | undefined
+  >(() => undefined),
   listSubagentRunsForRequester: vi.fn<() => SubagentRunRecord[]>(() => []),
   getLatestSubagentRunByChildSessionKey: vi.fn(() => undefined),
 }));
@@ -116,32 +123,8 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
-const REQUESTER_KEY = "agent:main:main";
 const SESSION_LANE = `session:${REQUESTER_KEY}`;
 const GLOBAL_LANE = "subagent-settle-dispatch-proof";
-
-function settledChild(): SubagentRunRecord {
-  return {
-    runId: "settled-child",
-    childSessionKey: "agent:main:subagent:settled-child",
-    requesterSessionKey: REQUESTER_KEY,
-    requesterDisplayKey: "main",
-    requesterAgentId: "main",
-    task: "finish child work",
-    cleanup: "keep",
-    createdAt: 1_000,
-    execution: { status: "terminal", startedAt: 2_000, endedAt: 3_000, outcome: { status: "ok" } },
-    expectsCompletionMessage: true,
-    completion: { required: true, resultText: "child result", capturedAt: 3_000 },
-    delivery: { status: "delivered" },
-    requesterSettleWake: {
-      status: "pending",
-      attemptCount: 0,
-      requesterYieldBatch: true,
-      rearmGeneration: 1,
-    },
-  };
-}
 
 function createContext(): GatewayRequestContext {
   const chatRunState = createChatRunState();
@@ -188,13 +171,19 @@ describe("requester settle dispatch deadline", () => {
     "wakes a nested yielded requester once (child completed before yield=%s)",
     async (afterRequesterYield) => {
       const requesterSessionKey = "agent:main:subagent:middle";
-      registryRead.getLatestLiveSubagentRunByChildSessionKey.mockReturnValue({
+      const requester: SubagentRunRecord = {
         ...settledChild(),
         runId: "yielded-requester",
         childSessionKey: requesterSessionKey,
         pauseReason: "sessions_yield",
         runTimeoutSeconds: 0,
-      });
+      };
+      registryRead.getLatestLiveSubagentRunByChildSessionKey.mockImplementation(
+        (sessionKey, matches) =>
+          sessionKey === requesterSessionKey && (!matches || matches(requester))
+            ? requester
+            : undefined,
+      );
       const child = settledChild();
       child.requesterSessionKey = requesterSessionKey;
       child.requesterSettleWake = {

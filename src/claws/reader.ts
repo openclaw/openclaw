@@ -1,4 +1,3 @@
-// Local package and development-manifest reader for Claws.
 import { createHash } from "node:crypto";
 import { realpath, stat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";

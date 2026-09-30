@@ -44,6 +44,7 @@ import {
   countPendingDescendantRuns,
   getLatestLiveSubagentRunByChildSessionKey,
 } from "./subagent-registry-read.js";
+import { adoptSubagentRunForRequesterTurnInRuns } from "./subagent-registry-requester-yield.js";
 import { createSubagentRegistryRestorer } from "./subagent-registry-restore.js";
 import type { RegisterSubagentRunParams } from "./subagent-registry-run-launch-record.js";
 import { createSubagentRunManager } from "./subagent-registry-run-manager.js";
@@ -58,6 +59,7 @@ import {
   retireSupersededSubagentRun as retireSupersededSubagentRunForSweep,
 } from "./subagent-registry-sweeper.js";
 import type { RegisterSubagentRunOptions, SubagentRunRecord } from "./subagent-registry.types.js";
+import { isRequesterCompletionCohortCurrent } from "./subagent-requester-settle-identity.js";
 import {
   resolveSubagentRunOrphanReason,
   resolveSubagentSessionCompletion,
@@ -417,6 +419,38 @@ function resolveSubagentWaitTimeoutMs(cfg: OpenClawConfig, runTimeoutSeconds?: n
 }
 
 function retireSupersededSubagentRun(runId: string, entry: SubagentRunRecord): Promise<void> {
+  const wake = entry.requesterSettleWake;
+  const cohort = [...getSubagentRunsForChildSession(entry.childSessionKey)].filter((candidate) =>
+    entry.requesterTurnRunId
+      ? candidate.requesterTurnRunId === entry.requesterTurnRunId
+      : wake?.batchRunIds?.includes(candidate.runId) &&
+        candidate.requesterSettleWake?.rearmGeneration === wake.rearmGeneration,
+  );
+  const isCurrent = () =>
+    subagentRuns.get(runId) === entry &&
+    isRequesterCompletionCohortCurrent(entry, cohort, getLatestLiveSubagentRunByChildSessionKey);
+  if (
+    isCurrent() &&
+    entry.expectsCompletionMessage === true &&
+    entry.suppressCompletionDelivery !== true &&
+    !entry.killIntent &&
+    !entry.killReconciliation &&
+    cohort.includes(entry)
+  ) {
+    // A newer task owns session effects, but this cohort still owes the older result.
+    if (entry.cleanupCompletedAt !== undefined) {
+      resumeRequesterSettleWake(runId, entry);
+      return Promise.resolve();
+    }
+    return completeCleanupBookkeeping({
+      runId,
+      entry,
+      cleanup: entry.cleanup,
+      completedAt: Date.now(),
+      preserveTranscript: true,
+      isCurrent,
+    });
+  }
   return retireSupersededSubagentRunForSweep({
     runId,
     entry,
@@ -668,6 +702,33 @@ export const markRequesterTurnYielded = publicApi.markRequesterTurnYielded;
 export const markSubagentMessageWait = publicApi.markSubagentMessageWait;
 export const listUnsettledRequesterChildren = publicApi.listUnsettledRequesterChildren;
 export type { UnsettledRequesterChild } from "./subagent-registry-requester-yield.js";
+
+export function adoptSubagentRunForRequesterTurn(
+  params: Omit<Parameters<typeof adoptSubagentRunForRequesterTurnInRuns>[0], "runs" | "persist">,
+) {
+  if (subagentLifecycleController.newerGenerationOwnsSession(params.expected)) {
+    return Promise.resolve(undefined);
+  }
+  return adoptSubagentRunForRequesterTurnInRuns({
+    ...params,
+    runs: subagentRuns,
+    persist: persistSubagentRunsAsyncOrThrow,
+    assertPublicationCurrent: () =>
+      subagentRuns.runWithCompletionAuthority(params.expected, () => {
+        params.assertPublicationCurrent?.();
+        if (subagentLifecycleController.newerGenerationOwnsSession(params.expected)) {
+          throw new Error("Steered completion no longer owns its execution");
+        }
+      }),
+    assertCurrent: () =>
+      subagentRuns.runWithCompletionAuthority(params.expected, () => {
+        params.assertCurrent();
+        if (subagentLifecycleController.newerGenerationOwnsSession(params.expected)) {
+          throw new Error("Steered completion no longer owns its execution");
+        }
+      }),
+  });
+}
 
 /** Attaches presentation to an existing wake without changing completion ownership. */
 export function attachRequesterProgressPresentation(params: {

@@ -1,4 +1,3 @@
-// Stores and verifies web push subscriptions and delivery payloads.
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { expectDefined, normalizeOptionalString } from "@openclaw/normalization-core";

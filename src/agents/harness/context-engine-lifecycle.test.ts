@@ -403,7 +403,7 @@ describe("harness context engine lifecycle", () => {
         return { ok: true, compacted: false };
       }),
     });
-    registerTestContextEngine(engineId, () => engine);
+    await registerTestContextEngine(engineId, () => engine);
     const configuredEngine = await resolveContextEngine({
       plugins: { slots: { contextEngine: engineId } },
     });

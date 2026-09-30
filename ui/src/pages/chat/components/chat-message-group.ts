@@ -1,13 +1,8 @@
 import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { groupToolCalls, type ToolCallGroup } from "../../../../../src/chat/tool-call-grouping.js";
-import type { BrowserTabSelection } from "../../../components/browser/browser-target.ts";
 import { icons } from "../../../components/icons.ts";
-import {
-  personActivityLink,
-  renderPersonName,
-  type PersonActivityRouting,
-} from "../../../components/person-activity-link.ts";
+import { personActivityLink, renderPersonName } from "../../../components/person-activity-link.ts";
 import { t } from "../../../i18n/index.ts";
 import type { MessageGroup, ToolCard } from "../../../lib/chat/chat-types.ts";
 import { messageClientSourcesLabel } from "../../../lib/chat/message-client-source.ts";
@@ -29,37 +24,32 @@ import { resolveIdentityHue } from "../../../lib/identity-avatar.ts";
 import { DEFAULT_AGENT_ID } from "../../../lib/sessions/session-key.ts";
 import { resolveAssistantReplyPhase } from "../chat-assistant-reply.ts";
 import { renderChatAvatar, renderForwardedAvatar } from "../chat-avatar.ts";
-import type { AssistantMessageExpansionState } from "../chat-message-recovery.ts";
-import type { TurnRecap } from "../chat-progress.ts";
 import { transcriptRunId } from "../chat-thread-run-identity.ts";
 import { persistedMessageEntryId, readPendingSendStatus } from "../chat-thread.ts";
-import { hasForwardedSource } from "../chat-turn-boundary.ts";
+import { hasForwardedSource, isInterSessionGroup } from "../chat-turn-boundary.ts";
 import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts";
 import { activityHeadline, selectActivityHeadline } from "./chat-activity-headline.ts";
 import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
 import { renderForwardedAttribution } from "./chat-forwarded-attribution.ts";
 import { renderGroupedMessage } from "./chat-message-bubble.ts";
 import { renderRewindButton } from "./chat-message-confirmation.ts";
+import type { RenderMessageGroupOptions } from "./chat-message-group-options.ts";
 import {
   FULL_MESSAGE_RETRY_REVISION_LIMIT,
+  hasMessageActionButtons,
   renderMessageActionButtons,
   renderReplyButton,
   prepareChatMessageRender,
   resolveMessageActionDetails,
-  type MessageReplyTarget,
 } from "./chat-message-markdown.ts";
-import { renderChatSendStatus, type ChatSendStatusActions } from "./chat-message-send-status.ts";
+import { messageReactionOptions, renderGroupMessageReactions } from "./chat-message-reactions.ts";
+import { renderChatSendStatus } from "./chat-message-send-status.ts";
 import {
   isOwnSenderGroup,
   isSourceOnlyUserGroup,
   resolveMessageGroupSenderLabel,
 } from "./chat-message-sender.ts";
-import {
-  emptyGroupFooter,
-  renderStreamGroupParts,
-  type StreamGroupOptions,
-  type StreamGroupPart,
-} from "./chat-message-stream.ts";
+import { emptyGroupFooter, renderStreamGroupParts } from "./chat-message-stream.ts";
 import type { AssistantMessageDisclosure } from "./chat-message-text.ts";
 import { extractGroupMeta, renderMessageMeta } from "./chat-message-timestamp.ts";
 import {
@@ -68,11 +58,9 @@ import {
   renderReplyLineConnector,
   resolveGroupReplyLine,
   resolveMessageReplyLine,
-  type ReplyLine,
 } from "./chat-reply-attribution.ts";
-import type { ReplyPreviewLookup } from "./chat-reply-preview.types.ts";
 import { chatResponsiveLayout } from "./chat-responsive-layout.ts";
-import type { SidebarContent, SidebarFullMessageLoader } from "./chat-sidebar.ts";
+import { renderInterSessionActivity } from "./chat-session-activity.ts";
 import {
   renderBrowserTabPreviews,
   renderToolCard,
@@ -81,62 +69,7 @@ import {
 import { renderToolOutcomeSummary } from "./chat-tool-outcome-summary.ts";
 import { renderTurnRecapRow } from "./chat-working-indicator.ts";
 
-type ActiveContinuation = {
-  parts: StreamGroupPart[];
-  options: StreamGroupOptions;
-};
-
 type GroupedMessageRenderOptions = Parameters<typeof renderGroupedMessage>[2];
-
-type RenderMessageGroupOptions = Omit<
-  GroupedMessageRenderOptions,
-  | "isStreaming"
-  | "duplicateCount"
-  | "assistantMessageDisclosure"
-  | "messageActions"
-  | "entryId"
-  | "entryRef"
-  | "replyLine"
-> &
-  ChatSendStatusActions &
-  Parameters<typeof renderForwardedAvatar>[1] & {
-    /** A run frame's line, from its final answer; other groups resolve their own. */
-    frameReplyLine?: ReplyLine;
-    entryRefFor?: (key: string) => ((element?: Element) => void) | undefined;
-    latestBrowserTabs?: ReadonlyMap<string, BrowserTabSelection>;
-    /** Configured main-session key; an agent's main source labels as the agent. */
-    mainKey?: string;
-    onOpenSidebar?: (content: SidebarContent) => void;
-    loadFullAssistantMessage?: SidebarFullMessageLoader;
-    getAssistantMessageExpansion?: (
-      messageId: string,
-    ) => AssistantMessageExpansionState | undefined;
-    onToggleAssistantMessageExpanded?: (messageId: string) => void;
-    userId?: string | null;
-    userName?: string | null;
-    showOwnSenderName?: boolean;
-    /** Routing for peer sender names; absent leaves them plain text. */
-    personActivity?: PersonActivityRouting;
-    userAvatar?: string | null;
-    avatarPlacement?: "gutter" | "footer" | "none";
-    showAssistantAvatar?: boolean;
-    contextWindow?: number | null;
-    onReply?: (target: MessageReplyTarget) => void;
-    resolveReplyPreview?: ReplyPreviewLookup;
-    onRewind?: () => void;
-    rewindDisabled?: boolean;
-    activeContinuation?: ActiveContinuation;
-    /** Only this run may supply live copy for an activity disclosure. */
-    activityRunId?: string | null;
-    activityGroupKey?: string;
-    turnRecap?: TurnRecap;
-    /** Frame bodies are pre-rendered by the frame owner; ordinary groups omit them. */
-    frameContent?: readonly unknown[];
-    frameActionOwner?: MessageGroup["messages"][number] | null;
-    latestAssistant?: boolean;
-    /** Rendered as a transcript search result, outside its turn. */
-    searchResult?: boolean;
-  };
 
 function prepareGroupMessage(
   group: MessageGroup,
@@ -188,12 +121,13 @@ function renderPreparedGroupMessage(
         : {}),
     };
   }
-  return renderGroupedMessage(
+  const isStreaming = group.isStreaming && index === group.messages.length - 1;
+  return html`${renderGroupedMessage(
     source,
     item.key,
     {
       ...opts,
-      isStreaming: group.isStreaming && index === group.messages.length - 1,
+      isStreaming,
       entryId: persistedMessageEntryId(item.message) ?? undefined,
       entryRef: opts.entryRefFor?.(item.key),
       duplicateCount: item.duplicateCount ?? 1,
@@ -203,7 +137,7 @@ function renderPreparedGroupMessage(
       messageActions: actionDetails,
     },
     opts.onOpenSidebar,
-  );
+  )}${renderGroupMessageReactions(group, actionDetails, isStreaming, opts)}`;
 }
 
 export function renderActivityGroup(
@@ -421,6 +355,28 @@ export function renderMessageGroupContent(group: MessageGroup, opts: RenderMessa
 }
 
 export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroupOptions) {
+  if (isInterSessionGroup(group)) {
+    return renderInterSessionActivity(group, opts, (item, index) => {
+      const prepared = prepareGroupMessage(group, item, opts);
+      return {
+        content: renderPreparedGroupMessage(
+          group,
+          index,
+          {
+            ...opts,
+            isForwarded: true,
+            onToggleUserMessageExpanded: undefined,
+            replyLine: resolveGroupReplyLine(
+              { ...group, messages: [item] },
+              opts.resolveReplyPreview,
+            ),
+          },
+          prepared,
+        ),
+        actions: prepared.actions ? renderMessageActionButtons(prepared.actions, opts) : nothing,
+      };
+    });
+  }
   const normalizedRole = normalizeRoleForGrouping(group.role);
   const sourceOnly = isSourceOnlyUserGroup(group);
   const showAvatar =
@@ -516,11 +472,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
   const footerActionMessageKey = actionOwners.at(-1)?.key;
   const hasUserFooterActions =
     normalizedRole === "user" &&
-    Boolean(
-      (footerActionDetails?.replyTarget && opts.onReply) ||
-      (opts.onRewind && !opts.rewindDisabled) ||
-      footerActionDetails?.markdown,
-    );
+    ((opts.onRewind && !opts.rewindDisabled) || hasMessageActionButtons(footerActionDetails, opts));
   const userFooterActions = hasUserFooterActions
     ? html`
         <div
@@ -533,11 +485,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
               : nothing
           }
           ${opts.onRewind && !opts.rewindDisabled ? renderRewindButton(opts.onRewind) : nothing}
-          ${
-            footerActionDetails?.markdown
-              ? renderMessageActionButtons(footerActionDetails, {})
-              : nothing
-          }
+          ${renderMessageActionButtons(footerActionDetails, messageReactionOptions(group, opts))}
         </div>
       `
     : nothing;
@@ -606,8 +554,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
               (prepared, index) => {
                 const { item, actions: actionDetails } = prepared;
                 const actions =
-                  actionDetails &&
-                  (actionDetails.markdown || (actionDetails.replyTarget && opts.onReply)) &&
+                  hasMessageActionButtons(actionDetails, opts) &&
                   index < lastMessageIndex &&
                   !isTurnBlock
                     ? mobile

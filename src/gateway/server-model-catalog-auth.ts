@@ -14,6 +14,7 @@ export type PreparedGatewayModelCatalogSnapshot = GatewayModelCatalogSnapshot &
     | "pluginRegistry"
     | "isCurrent"
     | "observationConfig"
+    | "accountCatalog"
   > & {
     authMaterializations: readonly RuntimeAuthMaterialization[];
   };

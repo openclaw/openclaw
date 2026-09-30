@@ -1,4 +1,3 @@
-// Defines core Zod schema fragments for canonical config parsing.
 import path from "node:path";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { z } from "zod";
@@ -75,11 +74,8 @@ const SecretsManualExecProviderSchema = z
     command: z
       .string()
       .min(1)
-      .refine((value) => isSafeExecutableValue(value), "secrets.providers.*.command is unsafe.")
-      .refine(
-        (value) => isAbsolutePath(value),
-        "secrets.providers.*.command must be an absolute path.",
-      ),
+      .refine(isSafeExecutableValue, "secrets.providers.*.command is unsafe.")
+      .refine(isAbsolutePath, "secrets.providers.*.command must be an absolute path."),
     args: z.array(z.string().max(1024)).max(128).optional(),
     timeoutMs: z.number().int().positive().max(120000).optional(),
     noOutputTimeoutMs: z.number().int().positive().max(120000).optional(),
@@ -94,10 +90,7 @@ const SecretsManualExecProviderSchema = z
     passEnv: z.array(z.string().regex(ENV_SECRET_REF_ID_RE)).max(128).optional(),
     trustedDirs: z
       .array(
-        z
-          .string()
-          .min(1)
-          .refine((value) => isAbsolutePath(value), "trustedDirs entries must be absolute paths."),
+        z.string().min(1).refine(isAbsolutePath, "trustedDirs entries must be absolute paths."),
       )
       .max(64)
       .optional(),
@@ -160,12 +153,7 @@ export const SecretsConfigSchema = z
       })
       .strict()
       .optional(),
-    providers: z
-      .object({
-        // Keep this as a record so users can define multiple named providers per source.
-      })
-      .catchall(SecretProviderSchema)
-      .optional(),
+    providers: z.object({}).catchall(SecretProviderSchema).optional(),
     defaults: z
       .object({
         env: z.string().regex(SECRET_PROVIDER_ALIAS_PATTERN).optional(),
@@ -351,9 +339,7 @@ const ModelCompatSchema = z
     supportsEagerToolInputStreaming: z.boolean().optional(),
     /**
      * Whether the provider supports long prompt cache retention (`prompt_cache_retention: "24h"`
-     * or Anthropic-style `cache_control.ttl: "1h"`, depending on format). Default: true. Whether
-     * the provider supports `prompt_cache_retention: "24h"`. Default: true. Whether the provider
-     * supports Anthropic long cache retention (`cache_control.ttl: "1h"`). Default: true.
+     * or Anthropic-style `cache_control.ttl: "1h"`, depending on format). Default: true.
      */
     supportsLongCacheRetention: z.boolean().optional(),
   })
@@ -620,16 +606,13 @@ const ModelCatalogRefreshConfigSchema = z
       .string()
       .refine(
         (value) => {
-          try {
-            const parsed = new URL(value);
-            return (
-              parsed.protocol === "https:" ||
+          const parsed = URL.parse(value);
+          return (
+            parsed !== null &&
+            (parsed.protocol === "https:" ||
               (parsed.protocol === "http:" &&
-                ["localhost", "127.0.0.1", "[::1]"].includes(parsed.hostname))
-            );
-          } catch {
-            return false;
-          }
+                ["localhost", "127.0.0.1", "[::1]"].includes(parsed.hostname)))
+          );
         },
         {
           message: "models.catalogRefresh.url must use https, or http on localhost",

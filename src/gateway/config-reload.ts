@@ -72,6 +72,7 @@ import type {
   PreparedGatewayConfigCandidate,
 } from "./config-reload.types.js";
 import {
+  assertConfigReloadWriteSnapshot,
   assertReloadPublicationCurrent,
   GatewayConfigReloadSupersededError,
 } from "./server-reload-contracts.js";
@@ -982,9 +983,8 @@ export function startGatewayConfigReloader(opts: {
           await runAcceptedTransaction(async () => {
             const snapshot = pendingWrite.snapshot;
             assertLeaseOwned();
+            assertConfigReloadWriteSnapshot(snapshot);
             if (
-              !snapshot.exists ||
-              !snapshot.valid ||
               source.observation.writerRevision > pendingWrite.epoch ||
               activeInProcessConfig !== pendingWrite ||
               snapshot.hash !== pendingWrite.persistedHash ||

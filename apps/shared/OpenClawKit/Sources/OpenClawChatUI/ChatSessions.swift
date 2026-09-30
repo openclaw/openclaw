@@ -100,6 +100,7 @@ public enum OpenClawChatFastMode: Sendable, Equatable, Hashable, Codable {
     case off
     case on
     case automatic
+    case ultrafast
 
     public var isEnabled: Bool {
         self != .off
@@ -111,11 +112,14 @@ public enum OpenClawChatFastMode: Sendable, Equatable, Hashable, Codable {
             self = enabled ? .on : .off
             return
         }
-        if try container.decode(String.self).lowercased() == "auto" {
+        switch try container.decode(String.self).lowercased() {
+        case "auto":
             self = .automatic
-            return
+        case "ultrafast":
+            self = .ultrafast
+        default:
+            throw DecodingError.dataCorruptedError(in: container, debugDescription: "Invalid fast mode")
         }
-        throw DecodingError.dataCorruptedError(in: container, debugDescription: "Invalid fast mode")
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -127,6 +131,8 @@ public enum OpenClawChatFastMode: Sendable, Equatable, Hashable, Codable {
             try container.encode(true)
         case .automatic:
             try container.encode("auto")
+        case .ultrafast:
+            try container.encode("ultrafast")
         }
     }
 }

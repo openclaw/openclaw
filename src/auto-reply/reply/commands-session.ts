@@ -1,4 +1,3 @@
-// Implements session commands for list, show, fork, reset, and routing state.
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
@@ -29,6 +28,7 @@ import {
   writeRestartSentinel,
 } from "../../infra/restart-sentinel.js";
 import { scheduleGatewayRestart, triggerOpenClawRestart } from "../../infra/restart.js";
+import { formatFastModeConfirmation } from "../../shared/fast-mode.js";
 import { parseActivationCommand } from "../group-activation.js";
 import { parseSendPolicyCommand } from "../send-policy.js";
 import {
@@ -306,7 +306,7 @@ export const handleFastCommand: CommandHandler = defineAuthorizedTextCommand(
     const resetsToDefault = isSessionDefaultDirectiveValue(rawMode);
     const nextMode = resetsToDefault ? undefined : normalizeFastMode(rawMode);
     if (nextMode === undefined && !resetsToDefault) {
-      return sessionCommandReply("⚙️ Usage: /fast status|auto|on|off|default");
+      return sessionCommandReply("⚙️ Usage: /fast status|auto|on|off|ultrafast|default");
     }
 
     if (targetSessionEntry && params.sessionStore && params.sessionKey) {
@@ -329,9 +329,7 @@ export const handleFastCommand: CommandHandler = defineAuthorizedTextCommand(
     return sessionCommandReply(
       resetsToDefault
         ? "⚙️ Fast mode reset to default."
-        : nextMode === "auto"
-          ? "⚙️ Fast mode set to auto."
-          : `⚙️ Fast mode ${nextMode ? "enabled" : "disabled"}.`,
+        : `⚙️ ${formatFastModeConfirmation(nextMode)}`,
     );
   },
 );

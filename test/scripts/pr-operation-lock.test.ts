@@ -341,6 +341,8 @@ function createFreshMainTemplate() {
   );
   git("add", "--", ...wrapperSources);
   git("commit", "-qm", "test: unmodified public PR wrapper fixture");
+  // Pack once without delta search; each case still clones through the real file transport.
+  git("repack", "-ad", "--window=0");
   const cachedMain = git("rev-parse", "HEAD");
   const canonicalTree = git("rev-parse", "HEAD^{tree}");
   return { repoDir, cachedMain, canonicalTree };

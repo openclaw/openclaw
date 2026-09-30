@@ -79,17 +79,12 @@ enum WatchMessageLegacyDefaults {
 final class WatchReplyCoordinator {
     private struct CommandKey: Hashable {
         let context: OpenClawWatchChatDeliveryContext
-        let id: Data
-
-        init(context: OpenClawWatchChatDeliveryContext, id: String) {
-            self.context = context
-            self.id = Data(id.utf8)
-        }
+        let id: ExactOpaqueIdentifierKey
     }
 
     private struct ReceiptKey: Hashable {
         let command: CommandKey
-        let receiptID: Data?
+        let receiptID: ExactOpaqueIdentifierKey?
     }
 
     private let journal: OpenClawWatchMessageJournal
@@ -195,11 +190,11 @@ final class WatchReplyCoordinator {
 
     private func start(_ entry: OpenClawWatchMessageEntry) {
         guard [.queued, .accepted].contains(entry.phase), let command = entry.command else { return }
-        self.start(CommandKey(context: command.context, id: command.commandId))
+        self.start(CommandKey(context: command.context, id: ExactOpaqueIdentifierKey(command.commandId)))
     }
 
     private func start(_ key: CommandKey) {
-        guard !self.stopped, let commandID = String(bytes: key.id, encoding: .utf8) else { return }
+        guard !self.stopped else { return }
         guard self.tasks[key] == nil else {
             self.pendingResumes.insert(key)
             return
@@ -216,7 +211,7 @@ final class WatchReplyCoordinator {
             do {
                 while !self.stopped, !Task.isCancelled {
                     guard let current = try await self.journal.resumableEntry(
-                        id: commandID, context: key.context),
+                        id: key.id.rawValue, context: key.context),
                         !self.stopped, !Task.isCancelled, await self.process(current)
                     else { return }
                     let attempt = (self.retryAttempts[key] ?? 0) + 1
@@ -364,8 +359,8 @@ final class WatchReplyCoordinator {
             return
         }
         let key = ReceiptKey(
-            command: CommandKey(context: receipt.context, id: receipt.commandId),
-            receiptID: receipt.terminal.map { Data($0.receiptId.utf8) })
+            command: CommandKey(context: receipt.context, id: ExactOpaqueIdentifierKey(receipt.commandId)),
+            receiptID: receipt.terminal.map { ExactOpaqueIdentifierKey($0.receiptId) })
         guard self.receiptTasks[key] == nil else {
             self.pendingReceiptResumes.insert(key)
             return

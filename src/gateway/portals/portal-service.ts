@@ -91,6 +91,92 @@ export type GatewayPortalService = {
   closeAll: () => Promise<void>;
 };
 
+type PortalOperationOwner = {
+  environmentId: string;
+  ownerEpoch: number;
+  resourceOwnerKey?: string;
+  assertCurrent(): void;
+  ownershipError: string;
+  prepareTarget(port: number): Promise<{
+    connect: () => Promise<Duplex>;
+    close: () => Promise<void> | void;
+    assertCurrent?: () => void;
+    ownerSignal?: AbortSignal;
+    origin?: string;
+  }>;
+};
+
+/** Callers retain admission and resource authority; the portal owner settles target custody. */
+export function createPortalOperations(
+  service: GatewayPortalService,
+  owner?: PortalOperationOwner,
+  onChanged?: () => void,
+) {
+  const list = () => {
+    owner?.assertCurrent();
+    const portals = owner
+      ? service.listWorkerPortals(owner.environmentId, owner.ownerEpoch, owner.resourceOwnerKey)
+      : service.list();
+    owner?.assertCurrent();
+    return { portals };
+  };
+  return {
+    list,
+    async close(id: string) {
+      if (owner && !list().portals.some((portal) => portal.id === id)) {
+        throw new Error(owner.ownershipError);
+      }
+      await service.close(id, owner?.assertCurrent.bind(owner));
+      onChanged?.();
+      owner?.assertCurrent();
+      return { closed: true };
+    },
+    async open(request: { port: number; title?: string; description?: string; path?: string }) {
+      owner?.assertCurrent();
+      const connection = await owner?.prepareTarget(request.port);
+      try {
+        owner?.assertCurrent();
+        connection?.assertCurrent?.();
+        connection?.ownerSignal?.throwIfAborted();
+      } catch (error) {
+        await connection?.close();
+        throw error;
+      }
+      const opened = await service.open({
+        targetPort: request.port,
+        ...(owner && connection
+          ? {
+              target: {
+                kind: "worker" as const,
+                environmentId: owner.environmentId,
+                ownerEpoch: owner.ownerEpoch,
+                remotePort: request.port,
+                connect: connection.connect,
+              },
+              assertCurrent: owner.assertCurrent.bind(owner),
+              onClose: connection.close,
+              resourceOwnerKey: owner.resourceOwnerKey,
+              ownerSignal: connection.ownerSignal,
+              origin: connection.origin,
+            }
+          : {}),
+        ...(request.title !== undefined ? { title: request.title } : {}),
+        ...(request.description !== undefined ? { description: request.description } : {}),
+        ...(request.path !== undefined ? { path: request.path } : {}),
+      });
+      // Publication transfers custody; an ended invocation only loses access to its result.
+      onChanged?.();
+      owner?.assertCurrent();
+      return opened;
+    },
+  };
+}
+
+export function redactPortalSummary(summary: PortalSummary): PortalSummary {
+  const { tokenQuery: _tokenQuery, url: _url, ...redacted } = summary;
+  return redacted;
+}
+
 function removeServers(shared: HttpServer[], owned: readonly HttpServer[]): void {
   for (const server of owned) {
     const index = shared.indexOf(server);

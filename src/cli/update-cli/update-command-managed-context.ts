@@ -33,7 +33,7 @@ export type OwnedManagedUpdateContext = {
 /** Resolve the service's selectors without reading or validating its configuration. */
 export function resolveOwnedManagedUpdatePreflightEnv(params: {
   stopState: PreManagedServiceStop | undefined;
-  processEnv: NodeJS.ProcessEnv;
+  processEnv?: NodeJS.ProcessEnv;
   invocationCwd?: string;
 }) {
   const state = params.stopState;
@@ -93,21 +93,13 @@ export async function captureOwnedManagedUpdateContext(params: {
   invocationCwd?: string;
 }): Promise<OwnedManagedUpdateContext | undefined> {
   const stopState = params.stopState;
-  if (
-    stopState?.inspected !== true ||
-    stopState.serviceUpdateVerdict?.kind !== "owned" ||
-    !stopState.serviceEnv
-  ) {
+  if (stopState?.inspected !== true) {
     return undefined;
   }
-  const env = stripGatewayServiceMarkerEnv(
-    resolveOwnedManagedUpdateEnv({
-      processEnv: params.processEnv,
-      serviceEnv: stopState.serviceEnv,
-      serviceDefinitionEnv: stopState.serviceDefinitionEnv,
-      invocationCwd: params.invocationCwd,
-    }),
-  );
+  const env = resolveOwnedManagedUpdatePreflightEnv(params);
+  if (!env) {
+    return undefined;
+  }
   // Every later schema, doctor, recovery, and restart step consumes serviceEnv. Promote the
   // normalized owned environment before I/O so even capture failure recovery targets its owner.
   stopState.serviceEnv = env;

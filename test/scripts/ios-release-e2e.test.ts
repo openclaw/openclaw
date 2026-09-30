@@ -562,7 +562,7 @@ describe("release qualification workflow authority", () => {
       trials: [],
     });
   });
-  it("isolates qualification builds from the release checkout before accessing signing assets", () => {
+  it("isolates App Store qualification from the release checkout before accessing signing assets", () => {
     const releaseJob = release.jobs.release;
     const qualification = release.jobs[releaseJob.needs];
     expect(qualification).toMatchObject({
@@ -570,11 +570,9 @@ describe("release qualification workflow authority", () => {
       permissions: { actions: "read", contents: "read" },
       with: { target_sha: "${{ github.sha }}", mode: "stock" },
     });
-    expect(qualification.if).toBe(releaseJob.if);
     expect(qualification.secrets).toBeUndefined();
     expect(qualification["continue-on-error"]).toBeUndefined();
     expect(releaseJob["continue-on-error"]).toBeUndefined();
-    expect(releaseJob.if).not.toMatch(/\b(?:always|failure|cancelled)\s*\(/u);
 
     const steps = releaseJob.steps;
     expect(

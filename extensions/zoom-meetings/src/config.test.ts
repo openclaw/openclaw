@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { zoomMeetingsConfig } from "./config.js";
+import { zoomMeetingsPlugin } from "../index.js";
 
-const resolveZoomMeetingsConfig = zoomMeetingsConfig.resolveConfig;
+const resolveZoomMeetingsConfig = zoomMeetingsPlugin.config.resolveConfig;
 describe("Zoom meetings config", () => {
   it("builds native command pairs for the selected audio backend and format", () => {
     const config = resolveZoomMeetingsConfig({

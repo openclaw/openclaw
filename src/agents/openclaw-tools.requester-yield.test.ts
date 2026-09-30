@@ -46,7 +46,7 @@ function seedRequiredChild(
   return run;
 }
 
-const GENERIC_NO_CLAIM_ERROR = expect.stringContaining("return its result normally");
+const GENERIC_NO_CLAIM_MESSAGE = expect.stringContaining("return its result normally");
 
 it.each([
   {
@@ -213,8 +213,8 @@ describe("requester yield ownership", () => {
       await expectStillActive();
       acknowledgeInternalToolResult(result);
       expect((await yieldTool.execute("yield-collected", {})).details).toMatchObject({
-        status: "error",
-        error: expect.stringContaining("return its result normally"),
+        status: "nothing_pending",
+        message: GENERIC_NO_CLAIM_MESSAGE,
       });
       expect(
         (await yieldTool.execute("yield-collected-message", { waitFor: "message" })).details,
@@ -463,8 +463,8 @@ describe("requester yield ownership", () => {
       onYield: turn2Yield,
     });
     expect((await continuation.execute("current-wake", {})).details).toMatchObject({
-      status: "error",
-      error: GENERIC_NO_CLAIM_ERROR,
+      status: "nothing_pending",
+      message: GENERIC_NO_CLAIM_MESSAGE,
     });
     const wrongGeneration = createYieldToolForTurn({
       requesterSessionKey,

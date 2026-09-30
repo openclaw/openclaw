@@ -49,7 +49,8 @@ const session = vi.hoisted(() => ({
 
 vi.mock("./pw-session.js", () => session);
 
-const pw = await import("./pw-tools-core.interactions.js");
+const pw = await import("./pw-tools-core.interactions.actions.js");
+const { waitForViaPlaywright } = await import("./pw-tools-core.interactions.content.js");
 
 const target = { cdpUrl: "http://127.0.0.1:18792", targetId: "tab-1" };
 const strict = { ...target, ssrfPolicy: { allowPrivateNetwork: false } };
@@ -172,7 +173,7 @@ describe("pw-tools-core browser SSRF guards", () => {
         }),
         waitForFunction,
       });
-      await pw.waitForViaPlaywright({ ...proxied, timeMs: 1, fn });
+      await waitForViaPlaywright({ ...proxied, timeMs: 1, fn });
       expect(waitForFunction).toHaveBeenCalledOnce();
       expect(waitForFunction).toHaveBeenCalledWith(
         expect.any(Function),
@@ -210,7 +211,7 @@ describe("pw-tools-core browser SSRF guards", () => {
     );
 
     await expect(
-      pw.waitForViaPlaywright({
+      waitForViaPlaywright({
         ...strict,
         fn: "() => document.cookie",
       }),
@@ -235,7 +236,7 @@ describe("pw-tools-core browser SSRF guards", () => {
     };
 
     await expect(
-      pw.waitForViaPlaywright({
+      waitForViaPlaywright({
         ...strict,
         timeMs: 1,
         fn: "() => true",
@@ -260,7 +261,7 @@ describe("pw-tools-core browser SSRF guards", () => {
     });
 
     await expect(
-      pw.waitForViaPlaywright({
+      waitForViaPlaywright({
         ...strict,
         fn: "() => true",
         signal: ctrl.signal,

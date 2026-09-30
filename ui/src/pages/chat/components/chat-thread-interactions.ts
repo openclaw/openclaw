@@ -1,6 +1,7 @@
 // Pane-local search, context menus, selection actions, and presentation resets.
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
+import type { MessageReactionSummary } from "../../../../../packages/gateway-protocol/src/index.js";
 import type { ChatPendingInputsPage } from "../../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { ThemeBranding } from "../../../../../packages/gateway-protocol/src/theme.ts";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
@@ -106,6 +107,8 @@ type ReplyMessageAccess = {
 };
 
 export type ChatThreadProps = ChatSendStatusActions & {
+  messageReactions?: ReadonlyMap<string, MessageReactionSummary[]>;
+  onReact?: (messageId: string, emoji: string, remove: boolean) => void;
   branding?: ThemeBranding;
   compactionStatus?: CompactionStatus | null;
   paneId: string;
@@ -183,6 +186,7 @@ export type ChatThreadProps = ChatSendStatusActions & {
   onOpenSidebar?: (content: SidebarContent) => void;
   onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
   onOpenSessionLink?: (target: SessionLinkTarget) => void;
+  onNavigate?: (routeId: "cron", options: { search: string }) => void;
   onRequestOpenImage?: () => number;
   onOpenImage?: (item: ImageLightboxItem, requestVersion?: number) => void;
   onAssistantAttachmentLoaded?: () => void;
