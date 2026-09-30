@@ -367,7 +367,7 @@ struct MacGatewayChatTransport: OpenClawChatGatewayTransport {
             archived: archived,
             agentID: agentID)
         let data = try await connection.request(request)
-        let decoded = try OpenClawChatGatewayPayloadCodec.decodeSessionsList(
+        var decoded = try OpenClawChatGatewayPayloadCodec.decodeSessionsList(
             data, agentID: request.params["agentId"]?.value as? String)
         let mainSessionKey = await connection.cachedMainSessionKey()
         let defaults = OpenClawChatSessionsDefaults(
@@ -380,16 +380,8 @@ struct MacGatewayChatTransport: OpenClawChatGatewayTransport {
             mainSessionKey: mainSessionKey,
             modelSelectionTarget: decoded.defaults?.modelSelectionTarget,
             agentRuntime: decoded.defaults?.agentRuntime)
-        return OpenClawChatSessionsListResponse(
-            ts: decoded.ts,
-            path: decoded.path,
-            count: decoded.count,
-            totalCount: decoded.totalCount,
-            offset: decoded.offset,
-            nextOffset: decoded.nextOffset,
-            hasMore: decoded.hasMore,
-            defaults: defaults,
-            sessions: decoded.sessions)
+        decoded.defaults = defaults
+        return decoded
     }
 
     func sessionsListRequest(
