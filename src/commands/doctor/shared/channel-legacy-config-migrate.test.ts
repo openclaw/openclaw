@@ -29,6 +29,7 @@ vi.mock("../../../channels/plugins/bootstrap-registry.js", () => ({
 }));
 
 let applyChannelDoctorCompatibilityMigrations: typeof import("./channel-legacy-config-migrate.js").applyChannelDoctorCompatibilityMigrations;
+let normalizeCompatibilityConfigValues: typeof import("./legacy-config-core-migrate.js").normalizeCompatibilityConfigValues;
 
 beforeAll(async () => {
   // Commands runs on the shared non-isolated worker, so reload after installing
@@ -36,6 +37,7 @@ beforeAll(async () => {
   vi.resetModules();
   ({ applyChannelDoctorCompatibilityMigrations } =
     await import("./channel-legacy-config-migrate.js"));
+  ({ normalizeCompatibilityConfigValues } = await import("./legacy-config-core-migrate.js"));
 });
 
 beforeEach(() => {
@@ -108,7 +110,7 @@ describe("bundled channel legacy config migrations", () => {
   });
 
   it("prefers bundled channel doctor contract normalizers before plugin registry fallback", () => {
-    collectRelevantDoctorPluginIds.mockReturnValueOnce([]);
+    collectRelevantDoctorPluginIds.mockReturnValue([]);
     loadBundledChannelDoctorContractApi.mockImplementation((channelId: string) =>
       channelId === "slack"
         ? {
@@ -150,6 +152,26 @@ describe("bundled channel legacy config migrations", () => {
     expect(nextChannels.slack?.streaming).toBe(true);
     expect(nextChannels.slack?.normalizedByBundledContract).toBe(true);
     expect(result.changes).toEqual(["Normalized channels.slack via bundled doctor contract."]);
+  });
+
+  it("preserves config when a bundled channel doctor normalizer throws", () => {
+    collectRelevantDoctorPluginIds.mockReturnValue([]);
+    loadBundledChannelDoctorContractApi.mockReturnValue({
+      normalizeCompatibilityConfig: ({ cfg }: { cfg: Record<string, unknown> }) => {
+        cfg.mutated = true;
+        throw new Error("fixture repair failed");
+      },
+    });
+
+    const config = { channels: { slack: { streaming: true } } };
+    const result = applyChannelDoctorCompatibilityMigrations(config);
+
+    expect(config).toEqual({ channels: { slack: { streaming: true } } });
+    expect(result.next).toEqual(config);
+    expect(result.warnings).toEqual([
+      expect.stringContaining('Plugin "slack" config repair failed: fixture repair failed'),
+    ]);
+    expect(normalizeCompatibilityConfigValues(config).pluginWarnings).toEqual(result.warnings);
   });
 
   it("normalizes legacy private-network aliases exposed through bundled contract surfaces", () => {

@@ -10,6 +10,7 @@ const root = process.env.HOME!;
 const [scenario, ...args] = process.argv.slice(2);
 const sourceUrl = (relative: string) => new URL(relative, import.meta.url).href;
 const doctorSource = `
+import fs from 'node:fs/promises';
 import { intro, note, outro } from ${JSON.stringify(pathToFileURL(require.resolve("@clack/prompts")).href)};
 export async function doctorCommand() {
   intro('OpenClaw doctor');
@@ -18,6 +19,8 @@ export async function doctorCommand() {
   console.log('Doctor console diagnostic');
   process.stderr.write('Doctor stderr diagnostic\\n');
   outro('Doctor complete.');
+  const resultPath = process.env.OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH;
+  if (resultPath) await fs.writeFile(resultPath, JSON.stringify(${scenario === "doctor-error" ? "{ status: 'error', reason: 'doctor-failed', message: 'Doctor repair failed' }" : "{ status: 'ok' }"}));
   ${scenario === "doctor-error" ? "throw new Error('Doctor repair failed');" : ""}
 }
 `;

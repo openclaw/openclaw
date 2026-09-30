@@ -121,6 +121,7 @@ export function normalizeCompatibilityConfigValues(
 ): {
   config: OpenClawConfig;
   changes: string[];
+  pluginWarnings?: string[];
   warnings?: string[];
 } {
   const changes: string[] = [];
@@ -179,6 +180,9 @@ export function normalizeCompatibilityConfigValues(
   return {
     config: next,
     changes,
-    ...(contextBudgetWarnings.length > 0 ? { warnings: contextBudgetWarnings } : {}),
+    ...(channelMigrations.warnings?.length ? { pluginWarnings: channelMigrations.warnings } : {}),
+    ...(contextBudgetWarnings.length > 0 || channelMigrations.warnings?.length
+      ? { warnings: [...contextBudgetWarnings, ...(channelMigrations.warnings ?? [])] }
+      : {}),
   };
 }

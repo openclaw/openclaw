@@ -21,13 +21,49 @@ export const PACKAGE_POST_INSTALL_DOCTOR_ADVISORY: PackageUpdateStepAdvisory = {
     "Post-install doctor reported a recoverable update-time repair warning after the package install was verified; continuing with post-core plugin convergence.",
 };
 
-export type UpdatePostInstallDoctorResult = {
-  status: "advisory";
-  advisory: PackageUpdateStepAdvisory & {
-    reason: "deferred-configured-plugin-repair";
-    details: string[];
-  };
-};
+export type UpdatePostInstallDoctorResult =
+  | {
+      status: "ok";
+      pluginWarnings?: string[];
+    }
+  | {
+      status: "error";
+      reason: "config-write-refusal" | "required-migration" | "doctor-failed";
+      message: string;
+    }
+  | {
+      status: "advisory";
+      pluginWarnings?: string[];
+      advisory: PackageUpdateStepAdvisory & {
+        reason: "deferred-configured-plugin-repair";
+        details: string[];
+      };
+    };
+
+export function mergeUpdatePostInstallDoctorPluginWarnings(
+  result: UpdatePostInstallDoctorResult | undefined,
+  pluginWarnings: readonly string[],
+): UpdatePostInstallDoctorResult {
+  const base = result ?? { status: "ok" };
+  if (base.status === "error") {
+    return base;
+  }
+  const merged = [...new Set([...(base.pluginWarnings ?? []), ...pluginWarnings])];
+  return merged.length ? { ...base, pluginWarnings: merged } : base;
+}
+
+type UpdatePostInstallDoctorErrorReason = Extract<
+  UpdatePostInstallDoctorResult,
+  { status: "error" }
+>["reason"];
+
+function isUpdatePostInstallDoctorErrorReason(
+  value: unknown,
+): value is UpdatePostInstallDoctorErrorReason {
+  return (
+    value === "config-write-refusal" || value === "required-migration" || value === "doctor-failed"
+  );
+}
 
 export function createUpdatePostInstallDoctorResultPath(): string {
   return path.join(
@@ -98,6 +134,33 @@ function parseUpdatePostInstallDoctorResult(value: unknown): UpdatePostInstallDo
     return null;
   }
   const record = value as Record<string, unknown>;
+  if (record.status === "ok") {
+    const warnings = record.pluginWarnings;
+    if (
+      warnings !== undefined &&
+      (!Array.isArray(warnings) || !warnings.every((entry) => typeof entry === "string"))
+    ) {
+      return null;
+    }
+    return {
+      status: "ok",
+      ...(warnings?.length ? { pluginWarnings: warnings.filter((entry) => entry.trim()) } : {}),
+    };
+  }
+  if (record.status === "error") {
+    if (
+      !isUpdatePostInstallDoctorErrorReason(record.reason) ||
+      typeof record.message !== "string" ||
+      !record.message.trim()
+    ) {
+      return null;
+    }
+    return {
+      status: "error",
+      reason: record.reason,
+      message: record.message,
+    };
+  }
   if (record.status !== "advisory") {
     return null;
   }
@@ -107,18 +170,27 @@ function parseUpdatePostInstallDoctorResult(value: unknown): UpdatePostInstallDo
   }
   const advisoryRecord = advisory as Record<string, unknown>;
   const details = advisoryRecord.details;
+  const pluginWarnings = record.pluginWarnings;
   if (
     advisoryRecord.kind !== "package-post-install-doctor" ||
     advisoryRecord.reason !== "deferred-configured-plugin-repair" ||
     typeof advisoryRecord.message !== "string" ||
     !Array.isArray(details) ||
     details.length === 0 ||
-    !details.every((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+    !details.every(
+      (entry): entry is string => typeof entry === "string" && entry.trim().length > 0,
+    ) ||
+    (pluginWarnings !== undefined &&
+      (!Array.isArray(pluginWarnings) ||
+        !pluginWarnings.every((entry) => typeof entry === "string")))
   ) {
     return null;
   }
   return {
     status: "advisory",
+    ...(pluginWarnings?.length
+      ? { pluginWarnings: pluginWarnings.filter((entry) => entry.trim()) }
+      : {}),
     advisory: {
       kind: "package-post-install-doctor",
       reason: "deferred-configured-plugin-repair",

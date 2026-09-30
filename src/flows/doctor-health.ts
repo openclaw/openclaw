@@ -92,6 +92,10 @@ export async function runDoctorHealthFlow(runtime?: RuntimeEnv, options: DoctorO
   const { beginDoctorMaintenance } = await import("../commands/doctor-maintenance.js");
   const maintenance = await beginDoctorMaintenance({ options, root, runtime: effectiveRuntime });
   let exitCode: number | undefined;
+  let doctorUpdateResult:
+    | import("../infra/update-doctor-result.js").UpdatePostInstallDoctorResult
+    | undefined;
+  const updateResultPath = process.env.OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH?.trim();
   try {
     // Keep side-effect-heavy legacy checks before structured contributions until fully migrated.
     const { maybeRepairUiProtocolFreshness } = await import("../commands/doctor-ui.js");
@@ -138,47 +142,62 @@ export async function runDoctorHealthFlow(runtime?: RuntimeEnv, options: DoctorO
           : "Doctor finished, but config fixes were not applied.",
       );
       exitCode = 1;
+      doctorUpdateResult = {
+        status: "error",
+        reason: "config-write-refusal",
+        message: `Doctor config fixes were not applied: ${ctx.configWriteRefusal}`,
+      };
       return;
     }
     if (options.repair === true || options.yes === true) {
       // Contributions can report optional migration warnings, but repair must not
       // complete while startup would still reject a legacy session store.
-      const { assertSessionStoreMigrationComplete } =
-        await import("../config/sessions/startup-migration.js");
-      assertSessionStoreMigrationComplete({ cfg: ctx.cfg, env: process.env });
-      const { assertOpenClawDatabasesReady } =
-        await import("../state/openclaw-database-preflight.js");
-      const { resolveConfiguredAgentDatabaseTargets } =
-        await import("../config/sessions/targets.js");
-      assertOpenClawDatabasesReady({
-        env: process.env,
-        operation: "doctor",
-        configuredAgentDatabaseTargets: resolveConfiguredAgentDatabaseTargets(ctx.cfg, {
+      try {
+        const { assertSessionStoreMigrationComplete } =
+          await import("../config/sessions/startup-migration.js");
+        assertSessionStoreMigrationComplete({ cfg: ctx.cfg, env: process.env });
+        const { assertOpenClawDatabasesReady } =
+          await import("../state/openclaw-database-preflight.js");
+        const { resolveConfiguredAgentDatabaseTargets } =
+          await import("../config/sessions/targets.js");
+        assertOpenClawDatabasesReady({
           env: process.env,
-        }),
-      });
-      const { assertConfiguredWorkspaceStateReady } =
-        await import("../agents/workspace-state-dirs.js");
-      assertConfiguredWorkspaceStateReady({ cfg: ctx.cfg });
-    }
-    await maintenance?.finish(ctx.cfg);
-    if (ctx.postInstallDoctorResult) {
-      const {
-        UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
-        UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
-        writeUpdatePostInstallDoctorResult,
-      } = await import("../infra/update-doctor-result.js");
-      const resultPath = process.env[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]?.trim();
-      if (resultPath) {
-        await writeUpdatePostInstallDoctorResult({
-          resultPath,
-          result: ctx.postInstallDoctorResult,
+          operation: "doctor",
+          configuredAgentDatabaseTargets: resolveConfiguredAgentDatabaseTargets(ctx.cfg, {
+            env: process.env,
+          }),
         });
-        exitCode = UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE;
-        return;
+        const { assertConfiguredWorkspaceStateReady } =
+          await import("../agents/workspace-state-dirs.js");
+        assertConfiguredWorkspaceStateReady({ cfg: ctx.cfg });
+      } catch (error) {
+        doctorUpdateResult = {
+          status: "error",
+          reason: "required-migration",
+          message: error instanceof Error ? error.message : String(error),
+        };
+        throw error;
       }
     }
+    await maintenance?.finish(ctx.cfg);
+    const { mergeUpdatePostInstallDoctorPluginWarnings } =
+      await import("../infra/update-doctor-result.js");
+    doctorUpdateResult = mergeUpdatePostInstallDoctorPluginWarnings(
+      ctx.postInstallDoctorResult,
+      ctx.configResult.pluginWarnings ?? [],
+    );
+    if (ctx.postInstallDoctorResult && updateResultPath) {
+      const { UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE } =
+        await import("../infra/update-doctor-result.js");
+      exitCode = UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE;
+      return;
+    }
   } catch (error) {
+    doctorUpdateResult ??= {
+      status: "error",
+      reason: "doctor-failed",
+      message: error instanceof Error ? error.message : String(error),
+    };
     if (maintenance) {
       effectiveRuntime.error(
         "Doctor could not complete maintenance. Check the reported service state, resolve the failure, and rerun doctor --fix.",
@@ -187,6 +206,14 @@ export async function runDoctorHealthFlow(runtime?: RuntimeEnv, options: DoctorO
     throw error;
   } finally {
     await maintenance?.release();
+    if (updateResultPath && doctorUpdateResult) {
+      const { writeUpdatePostInstallDoctorResult } =
+        await import("../infra/update-doctor-result.js");
+      await writeUpdatePostInstallDoctorResult({
+        resultPath: updateResultPath,
+        result: doctorUpdateResult,
+      });
+    }
     // The default runtime exits synchronously; finish native recovery and release
     // maintenance leases before handing it an exit code.
     if (exitCode !== undefined) {

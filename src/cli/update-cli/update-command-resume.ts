@@ -76,7 +76,7 @@ export async function resumePostCoreUpdate(params: ResumePostCoreUpdateParams): 
     updateStartedAtMs,
   });
   await createUpdateConfigSnapshot();
-  await runUpdateFinalizationDoctorInFreshProcess({
+  const prePluginDoctorWarnings = await runUpdateFinalizationDoctorInFreshProcess({
     phase: "pre-plugin",
     root: params.root,
     yes: params.opts.yes === true,
@@ -134,6 +134,7 @@ export async function resumePostCoreUpdate(params: ResumePostCoreUpdateParams): 
     yes: params.opts.yes === true,
     json: params.opts.json === true,
     timeoutMs: params.timeoutMs,
+    prePluginDoctorWarnings,
   });
   const { pluginUpdate } = completed;
   await persistValidatedDowngradeConfig(completed.configSnapshot);

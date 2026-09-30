@@ -82,6 +82,17 @@ export async function runUpdateLeaseChild(): Promise<void> {
     });
     process.stdout.write("doctor fixture output\n");
     process.stderr.write("doctor fixture diagnostic\n");
+    const resultPath = process.env.OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH;
+    if (resultPath) {
+      await fs.writeFile(
+        resultPath,
+        JSON.stringify(
+          scenario.failDoctor === phase
+            ? { status: "error", reason: "doctor-failed", message: "doctor fixture failure" }
+            : { status: "ok" },
+        ),
+      );
+    }
     if (scenario.failDoctor === phase) {
       throw new Error("doctor fixture failure");
     }

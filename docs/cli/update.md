@@ -172,6 +172,13 @@ accept capability changes, and JSON mode does not prompt. An unresolved review
 preserves the previous plugin, exits non-zero, and blocks any requested Gateway
 restart.
 
+After plugin convergence, the updater runs Doctor in the updated runtime and
+validates the resulting config before continuing. If a plugin compatibility
+repair hook throws, Doctor preserves the input config and reports that hook as a
+warning. The updater accepts that warning only from Doctor's typed completion
+receipt; a refused config write, required migration, invalid final config, or
+missing or interrupted receipt remains a blocking failure.
+
 If the core package has already changed, run `openclaw update repair` in an
 interactive terminal to review plugin capabilities. After reviewing the changes,
 automation can use `openclaw update repair --accept-capabilities`. Acceptance

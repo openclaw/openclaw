@@ -8,6 +8,13 @@ import {
 import { readConfigFileSnapshot } from "../../config/config.js";
 import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import {
+  consumeUpdatePostInstallDoctorResult,
+  createUpdatePostInstallDoctorResultPath,
+  UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
+  UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
+} from "../../infra/update-doctor-result.js";
 import { buildUpdateDoctorEnv } from "../../infra/update-runner-doctor.js";
 import { runExec } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -96,6 +103,25 @@ function createPostPluginDoctorExecutionFailure(
   };
 }
 
+function createPostPluginDoctorExecutionWarning(
+  pluginUpdate: PostCorePluginUpdateResult,
+  warnings: readonly string[],
+): PostCorePluginUpdateResult {
+  return {
+    ...pluginUpdate,
+    status: "warning",
+    reason: POST_PLUGIN_DOCTOR_EXECUTION_FAILED_REASON,
+    warnings: [
+      ...(pluginUpdate.warnings ?? []),
+      ...warnings.map((message) => ({
+        reason: "doctor-advisory",
+        message,
+        guidance: ["Run `openclaw update repair` to retry post-update plugin repair."],
+      })),
+    ],
+  };
+}
+
 export async function runUpdateFinalizationDoctorInFreshProcess(params: {
   phase: UpdateDoctorPhase;
   root: string;
@@ -105,7 +131,7 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
   timeoutMs: number;
   nodeRunner?: string;
   entryPath?: string;
-}): Promise<void> {
+}): Promise<string[]> {
   const entryPath = params.entryPath ?? (await resolveGatewayInstallEntrypoint(params.root));
   if (!entryPath) {
     throw new Error("Updated OpenClaw entrypoint not found for post-plugin doctor");
@@ -120,7 +146,9 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
   ];
   const baseEnv = stripGatewayServiceMarkerEnv(disableUpdatedPackageCompileCacheEnv(process.env));
   delete baseEnv[UPDATE_POST_CORE_CONVERGENCE_ENV];
+  const doctorResultPath = createUpdatePostInstallDoctorResultPath();
   let result: { stdout?: unknown; stderr?: unknown } | undefined;
+  let executionError: unknown;
   try {
     result = await runExec(params.nodeRunner ?? resolveNodeRunner(), args, {
       cwd: params.root,
@@ -129,6 +157,7 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
       logOutput: false,
       baseEnv,
       env: {
+        [UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]: doctorResultPath,
         // The outer updater owns service refresh and activation after every
         // migration finishes; a fresh Doctor must not resume its parked service.
         ...buildUpdateDoctorEnv({
@@ -143,7 +172,7 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
     if (isRecord(error)) {
       result = error;
     }
-    throw error;
+    executionError = error;
   } finally {
     // Clack writes directly to the child's stdout. Preserve diagnostics on either
     // exit path without letting them share the parent's JSON result stream.
@@ -154,6 +183,50 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
       defaultRuntime.error(result.stderr.trimEnd());
     }
   }
+  const doctorResult = await consumeUpdatePostInstallDoctorResult(doctorResultPath);
+  if (doctorResult?.status === "error") {
+    throw Object.assign(
+      executionError instanceof Error ? executionError : new Error(doctorResult.message),
+      {
+        failureFacts: [{ check: "doctor", code: doctorResult.reason }],
+        ...(doctorResult.reason === "config-write-refusal"
+          ? { configWriteRefusal: doctorResult.reason }
+          : {}),
+      },
+    );
+  }
+  if (
+    doctorResult?.status === "advisory" &&
+    isRecord(executionError) &&
+    executionError.failed === true &&
+    executionError.exitCode === UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE &&
+    executionError.signal === undefined &&
+    executionError.cause === undefined &&
+    executionError.timedOut !== true &&
+    executionError.isCanceled !== true &&
+    executionError.isMaxBuffer !== true &&
+    executionError.isTerminated !== true
+  ) {
+    return [...(doctorResult.pluginWarnings ?? []), doctorResult.advisory.message];
+  }
+  if (doctorResult?.status === "advisory") {
+    throw executionError instanceof Error
+      ? executionError
+      : new Error(
+          executionError === undefined
+            ? "Post-install Doctor advisory receipt did not match the required advisory exit"
+            : formatErrorMessage(executionError),
+        );
+  }
+  if (executionError) {
+    throw executionError instanceof Error
+      ? executionError
+      : new Error(formatErrorMessage(executionError));
+  }
+  if (doctorResult?.status === "ok") {
+    return doctorResult.pluginWarnings ?? [];
+  }
+  throw new Error("Post-install Doctor did not produce a valid completion receipt");
 }
 
 async function validatePostPluginConfigInFreshProcess(params: {
@@ -209,11 +282,14 @@ async function applyFreshPostPluginDoctor(params: {
   }
   let pluginUpdate = params.pluginUpdate;
   try {
-    await runUpdateFinalizationDoctorInFreshProcess({
+    const warnings = await runUpdateFinalizationDoctorInFreshProcess({
       ...params,
       entryPath,
       phase: "post-plugin",
     });
+    if (warnings.length > 0) {
+      pluginUpdate = createPostPluginDoctorExecutionWarning(params.pluginUpdate, warnings);
+    }
   } catch (err) {
     pluginUpdate = createPostPluginDoctorExecutionFailure(params.pluginUpdate, String(err));
   }
@@ -229,11 +305,14 @@ export async function completePostCorePluginUpdate(params: {
   json: boolean;
   timeoutMs: number;
   nodeRunner?: string;
+  prePluginDoctorWarnings?: readonly string[];
 }): Promise<{
   pluginUpdate: PostCorePluginUpdateResult;
   configSnapshot: ConfigFileSnapshot;
 }> {
-  let pluginUpdate = params.pluginUpdate;
+  let pluginUpdate = params.prePluginDoctorWarnings?.length
+    ? createPostPluginDoctorExecutionWarning(params.pluginUpdate, params.prePluginDoctorWarnings)
+    : params.pluginUpdate;
   let freshConfigValid: boolean | undefined;
   if (pluginUpdate.status !== "error" && params.freshDoctorRequired) {
     // The current process can still hold the pre-update plugin and schema. Reload the updated

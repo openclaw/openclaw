@@ -181,6 +181,7 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
     });
   }
 
+  let prePluginDoctorWarnings: string[] = [];
   const initialPluginUpdate = await withPrePluginUpdateDoctorEnv(async () => {
     await runTimedFinalizePhase({
       finalizationStartedAt,
@@ -193,7 +194,7 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
       phaseTimings,
       phase: "doctor",
       run: async () => {
-        await runUpdateFinalizationDoctorInFreshProcess({
+        prePluginDoctorWarnings = await runUpdateFinalizationDoctorInFreshProcess({
           phase: "pre-plugin",
           root,
           yes: opts.yes === true,
@@ -266,6 +267,7 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
         yes: opts.yes === true,
         json: opts.json === true,
         timeoutMs: timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
+        prePluginDoctorWarnings,
       }),
     outcome: (result) =>
       result.pluginUpdate.status === "error"
