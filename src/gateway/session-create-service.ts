@@ -86,10 +86,10 @@ import { buildDashboardSessionKey, resolveSessionCreateTargetKey } from "./sessi
 import {
   createSessionCreateCommitGuard,
   prepareSessionCreateDefaultAccount,
-  prepareSessionCreateModelSelection,
   resolveSessionCreateModelInputError,
   resolveSessionForkMaxTokens,
 } from "./session-create-model-selection.js";
+import { prepareSessionCreateSelections } from "./session-create-selections.js";
 import type {
   CreatedGatewaySession,
   CreateGatewaySessionParams,
@@ -651,16 +651,13 @@ export async function createGatewaySession(
         return { ok: false, error: root.error };
       }
     }
-    const modelSelection = prepareSessionCreateModelSelection({
-      cfg: params.cfg,
-      agentId: target.agentId,
-      input:
-        params.catalogTarget ??
-        (params.model ? { model: params.model, agentRuntime: params.agentRuntime } : undefined),
-      parentEntry: currentParentSessionEntry,
-      preparedModelSelection: params.preparedModelSelection?.ref,
+    const modelSelection = prepareSessionCreateSelections(
+      params,
+      target.agentId,
+      currentTargetEntry,
+      currentParentSessionEntry,
       operatorAuthority,
-    });
+    );
     if (!modelSelection.ok) {
       return modelSelection;
     }
@@ -827,7 +824,10 @@ export async function createGatewaySession(
             ...(requestedThinkingLevel ? { thinkingLevel: requestedThinkingLevel } : {}),
             ...(requestedFastMode !== undefined ? { fastMode: requestedFastMode } : {}),
             ...(requestedToolOverrides ? { toolOverrides: params.toolOverrides } : {}),
-            ...(params.permissionMode ? { permissionMode: params.permissionMode } : {}),
+            ...((params.permissionMode ??
+            (createdNewEntry ? modelSelection.permissionMode : undefined))
+              ? { permissionMode: params.permissionMode ?? modelSelection.permissionMode }
+              : {}),
           },
           loadGatewayModelCatalogSnapshot: loadModelCatalog
             ? async () => {

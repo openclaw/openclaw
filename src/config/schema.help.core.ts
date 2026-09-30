@@ -345,6 +345,8 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     'Optional per-agent default for fast mode ("auto", "ultrafast", true, or false). Applies when no per-message or session fast-mode override is set.',
   "agents.defaults.fastModeDefault":
     'Default fast-mode policy for the agent loop ("auto", "ultrafast", true, or false). Individual agent entries override it.',
+  "agents.entries.*.newSessionPermissionMode":
+    "Optional explicit mode saved on genuinely new attended operator sessions when permissionMode is omitted. Requires an authenticated user profile; full still requires current operator.admin. Explicit choices, existing/reset/fork/catalog/plugin and autonomous sessions retain their behavior. No global default.",
   "agents.entries.*.runtime":
     "Optional runtime descriptor for this agent. Use embedded for default OpenClaw execution or acp for external ACP harness defaults.",
   "agents.entries.*.runtime.type":

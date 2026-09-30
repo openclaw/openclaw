@@ -100,11 +100,17 @@ test.each(["during preparation", "after preparation"] as const)(
 );
 
 async function createFixture(
-  scope: "operator.sessions.write" | "operator.write",
+  scope: "operator.sessions.write" | "operator.write" | "operator.admin",
   personalAccount: boolean,
+  permissionDefault?: "read-only" | "guarded" | "workspace" | "full",
 ) {
   const { storePath } = await createSessionStoreDir();
   testState.agentConfig = { model: { primary: model } };
+  if (permissionDefault) {
+    testState.agentsConfig = {
+      entries: { main: { model: { primary: model }, newSessionPermissionMode: permissionDefault } },
+    };
+  }
   const owner = ensureProfileForEmail("session-creator@example.test");
   const authProfileId = personalAccount
     ? connectUserModelAccount({
@@ -129,7 +135,7 @@ async function createFixture(
   };
   const config = await getGatewayConfigModule();
   config.clearRuntimeConfigSnapshot();
-  const cfg = {
+  let cfg = {
     ...config.getRuntimeConfig(),
     gateway: { roles: { default: "creator", definitions: { creator: role } } },
   };
@@ -146,7 +152,7 @@ async function createFixture(
   await initializeSessionReadContext(context);
   const key = "agent:main:dashboard:account-authority";
   const respond = vi.fn();
-  const create = (selection?: string, idempotent = true) =>
+  const create = (selection?: string, idempotent = true, extra: Record<string, unknown> = {}) =>
     handleGatewayRequest({
       req: {
         type: "req",
@@ -154,6 +160,7 @@ async function createFixture(
         method: "sessions.create",
         params: {
           key,
+          ...extra,
           ...(selection ? { model: selection } : {}),
           ...(idempotent ? { idempotencyKey: "create-once" } : {}),
         },
@@ -163,7 +170,22 @@ async function createFixture(
       respond,
       isWebchatConnect: () => false,
     });
-  return { authProfileId, client, clients, context, create, key, owner, respond, role, storePath };
+  return {
+    authProfileId,
+    client,
+    clients,
+    context,
+    create,
+    key,
+    owner,
+    respond,
+    role,
+    storePath,
+    cfg,
+    publishConfig: (next: typeof cfg) => {
+      cfg = next;
+    },
+  };
 }
 
 test.each([
@@ -322,3 +344,107 @@ test("session-only creation authority does not permit changing personal defaults
     }
   });
 });
+
+test.each([
+  {
+    scope: "operator.admin",
+    configured: "full",
+    explicit: undefined,
+    expected: "full",
+    allowed: true,
+  },
+  {
+    scope: "operator.write",
+    configured: "full",
+    explicit: undefined,
+    expected: undefined,
+    allowed: false,
+  },
+  {
+    scope: "operator.write",
+    configured: "full",
+    explicit: "read-only",
+    expected: "read-only",
+    allowed: true,
+  },
+  {
+    scope: "operator.sessions.write",
+    configured: "guarded",
+    explicit: undefined,
+    expected: "guarded",
+    allowed: true,
+  },
+] as const)(
+  "attended creation default $configured under $scope preserves explicit $explicit",
+  async (row) => {
+    await withOpenClawTestState({ layout: "state-only" }, async () => {
+      const f = await createFixture(row.scope, false, row.configured);
+      await f.create(undefined, false, row.explicit ? { permissionMode: row.explicit } : {});
+      expect(f.respond.mock.calls[0]?.[0]).toBe(row.allowed);
+      const entry = loadSessionEntry({ sessionKey: f.key, storePath: f.storePath });
+      if (row.allowed) {
+        expect(entry?.permissionMode).toBe(row.expected);
+      } else {
+        expect(entry).toBeUndefined();
+        expect(f.respond.mock.calls[0]?.[2]).toMatchObject({
+          code: "FORBIDDEN",
+          details: { missingScope: "operator.admin" },
+        });
+      }
+    });
+  },
+);
+
+test("attended default preserves an adopted existing session mode", async () => {
+  await withOpenClawTestState({ layout: "state-only" }, async () => {
+    const f = await createFixture("operator.admin", false, "full");
+    await f.create(undefined, false, { permissionMode: "guarded" });
+    f.respond.mockClear();
+    await f.create(undefined, false);
+    expect(f.respond.mock.calls[0]?.[0]).toBe(true);
+    expect(loadSessionEntry({ sessionKey: f.key, storePath: f.storePath })?.permissionMode).toBe(
+      "guarded",
+    );
+  });
+});
+
+test.each(["role", "configured default"] as const)(
+  "attended default rechecks %s before commit",
+  async (changed) => {
+    await withOpenClawTestState({ layout: "state-only" }, async () => {
+      const f = await createFixture("operator.admin", false, "full");
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const load = f.context.loadGatewayModelCatalogSnapshot;
+      f.context.loadGatewayModelCatalogSnapshot = async (request) => {
+        entered.resolve();
+        await release.promise;
+        return await load(request);
+      };
+      const request = f.create(model, false);
+      try {
+        await Promise.race([entered.promise, request]);
+        expect(f.respond).not.toHaveBeenCalled();
+        if (changed === "role") {
+          f.role.scopes = ["operator.write"];
+        } else {
+          f.publishConfig({
+            ...f.cfg,
+            agents: {
+              ...f.cfg.agents,
+              entries: {
+                ...f.cfg.agents?.entries,
+                main: { model: { primary: model }, newSessionPermissionMode: "guarded" },
+              },
+            },
+          });
+        }
+      } finally {
+        release.resolve();
+        await request;
+      }
+      expect(f.respond.mock.calls[0]?.[0]).toBe(false);
+      expect(loadSessionEntry({ sessionKey: f.key, storePath: f.storePath })).toBeUndefined();
+    });
+  },
+);

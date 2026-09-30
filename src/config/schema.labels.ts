@@ -89,6 +89,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.entries.*.thinkingDefault": "Agent Thinking Default",
   "agents.entries.*.reasoningDefault": "Agent Reasoning Default",
   "agents.entries.*.fastModeDefault": "Agent Fast Mode Default",
+  "agents.entries.*.newSessionPermissionMode": "New Session Permission Mode",
   "agents.defaults.fastModeDefault": "Default Agent Fast Mode",
   "agents.entries.*.contextInjection": "Agent Context Injection",
   "agents.entries.*.bootstrapMaxChars": "Agent Bootstrap Max Chars",

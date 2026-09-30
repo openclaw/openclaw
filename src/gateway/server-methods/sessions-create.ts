@@ -27,6 +27,7 @@ import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js
 import { startSessionCreateDiagnostics } from "../session-create-diagnostics.js";
 import { buildDashboardSessionKey } from "../session-create-key.js";
 import { resolveSessionCreateCatalogSelectionError } from "../session-create-model-selection.js";
+import { SessionCreatePermissionDefaultChangedError } from "../session-create-selections.js";
 import { createGatewaySession } from "../session-create-service.js";
 import type { PreparedGatewaySessionLifecycle } from "../session-create-service.types.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
@@ -527,6 +528,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       spawnDepth: p.spawnDepth,
       ...resolveSessionCreateRootParameters(p, preparedRoot?.value),
       permissionMode: p.permissionMode,
+      applyAgentPermissionDefault: true,
       ...(p.toolOverrides !== undefined ? { toolOverrides: p.toolOverrides } : {}),
       prepareLifecycle,
       onLifecycleCleanupError: (error) =>
@@ -616,6 +618,14 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       },
     };
     const created = await createGatewaySession(createParams).catch((error: unknown) => {
+      if (error instanceof SessionCreatePermissionDefaultChangedError) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.UNAVAILABLE, error.message, { retryable: true }),
+        );
+        return undefined;
+      }
       if (error instanceof ModelAccountConnectAuthorityError) {
         respond(false, undefined, errorShape(ErrorCodes.FORBIDDEN, error.message));
         return undefined;
