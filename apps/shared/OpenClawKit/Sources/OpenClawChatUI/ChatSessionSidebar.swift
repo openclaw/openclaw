@@ -42,21 +42,7 @@ struct ChatSessionSidebar: View {
     }
 
     private func sidebar(now: Date) -> some View {
-        let sections = ChatSessionSidebarModel.sections(
-            sessions: self.viewModel.sessions,
-            currentSessionKey: self.viewModel.sessionKey,
-            mainSessionKey: self.viewModel.selectedAgentMainSessionKey,
-            activeAgentID: self.viewModel.selectedAgentID,
-            groups: self.groups,
-            excludesMainSession: self.viewModel.selectedAgent != nil,
-            query: self.query,
-            sessionRoutingContract: self.viewModel.agentCatalog?.sessionRoutingContract ??
-                self.viewModel.sessionRoutingContract,
-            viewOptions: .init(
-                sort: self.sessionSort,
-                showAutomation: self.showAutomationSessions,
-                showSystem: self.showSystemSessions),
-            observedOrder: self.observedOrder)
+        let sections = self.rosterSections(observedOrder: self.observedOrder)
         let previewRequest = ChatSessionSidebarPreviews.Request(
             viewModel: self.viewModel,
             sessions: sections.flatMap(\.nodes).flatMap(\.previewSessions))
@@ -117,7 +103,8 @@ struct ChatSessionSidebar: View {
                     }
                 }
             }
-            if sections.isEmpty {
+            if let data = self.rosterData { ChatSessionSidebarRosterState(data: data) }
+            if sections.isEmpty, self.rosterData?.isSettled != false {
                 Text(self.query
                     .isEmpty ? String(localized: "No threads yet") : String(localized: "No matching threads"))
                     .font(OpenClawChatTypography.caption)
@@ -134,9 +121,18 @@ struct ChatSessionSidebar: View {
             placement: .sidebar,
             prompt: String(localized: "Search threads"))
         .safeAreaInset(edge: .bottom, spacing: 0) { self.connectionFooter }
-        .onChange(of: self.viewModel.sessions.map(\.key), initial: true) { _, keys in
+        .onChange(of: (self.rosterData?.rows ?? self.viewModel.sessions).map(\.key), initial: true) { _, keys in
             self.observedOrder.observe(keys)
         }
+        .onChange(of: self.query, initial: true) { _, value in
+            self.viewModel.updateSidebarQuery(
+                search: value, showAutomation: self.showAutomationSessions, showSystem: self.showSystemSessions)
+        }
+        .onChange(of: self.showAutomationSessions) { _, value in
+            self.viewModel.updateSidebarQuery(showAutomation: value)
+        }
+        .onChange(of: self.showSystemSessions) { _, value in self.viewModel.updateSidebarQuery(showSystem: value) }
+        .onChange(of: self.viewModel.selectedAgentID) { _, _ in self.viewModel.updateSidebarQuery() }
         .task(id: previewRequest) {
             let model = self.viewModel
             let cache = model.transcriptCache

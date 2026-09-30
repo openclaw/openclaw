@@ -64,6 +64,13 @@ The full native chat window is a split view:
 - **Find in Conversation**: press Cmd-F to search user and assistant text in the loaded conversation. Return or Cmd-G moves to the next matching message; Shift-Cmd-G moves backward. The selected message is outlined and revealed without incoming replies pulling you away. Escape closes Find. Search does not fetch older history or search hidden reasoning and tool payloads.
 - **Voice controls**: the composer can start or stop the existing macOS Talk Mode without replacing its menu-bar overlay. While Talk Mode is active, the composer shows its listening/thinking/speaking state, live audio activity, and an expandable rolling transcript. Right-click the Talk button to choose **System Default** or a connected microphone; this is the same microphone selection used by Voice Wake and push-to-talk. If a selected microphone disconnects, the active Talk session falls back to the system default and tries the selection again the next time Talk Mode starts. A separate microphone action records a voice note when Talk Mode does not own audio capture.
 
+The sidebar loads threads in pages; choose **Load more** to reach older threads.
+Typing filters loaded rows immediately, then searches session names, metadata,
+and messages on the Gateway. Results appear in relevance order. Notices explain
+when message indexing is still in progress or archived transcripts are excluded.
+Choose **Retry** after a list or search failure. Loaded rows stay visible while
+the same Gateway reconnects.
+
 The sidebar and New Thread picker show the agent roster immediately, using
 configured names or agent IDs. Resolved identities update each agent as they
 arrive, including the toolbar subtitle and composer, without delaying selection.
