@@ -228,9 +228,7 @@ function normalizeOllamaGreedySamplingOptions(options: Record<string, unknown>):
   }
 }
 
-function resolveOllamaTopLevelParams(
-  model: ProviderRuntimeModel,
-): Record<string, unknown> | undefined {
+function resolveOllamaTopLevelParams(model: ProviderRuntimeModel, baseUrl: string) {
   const requestParams: Record<string, unknown> = {};
   const params = model.params;
   if (params && typeof params === "object" && !Array.isArray(params)) {
@@ -240,7 +238,7 @@ function resolveOllamaTopLevelParams(
       }
     }
   }
-  const think = resolveOllamaThinkParamValue(params, supportsNativeOllamaMax(model));
+  const think = resolveOllamaThinkParamValue(params, supportsNativeOllamaMax(model, baseUrl));
   if (think !== undefined && shouldForwardNativeOllamaThink(model, think)) {
     requestParams.think = think;
   }
@@ -882,7 +880,7 @@ function createRawOllamaStreamFn(
           !isOllamaCloudOrigin(baseUrl)
             ? { truncate: false, shift: false }
             : {}),
-          ...resolveOllamaTopLevelParams(model),
+          ...resolveOllamaTopLevelParams(model, baseUrl),
           ...(responseFormat !== undefined ? { format: responseFormat } : {}),
         };
 

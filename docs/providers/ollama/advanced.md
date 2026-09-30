@@ -270,6 +270,10 @@ sidebarTitle: "Advanced"
     Ollama Cloud families such as GLM 5.2 and DeepSeek V4 also send native
     `think: "max"` for `/think max`; other models and local servers keep the
     compatible `think: "high"` mapping.
+    Native `max` applies to the `ollama-cloud` provider and to any `ollama`
+    provider whose base URL is `https://ollama.com`. A `:cloud` model reached
+    through a local Ollama server keeps `high`, because Ollama 0.21.2 and
+    earlier reject `max`.
 
     <Tip>
     For the OpenAI-compatible endpoint instead, see "Legacy OpenAI-compatible mode" above — streaming and tool calling may not work together there.
