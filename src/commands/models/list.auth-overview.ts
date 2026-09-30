@@ -1,4 +1,3 @@
-/** Builds provider auth summaries for model-list/status output. */
 import { normalizeProviderIdForAuth } from "@openclaw/model-catalog-core/provider-id";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -73,7 +72,6 @@ function resolveProfileSourceAgentDir(params: {
     : params.agentDir;
 }
 
-/** Resolves the effective auth source and profile counts for a provider. */
 export function resolveProviderAuthOverview(params: {
   provider: string;
   cfg: OpenClawConfig;

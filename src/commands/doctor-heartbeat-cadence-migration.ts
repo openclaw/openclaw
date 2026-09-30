@@ -97,7 +97,6 @@ function cadenceFinding(params: {
   };
 }
 
-/** Reports heartbeat monitor rows that do not yet match cadence config. */
 export async function collectHeartbeatCadenceMigrationFindings(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
@@ -120,7 +119,6 @@ export async function collectHeartbeatCadenceMigrationFindings(
   }
 }
 
-/** Creates or updates the stable monitor rows used by heartbeat execution. */
 export async function ensureHeartbeatMonitorJobs(
   cfg: OpenClawConfig,
   storePath: string,
@@ -145,7 +143,6 @@ export async function ensureHeartbeatMonitorJobs(
   }
 }
 
-/** Previews or applies config-to-cron heartbeat cadence materialization. */
 export async function maybeMigrateHeartbeatCadenceToCron(params: {
   cfg: OpenClawConfig;
   shouldRepair: boolean;

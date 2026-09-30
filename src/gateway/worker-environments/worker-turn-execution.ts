@@ -590,12 +590,8 @@ export async function executeWorkerTurn(
       workspace: params.workspace,
       transcriptTarget,
       tunnel,
-      ...(params.prepareAcceptedWorkspacePublication
-        ? { prepareAcceptedWorkspacePublication: params.prepareAcceptedWorkspacePublication }
-        : {}),
-      ...(params.publishAcceptedWorkspace
-        ? { publishAcceptedWorkspace: params.publishAcceptedWorkspace }
-        : {}),
+      prepareAcceptedWorkspacePublication: params.prepareAcceptedWorkspacePublication,
+      publishAcceptedWorkspace: params.publishAcceptedWorkspace,
     }).catch((reconciliationError: unknown) => {
       if (workerFailure) {
         throw workerWorkspaceFailure(workerFailure, reconciliationError);
@@ -603,16 +599,13 @@ export async function executeWorkerTurn(
       throw reconciliationError;
     });
     if (workspaceConflict) {
-      const reportedWorkspaceConflict = workspaceConflict;
       await Promise.resolve()
         .then(() =>
           turn.onAgentEvent?.({
             stream: "assistant",
             data: {
-              text: text
-                ? `${text}\n\n${reportedWorkspaceConflict.summary}`
-                : reportedWorkspaceConflict.summary,
-              delta: `${text ? "\n\n" : ""}${reportedWorkspaceConflict.summary}`,
+              text: text ? `${text}\n\n${workspaceConflict.summary}` : workspaceConflict.summary,
+              delta: `${text ? "\n\n" : ""}${workspaceConflict.summary}`,
             },
           }),
         )

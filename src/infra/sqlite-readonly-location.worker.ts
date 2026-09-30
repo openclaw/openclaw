@@ -154,11 +154,9 @@ async function inspect(args: string[]): Promise<SqliteReadOnlyWorkerResult> {
     const allocationRefused =
       (mode === "staging-create" || mode === "staging-create-legacy") &&
       isPrivateDirectoryCreationRefused(error);
-    const prefix = allocationRefused
-      ? SQLITE_SNAPSHOT_ALLOCATION_REFUSED_PREFIX
-      : contention
-        ? SQLITE_INSPECTION_CONTENTION_PREFIX
-        : "";
+    const prefix =
+      (contention ? SQLITE_INSPECTION_CONTENTION_PREFIX : "") +
+      (allocationRefused ? SQLITE_SNAPSHOT_ALLOCATION_REFUSED_PREFIX : "");
     return {
       ok: false,
       message: `${prefix}${formatSqliteReadOnlyInspectionFailure(error)}`,

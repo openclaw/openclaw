@@ -3,10 +3,7 @@ package ai.openclaw.app.ui
 import ai.openclaw.app.R
 import ai.openclaw.app.ui.design.ClawPanel
 import ai.openclaw.app.ui.design.ClawTheme
-import android.content.ClipData
 import android.content.ClipboardManager
-import android.content.Context
-import android.widget.Toast
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -121,7 +118,7 @@ internal fun AboutBuildIdentityPanel(
   val commitClick: (() -> Unit)? =
     identity.fullCommit?.let { commit ->
       {
-        copyAboutBuildValue(
+        context.getSystemService(ClipboardManager::class.java)?.copyTextWithConfirmation(
           context = context,
           label = commitClipboardLabel,
           value = commit,
@@ -132,7 +129,7 @@ internal fun AboutBuildIdentityPanel(
   val timestampClick: (() -> Unit)? =
     identity.buildTimestamp?.let { timestamp ->
       {
-        copyAboutBuildValue(
+        context.getSystemService(ClipboardManager::class.java)?.copyTextWithConfirmation(
           context = context,
           label = timestampClipboardLabel,
           value = timestamp,
@@ -243,15 +240,4 @@ private fun AboutBuildIdentityCell(
       textAlign = TextAlign.Center,
     )
   }
-}
-
-private fun copyAboutBuildValue(
-  context: Context,
-  label: String,
-  value: String,
-  confirmation: String,
-) {
-  val clipboard = context.getSystemService(ClipboardManager::class.java) ?: return
-  clipboard.setPrimaryClip(ClipData.newPlainText(label, value))
-  Toast.makeText(context, confirmation, Toast.LENGTH_SHORT).show()
 }

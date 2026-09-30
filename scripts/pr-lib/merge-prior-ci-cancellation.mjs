@@ -31,6 +31,66 @@ function readWorkflow({ evidence, git, requireEvidence }) {
   };
 }
 
+function qualifyBoundaryDeadline(context, job, seconds, cancelledAnnotationCount) {
+  const { requireEvidence } = context;
+  const { workflow, workflowBlob } = readWorkflow(context);
+  const workflowJob = "check-additional-shard";
+  const owner = workflow?.jobs?.[workflowJob];
+  const sourceSteps = owner?.steps?.filter((step) => step.name === "Run additional check shard");
+  const source = sourceSteps?.[0];
+  requireEvidence(
+    owner?.name === "${{ matrix.check_name || 'check-additional-shard' }}" &&
+      Array.isArray(owner.needs) &&
+      owner.needs.includes("preflight") &&
+      owner.strategy?.matrix ===
+        "${{ fromJSON(needs.preflight.outputs.check_additional_matrix) }}" &&
+      owner.strategy["fail-fast"] === false &&
+      owner["timeout-minutes"] === 20 &&
+      seconds === 1200 &&
+      [undefined, false].includes(owner["continue-on-error"]) &&
+      sourceSteps?.length === 1 &&
+      source.shell === "bash" &&
+      source.uses === undefined &&
+      source.env?.ADDITIONAL_CHECK_GROUP === "${{ matrix.group }}" &&
+      [undefined, false].includes(source["continue-on-error"]) &&
+      typeof source.run === "string" &&
+      digest(source.run) === "fbc8e4f959c865558e529e9b4cad09493d132f7b0f851c7a77eb27a84d984ca6",
+    "boundary deadline requires the unchanged historical package-boundary workflow owner",
+  );
+  const steps = job.steps;
+  const jobStart = Date.parse(job.started_at);
+  const jobEnd = Date.parse(job.completed_at);
+  const shards = steps.filter((step) => step.name === source.name);
+  const shard = shards[0];
+  requireEvidence(
+    context.jobs.filter((candidate) => candidate.name === job.name).length === 1 &&
+      shards.length === 1 &&
+      shard.number === owner.steps.indexOf(source) + 2 &&
+      ["success", "cancelled"].includes(shard.conclusion) &&
+      cancelledAnnotationCount === (shard.conclusion === "cancelled" ? 1 : 0) &&
+      steps.every((step, index) => {
+        const start = Date.parse(step.started_at);
+        const end = Date.parse(step.completed_at);
+        return (
+          positiveInteger(step.number) &&
+          (index === 0 || step.number > steps[index - 1].number) &&
+          Number.isFinite(start) &&
+          Number.isFinite(end) &&
+          jobStart <= start &&
+          start <= end &&
+          end <= jobEnd &&
+          (index === 0 || Date.parse(steps[index - 1].completed_at) <= start) &&
+          (step === shard || ["success", "skipped"].includes(step.conclusion))
+        );
+      }) &&
+      Date.parse(shard.completed_at) - jobStart >= seconds * 1000 &&
+      steps.at(-1)?.name === "Complete job" &&
+      steps.at(-1).conclusion === "success",
+    "boundary deadline has incomplete or contradictory step evidence",
+  );
+  return { workflowBlob, workflowJob, step: shard, steps };
+}
+
 /** A cancelled job can retain a failed test step or an exhausted execution deadline. */
 export function qualifyPriorCiCancelledRoots(context) {
   const { evidence, run, jobs, gate, requireEvidence } = context;
@@ -96,7 +156,9 @@ export function qualifyPriorCiCancelledRoots(context) {
         entry.title === "" &&
         entry.path === ".github" &&
         entry.start_line === 1 &&
-        /^The job has exceeded the maximum execution time of \d+h\d+m\d+s$/u.test(entry.message),
+        /^The job has exceeded the maximum execution time of (?:\d+h)?\d+m\d+s$/u.test(
+          entry.message,
+        ),
     );
     const cancelled = annotations.filter(
       (entry) =>
@@ -106,19 +168,21 @@ export function qualifyPriorCiCancelledRoots(context) {
         positiveInteger(entry.start_line) &&
         entry.message === "The operation was canceled.",
     );
+    const boundary = job.name === "check-additional-extension-package-boundary";
     requireEvidence(
       check.output?.annotations_count === annotations.length &&
-        annotations.length === 2 &&
         timeout.length === 1 &&
-        cancelled.length === 1,
+        cancelled.length <= 1 &&
+        annotations.length === 1 + cancelled.length &&
+        (boundary || (cancelled.length === 1 && /\d+h\d+m\d+s$/u.test(timeout[0].message))),
       "deadline root requires complete matching GitHub Actions timeout annotations",
     );
-    const parts = /(\d+)h(\d+)m(\d+)s$/u.exec(timeout[0].message).slice(1).map(Number);
-    const seconds = parts[0] * 3600 + parts[1] * 60 + parts[2];
+    const parts = /(?:(\d+)h)?(\d+)m(\d+)s$/u.exec(timeout[0].message);
+    const seconds = Number(parts[1] ?? 0) * 3600 + Number(parts[2]) * 60 + Number(parts[3]);
     requireEvidence(
       positiveInteger(seconds) &&
-        parts[1] < 60 &&
-        parts[2] < 60 &&
+        Number(parts[2]) < 60 &&
+        Number(parts[3]) < 60 &&
         Date.parse(job.completed_at) - Date.parse(job.started_at) >= seconds * 1000 &&
         Array.isArray(job.steps) &&
         job.steps.every(
@@ -126,15 +190,18 @@ export function qualifyPriorCiCancelledRoots(context) {
             step.status === "completed" &&
             ["success", "skipped", "cancelled"].includes(step.conclusion),
         ) &&
-        job.steps.filter((step) => step.conclusion === "cancelled").length === 1 &&
-        job.steps.some(
-          (step) => step.name === "Run Node test shard" && step.conclusion === "cancelled",
-        ),
+        (boundary ||
+          (job.steps.filter((step) => step.conclusion === "cancelled").length === 1 &&
+            job.steps.some(
+              (step) => step.name === "Run Node test shard" && step.conclusion === "cancelled",
+            ))),
       "deadline root has contradictory duration or additional failed steps",
     );
-    const { workflowBlob } = readWorkflow(context);
+    const binding = boundary
+      ? qualifyBoundaryDeadline(context, job, seconds, cancelled.length)
+      : { workflowBlob: readWorkflow(context).workflowBlob };
     roots.set(job.id, {
-      deadline: { checkRunId, conclusion: job.conclusion, seconds, workflowBlob, annotations },
+      deadline: { checkRunId, conclusion: job.conclusion, seconds, ...binding, annotations },
     });
   }
   return roots;
@@ -451,8 +518,20 @@ export function verifyPriorCiCancellation(context) {
     requireEvidence(cancellation === undefined, "cancellation attribution has no matching jobs");
     return result;
   }
+  const matrix = cancellation?.kind === "matrix-fail-fast";
+  // Other independently attributed failures still belong to the aggregate, not this matrix.
+  const matrixCauses =
+    matrix && Array.isArray(cancellation.causedBy)
+      ? failed.filter((job) => cancellation.causedBy.includes(job.id))
+      : [];
+  const qualifiedCauses = matrix
+    ? context.references(cancellation) &&
+      matrixCauses.length > 0 &&
+      cancellation.causedBy.length === matrixCauses.length &&
+      new Set(cancellation.causedBy).size === matrixCauses.length
+    : causedByRoots(cancellation);
   requireEvidence(
-    causedByRoots(cancellation) &&
+    qualifiedCauses &&
       Array.isArray(cancellation.jobIds) &&
       JSON.stringify(cancellation.jobIds.toSorted((a, b) => a - b)) ===
         JSON.stringify(result.cancelledJobIds),
@@ -469,7 +548,7 @@ export function verifyPriorCiCancellation(context) {
       "secondary artifact failures require the successful owned cancellation monitor",
     );
     result.cancellation = verifyMatrixCancellation(context, cancellation, [
-      ...failed,
+      ...matrixCauses,
       ...cancelled,
     ]);
   } else {

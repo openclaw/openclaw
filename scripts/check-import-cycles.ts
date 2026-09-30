@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-// Check Import Cycles script supports OpenClaw repository automation.
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,6 +9,7 @@ import {
   formatCycle,
 } from "./lib/import-cycle-graph.ts";
 import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
+import { visitModuleSpecifiers } from "./lib/ts-guard-utils.mts";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const scanRoots = ["src", "extensions", "scripts"] as const;
@@ -109,29 +109,17 @@ function collectRuntimeStaticImports(
   sourceFile: ts.SourceFile,
 ) {
   const imports: string[] = [];
-  const visit = (node: ts.Node) => {
-    let specifier: string | undefined;
-    let include = false;
-    if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
-      specifier = node.moduleSpecifier.text;
-      include = importDeclarationHasRuntimeEdge(node);
-    } else if (
-      ts.isExportDeclaration(node) &&
-      node.moduleSpecifier &&
-      ts.isStringLiteral(node.moduleSpecifier)
-    ) {
-      specifier = node.moduleSpecifier.text;
-      include = exportDeclarationHasRuntimeEdge(node);
-    }
+  visitModuleSpecifiers(sourceFile, ({ node, specifier }) => {
+    const include =
+      (ts.isImportDeclaration(node) && importDeclarationHasRuntimeEdge(node)) ||
+      (ts.isExportDeclaration(node) && exportDeclarationHasRuntimeEdge(node));
     if (include && specifier) {
       const resolved = resolveSource(file, specifier);
       if (resolved) {
         imports.push(resolved);
       }
     }
-    node.forEachChild(visit);
-  };
-  visit(sourceFile);
+  });
   return imports.toSorted((left, right) => left.localeCompare(right));
 }
 

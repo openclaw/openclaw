@@ -1,4 +1,3 @@
-/** Admission verdict for explicit Doctor maintenance before mutable repair. */
 import { formatCliCommand } from "../cli/command-format.js";
 import type { PreManagedServiceStop } from "../cli/update-cli/update-command-service-maintenance.js";
 import { ConfigWritePostCommitError } from "../config/io.write-errors.js";

@@ -1,6 +1,5 @@
 import { isCancel } from "@clack/core";
 import { expectDefined } from "@openclaw/normalization-core";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -16,10 +15,34 @@ import { createCliRuntimeCapture } from "./test-runtime-capture.js";
 
 const commandTransport = vi.hoisted(() => ({
   run: vi.fn<typeof import("../process/exec.js").runCommandWithTimeout>(),
+  exec: vi.fn<typeof import("../process/exec.js").runExec>(async () => ({
+    stdout: "",
+    stderr: "",
+  })),
+  hostPlatform: process.platform,
   hostEnv: { ...process.env, NODE_OPTIONS: "", NODE_PATH: "" },
   hostCwd: process.cwd(),
   npmPrefix: "",
 }));
+
+const isMacosAclInspection = vi.hoisted(
+  () => (command: string, args: readonly string[]) =>
+    args.length === 3 &&
+    ((command === "/bin/ls" && args[0] === "-lden" && args[1] === "--") ||
+      (command === "/usr/bin/dsmemberutil" && args[0] === "getuuid" && args[1] === "-U")),
+);
+
+const isPlistStdinConversion = vi.hoisted(
+  () => (command: string, args: readonly string[]) =>
+    command === "/usr/bin/plutil" &&
+    args.length === 6 &&
+    args[0] === "-convert" &&
+    (args[1] === "xml1" || args[1] === "json") &&
+    args[2] === "-o" &&
+    args[3] === "-" &&
+    args[4] === "--" &&
+    args[5] === "-",
+);
 
 const sqliteHostPlatform = process.platform;
 const existingHostUri = nodeSqlite.resolveExistingSqliteFileUri;
@@ -131,6 +154,8 @@ const { defaultRuntime: runtimeCapture, resetRuntimeCapture } = createCliRuntime
 const fixtureEnvSnapshot = captureEnv([
   ...SUPERVISOR_HINT_ENV_VARS,
   "OPENCLAW_COMPATIBILITY_HOST_VERSION",
+  "OPENCLAW_BUNDLED_PLUGINS_DIR",
+  "OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR",
   "OPENCLAW_UPDATE_RUN_HANDOFF",
   "OPENCLAW_SERVICE_MARKER",
   "OPENCLAW_SERVICE_KIND",
@@ -407,11 +432,13 @@ vi.mock("node:child_process", async () => {
         resolveRuntimeProcessEntrypointUrl("spawnBroker"),
       );
       const childArgs = args[1];
-      return args[0] === process.execPath &&
-        Array.isArray(childArgs) &&
-        (childArgs.includes(SQLITE_READONLY_CHILD_ARG) ||
-          (childArgs.length === brokerArgv.length &&
-            childArgs.every((arg, index) => arg === brokerArgv[index])))
+      return Array.isArray(childArgs) &&
+        (isMacosAclInspection(args[0], childArgs) ||
+          isPlistStdinConversion(args[0], childArgs) ||
+          (args[0] === process.execPath &&
+            (childArgs.includes(SQLITE_READONLY_CHILD_ARG) ||
+              (childArgs.length === brokerArgv.length &&
+                childArgs.every((arg, index) => arg === brokerArgv[index])))))
         ? actual.spawn(...args)
         : spawn(...args);
     },
@@ -419,34 +446,12 @@ vi.mock("node:child_process", async () => {
 });
 
 vi.mock("../process/exec.js", async (importOriginal) => {
-  const { createUpdateCommandTransportFixture, createUpdateUtf8CommandTransportFixture } =
-    await import("./update-cli/update-command-transport.test-support.js");
+  const transport = await import("./update-cli/update-command-transport.test-support.js");
   const actual = await importOriginal<typeof import("../process/exec.js")>();
   return {
     isPlainCommandExitFailure: actual.isPlainCommandExitFailure,
-    // The real snapshot worker has separate WAL/source-inode boundary coverage.
-    // Retain real rehearsal config projection and drift checks in this CLI fixture.
-    runCommandBuffered: async (
-      ...[, options]: [string[], { input: string; timeoutMs?: number }]
-    ) => {
-      const input: unknown = JSON.parse(options.input);
-      const mode = isRecord(input) ? input.mode : undefined;
-      if (mode !== "inventory" && mode !== "snapshot") {
-        throw new Error("Unexpected update state worker mode");
-      }
-      return {
-        code: 0,
-        stdout: Buffer.from(
-          JSON.stringify(
-            mode === "inventory"
-              ? { databases: [], pluginBytes: 0, pluginPlan: "plugin-copy-plan.json" }
-              : { versions: [], pluginPaths: {} },
-          ),
-        ),
-        stderr: Buffer.alloc(0),
-      };
-    },
-    runCommandWithTimeout: await createUpdateCommandTransportFixture({
+    runCommandBuffered: transport.runUpdateStateSnapshotFixture,
+    runCommandWithTimeout: await transport.createUpdateCommandTransportFixture({
       ...commandTransport,
       get npmPrefix() {
         return commandTransport.npmPrefix;
@@ -454,12 +459,18 @@ vi.mock("../process/exec.js", async (importOriginal) => {
       readServiceCommand: (env) => serviceReadCommand(env),
     }),
     runUtf8CommandWithTimeout: vi.fn(
-      await createUpdateUtf8CommandTransportFixture(
+      await transport.createUpdateUtf8CommandTransportFixture(
         commandTransport,
         actual.runUtf8CommandWithTimeout,
       ),
     ),
-    runExec: vi.fn(async () => ({ stdout: "", stderr: "" })),
+    runExec: transport.createUpdateExecTransportFixture({
+      run: commandTransport.exec,
+      nativeRun: actual.runExec,
+      hostPlatform: commandTransport.hostPlatform,
+      isMacosAclInspection,
+      isPlistStdinConversion,
+    }),
   };
 });
 

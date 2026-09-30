@@ -216,7 +216,10 @@ describe("worker placement terminal persistence", () => {
       if (resultState === "accepted") {
         store.acceptWorkspaceResult(claim);
       } else if (resultState === "staged") {
-        store.recordStagedWorkspaceResult(claim, "refs/openclaw/worker-results/preserved-result");
+        await store.recordStagedWorkspaceResult(
+          claim,
+          "refs/openclaw/worker-results/preserved-result",
+        );
       } else if (resultState === "journaled") {
         const basePack = Buffer.from("pending remote workspace snapshot");
         store.beginWorkspaceReconciliation(

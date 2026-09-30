@@ -82,7 +82,7 @@ describe("runtime tool schema quarantine logging", () => {
         agentId: "main",
       });
 
-      expect(listPersistedRuntimeToolSchemaQuarantines()).toEqual([]);
+      expect(await listPersistedRuntimeToolSchemaQuarantines()).toEqual([]);
     });
   });
 });

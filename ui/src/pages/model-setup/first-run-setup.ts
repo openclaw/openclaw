@@ -64,6 +64,22 @@ export function captureModelSetupConnection(
 
 type ConnectionSnapshot = ReturnType<typeof captureModelSetupConnection>;
 
+export function modelSetupOwnerChanges(
+  previous: ConnectionSnapshot | null,
+  connection: ConnectionSnapshot,
+) {
+  const authenticatedOwnerLost =
+    previous && (!connection.recoveryScope || connection.recoveryScope !== previous.recoveryScope);
+  const ownerChanged =
+    previous &&
+    (connection.agentId !== previous.agentId ||
+      connection.selectionIntentRevision !== previous.selectionIntentRevision ||
+      connection.firstRun !== previous.firstRun ||
+      connection.connectionRevision !== previous.connectionRevision ||
+      authenticatedOwnerLost);
+  return { authenticatedOwnerLost, ownerChanged };
+}
+
 export function reconcileModelSetupConnection(
   previous: ConnectionSnapshot | null,
   connection: ConnectionSnapshot,

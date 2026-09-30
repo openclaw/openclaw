@@ -39,22 +39,6 @@ import type { GatewayClient, GatewayRequestContext, RespondFn } from "./shared-t
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
-function broadcastRemovedNodePairing(params: {
-  context: Pick<GatewayRequestContext, "broadcast">;
-  nodeId: string;
-}) {
-  params.context.broadcast(
-    "node.pair.resolved",
-    {
-      requestId: "",
-      nodeId: params.nodeId,
-      decision: "removed",
-      ts: Date.now(),
-    },
-    { dropIfSlow: true },
-  );
-}
-
 function emitNodePairingDeniedSecurityEvent(params: {
   authz: DeviceManagementAuthz;
   nodeId: string;
@@ -400,7 +384,16 @@ export const nodePairingHandlers: GatewayRequestHandlers = {
       try {
         clearRemovedNodeRuntimeState({ nodeId: deviceBacked.nodeId, context });
         await reconcileRevokedDeviceWorker(context, deviceBacked.nodeId);
-        broadcastRemovedNodePairing({ nodeId: deviceBacked.nodeId, context });
+        context.broadcast(
+          "node.pair.resolved",
+          {
+            requestId: "",
+            nodeId: deviceBacked.nodeId,
+            decision: "removed",
+            ts: Date.now(),
+          },
+          { dropIfSlow: true },
+        );
         respond(true, { nodeId: deviceBacked.nodeId }, undefined);
       } finally {
         // Preserve response-first shutdown on success, while guaranteeing the

@@ -599,16 +599,11 @@ async function evaluateSystemRunPolicyPhase(
   }
   if (requiresSecurityAuditSuppressionApproval && !policy.approvedByAsk) {
     policy = {
+      ...policy,
       allowed: false,
       eventReason: "approval-required",
       errorMessage: "SYSTEM_RUN_DENIED: approval required",
-      analysisOk: policy.analysisOk,
-      allowlistSatisfied: policy.allowlistSatisfied,
-      shellWrapperBlocked: policy.shellWrapperBlocked,
-      windowsShellWrapperBlocked: policy.windowsShellWrapperBlocked,
       requiresAsk: true,
-      approvalDecision: policy.approvalDecision,
-      approvedByAsk: policy.approvedByAsk,
     };
   }
   let autoReviewDeferredMessage: string | undefined;

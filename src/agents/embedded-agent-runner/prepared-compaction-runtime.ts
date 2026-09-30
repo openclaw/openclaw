@@ -100,7 +100,7 @@ export async function buildPreparedCompactionRuntime(
     sandbox,
     effectiveWorkspace,
     effectiveCwd,
-    effectiveSkillAgentId: sessionAgentId,
+    sessionAgentId,
   } = prepared;
   const mode = params.execOverrides?.mode
     ? SESSION_PERMISSION_BY_EXEC_MODE[params.execOverrides.mode]
@@ -595,7 +595,6 @@ export async function buildPreparedCompactionRuntime(
       allowedToolNames,
       buildSystemPromptText,
       resolvedMessageProvider,
-      sessionAgentId,
     };
   } catch (err) {
     restoreSkillEnvironment();

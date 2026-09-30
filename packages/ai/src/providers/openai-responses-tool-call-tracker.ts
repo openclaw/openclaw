@@ -70,21 +70,15 @@ export function createResponsesToolCallTracker<TState extends ResponsesToolCallS
     }
     const compatible = uniqueCandidates.filter((state) => !identitiesConflict(state, identity));
     const matches = compatible.filter((state) => sharesIdentity(state, identity));
-    const matched = matches.length === 1 ? matches.at(0) : undefined;
-    if (matched) {
-      return adoptIdentity(matched, identity);
-    }
-
     // Only a sole active call may adopt an identity it did not already know.
     // Parallel calls require a positive match so missing indices stay fail-closed.
-    const soleCompatible =
-      allowUnmatchedIdentity &&
-      uniqueCandidates.length === 1 &&
-      compatible.length === 1 &&
-      matches.length === 0
-        ? compatible.at(0)
-        : undefined;
-    return soleCompatible ? adoptIdentity(soleCompatible, identity) : undefined;
+    const matched =
+      matches.length === 1
+        ? matches.at(0)
+        : allowUnmatchedIdentity && uniqueCandidates.length === 1
+          ? compatible.at(0)
+          : undefined;
+    return matched ? adoptIdentity(matched, identity) : undefined;
   };
 
   return {

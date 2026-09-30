@@ -36,6 +36,7 @@ function qualify(run: Record<string, unknown>, failFast: string | boolean = atte
     failed: [failed],
     gate: undefined,
     causedByRoots: () => true,
+    references: () => true,
     git: ([command]: string[]) =>
       Buffer.from(command === "rev-parse" ? "a".repeat(40) : JSON.stringify(workflow)),
     requireEvidence: (condition: unknown, message: string) => {

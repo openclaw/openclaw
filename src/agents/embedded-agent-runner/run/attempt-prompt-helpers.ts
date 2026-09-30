@@ -25,6 +25,7 @@ import { deriveContextPromptTokens, type NormalizedUsage } from "../../usage.js"
 import { buildEmbeddedCompactionRuntimeContext } from "../compaction-runtime-context.js";
 import { resolveContextEngineCapabilities } from "../context-engine-capabilities.js";
 import { log } from "../logger.js";
+import { normalizeContextTokenBudget } from "../utils.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type PromptBuildHookRunner = Pick<HookRunner, "runBeforePromptBuild"> &
@@ -152,9 +153,6 @@ export async function resolvePromptBuildHookResult(params: {
 }
 
 export function resolvePromptModeForSession(sessionKey?: string): "minimal" | "full" {
-  if (!sessionKey) {
-    return "full";
-  }
   return isSubagentSessionKey(sessionKey) || isCronSessionKey(sessionKey) ? "minimal" : "full";
 }
 
@@ -461,6 +459,8 @@ export function buildAfterTurnRuntimeContext(params: {
     attempt: params.attempt,
     activeAgentId: params.activeAgentId,
   });
+  const tokenBudget = normalizeContextTokenBudget(params.tokenBudget);
+  const currentTokenCount = normalizeContextTokenBudget(params.currentTokenCount);
   return {
     ...buildEmbeddedCompactionRuntimeContext({
       sessionKey: params.attempt.sessionKey,
@@ -507,16 +507,8 @@ export function buildAfterTurnRuntimeContext(params: {
       contextEnginePluginId: params.contextEnginePluginId,
       purpose: "context-engine.after-turn",
     }),
-    ...(typeof params.tokenBudget === "number" &&
-    Number.isFinite(params.tokenBudget) &&
-    params.tokenBudget > 0
-      ? { tokenBudget: Math.floor(params.tokenBudget) }
-      : {}),
-    ...(typeof params.currentTokenCount === "number" &&
-    Number.isFinite(params.currentTokenCount) &&
-    params.currentTokenCount > 0
-      ? { currentTokenCount: Math.floor(params.currentTokenCount) }
-      : {}),
+    ...(tokenBudget !== undefined ? { tokenBudget } : {}),
+    ...(currentTokenCount !== undefined ? { currentTokenCount } : {}),
     ...(params.promptCache ? { promptCache: params.promptCache } : {}),
     transcriptStorage: { kind: "sqlite" },
     ...(sessionTarget ? { sessionTarget } : {}),

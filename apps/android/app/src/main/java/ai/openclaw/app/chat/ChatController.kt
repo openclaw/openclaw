@@ -28,8 +28,8 @@ import ai.openclaw.app.node.asStringOrNull
 import ai.openclaw.app.nonBlankString
 import ai.openclaw.app.parseGatewayModelCatalog
 import ai.openclaw.app.resolveAgentIdFromMainSessionKey
-import ai.openclaw.app.ui.chat.chatModelSendBlocked
 import ai.openclaw.app.ui.chat.providerQualifiedRef
+import ai.openclaw.app.ui.chat.selectedChatModelSendBlockingReason
 import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -3230,7 +3230,7 @@ class ChatController internal constructor(
     // must not leave with stale model or thinking state while sessions.patch is in flight.
     if (!waitForPendingSessionSettings(sessionSettingsKey(sessionKey))) return false
     if (!canAdmit() || !ownsCapturedUi()) return false
-    if (chatModelSendBlocked(_healthOk.value, _selectedModelRef.value, _modelCatalog.value)) return false
+    if (selectedChatModelSendBlockingReason(_healthOk.value, _selectedModelRef.value, _modelCatalog.value) != null) return false
     // agent-command.ts throws for explicit unsupported levels, so hidden controls must send off.
     // Applied at enqueue time too so durable rows never persist a level the selected model
     // rejects; reconnect flushes with a cleared catalog fail open, matching pre-gating behavior.
@@ -4938,6 +4938,12 @@ class ChatController internal constructor(
   private suspend fun fetchChatMetadata(requestSequence: Long = chatMetadataRequestSequence.incrementAndGet()) {
     val requestCacheScope = currentCacheScope()
     val metadataScope = currentChatMetadataScope() ?: return
+
+    fun isCurrent(): Boolean =
+      requestSequence == chatMetadataRequestSequence.get() &&
+        requestCacheScope == currentCacheScope() &&
+        metadataScope == currentChatMetadataScope()
+
     val requestSelection =
       synchronized(gatewayScopeApplyLock) {
         if (requestSequence != chatMetadataRequestSequence.get()) return
@@ -4959,8 +4965,8 @@ class ChatController internal constructor(
       val root = json.parseToJsonElement(res).asObjectOrNull()
       val metadataSwarmEnabled = root?.get("swarmEnabled").asBooleanOrNull() == true
       synchronized(gatewayScopeApplyLock) {
-        if (requestSequence != chatMetadataRequestSequence.get() || requestCacheScope != currentCacheScope() || metadataScope != currentChatMetadataScope()) return
-        _commands.value = parseChatCommands(json, res)
+        if (!isCurrent()) return
+        _commands.value = parseChatCommands(root)
         synchronized(swarmLock) { swarmEnabled = metadataSwarmEnabled }
         shouldRefreshSwarm = metadataSwarmEnabled
         shouldDisableSwarm = !metadataSwarmEnabled
@@ -4983,11 +4989,7 @@ class ChatController internal constructor(
           null
         }
       synchronized(gatewayScopeApplyLock) {
-        if (
-          requestSequence == chatMetadataRequestSequence.get() &&
-          requestCacheScope == currentCacheScope() &&
-          metadataScope == currentChatMetadataScope()
-        ) {
+        if (isCurrent()) {
           val catalog = parseGatewayModelCatalog(catalogResult)
           _modelCatalog.value = catalog.models
           val refreshFailed = catalog.refreshFailed
@@ -5009,9 +5011,7 @@ class ChatController internal constructor(
     } catch (_: Throwable) {
       synchronized(gatewayScopeApplyLock) {
         if (
-          requestSequence == chatMetadataRequestSequence.get() &&
-          requestCacheScope == currentCacheScope() &&
-          metadataScope == currentChatMetadataScope() &&
+          isCurrent() &&
           requestSelection != null &&
           isCurrentSessionAction(requestSelection) &&
           _errorText.value == null
@@ -5020,7 +5020,7 @@ class ChatController internal constructor(
         }
       }
     }
-    if (requestSequence != chatMetadataRequestSequence.get() || requestCacheScope != currentCacheScope() || metadataScope != currentChatMetadataScope()) return
+    if (!isCurrent()) return
     when {
       shouldRefreshSwarm -> refreshSwarmSessions()
       shouldDisableSwarm -> resetSwarmProgress()
@@ -8511,12 +8511,8 @@ private fun parseCreatedSessionKey(
     }
 }
 
-internal fun parseChatCommands(
-  json: Json,
-  commandsJson: String,
-): List<ChatCommandEntry> {
-  val root = json.parseToJsonElement(commandsJson).asObjectOrNull() ?: return emptyList()
-  val commands = root["commands"].asArrayOrNull() ?: return emptyList()
+internal fun parseChatCommands(root: JsonObject?): List<ChatCommandEntry> {
+  val commands = root?.get("commands").asArrayOrNull() ?: return emptyList()
   return commands.mapNotNull { item -> parseChatCommandEntry(item.asObjectOrNull()) }
 }
 

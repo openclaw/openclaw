@@ -606,12 +606,8 @@ describe("update-cli", () => {
         }
       });
 
-      if (inferred) {
-        expect(
-          vi.mocked(defaultRuntime.error).mock.calls.filter(([message]) => message === diagnostic),
-        ).toEqual([[diagnostic]]);
-      } else {
-        expect(defaultRuntime.error).toHaveBeenCalledExactlyOnceWith(diagnostic);
+      expect(defaultRuntime.error).toHaveBeenCalledExactlyOnceWith(diagnostic);
+      if (!inferred) {
         expect(getLogOutput()).not.toContain(diagnostic);
       }
       expect(vi.mocked(defaultRuntime.exit).mock.calls).toEqual(inferred ? [] : [[1]]);

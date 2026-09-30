@@ -5,6 +5,9 @@ import type {
 } from "./openclaw-state-read.types.js";
 
 export function captureCommand(command: OpenClawStateReadCommand): OpenClawStateReadCommand {
+  if (command.type === "cron.scratch") {
+    return { ...command, selector: { ...command.selector } };
+  }
   if (command.type === "tui.lastSession.retiredPointers") {
     return { ...command, retiredSessionKeys: [...command.retiredSessionKeys] };
   }
@@ -288,6 +291,18 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
         (proposal.queuedAtMs === undefined ? 0 : 8) +
         (proposal.runningAtMs === undefined ? 0 : 8),
       bytes + Buffer.byteLength(command.storeKey, "utf8"),
+    );
+  }
+  if (command.type === "cron.scratch") {
+    return (
+      bytes +
+      Buffer.byteLength(command.storeKey, "utf8") +
+      Buffer.byteLength(command.selector.kind, "utf8") +
+      (command.selector.kind === "job" ? 8 : 0) +
+      Buffer.byteLength(
+        command.selector.kind === "job" ? command.selector.jobId : command.selector.agentId,
+        "utf8",
+      )
     );
   }
   if (command.type === "devicePairing.bootstrapContext") {

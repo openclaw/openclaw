@@ -234,7 +234,8 @@ steps. The unchanged tested workflow must retain the audited Node shard entrypoi
 and matrix owner without `continue-on-error`. Matrix membership remains an inspected
 attestation, not an inference from the job name. The retained `failedStep` proof
 includes its cancelled job conclusion and actual step; exclude that root from
-collateral `cancellation.jobIds`, but include it in every `causedBy` root list.
+collateral `cancellation.jobIds`, and include it in the aggregate's complete root
+list. Matrix cancellation names it only when it is an inspected causal member.
 Extra failed steps, absent or changed qualification, and mismatched sources refuse
 admission. This does not qualify the underlying test failure by itself.
 
@@ -247,11 +248,23 @@ no additional failed steps, and unchanged workflow source. It retains the cancel
 status and deadline evidence; it does not classify this root as fail-fast collateral.
 Manual cancellation and missing or contradictory deadline evidence remain refused.
 
+The inspected historical `check-additional-extension-package-boundary` row also
+qualifies its 20-minute deadline. It must retain the audited additional-check
+command, matrix wiring and budget in the unchanged tested/baseline workflow.
+A successful shard requires only the deadline annotation; a cancelled shard
+requires both deadline and operation-cancelled annotations. Both require complete,
+ordered terminal steps, the expected shard ordinal, bounded timestamps reaching
+the deadline, successful cleanup, and no other failed or cancelled step. Preserve
+any unfinished receipt or canary coverage in its independent failure attribution.
+
 For the existing Node matrix's native fail-fast (including fork PRs whose monitor
 is skipped), use `cancellation.kind: "matrix-fail-fast"` and
 `workflowJob: "checks-node-core-test-nondist-shard"` instead of monitor `jobId`/`step`.
-Add `members`, the exact `{ jobId, name }` bindings for every admitted failed root
-and cancelled row. Retain the tested workflow blob locally. The verifier requires
+Its `causedBy` must name a nonempty, unique subset of independently admitted
+failed roots that actually caused this matrix cancellation. Add `members`, the
+exact `{ jobId, name }` bindings for those causal roots and every cancelled row.
+Other independently attributed failures remain in the aggregate's exhaustive
+`causedBy` list, without being misclassified as Node matrix members. Retain the tested workflow blob locally. The verifier requires
 that workflow to match the baseline, use the existing preflight matrix/name wiring,
 enable PR fail-fast, and have no `continue-on-error`. GitHub's job API omits matrix
 ownership; membership and cancellation cause remain explicitly inspected operator

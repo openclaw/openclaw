@@ -626,17 +626,11 @@ public struct OpenClawWatchAppSnapshotMessage: Codable, Sendable, Equatable {
     }
 
     private static func legacyText(for status: OpenClawWatchAppStatus) -> String {
-        if let verbatim = status.verbatim, !verbatim.isEmpty {
-            return verbatim
-        }
-        if let localizationKey = status.localizationKey, !localizationKey.isEmpty {
-            return localizationKey
-        }
-        return switch status.code {
+        let defaultText = switch status.code {
         case .gatewayConnected: "Connected"
         case .gatewayConnecting: "Connecting…"
         case .gatewayReconnecting: "Reconnecting…"
-        case .gatewayOffline: "Offline"
+        case .gatewayOffline, .talkOffline: "Offline"
         case .gatewayProblem, .gatewayProblemWithRequestID: "Gateway unavailable"
         case .talkOff: "Off"
         case .talkReady: "Ready"
@@ -644,7 +638,6 @@ public struct OpenClawWatchAppSnapshotMessage: Codable, Sendable, Equatable {
         case .talkListening: "Listening"
         case .talkThinking: "Thinking"
         case .talkSpeaking: "Speaking"
-        case .talkOffline: "Offline"
         case .talkPermissionRequired: "Gateway permission required"
         case .talkRequestingApproval: "Requesting Talk approval"
         case .talkApprovalRequested: "Approval requested"
@@ -655,6 +648,9 @@ public struct OpenClawWatchAppSnapshotMessage: Codable, Sendable, Equatable {
         case .chatUnavailable: "Chat unavailable"
         case .legacy: "Unavailable"
         }
+        return [status.verbatim, status.localizationKey]
+            .compactMap(\.self)
+            .first { !$0.isEmpty } ?? defaultText
     }
 }
 
