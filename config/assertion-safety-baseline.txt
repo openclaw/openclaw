@@ -186,7 +186,7 @@ extensions/comfy/workflow-runtime.ts	2
 extensions/copilot-proxy/index.ts	1
 extensions/copilot/harness.ts	8
 extensions/copilot/src/attempt-config.ts	10
-extensions/copilot/src/attempt-execution.ts	3
+extensions/copilot/src/attempt-execution.ts	2
 extensions/copilot/src/attempt-finalize.ts	2
 extensions/copilot/src/attempt-prepare.ts	4
 extensions/copilot/src/attempt-transcript-journal.ts	22
@@ -404,7 +404,7 @@ extensions/google-meet/src/cli-space-commands.ts	3
 extensions/google-meet/src/meet-api.ts	1
 extensions/google-meet/src/transports/chrome-create.ts	1
 extensions/google/cli-backend-auth.runtime.ts	1
-extensions/google/cli-backend-isolated-auth.runtime.ts	5
+extensions/google/cli-backend-isolated-auth.runtime.ts	3
 extensions/google/cli-backend.ts	1
 extensions/google/embedding-batch.ts	3
 extensions/google/music-generation-provider.ts	1
@@ -700,8 +700,7 @@ extensions/openai/index.ts	2
 extensions/openai/native-web-search.ts	1
 extensions/openai/openai-chatgpt-oauth-token.runtime.ts	1
 extensions/openai/provider-policy-api.ts	2
-extensions/openai/realtime-voice-bridge.ts	3
-extensions/openai/realtime-voice-session-policy.ts	2
+extensions/openai/realtime-voice-bridge.ts	1
 extensions/opencode-go/stream-termination.ts	4
 extensions/opencode/provider-catalog.ts	2
 extensions/opencode/session-catalog-plugin.ts	1

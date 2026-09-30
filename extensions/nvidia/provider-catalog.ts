@@ -62,15 +62,13 @@ const lookupNvidiaFeaturedModelHostname = (async (
 }) as LookupFn;
 
 export function buildNvidiaProvider(): ModelProviderConfig {
-  const provider = {
-    ...buildManifestModelProviderConfig({
-      providerId: "nvidia",
-      catalog: manifest.modelCatalog.providers.nvidia,
-    }),
-    apiKey: "NVIDIA_API_KEY",
-  };
+  const provider = buildManifestModelProviderConfig({
+    providerId: "nvidia",
+    catalog: manifest.modelCatalog.providers.nvidia,
+  });
   return {
     ...provider,
+    apiKey: "NVIDIA_API_KEY",
     models: applyNvidiaModelDefaults(provider.models),
   };
 }

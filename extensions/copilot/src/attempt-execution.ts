@@ -370,11 +370,9 @@ export async function runCopilotExecution(context: {
           throw error;
         }
         resumeFailureRecovered = true;
-        session = (await client.createSession(sessionConfig)) as unknown as SessionLike;
-        nativeSessionCreatedFresh = true;
-        nativeSessionHistoryValidated = true;
       }
-    } else {
+    }
+    if (!session) {
       session = (await client.createSession(sessionConfig)) as unknown as SessionLike;
       nativeSessionCreatedFresh = true;
       nativeSessionHistoryValidated = true;
