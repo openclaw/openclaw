@@ -44,6 +44,7 @@ const RESTART_MARKER =
   "[openclaw-test-instance] restarting gateway after migration convergence refusal";
 const LEGACY_STORE_PATH = "/fixture/sessions/sessions.json";
 const LEGACY_MIGRATION_REFUSAL = `Legacy session store requires migration: ${LEGACY_STORE_PATH}. Run "openclaw doctor --fix" against the same state/config before starting OpenClaw.`;
+const PROFILED_LEGACY_MIGRATION_REFUSAL = `Legacy session store requires migration: ${LEGACY_STORE_PATH}. Run "openclaw --profile qa-fixture doctor --fix" against the same state/config before starting OpenClaw.`;
 const LEGACY_STARTUP_FAILURE = [
   "OpenClaw startup migrations did not complete cleanly; refusing to report the gateway ready.",
   `- Legacy sessions store unreadable; left in place at ${LEGACY_STORE_PATH}`,
@@ -326,8 +327,8 @@ if (kind === "cli" || kind === "cli-drain") {
   process.exit(Number(argv[0]));
 }
 const refusal = ${JSON.stringify(MIGRATION_CONVERGENCE_REFUSAL)};
-const legacyRefusal = kind.startsWith("startup-") ? ${JSON.stringify(LEGACY_STARTUP_FAILURE)} : ${JSON.stringify(LEGACY_MIGRATION_REFUSAL)};
-if (kind === "legacy-refuse" || kind === "startup-legacy-refuse") { process.stderr.write(legacyRefusal + "\\n"); process.exit(78); }
+const legacyRefusal = kind.startsWith("startup-") ? ${JSON.stringify(LEGACY_STARTUP_FAILURE)} : kind.startsWith("profile-") ? ${JSON.stringify(PROFILED_LEGACY_MIGRATION_REFUSAL)} : ${JSON.stringify(LEGACY_MIGRATION_REFUSAL)};
+if (kind === "legacy-refuse" || kind === "startup-legacy-refuse" || kind === "profile-legacy-refuse") { process.stderr.write(legacyRefusal + "\\n"); process.exit(78); }
 if (kind === "late-legacy-refuse" || kind === "startup-late-legacy-refuse") {
   spawnInheritedWriter("stderr", legacyRefusal + "\\n");
   process.exit(78);
@@ -1359,13 +1360,16 @@ describe("openclaw test instance", () => {
 
   it.for([
     "legacy-refuse",
+    "profile-legacy-refuse",
     "late-legacy-refuse",
     "startup-legacy-refuse",
     "startup-late-legacy-refuse",
   ])("reports a typed %s only after the child's stderr closes", async (action) => {
     const message = action.startsWith("startup-")
       ? LEGACY_STARTUP_FAILURE
-      : LEGACY_MIGRATION_REFUSAL;
+      : action === "profile-legacy-refuse"
+        ? PROFILED_LEGACY_MIGRATION_REFUSAL
+        : LEGACY_MIGRATION_REFUSAL;
     const control = action.includes("late-") ? await createGatewayControl() : undefined;
     const { instance, readAttempts } = await createFakeGateway(
       `${action},config-refuse`,
@@ -1373,6 +1377,9 @@ describe("openclaw test instance", () => {
       1_500,
       control,
     );
+    if (action === "profile-legacy-refuse" || action.startsWith("startup-")) {
+      instance.env.OPENCLAW_PROFILE = "qa-fixture";
+    }
     const exited = createDeferred();
     if (control) {
       control.observers.onLaunch = () => {
@@ -1411,10 +1418,14 @@ describe("openclaw test instance", () => {
     "legacy-stdout",
     "legacy-status1",
     "legacy-no-advice",
+    "profile-legacy-refuse",
     "startup-no-advice",
     "startup-warning",
   ])("does not classify %s as an explained legacy migration refusal", async (action) => {
     const { instance, readAttempts } = await createFakeGateway(action);
+    if (action === "profile-legacy-refuse") {
+      instance.env.OPENCLAW_PROFILE = "different-fixture";
+    }
     const error = await instance.startGateway().catch((failure: unknown) => failure);
     expect(error).toBeInstanceOf(Error);
     expect(error).not.toBeInstanceOf(GatewayStartupRefusedError);

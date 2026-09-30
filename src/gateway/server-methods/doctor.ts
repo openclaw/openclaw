@@ -286,8 +286,6 @@ function trimDreamingEntries(
       if (selected.length > DREAMING_ENTRY_LIST_LIMIT) {
         selected.pop();
       }
-    } else if (selected.length < DREAMING_ENTRY_LIST_LIMIT) {
-      selected.push(entry);
     }
   }
   return selected;

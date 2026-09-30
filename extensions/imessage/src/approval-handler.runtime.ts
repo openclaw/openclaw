@@ -261,7 +261,7 @@ async function deliverIMessageApprovalPoll(params: {
       question: extractMarkdownFormatRuns(params.question).text,
       choices: options.map((option) => option.text),
       suppressComment: true,
-      options: { ...cliOptions, chatGuid },
+      options: cliOptions,
     });
     const pollGuid = normalizeIMessageMessageId(sent.messageId);
     const optionDecisions = mapSentPollOptionsToDecisions({
