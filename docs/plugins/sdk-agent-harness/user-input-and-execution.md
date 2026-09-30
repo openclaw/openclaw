@@ -133,8 +133,9 @@ guard, which the relay rechecks after awaited preparation immediately before all
 a returned reason becomes a model-visible refusal.
 The participant check uses existing native model admission, including its default
 optional mode. When native admission is disabled or unavailable, solo Codex turns
-keep native delegation, and another person's input queues as a follow-up instead of
-steering the active turn.
+keep native delegation, and another person's input queues as a follow-up when native
+spawn remains available. Threads whose effective policy already disables native
+delegation still permit cross-profile steering.
 If a fallback attempt already includes several people and native hook admission is unavailable, Codex refuses the attempt and asks the sender to send the request again as a new message so it runs as its own turn.
 
 Backend handles can declare `supportsCrossProfileSteering: false` when steering

@@ -23,6 +23,7 @@ import { prepareCodexAttemptRuntime } from "./run-attempt-runtime.js";
 import {
   bindProductionHarnessHostCapabilitiesForTest,
   createParams,
+  createCodexRuntimePlanFixture,
   createStartedThreadHarness,
   extractGenerationFromThreadRequest,
   extractRelayIdFromThreadRequest,
@@ -266,15 +267,37 @@ describe("Codex participant native admission", () => {
 
 describe("Codex native hook Gateway fallback", () => {
   setupRunAttemptTestHooks();
-  it("publishes cross-profile steering support from the installed native spawn admission", async () => {
+  it("publishes cross-profile steering from effective delegation policy and installed admission", async () => {
     const registered = vi.spyOn(agentHarnessRuntime, "setActiveEmbeddedRun");
-    for (const hooks of ["disabled", "managed-only", "optional"] as const) {
+    for (const { hooks, policy, supportsSteering } of [
+      { hooks: "disabled", policy: "normal", supportsSteering: false },
+      { hooks: "managed-only", policy: "normal", supportsSteering: false },
+      { hooks: "optional", policy: "normal", supportsSteering: true },
+      { hooks: "disabled", policy: "token-sharing", supportsSteering: true },
+      { hooks: "disabled", policy: "report-only", supportsSteering: true },
+      { hooks: "disabled", policy: "tool-search-unsupported", supportsSteering: false },
+    ] as const) {
       registered.mockClear();
       const params = createParams(
-        path.join(tempDir, `participant-handle-${hooks}.jsonl`),
-        path.join(tempDir, `participant-handle-${hooks}-workspace`),
+        path.join(tempDir, `participant-handle-${hooks}-${policy}.jsonl`),
+        path.join(tempDir, `participant-handle-${hooks}-${policy}-workspace`),
       );
       params.hostCapabilities = participantHostCapabilities(() => {});
+      if (policy === "token-sharing") {
+        const runtimePlan = createCodexRuntimePlanFixture();
+        params.runtimePlan = {
+          ...runtimePlan,
+          auth: {
+            ...runtimePlan.auth,
+            selectedAuthMode: "oauth",
+            selectedAuthFlow: "chatgpt-token-sharing",
+          },
+        };
+      } else if (policy === "report-only") {
+        params.delegationCapability = "report_only";
+      } else if (policy === "tool-search-unsupported") {
+        params.modelId = "gpt-5.4-nano";
+      }
       const harness = createStartedThreadHarness(async (method) => {
         if (method === "configRequirements/read") {
           return { requirements: { allowManagedHooksOnly: hooks === "managed-only" } };
@@ -295,7 +318,23 @@ describe("Codex native hook Gateway fallback", () => {
         await run.waitForTurnAccepted();
         expect(registered).toHaveBeenCalledTimes(1);
         const backend = registered.mock.calls[0]?.[1];
-        expect(backend?.supportsCrossProfileSteering).toBe(hooks === "optional");
+        expect
+          .soft(backend?.supportsCrossProfileSteering, `${hooks}: ${policy}`)
+          .toBe(supportsSteering);
+        const request = harness.requests.find(({ method }) => method === "thread/start")?.params;
+        if (policy === "token-sharing" || policy === "report-only") {
+          expect(request).toMatchObject({
+            config: {
+              "agents.enabled": false,
+              "features.multi_agent": false,
+              "features.multi_agent_v2": false,
+            },
+          });
+        } else if (policy === "tool-search-unsupported") {
+          expect(request).toMatchObject({ config: { "features.multi_agent": false } });
+          expect(request).not.toHaveProperty(["config", "features.multi_agent_v2"], false);
+          expect(request).not.toHaveProperty(["config", "agents.enabled"], false);
+        }
         await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
         await run;
       } finally {

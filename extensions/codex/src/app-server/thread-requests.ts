@@ -359,6 +359,20 @@ function resolveDirectOnlyToolNamespaces(
     .map((tool) => tool.name);
 }
 
+export function isCodexNativeDelegationDisabledForRun(
+  params: CodexThreadConfigurationContext,
+  hostSystemAgentActive = isHostScopedAgentToolActive("openclaw"),
+): boolean {
+  // Disabling only multi_agent still permits Codex's model-selected or explicit V2 tools.
+  return (
+    isCodexResponsesOAuthRun(params) ||
+    params.delegationCapability === "report_only" ||
+    params.pluginHarnessToolPolicyRestricted === true ||
+    isMessageOnlyCodexSourceReply(params) ||
+    (hostSystemAgentActive && isSystemAgentOnlyCodexDynamicToolAllowlist(params.toolsAllow))
+  );
+}
+
 export function buildCodexRuntimeThreadConfigForRun(
   params: CodexThreadConfigurationContext,
   config: JsonObject | undefined,
@@ -411,9 +425,11 @@ export function buildCodexRuntimeThreadConfigForRun(
     mergeCodexThreadConfigs(
       baseConfig,
       options.appServer?.networkProxy?.configPatch,
+      isCodexNativeDelegationDisabledForRun(params, options.hostSystemAgentActive)
+        ? CODEX_DELEGATION_DISABLED_THREAD_CONFIG
+        : undefined,
       isCodexResponsesOAuthRun(params)
         ? {
-            ...CODEX_DELEGATION_DISABLED_THREAD_CONFIG,
             "features.apps": false,
             "features.plugins": false,
             "features.image_generation": false,
@@ -429,9 +445,6 @@ export function buildCodexRuntimeThreadConfigForRun(
         : undefined,
       shouldDisableCodexToolSearchForModel(params.modelId)
         ? CODEX_TOOL_SEARCH_UNSUPPORTED_THREAD_CONFIG
-        : undefined,
-      params.delegationCapability === "report_only"
-        ? CODEX_DELEGATION_DISABLED_THREAD_CONFIG
         : undefined,
       messageOnlySourceReply || params.pluginHarnessToolPolicyRestricted === true
         ? buildRestrictedToolConfigPatch(
