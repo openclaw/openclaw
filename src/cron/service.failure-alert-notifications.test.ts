@@ -91,7 +91,6 @@ describe("CronService failure notification delivery", () => {
           cfg,
           preflight,
           canRelayToUser: true,
-          startedAt: Date.now(),
           scheduledTasks: [],
           useHeartbeatResponseTool: false,
         }).prompt,

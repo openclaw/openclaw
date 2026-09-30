@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { MediaUnderstandingProvider } from "openclaw/plugin-sdk/media-understanding";
 import type { MemoryEmbeddingProviderAdapter } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import { splitTrailingAuthProfile } from "openclaw/plugin-sdk/model-ref-parse";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import {
   definePluginEntry,
@@ -340,33 +341,6 @@ function toDynamicOllamaModel(params: {
   };
 }
 
-function stripTrailingAuthProfile(raw: string): string {
-  const trimmed = raw.trim();
-  const lastSlash = trimmed.lastIndexOf("/");
-  let delimiter = trimmed.indexOf("@", lastSlash + 1);
-  if (delimiter <= 0) {
-    return trimmed;
-  }
-  const suffix = () => trimmed.slice(delimiter + 1);
-  if (/^\d{8}(?:@|$)/.test(suffix())) {
-    const next = trimmed.indexOf("@", delimiter + 9);
-    if (next < 0) {
-      return trimmed;
-    }
-    delimiter = next;
-  }
-  if (/^(?:i?q\d+(?:_[a-z0-9]+)*|\d+bit)(?:@|$)/i.test(suffix())) {
-    const next = trimmed.indexOf("@", delimiter + 1);
-    if (next < 0) {
-      return trimmed;
-    }
-    delimiter = next;
-  }
-  const model = trimmed.slice(0, delimiter).trim();
-  const profile = trimmed.slice(delimiter + 1).trim();
-  return model && profile ? model : trimmed;
-}
-
 function needsOllamaCatalogMetadata(entry: ProviderAugmentModelCatalogContext["entries"][number]) {
   const hasContextLimit = entry.contextWindow !== undefined || entry.contextTokens !== undefined;
   return (
@@ -507,7 +481,7 @@ function collectConfiguredOllamaModelIds(params: {
     if (typeof raw !== "string") {
       return;
     }
-    const trimmed = stripTrailingAuthProfile(raw);
+    const trimmed = splitTrailingAuthProfile(raw).model;
     if (!trimmed.toLowerCase().startsWith(providerPrefix)) {
       return;
     }

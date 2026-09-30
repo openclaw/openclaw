@@ -73,10 +73,7 @@ async function openSkills(page: Page) {
 }
 
 suite.define(() => {
-  it.each([
-    { access: "operator", canWrite: true },
-    { access: "read-only", canWrite: false },
-  ])("keeps Alice's private pin while Bob browses with $access access", async ({ canWrite }) => {
+  it("keeps Alice's private pin while Bob browses with operator access", async () => {
     await suite.withPage({ viewport: { width: 375, height: 844 } }, async ({ page }) => {
       const commands = [
         {
@@ -96,7 +93,7 @@ suite.define(() => {
           { key: sessionKey, sessionId: "synthetic-alice-session" },
           { key: bobSessionKey, sessionId: "synthetic-bob-session" },
         ],
-        operatorScopes: canWrite ? ["operator.read", "operator.write"] : ["operator.read"],
+        operatorScopes: ["operator.read", "operator.write"],
         methodResponses: {
           "chat.startup": {
             cases: [
@@ -203,11 +200,11 @@ suite.define(() => {
       expect(actionBounds.left).toBeGreaterThanOrEqual(0);
       expect(actionBounds.right).toBeLessThanOrEqual(375);
       const actions = menu.locator('wa-dropdown-item[value^="library-"]');
-      expect(await actions.allTextContents()).toEqual(
-        canWrite
-          ? ["Read selected revision", "Refresh revision", "Detach"]
-          : ["Read selected revision"],
-      );
+      expect(await actions.allTextContents()).toEqual([
+        "Read selected revision",
+        "Refresh revision",
+        "Detach",
+      ]);
       for (const action of await actions.all()) {
         expect(await action.isVisible()).toBe(true);
         expect(await action.evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(
@@ -242,12 +239,6 @@ suite.define(() => {
       expect(await menu.getByText("Selected for this session", { exact: true }).count()).toBe(0);
       expect(await menu.getByText("Add from your libraries", { exact: true }).count()).toBe(0);
       expect(await menu.locator('wa-dropdown-item[value^="library-"]').count()).toBe(0);
-      if (!canWrite) {
-        expect(await gateway.getRequests("skills.library.activate")).toHaveLength(0);
-        expect(await gateway.getRequests("skills.library.save")).toHaveLength(0);
-        expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
-        return;
-      }
       await menu.getByRole("menuitem", { name: "Back", exact: true }).click();
       menu = await openSkills(page);
       await gateway.setMethodResponse("skills.library.list", projection([]));

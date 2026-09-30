@@ -614,9 +614,9 @@ struct MacNodeRuntimeTests {
             desktopAvailability: services.desktopAvailability,
             makeMainActorServices: { services })
 
-        let params = MacNodeScreenRecordParams(durationMs: 250)
+        let params = OpenClawScreenRecordParams(durationMs: 250)
         let response = try await invoke(
-            runtime, "req-5", MacNodeScreenCommand.record.rawValue, params: params)
+            runtime, "req-5", OpenClawScreenCommand.record.rawValue, params: params)
         #expect(response.ok == true)
         let payloadJSON = try #require(response.payloadJSON)
 
@@ -654,7 +654,7 @@ struct MacNodeRuntimeTests {
             quality: 0.5,
             format: .jpeg)
         let response = try await invoke(
-            runtime, "req-screen-snapshot", MacNodeScreenCommand.snapshot.rawValue, params: params)
+            runtime, "req-screen-snapshot", OpenClawScreenCommand.snapshot.rawValue, params: params)
         #expect(response.ok == true)
         let payloadJSON = try #require(response.payloadJSON)
 
@@ -686,7 +686,7 @@ struct MacNodeRuntimeTests {
             makeMainActorServices: { services })
 
         let response = await invoke(
-            runtime, "req-screen-snapshot-invalid", MacNodeScreenCommand.snapshot.rawValue, #"{"screenIndex":"#)
+            runtime, "req-screen-snapshot-invalid", OpenClawScreenCommand.snapshot.rawValue, #"{"screenIndex":"#)
 
         #expect(response.ok == false)
         #expect(response.error?.code == .invalidRequest)
@@ -702,7 +702,7 @@ struct MacNodeRuntimeTests {
             makeMainActorServices: { services })
 
         let response = await invoke(
-            runtime, "req-screen-snapshot-defaults", MacNodeScreenCommand.snapshot.rawValue)
+            runtime, "req-screen-snapshot-defaults", OpenClawScreenCommand.snapshot.rawValue)
 
         #expect(response.ok == true)
         let received = await MainActor.run { services.receivedSnapshotParams }
@@ -750,7 +750,7 @@ struct MacNodeRuntimeTests {
     }
 
     @Test func `provider selection owns both snapshot and action without cross-provider fallback`() async throws {
-        let commands: Set<String> = [MacNodeScreenCommand.snapshot.rawValue, OpenClawComputerCommand.act.rawValue]
+        let commands: Set<String> = [OpenClawScreenCommand.snapshot.rawValue, OpenClawComputerCommand.act.rawValue]
         let cuaWorker = ComputerProviderWorkerProbe(commands: commands)
         let cuaServices = await MainActor.run { MainActorServicesProbe() }
         let cuaRuntime = await MacNodeRuntime(
@@ -764,14 +764,14 @@ struct MacNodeRuntimeTests {
         #expect(await (self.invoke(
             cuaRuntime,
             "cua-snapshot",
-            MacNodeScreenCommand.snapshot.rawValue)).ok)
+            OpenClawScreenCommand.snapshot.rawValue)).ok)
         #expect(try await (self.invoke(
             cuaRuntime,
             "cua-action",
             OpenClawComputerCommand.act.rawValue,
             params: action)).ok)
         #expect(await cuaWorker.invokedCommands == [
-            MacNodeScreenCommand.snapshot.rawValue,
+            OpenClawScreenCommand.snapshot.rawValue,
             OpenClawComputerCommand.act.rawValue,
         ])
         #expect(await MainActor.run { cuaServices.snapshotCallCount == 0 && cuaServices.performCallCount == 0 })
@@ -787,7 +787,7 @@ struct MacNodeRuntimeTests {
         #expect(await (self.invoke(
             peekabooRuntime,
             "peekaboo-snapshot",
-            MacNodeScreenCommand.snapshot.rawValue)).ok)
+            OpenClawScreenCommand.snapshot.rawValue)).ok)
         #expect(try await (self.invoke(
             peekabooRuntime,
             "peekaboo-action",
@@ -809,7 +809,7 @@ struct MacNodeRuntimeTests {
         let unavailable = await invoke(
             unavailableRuntime,
             "cua-unavailable",
-            MacNodeScreenCommand.snapshot.rawValue)
+            OpenClawScreenCommand.snapshot.rawValue)
         #expect(!unavailable.ok)
         #expect(await MainActor.run { unavailableServices.snapshotCallCount == 0 })
     }
@@ -1240,7 +1240,7 @@ struct MacNodeRuntimeTests {
             makeMainActorServices: { services })
 
         let response = await invoke(
-            runtime, "req-screen-snapshot-error", MacNodeScreenCommand.snapshot.rawValue)
+            runtime, "req-screen-snapshot-error", OpenClawScreenCommand.snapshot.rawValue)
 
         #expect(response.ok == false)
         #expect(response.error?.code == .unavailable)
@@ -1256,7 +1256,7 @@ struct MacNodeRuntimeTests {
             desktopAvailability: invalidIndexServices.desktopAvailability,
             makeMainActorServices: { invalidIndexServices })
         let invalidIndexResponse = await invoke(
-            invalidIndexRuntime, "req-screen-snapshot-bad-index", MacNodeScreenCommand.snapshot.rawValue)
+            invalidIndexRuntime, "req-screen-snapshot-bad-index", OpenClawScreenCommand.snapshot.rawValue)
 
         #expect(invalidIndexResponse.ok == false)
         #expect(invalidIndexResponse.error?.code == .invalidRequest)
@@ -1269,7 +1269,7 @@ struct MacNodeRuntimeTests {
             desktopAvailability: noDisplaysServices.desktopAvailability,
             makeMainActorServices: { noDisplaysServices })
         let noDisplaysResponse = await invoke(
-            noDisplaysRuntime, "req-screen-snapshot-no-displays", MacNodeScreenCommand.snapshot.rawValue)
+            noDisplaysRuntime, "req-screen-snapshot-no-displays", OpenClawScreenCommand.snapshot.rawValue)
 
         #expect(noDisplaysResponse.ok == false)
         #expect(noDisplaysResponse.error?.code == .invalidRequest)
@@ -1293,7 +1293,7 @@ struct MacNodeRuntimeTests {
             makeMainActorServices: { services })
 
         let response = await invoke(
-            runtime, "req-screen-snapshot-too-large", MacNodeScreenCommand.snapshot.rawValue)
+            runtime, "req-screen-snapshot-too-large", OpenClawScreenCommand.snapshot.rawValue)
 
         #expect(response.ok == false)
         #expect(response.payloadJSON == nil)
@@ -1318,7 +1318,7 @@ struct MacNodeRuntimeTests {
             makeMainActorServices: { services })
 
         let response = await invoke(
-            runtime, "req-screen-snapshot-slash-heavy", MacNodeScreenCommand.snapshot.rawValue,
+            runtime, "req-screen-snapshot-slash-heavy", OpenClawScreenCommand.snapshot.rawValue,
             nodeId: "node-slash-heavy")
 
         #expect(response.ok == false)
@@ -1343,7 +1343,7 @@ struct MacNodeRuntimeTests {
             makeMainActorServices: { services })
 
         let response = await invoke(
-            runtime, "req-fit", MacNodeScreenCommand.snapshot.rawValue, nodeId: "node-fit")
+            runtime, "req-fit", OpenClawScreenCommand.snapshot.rawValue, nodeId: "node-fit")
 
         #expect(response.ok == true)
         let payloadJSON = try #require(response.payloadJSON)

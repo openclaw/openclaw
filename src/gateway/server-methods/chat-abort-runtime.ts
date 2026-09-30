@@ -21,7 +21,7 @@ import {
 } from "../../agents/subagents/registry/subagent-registry-read.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isAgentEventLifecycleGenerationCurrent } from "../../infra/agent-events.js";
-import { createChatAbortOps } from "../chat-abort-ops.js";
+import { captureWorkerInferenceForSession, createChatAbortOps } from "../chat-abort-ops.js";
 import {
   abortChatRunById,
   isChatAbortControllerEntryAbortable,
@@ -32,12 +32,10 @@ import { abortQueuedChatTurnById } from "../chat-queued-turns.js";
 import { resolveChatRunOwnerAgentId } from "../chat-run-owner.js";
 import { errorShapeFromError } from "../error-shape.js";
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX } from "../server-shared.js";
+import { withReadySessionRows, type SessionRowReadView } from "../session-row-prepared-read.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { resolveSessionStoreKey } from "../session-utils.js";
-import {
-  captureWorkerInferenceCancellation,
-  type WorkerInferenceCancellation,
-} from "../worker-environments/inference-control-internal.js";
+import type { WorkerInferenceCancellation } from "../worker-environments/inference-control-internal.js";
 import {
   canRequesterAbortChatRun,
   resolveAuthorizedPreRegisteredRunsForSessionKeys,
@@ -197,6 +195,7 @@ export function abortQueuedCollectorSession(
       const captured = agentId
         ? projection?.capture({ agentId, key: params.sessionKey })
         : undefined;
+      let publicationRows: SessionRowReadView | undefined;
       await killSubagentRunAdmin(
         {
           cfg,
@@ -250,7 +249,7 @@ export function abortQueuedCollectorSession(
                   sessionId: params.sessionId,
                   reason: "abort",
                 },
-                { preparedPublication: true },
+                { preparedPublication: true, sessionRows: publicationRows },
               );
             }
             outcome = {
@@ -269,16 +268,29 @@ export function abortQueuedCollectorSession(
         },
         {
           assertCurrent,
-          preparePublication: {
-            needsPreparation: () => projection?.needsMaterialization === true,
-            prepare: async () => {
-              await projection?.ensureMaterialized();
+          preparePublication: async (publish) => {
+            const publishPrepared = (read?: SessionRowReadView) => {
               if (captured && !projection?.isCurrent(captured)) {
                 throw new Error(
                   "Queued collector session changed before cancellation publication; retry Stop.",
                 );
               }
-            },
+              publicationRows = read;
+              try {
+                return publish();
+              } finally {
+                publicationRows = undefined;
+              }
+            };
+            if (projection && agentId) {
+              return await withReadySessionRows(
+                projection,
+                () => [{ agentId, key: params.sessionKey }],
+                publishPrepared,
+                { includeAncestors: true },
+              );
+            }
+            return publishPrepared();
           },
           beforeSessionKill: () => {
             // Resolve Gateway owners under the kill runtime's session fence.
@@ -340,22 +352,6 @@ export function abortQueuedCollectorSession(
     }
     return outcome;
   })();
-}
-
-export function captureWorkerInferenceForSession(params: {
-  context: GatewayRequestContext;
-  sessionId?: string;
-  runId?: string;
-}): WorkerInferenceCancellation | undefined {
-  const sessionId = normalizeOptionalString(params.sessionId);
-  if (!sessionId) {
-    return undefined;
-  }
-  return captureWorkerInferenceCancellation(
-    params.context.workerEnvironmentService,
-    sessionId,
-    params.runId,
-  );
 }
 
 type ChatSessionAbortParams = {

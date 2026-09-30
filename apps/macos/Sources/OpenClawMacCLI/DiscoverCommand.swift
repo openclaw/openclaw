@@ -115,15 +115,7 @@ func runDiscover(_ args: [String]) async {
                     debugID: $0.debugID,
                     isLocal: $0.isLocal)
             })
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        if let data = try? encoder.encode(payload),
-           let json = String(data: data, encoding: .utf8)
-        {
-            print(json)
-        } else {
-            print("{\"error\":\"failed to encode JSON\"}")
-        }
+        printCLIJSON(payload, fallback: "{\"error\":\"failed to encode JSON\"}")
         return
     }
 

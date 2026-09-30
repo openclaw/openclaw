@@ -145,21 +145,11 @@ function hasSuccessfulToolResultMessage(message: HeartbeatTranscriptMessage): bo
 }
 
 function collectSuccessfulToolResultCallIds(message: HeartbeatTranscriptMessage): string[] {
-  const record = message as Record<string, unknown>;
   const resultBlocks = collectToolResultBlocks(message.content);
-  const ids: string[] = [];
-  if (resultBlocks.length === 0) {
-    if (!isFailedToolResultRecord(record)) {
-      ids.push(...collectToolCallIds(record));
-    }
-  } else {
-    for (const block of resultBlocks) {
-      if (isFailedToolResultRecord(block)) {
-        continue;
-      }
-      ids.push(...collectToolCallIds(block));
-    }
-  }
+  const records = resultBlocks.length > 0 ? resultBlocks : [message];
+  const ids = records.flatMap((record) =>
+    isFailedToolResultRecord(record) ? [] : collectToolCallIds(record),
+  );
   return [...new Set(ids)];
 }
 
@@ -355,11 +345,11 @@ function resolveHeartbeatArtifactSpanEnd(
       index = advancePastAdjacentToolResults(messages, index + 1);
       continue;
     }
-    if (sawTerminalHeartbeatArtifact) {
-      index++;
-      continue;
-    }
-    if (isToolResultMessage(message) || hasAssistantToolCall(message)) {
+    if (
+      sawTerminalHeartbeatArtifact ||
+      isToolResultMessage(message) ||
+      hasAssistantToolCall(message)
+    ) {
       index++;
       continue;
     }
@@ -390,22 +380,16 @@ export function filterHeartbeatTranscriptArtifacts<T extends HeartbeatTranscript
   const result: T[] = [];
   let i = 0;
   while (i < messages.length) {
-    if (
-      !isHeartbeatUserMessage(expectDefined(messages[i], "messages entry at i"), heartbeatPrompt)
-    ) {
-      result.push(expectDefined(messages[i], "messages entry at i"));
-      i++;
-      continue;
-    }
-
-    const next = resolveHeartbeatArtifactSpanEnd(messages, i, ackMaxChars);
+    const message = expectDefined(messages[i], "messages entry at i");
+    const next = isHeartbeatUserMessage(message, heartbeatPrompt)
+      ? resolveHeartbeatArtifactSpanEnd(messages, i, ackMaxChars)
+      : undefined;
     if (next === undefined) {
-      result.push(expectDefined(messages[i], "messages entry at i"));
+      result.push(message);
       i++;
-      continue;
+    } else {
+      i = next;
     }
-
-    i = next;
   }
 
   return result;

@@ -38,16 +38,7 @@ import {
   hasSlackNativeDataBlock,
 } from "./native-data-blocks.js";
 import { SLACK_SECTION_TEXT_MAX } from "./presentation.js";
-import {
-  SLACK_APPROVAL_BUTTON_ACTION_ID,
-  SLACK_APPROVAL_SELECT_ACTION_ID,
-  SLACK_CALLBACK_BUTTON_ACTION_ID,
-  SLACK_CALLBACK_SELECT_ACTION_ID,
-  SLACK_QUESTION_BUTTON_ACTION_ID,
-  SLACK_REPLY_BUTTON_ACTION_ID,
-  SLACK_REPLY_LINK_ACTION_ID,
-  SLACK_REPLY_SELECT_ACTION_ID,
-} from "./reply-action-ids.js";
+import { SLACK_BUTTON_ACTION_IDS, SLACK_SELECT_ACTION_IDS } from "./reply-action-ids.js";
 
 export type SlackReplyBlockSegment =
   | { kind: "blocks"; blocks: SlackBlock[] }
@@ -430,18 +421,8 @@ function appendPresentationPart(
   );
 }
 
-const SLACK_BUTTON_CONTROL_ACTION_IDS = [
-  SLACK_APPROVAL_BUTTON_ACTION_ID,
-  SLACK_CALLBACK_BUTTON_ACTION_ID,
-  SLACK_QUESTION_BUTTON_ACTION_ID,
-  SLACK_REPLY_BUTTON_ACTION_ID,
-  SLACK_REPLY_LINK_ACTION_ID,
-] as const;
-const SLACK_SELECT_CONTROL_ACTION_IDS = [
-  SLACK_APPROVAL_SELECT_ACTION_ID,
-  SLACK_CALLBACK_SELECT_ACTION_ID,
-  SLACK_REPLY_SELECT_ACTION_ID,
-] as const;
+const SLACK_BUTTON_CONTROL_ACTION_IDS = Object.values(SLACK_BUTTON_ACTION_IDS);
+const SLACK_SELECT_CONTROL_ACTION_IDS = Object.values(SLACK_SELECT_ACTION_IDS);
 
 function readGeneratedSlackControlRowKey(block: SlackBlock): string | undefined {
   const record = block as { block_id?: unknown; elements?: unknown; type?: unknown };

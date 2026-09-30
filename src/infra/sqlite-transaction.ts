@@ -196,16 +196,6 @@ function slowBusyWaitThresholdMs(options: SqliteTransactionOptions | undefined):
   return Math.min(DEFAULT_SLOW_BUSY_WAIT_MS, options.busyTimeoutMs);
 }
 
-function slowTransactionHoldThresholdMs(options: SqliteTransactionOptions | undefined): number {
-  return options?.slowTransactionHoldMs ?? DEFAULT_SLOW_TRANSACTION_HOLD_MS;
-}
-
-function transactionLogger(
-  options: SqliteTransactionOptions | undefined,
-): Pick<SubsystemLogger, "warn"> {
-  return options?.logger ?? transactionLog;
-}
-
 function transactionDiagnosticLabels(
   db: DatabaseSync | undefined,
   options: Pick<SqliteTransactionOptions, "databaseLabel" | "operationLabel"> | undefined,
@@ -231,10 +221,12 @@ function logSlowTransactionHold(params: {
   mode: SqliteTransactionMode;
   options?: SqliteTransactionOptions;
 }): void {
-  if (params.elapsedMs < slowTransactionHoldThresholdMs(params.options)) {
+  if (
+    params.elapsedMs < (params.options?.slowTransactionHoldMs ?? DEFAULT_SLOW_TRANSACTION_HOLD_MS)
+  ) {
     return;
   }
-  transactionLogger(params.options).warn("slow SQLite transaction hold", {
+  (params.options?.logger ?? transactionLog).warn("slow SQLite transaction hold", {
     async: false,
     ...transactionDiagnosticLabels(params.db, params.options),
     elapsedMs: params.elapsedMs,
@@ -242,7 +234,7 @@ function logSlowTransactionHold(params: {
     mode: params.mode,
     pid: process.pid,
     threadId,
-    thresholdMs: slowTransactionHoldThresholdMs(params.options),
+    thresholdMs: params.options?.slowTransactionHoldMs ?? DEFAULT_SLOW_TRANSACTION_HOLD_MS,
   });
 }
 
@@ -256,7 +248,7 @@ function logSlowTransactionStep(params: {
   if (params.elapsedMs < slowBusyWaitThresholdMs(params.options)) {
     return;
   }
-  transactionLogger(params.options).warn("slow SQLite transaction step", {
+  (params.options?.logger ?? transactionLog).warn("slow SQLite transaction step", {
     async: false,
     ...(params.options?.busyTimeoutMs !== undefined
       ? { busyTimeoutMs: params.options.busyTimeoutMs }
@@ -302,7 +294,7 @@ function execTimedTransactionStep(params: {
     if (isSqliteLockError(error) && shouldReportSqliteLockFailure(params.db)) {
       const sqliteErrcode = sqliteExtendedResultCode(error);
       const sqlitePrimaryCode = sqlitePrimaryResultCode(error);
-      transactionLogger(params.options).warn("SQLite transaction lock wait failed", {
+      (params.options?.logger ?? transactionLog).warn("SQLite transaction lock wait failed", {
         async: false,
         ...(params.options?.busyTimeoutMs !== undefined
           ? { busyTimeoutMs: params.options.busyTimeoutMs }

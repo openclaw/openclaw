@@ -224,17 +224,20 @@ function buildUpdateFixture(fixture: CliOptions["fixture"], nowMs: number): Upda
     },
   };
 
+  const schedule: UpdateScheduleState = {
+    ...baseSchedule,
+    campaign: {
+      id:
+        fixture === "update-blocked"
+          ? "mock-update-waiting-for-idle"
+          : "mock-update-before-failure",
+      state: "waiting-for-idle",
+      announcedAtMs: nowMs - 2 * 60_000,
+      forceAtMs: nowMs + 13 * 60_000,
+      updatedAtMs: nowMs,
+    },
+  };
   if (fixture === "update-blocked") {
-    const schedule: UpdateScheduleState = {
-      ...baseSchedule,
-      campaign: {
-        id: "mock-update-waiting-for-idle",
-        state: "waiting-for-idle",
-        announcedAtMs: nowMs - 2 * 60_000,
-        forceAtMs: nowMs + 13 * 60_000,
-        updatedAtMs: nowMs,
-      },
-    };
     return {
       available,
       schedule,
@@ -259,16 +262,6 @@ function buildUpdateFixture(fixture: CliOptions["fixture"], nowMs: number): Upda
     };
   }
 
-  const schedule: UpdateScheduleState = {
-    ...baseSchedule,
-    campaign: {
-      id: "mock-update-before-failure",
-      state: "waiting-for-idle",
-      announcedAtMs: nowMs - 2 * 60_000,
-      forceAtMs: nowMs + 13 * 60_000,
-      updatedAtMs: nowMs,
-    },
-  };
   const result: UpdateRunResult = {
     status: "error",
     mode: "git",
@@ -808,64 +801,44 @@ function buildModelProviderMocks(baseTime: number) {
     authStatus: {
       ts: baseTime,
       providers: [
-        {
-          provider: "anthropic",
-          displayName: "Claude",
-          status: "ok",
-          expiry: expiry(11 * 24 * hour, "11d"),
-          profiles: [
-            {
-              profileId: "anthropic:default",
-              type: "oauth",
-              status: "ok",
-              expiry: expiry(11 * 24 * hour, "11d"),
-            },
-          ],
-          usage: {
-            providerId: "anthropic",
-            plan: anthropicUsage.plan,
-            windows: anthropicUsage.windows,
+        ...[
+          {
+            usage: anthropicUsage,
+            profileId: "anthropic:default",
+            type: "oauth",
+            status: "ok",
+            remainingMs: 11 * 24 * hour,
+            label: "11d",
           },
-        },
-        {
-          provider: "openai",
-          displayName: "OpenAI",
-          status: "ok",
-          expiry: expiry(6 * 24 * hour, "6d"),
-          profiles: [
-            {
-              profileId: "openai:codex",
-              type: "oauth",
-              status: "ok",
-              expiry: expiry(6 * 24 * hour, "6d"),
-            },
-          ],
-          usage: {
-            providerId: "openai",
-            plan: openaiUsage.plan,
-            windows: openaiUsage.windows,
-            billing: openaiUsage.billing,
+          {
+            usage: openaiUsage,
+            profileId: "openai:codex",
+            type: "oauth",
+            status: "ok",
+            remainingMs: 6 * 24 * hour,
+            label: "6d",
           },
-        },
-        {
-          provider: "github-copilot",
-          displayName: "GitHub Copilot",
-          status: "expiring",
-          expiry: expiry(26 * 60 * 1000, "26m"),
-          profiles: [
-            {
-              profileId: "github-copilot:default",
-              type: "token",
-              status: "expiring",
-              expiry: expiry(26 * 60 * 1000, "26m"),
-            },
-          ],
-          usage: {
-            providerId: "github-copilot",
-            plan: copilotUsage.plan,
-            windows: copilotUsage.windows,
+          {
+            usage: copilotUsage,
+            profileId: "github-copilot:default",
+            type: "token",
+            status: "expiring",
+            remainingMs: 26 * 60 * 1000,
+            label: "26m",
           },
-        },
+        ].map(({ usage, profileId, type, status, remainingMs, label }) => ({
+          provider: usage.provider,
+          displayName: usage.displayName,
+          status,
+          expiry: expiry(remainingMs, label),
+          profiles: [{ profileId, type, status, expiry: expiry(remainingMs, label) }],
+          usage: {
+            providerId: usage.provider,
+            plan: usage.plan,
+            windows: usage.windows,
+            ...("billing" in usage ? { billing: usage.billing } : {}),
+          },
+        })),
         {
           provider: "openrouter",
           displayName: "OpenRouter",
@@ -898,10 +871,13 @@ function buildModelProviderMocks(baseTime: number) {
         ],
         contextWindowDefault: "1m",
       },
-      {
-        id: "claude-sonnet-4-6",
-        name: "Claude Sonnet 4.6",
-        provider: "anthropic",
+      ...[
+        { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", provider: "anthropic" },
+        { id: "gpt-5-mini", name: "GPT-5 Mini", provider: "openai" },
+      ].map(({ id, name, provider }) => ({
+        id,
+        name,
+        provider,
         available: true,
         contextWindow: 200_000,
         thinkingLevels: [
@@ -912,22 +888,7 @@ function buildModelProviderMocks(baseTime: number) {
         thinkingDefault: "medium",
         reasoning: true,
         supportsTools: true,
-      },
-      {
-        id: "gpt-5-mini",
-        name: "GPT-5 Mini",
-        provider: "openai",
-        available: true,
-        contextWindow: 200_000,
-        thinkingLevels: [
-          { id: "low", label: "Low" },
-          { id: "medium", label: "Medium" },
-          { id: "high", label: "High" },
-        ],
-        thinkingDefault: "medium",
-        reasoning: true,
-        supportsTools: true,
-      },
+      })),
       { id: "gpt-5", name: "GPT-5", provider: "openai", available: true },
       { id: "gemini-3-pro", name: "Gemini 3 Pro", provider: "google", available: false },
       { id: "openrouter/auto", name: "OpenRouter Auto", provider: "openrouter", available: true },
@@ -1509,6 +1470,8 @@ async function createChatPickerScenario(
       path: "/mock/workspace/AGENTS.md",
       size: 2148,
       updatedAtMs: baseTime - 120_000,
+      content:
+        "# AGENTS.md\n\nMock workspace instructions for the composer rail.\n\n- Keep tool output compact.\n- Prefer right-rail context over modal previews.\n",
     },
     {
       missing: false,
@@ -1516,6 +1479,8 @@ async function createChatPickerScenario(
       path: "/mock/workspace/plan.md",
       size: 912,
       updatedAtMs: baseTime - 90_000,
+      content:
+        "# Composer polish plan\n\n1. Keep the composer controls calm.\n2. Move session selection into the sidebar.\n3. Keep model, reasoning, and speed choices discoverable without taking over the page.\n",
     },
     {
       missing: false,
@@ -1523,44 +1488,29 @@ async function createChatPickerScenario(
       path: "/mock/workspace/notes/context.md",
       size: 1620,
       updatedAtMs: baseTime - 30_000,
+      content:
+        "# Context notes\n\nThe right rail should feel like workspace context, not a modal pasted beside the chat.\n\n## Current focus\n\n- Markdown previews need readable dark-mode chrome.\n- Empty or unavailable content should show a quiet state instead of an empty card.\n- File previews should load from the same mock scenario as the file list.\n",
     },
   ];
   const workspaceListCases = ["main", "alpha", "openclaw-mock"].map((agentId) => ({
     match: { agentId },
     response: {
       agentId,
-      files: workspaceFiles,
+      files: workspaceFiles.map(({ content: _content, ...file }) => file),
       workspace: "/mock/workspace",
     },
   }));
-  const workspaceFileContentByName = new Map([
-    [
-      "AGENTS.md",
-      "# AGENTS.md\n\nMock workspace instructions for the composer rail.\n\n- Keep tool output compact.\n- Prefer right-rail context over modal previews.\n",
-    ],
-    [
-      "plan.md",
-      "# Composer polish plan\n\n1. Keep the composer controls calm.\n2. Move session selection into the sidebar.\n3. Keep model, reasoning, and speed choices discoverable without taking over the page.\n",
-    ],
-    [
-      "notes/context.md",
-      "# Context notes\n\nThe right rail should feel like workspace context, not a modal pasted beside the chat.\n\n## Current focus\n\n- Markdown previews need readable dark-mode chrome.\n- Empty or unavailable content should show a quiet state instead of an empty card.\n- File previews should load from the same mock scenario as the file list.\n",
-    ],
-  ]);
   const workspaceFileCases = ["main", "alpha", "openclaw-mock"].flatMap((agentId) =>
     workspaceFiles.map((file) => ({
       match: { agentId, name: file.name },
       response: {
         agentId,
-        file: {
-          ...file,
-          content: workspaceFileContentByName.get(file.name) ?? "",
-        },
+        file: { ...file },
         workspace: "/mock/workspace",
       },
     })),
   );
-  const sessionFiles = [
+  const sessionFileFixtures = [
     {
       kind: "modified",
       missing: false,
@@ -1568,6 +1518,8 @@ async function createChatPickerScenario(
       path: "ui/src/ui/views/chat.ts",
       size: 48320,
       updatedAtMs: baseTime - 20_000,
+      content:
+        'function renderSessionWorkspaceRail() {\n  return html`<aside class="chat-workspace-rail">...</aside>`;\n}\n',
     },
     {
       kind: "modified",
@@ -1576,6 +1528,8 @@ async function createChatPickerScenario(
       path: "ui/src/styles/chat/sidebar.css",
       size: 18840,
       updatedAtMs: baseTime - 18_000,
+      content:
+        ".chat-workspace-rail__section-title {\n  color: var(--muted);\n  text-transform: uppercase;\n}\n",
     },
     {
       kind: "read",
@@ -1584,6 +1538,8 @@ async function createChatPickerScenario(
       path: "src/gateway/server-methods/artifacts.ts",
       size: 21876,
       updatedAtMs: baseTime - 300_000,
+      content:
+        "// Artifact gateway methods collect generated artifacts from session transcripts.\n",
     },
     {
       kind: "read",
@@ -1592,109 +1548,79 @@ async function createChatPickerScenario(
       path: "packages/gateway-protocol/src/schema/sessions.ts",
       size: 16542,
       updatedAtMs: baseTime - 420_000,
+      content:
+        "export const SessionsFilesListParamsSchema = Type.Object({ sessionKey: NonEmptyString });\n",
     },
   ];
+  const sessionFiles = sessionFileFixtures.map(({ content: _content, ...file }) => file);
   const sessionWorkspaceRoot = "/mock/workspace";
-  const sessionFileContentByPath = new Map([
-    [
-      "ui/src/ui/views/chat.ts",
-      'function renderSessionWorkspaceRail() {\n  return html`<aside class="chat-workspace-rail">...</aside>`;\n}\n',
-    ],
-    [
-      "ui/src/styles/chat/sidebar.css",
-      ".chat-workspace-rail__section-title {\n  color: var(--muted);\n  text-transform: uppercase;\n}\n",
-    ],
-    [
-      "src/gateway/server-methods/artifacts.ts",
-      "// Artifact gateway methods collect generated artifacts from session transcripts.\n",
-    ],
-    [
-      "packages/gateway-protocol/src/schema/sessions.ts",
-      "export const SessionsFilesListParamsSchema = Type.Object({ sessionKey: NonEmptyString });\n",
-    ],
-    [
-      "package.json",
-      '{\n  "name": "openclaw",\n  "scripts": { "dev:ui:mock": "tsx scripts/control-ui-mock-dev.ts" }\n}\n',
-    ],
-    [
-      "ui/vite.config.ts",
-      "export default function controlUiViteConfig() {\n  return { server: { strictPort: true } };\n}\n",
-    ],
-    [
-      "ui/src/e2e/chat-flow.e2e.test.ts",
-      "it('keeps the session workspace useful while browsing files', async () => {\n  await page.getByText('Project files').waitFor();\n});\n",
-    ],
-  ]);
+  const sessionFileCase = <T extends { path: string }>(file: T) => ({
+    match: { sessionKey: "agent:main:main", path: file.path },
+    response: { file, root: sessionWorkspaceRoot, sessionKey: "agent:main:main" },
+  });
+  const sessionFileListCase = <T extends Record<string, unknown>>(
+    browser: T,
+    match: Record<string, unknown> = {},
+  ) => ({
+    match: { sessionKey: "agent:main:main", ...match },
+    response: {
+      browser,
+      files: sessionFiles,
+      root: sessionWorkspaceRoot,
+      sessionKey: "agent:main:main",
+    },
+  });
   const sessionFileCases = [
-    {
-      match: { sessionKey: "agent:main:main" },
-      response: {
-        browser: {
-          entries: [
-            {
-              kind: "directory",
-              name: "packages",
-              path: "packages",
-              sessionKind: "read",
-              updatedAtMs: baseTime - 420_000,
-            },
-            {
-              kind: "directory",
-              name: "src",
-              path: "src",
-              sessionKind: "read",
-              updatedAtMs: baseTime - 300_000,
-            },
-            {
-              kind: "directory",
-              name: "ui",
-              path: "ui",
-              sessionKind: "modified",
-              updatedAtMs: baseTime - 20_000,
-            },
-            {
-              kind: "file",
-              name: "package.json",
-              path: "package.json",
-              size: 92750,
-              updatedAtMs: baseTime - 800_000,
-            },
-          ],
-          path: "",
+    sessionFileListCase({
+      entries: [
+        {
+          kind: "directory",
+          name: "packages",
+          path: "packages",
+          sessionKind: "read",
+          updatedAtMs: baseTime - 420_000,
         },
-        files: sessionFiles,
-        root: sessionWorkspaceRoot,
-        sessionKey: "agent:main:main",
-      },
-    },
+        {
+          kind: "directory",
+          name: "src",
+          path: "src",
+          sessionKind: "read",
+          updatedAtMs: baseTime - 300_000,
+        },
+        {
+          kind: "directory",
+          name: "ui",
+          path: "ui",
+          sessionKind: "modified",
+          updatedAtMs: baseTime - 20_000,
+        },
+        {
+          kind: "file",
+          name: "package.json",
+          path: "package.json",
+          size: 92750,
+          updatedAtMs: baseTime - 800_000,
+        },
+      ],
+      path: "",
+    }),
   ];
-  const sessionFileGetCases = sessionFiles.map((file) => ({
-    match: { sessionKey: "agent:main:main", path: file.path },
-    response: {
-      file: {
-        ...file,
-        content: sessionFileContentByPath.get(file.path) ?? "",
-        // Fake CAS token so the file panel offers edit mode against the mock.
-        hash: mockFileHash(sessionFileContentByPath.get(file.path) ?? ""),
-      },
-      root: sessionWorkspaceRoot,
-      sessionKey: "agent:main:main",
-    },
-  }));
-  const sessionFileSetCases = sessionFiles.map((file) => ({
-    match: { sessionKey: "agent:main:main", path: file.path },
-    response: {
-      file: {
-        ...file,
-        kind: "modified",
-        workspacePath: file.path,
-        hash: mockFileHash(`${file.path}:saved`),
-        updatedAtMs: baseTime,
-      },
-      root: sessionWorkspaceRoot,
-      sessionKey: "agent:main:main",
-    },
-  }));
+  const sessionFileGetCases = sessionFileFixtures.map((file) =>
+    sessionFileCase({
+      ...file,
+      // Fake CAS token so the file panel offers edit mode against the mock.
+      hash: mockFileHash(file.content),
+    }),
+  );
+  const sessionFileSetCases = sessionFiles.map((file) =>
+    sessionFileCase({
+      ...file,
+      kind: "modified",
+      workspacePath: file.path,
+      hash: mockFileHash(`${file.path}:saved`),
+      updatedAtMs: baseTime,
+    }),
+  );
   const lobsterSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360">
   <rect width="640" height="360" fill="#10151d"/>
   <circle cx="320" cy="185" r="76" fill="#e23f3f"/>
@@ -1810,34 +1736,22 @@ async function createChatPickerScenario(
   const activitySessions = buildActivitySessionRows(activityTime);
   const dashboardGallerySessions =
     fixture === "dashboards"
-      ? [
-          sessionRow("agent:main:dashboard:release-health", "Release health", baseTime - 3_000, {
+      ? (
+          [
+            ["release-health", "Release health", 3_000, MOCK_ACTOR_MIRA],
+            ["model-spend", "Model spend", 8_000, MOCK_ACTOR_PETER],
+            ["support-radar", "Support radar", 18_000, MOCK_ACTOR_MIRA],
+            ["ci-signal", "CI signal", 42_000, MOCK_ACTOR_PETER],
+            ["community-pulse", "Community pulse", 75_000, MOCK_ACTOR_MIRA],
+            ["gateway-fleet", "Gateway fleet", 130_000, MOCK_ACTOR_PETER],
+          ] as const
+        ).map(([key, label, age, owner]) =>
+          sessionRow(`agent:main:dashboard:${key}`, label, baseTime - age, {
             boardFace: "dashboard",
-            createdActor: MOCK_ACTOR_MIRA,
-            hasActiveRun: true,
-            status: "running",
+            createdActor: owner,
+            ...(key === "release-health" ? { hasActiveRun: true, status: "running" } : {}),
           }),
-          sessionRow("agent:main:dashboard:model-spend", "Model spend", baseTime - 8_000, {
-            boardFace: "dashboard",
-            createdActor: MOCK_ACTOR_PETER,
-          }),
-          sessionRow("agent:main:dashboard:support-radar", "Support radar", baseTime - 18_000, {
-            boardFace: "dashboard",
-            createdActor: MOCK_ACTOR_MIRA,
-          }),
-          sessionRow("agent:main:dashboard:ci-signal", "CI signal", baseTime - 42_000, {
-            boardFace: "dashboard",
-            createdActor: MOCK_ACTOR_PETER,
-          }),
-          sessionRow("agent:main:dashboard:community-pulse", "Community pulse", baseTime - 75_000, {
-            boardFace: "dashboard",
-            createdActor: MOCK_ACTOR_MIRA,
-          }),
-          sessionRow("agent:main:dashboard:gateway-fleet", "Gateway fleet", baseTime - 130_000, {
-            boardFace: "dashboard",
-            createdActor: MOCK_ACTOR_PETER,
-          }),
-        ]
+        )
       : [];
   const activeGoal = {
     schemaVersion: 1 as const,
@@ -2432,7 +2346,10 @@ async function createChatPickerScenario(
         email: selfProfile.emails[0],
         avatarUrl: `/api/users/${selfProfile.id}/avatar`,
       },
-      {
+      ...[
+        ["agent:activity:design-review", "agent:main:main"],
+        ["agent:activity:design-review"],
+      ].map((watchedSessions) => ({
         id: "presence-colin",
         name: "Colin",
         email: "colin@example.com",
@@ -2441,19 +2358,8 @@ async function createChatPickerScenario(
         deviceFamily: "Mac",
         platform: "macOS",
         timeZone: "America/Los_Angeles",
-        watchedSessions: ["agent:activity:design-review", "agent:main:main"],
-      },
-      {
-        id: "presence-colin",
-        name: "Colin",
-        email: "colin@example.com",
-        onlineSince: activityTime - 47 * 60_000,
-        lastActivityAt: activityTime - 2 * 60_000,
-        deviceFamily: "Mac",
-        platform: "macOS",
-        timeZone: "America/Los_Angeles",
-        watchedSessions: ["agent:activity:design-review"],
-      },
+        watchedSessions,
+      })),
       {
         id: "presence-patricia",
         name: "Patrick",
@@ -3028,63 +2934,53 @@ async function createChatPickerScenario(
       },
       "sessions.files.list": {
         cases: [
-          {
-            match: { sessionKey: "agent:main:main", path: "ui" },
-            response: {
-              browser: {
-                entries: [
-                  {
-                    kind: "directory",
-                    name: "src",
-                    path: "ui/src",
-                    sessionKind: "modified",
-                    updatedAtMs: baseTime - 20_000,
-                  },
-                  {
-                    kind: "file",
-                    name: "vite.config.ts",
-                    path: "ui/vite.config.ts",
-                    size: 9860,
-                    updatedAtMs: baseTime - 900_000,
-                  },
-                ],
-                parentPath: "",
-                path: "ui",
-              },
-              files: sessionFiles,
-              root: sessionWorkspaceRoot,
-              sessionKey: "agent:main:main",
+          sessionFileListCase(
+            {
+              entries: [
+                {
+                  kind: "directory",
+                  name: "src",
+                  path: "ui/src",
+                  sessionKind: "modified",
+                  updatedAtMs: baseTime - 20_000,
+                },
+                {
+                  kind: "file",
+                  name: "vite.config.ts",
+                  path: "ui/vite.config.ts",
+                  size: 9860,
+                  updatedAtMs: baseTime - 900_000,
+                },
+              ],
+              parentPath: "",
+              path: "ui",
             },
-          },
-          {
-            match: { sessionKey: "agent:main:main", search: "chat" },
-            response: {
-              browser: {
-                entries: [
-                  {
-                    kind: "file",
-                    name: "chat.ts",
-                    path: "ui/src/ui/views/chat.ts",
-                    sessionKind: "modified",
-                    size: 48320,
-                    updatedAtMs: baseTime - 20_000,
-                  },
-                  {
-                    kind: "file",
-                    name: "chat-flow.e2e.test.ts",
-                    path: "ui/src/e2e/chat-flow.e2e.test.ts",
-                    size: 24950,
-                    updatedAtMs: baseTime - 25_000,
-                  },
-                ],
-                path: "",
-                search: "chat",
-              },
-              files: sessionFiles,
-              root: sessionWorkspaceRoot,
-              sessionKey: "agent:main:main",
+            { path: "ui" },
+          ),
+          sessionFileListCase(
+            {
+              entries: [
+                {
+                  kind: "file",
+                  name: "chat.ts",
+                  path: "ui/src/ui/views/chat.ts",
+                  sessionKind: "modified",
+                  size: 48320,
+                  updatedAtMs: baseTime - 20_000,
+                },
+                {
+                  kind: "file",
+                  name: "chat-flow.e2e.test.ts",
+                  path: "ui/src/e2e/chat-flow.e2e.test.ts",
+                  size: 24950,
+                  updatedAtMs: baseTime - 25_000,
+                },
+              ],
+              path: "",
+              search: "chat",
             },
-          },
+            { search: "chat" },
+          ),
           ...sessionFileCases,
         ],
       },

@@ -1,5 +1,5 @@
-import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { collectTextContentBlocks } from "../../agents/content-blocks.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
 import { redactTranscriptMessage } from "../../agents/transcript-redact.js";
 import {
@@ -28,8 +28,8 @@ import {
 } from "../../sessions/user-turn-transcript.js";
 import { buildChannelUserTurnSender } from "../../sessions/user-turn-transcript.metadata.js";
 import type { FinalizedRuntimeMsgContext } from "../templating.js";
+import { normalizeMessageTimestampMs } from "./message-timestamp.js";
 
-const EPOCH_MILLISECONDS_THRESHOLD = 1_000_000_000_000;
 const CONVERSATION_TURN_REPLY_CUSTOM_TYPE = "openclaw.conversation-turn-reply";
 
 function readPersistedReplyText(message: unknown): string | undefined {
@@ -37,30 +37,7 @@ function readPersistedReplyText(message: unknown): string | undefined {
   if (typeof content === "string") {
     return normalizeOptionalString(content);
   }
-  if (!Array.isArray(content)) {
-    return undefined;
-  }
-  return normalizeOptionalString(
-    content
-      .flatMap((part) => {
-        if (!part || typeof part !== "object") {
-          return [];
-        }
-        const record = part as Record<string, unknown>;
-        return record.type === "text" && typeof record.text === "string" ? [record.text] : [];
-      })
-      .join("\n"),
-  );
-}
-
-function normalizeTimestamp(value: unknown): number | undefined {
-  const timestamp = typeof value === "number" && Number.isFinite(value) ? value : undefined;
-  if (timestamp === undefined || timestamp <= 0) {
-    return undefined;
-  }
-  return asDateTimestampMs(
-    timestamp < EPOCH_MILLISECONDS_THRESHOLD ? Math.trunc(timestamp * 1_000) : timestamp,
-  );
+  return normalizeOptionalString(collectTextContentBlocks(content).join("\n"));
 }
 
 async function capturePendingConversationTurnReplyUnsafe(params: {
@@ -104,7 +81,7 @@ async function capturePendingConversationTurnReplyUnsafe(params: {
   if (!sessionEntry) {
     return false;
   }
-  const timestamp = normalizeTimestamp(params.ctx.Timestamp);
+  const timestamp = normalizeMessageTimestampMs(params.ctx.Timestamp);
   const parentConversationRef = threadId
     ? (conversation.parentConversationRef ??
       buildConversationRef({

@@ -313,7 +313,7 @@ Every section heading from the previous single-page version keeps its anchor her
 - <a id="feature-and-rpc-reference" />[Feature and RPC reference](/web/control-ui/feature-reference#feature-and-rpc-reference)
 - <a id="chat-and-talk" />[chat and talk](/web/control-ui/feature-reference#chat-and-talk)
 - <a id="channels-sessions-memory" />[channels sessions memory](/web/control-ui/feature-reference#channels-sessions-memory)
-- <a id="cron-tasks-plugins-skills-devices-exec-approvals" />[cron tasks plugins skills devices exec approvals](/web/control-ui/feature-reference#cron-tasks-plugins-skills-devices-exec-approvals)
+- <a id="cron-tasks-plugins-skills-devices-exec-approvals" />[cron plugins skills devices exec approvals](/web/control-ui/feature-reference#cron-tasks-plugins-skills-devices-exec-approvals)
 - <a id="config" />[config](/web/control-ui/feature-reference#config)
 - <a id="usage" />[usage](/web/control-ui/feature-reference#usage)
 - <a id="debug-logs-update" />[debug logs update](/web/control-ui/feature-reference#debug-logs-update)

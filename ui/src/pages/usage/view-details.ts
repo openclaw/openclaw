@@ -407,33 +407,22 @@ function renderSessionLogsCompact(
   cursorStart?: number | null,
   cursorEnd?: number | null,
 ) {
-  if ((loading || status.awaitingGateway) && !status.hasLoaded) {
-    return html`
-      <div class="session-logs-compact">
-        <div class="session-logs-header">${t("usage.details.conversation")}</div>
-        <div class="usage-empty-block">${t("usage.loading.badge")}</div>
-      </div>
-    `;
-  }
-  const refreshStatus = renderUsageRefreshStatus(
-    status,
-    "usage.details.conversation",
-    "conversation",
-  );
-  if (status.error && !status.hasLoaded) {
+  const initialLoading = (loading || status.awaitingGateway) && !status.hasLoaded;
+  const initialError = status.error && !status.hasLoaded;
+  const refreshStatus = initialLoading
+    ? nothing
+    : renderUsageRefreshStatus(status, "usage.details.conversation", "conversation");
+  if (initialLoading || initialError || !logs?.length) {
+    const message = initialLoading ? "usage.loading.badge" : "usage.details.noMessages";
     return html`
       <div class="session-logs-compact">
         <div class="session-logs-header">${t("usage.details.conversation")}</div>
         ${refreshStatus}
-      </div>
-    `;
-  }
-  if (!logs || logs.length === 0) {
-    return html`
-      <div class="session-logs-compact">
-        <div class="session-logs-header">${t("usage.details.conversation")}</div>
-        ${refreshStatus}
-        <div class="usage-empty-block">${t("usage.details.noMessages")}</div>
+        ${
+          initialLoading || !initialError
+            ? html`<div class="usage-empty-block">${t(message)}</div>`
+            : nothing
+        }
       </div>
     `;
   }

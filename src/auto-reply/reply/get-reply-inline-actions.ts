@@ -237,6 +237,10 @@ export async function handleInlineActions(params: {
     abortedLastRun: initialAbortedLastRun,
     skillFilter,
   } = params;
+  const finishCommand = (reply?: ReplyPayload | ReplyPayload[]): InlineActionResult => {
+    typing.cleanup();
+    return { kind: "reply", reply: markCommandReplyForDelivery(reply) };
+  };
   const notifyInlineCommandSessionMetadataChanges = () => {
     const changes = takeCommandSessionMetadataChangesFromTargets([sessionCtx, ctx]);
     if (changes) {
@@ -419,13 +423,7 @@ export async function handleInlineActions(params: {
 
       const tool = authorizedTools.find((candidate) => candidate.name === dispatch.toolName);
       if (!tool) {
-        typing.cleanup();
-        return {
-          kind: "reply",
-          reply: markCommandReplyForDelivery({
-            text: `❌ Tool not available: ${dispatch.toolName}`,
-          }),
-        };
+        return finishCommand({ text: `❌ Tool not available: ${dispatch.toolName}` });
       }
 
       const toolCallId = `cmd_${generateSecureToken(8)}`;
@@ -448,22 +446,13 @@ export async function handleInlineActions(params: {
         const result = await tool.execute(toolCallId, toolArgs, opts?.abortSignal);
         const blockedReason = extractBlockedToolReason(result);
         if (blockedReason) {
-          typing.cleanup();
-          return {
-            kind: "reply",
-            reply: markCommandReplyForDelivery({ text: `❌ Tool call blocked: ${blockedReason}` }),
-          };
+          return finishCommand({ text: `❌ Tool call blocked: ${blockedReason}` });
         }
         const text = extractTextFromToolResult(result) ?? "✅ Done.";
-        typing.cleanup();
-        return { kind: "reply", reply: markCommandReplyForDelivery({ text }) };
+        return finishCommand({ text });
       } catch (err) {
         const message = formatErrorMessage(err);
-        typing.cleanup();
-        return {
-          kind: "reply",
-          reply: markCommandReplyForDelivery({ text: `❌ ${message}` }),
-        };
+        return finishCommand({ text: `❌ ${message}` });
       }
     }
 
@@ -515,11 +504,7 @@ export async function handleInlineActions(params: {
 
   if (referenced) {
     if (referenced.error) {
-      typing.cleanup();
-      return {
-        kind: "reply",
-        reply: markCommandReplyForDelivery({ text: referenced.error }),
-      };
+      return finishCommand({ text: referenced.error });
     }
     if (referenced.skills.length > 0) {
       skillSelections = mergeSelections(skillSelections, toSelections(referenced.skills));
@@ -631,8 +616,7 @@ export async function handleInlineActions(params: {
     notifyInlineCommandSessionMetadataChanges();
     if (inlineResult.reply) {
       if (!cleanedBody) {
-        typing.cleanup();
-        return { kind: "reply", reply: markCommandReplyForDelivery(inlineResult.reply) };
+        return finishCommand(inlineResult.reply);
       }
       await sendInlineReply(inlineResult.reply);
     }
@@ -685,8 +669,7 @@ export async function handleInlineActions(params: {
   skillSelections = mergeSelections(skillSelections, commandResult.explicitSkillSelections);
   notifyInlineCommandSessionMetadataChanges();
   if (!commandResult.shouldContinue) {
-    typing.cleanup();
-    return { kind: "reply", reply: markCommandReplyForDelivery(commandResult.reply) };
+    return finishCommand(commandResult.reply);
   }
   if (command.commandBodyNormalized !== commandBodyBeforeRun) {
     cleanedBody = command.commandBodyNormalized;

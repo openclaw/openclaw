@@ -109,6 +109,16 @@
   background: transparent;
 }
 
+/* Keep short-pane insets with their defaults: shared CSS chunks can load the
+   startup sheet after composer styles when navigating from New Session. */
+@container chat-conversation (max-height: 320px) {
+  .chat-thread-viewport,
+  .chat-thread {
+    --chat-thread-padding-top: 0px;
+    --chat-thread-padding-bottom: 0px;
+  }
+}
+
 /* Keep the route's initial skeleton in the full transcript region as the real composer mounts. */
 .chat-thread.chat-thread--route-loading {
   display: flex;

@@ -11,7 +11,6 @@ enum CritterIconRenderer {
     private struct Canvas {
         let w: CGFloat
         let h: CGFloat
-        let stepX: CGFloat
         let stepY: CGFloat
         let snapX: (CGFloat) -> CGFloat
         let snapY: (CGFloat) -> CGFloat
@@ -196,7 +195,6 @@ enum CritterIconRenderer {
         return Canvas(
             w: w,
             h: h,
-            stepX: stepX,
             stepY: stepY,
             snapX: snapX,
             snapY: snapY,

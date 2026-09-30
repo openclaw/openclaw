@@ -1122,22 +1122,20 @@ assert.equal(result.status, "skipped", "second update was not a clean no-op");
 assert.equal(result.reason, "already-current", "second update was not already current");
 // The isolated state directory records a service refusal without running the suggested command.
 assert(Array.isArray(result.steps), "second update did not report its steps");
-const expectedSteps = result.steps.length === 0 ? [] : [{
+// Advisory guidance is product prose that releases reword; require one, not its text.
+const steps = result.steps.map(({ advisory, ...step }) => advisory ? {
+  ...step,
+  advisory: { kind: advisory.kind, explained: typeof advisory.message === "string" && advisory.message.trim() !== "" },
+} : step);
+const expectedSteps = steps.length === 0 ? [] : [{
   name: "managed-service-reconciliation",
   command: "openclaw gateway install --force",
   cwd: result.root ?? "",
   durationMs: 0,
   exitCode: 0,
-  advisory: {
-    kind: "recoverable-maintenance",
-    message:
-      "service management skipped: non-default state dir or config path. " +
-      "Rerun with HOME set to the OS account home, without OPENCLAW_HOME, " +
-      "and with OPENCLAW_STATE_DIR and OPENCLAW_CONFIG_PATH either unset or pointing " +
-      "at the canonical paths for that account home and profile to manage the gateway service during update.",
-  },
+  advisory: { kind: "recoverable-maintenance", explained: true },
 }];
-assert.deepEqual(result.steps, expectedSteps, "second update executed mutations or unexpected maintenance");
+assert.deepEqual(steps, expectedSteps, "second update executed mutations or unexpected maintenance");
 assert(!result.nextAction, "second update requested repair");
 console.log("Second update: already-current, no package mutations or repair required.");
 NODE
@@ -1473,6 +1471,16 @@ candidate_update_spec() {
   esac
 }
 
+is_extended_stable_release_version() {
+  local version_pattern='^[1-9][0-9]{3}\.([1-9]|1[0-2])\.([1-9][0-9]*)$'
+  [[ "$1" =~ $version_pattern ]] && ((10#${BASH_REMATCH[2]} >= 33))
+}
+
+candidate_requires_stable_channel() {
+  is_extended_stable_release_version "$baseline_version" &&
+    ! is_extended_stable_release_version "$1"
+}
+
 update_candidate() {
   local after_repair="${1:-0}"
   local expected_version="${3:-$candidate_version}"
@@ -1507,6 +1515,12 @@ update_candidate() {
     previous_systemctl_lines="$(wc -l <"$SYSTEMCTL_SHIM_LOG")"
   fi
   local update_args=(update --tag "$update_spec" --yes --json)
+  local switch_to_stable=0
+  # Shipped extended-stable updaters reject --tag until the operator switches channels.
+  if candidate_requires_stable_channel "$expected_version"; then
+    update_args+=(--channel stable)
+    switch_to_stable=1
+  fi
   local update_env=(
     env
     -u OPENCLAW_GATEWAY_TOKEN
@@ -1617,6 +1631,14 @@ update_candidate() {
   if [ "$installed_version" != "$expected_version" ]; then
     echo "update did not leave the selected target installed: $installed_version (expected $expected_version)" >&2
     return 1
+  fi
+  if [ "$switch_to_stable" = "1" ]; then
+    node --input-type=module - "$OPENCLAW_CONFIG_PATH" <<'NODE' || return "$?"
+import assert from "node:assert/strict";
+import fs from "node:fs";
+const config = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+assert.equal(config.update?.channel, "stable", "update channel was not persisted as stable");
+NODE
   fi
   CURRENT_PHASE="$update_phase"
 }

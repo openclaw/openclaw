@@ -108,7 +108,7 @@ it.each([
       ),
     ).toBe(scenario.visibleBeforeStaging);
     const stagedResultRef = `refs/openclaw/worker-results/${claim.claimId}`;
-    store.recordStagedWorkspaceResult(claim, stagedResultRef);
+    await store.recordStagedWorkspaceResult(claim, stagedResultRef);
     expect(readReconciling()).toEqual(new Set([active.sessionId]));
     store.recordWorkspaceResultConflict(claim, { paths: ["conflict.txt"], stagedResultRef });
     const conflicted = await store.readProjection([active.sessionId]);

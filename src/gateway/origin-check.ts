@@ -15,6 +15,16 @@ import {
   normalizeHostHeader,
   resolveHostName,
 } from "./net.js";
+import type { GatewayWsBrowserOrigin } from "./server/client-identity-types.js";
+
+export function checkGatewayWsBrowserOrigin(origin: GatewayWsBrowserOrigin, cfg: OpenClawConfig) {
+  return checkBrowserOrigin({
+    ...origin,
+    allowedOrigins: resolveControlUiAllowedOrigins(cfg),
+    allowHostHeaderOriginFallback:
+      cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true,
+  });
+}
 
 type OriginCheckResult =
   | {

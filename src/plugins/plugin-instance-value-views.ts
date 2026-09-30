@@ -293,10 +293,14 @@ export function createPluginValueView(
     wrap: (value) => wrap(value),
     invoke: admitCallback,
   });
-  const wrapResult = <T>(result: T, callerData?: unknown[]): T => {
+  const wrapResult = <T>(
+    result: T,
+    callerData?: unknown[],
+    project: <V>(value: V) => V = wrap,
+  ): T => {
     const completion = resolvePluginReturnPromise(result);
     if (completion) {
-      const pending = mapPluginReturnPromise(completion, (resolved) => wrap(resolved));
+      const pending = mapPluginReturnPromise(completion, (resolved) => project(resolved));
       if (pending.host) {
         valueInstances.setHost(pending.value, bindings.instance);
       } else {
@@ -305,7 +309,7 @@ export function createPluginValueView(
       // SAFETY: Promise-like results retain their resolved type while callable values stay owned.
       return pending.value as T;
     }
-    return callerData?.includes(result) ? result : wrap(result);
+    return callerData?.includes(result) ? result : project(result);
   };
 
   /** Callables retain their instance; schemas remain data for host validators. */
@@ -566,6 +570,16 @@ export function createPluginValueView(
     return result as T;
   };
 
+  // Host readers retain their lease; the outer iterator can project their payload lazily.
+  const wrapIteratorResult = <T>(value: T): T =>
+    value !== null &&
+    typeof value === "object" &&
+    IteratorResultReader.get(value) &&
+    !pluginMemberNeedsAdmission(value, "then") &&
+    typeof Reflect.get(value, "then") !== "function"
+      ? value
+      : wrap(value);
+
   const admitIterator = (iterator: object): PluginIteratorAdmission => {
     const current = iterators.get(iterator);
     if (current?.active) {
@@ -615,14 +629,14 @@ export function createPluginValueView(
         if (
           value === null ||
           (typeof value !== "object" && typeof value !== "function") ||
-          ((!project || dataRead?.data === value || isPluginData(value)) &&
+          (((!project && !reader) || dataRead?.data === value || isPluginData(value)) &&
             !types.isPromise(value) &&
             !pluginMemberNeedsAdmission(value, "then") &&
             typeof Reflect.get(value, "then") !== "function")
         ) {
           // Share only a completed classification in this synchronous reader chain.
           // A later read starts fresh, so mutations never retain a data exemption.
-          if (project && dataRead && value !== null && typeof value === "object") {
+          if ((project || reader) && dataRead && value !== null && typeof value === "object") {
             dataRead.data = value;
           }
           return value;
@@ -630,12 +644,16 @@ export function createPluginValueView(
         if (dataRead) {
           dataRead.data = undefined;
         }
-        return invoke(() => (project ? project.read(key, source, () => value) : value));
+        return invoke(() => {
+          const projected =
+            project ?? (reader ? MemberReader.get(wrap(result), factory) : undefined);
+          return projected ? projected.read(key, source, () => value) : value;
+        });
       }
       if (dataRead) {
         dataRead.data = undefined;
       }
-      return invoke(() => Reflect.get(result, key));
+      return invoke(() => Reflect.get(reader ? wrap(result) : result, key));
     };
     const admission: PluginIteratorAdmission = {
       get done() {
@@ -672,7 +690,11 @@ export function createPluginValueView(
               }
               throw new TypeError("Plugin iterator method must be callable");
             }
-            const next: unknown = await wrapResult(Reflect.apply(method, iterator, args));
+            const next: unknown = await wrapResult(
+              Reflect.apply(method, iterator, args),
+              undefined,
+              wrapIteratorResult,
+            );
             if (next === null || (typeof next !== "object" && typeof next !== "function")) {
               throw new TypeError("Plugin async iterator result must be an object");
             }
@@ -681,7 +703,9 @@ export function createPluginValueView(
             // A later explicit next can acquire a new lease only while the instance is live.
             state = complete ? "done" : key === "return" ? "returned" : state;
             const readWithData = (dataRead: IteratorDataRead) =>
-              active ? readResultMember(next, "value", dataRead) : Reflect.get(next, "value");
+              active
+                ? readResultMember(next, "value", dataRead)
+                : Reflect.get(IteratorResultReader.get(next) ? wrap(next) : next, "value");
             const readValue = () => readWithData({});
             // Completion may join disposal; value stays lazy and checks the exact inner lease.
             const result = Object.defineProperty({ done: complete }, "value", {

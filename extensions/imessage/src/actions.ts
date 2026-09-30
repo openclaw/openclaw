@@ -24,6 +24,7 @@ import { IMESSAGE_ACTION_NAMES, IMESSAGE_ACTIONS } from "./actions-contract.js";
 import { chatContextFromIMessageTarget } from "./chat-context.js";
 import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "./constants.js";
 import { resolveAuthorizedIMessageActionReference } from "./message-action-reference.js";
+import { normalizeIMessageMessageId } from "./message-guid.js";
 import { describeIMessageMessageTool } from "./message-tool-api.js";
 import {
   findLatestIMessageEntryForChat,
@@ -151,8 +152,8 @@ async function rememberOutboundBridgeMessage(params: {
   messageId?: string;
   chatGuid: string;
 }): Promise<void> {
-  const messageId = params.messageId?.trim();
-  if (!messageId || messageId === "ok" || messageId === "unknown") {
+  const messageId = normalizeIMessageMessageId(params.messageId);
+  if (!messageId) {
     return;
   }
   await rememberIMessageReplyCache({
@@ -164,13 +165,7 @@ async function rememberOutboundBridgeMessage(params: {
   });
 }
 
-/**
- * Read messageId from the action params, falling back to the most recent
- * inbound in the same chat when the caller omitted it. The natural intent
- * for "react with 👍" or "tapback the last message" is the message that
- * just arrived in the current conversation; making the agent re-quote a
- * message id every time is friction the cache already has the answer for.
- */
+/** An omitted action reference targets the most recent inbound in the same chat. */
 function readMessageIdWithChatFallback(
   params: Record<string, unknown>,
   chatContext: IMessageChatContext & { accountId: string },
@@ -183,9 +178,6 @@ function readMessageIdWithChatFallback(
   if (latest?.messageId) {
     return latest.messageId;
   }
-  // Surface the same error the strict readMessageId would have, so the
-  // agent gets a clear "you must supply messageId" signal when there is
-  // also no cached message to fall back to.
   return readStringParam(params, "messageId", { required: true });
 }
 
@@ -205,56 +197,45 @@ async function resolveChatGuid(params: {
   };
 }): Promise<string> {
   const target = resolveIMessageActionTarget(params);
-  if (target) {
-    if (target.kind === "chat_guid") {
-      return target.chatGuid;
-    }
-    if (target.kind === "chat_id" || target.kind === "chat_identifier") {
-      const resolved = await params.runtime.resolveChatGuidForTarget({
-        target,
-        options: params.options,
-        conversationReadOrigin: params.conversationReadOrigin,
-      });
-      if (resolved) {
-        return resolved;
-      }
-      throw new Error(
-        `iMessage ${params.action} failed: chatGuid not found for ${formatUnresolvedTarget(target)}.`,
-      );
-    }
-    if (target.kind === "handle") {
-      // A bare phone/email is a valid chat scope for direct messages —
-      // Messages addresses DMs as `iMessage;-;<handle>` / `SMS;-;<handle>`.
-      // Promote it to chat_identifier so resolveChatGuidForTarget (which
-      // only accepts chat_id / chat_identifier kinds) can look it up.
-      const synthesizedIdentifier = `${target.service === "sms" ? "SMS" : "iMessage"};-;${target.to}`;
-      const resolved = await params.runtime.resolveChatGuidForTarget({
-        target: { kind: "chat_identifier", chatIdentifier: synthesizedIdentifier },
-        options: params.options,
-        conversationReadOrigin: params.conversationReadOrigin,
-      });
-      if (resolved) {
-        return resolved;
-      }
-      // Per-action fallback policy:
-      //  - send / reply / sendWithEffect / sendAttachment: fine to send to
-      //    a synthesized DM identifier; Messages will register the chat.
-      //  - react / edit / unsend: these mutate an existing message that
-      //    must already exist in the chat. If we have no registered chat
-      //    we have no message to act on, and synthesizing the identifier
-      //    just produces a confusing CLI failure.
-      if (params.action === "react" || params.action === "edit" || params.action === "unsend") {
-        throw new Error(
-          `iMessage ${params.action} requires a known chat. ` +
-            `No registered chat for the supplied target; send a message first or pass an explicit chatGuid.`,
-        );
-      }
-      return synthesizedIdentifier;
-    }
+  if (!target) {
+    throw new Error(
+      `iMessage ${params.action} requires chatGuid, chatId, chatIdentifier, or a chat target.`,
+    );
   }
-  throw new Error(
-    `iMessage ${params.action} requires chatGuid, chatId, chatIdentifier, or a chat target.`,
-  );
+  if (target.kind === "chat_guid") {
+    return target.chatGuid;
+  }
+  // Messages identifies direct chats by service and handle; resolve all other
+  // target shapes through the same account-scoped chat lookup.
+  const synthesizedIdentifier =
+    target.kind === "handle"
+      ? `${target.service === "sms" ? "SMS" : "iMessage"};-;${target.to}`
+      : "";
+  const lookupTarget =
+    target.kind === "handle"
+      ? { kind: "chat_identifier" as const, chatIdentifier: synthesizedIdentifier }
+      : target;
+  const resolved = await params.runtime.resolveChatGuidForTarget({
+    target: lookupTarget,
+    options: params.options,
+    conversationReadOrigin: params.conversationReadOrigin,
+  });
+  if (resolved) {
+    return resolved;
+  }
+  if (target.kind !== "handle") {
+    throw new Error(
+      `iMessage ${params.action} failed: chatGuid not found for ${formatUnresolvedTarget(target)}.`,
+    );
+  }
+  // Sends may create a DM; mutations require a registered chat and message.
+  if (params.action === "react" || params.action === "edit" || params.action === "unsend") {
+    throw new Error(
+      `iMessage ${params.action} requires a known chat. ` +
+        `No registered chat for the supplied target; send a message first or pass an explicit chatGuid.`,
+    );
+  }
+  return synthesizedIdentifier;
 }
 
 function formatUnresolvedTarget(

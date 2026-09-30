@@ -48,11 +48,9 @@ function isExplicitEmptyString(value: unknown): boolean {
   return typeof value === "string" && value.trim() === "";
 }
 
-function hasUsableConversationAnchor(projection: {
-  chat_id?: number;
-  chat_guid?: string;
-  chat_identifier?: string;
-}): boolean {
+function hasUsableConversationAnchor(
+  projection: Pick<IMessagePayload, "chat_id" | "chat_guid" | "chat_identifier">,
+): boolean {
   return (
     hasPositiveChatId(projection.chat_id) ||
     isNonEmptyString(projection.chat_guid) ||
@@ -61,11 +59,7 @@ function hasUsableConversationAnchor(projection: {
 }
 
 function isIMessageAnchorless(message: IMessagePayload): boolean {
-  const hasUsableAnchor =
-    hasPositiveChatId(message.chat_id) ||
-    isNonEmptyString(message.chat_guid) ||
-    isNonEmptyString(message.chat_identifier);
-  if (hasUsableAnchor) {
+  if (hasUsableConversationAnchor(message)) {
     return false;
   }
 

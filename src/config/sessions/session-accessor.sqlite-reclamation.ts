@@ -1,15 +1,10 @@
-import { isDeepStrictEqual } from "node:util";
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { isGatewayExternallySupervised } from "../../infra/gateway-supervision.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
-import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
-import { retainOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
-  deferOpenClawAgentPostCommitPublication,
-  isIncognitoOpenClawAgentSqlitePath,
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
   runOpenClawAgentWriteTransaction,
@@ -25,56 +20,38 @@ import type { MaterializedSessionStateDeletePlan } from "./session-accessor.sqli
 import type {
   DeleteSessionEntryLifecycleParams,
   DeleteSessionEntryLifecycleResult,
-  SqliteSessionReclamationDiagnostics,
 } from "./session-accessor.sqlite-contract.js";
-import { runSqliteSessionDeletionTransaction } from "./session-accessor.sqlite-deletion.js";
 import {
-  sqliteLifecycleTargetSnapshotsEqual,
-  type SqliteLifecycleTargetSnapshot,
-} from "./session-accessor.sqlite-entry-equality.js";
+  prepareSessionDeletionInDatabase,
+  readValidatedSessionDeletionTarget,
+} from "./session-accessor.sqlite-deletion-plan.js";
+import { runSqliteSessionDeletionTransaction } from "./session-accessor.sqlite-deletion.js";
+import type { SqliteLifecycleTargetSnapshot } from "./session-accessor.sqlite-entry-equality.js";
 import {
   deleteLifecycleTargetRows,
-  readLifecycleTargetSnapshot,
+  readSessionEntryCount,
 } from "./session-accessor.sqlite-entry-store.js";
-import {
-  readSqliteSessionGenerationClaim,
-  readSqliteSessionGenerationWindows,
-} from "./session-accessor.sqlite-generation-copy.js";
 import {
   assertPlannedLifecycleArtifactEntriesUnchanged,
   deleteMaterializedSessionStatePlans,
   deletePlannedLifecycleArtifactEntries,
-  shouldRemoveSessionEntry,
+  projectSessionEntryLifecycleRemovalsInDatabase,
 } from "./session-accessor.sqlite-lifecycle-state.js";
 import type {
+  SessionDeletionValidation,
   ReclamationDatabaseOptions,
   ReclamationDeleteParams,
   SessionEntryMaintenanceInput,
   SessionEntryRemovalPlan,
-  SqliteSessionDeletionScope,
   SqliteSessionReclamationCallbacks,
   SqliteSessionReclamationPlan,
   SqliteSessionReclamationResult,
 } from "./session-accessor.sqlite-lifecycle-types.js";
 import { reclaimSessionMaintenanceInTransaction } from "./session-accessor.sqlite-maintenance-transaction.js";
-import {
-  deleteSessionDeliveryArtifacts,
-  readSessionNodeArtifactFingerprint,
-} from "./session-accessor.sqlite-node-artifacts.js";
-import { prepareReclamationPublication } from "./session-accessor.sqlite-reclamation-publication.js";
-import { runPreparedSqliteSessionReclamation } from "./session-accessor.sqlite-reclamation-run.js";
-import { withSqliteReclamationWorker } from "./session-accessor.sqlite-reclamation-worker.js";
-import {
-  collectSessionStateIdsForEntry,
-  isRecentHistoricalSessionId,
-} from "./session-accessor.sqlite-references.js";
-import {
-  getSessionKysely,
-  runExclusiveSqliteSessionWrite,
-  withSqliteSessionDatabase,
-} from "./session-accessor.sqlite-scope.js";
-import { withSqliteMutationWorkerLifetime } from "./session-accessor.sqlite-worker-request.js";
-import type { InternalSessionEntry as SessionEntry } from "./types.js";
+import { deleteSessionDeliveryArtifacts } from "./session-accessor.sqlite-node-artifacts.js";
+import { commitProjectedSessionEntryRemovalsInDatabase } from "./session-accessor.sqlite-projection-state.js";
+import { isRecentHistoricalSessionId } from "./session-accessor.sqlite-references.js";
+import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 
 type SessionBoardCleanupDatabase = Pick<
   OpenClawAgentKyselyDatabase,
@@ -137,90 +114,6 @@ function deleteSessionBoardRows(
   executeSqliteQuerySync(database.db, db.deleteFrom("board_tabs").where("session_key", "in", keys));
 }
 
-export function shouldDeleteSqliteSessionEntryLifecycle(
-  database: OpenClawAgentDatabase,
-  entry: SessionEntry | undefined,
-  params: DeleteSessionEntryLifecycleParams,
-  scope: SqliteSessionDeletionScope = { kind: "entry", phase: "plan" },
-): entry is SessionEntry {
-  if (
-    params.expectedDatabaseIdentity !== undefined &&
-    params.expectedDatabaseIdentity !== readOpenClawAgentDatabaseIdentity(database).identity
-  ) {
-    return false;
-  }
-  if (
-    !shouldRemoveSessionEntry(entry, {
-      expectedEntry: params.expectedEntry || undefined,
-      expectedSessionId: params.expectedSessionId,
-      expectedLifecycleRevision: params.expectedLifecycleRevision,
-      expectedUpdatedAt: params.expectedUpdatedAt,
-    })
-  ) {
-    return false;
-  }
-  if (
-    scope.kind === "entry" &&
-    params.expectedNodeArtifactFingerprint !== undefined &&
-    params.expectedNodeArtifactFingerprint !==
-      readSessionNodeArtifactFingerprint(database, params.target.canonicalKey)
-  ) {
-    return false;
-  }
-  if (params.expectedGenerations) {
-    const expected = new Map(
-      params.expectedGenerations.map((generation) => [generation.window.session_id, generation]),
-    );
-    const windows = readSqliteSessionGenerationWindows(
-      database,
-      scope.kind === "entry" ? [params.target.canonicalKey, ...params.target.storeKeys] : [],
-      scope.kind === "entry" ? collectSessionStateIdsForEntry(entry) : [scope.sessionId],
-    );
-    // Historical cleanup commits one generation at a time; already-copied removals are allowed.
-    if (
-      windows.some((window) => {
-        const generation = expected.get(window.session_id);
-        return (
-          !generation ||
-          !isDeepStrictEqual({ ...generation.window }, { ...window }) ||
-          (scope.phase === "commit" &&
-            generation.fingerprint !==
-              readSqliteSessionGenerationClaim(database, window).fingerprint)
-        );
-      })
-    ) {
-      return false;
-    }
-  }
-  return true;
-}
-
-type SessionDeletionValidation = {
-  deleteParams: DeleteSessionEntryLifecycleParams;
-  preparedTargetSnapshot: SqliteLifecycleTargetSnapshot;
-  scope?: SqliteSessionDeletionScope;
-};
-
-export function readValidatedSessionDeletionTarget(
-  database: OpenClawAgentDatabase,
-  validation: SessionDeletionValidation,
-) {
-  const snapshot = readLifecycleTargetSnapshot(database, validation.deleteParams.target);
-  const entry = snapshot[0]?.entry;
-  if (
-    !sqliteLifecycleTargetSnapshotsEqual(validation.preparedTargetSnapshot, snapshot) ||
-    !shouldDeleteSqliteSessionEntryLifecycle(
-      database,
-      entry,
-      validation.deleteParams,
-      validation.scope,
-    )
-  ) {
-    return undefined;
-  }
-  return { snapshot, entry };
-}
-
 export function* prepareHistoricalGenerationDeletions(params: {
   deleteParams: DeleteSessionEntryLifecycleParams;
   preparedTargetSnapshot: SqliteLifecycleTargetSnapshot;
@@ -281,6 +174,53 @@ function reclaimSqliteRowsInTransaction(
   plan: Exclude<SqliteSessionReclamationPlan, { kind: "maintenance-pages" }>,
   callbacks: SqliteSessionReclamationCallbacks,
 ): SqliteSessionReclamationResult {
+  if (plan.kind === "deletion-plan") {
+    return runOpenClawAgentWriteTransaction(
+      (database) => {
+        callbacks.beforeMutation?.();
+        const value = prepareSessionDeletionInDatabase(database, plan.planning);
+        callbacks.onCommit?.(database);
+        return { kind: plan.kind, value };
+      },
+      plan.databaseOptions,
+      { operationLabel: "session.deletion.plan" },
+    );
+  }
+  if (plan.kind === "lifecycle-projection-plan" || plan.kind === "lifecycle-projection-count") {
+    return runOpenClawAgentWriteTransaction(
+      (database) => {
+        callbacks.beforeMutation?.();
+        const result: SqliteSessionReclamationResult =
+          plan.kind === "lifecycle-projection-plan"
+            ? {
+                kind: plan.kind,
+                value: projectSessionEntryLifecycleRemovalsInDatabase(database, plan.input),
+              }
+            : { kind: plan.kind, value: readSessionEntryCount(database) };
+        callbacks.onCommit?.(database);
+        return result;
+      },
+      plan.databaseOptions,
+      { operationLabel: "session.lifecycle.plan" },
+    );
+  }
+  if (plan.kind === "lifecycle-projection-commit") {
+    const value = runSqliteSessionDeletionTransaction(
+      (database) => {
+        callbacks.beforeMutation?.();
+        const result = commitProjectedSessionEntryRemovalsInDatabase(
+          database,
+          plan.input,
+          plan.materializedPlans,
+        );
+        callbacks.onCommit?.(database, { kind: plan.kind, value: result });
+        return result;
+      },
+      plan.databaseOptions,
+      { operationLabel: "session.lifecycle.mutate" },
+    );
+    return { kind: plan.kind, value };
+  }
   if (plan.kind === "archive-publish-prepare" || plan.kind === "archive-publish-record") {
     return reclaimSessionArchivePublicationInTransaction(plan, callbacks);
   }
@@ -426,117 +366,11 @@ function reclaimSqliteFreePagesBestEffort(databaseOptions: ReclamationDatabaseOp
   }
 }
 
-export async function runSqliteSessionReclamation(params: {
-  diagnostics?: SqliteSessionReclamationDiagnostics;
-  assertCommitAllowed?: () => void;
-  forceInProcess: boolean;
-  onInProcessCommit?: (database: OpenClawAgentDatabase) => void;
-  onWorkerResult?: (
-    result: SqliteSessionReclamationResult,
-    databaseIdentity: string | symbol,
-  ) => void;
-  plan: SqliteSessionReclamationPlan;
-}): Promise<SqliteSessionReclamationResult> {
-  if (params.diagnostics) {
-    params.diagnostics.kind = params.plan.kind;
-  }
-  if (
-    params.forceInProcess ||
-    isIncognitoOpenClawAgentSqlitePath(params.plan.databaseOptions.path, {
-      agentId: params.plan.databaseOptions.agentId,
-      env: params.plan.databaseOptions.env,
-    })
-  ) {
-    return await runExclusiveSqliteSessionWrite(
-      params.plan.databaseOptions,
-      async () => {
-        params.assertCommitAllowed?.();
-        return await withSqliteSessionDatabase(
-          params.plan.databaseOptions,
-          () => {
-            params.assertCommitAllowed?.();
-            return reclaimSqliteSessionInTransaction(params.plan, {
-              beforeMutation: params.assertCommitAllowed,
-              onCommit: (database, result) => {
-                const publish = prepareReclamationPublication(
-                  params.plan,
-                  readOpenClawAgentDatabaseIdentity(database).identity,
-                  result,
-                );
-                if (publish) {
-                  deferOpenClawAgentPostCommitPublication(database, publish);
-                }
-                params.onInProcessCommit?.(database);
-              },
-            });
-          },
-          params.assertCommitAllowed,
-        );
-      },
-      "session.reclamation.in-process",
-      params.diagnostics,
-    );
-  }
-  return await withSqliteMutationWorkerLifetime(
-    params.plan.databaseOptions,
-    async ({ assertCurrent, commitGate, signal }) => {
-      const assertRequestCurrent = () => {
-        assertCurrent();
-        params.assertCommitAllowed?.();
-      };
-      const retained = await runExclusiveSqliteSessionWrite(
-        params.plan.databaseOptions,
-        async () => {
-          assertRequestCurrent();
-          return retainOpenClawAgentDatabaseReadOnly(params.plan.databaseOptions);
-        },
-        "session.reclamation.retain",
-        undefined,
-        "foreground",
-        signal,
-      );
-      if (!retained.found) {
-        throw new Error("SQLite session reclamation lost its prepared database");
-      }
-      const { database, claim } = retained;
-      try {
-        // The parent keeps its exact handle live; only the existing cloneable filename crosses threads.
-        const plan = {
-          ...params.plan,
-          databaseOptions: {
-            ...params.plan.databaseOptions,
-            path: readOpenClawAgentDatabaseIdentity(database).filename,
-          },
-        };
-        return await withSqliteReclamationWorker(
-          plan.databaseOptions,
-          claim,
-          async (worker) => {
-            return runPreparedSqliteSessionReclamation(
-              { ...params, plan },
-              {
-                database,
-                claim,
-                worker,
-                assertRequestCurrent,
-                commitGate,
-                signal,
-              },
-            );
-          },
-          assertRequestCurrent,
-          signal,
-        );
-      } finally {
-        claim.release();
-      }
-    },
-  );
-}
-
 // The live assertion belongs to runSqliteSessionReclamation, never its cloneable plan.
 function prepareReclamationDeleteParams({
   commitGuard: _commitGuard,
+  env: _env,
+  descendantRunBasis: _descendantRunBasis,
   ...params
 }: DeleteSessionEntryLifecycleParams): ReclamationDeleteParams {
   return params;
@@ -549,6 +383,7 @@ export function createSessionEntryReclamationPlan(params: {
   preparedTargetSnapshot: SqliteLifecycleTargetSnapshot;
 }): Extract<SqliteSessionReclamationPlan, { kind: "entry" }> {
   return {
+    descendantRunBasis: params.deleteParams.descendantRunBasis,
     databaseOptions: resolveSessionReclamationDatabaseOptions(params.databaseOptions),
     deleteParams: prepareReclamationDeleteParams(params.deleteParams),
     kind: "entry",
@@ -633,6 +468,7 @@ export function createHistoricalGenerationReclamationPlan(params: {
   sessionId: string;
 }): Extract<SqliteSessionReclamationPlan, { kind: "historical-generation" }> {
   return {
+    descendantRunBasis: params.deleteParams.descendantRunBasis,
     databaseOptions: resolveSessionReclamationDatabaseOptions(params.databaseOptions),
     deleteParams: prepareReclamationDeleteParams(params.deleteParams),
     kind: "historical-generation",

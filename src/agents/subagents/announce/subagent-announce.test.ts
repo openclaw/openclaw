@@ -51,9 +51,7 @@ const { subagentRegistryRuntimeMock } = vi.hoisted(() => ({
   subagentRegistryRuntimeMock: {
     shouldIgnorePostCompletionAnnounceForSession: vi.fn(() => false),
     isSubagentSessionRunActive: vi.fn(() => true),
-    countActiveDescendantRuns: vi.fn(() => 0),
     countPendingDescendantRuns: vi.fn(() => 0),
-    hasDescendantRunAwaitingSettle: vi.fn(() => false),
     getLatestSubagentRunByChildSessionKey: vi.fn(() => undefined),
     listSubagentRunsForRequester: vi.fn<() => SubagentRunRecord[]>(() => []),
     replaceSubagentRunAfterSteer: vi.fn(() => true),
@@ -294,12 +292,8 @@ describe("subagent announce seam flow", () => {
     subagentRegistryRuntimeMock.shouldIgnorePostCompletionAnnounceForSession.mockReturnValue(false);
     subagentRegistryRuntimeMock.isSubagentSessionRunActive.mockReset();
     subagentRegistryRuntimeMock.isSubagentSessionRunActive.mockReturnValue(true);
-    subagentRegistryRuntimeMock.countActiveDescendantRuns.mockReset();
-    subagentRegistryRuntimeMock.countActiveDescendantRuns.mockReturnValue(0);
     subagentRegistryRuntimeMock.countPendingDescendantRuns.mockReset();
     subagentRegistryRuntimeMock.countPendingDescendantRuns.mockReturnValue(0);
-    subagentRegistryRuntimeMock.hasDescendantRunAwaitingSettle.mockReset();
-    subagentRegistryRuntimeMock.hasDescendantRunAwaitingSettle.mockReturnValue(false);
     subagentRegistryRuntimeMock.listSubagentRunsForRequester.mockReset();
     subagentRegistryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([]);
     subagentRegistryRuntimeMock.replaceSubagentRunAfterSteer.mockReset();
@@ -397,6 +391,7 @@ describe("subagent announce seam flow", () => {
         expectedLifecycleRevision: "child-lifecycle-revision",
       },
       timeoutMs: 10_000,
+      prepareDispatchCurrent: expect.any(Function),
       assertDispatchCurrent: expect.any(Function),
     });
   });
@@ -413,23 +408,34 @@ describe("subagent announce seam flow", () => {
     expect(sessionsDeleteSpy).not.toHaveBeenCalled();
   });
 
-  it("delivers frozen terminal facts while child-session effects stay suppressed", async () => {
-    const didAnnounce = await runAnnounceFlow({
-      childSessionKey: "agent:main:subagent:retired",
-      childRunId: "run-retired-recovery",
-      task: "recover interrupted work",
-      cleanup: "delete",
-      outcome: { status: "error", error: "interrupted by restart" },
-      roundOneReply: "frozen terminal result",
-      suppressChildSessionEffects: true,
-      isChildSessionEffectsAllowed: () => false,
-      isCompletionDeliveryAllowed: () => true,
-    });
+  it.each(["explicit", "host", "currency"] as const)(
+    "delivers frozen terminal facts while %s suppresses child-session effects",
+    async (reason) => {
+      loadSessionStoreMock.mockReturnValue({
+        "agent:main:subagent:retired": {
+          sessionId: "retired-session",
+          lifecycleRevision: "retired-lifecycle",
+        },
+      });
+      const didAnnounce = await runAnnounceFlow({
+        childSessionKey: "agent:main:subagent:retired",
+        childRunId: "run-retired-recovery",
+        task: "recover interrupted work",
+        cleanup: "delete",
+        outcome: { status: "error", error: "interrupted by restart" },
+        roundOneReply: "frozen terminal result",
+        suppressChildSessionEffects: reason === "explicit",
+        isChildSessionEffectsAllowed: () => reason !== "host",
+        prepareChildSessionEffects: async () => reason !== "currency",
+        isCompletionDeliveryAllowed: () => true,
+      });
 
-    expect(didAnnounce).toBe("delivered");
-    expect(agentSpy).toHaveBeenCalledTimes(1);
-    expect(sessionsDeleteSpy).not.toHaveBeenCalled();
-  });
+      expect(didAnnounce).toBe("delivered");
+      expect(agentSpy).toHaveBeenCalledTimes(1);
+      expect(requireAgentCall().params?.message).toContain("frozen terminal result");
+      expect(sessionsDeleteSpy).not.toHaveBeenCalled();
+    },
+  );
 
   it("drops requester delivery after the cleanup owner changes", async () => {
     const didAnnounce = await runAnnounceFlow({
@@ -555,6 +561,7 @@ describe("subagent announce seam flow", () => {
         expectedLifecycleRevision: "child-lifecycle-revision",
       },
       timeoutMs: 10_000,
+      prepareDispatchCurrent: expect.any(Function),
       assertDispatchCurrent: expect.any(Function),
     });
   });

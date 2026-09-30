@@ -136,18 +136,17 @@ function createWorkspaceAwareMediaReadFile(params: {
   }
   return createBoundedOutboundMediaReadFile(async (filePath, options) => {
     const resolvedPath = path.resolve(filePath);
-    if (workspaceLocalRoots.some((root) => isPathInside(path.resolve(root), resolvedPath))) {
-      return await readOutboundMediaFile(workspaceReadFile, filePath, {
-        maxBytes: options?.maxBytes ?? Number.MAX_SAFE_INTEGER,
-      });
-    }
-    if (params.hostReadFile) {
-      return await readOutboundMediaFile(params.hostReadFile, filePath, {
-        maxBytes: options?.maxBytes ?? Number.MAX_SAFE_INTEGER,
-      });
+    const readFile = workspaceLocalRoots.some((root) =>
+      isPathInside(path.resolve(root), resolvedPath),
+    )
+      ? workspaceReadFile
+      : params.hostReadFile;
+    const maxBytes = options?.maxBytes ?? Number.MAX_SAFE_INTEGER;
+    if (readFile) {
+      return await readOutboundMediaFile(readFile, filePath, { maxBytes });
     }
     return await readLocalMediaFile(filePath, params.localRoots, {
-      maxBytes: options?.maxBytes ?? Number.MAX_SAFE_INTEGER,
+      maxBytes,
       excludedRoots: params.excludedLocalRoots,
     });
   });

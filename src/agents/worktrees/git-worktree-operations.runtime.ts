@@ -11,11 +11,10 @@ import type {
   GitWorktreeOperationResult,
   GitWorktreeOperations,
 } from "./git-worktree-operations.js";
-import { requireGitBuffer, worktreePathExists } from "./git.js";
+import { lstatIfExists, requireGitBuffer, worktreePathExists } from "./git.js";
 import {
   hasSafeParentDirectories,
   hasUnsnapshotableProvisionedFiles,
-  lstatIfExists,
   normalizeProvisionedRelativePath,
   resolveGitPath,
 } from "./provisioned-file-inspection.js";

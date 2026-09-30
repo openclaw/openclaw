@@ -29,6 +29,7 @@ import {
   readToolStringParam,
   ToolInputError,
 } from "./common.js";
+import { wrapGatewayPersonalToolExecution } from "./gateway-caller-context.js";
 import {
   callAgentToolGatewayRequest,
   type AgentToolGatewayRequestCaller,
@@ -48,6 +49,12 @@ import {
 } from "./sessions-helpers.js";
 
 const SessionsHistoryToolSchema = Type.Object({
+  user: Type.Optional(
+    Type.String({
+      description:
+        "The person's requester_profile.id, required when several people have steered this turn.",
+    }),
+  ),
   sessionKey: ChatHistoryParamsSchema.properties.sessionKey,
   limit: ChatHistoryParamsSchema.properties.limit,
   offset: Type.With(ChatHistoryParamsSchema.properties.offset, {
@@ -313,12 +320,7 @@ function resolveSessionsHistoryPaginationMetadata(params: {
   if (params.requestedMessageId) {
     return typeof result?.totalMessages === "number" ? { totalMessages: result.totalMessages } : {};
   }
-  const offset =
-    typeof result?.offset === "number"
-      ? result.offset
-      : params.requestedOffset !== undefined
-        ? params.requestedOffset
-        : undefined;
+  const offset = typeof result?.offset === "number" ? result.offset : params.requestedOffset;
   if (offset === undefined) {
     return {};
   }
@@ -372,7 +374,7 @@ export function createSessionsHistoryTool(opts?: {
     description: describeSessionsHistoryTool({ sessionLinkBase: opts?.sessionLinkBase }),
     parameters: SessionsHistoryToolSchema,
     outputSchema: SessionsHistoryOutputSchema,
-    execute: async (_toolCallId, args) => {
+    execute: wrapGatewayPersonalToolExecution(async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const gatewayCall = opts?.callGateway ?? callAgentToolGatewayRequest;
       const sessionKeyParam = readToolStringParam(params, "sessionKey", {
@@ -560,6 +562,6 @@ export function createSessionsHistoryTool(opts?: {
           : {}),
         ...pagination,
       });
-    },
+    }),
   };
 }

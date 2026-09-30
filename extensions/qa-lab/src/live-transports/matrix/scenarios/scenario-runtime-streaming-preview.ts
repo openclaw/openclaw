@@ -41,6 +41,22 @@ export async function runStreamingReplacementRetentionScenario(
     throw new Error("Matrix streaming replacement QA requires in-place fault injection");
   }
   const { client, startSince } = await primeMatrixQaDriverScenarioClient(context);
+  const waitForReplacementEvent = (
+    predicate: (event: MatrixQaObservedEvent) => boolean,
+    since: string | undefined,
+    label: string,
+  ) =>
+    client
+      .waitForRoomEvent({
+        observedEvents: context.observedEvents,
+        predicate,
+        roomId: context.roomId,
+        since,
+        timeoutMs: context.timeoutMs,
+      })
+      .catch((cause: unknown) => {
+        throw new Error(`Matrix replacement QA timed out waiting for ${label}`, { cause });
+      });
   const firstText = `@room ${buildMatrixStreamingPreviewFinalText("MATRIX_QA_RETAINED_DRAFT")}`;
   const firstToken = firstText.split(" ")[1]!;
   // Keep the first replacement unavailable throughout both turns. HTTP 400 is
@@ -62,23 +78,15 @@ export async function runStreamingReplacementRetentionScenario(
       mentionUserIds: [context.sutUserId],
       roomId: context.roomId,
     });
-    const firstPreview = await client
-      .waitForRoomEvent({
-        observedEvents: context.observedEvents,
-        predicate: (event) =>
-          event.roomId === context.roomId &&
-          event.sender === context.sutUserId &&
-          isMatrixQaMessageLikeKind(event.kind) &&
-          event.live === true,
-        roomId: context.roomId,
-        since: startSince,
-        timeoutMs: context.timeoutMs,
-      })
-      .catch((error: unknown) => {
-        throw new Error("Matrix replacement QA timed out waiting for the first draft", {
-          cause: error,
-        });
-      });
+    const firstPreview = await waitForReplacementEvent(
+      (event) =>
+        event.roomId === context.roomId &&
+        event.sender === context.sutUserId &&
+        isMatrixQaMessageLikeKind(event.kind) &&
+        event.live === true,
+      startSince,
+      "the first draft",
+    );
     const firstDraftEventId = firstPreview.event.replacesEventId ?? firstPreview.event.eventId;
     const firstWindow = await client.waitForOptionalRoomEvent({
       observedEvents: context.observedEvents,
@@ -104,61 +112,37 @@ export async function runStreamingReplacementRetentionScenario(
       mentionUserIds: [context.sutUserId],
       roomId: context.roomId,
     });
-    const secondPreview = await client
-      .waitForRoomEvent({
-        observedEvents: context.observedEvents,
-        predicate: (event) =>
-          event.roomId === context.roomId &&
-          event.sender === context.sutUserId &&
-          isMatrixQaMessageLikeKind(event.kind) &&
-          event.live === true &&
-          event.eventId !== firstPreview.event.eventId,
-        roomId: context.roomId,
-        since: firstWindow.since,
-        timeoutMs: context.timeoutMs,
-      })
-      .catch((error: unknown) => {
-        throw new Error("Matrix replacement QA timed out waiting for the second draft", {
-          cause: error,
-        });
-      });
+    const secondPreview = await waitForReplacementEvent(
+      (event) =>
+        event.roomId === context.roomId &&
+        event.sender === context.sutUserId &&
+        isMatrixQaMessageLikeKind(event.kind) &&
+        event.live === true &&
+        event.eventId !== firstPreview.event.eventId,
+      firstWindow.since,
+      "the second draft",
+    );
     const secondDraftEventId = secondPreview.event.replacesEventId ?? secondPreview.event.eventId;
-    const secondReply = await client
-      .waitForRoomEvent({
-        observedEvents: context.observedEvents,
-        predicate: (event) =>
-          event.roomId === context.roomId &&
-          event.sender === context.sutUserId &&
-          isMatrixQaMessageLikeKind(event.kind) &&
-          event.body?.includes(secondToken) === true &&
-          event.eventId !== secondDraftEventId &&
-          event.live !== true &&
-          event.replacesEventId === undefined,
-        roomId: context.roomId,
-        since: secondPreview.since,
-        timeoutMs: context.timeoutMs,
-      })
-      .catch((error: unknown) => {
-        throw new Error("Matrix replacement QA timed out waiting for the healthy replacement", {
-          cause: error,
-        });
-      });
-    const secondRedaction = await client
-      .waitForRoomEvent({
-        observedEvents: context.observedEvents,
-        predicate: (event) =>
-          event.roomId === context.roomId &&
-          event.sender === context.sutUserId &&
-          event.kind === "redaction",
-        roomId: context.roomId,
-        since: secondReply.since,
-        timeoutMs: context.timeoutMs,
-      })
-      .catch((error: unknown) => {
-        throw new Error("Matrix replacement QA timed out waiting for post-replacement redaction", {
-          cause: error,
-        });
-      });
+    const secondReply = await waitForReplacementEvent(
+      (event) =>
+        event.roomId === context.roomId &&
+        event.sender === context.sutUserId &&
+        isMatrixQaMessageLikeKind(event.kind) &&
+        event.body?.includes(secondToken) === true &&
+        event.eventId !== secondDraftEventId &&
+        event.live !== true &&
+        event.replacesEventId === undefined,
+      secondPreview.since,
+      "the healthy replacement",
+    );
+    const secondRedaction = await waitForReplacementEvent(
+      (event) =>
+        event.roomId === context.roomId &&
+        event.sender === context.sutUserId &&
+        event.kind === "redaction",
+      secondReply.since,
+      "post-replacement redaction",
+    );
     if (secondRedaction.event.redactsEventId !== secondDraftEventId) {
       throw new Error(
         `Matrix healthy replacement redacted ${secondRedaction.event.redactsEventId ?? "<unknown>"} instead of its own draft ${secondDraftEventId}`,

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import type { WorkerAdmissionHandshake } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { NODE_WORKER_WORKSPACE_RETAIN_COMMAND } from "../../infra/node-commands.js";
 import {
@@ -21,10 +22,10 @@ import type {
   WorkerSessionPlacementStore,
 } from "./placement-store.js";
 import type { WorkerEnvironmentService } from "./service.js";
+import { isTerminalWorkerEnvironmentState } from "./state.js";
 import { listRetainedWorkerBundleHashes } from "./worker-bundle-retention.js";
 
 const RETAIN_COMMAND_TIMEOUT_MS = 10 * 60_000;
-const TERMINAL_ENVIRONMENT_STATES = new Set(["destroyed", "failed", "orphaned"]);
 
 export type NodeWorkerBundleRetention = {
   currentBuild: () => Promise<
@@ -38,9 +39,16 @@ type NodeWorkspaceRetainCoordinatorOptions = {
   placements: Pick<WorkerSessionPlacementStore, "list" | "listPendingWorkspaceResults">;
   environments: Pick<WorkerEnvironmentService, "list">;
   bundleRetention?: NodeWorkerBundleRetention;
-  additionalManifestRefs?: (placement: WorkerSessionPlacementRecord) => readonly string[];
+  additionalManifestRefs?: (
+    placement: WorkerSessionPlacementRecord,
+  ) => Promise<() => readonly string[] | null>;
   warn: (message: string) => void;
 };
+
+type PreparedManifestRefs = ReadonlyMap<
+  string,
+  { placement: WorkerSessionPlacementRecord; current: () => readonly string[] | null }
+>;
 
 function nodeEnvironments(options: NodeWorkspaceRetainCoordinatorOptions, nodeId: string) {
   return options.environments.list().filter((environment) => environment.nodeDeviceId === nodeId);
@@ -51,7 +59,7 @@ function bundleStatusTargetForNode(options: NodeWorkspaceRetainCoordinatorOption
     .filter(
       (environment) =>
         environment.bootstrapReceipt !== null &&
-        !TERMINAL_ENVIRONMENT_STATES.has(environment.state),
+        !isTerminalWorkerEnvironmentState(environment.state),
     )
     .toSorted(
       (left, right) =>
@@ -80,6 +88,7 @@ function snapshotBundleHashesForNode(
 function snapshotEntriesForNode(
   options: NodeWorkspaceRetainCoordinatorOptions,
   nodeId: string,
+  preparedManifestRefs: PreparedManifestRefs,
 ): NodeWorkerWorkspaceRetainEntry[] {
   const placements = new Map(
     options.placements.list().map((placement) => [placement.sessionId, placement] as const),
@@ -90,8 +99,7 @@ function snapshotEntriesForNode(
   return nodeEnvironments(options, nodeId)
     .flatMap((environment): NodeWorkerWorkspaceRetainEntry[] => {
       if (
-        TERMINAL_ENVIRONMENT_STATES.has(environment.state) ||
-        environment.nodeDeviceId !== nodeId ||
+        isTerminalWorkerEnvironmentState(environment.state) ||
         environment.attachedSessionIds.length !== 1
       ) {
         return [];
@@ -110,18 +118,27 @@ function snapshotEntriesForNode(
         placement?.state === "active" ||
         placement?.state === "draining" ||
         placement?.state === "reconciling";
-      const exactManifest =
+      const prepared = preparedManifestRefs.get(sessionId);
+      const additionalManifestRefs = () => {
+        if (!options.additionalManifestRefs) {
+          return [];
+        }
+        if (!prepared || !isDeepStrictEqual(prepared.placement, placement)) {
+          return null;
+        }
+        return prepared.current();
+      };
+      const additional =
         hasExactManifestOwner &&
         !unsettled &&
         placement.environmentId === environment.environmentId &&
         placement.workspaceBaseManifestRef &&
         (placement.activeOwnerEpoch === environment.ownerEpoch || placement.state === "starting")
-          ? [
-              ...new Set([
-                placement.workspaceBaseManifestRef,
-                ...(options.additionalManifestRefs?.(placement) ?? []),
-              ]),
-            ].toSorted()
+          ? additionalManifestRefs()
+          : null;
+      const exactManifest =
+        additional !== null && placement?.workspaceBaseManifestRef
+          ? [...new Set([placement.workspaceBaseManifestRef, ...additional])].toSorted()
           : null;
       return [
         {
@@ -184,6 +201,25 @@ export function createNodeWorkspaceRetainCoordinator(
     if (!isCurrent()) {
       return;
     }
+    const preparedManifestRefs = new Map<
+      string,
+      { placement: WorkerSessionPlacementRecord; current: () => readonly string[] | null }
+    >();
+    if (options.additionalManifestRefs) {
+      const environmentIds = new Set(
+        nodeEnvironments(options, node.nodeId).map((environment) => environment.environmentId),
+      );
+      for (const placement of options.placements.list()) {
+        if (placement.environmentId && environmentIds.has(placement.environmentId)) {
+          const captured = { ...placement };
+          const current = await options.additionalManifestRefs(placement);
+          if (!isCurrent()) {
+            return;
+          }
+          preparedManifestRefs.set(placement.sessionId, { placement: captured, current });
+        }
+      }
+    }
     // Installation can finish before provisioning publishes its receipt. Do not acknowledge
     // the node's pending-install protection with an incomplete bundle reachability snapshot.
     const bundleRetentionReady = !nodeEnvironments(options, node.nodeId).some(
@@ -202,7 +238,7 @@ export function createNodeWorkspaceRetainCoordinator(
       gatewayNamespace: options.gatewayNamespace,
       controllerId,
       sequence: (sequence += 1),
-      retain: snapshotEntriesForNode(options, node.nodeId),
+      retain: snapshotEntriesForNode(options, node.nodeId, preparedManifestRefs),
     };
     const priorGeneration = acknowledgedBundleGenerationByNode.get(node.nodeId);
     const acknowledgedBundleGeneration =
@@ -246,13 +282,23 @@ export function createNodeWorkspaceRetainCoordinator(
       );
     }
     for (;;) {
+      const isDispatchAuthorized = () =>
+        isCurrent() &&
+        isDeepStrictEqual(
+          input.retain,
+          snapshotEntriesForNode(options, node.nodeId, preparedManifestRefs),
+        );
+      if (!isDispatchAuthorized()) {
+        currentTransport.acceptBundleStatus?.(node, undefined);
+        return;
+      }
       const result = await currentTransport.invoke({
         node,
         command: NODE_WORKER_WORKSPACE_RETAIN_COMMAND,
         params: input,
         timeoutMs: RETAIN_COMMAND_TIMEOUT_MS,
         signal: abortController.signal,
-        isDispatchAuthorized: isCurrent,
+        isDispatchAuthorized,
       });
       if (!isCurrent()) {
         return;

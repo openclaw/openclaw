@@ -2,6 +2,10 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { replaceFileAtomic } from "@openclaw/fs-safe/atomic";
+import {
+  asOptionalObjectRecord,
+  readStringField,
+} from "@openclaw/normalization-core/record-coerce";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import { registerSqliteAuditRecordAsync } from "../infra/sqlite-audit-record-store.async.js";
 import { createSqliteAuditRecordStore } from "../infra/sqlite-audit-record-store.js";
@@ -362,20 +366,9 @@ export function finalizeConfigWriteAuditRecord(params: {
   nextMetadata?: ConfigAuditStatMetadata | null;
   err?: unknown;
 }) {
-  const errorCode =
-    params.err &&
-    typeof params.err === "object" &&
-    "code" in params.err &&
-    typeof params.err.code === "string"
-      ? params.err.code
-      : undefined;
-  const errorMessage =
-    params.err &&
-    typeof params.err === "object" &&
-    "message" in params.err &&
-    typeof params.err.message === "string"
-      ? params.err.message
-      : undefined;
+  const errorRecord = asOptionalObjectRecord(params.err);
+  const errorCode = readStringField(errorRecord, "code");
+  const errorMessage = readStringField(errorRecord, "message");
   const success = params.result !== "failed" && params.result !== "rejected";
   const nextMetadata = success ? params.nextMetadata : undefined;
   return {

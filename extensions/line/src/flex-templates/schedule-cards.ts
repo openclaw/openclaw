@@ -1,19 +1,10 @@
 import { normalizeLineAction } from "../actions.js";
-import { createCardBubble } from "./common.js";
+import { createCardBubble, createCardTitle } from "./common.js";
 import type { Action, FlexBox, FlexBubble, FlexComponent, FlexText } from "./types.js";
 
 function buildTitleSubtitleHeader(params: { title: string; subtitle?: string }): FlexComponent[] {
   const { title, subtitle } = params;
-  const headerContents: FlexComponent[] = [
-    {
-      type: "text",
-      text: title,
-      weight: "bold",
-      size: "xl",
-      color: "#111111",
-      wrap: true,
-    } as FlexText,
-  ];
+  const headerContents: FlexComponent[] = [createCardTitle(title)];
 
   if (subtitle) {
     headerContents.push({

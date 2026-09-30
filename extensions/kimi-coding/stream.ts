@@ -7,6 +7,7 @@ import {
   transformProviderStreamMessages,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import {
+  asOptionalObjectRecord,
   isRecord,
   normalizeOptionalLowercaseString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -219,24 +220,16 @@ function parseKimiTaggedToolCalls(text: string): KimiToolCallBlock[] | null {
 }
 
 function rewriteKimiTaggedToolCallsInMessage(message: unknown): void {
-  if (!message || typeof message !== "object") {
-    return;
-  }
-
-  const content = (message as { content?: unknown }).content;
-  if (!Array.isArray(content)) {
+  const record = asOptionalObjectRecord(message);
+  if (!record || !Array.isArray(record.content)) {
     return;
   }
 
   let changed = false;
   const nextContent: unknown[] = [];
-  for (const block of content) {
-    if (!block || typeof block !== "object") {
-      nextContent.push(block);
-      continue;
-    }
-    const typedBlock = block as { type?: unknown; text?: unknown };
-    if (typedBlock.type !== "text" || typeof typedBlock.text !== "string") {
+  for (const block of record.content) {
+    const typedBlock = asOptionalObjectRecord(block);
+    if (typedBlock?.type !== "text" || typeof typedBlock.text !== "string") {
       nextContent.push(block);
       continue;
     }
@@ -255,10 +248,9 @@ function rewriteKimiTaggedToolCallsInMessage(message: unknown): void {
     return;
   }
 
-  (message as { content: unknown[] }).content = nextContent;
-  const typedMessage = message as { stopReason?: unknown };
-  if (typedMessage.stopReason === "stop") {
-    typedMessage.stopReason = "toolUse";
+  record.content = nextContent;
+  if (record.stopReason === "stop") {
+    record.stopReason = "toolUse";
   }
 }
 
@@ -342,28 +334,20 @@ export function wrapKimiProviderStream(ctx: ProviderWrapStreamFnContext): Stream
   });
 }
 
-function stripContentBlockCacheControl(block: unknown): void {
-  if (!block || typeof block !== "object") {
-    return;
-  }
-
-  const record = block as Record<string, unknown>;
-  delete record.cache_control;
-
-  if (record.type === "tool_result" && Array.isArray(record.content)) {
-    for (const nestedBlock of record.content) {
-      stripContentBlockCacheControl(nestedBlock);
-    }
-  }
-}
-
 function stripContentArrayCacheControl(value: unknown): void {
   if (!Array.isArray(value)) {
     return;
   }
 
   for (const block of value) {
-    stripContentBlockCacheControl(block);
+    const record = asOptionalObjectRecord(block);
+    if (!record) {
+      continue;
+    }
+    delete record.cache_control;
+    if (record.type === "tool_result") {
+      stripContentArrayCacheControl(record.content);
+    }
   }
 }
 
@@ -375,10 +359,6 @@ function stripAnthropicCacheControlMarkers(payloadObj: Record<string, unknown>):
   }
 
   for (const message of payloadObj.messages) {
-    if (!message || typeof message !== "object") {
-      continue;
-    }
-
-    stripContentArrayCacheControl((message as Record<string, unknown>).content);
+    stripContentArrayCacheControl(asOptionalObjectRecord(message)?.content);
   }
 }

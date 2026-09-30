@@ -501,9 +501,20 @@ required status closed.
 
 If the PR head changes before or during evaluation, the obsolete run stops
 successfully without publishing approval for the replacement commit. The new
-head's automatic event owns its evaluation. Changes to approval-relevant metadata
-on the same head and real evaluation errors still fail; supersession does not hide
-an earlier guard error. During long read sequences, the review checks the live
+head's automatic event owns its evaluation. Closing an unmerged PR, making it a
+draft, or changing its target also stops the obsolete evaluation successfully.
+Identity and permission changes and real evaluation errors still fail; a lifecycle
+change does not hide an earlier guard error.
+
+A merge of the scheduled revision lets the security evaluation finish, including
+when enforcement starts after the merge. Both guards retain their findings in
+statuses, comments, and workflow summaries so a force-merge does not discard that
+evidence. Automatic lockfile cleanup still requires an open PR immediately before
+its write. The resolver selects only open PRs, so this does not schedule new
+post-merge reviews. If ordinary CI is still running, the combined status can remain
+pending after merge; the CI workflow retains its own final result.
+
+During long read sequences, the review checks the live
 PR again before admitting another read after 30 seconds. Non-quota recovery waits
 check every 30 seconds too, so superseded work stops without finishing pagination
 or waiting out diff recovery. In-flight requests retain their 30-second deadline;

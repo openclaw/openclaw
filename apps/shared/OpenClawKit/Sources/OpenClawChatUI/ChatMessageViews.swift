@@ -289,6 +289,10 @@ private struct ChatBubbleShape: InsettableShape {
 struct ChatMessageBubble: View {
     @Environment(\.openClawAssistantUsesReadingColumn) private var usesReadingColumn
     @Environment(\.openClawAssistantRunContent) private var isRunContent
+    @Environment(\.openClawAssistantBubblesInCleanChrome) private var assistantBubblesInClean
+    @Environment(\.openClawChatDesktopLayout) private var isDesktopLayout
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     let message: OpenClawChatMessage
     var liveToolCalls: [OpenClawChatPendingToolCall] = []
     var metadata: ChatMessageMetadata?
@@ -351,31 +355,6 @@ struct ChatMessageBubble: View {
     private var isUser: Bool {
         self.message.role.lowercased() == "user"
     }
-
-    private var messageBody: some View {
-        ChatMessageBody(
-            message: self.message,
-            liveToolCalls: self.liveToolCalls,
-            metadata: self.metadata,
-            sourcePreviews: self.sourcePreviews,
-            sourceContextRevision: self.sourceContextRevision,
-            sourceFaviconsEnabled: self.sourceFaviconsEnabled,
-            loadSourceFavicon: self.loadSourceFavicon,
-            isUser: self.isUser,
-            style: self.style,
-            markdownVariant: self.markdownVariant,
-            userAccent: self.userAccent,
-            displayOptions: self.displayOptions,
-            isClean: self.isClean,
-            contextWindowTokens: self.contextWindowTokens,
-            userMessageExpanded: self.userMessageExpanded,
-            onToggleUserMessageExpanded: self.onToggleUserMessageExpanded,
-            inlineWidgetResolverReady: self.inlineWidgetResolverReady,
-            inlineWidgetResourceResolver: self.inlineWidgetResourceResolver,
-            mediaArtifactResolverReady: self.mediaArtifactResolverReady,
-            mediaPlaybackAllowed: self.mediaPlaybackAllowed,
-            loadMediaArtifact: self.loadMediaArtifact)
-    }
 }
 
 enum ChatUserMessageDisclosurePolicy {
@@ -410,41 +389,9 @@ enum ChatUserMessageDisclosurePolicy {
     }
 }
 
-@MainActor
-private struct ChatMessageBody: View {
-    @Environment(\.openClawAssistantRunContent) private var isRunContent
-    @Environment(\.openClawAssistantBubblesInCleanChrome) private var assistantBubblesInClean
-    @Environment(\.openClawChatDesktopLayout) private var isDesktopLayout
-    @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
-    let message: OpenClawChatMessage
-    var liveToolCalls: [OpenClawChatPendingToolCall] = []
-    var metadata: ChatMessageMetadata?
-    var sourcePreviews: [ChatSourcePreview] = []
-    var sourceContextRevision = UUID()
-    var sourceFaviconsEnabled = false
-    var loadSourceFavicon: @MainActor @Sendable (String) async -> Data? = { _ in nil }
-    let isUser: Bool
-    let style: OpenClawChatView.Style
-    let markdownVariant: ChatMarkdownVariant
-    let userAccent: Color?
-    let displayOptions: OpenClawChatDisplayOptions
-    let isClean: Bool
-    let contextWindowTokens: Int?
-    let userMessageExpanded: Bool
-    let onToggleUserMessageExpanded: @MainActor () -> Void
-    let inlineWidgetResolverReady: Bool
-    let inlineWidgetResourceResolver: @MainActor @Sendable (
-        String,
-        OpenClawChatWidgetResource?) async -> OpenClawChatWidgetResource?
-    let mediaArtifactResolverReady: Bool
-    let mediaPlaybackAllowed: @MainActor @Sendable () -> Bool
-    let loadMediaArtifact: @MainActor @Sendable (
-        String,
-        OpenClawChatMediaKind,
-        OpenClawChatPlaybackMode?) async throws -> OpenClawChatLoadedMedia?
-
-    var body: some View {
+extension ChatMessageBubble {
+    @ViewBuilder
+    private var messageBody: some View {
         let text = self.primaryText
         let textColor = self.textColor
         let shouldRenderBubble = self.shouldRenderBubble
@@ -456,7 +403,7 @@ private struct ChatMessageBody: View {
                     self.messageContent(text: text, textColor: textColor)
                         .padding(.vertical, 10)
                         .padding(.horizontal, 12)
-                        .background(self.bubbleBackground)
+                        .background(AnyShapeStyle(self.bubbleFillColor))
                         .clipShape(self.bubbleShape)
                         .overlay(self.bubbleBorder)
                         .shadow(
@@ -560,7 +507,11 @@ private struct ChatMessageBody: View {
                 .foregroundStyle(textColor)
                 .fixedSize(horizontal: false, vertical: true)
         } else {
-            self.userMarkdown(text: text, textColor: textColor)
+            ChatMarkdownRenderer(
+                text: text,
+                context: .user,
+                variant: self.markdownVariant,
+                textColor: textColor)
         }
 
         if preview != nil {
@@ -586,14 +537,6 @@ private struct ChatMessageBody: View {
                 localized: self.userMessageExpanded ? "Expanded" : "Collapsed"))
             .accessibilityIdentifier("chat-user-message-disclosure-toggle")
         }
-    }
-
-    private func userMarkdown(text: String, textColor: Color) -> some View {
-        ChatMarkdownRenderer(
-            text: text,
-            context: .user,
-            variant: self.markdownVariant,
-            textColor: textColor)
     }
 
     @ViewBuilder
@@ -630,7 +573,7 @@ private struct ChatMessageBody: View {
     }
 
     private var shouldRenderBubble: Bool {
-        guard !self.isToolResultMessage else { return false }
+        guard !self.message.isToolResult else { return false }
         return !self.primaryText.isEmpty ||
             !self.inlineAttachments.isEmpty ||
             !self.inlineWidgets.isEmpty ||
@@ -642,7 +585,7 @@ private struct ChatMessageBody: View {
         // Results normally reach us merged into the calling assistant message
         // (ChatTranscriptRow.mergeToolResults); this branch is the orphan
         // fallback for results whose call is not in the preceding message.
-        if self.isToolResultMessage {
+        if self.message.isToolResult {
             return [ChatToolActivityItem(
                 id: self.message.content.first?.id ?? "result-0",
                 name: self.message.toolName,
@@ -714,11 +657,6 @@ private struct ChatMessageBody: View {
         self.message.content.filter(\.isToolResult)
     }
 
-    private var isToolResultMessage: Bool {
-        let role = self.message.role.lowercased()
-        return role == "toolresult" || role == "tool_result"
-    }
-
     private var usagePresentation: ChatMessageUsagePresentation? {
         ChatMessageUsagePresentation.make(
             message: self.message,
@@ -747,10 +685,6 @@ private struct ChatMessageBody: View {
             return OpenClawChatTheme.onboardingAssistantBubble
         }
         return OpenClawChatTheme.assistantBubble
-    }
-
-    private var bubbleBackground: AnyShapeStyle {
-        AnyShapeStyle(self.bubbleFillColor)
     }
 
     private var bubbleBorderColor: Color {
@@ -837,7 +771,6 @@ private struct AttachmentRow: View {
                     artifactId: artifactId,
                     label: self.attachmentLabel,
                     durationSeconds: self.att.durationSeconds,
-                    playback: self.att.playback,
                     resolverReady: self.resolverReady,
                     playbackAllowed: self.playbackAllowed,
                     load: { try await self.loadMedia($0, .audio, self.att.playback) })
@@ -847,7 +780,6 @@ private struct AttachmentRow: View {
                     label: self.attachmentLabel,
                     width: self.att.width,
                     height: self.att.height,
-                    playback: self.att.playback,
                     resolverReady: self.resolverReady,
                     playbackAllowed: self.playbackAllowed,
                     load: { try await self.loadMedia($0, .video, self.att.playback) })
@@ -1192,45 +1124,16 @@ struct ChatStreamingAssistantBubble: View {
     }
 }
 
-@MainActor
-struct EquatableChatStreamingAssistantBubble: View {
-    let bubble: ChatStreamingAssistantBubble
-
-    var body: some View {
-        self.bubble
-    }
-}
-
-extension EquatableChatStreamingAssistantBubble: @MainActor Equatable {
+extension ChatStreamingAssistantBubble: @MainActor Equatable {
     static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.bubble.text.sourceText == rhs.bubble.text.sourceText &&
-            lhs.bubble.text.includesThinking == rhs.bubble.text.includesThinking &&
-            lhs.bubble.markdownVariant == rhs.bubble.markdownVariant &&
-            lhs.bubble.assistantName == rhs.bubble.assistantName &&
-            lhs.bubble.assistantAvatarText == rhs.bubble.assistantAvatarText &&
-            lhs.bubble.assistantAvatarTint == rhs.bubble.assistantAvatarTint &&
-            lhs.bubble.showsAssistantAvatar == rhs.bubble.showsAssistantAvatar &&
-            lhs.bubble.isClean == rhs.bubble.isClean
-    }
-}
-
-@MainActor
-struct ChatPendingToolsBubble: View {
-    let toolCalls: [OpenClawChatPendingToolCall]
-
-    var body: some View {
-        ChatToolActivityList(items: self.items)
-            .padding(4)
-    }
-
-    private var items: [ChatToolActivityItem] {
-        self.toolCalls.map(ChatToolActivityItem.init(live:))
-    }
-}
-
-extension ChatPendingToolsBubble: @MainActor Equatable {
-    static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.toolCalls == rhs.toolCalls
+        lhs.text.sourceText == rhs.text.sourceText &&
+            lhs.text.includesThinking == rhs.text.includesThinking &&
+            lhs.markdownVariant == rhs.markdownVariant &&
+            lhs.assistantName == rhs.assistantName &&
+            lhs.assistantAvatarText == rhs.assistantAvatarText &&
+            lhs.assistantAvatarTint == rhs.assistantAvatarTint &&
+            lhs.showsAssistantAvatar == rhs.showsAssistantAvatar &&
+            lhs.isClean == rhs.isClean
     }
 }
 

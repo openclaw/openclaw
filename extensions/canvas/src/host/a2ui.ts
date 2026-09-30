@@ -69,9 +69,10 @@ async function resolveA2uiRootReal(): Promise<string | null> {
       const root = await resolveA2uiRoot();
       cachedA2uiRootReal = root ? await fs.realpath(root) : null;
       cachedA2uiResolvedAtMs = Date.now();
-      resolvingA2uiRoot = null;
       return cachedA2uiRootReal;
-    })();
+    })().finally(() => {
+      resolvingA2uiRoot = null;
+    });
   }
   return resolvingA2uiRoot;
 }

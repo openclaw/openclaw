@@ -4,7 +4,6 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createPluginActivationSource, normalizePluginsConfig } from "../plugins/config-state.js";
 import {
   makeEmptyPluginMetadataOwners,
   setCurrentPluginMetadataSnapshot,
@@ -14,13 +13,10 @@ import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-l
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { buildDeclaredProviderOwnerIndex } from "../plugins/provider-owner-index.js";
 import * as facadeActivationRuntime from "./facade-activation-check.runtime.js";
-import {
-  evaluateBundledPluginPublicSurfaceAccess,
-  resolveBundledPluginPublicSurfaceAccess as resolveActivationCheckBundledPluginPublicSurfaceAccess,
-  throwForBundledPluginPublicSurfaceAccess,
-} from "./facade-activation-check.runtime.js";
+import { resolveBundledPluginPublicSurfaceAccess as resolveActivationCheckBundledPluginPublicSurfaceAccess } from "./facade-activation-check.runtime.js";
 import {
   testing,
+  loadActivatedBundledPluginPublicSurfaceModuleSync,
   listImportedBundledPluginFacadeIds,
   resetFacadeRuntimeStateForTest,
 } from "./facade-runtime.js";
@@ -396,88 +392,36 @@ describe("plugin-sdk facade runtime", () => {
     expect(loader).toHaveBeenCalledTimes(1);
   });
 
-  it("blocks runtime-api facade loads for bundled plugins that are not activated", () => {
-    const access = evaluateBundledPluginPublicSurfaceAccess({
-      params: {
-        dirName: "discord",
-        artifactBasename: "runtime-api.js",
-      },
-      manifestRecord: {
-        id: "discord",
-        origin: "bundled",
-        enabledByDefault: false,
-        rootDir: "/tmp/discord",
-        channels: ["discord"],
-      },
-      config: {},
-      normalizedPluginsConfig: normalizePluginsConfig(),
-      activationSource: createPluginActivationSource({ config: {} }),
-      autoEnabledReasons: {},
+  it("loads a disabled-by-default facade only while it is explicitly enabled", () => {
+    const dir = createTrustedBundledFixtureRoot("openclaw-facade-runtime-enabled-");
+    const pluginDir = path.join(dir, "fixture");
+    writePluginPackageJson(pluginDir, "fixture", "commonjs");
+    writeJsonFile(path.join(pluginDir, "openclaw.plugin.json"), {
+      id: "fixture",
+      enabledByDefault: false,
     });
-
-    expect(access.allowed).toBe(false);
-    expect(access.pluginId).toBe("discord");
-    expect(access.reason).toMatch(/disabled|not enabled|not active/i);
-    expect(() =>
-      throwForBundledPluginPublicSurfaceAccess({
-        access,
-        request: {
-          dirName: "discord",
-          artifactBasename: "runtime-api.js",
-        },
-      }),
-    ).toThrow(/Bundled plugin public surface access blocked/);
-    expect(access.allowed).toBe(false);
-  });
-
-  it("allows runtime-api facade loads when the bundled plugin is explicitly enabled", () => {
-    const dir = createTempDirSync("openclaw-facade-runtime-enabled-");
-    fs.mkdirSync(path.join(dir, "discord"), { recursive: true });
     fs.writeFileSync(
-      path.join(dir, "discord", "runtime-api.js"),
-      'export const marker = "runtime-api-enabled";\n',
-      "utf8",
+      path.join(pluginDir, "runtime-api.js"),
+      'exports.marker = "runtime-api-enabled";\n',
     );
-    const config = {
-      plugins: {
-        entries: {
-          discord: {
-            enabled: true,
-          },
-        },
-      },
-    } as const;
-    const access = evaluateBundledPluginPublicSurfaceAccess({
-      params: {
-        dirName: "discord",
+    useBundledPluginDirOverrideForTest(dir);
+    testing.setFacadeActivationCheckRuntimeForTest(facadeActivationRuntime);
+    const load = () =>
+      loadActivatedBundledPluginPublicSurfaceModuleSync({
+        dirName: "fixture",
         artifactBasename: "runtime-api.js",
-      },
-      manifestRecord: {
-        id: "discord",
-        origin: "bundled",
-        enabledByDefault: false,
-        rootDir: "/tmp/discord",
-        channels: ["discord"],
-      },
-      config,
-      normalizedPluginsConfig: normalizePluginsConfig(config.plugins),
-      activationSource: createPluginActivationSource({ config }),
-      autoEnabledReasons: {},
-    });
-    const loader = vi.fn(() => ({ marker: "runtime-api-enabled" }));
-    const location = {
-      modulePath: path.join(dir, "discord", "runtime-api.js"),
-      boundaryRoot: dir,
-    };
+      });
 
-    expect(access.allowed).toBe(true);
-    const loaded = testing.loadFacadeModuleAtLocationSync<{ marker: string }>({
-      location,
-      trackedPluginId: "discord",
-      loadModule: loader,
-    });
-    expect(loaded.marker).toBe("runtime-api-enabled");
-    expect(loader).toHaveBeenCalledTimes(1);
+    setRuntimeConfigSnapshot({});
+    expect(load).toThrow(/Bundled plugin public surface access blocked.*disabled by default/);
+    expect(listImportedBundledPluginFacadeIds()).toEqual([]);
+
+    setRuntimeConfigSnapshot({ plugins: { entries: { fixture: { enabled: true } } } });
+    expect(load()).toEqual({ marker: "runtime-api-enabled" });
+    expect(listImportedBundledPluginFacadeIds()).toEqual(["fixture"]);
+
+    setRuntimeConfigSnapshot({ plugins: { entries: { fixture: { enabled: false } } } });
+    expect(load).toThrow(/Bundled plugin public surface access blocked.*disabled in config/);
   });
 
   it("rejects hardlinked artifacts under installed plugin roots", () => {

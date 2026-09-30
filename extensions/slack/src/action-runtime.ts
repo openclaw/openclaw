@@ -79,11 +79,9 @@ export const slackActionRuntime = {
   readSlackMessages: bindSlackAction((runtime) => runtime.readSlackMessages),
   removeOwnSlackReactions: bindSlackAction((runtime) => runtime.removeOwnSlackReactions),
   removeSlackReaction: bindSlackAction((runtime) => runtime.removeSlackReaction),
-  resolveSlackConversationName: bindSlackAction((runtime) => runtime.resolveSlackConversationName),
   resolveSlackConversationInfo: bindSlackChannelType(
     (runtime) => runtime.resolveSlackConversationInfo,
   ),
-  resolveSlackChannelType: bindSlackChannelType((runtime) => runtime.resolveSlackChannelType),
   sendSlackMessage: bindSlackAction((runtime) => runtime.sendSlackMessage),
   unpinSlackMessage: bindSlackAction((runtime) => runtime.unpinSlackMessage),
 };

@@ -73,26 +73,13 @@ function latestAssistantProvider(messages: unknown[] | undefined): string | null
 function getContextNoticeViewModel(
   session: GatewaySessionRow | undefined,
   defaultContextTokens: number | null,
-): {
-  pct: number;
-  used: number;
-  limit: number;
-  input: number | null;
-  output: number | null;
-  cost: number | null;
-  detail: string;
-  color: string;
-  bg: string;
-  warning: boolean;
-  approximate: boolean;
-  fromLastPrompt: boolean;
-} | null {
-  const used = session?.totalTokens;
+) {
+  const used = asNonNegativeFiniteNumber(session?.totalTokens);
   const { tokens: limit, fromLastPrompt } = resolveSessionContextLimit(
     session,
     defaultContextTokens,
   );
-  if (typeof used !== "number" || !Number.isFinite(used) || used < 0 || !limit) {
+  if (used === undefined || !limit) {
     return null;
   }
   const approximate = session?.totalTokensFresh === false;
@@ -104,38 +91,23 @@ function getContextNoticeViewModel(
   // Session rows expose the latest run snapshot; totalTokens is the separate context snapshot.
   const input = Number.isFinite(session?.inputTokens) ? (session?.inputTokens ?? null) : null;
   const output = Number.isFinite(session?.outputTokens) ? (session?.outputTokens ?? null) : null;
-  const cost =
-    typeof session?.estimatedCostUsd === "number" &&
-    Number.isFinite(session.estimatedCostUsd) &&
-    session.estimatedCostUsd >= 0
-      ? session.estimatedCostUsd
-      : null;
-  const usage = {
+  const cost = asNonNegativeFiniteNumber(session?.estimatedCostUsd) ?? null;
+  let color = "var(--muted)";
+  let bg = "color-mix(in srgb, var(--muted) 8%, transparent)";
+  if (warning) {
+    const mix = Math.min(Math.max((ratio - CONTEXT_NOTICE_RATIO) / 0.1, 0), 1);
+    color = `color-mix(in srgb, var(--warn), var(--danger) ${mix * 100}%)`;
+    bg = `color-mix(in srgb, ${color} ${8 + 8 * mix}%, transparent)`;
+  }
+  return {
+    pct,
     fromLastPrompt,
     used,
     limit,
     input,
     output,
     cost,
-  };
-  if (!warning) {
-    return {
-      pct,
-      ...usage,
-      detail: `${approximate ? "~" : ""}${formatCompactTokenCount(used)} / ${formatCompactTokenCount(limit)}`,
-      color: "var(--muted)",
-      bg: "color-mix(in srgb, var(--muted) 8%, transparent)",
-      warning,
-      approximate,
-    };
-  }
-  const mix = Math.min(Math.max((ratio - CONTEXT_NOTICE_RATIO) / 0.1, 0), 1);
-  const color = `color-mix(in srgb, var(--warn), var(--danger) ${mix * 100}%)`;
-  const bg = `color-mix(in srgb, ${color} ${8 + 8 * mix}%, transparent)`;
-  return {
-    pct,
-    ...usage,
-    detail: `${formatCompactTokenCount(used)} / ${formatCompactTokenCount(limit)}`,
+    detail: `${approximate ? "~" : ""}${formatCompactTokenCount(used)} / ${formatCompactTokenCount(limit)}`,
     color,
     bg,
     warning,

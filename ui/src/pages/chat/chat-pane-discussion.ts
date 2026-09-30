@@ -5,13 +5,7 @@ import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { ChatPaneSessionMenu } from "./chat-pane-session-menu.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
 import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.ts";
-import {
-  SIDEBAR_NARROW_BREAKPOINT_PX,
-  activatePanel,
-  closeSlot,
-  fitSidebarLayout,
-  openSlot,
-} from "./sidebar-layout.ts";
+import { closeSlot, openSlot } from "./sidebar-layout.ts";
 
 export abstract class ChatPaneDiscussion extends ChatPaneSessionMenu {
   // Probe once per session activation; transient failures stay uncached so the
@@ -127,18 +121,11 @@ export abstract class ChatPaneDiscussion extends ChatPaneSessionMenu {
     if (!state) {
       return false;
     }
-    let opened = openSlot(state.sidebarLayout, "discussion");
+    const opened = openSlot(state.sidebarLayout, "discussion");
     const discussionPanel = opened.columns
       .flatMap((column) => column.panels)
       .find((panel) => panel.slot === "discussion");
-    if (discussionPanel) {
-      opened = activatePanel(opened, discussionPanel.id);
-    }
-    const fitted =
-      this.paneWidth >= SIDEBAR_NARROW_BREAKPOINT_PX
-        ? (fitSidebarLayout(opened, this.paneWidth) ?? opened)
-        : opened;
-    this.commitSidebarLayout(fitted);
+    this.commitSidebarLayout(opened);
     if (discussionPanel) {
       state.updateSidebarActivePanel(discussionPanel.id);
     }

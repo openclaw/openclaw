@@ -369,6 +369,9 @@ function handleSessionsChangedEvent(
   if (resetsSelectedSession || changesBranchTopology) {
     retirePullRequestRefreshes(state);
   }
+  if (matchesChat && source?.reason === "project") {
+    retireSessionWorkspaceCheckout(state);
+  }
   if (resetsSelectedSession) {
     const scope = readChatSessionProjectionScope(state, { agentId: resolveChatAgentId(state) });
     // Reset keeps the public session ID; the explicit reducer event is the

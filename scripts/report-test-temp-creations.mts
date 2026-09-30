@@ -272,32 +272,6 @@ function nodeOverlapsAddedLine(
   return false;
 }
 
-function normalizeFileTextMap(
-  fileTextByPath: Map<string, string> | Record<string, string> | undefined,
-) {
-  if (!fileTextByPath) {
-    return null;
-  }
-  if (fileTextByPath instanceof Map) {
-    return fileTextByPath;
-  }
-  return new Map(Object.entries(fileTextByPath));
-}
-
-function readCurrentSource(
-  filePath: string,
-  options: { readFile?: (filePath: string) => string | null | undefined },
-  fileTextByPath: Map<string, string> | null,
-): string {
-  if (fileTextByPath?.has(filePath)) {
-    return fileTextByPath.get(filePath) ?? "";
-  }
-  if (options.readFile) {
-    return options.readFile(filePath) ?? "";
-  }
-  return "";
-}
-
 function collectManualTempDirHelperImports(
   sourceFile: ts.SourceFile,
   filePath: string,
@@ -387,7 +361,10 @@ export function collectTempCreationFindingsFromDiff(
 ): TempCreationFinding[] {
   const findings: TempCreationFinding[] = [];
   const addedLinesByFile = new Map<string, Set<number>>();
-  const fileTextByPath = normalizeFileTextMap(options.fileTextByPath);
+  const fileTextByPath =
+    options.fileTextByPath instanceof Map
+      ? options.fileTextByPath
+      : new Map(Object.entries(options.fileTextByPath ?? {}));
   let currentFile: string | null = null;
   let currentLine = 0;
   let allowNextLine: AllowNextLine | null = null;
@@ -458,7 +435,8 @@ export function collectTempCreationFindingsFromDiff(
       if (!shouldInspectManualHelperUsage(file)) {
         continue;
       }
-      const sourceText = readCurrentSource(file, options, fileTextByPath);
+      const sourceText =
+        (fileTextByPath.has(file) ? fileTextByPath.get(file) : options.readFile?.(file)) ?? "";
       if (!sourceText) {
         continue;
       }

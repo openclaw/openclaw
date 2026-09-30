@@ -25,11 +25,9 @@ public struct OpenClawChatAgentChoice: Codable, Identifiable, Sendable, Hashable
     }
 
     static func normalizedName(_ value: String?) -> String? {
-        guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else { return nil }
+        guard let value = ChatPayloadDecoding.trimmedNonEmptyString(value) else { return nil }
         // Match normalizeAssistantIdentity's UTF-16 bound without splitting a surrogate pair.
-        var units = Array(value.utf16.prefix(50))
-        if let last = units.last, (0xD800...0xDBFF).contains(last) { units.removeLast() }
-        return String(decoding: units, as: UTF16.self)
+        return ChatReplyQuote.truncateUTF16Safe(value, limit: 50)
     }
 
     static func textAvatar(_ value: String?) -> String? {

@@ -3,6 +3,8 @@ import { buildFileConsentCard } from "./file-consent.js";
 import { storePendingUploadFs } from "./pending-uploads-fs.js";
 import { storePendingUpload } from "./pending-uploads.js";
 
+export const FILE_CONSENT_THRESHOLD_BYTES = 4 * 1024 * 1024;
+
 type FileConsentMedia = {
   buffer: Buffer;
   filename: string;
@@ -94,10 +96,9 @@ export function requiresFileConsent(params: {
   conversationType: string | undefined;
   contentType: string | undefined;
   bufferSize: number;
-  thresholdBytes: number;
 }): boolean {
   const isPersonal = normalizeOptionalLowercaseString(params.conversationType) === "personal";
   const isImage = params.contentType?.startsWith("image/") ?? false;
-  const isLargeFile = params.bufferSize >= params.thresholdBytes;
+  const isLargeFile = params.bufferSize >= FILE_CONSENT_THRESHOLD_BYTES;
   return isPersonal && (isLargeFile || !isImage);
 }

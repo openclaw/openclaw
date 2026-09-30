@@ -96,17 +96,8 @@ async function readLegacySourceSnapshot(params: {
   return { ...snapshot, identity };
 }
 
-type CanonicalIdentityRow = {
-  identity_key: string;
-  device_id: string;
-  public_key_pem: string;
-  private_key_pem: string;
-  created_at_ms: number;
-  updated_at_ms: number;
-};
-
 function classifyCanonicalRow(
-  row: CanonicalIdentityRow,
+  row: NonNullable<ReturnType<typeof readCanonicalIdentity>>,
   identity: NormalizedLegacyDeviceIdentity,
 ): "same" | "different" | "invalid" {
   if (!isValidCreatedAtMs(row.updated_at_ms)) {
@@ -141,9 +132,7 @@ function classifyCanonicalRow(
     : "different";
 }
 
-function readCanonicalIdentity(
-  db: ReturnType<typeof openOpenClawStateDatabase>["db"],
-): CanonicalIdentityRow | undefined {
+function readCanonicalIdentity(db: ReturnType<typeof openOpenClawStateDatabase>["db"]) {
   return executeSqliteQueryTakeFirstSync(
     db,
     getNodeSqliteKysely<DeviceIdentityMigrationDatabase>(db)

@@ -362,7 +362,7 @@ describe("resolveGatewayScopedTools", () => {
     const registry = await import("../agents/subagents/registry/subagent-registry.js");
     const markRequesterTurnYielded = vi
       .spyOn(registry, "markRequesterTurnYielded")
-      .mockReturnValue(1);
+      .mockResolvedValue(1);
     const onYield = vi.fn();
     try {
       const result = resolveGatewayScopedTools({

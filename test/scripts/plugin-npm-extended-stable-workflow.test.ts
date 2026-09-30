@@ -597,7 +597,7 @@ if (endpoint === "repos/openclaw/openclaw/compare/${toolingSha}...main") {
           `#!${nodeExecutable}
 const fs = require("node:fs");
 const args = process.argv.slice(2);
-const result = require("node:child_process").spawnSync(process.execPath, [process.env.NPM_CLI, "config", "get", "registry"], { env: process.env, encoding: "utf8", timeout: 10_000 });
+const result = require("node:child_process").spawnSync(process.env.NPM_CLI, ["config", "get", "registry"], { env: process.env, encoding: "utf8", timeout: 10_000 });
 if (result.status !== 0) { process.stderr.write(result.stderr); process.exit(result.status ?? 1); }
 fs.appendFileSync(process.env.EVENTS, JSON.stringify({ command: "npm", args, bytes: fs.readFileSync(args[1], "utf8"), token: Boolean(process.env.NPM_TOKEN || process.env.NODE_AUTH_TOKEN) }) + "\\n");
 `,

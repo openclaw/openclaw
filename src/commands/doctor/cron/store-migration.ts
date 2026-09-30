@@ -157,7 +157,6 @@ function normalizeStoredCronJobIdentity(raw: Record<string, unknown>): {
   };
 }
 
-/** Normalize persisted cron jobs in place and report issues plus rows to quarantine. */
 export function normalizeStoredCronJobs(
   jobs: Array<Record<string, unknown>>,
   options: {
@@ -458,7 +457,7 @@ export function normalizeStoredCronJobs(
         sched.everyMs = everyMs;
         mutated = true;
       }
-      if ((kind === "every" || sched.kind === "every") && everyMs !== null) {
+      if (sched.kind === "every" && everyMs !== null) {
         const anchorRaw = sched.anchorMs;
         const anchorCoerced = coerceFiniteScheduleNumber(anchorRaw);
         const normalizedAnchor =
@@ -493,7 +492,7 @@ export function normalizeStoredCronJobs(
         mutated = true;
         trackIssue("legacyScheduleCron");
       }
-      if ((kind === "cron" || sched.kind === "cron") && normalizedExpr) {
+      if (sched.kind === "cron" && normalizedExpr) {
         const explicitStaggerMs = normalizeCronStaggerMs(sched.staggerMs);
         const defaultStaggerMs = resolveDefaultCronStaggerMs(normalizedExpr);
         const targetStaggerMs = explicitStaggerMs ?? defaultStaggerMs;
@@ -532,6 +531,8 @@ export function normalizeStoredCronJobs(
 
     const payloadKind =
       payloadRecord && typeof payloadRecord.kind === "string" ? payloadRecord.kind : "";
+    const isRunnablePayload =
+      payloadKind === "agentTurn" || payloadKind === "command" || payloadKind === "script";
     const rawSessionTarget = normalizeOptionalString(raw.sessionTarget) ?? "";
     const loweredSessionTarget = normalizeLowercaseStringOrEmpty(rawSessionTarget);
     if (
@@ -557,10 +558,7 @@ export function normalizeStoredCronJobs(
         }
       }
     } else {
-      const inferredSessionTarget =
-        payloadKind === "agentTurn" || payloadKind === "command" || payloadKind === "script"
-          ? "isolated"
-          : "main";
+      const inferredSessionTarget = isRunnablePayload ? "isolated" : "main";
       if (raw.sessionTarget !== inferredSessionTarget) {
         raw.sessionTarget = inferredSessionTarget;
         mutated = true;
@@ -568,22 +566,16 @@ export function normalizeStoredCronJobs(
     }
 
     const sessionTarget = normalizeOptionalLowercaseString(raw.sessionTarget) ?? "";
-    const isIsolatedRunnablePayload =
+    const isIsolatedTarget =
       sessionTarget === "isolated" ||
       sessionTarget === "current" ||
-      sessionTarget.startsWith("session:") ||
-      (sessionTarget === "" &&
-        (payloadKind === "agentTurn" || payloadKind === "command" || payloadKind === "script"));
+      sessionTarget.startsWith("session:");
     const normalizedLegacy = normalizeLegacyDeliveryInput({
       delivery,
       payload: payloadRecord,
     });
 
-    if (
-      !delivery &&
-      isIsolatedRunnablePayload &&
-      (payloadKind === "agentTurn" || payloadKind === "command" || payloadKind === "script")
-    ) {
+    if (!delivery && isIsolatedTarget && isRunnablePayload) {
       raw.delivery = normalizedLegacy.delivery ?? { mode: "announce" };
       mutated = true;
     } else if (normalizedLegacy.mutated && normalizedLegacy.delivery) {

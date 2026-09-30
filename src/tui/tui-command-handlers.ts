@@ -522,7 +522,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         await setAgent(args);
       }
     },
-    agents: async () => await openAgentSelector(),
+    agents: openAgentSelector,
     context: async (args, raw) => {
       if (opts.local) {
         addUnsupportedLocalCommand("context");
@@ -584,7 +584,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         await setSession(args);
       }
     },
-    sessions: async () => await openSessionSelector(),
+    sessions: openSessionSelector,
     model: async (args, raw) => {
       if (shouldForwardModelCommandToServer(args)) {
         await sendMessage(raw);
@@ -607,7 +607,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         );
       }
     },
-    models: () => openModelSelector(),
+    models: openModelSelector,
     think: async (args) => {
       const { thinkingLevels, modelProvider, model, agentRuntime } = state.sessionInfo;
       const levels = thinkingLevels?.length
@@ -838,7 +838,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       // local run ids are not a complete stop target inventory.
       await abortActive({ preferActive: true });
     },
-    settings: () => openSettings(),
+    settings: openSettings,
     question: async () => {
       if (context.reopenQuestion) {
         await context.reopenQuestion();
@@ -879,6 +879,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       return;
     }
     const isBtw = isBtwCommand(text);
+    const forgetRunId = isBtw ? forgetLocalBtwRunId : forgetLocalRunId;
     if (isSlashStopCommand(text) || (hasTrackedAbortTarget() && isChatStopCommandText(text))) {
       await abortActive({ preferActive: true });
       return;
@@ -932,16 +933,11 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       const terminalAckFailure = terminalAckStatus === "timeout" || terminalAckStatus === "error";
       const terminalAck = terminalAckStatus !== undefined;
       if (!isCurrentSendViewport()) {
-        if (isBtw) {
-          forgetLocalBtwRunId?.(runId);
-          if (acceptedRunId !== runId) {
-            forgetLocalBtwRunId?.(acceptedRunId);
-          }
-        } else {
-          forgetLocalRunId?.(runId);
-          if (acceptedRunId !== runId) {
-            forgetLocalRunId?.(acceptedRunId);
-          }
+        forgetRunId?.(runId);
+        if (acceptedRunId !== runId) {
+          forgetRunId?.(acceptedRunId);
+        }
+        if (!isBtw) {
           clearPendingSubmit(state, runId);
           clearPendingSubmit(state, acceptedRunId);
           consumeCompletedRunForPendingSend?.(acceptedRunId);
@@ -1038,11 +1034,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         tui.requestRender();
       }
     } catch (err) {
-      if (isBtw) {
-        forgetLocalBtwRunId?.(runId);
-      } else {
-        forgetLocalRunId?.(runId);
-      }
+      forgetRunId?.(runId);
       if (!isCurrentSendViewport()) {
         clearPendingSubmit(state, runId);
         return;

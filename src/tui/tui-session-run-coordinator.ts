@@ -1,4 +1,3 @@
-// Owns bounded TUI run state, transcript persistence, and serialized history reloads.
 import { createTuiRefreshCoalescer } from "./coalesced-refresh.js";
 import { TuiStreamAssembler } from "./tui-stream-assembler.js";
 import { getPendingSubmitAcceptedRunId, hasPendingSubmit } from "./tui-submit-state.js";
@@ -316,7 +315,7 @@ export class TuiSessionRunCoordinator {
 
   private async loadHistoryPreservingTerminalErrors(): Promise<TuiHistoryLoadResult> {
     const generation = this.historyReloadGeneration;
-    const result = (await this.context.loadHistory()) ?? { loaded: false };
+    const result = await this.context.loadHistory();
     if (!result.loaded || generation !== this.historyReloadGeneration) {
       return result;
     }

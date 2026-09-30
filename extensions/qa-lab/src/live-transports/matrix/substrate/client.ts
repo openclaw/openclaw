@@ -296,13 +296,9 @@ export function createMatrixQaClient(params: {
         response: result.body,
       });
     },
-    async sendTextMessage(opts: {
-      body: string;
-      mentionUserIds?: string[];
-      replyToEventId?: string;
-      roomId: string;
-      threadRootEventId?: string;
-    }) {
+    async sendTextMessage(
+      opts: Parameters<typeof buildMatrixQaMessageContent>[0] & { roomId: string },
+    ) {
       const txnId = randomUUID();
       return await sendEvent({
         body: buildMatrixQaMessageContent(opts),
@@ -310,12 +306,9 @@ export function createMatrixQaClient(params: {
         errorLabel: "sendMessage",
       });
     },
-    async sendReplacementMessage(opts: {
-      body: string;
-      mentionUserIds?: string[];
-      roomId: string;
-      targetEventId: string;
-    }) {
+    async sendReplacementMessage(
+      opts: Parameters<typeof buildMatrixQaReplacementMessageContent>[0] & { roomId: string },
+    ) {
       const txnId = randomUUID();
       return await sendEvent({
         body: buildMatrixQaReplacementMessageContent(opts),
@@ -323,17 +316,12 @@ export function createMatrixQaClient(params: {
         errorLabel: "sendReplacementMessage",
       });
     },
-    async sendMediaMessage(opts: {
-      body?: string;
-      buffer: Buffer;
-      contentType?: string;
-      fileName?: string;
-      kind?: "audio" | "file" | "image" | "video";
-      mentionUserIds?: string[];
-      replyToEventId?: string;
-      roomId: string;
-      threadRootEventId?: string;
-    }) {
+    async sendMediaMessage(
+      opts: Omit<Parameters<typeof buildMatrixQaMediaMessageContent>[0], "size" | "url"> & {
+        buffer: Buffer;
+        roomId: string;
+      },
+    ) {
       const contentUri = await uploadMatrixQaContent({
         accessToken: params.accessToken,
         baseUrl: params.baseUrl,
@@ -345,14 +333,8 @@ export function createMatrixQaClient(params: {
       const txnId = randomUUID();
       return await sendEvent({
         body: buildMatrixQaMediaMessageContent({
-          body: opts.body,
-          contentType: opts.contentType,
-          fileName: opts.fileName,
-          kind: opts.kind,
-          mentionUserIds: opts.mentionUserIds,
-          replyToEventId: opts.replyToEventId,
+          ...opts,
           size: opts.buffer.byteLength,
-          threadRootEventId: opts.threadRootEventId,
           url: contentUri,
         }),
         endpoint: `/_matrix/client/v3/rooms/${encodeURIComponent(opts.roomId)}/send/m.room.message/${encodeURIComponent(txnId)}`,
@@ -411,18 +393,10 @@ export function createMatrixQaClient(params: {
       });
     },
     waitForOptionalRoomEvent(opts: MatrixQaClientRoomEventWaitParams) {
-      return resolveRoomObserver(opts).waitForOptionalRoomEvent({
-        predicate: opts.predicate,
-        roomId: opts.roomId,
-        timeoutMs: opts.timeoutMs,
-      });
+      return resolveRoomObserver(opts).waitForOptionalRoomEvent(opts);
     },
     async waitForRoomEvent(opts: MatrixQaClientRoomEventWaitParams) {
-      return await resolveRoomObserver(opts).waitForRoomEvent({
-        predicate: opts.predicate,
-        roomId: opts.roomId,
-        timeoutMs: opts.timeoutMs,
-      });
+      return await resolveRoomObserver(opts).waitForRoomEvent(opts);
     },
   };
 }
