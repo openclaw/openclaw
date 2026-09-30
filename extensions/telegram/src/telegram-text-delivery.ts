@@ -7,12 +7,17 @@ import {
   splitTelegramHtmlChunks,
   telegramHtmlToPlainTextFallback,
 } from "./format.js";
-import type { TelegramRichBlocksDegradationReason } from "./rich-block-model.js";
+import {
+  inputRichBlockMediaSources,
+  type TelegramRichBlocksDegradationReason,
+} from "./rich-block-model.js";
 import { splitTelegramRichBlocks } from "./rich-block-split.js";
+import type { TelegramRichLocalMedia } from "./rich-local-media.js";
 import {
   buildTelegramRichBlocksPlan,
   buildTelegramRichMarkdownPlan,
   splitTelegramRichMessageTextChunks,
+  telegramRichMediaReference,
   type TelegramInputRichMessage,
 } from "./rich-message.js";
 import {
@@ -28,6 +33,8 @@ export type TelegramTextDeliveryPage = {
   fullSourceText?: string;
   htmlText?: string;
   richMessage?: TelegramInputRichMessage;
+  /** Local uploads behind `richMessage.media`; resent as legacy media after a plain fallback. */
+  richLocalMedia?: readonly TelegramRichLocalMedia[];
   degradationReasons?: readonly TelegramRichBlocksDegradationReason[];
 };
 
@@ -39,6 +46,7 @@ type TelegramTextPlanParams = {
   textMode?: "html" | "plain";
   richMessages?: boolean;
   richMessage?: TelegramInputRichMessage;
+  richLocalMedia?: readonly TelegramRichLocalMedia[];
   degradationReasons?: readonly TelegramRichBlocksDegradationReason[];
   skipEntityDetection?: boolean;
   warn?: (message: string) => void;
@@ -60,6 +68,38 @@ function fallbackPage(text: string): TelegramTextDeliveryPage {
   };
 }
 
+function attachTelegramRichLocalMedia(
+  page: { plainText: string; richMessage: TelegramInputRichMessage },
+  media: readonly TelegramRichLocalMedia[] | undefined,
+): {
+  plainText: string;
+  richMessage: TelegramInputRichMessage;
+  richLocalMedia?: readonly TelegramRichLocalMedia[];
+} {
+  const mediaSources = inputRichBlockMediaSources(page.richMessage.blocks);
+  const matched = media?.filter((entry) => mediaSources.has(telegramRichMediaReference(entry)));
+  if (!matched?.length) {
+    return { plainText: page.plainText, richMessage: page.richMessage };
+  }
+  // The plain fallback names the file: a tg:// id only resolves inside the
+  // rich upload, and the original file follows through the legacy media path.
+  const fileNames = new Map(
+    matched.map((entry) => [telegramRichMediaReference(entry), entry.fileName]),
+  );
+  const plainText = page.plainText.replace(
+    /tg:\/\/(?:photo|video|audio)\?id=[A-Za-z0-9_-]+/g,
+    (reference) => fileNames.get(reference) ?? reference,
+  );
+  return {
+    plainText,
+    richMessage: {
+      ...page.richMessage,
+      media: matched.map(({ id, media: upload }) => ({ id, media: upload })),
+    },
+    richLocalMedia: matched,
+  };
+}
+
 export function planTelegramTextDeliveryPages(
   params: TelegramTextPlanParams,
 ): TelegramTextDeliveryPage[] {
@@ -70,8 +110,10 @@ export function planTelegramTextDeliveryPages(
       const pages = splitTelegramRichBlocks(params.richMessage.blocks, { textLimit: maxChars }).map(
         (blocks, index) => {
           const plan = buildTelegramRichBlocksPlan(blocks, { skipEntityDetection });
-          const page = plainPage(plan.plainText);
-          page.richMessage = plan.richMessage;
+          const attached = attachTelegramRichLocalMedia(plan, params.richLocalMedia);
+          const page = plainPage(attached.plainText);
+          page.richMessage = attached.richMessage;
+          page.richLocalMedia = attached.richLocalMedia;
           page.degradationReasons = index === 0 ? params.degradationReasons : undefined;
           return page;
         },
@@ -101,8 +143,10 @@ export function planTelegramTextDeliveryPages(
     }
     return splitTelegramRichMessageTextChunks({ plan: richPlan, textLimit: maxChars }).map(
       (chunk) => {
-        const page = plainPage(chunk.plainText);
-        page.richMessage = chunk.richMessage;
+        const attached = attachTelegramRichLocalMedia(chunk, params.richLocalMedia);
+        const page = plainPage(attached.plainText);
+        page.richMessage = attached.richMessage;
+        page.richLocalMedia = attached.richLocalMedia;
         page.degradationReasons = chunk.degradationReasons;
         return page;
       },
@@ -174,6 +218,8 @@ type TelegramTextPageSender<TPlain, THtml, TRich> = {
     sendRich: (richMessage: TelegramInputRichMessage) => Promise<TRich>;
   };
   fallbackLimit?: number;
+  /** Observes a page whose formatted send degraded to plain chunks. */
+  onPlainFallback?: (page: TelegramTextDeliveryPage) => void;
 };
 
 // Yield outside the transport fallback catch. Observing an accepted message may
@@ -215,6 +261,7 @@ export async function* sendTelegramTextPageParts<TPlain, THtml, TRich>(
     yield { result: delivery.result, page };
     return;
   }
+  params.onPlainFallback?.(page);
   for (const [index, text] of delivery.chunks.entries()) {
     yield {
       result: await params.sender.sendPlain(

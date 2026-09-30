@@ -22,6 +22,10 @@ import {
 } from "./interactive-fallback.js";
 import { parseTelegramReplyToMessageId, parseTelegramThreadId } from "./outbound-params.js";
 import {
+  normalizeTelegramFallbackPayloadBatch,
+  normalizeTelegramMetadataOnlyPayload,
+} from "./outbound-payload-normalization.js";
+import {
   createTelegramPromptContextProjectionCursor,
   resolveTelegramPromptContextSource,
 } from "./prompt-context-projection.js";
@@ -126,113 +130,6 @@ type CreateTelegramOutboundAdapterOptions = Pick<
   resolveSend?: ResolveTelegramSendFn;
   loadSendModule?: LoadTelegramSendModuleFn;
 };
-
-function normalizeTelegramMetadataOnlyPayload(payload: ReplyPayload): ReplyPayload | null {
-  const telegramData = payload.channelData?.telegram as TelegramPayloadData | undefined;
-  const text = resolveTelegramInteractiveTextFallback(payload);
-  if (
-    text?.trim() ||
-    resolveSendableOutboundReplyParts(payload).mediaUrls.length > 0 ||
-    payload.location ||
-    payload.audioAsVoice === true ||
-    payload.videoAsNote === true ||
-    payload.presentation ||
-    payload.interactive
-  ) {
-    return payload;
-  }
-  const buttons = resolveTelegramInlineButtons({
-    buttons: telegramData?.buttons,
-    presentation: payload.presentation,
-    interactive: payload.interactive,
-  });
-  const hasQuoteText =
-    typeof telegramData?.quoteText === "string" && Boolean(telegramData.quoteText.trim());
-  const hasReaction =
-    typeof telegramData?.reaction?.emoji === "string" &&
-    Boolean(telegramData.reaction.emoji.trim());
-  if (hasReaction && !buttons?.length && !hasQuoteText) {
-    return payload;
-  }
-  const fallbackText = payload.fallbackText?.text.trim();
-  if (!buttons?.length && !hasQuoteText) {
-    return null;
-  }
-  return fallbackText ? { ...payload, text: fallbackText } : null;
-}
-
-function mergeTelegramFallbackPayloads(source: ReplyPayload, adopter: ReplyPayload): ReplyPayload {
-  const sourceTelegram = source.channelData?.telegram as TelegramPayloadData | undefined;
-  const adopterTelegram = adopter.channelData?.telegram as TelegramPayloadData | undefined;
-  const buttons = [...(sourceTelegram?.buttons ?? []), ...(adopterTelegram?.buttons ?? [])];
-  const quoteText = sourceTelegram?.quoteText?.trim()
-    ? sourceTelegram.quoteText
-    : adopterTelegram?.quoteText;
-  const telegram =
-    sourceTelegram || adopterTelegram
-      ? {
-          ...adopterTelegram,
-          ...sourceTelegram,
-          ...(buttons.length > 0 ? { buttons } : {}),
-          ...(quoteText ? { quoteText } : {}),
-        }
-      : undefined;
-  return {
-    ...adopter,
-    ...source,
-    fallbackText: adopter.fallbackText,
-    channelData: {
-      ...adopter.channelData,
-      ...source.channelData,
-      ...(telegram ? { telegram } : {}),
-    },
-  };
-}
-
-function normalizeTelegramFallbackPayloadBatch(
-  entries: readonly { index: number; payload: ReplyPayload }[],
-): ReadonlyArray<ReplyPayload | null> {
-  const normalized: Array<ReplyPayload | null> = entries.map((entry) => entry.payload);
-  const positions = new Map(entries.map((entry, position) => [entry.index, position]));
-  for (const [position, entry] of entries.entries()) {
-    const fallback = entry.payload.fallbackText;
-    if (
-      fallback?.replacesPayloadIndex === undefined ||
-      entry.payload.text?.trim() !== fallback.text.trim() ||
-      entry.payload.interactive ||
-      entry.payload.presentation ||
-      resolveSendableOutboundReplyParts(entry.payload).mediaUrls.length > 0 ||
-      entry.payload.location ||
-      entry.payload.audioAsVoice === true ||
-      entry.payload.videoAsNote === true
-    ) {
-      continue;
-    }
-    const channelData = entry.payload.channelData;
-    const channelDataKeys = channelData ? Object.keys(channelData) : [];
-    const telegramData = channelData?.telegram as TelegramPayloadData | undefined;
-    if (
-      channelDataKeys.length !== 1 ||
-      channelDataKeys[0] !== "telegram" ||
-      !telegramData?.buttons?.length ||
-      telegramData.quoteText?.trim() ||
-      telegramData.reaction
-    ) {
-      continue;
-    }
-    const sourcePosition = positions.get(fallback.replacesPayloadIndex);
-    if (sourcePosition === undefined) {
-      continue;
-    }
-    const source = normalized[sourcePosition];
-    if (!source || source.text?.trim() !== fallback.text.trim()) {
-      continue;
-    }
-    normalized[sourcePosition] = mergeTelegramFallbackPayloads(source, entry.payload);
-    normalized[position] = null;
-  }
-  return normalized;
-}
 
 export async function sendTelegramPayloadMessages(params: {
   send: TelegramSendFn;
@@ -495,7 +392,14 @@ export function createTelegramOutboundAdapter(
           ...params,
           resolveSend,
         });
-        return toTelegramOutboundResult(await send(outboundTo, params.text, baseOpts));
+        return toTelegramOutboundResult(
+          await send(outboundTo, params.text, {
+            ...baseOpts,
+            ...(params.mediaAccess !== undefined ? { mediaAccess: params.mediaAccess } : {}),
+            mediaLocalRoots: params.mediaLocalRoots,
+            mediaReadFile: params.mediaReadFile,
+          }),
+        );
       },
       sendMedia: async (params) => {
         const { outboundTo, send, baseOpts } = await resolveTelegramOutboundSendContext({

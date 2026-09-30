@@ -9,7 +9,14 @@ import { parseTelegramQuestionCallbackData } from "./question-callback-data.js";
 
 describe("resolveTelegramInlineButtons precedence", () => {
   it("returns explicit buttons without reading lower-priority payloads", () => {
-    const buttons = [[{ text: "Explicit", callback_data: "explicit" }]];
+    const buttons = [
+      [],
+      [
+        { text: "Explicit", callback_data: " env|prod:東京 ", style: "success", extra: "kept" },
+        { text: "Docs", url: "https://example.test/docs", style: "primary" },
+        { text: "App", web_app: { url: "https://example.test/app" }, style: "danger" },
+      ],
+    ] as const;
     expect(
       resolveTelegramInlineButtons({
         buttons,
