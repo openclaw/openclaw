@@ -259,8 +259,13 @@ struct ChatSessionSidebar: View {
         now: Date,
         previewRequest: ChatSessionSidebarPreviews.Request) -> some View
     {
-        OutlineGroup(nodes, children: \.outlineChildren) { node in
-            self.row(for: node, now: now, previewRequest: previewRequest)
+        let rootIDs = Set(nodes.map(\.id))
+        return OutlineGroup(nodes, children: \.outlineChildren) { node in
+            self.row(
+                for: node,
+                isChild: !rootIDs.contains(node.id),
+                now: now,
+                previewRequest: previewRequest)
         }
     }
 
