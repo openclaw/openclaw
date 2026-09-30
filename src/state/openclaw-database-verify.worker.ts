@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { formatSqliteErrorCodeSuffix } from "../infra/sqlite-error-diagnostics.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db-contract.js";
 
@@ -17,12 +18,9 @@ export type OpenClawDatabaseVerifyResult = {
   terminal?: boolean;
 };
 
-function isVerifyTarget(value: unknown): value is OpenClawDatabaseVerifyTarget {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return false;
-  }
-  const target = value as Record<string, unknown>;
+function isVerifyTarget(target: unknown): target is OpenClawDatabaseVerifyTarget {
   return (
+    isRecord(target) &&
     typeof target.path === "string" &&
     (target.kind === "agent" || target.kind === "state") &&
     typeof target.label === "string" &&

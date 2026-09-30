@@ -31,17 +31,12 @@ const skillsLogger = createSubsystemLogger("skills");
 const skillsSyncQueue = new KeyedAsyncQueue();
 
 function resolveUniqueSyncedSkillDirName(base: string, used: Set<string>): string {
-  if (!used.has(base)) {
-    used.add(base);
-    return base;
+  let candidate = base;
+  for (let index = 2; used.has(candidate); index += 1) {
+    candidate = `${base}-${index}`;
   }
-  for (let index = 2; ; index += 1) {
-    const candidate = `${base}-${index}`;
-    if (!used.has(candidate)) {
-      used.add(candidate);
-      return candidate;
-    }
-  }
+  used.add(candidate);
+  return candidate;
 }
 
 const SYNCED_SKILLS_MANIFEST_NAME = ".openclaw-sync.json";
@@ -277,10 +272,8 @@ export async function syncWorkspaceSkills(params: {
     const preservedDestinations = new Set(
       plans.flatMap((plan) => {
         const destination = plan.destinationPath ? path.basename(plan.destinationPath) : null;
-        return previousUsage?.destinations.get(plan.identity) === destination
-          ? destination
-            ? [destination]
-            : []
+        return destination && previousUsage?.destinations.get(plan.identity) === destination
+          ? [destination]
           : [];
       }),
     );
