@@ -65,6 +65,21 @@ function assignRemoteMediaStagingMetadata(
   }
 }
 
+function projectInboundMessageMetadata(canonical: CanonicalInboundMessageHookContext) {
+  const metadata = {
+    to: canonical.to,
+    provider: canonical.provider,
+    surface: canonical.surface,
+    senderE164: canonical.senderE164,
+    ...projectHookMediaAliases(canonical),
+    guildId: canonical.guildId,
+    channelName: canonical.channelName,
+    topicName: canonical.topicName,
+  };
+  assignRemoteMediaStagingMetadata(metadata, canonical);
+  return metadata;
+}
+
 function projectHookMediaState(canonical: CanonicalInboundMessageHookContext) {
   const stagingPending = canonical.mediaStagingPending === true;
   const media = stagingPending ? undefined : canonical.media;
@@ -274,8 +289,9 @@ export function resolveInboundReplyHookTarget(
   finalized: FinalizedMsgContext,
   hookCtx: CanonicalInboundMessageHookContext,
 ): string {
-  if (typeof finalized.OriginatingTo === "string" && finalized.OriginatingTo.trim()) {
-    return finalized.OriginatingTo;
+  const originatingTo = readNonBlankString(finalized.OriginatingTo);
+  if (originatingTo) {
+    return originatingTo;
   }
   if (hookCtx.isGroup) {
     return hookCtx.conversationId ?? hookCtx.to ?? hookCtx.from;
@@ -389,6 +405,32 @@ function resolveInboundConversation(canonical: CanonicalInboundMessageHookContex
   return { conversationId: baseConversationId };
 }
 
+function projectPluginInboundMessageFacts(canonical: CanonicalInboundMessageHookContext) {
+  return {
+    content: canonical.content,
+    timestamp: canonical.timestamp,
+    senderId: canonical.senderId,
+    ...projectHookReplyFields(canonical),
+    threadId: canonical.threadId,
+    messageId: canonical.messageId,
+    sessionKey: canonical.sessionKey,
+    runId: canonical.runId,
+    ...(canonical.location ? { location: { ...canonical.location } } : {}),
+    ...(canonical.providerUpdate ? { providerUpdate: { ...canonical.providerUpdate } } : {}),
+    ...projectHookMediaState(canonical),
+    metadata: {
+      ...projectInboundMessageMetadata(canonical),
+      originatingChannel: canonical.originatingChannel,
+      originatingTo: canonical.originatingTo,
+      replyToId: canonical.replyToId,
+      replyToIdFull: canonical.replyToIdFull,
+      replyToBody: canonical.replyToBody,
+      replyToSender: canonical.replyToSender,
+      replyToIsQuote: canonical.replyToIsQuote,
+    },
+  };
+}
+
 export function toPluginInboundClaimPair(
   canonical: CanonicalInboundMessageHookContext,
   extras?: {
@@ -414,53 +456,23 @@ export function toPluginInboundClaimPair(
   };
   Object.assign(context, projectHookReplyFields(canonical));
   assignTraceFields(context, canonical.trace);
+  const facts = projectPluginInboundMessageFacts(canonical);
   const event: PluginHookInboundClaimEvent = {
-    content: canonical.content,
+    ...facts,
     body: canonical.body,
     bodyForAgent: canonical.bodyForAgent,
     transcript: canonical.transcript,
-    timestamp: canonical.timestamp,
     channel: canonical.channelId,
     accountId: canonical.accountId,
     conversationId: context.conversationId,
     parentConversationId: context.parentConversationId,
-    senderId: canonical.senderId,
     senderName: canonical.senderName,
     senderUsername: canonical.senderUsername,
-    ...projectHookReplyFields(canonical),
-    threadId: canonical.threadId,
-    messageId: canonical.messageId,
-    sessionKey: canonical.sessionKey,
-    runId: canonical.runId,
     isGroup: canonical.isGroup,
     commandAuthorized: extras?.commandAuthorized,
     wasMentioned: extras?.wasMentioned,
-    ...(canonical.location ? { location: { ...canonical.location } } : {}),
-    ...(canonical.providerUpdate ? { providerUpdate: { ...canonical.providerUpdate } } : {}),
-    ...projectHookMediaState(canonical),
-    metadata: {
-      from: canonical.from,
-      to: canonical.to,
-      provider: canonical.provider,
-      surface: canonical.surface,
-      originatingChannel: canonical.originatingChannel,
-      originatingTo: canonical.originatingTo,
-      senderE164: canonical.senderE164,
-      replyToId: canonical.replyToId,
-      replyToIdFull: canonical.replyToIdFull,
-      replyToBody: canonical.replyToBody,
-      replyToSender: canonical.replyToSender,
-      replyToIsQuote: canonical.replyToIsQuote,
-      ...projectHookMediaAliases(canonical),
-      guildId: canonical.guildId,
-      channelName: canonical.channelName,
-      groupId: canonical.groupId,
-      topicName: canonical.topicName,
-    },
+    metadata: { ...facts.metadata, from: canonical.from, groupId: canonical.groupId },
   };
-  if (event.metadata) {
-    assignRemoteMediaStagingMetadata(event.metadata, canonical);
-  }
   assignTraceFields(event, canonical.trace);
   return { context, event };
 }
@@ -468,45 +480,19 @@ export function toPluginInboundClaimPair(
 export function toPluginMessageReceivedEvent(
   canonical: CanonicalInboundMessageHookContext,
 ): PluginHookMessageReceivedEvent {
+  const facts = projectPluginInboundMessageFacts(canonical);
   const event: PluginHookMessageReceivedEvent = {
+    ...facts,
     from: canonical.from,
-    content: canonical.content,
-    timestamp: canonical.timestamp,
-    threadId: canonical.threadId,
-    messageId: canonical.messageId,
-    senderId: canonical.senderId,
-    ...projectHookReplyFields(canonical),
-    sessionKey: canonical.sessionKey,
-    runId: canonical.runId,
-    ...(canonical.location ? { location: { ...canonical.location } } : {}),
-    ...(canonical.providerUpdate ? { providerUpdate: { ...canonical.providerUpdate } } : {}),
-    ...projectHookMediaState(canonical),
     metadata: {
-      to: canonical.to,
-      provider: canonical.provider,
-      surface: canonical.surface,
+      ...facts.metadata,
       threadId: canonical.threadId,
-      originatingChannel: canonical.originatingChannel,
-      originatingTo: canonical.originatingTo,
       messageId: canonical.messageId,
       senderId: canonical.senderId,
       senderName: canonical.senderName,
       senderUsername: canonical.senderUsername,
-      senderE164: canonical.senderE164,
-      replyToId: canonical.replyToId,
-      replyToIdFull: canonical.replyToIdFull,
-      replyToBody: canonical.replyToBody,
-      replyToSender: canonical.replyToSender,
-      replyToIsQuote: canonical.replyToIsQuote,
-      ...projectHookMediaAliases(canonical),
-      guildId: canonical.guildId,
-      channelName: canonical.channelName,
-      topicName: canonical.topicName,
     },
   };
-  if (event.metadata) {
-    assignRemoteMediaStagingMetadata(event.metadata, canonical);
-  }
   assignTraceFields(event, canonical.trace);
   return event;
 }
@@ -530,7 +516,7 @@ export function toPluginMessageSentEvent(
 export function toInternalMessageReceivedContext(
   canonical: CanonicalInboundMessageHookContext,
 ): MessageReceivedHookContext {
-  const context: MessageReceivedHookContext = {
+  return {
     from: canonical.from,
     content: canonical.content,
     timestamp: canonical.timestamp,
@@ -540,24 +526,13 @@ export function toInternalMessageReceivedContext(
     messageId: canonical.messageId,
     ...projectHookMediaState(canonical),
     metadata: {
-      to: canonical.to,
-      provider: canonical.provider,
-      surface: canonical.surface,
+      ...projectInboundMessageMetadata(canonical),
       threadId: canonical.threadId,
       senderId: canonical.senderId,
       senderName: canonical.senderName,
       senderUsername: canonical.senderUsername,
-      senderE164: canonical.senderE164,
-      ...projectHookMediaAliases(canonical),
-      guildId: canonical.guildId,
-      channelName: canonical.channelName,
-      topicName: canonical.topicName,
     },
   };
-  if (context.metadata) {
-    assignRemoteMediaStagingMetadata(context.metadata, canonical);
-  }
-  return context;
 }
 
 export function toInternalMessageTranscribedContext(

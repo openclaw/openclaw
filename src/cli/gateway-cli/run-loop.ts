@@ -139,7 +139,7 @@ export async function runGatewayLoop(params: {
   };
   const observeSignal = loopLogs.createGatewaySignalObserver(gatewayLog);
   let startupFailedWithoutServerHandle = false;
-  const restartRecovery = createGatewayRestartRecovery(params.onRestartStartupFailure, gatewayLog);
+  const restartRecovery = createGatewayRestartRecovery(params, gatewayLog, supervisor);
   const processInstanceId = randomUUID();
   const getManagedUpdateOwner = () =>
     (pendingStartupRequest ?? activeRestartRequest)?.restartIntent?.successorOwner;
@@ -1336,7 +1336,7 @@ export async function runGatewayLoop(params: {
         if (
           maintenanceRequired ||
           !isRestartIteration ||
-          isTriageRetry ||
+          (isTriageRetry && supervisorMode) ||
           err instanceof GatewayStartupCleanupError
         ) {
           throw err;
@@ -1350,15 +1350,13 @@ export async function runGatewayLoop(params: {
           // forcing manual cleanup. (#35862)
           await releaseLockIfHeld();
         }
-        const errMsg = formatErrorMessage(err);
-        const errStack = err instanceof Error && err.stack ? `\n${err.stack}` : "";
         writeStabilityBundle("gateway.restart_startup_failed", err);
-        gatewayLog.error(
-          `gateway startup failed: ${errMsg}. ` +
-            `${params.onRestartStartupFailure ? "Attempting automatic triage before recovery." : "Process will stay alive; fix the issue and restart."}${errStack}`,
-        );
-        if (!shuttingDown) {
+        restartRecovery.reportStartupFailure(err, isTriageRetry);
+        if (!shuttingDown && !isTriageRetry) {
           retryAfterTriage = (await restartRecovery.attempt(err)) && !shuttingDown;
+        }
+        if (!retryAfterTriage && !shuttingDown) {
+          restartRecovery.reportManualRecovery();
         }
       }
       if (startupFailedBeforeServerHandle) {

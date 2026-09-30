@@ -72,15 +72,7 @@ export function selectCompactionTimeoutSnapshot(params: {
   currentSnapshot: AgentMessage[];
   currentSessionId: string;
 }): SnapshotSelection {
-  if (!params.timedOutDuringCompaction) {
-    return {
-      messagesSnapshot: params.currentSnapshot,
-      sessionIdUsed: params.currentSessionId,
-      source: "current",
-    };
-  }
-
-  if (params.preCompactionSnapshot) {
+  if (params.timedOutDuringCompaction && params.preCompactionSnapshot) {
     const continuablePreCompactionSnapshot = trimToContinuableTail(params.preCompactionSnapshot);
     if (continuablePreCompactionSnapshot) {
       return {
@@ -92,7 +84,9 @@ export function selectCompactionTimeoutSnapshot(params: {
   }
 
   return {
-    messagesSnapshot: trimToContinuableTail(params.currentSnapshot) ?? [],
+    messagesSnapshot: params.timedOutDuringCompaction
+      ? (trimToContinuableTail(params.currentSnapshot) ?? [])
+      : params.currentSnapshot,
     sessionIdUsed: params.currentSessionId,
     source: "current",
   };

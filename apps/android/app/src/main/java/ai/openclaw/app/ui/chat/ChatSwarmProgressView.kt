@@ -141,7 +141,7 @@ private fun ChatSwarmGroupCard(group: ChatSwarmGroup) {
 
 @Composable
 private fun ChatSwarmDotView(dot: ChatSwarmDot) {
-  val description = verbatimText("${dot.label}: ${nativeString(dot.status.label)}").resolveNativeTextResource()
+  val description = verbatimText("${dot.label}: ${nativeString(dot.status.name)}").resolveNativeTextResource()
   when (dot.status) {
     ChatSwarmDotStatus.Queued -> {
       val color = ClawTheme.colors.textMuted

@@ -3,7 +3,7 @@ import { createAssistantMessageEventStream } from "@openclaw/ai/event-stream";
 import type { AssistantMessage, Context, Model, ToolCall } from "@openclaw/llm-core";
 import { Type } from "typebox";
 import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import { runAgentLoop } from "./agent-loop.js";
 import { Agent } from "./agent.js";
 import { attachInternalToolBatchLifecycle } from "./internal-hooks.js";
@@ -125,12 +125,23 @@ it.each([
   const prepared = createDeferred();
   const firstDone = createDeferred();
   const secondDone = createDeferred();
+  const toolStarted = {
+    first: createDeferred(),
+    second: createDeferred(),
+    third: createDeferred(),
+  };
+  const assistantFragmentsPersisted = createDeferred();
+  const secondResultPersisted = createDeferred();
+  // Keep the former vi.waitFor deadline without its 50 ms polling interval.
+  const waitForSignal = (signal: Promise<void>, message: string) =>
+    withTestTimeout(signal, 1_000, message);
   const preparedNames: string[] = [];
   const started: string[] = [];
   const persisted: AgentMessage[] = [];
-  const make = (name: string, gate = Promise.resolve()) =>
+  const make = (name: keyof typeof toolStarted, gate = Promise.resolve()) =>
     tool(name, async () => {
       started.push(name);
+      toolStarted[name].resolve();
       await gate;
       return { content: [], details: {}, terminate: true };
     });
@@ -164,7 +175,21 @@ it.each([
         return undefined;
       },
     },
-    (event) => recordMessage(event, persisted),
+    (event) => {
+      recordMessage(event, persisted);
+      if (event.type === "message_end") {
+        if (
+          event.message.role === "assistant" &&
+          persisted.filter((message) => message.role === "assistant").length ===
+            (mode === "mixed-parallel" ? 2 : 3)
+        ) {
+          assistantFragmentsPersisted.resolve();
+        }
+        if (event.message.role === "toolResult" && event.message.toolCallId === "second") {
+          secondResultPersisted.resolve();
+        }
+      }
+    },
     undefined,
     () => response,
   );
@@ -183,24 +208,24 @@ it.each([
       response.end();
     }
     await preparing.promise;
-    await vi.waitFor(() =>
-      expect(persisted.filter((message) => message.role === "assistant")).toHaveLength(
-        mode === "mixed-parallel" ? 2 : 3,
-      ),
+    await waitForSignal(assistantFragmentsPersisted.promise, "Assistant fragments not persisted");
+    expect(persisted.filter((message) => message.role === "assistant")).toHaveLength(
+      mode === "mixed-parallel" ? 2 : 3,
     );
     expect(preparedNames).toEqual(["first"]);
     prepared.resolve();
-    await vi.waitFor(() => expect(started).toContain("first"));
+    await waitForSignal(toolStarted.first.promise, "First tool did not start");
+    expect(started).toContain("first");
     if (mode === "default" || mode === "parallel" || mode === "mixed-parallel") {
-      await vi.waitFor(() => expect(started).toEqual(["first", "second", "third"]));
+      await waitForSignal(toolStarted.third.promise, "Third tool did not start");
+      expect(started).toEqual(["first", "second", "third"]);
       secondDone.resolve();
-      await vi.waitFor(() =>
-        expect(
-          persisted.some(
-            (message) => message.role === "toolResult" && message.toolCallId === "second",
-          ),
-        ).toBe(true),
-      );
+      await waitForSignal(secondResultPersisted.promise, "Second tool result not persisted");
+      expect(
+        persisted.some(
+          (message) => message.role === "toolResult" && message.toolCallId === "second",
+        ),
+      ).toBe(true);
       expect(
         persisted.some(
           (message) => message.role === "toolResult" && message.toolCallId === "first",
@@ -211,11 +236,13 @@ it.each([
       await setImmediate();
       expect(started).toEqual(["first"]);
       firstDone.resolve();
-      await vi.waitFor(() => expect(started).toEqual(["first", "second"]));
+      await waitForSignal(toolStarted.second.promise, "Second tool did not start");
+      expect(started).toEqual(["first", "second"]);
       await setImmediate();
       expect(started).not.toContain("third");
       secondDone.resolve();
-      await vi.waitFor(() => expect(started).toEqual(["first", "second", "third"]));
+      await waitForSignal(toolStarted.third.promise, "Third tool did not start");
+      expect(started).toEqual(["first", "second", "third"]);
     }
   } finally {
     prepared.resolve();

@@ -1,4 +1,3 @@
-// Shared session-handler target resolution and mutation guards.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -87,15 +86,11 @@ export const loadSessionsRuntimeModule = createLazyRuntimeModule(
 );
 
 export function requireSessionKey(key: unknown, respond: RespondFn): string | null {
-  const raw =
-    typeof key === "string"
-      ? key
-      : typeof key === "number"
-        ? String(key)
-        : typeof key === "bigint"
-          ? String(key)
-          : "";
-  const normalized = normalizeOptionalString(raw) ?? "";
+  const normalized = normalizeOptionalString(
+    typeof key === "string" || typeof key === "number" || typeof key === "bigint"
+      ? String(key)
+      : undefined,
+  );
   if (!normalized) {
     respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "key required"));
     return null;

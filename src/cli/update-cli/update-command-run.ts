@@ -268,7 +268,7 @@ export async function admitUpdateCommandRun(params: {
       );
     }
     if (initialized.target) {
-      await revalidateUpdateDatabaseContext({
+      const current = await revalidateUpdateDatabaseContext({
         env,
         readEnv: env,
         config: initialized.target.configSnapshot.sourceConfig,
@@ -281,6 +281,9 @@ export async function admitUpdateCommandRun(params: {
           ? { legacyConfigPlan: initialized.target.legacyConfigPlan }
           : {}),
       });
+      initialized.target.configSnapshot = current.configSnapshot;
+      initialized.target.legacyConfigPlan = current.legacyConfigPlan;
+      initialized.target.configReadFailure = undefined;
     }
   }
   const meta = await readControlPlaneUpdateSentinelMeta(env);

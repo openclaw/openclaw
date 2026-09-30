@@ -101,7 +101,6 @@ export function formatIncompleteInheritedAuthorityAdvisory(names: string[]): str
   ].join("\n");
 }
 
-/** Convert legacy cron issue counts into doctor preview lines. */
 export function formatLegacyIssuePreview(issues: CronLegacyIssueCounts): string[] {
   const descriptions: Record<string, string> = {
     jobId: "still uses legacy `jobId`",
@@ -171,7 +170,6 @@ export function mergeLegacyCronJobs(params: {
   return { jobs: merged, importedCount };
 }
 
-/** Attach runtime SQLite state columns back onto a config-defined cron job row. */
 export function mergeRuntimeEntryIntoConfigJob(params: {
   job: Record<string, unknown>;
   runtimeEntry?: { updatedAtMs?: number; state?: Record<string, unknown> };

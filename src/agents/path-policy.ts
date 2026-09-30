@@ -60,52 +60,6 @@ type RelativePathOptions = {
   includeRootInError?: boolean;
 };
 
-function throwPathEscapesBoundary(params: {
-  options?: RelativePathOptions;
-  rootResolved: string;
-  candidate: string;
-}): never {
-  const boundary = params.options?.boundaryLabel ?? "workspace root";
-  const suffix = params.options?.includeRootInError ? ` (${params.rootResolved})` : "";
-  throw new Error(`Path escapes ${boundary}${suffix}: ${params.candidate}`);
-}
-
-function validateRelativePathWithinBoundary(params: {
-  relativePath: string;
-  isAbsolutePath: (path: string) => boolean;
-  options?: RelativePathOptions;
-  rootResolved: string;
-  candidate: string;
-}): string {
-  // path.relative returns "." for the root itself. Treat that as escaping unless
-  // the caller explicitly accepts root-targeting operations.
-  if (params.relativePath === "" || params.relativePath === ".") {
-    if (params.options?.allowRoot) {
-      return "";
-    }
-    throwPathEscapesBoundary({
-      options: params.options,
-      rootResolved: params.rootResolved,
-      candidate: params.candidate,
-    });
-  }
-  // The absolute-path check catches Windows drive-relative oddities after
-  // normalization, while the prefix checks cover ordinary parent traversal.
-  if (
-    params.relativePath === ".." ||
-    params.relativePath.startsWith("../") ||
-    params.relativePath.startsWith("..\\") ||
-    params.isAbsolutePath(params.relativePath)
-  ) {
-    throwPathEscapesBoundary({
-      options: params.options,
-      rootResolved: params.rootResolved,
-      candidate: params.candidate,
-    });
-  }
-  return params.relativePath;
-}
-
 function toRelativePathUnderRoot(params: {
   root: string;
   candidate: string;
@@ -126,13 +80,23 @@ function toRelativePathUnderRoot(params: {
     windows ? normalizeWindowsPathPreservingCase(rootResolved) : rootResolved,
     windows ? normalizeWindowsPathPreservingCase(resolvedCandidate) : resolvedCandidate,
   );
-  return validateRelativePathWithinBoundary({
-    relativePath: relative,
-    isAbsolutePath: syntax.isAbsolute,
-    options: params.options,
-    rootResolved,
-    candidate: params.candidate,
-  });
+  const targetsRoot = relative === "" || relative === ".";
+  if (targetsRoot && params.options?.allowRoot) {
+    return "";
+  }
+  // Absolute results catch Windows drive-relative oddities after normalization.
+  if (
+    targetsRoot ||
+    relative === ".." ||
+    relative.startsWith("../") ||
+    relative.startsWith("..\\") ||
+    syntax.isAbsolute(relative)
+  ) {
+    const boundary = params.options?.boundaryLabel ?? "workspace root";
+    const suffix = params.options?.includeRootInError ? ` (${rootResolved})` : "";
+    throw new Error(`Path escapes ${boundary}${suffix}: ${params.candidate}`);
+  }
+  return relative;
 }
 
 /**

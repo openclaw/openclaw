@@ -149,18 +149,11 @@ function hasReviewerDirective(input: ModelAutoReviewInput): boolean {
   return values.some((value) => value.length > 0 && textLooksLikeReviewerDirective(value));
 }
 
-function stripJsonFence(text: string): string {
+function extractJsonObject(text: string): string | null {
   const trimmed = text.trim();
   const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/iu.exec(trimmed);
-  return fenced?.[1]?.trim() ?? trimmed;
-}
-
-function extractJsonObject(text: string): string | null {
-  const stripped = stripJsonFence(text);
-  if (stripped.startsWith("{") && stripped.endsWith("}")) {
-    return stripped;
-  }
-  return null;
+  const stripped = fenced?.[1]?.trim() ?? trimmed;
+  return stripped.startsWith("{") && stripped.endsWith("}") ? stripped : null;
 }
 
 function hasDuplicateJsonObjectKeys(text: string): boolean {
@@ -169,19 +162,11 @@ function hasDuplicateJsonObjectKeys(text: string): boolean {
 
   for (let index = 0; index < text.length; index += 1) {
     const token = text[index];
-    if (token === "{") {
+    if (token === "{" || token === "[") {
       depth += 1;
       continue;
     }
-    if (token === "}") {
-      depth -= 1;
-      continue;
-    }
-    if (token === "[") {
-      depth += 1;
-      continue;
-    }
-    if (token === "]") {
+    if (token === "}" || token === "]") {
       depth -= 1;
       continue;
     }
@@ -332,15 +317,6 @@ function extractCompletionFailure(
   return `model stopped without a complete response (${stopReason ?? "unknown"})`;
 }
 
-function resolveReviewerModelRef(config?: ExecReviewerConfig): string | undefined {
-  return coerceToolModelConfig(config?.model).primary;
-}
-
-/** Resolves the reviewer timeout with a low minimum to avoid hanging exec approval. */
-function resolveExecReviewerTimeoutMs(config?: ExecReviewerConfig): number {
-  return resolveTimerTimeoutMs(config?.timeoutMs, DEFAULT_EXEC_REVIEWER_TIMEOUT_MS, 1_000);
-}
-
 /**
  * Resolves a bounded completion budget for the exec auto-reviewer.
  * Uses the default 1,024 tokens while clamping downward to the provider model's
@@ -411,8 +387,12 @@ export function createModelExecAutoReviewer(params: {
   const complete =
     params.deps?.completeWithPreparedSimpleCompletionModel ??
     completeWithPreparedSimpleCompletionModel;
-  const modelRef = resolveReviewerModelRef(params.reviewer);
-  const timeoutMs = resolveExecReviewerTimeoutMs(params.reviewer);
+  const modelRef = coerceToolModelConfig(params.reviewer?.model).primary;
+  const timeoutMs = resolveTimerTimeoutMs(
+    params.reviewer?.timeoutMs,
+    DEFAULT_EXEC_REVIEWER_TIMEOUT_MS,
+    1_000,
+  );
   return async (input) => {
     let completionController: AbortController | undefined;
     let callerFinished: Deferred | undefined;

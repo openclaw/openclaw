@@ -1,6 +1,7 @@
 import path from "node:path";
 import { toUSVString } from "node:util";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { markPrivateDirectoryCreationRefused } from "./private-directory-creation.js";
 import { readDatabaseFileIdentity, type DatabaseFileIdentity } from "./sqlite-worker-identity.js";
 
 // Keep the one-shot execFile output limit when inspections use IPC.
@@ -157,25 +158,26 @@ export function readSqliteReadOnlyWorkerValue(
   }
   if (params.failure || !result.ok) {
     const contention = !result.ok && result.message.startsWith(SQLITE_INSPECTION_CONTENTION_PREFIX);
+    const message = !result.ok
+      ? contention
+        ? result.message.slice(SQLITE_INSPECTION_CONTENTION_PREFIX.length)
+        : result.message
+      : (params.failure ?? "failed");
     const allocationRefused =
-      !params.failure &&
+      params.failure === undefined &&
       !result.ok &&
       (mode === "staging-create" || mode === "staging-create-legacy") &&
-      result.message.startsWith(SQLITE_SNAPSHOT_ALLOCATION_REFUSED_PREFIX);
-    const prefix = allocationRefused
-      ? SQLITE_SNAPSHOT_ALLOCATION_REFUSED_PREFIX
-      : contention
-        ? SQLITE_INSPECTION_CONTENTION_PREFIX
-        : "";
+      message.startsWith(SQLITE_SNAPSHOT_ALLOCATION_REFUSED_PREFIX);
     const error = createSqliteReadOnlyWorkerError(
-      !result.ok ? result.message.slice(prefix.length) : (params.failure ?? "failed"),
+      allocationRefused ? message.slice(SQLITE_SNAPSHOT_ALLOCATION_REFUSED_PREFIX.length) : message,
       params.stderr,
     );
+    if (contention) {
+      const failure = new SqliteReadOnlyInspectionContentionError(error.message);
+      throw allocationRefused ? markPrivateDirectoryCreationRefused(failure) : failure;
+    }
     if (allocationRefused) {
       throw new SqliteSnapshotAllocationRefusedError(error.message);
-    }
-    if (contention) {
-      throw new SqliteReadOnlyInspectionContentionError(error.message);
     }
     throw error;
   }

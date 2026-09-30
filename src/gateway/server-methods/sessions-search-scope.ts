@@ -24,7 +24,7 @@ export function resolveSessionSearchScope(cfg: OpenClawConfig, params: SessionsS
         ? ({ ok: true, agentId: requestedAgentId } as const)
         : resolveRequestedSessionAgentId(cfg, sessionKey, requestedAgentId);
     if (!requestedAgent.ok) {
-      return { ok: false as const, error: requestedAgent.error };
+      return requestedAgent;
     }
     resolvedSessionKeys?.push({
       sessionKey: resolveStoredSessionKeyForAgentStore({
@@ -47,7 +47,7 @@ export function resolveSessionSearchScope(cfg: OpenClawConfig, params: SessionsS
   if (!agentId) {
     const fallbackAgent = resolveRequestedSessionAgentId(cfg, "main");
     if (!fallbackAgent.ok) {
-      return { ok: false as const, error: fallbackAgent.error };
+      return fallbackAgent;
     }
     agentId = fallbackAgent.agentId;
   }

@@ -31,7 +31,7 @@ import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contra
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
 import { resolveEnvironmentValue } from "./process-env.js";
-import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
+import { throwSqliteLifecycleErrors } from "./sqlite-lifecycle-errors.js";
 import { stopSupervisedPredecessorGateway } from "./update-candidate-predecessor-stop.js";
 import { UPDATE_RUN_ID_ENV } from "./update-control-plane-sentinel.js";
 import {
@@ -475,31 +475,18 @@ async function finalizeInput(
 
 void (async () => {
   const errors: unknown[] = [];
-  try {
-    await finalizeMigratedUpdate();
-  } catch (error) {
-    errors.push(error);
+  for (const finalize of [
+    finalizeMigratedUpdate,
+    finalizeActiveDebugProxyCaptures,
+    closeOpenClawStateDatabaseAsync,
+  ]) {
+    try {
+      await finalize();
+    } catch (error) {
+      errors.push(error);
+    }
   }
-  try {
-    await finalizeActiveDebugProxyCaptures();
-  } catch (error) {
-    errors.push(error);
-  }
-  try {
-    await closeOpenClawStateDatabaseAsync();
-  } catch (error) {
-    errors.push(error);
-  }
-  if (errors.length === 1) {
-    throw errors[0];
-  }
-  if (errors.length > 1) {
-    throw createSqliteLifecycleAggregateError(
-      errors,
-      "Update finalization and resource cleanup failed.",
-      errors[0],
-    );
-  }
+  throwSqliteLifecycleErrors(errors, "Update finalization and resource cleanup failed.");
 })().catch((error: unknown) => {
   process.stderr.write(`${formatUpdateFinalizationError(error)}\n`);
   process.exitCode = 1;

@@ -53,7 +53,6 @@ function hasMultipleReachableGatewayIdentities(reachable: GatewayStatusProbedTar
   return new Set(identityKeys).size > 1;
 }
 
-/** Chooses the reachable target that best represents the user's requested gateway. */
 export function pickPrimaryProbedTarget(probed: GatewayStatusProbedTarget[]) {
   const reachable = probed.filter((entry) => isProbeReachable(entry.probe));
   return (
@@ -144,7 +143,6 @@ export function buildGatewayStatusWarnings(params: {
   return warnings;
 }
 
-/** Writes the machine-readable gateway status payload and exits nonzero when unreachable. */
 export function writeGatewayStatusJson(params: {
   runtime: RuntimeEnv;
   startedAt: number;
@@ -202,7 +200,6 @@ export function writeGatewayStatusJson(params: {
   }
 }
 
-/** Writes the human-readable gateway status report and exits nonzero when unreachable. */
 export function writeGatewayStatusText(params: {
   runtime: RuntimeEnv;
   rich: boolean;
