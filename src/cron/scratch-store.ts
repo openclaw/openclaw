@@ -54,6 +54,13 @@ export function readHeartbeatMonitorScratchReadOnly(
   );
 }
 
+const publishedScratchRevisions = new Map<string, number>();
+
+/** Returns the last scratch revision committed by this process for this job. */
+export function getPublishedCronJobScratchRevision(jobId: string): number | undefined {
+  return publishedScratchRevisions.get(jobId);
+}
+
 /** Writes through the existing actor while retaining the original caller's admission. */
 export async function writeCronJobScratch(
   params: {
@@ -101,6 +108,9 @@ export async function writeCronJobScratch(
     },
     publish(outcome) {
       result = outcome.result;
+      if (result.ok) {
+        publishedScratchRevisions.set(params.jobId, result.currentRevision);
+      }
       if (outcome.written) {
         markCommitted?.();
       }
@@ -121,6 +131,19 @@ export function deleteCronJobScratch(
   storePath: string,
   jobId: string,
   options: OpenClawStateDatabaseOptions = {},
+  guard?: { expectedRevision: number },
+): boolean {
+  const deleted = deleteCronJobScratchRow(storePath, jobId, options, guard);
+  if (deleted) {
+    publishedScratchRevisions.set(jobId, 0);
+  }
+  return deleted;
+}
+
+function deleteCronJobScratchRow(
+  storePath: string,
+  jobId: string,
+  options: OpenClawStateDatabaseOptions,
   guard?: { expectedRevision: number },
 ): boolean {
   return runOpenClawStateWriteTransaction(

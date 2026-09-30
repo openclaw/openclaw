@@ -213,6 +213,17 @@ message or perform another effect. An `unavailable` outcome carries a reason for
 the consumer's existing fallback. Do not catch cancellation or closed-authority
 errors and turn them into fallback work.
 
+Automatic consumers can pass `admit: () => boolean` to reread their live opt-in
+and per-invocation targeting. This callback must be synchronous and return a
+boolean. The host checks it before provider dispatch, carries it through provider
+preparation to each SDK guarded-fetch request boundary, and checks again before
+returning the answer. Once observed, withdrawal is final for that evaluation and
+returns `unavailable: "disabled"` without affecting provider health. A throwing,
+asynchronous, or non-boolean callback rejects as a contract error. Existing
+callers without `admit` retain their behavior. This does not intercept arbitrary
+third-party network clients outside SDK guarded fetch. Keep the caller signal
+and the consumer's own final-effect authority checks; consent is not new authority.
+
 The provider receives the selected `model` and optional `agentId` in its evaluation
 context. Concurrent agent/model selections share provider health without retiring
 each other. A changed selection fences the affected request before returning it.

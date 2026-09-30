@@ -21,6 +21,6 @@ describe("exec foreground retention", () => {
     expect(content?.type === "text" ? content.text : "").toMatch(
       /^\[earlier output was discarded at the retention cap and cannot be recovered\]/,
     );
-    expect((result.details as { aggregated?: string }).aggregated).toBe("retained output");
+    expect(result.details).toMatchObject({ aggregated: "retained output", truncated: true });
   });
 });

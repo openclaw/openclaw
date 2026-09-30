@@ -225,6 +225,26 @@ describe("agent defaults schema", () => {
     expect(agent.contextLimits?.memoryGetMaxChars).toBe(18_000);
   });
 
+  it.each([undefined, "agent", "questions"] as const)(
+    "preserves optional heartbeat mode %s at default and agent scope",
+    (mode) => {
+      const heartbeat = mode === undefined ? { every: "30m" } : { every: "30m", mode };
+      expect(AgentDefaultsSchema.parse({ heartbeat })?.heartbeat).toEqual(heartbeat);
+      expect(AgentEntrySchema.parse({ id: "ops", heartbeat }).heartbeat).toEqual(heartbeat);
+    },
+  );
+
+  it("rejects unsupported heartbeat modes at default and agent scope", () => {
+    expectSchemaFailurePath(
+      AgentDefaultsSchema.safeParse({ heartbeat: { mode: "jev" } }),
+      "heartbeat.mode",
+    );
+    expectSchemaFailurePath(
+      AgentEntrySchema.safeParse({ id: "ops", heartbeat: { mode: "jev" } }),
+      "heartbeat.mode",
+    );
+  });
+
   it("accepts positive heartbeat timeoutSeconds on defaults and agent entries", () => {
     expect(
       AgentDefaultsSchema.parse({ heartbeat: { timeoutSeconds: 45 } })?.heartbeat?.timeoutSeconds,

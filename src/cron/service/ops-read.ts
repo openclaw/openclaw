@@ -1,10 +1,15 @@
 import { performance } from "node:perf_hooks";
 import { isMainThread, threadId } from "node:worker_threads";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import {
+  heartbeatScratchNotesView,
+  replaceHeartbeatScratchNotes,
+} from "../../infra/heartbeat-questions.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { tryResolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { resolveCronListSnapshotRevision } from "../list-snapshot-revision.js";
+import type { CronJobScratchState } from "../scratch-contract.js";
 import { readCronScratchSnapshot } from "../scratch-read.js";
 import { writeCronJobScratch } from "../scratch-store.js";
 import { getCronJobsStoreRevision, noteCronJobsStoreCommit } from "../store.js";
@@ -78,6 +83,19 @@ export async function readJob(state: CronServiceState, id: string) {
   );
 }
 
+/** Heartbeat monitors expose only their notes; question groups are managed by their tool. */
+function heartbeatNotesView<T extends Pick<CronJobScratchState, "scratch">>(scratchState: T): T {
+  return scratchState.scratch
+    ? {
+        ...scratchState,
+        scratch: {
+          ...scratchState.scratch,
+          content: heartbeatScratchNotesView(scratchState.scratch.content),
+        },
+      }
+    : scratchState;
+}
+
 /** Reads one job's private scratch state after proving the job exists in this store. */
 export async function readScratch(
   state: CronServiceState,
@@ -111,7 +129,7 @@ export async function readScratch(
       noteCronJobsStoreCommit(source.storeKey);
       throw new CronJobsStoreChangedError(source.storeKey);
     }
-    return snapshot.state;
+    return job.payload.kind === "heartbeat" ? heartbeatNotesView(snapshot.state) : snapshot.state;
   });
 }
 
@@ -133,12 +151,29 @@ export async function writeScratch(
     source.assertCurrent();
     const job = findJobOrThrow(state, id);
     const expectedRevision = resolveCronJobConfigRevision(job);
-    return await writeCronJobScratch(
+    let content = params.content;
+    let scratchRevision = params.expectedRevision;
+    if (job.payload.kind === "heartbeat") {
+      const snapshot = await readCronScratchSnapshot(
+        state.deps.storePath,
+        { kind: "job", jobId: id, createdAtMsFallback: job.createdAtMs },
+        {},
+        { context: source.context, assertCurrent: source.assertCurrent },
+      );
+      if (!snapshot || snapshot.configRevision !== expectedRevision) {
+        noteCronJobsStoreCommit(source.storeKey);
+        throw new CronJobsStoreChangedError(source.storeKey);
+      }
+      content = replaceHeartbeatScratchNotes(snapshot.state.scratch?.content, params.content);
+      // Tool edits do not take this lock; the worker CAS preserves their groups.
+      scratchRevision ??= snapshot.state.currentRevision;
+    }
+    const result = await writeCronJobScratch(
       {
         storePath: state.deps.storePath,
         jobId: id,
-        content: params.content,
-        expectedRevision: params.expectedRevision,
+        content,
+        expectedRevision: scratchRevision,
         sourceSha256: params.sourceSha256,
         nowMs: state.deps.nowMs(),
       },
@@ -159,10 +194,10 @@ export async function writeScratch(
         },
       },
     );
+    return result.ok && job.payload.kind === "heartbeat" ? heartbeatNotesView(result) : result;
   });
 }
 
-/** Record a terminal failure from a scheduler-owned event source. */
 function resolveEnabledFilter(opts?: CronListPageOptions): CronJobsEnabledFilter {
   if (opts?.enabled === "all" || opts?.enabled === "enabled" || opts?.enabled === "disabled") {
     return opts.enabled;

@@ -152,6 +152,7 @@ describe("tool-catalog", () => {
       "dashboard",
       "terminal",
       "portal",
+      "heartbeat_questions",
       "automations",
       "gateway",
       "plugins",

@@ -35,8 +35,8 @@ chooses the provider for explicit evaluation and supported consumers. The core
 Selection does not start background work or replace the chat model.
 Automatic experimental consumers additionally require explicit
 [Decision assistance opt-in](/concepts/experimental-features#decision-assistance).
-That Labs entry currently provides the gate foundation only, with no automatic
-consumers connected; explicit `decision_evaluate` remains independent of Labs.
+[Experimental heartbeat questions](#heartbeat-questions) are currently the only
+automatic consumer; explicit `decision_evaluate` remains independent of Labs.
 
 ## Choose a provider and model
 
@@ -91,6 +91,18 @@ role off. There is no automatic fallback to a conversational model.
 For local setup verification, `openclaw onnx models` lists the presets and
 `openclaw onnx probe gliclass-edge-v3.0` runs a Choice, Score, and Boolean smoke
 evaluation after the model has been downloaded.
+
+## Heartbeat questions
+
+[Experimental heartbeat question mode](/gateway/heartbeat#experimental-question-mode)
+uses this role to evaluate agent-managed groups of commands and questions.
+Each group gets a separate request to the owning agent's selected
+`decisionModel`, containing its command outputs, a bounded recent conversation
+slice, full heartbeat notes, and the current time. Any yes starts one ordinary
+agent turn; all no across all groups skips it. Question mode needs all three of
+`heartbeat.mode: "questions"`, an effective `decisionModel` for the agent, and
+[Decision assistance opt-in](/concepts/experimental-features#decision-assistance).
+Missing any of them leaves ordinary heartbeats unchanged.
 
 ## Define a decision
 

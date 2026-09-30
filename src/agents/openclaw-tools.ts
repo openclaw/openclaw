@@ -25,10 +25,10 @@ import {
   resolveImageToolFactoryAvailable,
   resolveOptionalMediaToolFactoryPlan,
 } from "./openclaw-tools.media-factory-plan.js";
+import { resolveProgressCardTool } from "./openclaw-tools.progress-card.js";
 import {
   applyNodesToolWorkspaceGuard,
   shouldIncludePrimarySessionToolForOpenClawTools,
-  shouldIncludeProgressCardToolForOpenClawTools,
 } from "./openclaw-tools.registration.js";
 import { createRequesterYieldCallback } from "./openclaw-tools.requester-yield.js";
 import { createOpenClawSwarmToolGroups } from "./openclaw-tools.swarm.js";
@@ -57,6 +57,7 @@ import {
   createGetGoalTool,
   createUpdateGoalTool,
 } from "./tools/goal-tools.js";
+import { createHeartbeatTools } from "./tools/heartbeat-questions-tool.js";
 import { createHeartbeatResponseTool } from "./tools/heartbeat-response-tool.js";
 import { createImageGenerateTool } from "./tools/image-generate-tool.js";
 import { createImageTool } from "./tools/image-tool.js";
@@ -67,7 +68,6 @@ import { createMusicGenerateTool } from "./tools/music-generate-tool.js";
 import { createNodesTool } from "./tools/nodes-tool.js";
 import { createPdfTool } from "./tools/pdf-tool.js";
 import { createAvailablePortalTools } from "./tools/portal-tool.js";
-import { createProgressCardTool } from "./tools/progress-card-tool.js";
 import { createScreenTool } from "./tools/screen-tool.js";
 import { createSecretsTool } from "./tools/secrets-tool.js";
 import { createSessionStatusTool } from "./tools/session-status-tool.js";
@@ -293,18 +293,10 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
     callGateway: embedded ? createEmbeddedCallGateway() : callAgentToolGatewayRequest,
     sessionLinkBase: resolveControlUiSessionLinkBase(resolvedConfig),
   };
-  const progressCardTool = shouldIncludeProgressCardToolForOpenClawTools({
-    ...options,
-    agentId: sessionAgentId,
-  })
-    ? createProgressCardTool({
-        agentSessionKey: sessionKey,
-        agentId: sessionAgentId,
-        onPlanSaved: options?.onProgressCardPlanSaved,
-      })
-    : null;
+  const progressCardTool = resolveProgressCardTool(options, sessionAgentId, sessionKey);
   const transcriptsTool = resolveTranscriptsTool(resolvedConfig, sessionAgentId, options);
-  const tools = [
+  const tools: AnyAgentTool[] = [
+    ...createHeartbeatTools(sessionAgentId, availabilityConfig, options, embedded),
     createDashboardTool({
       agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
       agentId: sessionAgentId,

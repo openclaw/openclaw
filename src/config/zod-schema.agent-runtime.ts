@@ -40,6 +40,7 @@ const AgentTtsConfigSchema = TtsConfigSchema.unwrap()
 
 export const HeartbeatSchema = z
   .strictObject({
+    mode: z.enum(["agent", "questions"]).optional(),
     every: z.string().optional(),
     activeHours: z
       .strictObject({

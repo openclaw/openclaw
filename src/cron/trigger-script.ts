@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { createHeartbeatContextCollector } from "./heartbeat-context-collector.js";
 import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
@@ -142,7 +143,36 @@ type PrepareTriggerRuntime = (params: {
   scheduledToolPolicy?: ScheduledToolPolicyContext;
   execTarget?: CronToolsAllowExecTarget;
   signal?: AbortSignal;
+  heartbeatCollector?: boolean;
+  sessionKey?: string;
 }) => Promise<PreparedTriggerRuntime>;
+
+type CodeModeInvocation = Omit<CronScriptInvocation, "job"> & {
+  jobId: string;
+  agentId?: string;
+  toolsAllow?: string[];
+  scheduledToolPolicy?: ScheduledToolPolicyContext;
+  execTarget?: CronToolsAllowExecTarget;
+  sessionKey?: string;
+  heartbeatCollector?: boolean;
+  isCurrent?: () => boolean;
+  collectOutput?: (input: unknown, result: unknown) => void;
+};
+
+function cronInvocation(params: CronScriptInvocation): CodeModeInvocation {
+  return {
+    ...params,
+    jobId: params.job.id,
+    agentId: params.job.agentId,
+    toolsAllow: params.job.payload.toolsAllow,
+    scheduledToolPolicy: resolveCronScheduledToolPolicy({
+      toolsAllow: params.job.payload.toolsAllow,
+      scheduledToolPolicy: params.job.scheduledToolPolicy,
+      owner: params.job.owner,
+    }),
+    execTarget: params.job.toolsAllowExecTarget,
+  };
+}
 
 type LoadTriggerPluginRegistry = (input: {
   config: OpenClawConfig;
@@ -210,7 +240,7 @@ async function prepareTriggerRuntime(
   });
 
   const prepare = async (): Promise<PreparedTriggerRuntime> => {
-    const rawSessionKey = `cron:${params.jobId}:trigger`;
+    const rawSessionKey = params.sessionKey ?? `cron:${params.jobId}:trigger`;
     const sessionKey = resolveCronAgentSessionKey({
       sessionKey: rawSessionKey,
       agentId,
@@ -267,7 +297,12 @@ async function prepareTriggerRuntime(
             runId: admitted.operationalRunInstance.runId,
             operationalRunInstance: admitted.operationalRunInstance,
             abortSignal: signal,
-            exec: { config },
+            exec: {
+              config,
+              ...(params.heartbeatCollector
+                ? { nonInteractiveApproval: true, allowBackground: false, notifyOnExit: false }
+                : {}),
+            },
             sandbox,
             sessionKey,
             trigger: "cron",
@@ -343,7 +378,8 @@ function triggerStateNamespace(state: unknown, streamBatch?: string): CodeModeNa
   };
 }
 
-function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
+/** Builds the admitted headless runner shared by cron and heartbeat collection. */
+export function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
   const runHeadless = deps.runHeadless ?? runCodeModeScriptHeadless;
   const prepareRuntime =
     deps.prepareRuntime ?? ((params) => prepareTriggerRuntime(params, deps.loadPluginRegistry));
@@ -360,6 +396,8 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
       request.toolsAllow ?? null,
       request.scheduledToolPolicy ?? null,
       request.execTarget ?? null,
+      request.sessionKey ?? null,
+      request.heartbeatCollector ?? false,
     ]);
     const cached = runtimeCache.get(request.jobId);
     if (
@@ -419,7 +457,7 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
   };
 
   return async function runCronCodeModeScript(
-    params: CronScriptInvocation & {
+    params: CodeModeInvocation & {
       wallClockMs: number;
       maxToolCalls: number;
       label: string;
@@ -435,21 +473,19 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
       params.label,
     );
     const catalogRef = createToolSearchCatalogRef();
-    const runId = `cron-trigger:${params.job.id}:${crypto.randomUUID()}`;
+    const runId = `cron-trigger:${params.jobId}:${crypto.randomUUID()}`;
     let admission: PreparedAgentRunAdmission | undefined;
     let mcp: CronScriptMcpTools | undefined;
     try {
       const request = {
         runtimeConfig: resolveCronActiveRuntimeConfig(deps.config),
-        jobId: params.job.id,
-        agentId: params.job.agentId,
-        toolsAllow: params.job.payload.toolsAllow,
-        scheduledToolPolicy: resolveCronScheduledToolPolicy({
-          toolsAllow: params.job.payload.toolsAllow,
-          scheduledToolPolicy: params.job.scheduledToolPolicy,
-          owner: params.job.owner,
-        }),
-        execTarget: params.job.toolsAllowExecTarget,
+        jobId: params.jobId,
+        agentId: params.agentId,
+        toolsAllow: params.toolsAllow,
+        scheduledToolPolicy: params.scheduledToolPolicy,
+        execTarget: params.execTarget,
+        sessionKey: params.sessionKey,
+        heartbeatCollector: params.heartbeatCollector,
       };
       let runtime: CachedTriggerRuntime | undefined;
       let tools: AnyAgentTool[];
@@ -458,6 +494,7 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
       let caller: ReturnType<typeof createAdmittedGatewayToolCallerIdentity>;
       function assertActive() {
         if (
+          params.isCurrent?.() === false ||
           !assertAdmitted ||
           !caller ||
           (caller.gatewayContextResolver && !caller.gatewayContextResolver())
@@ -564,6 +601,8 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
               rewrapToolWithBeforeToolCallHook(
                 // SAFETY: Headless registration and preparation retain AnyAgentTool instances.
                 bindAgentToolSourceExecutionGuard(call.tool as AnyAgentTool, assertActive),
+                undefined,
+                params.heartbeatCollector ? { approvalMode: "deny" } : undefined,
               ),
               evaluationScope.signal,
             );
@@ -574,6 +613,7 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
               call.onUpdate,
             );
             assertActive();
+            params.collectOutput?.(call.input, result);
             return await call.acceptResultBeforeProjection(result);
           }),
       };
@@ -640,6 +680,7 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
 export function createCronScriptRuntime(deps: CronTriggerEvaluatorDeps) {
   const run = createCronCodeModeRunner(deps);
   return {
+    collectHeartbeatContext: createHeartbeatContextCollector(run),
     evaluateTrigger: async (params: CronScriptInvocation): Promise<CronTriggerEvaluationResult> => {
       if (activeTriggerEvaluations >= MAX_CONCURRENT_TRIGGER_EVALS) {
         return { kind: "busy" };
@@ -647,7 +688,7 @@ export function createCronScriptRuntime(deps: CronTriggerEvaluatorDeps) {
       activeTriggerEvaluations += 1;
       try {
         const outcome = await run({
-          ...params,
+          ...cronInvocation(params),
           wallClockMs: HEADLESS_TRIGGER_WALL_CLOCK_MS,
           maxToolCalls: HEADLESS_TRIGGER_TOOL_BUDGET,
           label: "cron trigger evaluation",
@@ -673,9 +714,11 @@ export function createCronScriptRuntime(deps: CronTriggerEvaluatorDeps) {
         Math.max(1, Math.floor(payload.toolBudget ?? DEFAULT_CRON_SCRIPT_TOOL_BUDGET)),
       );
       const outcome = await run({
-        ...params,
-        script: payload.script,
-        state: params.job.state.triggerState,
+        ...cronInvocation({
+          ...params,
+          script: payload.script,
+          state: params.job.state.triggerState,
+        }),
         wallClockMs: timeoutSeconds * 1000,
         maxToolCalls: toolBudget,
         label: "cron script payload",

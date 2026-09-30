@@ -143,6 +143,12 @@ export interface DecisionRuntimeV1 {
       readonly rubricVersion: string;
       readonly timeoutMs: number;
       readonly signal: AbortSignal;
+      /**
+       * Synchronous live consumer consent, checked before provider dispatch, at
+       * guarded-fetch request boundaries, and before returning an answer. A false
+       * result permanently disables this evaluation; throws/non-booleans reject.
+       */
+      readonly admit?: () => boolean;
     },
   ): Promise<DecisionOutcome>;
 }

@@ -20,6 +20,10 @@ import {
 } from "./heartbeat-events-filter.js";
 import { heartbeatLog as log } from "./heartbeat-log.js";
 import {
+  isHeartbeatQuestionModeActive,
+  parseHeartbeatQuestionDocument,
+} from "./heartbeat-questions.js";
+import {
   resolveConfiguredHeartbeatPrompt,
   resolveHeartbeatResponseToolPrompt,
 } from "./heartbeat-runner-config.js";
@@ -181,7 +185,13 @@ export async function resolveHeartbeatPreflight(params: {
     // decides whether anything needs attention.
     return basePreflight;
   }
-  if (isHeartbeatContentEffectivelyEmpty(heartbeatScratchContent)) {
+  const parsed = parseHeartbeatQuestionDocument(heartbeatScratchContent);
+  // Saved groups replace the notes gate; without groups, question mode keeps ordinary behavior.
+  const gatedByQuestions =
+    parsed.status === "invalid" ||
+    (parsed.document.groups.length > 0 &&
+      isHeartbeatQuestionModeActive(params.cfg, params.agentId, params.heartbeat));
+  if (!gatedByQuestions && isHeartbeatContentEffectivelyEmpty(parsed.document.notes)) {
     return {
       ...basePreflight,
       skipReason: "empty-heartbeat-file",
@@ -212,7 +222,7 @@ function appendHeartbeatScratch(prompt: string, heartbeatScratchContent?: string
   return `${prompt}\n\nHeartbeat monitor scratch:\n${directives}`;
 }
 
-export function resolveHeartbeatRunPrompt(params: {
+export function resolveHeartbeatRunPrompt(input: {
   cfg: OpenClawConfig;
   heartbeat?: HeartbeatConfig;
   preflight: HeartbeatPreflight;
@@ -221,6 +231,11 @@ export function resolveHeartbeatRunPrompt(params: {
   heartbeatScratchContent?: string;
   useHeartbeatResponseTool: boolean;
 }): HeartbeatPromptResolution {
+  const parsed = parseHeartbeatQuestionDocument(input.heartbeatScratchContent);
+  const params =
+    parsed.status === "valid"
+      ? { ...input, heartbeatScratchContent: parsed.document.notes }
+      : input;
   const pendingEventEntries = params.preflight.pendingEventEntries;
   const genericEvents: SystemEvent[] = [];
   const cronEvents: SystemEvent[] = [];
