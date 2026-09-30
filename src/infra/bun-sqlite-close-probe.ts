@@ -12,13 +12,53 @@ type SqliteCloseProbeResult = Readonly<{
   reason: string;
 }>;
 
+async function cleanupProbe(
+  worker: Worker | undefined,
+  directory: string | undefined,
+  background: boolean,
+) {
+  let deadline: NodeJS.Timeout | undefined;
+  try {
+    if (worker) {
+      if (background) {
+        worker.unref();
+      }
+      await Promise.race([
+        worker.terminate(),
+        new Promise<never>((_resolve, reject) => {
+          deadline = setTimeout(
+            () => reject(new Error("SQLite close probe termination timed out after 5000ms")),
+            5_000,
+          );
+          if (background) {
+            deadline.unref();
+          }
+        }),
+      ]);
+      await nextTurn(undefined, { ref: !background });
+    }
+    if (directory) {
+      await rm(directory, { recursive: true, force: true });
+    }
+  } catch (error) {
+    worker?.unref();
+    const reason = `SQLite close probe cleanup failed: ${String(error)}; retained ${directory}`;
+    process.emitWarning(reason, { code: "SQLITE_CLOSE_PROBE_CLEANUP" });
+    return reason;
+  } finally {
+    clearTimeout(deadline);
+  }
+  return undefined;
+}
+
 export async function probeSqliteNativeClose(): Promise<SqliteCloseProbeResult> {
   let directory: string | undefined;
   let worker: Worker | undefined;
   let deadline: NodeJS.Timeout | undefined;
   let result: SqliteCloseProbeResult;
   try {
-    directory = await realpath(await mkdtemp(join(tmpdir(), "openclaw-sqlite-close-")));
+    directory = await mkdtemp(join(tmpdir(), "openclaw-sqlite-close-"));
+    directory = await realpath(directory);
     channel("openclaw.sqlite.close-probe").publish({ phase: "start" });
     worker = new Worker(resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sqliteCloseProbe), {
       workerData: directory,
@@ -49,21 +89,17 @@ export async function probeSqliteNativeClose(): Promise<SqliteCloseProbeResult> 
     result = { explicitSqliteCloseReleasesNativeResources: false, reason: String(error) };
   } finally {
     clearTimeout(deadline);
-    try {
-      if (worker) {
-        await worker.terminate();
-        await nextTurn();
-      }
-      // A failed native join retains custody of the private directory.
-      if (directory) {
-        await rm(directory, { recursive: true, force: true });
-      }
-    } catch (error) {
-      result = {
-        explicitSqliteCloseReleasesNativeResources: false,
-        reason: `SQLite close probe cleanup failed: ${String(error)}`,
-      };
-    }
+  }
+  // A known conservative decision must not wait for a potentially stuck native worker.
+  const background = !result.explicitSqliteCloseReleasesNativeResources;
+  const cleanup = cleanupProbe(worker, directory, background);
+  if (background) {
+    void cleanup;
+    return result;
+  }
+  const failure = await cleanup;
+  if (failure) {
+    return { explicitSqliteCloseReleasesNativeResources: false, reason: failure };
   }
   return result;
 }

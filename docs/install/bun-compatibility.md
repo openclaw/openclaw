@@ -147,7 +147,12 @@ the shared writer pool and targeted reader cleanup used on Node.
 
 Stock Bun 1.4.2 fails this check and retains the conservative lifecycle below.
 Errors, timeouts, and unsupported WAL behavior also keep that lifecycle and record
-the reason. Windows Bun stays conservative without running the check until Windows
+the reason. A timeout or error returns the conservative decision without waiting
+for worker cleanup. Cleanup waits up to five seconds for worker exit before
+removing its private files. An unconfirmed exit leaves the worker unreferenced
+and its directory intact, with a `SQLITE_CLOSE_PROBE_CLEANUP` warning naming the
+retained path. A passing probe also uses this bounded join before accepting success.
+Windows Bun stays conservative without running the check until Windows
 conformance is qualified. Before the result is available, per-operation readers
 and close paths use conservative cleanup without fixing the global decision;
 later operations can use the completed result. Each writer broker fixes placement,

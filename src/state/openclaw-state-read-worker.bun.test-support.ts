@@ -24,7 +24,17 @@ const { explicitSqliteCloseReleasesNativeResources: capable } =
     ? await initializeSqliteRuntimeCapabilities()
     : getSqliteRuntimeCapabilities();
 const admissionWorkers = getTrackedWorkerLifecycleSnapshot();
-assert.equal(admissionWorkers.workerCount, 0, "admission joins its probe before product workers");
+for (const worker of admissionWorkers.workerLifecycle) {
+  assert.equal(worker.script, "other", "the builtins-only probe uses native Worker tracking");
+  assert.equal(worker.started, 1, "admission starts at most one private probe");
+}
+assert.ok(
+  admissionWorkers.workerCount === 0 ||
+    (!capable &&
+      admissionWorkers.workerCount === 1 &&
+      admissionWorkers.workerLifecycle.length === 1),
+  "only conservative admission may retain one private probe",
+);
 const filename = path.join(root, "state.sqlite");
 const privateLocation = path.join(root, "private.sqlite");
 for (const location of [filename, privateLocation]) {
@@ -45,13 +55,14 @@ function lifecycle() {
   );
   assert(worker);
   assert(supervisor);
+  const probes = snapshot.workerLifecycle.filter(
+    ({ script }) =>
+      script !== "openclaw-state-read.worker.js" && script !== "worker-native-lifecycle.worker.js",
+  );
+  // Conservative admission can finish while its unreferenced probe is still retiring.
   assert.deepEqual(
-    snapshot.workerLifecycle.filter(
-      ({ script }) =>
-        script !== "openclaw-state-read.worker.js" &&
-        script !== "worker-native-lifecycle.worker.js",
-    ),
-    admissionWorkers.workerLifecycle,
+    probes.map(({ script, started }) => ({ script, started })),
+    admissionWorkers.workerLifecycle.map(({ script, started }) => ({ script, started })),
     "only the SQL reader and its retained supervisor start after admission",
   );
   const retired = worker.retired.reduce((total, { count }) => total + count, 0);
@@ -62,7 +73,14 @@ function lifecycle() {
     "the unbound SQL-free supervisor remains until process exit",
   );
   const live = worker.started - retired;
-  assert.equal(snapshot.workerCount, live + supervisor.started - supervisorRetired);
+  const liveProbes = probes.reduce(
+    (total, probe) =>
+      total +
+      probe.started -
+      probe.retired.reduce((count, retirement) => count + retirement.count, 0),
+    0,
+  );
+  assert.equal(snapshot.workerCount, live + supervisor.started - supervisorRetired + liveProbes);
   return { started: worker.started, retired, live };
 }
 

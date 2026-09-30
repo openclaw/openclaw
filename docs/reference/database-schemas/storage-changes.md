@@ -2048,7 +2048,13 @@ Before initialization settles, per-operation consumers receive a conservative
 undecided result without sealing the global decision. Later reads and close paths
 can use the completed fact. Gateway startup diagnostics distinguish `decided: true` and
 the probe's reason from this undecided fallback. Errors, timeouts, and unsupported
-WAL settle conservatively. Windows Bun does not run the probe and stays conservative
+WAL settle conservatively. Conservative decisions do not await probe cleanup;
+background cleanup leaves the worker and its five-second deadline unreferenced.
+A passing probe awaits the same bounded worker join before accepting success.
+Only a confirmed exit permits deletion of the probe's private directory. An
+unconfirmed exit retains that directory, unreferences the worker, and emits one
+`SQLITE_CLOSE_PROBE_CLEANUP` warning naming the retained path.
+Windows Bun does not run the probe and stays conservative
 until a Windows conformance run qualifies it. Workers inherit the decision at
 creation and keep it for their lifetime, including conservative workers created
 before the decision; later workers inherit the completed result.
