@@ -62,6 +62,45 @@ extension OpenClawChatViewModel {
             })
     }
 
+    /// Session lists are capped (bootstrap fetches 50 rows), so the active
+    /// session's row can drop out of `sessions` entirely. The last authoritative
+    /// `reasoningLevel` for the active session is retained here so its
+    /// visibility survives list replacement; it resets on session switch and is
+    /// superseded by any fresher authoritative value (a listed row, a history
+    /// `sessionInfo`, or a transport event).
+    var retainedActiveSessionReasoningLevel: String?
+
+    /// The Gateway's authoritative reasoning visibility for the current session,
+    /// set by the `/reasoning` directive and echoed on session rows. Reasoning
+    /// renders only when this is `"on"`, matching the Control UI; a device-local
+    /// "show trace" preference is a secondary filter applied by hosts.
+    public var currentSessionReasoningVisible: Bool {
+        if let entry = self.currentSessionEntry() {
+            return entry.reasoningLevel == "on"
+        }
+        return self.retainedActiveSessionReasoningLevel == "on"
+    }
+
+    /// Called before a fetched session list replaces `sessions` (lists are
+    /// capped, so the active row can be omitted). When the incoming list drops
+    /// the active session, retain its last known `reasoningLevel` so the
+    /// visibility gate keeps working; when the list carries a fresh row, clear
+    /// the retention so the authoritative row owns the gate again.
+    func retainActiveSessionReasoningLevel(
+        beforeReplacingWith organized: [OpenClawChatSessionEntry])
+    {
+        let activeKey = self.currentSessionEntry()?.key ?? self.sessionKey
+        let activePresent = organized.contains {
+            $0.key == activeKey ||
+                self.matchesCurrentSessionKey(incoming: $0.key, current: self.sessionKey)
+        }
+        if activePresent {
+            self.retainedActiveSessionReasoningLevel = nil
+        } else if let level = self.currentSessionEntry()?.reasoningLevel {
+            self.retainedActiveSessionReasoningLevel = level
+        }
+    }
+
     static func preferredLiveUsageRunID(
         localRunIDs: Set<String>,
         sessionActiveRunIDs: [String]) -> String?

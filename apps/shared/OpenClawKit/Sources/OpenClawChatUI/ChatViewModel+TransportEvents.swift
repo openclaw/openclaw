@@ -388,6 +388,12 @@ extension OpenClawChatViewModel {
         merged.updatedAt = snapshot.updatedAt ?? existing.updatedAt
         merged.status = snapshot.status ?? existing.status
         merged.hasActiveRun = snapshot.hasActiveRun ?? existing.hasActiveRun
+        // Lifecycle rows are the Gateway's canonical echo of the `/reasoning`
+        // directive; an absent key keeps the known value (older rows never
+        // clobber it), mirroring the sidebar session-change projection.
+        if let reasoningLevel = snapshot.reasoningLevel {
+            merged.reasoningLevel = reasoningLevel
+        }
         if phase == "start" || phase == "end" {
             merged.lastRunError = snapshot.lastRunError
         } else {
