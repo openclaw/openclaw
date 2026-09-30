@@ -327,6 +327,24 @@ describe("chat transcript replies", () => {
       strips: [],
     },
     {
+      case: "a system turn replies explicitly to an older human prompt",
+      messages: [
+        turn("p1", "user", "Please check this report", {
+          ...alice,
+          idempotencyKey: "run-a:user",
+        }),
+        {
+          ...turn("p2", "user", "[System] Scheduled report", { idempotencyKey: "run-b:user" }),
+          provenance: { kind: "internal_system", sourceTool: "cron" },
+        },
+        {
+          ...turn("a3", "assistant", "Answer to the older prompt", { replyToId: "p1" }),
+          runId: "run-b",
+        },
+      ],
+      strips: ["Alice"],
+    },
+    {
       // An explicit reply to its own prompt stays visible once the thread is shared.
       case: "the session has a participant outside the loaded page",
       messages: [
@@ -407,59 +425,93 @@ describe("chat transcript replies", () => {
     },
   );
 
-  it("clears search before navigating to a filtered reply target", async () => {
+  it.each([
+    { target: "loaded explicit", loaded: true, readOnly: false },
+    { target: "unloaded explicit", loaded: false, readOnly: false },
+    { target: "loaded automatic in a read-only archive", loaded: true, readOnly: true },
+  ])("clears search and navigates to a $target reply target", async ({ loaded, readOnly }) => {
+    vi.useFakeTimers();
     const transcript = createTestTranscript();
     const searchContainer = document.body.appendChild(document.createElement("div"));
     const threadContainer = document.body.appendChild(document.createElement("div"));
     const open = vi.fn();
     const paneId = "pane-filtered-reply-navigation";
     const [sourceMessage, followUp] = replyMessages();
-    const props = {
-      ...threadProps(paneId, "agent:main:main", [
-        sourceMessage,
-        {
-          ...followUp,
-          __openclaw: {
-            ...followUp["__openclaw"],
-            replyToPreview: { text: "The original answer", senderLabel: "Molty" },
-          },
-        },
-      ]),
-      replyMessageAccess: {
+    const sourceId = readOnly ? "p2" : "source-message";
+    const sourceSelector = `[data-entry-id='${sourceId}']`;
+    const props = threadProps(
+      paneId,
+      "agent:main:main",
+      readOnly
+        ? [
+            turn("p1", "user", "Original for Alice", alice),
+            turn("p2", "user", "Original for Bob", bob),
+            turn("a3", "assistant", "Follow up for Bob"),
+          ]
+        : [
+            ...(loaded ? [sourceMessage] : []),
+            {
+              ...followUp,
+              __openclaw: {
+                ...followUp["__openclaw"],
+                replyToPreview: { text: "The original answer", senderLabel: "Molty" },
+              },
+            },
+          ],
+    );
+    if (readOnly) {
+      props.selectedSession = {
+        key: props.sessionKey,
+        kind: "direct",
+        updatedAt: 1,
+        archived: true,
+      };
+    } else {
+      props.replyMessageAccess = {
         revision: 0,
         navigationId: null,
         read: () => undefined,
         request: vi.fn(),
         open,
-      },
-    };
+      };
+    }
+    const requestUpdate = () => queueMicrotask(rerender);
     const rerender = () => {
-      render(renderTranscriptSearch(paneId, rerender), searchContainer);
+      render(renderTranscriptSearch(paneId, requestUpdate), searchContainer);
       render(
-        renderChatThread({ ...props, onRequestUpdate: rerender }, transcript),
+        renderChatThread({ ...props, onRequestUpdate: requestUpdate }, transcript),
         threadContainer,
       );
       transcript.hostUpdated();
     };
-    toggleTranscriptSearch(paneId, rerender);
-    rerender();
-    transcript.hostConnected();
-    const input = searchContainer.querySelector<HTMLInputElement>("input");
-    expect(input).not.toBeNull();
-    input!.value = "Follow up";
-    input!.dispatchEvent(new Event("input", { bubbles: true }));
-    await flushDeferredRowPrune();
+    try {
+      toggleTranscriptSearch(paneId, requestUpdate);
+      rerender();
+      transcript.hostConnected();
+      const input = requireElement(searchContainer, "input") as HTMLInputElement;
+      input.value = "Follow up";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      await vi.advanceTimersByTimeAsync(0);
 
-    expect(threadContainer.querySelector("[data-entry-id='source-message']")).toBeNull();
-    const preview = threadContainer.querySelector<HTMLButtonElement>(
-      ".chat-reply-attribution--inline button",
-    );
-    expect(preview).not.toBeNull();
-    preview!.click();
+      expect(threadContainer.querySelector(sourceSelector)).toBeNull();
+      requireElement(threadContainer, ".chat-reply-attribution button").click();
+      await vi.advanceTimersByTimeAsync(0);
 
-    expect(open).toHaveBeenCalledWith("source-message");
-    expect(searchContainer.querySelector("input")).toBeNull();
-    transcript.hostDisconnected();
+      expect(searchContainer.querySelector("input")).toBeNull();
+      if (loaded) {
+        expect(open).not.toHaveBeenCalled();
+        expect(
+          requireElement(threadContainer, sourceSelector).classList.contains(
+            "chat-bubble--reply-target",
+          ),
+        ).toBe(true);
+      } else {
+        expect(open).toHaveBeenCalledWith(sourceId);
+      }
+    } finally {
+      transcript.hostDisconnected();
+      vi.useRealTimers();
+    }
   });
 
   it.each(["group", "frame"] as const)(

@@ -162,14 +162,9 @@ const resolveGatewayWatchBenchmarkArgs = ({
     if (arg === undefined) {
       continue;
     }
-    if (arg === "--benchmark") {
+    if (arg === "--benchmark" || arg === "--benchmark-no-force") {
       benchmarkFlagSeen = true;
-      benchmarkDir ??= DEFAULT_BENCHMARK_PROFILE_DIR;
-      continue;
-    }
-    if (arg === "--benchmark-no-force") {
-      benchmarkFlagSeen = true;
-      benchmarkNoForceSeen = true;
+      benchmarkNoForceSeen ||= arg === "--benchmark-no-force";
       benchmarkDir ??= DEFAULT_BENCHMARK_PROFILE_DIR;
       continue;
     }
@@ -245,14 +240,11 @@ export const resolveGatewayWatchTmuxSessionName = ({
 };
 
 const resolveColorEnv = (env: NodeJS.ProcessEnv) => {
-  const forceColor = env.FORCE_COLOR;
-  if (forceColor == null || forceColor === "") {
-    return { assignments: ["FORCE_COLOR=1"], options: ["-u", "NO_COLOR"] };
-  }
-  if (forceColor.trim() !== "0") {
-    return { assignments: [`FORCE_COLOR=${forceColor}`], options: ["-u", "NO_COLOR"] };
-  }
-  return { assignments: [`FORCE_COLOR=${forceColor}`], options: [] };
+  const forceColor = env.FORCE_COLOR || "1";
+  return {
+    assignments: [`FORCE_COLOR=${forceColor}`],
+    options: forceColor.trim() === "0" ? [] : ["-u", "NO_COLOR"],
+  };
 };
 
 export const buildGatewayWatchTmuxCommand = ({

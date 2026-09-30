@@ -241,7 +241,7 @@ it("releases the shared discovery snapshot before agent inspection", async () =>
     discoverUpdateStateSchemaInspectionInProcess({ stateDir, config: {}, stagingRoot }),
   ).resolves.toMatchObject({
     files: expect.arrayContaining([
-      [shared, { spellings: [shared] }],
+      [shared, { spellings: [shared], owners: [{ role: "global" }] }],
       [agent, { spellings: [agent] }],
     ]),
     sharedVersion: { path: shared, userVersion: 3, contentVersion: 3 },

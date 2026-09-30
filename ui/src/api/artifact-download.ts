@@ -105,3 +105,38 @@ export async function downloadArtifact(
     return await request(false);
   }
 }
+
+const ARTIFACT_IMAGE_MIME = /^image\/(?:png|jpeg|gif|webp|avif)$/u;
+
+export async function resolveArtifactDownloadSource(
+  state: ArtifactDownloadHost,
+  params: { sessionKey: string; agentId?: string; artifactId: string },
+  signal?: AbortSignal,
+): Promise<{ url: string; expiresAt?: string; blob?: Blob } | null> {
+  const result = await downloadArtifact(state, params, signal);
+  if (
+    result?.blob &&
+    (result.artifact.type !== "image" ||
+      !ARTIFACT_IMAGE_MIME.test(result.blob.type.split(";", 1)[0]?.trim().toLowerCase() ?? ""))
+  ) {
+    return null;
+  }
+  if (
+    result?.encoding === "base64" &&
+    result.artifact.type === "image" &&
+    ARTIFACT_IMAGE_MIME.test(result.artifact.mimeType ?? "") &&
+    result.data
+  ) {
+    return { url: `data:${result.artifact.mimeType};base64,${result.data}` };
+  }
+  const url = typeof result?.url === "string" ? result.url.trim() : "";
+  if (!url) {
+    return null;
+  }
+  const expiresAt = typeof result?.expiresAt === "string" ? result.expiresAt.trim() : undefined;
+  return {
+    url,
+    ...(expiresAt ? { expiresAt } : {}),
+    ...(result?.blob ? { blob: result.blob } : {}),
+  };
+}

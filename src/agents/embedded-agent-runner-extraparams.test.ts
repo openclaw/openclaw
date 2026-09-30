@@ -786,16 +786,20 @@ describe("applyExtraParamsToAgent", () => {
     },
   );
 
+  function createGoogleCompletionsModel(): Model<"openai-completions"> {
+    return {
+      api: "openai-completions",
+      provider: "google",
+      id: "gemini-2.5-pro",
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+    } as Model<"openai-completions">;
+  }
+
   it("strips store from proxied openai-completions payloads", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "google",
       applyModelId: "gemini-2.5-pro",
-      model: {
-        api: "openai-completions",
-        provider: "google",
-        id: "gemini-2.5-pro",
-        baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
-      } as Model<"openai-completions">,
+      model: createGoogleCompletionsModel(),
       payload: {
         messages: [],
         store: false,
@@ -829,23 +833,21 @@ describe("applyExtraParamsToAgent", () => {
       applyProvider: "google",
       applyModelId: "gemini-2.5-pro",
       cfg: buildModelConfig("google/gemini-2.5-pro", {
+        chat_template_kwargs: { enable_thinking: true, template_only: true },
         extraBody: {
           google: { thinking_config: { thinking_budget: 0 } },
+          chat_template_kwargs: { enable_thinking: false },
           store: false,
         },
       }),
-      model: {
-        api: "openai-completions",
-        provider: "google",
-        id: "gemini-2.5-pro",
-        baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
-      } as Model<"openai-completions">,
+      model: createGoogleCompletionsModel(),
       payload: {
         messages: [],
       },
     });
 
     expect(payload.google).toEqual({ thinking_config: { thinking_budget: 0 } });
+    expect(payload.chat_template_kwargs).toEqual({ enable_thinking: false });
     expect(payload).not.toHaveProperty("store");
   });
 
@@ -967,12 +969,7 @@ describe("applyExtraParamsToAgent", () => {
       applyModelId: "gemini-2.5-pro",
       configKey: "google/gemini-2.5-pro",
       params: { extra_body: "not-an-object" },
-      model: {
-        api: "openai-completions",
-        provider: "google",
-        id: "gemini-2.5-pro",
-        baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
-      } as Model<"openai-completions">,
+      model: createGoogleCompletionsModel(),
       payload: undefined,
       missingProperty: "extra_body",
       warning: "ignoring invalid extra_body param: not-an-object",

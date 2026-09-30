@@ -1,4 +1,3 @@
-// OC Path module implements resolve behavior.
 import { isMap, isScalar, isSeq, type Node, type Pair } from "yaml";
 import type { OcPath } from "../oc-path.js";
 import {
@@ -85,17 +84,13 @@ function walkNode(
       return null;
     }
     const childWalked = [...walked, seg];
-    if (i === segments.length - 1) {
-      const child = pair.value;
-      if (isScalar(child)) {
-        return {
-          kind: "pair",
-          key: seg,
-          value: child.value,
-          path: childWalked,
-        };
-      }
-      return walkNode(child as Node, segments, i + 1, childWalked);
+    if (i === segments.length - 1 && isScalar(pair.value)) {
+      return {
+        kind: "pair",
+        key: seg,
+        value: pair.value.value,
+        path: childWalked,
+      };
     }
     return walkNode(pair.value as Node, segments, i + 1, childWalked);
   }
@@ -119,8 +114,7 @@ export function resolveYamlPositionalSegment(node: Node, seg: string): string | 
     return resolvePositionalSeg(seg, { indexable: false, size: keys.length, keys });
   }
   if (isSeq(node)) {
-    const items = (node as { items: Node[] }).items;
-    return resolvePositionalSeg(seg, { indexable: true, size: items.length });
+    return resolvePositionalSeg(seg, { indexable: true, size: node.items.length });
   }
   return null;
 }

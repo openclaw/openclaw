@@ -196,33 +196,18 @@ function findConfiguredOpenRouterModelParams(
   return undefined;
 }
 
-function findConfiguredOpenRouterAgentParams(
-  ctx: OpenRouterFusionPromptContext,
-): Record<string, unknown> | undefined {
-  if (!ctx.agentId) {
-    return undefined;
-  }
-  return readRecord(resolveAgentConfig(ctx.config ?? {}, ctx.agentId)?.params);
-}
-
-function resolveMergedOpenRouterPromptParams(
-  ctx: OpenRouterFusionPromptContext,
-): Record<string, unknown> | undefined {
-  const merged = {
-    ...readRecord(ctx.config?.agents?.defaults?.params),
-    ...findConfiguredOpenRouterModelParams(ctx),
-    ...findConfiguredOpenRouterAgentParams(ctx),
-  };
-  return Object.keys(merged).length > 0 ? merged : undefined;
-}
-
 function resolveFusionExtraBody(
   ctx: OpenRouterFusionPromptContext,
 ): Record<string, unknown> | undefined {
-  const params = resolveMergedOpenRouterPromptParams(ctx);
-  const rawExtraBody =
-    params && Object.hasOwn(params, "extra_body") ? params.extra_body : params?.extraBody;
-  return readRecord(rawExtraBody);
+  const params = {
+    ...readRecord(ctx.config?.agents?.defaults?.params),
+    ...findConfiguredOpenRouterModelParams(ctx),
+    ...(ctx.agentId ? readRecord(resolveAgentConfig(ctx.config ?? {}, ctx.agentId)?.params) : {}),
+  };
+  if (Object.keys(params).length === 0) {
+    return undefined;
+  }
+  return readRecord(Object.hasOwn(params, "extra_body") ? params.extra_body : params.extraBody);
 }
 
 function resolveOpenRouterFusionPromptContribution(
@@ -237,10 +222,7 @@ function resolveOpenRouterFusionPromptContribution(
   const fusionPlugin = Array.isArray(extraBody?.plugins)
     ? extraBody.plugins.map(readRecord).find((plugin) => plugin?.id === "fusion")
     : undefined;
-  if (!fusionPlugin) {
-    return undefined;
-  }
-  if (fusionPlugin.enabled === false) {
+  if (!fusionPlugin || fusionPlugin.enabled === false) {
     return undefined;
   }
 
@@ -357,7 +339,7 @@ export default defineSingleProviderPluginEntry({
           provider: buildOpenrouterProvider(),
         }),
       },
-      resolveDynamicModel: (ctx) => buildDynamicOpenRouterModel(ctx),
+      resolveDynamicModel: buildDynamicOpenRouterModel,
       // Resolve the catalog model even when a configured row already exists.
       preferRuntimeResolvedModel: (ctx) => {
         const configuredProvider = findNormalizedProviderValue(

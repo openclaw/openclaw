@@ -279,10 +279,11 @@ export class DurableChatComposerPersistence {
       }
       return;
     }
+    const draft = result.status === "found" ? result.draft : undefined;
     let attachments: ChatAttachment[] = [];
-    if (result.status === "found") {
+    if (draft) {
       try {
-        attachments = await hydrateDurableComposerAttachments(result.draft.attachments);
+        attachments = await hydrateDurableComposerAttachments(draft.attachments);
       } catch {
         reportDurableComposerStorageError(baseline.scope, this.onStorageError);
         return;
@@ -293,16 +294,10 @@ export class DurableChatComposerPersistence {
     }
     apply({
       revision,
-      text: result.status === "found" ? result.draft.text : "",
-      ...(result.status === "found" && result.draft.mentions
-        ? { mentions: result.draft.mentions }
-        : {}),
-      ...(result.status === "found" && result.draft.goalMode
-        ? { goalMode: result.draft.goalMode }
-        : {}),
-      ...(result.status === "found" && result.draft.replyTarget
-        ? { replyTarget: result.draft.replyTarget }
-        : {}),
+      text: draft ? draft.text : "",
+      ...(draft?.mentions ? { mentions: draft.mentions } : {}),
+      ...(draft?.goalMode ? { goalMode: draft.goalMode } : {}),
+      ...(draft?.replyTarget ? { replyTarget: draft.replyTarget } : {}),
       attachments,
     });
   }

@@ -1,5 +1,5 @@
 import type { AsyncLocalStorage } from "node:async_hooks";
-import { readCommittedIncognitoSessionSharing } from "../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
+import { readCommittedIncognitoSessionSharing } from "../config/sessions/session-accessor.sqlite-incognito-sharing.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { getOpenIncognitoAgentDatabase } from "../state/openclaw-agent-db-lifecycle.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
@@ -181,10 +181,13 @@ export function createSessionRowAncestorReads(owner: {
     ) => boolean;
   };
   isActive: () => boolean;
-  projection: () => SessionRowReadView & { isCurrent(row: records.Row): boolean };
+  projection: () => SessionRowReadView & {
+    isCurrent(row: records.Row): boolean;
+    getPolicyConfig(): records.Inputs["cfg"];
+  };
 }) {
   return {
-    ancestorRows: (record: records.MaterializedRow) =>
+    ancestorRows: (record: records.MaterializedRow, read?: SessionRowReadView) =>
       readSessionRowAncestors(record, {
         ...owner.state(),
         referenced: owner.referenced,
@@ -194,7 +197,7 @@ export function createSessionRowAncestorReads(owner: {
           !owner.membership.needsPreparation(() => [
             { ...row, storePath: row.storeTarget.storePath },
           ])
-            ? owner.describe({ ...row, storePath: row.storeTarget.storePath }, row)
+            ? (read ?? owner).describe({ ...row, storePath: row.storeTarget.storePath }, row)
             : undefined,
       }),
     async withPreparedExactRows<T>(

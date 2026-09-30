@@ -114,14 +114,7 @@ function snapshotToolMetadata(tool: Record<string, unknown>): Record<string, unk
 }
 
 function hasOpenAiAnthropicToolPayloadCompatFlag(model: { compat?: unknown }): boolean {
-  if (!model.compat || typeof model.compat !== "object" || Array.isArray(model.compat)) {
-    return false;
-  }
-
-  return (
-    (model.compat as { requiresOpenAiAnthropicToolPayload?: unknown })
-      .requiresOpenAiAnthropicToolPayload === true
-  );
+  return isRecord(model.compat) && model.compat.requiresOpenAiAnthropicToolPayload === true;
 }
 
 function requiresAnthropicToolPayloadCompatibilityForModel(
@@ -420,11 +413,11 @@ function normalizeOpenAiStringModeAnthropicToolChoice(
     }
     return toolChoice;
   }
-  if (!toolChoice || typeof toolChoice !== "object" || Array.isArray(toolChoice)) {
+  if (!isRecord(toolChoice)) {
     return toolChoice;
   }
 
-  const choice = toolChoice as Record<string, unknown>;
+  const choice = toolChoice;
   if (choice.type === "auto") {
     if (toolProjection?.tools.length === 0) {
       return undefined;

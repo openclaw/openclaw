@@ -64,7 +64,7 @@ import { resolveReplyDirectives } from "./get-reply-directives.js";
 import {
   initFastReplySessionState,
   resolveGetReplyConfig,
-  shouldUseReplyFastTestBootstrap,
+  shouldUseReplyFastTestRuntime,
 } from "./get-reply-fast-path.js";
 import { handleInlineActions } from "./get-reply-inline-actions.js";
 import { maybeResolveNativeSlashCommandFastReply } from "./get-reply-native-slash-fast-path.js";
@@ -234,9 +234,9 @@ export async function getReplyFromConfig(
     enabled: profilerEnabled,
   });
   const useFastTestBootstrap = resolverTiming.measureSync("reply.resolve_fast_test_bootstrap", () =>
-    shouldUseReplyFastTestBootstrap({
+    shouldUseReplyFastTestRuntime({
       isFastTestEnv,
-      configOverride,
+      cfg: configOverride,
     }),
   );
   const inboundMediaWasAlreadyStaged = hasStagedMediaFacts(ctx.media);
@@ -360,12 +360,10 @@ export async function getReplyFromConfig(
   const { workspaceDirRaw, workspaceDirForNativeCommand, agentDir, timeoutMs } =
     resolverTiming.measureSync("reply.resolve_workspace_agent_dir", () => {
       const workspaceDirRawLocal =
-        preparedWorkspaceDir ??
-        resolveAgentWorkspaceDir(cfg, agentId) ??
-        DEFAULT_AGENT_WORKSPACE_DIR;
+        resolveAgentWorkspaceDir(cfg, agentId) ?? DEFAULT_AGENT_WORKSPACE_DIR;
       return {
         workspaceDirRaw: workspaceDirRawLocal,
-        workspaceDirForNativeCommand: workspaceDirRawLocal,
+        workspaceDirForNativeCommand: preparedWorkspaceDir ?? workspaceDirRawLocal,
         agentDir: preparedAgentDir ?? resolveAgentDir(cfg, agentId),
         timeoutMs: resolveAgentTimeoutMs({
           cfg,
@@ -466,7 +464,7 @@ export async function getReplyFromConfig(
         : "⚠️ This agent's workspace is missing on the gateway host. Ask the operator to restore the workspace from backup and run `openclaw doctor`.";
     return markReplyPayloadForSourceSuppressionDelivery({ text });
   }
-  const workspaceDir = workspace.dir;
+  const workspaceDir = preparedWorkspaceDir ?? workspace.dir;
 
   if (
     !isFastTestEnv &&
@@ -672,9 +670,6 @@ export async function getReplyFromConfig(
       if (heartbeatPending.shouldClear) {
         Object.assign(sessionEntry, PENDING_FINAL_DELIVERY_CLEAR_PATCH);
         sessionEntryHandle.replaceCurrent(sessionEntry);
-        if (sessionKey && sessionStore) {
-          sessionStore[sessionKey] = sessionEntry;
-        }
         if (sessionKey && storePath) {
           const { updateSessionEntry } = await import("../../config/sessions/session-accessor.js");
           await updateSessionEntry(

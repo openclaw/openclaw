@@ -20,6 +20,15 @@ When Gateway startup encounters a newer database schema, it exits with status 78
 
 Changes may stay at the same schema version only when downgraded readers remain safe. New tables qualify because older builds ignore them. An explicitly compatible column on an existing table qualifies only when its declaration is exactly one bare nullable SQLite `STRICT` datatype: `ANY`, `BLOB`, `INT`, `INTEGER`, `REAL`, or `TEXT`. The declaration cannot have a default, `NOT NULL`, a primary or unique key, a check, a reference, a collation, a generated expression, or another suffix. Constrained existing-table additions require a schema-version bump or a companion table instead.
 
+Linux Node worker cleanup uses the additive `node_worker_launch_process_scopes`
+companion table. Its launch-bound `linux-subreaper` certificate records kernel
+descendant extinction independently of `node_worker_launch_cleanup.lineage_settled`.
+The existing cleanup row retains `owned-anchor` with no synthetic lineage
+completion, so older readers retain uncertain custody rather than treating the new
+certificate as an older proof. Existing rows are not backfilled or reinterpreted.
+The companion row is pruned with its launch under the same retention policy; the
+schema version is unchanged.
+
 Matching numeric versions are necessary but not sufficient. A release can add a lazy or startup-repairable table, column, index, or trigger without advancing `user_version`, so two databases at the same version can still have different shapes. OpenClaw validates the canonical table definitions, constraints, indexes, triggers, virtual tables, and table options owned by the running release.
 
 Admitted agent and cached shared-state handles retain their schema version and

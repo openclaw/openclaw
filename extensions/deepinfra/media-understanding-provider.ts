@@ -12,20 +12,12 @@ import {
 } from "./media-models.js";
 import type { DeepInfraSurfaceModel } from "./media-models.js";
 
-function resolveDefault(
-  surfaceModels: readonly DeepInfraSurfaceModel[] | undefined,
-  fallback: readonly string[],
-): string {
-  const first = surfaceModels?.[0]?.id;
-  return first ?? fallback[0] ?? "";
-}
-
 async function transcribeDeepInfraAudio(params: AudioTranscriptionRequest) {
   return await transcribeOpenAiCompatibleAudio({
     ...params,
     provider: "deepinfra",
     defaultBaseUrl: DEEPINFRA_BASE_URL,
-    defaultModel: resolveDefault(undefined, DEEPINFRA_STT_FALLBACK_MODELS),
+    defaultModel: DEEPINFRA_STT_FALLBACK_MODELS[0],
   });
 }
 
@@ -38,8 +30,8 @@ export function buildDeepInfraMediaUnderstandingProvider(options?: {
     id: "deepinfra",
     capabilities: ["image", "audio"],
     defaultModels: {
-      image: resolveDefault(options?.vlmModels, DEEPINFRA_VLM_FALLBACK_MODELS),
-      audio: resolveDefault(options?.sttModels, DEEPINFRA_STT_FALLBACK_MODELS),
+      image: options?.vlmModels?.[0]?.id ?? DEEPINFRA_VLM_FALLBACK_MODELS[0],
+      audio: options?.sttModels?.[0]?.id ?? DEEPINFRA_STT_FALLBACK_MODELS[0],
     },
     autoPriority: {
       image: 45,

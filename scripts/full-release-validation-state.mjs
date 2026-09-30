@@ -421,6 +421,7 @@ async function validateReuse(executionPlan, signal) {
         validateReusableReleaseChild(selection, {
           repository: executionPlan.repository,
           targetSha: executionPlan.targetSha,
+          workflowSha: executionPlan.workflowSha,
           role,
           inputs: selection.inputs,
         }),
@@ -1531,7 +1532,7 @@ async function validateManifestMode() {
   ) {
     throw new Error("release validation manifest differs from the immutable execution plan");
   }
-  rawManifest.advisoryJobs = [];
+  rawManifest.advisoryJobs = manifest.advisoryJobs;
   writeArtifact(manifestPath, rawManifest);
 }
 

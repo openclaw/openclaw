@@ -3,15 +3,10 @@
  * schema policy quarantines incompatible tools and emits notices instead of
  * silently hiding them.
  */
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import type { McpToolCatalog } from "./agent-bundle-mcp-types.js";
-import { normalizeAgentRuntimeTools } from "./runtime-plan/tools.js";
-import {
-  filterRuntimeCompatibleTools,
-  type RuntimeToolSchemaDiagnostic,
-} from "./tool-schema-projection.js";
+import type { RuntimeToolSchemaDiagnostic } from "./tool-schema-projection.js";
+import { normalizeToolInventorySchemas } from "./tools-effective-inventory-build.js";
 import {
   disambiguateEffectiveToolLabels,
   resolveEffectiveToolLabel,
@@ -77,35 +72,15 @@ function buildMcpToolInventoryEntries(
 }
 
 /** Builds the runtime-compatible MCP tool inventory and quarantine notices. */
-export function buildRuntimeCompatibleMcpToolInventory(params: {
-  tools: readonly AnyAgentTool[];
-  cfg: OpenClawConfig;
-  workspaceDir?: string;
-  modelProvider?: string;
-  modelId?: string;
-  modelApi?: string | null;
-  runtimeModel?: ProviderRuntimeModel;
-}): {
+export function buildRuntimeCompatibleMcpToolInventory(
+  params: Parameters<typeof normalizeToolInventorySchemas>[0],
+): {
   entries: EffectiveToolInventoryEntry[];
   notices: EffectiveToolInventoryNotice[];
 } {
-  const preNormalizationDiagnostics: RuntimeToolSchemaDiagnostic[] = [];
-  const normalizedTools = normalizeAgentRuntimeTools({
-    tools: params.tools,
-    provider: params.modelProvider ?? "",
-    config: params.cfg,
-    workspaceDir: params.workspaceDir,
-    modelId: params.modelId,
-    modelApi: params.modelApi ?? undefined,
-    model: params.runtimeModel,
-    allowProviderRuntimePluginLoad: false,
-    onPreNormalizationSchemaDiagnostics: (diagnostics) =>
-      preNormalizationDiagnostics.push(...diagnostics),
-  });
-  const projection = filterRuntimeCompatibleTools(normalizedTools);
-  const diagnostics = [...preNormalizationDiagnostics, ...projection.diagnostics];
+  const projection = normalizeToolInventorySchemas(params, false);
   return {
     entries: buildMcpToolInventoryEntries(projection.tools),
-    notices: diagnostics.map(buildMcpUnsupportedToolSchemaNotice),
+    notices: projection.diagnostics.map(buildMcpUnsupportedToolSchemaNotice),
   };
 }

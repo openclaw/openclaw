@@ -25,7 +25,7 @@ import {
 } from "./package-update-filesystem.js";
 import {
   createPackageIntegrityReader,
-  PackageIntegrityTimeoutError,
+  isPackageIntegrityResourceError,
   readPackageVersionIfPresent,
   type PackageDirectoryIdentity,
   type PackageRootIntegrityFingerprint,
@@ -42,7 +42,10 @@ import {
   type StagedPackageSwapParams,
 } from "./package-update-swap-contract.js";
 import { createPackageSwapResults } from "./package-update-swap-results.js";
-import { retireVerifiedPackageSwap } from "./package-update-swap-retirement.js";
+import {
+  retireRefusedPackageSwap,
+  retireVerifiedPackageSwap,
+} from "./package-update-swap-retirement.js";
 import { resolveStagedPackageSwapTarget } from "./package-update-swap-target.js";
 import { runPackagePostInstallVerification } from "./package-update-verification-step.js";
 import {
@@ -295,7 +298,7 @@ export async function swapStagedPackageInstall(
       } catch (error) {
         // Preserve the scan cause if the identity fallback also fails.
         baselineError = new Error("Baseline package scan failed", { cause: error });
-        if (!(error instanceof PackageIntegrityTimeoutError)) {
+        if (!isPackageIntegrityResourceError(error)) {
           throw error;
         }
         // Capture the identity before mutation even when the full walk exhausted its budget.
@@ -307,7 +310,7 @@ export async function swapStagedPackageInstall(
           throw error;
         }
         warnings.push(
-          `baseline package fingerprint incomplete after ${error.budgetMs / 1000} s; rollback will be verified by the retained package copy`,
+          `baseline package fingerprint incomplete (${error.message}); rollback requires the retained directory identity, package version and launchers; full package contents are unverified`,
         );
       }
       baselineError = undefined;
@@ -707,7 +710,12 @@ export async function swapStagedPackageInstall(
       error instanceof PackageUpdateActivationError ||
       error instanceof FreeBsdPkgOwnershipError
     ) {
-      if (!activation && !preparationCustody) {
+      if (activation && !retained && !liveMutationStarted) {
+        await retireRefusedPackageSwap(
+          activation,
+          error instanceof PackageUpdateActivationError ? error.cause : error,
+        );
+      } else if (!activation && !preparationCustody) {
         await discardPackageLauncherBackup(launchers, targetLayout.globalRoot);
       }
       throw error instanceof PackageUpdateActivationError

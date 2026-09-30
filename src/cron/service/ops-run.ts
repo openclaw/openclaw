@@ -8,11 +8,10 @@ import { isCronActiveJobMarkerCurrent } from "../active-jobs.js";
 import { captureCronRunAdmissionTracker } from "../mutation-completion.js";
 import {
   CronRunReceiptRevisionError,
-  finishCronRunReceipt,
+  finishCronRunReceiptAsync,
   releaseLocalCronRunReceiptOwnership,
   type CronRunReceiptSettlementDisposition,
 } from "../store/run-receipt-store.js";
-import { isCronRunTriggerStateRetiredInDatabase } from "../store/run-receipt-trigger-state.js";
 import type { CronJob } from "../types.js";
 import { normalizeCronRunErrorText } from "./execution-errors.js";
 import { locked } from "./locked.js";
@@ -36,13 +35,14 @@ import {
   runWithCronAdmission,
   supersedeActivatedCronRun,
 } from "./run-admission.js";
+import { finalizeCronRuntimeRows } from "./run-finalization.js";
 import {
   createCronOwnerExecutionIdentityAdmission,
   recordQuietCronEvaluation,
 } from "./run-history.js";
-import { cronRunReceiptPersistHooks, resolveCronRunReceiptTerminalStatus } from "./run-receipts.js";
+import { resolveCronRunReceiptTerminalStatus } from "./run-receipts.js";
 import { publishCronRuntimeRows } from "./runtime-publication.js";
-import { applyCronRuntimeRowsToState, commitCronRuntimeRows } from "./runtime-store.js";
+import { applyCronRuntimeRowsToState } from "./runtime-store.js";
 import { recomputeUnownedCronSchedules } from "./schedule-maintenance.js";
 import type {
   CronRunMode,
@@ -122,6 +122,7 @@ async function finishPreparedManualRun(
       taskRunId,
       activeJobMarker: prepared.activeJobMarker,
       runReceipt: prepared.runReceipt,
+      runReceiptContext: prepared.runReceiptContext,
       startedAt,
       endedAt,
     };
@@ -181,15 +182,18 @@ async function finishPreparedManualRun(
       );
     };
     const finishRemovedRun = async () => {
-      finishCronRunReceipt({
-        handle: prepared.runReceipt,
-        status: resolveCronRunReceiptTerminalStatus(
-          triggerSkipped ? "skipped" : coreResult.status,
-          coreResult.triggerEval?.fired,
-        ),
-        finishedAtMs: endedAt,
-        error: coreResult.error,
-      });
+      await finishCronRunReceiptAsync(
+        {
+          handle: prepared.runReceipt,
+          status: resolveCronRunReceiptTerminalStatus(
+            triggerSkipped ? "skipped" : coreResult.status,
+            coreResult.triggerEval?.fired,
+          ),
+          finishedAtMs: endedAt,
+          error: coreResult.error,
+        },
+        prepared.runReceiptContext,
+      );
       finalized = true;
       await emitMissingTerminal(true);
     };
@@ -217,37 +221,39 @@ async function finishPreparedManualRun(
       }
       let removedJob: CronJob | undefined;
       try {
-        const committed = commitCronRuntimeRows({
+        const committed = await finalizeCronRuntimeRows({
           state,
+          context: prepared.runReceiptContext,
           jobIds: [jobId],
-          operationLabel: "cron.manual-run-finalization",
-          transactionHooks: cronRunReceiptPersistHooks({
-            state,
-            handle: prepared.runReceipt,
-            terminal: {
-              status: triggerSkipped ? "skipped" : coreResult.status,
-              finishedAtMs: endedAt,
-              error: coreResult.error,
-              ...(receiptSettlementDisposition
-                ? { disposition: receiptSettlementDisposition }
-                : {}),
+          markers: [prepared.activeJobMarker],
+          receipts: [
+            {
+              context: prepared.runReceiptContext,
+              allowMissingJob: false,
+              disposition: receiptSettlementDisposition,
+              terminal: {
+                handle: prepared.runReceipt,
+                status: resolveCronRunReceiptTerminalStatus(
+                  triggerSkipped ? "skipped" : coreResult.status,
+                ),
+                finishedAtMs: endedAt,
+                error: coreResult.error,
+              },
             },
-          }),
-          mutate: ({ database, jobs }) => {
+          ],
+          mutate: ({ jobs, retiredTriggerReceiptIds }) => {
             const current = jobs.get(jobId);
             if (!current) {
-              return { value: undefined };
+              return { jobs: [], deletedJobIds: [], value: undefined };
             }
             const removed = applyOutcomeToAuthoritativeJob(state, current, outcome, {
               ...outcomeOptions,
-              triggerStateRetired: isCronRunTriggerStateRetiredInDatabase({
-                database,
-                handle: prepared.runReceipt,
-              }),
+              triggerStateRetired: retiredTriggerReceiptIds.has(prepared.runReceipt.receiptId),
               deferredNotifications: postPersistNotifications,
             });
             return {
-              ...(removed ? { deleteJobIds: [jobId] } : { upsertJobIds: [jobId] }),
+              jobs: removed ? [] : [current],
+              deletedJobIds: removed ? [jobId] : [],
               value: { job: structuredClone(current), removed },
             };
           },
@@ -330,6 +336,7 @@ async function finishPreparedManualRun(
         jobId,
         reservationIdentity: prepared.reservationIdentity,
         runReceipt: prepared.runReceipt,
+        runReceiptContext: prepared.runReceiptContext,
         reason: supersedeReason,
       });
     }

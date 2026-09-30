@@ -86,14 +86,14 @@ async function seedYieldedParent() {
     expectsCompletionMessage: true,
   });
   expect(
-    markRequesterTurnYielded({
+    await markRequesterTurnYielded({
       requesterSessionKey: parentKey,
       requesterAgentId: "main",
       requesterTurnRunId: parentRunId,
     }),
   ).toBe(1);
   expect(
-    settleRequesterAfterSessionSpawns({
+    await settleRequesterAfterSessionSpawns({
       requesterSessionKey: parentKey,
       requesterAgentId: "main",
       requesterTurnRunId: parentRunId,

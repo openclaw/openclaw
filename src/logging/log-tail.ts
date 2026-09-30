@@ -23,7 +23,6 @@ function missingPathToNull(error: unknown): null {
   return null;
 }
 
-/** Payload returned to log-tail callers with cursor and truncation metadata. */
 export type LogTailPayload = {
   file: string;
   cursor: number;
@@ -274,7 +273,6 @@ async function readLogSlice(
   }
 }
 
-/** Reads and redacts the configured log tail with bounded bytes and line count. */
 export async function readConfiguredLogTail(
   params?: { cursor?: number; limit?: number; maxBytes?: number },
   filter?: (line: string) => boolean,

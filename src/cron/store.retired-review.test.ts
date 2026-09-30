@@ -50,7 +50,7 @@ describe("retired Workshop cron jobs", () => {
         await saveCronJobsStore(storePath, { version: 1, jobs: [job("retired"), job("keep")] });
         await saveCronJobsStore(otherStorePath, { version: 1, jobs: [job("retired")] });
         for (const target of [storePath, otherStorePath]) {
-          writeCronJobScratch({
+          await writeCronJobScratch({
             storePath: target,
             jobId: "retired",
             content: "old scratch",

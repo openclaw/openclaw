@@ -1,5 +1,3 @@
-// Health gateway methods return cached or refreshed status summaries while
-// detecting stale channel runtime state against live gateway snapshots.
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { getPreparedModelRuntimeStartupStatus } from "../../agents/prepared-model-runtime.startup-status.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
@@ -36,7 +34,6 @@ function cachedLifecycleDiffersFromRuntime(params: {
   return params.cachedAccount === undefined;
 }
 
-/** Checks whether cached channel health is stale against the live runtime snapshot. */
 function cachedHealthDiffersFromRuntime(
   cached: HealthSummary,
   runtime: ChannelRuntimeSnapshot,
@@ -90,7 +87,6 @@ function cachedHealthDiffersFromRuntime(
   );
 }
 
-/** Merges cheap live runtime facts into a cached health summary before responding. */
 async function mergeCachedHealthRuntimeState(params: {
   cached: HealthSummary;
   getEventLoopHealth?: () => HealthSummary["eventLoop"];
@@ -107,7 +103,7 @@ async function mergeCachedHealthRuntimeState(params: {
   const deliveryQueues = await buildDeliveryQueueHealthSummary(
     _cachedDeliveryQueues?.ingressPressure ?? [],
   );
-  const contextEngines = buildContextEngineHealthSummary();
+  const contextEngines = await buildContextEngineHealthSummary();
   // A reset sampler has no current window; never revive the cached reading.
   const eventLoop = params.getEventLoopHealth?.();
   return {
@@ -122,7 +118,6 @@ async function mergeCachedHealthRuntimeState(params: {
   };
 }
 
-/** Gateway handlers for health snapshots and status summaries. */
 export const healthHandlers: GatewayRequestHandlers = {
   health: async ({ respond, context, params, client }) => {
     const { getHealthCache, refreshHealthSnapshot, logHealth } = context;

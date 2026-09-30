@@ -4,6 +4,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import type { GatewayScheduler, GatewayScheduledJob } from "../infra/gateway-scheduler.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { settlesWithin } from "../shared/settle-within.js";
 import {
   DEFAULT_CHANNEL_CONNECT_GRACE_MS,
   DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
@@ -284,20 +285,7 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
     if (!check) {
       return;
     }
-    let timeout: ReturnType<typeof setTimeout> | undefined;
-    const outcome = await Promise.race([
-      check.then(() => "idle" as const),
-      new Promise<"timeout">((resolve) => {
-        timeout = setTimeout(() => resolve("timeout"), CHANNEL_HEALTH_MONITOR_HANDOFF_TIMEOUT_MS);
-        if (typeof timeout === "object" && "unref" in timeout) {
-          timeout.unref();
-        }
-      }),
-    ]);
-    if (timeout) {
-      clearTimeout(timeout);
-    }
-    if (outcome === "timeout") {
+    if (!(await settlesWithin(check, CHANNEL_HEALTH_MONITOR_HANDOFF_TIMEOUT_MS))) {
       // A late provider stop must not block lifecycle ownership or restart after
       // the replacement/shutdown handoff has already continued.
       shutdown();

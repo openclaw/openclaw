@@ -225,7 +225,6 @@ function navigateChatInputHistory(host: TestChatHost, direction: "up" | "down"):
     key: direction === "up" ? "ArrowUp" : "ArrowDown",
     selectionStart: 0,
     selectionEnd: 0,
-    valueLength: host.chatMessage.length,
     altKey: false,
     ctrlKey: false,
     metaKey: false,

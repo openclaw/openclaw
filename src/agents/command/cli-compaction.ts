@@ -1,13 +1,8 @@
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import {
   loadSessionEntryReadOnly,
   type SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.js";
-/**
- * CLI turn compaction lifecycle.
- *
- * This module decides when CLI-backed sessions need context compaction, chooses
- * native harness or context-engine compaction, and records resulting session state.
- */
 import { resolveFreshSessionTotalTokens, type SessionEntry } from "../../config/sessions/types.js";
 import type { AgentCompactionMode } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -239,7 +234,7 @@ async function compactCliTranscript(
       params.abortSignal,
     );
   } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
+    const reason = coerceErrorMessage(error);
     if (isBenignCompactionSkipReason(reason)) {
       log.info(
         `CLI transcript compaction skipped for ${params.provider}/${params.model}: ${reason}`,
@@ -315,7 +310,7 @@ async function compactCliTranscript(
       throw error;
     }
     log.warn(
-      `CLI transcript compaction maintenance failed after fallback for ${params.provider}/${params.model}: ${error instanceof Error ? error.message : String(error)}`,
+      `CLI transcript compaction maintenance failed after fallback for ${params.provider}/${params.model}: ${coerceErrorMessage(error)}`,
     );
   }
   return outcome;
@@ -415,12 +410,13 @@ async function compactNativeHarnessCliTranscript(
       );
     });
   } catch (error) {
+    const reason = coerceErrorMessage(error);
     log.warn(
-      `CLI native harness compaction failed for ${params.provider}/${params.model}: ${error instanceof Error ? error.message : String(error)}`,
+      `CLI native harness compaction failed for ${params.provider}/${params.model}: ${reason}`,
     );
     return {
       compacted: false,
-      failureReason: error instanceof Error ? error.message : String(error),
+      failureReason: reason,
     };
   }
 

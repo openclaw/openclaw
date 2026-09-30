@@ -4,71 +4,16 @@ import Testing
 import WebKit
 @testable import OpenClaw
 
-/// One-shot wake-up for a main-actor test event. Cancellation resumes a pending
-/// wait, so the test's time limit still ends a wait whose event never arrives.
-@MainActor
-private final class DashboardEventSignal {
-    private var fired = false
-    private var continuation: CheckedContinuation<Void, Error>?
-
-    func fire() {
-        self.fired = true
-        self.continuation?.resume()
-        self.continuation = nil
-    }
-
-    func wait() async throws {
-        guard !self.fired else { return }
-        try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { self.continuation = $0 }
-        } onCancel: {
-            Task { @MainActor in self.cancel() }
-        }
-    }
-
-    private func cancel() {
-        self.continuation?.resume(throwing: CancellationError())
-        self.continuation = nil
-    }
-}
-
 @MainActor
 private final class DashboardAppLinkRecorder: NSObject, WKScriptMessageHandler {
     var urls: [String] = []
-    let received = DashboardEventSignal()
+    let received = AsyncTestGate()
 
     func userContentController(_: WKUserContentController, didReceive message: WKScriptMessage) {
         #expect(message.world === DashboardAppLinkMessageHandler.world)
         #expect(message.frameInfo.isMainFrame)
         if let url = message.body as? String { self.urls.append(url) }
-        self.received.fire()
-    }
-}
-
-/// Resumes after WebKit finishes the dashboard load. WebKit publishes `isLoading`
-/// and calls the controller's `didFinish` in the same main-thread turn, so the
-/// controller has settled before the waiting task resumes. No wall-clock deadline:
-/// shared main-actor load in the native suite cannot fail this wait.
-@MainActor
-private final class DashboardLoadCompletion {
-    private let finished = DashboardEventSignal()
-    private var sawLoading = false
-
-    func wait(for webView: WKWebView, _ start: () -> Void) async throws {
-        let observation = webView.observe(\.isLoading, options: [.new]) { [weak self] webView, _ in
-            MainActor.assumeIsolated { self?.update(isLoading: webView.isLoading) }
-        }
-        defer { observation.invalidate() }
-        start()
-        try await self.finished.wait()
-    }
-
-    private func update(isLoading: Bool) {
-        if isLoading {
-            self.sawLoading = true
-        } else if self.sawLoading {
-            self.finished.fire()
-        }
+        self.received.open()
     }
 }
 
@@ -97,9 +42,8 @@ struct DashboardAppLinkBridgeTests {
             recorder,
             contentWorld: DashboardAppLinkMessageHandler.world,
             name: DashboardAppLinkMessageHandler.name)
-        try await DashboardLoadCompletion().wait(for: controller.webView) {
-            controller.show(url: server.url(), auth: auth)
-        }
+        controller.show(url: server.url(), auth: auth)
+        try await DashboardTestWait.document(controller, "app-link document")
         #expect(controller.canDeliverNativeCommands)
         let pageHasHandler = try await controller.webView.callAsyncJavaScript(
             "return typeof window.webkit.messageHandlers.openclawAppLink !== 'undefined';",
@@ -127,7 +71,8 @@ struct DashboardAppLinkBridgeTests {
             isARepeat: false,
             keyCode: 36))
         controller.webView.keyDown(with: enter)
-        try await recorder.received.wait()
+        await recorder.received.wait()
+        try Task.checkCancellation()
         #expect(recorder.urls == ["openclaw://dashboard"])
     }
 }

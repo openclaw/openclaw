@@ -1,5 +1,3 @@
-import { createHash } from "node:crypto";
-import { stableStringify } from "@openclaw/normalization-core";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -10,6 +8,7 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import { digestClawValue } from "./digest.js";
 import {
   toPackageRefExtensionSqlParams,
   type PersistedClawPackageRef,
@@ -33,7 +32,7 @@ export function digestClawPackageRef(ref: PersistedClawPackageRef): string {
     installedAtMs: ref.installedAtMs,
     updatedAtMs: ref.updatedAtMs,
   };
-  return `sha256:${createHash("sha256").update(stableStringify(persisted)).digest("hex")}`;
+  return digestClawValue(persisted);
 }
 
 export function replaceClawPackageRefExpected(

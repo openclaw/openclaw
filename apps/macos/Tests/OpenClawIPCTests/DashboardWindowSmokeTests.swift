@@ -49,12 +49,10 @@ private final class DashboardBrowserImportGate {
 
 @MainActor
 private func nextDashboardImportRequest(_ requests: AsyncStream<Int>) async throws -> Int {
-    try await AsyncTimeout.withTimeout(seconds: 5, onTimeout: { URLError(.timedOut) }) {
-        for await request in requests {
-            return request
-        }
-        throw CancellationError()
+    for await request in requests {
+        return request
     }
+    throw CancellationError()
 }
 
 private final class DashboardWindowGestureSpy: NSWindow {
@@ -70,7 +68,7 @@ private final class DashboardWindowGestureSpy: NSWindow {
     }
 }
 
-@Suite(.serialized)
+@Suite(.serialized, .timeLimit(.minutes(1)))
 @MainActor
 struct DashboardWindowSmokeTests {
     @Test func `dashboard frame routes single click to drag and double click to zoom`() throws {
@@ -332,7 +330,7 @@ struct DashboardWindowSmokeTests {
             windowAutosaveName: "",
             requestBrowserProfileImportOffer: { _ in false })
         defer { controller.closeDashboard() }
-        #expect(controller._testNavigationWebViewIdentity == controller._testDashboardWebViewIdentity)
+        #expect(controller._testNavigationWebViewIdentity == ObjectIdentifier(controller.webView))
 
         try controller.nativeBrowser.open(tabId: "mac-focused", url: readerServer.url("/docs/"), sessionKey: "")
         let readingWebView = try #require(controller.nativeBrowser.webView(for: "mac-focused"))
@@ -342,7 +340,7 @@ struct DashboardWindowSmokeTests {
         #expect(controller.window?.makeFirstResponder(readingWebView) == true)
         #expect(controller._testNavigationWebViewIdentity == ObjectIdentifier(readingWebView))
         #expect(controller.window?.makeFirstResponder(controller.webView) == true)
-        #expect(controller._testNavigationWebViewIdentity == controller._testDashboardWebViewIdentity)
+        #expect(controller._testNavigationWebViewIdentity == ObjectIdentifier(controller.webView))
     }
 
     @Test func `first Mac tab requests browser import and retries until the offer completes`() async throws {
@@ -470,9 +468,7 @@ struct DashboardWindowSmokeTests {
         try controller.nativeBrowser.close(tabId: "mac-import")
         firstRequestContinuation?.resume()
         firstRequestContinuation = nil
-        try await AsyncTimeout.withTimeout(seconds: 5, onTimeout: { URLError(.timedOut) }) {
-            await settled.wait()
-        }
+        await settled.wait()
         #expect(firstRequestApplied == false)
 
         try controller.nativeBrowser.open(tabId: "mac-import", url: link, sessionKey: "")
@@ -743,11 +739,11 @@ extension DashboardWindowSmokeTests {
         try await waitForNativeDashboardDocument(controller)
         #expect(try await controller.webView.evaluateJavaScript("window.initialChrome") as? Bool == true)
         #expect(controller.window?.titlebarAccessoryViewControllers.isEmpty == true)
-        #expect(controller._testAllowsBackForwardGestures)
+        #expect(controller.webView.allowsBackForwardNavigationGestures)
     }
 
     @Test func `dashboard javascript confirm alert maps actions`() {
-        let alert = DashboardWindowController._testJavaScriptConfirmAlert(
+        let alert = ControlUIDocumentHost.makeJavaScriptConfirmAlert(
             message: "Delete 1 session?",
             host: "127.0.0.1")
 
@@ -755,11 +751,11 @@ extension DashboardWindowSmokeTests {
         #expect(alert.informativeText.contains("127.0.0.1 is asking:"))
         #expect(alert.informativeText.contains("Delete 1 session?"))
         #expect(alert.buttons.map(\.title) == ["OK", "Cancel"])
-        #expect(DashboardWindowController._testJavaScriptConfirmResult(
+        #expect(ControlUIDocumentHost.javaScriptConfirmResult(
             for: .alertFirstButtonReturn))
-        #expect(!DashboardWindowController._testJavaScriptConfirmResult(
+        #expect(!ControlUIDocumentHost.javaScriptConfirmResult(
             for: .alertSecondButtonReturn))
-        #expect(!DashboardWindowController._testJavaScriptConfirmResult(for: .cancel))
+        #expect(!ControlUIDocumentHost.javaScriptConfirmResult(for: .cancel))
     }
 
     @Test func `dashboard failure state opens in dashboard window`() async throws {

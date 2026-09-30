@@ -1501,19 +1501,27 @@ function resolveExplicitSourceTestTargets(
   ].toSorted((left, right) => left.localeCompare(right));
 }
 
-function listPackageDirectoryTestTargets(directory: string, cwd: string): string[] {
+function listDirectoryTestTargets(directory: string, cwd: string): string[] {
   if (isSharedVitestExcludedPath(directory) || isSharedVitestExcludedPath(`${directory}/`)) {
     return [];
   }
   return fs.readdirSync(path.join(cwd, directory), { withFileTypes: true }).flatMap((entry) => {
     const relative = path.posix.join(directory, entry.name);
     if (entry.isDirectory()) {
-      return listPackageDirectoryTestTargets(relative, cwd);
+      return listDirectoryTestTargets(relative, cwd);
     }
     return entry.isFile() && relative.endsWith(".test.ts") && !isSharedVitestExcludedPath(relative)
       ? [relative]
       : [];
   });
+}
+
+function isOrdinaryAgentGlobTarget(relative: string): boolean {
+  return (
+    isPathAtOrUnder(relative, agentVitestProjectOwners.all.root) &&
+    isGlobTarget(relative) &&
+    !/\.(?:live|e2e)\.test\.ts$/u.test(relative)
+  );
 }
 
 function expandExplicitSourceTestTargets(targetArgs: string[], cwd: string, watchMode: boolean) {
@@ -1530,9 +1538,26 @@ function expandExplicitSourceTestTargets(targetArgs: string[], cwd: string, watc
     }
     const glob = isGlobTarget(relative);
     const directory = isExistingDirectoryTarget(targetArg, cwd);
-    if (!watchMode && !glob && directory && isPathAtOrUnder(relative, "packages")) {
-      const targets = listPackageDirectoryTestTargets(relative, cwd).toSorted((left, right) =>
+    if (
+      !watchMode &&
+      !glob &&
+      directory &&
+      (isPathAtOrUnder(relative, "packages") ||
+        isPathAtOrUnder(relative, agentVitestProjectOwners.all.root))
+    ) {
+      const targets = listDirectoryTestTargets(relative, cwd).toSorted((left, right) =>
         left.localeCompare(right),
+      );
+      return targets.length > 0 ? targets : [targetArg];
+    }
+    if (!watchMode && isOrdinaryAgentGlobTarget(relative)) {
+      // Assign every leaf before choosing configs: agent shards exclude light,
+      // isolated, and database-worker tests owned by other projects.
+      const targets = expandVitestIncludePatterns([relative], cwd).filter(
+        (file) =>
+          file.endsWith(".test.ts") &&
+          !isSharedVitestExcludedPath(file) &&
+          isExistingFileTarget(file, cwd),
       );
       return targets.length > 0 ? targets : [targetArg];
     }
@@ -4896,6 +4921,17 @@ export function buildVitestRunPlans(
     ...activeTargetArgs,
   ]).flatMap((targetArg) => {
     const relative = toRepoRelativeTarget(targetArg, cwd);
+    if (
+      !watchMode &&
+      (isOrdinaryAgentGlobTarget(relative) ||
+        (!isGlobTarget(relative) &&
+          isExistingDirectoryTarget(targetArg, cwd) &&
+          (isPathAtOrUnder(relative, "packages") ||
+            isPathAtOrUnder(relative, agentVitestProjectOwners.all.root))))
+    ) {
+      // Expanded selections already contribute their existing leaves through activeTargetArgs.
+      return [];
+    }
     return isTestFileTarget(relative) ||
       isGlobTarget(relative) ||
       isExistingDirectoryTarget(targetArg, cwd)

@@ -43,6 +43,7 @@ import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "./session-sql
 import {
   assertSessionStoreReadCandidate,
   captureSessionStoreReadCandidate,
+  type SessionStoreReadCandidate,
 } from "./session-store-read-candidates.js";
 import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
 import { withSessionStoreTarget } from "./session-store-target-runtime.js";
@@ -90,6 +91,7 @@ export type SessionEntryReadWorkerOwner = {
   kind: "native" | "file" | "unresolved";
   assertCurrent: () => void;
   scope?: SessionEntryReadOnlyWorkerScope;
+  selectedStore?: Readonly<Pick<SessionStoreReadCandidate, "path" | "physicalPath">>;
   onRegistryChange?: (change: AgentDatabaseRegistryChange) => void;
   refreshBeforeDispatch?: (assertRetainedTarget: () => void) => Promise<void>;
   revalidateTarget?: () => Promise<void>;
@@ -131,6 +133,7 @@ export async function withSessionEntryReadOnlyInWorker<T>(
 type SessionEntryReadOnlyWorkerSource = {
   kind: "file";
   scope: SessionEntryReadOnlyWorkerScope;
+  selectedStore: NonNullable<SessionEntryReadWorkerOwner["selectedStore"]>;
   reader: SessionHistoryWorkerDatabase;
   continuation?: CanonicalSessionReaderContinuation;
   assertCurrent: () => void;
@@ -256,6 +259,10 @@ async function withSessionEntryReadOnlyWorkerSource<T>(
           const result = await consumeRead(
             ok({
               kind: "file",
+              selectedStore: Object.freeze({
+                path: target.sourcePath,
+                physicalPath: database.path,
+              }),
               scope: {
                 ...scope,
                 agentId: target.logicalAgentId,
@@ -408,7 +415,7 @@ type SessionStoreWorkerReadScope = {
 type SessionEntryWorkerRead = SessionStoreWorkerReadScope &
   SessionExactEntriesWorkerSelection & {
     lifecycleSessionKey?: string;
-    projection?: "full" | "backing" | "sharing" | "list";
+    projection?: "full" | "sharing" | "list";
     includeMembers?: boolean;
     includeParticipantRecords?: boolean;
     includeAuthorization?: boolean;
@@ -506,7 +513,7 @@ export async function withSessionEntriesFromStoreInWorker<T>(
       assertCurrent();
       return consume({ result, database, assertCurrent });
     },
-    { backing: input.projection === "backing" || input.projection === "list", dataOnly },
+    { backing: input.projection === "list", dataOnly },
   );
 }
 
@@ -529,6 +536,7 @@ export function withSessionRegistryEntriesInWorker<T>(
         agentId: database.agentId,
         storePath: database.path,
         env: database.env,
+        cronRetention: true,
       });
       assertCurrent();
       return await consume(entries, assertCurrent);

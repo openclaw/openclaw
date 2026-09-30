@@ -29,7 +29,7 @@ enum WideAreaGatewayDiscovery {
         static let live = DiscoveryContext(
             tailscaleStatus: { await readTailscaleStatus() },
             dig: { args, timeout in
-                await runDig(args: args, timeout: timeout)
+                await BoundedCommand.run(path: digPath, arguments: args, timeout: timeout)
             })
     }
 
@@ -145,10 +145,6 @@ enum WideAreaGatewayDiscovery {
         let ptrLines = stdout.split(whereSeparator: \.isNewline)
         guard !ptrLines.isEmpty else { return nil }
         return (domainTrimmed, ptrLines)
-    }
-
-    private static func runDig(args: [String], timeout: TimeInterval) async -> String? {
-        await BoundedCommand.run(path: self.digPath, arguments: args, timeout: timeout)
     }
 
     private static func parseSrv(_ stdout: String) -> (String, Int)? {

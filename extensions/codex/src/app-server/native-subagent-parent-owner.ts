@@ -8,7 +8,6 @@ import {
   notifyNativeModelSourceWaiters,
 } from "./native-subagent-model-source.js";
 import type {
-  ChildState,
   NativeModelBinding,
   NativeModelSource,
   NativeSubagentMonitorRuntime,
@@ -46,14 +45,12 @@ export type NativeParentRegistration = Pick<
 
 type ParentDependencies = {
   states: Map<string, ParentState>;
-  children: ReadonlyMap<string, ChildState>;
   isClosed: () => boolean;
   isRetired: (state: ParentState) => boolean;
   runtime: Pick<NativeSubagentMonitorRuntime, "captureAgentHarnessCompletionCustody">;
   assignments: Pick<CodexNativeSubagentAssignmentInventory, "restore" | "drain">;
   submissions: Pick<CodexNativeSubagentSubmissionOwner, "restore" | "bind" | "drain">;
   closes: Pick<CodexNativeSubagentCloseOwner, "bind" | "prune" | "settlements">;
-  deliverPending: (state: ParentState, child: ChildState) => Promise<void>;
   deliverDetached: (state: ParentState) => void;
   drainAdmissions: (state: ParentState, owner: ParentOwner, turnId: string) => void;
   clearAdmissions: () => void;
@@ -227,11 +224,7 @@ export async function registerNativeSubagentParent(
     state.assignmentStore ??= params.assignmentStore;
     state.owners.set(ownerKey, owner);
     state.preparing = undefined;
-    for (const child of dependencies.children.values()) {
-      if (child.parentThreadId === parentThreadId && child.pendingCompletion) {
-        void dependencies.deliverPending(state, child);
-      }
-    }
+    dependencies.deliverDetached(state);
     dependencies.submissions.restore(state, owner);
   } catch (error) {
     releaseRootModelBinding();

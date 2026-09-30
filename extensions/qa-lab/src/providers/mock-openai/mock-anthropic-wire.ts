@@ -241,6 +241,18 @@ export function buildAnthropicMessageResponse(params: {
   };
 }
 
+function buildAnthropicMessageStart(message: ReturnType<typeof buildAnthropicMessageResponse>) {
+  return {
+    type: "message_start",
+    message: {
+      ...message,
+      content: [],
+      stop_reason: null,
+      usage: { input_tokens: message.usage.input_tokens, output_tokens: 0 },
+    },
+  };
+}
+
 export function buildAnthropicFailureResponse(failure: QaMockProviderFailure) {
   return {
     type: "error",
@@ -273,24 +285,13 @@ export function buildAnthropicThinkingErrorResponse(params: {
 export function buildAnthropicThinkingErrorStreamEvents(params: {
   model: string;
 }): AnthropicStreamEvent[] {
-  const messageId = `msg_mock_${Math.floor(Math.random() * 1_000_000).toString(16)}`;
   return [
-    {
-      type: "message_start",
-      message: {
-        id: messageId,
-        type: "message",
-        role: "assistant",
-        model: params.model || "claude-opus-4-8",
-        content: [],
-        stop_reason: null,
-        stop_sequence: null,
-        usage: {
-          input_tokens: 64,
-          output_tokens: 0,
-        },
-      },
-    },
+    buildAnthropicMessageStart(
+      buildAnthropicMessageResponse({
+        model: params.model,
+        extracted: { text: "", toolCalls: [] },
+      }),
+    ),
     {
       type: "content_block_start",
       index: 0,
@@ -342,20 +343,7 @@ export function buildAnthropicMessageStreamEvents(
   message: ReturnType<typeof buildAnthropicMessageResponse>,
   failure?: QaMockProviderFailure,
 ): AnthropicStreamEvent[] {
-  const events: AnthropicStreamEvent[] = [
-    {
-      type: "message_start",
-      message: {
-        ...message,
-        content: [],
-        stop_reason: null,
-        usage: {
-          input_tokens: message.usage.input_tokens,
-          output_tokens: 0,
-        },
-      },
-    },
-  ];
+  const events: AnthropicStreamEvent[] = [buildAnthropicMessageStart(message)];
   for (const [index, block] of message.content.entries()) {
     events.push({
       type: "content_block_start",

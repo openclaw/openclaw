@@ -327,7 +327,7 @@ it.each([
       });
     }
     expect(
-      markRequesterTurnYielded({
+      await markRequesterTurnYielded({
         requesterSessionKey: requesterKey,
         requesterAgentId: "main",
         requesterTurnRunId: "requester",
@@ -336,7 +336,7 @@ it.each([
     expect(markSubagentRunPausedAfterYield({ entry: subagentRuns.get("requester")! })).toBe(true);
     persistSubagentRunsToDiskOrThrow(subagentRuns, ["requester"]);
     expect(
-      settleRequesterAfterSessionSpawns({
+      await settleRequesterAfterSessionSpawns({
         requesterSessionKey: requesterKey,
         requesterAgentId: "main",
         requesterTurnRunId: "requester",

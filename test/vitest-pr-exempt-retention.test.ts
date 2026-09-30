@@ -36,22 +36,9 @@ function selectedFiles(shards: ReturnType<typeof createChangedNodeTestShards>) {
   );
 }
 
-it("retains every PR-exempt file in hourly and release plans with its canonical owner", () => {
+function createPrExemptCensus() {
   const prExemptFiles = listPrExemptRuntimeTestFiles();
   expect(prExemptFiles.length).toBeGreaterThan(0);
-  const common = {
-    runnerBackend: "github",
-    includeReleaseOnlyPluginShards: false,
-    includeReleaseOnlyRuntimeTests: false,
-  };
-  const pr = expectDefined(
-    createChangedNodeTestShards(["src/infra/retry.test.ts"], {
-      ...common,
-      includePrExemptRuntimeTests: false,
-      includeReleaseOnlyToolingShards: false,
-    }),
-    "unrelated PR owner plan",
-  );
   // Plugin Prerelease owns the same full extension inventory on its hourly
   // schedule and as Full Release Validation's exact-target child, including
   // manifest-only plugins through the same discovery owner.
@@ -121,23 +108,6 @@ it("retains every PR-exempt file in hourly and release plans with its canonical 
       group.roots.some((root) => file === root || file.startsWith(`${root}/`)),
     ),
   }));
-  const hourly = createNodeTestShardBundles({
-    ...common,
-    compactMode: "pull-request",
-    includePrExemptRuntimeTests: true,
-    includeReleaseOnlyToolingShards: true,
-    includeProofTests: true,
-    compactNodeJobCap: 77,
-  });
-  const release = createNodeTestShardBundles({
-    ...common,
-    includeReleaseOnlyRuntimeTests: true,
-    includePrExemptRuntimeTests: true,
-    includeReleaseOnlyToolingShards: true,
-  });
-  const uiPr = createUiTestShardGroups({ includePrExemptRuntimeTests: false });
-  const uiHourly = createUiTestShardGroups({ includeReleaseOnlyTests: false });
-  const uiRelease = createUiTestShardGroups();
   const uiProjects = expectDefined(
     discovered.projects["ui/vitest.config.ts"],
     "UI package projects",
@@ -167,11 +137,6 @@ it("retains every PR-exempt file in hourly and release plans with its canonical 
     };
     return { ui, e2e, canonical: [browser, ...e2e] };
   };
-  const prUiOwners = dedicatedGroups(uiPr);
-  const hourlyUiOwners = dedicatedGroups(uiHourly);
-  const releaseUiOwners = dedicatedGroups(uiRelease);
-  expect(hourly.filter((job) => !job.requiresDist).length).toBeLessThanOrEqual(77);
-  expect(hourly.length).toBeLessThanOrEqual(79);
   // Node retains canonical jsdom ownership. The UI package independently runs
   // those projects; native Chromium and mocked E2E have dedicated owners only.
   const projectNodeOwners = (jobs: NonNullable<ReturnType<typeof createChangedNodeTestShards>>) =>
@@ -185,35 +150,6 @@ it("retains every PR-exempt file in hourly and release plans with its canonical 
           )
         : fallbackGroups([shard]),
     );
-  const prGroups = [...projectNodeOwners(pr), ...prUiOwners.canonical];
-  const changedPr = expectDefined(
-    createChangedNodeTestShards(prExemptFiles, {
-      ...common,
-      includePrExemptRuntimeTests: false,
-      includeReleaseOnlyToolingShards: false,
-      dedicatedUiTests: true,
-      dedicatedUiE2e: true,
-    }),
-    "directly edited PR-exempt owner plan",
-  );
-  const changedUiOwners = dedicatedGroups(
-    createUiTestShardGroups({
-      includeReleaseOnlyTests: false,
-      includePrExemptRuntimeTests: false,
-      changedPaths: prExemptFiles,
-    }),
-  );
-
-  const hourlyGroups = [
-    ...hourly.flatMap((job) => job.groups),
-    ...retainedExtensionGroups,
-    ...hourlyUiOwners.canonical,
-  ];
-  const releaseGroups = [
-    ...fallbackGroups(release),
-    ...retainedExtensionGroups,
-    ...releaseUiOwners.canonical,
-  ];
   const configsByFile = new Map(
     prExemptFiles.map((file) => {
       const rawConfig = expectDefined(buildVitestRunPlans([file])[0]?.config, file);
@@ -240,7 +176,140 @@ it("retains every PR-exempt file in hourly and release plans with its canonical 
     }
     return owners;
   };
-  const prOwners = indexOwners(prGroups);
+  return {
+    prExemptFiles,
+    retainedExtensionGroups,
+    configsByFile,
+    dedicatedGroups,
+    projectNodeOwners,
+    indexOwners,
+  };
+}
+
+let prExemptCensus: ReturnType<typeof createPrExemptCensus> | undefined;
+
+function getPrExemptCensus() {
+  return (prExemptCensus ??= createPrExemptCensus());
+}
+
+const prExemptPlanOptions = {
+  runnerBackend: "github",
+  includeReleaseOnlyPluginShards: false,
+  includeReleaseOnlyRuntimeTests: false,
+};
+
+it("omits unchanged PR-exempt files from PR plans except the fixed smoke", () => {
+  const pr = expectDefined(
+    createChangedNodeTestShards(["src/infra/retry.test.ts"], {
+      ...prExemptPlanOptions,
+      includePrExemptRuntimeTests: false,
+      includeReleaseOnlyToolingShards: false,
+    }),
+    "unrelated PR owner plan",
+  );
+  const { prExemptFiles, dedicatedGroups, projectNodeOwners, indexOwners } = getPrExemptCensus();
+  const prUiOwners = dedicatedGroups(
+    createUiTestShardGroups({ includePrExemptRuntimeTests: false }),
+  );
+  const prOwners = indexOwners([...projectNodeOwners(pr), ...prUiOwners.canonical]);
+  const targets = selectedFiles(pr);
+  for (const file of prExemptFiles) {
+    const fixedSmokeOptIn = file === "src/config/utility-model-separation-migration.io.test.ts";
+    expect(
+      targets.filter((target) => target === file),
+      file,
+    ).toHaveLength(fixedSmokeOptIn ? 1 : 0);
+    expect(prOwners.get(file) ?? [], file).toHaveLength(fixedSmokeOptIn ? 1 : 0);
+    if (file.startsWith("ui/")) {
+      const kind = isUiTestTarget(file) ? "ui" : "e2e";
+      expect(
+        prUiOwners[kind].filter((group) => group.includePatterns.includes(file)),
+        file,
+      ).toHaveLength(0);
+    }
+  }
+});
+
+it("retains one canonical owner for every PR-exempt file in hourly plans within the job cap", () => {
+  const { prExemptFiles, retainedExtensionGroups, dedicatedGroups, indexOwners } =
+    getPrExemptCensus();
+  const hourly = createNodeTestShardBundles({
+    ...prExemptPlanOptions,
+    compactMode: "pull-request",
+    includePrExemptRuntimeTests: true,
+    includeReleaseOnlyToolingShards: true,
+    includeProofTests: true,
+    compactNodeJobCap: 77,
+  });
+  const hourlyUiOwners = dedicatedGroups(
+    createUiTestShardGroups({ includeReleaseOnlyTests: false }),
+  );
+  expect(hourly.filter((job) => !job.requiresDist).length).toBeLessThanOrEqual(77);
+  expect(hourly.length).toBeLessThanOrEqual(79);
+  const hourlyOwners = indexOwners([
+    ...hourly.flatMap((job) => job.groups),
+    ...retainedExtensionGroups,
+    ...hourlyUiOwners.canonical,
+  ]);
+  for (const file of prExemptFiles) {
+    expect(hourlyOwners.get(file) ?? [], file).toHaveLength(1);
+    if (file.startsWith("ui/")) {
+      const kind = isUiTestTarget(file) ? "ui" : "e2e";
+      expect(
+        hourlyUiOwners[kind].filter((group) => group.includePatterns.includes(file)),
+        file,
+      ).toHaveLength(1);
+    }
+  }
+});
+
+it("retains one canonical owner for every PR-exempt file in release plans", () => {
+  const { prExemptFiles, retainedExtensionGroups, dedicatedGroups, indexOwners } =
+    getPrExemptCensus();
+  const release = createNodeTestShardBundles({
+    ...prExemptPlanOptions,
+    includeReleaseOnlyRuntimeTests: true,
+    includePrExemptRuntimeTests: true,
+    includeReleaseOnlyToolingShards: true,
+  });
+  const releaseUiOwners = dedicatedGroups(createUiTestShardGroups());
+  const releaseOwners = indexOwners([
+    ...fallbackGroups(release),
+    ...retainedExtensionGroups,
+    ...releaseUiOwners.canonical,
+  ]);
+  for (const file of prExemptFiles) {
+    expect(releaseOwners.get(file) ?? [], file).toHaveLength(1);
+    if (file.startsWith("ui/")) {
+      const kind = isUiTestTarget(file) ? "ui" : "e2e";
+      expect(
+        releaseUiOwners[kind].filter((group) => group.includePatterns.includes(file)),
+        file,
+      ).toHaveLength(1);
+    }
+  }
+});
+
+it("opts every directly edited PR-exempt file into its canonical PR owner", () => {
+  const { prExemptFiles, configsByFile, dedicatedGroups, projectNodeOwners, indexOwners } =
+    getPrExemptCensus();
+  const changedPr = expectDefined(
+    createChangedNodeTestShards(prExemptFiles, {
+      ...prExemptPlanOptions,
+      includePrExemptRuntimeTests: false,
+      includeReleaseOnlyToolingShards: false,
+      dedicatedUiTests: true,
+      dedicatedUiE2e: true,
+    }),
+    "directly edited PR-exempt owner plan",
+  );
+  const changedUiOwners = dedicatedGroups(
+    createUiTestShardGroups({
+      includeReleaseOnlyTests: false,
+      includePrExemptRuntimeTests: false,
+      changedPaths: prExemptFiles,
+    }),
+  );
   const changedPrOwners = indexOwners(projectNodeOwners(changedPr));
   // Dedicated UI executes its inline projects; preserve that handoff rather
   // than assigning its ordinary package projects to generic Node rows.
@@ -254,25 +323,7 @@ it("retains every PR-exempt file in hourly and release plans with its canonical 
       changedPrOwners.set(file, entries);
     }
   }
-  const hourlyOwners = indexOwners(hourlyGroups);
-  const releaseOwners = indexOwners(releaseGroups);
   for (const file of prExemptFiles) {
-    const fixedSmokeOptIn = file === "src/config/utility-model-separation-migration.io.test.ts";
-    expect(
-      selectedFiles(pr).filter((target) => target === file),
-      file,
-    ).toHaveLength(fixedSmokeOptIn ? 1 : 0);
-    expect(prOwners.get(file) ?? [], file).toHaveLength(fixedSmokeOptIn ? 1 : 0);
     expect(changedPrOwners.get(file)?.length ?? 0, file).toBeGreaterThan(0);
-    expect(hourlyOwners.get(file) ?? [], file).toHaveLength(1);
-    expect(releaseOwners.get(file) ?? [], file).toHaveLength(1);
-    if (file.startsWith("ui/")) {
-      const kind = isUiTestTarget(file) ? "ui" : "e2e";
-      const selectedProjects = (groups: readonly { includePatterns: readonly string[] }[]) =>
-        groups.filter((group) => group.includePatterns.includes(file));
-      expect(selectedProjects(prUiOwners[kind]), file).toHaveLength(0);
-      expect(selectedProjects(hourlyUiOwners[kind]), file).toHaveLength(1);
-      expect(selectedProjects(releaseUiOwners[kind]), file).toHaveLength(1);
-    }
   }
 });

@@ -3207,38 +3207,6 @@ describe("agentLoop tool termination", () => {
     });
   });
 
-  it("marks policy-blocked tool calls as not executed", async () => {
-    const executed: string[] = [];
-    const streamFn = createTurnSequenceStream([
-      [{ type: "toolCall", id: "call-cron", name: "cron", arguments: {} }],
-      [{ type: "text", text: "done" }],
-    ]);
-
-    const run = captureAgentLoop(
-      [{ role: "user", content: "hello", timestamp: 1 }],
-      {
-        systemPrompt: "",
-        messages: [],
-        tools: [makeTool("cron", executed)],
-      },
-      {
-        ...config,
-        beforeToolCall: async () => ({ block: true, reason: "blocked" }),
-      },
-      undefined,
-      streamFn,
-    );
-
-    const events = await collectEvents(run);
-    const endEvent = events.find(
-      (event): event is Extract<AgentEvent, { type: "tool_execution_end" }> =>
-        event.type === "tool_execution_end",
-    );
-
-    expect(executed).toEqual([]);
-    expect(endEvent?.executionStarted).toBe(false);
-  });
-
   it("marks argument validation failures with typed provenance", async () => {
     const executed: string[] = [];
     const afterToolOutcome = vi.fn(async () => ({

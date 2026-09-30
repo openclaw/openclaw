@@ -4,6 +4,38 @@ import { createMergeOutcomeFixtureHarness } from "./pr-merge-outcome.test-suppor
 const { fixture, outcomeRef, describePosix } = createMergeOutcomeFixtureHarness();
 
 describePosix("native auto-merge recovery", () => {
+  it.each(["before cancellation", "after cancellation"])(
+    "retires the original auto request when mergeability settles %s",
+    (phase) => {
+      const f = fixture();
+      f.save({
+        ...f.state(),
+        mode: "pending",
+        pr: { ...f.state().pr, mergeStateStatus: "BLOCKED" },
+      });
+      expect(f.run(true).status).toBe(0);
+      const accepted = f.git(["rev-parse", outcomeRef]);
+      f.save({
+        ...f.state(),
+        observations: [
+          ...(phase === "after cancellation" ? [{}, {}] : []),
+          { pr: { mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" } },
+          { pr: { mergeable: "MERGEABLE", mergeStateStatus: "BLOCKED" } },
+        ],
+      });
+      const result = f.cancel(accepted);
+      expect(result.status, result.output).toBe(0);
+      expect(f.state()).toMatchObject({ cancellations: 1, mutations: 1, posts: 0 });
+      expect(f.record()).toMatchObject({
+        phase: "intent",
+        accepted: true,
+        head: f.head,
+        route: "auto",
+        cancellation: { state: "confirmed", outcome: accepted },
+      });
+      expect(f.state().pr.autoMergeRequest).toBeNull();
+    },
+  );
   it.each([
     { mode: "pending", cancellation: "success", absent: false },
     { mode: "pending", cancellation: "lost", absent: false },

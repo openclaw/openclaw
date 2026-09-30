@@ -79,13 +79,16 @@ describe("embedded OpenClaw queued steering cancellation", () => {
       const f = fixture([target, unrelated], target);
       const sourceAbort = new AbortController();
       const onQueueAccepted = vi.fn();
+      const onQueueSettled = vi.fn();
       await f.wait("admitted guidance", {
         waitForTranscriptCommit: false,
         deliveryTimeoutMs: 1,
         abortSignal: sourceAbort.signal,
         onQueueAccepted,
+        onQueueSettled,
       });
       expect(onQueueAccepted).toHaveBeenCalledExactlyOnceWith(true);
+      expect(onQueueSettled).not.toHaveBeenCalled();
       expect(f.listeners).toHaveLength(1);
       // A completed sender no longer owns withdrawal of the admitted message.
       sourceAbort.abort();
@@ -100,6 +103,7 @@ describe("embedded OpenClaw queued steering cancellation", () => {
       await vi.advanceTimersByTimeAsync(0);
       expect(f.queue).toEqual([unrelated]);
       expect(f.listeners).toHaveLength(0);
+      expect(onQueueSettled).toHaveBeenCalledOnce();
       expect(f.retire).toHaveBeenCalledTimes(terminal === "message_end" ? 0 : 1);
       expect(onQueueAccepted).toHaveBeenCalledExactlyOnceWith(true);
     },

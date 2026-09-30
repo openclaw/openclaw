@@ -1,17 +1,15 @@
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
-import { getRuntimeConfig } from "../../config/io.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { NodePairingGeneration } from "../../infra/device-pairing-node-state.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   clearApnsRegistrationIfCurrent,
   loadApnsRegistration,
-  resolveApnsAuthConfigFromEnv,
-  resolveApnsRelayConfigFromEnv,
   sendApnsAlert,
   sendApnsBackgroundWake,
   shouldClearStoredApnsRegistration,
 } from "../../infra/push-apns.js";
+import { sleep } from "../../utils/sleep.js";
 import type { NodeSession } from "../node-registry.js";
 import type { NodeWakeAttempt } from "../node-wake-state-store.js";
 import {
@@ -25,26 +23,9 @@ import {
   type NodeWakeLifecycle,
   type NodeWakeNudgeAttempt,
 } from "../node-wake-state.js";
+import { resolveNodePushTransport } from "./node-push-transport.js";
 import { nodeInvokePolicy } from "./nodes-policy.js";
 import { isNodePushAttemptCurrent, resolveDispatchableNodeSession } from "./nodes.shared.js";
-
-async function resolveNodePushTransport(
-  registration: NonNullable<Awaited<ReturnType<typeof loadApnsRegistration>>>,
-  cfg?: OpenClawConfig,
-) {
-  if (registration.transport === "relay") {
-    const relay = resolveApnsRelayConfigFromEnv(process.env, (cfg ?? getRuntimeConfig()).gateway, {
-      registrationRelayOrigin: registration.relayOrigin,
-    });
-    return relay.ok
-      ? { ok: true as const, transport: { registration, relayConfig: relay.value } }
-      : { ok: false as const, error: relay.error };
-  }
-  const auth = await resolveApnsAuthConfigFromEnv(process.env);
-  return auth.ok
-    ? { ok: true as const, transport: { registration, auth: auth.value } }
-    : { ok: false as const, error: auth.error };
-}
 
 async function clearStaleApnsRegistrationIfNeeded(
   registration: NonNullable<Awaited<ReturnType<typeof loadApnsRegistration>>>,
@@ -62,12 +43,6 @@ async function clearStaleApnsRegistrationIfNeeded(
   await clearApnsRegistrationIfCurrent({
     nodeId,
     registration,
-  });
-}
-
-async function delayMs(ms: number): Promise<void> {
-  await new Promise<void>((resolve) => {
-    setTimeout(resolve, ms);
   });
 }
 
@@ -285,7 +260,8 @@ export async function waitForNodeReconnect(params: {
   const pollMs = resolveTimerTimeoutMs(params.pollMs, NODE_WAKE_RECONNECT_POLL_MS, 50);
   const deadline = performance.now() + timeoutMs;
 
-  while (performance.now() < deadline) {
+  for (;;) {
+    const beforeDeadline = performance.now() < deadline;
     if (
       params.lifecycle &&
       !isNodeWakeLifecycleCurrent(params.nodeId, params.lifecycle, params.pairingGeneration)
@@ -298,16 +274,9 @@ export async function waitForNodeReconnect(params: {
     if (resolveDispatchableNodeSession(session)) {
       return true;
     }
-    await delayMs(Math.min(pollMs, Math.max(0, deadline - performance.now())));
+    if (!beforeDeadline) {
+      return false;
+    }
+    await sleep(Math.min(pollMs, Math.max(0, deadline - performance.now())));
   }
-  if (
-    params.lifecycle &&
-    !isNodeWakeLifecycleCurrent(params.nodeId, params.lifecycle, params.pairingGeneration)
-  ) {
-    return false;
-  }
-  const session = params.pairingGeneration
-    ? params.context.nodeRegistry.getForPairingGeneration(params.nodeId, params.pairingGeneration)
-    : params.context.nodeRegistry.get(params.nodeId);
-  return Boolean(resolveDispatchableNodeSession(session));
 }

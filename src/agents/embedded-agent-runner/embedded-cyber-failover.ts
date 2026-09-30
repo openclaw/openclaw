@@ -75,13 +75,7 @@ export function isReplaySafeEmbeddedOpenAiCyberRefusal(params: {
   );
 }
 
-/**
- * True when the caller pinned this turn to exactly one model. `run-embedded-attempt`
- * passes an explicit empty fallback override for a locked model selection, and
- * `docs/concepts/model-failover.md` documents that as strict: no other model may
- * serve the turn. Policy escalation honors that contract, so a locked session
- * keeps a cyber refusal terminal until the operator unlocks the selection.
- */
+// An explicit empty fallback override locks selection, including policy escalation.
 export function isEmbeddedModelSelectionStrict(selection: {
   fallbacksOverride?: readonly string[];
 }): boolean {
@@ -107,15 +101,8 @@ export function isEmbeddedCyberFailoverTargetUsable(result: EmbeddedAgentRunResu
   );
 }
 
-/**
- * True when a failed escalation attempt already committed work that the caller
- * must still see. A replay-safe initial refusal says nothing about the retry:
- * the retry runs the same turn with tools enabled, so it can execute a tool or
- * deliver output and only then error out. Restoring the original refusal
- * wholesale in that case would drop the retry's replay verdict, delivery
- * evidence, and terminal receipt, and would tell recovery consumers that
- * nothing ran.
- */
+// A replay-safe initial refusal says nothing about the retry's committed work.
+// Keep that retry's evidence instead of replacing it with the original refusal.
 export function didEmbeddedCyberFailoverTargetCommitWork(result: EmbeddedAgentRunResult): boolean {
   return result.meta.replayInvalid === true || hasCommittedOutboundDeliveryEvidence(result);
 }

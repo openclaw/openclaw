@@ -23,10 +23,10 @@ import Testing
                 talkConfigLoaded: false,
                 notificationsAllowed: true) == [.talkConfigMissing])
         #expect(
-            SettingsDiagnostics.issueCount(
+            SettingsDiagnostics.issues(
                 gatewayConnected: true,
                 discoveredGatewayCount: 1,
                 talkConfigLoaded: true,
-                notificationsAllowed: true) == 0)
+                notificationsAllowed: true).isEmpty)
     }
 }

@@ -292,8 +292,10 @@ describe("node worker provider provisioning", () => {
     const closeNodeEnrollment = vi.fn();
     const retireNodeEnrollment = vi.fn(async () => {});
     let begin: (() => Promise<WorkerNodeEnrollment>) | undefined;
+    let declaredTimeoutMs: number | undefined;
     const provision = vi.fn<WorkerProvider["provision"]>(
       async (_profile, _operationId, options) => {
+        expect(options?.nodeBootstrapTimeoutMs).toBe(declaredTimeoutMs);
         begin = options?.beginNodeEnrollment;
         await expect(options?.beginNodeEnrollment?.()).resolves.toMatchObject({
           mode: "connect",
@@ -311,6 +313,12 @@ describe("node worker provider provisioning", () => {
         supportedExecutionModes: ["worker-turn"],
         provisionBeforeInstallation: true,
         requiresNodeEnrollment: true,
+        resolveProvisionTimeoutMs: (_profile, options) => {
+          expect(prepareNodeEnrollment).not.toHaveBeenCalled();
+          expect(options?.nodeBootstrapTimeoutMs).toBe(105 * 60_000);
+          declaredTimeoutMs = options?.nodeBootstrapTimeoutMs;
+          return declaredTimeoutMs ?? 1;
+        },
         provision,
       }),
       {

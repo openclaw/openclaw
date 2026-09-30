@@ -693,11 +693,6 @@ function runDocsLinkAuditCli() {
   }
 }
 
-function isCliEntry() {
-  const cliArg = process.argv[1];
-  return cliArg ? import.meta.url === pathToFileURL(cliArg).href : false;
-}
-
-if (isCliEntry()) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   process.exit(runDocsLinkAuditCli());
 }

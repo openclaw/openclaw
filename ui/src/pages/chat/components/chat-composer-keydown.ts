@@ -99,7 +99,6 @@ export function createComposerKeyDownHandler({
         key: event.key,
         selectionStart: target.selectionStart,
         selectionEnd: target.selectionEnd,
-        valueLength: target.value.length,
         altKey: event.altKey,
         ctrlKey: event.ctrlKey,
         metaKey: event.metaKey,

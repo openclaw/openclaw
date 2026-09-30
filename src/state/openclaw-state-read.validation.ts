@@ -70,6 +70,15 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
           typeof input.command.conversation.parentConversationId === "string")) ||
       (input.command.type === "cron.activeReceiptOwners" &&
         typeof input.command.agentId === "string") ||
+      (input.command.type === "cron.scratch" &&
+        typeof input.command.storeKey === "string" &&
+        isRecord(input.command.selector) &&
+        ((input.command.selector.kind === "job" &&
+          typeof input.command.selector.jobId === "string" &&
+          typeof input.command.selector.createdAtMsFallback === "number" &&
+          Number.isFinite(input.command.selector.createdAtMsFallback)) ||
+          (input.command.selector.kind === "heartbeat" &&
+            typeof input.command.selector.agentId === "string"))) ||
       (input.command.type === "cron.jobNames" &&
         (input.command.storePath === undefined || typeof input.command.storePath === "string") &&
         Array.isArray(input.command.jobIds) &&
@@ -102,8 +111,20 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
         typeof input.command.childSessionKey === "string") ||
       (input.command.type === "subagents.runs" &&
         isRecord(input.command.scope) &&
-        ((input.command.scope.kind === "session" &&
-          typeof input.command.scope.sessionKey === "string") ||
+        (input.command.scope.kind === "all" ||
+          input.command.scope.kind === "maintenance" ||
+          (input.command.scope.kind === "session" &&
+            typeof input.command.scope.sessionKey === "string") ||
+          (input.command.scope.kind === "descendants" &&
+            Array.isArray(input.command.scope.sessionKeys) &&
+            input.command.scope.sessionKeys.every((key: unknown) => typeof key === "string") &&
+            Array.isArray(input.command.scope.liveTopology) &&
+            input.command.scope.liveTopology.every(
+              (link: unknown) =>
+                isRecord(link) &&
+                typeof link.childSessionKey === "string" &&
+                typeof link.requesterSessionKey === "string",
+            )) ||
           (input.command.scope.kind === "ids" &&
             Array.isArray(input.command.scope.runIds) &&
             input.command.scope.runIds.every((runId: unknown) => typeof runId === "string")))) ||
@@ -183,6 +204,15 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
         typeof input.command.input.now === "number" &&
         (typeof input.command.input.runId === "string" ||
           typeof input.command.input.executionId === "string")) ||
+      (input.command.type === "githubPublication.sharedObservation" &&
+        isRecord(input.command.input) &&
+        (input.command.input.kind === "repository" || input.command.input.kind === "worktree") &&
+        isRecord(input.command.input.session) &&
+        typeof input.command.input.session.agentId === "string" &&
+        typeof input.command.input.session.sessionKey === "string" &&
+        typeof input.command.input.session.sessionId === "string" &&
+        isRecord(input.command.input.selector) &&
+        isRecord(input.command.input.entry)) ||
       (input.command.type === "sessionRepositoryWorkspaces.find" &&
         Array.isArray(input.command.owners) &&
         input.command.owners.every(

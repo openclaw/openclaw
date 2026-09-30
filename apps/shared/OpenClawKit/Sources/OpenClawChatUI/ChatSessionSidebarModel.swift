@@ -230,17 +230,14 @@ public enum ChatSessionSidebarModel {
             return sessions.map { self.node(session: $0, children: []) }
         }
 
-        var entriesByKey: [String: OpenClawChatSessionEntry] = [:]
-        for session in sessions where entriesByKey[session.key] == nil {
-            entriesByKey[session.key] = session
-        }
+        let sessionKeys = Set(sessions.map(\.key))
         var parentByChild: [String: String] = [:]
         // The gateway child roster is freshness-filtered and omitted when
         // empty. Persisted parent metadata can outlive that freshness window,
         // so it is display metadata only and must not recreate stale edges.
         for parent in sessions {
             for childKey in parent.childSessions ?? [] where childKey != parent.key {
-                if entriesByKey[childKey] != nil, parentByChild[childKey] == nil {
+                if sessionKeys.contains(childKey), parentByChild[childKey] == nil {
                     parentByChild[childKey] = parent.key
                 }
             }
@@ -276,21 +273,13 @@ public enum ChatSessionSidebarModel {
             }
         }
 
-        func build(_ session: OpenClawChatSessionEntry, ancestors: Set<String>) -> Node {
-            guard !ancestors.contains(session.key) else {
-                return Self.node(session: session, children: [])
-            }
-            var nextAncestors = ancestors
-            nextAncestors.insert(session.key)
-            let children = (childrenByParent[session.key] ?? []).map {
-                build($0, ancestors: nextAncestors)
-            }
-            return Self.node(session: session, children: children)
+        func build(_ session: OpenClawChatSessionEntry) -> Node {
+            Self.node(session: session, children: (childrenByParent[session.key] ?? []).map(build))
         }
 
         return sessions.compactMap { session in
             guard parentByChild[session.key] == nil else { return nil }
-            return build(session, ancestors: [])
+            return build(session)
         }
     }
 
@@ -308,25 +297,6 @@ public enum ChatSessionSidebarModel {
                 runningCount: (isRunning ? 1 : 0) + children.reduce(0) { $0 + $1.badges.runningCount },
                 failedCount: (hasFailed ? 1 : 0) + children.reduce(0) { $0 + $1.badges.failedCount },
                 hasUnread: session.unread == true || children.contains { $0.badges.hasUnread }))
-    }
-
-    public static func displayName(for session: OpenClawChatSessionEntry) -> String {
-        ChatPayloadDecoding.trimmedNonEmptyString(session.label) ??
-            ChatPayloadDecoding.trimmedNonEmptyString(session.displayName) ??
-            ChatPayloadDecoding.trimmedNonEmptyString(session.autoLabel) ??
-            self.displayName(forKey: session.key)
-    }
-
-    /// Compact "repo \u{2387} branch" line for worktree/work sessions; mirrors the
-    /// web sidebar row subtitle (ui/src/lib/session-display.ts).
-    public static func workSubtitle(for session: OpenClawChatSessionEntry) -> String? {
-        let repoRoot = session.worktree?.repoRoot?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let branch = session.worktree?.branch?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let repoName = repoRoot?.split(separator: "/").last.map(String.init)
-        let shortBranch = branch.map { $0.hasPrefix("openclaw/") ? String($0.dropFirst("openclaw/".count)) : $0 }
-        guard let repoName, !repoName.isEmpty else { return nil }
-        guard let shortBranch, !shortBranch.isEmpty else { return repoName }
-        return "\(repoName) \u{2387} \(shortBranch)"
     }
 
     /// Resolves the single session-list subtitle slot with the same ownership
@@ -665,20 +635,6 @@ public enum ChatSessionSidebarModel {
                 activeAgentId: activeAgentID,
                 sessionRoutingContract: sessionRoutingContract)
         })?.key ?? currentSessionKey
-    }
-
-    /// Session keys read as routing ids ("agent:main:main"); show the human
-    /// part and keep the owning agent as a suffix only when it disambiguates.
-    public static func displayName(forKey key: String) -> String {
-        let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
-        let parts = trimmed.split(separator: ":", maxSplits: 2, omittingEmptySubsequences: false)
-        guard parts.count == 3, parts[0] == "agent" else {
-            return trimmed.isEmpty ? key : trimmed
-        }
-        let agent = String(parts[1])
-        let session = String(parts[2])
-        if session.isEmpty { return trimmed }
-        return agent == "main" || agent.isEmpty ? session : "\(session) (\(agent))"
     }
 
     @MainActor

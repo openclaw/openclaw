@@ -126,6 +126,15 @@ binds the host-resolved run, sandbox, requester, route, and approval identity;
 plugins must not reconstruct those fields or retain the capability after the
 attempt returns. Calls made after attempt settlement fail closed.
 
+When supplied, `assertNativeSubagentSpawnAllowed()` must run at native spawn
+admission. It rejects ambiguous participant identity; direct the model to
+`sessions_spawn` with the requester's verified `requester_profile.id` as `user`. Bundled native hook admission may return a synchronous
+guard, which the relay rechecks after awaited preparation immediately before allow;
+a returned reason becomes a model-visible refusal.
+The participant check uses existing native model admission, including its default
+optional mode. When native admission is disabled or unavailable, the thread disables
+native delegation; `sessions_spawn` remains available.
+
 For independently retained native work, call the optional
 `retainSourceAuthority()` while the host capability is active. When an operator
 source exists, the returned `assertCurrent`, optional `signal`, and idempotent

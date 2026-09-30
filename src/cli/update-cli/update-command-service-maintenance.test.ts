@@ -55,6 +55,10 @@ it.each(["direct", "authority-lost", "ordinary"] as const)(
       const assertAdmission = () => assert.ok(current, lost);
       vi.spyOn(doctorAdmission, "resolveDoctorUpdateAdmission").mockReturnValue({
         assertCurrent: assertAdmission,
+        readContinuation: () => {
+          assertAdmission();
+          return undefined;
+        },
         recordContinuation: assertAdmission,
       });
       const service = createMockGatewayService({

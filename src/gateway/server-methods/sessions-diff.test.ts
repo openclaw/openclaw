@@ -156,6 +156,22 @@ describe("loadSessionDiff", () => {
     expect(result.unavailableReason).toBe("not_git");
   });
 
+  it.each([
+    { pendingWorktree: { titleSource: "New checkout" } },
+    { pendingProjectGitUrl: "https://github.com/example/project.git" },
+  ])("keeps pending checkouts separate from the agent workspace: %j", async (pending) => {
+    initRepo(repoRoot);
+    fs.writeFileSync(path.join(repoRoot, "AGENTS.md"), "Agent workspace bootstrap\n");
+    mockSession(repoRoot, { spawnedCwd: undefined, ...pending });
+
+    expect(await loadSessionDiff({ sessionKey: "agent:main:s1" })).toEqual({
+      sessionKey: "agent:main:s1",
+      files: [],
+      additions: 0,
+      deletions: 0,
+    });
+  });
+
   // Diff and baseline reads run inside the Gateway process against user
   // checkouts, so a checkout-configured core.fsmonitor command (or hook) must
   // never execute — same invariant as the publication git transport.

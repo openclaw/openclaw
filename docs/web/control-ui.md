@@ -36,6 +36,8 @@ The sidebar’s **Online** list shows compact person rows with avatar presence i
 
 Sidebar live narration pauses while the browser tab is hidden and resumes from current activity when you return. The selected chat and pending outbox keep their separately owned subscriptions.
 
+With sidebar previews enabled, running sessions show a small, static tool icon beside the progress text on the second row beneath the session name. The title row stays unchanged, and the tool name is available only in the icon’s tooltip and accessible label rather than repeated as visible text. The compact one-row sidebar and team roster add no tool icon or tool text, so tool changes do not shift the list. Tool progress uses only explicitly public progress text from the Gateway, never argument-derived metadata or raw command output. If a call’s progress becomes hidden, its displayed progress is withdrawn. Pending questions and other critical status keep their existing priority. The existing session indicator remains the only activity animation, and tool state clears when its live subscription ends.
+
 Live narration retains up to six visible running background sessions, plus the open session. Recency changes keep that window stable; when a session finishes or leaves the visible rows, the most recent eligible session fills its slot. Reconnecting selects a fresh window.
 
 If a narration subscription encounters a retryable failure or times out, it retries automatically with randomized exponential backoff, honoring the server's retry delay. Sidebar updates share the pending retry instead of sending more requests. Retries stop when that session leaves the narration window, the tab is hidden, or the connection closes; non-retryable errors wait for a new subscription intent or connection.
@@ -313,7 +315,7 @@ Every section heading from the previous single-page version keeps its anchor her
 - <a id="feature-and-rpc-reference" />[Feature and RPC reference](/web/control-ui/feature-reference#feature-and-rpc-reference)
 - <a id="chat-and-talk" />[chat and talk](/web/control-ui/feature-reference#chat-and-talk)
 - <a id="channels-sessions-memory" />[channels sessions memory](/web/control-ui/feature-reference#channels-sessions-memory)
-- <a id="cron-tasks-plugins-skills-devices-exec-approvals" />[cron tasks plugins skills devices exec approvals](/web/control-ui/feature-reference#cron-tasks-plugins-skills-devices-exec-approvals)
+- <a id="cron-tasks-plugins-skills-devices-exec-approvals" />[cron plugins skills devices exec approvals](/web/control-ui/feature-reference#cron-tasks-plugins-skills-devices-exec-approvals)
 - <a id="config" />[config](/web/control-ui/feature-reference#config)
 - <a id="usage" />[usage](/web/control-ui/feature-reference#usage)
 - <a id="debug-logs-update" />[debug logs update](/web/control-ui/feature-reference#debug-logs-update)

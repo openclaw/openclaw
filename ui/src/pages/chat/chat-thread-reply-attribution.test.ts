@@ -40,6 +40,13 @@ describe("reply attribution grouping", () => {
   it.each([
     { boundary: "sender-less user", message: userMessage("Local follow-up", 1006) },
     {
+      boundary: "system turn",
+      message: userMessage("[System] Scheduled report", 1006, {
+        provenance: { kind: "internal_system", sourceTool: "cron" },
+        __openclaw: { idempotencyKey: "system-run:user" },
+      }),
+    },
+    {
       boundary: "forwarded input",
       message: assistantMessage("Forwarded input", 1006, {
         senderSession: { sessionKey: "agent:other:main" },
@@ -82,23 +89,207 @@ describe("reply attribution grouping", () => {
     expect(assistantGroups.at(-1)?.replyToMessage).toBeUndefined();
   });
 
-  it("keeps search hits apart across a hidden prompt", () => {
+  it.each([
+    {
+      boundary: "human prompt",
+      message: userMessage("Status?", 1002, {
+        __openclaw: { senderId: "bob", senderName: "Bob" },
+      }),
+      recipient: "Bob",
+    },
+    {
+      boundary: "forwarded input",
+      message: assistantMessage("Forwarded report", 1002, {
+        senderLabel: "Forwarded from main",
+        provenance: { kind: "inter_session", sourceTool: "sessions_send" },
+      }),
+      recipient: undefined,
+    },
+    {
+      boundary: "projected forwarded source",
+      message: assistantMessage("Forwarded report", 1002, {
+        senderSession: { sessionKey: "agent:other:main", agentId: "other" },
+      }),
+      recipient: undefined,
+    },
+    {
+      boundary: "cron delivery",
+      message: assistantMessage("Scheduled report", 1002, {
+        senderLabel: "Daily report",
+        provenance: {
+          kind: "internal_system",
+          sourceTool: "cron",
+          jobId: "daily",
+          runId: "cron-run",
+          sourceSessionKey: "agent:main:cron:daily",
+        },
+      }),
+      recipient: undefined,
+    },
+    {
+      boundary: "projected turn",
+      message: assistantMessage("Automatic continuation", 1002, {
+        __openclaw: { turnBoundary: true },
+      }),
+      recipient: undefined,
+    },
+  ])("keeps search hits apart across a hidden $boundary", ({ message, recipient }) => {
     const groups = messageGroups({
       searchOpen: true,
       searchQuery: "Rollout",
+      replyPeople: [
+        sessionParticipantIdentityKey({ type: "profile", id: "alice" }),
+        sessionParticipantIdentityKey({ type: "profile", id: "bob" }),
+      ],
       messages: [
         userMessage("Deploy?", 1000, { __openclaw: { senderId: "alice", senderName: "Alice" } }),
         assistantMessage("Rollout started", 1001),
-        userMessage("Status?", 1002, { __openclaw: { senderId: "bob", senderName: "Bob" } }),
+        message,
         assistantMessage("Rollout done", 1003),
       ],
     });
 
     expect(groups.map((group) => [group.messages.length, group.replyToSender?.name])).toEqual([
       [1, "Alice"],
-      [1, "Bob"],
+      [1, recipient],
     ]);
   });
+
+  it.each(["human", "forwarded", "projected source"] as const)(
+    "keeps tool results out of the previous turn when search hides a %s boundary",
+    (boundary) => {
+      const invocation = {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Rollout started" },
+          { type: "tool_call", id: "reused", name: "custom", arguments: {} },
+        ],
+        timestamp: 1000,
+      };
+      const separator =
+        boundary === "human"
+          ? userMessage("New request", 1001)
+          : assistantMessage(
+              "Forwarded request",
+              1001,
+              boundary === "forwarded"
+                ? { provenance: { kind: "inter_session", sourceTool: "sessions_send" } }
+                : { senderSession: { sessionKey: "agent:other:main", agentId: "other" } },
+            );
+      const result = {
+        role: "toolResult",
+        toolCallId: "reused",
+        toolName: "custom",
+        content: "Rollout result from the later turn",
+        timestamp: 1002,
+      };
+      const sources = messageGroups({
+        messages: [invocation, separator, result],
+        searchOpen: true,
+        searchQuery: "Rollout",
+      }).flatMap((group) => group.messages);
+      expect(sources.map((source) => source.message)).toEqual([invocation, result]);
+    },
+  );
+
+  it("retains a search-hidden historical pending input as the reply source", () => {
+    const prompt = userMessage("Please resume", 1002, {
+      __openclaw: { id: "pending:bob", senderId: "bob", senderName: "Bob" },
+    });
+    const groups = messageGroups({
+      searchOpen: true,
+      searchQuery: "Rollout",
+      messages: [
+        userMessage("Rollout plan?", 1000, {
+          __openclaw: { senderId: "alice", senderName: "Alice" },
+        }),
+        assistantMessage("Rollout started", 1001),
+        assistantMessage("Rollout resumed", 1003),
+      ],
+      pendingInputs: [{ id: "bob", acceptedAt: 1002, state: "interrupted", message: prompt }],
+    });
+    const replies = groups.filter((group) => group.role === "assistant");
+    expect(replies.map((group) => [group.messages.length, group.replyToSender?.name])).toEqual([
+      [1, "Alice"],
+      [1, "Bob"],
+    ]);
+    expect(replies[1]?.replyTurnSource?.message).toBe(prompt);
+    expect(groups.some((group) => group.messages.some((source) => source.message === prompt))).toBe(
+      false,
+    );
+  });
+
+  it("keeps a search-hidden local prompt before its recovered output without inheriting a peer", () => {
+    const groups = messageGroups({
+      searchOpen: true,
+      searchQuery: "Rollout",
+      replyLocalPerson: localParticipantIdentityKey("viewer"),
+      messages: [
+        userMessage("Rollout plan?", 1000, {
+          __openclaw: { senderId: "bob", senderName: "Bob" },
+        }),
+        assistantMessage("Rollout started", 1001),
+        assistantMessage("Rollout resumed", 1003, {
+          __openclaw: { id: "recovered", seq: 3, runId: "local-run" },
+        }),
+      ],
+      queue: [
+        {
+          id: "local",
+          text: "Please resume",
+          createdAt: 1002,
+          sendRunId: "local-run",
+          sendState: "waiting-reconnect",
+          sendAttempts: 1,
+        },
+      ],
+    });
+    const replies = groups.filter((group) => group.role === "assistant");
+    expect(replies.map((group) => group.replyToSender?.name)).toEqual(["Bob", undefined]);
+    expect(replies[1]?.replyShared).toBe(true);
+    expect(replies[1]?.replyTurnSource?.key).toBe("msg:send:local-run:0");
+  });
+
+  it.each([false, true])(
+    "keeps live attribution before a future pending input (search: %s)",
+    (searchOpen) => {
+      const current = userMessage("Current prompt", 1000, {
+        __openclaw: { id: "pending:current", senderId: "bob", senderName: "Bob" },
+      });
+      const future = userMessage("Rollout follow-up", 1001, {
+        __openclaw: { id: "pending:future", senderId: "alice", senderName: "Alice" },
+      });
+      const items = buildCachedChatItems(
+        createProps({
+          searchOpen,
+          searchQuery: "Rollout",
+          runId: "current",
+          stream: "Rollout in progress",
+          streamStartedAt: 1002,
+          pendingInputs: [
+            {
+              id: "current",
+              runId: "current",
+              acceptedAt: 1000,
+              state: "queued",
+              message: current,
+            },
+            { id: "future", runId: "future", acceptedAt: 1001, state: "queued", message: future },
+          ],
+        }),
+      );
+      const streamIndex = items.findIndex((item) => item.kind === "stream");
+      const futureIndex = items.findIndex(
+        (item) =>
+          item.kind === "group" && item.messages.some((source) => source.message === future),
+      );
+      expect(streamIndex).toBeGreaterThanOrEqual(0);
+      expect(streamIndex).toBeLessThan(futureIndex);
+      const stream = items[streamIndex];
+      expect(stream).toMatchObject({ replyToSender: { name: "Bob" } });
+      expect(stream?.kind === "stream" && stream.replyToMessage?.message).toBe(current);
+    },
+  );
 
   it("does not add reply attribution in a single-sender thread", () => {
     const groups = messageGroups({

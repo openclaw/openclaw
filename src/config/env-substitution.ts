@@ -21,23 +21,13 @@
  * ```
  */
 
-// Pattern for valid uppercase env var names: starts with letter or underscore,
-// followed by letters, numbers, or underscores (all uppercase)
 import { appendConfigPathSegment } from "../shared/dot-path.js";
 import { isPlainObject } from "../utils.js";
 import { parseEnvTemplateSecretRef } from "./types.secrets.js";
 
 const ENV_VAR_NAME_PATTERN = /^[A-Z_][A-Z0-9_]*$/;
 
-/**
- * Bash-style default-value operator: `${VAR:-fallback}`.
- *
- * Only `:-` is recognized, the form the reported issue names. Bash also has `-`, which
- * substitutes when the var is unset but not when it is set to `""`. That is implementable
- * here as a local branch on the missing test below, so it is left out by choice, not by
- * constraint: `${VAR}` already treats `""` as missing, and putting `${VAR-x}` beside
- * `${VAR:-x}` would place two different notions of "set" in one config file.
- */
+// Bare references and defaults both treat an empty environment value as missing.
 const DEFAULT_VALUE_OPERATOR = ":-";
 
 /** Error thrown when a config value references a missing or empty environment variable. */
@@ -61,14 +51,7 @@ export type EnvTemplateToken = {
 
 type EnvToken = EnvTemplateToken & { end: number };
 
-/**
- * Parses the text between `${` and the first following `}`.
- *
- * A fallback is recognized only when it carries no `$` and no `{`. That keeps the scan
- * for the closing brace a plain `indexOf("}")`, so no input that is left literal today
- * starts parsing differently: `${A:-${B}}` still falls through to the literal path and
- * its inner `${B}` is still the only thing that substitutes, exactly as before.
- */
+// Nested fallbacks stay literal; their inner references are scanned independently.
 function parseEnvTokenBody(body: string): Omit<EnvTemplateToken, "kind"> | null {
   if (ENV_VAR_NAME_PATTERN.test(body)) {
     return { name: body };
@@ -119,13 +102,7 @@ function parseEnvTokenAt(value: string, index: number): EnvToken | null {
   return null;
 }
 
-/**
- * Lists every recognized placeholder in authoring order.
- *
- * Exported so config write-back preservation shares this grammar instead of keeping its
- * own copy; a second scanner would silently stop restoring authored templates the moment
- * the two drifted.
- */
+/** Shares the substitution grammar with write-back preservation, in authoring order. */
 export function scanEnvTemplateTokens(value: string): EnvTemplateToken[] {
   return Array.from(iterateEnvTemplateTokens(value), (token) => ({
     kind: token.kind,

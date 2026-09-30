@@ -84,22 +84,17 @@ export function resetSlashMenuState(state: SlashMenuState): void {
   state.slashMenuCompletion = null;
 }
 
-function hasVisibleSlashMenuState(state: SlashMenuState): boolean {
-  return (
+function closeSlashMenuIfNeeded(state: SlashMenuState, requestUpdate: () => void): void {
+  if (
     state.slashMenuOpen ||
     state.slashMenuMode !== "command" ||
     state.slashMenuCommand !== null ||
     state.slashMenuArgItems.length > 0 ||
     state.slashMenuItems.length > 0
-  );
-}
-
-function closeSlashMenuIfNeeded(state: SlashMenuState, requestUpdate: () => void): void {
-  if (!hasVisibleSlashMenuState(state)) {
-    return;
+  ) {
+    resetSlashMenuState(state);
+    requestUpdate();
   }
-  resetSlashMenuState(state);
-  requestUpdate();
 }
 
 function requestSlashCommandRefresh(

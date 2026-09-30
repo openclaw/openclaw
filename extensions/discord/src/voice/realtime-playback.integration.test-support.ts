@@ -17,7 +17,6 @@ vi.mock("./audio-worker-thread.js", async () => {
     ) => new InProcessDiscordAudioWorker(undefined, { workerData: options }),
   };
 });
-import { createVoiceCaptureState } from "./capture-state.js";
 import { DiscordRealtimePlayback } from "./realtime-playback.js";
 import { DiscordRealtimePlayer } from "./realtime-player.js";
 import { createVoiceReceiveRecoveryState } from "./receive-recovery.js";
@@ -90,7 +89,7 @@ export function createRealtimePlaybackFixture(
     conversations: new DiscordVoiceConversationQueue(),
     audioInputBudget: { enabled: false },
     ttsStreamFallbackWarned: false,
-    capture: createVoiceCaptureState(),
+    capture: new Map(),
     realtimeLifecycle: { status: "inactive", generation: 0 },
     receiveRecovery: createVoiceReceiveRecoveryState(),
     stop: vi.fn(),

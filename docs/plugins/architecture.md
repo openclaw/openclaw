@@ -261,6 +261,12 @@ Ctime-only uncertainty is resolved
 with a bounded rehash, including ordinary companion files whose inodes another
 capture retains or releases. Legacy reload receipts keep their framed raw-byte value,
 so a changed receipt still requires streaming its native payloads.
+Read-only inspection never publishes its native admissions during later settlement.
+Deferred publication retains the original database authority and state directory.
+Doctor's private checks keep captured code in profile-qualified temporary storage,
+so removing their database snapshots cannot remove an image still loaded in the process.
+An entirely missing retired capture can be rebuilt from its installed source;
+missing files in a retained or partially present namespace remain load errors.
 Identity reuse cannot detect an edit that preserves every recorded identity field.
 Source code outside an admitted native namespace is captured and verified separately.
 Published native captures survive ordinary scratch cleanup. Doctor maintenance

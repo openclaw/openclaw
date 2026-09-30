@@ -11,7 +11,6 @@ import { getLatestSubagentRunByChildSessionKeyFromRuns } from "./subagent-regist
 import {
   clearSubagentRunsReadCacheForTest,
   getSubagentRunsSnapshotForRead,
-  getSubagentRunsSnapshotForSessions,
   persistSubagentRunsToDiskOrThrow,
   persistSubagentRunsToDisk,
   withSubagentRunReadSnapshot,
@@ -66,12 +65,12 @@ afterEach(async () => {
 
 describe("prepared subagent publication ownership", () => {
   it.each([
-    { warm: false, tree: false },
-    { warm: true, tree: false },
-    { warm: false, tree: true },
+    { warm: false, preparedFirst: false },
+    { warm: true, preparedFirst: false },
+    { warm: false, preparedFirst: true },
   ])(
-    "retains failed named deletion through hydration (warm=$warm, tree=$tree) and clears only exact successful rows",
-    async ({ warm, tree }) => {
+    "retains failed named deletion through hydration (warm=$warm, prepared first=$preparedFirst) and clears only exact successful rows",
+    async ({ warm, preparedFirst }) => {
       const first = run("first", 100);
       const second = run("second", 200);
       saveSubagentRegistryToSqlite(
@@ -90,8 +89,8 @@ describe("prepared subagent publication ownership", () => {
         });
       persistSubagentRunsToDisk(new Map(), [first.runId, second.runId]);
       fail.mockRestore();
-      if (tree) {
-        expect(getSubagentRunsSnapshotForSessions(new Map(), [childSessionKey]).size).toBe(0);
+      if (preparedFirst) {
+        expect(await readLatest()).toBeNull();
       }
       expect(getSubagentRunsSnapshotForRead(new Map()).size).toBe(0);
       expect(store.loadSubagentRegistryFromSqlite().size).toBe(2);

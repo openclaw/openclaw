@@ -1,13 +1,16 @@
 import type { CommandLaneTaskMarker } from "../../process/command-queue.js";
+import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import type { CronActiveJobMarker } from "../active-jobs.js";
 import { resolveCronCompletionStatus } from "../completion-status.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
+import type { CronRunHistorySource } from "../store/run-history.js";
 import {
   finishCronRunReceiptInDatabase,
   releaseLocalCronRunReceiptOwnership,
 } from "../store/run-receipt-store.js";
 import type { CronRunReceiptHandle } from "../store/run-receipt.types.js";
+import { ownsStreamSource } from "../stream-schedule.js";
 import type {
   CronFailureNotificationDetail,
   CronJob,
@@ -19,7 +22,7 @@ import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
 import { findJobOrThrow, hasActiveCronRun, isJobDue, isJobEnabled } from "./jobs-scheduling.js";
 import { assertSupportedJobSpec } from "./jobs-validation.js";
 import { locked } from "./locked.js";
-import { markManualCronJobActive, ownsStreamSource } from "./ops-shared.js";
+import { markManualCronJobActive } from "./ops-shared.js";
 import {
   activateQueuedCronRun,
   cleanupQueuedCronRunReservations,
@@ -66,6 +69,7 @@ export type ActivatedManualRun = Extract<PreparedManualRun, { ran: true }> & {
   admittedJob: CronJob;
   executionJob: CronJob;
   runReceipt: CronRunReceiptHandle;
+  runReceiptContext: OpenClawStateWorkerContext;
 };
 
 export type OnExitRunOptions = {
@@ -104,6 +108,7 @@ export async function emitCronRunFinished(
     scriptResult?: { scriptStateChanged?: boolean; scriptState?: unknown };
     errorClassification?: CronRunErrorClassification;
     failureNotificationDetail?: CronFailureNotificationDetail;
+    historySource?: CronRunHistorySource;
   },
 ): Promise<void> {
   const event = {
@@ -116,10 +121,12 @@ export async function emitCronRunFinished(
     taskRunId,
     job: evt.job,
     event,
+    historySource: details?.historySource,
     errorClassification: details?.errorClassification,
     ...(details?.scriptResult ? { scriptResult: details.scriptResult } : {}),
     ...(details?.triggerEval ? { triggerEval: details.triggerEval } : {}),
   });
+  details?.historySource?.assertCurrent();
   emit(state, event, cronFailureNotificationEventContext(details?.failureNotificationDetail));
   if (tracker) {
     tracker.emitted = true;
@@ -365,13 +372,14 @@ export async function prepareManualRun(
             ? {
                 onExit: {
                   commitGuard: onExit.commitGuard,
-                  onReserved: (reservedJob: CronJob, runReceipt: CronRunReceiptHandle) => {
+                  onReserved: (reservedJob, runReceipt, runReceiptContext) => {
                     reservationIdentity = reserveQueuedCronRun(
                       state,
                       reservedJob.id,
                       reservationAt,
                       {
                         runReceipt,
+                        runReceiptContext,
                         preserveWhenDisabled: true,
                         onExit: true,
                         lifecycleGeneration: generation,
@@ -405,6 +413,7 @@ export async function prepareManualRun(
     const reservedJob = reserved.job;
     reservationIdentity ??= reserveQueuedCronRun(state, reservedJob.id, reservationAt, {
       runReceipt: reserved.runReceipt,
+      runReceiptContext: reserved.runReceiptContext,
       preserveWhenDisabled: mode === "force" && !isJobEnabled(job),
       lifecycleGeneration: generation,
     });
@@ -574,6 +583,7 @@ export async function activatePreparedManualRun(
       admittedJob,
       executionJob,
       runReceipt: activation.runReceipt,
+      runReceiptContext: activation.runReceiptContext,
     } as const;
   });
 }

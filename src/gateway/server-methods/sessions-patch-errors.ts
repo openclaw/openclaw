@@ -39,9 +39,7 @@ export function createCommitGuard(key: string, assertCurrent: (() => void) | und
       assertCurrent?.();
       return undefined;
     } catch (error) {
-      return error instanceof SessionMutationAuthorizationChangedError
-        ? error.error
-        : unexpectedPatchError(key, error);
+      return unexpectedPatchError(key, error);
     }
   };
 }

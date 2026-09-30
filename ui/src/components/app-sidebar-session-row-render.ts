@@ -33,6 +33,7 @@ import {
   sidebarSessionMetaId,
   sidebarSessionStateId,
   type SidebarRecentSession,
+  type SidebarToolActivity,
   type SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
 import { icons } from "./icons.ts";
@@ -60,6 +61,7 @@ export interface SessionListHost {
   readonly sessionsShowPreview: boolean;
   readonly sessionsShowSystem: boolean;
   readonly sidebarNarrationLines: ReadonlyMap<string, string>;
+  readonly sidebarTools: ReadonlyMap<string, SidebarToolActivity>;
   readonly sidebarObserverDigests: ReadonlyMap<string, SessionObserverDigest>;
   readonly sessionProjection: Pick<SidebarSessionProjection, "resolveSubtitle">;
   readonly selectedSessionKeys: ReadonlySet<string>;
@@ -354,13 +356,17 @@ export function renderRecentSession(params: {
   const team = host.sidebarAgentsMode === "roster";
   const ownAttention = session.ownAttention ?? session.attention;
   const label = session.label;
-  const { subtitle, narration } = host.sessionProjection.resolveSubtitle({
+  const toolActivity =
+    !team && host.sessionsShowPreview && session.hasActiveRun && host.sidebarLiveActivity
+      ? host.sidebarTools.get(session.key)
+      : undefined;
+  const { subtitle, narration, toolName } = host.sessionProjection.resolveSubtitle({
     session,
     hasDisplay: display !== undefined,
-    displaySubtitle: display?.subtitle,
     sidebarLiveActivity: host.sidebarLiveActivity,
     showPreview: host.sessionsShowPreview,
     narrationLine: host.sidebarNarrationLines.get(session.key),
+    toolActivity,
     observerDigest: host.sidebarObserverDigests.get(session.key) ?? null,
   });
   const indicators = renderSidebarSessionIndicators(host, session, display, icon);
@@ -478,7 +484,7 @@ export function renderRecentSession(params: {
       >
         ${persistentIndicator}
         <span class="sidebar-recent-session__text">
-          <span class="sidebar-recent-session__title-row"> ${marqueeLabel} </span>
+          <span class="sidebar-recent-session__title-row">${marqueeLabel}</span>
           <span class="sidebar-recent-session__details">
             ${
               session.channelPresentation
@@ -492,7 +498,7 @@ export function renderRecentSession(params: {
                   </span>`
                 : nothing
             }
-            ${team ? nothing : renderSidebarSessionSubtitle({ subtitle, narration })}
+            ${team ? nothing : renderSidebarSessionSubtitle({ subtitle, narration, toolName })}
             ${indicators.content}
           </span>
         </span>

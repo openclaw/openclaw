@@ -49,8 +49,6 @@ internal interface VoiceWakeRecognizer {
   )
 
   fun stop(operationId: Long)
-
-  fun destroy(operationId: Long)
 }
 
 internal class VoiceWakeRecognitionSession(
@@ -124,8 +122,6 @@ internal class AndroidOnDeviceVoiceWakeRecognizer(
       if (operationId == latestOperationId.get()) retireRecognizer()
     }
   }
-
-  override fun destroy(operationId: Long) = stop(operationId)
 
   private fun claimOperation(operationId: Long): Boolean {
     while (true) {
@@ -261,10 +257,6 @@ internal class VoiceWakeManager(
     data class Stop(
       override val operationId: Long,
     ) : RecognizerAction
-
-    data class Destroy(
-      override val operationId: Long,
-    ) : RecognizerAction
   }
 
   private val lock = Any()
@@ -344,7 +336,7 @@ internal class VoiceWakeManager(
       synchronized(lock) {
         enabled = false
         foreground = false
-        val pendingAction = stopSessionLocked(destroy = true)
+        val pendingAction = stopSessionLocked(force = true)
         _statusText.value = nativeText("Off")
         pendingAction
       }
@@ -354,7 +346,7 @@ internal class VoiceWakeManager(
   private fun reconcileLocked(): RecognizerAction? {
     val blockedStatus = blockedStatusLocked()
     if (blockedStatus != null) {
-      val action = stopSessionLocked(destroy = !enabled || !foreground)
+      val action = stopSessionLocked(force = !enabled || !foreground)
       _statusText.value = blockedStatus
       return action
     }
@@ -492,7 +484,7 @@ internal class VoiceWakeManager(
       else -> restartDelayMs
     }
 
-  private fun stopSessionLocked(destroy: Boolean): RecognizerAction? {
+  private fun stopSessionLocked(force: Boolean): RecognizerAction? {
     restartJob?.cancel()
     restartJob = null
     commandJob?.cancel()
@@ -502,11 +494,7 @@ internal class VoiceWakeManager(
     val wasActive = sessionActive
     sessionActive = false
     _isListening.value = false
-    return when {
-      destroy -> RecognizerAction.Destroy(nextRecognizerOperationIdLocked())
-      wasActive -> RecognizerAction.Stop(nextRecognizerOperationIdLocked())
-      else -> null
-    }
+    return if (force || wasActive) RecognizerAction.Stop(nextRecognizerOperationIdLocked()) else null
   }
 
   private fun nextRecognizerOperationIdLocked(): Long {
@@ -526,10 +514,6 @@ internal class VoiceWakeManager(
         recognizer.stop(action.operationId)
       }
 
-      is RecognizerAction.Destroy -> {
-        recognizer.destroy(action.operationId)
-      }
-
       null -> {}
     }
   }
@@ -546,6 +530,4 @@ internal class PreviewVoiceWakeRecognizer : VoiceWakeRecognizer {
   }
 
   override fun stop(operationId: Long) = Unit
-
-  override fun destroy(operationId: Long) = Unit
 }

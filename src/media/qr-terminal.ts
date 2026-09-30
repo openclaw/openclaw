@@ -1,4 +1,3 @@
-// QR terminal helpers render QR codes for terminal output.
 import { loadQrCodeRuntime } from "./qr-runtime.ts";
 
 type QrTerminalModules = {
@@ -9,9 +8,6 @@ type QrTerminalModules = {
 const COMPACT_MARGIN_MODULES = 1;
 const TERMINAL_BLACK_ON_WHITE = "\x1b[47m\x1b[30m";
 const TERMINAL_RESET = "\x1b[0m";
-const FULL_BLOCK = "█";
-const UPPER_HALF_BLOCK = "▀";
-const LOWER_HALF_BLOCK = "▄";
 
 function readModule(modules: QrTerminalModules, x: number, y: number): boolean {
   if (x < 0 || y < 0 || x >= modules.size || y >= modules.size) {
@@ -21,16 +17,7 @@ function readModule(modules: QrTerminalModules, x: number, y: number): boolean {
 }
 
 function compactBlock(top: boolean, bottom: boolean): string {
-  if (top && bottom) {
-    return FULL_BLOCK;
-  }
-  if (top) {
-    return UPPER_HALF_BLOCK;
-  }
-  if (bottom) {
-    return LOWER_HALF_BLOCK;
-  }
-  return " ";
+  return top ? (bottom ? "█" : "▀") : bottom ? "▄" : " ";
 }
 
 function renderCompactTerminalQr(modules: QrTerminalModules): string {

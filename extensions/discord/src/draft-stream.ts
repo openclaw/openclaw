@@ -1,7 +1,7 @@
+import { Routes } from "discord-api-types/v10";
 import { createFinalizableDraftLifecycle } from "openclaw/plugin-sdk/channel-outbound";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
-  createChannelMessage,
   deleteChannelMessage,
   editChannelMessage,
   type RequestClient,
@@ -12,24 +12,6 @@ import { resolveDiscordMessageFlags } from "./send.shared.js";
 const DISCORD_STREAM_MAX_CHARS = 2000;
 const DEFAULT_THROTTLE_MS = 1200;
 const DISCORD_PREVIEW_ALLOWED_MENTIONS = { parse: [] };
-
-type DiscordDraftStream = {
-  update: (text: string, options?: { complete?: boolean }) => void;
-  flush: () => Promise<void>;
-  messageId: () => string | undefined;
-  lastDeliveredText: () => string;
-  clear: () => Promise<void>;
-  deleteCurrentMessage: () => Promise<void>;
-  discardPending: () => Promise<void>;
-  seal: () => Promise<void>;
-  stop: () => Promise<void>;
-  /** Move the active draft to another Discord channel, preserving its current text. */
-  retarget: (channelId: string) => Promise<void>;
-  /** Retry failed preview deletes at the owning turn's cleanup boundary. */
-  cleanupPendingMessages: () => Promise<void>;
-  /** Reset internal state so the next update creates a new message instead of editing. */
-  forceNewMessage: (mode?: "preserve" | "discard") => void;
-};
 
 type DiscordDraftMessage = { channelId: string; messageId: string };
 type DiscordDraftUpdate = { text: string; complete: boolean };
@@ -45,7 +27,7 @@ export function createDiscordDraftStream(params: {
   suppressEmbeds?: boolean;
   log?: (message: string) => void;
   warn?: (message: string) => void;
-}): DiscordDraftStream {
+}) {
   const maxChars = Math.min(params.maxChars ?? DISCORD_STREAM_MAX_CHARS, DISCORD_STREAM_MAX_CHARS);
   const throttleMs = Math.max(250, params.throttleMs ?? DEFAULT_THROTTLE_MS);
   const minInitialChars = params.minInitialChars;
@@ -116,12 +98,12 @@ export function createDiscordDraftStream(params: {
         ? { message_id: replyToMessageId, fail_if_not_exists: false }
         : undefined;
       activeCreateGeneration = generation;
-      const sent = await createChannelMessage<{ id?: string }>(rest, targetChannelId, {
+      const sent = (await rest.post(Routes.channelMessages(targetChannelId), {
         body: {
           ...body,
           ...(messageReference ? { message_reference: messageReference } : {}),
         },
-      });
+      })) as { id?: string }; // SAFETY: The create response's ID is checked before use.
       const sentMessageId = sent?.id;
       const shouldDiscardStaleCreate = activeCreateGeneration === generation && discardActiveCreate;
       activeCreateGeneration = undefined;
@@ -174,9 +156,10 @@ export function createDiscordDraftStream(params: {
     warnPrefix: "discord stream preview cleanup failed",
   });
   const { loop, update: updateDraft, stop, discardPending, seal } = lifecycle;
-  const update: DiscordDraftStream["update"] = (text, options) =>
+  const update = (text: string, options?: { complete?: boolean }) =>
     updateDraft({ text, complete: options?.complete === true });
 
+  /** Reset the draft so the next update creates a new message. */
   const forceNewMessage = (mode: "preserve" | "discard" = "preserve") => {
     // In-flight REST calls may finish after a turn boundary. Advance identity
     // synchronously so their result cannot overwrite the next turn's state.
@@ -192,6 +175,7 @@ export function createDiscordDraftStream(params: {
     loop.resetPending();
     loop.resetThrottleWindow();
   };
+  /** Move the draft to another channel, preserving its current text. */
   const retarget = async (nextChannelId: string) => {
     const normalized = nextChannelId.trim();
     if (!normalized || normalized === channelId) {

@@ -1,5 +1,9 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import {
+  asFiniteNumber,
+  asPositiveFiniteNumber,
+} from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { EmbeddedAgentRunMeta } from "../../agents/embedded-agent-runner/types.js";
 import { deriveContextPromptTokens, type NormalizedUsage } from "../../agents/usage.js";
@@ -22,25 +26,21 @@ function escapeTraceFence(value: string): string {
   return value.replace(/^~~~/gm, "\\~~~");
 }
 
-function hasTraceUsageFields(usage: TraceUsageView | undefined): boolean {
-  if (!usage) {
-    return false;
-  }
-  return ["input", "output", "cacheRead", "cacheWrite", "total"].some((key) => {
-    const value = usage[key as keyof typeof usage];
-    return typeof value === "number" && Number.isFinite(value);
-  });
-}
-
 function formatTraceUsageLine(label: string, value: number | undefined): string {
-  return `${label}=${typeof value === "number" && Number.isFinite(value) ? `${value.toLocaleString()} tok (${formatTokenCount(value)})` : "n/a"}`;
+  const finite = asFiniteNumber(value);
+  return `${label}=${finite !== undefined ? `${finite.toLocaleString()} tok (${formatTokenCount(finite)})` : "n/a"}`;
 }
 
 function formatUsageTraceBlock(
   title: string,
   usage: TraceUsageView | undefined,
 ): string | undefined {
-  if (!hasTraceUsageFields(usage)) {
+  if (
+    !usage ||
+    [usage.input, usage.output, usage.cacheRead, usage.cacheWrite, usage.total].every(
+      (value) => asFiniteNumber(value) === undefined,
+    )
+  ) {
     return undefined;
   }
   return `🔎 ${title}:\n~~~text\n${[
@@ -59,8 +59,7 @@ function formatTraceScalar(value: string | number | boolean | undefined): string
   if (typeof value === "number") {
     return Number.isFinite(value) ? value.toLocaleString() : undefined;
   }
-  const trimmed = normalizeOptionalString(value);
-  return trimmed ?? undefined;
+  return normalizeOptionalString(value);
 }
 
 function formatKeyValueTraceBlock(
@@ -158,56 +157,38 @@ export function derivePromptSegments(
   let index = 0;
   while (index < lines.length) {
     const line = lines[index] ?? "";
+    let segmentKey: string | undefined;
+    let end = index + 2;
     if (line === "Context:") {
       const tagLine = lines[index + 1] ?? "";
       const tagMatch = tagLine.trim().match(/^<([a-z0-9_:-]+)>$/i);
       if (tagMatch) {
+        segmentKey = expectDefined(tagMatch[1], "tag match capture group 1");
         const closeTag = `</${tagMatch[1]}>`;
-        let end = index + 2;
         while (end < lines.length && lines[end]?.trim() !== closeTag) {
           end += 1;
         }
-        if (end < lines.length) {
-          addChars(
-            expectDefined(tagMatch[1], "tag match capture group 1"),
-            lines.slice(index, end + 1).join("\n").length,
-          );
-          index = end + 1;
-          while (index < lines.length && lines[index] === "") {
-            index += 1;
-          }
-          continue;
-        }
       }
-    }
-    const metadataHeaderLine = line.trim().endsWith(INBOUND_CONTEXT_MARKER) ? line : null;
-    if (metadataHeaderLine) {
-      const start = index;
+    } else if (line.trim().endsWith(INBOUND_CONTEXT_MARKER)) {
       const fence = lines[index + 1] ?? "";
       // Generated metadata blocks always use ```json fences (inbound-meta.ts,
       // channel-prompt-context.ts); other fence languages are user content and must
       // stay attributed to user_message.
       if (fence.trim() === "```json") {
-        let end = index + 2;
         while (end < lines.length && !(lines[end] ?? "").startsWith("```")) {
           end += 1;
         }
-        if (end < lines.length) {
-          const headerWithoutMarker = metadataHeaderLine
-            .trim()
-            .slice(0, -INBOUND_CONTEXT_MARKER.length)
-            .trim();
-          addChars(
-            resolveMetadataSegmentKey(headerWithoutMarker || "metadata"),
-            lines.slice(start, end + 1).join("\n").length,
-          );
-          index = end + 1;
-          while (index < lines.length && lines[index] === "") {
-            index += 1;
-          }
-          continue;
-        }
+        const headerWithoutMarker = line.trim().slice(0, -INBOUND_CONTEXT_MARKER.length).trim();
+        segmentKey = resolveMetadataSegmentKey(headerWithoutMarker || "metadata");
       }
+    }
+    if (segmentKey && end < lines.length) {
+      addChars(segmentKey, lines.slice(index, end + 1).join("\n").length);
+      index = end + 1;
+      while (index < lines.length && lines[index] === "") {
+        index += 1;
+      }
+      continue;
     }
     if (line.trim()) {
       userChars += line.length + 1;
@@ -295,36 +276,27 @@ function formatRequestContextTraceBlock(params: {
   contextLimit?: number;
   promptTokens?: number;
 }): string | undefined {
-  const limit = params.contextLimit;
-  const used = params.promptTokens;
+  const limit = asFiniteNumber(params.contextLimit);
+  const used = asFiniteNumber(params.promptTokens);
   if (
-    (typeof limit !== "number" || !Number.isFinite(limit) || limit <= 0) &&
-    (typeof used !== "number" || !Number.isFinite(used) || used <= 0) &&
+    (limit === undefined || limit <= 0) &&
+    (used === undefined || used <= 0) &&
     !params.provider &&
     !params.model
   ) {
     return undefined;
   }
   const headroom =
-    typeof limit === "number" &&
-    Number.isFinite(limit) &&
-    typeof used === "number" &&
-    Number.isFinite(used)
-      ? Math.max(0, limit - used)
-      : undefined;
+    limit !== undefined && used !== undefined ? Math.max(0, limit - used) : undefined;
   const percent =
-    typeof limit === "number" &&
-    Number.isFinite(limit) &&
-    limit > 0 &&
-    typeof used === "number" &&
-    Number.isFinite(used)
+    limit !== undefined && limit > 0 && used !== undefined
       ? Math.round((used / limit) * 100)
       : undefined;
   return `🔎 Context Window (Last Model Request):\n~~~text\n${[
     `provider=${params.provider ?? "n/a"}`,
     `model=${params.model ?? "n/a"}`,
-    `used=${typeof used === "number" && Number.isFinite(used) ? `${used.toLocaleString()} tok (${formatTokenCount(used)})` : "n/a"}`,
-    `limit=${typeof limit === "number" && Number.isFinite(limit) ? `${limit.toLocaleString()} tok (${formatTokenCount(limit)})` : "n/a"}`,
+    formatTraceUsageLine("used", used),
+    formatTraceUsageLine("limit", limit),
     `headroom=${typeof headroom === "number" ? `${headroom.toLocaleString()} tok (${formatTokenCount(headroom)})` : "n/a"}`,
     `usage=${typeof percent === "number" ? `${percent}%` : "n/a"}`,
   ].join("\n")}\n~~~`;
@@ -334,19 +306,11 @@ function formatSummaryPromptValue(params: {
   contextLimit?: number;
   promptTokens?: number;
 }): string | undefined {
-  const used = params.promptTokens;
-  const limit = params.contextLimit;
-  if (
-    typeof used !== "number" ||
-    !Number.isFinite(used) ||
-    used <= 0 ||
-    typeof limit !== "number" ||
-    !Number.isFinite(limit) ||
-    limit <= 0
-  ) {
-    return undefined;
-  }
-  return `${formatTokenCount(used)}/${formatTokenCount(limit)}`;
+  const used = asPositiveFiniteNumber(params.promptTokens);
+  const limit = asPositiveFiniteNumber(params.contextLimit);
+  return used !== undefined && limit !== undefined
+    ? `${formatTokenCount(used)}/${formatTokenCount(limit)}`
+    : undefined;
 }
 
 function formatRawTraceSummaryLine(

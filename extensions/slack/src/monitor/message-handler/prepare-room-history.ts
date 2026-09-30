@@ -181,32 +181,6 @@ function sliceSlackHistoryAttachmentCandidates(
   return out;
 }
 
-function buildSlackHistoryMediaCandidateMessage(
-  message: SlackMessageEvent,
-  maxAttachments: number,
-): { message: SlackMessageEvent; attempted: number } | null {
-  const files = sliceSlackImageFileCandidates(message.files, maxAttachments);
-  const attachments = sliceSlackHistoryAttachmentCandidates(
-    message.attachments,
-    Math.max(0, maxAttachments - files.length),
-  );
-  if (files.length === 0 && attachments.length === 0) {
-    return null;
-  }
-  return {
-    message: { ...message, files, attachments },
-    attempted:
-      files.length +
-      attachments.reduce(
-        (count, attachment) =>
-          count +
-          (normalizeOptionalString(attachment.image_url) ? 1 : 0) +
-          (attachment.files?.length ?? 0),
-        0,
-      ),
-  };
-}
-
 async function resolveSlackHistoryMedia(params: {
   ctx: SlackMonitorContext;
   message: SlackMessageEvent;
@@ -215,12 +189,25 @@ async function resolveSlackHistoryMedia(params: {
   assertCurrent: () => void;
   abortSignal?: AbortSignal;
 }) {
-  const candidate = buildSlackHistoryMediaCandidateMessage(params.message, params.maxAttachments);
-  if (!candidate) {
+  const files = sliceSlackImageFileCandidates(params.message.files, params.maxAttachments);
+  const attachments = sliceSlackHistoryAttachmentCandidates(
+    params.message.attachments,
+    Math.max(0, params.maxAttachments - files.length),
+  );
+  if (files.length === 0 && attachments.length === 0) {
     return { media: [], attempted: 0 };
   }
+  const attempted =
+    files.length +
+    attachments.reduce(
+      (count, attachment) =>
+        count +
+        (normalizeOptionalString(attachment.image_url) ? 1 : 0) +
+        (attachment.files?.length ?? 0),
+      0,
+    );
   const content = await resolveSlackMessageContent({
-    message: candidate.message,
+    message: { ...params.message, files, attachments },
     isThreadReply: false,
     threadStarter: null,
     isBotMessage: Boolean(params.message.bot_id),
@@ -237,6 +224,6 @@ async function resolveSlackHistoryMedia(params: {
       kind: "image",
       messageId: params.message.ts,
     }),
-    attempted: candidate.attempted,
+    attempted,
   };
 }

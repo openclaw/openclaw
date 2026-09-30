@@ -2,20 +2,10 @@ import { inspectSourceUpdateArtifacts } from "../../../scripts/lib/source-update
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createUpdatePreflightFailure } from "../../infra/update-preflight-details.js";
 import { recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
-import { isFailedUpdateStep } from "../../infra/update-run-step.js";
-import type { UpdateRunnerOptions, UpdateRunResult } from "../../infra/update-runner-types.js";
+import type { UpdateRunnerOptions } from "../../infra/update-runner-types.js";
 import { UpdatePreMutationError, type UpdateCommandOptions } from "./shared.js";
 
 type BeforeGitMutation = NonNullable<UpdateRunnerOptions["beforeGitMutation"]>;
-
-export function assertGitCandidateSteps(steps: UpdateRunResult["steps"]): void {
-  const failed = steps.find(isFailedUpdateStep);
-  if (failed) {
-    throw new UpdatePreMutationError(failed.name, failed.stderrTail ?? "Update checks failed.", {
-      failureFacts: failed.failureFacts,
-    });
-  }
-}
 
 export async function admitSourceUpdateArtifacts(
   root: string,

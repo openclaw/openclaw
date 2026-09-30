@@ -1,10 +1,9 @@
-// Builds overview table rows for `openclaw status` and `openclaw status --all`.
-// The row builders combine scan surfaces with health/session summaries while keeping rendering elsewhere.
-
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveIsNixMode } from "../config/paths.js";
 import { formatMissingChildRuntimeWarning } from "../infra/child-runtime-viability.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { formatTimeAgo } from "../infra/format-time/format-relative.js";
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
 import type { BackupRunFreshness } from "../state/backup-run-records.js";
@@ -30,7 +29,6 @@ import {
   buildStatusHeartbeatValue,
   buildStatusLastHeartbeatValue,
   buildStatusMemoryValue,
-  type StatusMemoryStateResolvers,
 } from "./status.command-sections.js";
 import type { MemoryStatusSnapshot } from "./status.scan.shared.js";
 
@@ -99,48 +97,37 @@ function buildStatusDegradationRows(
   return rows;
 }
 
-/** Builds the default `openclaw status` overview rows from scan, health, memory, and session inputs. */
-export function buildStatusCommandOverviewRows(
-  params: {
-    env: NodeJS.ProcessEnv;
-    backupFreshness: BackupRunFreshness;
-    opts: {
-      deep?: boolean;
-    };
-    surface: StatusOverviewSurface;
-    osLabel: string;
-    summary: StatusSummary;
-    health?: HealthSummary;
-    lastHeartbeat: HeartbeatEventPayload | null;
-    agentStatus: {
-      defaultId?: string | null;
-      bootstrapPendingCount: number;
-      totalSessions: number;
-      agents: AgentLocalStatus[];
-    };
-    memory: MemoryStatusSnapshot | null;
-    memoryPlugin: MemoryPluginStatus;
-    pluginCompatibility: PluginCompatibilityNotice[];
-    ok: (value: string) => string;
-    warn: (value: string) => string;
-    muted: (value: string) => string;
-    formatTimeAgo: (ageMs: number) => string;
-    formatKTokens: (value: number) => string;
-    updateValue?: string;
-    updateRows?: Array<{ Item: string; Value: string }>;
-  } & StatusMemoryStateResolvers,
-) {
+export function buildStatusCommandOverviewRows(params: {
+  env: NodeJS.ProcessEnv;
+  backupFreshness: BackupRunFreshness;
+  opts: {
+    deep?: boolean;
+  };
+  surface: StatusOverviewSurface;
+  osLabel: string;
+  summary: StatusSummary;
+  health?: HealthSummary;
+  lastHeartbeat: HeartbeatEventPayload | null;
+  agentStatus: {
+    defaultId?: string | null;
+    bootstrapPendingCount: number;
+    totalSessions: number;
+    agents: AgentLocalStatus[];
+  };
+  memory: MemoryStatusSnapshot | null;
+  memoryPlugin: MemoryPluginStatus;
+  pluginCompatibility: PluginCompatibilityNotice[];
+  updateValue?: string;
+  updateRows?: Array<{ Item: string; Value: string }>;
+}) {
   const agentsValue = buildStatusAgentsValue({
     agentStatus: params.agentStatus,
-    formatTimeAgo: params.formatTimeAgo,
   });
   const eventsValue = buildStatusEventsValue({
     queuedSystemEvents: params.summary.queuedSystemEvents,
   });
   const probesValue = buildStatusProbesValue({
     health: params.health,
-    ok: params.ok,
-    muted: params.muted,
   });
   const heartbeatValue = buildStatusHeartbeatValue({ summary: params.summary });
   const lastHeartbeatValue = buildStatusLastHeartbeatValue({
@@ -148,25 +135,14 @@ export function buildStatusCommandOverviewRows(
     gatewayReachable: params.surface.gatewayReachable,
     gatewayStartupPhase: params.surface.gatewayProbe?.startupPhase,
     lastHeartbeat: params.lastHeartbeat,
-    warn: params.warn,
-    muted: params.muted,
-    formatTimeAgo: params.formatTimeAgo,
   });
   const memoryValue = buildStatusMemoryValue({
     memory: params.memory,
     memoryPlugin: params.memoryPlugin,
-    ok: params.ok,
-    warn: params.warn,
-    muted: params.muted,
-    resolveMemoryVectorState: params.resolveMemoryVectorState,
-    resolveMemoryFtsState: params.resolveMemoryFtsState,
-    resolveMemoryCacheSummary: params.resolveMemoryCacheSummary,
     memoryUnavailableLabel: "not checked",
   });
   const pluginCompatibilityValue = buildStatusPluginCompatibilityValue({
     notices: params.pluginCompatibility,
-    ok: params.ok,
-    warn: params.warn,
   });
   const updatesDisabled =
     params.surface.cfg.update?.checkOnStart === false ||
@@ -174,19 +150,19 @@ export function buildStatusCommandOverviewRows(
     resolveIsNixMode(params.env);
   const doNotTrack = params.env.DO_NOT_TRACK?.trim().toLowerCase();
   const telemetryValue = updatesDisabled
-    ? params.muted("disabled · update checks off")
+    ? theme.muted("disabled · update checks off")
     : doNotTrack === "1" || doNotTrack === "true"
-      ? params.muted("disabled (DO_NOT_TRACK)")
+      ? theme.muted("disabled (DO_NOT_TRACK)")
       : params.surface.cfg.telemetry?.enabled === true
-        ? params.ok("enabled · anonymous feature stats")
-        : params.muted("disabled · update checks only");
+        ? theme.success("enabled · anonymous feature stats")
+        : theme.muted("disabled · update checks only");
   const hostDesktopValue = formatHostDesktopStatus(params.summary.hostDesktop);
   return buildStatusOverviewSurfaceRows({
     ...params.surface,
-    decorateOk: params.ok,
-    decorateWarn: params.warn,
-    decorateTailscaleOff: params.muted,
-    decorateTailscaleWarn: params.warn,
+    decorateOk: theme.success,
+    decorateWarn: theme.warn,
+    decorateTailscaleOff: theme.muted,
+    decorateTailscaleWarn: theme.warn,
     prefixRows: [{ Item: "OS", Value: `${params.osLabel} · node ${process.versions.node}` }],
     updateValue: params.updateValue,
     agentsValue,
@@ -198,10 +174,10 @@ export function buildStatusCommandOverviewRows(
         Item: "Host desktop",
         Value:
           (params.summary.hostDesktop?.state ?? "disabled") === "disabled"
-            ? params.muted(hostDesktopValue)
+            ? theme.muted(hostDesktopValue)
             : hostDesktopValue,
       },
-      ...buildStatusDegradationRows(params.summary, params.warn),
+      ...buildStatusDegradationRows(params.summary, theme.warn),
       { Item: "Plugin compatibility", Value: pluginCompatibilityValue },
       { Item: "Probes", Value: probesValue },
       { Item: "Events", Value: eventsValue },
@@ -209,7 +185,7 @@ export function buildStatusCommandOverviewRows(
         Item: "Backups",
         Value: buildBackupStatusValue({
           freshness: params.backupFreshness,
-          formatTimeAgo: params.formatTimeAgo,
+          formatTimeAgo,
         }),
       },
       { Item: "Heartbeat", Value: heartbeatValue },
@@ -218,17 +194,15 @@ export function buildStatusCommandOverviewRows(
         Item: "Sessions",
         Value: buildStatusSessionsOverviewValue({
           sessions: params.summary.sessions,
-          formatKTokens: params.formatKTokens,
         }),
       },
     ],
     gatewayAuthWarningValue: params.surface.gatewayProbeAuthWarning
-      ? params.warn(params.surface.gatewayProbeAuthWarning)
+      ? theme.warn(params.surface.gatewayProbeAuthWarning)
       : null,
   });
 }
 
-/** Builds the expanded status-all overview rows, including config and security hints. */
 export function buildStatusAllOverviewRows(params: {
   surface: StatusOverviewSurface;
   summary: StatusDegradationSummary;

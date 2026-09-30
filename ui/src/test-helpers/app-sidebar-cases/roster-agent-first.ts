@@ -295,7 +295,11 @@ describe("AppSidebar agent roster", () => {
       }),
     ]);
     sidebar.sidebarAgentsMode = "roster";
-    sidebar.hasSessionDraft = (sessionKey) => sessionKey === key("automation");
+    sidebar.storedOutboxes = {
+      total: 0,
+      attentionCountForSession: () => 0,
+      hasSessionDraft: (sessionKey) => sessionKey === key("automation"),
+    };
     sessions.sessions.setPullRequestSummary(key("open"), { numbers: [101], state: "open" });
     sessions.sessions.setPullRequestSummary(key("merged"), { numbers: [102], state: "merged" });
     await vi.waitFor(() => expect(sessionKeys(sidebar)).toHaveLength(7));

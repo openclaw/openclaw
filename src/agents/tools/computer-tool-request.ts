@@ -91,22 +91,6 @@ function readCoordinate(
   return [raw[0] as number, raw[1] as number];
 }
 
-function requireCoordinate(params: Record<string, unknown>, action: string): [number, number] {
-  const coordinate = readCoordinate(params, "coordinate");
-  if (!coordinate) {
-    throw new Error(`coordinate [x, y] required for ${action}`);
-  }
-  return coordinate;
-}
-
-function readModifiers(params: Record<string, unknown>, action: ComputerToolAction) {
-  if (!MODIFIER_TEXT_ACTIONS.has(action)) {
-    return undefined;
-  }
-  const text = typeof params.text === "string" ? params.text.trim() : "";
-  return text ? text : undefined;
-}
-
 function copyOptionalStringParams(
   target: Record<string, unknown>,
   input: Record<string, unknown>,
@@ -181,7 +165,6 @@ const REQUIRED_STRING_PARAMS: Partial<Record<ComputerToolAction, readonly string
   browser_pointer: [...BROWSER_REFS, "observationId", "pointerAction"],
 };
 
-/** Builds the computer.act wire params for one tool input action. */
 export function buildComputerActParams(params: {
   action: ComputerToolAction;
   input: Record<string, unknown>;
@@ -201,9 +184,12 @@ export function buildComputerActParams(params: {
     COORDINATE_REQUIRED_ACTIONS.has(action) &&
     !(elementRef && ELEMENT_TARGETABLE_CLICK_ACTIONS.has(action))
   ) {
-    const [x, y] = requireCoordinate(input, action);
-    wire.x = x;
-    wire.y = y;
+    const coordinate = readCoordinate(input, "coordinate");
+    if (!coordinate) {
+      throw new Error(`coordinate [x, y] required for ${action}`);
+    }
+    wire.x = coordinate[0];
+    wire.y = coordinate[1];
   } else if (COORDINATE_OPTIONAL_ACTIONS.has(action)) {
     const coordinate = readCoordinate(input, "coordinate");
     if (coordinate) {
@@ -214,7 +200,8 @@ export function buildComputerActParams(params: {
   if ((wire.x !== undefined || wire.fromX !== undefined) && params.displayFrameId) {
     wire.displayFrameId = params.displayFrameId;
   }
-  const modifiers = readModifiers(input, action);
+  const modifiers =
+    MODIFIER_TEXT_ACTIONS.has(action) && typeof input.text === "string" ? input.text.trim() : "";
   if (modifiers) {
     wire.modifiers = modifiers;
   }
@@ -251,8 +238,7 @@ export function buildComputerActParams(params: {
     }
     case "key":
     case "hold_key": {
-      const keys = readToolStringParam(input, "text", { required: true });
-      wire.keys = keys;
+      wire.keys = readToolStringParam(input, "text", { required: true });
       if (action === "hold_key") {
         const seconds =
           readFiniteNumberParam(input, "duration", {
@@ -455,20 +441,16 @@ export function validateCapabilityBoundInput(params: {
           : ""),
     );
   }
-  if (windowRef && !capabilities?.targets.includes("window")) {
-    throw new Error(
-      `${COMPUTER_CONTRACT_MISMATCH}: selected computer has no window target support`,
-    );
-  }
-  if (elementRef && !capabilities?.targets.includes("element")) {
-    throw new Error(
-      `${COMPUTER_CONTRACT_MISMATCH}: selected computer has no element target support`,
-    );
-  }
-  if ((browserRef || pageRef) && !capabilities?.targets.includes("browser")) {
-    throw new Error(
-      `${COMPUTER_CONTRACT_MISMATCH}: selected computer has no browser target support`,
-    );
+  for (const [target, reference] of [
+    ["window", windowRef],
+    ["element", elementRef],
+    ["browser", browserRef || pageRef],
+  ] as const) {
+    if (reference && !capabilities?.targets.includes(target)) {
+      throw new Error(
+        `${COMPUTER_CONTRACT_MISMATCH}: selected computer has no ${target} target support`,
+      );
+    }
   }
   if (deliveryMode && !capabilities?.deliveryModes.some((mode) => mode === deliveryMode)) {
     throw new Error(

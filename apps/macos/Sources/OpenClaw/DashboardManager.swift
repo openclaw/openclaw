@@ -334,7 +334,7 @@ final class DashboardManager {
             let key = ObjectIdentifier(controller)
             let previousRoute = self.displayedPrimaryRoutes[key]
             let revisionChanged = (previousRoute?.revision).map { $0 != routeRevision } ?? (routeRevision > 0)
-            let routeChanged = revisionChanged || !controller.hasTLSParams(configuration.tlsParams) ||
+            let routeChanged = revisionChanged || controller.tlsParams != configuration.tlsParams ||
                 controller.auth.gatewayUrl != auth.gatewayUrl
             let credentialChanged = controller.auth != auth
             if routeChanged || credentialChanged {
@@ -756,9 +756,11 @@ final class DashboardManager {
                         configuration: configuration,
                         target: target,
                         present: false)
-                } else if needsRefresh {
+                } else if needsRefresh, controller.documentHost.legacyNativeCredentials?.isCurrent() != true {
                     // Same-principal reconnects retain the page but replace its
                     // socket-owned projections before an old observer can retire them.
+                    // A catalog refresh on the current socket keeps them, so it cannot
+                    // refuse that document's native challenges in flight.
                     controller.documentHost.nativeGatewayAuthProvider = configuration.nativeAuthProvider
                     controller.documentHost.legacyNativeCredentials = configuration.legacyNativeCredentials
                 }

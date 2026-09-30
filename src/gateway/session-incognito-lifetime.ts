@@ -36,16 +36,13 @@ export function startIncognitoSessionLifetime(params: {
     expiresAt: number;
     job?: GatewayScheduledJob;
   };
-  const { scheduler } = params;
+  const scheduler = params.scheduler.scope();
   const runInOwner = AsyncLocalStorage.snapshot();
   const env = { ...process.env, OPENCLAW_STATE_DIR: resolveStateDir() };
   const restartSignal = getGatewayRestartDrainSignal();
   const deadlines = new Map<string, Deadline>();
-  const pending = new Set<Promise<void>>();
-  let stopped = false;
-
   const current = (deadline: Deadline) =>
-    !stopped &&
+    !scheduler.signal.aborted &&
     !restartSignal.aborted &&
     deadlines.get(deadline.sessionKey) === deadline &&
     deadline.source.isOpen;
@@ -61,49 +58,45 @@ export function startIncognitoSessionLifetime(params: {
     deadline.job = scheduler.schedule({
       id: `incognito-expiry:${deadline.sessionKey}`,
       ...(delayMs === undefined ? { atMs: deadline.expiresAt } : { delayMs }),
-      run: () => {
+      run: async () => {
         if (!current(deadline)) {
           retire(deadline);
-          return undefined;
+          return;
         }
-        const operation = (async () => {
-          try {
-            const { deleteGatewaySession } = await import("./server-methods/sessions-delete.js");
-            const result = await deleteGatewaySession({
-              params: {
-                key: deadline.sessionKey,
-                agentId: deadline.agentId,
-                expectedSessionId: deadline.sessionId,
-              },
-              client: null,
-              context: params.context,
-              assertCurrent: () => {
-                if (!current(deadline)) {
-                  throw new Error("Incognito expiry no longer owns this session.");
-                }
-              },
-            });
-            if (!result.ok) {
-              throw new Error(result.error.message);
-            }
-            retire(deadline);
-          } catch {
-            if (current(deadline)) {
-              params.logWarning("Incognito session expiry could not finish cleanup; will retry.");
-              schedule(deadline, CLEANUP_RETRY_MS);
-            } else {
-              retire(deadline);
-            }
+        try {
+          const { deleteGatewaySession } = await import("./server-methods/sessions-delete.js");
+          const result = await deleteGatewaySession({
+            params: {
+              key: deadline.sessionKey,
+              agentId: deadline.agentId,
+              expectedSessionId: deadline.sessionId,
+            },
+            client: null,
+            context: params.context,
+            assertCurrent: () => {
+              if (!current(deadline)) {
+                throw new Error("Incognito expiry no longer owns this session.");
+              }
+            },
+          });
+          if (!result.ok) {
+            throw new Error(result.error.message);
           }
-        })();
-        pending.add(operation);
-        return operation.finally(() => pending.delete(operation));
+          retire(deadline);
+        } catch {
+          if (current(deadline)) {
+            params.logWarning("Incognito session expiry could not finish cleanup; will retry.");
+            schedule(deadline, CLEANUP_RETRY_MS);
+          } else {
+            retire(deadline);
+          }
+        }
       },
     });
   };
 
   const observe = (change: SessionRowChange) => {
-    if (stopped || restartSignal.aborted || !("sessionKey" in change)) {
+    if (scheduler.signal.aborted || restartSignal.aborted || !("sessionKey" in change)) {
       return;
     }
     const { sessionKey, agentId, storePath } = change;
@@ -164,12 +157,10 @@ export function startIncognitoSessionLifetime(params: {
   }
   return {
     stop: async () => {
-      stopped = true;
+      scheduler.beginClose();
       unsubscribe();
-      for (const deadline of deadlines.values()) {
-        retire(deadline);
-      }
-      await Promise.all(pending);
+      deadlines.clear();
+      await scheduler.stop();
     },
   };
 }

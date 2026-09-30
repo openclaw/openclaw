@@ -17,7 +17,11 @@ import {
   readToolApprovalReviews,
   resolveToolApprovalReviewOutcome,
 } from "../../../lib/chat/tool-approval-reviews.ts";
-import { summarizeToolGroup, readPreparedActivity } from "../../../lib/chat/tool-call-grouping.ts";
+import {
+  describeToolGroup,
+  summarizeToolGroup,
+  readPreparedActivity,
+} from "../../../lib/chat/tool-call-grouping.ts";
 import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
 import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import { gatewayClientKind } from "../../../lib/gateway-client-kind.ts";
@@ -27,9 +31,11 @@ import { resolveAssistantReplyPhase } from "../chat-assistant-reply.ts";
 import { renderChatAvatar, renderForwardedAvatar } from "../chat-avatar.ts";
 import type { AssistantMessageExpansionState } from "../chat-message-recovery.ts";
 import type { TurnRecap } from "../chat-progress.ts";
+import { transcriptRunId } from "../chat-thread-run-identity.ts";
 import { persistedMessageEntryId, readPendingSendStatus } from "../chat-thread.ts";
 import { hasForwardedSource } from "../chat-turn-boundary.ts";
 import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts";
+import { activityHeadline, selectActivityHeadline } from "./chat-activity-headline.ts";
 import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
 import { renderForwardedAttribution } from "./chat-forwarded-attribution.ts";
 import { renderGroupedMessage } from "./chat-message-bubble.ts";
@@ -119,6 +125,9 @@ type RenderMessageGroupOptions = Omit<
     onRewind?: () => void;
     rewindDisabled?: boolean;
     activeContinuation?: ActiveContinuation;
+    /** Only this run may supply live copy for an activity disclosure. */
+    activityRunId?: string | null;
+    activityGroupKey?: string;
     turnRecap?: TurnRecap;
     /** Frame bodies are pre-rendered by the frame owner; ordinary groups omit them. */
     frameContent?: readonly unknown[];
@@ -209,8 +218,17 @@ export function renderActivityGroup(
   const cards: ToolCard[] = [];
   const toolContexts = new Map<ToolCard, { messageKey: string; disclosureId: string }>();
   const preparedByCard = new Map<ToolCard, ReturnType<typeof readPreparedActivity>[number]>();
+  const currentRunActivity = new Set<ReturnType<typeof readPreparedActivity>[number]>();
   const activity = entries.flatMap((entry) => {
     const prepared = readPreparedActivity(entry.message);
+    if (
+      opts.runActive &&
+      opts.activityRunId &&
+      (!opts.activityGroupKey || groups.some((group) => group.key === opts.activityGroupKey)) &&
+      transcriptRunId(entry.message) === opts.activityRunId
+    ) {
+      prepared.forEach((item) => currentRunActivity.add(item));
+    }
     const byCallId = new Map(prepared.map((item) => [item.toolCallId, item]));
     for (const [index, card] of extractToolCardsCached(entry.message).entries()) {
       cards.push(card);
@@ -228,38 +246,22 @@ export function renderActivityGroup(
   const visibleActivity = activity.filter(
     (item) => !item.hideFromChannelProgress && !item.suppressChannelProgress,
   );
-  const running = opts.runActive
-    ? visibleActivity.findLast((item) => item.status === "running")
-    : undefined;
+  const currentActivity = [
+    ...new Map(
+      visibleActivity
+        .filter((item) => currentRunActivity.has(item))
+        .map((item) => [item.toolCallId ?? item.itemId, item]),
+    ).values(),
+  ];
   const cardGroups = groupToolCalls(cards);
-  let runningOperation = running;
-  if (running?.toolCallId) {
-    const runningCard = cards.findLast((card) => preparedByCard.get(card) === running);
-    for (const root of cardGroups) {
-      const pending = [...root.children];
-      for (const child of pending) {
-        if (child.card === runningCard) {
-          // Recorded nesting chooses the owner; only its prepared item supplies copy.
-          const parentActivity = preparedByCard.get(root.card);
-          if (
-            parentActivity &&
-            !parentActivity.hideFromChannelProgress &&
-            !parentActivity.suppressChannelProgress
-          ) {
-            runningOperation = parentActivity;
-          }
-        }
-        pending.push(...child.children);
-      }
-    }
-  }
+  const headline = selectActivityHeadline(currentActivity, cardGroups, preparedByCard);
   const visibleCalls = new Set(visibleActivity.map((item) => item.toolCallId ?? item.itemId));
   const activityDisclosureId = `activity:${firstGroup.key}`;
   const activityBodyId = `activity-body-${fnv1aUtf16(firstGroup.key).toString(16)}`;
   const activityExpanded = opts.isToolMessageExpanded?.(activityDisclosureId) ?? false;
-  const groupSummaryLabel = runningOperation
-    ? `${runningOperation.title}…`
-    : summarizeToolGroup(visibleActivity, { includeInlineOutcomes: activityExpanded });
+  const groupSummaryLabel = summarizeToolGroup(visibleActivity, {
+    includeInlineOutcomes: activityExpanded,
+  });
   const toolCardOverrides = new Map<ToolCard, unknown>();
   function renderOperation(group: ToolCallGroup<ToolCard>): unknown {
     const { card, children } = group;
@@ -298,9 +300,7 @@ export function renderActivityGroup(
   const reviewOutcome = resolveToolApprovalReviewOutcome(approvalReviews, recordedReviewOutcomes);
   const reviewer = approvalReviews[0]?.label ?? "Review";
   const reviewAriaLabel = reviewOutcome
-    ? t(`chat.toolCards.review.${reviewOutcome === "reviewing" ? "reviewing" : reviewOutcome}`, {
-        reviewer,
-      })
+    ? t(`chat.toolCards.review.${reviewOutcome}`, { reviewer })
     : "";
   const content = html`
     <div class="chat-activity-group ${activityExpanded ? "is-open" : ""}">
@@ -315,8 +315,20 @@ export function renderActivityGroup(
       >
         <span class="chat-activity-group__icon">${icons.listTree}</span>
         <span class="chat-tool-disclosure__content">
-          <span class="chat-activity-group__label">${groupSummaryLabel}</span>
+          ${activityHeadline(
+            JSON.stringify([opts.sessionKey, opts.connectionEpoch, opts.activityRunId]),
+            headline,
+            groupSummaryLabel,
+            currentActivity,
+          )}
         </span>
+        ${
+          headline
+            ? describeToolGroup(visibleActivity)
+                .outcomes.filter(({ kind }) => kind !== "failed" && kind !== "skipped")
+                .map(({ label }) => html`<span class="muted">${label}</span>`)
+            : nothing
+        }
         ${
           reviewOutcome
             ? html`<span
@@ -484,12 +496,8 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
     : group.messages;
   const preparedMessages = actionOwners.map((item) => prepareGroupMessage(group, item, opts));
   const lastMessageIndex = group.messages.length - 1;
-  const footerActionDetails = ownsRunFrame
-    ? (preparedMessages[0]?.actions ?? null)
-    : (preparedMessages[lastMessageIndex]?.actions ?? null);
-  const footerActionMessageKey = ownsRunFrame
-    ? opts.frameActionOwner?.key
-    : group.messages[lastMessageIndex]?.key;
+  const footerActionDetails = preparedMessages.at(-1)?.actions ?? null;
+  const footerActionMessageKey = actionOwners.at(-1)?.key;
   const hasUserFooterActions =
     normalizedRole === "user" &&
     Boolean(

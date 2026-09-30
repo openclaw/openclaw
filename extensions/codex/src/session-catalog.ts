@@ -102,16 +102,11 @@ function toGenericCatalogHost(
     ...(host.pending ? { pending: true } : {}),
     ...(host.nodeId ? { nodeId: host.nodeId } : {}),
     sessions: host.sessions.map((session) => {
-      const continuableStatus =
-        !session.archived && (session.status === "idle" || session.status === "notLoaded");
-      const canContinue =
-        (local || host.canContinueCodex === true) &&
-        continuableStatus &&
-        isInteractiveThreadSource(session.source);
-      const canArchive = local && continuableStatus && isInteractiveThreadSource(session.source);
-      const canOpenTerminal =
-        isInteractiveThreadSource(session.source) &&
-        (local ? localTerminalAvailable : host.canOpenTerminalCodex === true);
+      const interactive = isInteractiveThreadSource(session.source);
+      const continuable =
+        interactive &&
+        !session.archived &&
+        (session.status === "idle" || session.status === "notLoaded");
       const name = session.name ?? session.fallbackName;
       return {
         threadId: session.threadId,
@@ -128,9 +123,10 @@ function toGenericCatalogHost(
         ...(session.gitBranch ? { gitBranch: session.gitBranch } : {}),
         archived: session.archived,
         ...(session.sessionKey ? { sessionKey: session.sessionKey } : {}),
-        canContinue,
-        canArchive,
-        canOpenTerminal,
+        canContinue: (local || host.canContinueCodex === true) && continuable,
+        canArchive: local && continuable,
+        canOpenTerminal:
+          interactive && (local ? localTerminalAvailable : host.canOpenTerminalCodex === true),
       };
     }),
     ...(host.nextCursor ? { nextCursor: host.nextCursor } : {}),
@@ -246,13 +242,6 @@ function catalogHostMapper(
   };
 }
 
-function mappedHostPublisher(
-  onHost: (host: SessionCatalogHost) => void,
-  mapHost: (host: CodexSessionCatalogHost) => SessionCatalogHost,
-) {
-  return (host: CodexSessionCatalogHost) => onHost(mapHost(host));
-}
-
 function mapCatalogListOperation(
   operation: ReturnType<typeof createCodexSessionCatalogListOperation>,
   mapHost: (host: CodexSessionCatalogHost) => SessionCatalogHost,
@@ -348,7 +337,7 @@ function registerCodexSessionCatalog(params: {
           localHomes,
           allowPartialResults,
           nodeSnapshots,
-          ...(onHost ? { onHost: mappedHostPublisher(onHost, mapHost) } : {}),
+          ...(onHost ? { onHost: (host: CodexSessionCatalogHost) => onHost(mapHost(host)) } : {}),
         }),
         mapHost,
       );

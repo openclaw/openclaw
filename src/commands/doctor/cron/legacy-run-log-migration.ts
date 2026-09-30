@@ -93,7 +93,6 @@ export async function migrateLegacyCronRunLogsToSqlite(
   return { importedFiles: jsonlFiles.length };
 }
 
-/** Return true when legacy cron JSONL run log files exist next to a store path. */
 export async function legacyCronRunLogFilesExist(storePath: string): Promise<boolean> {
   return (await listLegacyCronRunLogFiles(storePath)).length > 0;
 }

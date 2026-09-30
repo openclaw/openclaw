@@ -5,6 +5,8 @@ import {
 import { resolveContextEngineOwnerPluginId } from "../../../context-engine/registry.js";
 import { runWithAsyncWorkResources } from "../../../shared/async-work-resources.js";
 import { getAsyncWorkSignal } from "../../../shared/async-work-scope.js";
+import { createStageTimingTracker } from "../../../shared/stage-timing.js";
+import { clearToolActivityRun } from "../../../shared/tool-activity-heartbeat.js";
 import {
   bindOperatorModelExecution,
   readRunOperatorAuthority,
@@ -48,13 +50,11 @@ import {
   startEmbeddedAttemptDiagnostics,
   type EmitDiagnosticRunCompleted,
 } from "./attempt-setup.js";
-import { createEmbeddedRunStageTracker } from "./attempt-stage-timing.js";
 import { prepareEmbeddedAttemptSystemPrompt } from "./attempt-system-prompt-prepare.js";
 import { prepareEmbeddedAttemptToolCatalog } from "./attempt-tool-catalog.js";
 import { prepareEmbeddedAttemptToolBase } from "./attempt-tool-prepare.js";
 import { prepareEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle-prepare.js";
 import { measureEmbeddedAgentPreparation } from "./preparation-timing.js";
-import { clearToolActivityRun } from "./tool-activity-heartbeat.js";
 import type {
   EmbeddedAttemptExecutionState,
   EmbeddedRunAttemptParams,
@@ -236,7 +236,7 @@ async function runEmbeddedAttemptOwned(
     const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId);
     const { diagnosticTrace, runTrace, emitCompleted } = startEmbeddedAttemptDiagnostics(params);
     emitDiagnosticRunCompleted = emitCompleted;
-    const corePluginToolStages = createEmbeddedRunStageTracker();
+    const corePluginToolStages = createStageTimingTracker(Date.now);
     let toolSearchCatalogExecutor: ToolSearchCatalogToolExecutor | undefined;
     const preparedToolBase = await prepare("attempt.tool-base", () =>
       prepareEmbeddedAttemptToolBase({
@@ -303,7 +303,6 @@ async function runEmbeddedAttemptOwned(
         isRawModelRun,
       }),
     );
-    // Track sessions_yield tool invocation (callback pattern, like clientToolCallDetected)
     let yieldDetected = false;
     let yieldMessage: string | null = null;
     let yieldAcknowledgment: string | undefined;
@@ -472,14 +471,13 @@ async function runEmbeddedAttemptOwned(
       // Read catalog counters before the finally-phase cleanup clears the
       // run-scoped catalog session; afterwards the counts are gone.
       const catalogSession = toolSearchCatalogRef?.current;
+      const providerRetry =
+        preparedSessionRuntime.agentSession.settingsManager.getProviderRetrySettings();
       return {
         ...executionResult,
         codeModeEngaged: codeModeControlsEnabledForRun,
-        providerRetryMaxRetries:
-          preparedSessionRuntime.agentSession.settingsManager.getProviderRetrySettings().maxRetries,
-        providerRetryMaxDelayMs:
-          preparedSessionRuntime.agentSession.settingsManager.getProviderRetrySettings()
-            .maxRetryDelayMs,
+        providerRetryMaxRetries: providerRetry.maxRetries,
+        providerRetryMaxDelayMs: providerRetry.maxRetryDelayMs,
         ...(catalogSession
           ? {
               bridgeCalls: {

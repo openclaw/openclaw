@@ -438,19 +438,7 @@ export async function appendTranscriptMessage<TMessage>(
   scope: SessionTranscriptWriteScope,
   options: TranscriptMessageAppendOptions<TMessage>,
 ): Promise<TranscriptMessageAppendResult<TMessage> | undefined> {
-  const resolved = resolveSqliteTranscriptScope(scope);
-  const { restoreSessionColdTranscript } = await import("./session-cold-storage.js");
-  await restoreSessionColdTranscript({ ...scope, sessionId: resolved.sessionId });
-  return await runExclusiveSqliteSessionWrite(
-    resolved,
-    async () =>
-      runOpenClawAgentWriteTransaction(
-        (database) => appendTranscriptMessageInTransaction(database, resolved, options),
-        toDatabaseOptions(resolved),
-        { operationLabel: "session.transcript.message-append" },
-      ),
-    "session.transcript.message-append",
-  );
+  return await withTranscriptWriteLock(scope, (transcript) => transcript.appendMessage(options));
 }
 
 /** Appends one transcript message synchronously for sync session runtimes. */

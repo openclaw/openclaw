@@ -20,6 +20,22 @@ import {
 
 const DEFAULT_PLUGIN_METADATA_MAX_BYTES = 16 * 1024 * 1024;
 
+function capturedPluginFile(
+  filePath: string,
+  rootRealPath: string,
+  contents: Buffer,
+  stat: fs.Stats,
+): Extract<PluginFileCacheEntry, { ok: true }> {
+  return {
+    ok: true,
+    path: filePath,
+    rootRealPath,
+    contents,
+    hash: crypto.createHash("sha256").update(contents).digest("hex"),
+    signature: { size: stat.size, mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs },
+  };
+}
+
 function entryKey(relativePath: string, rejectHardlinks: boolean): string {
   return JSON.stringify([path.normalize(relativePath), rejectHardlinks]);
 }
@@ -273,18 +289,7 @@ export function readPluginCacheFile(params: {
         maxBytes === undefined
           ? fs.readFileSync(opened.fd)
           : readFileDescriptorBoundedSync(opened.fd, maxBytes);
-      entry = {
-        ok: true,
-        path: opened.path,
-        rootRealPath: opened.rootRealPath,
-        contents,
-        hash: crypto.createHash("sha256").update(contents).digest("hex"),
-        signature: {
-          size: opened.stat.size,
-          mtimeMs: opened.stat.mtimeMs,
-          ctimeMs: opened.stat.ctimeMs,
-        },
-      };
+      entry = capturedPluginFile(opened.path, opened.rootRealPath, contents, opened.stat);
       Object.assign(pathFacts(absolutePath), { exists: true, stat: opened.stat });
       root.checkedEntries.set(key, {
         ok: true,
@@ -335,14 +340,7 @@ function readPluginCacheRegularFile(params: {
         filePath: absolutePath,
         maxBytes: params.maxBytes,
       });
-      entry = {
-        ok: true,
-        path: path.join(canonicalRoot, filename),
-        rootRealPath: canonicalRoot,
-        contents,
-        hash: crypto.createHash("sha256").update(contents).digest("hex"),
-        signature: { size: stat.size, mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs },
-      };
+      entry = capturedPluginFile(path.join(canonicalRoot, filename), canonicalRoot, contents, stat);
       Object.assign(pathFacts(absolutePath), { exists: true, stat });
       root.files.set(key, entry);
     } catch (error) {

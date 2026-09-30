@@ -2,12 +2,8 @@ import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { CoreConfig } from "../../types.js";
-import {
-  formatMatrixMediaTooLargeText,
-  formatMatrixMediaUnavailableText,
-  formatMatrixMessageText,
-} from "../media-text.js";
-import { formatPollAsText, isPollStartType, parsePollStartContent } from "../poll-types.js";
+import { formatMatrixMessageText } from "../media-text.js";
+import { formatPollAsText, isPollStartType, parsePollStart } from "../poll-types.js";
 import { RelationType } from "../send/types.js";
 import { resolveMatrixStoredSessionMeta } from "../session-store-metadata.js";
 import { isMatrixAudioContent } from "./preflight-audio.js";
@@ -29,7 +25,7 @@ export function resolveMatrixMentionPrecheckText(params: {
     return params.content.body.trim();
   }
   if (isPollStartType(params.eventType)) {
-    const parsed = parsePollStartContent(params.content as never);
+    const parsed = parsePollStart(params.content as never);
     if (parsed) {
       return formatPollAsText(parsed);
     }
@@ -60,18 +56,15 @@ export function resolveMatrixInboundBodyText(params: {
   if (!params.mediaDownloadFailed || !params.hadMediaUrl) {
     return params.rawBody;
   }
-  if (params.mediaSizeLimitExceeded) {
-    return formatMatrixMediaTooLargeText({
+  return (
+    formatMatrixMessageText({
       body: params.rawBody,
       filename: params.filename,
       msgtype: params.msgtype,
-    });
-  }
-  return formatMatrixMediaUnavailableText({
-    body: params.rawBody,
-    filename: params.filename,
-    msgtype: params.msgtype,
-  });
+      tooLarge: params.mediaSizeLimitExceeded,
+      unavailable: true,
+    }) ?? ""
+  );
 }
 
 export function markTrackedRoomIfFirst(set: Set<string>, roomId: string): boolean {

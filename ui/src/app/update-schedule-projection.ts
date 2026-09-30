@@ -16,19 +16,21 @@ type UpdateScheduleProjection = {
   updateCampaignStatusHydrated: boolean;
 };
 
-function retainCampaignStatusHydration(
-  current: UpdateScheduleState | null,
-  next: UpdateScheduleState | null | undefined,
-  hydrated: boolean,
-): boolean {
-  const currentCampaign = current?.campaign;
-  const nextCampaign = next?.campaign;
-  return (
-    !nextCampaign ||
-    (hydrated &&
-      currentCampaign?.id === nextCampaign.id &&
-      currentCampaign.updatedAtMs === nextCampaign.updatedAtMs)
-  );
+function projectUpdateSchedule(
+  current: UpdateScheduleProjection,
+  updateSchedule: UpdateScheduleState | null,
+): Omit<UpdateScheduleProjection, "updateAvailable"> {
+  const currentCampaign = current.updateSchedule?.campaign;
+  const nextCampaign = updateSchedule?.campaign;
+  return {
+    updateSchedule,
+    heldUpdateCampaignId: resolveHeldUpdateCampaignId(updateSchedule, current.heldUpdateCampaignId),
+    updateCampaignStatusHydrated:
+      !nextCampaign ||
+      (current.updateCampaignStatusHydrated &&
+        currentCampaign?.id === nextCampaign.id &&
+        currentCampaign.updatedAtMs === nextCampaign.updatedAtMs),
+  };
 }
 
 export function resolveHeldUpdateCampaignId(
@@ -42,16 +44,9 @@ export function projectConnectedUpdateSnapshot(
   current: UpdateScheduleProjection,
   hello: GatewayHelloOk | null,
 ): UpdateScheduleProjection {
-  const updateSchedule = readUpdateSchedule(hello);
   return {
     updateAvailable: readUpdateAvailable(hello),
-    updateSchedule,
-    heldUpdateCampaignId: resolveHeldUpdateCampaignId(updateSchedule, current.heldUpdateCampaignId),
-    updateCampaignStatusHydrated: retainCampaignStatusHydration(
-      current.updateSchedule,
-      updateSchedule,
-      current.updateCampaignStatusHydrated,
-    ),
+    ...projectUpdateSchedule(current, readUpdateSchedule(hello)),
   };
 }
 
@@ -65,20 +60,7 @@ export function projectUpdateAvailableEvent(
       : undefined;
   return {
     updateAvailable: readUpdateAvailableValue(payload?.updateAvailable),
-    ...(updateSchedule !== undefined
-      ? {
-          updateSchedule,
-          heldUpdateCampaignId: resolveHeldUpdateCampaignId(
-            updateSchedule,
-            current.heldUpdateCampaignId,
-          ),
-          updateCampaignStatusHydrated: retainCampaignStatusHydration(
-            current.updateSchedule,
-            updateSchedule,
-            current.updateCampaignStatusHydrated,
-          ),
-        }
-      : {}),
+    ...(updateSchedule !== undefined ? projectUpdateSchedule(current, updateSchedule) : {}),
   };
 }
 
