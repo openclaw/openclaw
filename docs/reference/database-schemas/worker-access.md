@@ -192,6 +192,15 @@ survives cleanup failure while the failed native owner retires. Use `run` when
 dependent commands share a binding or host publication must stay inside the
 same FIFO interval.
 
+Memory Core standing-intent operations queue through the canonical agent writer
+before acquiring their database generation. Their connection-bound worker handles
+creation, listing, cancellation, matching, and lifecycle maintenance. Schema
+preparation commits separately before the business transaction, preserving first-use
+recovery. Both transactions recheck the original caller at mutation and commit.
+Scope matching, FTS scan bounds, fire budgets, and hidden-context limits are unchanged.
+Cold agent opening and lease/bootstrap control retain their existing owners; this
+cut does not claim that all agent-database work has left the host thread.
+
 The exported `OpenClawAgentSqliteWorkerStore` type retains its `run` and `close`
 contract for existing adapters. The factory's inferred return type additionally
 provides the typed single-command `execute` method.
@@ -233,6 +242,18 @@ receipts publish claim authority and release observers before callers continue,
 including when ordinary reply delivery fails. Local forced completion and final
 cleanup join the same pending release. Restart recovery, schemas, persisted
 fields, and update behavior are unchanged.
+
+Staged workspace-result pointers also commit through that placement worker. The
+same transaction checks the pending-result claim, immutable staged ref, and exact
+repository session owner, with live caller guards rechecked at admission and
+commit. Repository publication awaits the durable pointer before accepting its
+reconciliation journal. Local worktree reconciliation preserves its applied
+journal and final-verification ordering, then awaits durable pointer publication.
+Commit receipts
+invalidate pending-result read observations without revoking separate turn
+claims; uncertain writes retain recovery custody and are not replayed. Other
+placement lifecycle methods and their synchronous guards remain separate
+migration work. Schemas, stored fields, and update behavior are unchanged.
 
 Memory session preparation retains only export text, provenance, timestamps, and
 classification/reset facts from each decoded SQLite event. Full-message observers

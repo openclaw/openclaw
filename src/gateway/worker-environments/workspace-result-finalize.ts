@@ -188,6 +188,11 @@ export async function reconcileWorkspaceAfterTurn(params: {
     placements: params.placements,
     turnClaim: params.turnClaim,
   });
+  const assertWorkspaceResultCurrent = () => {
+    if (!params.placements.validateWorkspaceResultClaim(params.turnClaim)) {
+      throw new Error("Cloud worker workspace result lost its placement owner");
+    }
+  };
   let workspaceConflict: WorkspaceConflictReport | undefined;
   try {
     await params.workspaceOperations.run(currentPlacement.environmentId, async () => {
@@ -213,13 +218,10 @@ export async function reconcileWorkspaceAfterTurn(params: {
                   params.workspace.kind === "repository"
                     ? params.workspace.repository.workspaceId
                     : undefined,
+                  assertWorkspaceResultCurrent,
                 ),
             },
-            assertCurrent: () => {
-              if (!params.placements.validateWorkspaceResultClaim(params.turnClaim)) {
-                throw new Error("Cloud worker workspace result lost its placement owner");
-              }
-            },
+            assertCurrent: assertWorkspaceResultCurrent,
           }),
         );
         const applied = await verifyReconciledWorkspaceFinal(reconciliation, quiescence);

@@ -276,7 +276,7 @@ function selectBoundedModelRequests(
   }
   if (selected.length === 0) {
     throw new RangeError(
-      "Newest session context cannot fit the model-context limit without splitting a tool frame",
+      "The latest messages exceed this session's context limit. Start a new session with a brief summary to continue.",
     );
   }
   const selectedMessages = selected.flatMap(({ entry }) =>
