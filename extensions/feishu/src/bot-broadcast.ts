@@ -164,9 +164,6 @@ export function createFeishuBroadcastIngressSettlement(params: {
     createLane: (replayClaim) => {
       const lane: LaneState = { replayClaim, status: "pending" };
       lanes.add(lane);
-      const releaseLane = (error: unknown) => {
-        lane.replayClaim?.release({ error });
-      };
       return {
         lifecycle: {
           abortSignal: params.lifecycle?.abortSignal ?? fallbackAbort.signal,
@@ -217,7 +214,7 @@ export function createFeishuBroadcastIngressSettlement(params: {
               return;
             }
             lane.status = "abandoned";
-            releaseLane(new Error("feishu-broadcast-turn-abandoned"));
+            lane.replayClaim?.release({ error: new Error("feishu-broadcast-turn-abandoned") });
             await maybeSettle();
           },
         },
@@ -232,13 +229,13 @@ export function createFeishuBroadcastIngressSettlement(params: {
           );
           lane.status = "failed";
           failures.push(error);
-          releaseLane(error);
+          lane.replayClaim?.release({ error });
         },
         onDispatchFailed: async (error) => {
           failures.push(error);
           if (lane.status !== "completed") {
             lane.status = "failed";
-            releaseLane(error);
+            lane.replayClaim?.release({ error });
           }
           await maybeSettle();
         },
