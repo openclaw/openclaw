@@ -249,7 +249,9 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
     case "gateway.event_loop.sample":
     case "diagnostic.gc":
     case "diagnostic.child_process.spawn":
-      // Runtime measurements are exporter-only and excluded by the subscription.
+    case "log.record":
+    case "telemetry.exporter":
+      // These events use separate exporters and are excluded by the subscription.
       break;
     case "model.usage":
       copy(event, "channel", "provider", "model");
@@ -485,10 +487,6 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
         }
       }
       break;
-    case "log.record":
-      record.level = event.level;
-      record.source = event.loggerName;
-      break;
     case "security.event":
       record.source = event.category;
       copy(event, "action", "outcome");
@@ -508,12 +506,6 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
     case "payload.large":
       copy(event, "surface", "action", "bytes", "limitBytes", "count", "channel", "pluginId");
       assignReasonCode(record, event.reason);
-      break;
-    case "telemetry.exporter":
-      record.source = copyExporterCode(event.exporter);
-      record.target = event.signal;
-      record.outcome = event.status;
-      assignReasonCode(record, event.reason ?? event.errorCategory);
       break;
     case "diagnostic.async_queue.dropped":
       copy(

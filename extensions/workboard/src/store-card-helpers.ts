@@ -101,7 +101,7 @@ export function syncExecutionAttemptMetadata(
   }
   const previousFailed =
     existingAttempt?.status === "blocked" || existingAttempt?.status === "failed";
-  const attemptFailed = attemptStatus === "blocked" || attemptStatus === "failed";
+  const attemptFailed = attemptStatus === "blocked";
   const failureCount = attemptFailed
     ? previousFailed
       ? metadata.failureCount

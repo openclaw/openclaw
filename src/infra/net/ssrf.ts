@@ -254,7 +254,7 @@ export function matchesHostnameAllowlist(hostname: string, allowlist: string[]):
 
 function looksLikeUnsupportedIpv4Literal(address: string): boolean {
   const parts = address.split(".");
-  if (parts.length === 0 || parts.length > 4) {
+  if (parts.length > 4) {
     return false;
   }
   if (parts.some((part) => part.length === 0)) {

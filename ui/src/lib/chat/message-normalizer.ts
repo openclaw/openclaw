@@ -162,9 +162,7 @@ export function resolveMessageSenderLabel(
 }
 
 export function isToolResultMessage(message: unknown): boolean {
-  const m = asOptionalRecord(message);
-  const role = typeof m?.role === "string" ? m.role.toLowerCase() : "";
-  return role === "toolresult" || role === "tool_result";
+  return isToolResultContentType(asOptionalRecord(message)?.role);
 }
 
 export function isStandaloneToolMessageForDisplay(message: unknown): boolean {
@@ -409,9 +407,8 @@ function expandTextContent(
         type: "attachment",
         attachment: {
           url: segment.url,
-          kind: inferred.kind,
-          label: inferred.label,
-          mimeType: inferred.mimeType,
+          ...inferred,
+          ...(inferred.kind === "audio" && audioAsVoice ? { isVoiceNote: true } : {}),
         },
       });
       continue;
@@ -435,14 +432,7 @@ function expandTextContent(
     });
   }
 
-  const content = mergeAdjacentTextItems(
-    parts.map((item) => {
-      if (item.type === "attachment" && item.attachment.kind === "audio" && audioAsVoice) {
-        return Object.assign({}, item, { attachment: { ...item.attachment, isVoiceNote: true } });
-      }
-      return item;
-    }),
-  );
+  const content = mergeAdjacentTextItems(parts);
 
   return {
     content:

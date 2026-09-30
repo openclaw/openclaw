@@ -259,13 +259,10 @@ class ReefSqliteAuditStore implements AuditStore {
             if (latestHead.pending?.owner !== owner) {
               throw new Error("Reef audit append lease was lost before linking");
             }
-            const replacesStaleLink =
-              previous.nextHash !== undefined &&
-              staleEntryKey === reefAuditEntryKey(previous.nextHash);
             if (previous.nextHash === entry.entryHash) {
               return previous;
             }
-            if (previous.nextHash !== undefined && !replacesStaleLink) {
+            if (previous.nextHash !== undefined) {
               throw new Error("Reef audit head already links a committed successor");
             }
             return { ...previous, nextHash: entry.entryHash };
