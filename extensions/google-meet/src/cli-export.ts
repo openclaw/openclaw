@@ -389,6 +389,31 @@ function collectGoogleMeetArtifactWarnings(
   return warnings;
 }
 
+export type GoogleMeetExportManifest = {
+  generatedAt: string;
+  request?: GoogleMeetExportRequest;
+  tokenSource?: "cached-access-token" | "refresh-token";
+  calendarEvent?: GoogleMeetCalendarLookupResult;
+  inputs: {
+    artifacts?: string;
+    attendance?: string;
+  };
+  counts: {
+    conferenceRecords: number;
+    artifacts: number;
+    attendanceRows: number;
+    recordings: number;
+    transcripts: number;
+    transcriptEntries: number;
+    smartNotes: number;
+    warnings: number;
+  };
+  conferenceRecords: string[];
+  files: string[];
+  zipFile?: string;
+  warnings: GoogleMeetExportWarning[];
+};
+
 export function buildGoogleMeetExportManifest(params: {
   artifacts: GoogleMeetArtifactsResult;
   attendance: GoogleMeetAttendanceResult;
@@ -397,7 +422,7 @@ export function buildGoogleMeetExportManifest(params: {
   tokenSource?: "cached-access-token" | "refresh-token";
   calendarEvent?: GoogleMeetCalendarLookupResult;
   zipFile?: string;
-}) {
+}): GoogleMeetExportManifest {
   const transcriptEntryCount = params.artifacts.artifacts.reduce(
     (count, entry) =>
       count +

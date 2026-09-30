@@ -2,6 +2,7 @@ import {
   GatewayClient,
   startGatewayClientWhenEventLoopReady,
 } from "openclaw/plugin-sdk/gateway-runtime";
+// Google Meet keeps its labels/config; core owns the voicecall.* delegation contract.
 import {
   createMeetingVoiceCallGateway,
   joinMeetingViaVoiceCallGateway,
