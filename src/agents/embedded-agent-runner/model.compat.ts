@@ -51,7 +51,8 @@ function isVllmQwenThinkingCompat(params: { provider: string; compat?: unknown }
   }
   const thinkingFormat = (compat as { thinkingFormat?: unknown }).thinkingFormat;
   return (
-    normalizeProviderId(params.provider) === "vllm" &&
+    (normalizeProviderId(params.provider) === "vllm" ||
+      normalizeProviderId(params.provider) === "bailian") &&
     (thinkingFormat === "qwen" || thinkingFormat === "qwen-chat-template")
   );
 }
