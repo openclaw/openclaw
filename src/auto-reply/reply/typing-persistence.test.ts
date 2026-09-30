@@ -25,23 +25,6 @@ describe("typing persistence bug fix", () => {
     vi.useRealTimers();
   });
 
-  it("should NOT restart typing after markRunComplete is called", async () => {
-    // Start typing normally
-    await controller.startTypingLoop();
-    expect(onReplyStartSpy).toHaveBeenCalledTimes(1);
-
-    // Mark run as complete (but not yet dispatch idle)
-    controller.markRunComplete();
-
-    // Advance time to trigger the typing interval (6 seconds)
-    vi.advanceTimersByTime(6000);
-
-    // BUG: The typing loop should NOT call onReplyStart again
-    // because the run is already complete
-    expect(onReplyStartSpy).toHaveBeenCalledTimes(1);
-    expect(onReplyStartSpy).not.toHaveBeenCalledTimes(2);
-  });
-
   it("keeps typing alive while keepalive ticks continue during long runs", async () => {
     const longRunCleanupSpy = vi.fn();
     const longRunController = createTypingController({

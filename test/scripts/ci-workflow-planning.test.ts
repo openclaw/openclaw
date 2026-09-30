@@ -468,6 +468,7 @@ function runCheckShardFixture(options: {
     profile?: "blacksmith" | "github" | "hybrid";
     eventName?: "pull_request" | "push" | "workflow_dispatch" | "schedule";
     stripeSupport?: boolean;
+    rootStripeSupport?: boolean;
     hostedContract?: boolean;
     failStripe?: string;
     changedPathsJson?: string;
@@ -499,7 +500,9 @@ function runCheckShardFixture(options: {
     );
     writeFileSync(
       path.join(root, "scripts/run-tsgo-core-test-shards.mts"),
-      options.types?.stripeSupport === false ? "// legacy runner\n" : "// --stripe\n",
+      options.types?.stripeSupport === false
+        ? "// legacy runner\n"
+        : `// --stripe${options.types?.rootStripeSupport ? " --root-stripe" : ""}\n`,
     );
     writeFileSync(
       path.join(root, "scripts/run-tsgo-core-test-shards.mjs"),
@@ -728,8 +731,8 @@ function runDependencyCheckFixture(options: {
       "fi",
       'printf "%s\\n" "$*" >> "$PNPM_CALLS"',
     ]);
-    const checkShardRun = readCiWorkflow().jobs["check-shard"].steps.find(
-      (step: WorkflowStep) => step.name === "Run check shard",
+    const checkShardRun = readCiWorkflow().jobs["check-additional-shard"].steps.find(
+      (step: WorkflowStep) => step.name === "Run dependency checks",
     ).run;
     const run = spawnSync("bash", ["-c", checkShardRun], {
       cwd: root,
@@ -1263,6 +1266,20 @@ describe("ci workflow guards", () => {
         lintCentralScripts: false,
         graphs: ["extensions", "extensions-test", "test-root"],
       },
+      {
+        path: "src/wizard/i18n/locales/en.ts",
+        nodeDataOnly: true,
+        tasks: ["guards", "prod-types", "lint", "dependencies", "test-types"],
+        fastTasks: [],
+        baselineRatchets: false,
+        contracts: false,
+        channelContracts: false,
+        performance: false,
+        coreStripes: [1, 4],
+        lintCoreStripes: [1, 2],
+        lintExtensionStripes: [],
+        lintCentralScripts: true,
+      },
     ])(
       "emits and wires narrow families for $path",
       ({
@@ -1278,6 +1295,7 @@ describe("ci workflow guards", () => {
         lintExtensionStripes,
         lintCentralScripts,
         graphs,
+        nodeDataOnly = false,
       }) => {
         const paths = [changedPath];
         const lintPlan: NonNullable<Awaited<ReturnType<typeof createChangedCiLintPlan>>> = {
@@ -1316,6 +1334,7 @@ describe("ci workflow guards", () => {
           runnerProfile: "hybrid",
           changedPaths: paths,
           ciTypeGraphNames: graphs,
+          scopeEnv: { OPENCLAW_CI_NODE_TEST_DATA_ONLY: String(nodeDataOnly) },
           ciLintPlan: lintPlan,
           changedPlannerSource: changedPlannerSource(),
         });
@@ -1340,7 +1359,43 @@ describe("ci workflow guards", () => {
             workflow.jobs["check-shard"].strategy.matrix,
             context,
           ).include.map((row: { task: string }) => row.task),
-        ).toEqual(tasks);
+        ).toEqual(nodeDataOnly ? tasks : tasks.filter((task) => task !== "dependencies"));
+        const additional = workflow.jobs["check-additional-shard"];
+        const dependencyRows = evaluateWorkflowExpression(
+          additional.strategy.matrix,
+          context,
+        ).include.filter((row: { group: string }) => row.group === "dependencies");
+        expect(dependencyRows).toEqual(
+          tasks.includes("dependencies") && !nodeDataOnly
+            ? [
+                {
+                  check_name: "check-dependencies",
+                  group: "dependencies",
+                  runner: "blacksmith-16vcpu-ubuntu-2404",
+                },
+              ]
+            : [],
+        );
+        if (nodeDataOnly) {
+          expect(manifest.outputs.run_check).toBe("true");
+          expect(manifest.outputs.run_check_additional).toBe("false");
+        }
+        if (dependencyRows.length) {
+          // The dependency gate must start while the installed compiler planner is pending.
+          expect(additional.needs).toEqual(["preflight"]);
+          expect(
+            evaluateWorkflowExpression(additional.if, {
+              ...context,
+              additionalNeeds: { "check-plan": { outputs: {}, result: "skipped" } },
+            }),
+          ).toBe(true);
+          expect(
+            evaluateWorkflowExpression(additional["runs-on"], {
+              ...context,
+              matrix: dependencyRows[0],
+            }),
+          ).toBe("blacksmith-16vcpu-ubuntu-2404");
+        }
         expect(
           JSON.parse(
             expectDefined(manifest.outputs.checks_fast_core_matrix, "fast check matrix"),
@@ -6528,6 +6583,39 @@ describe("ci workflow guards", () => {
       } else {
         expect(stripes).toEqual([]);
         expect(result.calls).toEqual(["check:test-types", "tsgo:scripts"]);
+      }
+    },
+  );
+
+  it.each(["pull_request", "schedule", "workflow_dispatch"] as const)(
+    "runs every root partition after its existing core stripe on %s",
+    (eventName) => {
+      const result = runCheckShardFixture({
+        task: "test-types",
+        scripts: ["tsgo:scripts", "tsgo:test:root"],
+        frozenTarget: false,
+        types: { compose: true, profile: "hybrid", eventName, rootStripeSupport: true },
+      });
+      expect(result.status, result.output).toBe(0);
+      expect(result.rows).toHaveLength(6);
+      expect(result.calls).toEqual(["tsgo:extensions:test", "tsgo:scripts"]);
+      for (let stripe = 1; stripe <= 5; stripe++) {
+        expect(result.typeCalls.filter((call) => call.row === `core-${stripe}`)).toEqual([
+          {
+            row: `core-${stripe}`,
+            command: `node --stripe ${stripe}/5 --concurrency 2`,
+            localCheck: null,
+          },
+          ...(stripe >= 2
+            ? [
+                {
+                  row: `core-${stripe}`,
+                  command: `node --root-stripe ${stripe - 1}/4`,
+                  localCheck: "0",
+                },
+              ]
+            : []),
+        ]);
       }
     },
   );

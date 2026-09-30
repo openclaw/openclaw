@@ -111,10 +111,7 @@ export function normalizeProviders(params: {
     const needsProfileApiKey =
       Array.isArray(normalizedProvider.models) &&
       normalizedProvider.models.length > 0 &&
-      !(
-        (typeof normalizedProvider.apiKey === "string" && normalizedProvider.apiKey.trim()) ||
-        normalizedProvider.apiKey
-      );
+      !normalizedProvider.apiKey;
     const profileApiKey = needsProfileApiKey ? resolveProfileApiKey(normalizedKey) : undefined;
     const providerApiKeyResolver = needsProfileApiKey
       ? resolveProviderConfigApiKeyResolver(normalizedKey, undefined, params.manifestRegistry)

@@ -15,7 +15,7 @@ afterEach(() => {
 });
 
 describe.runIf("__vitest_browser__" in globalThis)("narrow tool activity rows", () => {
-  it("truncates long progress receipts while keeping short tool labels intact", () => {
+  it("truncates long progress receipts while keeping tool identity visible", () => {
     container = document.body.appendChild(document.createElement("div"));
     container.style.width = "220px";
     const step = "Verify the implementation and report the result. ".repeat(12).slice(0, 512);
@@ -48,11 +48,11 @@ describe.runIf("__vitest_browser__" in globalThis)("narrow tool activity rows", 
     expect(text.scrollWidth).toBeGreaterThan(text.clientWidth);
     expect(getComputedStyle(text).textOverflow).toBe("ellipsis");
 
-    const label = Array.from(
-      container.querySelectorAll<HTMLElement>(".chat-tool-msg-summary__label"),
-    ).find((element) => element.textContent === "Yield")!;
-    expect(label).toBeDefined();
-    expect(label.scrollWidth).toBe(label.clientWidth);
+    const icon = container.querySelector<HTMLElement>('[role="img"][aria-label="yield"]')!;
+    expect(icon).not.toBeNull();
+    expect(icon.title).toBe("yield");
+    expect(icon.clientWidth).toBeGreaterThan(0);
+    expect(icon.scrollWidth).toBe(icon.clientWidth);
   });
 });
 

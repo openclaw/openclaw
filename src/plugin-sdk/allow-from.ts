@@ -1,4 +1,3 @@
-// Allow-from helpers parse and match plugin channel allowlist entries.
 import { normalizeOptionalLowercaseString } from "../../packages/normalization-core/src/string-coerce.js";
 import {
   normalizeStringEntries,

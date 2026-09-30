@@ -33,6 +33,7 @@ import { attachOutboundDeliveryCommitHook } from "./delivery-commit-hooks.js";
 import { pruneOrphanedDeliveryQueueMedia } from "./delivery-queue-media-spool.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-media-staging.js";
 import { recoverPendingDeliveries, type DeliverFn } from "./delivery-queue-recovery.js";
+import * as deliveryQueueStorage from "./delivery-queue-storage.js";
 import {
   claimDeliveryPlatformSendAttempt,
   enqueueDelivery,
@@ -275,39 +276,28 @@ describe("delivery-queue recovery", () => {
     });
     return { result, log };
   };
-  type StorageModule = typeof import("./delivery-queue-storage.js");
   async function runRecoveryWithStorageOverrides(params: {
-    overrides: (actual: StorageModule) => Partial<StorageModule>;
-    deliver?: ReturnType<typeof vi.fn>;
-    createDeliver?: () => Promise<ReturnType<typeof vi.fn>>;
+    overrides: Partial<
+      Pick<typeof deliveryQueueStorage, "ackDelivery" | "markDeliveryPlatformOutcomeUnknown">
+    >;
+    deliver: ReturnType<typeof vi.fn>;
   }) {
-    vi.resetModules();
-    vi.doMock("./delivery-queue-storage.js", async () => {
-      const actual = await vi.importActual<StorageModule>("./delivery-queue-storage.js");
-      return { ...actual, ...params.overrides(actual) };
-    });
+    const ackSpy = params.overrides.ackDelivery
+      ? vi
+          .spyOn(deliveryQueueStorage, "ackDelivery")
+          .mockImplementation(params.overrides.ackDelivery)
+      : undefined;
+    const markerSpy = params.overrides.markDeliveryPlatformOutcomeUnknown
+      ? vi
+          .spyOn(deliveryQueueStorage, "markDeliveryPlatformOutcomeUnknown")
+          .mockImplementation(params.overrides.markDeliveryPlatformOutcomeUnknown)
+      : undefined;
     try {
-      const { recoverPendingDeliveries: recoverWithFailures } =
-        await import("./delivery-queue-recovery.js");
-      const log = createRecoveryLog();
-      const deliver = params.deliver ?? (await params.createDeliver?.());
-      if (!deliver) {
-        throw new Error("Storage override recovery requires a delivery function");
-      }
-      const summary = await recoverWithFailures({
-        deliver: asDeliverFn(deliver),
-        log,
-        cfg: baseCfg,
-        stateDir: tmpDir(),
-      });
-      return { summary, log };
+      const { result, log } = await runRecovery({ deliver: params.deliver });
+      return { summary: result, log };
     } finally {
-      // Reset modules gives recovery its own SQLite cache; close that handle before discarding it.
-      const { closeOpenClawStateDatabaseForTest: closeRecoveryDatabase } =
-        await import("../../state/openclaw-state-db.js");
-      closeRecoveryDatabase();
-      vi.doUnmock("./delivery-queue-storage.js");
-      vi.resetModules();
+      ackSpy?.mockRestore();
+      markerSpy?.mockRestore();
     }
   }
   async function createConversationRecoveryFixture(operationId: string) {
@@ -1218,7 +1208,7 @@ describe("delivery-queue recovery", () => {
       return [];
     });
     const { summary, log } = await runRecoveryWithStorageOverrides({
-      overrides: (actual) => ({
+      overrides: {
         ...(markerFails
           ? {
               markDeliveryPlatformOutcomeUnknown: vi.fn(async () => {
@@ -1229,13 +1219,14 @@ describe("delivery-queue recovery", () => {
         ...(ackFails
           ? {
               ackDelivery: vi.fn(async (entryId: string, stateDir?: string) => {
-                recoveryStateAtAck = (await actual.loadPendingDelivery(entryId, stateDir))
-                  ?.recoveryState;
+                recoveryStateAtAck = (
+                  await deliveryQueueStorage.loadPendingDelivery(entryId, stateDir)
+                )?.recoveryState;
                 throw new Error("ack state db locked");
               }),
             }
           : {}),
-      }),
+      },
       deliver,
     });
     if (mode === "marker") {
@@ -1307,11 +1298,11 @@ describe("delivery-queue recovery", () => {
       return [firstResult, secondResult];
     });
     const { summary } = await runRecoveryWithStorageOverrides({
-      overrides: () => ({
+      overrides: {
         markDeliveryPlatformOutcomeUnknown: vi.fn(async () => {
           throw new Error("post-send state db locked");
         }),
-      }),
+      },
       deliver,
     });
     expect(summary).toMatchObject({ recovered: 1, failed: 0 });
@@ -1343,36 +1334,32 @@ describe("delivery-queue recovery", () => {
       bestEffort: true,
     });
     const afterCommit = vi.fn();
+    const result = attachOutboundDeliveryCommitHook(
+      { channel: "demo-channel-a", messageId: "m1" },
+      afterCommit,
+    );
     const { summary } = await runRecoveryWithStorageOverrides({
-      overrides: () => ({
+      overrides: {
         markDeliveryPlatformOutcomeUnknown: vi.fn(async () => {
           throw new Error("post-send state db locked");
         }),
-      }),
-      createDeliver: async () => {
-        const { attachOutboundDeliveryCommitHook: attachHookAfterReset } =
-          await import("./delivery-commit-hooks.js");
-        const result = attachHookAfterReset(
-          { channel: "demo-channel-a", messageId: "m1" },
-          afterCommit,
-        );
-        return vi.fn(
-          async (params: {
-            onDeliveryResult?: (deliveryResult: typeof result) => Promise<void> | void;
-            onPayloadDeliveryOutcome?: (outcome: OutboundPayloadDeliveryOutcome) => void;
-          }) => {
-            await params.onDeliveryResult?.(result);
-            params.onPayloadDeliveryOutcome?.({
-              index: 1,
-              status: "failed",
-              error: new Error("second send failed"),
-              sentBeforeError: false,
-              stage: "platform_send",
-            });
-            return [result];
-          },
-        );
       },
+      deliver: vi.fn(
+        async (params: {
+          onDeliveryResult?: (deliveryResult: typeof result) => Promise<void> | void;
+          onPayloadDeliveryOutcome?: (outcome: OutboundPayloadDeliveryOutcome) => void;
+        }) => {
+          await params.onDeliveryResult?.(result);
+          params.onPayloadDeliveryOutcome?.({
+            index: 1,
+            status: "failed",
+            error: new Error("second send failed"),
+            sentBeforeError: false,
+            stage: "platform_send",
+          });
+          return [result];
+        },
+      ),
     });
     expect(summary).toMatchObject({ recovered: 0, failed: 1 });
     expect(afterCommit).toHaveBeenCalledTimes(1);

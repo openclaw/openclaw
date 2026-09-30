@@ -18,13 +18,6 @@ import { resolveFeishuToolAccount } from "./tool-account.js";
 import { registerFeishuTool } from "./tool-registration.js";
 import { feishuExternalToolResult as json } from "./tool-result.js";
 
-function readChatPageSize(params: Record<string, unknown>): number | undefined {
-  return readPositiveIntegerParam(params, "page_size", {
-    max: 100,
-    message: "page_size must be a positive integer between 1 and 100",
-  });
-}
-
 export function buildFeishuDirectChatMembers(
   authorization: Extract<FeishuChatMemberReadAuthorization, { kind: "direct" }>,
 ) {
@@ -257,7 +250,10 @@ export function registerFeishuChatTools(api: OpenClawPluginApi) {
               : await getChatMembers(
                   client,
                   p.chat_id,
-                  readChatPageSize(p),
+                  readPositiveIntegerParam(p, "page_size", {
+                    max: 100,
+                    message: "page_size must be a positive integer between 1 and 100",
+                  }),
                   p.page_token,
                   p.member_id_type,
                 ),

@@ -400,38 +400,18 @@ export class ConfigPage extends OpenClawLightDomElement {
     onPageActivation: () => this.syncSystemInfoPolling(),
   });
   private readonly subscriptions = new SubscriptionsController(this)
-    .watch(
+    .watchStore(
       () => this.context?.runtimeConfig,
-      (runtimeConfig, notify) => runtimeConfig.subscribe(notify),
       (runtimeConfig) => this.synchronizeRuntimeConfig(runtimeConfig),
     )
-    .watch(
-      () => this.context?.overlays,
-      (overlays, notify) => overlays.subscribe(notify),
-    )
-    .watch(
-      () => this.context?.config,
-      (config, notify) => config.subscribe(notify),
-    )
-    .watch(
-      () => this.context?.settingsAgentSelection,
-      (selection, notify) => selection.subscribe(notify),
-    )
-    .watch(
-      () => this.context?.nativeDeviceSettings ?? undefined,
-      (nativeDeviceSettings, notify) => nativeDeviceSettings.subscribe(notify),
-    )
-    .watch(
-      () => this.context?.nativeNotifications ?? undefined,
-      (nativeNotifications, notify) => nativeNotifications.subscribe(notify),
-    )
-    .watch(
-      () => this.context?.webPush,
-      (webPush, notify) => webPush.subscribe(notify),
-    )
-    .watch(
+    .watchStore(() => this.context?.overlays)
+    .watchStore(() => this.context?.config)
+    .watchStore(() => this.context?.settingsAgentSelection)
+    .watchStore(() => this.context?.nativeDeviceSettings ?? undefined)
+    .watchStore(() => this.context?.nativeNotifications ?? undefined)
+    .watchStore(() => this.context?.webPush)
+    .watchStore(
       () => this.context?.theme,
-      (theme, notify) => theme.subscribe(notify),
       () => {
         this.settings = this.customThemeImportOwner.adoptSettings(
           this.settings,

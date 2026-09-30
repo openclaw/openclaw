@@ -24,6 +24,7 @@ import {
   chatItemStartsDisplayTurn,
   chatItemStartsUserTurn,
   hasForwardedSource,
+  isInterSessionMessage,
 } from "./chat-turn-boundary.ts";
 import { indexTurnContinuations, persistedSteerTargetRunId } from "./stream-causal-boundary.ts";
 
@@ -272,8 +273,11 @@ function groupChatItems(
     if (
       !currentGroup ||
       startsProjectedTurn ||
+      (isInterSessionMessage(item.message) && !normalized.senderSession?.sessionKey) ||
       currentGroup.role !== role ||
       currentGroup.runId !== runId ||
+      isInterSessionMessage(currentGroup.messages[0]?.message) !==
+        isInterSessionMessage(item.message) ||
       currentUserTurnIdentity !== userTurnIdentity ||
       (role === "assistant" && currentReplyTargetKey !== replyTargetKey) ||
       splitsAssistantKind ||
@@ -283,6 +287,7 @@ function groupChatItems(
         ((!sender?.identity && currentGroup.senderLabel !== senderLabel) ||
           currentGroup.senderSession?.sessionKey !== normalized.senderSession?.sessionKey ||
           currentGroup.senderSession?.label !== normalized.senderSession?.label ||
+          currentGroup.senderSession?.agentId !== normalized.senderSession?.agentId ||
           senderIdentityKey(currentGroup.sender) !== senderIdentityKey(sender)))
     ) {
       if (currentGroup) {

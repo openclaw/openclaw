@@ -15,7 +15,10 @@ import { buildCachedChatItems } from "../chat-thread.ts";
 import { agentEvent, createHost } from "../tool-stream.test-helpers.ts";
 import { handleAgentEvent } from "../tool-stream.ts";
 import { renderChatNotice } from "./chat-divider.ts";
+import { dismissConfirmedActionPopovers } from "./chat-message-confirmation.ts";
+import { renderActivityGroup, renderMessageGroup } from "./chat-message-group.ts";
 import { releaseChatMediaResourceSubscriber } from "./chat-message-media.ts";
+import { renderStreamGroup } from "./chat-message-stream.ts";
 import {
   createAssistantMessage,
   createCanvasPreview,
@@ -36,12 +39,6 @@ import {
   type TestMessage,
   type TestMessageEntry,
 } from "./chat-message.test-support.ts";
-import {
-  dismissConfirmedActionPopovers,
-  renderActivityGroup,
-  renderMessageGroup,
-  renderStreamGroup,
-} from "./chat-message.ts";
 import "./chat-sidebar.ts";
 
 let view: HTMLDivElement;
@@ -1883,9 +1880,8 @@ describe("grouped chat rendering", () => {
     });
 
     const summary = expectElement(view, ".chat-tool-msg-summary", HTMLButtonElement);
-    expect(summary.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe(
-      "Heartbeat Respond",
-    );
+    expect(summary.querySelector(".chat-tool-msg-summary__label")).toBeNull();
+    expect(summary.querySelector("[role=img]")?.ariaLabel).toBe("heartbeat_respond");
     expect(summary.querySelector(".chat-tool-msg-summary__names")).toBeNull();
   });
 

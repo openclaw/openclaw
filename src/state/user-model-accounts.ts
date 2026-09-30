@@ -23,6 +23,7 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
 import { isUserModelAuthProfileId, parseUserModelAuthProfileId } from "./user-model-account-id.js";
+import { publishUserProfileModelAccountLinksChange } from "./user-profile-events.js";
 import { selectResolvedUserProfile, userProfilesDb } from "./user-profiles-internal.js";
 
 const credentialSchema = inlineAuthProfileCredentialSchema.refine(
@@ -157,6 +158,7 @@ function readLinks(db: DatabaseSync, owner: string): UserModelLinks {
 
 function writeLinks(db: DatabaseSync, owner: string, links: UserModelLinks): void {
   writeRecord(db, owner, "model-accounts", JSON.stringify(linksSchema.parse(links)));
+  publishUserProfileModelAccountLinksChange(db, owner);
 }
 
 function readProfile(
@@ -495,6 +497,9 @@ export function renameUserProfileAuthLinks(
             .where("deleted_at_ms", "is", null),
         );
       }
+      for (const { owner } of replacements) {
+        publishUserProfileModelAccountLinksChange(db, owner);
+      }
       return replacements.length;
     },
     options,
@@ -621,4 +626,5 @@ export function mergeUserModelAccounts(db: DatabaseSync, source: string, target:
         eb.or([eb("name", "=", "model-accounts"), eb("name", "like", "model-account:%")]),
       ),
   );
+  publishUserProfileModelAccountLinksChange(db, source, target);
 }

@@ -368,7 +368,7 @@ public struct OpenClawChatSessionMutationRouteLease: Sendable {
         _ color: String??,
         _ pinned: Bool?,
         _ archived: Bool?,
-        _ unread: Bool?) async throws -> Void
+        _ unread: Bool?) async throws -> OpenClawChatSessionPatchReceipt?
     public typealias DeleteTarget = @Sendable (_ target: OpenClawChatSessionTarget) async throws -> Void
 
     private let patchSessionImpl: PatchTarget
@@ -384,6 +384,7 @@ public struct OpenClawChatSessionMutationRouteLease: Sendable {
                 guard target.agentID == nil else { throw OpenClawChatTransportSendError.notDispatched }
                 try await patchSession(
                     target.sessionKey, expectedID, expectedUnreadAt, label, category, color, pinned, archived, unread)
+                return nil
             }
         if let deleteSession {
             self.deleteSessionImpl = { target in
@@ -405,6 +406,7 @@ public struct OpenClawChatSessionMutationRouteLease: Sendable {
     public init(
         sessionTarget: @escaping @Sendable (String) -> OpenClawChatSessionTarget,
         unreadAckContract: Bool?,
+        receivesPatchReceipts: Bool = false,
         request: @escaping @Sendable (OpenClawChatGatewayRequest) async throws -> Data)
     {
         self.init(
@@ -413,7 +415,7 @@ public struct OpenClawChatSessionMutationRouteLease: Sendable {
                     throw OpenClawChatTransportSendError.notDispatched
                 }
                 let target = requested.agentID == nil ? sessionTarget(requested.sessionKey) : requested
-                _ = try await request(OpenClawChatGatewayRequests.patchSession(
+                let data = try await request(OpenClawChatGatewayRequests.patchSession(
                     sessionKey: target.sessionKey,
                     agentID: target.agentID,
                     expectedSessionID: expectedID,
@@ -426,6 +428,10 @@ public struct OpenClawChatSessionMutationRouteLease: Sendable {
                         unread: unread,
                         expectedMarkedUnreadAt: expectedUnreadAt,
                         supportsReadContract: unreadAckContract == true)))
+                guard receivesPatchReceipts else { return nil }
+                var receipt = try JSONDecoder().decode(OpenClawChatSessionPatchReceipt.self, from: data)
+                receipt.agentID = OpenClawChatSessionKey.agentID(from: target.sessionKey) ?? target.agentID
+                return receipt
             },
             deleteTarget: { requested in
                 let target = requested.agentID == nil ? sessionTarget(requested.sessionKey) : requested
@@ -435,6 +441,7 @@ public struct OpenClawChatSessionMutationRouteLease: Sendable {
             })
     }
 
+    @discardableResult
     public func patchSession(
         key: String,
         agentID: String? = nil,
@@ -445,7 +452,7 @@ public struct OpenClawChatSessionMutationRouteLease: Sendable {
         color: String?? = nil,
         pinned: Bool?,
         archived: Bool?,
-        unread: Bool?) async throws
+        unread: Bool?) async throws -> OpenClawChatSessionPatchReceipt?
     {
         try await self.patchSessionImpl(
             OpenClawChatSessionTarget(sessionKey: key, agentID: agentID),

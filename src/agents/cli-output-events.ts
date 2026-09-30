@@ -18,6 +18,8 @@ import type {
 } from "./cli-output-contracts.js";
 import {
   isClaudeSubagentRecord,
+  isClaudeToolResultBlockType,
+  isClaudeToolUseBlockType,
   isGeminiStreamJsonDialect,
   supportsCliJsonlToolEvents,
 } from "./cli-output-records.js";
@@ -228,12 +230,8 @@ export function projectCliTaggedReasoning(params: {
   return text;
 }
 
-export function isClaudeToolUseBlockType(type: unknown): type is CliToolUseStartDelta["kind"] {
-  return type === "tool_use" || type === "server_tool_use" || type === "mcp_tool_use";
-}
-
 function isClaudeAssistantToolResultBlockType(type: unknown): boolean {
-  return typeof type === "string" && type.endsWith("_tool_result") && type !== "tool_result";
+  return isClaudeToolResultBlockType(type) && type !== "tool_result";
 }
 
 function isClaudeToolResultError(content: unknown): boolean {

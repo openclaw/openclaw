@@ -68,9 +68,15 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/sidebar-update-card.ts":
     case "ui/src/styles/sidebar-update-card.css":
       return "sidebar-update-runtime";
+    case "ui/src/pages/chat/components/chat-transcript-geometry.ts":
+    case "ui/src/pages/chat/components/chat-transcript-header.ts":
     case "ui/src/pages/chat/components/chat-transcript-layout-owner.ts":
+    case "ui/src/pages/chat/components/chat-transcript-layout.ts":
+    case "ui/src/pages/chat/components/chat-transcript-offset-observer.ts":
+    case "ui/src/pages/chat/components/chat-transcript-row-refs.ts":
     case "ui/src/pages/chat/components/chat-transcript-scroll-events.ts":
-      // Keep geometry and its event channel independent of the shared transcript bundle.
+      // Keep row layout, measurement, and their event channel together,
+      // independent of the growing shared transcript content renderers.
       return "chat-transcript-layout";
     case "ui/src/pages/chat/session-snapshot-database.ts":
       // Warm boot reads while the Gateway connects; the chat boot group made it wait for the whole route.

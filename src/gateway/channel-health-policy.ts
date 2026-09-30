@@ -1,6 +1,10 @@
 // Gateway channel health policy.
 // Evaluates channel lifecycle snapshots for restart/readiness decisions.
-import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
+import {
+  asFiniteNumber,
+  isFutureDateTimestampMs,
+  resolveNonNegativeIntegerOption,
+} from "@openclaw/normalization-core/number-coercion";
 import type { ChannelAccountSnapshot, ChannelId } from "../channels/plugins/types.public.js";
 
 type ChannelHealthSnapshot = Omit<ChannelAccountSnapshot, "accountId">;
@@ -91,10 +95,7 @@ export function evaluateChannelHealth(
   if (snapshot.lifecycle === "blocked") {
     return { healthy: false, reason: "blocked" };
   }
-  const lastStartAt =
-    typeof snapshot.lastStartAt === "number" && Number.isFinite(snapshot.lastStartAt)
-      ? snapshot.lastStartAt
-      : null;
+  const lastStartAt = asFiniteNumber(snapshot.lastStartAt) ?? null;
   const currentLifecycleStarted =
     lastStartAt !== null && !isFutureDateTimestampMs(lastStartAt, { nowMs: policy.now });
   // Trust recorded starting/recovering only inside connect grace. Without a timestamp or after
@@ -109,10 +110,7 @@ export function evaluateChannelHealth(
   if (snapshot.lifecycle === "stopped" || !snapshot.running) {
     return { healthy: false, reason: "not-running" };
   }
-  const activeRuns =
-    typeof snapshot.activeRuns === "number" && Number.isFinite(snapshot.activeRuns)
-      ? Math.max(0, Math.trunc(snapshot.activeRuns))
-      : 0;
+  const activeRuns = resolveNonNegativeIntegerOption(snapshot.activeRuns, 0);
   const isBusy = snapshot.busy === true || activeRuns > 0;
   const lastRunActivityAt = resolveObservedChannelTimestamp(snapshot.lastRunActivityAt, policy.now);
   const activeRunStartedAt = resolveObservedChannelTimestamp(

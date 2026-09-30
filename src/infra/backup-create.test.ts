@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import fsSync from "node:fs";
+import fsSync, { rmSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -42,6 +42,7 @@ import {
 } from "./backup-create.test-support.js";
 import { classifyBackupSqliteSource } from "./backup-sqlite-snapshot.js";
 import { writeTarArchiveWithRetry } from "./backup-tar-retry.js";
+import * as backupTarWalk from "./backup-tar-walk.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 
@@ -485,6 +486,46 @@ describe("writeTarArchiveWithRetry", () => {
       }),
     ).rejects.toThrow(/last offending path: \/state\/logs\/gateway\.jsonl, after 3 attempts/);
     expect(runTar).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe("volatile archive traversal", () => {
+  it("filters a volatile file removed after directory discovery", async () => {
+    await withBackupState("openclaw-backup-volatile-traversal-", async (state) => {
+      const volatilePath = await state.writeText("logs/gateway.log", "live log\n");
+      await state.writeText("settings.json", '{"keep":true}\n');
+      const readdir = fs.readdir;
+      const walk = backupTarWalk.walkBackupTar;
+      let archiving = false;
+      let removedBeforeStat = false;
+      const traversal = vi.spyOn(backupTarWalk, "walkBackupTar").mockImplementation((params) => {
+        archiving = true;
+        return walk(params);
+      });
+      const discovery = vi.spyOn(fs, "readdir").mockImplementation(async (...args) => {
+        const entries = await readdir(...args);
+        // Earlier discovery also lists logs; remove only after the payload walker lists its name.
+        if (archiving && args[0] === path.dirname(volatilePath)) {
+          rmSync(volatilePath, { force: true });
+          removedBeforeStat = true;
+        }
+        return entries;
+      });
+      try {
+        const archive = await createBackupArchive({
+          output: state.path("backup.tar.gz"),
+          includeWorkspace: false,
+        });
+        const entries = await listArchiveEntries(archive.archivePath);
+        expect(removedBeforeStat).toBe(true);
+        expect(archive.skippedVolatileCount).toBe(1);
+        expect(entries.some((entry) => entry.endsWith("/settings.json"))).toBe(true);
+        expect(entries.some((entry) => entry.endsWith("/logs/gateway.log"))).toBe(false);
+      } finally {
+        discovery.mockRestore();
+        traversal.mockRestore();
+      }
+    });
   });
 });
 

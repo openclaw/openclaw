@@ -480,14 +480,9 @@ import WatchKit
         }
 
         let existingRecords = self.execApprovals
-        var existingRecordsByOwner: [ExecApprovalOwnerKey: WatchExecApprovalRecord] = [:]
-        for record in existingRecords {
-            guard let key = record.approval.ownerKey
-            else {
-                continue
-            }
-            existingRecordsByOwner[key] = record
-        }
+        let existingRecordsByOwner = Dictionary(
+            existingRecords.compactMap { record in record.approval.ownerKey.map { ($0, record) } },
+            uniquingKeysWith: { _, latest in latest })
         self.pruneExecApprovalTerminalTombstones(now: Date())
         let incomingApprovals = message.approvals.filter { approval in
             WatchApprovalID.exact(approval.id) != nil
@@ -853,32 +848,26 @@ extension WatchInboxStore {
         resetResolutionAttemptID: String? = nil) -> Bool
     {
         guard let ownerKey = approval.ownerKey else { return false }
-        if let index = execApprovals.firstIndex(where: { $0.id == ownerKey }) {
-            guard Self.snapshotCanReplace(
-                record: self.execApprovals[index],
-                snapshotSentAtMs: sourceSentAtMs)
-            else { return false }
-            let resetResolvingState = if let resetResolutionAttemptID,
-                                         let activeResolutionAttemptID =
-                                         self.execApprovals[index].activeResolutionAttemptID
-            {
-                WatchOpaqueUTF8Key(resetResolutionAttemptID) == WatchOpaqueUTF8Key(activeResolutionAttemptID)
-            } else {
-                false
-            }
-            self.execApprovals[index] = self.mergedExecApprovalRecord(
-                approval: approval,
-                transport: transport,
-                sourceSentAtMs: sourceSentAtMs,
-                existingRecord: self.execApprovals[index],
-                resetResolvingState: resetResolvingState)
+        let index = self.execApprovals.firstIndex(where: { $0.id == ownerKey })
+        let existingRecord = index.map { self.execApprovals[$0] }
+        guard Self.snapshotCanReplace(record: existingRecord, snapshotSentAtMs: sourceSentAtMs) else { return false }
+        let resetResolvingState = if let resetResolutionAttemptID,
+                                     let activeResolutionAttemptID = existingRecord?.activeResolutionAttemptID
+        {
+            WatchOpaqueUTF8Key(resetResolutionAttemptID) == WatchOpaqueUTF8Key(activeResolutionAttemptID)
         } else {
-            self.execApprovals.append(
-                self.mergedExecApprovalRecord(
-                    approval: approval,
-                    transport: transport,
-                    sourceSentAtMs: sourceSentAtMs,
-                    existingRecord: nil))
+            false
+        }
+        let record = self.mergedExecApprovalRecord(
+            approval: approval,
+            transport: transport,
+            sourceSentAtMs: sourceSentAtMs,
+            existingRecord: existingRecord,
+            resetResolvingState: resetResolvingState)
+        if let index {
+            self.execApprovals[index] = record
+        } else {
+            self.execApprovals.append(record)
         }
         if self.selectedExecApprovalOwnerKey == nil {
             self.selectedExecApprovalID = approval.id

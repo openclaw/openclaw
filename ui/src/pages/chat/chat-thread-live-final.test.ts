@@ -53,7 +53,12 @@ function indexItems(
   items: ReturnType<typeof coalesceAgentRunFrames>,
   labels: Parameters<typeof projectTranscriptIndex>[2],
 ) {
-  const chain = { collapsedItems: items, transcriptItems: items, continuations: new Map() };
+  const chain = {
+    collapsedItems: items,
+    transcriptItems: items,
+    continuations: new Map(),
+    searchActive: false,
+  };
   return projectTranscriptIndex(chain, new Map(), labels);
 }
 function completed() {

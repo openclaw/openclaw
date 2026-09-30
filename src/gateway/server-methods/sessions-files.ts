@@ -54,8 +54,6 @@ import {
   type TouchedFile,
 } from "./workspace-files.js";
 
-type FileKind = TouchedFile["kind"];
-
 type TouchedFilesCacheEntry = {
   cursor: string;
   files: Map<string, TouchedFile>;
@@ -108,7 +106,7 @@ function readPathArg(args: Record<string, unknown>): string | undefined {
 function addTouchedFile(
   files: Map<string, TouchedFile>,
   filePath: string | undefined,
-  kind: FileKind,
+  kind: TouchedFile["kind"],
 ) {
   if (!filePath) {
     return;
@@ -373,16 +371,6 @@ function respondSessionFileTooLarge(respond: RespondFn, file: SessionFileEntry, 
   );
 }
 
-function respondSessionFileUnsafe(respond: RespondFn, filePath: string) {
-  respond(
-    false,
-    undefined,
-    sessionFilesError("session_file_unsafe", "session file could not be written safely", {
-      path: filePath,
-    }),
-  );
-}
-
 function requireSessionFilesAgentId(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
@@ -552,7 +540,13 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
       return;
     }
     if (update.status === "unsafe") {
-      respondSessionFileUnsafe(respond, params.path);
+      respond(
+        false,
+        undefined,
+        sessionFilesError("session_file_unsafe", "session file could not be written safely", {
+          path: params.path,
+        }),
+      );
       return;
     }
     respond(true, {

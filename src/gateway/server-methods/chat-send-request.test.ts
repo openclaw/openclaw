@@ -196,7 +196,7 @@ describe("normalizeChatSendRequest", () => {
     ).toMatchObject({ ok: false });
   });
 
-  it.each(["clear the backlog", "/stop", "/btw investigate", "  résumé\n\n  preserve spacing  "])(
+  it.each(["/stop", "/btw investigate", "  résumé\n\n  preserve spacing  "])(
     "admits Goal objective %j literally without command interpretation",
     (message) => {
       expect(

@@ -1,6 +1,4 @@
 import path from "node:path";
-import type { AgentSession } from "openai/resources/beta/agents/agents";
-import type { Turn } from "openai/resources/beta/agents/sessions/turns";
 import {
   queueAgentHarnessMessage,
   type AgentHarnessAttemptParamsV2,
@@ -20,6 +18,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runAgentsApiAttempt, type AgentsApiPromptHistories } from "./agentsapi-attempt.js";
 import type { AgentsApiBinding } from "./agentsapi-bindings.js";
 import { AgentsApiClient, type AgentsApiItem } from "./agentsapi-client.js";
+import { createHostedSession, createModel, createTurn } from "./agentsapi.test-support.js";
 
 const { createSession, registerRun } = vi.hoisted(() => ({
   createSession: vi.fn<typeof import("./agentsapi-session.js").createAgentsApiSession>(),
@@ -352,18 +351,7 @@ async function createAttempt() {
     abortSignal: controller.signal,
     provider: "openai",
     modelId: "fixture-model",
-    model: {
-      id: "fixture-model",
-      name: "Fixture Model",
-      api: "openai-responses",
-      provider: "openai",
-      baseUrl: "https://api.openai.com/v1",
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 1024,
-      maxTokens: 512,
-    },
+    model: createModel(),
     resolvedApiKey: "fixture-not-a-real-api-key",
     authStorage,
     modelRegistry: ModelRegistry.inMemory(authStorage),
@@ -409,19 +397,7 @@ async function createAttempt() {
   };
 }
 
-const completedTurn: Turn = {
-  id: "turn-fixture",
-  agent_id: "agent-fixture",
-  session_id: "session-fixture",
-  object: "agent.session.turn",
-  created_at: 1,
-  started_at: 1,
-  completed_at: 2,
-  status: "completed",
-  subagent_id: null,
-  error: null,
-  usage: null,
-};
+const completedTurn = createTurn();
 
 const completedItem: AgentsApiItem = {
   id: "answer-fixture",
@@ -433,36 +409,4 @@ const completedItem: AgentsApiItem = {
   content: [{ type: "output_text", text: "The completed answer." }],
 };
 
-const hostedSession: AgentSession = {
-  id: "session-fixture",
-  agent: {
-    id: "agent-fixture",
-    instructions: "Fixture instructions",
-    model: "fixture-model",
-    multi_agent: { enabled: false, max_concurrent_subagents: null },
-    name: null,
-    reasoning: { effort: null, summary: null },
-    service_tier: "auto",
-    text: { format: { type: "text" }, verbosity: "medium" },
-    tools: [],
-  },
-  created_at: 1,
-  environment: {
-    id: "environment-fixture",
-    capability_directories: [],
-    files: [],
-    network: { access: "disabled", allowed_domains: [] },
-    packages: { npm: [], python: [], system: [] },
-    plugins: [],
-    skills: [],
-    type: "openai_hosted",
-  },
-  error: null,
-  last_active_at: 2,
-  metadata: {},
-  object: "agent.session",
-  required_actions: [],
-  status: "idle",
-  usage: null,
-  vault_ids: [],
-};
+const hostedSession = createHostedSession();

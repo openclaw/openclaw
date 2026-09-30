@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual, stripVTControlCharacters } from "node:util";
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import JSON5 from "json5";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -634,9 +635,7 @@ export async function validateUpdateCandidateCanary(params: {
     }
     const durationMs = Date.now() - stepStartedAt;
     const displayPhase = phase === "lint" ? "health" : phase;
-    const failureLine = capture(
-      `${displayPhase}: ${error instanceof Error ? error.message : String(error)} (${durationMs}ms)`,
-    );
+    const failureLine = capture(`${displayPhase}: ${coerceErrorMessage(error)} (${durationMs}ms)`);
     let failed = steps.at(-1);
     if (!failed || (failed.exitCode === 0 && failed !== activeLintStep) || failed.advisory) {
       failed = activeLintStep ?? {
@@ -659,7 +658,7 @@ export async function validateUpdateCandidateCanary(params: {
           check: phase === "readiness" ? "readyz" : phase === "startup" ? "startupz" : phase,
           code:
             phase === "doctor" || phase === "lint" ? "doctor-failed" : `candidate-${phase}-failed`,
-          message: error instanceof Error ? error.message : String(error),
+          message: coerceErrorMessage(error),
         },
         env,
       ),

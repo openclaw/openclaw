@@ -240,7 +240,7 @@ end
 def read_ios_version_metadata(**)
   { version: "2026.7.2", short_version: "2026.7.21", app_store_revision: "1" }
 end
-def render_ios_release_notes(short_version:, build_number:)
+def render_ios_release_notes(short_version:, build_number:, **)
   raise "wrong notes identity" unless [short_version, build_number] == ["2026.7.21", "3"]
   "Saved public release notes.\n"
 end
@@ -330,13 +330,30 @@ module UI
   def self.user_error!(message); raise message; end
   def self.success(*); end
   def self.important(*); end
+  def self.message(*); end
+  def self.header(*); end
 end
-def default_platform(*); end
-def desc(*); end
-def platform(*); yield; end
-def lane(name, &body); define_singleton_method(name, &body); end
-alias private_lane lane
-load ARGV.fetch(0)
+# Fastlane evaluates its Fastfile in an instance binding. Top-level load
+# incorrectly makes Fastfile constants visible to require_relative helpers.
+if ENV["OPENCLAW_TEST_FASTLANE_BUNDLE"] == "1"
+  require "fastlane"
+  FastlaneCore::UI.ui_object = UI
+  Fastlane.load_actions
+  fastfile = Fastlane::FastFile.new(ARGV.fetch(0))
+  run_stage = ->(options) { fastfile.runner.execute(:release_stage, :ios, options) }
+else
+  class FastfileFixture
+    def parsing_binding; binding; end
+    def default_platform(*); end
+    def desc(*); end
+    def platform(*); yield; end
+    def lane(name, &body); define_singleton_method(name, &body); end
+    alias private_lane lane
+  end
+  fastfile = FastfileFixture.new
+  eval(File.read(ARGV.fetch(0)), fastfile.parsing_binding, ARGV.fetch(0))
+  run_stage = ->(options) { fastfile.release_stage(options) }
+end
 $LOADED_FEATURES << "pilot.rb"
 module Pilot
   class BuildManager
@@ -344,9 +361,9 @@ module Pilot
   end
 end
 module Spaceship
-  module ConnectAPI
+  class ConnectAPI
     module Platform
-      IOS = "IOS"
+      IOS = "IOS" unless const_defined?(:IOS)
     end
     class Build
       def self.all(**); $builds; end
@@ -376,27 +393,29 @@ App = Struct.new(:id, :groups, :localizations) do
   def get_beta_groups; groups; end
   def get_beta_app_localizations; localizations; end
 end
-def read_ios_version_metadata(**)
-  { version: "2026.7.2", short_version: "2026.7.21", app_store_revision: "1" }
-end
-def render_ios_release_notes(**); "Saved beta notes."; end
-def assert_ios_uploaded_release_source!(**)
-  raise "source mismatch" if $scenario == "source-mismatch"
-end
-def app_store_connect_api_key_config; :fixture_key; end
-def app_store_connect_target_app; $app; end
-def stage_ios_app_store_release!(**); raise "App Store staging attempted"; end
-def resolve_ios_release_plan!(**); raise "replanning attempted"; end
-def upload_to_testflight(**options)
-  raise "reupload attempted" unless options[:distribute_only] == true
-  $options = options
-  raise "submission failed" if $scenario == "submission-failure"
-  build = $builds.first
-  build.localizations = [Localization.new("en-US", nil, nil, options.fetch(:localized_build_info).fetch("en-US").fetch(:whats_new))]
-  build.localizations.first.whats_new = "stale" if $scenario == "notes-readback"
-  build.build_beta_detail.auto_notify_enabled = options[:notify_external_testers] unless $scenario == "notify-readback"
-  build.build_beta_detail.external_build_state = "WAITING_FOR_BETA_REVIEW" if options[:submit_beta_review]
-  $group.builds = [build] unless $scenario == "group-readback"
+fastfile.instance_eval do
+  def read_ios_version_metadata(**)
+    { version: "2026.7.2", short_version: "2026.7.21", app_store_revision: "1" }
+  end
+  def render_ios_release_notes(**); "Saved beta notes."; end
+  def assert_ios_uploaded_release_source!(**)
+    raise "source mismatch" if $scenario == "source-mismatch"
+  end
+  def app_store_connect_api_key_config; :fixture_key; end
+  def app_store_connect_target_app; $app; end
+  def stage_ios_app_store_release!(**); raise "App Store staging attempted"; end
+  def resolve_ios_release_plan!(**); raise "replanning attempted"; end
+  def upload_to_testflight(**options)
+    raise "reupload attempted" unless options[:distribute_only] == true
+    $options = options
+    raise "submission failed" if $scenario == "submission-failure"
+    build = $builds.first
+    build.localizations = [Localization.new("en-US", nil, nil, options.fetch(:localized_build_info).fetch("en-US").fetch(:whats_new))]
+    build.localizations.first.whats_new = "stale" if $scenario == "notes-readback"
+    build.build_beta_detail.auto_notify_enabled = options[:notify_external_testers] unless $scenario == "notify-readback"
+    build.build_beta_detail.external_build_state = "WAITING_FOR_BETA_REVIEW" if options[:submit_beta_review]
+    $group.builds = [build] unless $scenario == "group-readback"
+  end
 end
 states = {
   "submit" => "READY_FOR_BETA_SUBMISSION", "pending" => "WAITING_FOR_BETA_REVIEW",
@@ -432,10 +451,10 @@ rows = Tempfile.create(["openclaw-beta-plan", ".json"]) do |plan|
       groups << Group.new("other", "external-group", false, []) if scenario == "ambiguous-group"
       $app = App.new("app", groups, [Localization.new("en-US", scenario == "missing-description" ? "" : "Beta description", "feedback@example.invalid")])
       $review = Review.new("Review", "Contact", scenario == "missing-contact" ? "" : "review@example.invalid", "+15555550123", "Reviewer access instructions", scenario == "missing-demo" ? true : nil)
-      facts = testflight_plan_facts(app: $app, group: $group, short_version: "2026.7.21", versions: [StoreVersion.new("2026.7.21", scenario.start_with?("adopt") ? build : nil)])
+      facts = fastfile.send(:testflight_plan_facts, app: $app, group: $group, short_version: "2026.7.21", versions: [StoreVersion.new("2026.7.21", scenario.start_with?("adopt") ? build : nil)])
       error = nil
       begin
-        release_stage(destination: "testflight", release_version: "2026.7.2", app_store_revision: "1", build_number: "3")
+        run_stage.call(destination: "testflight", release_version: "2026.7.2", app_store_revision: "1", build_number: "3")
       rescue => failure
         error = failure.message
       end
@@ -445,7 +464,14 @@ rows = Tempfile.create(["openclaw-beta-plan", ".json"]) do |plan|
 end
 puts JSON.generate(rows)
 `;
-    const result = spawnSync("ruby", ["-e", source, fastfilePath], { encoding: "utf8" });
+    // Node CI needs only Ruby; this opt-in also proves the pinned Fastlane runtime.
+    const useBundle = process.env.OPENCLAW_TEST_FASTLANE_BUNDLE === "1";
+    const rubyArgs = ["-e", source, fastfilePath];
+    const result = spawnSync(
+      useBundle ? "bundle" : "ruby",
+      useBundle ? ["_4.0.21_", "exec", "ruby", ...rubyArgs] : rubyArgs,
+      { encoding: "utf8", env: { ...process.env, BUNDLE_GEMFILE: gemfilePath } },
+    );
     expect(result.status, result.stderr).toBe(0);
     const rows = JSON.parse(result.stdout) as {
       scenario: string;
@@ -502,6 +528,7 @@ puts JSON.generate(rows)
           app_version: "2026.7.21",
           build_number: "3",
           distribute_only: true,
+          wait_processing_timeout_duration: 3600,
           distribute_external: true,
           groups: ["external-group"],
           notify_external_testers: true,

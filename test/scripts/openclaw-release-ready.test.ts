@@ -461,6 +461,8 @@ describe("release readiness executable handoff", () => {
       append_clawhub_dispatch_args() { clawhub_dispatch_args=(-f "plugins=fixture"); }
       dispatch_workflow() { node "$GITHUB_WORKSPACE/.release-harness/scripts/fixture-dispatch.mjs" "$@"; }
       dispatch_workflow_at_ref() { shift 2; dispatch_workflow "$@"; }
+      sweep_superseded_children() { :; }
+      require_clawhub_dispatch_available() { :; }
     `,
       );
       const plan = writeFixtureFile(

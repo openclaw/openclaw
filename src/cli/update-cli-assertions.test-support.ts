@@ -1,9 +1,8 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, vi } from "vitest";
-import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
+import type { ConfigFileSnapshot } from "../config/types.openclaw.js";
 import type { UpdateRunResult } from "../infra/update-runner-types.js";
-import { getMockCallOutput } from "./test-runtime-capture.js";
 import {
   callGateway,
   spawn,
@@ -19,6 +18,7 @@ import {
   runUpdateFailureTriage,
   updateGitCheckout,
 } from "./update-cli-modules.test-support.js";
+import { createUpdateFixtureAssertions } from "./update-cli-shared-fixture.test-support.js";
 import { isLegacyUpdateDoctorCommand } from "./update-cli/update-command-transport.test-support.js";
 
 await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
@@ -111,54 +111,24 @@ const spawnCall = (index = 0) => {
 
 const completionCommandCall = () => commandCalls().find(([argv]) => argv[2] === "completion");
 
-const syncPluginCall = (index = 0) => {
-  const calls = syncPluginsForUpdateChannel.mock.calls as unknown as Array<
-    [Record<string, unknown> & { channel?: string; config?: OpenClawConfig }]
-  >;
-  return calls[index]?.[0];
-};
-
-const npmPluginUpdateCall = (index = 0) => {
-  const calls = updateNpmInstalledPlugins.mock.calls as unknown as Array<
-    [Record<string, unknown> & { config?: OpenClawConfig; timeoutMs?: number }]
-  >;
-  return calls[index]?.[0];
-};
-const lastNpmPluginUpdateCall = () =>
-  npmPluginUpdateCall(updateNpmInstalledPlugins.mock.calls.length - 1);
-
-const replaceConfigCall = (index = 0) => vi.mocked(replaceConfigFile).mock.calls[index]?.[0];
-const lastReplaceConfigCall = () =>
-  replaceConfigCall(vi.mocked(replaceConfigFile).mock.calls.length - 1);
-const setupConfigMutationWithRetryMock = (
-  onCommitted?: (snapshot: ConfigFileSnapshot, nextConfig: OpenClawConfig) => void,
-) => {
-  vi.mocked(mutateConfigFileWithRetry).mockImplementation(async (params) => {
-    const snapshot = await readConfigFileSnapshot();
-    const nextConfig = structuredClone(snapshot.sourceConfig) as OpenClawConfig;
-    await params.mutate(nextConfig, {
-      snapshot,
-      previousHash: snapshot.hash ?? null,
-      attempt: 0,
-    });
-    await replaceConfigFile({
-      nextConfig,
-      ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
-    });
-    onCommitted?.(snapshot, nextConfig);
-    return {
-      path: snapshot.path,
-      previousHash: snapshot.hash ?? null,
-      snapshot,
-      nextConfig,
-      persistedHash: snapshot.hash ?? null,
-      result: undefined,
-      attempts: 1,
-      afterWrite: { mode: "none", reason: "test" },
-      followUp: { mode: "none", reason: "test", requiresRestart: false },
-    };
-  });
-};
+const {
+  syncPluginCall,
+  npmPluginUpdateCall,
+  lastNpmPluginUpdateCall,
+  replaceConfigCall,
+  lastReplaceConfigCall,
+  setupConfigMutationWithRetryMock,
+  lastWriteJsonCall,
+  getLogOutput,
+  getErrorOutput,
+} = createUpdateFixtureAssertions({
+  syncPluginsForUpdateChannel,
+  updateNpmInstalledPlugins,
+  readConfigFileSnapshot,
+  mutateConfigFileWithRetry,
+  replaceConfigFile,
+  defaultRuntime,
+});
 
 const mockMutableConfigSnapshot = (initial: ConfigFileSnapshot) => {
   let current = initial;
@@ -175,11 +145,6 @@ const mockMutableConfigSnapshot = (initial: ConfigFileSnapshot) => {
   });
 };
 
-const writeJsonCall = (index = 0) => vi.mocked(defaultRuntime.writeJson).mock.calls[index]?.[0];
-const lastWriteJsonCall = () =>
-  writeJsonCall(vi.mocked(defaultRuntime.writeJson).mock.calls.length - 1);
-const getLogOutput = () => getMockCallOutput(vi.mocked(defaultRuntime.log));
-const getErrorOutput = () => getMockCallOutput(vi.mocked(defaultRuntime.error));
 // Failure assertions must not render the triage target's inherited environment.
 const getTriageFailures = () =>
   vi.mocked(runUpdateFailureTriage).mock.calls.map(([call]) => call.failure);

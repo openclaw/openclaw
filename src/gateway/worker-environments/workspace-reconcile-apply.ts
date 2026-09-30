@@ -6,7 +6,7 @@ import {
   stagedInputDirectoriesFromEntries,
   stagedInputPathDirectory,
 } from "../../media/staged-inputs.js";
-import { isAcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
+import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
 import {
   activeWorkspaceHashContext,
   withWorkspaceHashContext,
@@ -275,7 +275,7 @@ async function applyStagedWorkerWorkspaceWithMemo(
   } catch (error) {
     // Transport or settlement timeouts are observation evidence, never authority
     // for an inverse operation; recovery owns restoring both sides.
-    if (isAcceptedWorkspacePublicationIndeterminateError(error)) {
+    if (error instanceof AcceptedWorkspacePublicationIndeterminateError) {
       throw error;
     }
     // A revoked owner cannot authorize an inverse mutation or consume the journal.

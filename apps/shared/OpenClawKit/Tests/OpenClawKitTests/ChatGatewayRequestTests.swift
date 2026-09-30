@@ -286,7 +286,7 @@ struct ChatGatewayRequestTests {
         #expect(request.params["verboseLevel"]?.value as? String == "full")
     }
 
-    @Test func `settings patch request encodes fast values and explicit resets`() {
+    @Test func `settings patch request encodes fast values and explicit resets`() throws {
         let reset = OpenClawChatGatewayRequests.patchSessionSettings(
             sessionKey: "main",
             agentID: nil,
@@ -302,6 +302,13 @@ struct ChatGatewayRequestTests {
         #expect(reset.params["fastMode"]?.value is NSNull)
         #expect(reset.params["verboseLevel"]?.value is NSNull)
         #expect(automatic.params["fastMode"]?.value as? String == "auto")
+        let ultrafast = try JSONDecoder().decode(OpenClawChatFastMode.self, from: Data(#""ultrafast""#.utf8))
+        #expect(ultrafast == .ultrafast)
+        #expect(ultrafast.isEnabled)
+        #expect(try JSONEncoder().encode(ultrafast) == Data(#""ultrafast""#.utf8))
+        let request = OpenClawChatGatewayRequests.patchSessionSettings(
+            sessionKey: "main", agentID: nil, fastMode: .some(ultrafast))
+        #expect(request.params["fastMode"]?.value as? String == "ultrafast")
     }
 
     @Test func `settings patch request preserves permission and sparse tool overrides`() throws {

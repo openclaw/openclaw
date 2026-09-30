@@ -3,6 +3,7 @@ import { DatabaseSync, StatementSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { notifyPreparedModelRuntimePublication } from "../agents/prepared-model-runtime.publication-events.js";
+import { ACTIVITY_SUMMARY_FORMAT_REVISION } from "../config/sessions/activity-summary.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   deleteSessionEntryLifecycle,
@@ -38,7 +39,7 @@ it("prepares dirty persistent row facts independently of history reads and the G
         updatedAt: 1,
         activitySummary: {
           version: 1,
-          formatRevision: 2,
+          formatRevision: ACTIVITY_SUMMARY_FORMAT_REVISION,
           text: "Ready",
           updatedAt: 1,
           sessionId: "worker-row",

@@ -896,20 +896,13 @@ export function validateReleaseChildRunProvenance(run, expected = {}) {
   };
 }
 
-function compositeJobsDigestPayload(value) {
-  return {
-    effectiveRunAttempt: value.effectiveRunAttempt,
-    jobs: value.jobs,
-    plannedRunAttempt: value.plannedRunAttempt,
-  };
-}
-
 function jsonSha256(value) {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
 
 export function releaseCompositeJobsSha256(value) {
-  return jsonSha256(canonicalValue(compositeJobsDigestPayload(value)));
+  const { effectiveRunAttempt, jobs, plannedRunAttempt } = value;
+  return jsonSha256(canonicalValue({ effectiveRunAttempt, jobs, plannedRunAttempt }));
 }
 
 export function composeReleaseAttemptJobs(attempts, expected = {}) {
@@ -942,11 +935,19 @@ export function composeReleaseAttemptJobs(attempts, expected = {}) {
       throw new Error("release child attempt evidence is gapped");
     }
     const names = new Set();
+    const completedNames = new Set(
+      expectedAttempt < effectiveRunAttempt
+        ? attempt.jobs.filter((job) => job?.status === "completed").map((job) => job.name)
+        : [],
+    );
     for (const rawJob of attempt.jobs) {
       const job = normalizedAttemptJob(rawJob, expectedAttempt);
-      // Completed skipped jobs never executed, so they cannot contribute attempt
-      // evidence. Drop them before identity checks because placeholders may collide.
-      if (job.status === "completed" && job.conclusion === "skipped") {
+      // Skipped jobs and GitHub's runnerless, stepless queued rerun copies (beside a
+      // completed sibling in a superseded attempt) never executed, so they carry no
+      // evidence. Drop them before identity checks because such copies may collide.
+      const ghost = job.status === "queued" && !rawJob.runner_name && rawJob.steps?.length === 0;
+      const skipped = job.status === "completed" && job.conclusion === "skipped";
+      if (skipped || (ghost && completedNames.has(job.name))) {
         continue;
       }
       if (names.has(job.name)) {

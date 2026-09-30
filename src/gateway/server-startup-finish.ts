@@ -174,6 +174,7 @@ export async function finishGatewayStartup(params: {
       preauthHandshakeTimeoutMs,
       isStartupPending: isGatewayStartupPending,
       isPendingWorkerNodeSetup: workerEnvironmentService?.hasPendingNodeEnrollmentSetup,
+      admitsNodeSetupCompletion: workerEnvironmentService?.admitsNodeSetupCompletion,
       gatewayMethods: runtimeState.gatewayMethods,
       events: GATEWAY_EVENTS,
       logGateway: log,

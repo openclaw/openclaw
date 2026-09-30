@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.9.6",
+  "version": "2026.9.7",
   "openclaw": {
     "updateAdmissionProtocol": 1,
     "schemaVersions": {
@@ -1968,6 +1968,7 @@
     "release:beta": "node --import ./scripts/tsx.mjs scripts/release-candidate-checklist.mts",
     "release:beta-smoke": "node --import ./scripts/tsx.mjs scripts/release-beta-smoke.ts",
     "release:candidate": "node --import ./scripts/tsx.mjs scripts/release-candidate-checklist.mts",
+    "release:clawhub-recovery": "node scripts/plugin-clawhub-recovery.mjs",
     "release:check": "pnpm build:package && pnpm release:generated:check && node --import ./scripts/tsx.mjs scripts/release-check.ts",
     "release:fast-pretag-check": "bash scripts/release-fast-pretag-check.sh",
     "release:generated:check": "node scripts/release-preflight.mjs --check",
@@ -2137,8 +2138,8 @@
     "test:live:models-profiles": "node --import ./scripts/tsx.mjs scripts/test-live.mts -- src/agents/models.profiles.live.test.ts",
     "test:macos:ci": "pnpm test:macos:ci:1 && pnpm test:macos:ci:2 && pnpm test:macos:ci:3",
     "test:macos:ci:1": "node --import ./scripts/tsx.mjs scripts/test-projects.mts test/scripts/mac-elevation-host.test.ts",
-    "test:macos:ci:2": "node --import ./scripts/tsx.mjs scripts/test-projects.mts test/scripts/vitest-process-group.test.ts test/scripts/package-mac-app.test.ts test/scripts/stage-cloudflared-macos.test.ts test/scripts/restart-mac.test.ts test/scripts/mac-node-worker.test.ts test/scripts/package-mac-dist.test.ts test/scripts/codesign-mac-app.test.ts test/scripts/notarize-mac-artifact.test.ts test/scripts/mac-elevation-artifact.test.ts",
-    "test:macos:ci:3": "node --import ./scripts/tsx.mjs scripts/test-projects.mts test/scripts/ci-platform-checkout.test.ts test/scripts/macos-native-test-launch.test.ts src/daemon/launchd.test.ts src/daemon/runtime-paths.test.ts src/daemon/runtime-binary.test.ts src/gateway/worker-environments/workspace-rsync-path.test.ts src/infra/brew.test.ts src/infra/stable-node-path.test.ts src/process/supervisor/adapters/child.service-lifecycle.test.ts test/scripts/verify-mac-node-worker-fs.test.ts test/scripts/create-dmg.test.ts src/skills/runtime/refresh.test.ts src/skills/runtime/refresh.missing-root.integration.test.ts",
+    "test:macos:ci:2": "node --import ./scripts/tsx.mjs scripts/test-projects.mts test/scripts/vitest-process-group.test.ts test/scripts/package-mac-app.test.ts test/scripts/stage-cloudflared-macos.test.ts test/scripts/stage-openclaw-bun-macos.test.ts test/scripts/build-mac-sqlite.test.ts test/scripts/restart-mac.test.ts test/scripts/mac-runtime.test.ts test/scripts/package-mac-dist.test.ts test/scripts/codesign-mac-app.test.ts test/scripts/notarize-mac-artifact.test.ts test/scripts/mac-elevation-artifact.test.ts",
+    "test:macos:ci:3": "node --import ./scripts/tsx.mjs scripts/test-projects.mts test/scripts/ci-platform-checkout.test.ts test/scripts/macos-native-test-launch.test.ts src/daemon/launchd.test.ts src/daemon/runtime-paths.test.ts src/daemon/runtime-binary.test.ts src/gateway/worker-environments/workspace-rsync-path.test.ts src/infra/brew.test.ts src/infra/stable-node-path.test.ts src/process/supervisor/adapters/child.service-lifecycle.test.ts test/scripts/verify-mac-runtime-fs.test.ts test/scripts/create-dmg.test.ts src/skills/runtime/refresh.test.ts src/skills/runtime/refresh.missing-root.integration.test.ts",
     "test:max": "node --import ./scripts/tsx.mjs scripts/test-projects-max.mts",
     "test:parallels:linux": "/bin/bash scripts/e2e/parallels-linux-smoke.sh",
     "test:parallels:macos": "/bin/bash scripts/e2e/parallels-macos-smoke.sh",

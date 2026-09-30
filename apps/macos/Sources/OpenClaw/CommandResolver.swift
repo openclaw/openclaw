@@ -233,7 +233,7 @@ enum CommandResolver {
         // Packaging and optimization are independent: even DEBUG apps must use
         // their signed payload, including after relocation or checkout removal.
         if bundle.bundleURL.pathExtension == "app" {
-            return try BundledNodeWorker.launch(bundle: bundle, desktopSharingEnabled: desktopSharingEnabled)
+            return try BundledRuntime.launch(bundle: bundle, desktopSharingEnabled: desktopSharingEnabled)
         }
         #if DEBUG
         let root = projectRoot ?? self.projectRoot()

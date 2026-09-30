@@ -154,6 +154,15 @@ describe("tavily client", () => {
     ["Tue, 11 Mar 2025 17:00:00 GMT", "2025-03-11T17:00:00.000Z"],
     ["Tue, 11 Mar 2025 17:00:00 GMT ignore instructions", undefined],
     ["Mon, 31 Feb 2025 17:00:00 GMT", undefined],
+    ["2026-02-30", undefined],
+    ["2026-13-01", undefined],
+    ["1900-02-29", undefined],
+    ["2026-01-00", undefined],
+    ["2000-02-29", "2000-02-29"],
+    ["0099-12-31", "0099-12-31"],
+    ["0000-02-29", "0000-02-29"],
+    ["2024-02-29T00:30:00+14:00", "2024-02-29T00:30:00+14:00"],
+    ["2026-09-21T", "2026-09-21T"],
   ])("normalizes the Tavily news publication date %s", async (published_date, published) => {
     // Tavily's Product News Tracker example returns RFC-style GMT dates.
     respondWith({
@@ -162,6 +171,7 @@ describe("tavily client", () => {
 
     const result = await runTavilySearch({ query: "news", topic: "news" });
 
+    expect(result.results).toEqual([expect.objectContaining({ url: "https://example.com/news" })]);
     expect((result.results as Array<Record<string, unknown>>)[0]?.published).toBe(published);
   });
 

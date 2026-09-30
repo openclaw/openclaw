@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetChatViewState } from "./chat-view-state.ts";
 import { getComposerTextarea, renderChatView } from "./chat-view.test-helpers.ts";
-import * as chatMessage from "./components/chat-message.ts";
+import * as chatMessage from "./components/chat-message-stream.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,

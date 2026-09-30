@@ -101,7 +101,7 @@ struct TalkRealtimeServerEvent: Decodable {
     }
 
     var isMaximumDurationError: Bool {
-        guard self.type == "error", let message = self.error?.message?.lowercased() else { return false }
+        guard self.type == "error", let message = error?.message?.lowercased() else { return false }
         return message.contains("session") && message.contains("maximum duration")
     }
 
@@ -147,10 +147,10 @@ struct TalkRealtimeServerItem: Decodable {
 struct TalkRealtimeLiveCaptionBuffer {
     struct Entry {
         let role: TalkRealtimeTranscriptRole
-        var text: String
+        let text: String
     }
 
-    private var entries: [Entry] = []
+    private var textByRole: [TalkRealtimeTranscriptRole: String] = [:]
 
     mutating func append(_ event: TalkRealtimeServerEvent) -> Entry? {
         let role: TalkRealtimeTranscriptRole
@@ -160,16 +160,12 @@ struct TalkRealtimeLiveCaptionBuffer {
         default: return nil
         }
         guard let delta = event.delta, !delta.isEmpty else { return nil }
-        if let index = self.entries.firstIndex(where: { $0.role == role }) {
-            self.entries[index].text = String((self.entries[index].text + delta).suffix(8192))
-            return self.entries[index]
-        }
-        let entry = Entry(role: role, text: String(delta.suffix(8192)))
-        self.entries.append(entry)
-        return entry
+        let text = String(((textByRole[role] ?? "") + delta).suffix(8192))
+        self.textByRole[role] = text
+        return Entry(role: role, text: text)
     }
 
     mutating func reset() {
-        self.entries.removeAll(keepingCapacity: true)
+        self.textByRole.removeAll(keepingCapacity: true)
     }
 }

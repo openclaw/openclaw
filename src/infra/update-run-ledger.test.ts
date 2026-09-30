@@ -489,6 +489,41 @@ describe("update run ledger", () => {
     },
   );
 
+  it.each(["running", "terminal"] as const)(
+    "keeps phase capture synchronous and isolated for a %s row",
+    (state) => {
+      const options = isolatedOptions();
+      const created = createUpdateRun({ trigger: "cli", target: { kind: "git" } }, options);
+      const before =
+        state === "terminal"
+          ? finishUpdateRun(created.runId, { status: "failed", reason: "fixture" }, options)
+          : created;
+      let captured: UpdateRunRecord | undefined;
+      const result = recordUpdateRunPhase(
+        created.runId,
+        "staging",
+        { target: { sha: "abcdef1234567890" } },
+        options,
+        (record) => {
+          expect(record).toEqual(before);
+          captured = record;
+          record.target.kind = "package";
+          record.phase = "finished";
+        },
+      );
+      expect(captured).toBeDefined();
+      if (state === "terminal") {
+        expect(result).toEqual(before);
+      } else {
+        expect(result).toMatchObject({
+          phase: "staging",
+          target: { kind: "git", sha: "abcdef1234567890" },
+        });
+      }
+      expect(getUpdateRun(created.runId, options)).toEqual(result);
+    },
+  );
+
   it("keeps phase order and merges repeated steps while preserving terminal outcomes and later boot facts", () => {
     const options = isolatedOptions();
     const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);

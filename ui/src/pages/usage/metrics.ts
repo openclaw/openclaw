@@ -18,7 +18,6 @@ const DAY_MS = 86_400_000;
 
 type UsageCostWindowSummary = {
   days: number;
-  startDate: string;
   endDate: string;
   totals: UsageTotals;
 };
@@ -559,7 +558,6 @@ function buildUsageCostWindowSummary(
 
   return {
     days: endDay - startDay + 1,
-    startDate,
     endDate,
     totals,
   };
@@ -569,7 +567,6 @@ function buildUsageCostWindows(
   daily: Array<UsageTotals & { date: string }>,
   rangeStartDate: string,
   rangeEndDate: string,
-  periods: number[] = [1, 7, 30, 90],
 ): UsageCostWindowSummary[] {
   const rangeStartDay = parseIsoDayIndex(rangeStartDate);
   const rangeEndDay = parseIsoDayIndex(rangeEndDate);
@@ -578,9 +575,8 @@ function buildUsageCostWindows(
   }
 
   const rangeDays = rangeEndDay - rangeStartDay + 1;
-  return Array.from(new Set(periods.map((days) => Math.max(1, Math.trunc(days)))))
+  return [1, 7, 30, 90]
     .filter((days) => days < rangeDays)
-    .toSorted((left, right) => left - right)
     .map((days) => {
       const startDate = formatIsoDayIndex(rangeEndDay - days + 1);
       return buildUsageCostWindowSummary(daily, startDate, rangeEndDate);

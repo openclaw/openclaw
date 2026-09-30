@@ -113,10 +113,7 @@ export class SessionMenuActions {
     private readonly onClose: () => void,
   ) {
     this.context = new ContextConsumer(host, { context: applicationContext, subscribe: true });
-    new SubscriptionsController(host).watch(
-      () => this.context.value?.gateway,
-      (gateway, notify) => gateway.subscribe(notify),
-    );
+    new SubscriptionsController(host).watchStore(() => this.context.value?.gateway);
     this.ownerMenu = new SessionOwnerMenu(host);
   }
 

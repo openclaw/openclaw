@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createHarness } from "./service-test-support.js";
+import { discussionChannel, createHarness } from "./service-test-support.js";
 
 describe("ClickClack discussion binding retention", () => {
   it("keeps a durable room visible after its attached session is deleted", async () => {
@@ -39,14 +39,14 @@ describe("ClickClack discussion binding retention", () => {
     entries.delete(firstKey);
     await harness.service.reconcile(firstKey);
 
-    harness.createChannel.mockImplementationOnce(async (_workspaceId, input) => ({
-      id: "chn_discussion_b",
-      route_id: "discussion-route-b",
-      workspace_id: "wsp_team",
-      ...input,
-      kind: "public",
-      created_at: "2026-07-19T00:00:00.000Z",
-    }));
+    harness.createChannel.mockImplementationOnce(async (_workspaceId, input) =>
+      discussionChannel({
+        id: "chn_discussion_b",
+        route_id: "discussion-route-b",
+        ...input,
+        kind: "public",
+      }),
+    );
     entries.set(secondKey, { sessionId: "session-b", label: "Detached B", updatedAt: 2 });
     await harness.service.open(secondKey);
     entries.delete(secondKey);

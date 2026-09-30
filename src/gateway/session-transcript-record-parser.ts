@@ -1,3 +1,4 @@
+import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
@@ -53,12 +54,7 @@ function extractJsonStringFieldWindow(
     if (!match) {
       continue;
     }
-    try {
-      const decoded = JSON.parse(`"${match[1]}"`) as unknown;
-      return readNonBlankString(decoded);
-    } catch {
-      return undefined;
-    }
+    return readNonBlankString(safeParseJson(`"${match[1]}"`));
   }
   return undefined;
 }

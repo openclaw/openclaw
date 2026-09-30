@@ -1,7 +1,7 @@
 // @vitest-environment node
 // Sidebar zone and session-section persistence split from the settings suites
 // to keep each file under the lint size budget.
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   expectedGatewayUrl,
   installSettingsStorageLifecycle,
@@ -12,6 +12,9 @@ import { loadSettings, saveSettings } from "./settings.ts";
 
 describe("sidebar preference persistence", () => {
   installSettingsStorageLifecycle();
+  beforeEach(() => {
+    setTestLocation({ protocol: "https:", host: "gateway.example:8443", pathname: "/" });
+  });
 
   it("defaults old or invalid agent modes to chip and persists explicit roster mode", () => {
     setTestLocation({ protocol: "https:", host: "gateway.example", pathname: "/" });
@@ -61,7 +64,6 @@ describe("sidebar preference persistence", () => {
   );
 
   it("persists sidebar width without leaking tab-local visibility across reloads", () => {
-    setTestLocation({ protocol: "https:", host: "gateway.example:8443", pathname: "/" });
     const gatewayUrl = expectedGatewayUrl("");
     const scopedKey = `openclaw.control.settings.v1:${gatewayUrl}`;
 
@@ -80,12 +82,6 @@ describe("sidebar preference persistence", () => {
   });
 
   it("persists sidebar entries across save and load, normalizing bad values", () => {
-    setTestLocation({
-      protocol: "https:",
-      host: "gateway.example:8443",
-      pathname: "/",
-    });
-
     const gwUrl = expectedGatewayUrl("");
     saveSettings(
       makeUiSettings(gwUrl, {
@@ -118,11 +114,6 @@ describe("sidebar preference persistence", () => {
   });
 
   it("migrates the legacy route-only list once and writes only sidebarEntries", () => {
-    setTestLocation({
-      protocol: "https:",
-      host: "gateway.example:8443",
-      pathname: "/",
-    });
     const gwUrl = expectedGatewayUrl("");
     const scopedKey = `openclaw.control.settings.v1:${gwUrl}`;
     const legacy = makeUiSettings(gwUrl) as unknown as Record<string, unknown>;

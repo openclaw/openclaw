@@ -277,6 +277,7 @@ async function fixture({
     "update-command-service-recovery",
     "update-command-plugins-internals",
     "../../process/exec-result",
+    "../../shared/null-writer",
     "../../shared/update-outcome",
     "../../infra/update-run-report",
     "../../infra/update-run-record",

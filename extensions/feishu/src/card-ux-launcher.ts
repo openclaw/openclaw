@@ -6,16 +6,16 @@ import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coe
 import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
 import { createFeishuCardInteractionEnvelope } from "./card-interaction.js";
 import { FEISHU_APPROVAL_REQUEST_ACTION } from "./card-ux-approval.js";
-import { buildFeishuCardButton, buildFeishuCardInteractionContext } from "./card-ux-shared.js";
+import {
+  buildFeishuActionCard,
+  buildFeishuCardButton,
+  buildFeishuCardInteractionContext,
+} from "./card-ux-shared.js";
 import { sendCardFeishu } from "./send.js";
 
 const FEISHU_QUICK_ACTION_CARD_TTL_MS = 10 * 60_000;
 
 const QUICK_ACTION_MENU_KEYS = new Set(["quick-actions", "quick_actions", "launcher"]);
-
-function isFeishuQuickActionMenuEventKey(eventKey: string): boolean {
-  return QUICK_ACTION_MENU_KEYS.has(normalizeOptionalLowercaseString(eventKey) ?? "");
-}
 
 function createQuickActionLauncherCard(params: {
   operatorOpenId: string;
@@ -25,67 +25,48 @@ function createQuickActionLauncherCard(params: {
   sessionKey?: string;
 }): Record<string, unknown> {
   const context = buildFeishuCardInteractionContext(params);
-  return {
-    schema: "2.0",
-    config: {
-      width_mode: "fill",
-    },
-    header: {
-      title: {
-        tag: "plain_text",
-        content: "Quick actions",
-      },
-      template: "indigo",
-    },
-    body: {
-      elements: [
-        {
-          tag: "markdown",
-          content: "Run common actions without typing raw commands.",
-        },
-        {
-          tag: "action",
-          actions: [
-            buildFeishuCardButton({
-              label: "Help",
-              value: createFeishuCardInteractionEnvelope({
-                k: "quick",
-                a: "feishu.quick_actions.help",
-                q: "/help",
-                c: context,
-              }),
-            }),
-            buildFeishuCardButton({
-              label: "New session",
-              type: "primary",
-              value: createFeishuCardInteractionEnvelope({
-                k: "meta",
-                a: FEISHU_APPROVAL_REQUEST_ACTION,
-                m: {
-                  command: "/new",
-                  prompt: "Start a fresh session? This will reset the current chat context.",
-                },
-                c: context,
-              }),
-            }),
-            buildFeishuCardButton({
-              label: "Reset",
-              type: "danger",
-              value: createFeishuCardInteractionEnvelope({
-                k: "meta",
-                a: FEISHU_APPROVAL_REQUEST_ACTION,
-                m: {
-                  command: "/reset",
-                  prompt: "Reset this session now? Any active conversation state will be cleared.",
-                },
-                c: context,
-              }),
-            }),
-          ],
-        },
-      ],
-    },
-  };
+  return buildFeishuActionCard({
+    title: "Quick actions",
+    template: "indigo",
+    content: "Run common actions without typing raw commands.",
+    actions: [
+      buildFeishuCardButton({
+        label: "Help",
+        value: createFeishuCardInteractionEnvelope({
+          k: "quick",
+          a: "feishu.quick_actions.help",
+          q: "/help",
+          c: context,
+        }),
+      }),
+      buildFeishuCardButton({
+        label: "New session",
+        type: "primary",
+        value: createFeishuCardInteractionEnvelope({
+          k: "meta",
+          a: FEISHU_APPROVAL_REQUEST_ACTION,
+          m: {
+            command: "/new",
+            prompt: "Start a fresh session? This will reset the current chat context.",
+          },
+          c: context,
+        }),
+      }),
+      buildFeishuCardButton({
+        label: "Reset",
+        type: "danger",
+        value: createFeishuCardInteractionEnvelope({
+          k: "meta",
+          a: FEISHU_APPROVAL_REQUEST_ACTION,
+          m: {
+            command: "/reset",
+            prompt: "Reset this session now? Any active conversation state will be cleared.",
+          },
+          c: context,
+        }),
+      }),
+    ],
+  });
 }
 
 export async function maybeHandleFeishuQuickActionMenu(params: {
@@ -96,7 +77,7 @@ export async function maybeHandleFeishuQuickActionMenu(params: {
   accountId?: string;
   now?: number;
 }): Promise<boolean> {
-  if (!isFeishuQuickActionMenuEventKey(params.eventKey)) {
+  if (!QUICK_ACTION_MENU_KEYS.has(normalizeOptionalLowercaseString(params.eventKey) ?? "")) {
     return false;
   }
 

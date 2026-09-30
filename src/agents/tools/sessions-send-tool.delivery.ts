@@ -8,6 +8,11 @@ import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
 import { enqueueSystemEventEntry } from "../../infra/system-events.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import {
+  buildAgentMainSessionKey,
+  isUnscopedSessionKeySentinel,
+  normalizeAgentId,
+} from "../../routing/session-key.js";
+import {
   annotateInterSessionPromptText,
   type InputProvenance,
 } from "../../sessions/input-provenance.js";
@@ -17,6 +22,7 @@ import {
   createUserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
+import { listAgentIds } from "../agent-scope.js";
 import { resolveActiveEmbeddedRunSessionId } from "../embedded-agent-runner/active-run-projections.js";
 import {
   type EmbeddedAgentQueueMessageOptions,
@@ -26,7 +32,10 @@ import {
   queueGuardedEmbeddedAgentMessageWithOutcomeAsync,
 } from "../embedded-agent-runner/runs.js";
 import { jsonResult } from "./common.js";
-import { resolveGatewayToolOperatorSelection } from "./gateway-caller-context.js";
+import {
+  captureGatewayToolCallerAssertion,
+  resolveGatewayToolOperatorSelection,
+} from "./gateway-caller-context.js";
 import {
   callInProcessGatewayToolWithCreation,
   hasInProcessGatewayToolContext,
@@ -141,6 +150,7 @@ export async function trySessionsSendActiveRunDelivery(
   params: SessionsSendDeliveryParams,
   ownChild: boolean,
 ): Promise<SessionsSendStart | { fallbackSessionKey?: string }> {
+  const assertCaller = captureGatewayToolCallerAssertion();
   try {
     const selection = resolveGatewayToolOperatorSelection();
     selection.assertCurrent();
@@ -203,13 +213,16 @@ export async function trySessionsSendActiveRunDelivery(
           }),
         };
         const dispatchQueue = (options: EmbeddedAgentQueueMessageOptions) =>
-          selection.operatorAuthority
+          selection.operatorAuthority || assertCaller
             ? queueGuardedEmbeddedAgentMessageWithOutcomeAsync(
                 activeRunSessionId,
                 messageText,
                 options,
                 () => {
                   assertCurrent();
+                  if (!selection.operatorAuthority) {
+                    assertCaller?.("agent");
+                  }
                   return true;
                 },
               )
@@ -314,6 +327,40 @@ function deliveryFailure(params: SessionsSendDeliveryParams, error: unknown) {
       sessionKey: params.sessionKey,
     }),
   };
+}
+
+export function resolveConfiguredAgentMainSessionKey(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  mainKey: string;
+}): string | undefined {
+  const agentId = normalizeAgentId(params.agentId);
+  if (!listAgentIds(params.cfg).includes(agentId)) {
+    return undefined;
+  }
+  return buildAgentMainSessionKey({ agentId, mainKey: params.mainKey });
+}
+
+export function isConfiguredAgentMainSessionKey(params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  mainKey: string;
+}): boolean {
+  if (isUnscopedSessionKeySentinel(params.sessionKey)) {
+    return false;
+  }
+  if (params.sessionKey === params.mainKey) {
+    return true;
+  }
+  const agentId = parseAgentSessionKey(params.sessionKey)?.agentId;
+  return agentId
+    ? params.sessionKey ===
+        resolveConfiguredAgentMainSessionKey({
+          cfg: params.cfg,
+          agentId,
+          mainKey: params.mainKey,
+        })
+    : false;
 }
 
 export async function createConfiguredAgentMainSession(params: {

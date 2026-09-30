@@ -1,4 +1,3 @@
-// Extracts provider contract public artifacts from plugin manifests.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { collectPublicArtifactFactories } from "./public-artifact-factories.js";

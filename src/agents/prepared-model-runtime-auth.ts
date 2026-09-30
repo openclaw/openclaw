@@ -1,10 +1,11 @@
 import { isDeepStrictEqual } from "node:util";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import type { ProviderCatalogOutcome } from "../plugins/provider-catalog-outcome.js";
 import type { PreparedAgentCredentialModes } from "./agent-auth-credential-modes.js";
 import { isOAuthRefreshFence } from "./auth-profiles/oauth-refresh-marker.js";
 import { hasOAuthIdentity } from "./auth-profiles/oauth-shared.js";
 import type { RuntimeAuthMaterialization } from "./auth-profiles/runtime-materializations.js";
-import type { AuthProfileStore } from "./auth-profiles/types.js";
+import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
 import type { ModelCatalogAuthLabels } from "./model-catalog-auth-labels.js";
 import type { AuthStorageData } from "./sessions/auth-storage.js";
 
@@ -86,6 +87,17 @@ export function hasSamePreparedModelCatalogAuth(
     identity(next.authStore, next.credentials),
   );
 }
+
+/** Selected-account inventory belongs to the prepared generation, not an RPC projector. */
+export type PreparedAccountCatalogAccess = {
+  acquire: (params: {
+    profileId: string;
+    credential: AuthProfileCredential;
+    allowDiscovery: boolean;
+    refresh?: boolean;
+    load: () => Promise<readonly ProviderCatalogOutcome[]>;
+  }) => Promise<{ outcomes: readonly ProviderCatalogOutcome[]; isCurrent: () => boolean }>;
+};
 
 /** Private auth facts owned by an immutable prepared model generation. */
 type RuntimeAuthBinding = {

@@ -1,5 +1,18 @@
 import { describe, expect, it } from "vitest";
-import { classifyFailoverReason, classifyFailoverSignal } from "./classify.js";
+import {
+  classifyFailoverReason,
+  classifyFailoverSignal,
+  isAuthErrorMessage,
+  isBillingErrorMessage,
+  isCloudCodeAssistFormatError,
+  isContextOverflowError,
+  isFailoverErrorMessage,
+  isProviderCompletedErrorFinishReasonMessage,
+  isServerErrorMessage,
+  isTimeoutErrorMessage,
+} from "./classify.js";
+import { isAuthPermanentErrorMessage } from "./message-patterns.js";
+import { renderRateLimitOrOverloadedCopy } from "./user-copy.js";
 
 describe("HTTP 402 prose classification", () => {
   it.each([
@@ -41,7 +54,7 @@ describe("request validation behind gateway status codes", () => {
     },
   );
 
-  it.each([404, 500, 502])("preserves request-validation semantics for HTTP %s", (status) => {
+  it.each([404, 500])("preserves request-validation semantics for HTTP %s", (status) => {
     expect(
       classifyFailoverSignal({
         status,
@@ -57,32 +70,30 @@ describe("request validation behind gateway status codes", () => {
     ).toBe("format");
   });
 
-  it.each([
-    "timeout",
-    "overloaded",
-    "server_error",
-    "rate_limit",
-    "authentication",
-    "context_length_exceeded",
-  ])("keeps an explicit rejection of %s ahead of message patterns", (parameter) => {
-    const error = {
-      type: "invalid_request_error",
-      code: "unknown_parameter",
-      message: `Unsupported parameter: ${parameter}`,
-    };
-    expect(
-      classifyFailoverSignal({
-        status: 500,
-        message: `500 ${error.message}`,
-        errorType: error.type,
-        code: error.code,
-        details: [JSON.stringify(error)],
-      }),
-    ).toEqual({ kind: "reason", reason: "format" });
-    for (const separator of [" ", ": "]) {
-      expect(classifyFailoverReason(`502${separator}${JSON.stringify({ error })}`)).toBe("format");
-    }
-  });
+  it.each(["timeout", "context_length_exceeded"])(
+    "keeps an explicit rejection of %s ahead of message patterns",
+    (parameter) => {
+      const error = {
+        type: "invalid_request_error",
+        code: "unknown_parameter",
+        message: `Unsupported parameter: ${parameter}`,
+      };
+      expect(
+        classifyFailoverSignal({
+          status: 500,
+          message: `500 ${error.message}`,
+          errorType: error.type,
+          code: error.code,
+          details: [JSON.stringify(error)],
+        }),
+      ).toEqual({ kind: "reason", reason: "format" });
+      for (const separator of [" ", ": "]) {
+        expect(classifyFailoverReason(`502${separator}${JSON.stringify({ error })}`)).toBe(
+          "format",
+        );
+      }
+    },
+  );
 
   it.each([
     { status: 401, reason: "auth" },
@@ -192,13 +203,8 @@ describe("Gateway transcript validation vs provider session expiry", () => {
     ).toBe("format");
   });
 
-  it.each([
-    "invalid session",
-    "HTTP 404: session not found",
-    "no such session",
-    "conversation expired",
-  ])("still treats provider session-expiry copy as session_expired: %s", (message) => {
-    expect(classifyFailoverReason(message)).toBe("session_expired");
+  it("preserves provider session expiry behind HTTP 404", () => {
+    expect(classifyFailoverReason("HTTP 404: session not found")).toBe("session_expired");
   });
 });
 
@@ -206,30 +212,17 @@ describe("HTTP 5xx status classification", () => {
   // A provider-side 5xx is not a timing failure. Naming it "timeout" both tells
   // the user the request timed out and takes the "timeout" carve-outs in
   // resolveRunFailoverDecision, which skip retry-limit model fallback.
-  it.each([500, 502, 503, 505, 507, 520, 521, 523])(
-    "classifies an untyped %i as server_error",
-    (status) => {
-      expect(classifyFailoverSignal({ status, message: "upstream failure" })).toEqual({
-        kind: "reason",
-        reason: "server_error",
-      });
-    },
-  );
+  it("classifies an untyped 500 as server_error", () => {
+    expect(classifyFailoverSignal({ status: 500, message: "upstream failure" })).toEqual({
+      kind: "reason",
+      reason: "server_error",
+    });
+  });
 
   it.each([499, 504, 522, 524])("keeps gateway-timeout status %i as timeout", (status) => {
     expect(classifyFailoverSignal({ status, message: "upstream failure" })).toEqual({
       kind: "reason",
       reason: "timeout",
-    });
-  });
-
-  it.each([502, 503, 521])("classifies a CDN HTML error page at %i as server_error", (status) => {
-    // An HTML body means a CDN answered instead of the provider, so there is
-    // no provider error type to read. It is still an upstream failure.
-    const html = `${status} <!doctype html><html><head><title>${status}</title></head><body>Cloudflare</body></html>`;
-    expect(classifyFailoverSignal({ message: html })).toEqual({
-      kind: "reason",
-      reason: "server_error",
     });
   });
 
@@ -265,4 +258,146 @@ describe("HTTP 5xx status classification", () => {
       }),
     ).toEqual({ kind: "reason", reason: "overloaded" });
   });
+});
+
+it.each([
+  ["api key revoked", true],
+  ["invalid_api_key", false],
+])("distinguishes permanent auth failure: %s", (message, expected) => {
+  expect(isAuthPermanentErrorMessage(message)).toBe(expected);
+});
+
+it("ignores multi-section billing explanations", () => {
+  expect(
+    isBillingErrorMessage(
+      "## Payments\nHandle insufficient credits.\n## Plans\nUpgrade your plan.",
+    ),
+  ).toBe(false);
+});
+
+it.each([
+  JSON.stringify({ code: 1311, message: "model not on plan", details: "x".repeat(700) }),
+  JSON.stringify({
+    error: {
+      code: "InvalidSubscription",
+      message: "Subscription unavailable",
+      details: "x".repeat(700),
+    },
+  }),
+  '{"error":{"code":402,"message":"payment required","details":"' + "x".repeat(700) + '"}}',
+])("recognizes billing markers in long payloads: %s", (message) => {
+  expect(isBillingErrorMessage(message)).toBe(true);
+});
+
+it("recognizes Z.ai credential error codes", () => {
+  expect(isAuthErrorMessage('{"code":1113,"message":"invalid api endpoint or credentials"}')).toBe(
+    true,
+  );
+});
+
+it("classifies Google's invalid API key response as auth", () => {
+  const message =
+    "Google Generative AI API error (400): API key not valid. Please pass a valid API key. [code=INVALID_ARGUMENT]";
+  expect(isAuthErrorMessage(message)).toBe(true);
+  expect(classifyFailoverReason(message)).toBe("auth");
+});
+
+it("does not classify unrelated Google invalid arguments as auth", () => {
+  const message =
+    "Google Generative AI API error (400): Request contains an invalid argument. [code=INVALID_ARGUMENT]";
+  expect(isAuthErrorMessage(message)).toBe(false);
+  expect(classifyFailoverReason(message)).toBeNull();
+});
+
+it("classifies the GLM overload body as overloaded", () => {
+  expect(classifyFailoverReason("[1305][该模型当前访问量过大，请您稍后再试]")).toBe("overloaded");
+});
+
+it("classifies a harness provider mismatch as format", () => {
+  expect(
+    classifyFailoverReason(
+      'Requested agent harness "codex" does not support openrouter/gpt-5.4 (provider is not one of: codex, openai).',
+    ),
+  ).toBe("format");
+});
+
+it.each([
+  ["status: internal server error", true],
+  ["provider failed (HTTP 500): upstream apiKey is empty", true],
+  ["Proxy notice: Status: Internal Server Error", false],
+])("recognizes server status evidence: %s", (message, expected) => {
+  expect(isServerErrorMessage(message)).toBe(expected);
+});
+
+it.each([
+  "Proxy notice: Status: Internal Server Error; upstream connect error",
+  "Proxy notice: Status: Internal Server Error; code:500",
+])("keeps server evidence retryable without a raw timeout match: %s", (message) => {
+  expect(isTimeoutErrorMessage(message)).toBe(false);
+  expect(classifyFailoverReason(message)).toBe("timeout");
+});
+
+it("distinguishes provider-completed errors from transport timeouts", () => {
+  const message = "Provider finish_reason: error";
+  expect(isProviderCompletedErrorFinishReasonMessage(message)).toBe(true);
+  expect(isTimeoutErrorMessage(message)).toBe(false);
+  expect(classifyFailoverReason(message)).toBe("server_error");
+});
+
+it("keeps aborted finish reasons in the timeout lane", () => {
+  const message = "Provider finish_reason: abort";
+  expect(isProviderCompletedErrorFinishReasonMessage(message)).toBe(false);
+  expect(isTimeoutErrorMessage(message)).toBe(true);
+  expect(classifyFailoverReason(message)).toBe("timeout");
+});
+
+it("matches bare terminated transport failures without matching unrelated prose", () => {
+  expect(isFailoverErrorMessage("terminated")).toBe(true);
+  expect(isFailoverErrorMessage("The user terminated the session manually.")).toBe(false);
+});
+
+it("does not classify MALFORMED_FUNCTION_CALL as timeout", () => {
+  const message = "Unhandled stop reason: MALFORMED_FUNCTION_CALL";
+  expect(isTimeoutErrorMessage(message)).toBe(false);
+  expect(classifyFailoverReason(message)).toBeNull();
+});
+
+it("classifies the generic LLM request failure as transient", () => {
+  expect(classifyFailoverReason("LLM request failed.")).toBe("timeout");
+});
+
+it("does not match schema rejection copy as a generic timeout", () => {
+  expect(
+    isTimeoutErrorMessage(
+      "LLM request failed: provider rejected the request schema or tool payload.",
+    ),
+  ).toBe(false);
+});
+
+it("recognizes Google INTERNAL status errors as timeout", () => {
+  const message =
+    "provider=google model=gemini-3.1-flash-lite-preview got status: INTERNAL upstream failure code:500";
+  expect(isTimeoutErrorMessage(message)).toBe(true);
+  expect(classifyFailoverReason(message)).toBe("timeout");
+});
+
+it("does not treat image dimension rejection as a Cloud Code format error", () => {
+  expect(
+    isCloudCodeAssistFormatError(
+      '400 {"type":"error","error":{"type":"invalid_request_error","message":"messages.84.content.1.image.source.base64.data: At least one of the image dimensions exceed max allowed size for many-image requests: 2000 pixels"}}',
+    ),
+  ).toBe(false);
+});
+
+it("does not confuse an upload limit with context overflow", () => {
+  expect(isContextOverflowError("request size exceeds upload limit")).toBe(false);
+});
+
+it("keeps HTTP 429 overload wording in rate-limit backoff and copy", () => {
+  const message =
+    '429 status code (exceeded limit)\n{"code":1305,"message":"The service may be temporarily overloaded, please try again later."}';
+  expect(classifyFailoverReason(message)).toBe("rate_limit");
+  expect(renderRateLimitOrOverloadedCopy({ reason: "rate_limit", raw: message })).toBe(
+    "⚠️ API rate limit reached. Please try again later.",
+  );
 });

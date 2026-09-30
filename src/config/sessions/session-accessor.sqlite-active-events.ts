@@ -25,6 +25,7 @@ import {
   type SessionTranscriptMessageEvent,
 } from "./session-accessor.sqlite-projection-read.js";
 import {
+  hasOversizedVisibleMessages,
   iterateVisibleMessageRange,
   iterateVisibleMessageMetadata,
   readVisibleMessageRange,
@@ -75,6 +76,8 @@ export type SessionTranscriptMessageAnchorPage = SessionTranscriptMessageEventPa
 };
 
 export type SessionTranscriptBoundedMessageTailPage = SessionTranscriptMessageEventPage & {
+  /** Role-matched individual oversized messages in the requested check range. */
+  hasOversizedMessages?: boolean;
   // `events` may remain sparse for salvage callers; this count marks the
   // authoritative newest suffix before the first byte-budget omission.
   newestContiguousEventCount: number;
@@ -224,15 +227,20 @@ export function readActiveTranscriptEntryIdentityInSnapshot(
 export function readSessionTranscriptActivePathEntryRelation(
   scope: SessionTranscriptReadScope,
   entryId: string | null,
+  options: { readOnly?: boolean } = {},
 ): "exact" | "ancestor" | "off-path" {
-  return withCurrentProjectionSnapshot(scope, (projection) => {
-    if (projection.state.leafEventId === entryId || entryId === null) {
-      return projection.state.leafEventId === entryId ? "exact" : "off-path";
-    }
-    return readActiveTranscriptEntryIdentityInSnapshot(projection, entryId)
-      ? "ancestor"
-      : "off-path";
-  });
+  return withCurrentProjectionSnapshot(
+    scope,
+    (projection) => {
+      if (projection.state.leafEventId === entryId || entryId === null) {
+        return projection.state.leafEventId === entryId ? "exact" : "off-path";
+      }
+      return readActiveTranscriptEntryIdentityInSnapshot(projection, entryId)
+        ? "ancestor"
+        : "off-path";
+    },
+    options,
+  );
 }
 
 /** Reads a bounded context tail, preserving control facts but excluding display-only messages. */
@@ -544,7 +552,13 @@ export function readSessionTranscriptMessageEventPage(
 /** Reads a tail page whose materialized event payloads fit a hard byte budget. */
 export function readSessionTranscriptBoundedMessageTailPage(
   scope: SessionTranscriptReadScope,
-  options: { maxBytes: number; maxMessages: number; offset: number; readOnly?: boolean },
+  options: {
+    maxBytes: number;
+    maxMessages: number;
+    offset: number;
+    readOnly?: boolean;
+    oversizedMessageCheck?: { roles: readonly string[]; includeEarlier?: boolean };
+  },
 ): SessionTranscriptBoundedMessageTailPage {
   return withCurrentProjectionSnapshot(
     scope,
@@ -565,8 +579,21 @@ export function readSessionTranscriptBoundedMessageTailPage(
       const endExclusive = Math.max(0, totalMessages - offset);
       const start = Math.max(0, endExclusive - maxMessages);
       const scannedMessages = endExclusive - start;
+      const oversized = options.oversizedMessageCheck;
+      const checked = oversized
+        ? {
+            hasOversizedMessages: hasOversizedVisibleMessages(
+              projection,
+              oversized.includeEarlier ? 0 : start,
+              endExclusive,
+              maxBytes,
+              oversized.roles,
+            ),
+          }
+        : {};
       if (scannedMessages === 0 || maxBytes === 0) {
         return {
+          ...checked,
           activeLeafEntryId: projection.state.leafEventId,
           events: [],
           newestContiguousEventCount: 0,
@@ -605,6 +632,7 @@ export function readSessionTranscriptBoundedMessageTailPage(
               ),
             ).rows.map(parseActiveTranscriptMessageRow);
       return {
+        ...checked,
         activeLeafEntryId: projection.state.leafEventId,
         events,
         newestContiguousEventCount: newestContiguousEventCount ?? selectedPositions.length,

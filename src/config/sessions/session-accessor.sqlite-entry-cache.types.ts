@@ -7,8 +7,6 @@ export type SessionEntryCacheReadOptions = {
   cache: boolean;
   latest?: boolean;
   projection?: "full" | "list";
-  /** Stream full JSON once, retaining prompt snapshots only for selected rows. Never cached. */
-  retainFullEntry?: (sessionKey: string, entry: SessionEntry) => boolean;
   /** Topology admits metadata first; its worker owns participant hydration. Never cache this view. */
   deferParticipants?: true;
 };
