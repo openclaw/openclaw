@@ -72,11 +72,9 @@ final class DashboardBrowserSessionStore {
     private let embedSignIn = CloudflareAccessEmbedLogin()
     private final class PreparedController {
         weak var controller: WKUserContentController?
-        var rule: WKContentRuleList?
 
-        init(_ controller: WKUserContentController, rule: WKContentRuleList?) {
+        init(_ controller: WKUserContentController) {
             self.controller = controller
-            self.rule = rule
         }
     }
 
@@ -233,6 +231,7 @@ final class DashboardBrowserSessionStore {
         self.revision &+= 1
         let revision = self.revision
         self.session = session
+        self.embedSignIn.setPrincipal((session ?? retainedSession)?.browserDataPrincipal)
         self.cookieRule = nil
         self.publishedRevision = nil
         let previous = self.preparation
@@ -298,7 +297,7 @@ final class DashboardBrowserSessionStore {
         self.preparedControllers.removeAll { $0.controller == nil }
         guard !self.preparedControllers.contains(where: { $0.controller === controller }) else { return }
         if let rule = self.cookieRule { controller.add(rule) }
-        self.preparedControllers.append(PreparedController(controller, rule: self.cookieRule))
+        self.preparedControllers.append(PreparedController(controller))
     }
 
     private func refreshCookieRule(
@@ -332,10 +331,12 @@ final class DashboardBrowserSessionStore {
         guard self.revision == revision else { throw GatewayBrowserSessionError.superseded }
         self.cookieRule = rule
         self.preparedControllers.removeAll { $0.controller == nil }
-        for prepared in self.preparedControllers {
-            if let previous = prepared.rule { prepared.controller?.remove(previous) }
-            if let rule { prepared.controller?.add(rule) }
-            prepared.rule = rule
+        if let rule {
+            // WebKit replaces lists by identifier. Removing first would briefly
+            // disable cookie blocking; no-session controllers retain their old list.
+            for prepared in self.preparedControllers {
+                prepared.controller?.add(rule)
+            }
         }
     }
 
@@ -355,6 +356,7 @@ final class DashboardBrowserSessionStore {
             await self.dataStore.httpCookieStore.setCookie(cookie)
             guard self.revision == revision else { throw GatewayBrowserSessionError.superseded }
             try await self.refreshCookieRule(revision: revision)
+            self.embedSignIn.recordCookieInstallation(appURL: embed.origin, gateway: gateway)
         }
         // Invalid embed credentials must not poison the Gateway's own lease.
         self.preparation = Task { @MainActor in _ = await preparation.result }

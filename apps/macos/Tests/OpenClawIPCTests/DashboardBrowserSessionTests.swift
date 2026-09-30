@@ -560,6 +560,21 @@ struct DashboardBrowserSessionTests {
 @Suite(.serialized)
 @MainActor
 struct DashboardEmbedCookieTests {
+    private final class ContentController: WKUserContentController {
+        var addedIdentifiers: [String] = []
+        var removedIdentifiers: [String] = []
+
+        override func add(_ contentRuleList: WKContentRuleList) {
+            self.addedIdentifiers.append(contentRuleList.identifier)
+            super.add(contentRuleList)
+        }
+
+        override func remove(_ contentRuleList: WKContentRuleList) {
+            self.removedIdentifiers.append(contentRuleList.identifier)
+            super.remove(contentRuleList)
+        }
+    }
+
     private func session(
         host: String = "embed.example.com",
         issuer: String = "https://identity.example.com",
@@ -639,6 +654,25 @@ struct DashboardEmbedCookieTests {
         ] {
             #expect(!allows(url))
         }
+    }
+
+    @Test func `live controllers replace cookie rules without a removal gap and retain them on sign-out`() async throws {
+        let store = DashboardBrowserSessionStore(dataStore: .nonPersistent())
+        let gateway = try self.session(host: "gateway.example.com")
+        let lease = store.lease(for: gateway)
+        let controllers = [ContentController(), ContentController()]
+        for controller in controllers {
+            try await lease.prepare(for: gateway.origin, in: controller)
+            #expect(controller.addedIdentifiers.count == 1)
+        }
+        try await lease.installEmbedSession(self.session())
+        try await store.invalidate().value
+        for controller in controllers {
+            #expect(controller.addedIdentifiers.count == 2)
+            #expect(Set(controller.addedIdentifiers).count == 1)
+            #expect(controller.removedIdentifiers.isEmpty)
+        }
+        #expect(await store.dataStore.httpCookieStore.allCookies().isEmpty)
     }
 
     @Test func `same principal replacement retains valid embeds and sign-out removes them`() async throws {

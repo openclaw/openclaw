@@ -205,8 +205,12 @@ struct CloudflareAccessLoginTests {
         ("app.example.org", "gateway.example.com", false),
         ("a.example.co", "b.example.io", false),
         ("app.com", "gateway.com", false),
+        ("embed.apps.example.com", "gateway.example.com", true),
+        ("Embed.Apps.Example.COM", "Gateway.Example.COM", true),
+        ("app.first.co.uk", "gateway.second.co.uk", true),
+        ("a.co.uk", "b.co.uk", true),
     ])
-    func `embedded sign in admits only the same parent site`(
+    func `embedded sign in uses a host suffix sanity check before measuring cookie delivery`(
         _ embedHost: String, _ gatewayHost: String, _ accepted: Bool) async throws
     {
         let gateway = try self.session(host: gatewayHost)
@@ -395,6 +399,107 @@ struct CloudflareAccessLoginTests {
         #expect(try second.get() == embedB)
     }
 
+    @MainActor
+    @Test func `reintercept after cookie installation logs once and blocks until expiry or relaunch`() async throws {
+        let gateway = try self.session(host: "gateway.example.net", lifetime: 172_800)
+        let embed = try self.session(host: "embed.example.net", lifetime: 172_800)
+        let app = try self.embedApplication()
+        var clock = self.now
+        var runs = 0
+        var blockedHosts: [String] = []
+        let owner = CloudflareAccessEmbedLogin(
+            discover: { _ in app },
+            signIn: { _, _ in
+                runs += 1
+                return embed
+            },
+            now: { clock },
+            logCookieBlocked: { blockedHosts.append($0) })
+        #expect(try await owner.signIn(appURL: embed.origin, gateway: gateway, isCurrent: { true }) == embed)
+        owner.recordCookieInstallation(appURL: embed.origin, gateway: gateway)
+        clock.addTimeInterval(60)
+        #expect(try await owner.signIn(appURL: embed.origin, gateway: gateway, isCurrent: { true }) == nil)
+        #expect(try await owner.signIn(appURL: embed.origin, gateway: gateway, isCurrent: { true }) == nil)
+        #expect(runs == 1)
+        #expect(blockedHosts == ["embed.example.net"])
+
+        // Persisted cookies are not installation receipts in a new process.
+        let relaunched = CloudflareAccessEmbedLogin(
+            discover: { _ in app },
+            signIn: { _, _ in
+                runs += 1
+                return embed
+            },
+            now: { clock },
+            logCookieBlocked: { blockedHosts.append($0) })
+        #expect(try await relaunched.signIn(appURL: embed.origin, gateway: gateway, isCurrent: { true }) == embed)
+        #expect(runs == 2)
+        clock.addTimeInterval(86399)
+        #expect(try await owner.signIn(appURL: embed.origin, gateway: gateway, isCurrent: { true }) == nil)
+        clock.addTimeInterval(1)
+        #expect(try await owner.signIn(appURL: embed.origin, gateway: gateway, isCurrent: { true }) == embed)
+        #expect(runs == 3)
+        #expect(blockedHosts == ["embed.example.net"])
+    }
+
+    @MainActor
+    @Test(arguments: ["account-change", "sign-out"])
+    func `account lifecycle clears cookie suppression without replaying stale receipts`(_ change: String) async throws {
+        let oldGateway = try self.session(host: "gateway.example.net")
+        let subject = change == "account-change" ? "next-user" : "user-42"
+        let nextGateway = try self.session(host: "gateway.example.net", subject: subject)
+        var embed = try self.session(host: "embed.example.net")
+        let app = try self.embedApplication()
+        var clock = self.now
+        var runs = 0
+        var blockedHosts: [String] = []
+        let owner = CloudflareAccessEmbedLogin(
+            discover: { _ in app },
+            signIn: { _, _ in
+                runs += 1
+                return embed
+            },
+            now: { clock },
+            logCookieBlocked: { blockedHosts.append($0) })
+        #expect(try await owner.signIn(appURL: embed.origin, gateway: oldGateway, isCurrent: { true }) == embed)
+        owner.recordCookieInstallation(appURL: embed.origin, gateway: oldGateway)
+        #expect(try await owner.signIn(appURL: embed.origin, gateway: oldGateway, isCurrent: { true }) == nil)
+        #expect(blockedHosts.count == 1)
+        clock.addTimeInterval(120)
+        owner.setPrincipal(change == "account-change" ? nextGateway.browserDataPrincipal : nil)
+        owner.recordCookieInstallation(appURL: embed.origin, gateway: oldGateway)
+        embed = try self.session(host: "embed.example.net", subject: subject)
+        #expect(try await owner.signIn(appURL: embed.origin, gateway: nextGateway, isCurrent: { true }) == embed)
+        #expect(runs == 2)
+        #expect(blockedHosts == ["embed.example.net"])
+    }
+
+    @MainActor
+    @Test func `login after the installation measurement window does not suppress the app`() async throws {
+        let gateway = try self.session(host: "gateway.example.net")
+        let embed = try self.session(host: "embed.example.net")
+        let app = try self.embedApplication()
+        var clock = self.now
+        var runs = 0
+        var blockedHosts: [String] = []
+        let owner = CloudflareAccessEmbedLogin(
+            discover: { _ in app },
+            signIn: { _, _ in
+                runs += 1
+                return embed
+            },
+            now: { clock },
+            logCookieBlocked: { blockedHosts.append($0) })
+        #expect(try await owner.signIn(appURL: embed.origin, gateway: gateway, isCurrent: { true }) == embed)
+        owner.recordCookieInstallation(appURL: embed.origin, gateway: gateway)
+        clock.addTimeInterval(301)
+        #expect(try await owner.signIn(appURL: embed.origin, gateway: gateway, isCurrent: { true }) == embed)
+        clock.addTimeInterval(120)
+        #expect(try await owner.signIn(appURL: embed.origin, gateway: gateway, isCurrent: { true }) == embed)
+        #expect(runs == 3)
+        #expect(blockedHosts.isEmpty)
+    }
+
     private func embedApplication(
         host: String = "embed.example.net", issuerHost: String = "tenant.cloudflareaccess.com") throws
         -> CloudflareAccessLogin.Application
@@ -411,18 +516,20 @@ struct CloudflareAccessLoginTests {
     private func session(
         host: String,
         subject: String = "user-42",
-        issuer: String = "https://tenant.cloudflareaccess.com") throws -> GatewayBrowserSession
+        issuer: String = "https://tenant.cloudflareaccess.com",
+        lifetime: TimeInterval = 3600) throws -> GatewayBrowserSession
     {
         var claims = self.tokenClaims
         claims["sub"] = subject
         claims["iss"] = issuer
+        claims["exp"] = self.now.addingTimeInterval(lifetime).timeIntervalSince1970
         return try GatewayBrowserSession(
             origin: #require(URL(string: "https://\(host)/")),
             issuer: #require(URL(string: issuer)),
             audience: "application-123",
             subject: subject,
             token: self.jwt(claims),
-            expiresAt: self.now.addingTimeInterval(3600))
+            expiresAt: self.now.addingTimeInterval(lifetime))
     }
 
     private var metadataClaims: [String: Any] {

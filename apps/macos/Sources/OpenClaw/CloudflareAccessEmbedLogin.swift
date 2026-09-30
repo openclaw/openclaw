@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 
 /// A profile's embedded applications share browser sign-in work, never its gateway credential.
 @MainActor
@@ -17,19 +18,31 @@ final class CloudflareAccessEmbedLogin {
     private let discover: Discover
     private let runSignIn: SignIn
     private let now: @MainActor () -> Date
+    private let logCookieBlocked: @MainActor (String) -> Void
     private var flights: [ApplicationKey: Task<GatewayBrowserSession?, Error>] = [:]
     private var retryAfter: [ApplicationKey: Date] = [:]
+    private var principal: String?
+    private var installedAt: [String: Date] = [:]
+    private var cookieBlockedUntil: [String: Date] = [:]
 
     init(
         discover: @escaping Discover = { try await CloudflareAccessLogin.discover(gatewayURL: $0) },
         signIn: @escaping SignIn = { application, isCurrent in
             try await CloudflareAccessLogin.signIn(application: application, isCurrent: { await isCurrent() })
         },
-        now: @escaping @MainActor () -> Date = Date.init)
+        now: @escaping @MainActor () -> Date = Date.init,
+        logCookieBlocked: @escaping @MainActor (String) -> Void = { host in
+            Logger(subsystem: "ai.openclaw", category: "gateway.browser-sign-in").warning(
+                """
+                Embedded Access cookie was not delivered for \(host, privacy: .private); \
+                automatic sign-in disabled for 24 hours. Use the tab's sign-in link.
+                """)
+        })
     {
         self.discover = discover
         self.runSignIn = signIn
         self.now = now
+        self.logCookieBlocked = logCookieBlocked
     }
 
     func signIn(
@@ -44,9 +57,11 @@ final class CloudflareAccessEmbedLogin {
               appURL.query == nil, appURL.fragment == nil, appURL.port == nil || appURL.port == 443,
               appURL.path.isEmpty || appURL.path == "/", let host = appURL.host?.lowercased(),
               Self.isDNSHostname(host), host != gateway.origin.host?.lowercased(),
-              Self.isSameSite(host, gatewayHost: gateway.origin.host)
+              Self.sharesHostSuffix(host, gatewayHost: gateway.origin.host)
         else { return nil }
         let key = ApplicationKey(principal: gateway.browserDataPrincipal, host: host)
+        self.setPrincipal(key.principal)
+        if self.cookieDeliveryFailed(for: host) { return nil }
         if let flight = self.flights[key] {
             let result = try await flight.value
             try Task.checkCancellation()
@@ -99,17 +114,43 @@ final class CloudflareAccessEmbedLogin {
         guard parts.percentEncodedPath.hasPrefix(prefix) else { return nil }
         let host = String(parts.percentEncodedPath.dropFirst(prefix.count)).lowercased()
         guard Self.isDNSHostname(host), host != gateway.origin.host?.lowercased(),
-              Self.isSameSite(host, gatewayHost: gateway.origin.host) else { return nil }
+              Self.sharesHostSuffix(host, gatewayHost: gateway.origin.host) else { return nil }
         return URL(string: "https://\(host)/")
     }
 
-    private static func isSameSite(_ host: String, gatewayHost: String?) -> Bool {
+    func setPrincipal(_ principal: String?) {
+        guard self.principal != principal else { return }
+        self.principal = principal
+        self.installedAt.removeAll()
+        self.cookieBlockedUntil.removeAll()
+    }
+
+    func recordCookieInstallation(appURL: URL, gateway: GatewayBrowserSession) {
+        guard self.principal == gateway.browserDataPrincipal, let host = appURL.host?.lowercased(),
+              self.cookieBlockedUntil[host] == nil else { return }
+        self.installedAt[host] = self.now()
+    }
+
+    private func cookieDeliveryFailed(for host: String) -> Bool {
+        let now = self.now()
+        if let until = self.cookieBlockedUntil[host] {
+            if until > now { return true }
+            self.cookieBlockedUntil[host] = nil
+        }
+        guard let installed = self.installedAt.removeValue(forKey: host) else { return false }
+        let elapsed = now.timeIntervalSince(installed)
+        guard elapsed >= 0, elapsed <= 300 else { return false }
+        self.cookieBlockedUntil[host] = now.addingTimeInterval(24 * 60 * 60)
+        self.logCookieBlocked(host)
+        return true
+    }
+
+    private static func sharesHostSuffix(_ host: String, gatewayHost: String?) -> Bool {
         guard let gatewayHost = gatewayHost?.lowercased() else { return false }
-        let parent = host.split(separator: ".").dropFirst().joined(separator: ".")
-        let gatewayParent = gatewayHost.split(separator: ".").dropFirst().joined(separator: ".")
-        // A shared TLD alone is insufficient; WebKit blocks other sites' iframe cookies.
-        return (parent == gatewayParent && parent.contains(".")) ||
-            host == gatewayParent || gatewayHost == parent
+        let suffix = host.split(separator: ".").suffix(2)
+        let gatewaySuffix = gatewayHost.split(separator: ".").suffix(2)
+        // Only a sanity check; subsequent cookie delivery determines WebKit's site boundary.
+        return suffix.count == 2 && suffix.elementsEqual(gatewaySuffix)
     }
 
     private static func sameIssuer(_ lhs: URL, _ rhs: URL) -> Bool {
