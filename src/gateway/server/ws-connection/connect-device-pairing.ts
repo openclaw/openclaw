@@ -429,11 +429,13 @@ export async function authorizeGatewayConnectDevice(
           !existingPairedDevice;
         const retryWhileControlUiApprovalPending =
           state.isControlUi && role === "operator" && Boolean(recoveryRequestId);
-        // Retry detached node approvals and pending browser approvals without
+        const retryWhileNodeApprovalPending = role === "node" && Boolean(recoveryRequestId);
+        // Retry pending node and browser approvals without
         // changing which connects require approval or what access they receive.
         const retryWhileApprovalPending =
           retryAfterBootstrapPairingApproval ||
           sshVerifyStarted ||
+          retryWhileNodeApprovalPending ||
           retryWhileControlUiApprovalPending;
         failPairingHandshake({
           message: buildPairingConnectErrorMessage(reason),

@@ -25,12 +25,12 @@ import type {
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
 import { assertCodexBindingMayBeReplaced } from "./session-binding.js";
 import { isCodexContextRestartSelectionChangedError } from "./thread-lifecycle-errors.js";
-import { buildCodexUserPromptMessage } from "./transcript-mirror.js";
 import {
   CodexUsageLimitPromptError,
   formatCodexTurnStartUsageLimitError,
   markCodexAuthProfileBlockedFromRateLimits,
 } from "./usage-limit-error.js";
+import { buildCodexUserPromptMessage } from "./user-prompt-message.js";
 
 export async function startCodexAttemptTurn(
   resources: CodexAttemptResources,

@@ -61,40 +61,27 @@ type StartupMigrationLeaseWaitParams = Omit<StartupMigrationLeaseParams, "nowMs"
   sleep?: (ms: number) => Promise<void>;
 };
 
-class StartupMigrationLeaseConflictError extends Error {
-  readonly canWaitForSameHostOwner: boolean;
-
-  constructor(message: string, canWaitForSameHostOwner: boolean) {
-    super(message);
-    this.canWaitForSameHostOwner = canWaitForSameHostOwner;
-  }
-}
-
-function withStartupMigrationCheckpointDatabase<T>(
-  env: NodeJS.ProcessEnv,
-  callback: (db: DatabaseSync) => T,
-  atomic = false,
-): T {
-  return withOpenClawStateStartupMigrationCheckpointDatabase(callback, { env, atomic });
-}
+class StartupMigrationLeaseConflictError extends Error {}
 
 function writeStartupMigrationCheckpointDatabase<T>(
   env: NodeJS.ProcessEnv,
   callback: (db: DatabaseSync) => T,
 ): T {
   const databasePath = resolveOpenClawStateSqlitePath(env);
-  return withStartupMigrationCheckpointDatabase(env, (db) =>
-    runSqliteImmediateTransactionSync(
-      db,
-      () => {
-        assertOpenClawStateWriteAllowed({ database: db, databasePath, env });
-        return callback(db);
-      },
-      {
-        databaseLabel: databasePath,
-        operationLabel: "state.startup-checkpoint.write",
-      },
-    ),
+  return withOpenClawStateStartupMigrationCheckpointDatabase(
+    (db) =>
+      runSqliteImmediateTransactionSync(
+        db,
+        () => {
+          assertOpenClawStateWriteAllowed({ database: db, databasePath, env });
+          return callback(db);
+        },
+        {
+          databaseLabel: databasePath,
+          operationLabel: "state.startup-checkpoint.write",
+        },
+      ),
+    { env, atomic: false },
   );
 }
 
@@ -169,12 +156,11 @@ function acquireStartupMigrationLease(
 ): StartupMigrationLease {
   const env = params.env ?? process.env;
   const owner = params.owner ?? randomUUID();
-  return withStartupMigrationCheckpointDatabase(
-    env,
+  return withOpenClawStateStartupMigrationCheckpointDatabase(
     (db) =>
       // Integrity verification may outlast a lease; start its lifetime at the actual claim.
       acquireStartupMigrationLeaseFromDatabase(db, { ...params, env, nowMs: now(), owner }),
-    true,
+    { env, atomic: true },
   );
 }
 
@@ -220,7 +206,6 @@ function acquireStartupMigrationLeaseFromDatabase(
         const ownerHint = existingOwner ? ` (held by pid ${existingOwner.pid})` : "";
         throw new StartupMigrationLeaseConflictError(
           `OpenClaw startup migrations are already running for this state directory; retry after the other OpenClaw process finishes or after ${new Date(existing.expiresAt ?? expiresAt).toISOString()}.${ownerHint}`,
-          existingOwner?.host === hostname(),
         );
       }
       executeSqliteQuerySync(
@@ -315,9 +300,10 @@ export function acquireStartupMigrationLeaseWithWait(
     sleep: params.sleep,
     acquire: () =>
       acquireStartupMigrationLease({ env: params.env, owner, ownerPid: params.ownerPid }, now),
+    // A replacement host cannot prove the old owner dead. Wait within the same
+    // bound for release or expiry instead of adding supervisor restart backoff.
     shouldRetry: (error) =>
-      (error instanceof StartupMigrationLeaseConflictError && error.canWaitForSameHostOwner) ||
-      sqlitePrimaryResultCode(error) === 5,
+      error instanceof StartupMigrationLeaseConflictError || sqlitePrimaryResultCode(error) === 5,
   });
 }
 

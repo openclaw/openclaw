@@ -1,13 +1,11 @@
 import { createHash } from "node:crypto";
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
 import type {
   WorkerPlacementExecutionMode,
   WorkerSessionPlacementIdentity,
@@ -16,7 +14,7 @@ import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementStore,
 } from "./placement-store.js";
-import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
+import { advancePlacementFixtureToActive } from "./placement-test-fixtures.js";
 
 const SESSION: WorkerSessionPlacementIdentity = {
   sessionId: "session-placement",
@@ -25,56 +23,33 @@ const SESSION: WorkerSessionPlacementIdentity = {
 };
 
 describe("worker session placement store", () => {
+  const tempDirs = useStateDatabaseTempDirs();
   let root: string;
   let database: OpenClawStateDatabase;
   let store: WorkerSessionPlacementStore;
   let nowMs: number;
 
-  beforeEach(async () => {
-    root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-placement-"));
+  beforeEach(() => {
+    root = tempDirs.make("openclaw-placement-");
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     nowMs = 1_000;
     store = createWorkerSessionPlacementStore({ database, now: () => nowMs });
   });
 
-  afterEach(async () => {
-    await closeStateDatabaseForTest();
-    await fs.rm(root, { recursive: true, force: true });
-  });
-
-  async function advanceToActive(
+  function advanceToActive(
     identity: WorkerSessionPlacementIdentity = SESSION,
     executionMode: WorkerPlacementExecutionMode = "worker-turn",
   ) {
-    seedAttachedPlacementEnvironment(database, {
-      environmentId: `environment-${identity.sessionId}`,
-      sessionId: identity.sessionId,
-      ownerEpoch: 7,
-    });
-    let placement = await store.startDispatch({ ...identity, executionMode });
-    for (const step of [
-      { to: "provisioning", patch: { environmentId: `environment-${identity.sessionId}` } },
-      { to: "syncing", patch: { workerBundleHash: "a".repeat(64) } },
+    return advancePlacementFixtureToActive(
+      store,
+      database,
+      { ...identity, executionMode },
       {
-        to: "starting",
-        patch: {
-          workspaceBaseManifestRef: `sha256:${"b".repeat(64)}`,
-          remoteWorkspaceDir: `/workspace/${identity.sessionId}`,
-        },
+        environmentId: `environment-${identity.sessionId}`,
+        remoteWorkspaceDir: `/workspace/${identity.sessionId}`,
+        seedEnvironment: "before-dispatch",
       },
-      { to: "active", patch: { activeOwnerEpoch: 7 } },
-    ] as const) {
-      placement = store.transition({
-        sessionId: identity.sessionId,
-        from: placement.state,
-        expectedGeneration: placement.generation,
-        ...step,
-      });
-    }
-    if (placement.state !== "active") {
-      throw new Error("expected active worker placement");
-    }
-    return placement;
+    );
   }
 
   it("persists the placement lifecycle and rejects stale transition generations", async () => {
@@ -789,10 +764,10 @@ describe("worker session placement store", () => {
 
     const manifestRef = `sha256:${"f".repeat(64)}`;
     const stagedResultRef = `refs/openclaw/worker-results/${claim.claimId}`;
-    expect(() =>
+    await expect(
       store.recordStagedWorkspaceResult(claim, "refs/openclaw/worker-results/unsafe.claim"),
-    ).toThrow("Worker workspace staged result reference is invalid");
-    store.recordStagedWorkspaceResult(claim, stagedResultRef);
+    ).rejects.toThrow("Worker workspace staged result reference is invalid");
+    await store.recordStagedWorkspaceResult(claim, stagedResultRef);
     store.recordWorkspaceResultConflict(claim, {
       paths: [" z.txt ", "a.txt", "a.txt"],
       stagedResultRef,

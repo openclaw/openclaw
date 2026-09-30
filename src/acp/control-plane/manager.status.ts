@@ -4,14 +4,13 @@ import type { AcpRuntimeStatus } from "@openclaw/acp-core/runtime/types";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withAcpRuntimeErrorBoundary } from "../runtime/errors.js";
 import { resolveManagerRuntimeCapabilities } from "./manager.runtime-controls.js";
-import { createSupersededActorError } from "./manager.runtime-handle-ensure.js";
 import type {
   AcpSessionStatus,
   EnsureManagerRuntimeHandle,
   ReconcileManagerRuntimeSessionIdentifiers,
   ResolveManagerSessionAsync,
 } from "./manager.types.js";
-import { requireReadySessionMeta } from "./manager.utils.js";
+import { assertCurrentAcpActor, requireReadySessionMeta } from "./manager.utils.js";
 import { resolveRuntimeOptionsFromMeta } from "./runtime-options.js";
 
 /** Reads a fresh ACP session status and reconciles runtime identifiers from the status response. */
@@ -29,9 +28,7 @@ export async function runManagerGetSessionStatus(params: {
 }): Promise<AcpSessionStatus> {
   const isCurrentActor = params.isCurrentActor ?? (() => true);
   const assertCurrent = () => {
-    if (!isCurrentActor()) {
-      throw createSupersededActorError(params.sessionKey);
-    }
+    assertCurrentAcpActor(isCurrentActor(), params.sessionKey);
     params.assertActive?.();
     params.throwIfAborted(params.signal);
   };
@@ -59,9 +56,7 @@ export async function runManagerGetSessionStatus(params: {
   let handle = ensuredHandle;
   params.assertActive?.();
   const capabilities = await resolveManagerRuntimeCapabilities({ runtime, handle });
-  if (!isCurrentActor()) {
-    throw createSupersededActorError(params.sessionKey);
-  }
+  assertCurrentAcpActor(isCurrentActor(), params.sessionKey);
   let runtimeStatus: AcpRuntimeStatus | undefined;
   if (runtime.getStatus) {
     runtimeStatus = await withAcpRuntimeErrorBoundary({
@@ -79,9 +74,7 @@ export async function runManagerGetSessionStatus(params: {
       fallbackMessage: "Could not read ACP runtime status.",
     });
   }
-  if (!isCurrentActor()) {
-    throw createSupersededActorError(params.sessionKey);
-  }
+  assertCurrentAcpActor(isCurrentActor(), params.sessionKey);
   const reconciledSession = await params.reconcileRuntimeSessionIdentifiers({
     cfg: params.cfg,
     sessionKey: params.sessionKey,

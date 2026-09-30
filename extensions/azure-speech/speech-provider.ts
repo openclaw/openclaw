@@ -38,12 +38,6 @@ type AzureSpeechProviderConfig = {
   timeoutMs?: number;
 };
 
-type AzureSpeechProviderOverrides = {
-  voice?: string;
-  lang?: string;
-  outputFormat?: string;
-};
-
 function readAzureSpeechEnvApiKey(): string | undefined {
   return (
     trimToUndefined(process.env.AZURE_SPEECH_KEY) ??
@@ -56,10 +50,6 @@ function readAzureSpeechEnvRegion(): string | undefined {
   return (
     trimToUndefined(process.env.AZURE_SPEECH_REGION) ?? trimToUndefined(process.env.SPEECH_REGION)
   );
-}
-
-function readAzureSpeechEnvEndpoint(): string | undefined {
-  return trimToUndefined(process.env.AZURE_SPEECH_ENDPOINT);
 }
 
 function resolveAzureSpeechConfigRecord(
@@ -79,7 +69,8 @@ function normalizeAzureSpeechProviderConfig(
 ): AzureSpeechProviderConfig {
   const raw = resolveAzureSpeechConfigRecord(rawConfig);
   const region = trimToUndefined(raw?.region) ?? readAzureSpeechEnvRegion();
-  const endpoint = trimToUndefined(raw?.endpoint) ?? readAzureSpeechEnvEndpoint();
+  const endpoint =
+    trimToUndefined(raw?.endpoint) ?? trimToUndefined(process.env.AZURE_SPEECH_ENDPOINT);
   const baseUrl = normalizeAzureSpeechBaseUrl({
     baseUrl: trimToUndefined(raw?.baseUrl),
     endpoint,
@@ -125,16 +116,11 @@ function readAzureSpeechProviderConfig(config: SpeechProviderConfig): AzureSpeec
   };
 }
 
-function readAzureSpeechOverrides(
-  overrides: SpeechProviderOverrides | undefined,
-): AzureSpeechProviderOverrides {
-  if (!overrides) {
-    return {};
-  }
+function readAzureSpeechOverrides(overrides: SpeechProviderOverrides | undefined) {
   return {
-    voice: trimToUndefined(overrides.voice ?? overrides.voiceId),
-    lang: trimToUndefined(overrides.lang ?? overrides.languageCode),
-    outputFormat: trimToUndefined(overrides.outputFormat),
+    voice: trimToUndefined(overrides?.voice ?? overrides?.voiceId),
+    lang: trimToUndefined(overrides?.lang ?? overrides?.languageCode),
+    outputFormat: trimToUndefined(overrides?.outputFormat),
   };
 }
 

@@ -239,19 +239,14 @@ async function synthesizeSpeechInternal(
         return { success: false, error: setup.error };
       }
 
-      const { cfg, config, persona, providers } = setup;
       const target = resolveTtsSynthesisTarget(params.channel);
       return await executeTtsProviderAttempts({
-        cfg,
-        config,
-        persona,
-        providers,
+        ...setup,
         synthesisText: normalizeSpeechText(params.text),
         providerOverrides: params.overrides?.providerOverrides,
         timeoutMs: params.timeoutMs,
         target,
         logLabel: "TTS",
-        prepareProviderRegistry: setup.prepareProviderRegistry,
         selectOperation: ({ resolvedProvider }) => ({
           kind: "ready",
           synthesize: (request) => resolvedProvider.provider.synthesize(request),

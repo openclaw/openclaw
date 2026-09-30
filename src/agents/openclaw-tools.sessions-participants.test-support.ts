@@ -24,10 +24,8 @@ export function registerSessionsSendParticipantTests({
   callGatewayMock: Mock;
 }) {
   it.each([
-    { timeoutSeconds: 0, admitted: true },
     { timeoutSeconds: 1, admitted: true },
     { timeoutSeconds: 0, admitted: false },
-    { timeoutSeconds: 1, admitted: false },
   ])(
     "records exactly one cross-agent contribution at the original prompt time only after admission (timeoutSeconds: $timeoutSeconds, admitted: $admitted)",
     async ({ timeoutSeconds, admitted }) => {

@@ -131,22 +131,6 @@ export async function patchSession(
   }
 }
 
-async function patchSessions(
-  host: SessionOrganizerControllerHost,
-  rows: readonly SidebarRecentSession[],
-  patch: SidebarSessionPatch,
-  scope: SidebarSessionMutationScope,
-): Promise<SidebarSessionMutationResult> {
-  if (rows.length === 0) {
-    return "completed";
-  }
-  const successful = await patchSessionRows(host, rows, patch, scope);
-  if (!successful) {
-    return host.sessionData.isSessionMutationScopeCurrent(scope) ? "failed" : "stale";
-  }
-  return successful.length === rows.length ? "completed" : "failed";
-}
-
 export async function archiveSessionWithUndo(
   host: SessionActionHost,
   session: SessionActionRow,
@@ -403,10 +387,10 @@ export async function runBatchSessionAction(
 ): Promise<void> {
   switch (action.kind) {
     case "toggle-unread":
-      await patchSessions(host, rows, { unread: !allUnread }, scope);
+      await patchSessionRows(host, rows, { unread: !allUnread }, scope);
       break;
     case "move-to-group":
-      await patchSessions(
+      await patchSessionRows(
         host,
         rows.filter((row) => (row.category ?? null) !== action.category),
         { category: action.category },
@@ -495,9 +479,14 @@ export async function createSessionGroup(
   // The Gateway checks the identities captured with the action. A bounded
   // roster can page them out or replace a key, so it cannot authorize the move.
   if (sessions.length > 0) {
-    return sessions.length === 1
-      ? patchSession(host, sessions[0]!, { category: name }, scope)
-      : patchSessions(host, sessions, { category: name }, scope);
+    if (sessions.length === 1) {
+      return patchSession(host, sessions[0]!, { category: name }, scope);
+    }
+    const successful = await patchSessionRows(host, sessions, { category: name }, scope);
+    if (!successful) {
+      return host.sessionData.isSessionMutationScopeCurrent(scope) ? "failed" : "stale";
+    }
+    return successful.length === sessions.length ? "completed" : "failed";
   }
   if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
     return "stale";

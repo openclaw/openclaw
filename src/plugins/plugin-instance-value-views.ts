@@ -35,10 +35,17 @@ class MemberReader extends PluginHostObject {
   }
 }
 
-class IteratorResultReader extends PluginHostObject {
-  #reader: { read: () => unknown; admission: PluginIteratorAdmission };
+type IteratorDataRead = { data?: object };
+type PluginIteratorResultReader = {
+  read: () => unknown;
+  readWithData: (read: IteratorDataRead) => unknown;
+  admission: PluginIteratorAdmission;
+};
 
-  constructor(value: object, reader: { read: () => unknown; admission: PluginIteratorAdmission }) {
+class IteratorResultReader extends PluginHostObject {
+  #reader: PluginIteratorResultReader;
+
+  constructor(value: object, reader: PluginIteratorResultReader) {
     super(value);
     this.#reader = reader;
   }
@@ -286,10 +293,14 @@ export function createPluginValueView(
     wrap: (value) => wrap(value),
     invoke: admitCallback,
   });
-  const wrapResult = <T>(result: T, callerData?: unknown[]): T => {
+  const wrapResult = <T>(
+    result: T,
+    callerData?: unknown[],
+    project: <V>(value: V) => V = wrap,
+  ): T => {
     const completion = resolvePluginReturnPromise(result);
     if (completion) {
-      const pending = mapPluginReturnPromise(completion, (resolved) => wrap(resolved));
+      const pending = mapPluginReturnPromise(completion, (resolved) => project(resolved));
       if (pending.host) {
         valueInstances.setHost(pending.value, bindings.instance);
       } else {
@@ -298,7 +309,7 @@ export function createPluginValueView(
       // SAFETY: Promise-like results retain their resolved type while callable values stay owned.
       return pending.value as T;
     }
-    return callerData?.includes(result) ? result : wrap(result);
+    return callerData?.includes(result) ? result : project(result);
   };
 
   /** Callables retain their instance; schemas remain data for host validators. */
@@ -559,6 +570,16 @@ export function createPluginValueView(
     return result as T;
   };
 
+  // Host readers retain their lease; the outer iterator can project their payload lazily.
+  const wrapIteratorResult = <T>(value: T): T =>
+    value !== null &&
+    typeof value === "object" &&
+    IteratorResultReader.get(value) &&
+    !pluginMemberNeedsAdmission(value, "then") &&
+    typeof Reflect.get(value, "then") !== "function"
+      ? value
+      : wrap(value);
+
   const admitIterator = (iterator: object): PluginIteratorAdmission => {
     const current = iterators.get(iterator);
     if (current?.active) {
@@ -586,7 +607,11 @@ export function createPluginValueView(
       pending += 1;
       return bindings.invoke(run, { token, release: releaseOperation });
     };
-    const readResultMember = (result: object, key: "done" | "value"): unknown => {
+    const readResultMember = (
+      result: object,
+      key: "done" | "value",
+      dataRead?: IteratorDataRead,
+    ): unknown => {
       assertActive();
       const view = MemberReader.get(result, factory);
       // Caller-defined shadow properties keep the Proxy's descriptor/identity contract.
@@ -598,21 +623,37 @@ export function createPluginValueView(
         descriptor &&
         ("value" in descriptor || (reader?.admission.active && descriptor.get === reader.read))
       ) {
-        const value: unknown = "value" in descriptor ? descriptor.value : reader?.read();
+        const value: unknown =
+          "value" in descriptor ? descriptor.value : reader?.readWithData(dataRead ?? {});
         // Ordinary data reads need authority, but only executable Promise inspection needs scope.
         if (
           value === null ||
           (typeof value !== "object" && typeof value !== "function") ||
-          ((!project || isPluginData(value)) &&
+          (((!project && !reader) || dataRead?.data === value || isPluginData(value)) &&
             !types.isPromise(value) &&
             !pluginMemberNeedsAdmission(value, "then") &&
             typeof Reflect.get(value, "then") !== "function")
         ) {
+          // Share only a completed classification in this synchronous reader chain.
+          // A later read starts fresh, so mutations never retain a data exemption.
+          if ((project || reader) && dataRead && value !== null && typeof value === "object") {
+            dataRead.data = value;
+          }
           return value;
         }
-        return invoke(() => (project ? project.read(key, source, () => value) : value));
+        if (dataRead) {
+          dataRead.data = undefined;
+        }
+        return invoke(() => {
+          const projected =
+            project ?? (reader ? MemberReader.get(wrap(result), factory) : undefined);
+          return projected ? projected.read(key, source, () => value) : value;
+        });
       }
-      return invoke(() => Reflect.get(result, key));
+      if (dataRead) {
+        dataRead.data = undefined;
+      }
+      return invoke(() => Reflect.get(reader ? wrap(result) : result, key));
     };
     const admission: PluginIteratorAdmission = {
       get done() {
@@ -649,7 +690,11 @@ export function createPluginValueView(
               }
               throw new TypeError("Plugin iterator method must be callable");
             }
-            const next: unknown = await wrapResult(Reflect.apply(method, iterator, args));
+            const next: unknown = await wrapResult(
+              Reflect.apply(method, iterator, args),
+              undefined,
+              wrapIteratorResult,
+            );
             if (next === null || (typeof next !== "object" && typeof next !== "function")) {
               throw new TypeError("Plugin async iterator result must be an object");
             }
@@ -657,15 +702,18 @@ export function createPluginValueView(
             // IteratorClose ends this admission even when a generator yields in finally.
             // A later explicit next can acquire a new lease only while the instance is live.
             state = complete ? "done" : key === "return" ? "returned" : state;
-            const readValue = () =>
-              active ? readResultMember(next, "value") : Reflect.get(next, "value");
+            const readWithData = (dataRead: IteratorDataRead) =>
+              active
+                ? readResultMember(next, "value", dataRead)
+                : Reflect.get(IteratorResultReader.get(next) ? wrap(next) : next, "value");
+            const readValue = () => readWithData({});
             // Completion may join disposal; value stays lazy and checks the exact inner lease.
             const result = Object.defineProperty({ done: complete }, "value", {
               get: readValue,
               enumerable: true,
               configurable: true,
             });
-            void new IteratorResultReader(result, { read: readValue, admission });
+            void new IteratorResultReader(result, { read: readValue, readWithData, admission });
             return result;
           } catch (error) {
             state = "done";

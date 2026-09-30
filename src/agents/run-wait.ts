@@ -277,7 +277,7 @@ export async function waitForAgentRunReply(params: {
 
 /** Wait until the current and newly spawned pending run IDs are drained or timed out. */
 export async function waitForAgentRunsToDrain(params: {
-  getPendingRunIds: () => Iterable<string>;
+  getPendingRunIds: () => Promise<Iterable<string>>;
   initialPendingRunIds?: Iterable<string>;
   timeoutMs?: number;
   deadlineAtMs?: number;
@@ -288,7 +288,7 @@ export async function waitForAgentRunsToDrain(params: {
 
   // Runs may finish and spawn more runs, so refresh until no pending IDs remain.
   let pendingRunIds = normalizePendingRunIds(
-    params.initialPendingRunIds ?? params.getPendingRunIds(),
+    params.initialPendingRunIds ?? (await params.getPendingRunIds()),
   );
 
   while (pendingRunIds.size > 0 && Date.now() < deadlineAtMs) {
@@ -303,7 +303,7 @@ export async function waitForAgentRunsToDrain(params: {
       ),
     );
     const previousRunIds = pendingRunIds;
-    pendingRunIds = normalizePendingRunIds(params.getPendingRunIds());
+    pendingRunIds = normalizePendingRunIds(await params.getPendingRunIds());
     const retryDelayMs = Math.min(AGENT_RUN_WAIT_RETRY_DELAY_MS, deadlineAtMs - Date.now());
     if (
       retryDelayMs > 0 &&
@@ -316,7 +316,7 @@ export async function waitForAgentRunsToDrain(params: {
       await new Promise<void>((resolve) => {
         setTimeout(resolve, retryDelayMs);
       });
-      pendingRunIds = normalizePendingRunIds(params.getPendingRunIds());
+      pendingRunIds = normalizePendingRunIds(await params.getPendingRunIds());
     }
   }
 

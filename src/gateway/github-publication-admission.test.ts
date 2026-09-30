@@ -336,7 +336,12 @@ describe("GitHub publication selection admission", () => {
     });
     expect(row).toMatchObject({ status: "requested", execution_id: null });
     expect(
-      fixture.coordinator.personalStatus(fixture.action, fixture.action, row!.request_id),
+      fixture.coordinator.personalStatus(
+        fixture.action,
+        fixture.action,
+        row!.request_id,
+        undefined,
+      ),
     ).toMatchObject({
       result: { status: "failed", code: "identity_changed" },
       confirmation: null,

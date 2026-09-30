@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { IncomingHttpHeaders } from "node:http";
+import { asOptionalObjectRecord, readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   startMatrixQaFaultProxy,
   type MatrixQaFaultProxyExchange,
@@ -491,10 +492,7 @@ export async function startMatrixQaRecordingProxy(params: {
     },
   };
   const recordExchange = (exchange: MatrixQaFaultProxyExchange) => {
-    const context =
-      typeof exchange.context === "object" && exchange.context !== null
-        ? (exchange.context as { scenarioId?: unknown; sequence?: unknown })
-        : undefined;
+    const context = asOptionalObjectRecord(exchange.context);
     const exchangeSequence = typeof context?.sequence === "number" ? context.sequence : ++sequence;
     const route = normalizeMatrixQaRoute(exchange.request.path);
     const exchangeScenarioId = route.endsWith("/sync")
@@ -504,10 +502,7 @@ export async function startMatrixQaRecordingProxy(params: {
         : "unattributed";
     const requestJson = parseJsonBody(exchange.request.body, exchange.request.headers);
     const responseJson = parseJsonBody(exchange.response.body, exchange.response.headers);
-    const responseMetadata =
-      typeof responseJson === "object" && responseJson !== null
-        ? (responseJson as { errcode?: unknown; next_batch?: unknown })
-        : undefined;
+    const responseMetadata = asOptionalObjectRecord(responseJson);
     const requestFields = collectStateFieldMarkers(requestJson);
     const responseFields = collectStateFieldMarkers(responseJson);
     const syncPrincipal = exchange.request.bearerToken ?? "anonymous";
@@ -516,14 +511,12 @@ export async function startMatrixQaRecordingProxy(params: {
     const sinceRaw = new URLSearchParams(exchange.request.search).get("since") ?? undefined;
     const since = sinceRaw ? (syncTokens.get(sinceRaw) ?? "sync-unknown") : undefined;
     const requestQuery = buildRedactedQuery(exchange.request.search, syncTokens);
-    const nextBatch =
-      typeof responseMetadata?.next_batch === "string" ? responseMetadata.next_batch : undefined;
+    const nextBatch = readStringField(responseMetadata, "next_batch");
     if (nextBatch && !syncTokens.has(nextBatch)) {
       syncTokens.set(nextBatch, `sync-${syncTokens.size + 1}`);
     }
     const nextBatchAlias = nextBatch ? syncTokens.get(nextBatch) : undefined;
-    const responseErrcode =
-      typeof responseMetadata?.errcode === "string" ? responseMetadata.errcode : undefined;
+    const responseErrcode = readStringField(responseMetadata, "errcode");
     const operationFingerprint = createHash("sha256")
       .update(exchange.request.method)
       .update("\0")
@@ -605,7 +598,7 @@ export async function startMatrixQaRecordingProxy(params: {
         substrate,
       };
     },
-    installFaultRule: (rule) => proxy.installRule(rule),
+    installFaultRule: proxy.installRule.bind(proxy),
     records: () =>
       structuredClone(
         records
@@ -615,7 +608,7 @@ export async function startMatrixQaRecordingProxy(params: {
     setScenarioId(nextScenarioId) {
       scenarioId = nextScenarioId;
     },
-    setTargetBaseUrl: (targetBaseUrl) => proxy.setTargetBaseUrl(targetBaseUrl),
-    stop: () => proxy.stop(),
+    setTargetBaseUrl: proxy.setTargetBaseUrl.bind(proxy),
+    stop: proxy.stop.bind(proxy),
   };
 }

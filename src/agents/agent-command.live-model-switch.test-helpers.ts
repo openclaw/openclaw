@@ -67,6 +67,21 @@ export function createChannelModelRuntimeConfig({
   };
 }
 
+export function createLegacyAutoFallbackAliasCollisionConfig() {
+  return {
+    agents: {
+      defaults: {
+        model: { primary: "anthropic/claude" },
+        models: {
+          "anthropic/claude": {},
+          "cloudflare-ai-gateway/gemini-2.5-flash-lite": {},
+          "google/gemini-2.5-flash-lite": { alias: "gemini-2.5-flash-lite" },
+        },
+      },
+    },
+  };
+}
+
 export function createConfiguredModelCompatRuntimeConfig(allowlisted: boolean, excluded = false) {
   return {
     agents: {

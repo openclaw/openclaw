@@ -172,8 +172,11 @@ function validatePurposeMatrix({ candidateSha, purpose, tag, targetContextRef, v
   if (parsedVersion === null || parsedVersion.version !== version) {
     fail("release plan version must use a supported release version");
   }
-  if (purpose === "beta-publish" && parsedVersion.channel === "stable") {
-    fail("beta-publish release plan version must be alpha or beta");
+  if (parsedVersion.channel === "alpha" && purpose !== "diagnostic") {
+    fail("Alpha releases are retired; use a beta prerelease instead.");
+  }
+  if (purpose === "beta-publish" && parsedVersion.channel !== "beta") {
+    fail("beta-publish release plan version must be beta");
   }
   if (purpose === "stable-publish" && parsedVersion.channel !== "stable") {
     fail("stable-publish release plan version must be stable");

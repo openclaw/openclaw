@@ -3026,16 +3026,11 @@ describe("ChatStateController render lifecycle", () => {
     } as unknown as ChatPageHost;
   }
 
-  function createInputHistoryKey(
-    selectionStart: number,
-    selectionEnd: number,
-    valueLength: number,
-  ) {
+  function createInputHistoryKey(selectionStart: number, selectionEnd: number) {
     return {
       key: "ArrowUp" as const,
       selectionStart,
       selectionEnd,
-      valueLength,
       altKey: false,
       ctrlKey: false,
       metaKey: false,
@@ -3781,11 +3776,11 @@ describe("ChatStateController render lifecycle", () => {
   });
 
   it.each([
-    { handled: true, selection: 0, valueLength: 0, decision: "handled:history-up" },
-    { handled: false, selection: 5, valueLength: 10, decision: "blocked:modifier-or-composition" },
+    { handled: true, selection: 0 },
+    { handled: false, selection: 5 },
   ] as const)(
     "invalidates input history only when recall is handled: $handled",
-    ({ handled, selection, valueLength, decision }) => {
+    ({ handled, selection }) => {
       const requestUpdate = vi.fn();
       const controller = new ChatStateController<ChatPageHost>(
         createControllerHost({ requestUpdate }),
@@ -3796,16 +3791,10 @@ describe("ChatStateController render lifecycle", () => {
         handled,
         preventDefault: handled,
         restoreCaret: handled ? "up" : null,
-        decision,
-        historyNavigationActiveBefore: false,
-        historyNavigationActiveAfter: handled,
-        selectionStart: 0,
-        selectionEnd: 0,
-        valueLength: 10,
       });
       const state = createInputHistoryState(renderLifecycle, navigateHistory);
       controller.attach(state);
-      const input = createInputHistoryKey(selection, selection, valueLength);
+      const input = createInputHistoryKey(selection, selection);
       const result = state.handleChatInputHistoryKey!(input);
 
       expect(result.handled).toBe(handled);

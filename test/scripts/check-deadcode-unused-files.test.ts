@@ -465,6 +465,56 @@ Delete the files or model their real entrypoints in Knip.`,
     });
   });
 
+  it.each([1, 2, 3])(
+    "preserves split UTF-8 for interleaved Knip streams at byte %i",
+    async (split) => {
+      const child = new FakeKnipProcess();
+      child.pid = 0;
+      const resultPromise = runKnip(KNIP_UNUSED_FILE_ARGS, {
+        maxBufferBytes: 8,
+        spawnCommand: () => child,
+        writeStatus: () => {},
+      });
+      const stdout = Buffer.from("🦞");
+      const stderr = Buffer.from("📦");
+      child.stdout.emit("data", stdout.subarray(0, split));
+      child.stderr.emit("data", stderr.subarray(0, split));
+      child.stdout.emit("data", stdout.subarray(split));
+      child.stderr.emit("data", stderr.subarray(split));
+      finishFakeProcess(child, 0, null);
+
+      await expect(resultPromise).resolves.toMatchObject({
+        errorCode: undefined,
+        output: "🦞📦",
+        signal: null,
+        status: 0,
+      });
+    },
+  );
+
+  it("does not flush a UTF-8 character cut by the Knip output byte cap", async () => {
+    const child = new FakeKnipProcess();
+    // This output-only child owns no OS process; the existing cap test covers signal delivery.
+    child.pid = 0;
+    const resultPromise = runKnip(KNIP_UNUSED_FILE_ARGS, {
+      maxBufferBytes: 4,
+      spawnCommand: () => child,
+      writeStatus: () => {},
+    });
+    const character = Buffer.from("🦞");
+    child.stdout.emit("data", "ab");
+    child.stdout.emit("data", character.subarray(0, 2));
+    child.stdout.emit("data", character.subarray(2));
+    finishFakeProcess(child, null, "SIGTERM");
+
+    await expect(resultPromise).resolves.toMatchObject({
+      errorCode: "ENOBUFS",
+      output: "ab",
+      signal: "SIGTERM",
+      status: null,
+    });
+  });
+
   it("bounds captured Knip output", async () => {
     const child = new FakeKnipProcess();
     await withFakeProcessSignals(child, async (kills) => {

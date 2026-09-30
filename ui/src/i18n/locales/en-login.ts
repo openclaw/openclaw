@@ -24,6 +24,13 @@ const enLogin = {
     toggleSecretVisibility: "Toggle Gateway secret visibility",
     failure: {
       rawError: "Raw error",
+      busy: {
+        title: "Gateway busy, retrying…",
+        summary:
+          "The Gateway is reachable, but the connection could not be opened. This page will retry automatically.",
+        countdown: "Retrying in {seconds}s…",
+        retrying: "Retrying now…",
+      },
       profileUnavailable: {
         title: "Profile verification unavailable",
         stepRetry: "Retry shortly.",
@@ -67,6 +74,15 @@ const enLogin = {
         stepDashboard:
           "Run openclaw dashboard --no-open for a fresh URL, or openclaw gateway auth-token --show to recover the token.",
         stepReplace: "Replace the Gateway secret with the token for this Gateway URL.",
+      },
+      bootstrapInvalid: {
+        title: "Pairing link is no longer valid",
+        summary:
+          "This one-time dashboard link may have expired or already been used. Request a fresh link instead of changing the Gateway secret.",
+        stepOpen:
+          "Open the fresh link that the command opens or copies in this browser. Pairing links can be used only once and expire after ten minutes.",
+        stepJson:
+          "If the browser or clipboard is unavailable, run openclaw dashboard --json on the Gateway host and open its browserUrl in this browser.",
       },
       trustedProxy: {
         title: "Proxy authentication required",

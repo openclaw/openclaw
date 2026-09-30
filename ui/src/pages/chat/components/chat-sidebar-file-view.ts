@@ -34,10 +34,7 @@ export function saveFileWrapPreference(wrap: boolean): void {
 }
 
 export function hasUniformLineEndings(content: string): boolean {
-  const crlf = content.split("\r\n").length - 1;
-  const bareCr = (content.match(/\r(?!\n)/g) ?? []).length;
-  const bareLf = (content.match(/(?<!\r)\n/g) ?? []).length;
-  return [crlf, bareCr, bareLf].filter((count) => count > 0).length <= 1;
+  return new Set(content.match(/\r\n?|\n/g)).size <= 1;
 }
 
 export function computeFileMatches(content: string, query: string): number[] {

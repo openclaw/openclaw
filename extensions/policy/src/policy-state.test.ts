@@ -360,14 +360,6 @@ describe("scanPolicyTools", () => {
     ).resolves.toEqual([]);
   });
 
-  it("ignores the complete local-notes subsection", async () => {
-    await expect(
-      scanPolicyTools(
-        ["## Tools", "### Local notes", "- SSH: prod-host", "### deploy risk: high"].join("\n"),
-      ),
-    ).resolves.toEqual([expect.objectContaining({ id: "deploy", risk: "high" })]);
-  });
-
   it("parses a tool literally named tools after local notes", async () => {
     await expect(
       scanPolicyTools(

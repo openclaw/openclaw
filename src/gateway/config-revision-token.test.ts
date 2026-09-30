@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { createHmac, randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -38,6 +38,15 @@ describe("Gateway config revision tokens", () => {
     const keyRow = reopened
       .prepare("SELECT hmac_key FROM config_revision_keys WHERE id = 1")
       .get() as { hmac_key: Uint8Array };
+    const bearer = "synthetic-operator-password";
+    const subject = projector.hashResponseSessionBearer(bearer);
+    expect(subject).toMatch(/^hmac-sha256:v1:[a-f0-9]{64}$/u);
+    expect(
+      subject.includes(createHmac("sha256", keyRow.hmac_key).update(bearer).digest("hex")),
+    ).toBe(false);
+    expect(
+      loadGatewayConfigRevisionProjector(stateOptions()).hashResponseSessionBearer(bearer),
+    ).not.toBe(subject);
 
     expect(reopened.prepare("PRAGMA user_version").get()?.user_version).toBe(schemaVersion);
     expect(keyRow.hmac_key).toHaveLength(32);
@@ -58,6 +67,9 @@ describe("Gateway config revision tokens", () => {
 
     closeOpenClawStateDatabaseForTest();
     expect(loadGatewayConfigRevisionProjector(options).projectRawHash(rawHash)).toBe(rawToken);
+    expect(loadGatewayConfigRevisionProjector(options).hashResponseSessionBearer(bearer)).toBe(
+      subject,
+    );
   });
 
   it("fails closed instead of replacing corrupt persisted key material", () => {

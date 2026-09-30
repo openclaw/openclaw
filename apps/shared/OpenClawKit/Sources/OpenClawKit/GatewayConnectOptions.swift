@@ -95,6 +95,8 @@ public enum GatewayAuthSource: String, Sendable {
 public struct GatewayAuthBinding: Equatable, Sendable {
     public let source: GatewayAuthSource
     public let credentialFingerprint: String?
+    /// Identity signed by this socket's connect, not whichever identity is stored later.
+    public let deviceId: String?
 }
 
 extension GatewayConnectOptions {

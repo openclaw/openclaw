@@ -80,6 +80,8 @@ public actor OpenClawChatSQLiteTranscriptCache: OpenClawChatTranscriptCache,
         return String(lastError[..<marker.lowerBound])
     }
 
+    private var sendOwnership: OpenClawChatSendOwnership?
+    private var pendingEnqueues = 0
     private let databases: OpenClawClientDatabases
     public nonisolated let gatewayID: String
     private var isRetired = false
@@ -301,7 +303,21 @@ public actor OpenClawChatSQLiteTranscriptCache: OpenClawChatTranscriptCache,
             else { return true }
             return canonicalMessageIdempotencyKeys.contains(key)
         }
-        await writeTranscript(sessionKey: sessionKey, agentID: agentID, messages: canonicalOnly)
+        guard !self.isRetired else { return }
+        let normalizedAgentID = Self.normalizedAgentID(agentID)
+        let gatewayID = self.gatewayID
+        do {
+            try await self.databases.cacheQueue.write { db in
+                try Self.replaceTranscript(
+                    db,
+                    gatewayID: gatewayID,
+                    sessionKey: sessionKey,
+                    agentID: normalizedAgentID,
+                    messages: canonicalOnly)
+            }
+        } catch {
+            cacheLogger.error("gateway transcript cache write failed: \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     public func mergeCanonicalTranscriptMessage(
@@ -400,28 +416,6 @@ public actor OpenClawChatSQLiteTranscriptCache: OpenClawChatTranscriptCache,
 }
 
 extension OpenClawChatSQLiteTranscriptCache {
-    private func writeTranscript(
-        sessionKey: String,
-        agentID: String?,
-        messages: [OpenClawChatMessage]) async
-    {
-        guard !self.isRetired else { return }
-        let normalizedAgentID = Self.normalizedAgentID(agentID)
-        let gatewayID = self.gatewayID
-        do {
-            try await self.databases.cacheQueue.write { db in
-                try Self.replaceTranscript(
-                    db,
-                    gatewayID: gatewayID,
-                    sessionKey: sessionKey,
-                    agentID: normalizedAgentID,
-                    messages: messages)
-            }
-        } catch {
-            cacheLogger.error("gateway transcript cache write failed: \(error.localizedDescription, privacy: .public)")
-        }
-    }
-
     private nonisolated static func replaceTranscript(
         _ db: Database,
         gatewayID: String,
@@ -491,7 +485,37 @@ extension OpenClawChatSQLiteTranscriptCache {
         self.storeChangeHub.stream()
     }
 
+    public func reserveWebConversation(
+        scope: OpenClawChatSendOwnership.Scope, owner: UUID, ownership: OpenClawChatSendOwnership) async -> Bool
+    {
+        guard !self.isRetired, self.pendingEnqueues == 0,
+              self.sendOwnership == nil || self.sendOwnership === ownership else { return false }
+        self.sendOwnership = ownership
+        guard ownership.beginWeb(scope, owner: owner) else { return false }
+        // Reserve admission before the database read so an enqueue cannot cross cutover.
+        guard let commands = await self.loadCommandsIfAvailable() else {
+            ownership.endWeb(scope, owner: owner)
+            return false
+        }
+        guard !commands.contains(where: {
+            OpenClawChatSendOwnership.Scope(
+                sessionKey: $0.deliverySessionKey, agentID: $0.agentID, routingContract: $0.routingContract) == scope
+        }) else {
+            ownership.endWeb(scope, owner: owner)
+            return false
+        }
+        return true
+    }
+
     public func enqueueCommand(_ command: OpenClawChatOutboxCommand) async -> Bool {
+        let scope = OpenClawChatSendOwnership.Scope(
+            sessionKey: command.deliverySessionKey, agentID: command.agentID, routingContract: command.routingContract)
+        let ownership = self.sendOwnership
+        guard ownership?.beginNative(scope) != false else { return false }
+        self.pendingEnqueues += 1
+        defer { self.pendingEnqueues -= 1
+            ownership?.endNative(scope)
+        }
         guard !self.isRetired,
               let attachmentByteCount = Self.attachmentByteCount(command.attachments),
               Self.canEnqueueAttachmentBytes(commandBytes: attachmentByteCount, queuedBytes: 0)

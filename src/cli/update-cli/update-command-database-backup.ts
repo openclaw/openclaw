@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { resolveStateDir } from "../../config/paths.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
@@ -30,7 +32,6 @@ export async function captureUpdateDatabases(params: {
 }) {
   const startedAt = Date.now();
   const { execution, context, transaction } = params;
-  const backupRoot = transaction.databaseBackupRoot ?? transaction.backupRoot;
   const env = context?.env ?? execution.opts.run!.env;
   params.assertCurrent();
   const source = await readUpdateCandidateSource(env, execution.legacyConfigPlan);
@@ -57,6 +58,14 @@ export async function captureUpdateDatabases(params: {
   try {
     const capture = async () => {
       params.assertCurrent();
+      let backupRoot = transaction.databaseBackupRoot ?? transaction.backupRoot;
+      if (execution.updateInstallKind === "git" && !execution.switchToGit) {
+        // Database recovery outlives runtime retirement and stays outside the Git source fence.
+        const artifactRoot = path.join(execution.root, ".artifacts");
+        await fs.mkdir(artifactRoot, { recursive: true });
+        params.assertCurrent();
+        backupRoot = path.join(artifactRoot, path.basename(backupRoot));
+      }
       const captured = await createUpdateDatabaseBackup({
         backupRoot,
         stateDir: resolveStateDir(env),
@@ -108,7 +117,7 @@ export async function captureUpdateDatabases(params: {
     durationMs: Date.now() - startedAt,
     exitCode: 0,
     diagnostics: [
-      `Databases snapshotted at ${backup.directory}. Retain this directory with the update's recovery artifacts.`,
+      `Databases snapshotted at ${backup.directory}. Verified successful activation removes these snapshots; otherwise retain them with the update's recovery artifacts.`,
       ...backup.databases.map(
         (entry) =>
           `${entry.path} -> ${entry.snapshotPath}; schema ${entry.userVersion}; ${entry.sizeBytes} bytes; SHA-256 ${entry.sha256}`,
@@ -127,35 +136,53 @@ export async function restoreFailedUpdateDatabases(params: {
   runId: string;
   env: NodeJS.ProcessEnv;
   assertCurrent: () => void;
+  assertRollbackSafe?: () => Promise<void>;
   progress?: Progress;
 }): Promise<boolean> {
   const startedAt = Date.now();
   const refuse = (reason: string) => {
     params.backup.restoreRefusal ??= reason;
     params.result.reason = "state-migrated-no-rollback";
+    params.result.rollbackOutcome = { status: "not-attempted", reason };
     const step: UpdateStepResult = {
       name: "database rollback",
       command: "preserve databases changed after snapshot capture",
       cwd: params.backup.directory,
       durationMs: Date.now() - startedAt,
       exitCode: 1,
-      stderrTail: `${reason}. Current databases were preserved. Keep the retained snapshots at ${params.backup.directory}; run openclaw doctor from the candidate version to inspect recovery before restarting or downgrading.`,
+      stderrTail: `${reason}. Current databases were preserved. Keep the retained snapshots at ${params.backup.directory}; run openclaw doctor from the candidate version to inspect recovery before downgrading.`,
     };
     params.result.steps.push(step);
     params.progress?.onStepComplete?.({ ...step, index: 0, total: 0 });
     return false;
   };
+  params.assertCurrent();
+  try {
+    await params.assertRollbackSafe?.();
+  } catch (error) {
+    params.assertCurrent();
+    if (hasCommandProcessCleanupError(error)) {
+      throw error;
+    }
+    params.result.recovery = { serviceRestartSafe: false, reason: "source-rollback-failed" };
+    return refuse(formatErrorMessage(error));
+  }
+  params.assertCurrent();
   if (params.backup.restoreRefusal) {
     return refuse(params.backup.restoreRefusal);
+  }
+  if (params.backup.migration && params.backup.migration.backup !== params.backup.directory) {
+    return refuse("Migration receipt belongs to a different database backup");
   }
   try {
     const migratedPaths = await restoreUpdateDatabaseBackup({
       ...params,
-      expectedGenerations:
-        params.backup.postMigrationGenerations ?? params.backup.sourceGenerations,
+      expectedGenerations: params.backup.migration?.to ?? params.backup.sourceGenerations,
     });
     if (migratedPaths === null) {
-      return refuse("databases changed after migration; the writer is unknown");
+      return refuse(
+        params.backup.restoreRefusal ?? "databases changed after migration; the writer is unknown",
+      );
     }
     params.assertCurrent();
     const step: UpdateStepResult = {

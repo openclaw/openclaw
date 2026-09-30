@@ -10,8 +10,15 @@ import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
-import { isCurrentPlacementTurnClaim, type WorkerSessionTurnOwner } from "./placement-record.js";
-import { stagePlacementTurnClaimWorkerPublication } from "./placement-turn-authority.js";
+import {
+  isCurrentPlacementTurnClaim,
+  type WorkerSessionTurnClaim,
+  type WorkerSessionTurnOwner,
+} from "./placement-record.js";
+import {
+  stagePlacementTurnClaimWorkerPublication,
+  stagePlacementWorkspaceResultWorkerPublication,
+} from "./placement-turn-authority.js";
 import { prepareWorkerTurnClaimClosed } from "./placement-turn-claim-events.js";
 import { ActiveTurnClaimError, type createPlacementTurnClaimOps } from "./placement-turn-claims.js";
 import type {
@@ -78,22 +85,41 @@ export function createPlacementTurnClaimWorkerOps(runtime: {
               },
             },
           }
-        : input.type === "placementTurns.recoverWorkspace"
+        : input.type === "placementTurns.recordStagedResult"
           ? {
               type: input.type,
               input: {
-                nowMs: input.input.nowMs,
-                gatewayInstanceId: input.input.gatewayInstanceId,
                 claim: { ...claim, placementGeneration: input.input.claim.placementGeneration },
+                stagedResultRef: input.input.stagedResultRef,
+                repositoryWorkspaceId: input.input.repositoryWorkspaceId,
               },
             }
-          : {
-              type: input.type,
-              input: {
-                nowMs: input.input.nowMs,
-                claim: { ...claim, placementGeneration: input.input.claim.placementGeneration },
-              },
-            };
+          : input.type === "placementTurns.recoverWorkspace"
+            ? {
+                type: input.type,
+                input: {
+                  nowMs: input.input.nowMs,
+                  gatewayInstanceId: input.input.gatewayInstanceId,
+                  claim: { ...claim, placementGeneration: input.input.claim.placementGeneration },
+                },
+              }
+            : input.type === "placementTurns.handoffRuntimeRefreshResult"
+              ? {
+                  type: input.type,
+                  input: {
+                    nowMs: input.input.nowMs,
+                    claim: { ...claim, placementGeneration: input.input.claim.placementGeneration },
+                    expectedGeneration: input.input.expectedGeneration,
+                    gatewayInstanceId: input.input.gatewayInstanceId,
+                  },
+                }
+              : {
+                  type: input.type,
+                  input: {
+                    nowMs: input.input.nowMs,
+                    claim: { ...claim, placementGeneration: input.input.claim.placementGeneration },
+                  },
+                };
     const close =
       command.type === "placementTurns.release" || command.type === "placementTurns.releaseIfOwned"
         ? prepareWorkerTurnClaimClosed(runtime.path, command.input.claim)
@@ -138,7 +164,15 @@ export function createPlacementTurnClaimWorkerOps(runtime: {
                     throw new Error("Placement claim commit has no receipt");
                   }
                   prepared = request.facts;
-                  if (request.facts.placement) {
+                  if (command.type === "placementTurns.recordStagedResult") {
+                    if (request.facts.placement?.sessionId !== command.input.claim.sessionId) {
+                      throw new Error("Staged workspace result receipt has a different owner");
+                    }
+                    publication = stagePlacementWorkspaceResultWorkerPublication(
+                      context.admission.identity,
+                      request.facts.placement.sessionId,
+                    );
+                  } else if (request.facts.placement) {
                     publication = stagePlacementTurnClaimWorkerPublication(
                       context.admission.identity,
                       request.facts.placement,
@@ -164,6 +198,12 @@ export function createPlacementTurnClaimWorkerOps(runtime: {
         }
         if (!granted || admission?.settlement?.kind === "completed") {
           publication?.rollback();
+        } else if (
+          command.type === "placementTurns.handoffRuntimeRefreshResult" ||
+          command.type === "placementTurns.recordStagedResult"
+        ) {
+          // An uncertain result write requires fresh recovery authority; never replay it.
+          publication?.invalidate();
         } else {
           if (command.type === "placementTurns.recoverWorkspace") {
             // An unchanged claim does not prove its result fence committed. Recovery
@@ -254,6 +294,20 @@ export function createPlacementTurnClaimWorkerOps(runtime: {
     }
   }
   return {
+    async recordStagedWorkspaceResult(
+      claim: WorkerSessionTurnClaim,
+      stagedResultRef: string,
+      repositoryWorkspaceId?: string,
+      assertCurrent?: () => void,
+    ): Promise<void> {
+      await execute(
+        {
+          type: "placementTurns.recordStagedResult",
+          input: { claim, stagedResultRef, repositoryWorkspaceId },
+        },
+        assertCurrent,
+      );
+    },
     async retainInterruptedTurnWorkspace(
       claim: Parameters<Claims["releaseTurn"]>[0],
       assertCurrent: () => void,
@@ -265,6 +319,25 @@ export function createPlacementTurnClaimWorkerOps(runtime: {
         },
         assertCurrent,
       );
+    },
+    async handoffRuntimeRefreshResult(
+      input: Omit<
+        PlacementTurnClaimWorkerOperations["placementTurns.handoffRuntimeRefreshResult"]["input"],
+        "nowMs"
+      >,
+      assertCurrent?: () => void,
+    ) {
+      const receipt = await execute(
+        {
+          type: "placementTurns.handoffRuntimeRefreshResult",
+          input: { ...input, nowMs: runtime.now?.() ?? Date.now() },
+        },
+        assertCurrent,
+      );
+      if (!receipt.placement) {
+        throw new Error("Worker runtime refresh handoff receipt is missing its placement");
+      }
+      return receipt.placement;
     },
     async claimTurn(input: Parameters<Claims["claimTurn"]>[0], assertCurrent?: () => void) {
       const receipt = await execute(

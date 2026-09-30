@@ -20,6 +20,7 @@ import { uniqueValues } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { mergeHybridResults, selectHybridSearchResults } from "./hybrid.js";
 import { applyImportanceMultiplier } from "./importance.js";
 import { runMemoryVectorFallback } from "./manager-cpu-worker-runtime.js";
+import { isMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
 import { acquireMemoryIndexReadGeneration } from "./manager-index-generation-lease.js";
 import {
   MemoryKeywordRetrieval,
@@ -183,7 +184,10 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
           if (err instanceof WorkerTaskError && err.code === "overloaded") {
             throw err;
           }
-          if (this.providerRequirement.mode === "optional" && this.shouldFallbackOnError(err)) {
+          if (
+            this.providerRequirement.mode === "optional" &&
+            isMemoryEmbeddingOperationError(err)
+          ) {
             const failedProvider = this.provider?.id ?? this.settings.provider;
             await this.retireCurrentProvider().catch((retireErr: unknown) => {
               const message = redactSensitiveText(formatErrorMessage(retireErr), {
@@ -473,7 +477,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
           opts?.onPartialResults?.(null);
           this.markLocalEmbeddingProviderDegraded(err);
           const message = formatErrorMessage(err);
-          const activatedFallback = this.shouldFallbackOnError(err)
+          const activatedFallback = isMemoryEmbeddingOperationError(err)
             ? await this.activateFallbackProvider(message).catch((fallbackErr: unknown) => {
                 log.warn(
                   `memory search: failed to activate fallback provider: ${formatErrorMessage(fallbackErr)}`,

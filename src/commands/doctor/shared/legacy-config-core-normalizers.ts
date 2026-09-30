@@ -594,18 +594,11 @@ function normalizeLegacyRuntimeAgentContainer(
 function normalizeLegacyCodexCliProviderRuntimePins(
   cfg: OpenClawConfig,
   changes: string[],
-): { config: OpenClawConfig; changed: boolean } {
-  const rawModels = cfg.models;
-  if (!isRecord(rawModels) || !isRecord(rawModels.providers)) {
-    return { config: cfg, changed: false };
+): OpenClawConfig {
+  if (!isRecord(cfg.models)) {
+    return cfg;
   }
-
-  let changed = false;
-  const nextProviders: Record<string, unknown> = { ...rawModels.providers };
-  for (const [providerId, rawProvider] of Object.entries(rawModels.providers)) {
-    if (!isRecord(rawProvider)) {
-      continue;
-    }
+  return normalizeModelProviders(cfg, (rawProvider, providerId) => {
     let providerChanged = false;
     const nextProvider: Record<string, unknown> = { ...rawProvider };
     const providerRuntime = normalizeLegacyCodexCliAgentRuntimePolicy(rawProvider.agentRuntime);
@@ -638,24 +631,8 @@ function normalizeLegacyCodexCliProviderRuntimePins(
       }
     }
 
-    if (providerChanged) {
-      nextProviders[providerId] = nextProvider;
-      changed = true;
-    }
-  }
-
-  return changed
-    ? {
-        config: {
-          ...cfg,
-          models: {
-            ...rawModels,
-            providers: nextProviders as NonNullable<OpenClawConfig["models"]>["providers"],
-          },
-        },
-        changed: true,
-      }
-    : { config: cfg, changed: false };
+    return providerChanged ? nextProvider : rawProvider;
+  });
 }
 
 /** Move legacy runtime-tagged model/provider refs onto current agentRuntime policy fields. */
@@ -664,8 +641,7 @@ export function normalizeLegacyRuntimeModelRefs(
   changes: string[],
   blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>,
 ): OpenClawConfig {
-  const providerPinned = normalizeLegacyCodexCliProviderRuntimePins(cfg, changes);
-  const cfgWithProviders = providerPinned.config;
+  const cfgWithProviders = normalizeLegacyCodexCliProviderRuntimePins(cfg, changes);
   const rewriteRemainingSlots = (config: OpenClawConfig): OpenClawConfig =>
     rewriteModelRefs(config, "config", changes, (modelRef) => {
       const migrated = migrateUnblockedLegacyRuntimeModelRef(modelRef, blockedModelIdentities);
@@ -756,66 +732,35 @@ export function normalizeLegacyOpenAICodexModelsAddMetadata(
   cfg: OpenClawConfig,
   changes: string[],
 ): OpenClawConfig {
-  const rawModels = cfg.models;
-  if (!isRecord(rawModels) || !isRecord(rawModels.providers)) {
+  if (!isRecord(cfg.models)) {
     return cfg;
   }
-
-  const rawProviders: Record<string, unknown> = rawModels.providers;
-  let providersChanged = false;
-  const nextProviders: Record<string, unknown> = { ...rawProviders };
-  for (const [providerId, rawProvider] of Object.entries(rawProviders)) {
-    if (normalizeProviderId(providerId) !== "openai-codex" || !isRecord(rawProvider)) {
-      continue;
+  return normalizeModelProviders(cfg, (rawProvider, providerId) => {
+    if (normalizeProviderId(providerId) !== "openai-codex" || !Array.isArray(rawProvider.models)) {
+      return rawProvider;
     }
-    const rawProviderModels = rawProvider.models;
-    if (!Array.isArray(rawProviderModels)) {
-      continue;
-    }
-    let providerChanged = false;
-    const nextModels: typeof rawProviderModels = [];
-    for (const model of rawProviderModels) {
+    let changed = false;
+    const models = Array.from(rawProvider.models, (model) => {
       if (
-        isRecord(model) &&
-        !("metadataSource" in model) &&
-        isLegacyModelsAddCodexMetadataModel({
+        !isRecord(model) ||
+        "metadataSource" in model ||
+        !isLegacyModelsAddCodexMetadataModel({
           provider: providerId,
           model: model as Partial<ModelDefinitionEntry>,
         })
       ) {
-        providerChanged = true;
-        const safeProviderId = sanitizeForLog(providerId);
-        const safeModelId = sanitizeForLog(normalizeOptionalString(model.id) ?? "unknown");
-        changes.push(
-          `Marked models.providers.${safeProviderId}.models.${safeModelId} as /models add metadata so official OpenAI Codex metadata can override it.`,
-        );
-        nextModels.push(Object.assign({}, model, { metadataSource: "models-add" }));
-      } else {
-        nextModels.push(model);
+        return model;
       }
-    }
-
-    if (!providerChanged) {
-      continue;
-    }
-    nextProviders[providerId] = {
-      ...rawProvider,
-      models: nextModels,
-    } as (typeof nextProviders)[string];
-    providersChanged = true;
-  }
-
-  if (!providersChanged) {
-    return cfg;
-  }
-
-  return {
-    ...cfg,
-    models: {
-      ...rawModels,
-      providers: nextProviders as NonNullable<OpenClawConfig["models"]>["providers"],
-    },
-  };
+      changed = true;
+      const safeProviderId = sanitizeForLog(providerId);
+      const safeModelId = sanitizeForLog(normalizeOptionalString(model.id) ?? "unknown");
+      changes.push(
+        `Marked models.providers.${safeProviderId}.models.${safeModelId} as /models add metadata so official OpenAI Codex metadata can override it.`,
+      );
+      return Object.assign({}, model, { metadataSource: "models-add" });
+    });
+    return changed ? { ...rawProvider, models } : rawProvider;
+  });
 }
 
 function normalizeModelProviders(

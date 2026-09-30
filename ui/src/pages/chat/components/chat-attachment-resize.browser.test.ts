@@ -9,12 +9,9 @@ import {
   releaseChatAttachmentPayloads,
 } from "../attachment-payload-store.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
+import { renderChatAttachmentInputs } from "./chat-attachment-inputs.ts";
 import { ChatAttachmentReadLifecycle } from "./chat-attachment-reads.ts";
-import {
-  createChatAttachmentDropHandlers,
-  handleChatAttachmentPaste,
-  renderChatAttachmentInputs,
-} from "./chat-attachments.ts";
+import { createChatAttachmentDropHandlers, handleChatAttachmentPaste } from "./chat-attachments.ts";
 
 const browserMode = "__vitest_browser__" in globalThis;
 
@@ -58,7 +55,11 @@ describe.runIf(browserMode)("oversized composer images", () => {
       const props: ChatAttachmentControlsProps = {
         attachments,
         getAttachments: () => attachments,
-        attachmentLimits: { maxBytes: 20 * 1024 * 1024, maxImageBytes: limit },
+        attachmentLimits: {
+          maxBytes: 20 * 1024 * 1024,
+          maxImageBytes: limit,
+          maxBatchBytes: 20 * 1024 * 1024,
+        },
         attachmentReads: reads,
         readSignal: signal,
         onAttachmentsChange: (next) => {

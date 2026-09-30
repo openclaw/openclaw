@@ -27,6 +27,7 @@ import {
   normalizeSessionDeliveryState,
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -34,6 +35,7 @@ import {
   chat,
   commandMessage,
   createBot,
+  deliverTelegramUpdate,
   groupChat,
   groupCommand,
   harness,
@@ -98,16 +100,10 @@ function bind(
 }
 
 async function receive(bot: Bot, message: NonNullable<Update["message"]>) {
-  // Telegram JSON omits grammY's undefined-only reply fields.
-  const request = new Request("http://localhost/telegram", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      update_id: ++updateId,
-      message: { ...message, entities: message.text?.startsWith("@") ? message.entities : [] },
-    } satisfies Update),
+  await deliverTelegramUpdate(bot, {
+    update_id: ++updateId,
+    message: { ...message, entities: message.text?.startsWith("@") ? message.entities : [] },
   });
-  await bot.handleUpdate(await request.json());
 }
 
 describe("Telegram recorded session destinations", () => {
@@ -416,6 +412,7 @@ describe("Telegram recorded session destinations", () => {
     });
     await bot.stop();
     resetTelegramTopicNameCacheForTest();
+    await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
     setTelegramPluginStateRuntimeForTests();
     const reopened = await createBot(false, true, cfg);

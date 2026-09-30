@@ -28,12 +28,7 @@ const coreIsolatedFiles = [
   "src/agents/subagents/registry/subagent-registry-requester-wake-commit.test.ts",
   "src/agents/subagents/registry/subagent-registry-restart-recovery.test.ts",
 ];
-const incompleteTurnFiles = [
-  `${embeddedRoot}/run.incomplete-turn.classification.test.ts`,
-  `${embeddedRoot}/run.incomplete-turn.delivery-resolution.test.ts`,
-  `${embeddedRoot}/run.incomplete-turn.error-recovery.test.ts`,
-  `${embeddedRoot}/run.incomplete-turn.payload-resolution.test.ts`,
-];
+const incompleteTurnFiles = [`${embeddedRoot}/run.incomplete-turn.classification.test.ts`];
 const overflowCompactionFiles = [`${embeddedRoot}/run.overflow-compaction.test.ts`];
 
 export const agentVitestProjectOwners = {

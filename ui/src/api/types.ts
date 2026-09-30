@@ -248,6 +248,7 @@ export type SessionsListResult = SessionsListResultBase<
 
 export type SessionsPatchResult = SessionsPatchResultBase<{
   sessionId: string;
+  label?: GatewaySessionRow["label"];
   category?: GatewaySessionRow["category"];
   updatedAt?: number;
   createdAt?: number;
@@ -255,6 +256,7 @@ export type SessionsPatchResult = SessionsPatchResultBase<{
   lastReadAt?: number;
   lastActivityAt?: number;
   lastInteractionAt?: number;
+  agentStatus?: GatewayWireSessionsPatchResult["entry"]["agentStatus"];
   permissionMode?: GatewaySessionRow["permissionMode"];
   nativeRuntimeConsent?: string;
   modelOverrideSource?: GatewayWireSessionsPatchResult["entry"]["modelOverrideSource"];

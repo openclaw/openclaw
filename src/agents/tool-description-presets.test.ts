@@ -83,6 +83,9 @@ describe("sessions_send tool description", () => {
     expect(describeSessionsSendTool()).toContain("reply may still announce");
     expect(describeSessionsSendTool()).toContain('`targetDisposition: "queued"` or `"steered"`');
     expect(describeSessionsSendTool()).toContain("neither proves target completion");
+    expect(describeSessionsSendTool()).toContain(
+      "With timeoutSeconds:0, your own running child is steered into its active run (admission only, no separate completion turn; use mode:followup for one); other sessions use ordinary message delivery.",
+    );
   });
 });
 

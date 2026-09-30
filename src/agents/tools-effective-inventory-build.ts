@@ -172,8 +172,7 @@ function buildEffectiveToolInventoryEntries(
   );
 }
 
-/** Normalizes tools, quarantines incompatible schemas, and returns inventory output. */
-export function buildRuntimeCompatibleToolInventory(params: {
+type RuntimeToolInventoryParams = {
   tools: readonly AnyAgentTool[];
   cfg: OpenClawConfig;
   workspaceDir?: string;
@@ -181,11 +180,13 @@ export function buildRuntimeCompatibleToolInventory(params: {
   modelId?: string;
   modelApi?: string | null;
   runtimeModel?: ProviderRuntimeModel;
-}): {
-  entries: EffectiveToolInventoryEntry[];
-  notices: EffectiveToolInventoryNotice[];
-} {
-  const rawToolsByName = buildReadableToolsByName(params.tools);
+};
+
+/** Keep pre-normalization quarantine evidence alongside the final runtime projection. */
+export function normalizeToolInventorySchemas(
+  params: RuntimeToolInventoryParams,
+  allowProviderRuntimePluginLoad?: false,
+) {
   const preNormalizationDiagnostics: RuntimeToolSchemaDiagnostic[] = [];
   const normalizedTools = normalizeAgentRuntimeTools({
     tools: params.tools,
@@ -195,16 +196,30 @@ export function buildRuntimeCompatibleToolInventory(params: {
     modelId: params.modelId,
     modelApi: params.modelApi ?? undefined,
     model: params.runtimeModel,
+    allowProviderRuntimePluginLoad,
     onPreNormalizationSchemaDiagnostics: (diagnostics) =>
       preNormalizationDiagnostics.push(...diagnostics),
   });
   const projection = filterRuntimeCompatibleTools(normalizedTools);
-  const diagnostics = [...preNormalizationDiagnostics, ...projection.diagnostics];
+  return {
+    tools: projection.tools,
+    normalizedTools,
+    diagnostics: [...preNormalizationDiagnostics, ...projection.diagnostics],
+  };
+}
+
+/** Normalizes tools, quarantines incompatible schemas, and returns inventory output. */
+export function buildRuntimeCompatibleToolInventory(params: RuntimeToolInventoryParams): {
+  entries: EffectiveToolInventoryEntry[];
+  notices: EffectiveToolInventoryNotice[];
+} {
+  const rawToolsByName = buildReadableToolsByName(params.tools);
+  const projection = normalizeToolInventorySchemas(params);
   return {
     entries: buildEffectiveToolInventoryEntries(projection.tools, rawToolsByName),
     notices: buildUnsupportedToolSchemaNotices({
-      diagnostics,
-      tools: normalizedTools,
+      diagnostics: projection.diagnostics,
+      tools: projection.normalizedTools,
       rawToolsByName,
     }),
   };

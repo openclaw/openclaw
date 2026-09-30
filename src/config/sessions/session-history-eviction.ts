@@ -1,3 +1,4 @@
+import { sqliteReaderDatabasePathKey } from "../../infra/sqlite-reader-lifecycle.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   collectActiveSessionWorkAdmissions,
@@ -28,10 +29,10 @@ import { emitArchivedTranscriptUpdates } from "./session-accessor.sqlite-events.
 import { planSessionStateDeleteIfUnreferenced } from "./session-accessor.sqlite-lifecycle-state.js";
 import { refreshSqliteSessionPlannerStatisticsBestEffort } from "./session-accessor.sqlite-maintenance.js";
 import { withSqliteSessionPageReclamation } from "./session-accessor.sqlite-page-reclamation.js";
+import { runSqliteSessionReclamation } from "./session-accessor.sqlite-reclamation-run.js";
 import {
   createHistoryEvictionReclamationPlan,
   runExclusiveSqliteSessionReclamation,
-  runSqliteSessionReclamation,
 } from "./session-accessor.sqlite-reclamation.js";
 import { isRecentHistoricalSessionId } from "./session-accessor.sqlite-references.js";
 import {
@@ -285,9 +286,17 @@ export async function enforceSqliteSessionHistoryDiskBudget(
     storePath: params.storePath,
     label: "enforceSqliteSessionHistoryDiskBudget",
     fn: async () => {
-      const result = await enforceSessionHistoryMaintenanceSerialized(params);
-      recordPhysicalBudgetOutcome(params, result);
-      return result;
+      try {
+        const result = await enforceSessionHistoryMaintenanceSerialized(params);
+        recordPhysicalBudgetOutcome(params, result);
+        return result;
+      } catch (error) {
+        const state = getBudgetKickState(params.storePath, params.maintenance);
+        if (!state.checkpointBlocked) {
+          state.checkpointGate = undefined;
+        }
+        throw error;
+      }
     },
   });
 }
@@ -351,13 +360,23 @@ async function enforceSessionHistoryMaintenanceForDatabase(
 ): Promise<SessionDiskBudgetSweepResult> {
   const databaseOptions = toDatabaseOptions(resolved);
   const databasePath = resolveOpenClawAgentSqlitePath(databaseOptions);
+  const budgetState = getBudgetKickState(params.storePath, params.maintenance);
+  const checkpointGate = (budgetState.checkpointGate ??= {
+    databasePath: sqliteReaderDatabasePathKey(databasePath),
+    afterNs: process.hrtime.bigint(),
+    completedAtNs: 0n,
+  });
   const archiveDirectory = resolveSqliteTranscriptArchiveDirectory(resolved);
   const pruneArchives = (trigger: SqliteSessionArchivePruningDiagnostics["trigger"]) => {
+    if (trigger === "after-eviction") {
+      checkpointGate.afterNs = process.hrtime.bigint();
+    }
     const archivePruning: SqliteSessionArchivePruningDiagnostics = { trigger };
     return pruneAllSessionTranscriptArchivesToHighWater({
       archiveDirectory,
       databaseOptions,
       diagnostics: archivePruning,
+      checkpointGate,
       highWaterBytes,
       storePath: params.storePath,
       onCheckpointIncomplete: (checkpoint) =>
@@ -570,12 +589,14 @@ async function enforceSessionHistoryMaintenanceForDatabase(
         const pageDiagnostics: SqliteSessionArchivePruningDiagnostics = {
           trigger: "after-eviction",
         };
+        checkpointGate.afterNs = process.hrtime.bigint();
         const checkpointCompleted = await withSqliteSessionPageReclamation(
           databaseOptions,
           async (reclaimPages, assertCurrent, preparedOptions) => {
             try {
               return await reclaimSqliteFreePages(preparedOptions, pageDiagnostics, {
                 reclaimPages,
+                checkpointGate,
                 assertCurrent,
                 onCheckpointIncomplete: (checkpoint) =>
                   deferPhysicalBudgetForCheckpoint(params, databasePath, checkpoint),

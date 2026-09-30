@@ -39,7 +39,6 @@ import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
   clearOpenClawAgentDatabaseOpenFailure,
   withAgentDatabaseMaintenanceLease,
-  type OpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { withLegacySessionParticipantsSchema } from "../state/openclaw-agent-participants-migration.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
@@ -65,7 +64,7 @@ import {
   runSqliteImmediateTransactionSync,
 } from "./sqlite-transaction.js";
 import { readSqliteUserVersion } from "./sqlite-user-version.js";
-import { createSqliteWalReclamationResult } from "./sqlite-wal-reclamation.js";
+import { createMigrationDatabaseHandle } from "./state-migrations.agent-database.js";
 import { recoverMisplacedAgentDatabaseCopies } from "./state-migrations.agent-owner-recovery.js";
 import {
   mediaSourceDriftMessage,
@@ -89,23 +88,6 @@ const PREVIOUS_MEDIA_SCHEMA_VERSION = AGENT_MEDIA_SCHEMA_VERSION - 1;
 const ARCHIVE_TEMP_MARKER = ".media-retirement";
 
 type MediaMigrationDatabase = Pick<OpenClawAgentKyselyDatabase, "schema_meta">;
-
-function createMigrationDatabaseHandle(
-  database: DatabaseSync,
-  agentId: string,
-  pathname: string,
-): OpenClawAgentDatabase {
-  return {
-    agentId,
-    db: database,
-    path: pathname,
-    walMaintenance: {
-      checkpoint: () => false,
-      close: () => false,
-      reclaimFreePages: createSqliteWalReclamationResult,
-    },
-  };
-}
 
 function refreshAgentDatabasePlannerStatistics(database: DatabaseSync): void {
   // Doctor owns a stopped-writer maintenance window here. Explicitly analyze every
@@ -265,12 +247,12 @@ async function migrateAgentDatabase(params: {
         { databaseLabel: params.pathname, operationLabel: "media-persistence-detection" },
       );
       if (!needsRepair) {
-        const rewrittenArchives = await migrateArchives();
+        const archives = await migrateArchives();
         refreshAgentDatabasePlannerStatistics(database);
         return {
           rewrittenSessions: 0,
           rewrittenTrajectoryRows: 0,
-          rewrittenArchives,
+          ...archives,
           initialVersion,
           finalVersion: userVersion,
         };
@@ -350,11 +332,11 @@ async function migrateAgentDatabase(params: {
         },
       );
     }
-    const rewrittenArchives = await migrateArchives();
+    const archives = await migrateArchives();
     refreshAgentDatabasePlannerStatistics(database);
     return {
       ...rewritten,
-      rewrittenArchives,
+      ...archives,
       initialVersion,
       finalVersion: readSqliteUserVersion(database),
     };
@@ -511,6 +493,8 @@ export async function migrateLegacyMediaPersistence(
             pathname,
           });
           maintenance.assertOwned();
+          warnings.push(...result.warnings);
+          recoverableWarningCount += result.warnings.length;
           // A prior attempt may have committed the schema before publishing its registration.
           registerOpenClawAgentDatabase({ agentId: entry.agentId, env, path: pathname });
           const schemaAdvanced = result.finalVersion > result.initialVersion;

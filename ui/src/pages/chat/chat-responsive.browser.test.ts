@@ -89,9 +89,8 @@ function installResponsiveChatGateway(page: Page, scenario: ControlUiMockGateway
   });
 }
 
-async function getSharedAppPage(): Promise<Page> {
-  sharedAppPagePromise ??= createSharedAppPage();
-  return await sharedAppPagePromise;
+function getSharedAppPage(): Promise<Page> {
+  return (sharedAppPagePromise ??= createSharedAppPage());
 }
 
 async function createSharedAppPage(): Promise<Page> {
@@ -105,7 +104,8 @@ async function createSharedAppPage(): Promise<Page> {
     page.on("pageerror", (error) => sharedAppPageErrors.push(error.message));
     await page.route("https://cdn.example/**", async (route) => {
       const request = route.request();
-      if (request.url() === SHARED_APP_IMAGE_URL) {
+      // Chromium normalizes the escaped dot before sending the image request.
+      if (decodeURI(request.url()) === decodeURI(SHARED_APP_IMAGE_URL)) {
         await route.fulfill({
           contentType: "image/png",
           body: Buffer.from(
@@ -1316,12 +1316,12 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         });
         const { toolRowGap, ...disclosureStyles } = styles;
         expect(disclosureStyles).toEqual({
-          activity: "text",
+          activity: "none",
           activityBackground: "rgba(0, 0, 0, 0)",
           activityPaddingBlock: hasTouch ? ["8px", "8px"] : ["5px", "5px"],
           // Summary gap (8px) less the chevron's own -3px inset.
           chevronGap: 5,
-          tool: "text",
+          tool: "none",
           toolPaddingBlock: ["3px", "3px"],
         });
         expect(toolRowGap).toBeGreaterThanOrEqual(0);
@@ -2385,6 +2385,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     const image = page.locator(`img.chat-message-image[src="${SHARED_APP_IMAGE_URL}"]`);
     await image.waitFor({ timeout: APP_FIRST_RENDER_TIMEOUT_MS });
     expect(await image.getAttribute("src")).toBe(SHARED_APP_IMAGE_URL);
+    await image.evaluate((element: HTMLImageElement) => element.decode());
     expect(await page.getByText(SHARED_APP_TTS_TEXT, { exact: true }).count()).toBe(1);
     expect(await page.getByText(/MEDIA:/u).count()).toBe(0);
     for (const [fileName, type, , playback] of SHARED_APP_PLAYBACK_MEDIA) {
@@ -3155,7 +3156,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       expect(textareaRect.height).toBeLessThanOrEqual(layout.viewportHeight * 0.25 + 1);
       expect(textareaMetrics.scrollHeight).toBeGreaterThan(textareaMetrics.clientHeight);
       expect(input.y - (thread.y + thread.height)).toBeCloseTo(0, 0);
-      expect(shell.x).toBeCloseTo(16, 0);
+      expect(shell.x).toBeCloseTo(20, 0);
       expect(layout.viewportWidth - (shell.x + shell.width)).toBeCloseTo(shell.x, 0);
       expect(attach.x - input.x).toBeLessThanOrEqual(10);
       expect(model.x).toBeGreaterThanOrEqual(context.x + context.width - 1);

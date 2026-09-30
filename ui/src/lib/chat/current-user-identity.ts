@@ -6,15 +6,16 @@ type HelloWithPresence = {
   snapshot?: unknown;
 };
 
-/** Finds this browser connection's authenticated user in the Gateway presence snapshot. */
+/** Uses shared identity when supplied; presence supports callers without Gateway identity state. */
 export function resolveCurrentUserIdentity(
   hello: HelloWithPresence | null | undefined,
   instanceId: string | null | undefined,
   snapshotUser?: unknown,
 ): SenderIdentity | null {
   const user =
-    asOptionalRecord(snapshotUser) ??
-    resolveSelfPresenceUser(readPresenceEntries(hello?.snapshot) ?? [], instanceId?.trim());
+    snapshotUser === undefined
+      ? resolveSelfPresenceUser(readPresenceEntries(hello?.snapshot) ?? [], instanceId?.trim())
+      : asOptionalRecord(snapshotUser);
   return user
     ? normalizeSenderIdentity({
         id: user.id ?? user.email,

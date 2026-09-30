@@ -18,6 +18,7 @@ import {
   initializeDebugProxyCaptureAsync,
 } from "../proxy-capture/runtime.js";
 import { acquireDebugProxyCaptureStoreAsync } from "../proxy-capture/store.async.js";
+import type { AsyncDebugProxyCaptureStore } from "../proxy-capture/store.types.js";
 import type { CaptureQueryPreset } from "../proxy-capture/types.js";
 import { defaultRuntime, writeRuntimeJson } from "../runtime.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
@@ -198,33 +199,23 @@ function formatProxyCheckLine(
   return `  ${icon} ${paddedKind} ${check.url}${status}${detail}`;
 }
 
-function formatProxyValidationNextSteps(result: ProxyValidationResult): string[] {
+function formatProxyValidationNextStep(result: ProxyValidationResult): string | undefined {
   if (result.ok) {
-    return [];
+    return undefined;
   }
   if (result.config.errors.some((error) => error.includes("proxy CA file could not be read"))) {
-    return [
-      "Confirm proxy.tls.caFile or --proxy-ca-file points to a readable PEM CA file for the HTTPS proxy endpoint.",
-    ];
+    return "Confirm proxy.tls.caFile or --proxy-ca-file points to a readable PEM CA file for the HTTPS proxy endpoint.";
   }
   if (result.config.errors.length > 0) {
-    return [
-      "Fix proxy.proxyUrl, OPENCLAW_PROXY_URL, or --proxy-url so it uses a reachable http:// or https:// proxy.",
-    ];
+    return "Fix proxy.proxyUrl, OPENCLAW_PROXY_URL, or --proxy-url so it uses a reachable http:// or https:// proxy.";
   }
   if (result.checks.some((check) => !check.ok && check.kind === "allowed")) {
-    return [
-      "Confirm the proxy is reachable from this deployment context and permits the allowed destinations.",
-    ];
+    return "Confirm the proxy is reachable from this deployment context and permits the allowed destinations.";
   }
   if (result.checks.some((check) => !check.ok && check.kind === "denied")) {
-    return [
-      "Update the proxy ACL so denied destinations are blocked, or pass the expected --denied-url values.",
-    ];
+    return "Update the proxy ACL so denied destinations are blocked, or pass the expected --denied-url values.";
   }
-  return [
-    "Review the failed checks above and update proxy configuration or validation destinations.",
-  ];
+  return "Review the failed checks above and update proxy configuration or validation destinations.";
 }
 
 function formatProxyValidationText(result: ProxyValidationResult): string {
@@ -252,12 +243,9 @@ function formatProxyValidationText(result: ProxyValidationResult): string {
     }
   }
 
-  const nextSteps = formatProxyValidationNextSteps(result);
-  if (nextSteps.length > 0) {
-    lines.push("", colors.heading("Next steps"));
-    for (const nextStep of nextSteps) {
-      lines.push(`  ${colors.warn(nextStep)}`);
-    }
+  const nextStep = formatProxyValidationNextStep(result);
+  if (nextStep) {
+    lines.push("", colors.heading("Next steps"), `  ${colors.warn(nextStep)}`);
   }
 
   return `${lines.join("\n")}\n`;
@@ -303,14 +291,20 @@ export async function runProxyValidateCommand(opts: {
   }
 }
 
-export async function runDebugProxySessionsCommand(opts: { json?: boolean; limit?: number }) {
+async function withCaptureStore(action: (store: AsyncDebugProxyCaptureStore) => Promise<void>) {
   const lease = await acquireDebugProxyCaptureStoreAsync();
   try {
-    const sessions = await lease.store.listSessions(opts.limit ?? 20);
-    writeRuntimeJson(defaultRuntime, opts.json ? { sessions } : sessions);
+    await action(lease.store);
   } finally {
     await lease.release();
   }
+}
+
+export async function runDebugProxySessionsCommand(opts: { json?: boolean; limit?: number }) {
+  await withCaptureStore(async (store) => {
+    const sessions = await store.listSessions(opts.limit ?? 20);
+    writeRuntimeJson(defaultRuntime, opts.json ? { sessions } : sessions);
+  });
 }
 
 export async function runDebugProxyQueryCommand(opts: {
@@ -318,13 +312,10 @@ export async function runDebugProxyQueryCommand(opts: {
   preset: CaptureQueryPreset;
   sessionId?: string;
 }) {
-  const lease = await acquireDebugProxyCaptureStoreAsync();
-  try {
-    const rows = await lease.store.queryPreset(opts.preset, opts.sessionId);
+  await withCaptureStore(async (store) => {
+    const rows = await store.queryPreset(opts.preset, opts.sessionId);
     writeRuntimeJson(defaultRuntime, opts.json ? { rows } : rows);
-  } finally {
-    await lease.release();
-  }
+  });
 }
 
 export async function runDebugProxyCoverageCommand() {
@@ -333,24 +324,18 @@ export async function runDebugProxyCoverageCommand() {
 }
 
 export async function runDebugProxyPurgeCommand() {
-  const lease = await acquireDebugProxyCaptureStoreAsync();
-  try {
-    const result = await lease.store.purgeAll();
+  await withCaptureStore(async (store) => {
+    const result = await store.purgeAll();
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
-  } finally {
-    await lease.release();
-  }
+  });
 }
 
 export async function readDebugProxyBlobCommand(opts: { blobId: string }) {
-  const lease = await acquireDebugProxyCaptureStoreAsync();
-  try {
-    const content = await lease.store.readBlob(opts.blobId);
+  await withCaptureStore(async (store) => {
+    const content = await store.readBlob(opts.blobId);
     if (content == null) {
       throw new Error(`Unknown blob: ${opts.blobId}`);
     }
     process.stdout.write(content);
-  } finally {
-    await lease.release();
-  }
+  });
 }

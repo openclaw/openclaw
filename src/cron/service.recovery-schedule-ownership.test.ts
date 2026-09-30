@@ -87,7 +87,7 @@ function readTasks(harness: Harness) {
 function rejectCronRowWrite(jobId: string) {
   const database = openOpenClawStateDatabase().db;
   database.exec(`
-    CREATE TEMP TRIGGER reject_cadence_row
+    CREATE TRIGGER reject_cadence_row
     BEFORE UPDATE ON cron_jobs
     WHEN NEW.job_id = '${jobId.replaceAll("'", "''")}'
     BEGIN

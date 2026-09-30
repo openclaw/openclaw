@@ -872,6 +872,7 @@ describe("startGatewayEventSubscriptions", () => {
         }),
       }),
       new Set(["conn-transcript"]),
+      undefined,
     );
     expect(transcriptBroadcastMocks.readMessageById).toHaveBeenCalledTimes(2);
     expect(warn).toHaveBeenCalledOnce();

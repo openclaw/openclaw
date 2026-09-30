@@ -13,7 +13,10 @@ import { invokeNodeWorkerSupervisorCommand } from "../../node-host/node-worker-s
 import { NodeWorkerWorkspaceRuntime } from "../../node-host/node-worker-workspace.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { createNodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
-import { startNodeWorkspaceTransferTestServer } from "./node-workspace-transfer.test-support.js";
+import {
+  startNodeWorkspaceTransferTestServer,
+  transferOwner,
+} from "./node-workspace-transfer.test-support.js";
 import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
 import { workspaceProcessTestEntrypoints } from "./workspace-process-runtime.test-support.js";
 
@@ -22,18 +25,6 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
   vi.restoreAllMocks();
 });
-
-function transferOwner(sessionId: string) {
-  return {
-    credential: { ownerEpoch: 1, expiresAtMs: Date.now() + 60_000, sessionId },
-    environment: {
-      ownerEpoch: 1,
-      attachedSessionIds: [sessionId],
-      destroyRequestedAtMs: null,
-      state: "attached",
-    },
-  };
-}
 
 function injectUploadWriteFaults() {
   const originalOpen = fs.open.bind(fs);
@@ -122,7 +113,7 @@ describe("node workspace transfer service", () => {
     await fs.mkdir(localPath);
     await fs.writeFile(path.join(localPath, "input.txt"), "gateway input\n");
     const service = createNodeWorkspaceTransferService({
-      getOwner: () => transferOwner("session-unborn"),
+      getOwner: () => transferOwner("session-unborn", 1, Date.now() + 60_000),
       temporaryRoot: path.join(root, "transfer-tmp"),
     });
     const request = {
@@ -537,7 +528,7 @@ describe("node workspace transfer service", () => {
     const localPath = path.join(root, "workspace");
     await fs.mkdir(localPath);
     const service = createNodeWorkspaceTransferService({
-      getOwner: () => transferOwner("session-close"),
+      getOwner: () => transferOwner("session-close", 1, Date.now() + 60_000),
       temporaryRoot: path.join(root, "transfer-tmp"),
     });
     const prepared = await service.prepareSync({
@@ -590,7 +581,8 @@ describe("node workspace transfer service", () => {
     const temporaryRoot = path.join(root, "transfer-tmp");
     await fs.mkdir(localPath);
     const service = createNodeWorkspaceTransferService({
-      getOwner: (environmentId) => transferOwner(`session-${environmentId}`),
+      getOwner: (environmentId) =>
+        transferOwner(`session-${environmentId}`, 1, Date.now() + 60_000),
       temporaryRoot,
     });
     for (const environmentId of ["environment-1", "environment-2"]) {
@@ -643,42 +635,49 @@ describe("node workspace transfer service", () => {
     }
   });
 
-  it("serializes transfer context replacement for one environment", async () => {
-    const root = tempDirs.make("node-workspace-transfer-serialization-");
-    const localPath = path.join(root, "workspace");
-    const temporaryRoot = path.join(root, "transfer-tmp");
-    await fs.mkdir(localPath);
-    await fs.writeFile(path.join(localPath, "input.txt"), "input\n");
-    const service = createNodeWorkspaceTransferService({
-      getOwner: () => transferOwner("session-serialize"),
-      temporaryRoot,
-    });
+  it.each([
+    ["sync", "sync"],
+    ["repository", "sync"],
+    ["sync", "repository"],
+  ] as const)(
+    "serializes %s → %s context replacement for one environment",
+    async (first, second) => {
+      const root = tempDirs.make("node-workspace-transfer-serialization-");
+      const localPath = path.join(root, "workspace");
+      const temporaryRoot = path.join(root, "transfer-tmp");
+      await fs.mkdir(localPath);
+      await fs.writeFile(path.join(localPath, "input.txt"), "input\n");
+      const service = createNodeWorkspaceTransferService({
+        getOwner: () => transferOwner("session-serialize", 1, Date.now() + 60_000),
+        temporaryRoot,
+      });
 
-    await Promise.all([
-      service.prepareSync({
-        environmentId: "environment-serialize",
-        ownerEpoch: 1,
-        sessionId: "session-serialize",
-        generation: 1,
-        localPath,
-        isAuthorized: () => true,
-      }),
-      service.prepareSync({
-        environmentId: "environment-serialize",
-        ownerEpoch: 1,
-        sessionId: "session-serialize",
-        generation: 2,
-        localPath,
-        isAuthorized: () => true,
-      }),
-    ]);
+      await Promise.all(
+        [first, second].map((kind, index) => {
+          const owner = {
+            environmentId: "environment-serialize",
+            ownerEpoch: 1,
+            sessionId: "session-serialize",
+            generation: index + 1,
+            isAuthorized: () => true,
+          };
+          return kind === "sync"
+            ? service.prepareSync({ ...owner, localPath })
+            : service.prepareRepository({
+                ...owner,
+                baseCommit: "b".repeat(40),
+                baseManifestRef: `sha256:${"a".repeat(64)}`,
+              });
+        }),
+      );
 
-    const contexts = (await fs.readdir(temporaryRoot)).filter((name) =>
-      name.startsWith("context-"),
-    );
-    expect(contexts).toHaveLength(1);
-    await service.closeAll();
-  });
+      const contexts = (await fs.readdir(temporaryRoot)).filter((name) =>
+        name.startsWith("context-"),
+      );
+      expect(contexts).toHaveLength(1);
+      await service.closeAll();
+    },
+  );
 
   it.each(["ready", "receiving"] as const)(
     "rejects a revoked source while its upload is %s and owner signal remains live",
@@ -691,15 +690,7 @@ describe("node workspace transfer service", () => {
       const baseManifestRef = `sha256:${"a".repeat(64)}`;
       const service = createNodeWorkspaceTransferService({
         temporaryRoot: path.join(root, "transfer"),
-        getOwner: () => ({
-          credential: { ownerEpoch: 1, sessionId },
-          environment: {
-            ownerEpoch: 1,
-            attachedSessionIds: [sessionId],
-            destroyRequestedAtMs: null,
-            state: "attached",
-          },
-        }),
+        getOwner: () => transferOwner(sessionId),
       });
       try {
         await service.prepareRepository({

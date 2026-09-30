@@ -102,7 +102,7 @@ export async function insertBlocksInBatches(
   logger?: Logger,
   parentBlockId: string = docToken,
   startIndex = -1,
-): Promise<{ children: FeishuDocxBlockChild[]; skipped: string[] }> {
+): Promise<FeishuDocxBlockChild[]> {
   const allChildren: FeishuDocxBlockChild[] = [];
 
   const batches: Array<{ firstLevelIds: string[]; blocks: FeishuDocxBlock[] }> = [];
@@ -175,5 +175,5 @@ export async function insertBlocksInBatches(
     }
   }
 
-  return { children: allChildren, skipped: [] };
+  return allChildren;
 }

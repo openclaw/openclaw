@@ -194,12 +194,8 @@ final class ChromeExtensionSetup {
                     }
                     let task = Task { try await self.performAction(action, isCurrent) }
                     self.manualTasks[id] = task
-                    do {
-                        let result = try await task.value
-                        self.manualReplies.removeValue(forKey: id)?.resume(returning: result)
-                    } catch {
-                        self.manualReplies.removeValue(forKey: id)?.resume(throwing: error)
-                    }
+                    let result = await task.result
+                    self.manualReplies.removeValue(forKey: id)?.resume(with: result)
                     self.manualTasks.removeValue(forKey: id)
                 }
             }

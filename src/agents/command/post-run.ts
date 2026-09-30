@@ -331,7 +331,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
         persistedCliTurnTranscript = transcriptResult.kind === "persisted";
       } catch (error) {
         log.warn(
-          `Turn transcript persistence failed for ${sessionKey ?? sessionId}: ${error instanceof Error ? error.message : String(error)}`,
+          `Turn transcript persistence failed for ${sessionKey ?? sessionId}: ${coerceErrorMessage(error)}`,
         );
         if (
           sessionStore &&

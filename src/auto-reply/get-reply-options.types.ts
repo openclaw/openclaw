@@ -15,6 +15,9 @@ import type { SourceReplyDeliveryMode } from "./source-reply-delivery-mode.types
 
 export type { SourceReplyDeliveryMode } from "./source-reply-delivery-mode.types.js";
 
+/** An accepted visible work session and its canonical Control UI link. */
+export type VisibleWorkSession = { sessionKey: string; url: string; label?: string };
+
 /** A successful runtime append, independent of optional active-path projection anchors. */
 export type ReplyDispatchAssistantTranscript = Pick<
   TranscriptEntryAnchor,
@@ -170,6 +173,8 @@ export type GetReplyOptions = {
   ) => unknown;
   /** Reports the terminal agent-run classification to the shared dispatch owner. */
   onAgentRunTerminalOutcome?: (outcome: "completed" | "failed") => void;
+  /** Reports visible work sessions this agent run spawned, in acceptance order. */
+  onVisibleWorkSessions?: (sessions: readonly VisibleWorkSession[]) => void;
   /**
    * Canonical adoption lifecycle (adopted / deferred / abandoned / settled + pre-adoption abort).
    */

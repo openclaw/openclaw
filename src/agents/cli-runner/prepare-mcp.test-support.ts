@@ -55,18 +55,22 @@ export function registerCliMcpPreparationTests({
         config: createConfig(),
       });
 
-      expect(context.params.admittedRunContext.operationalRunInstance).toBe(
-        preparedRunAdmission.operationalRunInstance,
-      );
-      expect(resolveMcpLoopbackScopedTools.mock.calls[0]?.[0].admittedRunContext).toBe(
-        context.params.admittedRunContext,
-      );
-      expect(getAdmittedRunDelegatedAuthority(context.params.admittedRunContext)).toBeDefined();
-      expect(bindMcpLoopbackClientGrantAdmission).toHaveBeenCalledExactlyOnceWith({
-        token: "loopback-token",
-        runtimeOwnerToken: "loopback-owner-token",
-        admittedRunContext: context.params.admittedRunContext,
-      });
+      try {
+        expect(context.params.admittedRunContext.operationalRunInstance).toBe(
+          preparedRunAdmission.operationalRunInstance,
+        );
+        expect(resolveMcpLoopbackScopedTools.mock.calls[0]?.[0].admittedRunContext).toBe(
+          context.params.admittedRunContext,
+        );
+        expect(getAdmittedRunDelegatedAuthority(context.params.admittedRunContext)).toBeDefined();
+        expect(bindMcpLoopbackClientGrantAdmission).toHaveBeenCalledExactlyOnceWith({
+          token: "loopback-token",
+          runtimeOwnerToken: "loopback-owner-token",
+          admittedRunContext: context.params.admittedRunContext,
+        });
+      } finally {
+        await context.preparedBackend.cleanup?.();
+      }
     } finally {
       preparedRunAdmission.close();
     }

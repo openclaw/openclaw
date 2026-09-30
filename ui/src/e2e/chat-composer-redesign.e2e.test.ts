@@ -232,9 +232,11 @@ suite.define(() => {
         if (!composerBox || !footerBox || !menuBox || !triggerBox) {
           throw new Error(`expected mobile layout boxes for ${picker.menu}`);
         }
-        expect(menuBox.x).toBeGreaterThanOrEqual(12);
-        expect(menuBox.x + menuBox.width).toBeLessThanOrEqual(381);
-        expect(menuBox.width).toBeGreaterThanOrEqual(368);
+        // Fixed pickers use the shared 16px mobile gutter without the
+        // in-flow content shell’s additional 4px inset.
+        expect(menuBox.x).toBeCloseTo(16, 0);
+        expect(menuBox.x + menuBox.width).toBeCloseTo(393 - 16, 0);
+        expect(menuBox.width).toBeCloseTo(393 - 2 * 16, 0);
         expect(menuBox.y).toBeGreaterThanOrEqual(0);
         expect(menuBox.y + menuBox.height).toBeLessThanOrEqual(composerBox.y + 1);
         expect(triggerBox.y + triggerBox.height).toBeLessThanOrEqual(853);

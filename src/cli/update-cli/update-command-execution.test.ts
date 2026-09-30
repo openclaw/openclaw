@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { mockSystemAccountHome } from "../../daemon/service.test-helpers.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
-import { createUpdateRun } from "../../infra/update-run-ledger.js";
+import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
@@ -17,11 +17,184 @@ import { registerExecutionTimeoutTests } from "./update-command-execution-timeou
 import { executeMutableUpdate } from "./update-command-execution.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import * as readiness from "./update-command-readiness.js";
+import * as publication from "./update-command-service-revalidation.js";
 
 const { executionParams, inspectOrStopService, mocks, successfulUpdate } =
   await import("./update-command-execution.test-support.js");
 
 describe("mutable update execution", () => {
+  it.each(
+    (["root", "include"] as const).flatMap((source) =>
+      (["after-validation", "after-stop", "after-git-transfer"] as const).flatMap((phase) =>
+        [true, false].map((accepted) => ({ source, phase, accepted })),
+      ),
+    ),
+  )(
+    "revalidates a concurrent $source save $phase before activation (accepted=$accepted)",
+    async ({ source, phase, accepted }) => {
+      await withTestDir({ prefix: "update-latest-config-" }, async (dir) => {
+        const root = path.join(dir, "installed");
+        const stage = path.join(dir, "candidate");
+        await fs.mkdir(root);
+        await fs.mkdir(stage);
+        for (const [directory, version] of [
+          [root, "1.0.0"],
+          [stage, "1.0.1"],
+        ]) {
+          await fs.writeFile(
+            path.join(directory!, "package.json"),
+            JSON.stringify({ name: "openclaw", version }),
+          );
+        }
+        const configPath = path.join(dir, "openclaw.json");
+        const includePath = path.join(dir, "messages.json");
+        await fs.writeFile(includePath, JSON.stringify({ ackReaction: "before" }));
+        await fs.writeFile(
+          configPath,
+          JSON.stringify({
+            messages:
+              source === "include" ? { $include: "messages.json" } : { ackReaction: "before" },
+          }),
+        );
+        const rootBefore = await fs.readFile(configPath, "utf8");
+        const observed: Array<string | undefined> = [];
+        const trackRun = phase === "after-stop" && source === "include" && accepted;
+        let runId: string | undefined;
+        let postStopPhase: string | undefined;
+        const env = {
+          OPENCLAW_CONFIG_PATH: configPath,
+          OPENCLAW_STATE_DIR: path.join(dir, "state"),
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+        };
+        mocks.captureManagedPreflight.mockResolvedValue(undefined);
+        mocks.maybeStopService.mockResolvedValue({
+          stopped: false,
+          inspected: true,
+          running: false,
+          serviceUpdateVerdict: { kind: "absent" },
+        });
+        mocks.validateCanary.mockImplementation(async ({ config }) => {
+          observed.push(config.messages?.ackReaction);
+          if (runId && config.messages?.ackReaction === "after") {
+            postStopPhase = getUpdateRun(runId, { env })?.phase;
+          }
+          const rejected = config.messages?.ackReaction === "after" && !accepted;
+          return {
+            status: rejected ? "error" : "ok",
+            ...(rejected ? { reason: "runtime-verification-failed" } : {}),
+            phase: "config",
+            durationMs: 0,
+            logTail: [],
+            steps: rejected
+              ? [
+                  {
+                    name: "candidate-config",
+                    command: "config validate",
+                    cwd: stage,
+                    durationMs: 0,
+                    exitCode: 1,
+                    stderrTail: "Candidate rejected the current configuration",
+                  },
+                ]
+              : [],
+          };
+        });
+        const save = () =>
+          fs.writeFile(
+            source === "include" ? includePath : configPath,
+            JSON.stringify(
+              source === "include"
+                ? { ackReaction: "after" }
+                : { messages: { ackReaction: "after" } },
+            ),
+          );
+        if (phase === "after-stop") {
+          const assertPublication = publication.assertManagedGatewayArtifactPublication;
+          let saved = false;
+          vi.spyOn(publication, "assertManagedGatewayArtifactPublication").mockImplementation(
+            async (params) => {
+              await assertPublication(params);
+              if (!params.phase && !saved) {
+                saved = true;
+                await save();
+              }
+            },
+          );
+        }
+        let activated = false;
+        const onActivation = vi.fn();
+        mocks.runPackageUpdate.mockImplementation(async ({ validateCandidate, beforeActivate }) => {
+          await validateCandidate(stage);
+          if (phase === "after-validation") {
+            await save();
+          }
+          await beforeActivate();
+          activated = true;
+          return successfulUpdate;
+        });
+        mocks.runGitUpdate.mockImplementation(
+          async (
+            options: Parameters<typeof import("./update-command-git.js").updateGitInstall>[0],
+          ) => {
+            const target = { schemaVersions: { state: 15, agent: 19 } };
+            await options.inspectGitTarget?.(target);
+            await options.validateCandidate?.(stage);
+            await options.beforeGitMutation?.(target);
+            await save();
+            await options.inspectGitTarget?.(target);
+            activated = true;
+            return { ...successfulUpdate, mode: "git" };
+          },
+        );
+        const execution = await withEnvAsync(env, async () => {
+          const params = {
+            ...executionParams(phase === "after-git-transfer" ? "git" : "package"),
+            root,
+            shouldRestart: false,
+            onActivation,
+          };
+          if (!trackRun) {
+            return executeMutableUpdate(params);
+          }
+          runId = createUpdateRun({ trigger: "cli" }, { env }).runId;
+          params.opts.run = { runId, env };
+          return withUpdateCommandExecutor(runId, async (executor) => {
+            mocks.prepareMutableUpdate.mockImplementation(async (_env, _timeout, admitExecutor) => {
+              admitExecutor(await executor.enter(root));
+            });
+            return executeMutableUpdate(params);
+          });
+        });
+        if (trackRun) {
+          expect(postStopPhase).toBe("activating");
+        }
+        expect(observed).toEqual(["before", "after"]);
+        expect(activated).toBe(accepted);
+        if (phase === "after-stop" || phase === "after-git-transfer") {
+          expect(
+            mocks.maybeStopService.mock.calls.filter(([request]) => request.phase === "prepare"),
+          ).toHaveLength(1);
+        }
+        expect(onActivation).toHaveBeenCalledTimes(
+          phase === "after-git-transfer" || accepted ? 1 : 0,
+        );
+        expect(execution?.mutationStarted).toBe(phase === "after-git-transfer" || accepted);
+        expect(execution?.result.status).toBe(accepted ? "ok" : "error");
+        if (!accepted) {
+          expect(execution?.result.reason).toBe("runtime-verification-failed");
+        }
+        if (source === "include") {
+          expect(await fs.readFile(configPath, "utf8")).toBe(rootBefore);
+        }
+        expect(
+          JSON.parse(await fs.readFile(source === "include" ? includePath : configPath, "utf8")),
+        ).toMatchObject(
+          source === "include" ? { ackReaction: "after" } : { messages: { ackReaction: "after" } },
+        );
+      });
+    },
+  );
+
   registerExecutionTimeoutTests();
 
   registerNativeAdmissionTests({ executionParams, mocks, successfulUpdate });
@@ -697,6 +870,7 @@ describe("mutable update execution", () => {
           state.windowsTaskAutoStartRecovery = {
             suspended: Promise.resolve(true),
             beginMutation,
+            assertRecoveryCurrent: () => {},
             restore: vi.fn(async () => {}),
             handoff: vi.fn(),
             complete: vi.fn(async () => {}),

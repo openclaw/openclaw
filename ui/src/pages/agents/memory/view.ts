@@ -12,7 +12,12 @@ import { registerDreamingEnglish } from "../../../i18n/locales/en-dreaming.ts";
 import { registerSettingsEnglish } from "../../../i18n/locales/en-settings.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import "../../../styles/dreams.css";
-import type { DreamingEntry, WikiImportInsights, WikiOverview } from "./dreaming.ts";
+import type {
+  DreamingEntry,
+  WikiImportInsights,
+  WikiOverview,
+  WikiPagePreview,
+} from "./dreaming.ts";
 
 registerSettingsEnglish();
 registerDreamingEnglish();
@@ -126,14 +131,7 @@ type DreamingProps = {
   onRefreshImports: () => void;
   onRefreshWikiOverview: () => void;
   onOpenConfig: () => void;
-  onOpenWikiPage: (lookup: string) => Promise<{
-    title: string;
-    path: string;
-    content: string;
-    totalLines?: number;
-    truncated?: boolean;
-    updatedAt?: string;
-  } | null>;
+  onOpenWikiPage: (lookup: string) => Promise<WikiPagePreview | null>;
   onBackfillDiary: () => void;
   onCopyDreamingArchivePath: () => void;
   onDedupeDreamDiary: () => void;
@@ -536,16 +534,12 @@ function toggleExpandedCard(bucket: Set<string>, key: string, onChange: () => vo
 
 async function openWikiPreview(lookup: string, props: DreamingProps): Promise<void> {
   const state = props.viewState;
-  const requestId = ++state.wikiPreviewRequestId;
+  resetWikiPreview(state);
+  const requestId = state.wikiPreviewRequestId;
   state.wikiPreviewOpen = true;
   state.wikiPreviewLoading = true;
   state.wikiPreviewTitle = basename(lookup);
   state.wikiPreviewPath = lookup;
-  state.wikiPreviewUpdatedAt = null;
-  state.wikiPreviewContent = "";
-  state.wikiPreviewTotalLines = null;
-  state.wikiPreviewTruncated = false;
-  state.wikiPreviewError = null;
   props.onViewStateChange();
   try {
     const preview = await props.onOpenWikiPage(lookup);

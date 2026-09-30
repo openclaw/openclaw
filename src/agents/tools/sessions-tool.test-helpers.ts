@@ -2,6 +2,7 @@ import { expect } from "vitest";
 import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
+  type AdmittedRunOperatorAuthority,
 } from "../admitted-run-context.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
@@ -70,9 +71,13 @@ export function expectOmittedResolvedAcknowledgement(result: {
   expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(3_840);
 }
 
-export async function withSessionToolTestCaller<T>(run: () => Promise<T>): Promise<T> {
+export async function withSessionToolTestCaller<T>(
+  run: () => Promise<T>,
+  operatorAuthority?: AdmittedRunOperatorAuthority,
+): Promise<T> {
   const admission = prepareAgentRunAdmission({
     cfg: {},
+    operatorAuthority,
     facts: {
       runId: "session-tool-test",
       agentId: "main",

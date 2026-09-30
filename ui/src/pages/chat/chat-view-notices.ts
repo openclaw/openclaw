@@ -1,5 +1,8 @@
 import { html, nothing, type TemplateResult } from "lit";
-import type { SessionPlacementDiskSpace } from "../../../../packages/gateway-protocol/src/schema/session-placement.ts";
+import type {
+  SessionPlacementDiskSpace,
+  SessionPlacementWorkerRuntimeInstall,
+} from "../../../../packages/gateway-protocol/src/schema/session-placement.ts";
 import type { ApplicationPlacementStartupStatus } from "../../app/session-placement-startup.ts";
 import { renderCopyButton } from "../../components/copy-button.ts";
 import { formatWebUiIconErrorText } from "../../components/error-presentation.ts";
@@ -23,6 +26,7 @@ export type ChatPlacementStartupNoticeProps = {
 
 type ChatViewNoticesProps = ChatPlacementStartupNoticeProps & {
   diskSpace?: SessionPlacementDiskSpace;
+  workerRuntimeInstall?: SessionPlacementWorkerRuntimeInstall;
   error?: string | null;
   focusMode?: boolean;
   onDismissError?: () => void;
@@ -71,6 +75,43 @@ function renderDiskSpaceNotice(diskSpace: SessionPlacementDiskSpace | undefined)
             free: formatBytes(diskSpace.availableBytes),
           })}
         </span>
+      </div>
+    </div>
+  `;
+}
+
+function renderWorkerRuntimeInstallNotice(
+  install: SessionPlacementWorkerRuntimeInstall | undefined,
+) {
+  if (!install) {
+    return nothing;
+  }
+  const progress = {
+    transferred: formatBytes(install.transferredBytes),
+    total: formatBytes(install.totalBytes),
+    percent: String(Math.round((install.transferredBytes / install.totalBytes) * 100)),
+  };
+  const installing = install.phase === "installing";
+  const body = installing
+    ? t("chat.workerRuntimeInstall.installingBody")
+    : t("chat.workerRuntimeInstall.transferringBody", progress);
+  // Topbar notices render as compact pills that hide the body, so the title carries progress.
+  return html`
+    <div
+      class="chat-composer-neighbor-card chat-composer-neighbor-card--info chat-worker-runtime-install-notice"
+      role="status"
+      title=${body}
+    >
+      <span class="chat-composer-neighbor-card__icon" aria-hidden="true">${icons.info}</span>
+      <div class="chat-composer-neighbor-card__copy">
+        <strong
+          >${
+            installing
+              ? t("chat.workerRuntimeInstall.installingTitle")
+              : t("chat.workerRuntimeInstall.transferringTitle", progress)
+          }</strong
+        >
+        <span>${body}</span>
       </div>
     </div>
   `;
@@ -137,6 +178,7 @@ export function renderChatTopbarNotices(props: ChatViewNoticesProps) {
   return html`
     <div class="chat-topbar-notices">
       ${renderDiskSpaceNotice(props.diskSpace)}
+      ${renderWorkerRuntimeInstallNotice(props.workerRuntimeInstall)}
       ${props.error ? renderErrorNotice(props.error, dismiss) : nothing}
       ${
         props.focusMode && props.onToggleFocusMode

@@ -351,6 +351,107 @@ describe("prepare gate changed-file plan", () => {
   });
 });
 
+describe("private QA build scope", () => {
+  function runBuildGate(
+    options: {
+      docsOnly?: boolean;
+      remote?: "testbox";
+      qa?: string;
+      workers?: string;
+      failBuild?: boolean;
+      conditional?: boolean;
+    } = {},
+  ) {
+    const { repoDir, headSha } = makeRetryRepo();
+    writeFileSync(join(repoDir, ".local", "pr-meta.env"), "PR_AUTHOR=fixture\n");
+    const result = runGatesBash(
+      [
+        `enter_worktree() { PR_MAIN_SHA=${headSha}; }`,
+        "checkout_prep_branch() { :; }",
+        "prepare_local_gate_workspace() { :; }",
+        "derive_prepare_gate_change_plan() {",
+        `  PREPARE_GATE_BASE_SHA=${headSha}`,
+        "  PREPARE_GATE_CHANGED_FILES=''",
+        `  PREPARE_GATE_DOCS_ONLY=${options.docsOnly ?? false}`,
+        "  PREPARE_GATE_CHANGELOG_ONLY=false",
+        "  PREPARE_GATE_CHANGELOG_UPDATE=false",
+        "  PREPARE_GATE_CHANGELOG_REQUIRED=false",
+        "}",
+        "run_quiet_logged() {",
+        '  local label="$1"; shift 2',
+        '  printf \'%s\\t%s\' "$label" "${OPENCLAW_BUILD_PRIVATE_QA-<unset>}" >> .local/commands',
+        "  printf '\\t%s' \"$@\" >> .local/commands",
+        "  printf '\\n' >> .local/commands",
+        ...(options.failBuild ? ['  if [ "$label" = "pnpm build" ]; then return 23; fi'] : []),
+        "}",
+        "run_remote_testbox_full_test_gate() {",
+        "  printf 'remote-test\\t%s\\n' \"${OPENCLAW_BUILD_PRIVATE_QA-<unset>}\" >> .local/commands",
+        "}",
+        `require_remote_testbox_gate_stamp() { printf '%s\\n' '{"leaseId":"tbx_fixture"}'; }`,
+        options.conditional ? 'prepare_gates 4242 || exit "$?"' : "prepare_gates 4242",
+      ].join("\n"),
+      {
+        cwd: repoDir,
+        env: {
+          OPENCLAW_PR_GATES_REMOTE: options.remote,
+          OPENCLAW_BUILD_PRIVATE_QA: options.qa,
+          OPENCLAW_VITEST_MAX_WORKERS: options.workers,
+        },
+      },
+    );
+    const commands = readFileSync(join(repoDir, ".local", "commands"), "utf8")
+      .trimEnd()
+      .split("\n")
+      .map((line) => line.split("\t"));
+    return { result, commands, headSha, stamp: join(repoDir, ".local", "gates.env") };
+  }
+
+  it.each([
+    { name: "default scheduling", qa: undefined, workers: undefined },
+    { name: "explicit workers and caller QA value", qa: "0", workers: "2" },
+  ])("prepares local full-test artifacts without changing $name", ({ qa, workers }) => {
+    const { result, commands, headSha, stamp } = runBuildGate({ qa, workers });
+    expect(result.status, result.stderr).toBe(0);
+    const inheritedQa = qa ?? "<unset>";
+    expect(commands).toEqual([
+      ["pnpm build", inheritedQa, "env", "OPENCLAW_BUILD_PRIVATE_QA=1", "pnpm", "build"],
+      ["pnpm check", inheritedQa, "pnpm", "check", "--base", headSha],
+      [
+        "pnpm test",
+        inheritedQa,
+        ...(workers ? ["env", `OPENCLAW_VITEST_MAX_WORKERS=${workers}`] : []),
+        "pnpm",
+        "test",
+      ],
+    ]);
+    expect(readFileSync(stamp, "utf8")).toContain(`FULL_GATES_HEAD_SHA=${headSha}\n`);
+  });
+
+  it.each([
+    { name: "docs-only", docsOnly: true, remote: undefined, gateMode: "docs_only" },
+    { name: "Testbox", docsOnly: false, remote: "testbox" as const, gateMode: "remote_testbox" },
+  ])("preserves $name producer and test inputs", ({ docsOnly, remote, gateMode }) => {
+    const { result, commands, headSha, stamp } = runBuildGate({ docsOnly, remote, qa: "0" });
+    expect(result.status, result.stderr).toBe(0);
+    expect(commands).toEqual([
+      ["pnpm build", "0", "pnpm", "build"],
+      ["pnpm check", "0", "pnpm", "check", "--base", headSha],
+      ...(remote ? [["remote-test", "0"]] : []),
+    ]);
+    expect(readFileSync(stamp, "utf8")).toContain(`GATES_MODE=${gateMode}\n`);
+  });
+
+  it.each([false, true])(
+    "stops at build failure without a success stamp, conditional=%s",
+    (conditional) => {
+      const { result, commands, stamp } = runBuildGate({ failBuild: true, conditional });
+      expect(result.status, result.stderr).toBe(23);
+      expect(commands.map(([label]) => label)).toEqual(["pnpm build"]);
+      expect(existsSync(stamp)).toBe(false);
+    },
+  );
+});
+
 describe("remote testbox gate delegation", () => {
   function runRemoteGate(env: NodeJS.ProcessEnv) {
     const dir = tempDirs.make("openclaw-pr-gates-remote-");

@@ -15,6 +15,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
 import { createGatewayMethodRegistry } from "../methods/registry.js";
@@ -85,7 +86,8 @@ async function withHostedQuestion(
       createdActor: { type: "human", source: "profile", id: foreign ? "other-person" : profileId },
     });
     expect(loadSessionEntry(scope)?.createdActor?.id).toBe(foreign ? "other-person" : profileId);
-    const manager = new QuestionManager();
+    const scheduler = createTestGatewayScheduler();
+    const manager = new QuestionManager(scheduler);
     const waiting = createDeferredCore();
     const context = createDirectChatContext({
       getRuntimeConfig: () => cfg,
@@ -126,6 +128,7 @@ async function withHostedQuestion(
     const handlers = createQuestionHandlers(
       manager,
       createSecretStoreWriteService({ reloadSecrets: async () => ({ warningCount: 0 }) }),
+      scheduler,
     );
     const request = vi.fn(async (options: GatewayRequestHandlerOptions) => {
       expect(options.client?.internal?.syntheticClient).toBe(true);

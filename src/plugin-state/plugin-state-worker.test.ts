@@ -8,6 +8,10 @@ import {
   observeHostDataSql,
   trackSqliteStatementExecutions,
 } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { captureSessionEntryCurrentRead } from "../config/sessions/session-entry-current-runtime.js";
+import type { SessionEntryCurrentFacts } from "../config/sessions/session-entry-current.types.js";
+import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { SQLITE_WORKER_MAX_RESULT_BYTES } from "../infra/sqlite-worker-contract.js";
 import { holdForeignWriter } from "../infra/sqlite-worker-shared-state-admission.test-support.js";
@@ -38,6 +42,58 @@ afterEach(async () => {
 });
 
 describe("worker plugin state", () => {
+  it("keeps a session-bound comparison from claiming state after its session changes", async () => {
+    await withOpenClawTestState({ label: "plugin-state-session-current" }, async (state) => {
+      const target = { agentId: "main", sessionKey: "agent:main:claim", env: state.env };
+      const entry = { sessionId: "claim-session", updatedAt: 1, lifecycleRevision: "original" };
+      await upsertSessionEntryCore(target, entry);
+      const read = await withSessionEntryReadOnlyInWorker(
+        target,
+        () => {},
+        async (result, owner) => {
+          if (!result.ok) {
+            throw result.error;
+          }
+          return captureSessionEntryCurrentRead(target, owner);
+        },
+      );
+      if (!read.source) {
+        throw new Error("Expected a file-backed session");
+      }
+      const store = createPluginStateKeyedStore<string>("device-pair", {
+        namespace: "session-claim",
+        maxEntries: 10,
+        env: state.env,
+      });
+      await store.register("tab", "open");
+      const comparison = (await store.observe!("tab")).comparison;
+      const facts: Array<SessionEntryCurrentFacts | undefined> = [];
+      const guarded = store.withCurrent!({
+        assertCurrent: read.assertSourceCurrent,
+        sessionEntryCurrent: {
+          source: read.source,
+          assertCurrent(current) {
+            facts.push(current);
+            if (current?.lifecycleRevision !== "original") {
+              throw new Error("Session no longer owns this claim");
+            }
+          },
+        },
+      });
+      await upsertSessionEntryCore(target, { ...entry, lifecycleRevision: "successor" });
+      await expect(
+        guarded.compareAndApply("tab", comparison, {
+          operation: "update",
+          action: "set",
+          value: "claimed",
+        }),
+      ).rejects.toBeInstanceOf(PluginStateStoreError);
+      expect(facts).toContainEqual(expect.objectContaining({ lifecycleRevision: "successor" }));
+      expect(await store.lookup("tab")).toBe("open");
+      expect(await store.delete("tab")).toBe(true);
+    });
+  });
+
   it.each(["register", "delete"] as const)(
     "revalidates caller authority after asynchronous worker admission for %s",
     async (operation) => {

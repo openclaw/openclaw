@@ -5,7 +5,6 @@ import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChannelType } from "../internal/discord.js";
-import { createVoiceCaptureState } from "./capture-state.js";
 import {
   createDefaultVoiceStates,
   createDiscordVoiceTestHelpers,
@@ -637,7 +636,6 @@ function buildVoiceTestHarness() {
     it,
     vi,
     ChannelType,
-    createVoiceCaptureState,
     createVoiceReceiveRecoveryState,
     DECRYPT_FAILURE_WINDOW_MS,
     requireRecord,

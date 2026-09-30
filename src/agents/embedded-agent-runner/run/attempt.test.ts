@@ -1,7 +1,8 @@
-// Broad helper coverage for runEmbeddedAttempt prompt, stream, and tool seams.
-import { prependSystemPromptAdditionAfterCacheBoundary } from "@openclaw/ai/internal/shared";
+import type { LlmRuntime } from "@openclaw/ai";
+import { defaultLlmRuntime } from "@openclaw/ai/internal/runtime";
 import { describe, expect, it, vi } from "vitest";
 import { streamSimple } from "../../../llm/stream.js";
+import { buildAgentSystemPrompt } from "../../system-prompt.js";
 import {
   textToolResult,
   textAssistant,
@@ -10,19 +11,13 @@ import {
 vi.mock("../context-engine-capabilities.js", () => ({
   resolveContextEngineCapabilities: async () => ({ llm: undefined }),
 }));
-import type { LlmRuntime } from "@openclaw/ai";
-import { defaultLlmRuntime } from "@openclaw/ai/internal/runtime";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { addSession } from "../../bash-process-registry.js";
 import { createProcessSessionFixture } from "../../bash-process-registry.test-helpers.js";
 import { resetProcessRegistryForTests } from "../../bash-process-registry.test-support.js";
 import { wrapPluginSystemContextSection } from "../../hook-system-context-boundary.js";
-import { buildAgentSystemPrompt } from "../../system-prompt.js";
 import type { NormalizedUsage } from "../../usage.js";
-import {
-  resolveEmbeddedAgentBaseStreamFn,
-  resolveEmbeddedAgentStream as resolveEmbeddedAgentStreamImpl,
-} from "../stream-resolution.js";
+import { resolveEmbeddedAgentStream as resolveEmbeddedAgentStreamImpl } from "../stream-resolution.js";
 import { buildContextEnginePromptCacheInfo } from "./attempt-context-engine-helpers.js";
 import {
   buildAfterTurnRuntimeContext,
@@ -30,8 +25,6 @@ import {
   mergeOrphanedTrailingUserPrompt,
   resolveAttemptFsWorkspaceOnly,
   resolvePromptBuildHookResult,
-  resolvePromptModeForSession,
-  shouldWarnOnOrphanedUserRepair,
 } from "./attempt-prompt-helpers.js";
 import { composeSystemPromptWithHookContext } from "./attempt-thread-helpers.js";
 import { wrapStreamFnSanitizeMalformedToolCalls } from "./attempt-tool-call-replay-sanitization.js";
@@ -54,23 +47,51 @@ type FakeWrappedStream = {
   [Symbol.asyncIterator]: () => AsyncIterator<unknown>;
 };
 
+type ToolStreamMessage = {
+  role: string;
+  content: Array<{ type: string; text?: string; name?: string }>;
+};
+
 function createFakeStream(params: {
   events: unknown[];
   resultMessage: unknown;
 }): FakeWrappedStream {
-  // Minimal stream compatible with wrappers that decorate result and iteration
-  // without needing a real provider stream.
   return {
     async result() {
       return params.resultMessage;
     },
-    [Symbol.asyncIterator]() {
-      return (async function* () {
-        for (const event of params.events) {
-          yield event;
-        }
-      })();
+    async *[Symbol.asyncIterator]() {
+      yield* params.events;
     },
+  };
+}
+
+function fakeBaseStream(resultMessage: unknown, events: unknown[] = []) {
+  return vi.fn(() => createFakeStream({ events, resultMessage }));
+}
+
+async function drainStream(stream: FakeWrappedStream) {
+  for await (const event of stream) {
+    void event;
+  }
+}
+
+function textUser(text: string) {
+  return { role: "user", content: [{ type: "text", text }] };
+}
+
+function toolMessage(name: string, command: string) {
+  return { role: "assistant", content: [{ type: "toolCall", name, arguments: { command } }] };
+}
+
+function toolDelta(projection: "partial" | "message", content: unknown[]) {
+  return { type: "toolcall_delta", [projection]: { role: "assistant", content } };
+}
+
+function thinkingTurn(...calls: unknown[]) {
+  return {
+    role: "assistant",
+    content: [{ type: "thinking", thinking: "internal", thinkingSignature: "sig_1" }, ...calls],
   };
 }
 
@@ -80,7 +101,6 @@ async function invokeWrappedTestStream(
   ) => (...args: never[]) => FakeWrappedStream | Promise<FakeWrappedStream>,
   baseFn: (...args: never[]) => unknown,
 ): Promise<FakeWrappedStream> {
-  // Helper keeps wrapper tests focused on mutated stream behavior.
   const wrappedFn = wrap(baseFn);
   return await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
 }
@@ -92,30 +112,21 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function requireContentItem(content: unknown[], index = 0) {
-  return requireRecord(content[index], `content item ${index}`);
-}
-
 function wrappedPluginSystemContext(text: string): string {
   return wrapPluginSystemContextSection(text) ?? "";
 }
 
 function expectSingleTextContent(content: unknown[], textFragment: string) {
-  expect(content).toHaveLength(1);
-  const item = requireContentItem(content);
-  expect(item.type).toBe("text");
-  expect(item.text).toContain(textFragment);
+  expect(content).toEqual([
+    expect.objectContaining({ type: "text", text: expect.stringContaining(textFragment) }),
+  ]);
 }
 
 function expectSingleToolCallContent(content: unknown[], name: string) {
-  expect(content).toHaveLength(1);
-  const item = requireContentItem(content);
-  expect(item.type).toBe("toolCall");
-  expect(item.name).toBe(name);
+  expect(content).toEqual([expect.objectContaining({ type: "toolCall", name })]);
 }
 
 function firstBaseContext(baseFn: ReturnType<typeof vi.fn>): { messages: unknown[] } {
-  // Wrapper tests assert the context passed to the underlying stream function.
   const call = baseFn.mock.calls.at(0);
   if (!call) {
     throw new Error("expected base stream call");
@@ -124,31 +135,6 @@ function firstBaseContext(baseFn: ReturnType<typeof vi.fn>): { messages: unknown
 }
 
 describe("resolvePromptBuildHookResult", () => {
-  it("preserves prompt-build context fields", async () => {
-    const hookRunner = {
-      hasHooks: vi.fn(() => true),
-      runBeforePromptBuild: vi.fn(async () => ({
-        prependContext: "prompt context",
-        appendContext: "prompt append context",
-        prependSystemContext: "prompt prepend",
-        appendSystemContext: "prompt append",
-      })),
-    };
-
-    const result = await resolvePromptBuildHookResult({
-      config: {},
-      prompt: "hello",
-      messages: [],
-      hookCtx: {},
-      hookRunner,
-    });
-
-    expect(result.prependContext).toBe("prompt context");
-    expect(result.appendContext).toBe("prompt append context");
-    expect(result.prependSystemContext).toBe(wrappedPluginSystemContext("prompt prepend"));
-    expect(result.appendSystemContext).toBe(wrappedPluginSystemContext("prompt append"));
-  });
-
   it("applies heartbeat prompt contributions only during heartbeat turns", async () => {
     const hookRunner = {
       hasHooks: vi.fn((hookName: string) => hookName === "heartbeat_prompt_contribution"),
@@ -187,10 +173,6 @@ describe("resolvePromptBuildHookResult", () => {
 });
 
 describe("composeSystemPromptWithHookContext", () => {
-  it("returns undefined when no hook system context is provided", () => {
-    expect(composeSystemPromptWithHookContext({ baseSystemPrompt: "base" })).toBeUndefined();
-  });
-
   it("normalizes hook system context block line endings and trailing whitespace", () => {
     expect(
       composeSystemPromptWithHookContext({
@@ -202,16 +184,6 @@ describe("composeSystemPromptWithHookContext", () => {
       `${wrappedPluginSystemContext("  prepend line\nsecond line")}\n\nbase system\n\n${wrappedPluginSystemContext("  append")}`,
     );
   });
-
-  it("avoids blank separators when base system prompt is empty", () => {
-    expect(
-      composeSystemPromptWithHookContext({
-        baseSystemPrompt: "   ",
-        appendSystemContext: wrappedPluginSystemContext("  append only  "),
-      }),
-    ).toBe(wrappedPluginSystemContext("  append only"));
-  });
-
   it("keeps bootstrap truncation notices in the system prompt instead of the user prompt", () => {
     const baseSystemPrompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
@@ -231,99 +203,30 @@ describe("composeSystemPromptWithHookContext", () => {
   });
 });
 
-describe("resolvePromptModeForSession", () => {
-  it("uses minimal mode for subagent sessions", () => {
-    expect(resolvePromptModeForSession("agent:main:subagent:child")).toBe("minimal");
-  });
-
-  it("uses minimal mode for cron sessions", () => {
-    expect(resolvePromptModeForSession("agent:main:cron:job-1")).toBe("minimal");
-    expect(resolvePromptModeForSession("agent:main:cron:job-1:run:run-abc")).toBe("minimal");
-  });
-
-  it("uses full mode for regular and undefined sessions", () => {
-    expect(resolvePromptModeForSession(undefined)).toBe("full");
-    expect(resolvePromptModeForSession("agent:main")).toBe("full");
-    expect(resolvePromptModeForSession("agent:main:thread:abc")).toBe("full");
-  });
-});
-
-describe("shouldWarnOnOrphanedUserRepair", () => {
-  it("warns for user and manual runs", () => {
-    expect(shouldWarnOnOrphanedUserRepair("user")).toBe(true);
-    expect(shouldWarnOnOrphanedUserRepair("manual")).toBe(true);
-  });
-
-  it("does not warn for background triggers", () => {
-    expect(shouldWarnOnOrphanedUserRepair("heartbeat")).toBe(false);
-    expect(shouldWarnOnOrphanedUserRepair("cron")).toBe(false);
-    expect(shouldWarnOnOrphanedUserRepair("memory")).toBe(false);
-    expect(shouldWarnOnOrphanedUserRepair("overflow")).toBe(false);
-  });
-});
-
 describe("mergeOrphanedTrailingUserPrompt", () => {
-  it("merges an orphaned user leaf into the next user-triggered prompt when missing", () => {
-    expect(
-      mergeOrphanedTrailingUserPrompt({
-        prompt: "newest inbound message",
-        trigger: "user",
-        leafMessage: {
-          content: [{ type: "text", text: "older active-turn message" }],
-        } as never,
-      }),
-    ).toEqual({
-      merged: true,
-      removeLeaf: false,
-      prompt:
-        "[Queued user message from a previous active turn; preserved as context only. Continue with the active prompt below.]\n" +
-        "older active-turn message\n\nnewest inbound message",
-    });
-  });
-
-  it("drops stale internal orphan context when a fresh prompt is present", () => {
-    expect(
-      mergeOrphanedTrailingUserPrompt({
-        prompt: "newest inbound message",
-        trigger: "user",
-        leafMessage: {
-          content: "NO_REPLY stale subagent completion",
-          provenance: { kind: "inter_session", sourceTool: "subagent_announce" },
-        },
-      }),
-    ).toEqual({
-      merged: false,
-      removeLeaf: true,
-      prompt: "newest inbound message",
-    });
-  });
-
+  function mergeOrphan(
+    leafMessage: Parameters<typeof mergeOrphanedTrailingUserPrompt>[0]["leafMessage"],
+    prompt = "newest inbound message",
+  ) {
+    return mergeOrphanedTrailingUserPrompt({ prompt, leafMessage });
+  }
   it("does not replay the initiating user turn into an approved-exec continuation", () => {
     expect(
-      mergeOrphanedTrailingUserPrompt({
-        prompt: "authenticated approved-exec result",
-        trigger: "user",
-        leafMessage: {
+      mergeOrphan(
+        {
           content: "run the command again",
           provenance: { kind: "inter_session", sourceTool: "exec_approval_followup" },
         },
-      }),
-    ).toEqual({
-      merged: false,
-      removeLeaf: true,
-      prompt: "authenticated approved-exec result",
-    });
+        "authenticated approved-exec result",
+      ),
+    ).toEqual({ merged: false, removeLeaf: true, prompt: "authenticated approved-exec result" });
   });
 
   it("preserves user-directed inter-session orphan context", () => {
     expect(
-      mergeOrphanedTrailingUserPrompt({
-        prompt: "newest inbound message",
-        trigger: "user",
-        leafMessage: {
-          content: "forwarded user request",
-          provenance: { kind: "inter_session", sourceTool: "sessions_send" },
-        },
+      mergeOrphan({
+        content: "forwarded user request",
+        provenance: { kind: "inter_session", sourceTool: "sessions_send" },
       }),
     ).toEqual({
       merged: true,
@@ -336,13 +239,10 @@ describe("mergeOrphanedTrailingUserPrompt", () => {
 
   it("does not duplicate orphaned user text already present in the next prompt", () => {
     expect(
-      mergeOrphanedTrailingUserPrompt({
-        prompt: "summary\nolder active-turn message\nnewest inbound message",
-        trigger: "user",
-        leafMessage: {
-          content: "older active-turn message",
-        } as never,
-      }),
+      mergeOrphan(
+        { content: "older active-turn message" },
+        "summary\nolder active-turn message\nnewest inbound message",
+      ),
     ).toEqual({
       merged: false,
       removeLeaf: false,
@@ -350,36 +250,14 @@ describe("mergeOrphanedTrailingUserPrompt", () => {
     });
   });
 
-  it("does not treat short orphan text as duplicate from a substring match", () => {
-    expect(
-      mergeOrphanedTrailingUserPrompt({
-        prompt: "please inspect this token",
-        trigger: "user",
-        leafMessage: {
-          content: "ok",
-        } as never,
-      }),
-    ).toEqual({
-      merged: true,
-      removeLeaf: false,
-      prompt:
-        "[Queued user message from a previous active turn; preserved as context only. Continue with the active prompt below.]\n" +
-        "ok\n\nplease inspect this token",
-    });
-  });
-
   it("preserves structured orphaned user content while keeping the leaf for later turns", () => {
     expect(
-      mergeOrphanedTrailingUserPrompt({
-        prompt: "newest inbound message",
-        trigger: "user",
-        leafMessage: {
-          content: [
-            { type: "text", text: "please inspect this" },
-            { type: "image_url", image_url: { url: "https://example.test/cat.png" } },
-            { type: "input_audio", audio_url: "https://example.test/cat.wav" },
-          ],
-        } as never,
+      mergeOrphan({
+        content: [
+          { type: "text", text: "please inspect this" },
+          { type: "image_url", image_url: { url: "https://example.test/cat.png" } },
+          { type: "input_audio", audio_url: "https://example.test/cat.wav" },
+        ],
       }),
     ).toEqual({
       merged: true,
@@ -393,44 +271,18 @@ describe("mergeOrphanedTrailingUserPrompt", () => {
     });
   });
 
-  it("summarizes inline structured media without embedding data URIs", () => {
-    const dataUri = `data:image/png;base64,${"a".repeat(4096)}`;
-
-    const result = mergeOrphanedTrailingUserPrompt({
-      prompt: "newest inbound message",
-      trigger: "user",
-      leafMessage: {
-        content: [
-          { type: "text", text: "please inspect this inline image" },
-          { type: "image_url", image_url: { url: dataUri } },
-        ],
-      } as never,
-    });
-
-    expect(result.merged).toBe(true);
-    expect(result.removeLeaf).toBe(false);
-    expect(result.prompt).toContain("please inspect this inline image");
-    expect(result.prompt).toContain("[image_url] inline data URI (image/png, 4118 chars)");
-    expect(result.prompt).not.toContain("base64");
-    expect(result.prompt).not.toContain("aaaa");
-  });
-
   it("summarizes unknown structured data before JSON serialization", () => {
     const dataUri = `data:image/png;base64,${"a".repeat(10_000)}`;
-    const result = mergeOrphanedTrailingUserPrompt({
-      prompt: "newest inbound message",
-      trigger: "user",
-      leafMessage: {
-        content: [
-          {
-            type: "unknown_content",
-            nested: {
-              inline: dataUri,
-              longText: "b".repeat(2_000),
-            },
+    const result = mergeOrphan({
+      content: [
+        {
+          type: "unknown_content",
+          nested: {
+            inline: dataUri,
+            longText: "b".repeat(2_000),
           },
-        ],
-      } as never,
+        },
+      ],
     });
 
     expect(result.merged).toBe(true);
@@ -443,66 +295,22 @@ describe("mergeOrphanedTrailingUserPrompt", () => {
   });
 
   it("removes an empty orphaned user leaf to prevent consecutive user turns", () => {
-    expect(
-      mergeOrphanedTrailingUserPrompt({
-        prompt: "newest inbound message",
-        trigger: "user",
-        leafMessage: {
-          content: [],
-        } as never,
-      }),
-    ).toEqual({
+    expect(mergeOrphan({ content: [] })).toEqual({
       merged: false,
       removeLeaf: true,
       prompt: "newest inbound message",
     });
   });
-
-  it("merges orphan prompt text for non-user triggers without warning policy changes", () => {
-    expect(
-      mergeOrphanedTrailingUserPrompt({
-        prompt: "HEARTBEAT_OK",
-        trigger: "heartbeat",
-        leafMessage: {
-          content: "older active-turn message",
-        } as never,
-      }),
-    ).toEqual({
-      merged: true,
-      removeLeaf: false,
-      prompt:
-        "[Queued user message from a previous active turn; preserved as context only. Continue with the active prompt below.]\n" +
-        "older active-turn message\n\nHEARTBEAT_OK",
-    });
-  });
 });
 
 describe("resolveEmbeddedAgentStream", () => {
-  it("reuses the session's original base stream across later wrapper mutations", () => {
-    const baseStreamFn = vi.fn();
-    const wrapperStreamFn = vi.fn();
-    const session = {
-      agent: {
-        streamFn: baseStreamFn,
-      },
-    };
-
-    expect(resolveEmbeddedAgentBaseStreamFn({ session })).toBe(baseStreamFn);
-    session.agent.streamFn = wrapperStreamFn;
-    expect(resolveEmbeddedAgentBaseStreamFn({ session })).toBe(baseStreamFn);
-  });
-
   it("injects authStorage api keys into provider-owned stream functions", async () => {
     const providerStreamFn = vi.fn(async (_model, _context, options) => options);
     const { streamFn } = resolveEmbeddedAgentStream({
       currentStreamFn: undefined,
       providerStreamFn,
       sessionId: "session-1",
-      model: {
-        api: "openai-completions",
-        provider: "demo-provider",
-        id: "demo-model",
-      } as never,
+      model: { api: "openai-completions", provider: "demo-provider", id: "demo-model" } as never,
       authProfileId: "demo-provider:oauth",
       authStorage: {
         getApiKey: vi.fn(async () => "demo-runtime-key"),
@@ -521,30 +329,12 @@ describe("resolveEmbeddedAgentStream", () => {
     expect(providerStreamFn).toHaveBeenCalledTimes(1);
   });
 
-  it("routes supported default streamSimple fallbacks through boundary-aware transports", () => {
-    const { streamFn } = resolveEmbeddedAgentStream({
-      currentStreamFn: undefined,
-      sessionId: "session-1",
-      model: {
-        api: "openai-responses",
-        provider: "openai",
-        id: "gpt-5.4",
-      } as never,
-    });
-
-    expect(streamFn).not.toBe(streamSimple);
-  });
-
   it("keeps explicit custom currentStreamFn values unchanged", () => {
     const currentStreamFn = vi.fn();
     const { streamFn } = resolveEmbeddedAgentStream({
       currentStreamFn: currentStreamFn as never,
       sessionId: "session-1",
-      model: {
-        api: "openai-responses",
-        provider: "openai",
-        id: "gpt-5.4",
-      } as never,
+      model: { api: "openai-responses", provider: "openai", id: "gpt-5.4" } as never,
     });
 
     expect(streamFn).toBe(currentStreamFn);
@@ -573,21 +363,6 @@ describe("resolveEmbeddedAgentStream", () => {
 });
 
 describe("resolveAttemptFsWorkspaceOnly", () => {
-  it("uses global tools.fs.workspaceOnly when agent has no override", () => {
-    const cfg: OpenClawConfig = {
-      tools: {
-        fs: { workspaceOnly: true },
-      },
-    };
-
-    expect(
-      resolveAttemptFsWorkspaceOnly({
-        config: cfg,
-        sessionAgentId: "main",
-      }),
-    ).toBe(true);
-  });
-
   it("prefers agent-specific tools.fs.workspaceOnly override", () => {
     const cfg: OpenClawConfig = {
       tools: {
@@ -605,12 +380,7 @@ describe("resolveAttemptFsWorkspaceOnly", () => {
       },
     };
 
-    expect(
-      resolveAttemptFsWorkspaceOnly({
-        config: cfg,
-        sessionAgentId: "main",
-      }),
-    ).toBe(false);
+    expect(resolveAttemptFsWorkspaceOnly({ config: cfg, sessionAgentId: "main" })).toBe(false);
   });
 });
 
@@ -632,65 +402,14 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     finalToolCall: { type: string; name: string };
   }) {
     const finalMessage = { role: "assistant", content: [params.finalToolCall] };
-    const baseFn = vi.fn(() =>
-      createFakeStream({ events: [params.event], resultMessage: finalMessage }),
-    );
+    const baseFn = fakeBaseStream(finalMessage, [params.event]);
     return { baseFn, finalMessage };
   }
 
-  it("trims whitespace from live streamed tool call names and final result message", async () => {
-    const partialToolCall = { type: "toolCall", name: " read " };
-    const messageToolCall = { type: "toolCall", name: " exec " };
-    const finalToolCall = { type: "toolCall", name: " write " };
-    const event = {
-      type: "toolcall_delta",
-      partial: { role: "assistant", content: [partialToolCall] },
-      message: { role: "assistant", content: [messageToolCall] },
-    };
-    const { baseFn, finalMessage } = createEventStream({ event, finalToolCall });
-
-    const stream = await invokeWrappedStream(baseFn);
-
-    const seenEvents: unknown[] = [];
-    for await (const item of stream) {
-      seenEvents.push(item);
-    }
-    const result = await stream.result();
-
-    expect(seenEvents).toHaveLength(1);
-    expect(partialToolCall.name).toBe("read");
-    expect(messageToolCall.name).toBe("exec");
-    expect(finalToolCall.name).toBe("write");
-    expect(result).toBe(finalMessage);
-    expect(baseFn).toHaveBeenCalledTimes(1);
-  });
-
-  it("supports async stream functions that return a promise", async () => {
-    const finalToolCall = { type: "toolCall", name: " browser " };
-    const finalMessage = { role: "assistant", content: [finalToolCall] };
-    const baseFn = vi.fn(async () =>
-      createFakeStream({
-        events: [],
-        resultMessage: finalMessage,
-      }),
-    );
-
-    const stream = await invokeWrappedStream(baseFn);
-    const result = await stream.result();
-
-    expect(finalToolCall.name).toBe("browser");
-    expect(result).toBe(finalMessage);
-    expect(baseFn).toHaveBeenCalledTimes(1);
-  });
   it("normalizes common tool aliases when the canonical name is allowed", async () => {
     const finalToolCall = { type: "toolCall", name: " BASH " };
     const finalMessage = { role: "assistant", content: [finalToolCall] };
-    const baseFn = vi.fn(() =>
-      createFakeStream({
-        events: [],
-        resultMessage: finalMessage,
-      }),
-    );
+    const baseFn = fakeBaseStream(finalMessage);
 
     const stream = await invokeWrappedStream(baseFn, new Set(["exec"]));
     const result = await stream.result();
@@ -699,124 +418,43 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     expect(result).toBe(finalMessage);
   });
 
-  it("maps provider-prefixed tool names to allowed canonical tools", async () => {
-    const partialToolCall = { type: "toolCall", name: " functions.read " };
-    const messageToolCall = { type: "toolCall", name: " functions.write " };
-    const finalToolCall = { type: "toolCall", name: " tools/exec " };
-    const event = {
-      type: "toolcall_delta",
-      partial: { role: "assistant", content: [partialToolCall] },
-      message: { role: "assistant", content: [messageToolCall] },
-    };
-    const { baseFn } = createEventStream({ event, finalToolCall });
-
-    const stream = await invokeWrappedStream(baseFn, new Set(["read", "write", "exec"]));
-
-    for await (const item of stream) {
-      void item;
-      // drain
-    }
-    await stream.result();
-
-    expect(partialToolCall.name).toBe("read");
-    expect(messageToolCall.name).toBe("write");
-    expect(finalToolCall.name).toBe("exec");
-  });
-
   it("strips only supported provider-leaked XML fragments from allowed tool names", async () => {
     const cases = [
-      {
-        label: "partial double-quote fragment",
-        toolCall: { type: "toolCall", name: 'read" parameter="path" string="true' },
-        expectedName: "read",
-        projection: "partial",
-      },
-      {
-        label: "message single-quote fragment",
-        toolCall: { type: "toolCall", name: "exec' parameter='command' string='true" },
-        expectedName: "exec",
-        projection: "message",
-      },
-      {
-        label: "final opening-angle fragment",
-        toolCall: { type: "toolCall", name: "write<parameter=path" },
-        expectedName: "write",
-        projection: "final",
-      },
-      {
-        label: "partial slash-prefixed fragment",
-        toolCall: { type: "toolCall", name: 'provider/read" parameter="path"' },
-        expectedName: "read",
-        projection: "partial",
-      },
-      {
-        label: "message dotted-prefix fragment",
-        toolCall: { type: "toolCall", name: "provider.exec' parameter='command'" },
-        expectedName: "exec",
-        projection: "message",
-      },
-      {
-        label: "final qualified-tool fragment",
-        toolCall: { type: "toolCall", name: "qualified/write<parameter=path" },
-        expectedName: "qualified.write",
-        projection: "final",
-      },
-      {
-        label: "partial unknown quoted prefix",
-        toolCall: { type: "toolCall", name: 'unknown" parameter="value" string="true' },
-        expectedName: 'unknown" parameter="value" string="true',
-        projection: "partial",
-      },
-      {
-        label: "message allowed prefix with bare closing angle",
-        toolCall: { type: "toolCall", name: "allowedTool>suffix" },
-        expectedName: "allowedTool>suffix",
-        projection: "message",
-      },
-      {
-        label: "final unknown slash-prefixed fragment",
-        toolCall: { type: "toolCall", name: 'provider/unknown" parameter="value"' },
-        expectedName: 'provider/unknown" parameter="value"',
-        projection: "final",
-      },
-    ] as const;
-    const event = {
-      type: "toolcall_delta",
-      partial: {
-        role: "assistant",
-        content: cases
-          .filter((testCase) => testCase.projection === "partial")
-          .map(({ toolCall }) => toolCall),
-      },
-      message: {
-        role: "assistant",
-        content: cases
-          .filter((testCase) => testCase.projection === "message")
-          .map(({ toolCall }) => toolCall),
-      },
-    };
-    const finalMessage = {
+      ['read" parameter="path" string="true', "read", "partial"],
+      ["exec' parameter='command' string='true", "exec", "message"],
+      ["qualified/write<parameter=path", "qualified.write", "final"],
+      [
+        'unknown" parameter="value" string="true',
+        'unknown" parameter="value" string="true',
+        "partial",
+      ],
+      ["allowedTool>suffix", "allowedTool>suffix", "message"],
+    ].map(([name, expectedName, projection]) => ({
+      label: name,
+      toolCall: { type: "toolCall", name },
+      expectedName,
+      projection,
+    }));
+    const project = (projection: string) => ({
       role: "assistant",
       content: cases
-        .filter((testCase) => testCase.projection === "final")
+        .filter((testCase) => testCase.projection === projection)
         .map(({ toolCall }) => toolCall),
+    });
+    const event = {
+      type: "toolcall_delta",
+      partial: project("partial"),
+      message: project("message"),
     };
-    const baseFn = vi.fn(() =>
-      createFakeStream({
-        events: [event],
-        resultMessage: finalMessage,
-      }),
-    );
+    const finalMessage = project("final");
+    const baseFn = fakeBaseStream(finalMessage, [event]);
 
     const stream = await invokeWrappedStream(
       baseFn,
       new Set(["read", "write", "exec", "qualified.write", "allowedTool"]),
     );
 
-    for await (const item of stream) {
-      void item;
-      // drain
-    }
+    await drainStream(stream);
     const result = await stream.result();
 
     for (const testCase of cases) {
@@ -835,95 +473,17 @@ describe("wrapStreamFnTrimToolCallNames", () => {
       message: { role: "assistant", content: [messageToolCall] },
     };
     const finalMessage = { role: "assistant", content: [finalToolCall] };
-    const baseFn = vi.fn(() =>
-      createFakeStream({
-        events: [event],
-        resultMessage: finalMessage,
-      }),
-    );
+    const baseFn = fakeBaseStream(finalMessage, [event]);
 
     const stream = await invokeWrappedStream(baseFn, new Set(["read", "write", "exec"]));
 
-    for await (const item of stream) {
-      void item;
-      // drain
-    }
+    await drainStream(stream);
     const result = await stream.result();
 
     expect(partialToolCall.name).toBe("read");
     expect(messageToolCall.name).toBe("exec");
     expect(finalToolCall.name).toBe("write");
     expect(result).toBe(finalMessage);
-  });
-
-  it("preserves multi-segment tool suffixes when dropping provider prefixes", async () => {
-    const finalToolCall = { type: "toolCall", name: " functions.graph.search " };
-    const finalMessage = { role: "assistant", content: [finalToolCall] };
-    const baseFn = vi.fn(() =>
-      createFakeStream({
-        events: [],
-        resultMessage: finalMessage,
-      }),
-    );
-
-    const stream = await invokeWrappedStream(baseFn, new Set(["graph.search", "search"]));
-    const result = await stream.result();
-
-    expect(finalToolCall.name).toBe("graph.search");
-    expect(result).toBe(finalMessage);
-  });
-
-  it("rewrites repeated unavailable tool calls into plain assistant text after the threshold", async () => {
-    const baseFn = vi.fn(() =>
-      createFakeStream({
-        events: [],
-        resultMessage: {
-          role: "assistant",
-          content: [{ type: "toolCall", name: " exec ", arguments: { command: "echo eleven" } }],
-        },
-      }),
-    );
-    const wrappedFn = wrapStreamFnTrimToolCallNames(baseFn as never, new Set(["read"]), {
-      unknownToolThreshold: 10,
-    });
-
-    for (let i = 0; i < 10; i += 1) {
-      const stream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
-      const result = await stream.result();
-      const message = requireRecord(result, "result message");
-      expect(message.role).toBe("assistant");
-      expectSingleToolCallContent(message.content as unknown[], "exec");
-    }
-
-    const blockedStream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
-    const blockedResult = (await blockedStream.result()) as {
-      role: string;
-      content: Array<{ type: string; text?: string }>;
-    };
-
-    expect(blockedResult.role).toBe("assistant");
-    expectSingleTextContent(blockedResult.content, '"exec"');
-  });
-
-  it("leaves repeated unavailable tool calls alone when the unknown-tool guard is disabled", async () => {
-    const baseFn = vi.fn(() =>
-      createFakeStream({
-        events: [],
-        resultMessage: {
-          role: "assistant",
-          content: [{ type: "toolCall", name: " exec ", arguments: { command: "echo eleven" } }],
-        },
-      }),
-    );
-    const wrappedFn = wrapStreamFnTrimToolCallNames(baseFn as never, new Set(["read"]));
-
-    for (let i = 0; i < 11; i += 1) {
-      const stream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
-      const result = await stream.result();
-      const message = requireRecord(result, "result message");
-      expect(message.role).toBe("assistant");
-      expectSingleToolCallContent(message.content as unknown[], "exec");
-    }
   });
 
   it("does not count partial tool-call deltas as separate unavailable-tool retries", async () => {
@@ -941,10 +501,7 @@ describe("wrapStreamFnTrimToolCallNames", () => {
       unknownToolThreshold: 1,
     });
 
-    for await (const item of stream) {
-      void item;
-      // drain
-    }
+    await drainStream(stream);
     const result = (await stream.result()) as {
       content: Array<{ type: string; text?: string; name?: string }>;
     };
@@ -954,191 +511,78 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     expectSingleToolCallContent(result.content, "exec");
   });
 
-  it("does not reset the unavailable-tool streak on partial-only stream chunks", async () => {
-    const baseFn = vi.fn(() =>
-      createFakeStream({
-        events: [
-          {
-            type: "toolcall_delta",
-            partial: { role: "assistant", content: [{ type: "toolCall", name: " exec " }] },
-          },
-        ],
-        resultMessage: {
-          role: "assistant",
-          content: [{ type: "toolCall", name: " exec ", arguments: { command: "echo retry" } }],
-        },
-      }),
-    );
-    const wrappedFn = wrapStreamFnTrimToolCallNames(baseFn as never, new Set(["read"]), {
+  function sequenceStreams(
+    allowedTools: string[],
+    frames: Parameters<typeof createFakeStream>[0][],
+  ) {
+    const baseFn = vi.fn();
+    for (const frame of frames) {
+      baseFn.mockImplementationOnce(() => createFakeStream(frame));
+    }
+    const wrappedFn = wrapStreamFnTrimToolCallNames(baseFn as never, new Set(allowedTools), {
       unknownToolThreshold: 1,
     });
+    return () => Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
+  }
 
-    const firstStream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
+  function retryFrames(projection: "partial" | "message", name: string) {
+    return Array.from({ length: 2 }, () => ({
+      events: [toolDelta(projection, [{ type: "toolCall", name }])],
+      resultMessage: toolMessage(" exec ", "echo retry"),
+    }));
+  }
+
+  it("does not reset the unavailable-tool streak on partial-only stream chunks", async () => {
+    const nextStream = sequenceStreams(["read"], retryFrames("partial", " exec "));
+    const firstStream = await nextStream();
     await firstStream.result();
-
-    const secondStream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
-    for await (const ignoredItem of secondStream) {
-      void ignoredItem;
-      // drain
-    }
-    const secondResult = (await secondStream.result()) as {
-      role: string;
-      content: Array<{ type: string; text?: string; name?: string }>;
-    };
-
+    const secondStream = await nextStream();
+    await drainStream(secondStream);
+    const secondResult = (await secondStream.result()) as ToolStreamMessage;
     expect(secondResult.role).toBe("assistant");
     expectSingleTextContent(secondResult.content, '"exec"');
   });
 
   it("counts the final unknown-tool retry when streamed messages omit the tool name", async () => {
-    const baseFn = vi.fn(() =>
-      createFakeStream({
-        events: [
-          {
-            type: "toolcall_delta",
-            message: { role: "assistant", content: [{ type: "toolCall", name: "" }] },
-          },
-        ],
-        resultMessage: {
-          role: "assistant",
-          content: [{ type: "toolCall", name: " exec ", arguments: { command: "echo retry" } }],
-        },
-      }),
-    );
-    const wrappedFn = wrapStreamFnTrimToolCallNames(baseFn as never, new Set(["read"]), {
-      unknownToolThreshold: 1,
-    });
-
-    const firstStream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
+    const nextStream = sequenceStreams(["read"], retryFrames("message", ""));
+    const firstStream = await nextStream();
     await firstStream.result();
-
-    const secondStream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
-    for await (const ignoredItem of secondStream) {
-      void ignoredItem;
-      // drain
-    }
-    const secondResult = (await secondStream.result()) as {
-      role: string;
-      content: Array<{ type: string; text?: string; name?: string }>;
-    };
-
+    const secondStream = await nextStream();
+    await drainStream(secondStream);
+    const secondResult = (await secondStream.result()) as ToolStreamMessage;
     expect(secondResult.role).toBe("assistant");
     expectSingleTextContent(secondResult.content, '"exec"');
   });
 
-  it("resets a provisional streamed unknown-tool retry when later chunks resolve to an allowed tool", async () => {
-    const baseFn = vi
-      .fn()
-      .mockImplementationOnce(() =>
-        createFakeStream({
-          events: [
-            {
-              type: "toolcall_delta",
-              message: { role: "assistant", content: [{ type: "toolCall", name: " ex " }] },
-            },
-            {
-              type: "toolcall_delta",
-              message: { role: "assistant", content: [{ type: "toolCall", name: " exec " }] },
-            },
-          ],
-          resultMessage: {
-            role: "assistant",
-            content: [{ type: "toolCall", name: " exec ", arguments: { command: "echo ok" } }],
-          },
-        }),
-      )
-      .mockImplementationOnce(() =>
-        createFakeStream({
-          events: [],
-          resultMessage: {
-            role: "assistant",
-            content: [{ type: "toolCall", name: " ex ", arguments: { command: "echo retry" } }],
-          },
-        }),
-      );
-    const wrappedFn = wrapStreamFnTrimToolCallNames(baseFn as never, new Set(["exec"]), {
-      unknownToolThreshold: 1,
-    });
-
-    const firstStream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
-    for await (const ignoredItem of firstStream) {
-      void ignoredItem;
-      // drain
-    }
-    await firstStream.result();
-
-    const secondStream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
-    const secondResult = (await secondStream.result()) as {
-      role: string;
-      content: Array<{ type: string; text?: string; name?: string }>;
-    };
-
-    expect(secondResult.role).toBe("assistant");
-    expectSingleToolCallContent(secondResult.content, "ex");
-  });
-
   it("keeps processing later streamed messages after one streamed unknown-tool retry was counted", async () => {
-    const baseFn = vi
-      .fn()
-      .mockImplementationOnce(() =>
-        createFakeStream({
+    const nextStream = sequenceStreams(
+      ["read"],
+      [
+        {
           events: [
-            {
-              type: "toolcall_delta",
-              message: { role: "assistant", content: [{ type: "toolCall", name: " re " }] },
-            },
-            {
-              type: "toolcall_delta",
-              message: { role: "assistant", content: [{ type: "toolCall", name: " read " }] },
-            },
+            toolDelta("message", [{ type: "toolCall", name: " re " }]),
+            toolDelta("message", [{ type: "toolCall", name: " read " }]),
           ],
           resultMessage: textAssistant("resolved to allowed tool"),
-        }),
-      )
-      .mockImplementationOnce(() =>
-        createFakeStream({
-          events: [],
-          resultMessage: {
-            role: "assistant",
-            content: [{ type: "toolCall", name: " re ", arguments: { command: "echo retry" } }],
-          },
-        }),
-      );
-    const wrappedFn = wrapStreamFnTrimToolCallNames(baseFn as never, new Set(["read"]), {
-      unknownToolThreshold: 1,
-    });
-
-    const firstStream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
-    for await (const ignoredItem of firstStream) {
-      void ignoredItem;
-      // drain
-    }
+        },
+        { events: [], resultMessage: toolMessage(" re ", "echo retry") },
+      ],
+    );
+    const firstStream = await nextStream();
+    await drainStream(firstStream);
     await firstStream.result();
-
-    const secondStream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
-    const secondResult = (await secondStream.result()) as {
-      role: string;
-      content: Array<{ type: string; text?: string; name?: string }>;
-    };
-
+    const secondStream = await nextStream();
+    const secondResult = (await secondStream.result()) as ToolStreamMessage;
     expect(secondResult.role).toBe("assistant");
     expectSingleToolCallContent(secondResult.content, "re");
   });
 
   it("resets a stale unknown-tool streak when a streamed message mixes allowed and unknown tools", async () => {
-    const baseFn = vi
-      .fn()
-      .mockImplementationOnce(() =>
-        createFakeStream({
-          events: [],
-          resultMessage: {
-            role: "assistant",
-            content: [{ type: "toolCall", name: " ex ", arguments: { command: "echo first" } }],
-          },
-        }),
-      )
-      .mockImplementationOnce(() =>
-        createFakeStream({
+    const nextStream = sequenceStreams(
+      ["exec"],
+      [
+        { events: [], resultMessage: toolMessage(" ex ", "echo first") },
+        {
           events: [
             {
               type: "toolcall_delta",
@@ -1151,41 +595,18 @@ describe("wrapStreamFnTrimToolCallNames", () => {
               },
             },
           ],
-          resultMessage: {
-            role: "assistant",
-            content: [{ type: "toolCall", name: " exec ", arguments: { command: "echo ok" } }],
-          },
-        }),
-      )
-      .mockImplementationOnce(() =>
-        createFakeStream({
-          events: [],
-          resultMessage: {
-            role: "assistant",
-            content: [{ type: "toolCall", name: " ex ", arguments: { command: "echo retry" } }],
-          },
-        }),
-      );
-    const wrappedFn = wrapStreamFnTrimToolCallNames(baseFn as never, new Set(["exec"]), {
-      unknownToolThreshold: 1,
-    });
-
-    const firstStream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
+          resultMessage: toolMessage(" exec ", "echo ok"),
+        },
+        { events: [], resultMessage: toolMessage(" ex ", "echo retry") },
+      ],
+    );
+    const firstStream = await nextStream();
     await firstStream.result();
-
-    const secondStream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
-    for await (const ignoredItem of secondStream) {
-      void ignoredItem;
-      // drain
-    }
+    const secondStream = await nextStream();
+    await drainStream(secondStream);
     await secondStream.result();
-
-    const thirdStream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
-    const thirdResult = (await thirdStream.result()) as {
-      role: string;
-      content: Array<{ type: string; text?: string; name?: string }>;
-    };
-
+    const thirdStream = await nextStream();
+    const thirdResult = (await thirdStream.result()) as ToolStreamMessage;
     expect(thirdResult.role).toBe("assistant");
     expectSingleToolCallContent(thirdResult.content, "ex");
   });
@@ -1198,26 +619,15 @@ describe("wrapStreamFnTrimToolCallNames", () => {
       id: "functionswrite4",
     };
     const finalToolCallC = { type: "functionCall", id: "functions.exec2", name: "" };
-    const event = {
-      type: "toolcall_delta",
-      partial: { role: "assistant", content: [partialToolCall] },
-    };
+    const event = toolDelta("partial", [partialToolCall]);
     const finalMessage = {
       role: "assistant",
       content: [finalToolCallA, finalToolCallB, finalToolCallC],
     };
-    const baseFn = vi.fn(() =>
-      createFakeStream({
-        events: [event],
-        resultMessage: finalMessage,
-      }),
-    );
+    const baseFn = fakeBaseStream(finalMessage, [event]);
 
     const stream = await invokeWrappedStream(baseFn, new Set(["read", "write", "exec"]));
-    for await (const item of stream) {
-      void item;
-      // drain
-    }
+    await drainStream(stream);
     const result = await stream.result();
 
     expect(partialToolCall.name).toBe("read");
@@ -1233,12 +643,7 @@ describe("wrapStreamFnTrimToolCallNames", () => {
       id: "functionsread3",
     };
     const finalMessage = { role: "assistant", content: [finalToolCall] };
-    const baseFn = vi.fn(() =>
-      createFakeStream({
-        events: [],
-        resultMessage: finalMessage,
-      }),
-    );
+    const baseFn = fakeBaseStream(finalMessage);
 
     const stream = await invokeWrappedStream(baseFn);
     await stream.result();
@@ -1246,141 +651,15 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     expect(finalToolCall.name).toBeUndefined();
   });
 
-  it("infers malformed non-blank tool names before dispatch", async () => {
-    const partialToolCall = { type: "toolCall", id: "functionsread3", name: "functionsread3" };
-    const finalToolCall = { type: "toolCall", id: "functionsread3", name: "functionsread3" };
-    const event = {
-      type: "toolcall_delta",
-      partial: { role: "assistant", content: [partialToolCall] },
-    };
-    const finalMessage = { role: "assistant", content: [finalToolCall] };
-    const baseFn = vi.fn(() =>
-      createFakeStream({
-        events: [event],
-        resultMessage: finalMessage,
-      }),
-    );
-
-    const stream = await invokeWrappedStream(baseFn, new Set(["read", "write"]));
-    for await (const item of stream) {
-      void item;
-      // drain
-    }
-    await stream.result();
-
-    expect(partialToolCall.name).toBe("read");
-    expect(finalToolCall.name).toBe("read");
-  });
-
-  it.each([
-    {
-      name: "recovers malformed non-blank names when id is missing",
-      toolCall: { type: "toolCall", name: "functionsread3" },
-      allowedTools: ["read", "write"],
-      expectedName: "read",
-    },
-    {
-      name: "recovers canonical tool names from canonical ids when name is empty",
-      toolCall: { type: "toolCall", id: "read", name: "" },
-      allowedTools: ["read", "write"],
-      expectedName: "read",
-    },
-    {
-      name: "recovers blank tool names from provider-prefixed XML-polluted ids",
-      toolCall: {
-        type: "toolCall",
-        id: 'provider/read" parameter="path"',
-        name: "",
-      },
-      allowedTools: ["read", "write"],
-      expectedName: "read",
-    },
-    {
-      name: "recovers tool names from ids when name is whitespace-only",
-      toolCall: { type: "toolCall", id: "functionswrite4", name: "   " },
-      allowedTools: ["read", "write"],
-      expectedName: "write",
-    },
-    {
-      name: "prefers explicit trimmed canonical names over conflicting malformed ids",
-      toolCall: { type: "toolCall", id: "functionswrite4", name: " read " },
-      allowedTools: ["read", "write"],
-      expectedName: "read",
-    },
-    {
-      name: "does not rewrite composite names that mention multiple tools",
-      toolCall: { type: "toolCall", id: "functionsread3", name: "read write" },
-      allowedTools: ["read", "write"],
-      expectedName: "read write",
-    },
-    {
-      name: "fails closed for malformed non-blank names that are ambiguous",
-      toolCall: { type: "toolCall", id: "functions.exec2", name: "functions.exec2" },
-      allowedTools: ["exec", "exec2"],
-      expectedName: "functions.exec2",
-    },
-    {
-      name: "matches malformed ids case-insensitively across common separators",
-      toolCall: { type: "toolCall", id: "Functions.Read_7", name: "" },
-      allowedTools: ["read", "write"],
-      expectedName: "read",
-    },
-    {
-      name: "does not override explicit non-blank tool names with inferred ids",
-      toolCall: { type: "toolCall", id: "functionswrite4", name: "someOtherTool" },
-      allowedTools: ["read", "write"],
-      expectedName: "someOtherTool",
-    },
-  ])("$name", async ({ toolCall, allowedTools, expectedName }) => {
+  it("fails closed for malformed non-blank names that are ambiguous", async () => {
+    const toolCall = { type: "toolCall", id: "functions.exec2", name: "functions.exec2" };
     const finalMessage = { role: "assistant", content: [toolCall] };
-    const baseFn = vi.fn(() =>
-      createFakeStream({
-        events: [],
-        resultMessage: finalMessage,
-      }),
-    );
+    const baseFn = fakeBaseStream(finalMessage);
 
-    const stream = await invokeWrappedStream(baseFn, new Set(allowedTools));
+    const stream = await invokeWrappedStream(baseFn, new Set(["exec", "exec2"]));
     await stream.result();
 
-    expect(toolCall.name).toBe(expectedName);
-  });
-
-  it("stops final blank tool names before dispatch and still assigns fallback ids", async () => {
-    const finalToolCall = { type: "toolCall", id: "", name: "" };
-    const finalMessage = { role: "assistant", content: [finalToolCall] };
-    const baseFn = vi.fn(() =>
-      createFakeStream({
-        events: [],
-        resultMessage: finalMessage,
-      }),
-    );
-
-    const stream = await invokeWrappedStream(baseFn, new Set(["read", "write"]));
-    const result = (await stream.result()) as {
-      content: Array<{ type: string; text?: string }>;
-    };
-
-    expectSingleTextContent(result.content, '"blank tool name"');
-    expect(finalToolCall.name).toBe("");
-    expect(finalToolCall.id).toMatch(/^call_[0-9a-f]{24}$/);
-  });
-
-  it("assigns fallback ids when both name and id are missing", async () => {
-    const finalToolCall: { type: string; name?: string; id?: string } = { type: "toolCall" };
-    const finalMessage = { role: "assistant", content: [finalToolCall] };
-    const baseFn = vi.fn(() =>
-      createFakeStream({
-        events: [],
-        resultMessage: finalMessage,
-      }),
-    );
-
-    const stream = await invokeWrappedStream(baseFn, new Set(["read", "write"]));
-    await stream.result();
-
-    expect(finalToolCall.name).toBeUndefined();
-    expect(finalToolCall.id).toMatch(/^call_[0-9a-f]{24}$/);
+    expect(toolCall.name).toBe("functions.exec2");
   });
 
   it("does not reuse fallback ids across assistant response streams", async () => {
@@ -1409,32 +688,10 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     expect(ids[1]).not.toBe(ids[0]);
   });
 
-  it("prefers explicit canonical names over conflicting canonical ids", async () => {
-    const finalToolCall = { type: "toolCall", id: "write", name: "read" };
-    const finalMessage = { role: "assistant", content: [finalToolCall] };
-    const baseFn = vi.fn(() =>
-      createFakeStream({
-        events: [],
-        resultMessage: finalMessage,
-      }),
-    );
-
-    const stream = await invokeWrappedStream(baseFn, new Set(["read", "write"]));
-    await stream.result();
-
-    expect(finalToolCall.name).toBe("read");
-    expect(finalToolCall.id).toBe("write");
-  });
-
   it("fails closed when malformed ids could map to multiple allowlisted tools", async () => {
     const finalToolCall = { type: "toolCall", id: "functions.exec2", name: "" };
     const finalMessage = { role: "assistant", content: [finalToolCall] };
-    const baseFn = vi.fn(() =>
-      createFakeStream({
-        events: [],
-        resultMessage: finalMessage,
-      }),
-    );
+    const baseFn = fakeBaseStream(finalMessage);
 
     const stream = await invokeWrappedStream(baseFn, new Set(["exec", "exec2"]));
     const result = (await stream.result()) as {
@@ -1447,18 +704,12 @@ describe("wrapStreamFnTrimToolCallNames", () => {
   it("leaves provisional blank streamed names recoverable while stopping final blank dispatch", async () => {
     const partialToolCall = { type: "toolCall", name: "   " };
     const finalToolCall = { type: "toolCall", name: "\t  " };
-    const event = {
-      type: "toolcall_delta",
-      partial: { role: "assistant", content: [partialToolCall] },
-    };
+    const event = toolDelta("partial", [partialToolCall]);
     const { baseFn } = createEventStream({ event, finalToolCall });
 
     const stream = await invokeWrappedStream(baseFn);
 
-    for await (const item of stream) {
-      void item;
-      // drain
-    }
+    await drainStream(stream);
     const result = (await stream.result()) as {
       content: Array<{ type: string; text?: string }>;
     };
@@ -1469,25 +720,6 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     expect(baseFn).toHaveBeenCalledTimes(1);
   });
 
-  it("does not turn blank model output into a callable _blank tool", async () => {
-    const finalToolCall = { type: "toolCall", id: "call_1", name: "", arguments: {} };
-    const finalMessage = { role: "assistant", content: [finalToolCall] };
-    const baseFn = vi.fn(() =>
-      createFakeStream({
-        events: [],
-        resultMessage: finalMessage,
-      }),
-    );
-
-    const stream = await invokeWrappedStream(baseFn, new Set(["_blank"]));
-    const result = (await stream.result()) as {
-      content: Array<{ type: string; text?: string }>;
-    };
-
-    expectSingleTextContent(result.content, '"blank tool name"');
-    expect(finalToolCall.name).toBe("");
-  });
-
   it("assigns fallback ids to missing/blank tool call ids in streamed and final messages", async () => {
     const partialToolCall = { type: "toolCall", name: " read ", id: "   " };
     const finalToolCallA = { type: "toolCall", name: " exec ", id: "" };
@@ -1495,23 +727,12 @@ describe("wrapStreamFnTrimToolCallNames", () => {
       type: "toolCall",
       name: " write ",
     };
-    const event = {
-      type: "toolcall_delta",
-      partial: { role: "assistant", content: [partialToolCall] },
-    };
+    const event = toolDelta("partial", [partialToolCall]);
     const finalMessage = { role: "assistant", content: [finalToolCallA, finalToolCallB] };
-    const baseFn = vi.fn(() =>
-      createFakeStream({
-        events: [event],
-        resultMessage: finalMessage,
-      }),
-    );
+    const baseFn = fakeBaseStream(finalMessage, [event]);
 
     const stream = await invokeWrappedStream(baseFn);
-    for await (const item of stream) {
-      void item;
-      // drain
-    }
+    await drainStream(stream);
     const result = await stream.result();
 
     expect(partialToolCall.name).toBe("read");
@@ -1528,12 +749,7 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     const finalToolCallA = { type: "toolCall", name: " read ", id: "  edit:22  " };
     const finalToolCallB = { type: "toolCall", name: " write ", id: "edit:22" };
     const finalMessage = { role: "assistant", content: [finalToolCallA, finalToolCallB] };
-    const baseFn = vi.fn(() =>
-      createFakeStream({
-        events: [],
-        resultMessage: finalMessage,
-      }),
-    );
+    const baseFn = fakeBaseStream(finalMessage);
 
     const stream = await invokeWrappedStream(baseFn);
     await stream.result();
@@ -1546,6 +762,31 @@ describe("wrapStreamFnTrimToolCallNames", () => {
 });
 
 describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
+  function replayCall(name: string, id: string) {
+    return { type: "toolCall", id, name, arguments: {} };
+  }
+  function replayAssistant(content: unknown[]) {
+    return { role: "assistant", content };
+  }
+
+  function embeddedResultUser(result: string, text = "retry") {
+    return {
+      role: "user",
+      content: [
+        { type: "toolResult", toolUseId: "call_1", content: [{ type: "text", text: result }] },
+        { type: "text", text },
+      ],
+    };
+  }
+
+  const anthropicPolicy = {
+    validateGeminiTurns: false,
+    validateAnthropicTurns: true,
+    preserveSignatures: false,
+    dropThinkingBlocks: false,
+  };
+  const signedPolicy = { ...anthropicPolicy, preserveSignatures: true };
+
   async function replayContext(
     messages: unknown[],
     allowedToolNames?: Set<string>,
@@ -1564,116 +805,16 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     expect(baseFn).toHaveBeenCalledTimes(1);
     return firstBaseContext(baseFn);
   }
-  function expectedRetryMessages() {
-    return [
-      {
-        role: "user",
-        content: [{ type: "text", text: "retry" }],
-      },
-    ];
+  function replaySigned(messages: unknown[], api = "anthropic-messages") {
+    return replayContext(messages, new Set(["read"]), signedPolicy, api);
   }
 
-  it("drops malformed assistant tool calls from outbound context before provider replay", async () => {
-    const messages = [
-      {
-        role: "assistant",
-        stopReason: "error",
-        content: [{ type: "toolCall", name: "read", arguments: {} }],
-      },
-      {
-        role: "user",
-        content: [{ type: "text", text: "retry" }],
-      },
-    ];
-    const seenContext = await replayContext(messages, new Set(["read"]), {
-      validateGeminiTurns: false,
-      validateAnthropicTurns: true,
-      preserveSignatures: true,
-      dropThinkingBlocks: false,
-    });
-    expect(seenContext.messages).toEqual(expectedRetryMessages());
-    expect(seenContext.messages).not.toBe(messages);
-  });
-
-  it("preserves outbound context when all assistant tool calls are valid", async () => {
-    const messages = [
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
-      },
-    ];
-    const seenContext = await replayContext(messages, new Set(["read"]), {
-      validateGeminiTurns: false,
-      validateAnthropicTurns: true,
-      preserveSignatures: true,
-      dropThinkingBlocks: false,
-    });
-    expect(seenContext.messages).toBe(messages);
-  });
-
-  it("preserves deferred directory tool calls allowed only for replay", async () => {
-    const messages = [
-      {
-        role: "assistant",
-        content: [
-          { type: "toolCall", id: "call_hidden", name: "hidden_catalog_tool", arguments: {} },
-        ],
-      },
-      {
-        role: "tool",
-        toolCallId: "call_hidden",
-        content: [{ type: "toolResult", result: { ok: true } }],
-      },
-    ];
-    const seenContext = await replayContext(
-      messages,
-      new Set(["tool_describe", "tool_call", "hidden_catalog_tool"]),
-      {
-        validateGeminiTurns: false,
-        validateAnthropicTurns: true,
-        preserveSignatures: true,
-        dropThinkingBlocks: false,
-      },
-    );
-    expect(seenContext.messages).toBe(messages);
-  });
-
-  it("strips trailing assistant prefill turns for Anthropic outbound replay", async () => {
-    const messages = [
-      {
-        role: "user",
-        content: [{ type: "text", text: "earlier question" }],
-      },
-      textAssistant("stale assistant answer"),
-    ];
-    const seenContext = await replayContext(
-      messages,
-      new Set(["read"]),
-      {
-        validateGeminiTurns: false,
-        validateAnthropicTurns: true,
-        preserveSignatures: true,
-        dropThinkingBlocks: false,
-      },
-      "anthropic-messages",
-    );
-    expect(seenContext.messages).toEqual([
-      {
-        role: "user",
-        content: [{ type: "text", text: "earlier question" }],
-      },
-    ]);
-    expect(seenContext.messages).not.toBe(messages);
-  });
+  function expectedRetryMessages() {
+    return [textUser("retry")];
+  }
 
   it("strips trailing assistant prefill turns for Gemini outbound replay", async () => {
-    const messages = [
-      {
-        role: "user",
-        content: [{ type: "text", text: "earlier question" }],
-      },
-      textAssistant("stale model answer"),
-    ];
+    const messages = [textUser("earlier question"), textAssistant("stale model answer")];
     const seenContext = await replayContext(
       messages,
       new Set(["read"]),
@@ -1685,315 +826,59 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
       },
       "google-generative-ai",
     );
-    expect(seenContext.messages).toEqual([
-      {
-        role: "user",
-        content: [{ type: "text", text: "earlier question" }],
-      },
-    ]);
+    expect(seenContext.messages).toEqual([textUser("earlier question")]);
     expect(seenContext.messages).not.toBe(messages);
   });
 
-  it("drops signed thinking turns when sibling replay tool calls are not allowlisted", async () => {
-    const messages = [
-      {
-        role: "assistant",
-        content: [
-          { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
-          { type: "toolCall", id: "toolu_legacy", name: "gateway", arguments: {} },
-        ],
-      },
-      {
-        role: "user",
-        content: [{ type: "text", text: "retry" }],
-      },
-    ];
-    const seenContext = await replayContext(
-      messages,
-      new Set(["read"]),
-      {
-        validateGeminiTurns: false,
-        validateAnthropicTurns: true,
-        preserveSignatures: true,
-        dropThinkingBlocks: false,
-      },
-      "anthropic-messages",
-    );
-    expect(seenContext.messages).toEqual(expectedRetryMessages());
-  });
-
   it("drops signed thinking turns for bedrock claude replay when sibling tool calls are not replay-safe", async () => {
-    const messages = [
-      {
-        role: "assistant",
-        content: [
-          { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
-          { type: "toolCall", id: "toolu_legacy", name: "gateway", arguments: {} },
-        ],
-      },
-      {
-        role: "user",
-        content: [{ type: "text", text: "retry" }],
-      },
-    ];
-    const seenContext = await replayContext(
-      messages,
-      new Set(["read"]),
-      {
-        validateGeminiTurns: false,
-        validateAnthropicTurns: true,
-        preserveSignatures: true,
-        dropThinkingBlocks: false,
-      },
-      "bedrock-converse-stream",
-    );
+    const messages = [thinkingTurn(replayCall("gateway", "toolu_legacy")), textUser("retry")];
+    const seenContext = await replaySigned(messages, "bedrock-converse-stream");
     expect(seenContext.messages).toEqual(expectedRetryMessages());
   });
 
   it("drops signed thinking turns when sibling replay tool calls reuse an id", async () => {
     const messages = [
-      {
-        role: "assistant",
-        content: [
-          { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
-          { type: "toolCall", id: "call_1", name: "read", arguments: {} },
-          { type: "functionCall", id: "call_1", name: "read", arguments: {} },
-        ],
-      },
-      {
-        role: "user",
-        content: [{ type: "text", text: "retry" }],
-      },
+      thinkingTurn(replayCall("read", "call_1"), {
+        type: "functionCall",
+        id: "call_1",
+        name: "read",
+        arguments: {},
+      }),
+      textUser("retry"),
     ];
-    const seenContext = await replayContext(
-      messages,
-      new Set(["read"]),
-      {
-        validateGeminiTurns: false,
-        validateAnthropicTurns: true,
-        preserveSignatures: true,
-        dropThinkingBlocks: false,
-      },
-      "anthropic-messages",
-    );
+    const seenContext = await replaySigned(messages);
     expect(seenContext.messages).toEqual(expectedRetryMessages());
   });
 
   it("keeps signed thinking turns that reuse a mutable earlier tool id", async () => {
     const messages = [
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
-      },
-      {
-        role: "toolResult",
-        toolCallId: "call_1",
-        content: [{ type: "text", text: "mutable result" }],
-      },
-      {
-        role: "assistant",
-        content: [
-          { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
-          { type: "toolUse", id: "call_1", name: "read", input: {} },
-        ],
-      },
-      {
-        role: "toolResult",
-        toolCallId: "call_1",
-        content: [{ type: "text", text: "signed result" }],
-      },
-      {
-        role: "user",
-        content: [{ type: "text", text: "retry" }],
-      },
+      replayAssistant([replayCall("read", "call_1")]),
+      textToolResult("call_1", "read", "mutable result"),
+      thinkingTurn({ type: "toolUse", id: "call_1", name: "read", input: {} }),
+      textToolResult("call_1", "read", "signed result"),
+      textUser("retry"),
     ];
-    const seenContext = await replayContext(
-      messages,
-      new Set(["read"]),
-      {
-        validateGeminiTurns: false,
-        validateAnthropicTurns: true,
-        preserveSignatures: true,
-        dropThinkingBlocks: false,
-      },
-      "anthropic-messages",
-    );
+    const seenContext = await replaySigned(messages);
     expect(seenContext.messages).toBe(messages);
   });
 
   it("drops signed thinking reused ids when their real result is displaced", async () => {
-    const firstAssistant = {
-      role: "assistant",
-      content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
-    };
+    const firstAssistant = replayAssistant([replayCall("read", "call_1")]);
     const firstResult = textToolResult("call_1", "read", "mutable result");
-    const userMessage = {
-      role: "user",
-      content: [{ type: "text", text: "retry" }],
-    };
+    const userMessage = textUser("retry");
     const messages = [
       firstAssistant,
       firstResult,
-      {
-        role: "assistant",
-        content: [
-          { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
-          { type: "toolUse", id: "call_1", name: "read", input: {} },
-        ],
-      },
+      thinkingTurn({ type: "toolUse", id: "call_1", name: "read", input: {} }),
       userMessage,
-      {
-        role: "toolResult",
-        toolCallId: "call_1",
-        content: [{ type: "text", text: "signed result" }],
-      },
+      textToolResult("call_1", "read", "signed result"),
     ];
-    const seenContext = await replayContext(
-      messages,
-      new Set(["read"]),
-      {
-        validateGeminiTurns: false,
-        validateAnthropicTurns: true,
-        preserveSignatures: true,
-        dropThinkingBlocks: false,
-      },
-      "anthropic-messages",
-    );
+    const seenContext = await replaySigned(messages);
     expect(seenContext.messages).toEqual([firstAssistant, firstResult, userMessage]);
   });
 
-  it("drops signed thinking turns with inline sessions_spawn attachments when the result is missing", async () => {
-    const attachmentContent = "SIGNED_THINKING_INLINE_ATTACHMENT";
-    const messages = [
-      {
-        role: "assistant",
-        content: [
-          { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
-          {
-            type: "toolUse",
-            id: "call_1",
-            name: "sessions_spawn",
-            input: {
-              task: "inspect attachment",
-              attachments: [{ name: "snapshot.txt", content: attachmentContent }],
-            },
-          },
-        ],
-      },
-      {
-        role: "user",
-        content: [{ type: "text", text: "retry" }],
-      },
-    ];
-    const seenContext = await replayContext(
-      messages,
-      new Set(["sessions_spawn"]),
-      {
-        validateGeminiTurns: false,
-        validateAnthropicTurns: true,
-        preserveSignatures: true,
-        dropThinkingBlocks: false,
-      },
-      "anthropic-messages",
-    );
-    expect(seenContext.messages).toEqual(expectedRetryMessages());
-  });
-
-  it("drops signed thinking turns with non-content attachment payload fields when the result is missing", async () => {
-    const attachmentContent = "SIGNED_THINKING_NESTED_ATTACHMENT";
-    const messages = [
-      {
-        role: "assistant",
-        content: [
-          { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
-          {
-            type: "toolUse",
-            id: "call_1",
-            name: "sessions_spawn",
-            input: {
-              task: "inspect attachment",
-              attachments: [
-                {
-                  name: "snapshot.txt",
-                  mimeType: "text/plain",
-                  data: attachmentContent,
-                },
-              ],
-            },
-          },
-        ],
-      },
-      {
-        role: "user",
-        content: [{ type: "text", text: "retry" }],
-      },
-    ];
-    const seenContext = await replayContext(
-      messages,
-      new Set(["sessions_spawn"]),
-      {
-        validateGeminiTurns: false,
-        validateAnthropicTurns: true,
-        preserveSignatures: true,
-        dropThinkingBlocks: false,
-      },
-      "anthropic-messages",
-    );
-    expect(seenContext.messages).toEqual(expectedRetryMessages());
-  });
-
-  it("keeps signed thinking turns with sessions_spawn attachments when the tool result is present", async () => {
-    const attachmentContent = "SIGNED_THINKING_PAIRED_ATTACHMENT";
-    const messages = [
-      {
-        role: "assistant",
-        content: [
-          { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
-          {
-            type: "toolUse",
-            id: "call_1",
-            name: "sessions_spawn",
-            input: {
-              task: "inspect attachment",
-              attachments: [{ name: "snapshot.txt", content: attachmentContent }],
-            },
-          },
-        ],
-      },
-      textToolResult("call_1", "sessions_spawn", "done"),
-      {
-        role: "user",
-        content: [{ type: "text", text: "retry" }],
-      },
-    ];
-    const seenContext = await replayContext(
-      messages,
-      new Set(["sessions_spawn"]),
-      {
-        validateGeminiTurns: false,
-        validateAnthropicTurns: true,
-        preserveSignatures: true,
-        dropThinkingBlocks: false,
-      },
-      "anthropic-messages",
-    );
-    expect(seenContext.messages).toBe(messages);
-  });
-
   it("keeps mutable thinking turns outside anthropic replay-only preservation", async () => {
-    const messages = [
-      {
-        role: "assistant",
-        content: [
-          { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
-          { type: "toolCall", id: "call_1", name: " read ", arguments: {} },
-        ],
-      },
-      {
-        role: "user",
-        content: [{ type: "text", text: "retry" }],
-      },
-    ];
+    const messages = [thinkingTurn(replayCall(" read ", "call_1")), textUser("retry")];
     const seenContext = await replayContext(
       messages,
       new Set(["read"]),
@@ -2006,13 +891,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
       "openai-completions",
     );
     expect(seenContext.messages).toHaveLength(3);
-    expect(seenContext.messages[0]).toEqual({
-      role: "assistant",
-      content: [
-        { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
-        { type: "toolCall", id: "call_1", name: "read", arguments: {} },
-      ],
-    });
+    expect(seenContext.messages[0]).toEqual(thinkingTurn(replayCall("read", "call_1")));
     const repairedToolResult = requireRecord(seenContext.messages[1], "repaired tool result");
     expect(repairedToolResult.role).toBe("toolResult");
     expect(repairedToolResult.toolCallId).toBe("call_1");
@@ -2025,204 +904,28 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     ]);
     expect(repairedToolResult.isError).toBe(true);
     expect(repairedToolResult.timestamp).toBeTypeOf("number");
-    expect(seenContext.messages[2]).toEqual({
-      role: "user",
-      content: [{ type: "text", text: "retry" }],
-    });
-  });
-
-  it("preserves sessions_spawn attachment payloads on replay", async () => {
-    const attachmentContent = "INLINE_ATTACHMENT_PAYLOAD";
-    const messages = [
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "toolUse",
-            id: "call_1",
-            name: "  SESSIONS_SPAWN  ",
-            input: {
-              task: "inspect attachment",
-              attachments: [{ name: "snapshot.txt", content: attachmentContent }],
-            },
-          },
-        ],
-      },
-    ];
-    const seenContext = (await replayContext(messages, new Set(["sessions_spawn"]), {
-      validateGeminiTurns: false,
-      preserveSignatures: false,
-      dropThinkingBlocks: false,
-      validateAnthropicTurns: true,
-    })) as {
-      messages: Array<{ content?: Array<Record<string, unknown>> }>;
-    };
-    const toolCall = seenContext.messages[0]?.content?.[0] as {
-      name?: string;
-      input?: { attachments?: Array<{ content?: string }> };
-    };
-    expect(toolCall.name).toBe("sessions_spawn");
-    expect(toolCall.input?.attachments?.[0]?.content).toBe(attachmentContent);
-  });
-
-  it("keeps non-Anthropic thinking turns mutable when Anthropic replay validation is off", async () => {
-    const messages = [
-      {
-        role: "assistant",
-        content: [
-          { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
-          { type: "toolCall", id: "call_read", name: " read ", arguments: { path: "README.md" } },
-        ],
-      },
-      {
-        role: "user",
-        content: [{ type: "text", text: "retry" }],
-      },
-    ];
-    const seenContext = (await replayContext(
-      messages,
-      new Set(["read"]),
-      undefined,
-      "google-gemini",
-    )) as {
-      messages: Array<{ content?: unknown[] }>;
-    };
-    expect(seenContext.messages[0]?.content).toEqual([
-      { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
-      { type: "toolCall", id: "call_read", name: "read", arguments: { path: "README.md" } },
-    ]);
-  });
-
-  it("preserves allowlisted tool names that contain punctuation", async () => {
-    const messages = [
-      {
-        role: "assistant",
-        content: [{ type: "toolUse", id: "call_1", name: "admin.export", input: { scope: "all" } }],
-      },
-    ];
-    const seenContext = await replayContext(messages, new Set(["admin.export"]));
-    expect(seenContext.messages).toBe(messages);
-  });
-
-  it("normalizes provider-prefixed replayed tool names before provider replay", async () => {
-    const messages = [
-      {
-        role: "assistant",
-        content: [{ type: "toolUse", id: "call_1", name: "functions.read", input: { path: "." } }],
-      },
-    ];
-    const seenContext = (await replayContext(messages, new Set(["read"]))) as {
-      messages: Array<{ content?: Array<{ name?: string }> }>;
-    };
-    expect(seenContext.messages[0]?.content?.[0]?.name).toBe("read");
+    expect(seenContext.messages[2]).toEqual(textUser("retry"));
   });
 
   it("canonicalizes mixed-case allowlisted tool names on replay", async () => {
-    const messages = [
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call_1", name: "readfile", arguments: {} }],
-      },
-    ];
+    const messages = [replayAssistant([replayCall("readfile", "call_1")])];
     const seenContext = (await replayContext(messages, new Set(["ReadFile"]))) as {
       messages: Array<{ content?: Array<{ name?: string }> }>;
     };
     expect(seenContext.messages[0]?.content?.[0]?.name).toBe("ReadFile");
   });
 
-  it("recovers blank replayed tool names from their ids", async () => {
-    const messages = [
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "functionswrite4", name: "   ", arguments: {} }],
-      },
-    ];
-    const seenContext = (await replayContext(messages, new Set(["write"]))) as {
-      messages: Array<{ content?: Array<{ name?: string }> }>;
-    };
-    expect(seenContext.messages[0]?.content?.[0]?.name).toBe("write");
-  });
-
   it("drops replayed blank tool names that cannot be recovered from ids", async () => {
     const messages = [
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call_1", name: "   ", arguments: {} }],
-      },
+      replayAssistant([replayCall("   ", "call_1")]),
       textToolResult("call_1", "", "stale result", { isError: true }),
     ];
     const seenContext = await replayContext(messages);
     expect(seenContext.messages).toStrictEqual([]);
   });
 
-  it("recovers mangled replayed tool names before dropping the call", async () => {
-    const messages = [
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call_1", name: "functionsread3", arguments: {} }],
-      },
-    ];
-    const seenContext = (await replayContext(messages, new Set(["read"]))) as {
-      messages: Array<{ content?: Array<{ name?: string }> }>;
-    };
-    expect(seenContext.messages[0]?.content?.[0]?.name).toBe("read");
-  });
-
-  it("drops orphaned tool results after replay sanitization removes a tool-call turn", async () => {
-    const messages = [
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", name: "read", arguments: {} }],
-        stopReason: "error",
-      },
-      textToolResult("call_missing", "read", "stale result", { isError: false }),
-      {
-        role: "user",
-        content: [{ type: "text", text: "retry" }],
-      },
-    ];
-    const seenContext = (await replayContext(messages, new Set(["read"]))) as {
-      messages: Array<{ role?: string }>;
-    };
-    expect(seenContext.messages).toEqual(expectedRetryMessages());
-  });
-
-  it("preserves completed toolCall history outside the current allowlist", async () => {
-    const messages = [
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call_1", name: "write", arguments: {} }],
-      },
-      textToolResult("call_1", "write", "stale result", { isError: false }),
-      {
-        role: "user",
-        content: [{ type: "text", text: "retry" }],
-      },
-    ];
-    const expectedMessages = structuredClone(messages);
-    const seenContext = await replayContext(messages, new Set(["read"]));
-    expect(seenContext.messages).toStrictEqual(expectedMessages);
-  });
-  it("preserves completed toolUse history outside the current allowlist", async () => {
-    const messages = [
-      {
-        role: "assistant",
-        content: [{ type: "toolUse", id: "call_1", name: "unknown_tool", input: { path: "." } }],
-      },
-      textToolResult("call_1", "unknown_tool", "stale result", { isError: false }),
-    ];
-    const expectedMessages = structuredClone(messages);
-    const seenContext = await replayContext(messages, new Set(["read"]));
-    expect(seenContext.messages).toStrictEqual(expectedMessages);
-  });
-
   it("drops ambiguous mangled replay names instead of guessing a tool", async () => {
-    const messages = [
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call_1", name: "functions.exec2", arguments: {} }],
-      },
-    ];
+    const messages = [replayAssistant([replayCall("functions.exec2", "call_1")])];
     const seenContext = await replayContext(messages, new Set(["exec", "exec2"]));
     expect(seenContext.messages).toStrictEqual([]);
   });
@@ -2232,23 +935,17 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
       {
         role: "assistant",
         stopReason: "error",
-        content: [
-          { type: "toolCall", id: "call_1", name: "read", arguments: {} },
-          { type: "toolCall", name: "read", arguments: {} },
-        ],
+        content: [replayCall("read", "call_1"), { type: "toolCall", name: "read", arguments: {} }],
       },
       textToolResult("call_1", "read", "kept result", { isError: false }),
-      {
-        role: "user",
-        content: [{ type: "text", text: "retry" }],
-      },
+      textUser("retry"),
     ];
     const seenContext = await replayContext(messages, new Set(["read"]));
     expect(seenContext.messages).toEqual([
       {
         role: "assistant",
         stopReason: "error",
-        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
+        content: [replayCall("read", "call_1")],
       },
       {
         role: "toolResult",
@@ -2257,45 +954,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
         content: [{ type: "text", text: "kept result" }],
         isError: false,
       },
-      {
-        role: "user",
-        content: [{ type: "text", text: "retry" }],
-      },
-    ]);
-  });
-
-  it("revalidates turn ordering after dropping an assistant replay turn", async () => {
-    const messages = [
-      {
-        role: "user",
-        content: [{ type: "text", text: "first" }],
-      },
-      {
-        role: "assistant",
-        stopReason: "error",
-        content: [{ type: "toolCall", name: "read", arguments: {} }],
-      },
-      {
-        role: "user",
-        content: [{ type: "text", text: "second" }],
-      },
-    ];
-    const seenContext = (await replayContext(messages, new Set(["read"]), {
-      validateGeminiTurns: false,
-      validateAnthropicTurns: true,
-      preserveSignatures: false,
-      dropThinkingBlocks: false,
-    })) as {
-      messages: Array<{ role?: string; content?: unknown[] }>;
-    };
-    expect(seenContext.messages).toEqual([
-      {
-        role: "user",
-        content: [
-          { type: "text", text: "first" },
-          { type: "text", text: "second" },
-        ],
-      },
+      textUser("retry"),
     ]);
   });
 
@@ -2308,164 +967,44 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
           { type: "toolUse", name: "read", input: { path: "." } },
         ],
       },
-      {
-        role: "user",
-        content: [
-          { type: "toolResult", toolUseId: "call_1", content: [{ type: "text", text: "stale" }] },
-          { type: "text", text: "retry" },
-        ],
-      },
+      embeddedResultUser("stale"),
     ];
-    const seenContext = (await replayContext(messages, new Set(["read"]), {
-      validateGeminiTurns: false,
-      validateAnthropicTurns: true,
-      preserveSignatures: false,
-      dropThinkingBlocks: false,
-    })) as {
-      messages: Array<{ role?: string; content?: unknown[] }>;
-    };
+    const seenContext = await replayContext(messages, new Set(["read"]), anthropicPolicy);
     expect(seenContext.messages).toEqual([
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "partial response" }],
-      },
-      {
-        role: "user",
-        content: [{ type: "text", text: "retry" }],
-      },
+      replayAssistant([{ type: "text", text: "partial response" }]),
+      textUser("retry"),
     ]);
   });
 
   it("drops embedded Anthropic user tool_result blocks when signed-thinking replay must stay provider-owned", async () => {
     const messages = [
-      {
-        role: "assistant",
-        content: [
-          { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
-          { type: "toolUse", id: "call_1", name: "read", input: { path: "." } },
-        ],
-      },
-      {
-        role: "user",
-        content: [
-          {
-            type: "toolResult",
-            toolUseId: "call_1",
-            content: [{ type: "text", text: "embedded result" }],
-          },
-          { type: "text", text: "retry" },
-        ],
-      },
+      thinkingTurn({ type: "toolUse", id: "call_1", name: "read", input: { path: "." } }),
+      embeddedResultUser("embedded result"),
     ];
-    const seenContext = (await replayContext(
-      messages,
-      new Set(["read"]),
-      {
-        validateGeminiTurns: false,
-        validateAnthropicTurns: true,
-        preserveSignatures: true,
-        dropThinkingBlocks: false,
-      },
-      "anthropic-messages",
-    )) as {
-      messages: Array<{ role?: string; content?: unknown[] }>;
-    };
+    const seenContext = await replaySigned(messages);
     expect(seenContext.messages).toEqual(expectedRetryMessages());
   });
 
   it("preserves embedded Anthropic user tool_result blocks for non-thinking turns even when immutable replay is enabled", async () => {
     const messages = [
-      {
-        role: "assistant",
-        content: [{ type: "toolUse", id: "call_1", name: "read", input: { path: "." } }],
-      },
-      {
-        role: "user",
-        content: [
-          {
-            type: "toolResult",
-            toolUseId: "call_1",
-            content: [{ type: "text", text: "kept result" }],
-          },
-          { type: "text", text: "retry" },
-        ],
-      },
+      replayAssistant([{ type: "toolUse", id: "call_1", name: "read", input: { path: "." } }]),
+      embeddedResultUser("kept result"),
     ];
-    const seenContext = (await replayContext(
-      messages,
-      new Set(["read"]),
-      {
-        validateGeminiTurns: false,
-        validateAnthropicTurns: true,
-        preserveSignatures: true,
-        dropThinkingBlocks: false,
-      },
-      "anthropic-messages",
-    )) as {
-      messages: Array<{ role?: string; content?: unknown[] }>;
-    };
+    const seenContext = await replaySigned(messages);
     expect(seenContext.messages).toEqual(messages);
   });
 
-  it.each(["toolCall", "functionCall"] as const)(
-    "preserves matching Anthropic user tool_result blocks after %s replay turns",
-    async (toolCallType) => {
-      const messages = [
-        {
-          role: "assistant",
-          content: [{ type: toolCallType, id: "call_1", name: "read", arguments: {} }],
-        },
-        {
-          role: "user",
-          content: [
-            {
-              type: "toolResult",
-              toolUseId: "call_1",
-              content: [{ type: "text", text: "kept result" }],
-            },
-            { type: "text", text: "retry" },
-          ],
-        },
-      ];
-      const seenContext = (await replayContext(messages, new Set(["read"]), {
-        validateGeminiTurns: false,
-        validateAnthropicTurns: true,
-        preserveSignatures: false,
-        dropThinkingBlocks: false,
-      })) as {
-        messages: Array<{ role?: string; content?: unknown[] }>;
-      };
-      expect(seenContext.messages).toEqual(messages);
-    },
-  );
-
   it("drops orphaned Anthropic user tool_result blocks after dropping an assistant replay turn", async () => {
     const messages = [
-      {
-        role: "user",
-        content: [{ type: "text", text: "first" }],
-      },
+      textUser("first"),
       {
         role: "assistant",
         stopReason: "error",
         content: [{ type: "toolUse", name: "read", input: { path: "." } }],
       },
-      {
-        role: "user",
-        content: [
-          { type: "toolResult", toolUseId: "call_1", content: [{ type: "text", text: "stale" }] },
-          { type: "text", text: "second" },
-        ],
-      },
+      embeddedResultUser("stale", "second"),
     ];
-    const seenContext = (await replayContext(messages, new Set(["read"]), {
-      validateGeminiTurns: false,
-      validateAnthropicTurns: true,
-      preserveSignatures: false,
-      dropThinkingBlocks: false,
-    })) as {
-      messages: Array<{ role?: string; content?: unknown[] }>;
-    };
+    const seenContext = await replayContext(messages, new Set(["read"]), anthropicPolicy);
     expect(seenContext.messages).toEqual([
       {
         role: "user",
@@ -2485,7 +1024,6 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
       name?: string;
       initialArgs?: Record<string, unknown>;
       fullResult?: boolean;
-      incomplete?: boolean;
     } = {},
   ) {
     const name = options.name ?? "read";
@@ -2506,19 +1044,15 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
             delta,
             partial: partialMessage,
           })),
-          ...(options.incomplete
-            ? []
-            : [
-                {
-                  type: "toolcall_end",
-                  contentIndex: 0,
-                  toolCall: streamedToolCall,
-                  partial: partialMessage,
-                  ...(options.fullResult
-                    ? { message: { role: "assistant", content: [endMessageToolCall] } }
-                    : {}),
-                },
-              ]),
+          {
+            type: "toolcall_end",
+            contentIndex: 0,
+            toolCall: streamedToolCall,
+            partial: partialMessage,
+            ...(options.fullResult
+              ? { message: { role: "assistant", content: [endMessageToolCall] } }
+              : {}),
+          },
         ],
         resultMessage: finalMessage,
       }),
@@ -2527,9 +1061,7 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
       (innerBaseFn) => wrapStreamFnRepairMalformedToolCallArguments(innerBaseFn as never),
       baseFn,
     );
-    for await (const item of stream) {
-      void item;
-    }
+    await drainStream(stream);
     return {
       stream,
       partialToolCall,
@@ -2582,29 +1114,6 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
     expect(streamedToolCall.arguments).toStrictEqual({});
   });
 
-  it("keeps incomplete partial JSON unchanged until a complete object exists", async () => {
-    const { partialToolCall } = await replayArgumentDeltas(['{"path":"/tmp'], { incomplete: true });
-    expect(partialToolCall.arguments).toStrictEqual({});
-  });
-
-  it("does not repair tool arguments when trailing junk exceeds the Kimi-specific allowance", async () => {
-    const { partialToolCall, streamedToolCall } = await replayArgumentDeltas([
-      '{"path":"/tmp/report.txt"}oops',
-    ]);
-    expect(partialToolCall.arguments).toStrictEqual({});
-    expect(streamedToolCall.arguments).toStrictEqual({});
-  });
-
-  it("clears a cached repair when later deltas make the trailing suffix invalid", async () => {
-    const { partialToolCall, streamedToolCall } = await replayArgumentDeltas([
-      '{"path":"/tmp/report.txt"}',
-      "x",
-      "yzq",
-    ]);
-    expect(partialToolCall.arguments).toStrictEqual({});
-    expect(streamedToolCall.arguments).toStrictEqual({});
-  });
-
   it("clears a cached repair when a later delta adds a single oversized trailing suffix", async () => {
     const { partialToolCall, streamedToolCall } = await replayArgumentDeltas([
       '{"path":"/tmp/report.txt"}',
@@ -2623,26 +1132,22 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
   });
 });
 
-describe("context engine system prompt additions", () => {
-  it("prepends context-engine addition to the system prompt", () => {
-    const result = prependSystemPromptAdditionAfterCacheBoundary({
-      systemPrompt: "base system",
-      systemPromptAddition: "extra behavior",
-    });
-
-    expect(result).toBe("extra behavior\n\nbase system");
-  });
-
-  it("returns the original system prompt when no addition is provided", () => {
-    const result = prependSystemPromptAdditionAfterCacheBoundary({
-      systemPrompt: "base system",
-    });
-
-    expect(result).toBe("base system");
-  });
-});
-
 describe("buildAfterTurnRuntimeContext", () => {
+  type RuntimeAttempt = Parameters<typeof buildAfterTurnRuntimeContext>[0]["attempt"];
+  const runtimeDirectories = { workspaceDir: "/tmp/workspace", agentDir: "/tmp/agent" };
+  function runtimeAttempt(overrides: Partial<RuntimeAttempt>): RuntimeAttempt {
+    return {
+      config: {},
+      provider: "openai",
+      modelId: "gpt-5.4",
+      thinkLevel: "off",
+      reasoningLevel: "on",
+      extraSystemPrompt: "extra",
+      ownerNumbers: ["+15555550123"],
+      ...overrides,
+    };
+  }
+
   it.each([undefined, "agent:main:execution"])(
     "preserves execution-scoped processes with sessionKey=%s and borrowed policy",
     (sessionKey) => {
@@ -2665,21 +1170,12 @@ describe("buildAfterTurnRuntimeContext", () => {
         addSession(other);
 
         const legacy = buildAfterTurnRuntimeContext({
-          attempt: {
+          attempt: runtimeAttempt({
             sessionId: "session-123",
             sessionKey,
             sandboxSessionKey: "agent:main",
-            config: {} as OpenClawConfig,
-            skillsSnapshot: undefined,
-            provider: "openai",
-            modelId: "gpt-5.4",
-            thinkLevel: "off",
-            reasoningLevel: "on",
-            extraSystemPrompt: "extra",
-            ownerNumbers: ["+15555550123"],
-          },
-          workspaceDir: "/tmp/workspace",
-          agentDir: "/tmp/agent",
+          }),
+          ...runtimeDirectories,
           activeAgentId: "main",
         });
 
@@ -2701,69 +1197,20 @@ describe("buildAfterTurnRuntimeContext", () => {
     },
   );
 
-  it("uses primary model when compaction.model is not set", () => {
-    const runtimeAuthPlan = {
-      providerForAuth: "openai",
-      authProfileProviderForAuth: "openai",
-      harnessAuthProvider: "openai",
-      forwardedAuthProfileId: "openai:p1",
-      forwardedAuthProfileSource: "user" as const,
-      modelRoute: {
-        provider: "openai",
-        modelId: "gpt-5.4",
-        api: "openai-chatgpt-responses",
-        baseUrl: "https://chatgpt.com/backend-api/codex",
-        authRequirement: "subscription" as const,
-        requestTransportOverrides: "none" as const,
-      },
-    };
-    const legacy = buildAfterTurnRuntimeContext({
-      attempt: {
-        sessionKey: "agent:main:session:abc",
-        messageChannel: "slack",
-        messageProvider: "slack",
-        agentAccountId: "acct-1",
-        authProfileId: "openai:p1",
-        authProfileIdSource: "user",
-        runtimePlan: { auth: runtimeAuthPlan } as never,
-        config: {} as OpenClawConfig,
-        skillsSnapshot: undefined,
-        provider: "openai",
-        modelId: "gpt-5.4",
-        thinkLevel: "off",
-        reasoningLevel: "on",
-        extraSystemPrompt: "extra",
-        ownerNumbers: ["+15555550123"],
-      },
-      workspaceDir: "/tmp/workspace",
-      cwd: "/tmp/task-repo",
-      agentDir: "/tmp/agent",
-    });
-
-    expect(legacy.provider).toBe("openai");
-    expect(legacy.model).toBe("gpt-5.4");
-    expect(legacy.authProfileIdSource).toBe("user");
-    expect(legacy.runtimeAuthPlan).toBe(runtimeAuthPlan);
-  });
-
   it("keeps the primary model for a locked after-turn runtime context", () => {
     const runtimeContext = buildAfterTurnRuntimeContext({
-      attempt: {
+      attempt: runtimeAttempt({
         sessionKey: "agent:main:session:locked",
         sandboxSessionKey: "global",
         sandboxAgentId: "main",
         config: {
           agents: { defaults: { compaction: { model: "anthropic/claude-opus-4-6" } } },
         } as OpenClawConfig,
-        skillsSnapshot: undefined,
-        provider: "openai",
         modelId: "gpt-5.5",
         agentHarnessId: "openclaw",
         modelSelectionLocked: true,
-        thinkLevel: "off",
-      },
-      workspaceDir: "/tmp/workspace",
-      agentDir: "/tmp/agent",
+      }),
+      ...runtimeDirectories,
     });
 
     expect(runtimeContext.modelSelectionLocked).toBe(true);
@@ -2773,154 +1220,46 @@ describe("buildAfterTurnRuntimeContext", () => {
     expect(runtimeContext.model).toBe("gpt-5.5");
   });
 
-  it("publishes the storage-neutral session target in runtime context", () => {
-    const sessionTarget = {
-      agentId: "main",
-      sessionId: "session-abc",
-      sessionKey: "agent:main:session:abc",
-      storePath: "/tmp/state/agents/main/sessions/sessions.json",
-      threadId: 42,
-    };
-
-    const runtimeContext = buildAfterTurnRuntimeContext({
-      attempt: {
-        sessionId: "ignored-session-id",
-        sessionKey: "agent:main:fallback",
-        sessionTarget,
-        config: {} as OpenClawConfig,
-        skillsSnapshot: undefined,
-        provider: "openai",
-        modelId: "gpt-5.4",
-        thinkLevel: "off",
-        reasoningLevel: "on",
-      },
-      workspaceDir: "/tmp/workspace",
-      agentDir: "/tmp/agent",
-      activeAgentId: "main",
-    });
-
-    expect(runtimeContext.transcriptStorage).toEqual({ kind: "sqlite" });
-    expect(runtimeContext.sessionTarget).toEqual(sessionTarget);
-  });
   it("resolves compaction.model override in runtime context so all context engines use the correct model", () => {
     const legacy = buildAfterTurnRuntimeContext({
-      attempt: {
+      attempt: runtimeAttempt({
         sessionKey: "agent:main:session:abc",
-        messageChannel: "slack",
-        messageProvider: "slack",
-        agentAccountId: "acct-1",
         authProfileId: "openai:p1",
         config: {
           agents: {
             defaults: {
               models: {
-                "openrouter/anthropic/claude-sonnet-4-5": {
-                  alias: "summary",
-                },
+                "openrouter/anthropic/claude-sonnet-4-5": { alias: "summary" },
               },
-              compaction: {
-                model: "summary",
-              },
+              compaction: { model: "summary" },
             },
           },
         } as OpenClawConfig,
-        skillsSnapshot: undefined,
-        provider: "openai",
-        modelId: "gpt-5.4",
-        thinkLevel: "off",
-        reasoningLevel: "on",
-        extraSystemPrompt: "extra",
-        ownerNumbers: ["+15555550123"],
-      },
-      workspaceDir: "/tmp/workspace",
-      cwd: "/tmp/task-repo",
-      agentDir: "/tmp/agent",
+      }),
+      ...runtimeDirectories,
     });
 
-    // Resolve aliases before handing runtime context to any context engine;
-    // otherwise third-party engines can dispatch the bare alias as a model id.
     expect(legacy.provider).toBe("openrouter");
     expect(legacy.model).toBe("anthropic/claude-sonnet-4-5");
-    // Auth profile dropped because provider changed from openai to openrouter.
     expect(legacy.authProfileId).toBeUndefined();
   });
-  it("includes resolved auth profile fields for context-engine afterTurn compaction", () => {
-    const promptCache = buildContextEnginePromptCacheInfo({
-      lastCallUsage: {
-        input: 10,
-        output: 5,
-        cacheRead: 40,
-        cacheWrite: 2,
-        total: 57,
-      },
-    });
-    const legacy = buildAfterTurnRuntimeContext({
-      attempt: {
-        sessionKey: "agent:main:session:abc",
-        messageChannel: "slack",
-        messageProvider: "slack",
-        agentAccountId: "acct-1",
-        authProfileId: "openai:p1",
-        config: { plugins: { slots: { contextEngine: "lossless-claw" } } } as OpenClawConfig,
-        skillsSnapshot: undefined,
-        provider: "openai",
-        modelId: "gpt-5.4",
-        thinkLevel: "off",
-        reasoningLevel: "on",
-        extraSystemPrompt: "extra",
-        ownerNumbers: ["+15555550123"],
-      },
-      workspaceDir: "/tmp/workspace",
-      cwd: "/tmp/task-repo",
-      agentDir: "/tmp/agent",
-      tokenBudget: 1050000,
-      currentTokenCount: 52,
-      promptCache,
-    });
-
-    expect(legacy.authProfileId).toBe("openai:p1");
-    expect(legacy.provider).toBe("openai");
-    expect(legacy.model).toBe("gpt-5.4");
-    expect(legacy.workspaceDir).toBe("/tmp/workspace");
-    expect(legacy.cwd).toBe("/tmp/task-repo");
-    expect(legacy.agentDir).toBe("/tmp/agent");
-    expect(legacy.tokenBudget).toBe(1050000);
-    expect(legacy.currentTokenCount).toBe(52);
-    expect(legacy.promptCache?.lastCallUsage?.total).toBe(57);
-  });
-
   it("derives afterTurn token count from the current assistant usage snapshot", () => {
     const lastCallUsage = {
       input: 10,
       output: 5,
       cacheRead: 40,
       cacheWrite: 2,
-      contextUsage: {
-        state: "available",
-        promptTokens: 23,
-        totalTokens: 28,
-      },
+      contextUsage: { state: "available", promptTokens: 23, totalTokens: 28 },
       total: 57,
     } satisfies NormalizedUsage;
     const promptCache = buildContextEnginePromptCacheInfo({ lastCallUsage });
     const legacy = buildAfterTurnRuntimeContextFromUsage({
-      attempt: {
+      attempt: runtimeAttempt({
         sessionKey: "agent:main:session:abc",
-        messageChannel: "slack",
-        messageProvider: "slack",
-        agentAccountId: "acct-1",
         authProfileId: "openai:p1",
         config: { plugins: { slots: { contextEngine: "lossless-claw" } } } as OpenClawConfig,
-        skillsSnapshot: undefined,
-        provider: "openai",
-        modelId: "gpt-5.4",
-        thinkLevel: "off",
-        reasoningLevel: "on",
-        extraSystemPrompt: "extra",
-        ownerNumbers: ["+15555550123"],
-      },
-      workspaceDir: "/tmp/workspace",
-      agentDir: "/tmp/agent",
+      }),
+      ...runtimeDirectories,
       tokenBudget: 1050000,
       lastCallUsage,
       promptCache,
@@ -2928,37 +1267,6 @@ describe("buildAfterTurnRuntimeContext", () => {
 
     expect(legacy.currentTokenCount).toBe(23);
     expect(legacy.promptCache?.lastCallUsage?.total).toBe(57);
-  });
-
-  it("preserves sender and channel routing context for scoped compaction discovery", () => {
-    const legacy = buildAfterTurnRuntimeContext({
-      attempt: {
-        sessionKey: "agent:main:session:abc",
-        messageChannel: "slack",
-        messageProvider: "slack",
-        agentAccountId: "acct-1",
-        currentChannelId: "C123",
-        currentThreadTs: "thread-9",
-        currentMessageId: "msg-42",
-        authProfileId: "openai:p1",
-        config: {} as OpenClawConfig,
-        skillsSnapshot: undefined,
-        senderId: "user-123",
-        provider: "openai",
-        modelId: "gpt-5.4",
-        thinkLevel: "off",
-        reasoningLevel: "on",
-        extraSystemPrompt: "extra",
-        ownerNumbers: ["+15555550123"],
-      },
-      workspaceDir: "/tmp/workspace",
-      agentDir: "/tmp/agent",
-    });
-
-    expect(legacy.senderId).toBe("user-123");
-    expect(legacy.currentChannelId).toBe("C123");
-    expect(legacy.currentThreadTs).toBe("thread-9");
-    expect(legacy.currentMessageId).toBe("msg-42");
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

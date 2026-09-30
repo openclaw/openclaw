@@ -47,12 +47,9 @@ import {
   resolveImageModelConfigForOverride,
   runImagePrompt,
 } from "./image-tool.model-execution.js";
+import { buildNativeImageToolResult, type LoadedImageForTool } from "./image-tool.result.js";
 import {
-  buildImageToolReferenceDetails,
-  buildNativeImageToolResult,
-  type LoadedImageForTool,
-} from "./image-tool.result.js";
-import {
+  buildMediaReferenceDetails,
   buildTextToolResult,
   normalizeMediaReferenceList,
   REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS,
@@ -250,35 +247,25 @@ function resolveImageModelConfigForTool(params: {
     cfg: params.cfg,
     provider: primary.provider,
   });
-  const primaryCandidates = (() => {
-    if (providerVisionFromConfig) {
-      if (primary.provider === "openai") {
-        return [
-          resolveImplicitOpenAiImageCandidate(
-            providerVisionFromConfig.slice(providerVisionFromConfig.indexOf("/") + 1),
-          ),
-        ];
-      }
-      return [providerVisionFromConfig];
-    }
-    const providerDefault = imageToolProviderDeps.resolveDefaultMediaModel({
-      cfg: params.cfg,
-      workspaceDir: params.workspaceDir,
-      providerId: primary.provider,
-      capability: "image",
-      includeConfiguredImageModels: !isMinimaxVlmProvider(primary.provider),
-    });
-    if (providerDefault) {
-      if (primary.provider === "openai") {
-        return [resolveImplicitOpenAiImageCandidate(providerDefault)];
-      }
-      return [`${primary.provider}/${providerDefault}`];
-    }
-    if (isMinimaxVlmProvider(primary.provider)) {
-      return [`${primary.provider}/MiniMax-VL-01`];
-    }
-    return [];
-  })();
+  const primaryModelId = providerVisionFromConfig
+    ? providerVisionFromConfig.slice(providerVisionFromConfig.indexOf("/") + 1)
+    : imageToolProviderDeps.resolveDefaultMediaModel({
+        cfg: params.cfg,
+        workspaceDir: params.workspaceDir,
+        providerId: primary.provider,
+        capability: "image",
+        includeConfiguredImageModels: !isMinimaxVlmProvider(primary.provider),
+      });
+  const primaryCandidates =
+    providerVisionFromConfig || primaryModelId
+      ? [
+          primary.provider === "openai"
+            ? resolveImplicitOpenAiImageCandidate(primaryModelId ?? "")
+            : (providerVisionFromConfig ?? `${primary.provider}/${primaryModelId}`),
+        ]
+      : isMinimaxVlmProvider(primary.provider)
+        ? [`${primary.provider}/MiniMax-VL-01`]
+        : [];
 
   const rawAutoCandidates = imageToolProviderDeps
     .resolveAutoMediaKeyProviders({
@@ -623,7 +610,7 @@ export function createImageTool(options?: {
           loadedImages.push({
             buffer: media.buffer,
             mimeType,
-            resolvedImage,
+            resolvedInput: resolvedImage,
             ...(rewrittenFrom ? { rewrittenFrom } : {}),
           });
         }
@@ -656,7 +643,7 @@ export function createImageTool(options?: {
           imageToolProviderDeps,
         );
 
-        return buildTextToolResult(result, buildImageToolReferenceDetails(loadedImages));
+        return buildTextToolResult(result, buildMediaReferenceDetails(loadedImages, "image"));
       }),
   };
 }

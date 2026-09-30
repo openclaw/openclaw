@@ -64,19 +64,23 @@ export function recordPersistedContextEngineQuarantine(
   quarantineStore.register(JSON.stringify([record.engineId, record.processId]), record);
 }
 
-export function listPersistedContextEngineQuarantines(): PersistedContextEngineRuntimeQuarantine[] {
-  return quarantineStore.list().map(({ engineId, operation, reason, owner, failedAtMs }) => {
-    const quarantine: PersistedContextEngineRuntimeQuarantine = {
-      engineId,
-      operation,
-      reason,
-      failedAt: new Date(failedAtMs),
-    };
-    if (owner) {
-      quarantine.owner = owner;
-    }
-    return quarantine;
-  });
+export async function listPersistedContextEngineQuarantines(): Promise<
+  PersistedContextEngineRuntimeQuarantine[]
+> {
+  return (await quarantineStore.list()).map(
+    ({ engineId, operation, reason, owner, failedAtMs }) => {
+      const quarantine: PersistedContextEngineRuntimeQuarantine = {
+        engineId,
+        operation,
+        reason,
+        failedAt: new Date(failedAtMs),
+      };
+      if (owner) {
+        quarantine.owner = owner;
+      }
+      return quarantine;
+    },
+  );
 }
 
 export function clearPersistedContextEngineQuarantineForProcess(

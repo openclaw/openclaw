@@ -28,7 +28,7 @@ jobs:
     permissions:
       # Dispatch the parent and read its runs and evidence artifacts.
       actions: write
-      # Create and delete the helper's immutable release-ci/* and validation/* refs.
+      # Create and delete the helper's immutable release-ci/* workflow ref.
       contents: write
     steps:
       - name: Checkout scheduled main SHA

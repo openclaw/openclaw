@@ -307,16 +307,11 @@ async function removeMantisWorktreeBeforeDeadline(
     deadline,
   );
   const ownership = params.ownership;
+  const listRegisteredPaths = () =>
+    listRegisteredWorktreePaths({ ...params, createExecution: createCleanupExecution, deadline });
 
   if (!ownership) {
-    const registeredWorktreePaths = await listRegisteredWorktreePaths({
-      createExecution: createCleanupExecution,
-      deadline,
-      lane: params.lane,
-      repoRoot: params.repoRoot,
-      runner: params.runner,
-      worktreeDir: params.worktreeDir,
-    });
+    const registeredWorktreePaths = await listRegisteredPaths();
     if (!registeredWorktreePaths.includes(normalizedWorktreeDir)) {
       if (await pathExistsBeforeDeadline(params.worktreeDir, deadline)) {
         throw createRetainedDirectoryError({
@@ -338,14 +333,7 @@ async function removeMantisWorktreeBeforeDeadline(
       worktreeDir: params.worktreeDir,
     }))
   ) {
-    const registeredWorktreePaths = await listRegisteredWorktreePaths({
-      createExecution: createCleanupExecution,
-      deadline,
-      lane: params.lane,
-      repoRoot: params.repoRoot,
-      runner: params.runner,
-      worktreeDir: params.worktreeDir,
-    });
+    const registeredWorktreePaths = await listRegisteredPaths();
     if (!registeredWorktreePaths.includes(normalizedWorktreeDir)) {
       return;
     }
@@ -397,14 +385,7 @@ async function removeMantisWorktreeBeforeDeadline(
 
   let registeredWorktreePaths: string[];
   try {
-    registeredWorktreePaths = await listRegisteredWorktreePaths({
-      createExecution: createCleanupExecution,
-      deadline,
-      lane: params.lane,
-      repoRoot: params.repoRoot,
-      runner: params.runner,
-      worktreeDir: params.worktreeDir,
-    });
+    registeredWorktreePaths = await listRegisteredPaths();
   } catch (listError) {
     rethrowMantisCleanupBoundaryError(listError);
     throw createCleanupVerificationAggregate({

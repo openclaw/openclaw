@@ -196,6 +196,7 @@ describe("sessions tool", () => {
           enum: [
             "cloud_profiles",
             "patch",
+            "stop",
             "reset",
             "delete",
             "assign_owner",

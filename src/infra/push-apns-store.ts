@@ -140,13 +140,7 @@ export function isLikelyApnsToken(value: string): boolean {
 }
 
 function normalizeDistribution(value: unknown): "official" | null {
-  if (typeof value !== "string") {
-    return null;
-  }
-  const normalized = normalizeOptionalString(value)
-    ? normalizeLowercaseStringOrEmpty(value)
-    : undefined;
-  return normalized === "official" ? "official" : null;
+  return normalizeLowercaseStringOrEmpty(value) === "official" ? "official" : null;
 }
 
 function normalizeRelayOrigin(

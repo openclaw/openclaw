@@ -21,3 +21,61 @@ Operator workflows:
   pool operations, and WhatsApp live credential setup/replacement.
 
 Keep this folder in git. Add new scenarios here before wiring them into automation.
+
+QA-channel flows that assert final replies use `waitForCompletedQaReply` with the
+message returned by `sendInbound`. It waits for the channel's processing
+acknowledgment before reading the retained reply. QA-channel reset also waits for
+pending inbound turns before clearing observations.
+
+Generated-media scenarios count attachment deliveries separately from text
+progress and check the saved bytes plus the persisted completion reply.
+
+## Confined repository checkpoint commands
+
+`scripts/qa/repository-checkpoint-admission.ts` adapts the product-owned checkpoint
+and publication command planners to the final campaign Git launch boundary. It executes only the
+canonical bare checkpoint initialization, checkpoint Git-directory query, and
+read-only publication config probes. All other commands exit 126 before spawning Git.
+
+The launcher supplies freshly validated `checkpointRoot` (from the repository
+workspace store), `nodeRoot` (from the current placement), `campaignRoot`, `cwd`,
+`argv` (including `git`), and `env`. Paths must already exist, be canonical, and
+remain inside the isolated campaign. The adapter does not discover sessions,
+read state databases, authorize transport, or
+manage checkpoint contents. Those responsibilities stay with their owners.
+Do not turn a denied command into a generic Git write allowance.
+
+Pass that JSON object on stdin
+to `node --import ./scripts/tsx.mjs scripts/qa/repository-checkpoint-admission.ts`.
+The launcher validates those current roots and exact canonical argv immediately
+before spawning Git, sanitizes its environment, and forwards Git's output/status.
+It uses the campaign launcher's PATH, not the requested command's PATH. Delegate
+the process to this entry rather than treating its exit status as permission to
+spawn Git again. Freeze it with the campaign tooling; preserve the enclosing
+sandbox, freshly validated current-owner facts, and execution evidence. Historical
+artifact shims that consumed the old Boolean interface must migrate to this
+delegated launch; they are not maintained campaign entry points.
+
+### Script checkout and artifact roots
+
+The maintained test-file runner expands `${repoRoot}` to the selected checkout
+and `${outputDir}` to the scenario's artifact directory. Script scenarios can
+pass these as distinct arguments without embedding a campaign path or SHA.
+
+## Holding a mock provider continuation
+
+Private QA Lab flows using `mock-openai` can call
+`env.mock.holdNextContinuation(sessionId, signal)` before starting a turn.
+Pass the flow's existing `signal`; only one hold may be active per provider.
+Await `hold.reached` for `{ cursor, sessionId, toolOutputCallId }`, then use
+`hold.release()` to send the planned response or `hold.cancel()` to discard it.
+The checkpoint identifies the next tool continuation for the exact transport
+session, after request recording and before any response bytes. Compaction and
+other sessions do not consume it. The cursor indexes the existing `/debug/requests`
+log for this provider lifetime; it is not a durable Gateway run or receipt ID.
+Collect those identities separately through their authoritative interfaces.
+
+A hold captures one request. Reconnected/replacement requests proceed normally;
+cancel the old hold in the scenario's `finally` after interrupting its caller.
+Scenario cancellation and provider shutdown also settle pending holds. This
+control is absent from model tools, Gateway RPC and ordinary plugin SDK exports.

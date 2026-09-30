@@ -130,10 +130,8 @@ describe("chat page retained sessions", () => {
       await page.updateComplete;
       const owner = page as unknown as {
         retainedSessions: { suspend(): void };
-        clearDropIndicator(): void;
       };
       const suspend = vi.spyOn(owner.retainedSessions, "suspend");
-      const clearDrop = vi.spyOn(owner, "clearDropIndicator");
       const present = async (value: boolean) => {
         if (mode === "web") {
           page.presented = value;
@@ -150,14 +148,11 @@ describe("chat page retained sessions", () => {
           await page.updateComplete;
         }
         expect(suspend).toHaveBeenCalledTimes(1);
-        expect(clearDrop).toHaveBeenCalledTimes(1);
         await present(true);
         await present(false);
         expect(suspend).toHaveBeenCalledTimes(2);
-        expect(clearDrop).toHaveBeenCalledTimes(2);
       } finally {
         suspend.mockRestore();
-        clearDrop.mockRestore();
       }
     },
   );

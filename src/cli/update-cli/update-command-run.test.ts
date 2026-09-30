@@ -253,7 +253,7 @@ it("presents committed steps without reopening the ledger for display", () => {
   }
 });
 it.each(["state", "config", "include", "environment"])(
-  "refuses changed %s ownership after target initialization before writing update history",
+  "revalidates changed %s input after target initialization without changing its owner",
   async (changed) => {
     const root = dirs.make("update-initialization-admission-");
     const stateDir = path.join(root, "profile");
@@ -294,12 +294,27 @@ it.each(["state", "config", "include", "environment"])(
     const configBefore = fs.readFileSync(configPath);
     const includeBefore = fs.readFileSync(includePath);
 
-    await expect(
-      admitUpdateCommandRun({ opts: {}, root, initialization }).then(() => "admitted"),
-    ).rejects.toThrow(/changed/);
-
-    expect(fs.existsSync(databasePath)).toBe(false);
-    expect(fs.existsSync(resolveOpenClawStateSqlitePath(process.env))).toBe(false);
+    if (changed === "state" || changed === "config") {
+      await expect(
+        admitUpdateCommandRun({ opts: {}, root, initialization }).then(() => "admitted"),
+      ).rejects.toThrow(/changed/);
+      expect(fs.existsSync(databasePath)).toBe(false);
+      expect(fs.existsSync(resolveOpenClawStateSqlitePath(process.env))).toBe(false);
+    } else {
+      const warning = vi.spyOn(defaultRuntime, "error");
+      const run = await admitUpdateCommandRun({ opts: {}, root, initialization });
+      expect(getUpdateRun(run.runId, { env })?.status).toBe("running");
+      expect(fs.existsSync(databasePath)).toBe(true);
+      expect(fs.existsSync(resolveOpenClawStateSqlitePath(process.env))).toBe(true);
+      expect(warning).toHaveBeenCalledWith(
+        expect.stringContaining("Warning: Configuration changed during database admission"),
+      );
+      expect(initialization.target.configSnapshot.config).toMatchObject(
+        changed === "include"
+          ? { gateway: { mode: "local", port: 19222 } }
+          : { agents: { defaults: { workspace: path.join(root, "replacement-workspace") } } },
+      );
+    }
     expect(fs.readFileSync(configPath)).toEqual(configBefore);
     expect(fs.readFileSync(includePath)).toEqual(includeBefore);
   },

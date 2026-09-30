@@ -10,6 +10,7 @@ import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpe
 import { SubagentLifecycleController } from "../registry/subagent-registry-lifecycle.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { getLatestLiveSubagentRunByChildSessionKey } from "../registry/subagent-registry-read.js";
+import { persistSubagentRunsToDiskAsyncOrThrow } from "../registry/subagent-registry-state.js";
 import { observeRootWork } from "../registry/subagent-registry.browser-cleanup.test-support.js";
 import { bindSubagentRunRecord } from "../registry/subagent-registry.store.codec.js";
 import { upsertSubagentRunRowInDatabase } from "../registry/subagent-registry.store.kernel.js";
@@ -105,8 +106,10 @@ export function requesterWakeDriver(inputs: ReturnType<typeof records>[]) {
     getRuntimeConfig: () => ({}),
     persist,
     persistOrThrow: persist,
+    persistAsyncOrThrow: (context, callbacks, ...runIds) =>
+      persistSubagentRunsToDiskAsyncOrThrow(subagentRuns, runIds, { context, ...callbacks }),
     clearPendingLifecycleError: vi.fn(),
-    countPendingDescendantRuns: () => 0,
+    countPendingDescendantRuns: async () => 0,
     getLatestRunForChildSession: getLatestLiveSubagentRunByChildSessionKey,
     suppressAnnounceForSteerRestart: () => false,
     shouldEmitEndedHookForRun: () => false,

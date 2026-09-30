@@ -412,22 +412,6 @@ export async function executeSnapshotAction(params: {
   }
 }
 
-function withPageStateUnavailableHint(
-  result: AgentToolResult<unknown>,
-  reason: string,
-): AgentToolResult<unknown> {
-  return {
-    ...result,
-    content: [
-      ...result.content,
-      {
-        type: "text",
-        text: `[page snapshot unavailable: ${reason}. Use action=snapshot to read the page.]`,
-      },
-    ],
-  };
-}
-
 /**
  * Attach fresh page state to the result of an action that changed the page
  * document (navigate, act that navigated). The model can act on the new page
@@ -461,13 +445,20 @@ export async function appendNavigatedPageState(params: {
     if (err instanceof Error && err.name === "AbortError") {
       throw err;
     }
-    return withPageStateUnavailableHint(
-      params.result,
-      wrapExternalContent(neutralizeMediaDirectives(formatErrorMessage(err)), {
-        source: "browser",
-        includeWarning: false,
-      }),
-    );
+    const reason = wrapExternalContent(neutralizeMediaDirectives(formatErrorMessage(err)), {
+      source: "browser",
+      includeWarning: false,
+    });
+    return {
+      ...params.result,
+      content: [
+        ...params.result.content,
+        {
+          type: "text",
+          text: `[page snapshot unavailable: ${reason}. Use action=snapshot to read the page.]`,
+        },
+      ],
+    };
   }
   const baseDetails =
     params.result.details && typeof params.result.details === "object"

@@ -252,7 +252,6 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
           })
         : widget.grantState === "rejected"
           ? renderBoardWidgetRejected({
-              widget,
               disabled: this.busy || this.actionPending || !this.canMutate,
               onRemove: () => void this.runAction(() => callbacks.remove(widget)),
             })

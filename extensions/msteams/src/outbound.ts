@@ -180,18 +180,14 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
     const handoff = { assertDirectAdapterHandoff, onPlatformSendDispatch };
     const deliveryTarget = resolveMSTeamsThreadTarget(to, threadId);
     const msteamsData = asOptionalRecord(payload.channelData?.msteams);
-    const presentationCard = msteamsData?.presentationCard;
-    if (
-      presentationCard &&
-      typeof presentationCard === "object" &&
-      !Array.isArray(presentationCard)
-    ) {
+    const presentationCard = asOptionalRecord(msteamsData?.presentationCard);
+    if (presentationCard) {
       const result = await sendWithDeliveryResults(
         (report) =>
           sendAdaptiveCardMSTeams({
             cfg,
             to: deliveryTarget,
-            card: presentationCard as Record<string, unknown>,
+            card: presentationCard,
             ...handoff,
             onDeliveryResult: report,
           }),

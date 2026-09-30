@@ -13,6 +13,15 @@ export type PlacementTurnClaimWorkerOperations = {
     input: { claim: WorkerTurnClaimInput; nowMs?: number };
     output: PlacementTurnClaimReceipt;
   };
+  "placementTurns.recordStagedResult": {
+    input: {
+      claim: WorkerSessionTurnClaim;
+      stagedResultRef: string;
+      repositoryWorkspaceId?: string;
+      nowMs?: number;
+    };
+    output: PlacementTurnClaimReceipt;
+  };
   "placementTurns.release": {
     input: { claim: WorkerSessionTurnClaim; nowMs?: number };
     output: PlacementTurnClaimReceipt;
@@ -25,6 +34,15 @@ export type PlacementTurnClaimWorkerOperations = {
     input: { claim: WorkerSessionTurnClaim; gatewayInstanceId: string; nowMs?: number };
     output: PlacementTurnClaimReceipt;
   };
+  "placementTurns.handoffRuntimeRefreshResult": {
+    input: {
+      claim: WorkerSessionTurnClaim;
+      expectedGeneration: number;
+      gatewayInstanceId: string;
+      nowMs: number;
+    };
+    output: PlacementTurnClaimReceipt;
+  };
 };
 
 export function isPlacementTurnClaimCommand(command: {
@@ -32,8 +50,10 @@ export function isPlacementTurnClaimCommand(command: {
 }): command is SqliteWorkerCommand<PlacementTurnClaimWorkerOperations> {
   return (
     command.type === "placementTurns.claim" ||
+    command.type === "placementTurns.recordStagedResult" ||
     command.type === "placementTurns.release" ||
     command.type === "placementTurns.releaseIfOwned" ||
-    command.type === "placementTurns.recoverWorkspace"
+    command.type === "placementTurns.recoverWorkspace" ||
+    command.type === "placementTurns.handoffRuntimeRefreshResult"
   );
 }

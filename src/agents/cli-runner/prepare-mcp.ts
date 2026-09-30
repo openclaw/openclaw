@@ -1,4 +1,5 @@
 import type { resolveMcpLoopbackScopedTools } from "../../gateway/mcp-http.runtime.js";
+import { readAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import { admitCliRunParams } from "./run-admission.js";
 import type { RunCliAgentParams } from "./types.js";
 
@@ -45,6 +46,7 @@ export async function prepareCliMcpToolProjection(
     signal: admittedParams.abortSignal,
     context,
     admittedRunContext: admittedParams.admittedRunContext,
+    sessionControlAuthority: readAdmittedRunOperatorAuthority(admittedParams.admittedRunContext),
   });
   return { params: admittedParams, tools };
 }

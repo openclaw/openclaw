@@ -106,7 +106,7 @@ export type CaptureEventView = {
   captureOrigin?: string;
 };
 
-export type CaptureQueryPreset = "none" | StoredCaptureQueryPreset;
+type CaptureQueryPreset = "none" | StoredCaptureQueryPreset;
 
 export type CaptureSessionsEnvelope = {
   sessions: CaptureSessionSummary[];

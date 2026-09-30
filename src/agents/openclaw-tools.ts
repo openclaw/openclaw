@@ -183,6 +183,7 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
     agentDir: options?.agentDir,
     authProfileStore: options?.authProfileStore,
     agentSessionKey: mediaGenerationAgentSessionKey,
+    requesterRunSessionKey: trimmedRunSessionKey,
     requesterAgentId: sessionAgentId,
     requesterOrigin: widgetPresentation.deliveryContext ?? undefined,
     workspaceDir,
@@ -354,6 +355,7 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
     ? createProgressCardTool({
         agentSessionKey: sessionKey,
         agentId: sessionAgentId,
+        onPlanSaved: options?.onProgressCardPlanSaved,
       })
     : null;
   const transcriptsTool = resolveTranscriptsTool(resolvedConfig, sessionAgentId, options);
@@ -402,6 +404,9 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
           }),
           createSessionsTool({
             senderIsOwner: options?.senderIsOwner,
+            sessionControlAuthority: options?.sessionControlAuthority,
+            stopAllowed: options?.swarmCollector !== true,
+            controlOnly: options?.senderIsOwner === false,
             agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
             agentSessionId: options?.sessionId,
             requesterAgentIdOverride: sessionAgentId,
@@ -562,6 +567,7 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
           ),
           // Keep the in-process caller so materialized agent roots retain their creation stamp.
           createSessionsSendTool({
+            requesterTurnRunId: options?.runId,
             agentId: sessionAgentId,
             // Match sessions_spawn: spawned children record the durable run
             // session as spawnedBy, so the parent check must use the same key.

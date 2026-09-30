@@ -101,6 +101,7 @@ export type NormalizedChromeMcpProfileOptions = {
   browserUrl?: string;
   command: string;
   args: string[];
+  env?: Record<string, string>;
 };
 export type ChromeMcpOptionsInput =
   | string

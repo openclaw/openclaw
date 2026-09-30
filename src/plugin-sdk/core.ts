@@ -700,15 +700,12 @@ function resolveChatChannelThreading<TResolvedAccount>(
     return threading;
   }
 
-  let resolveReplyToMode: ChannelThreadingAdapter["resolveReplyToMode"];
-  if ("topLevelReplyToMode" in threading) {
-    resolveReplyToMode = createTopLevelChannelReplyToModeResolver(threading.topLevelReplyToMode);
-  } else {
-    resolveReplyToMode = createScopedAccountReplyToModeResolver<TResolvedAccount>(
-      threading.scopedAccountReplyToMode,
-    );
-  }
-
+  const resolveReplyToMode =
+    "topLevelReplyToMode" in threading
+      ? createTopLevelChannelReplyToModeResolver(threading.topLevelReplyToMode)
+      : createScopedAccountReplyToModeResolver<TResolvedAccount>(
+          threading.scopedAccountReplyToMode,
+        );
   return {
     ...threading,
     resolveReplyToMode,
