@@ -22,11 +22,7 @@ import {
   upsertAcpSessionMeta,
   writeAcpSessionMetaForMigration,
 } from "../acp/runtime/session-meta.js";
-import {
-  listAgentIds,
-  resolveAgentWorkspaceDir,
-  resolveAmbientOwnerAgentId,
-} from "../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir, resolveAmbientOwnerAgentId } from "../agents/agent-scope.js";
 import {
   clearBootstrapSnapshot,
   clearBootstrapSnapshotOnSessionBoundary,
@@ -81,7 +77,6 @@ import {
   isIncognitoSessionKey,
   isSubagentSessionKey,
   normalizeAgentId,
-  parseAgentSessionKey,
 } from "../routing/session-key.js";
 import { resolveMissingAgentHarnessSessionError } from "../sessions/agent-harness-session-key.js";
 import {
@@ -117,17 +112,14 @@ import {
 } from "./session-lifecycle-preparation.js";
 import { resolvePluginSessionOwnershipError } from "./session-plugin-ownership.js";
 import { notifyGatewaySessionReset } from "./session-reset-notifications.js";
+import { resolveSessionResetTarget } from "./session-reset-target.js";
 import {
   archiveSessionTranscriptsDetailed,
   resolveStableSessionEndTranscript,
   type ArchivedSessionTranscript,
 } from "./session-transcript-files.fs.js";
 import { readSessionMessagesAsync } from "./session-transcript-readers.js";
-import {
-  loadSessionEntry,
-  resolveGatewaySessionStoreTarget,
-  resolveSessionStoreKey,
-} from "./session-utils.js";
+import { loadSessionEntry, resolveGatewaySessionStoreTarget } from "./session-utils.js";
 import type { SessionWorkerPlacementContext } from "./session-worker-placement-context.js";
 import {
   resolveSessionWorkerPlacementMutationError,
@@ -1043,40 +1035,7 @@ export async function performGatewaySessionReset(params: {
     }
   | { ok: false; error: ReturnType<typeof errorShape> }
 > {
-  const resetTarget = (() => {
-    const cfg = getRuntimeConfig();
-    const explicitAgentId = params.agentId ? normalizeAgentId(params.agentId) : undefined;
-    const parsedKey = parseAgentSessionKey(params.key);
-    const inferredGlobalAgentId =
-      !explicitAgentId &&
-      parsedKey &&
-      resolveSessionStoreKey({ cfg, sessionKey: params.key }) === "global"
-        ? normalizeAgentId(parsedKey.agentId)
-        : undefined;
-    const requestedAgentId = explicitAgentId ?? inferredGlobalAgentId;
-    if (requestedAgentId && !listAgentIds(cfg).includes(requestedAgentId)) {
-      return {
-        ok: false as const,
-        error: errorShape(ErrorCodes.INVALID_REQUEST, `Unknown agent id: ${requestedAgentId}`),
-      };
-    }
-    if (
-      explicitAgentId &&
-      parsedKey?.agentId &&
-      normalizeAgentId(parsedKey.agentId) !== explicitAgentId
-    ) {
-      return {
-        ok: false as const,
-        error: errorShape(ErrorCodes.INVALID_REQUEST, "session key agent does not match agentId"),
-      };
-    }
-    const target = resolveGatewaySessionStoreTarget({
-      cfg,
-      key: params.key,
-      ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
-    });
-    return { ok: true as const, cfg, target, storePath: target.storePath, requestedAgentId };
-  })();
+  const resetTarget = resolveSessionResetTarget(getRuntimeConfig(), params);
   if (!resetTarget.ok) {
     return resetTarget;
   }

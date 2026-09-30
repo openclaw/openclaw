@@ -112,14 +112,12 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
     const sessionId = entry?.sessionId;
     if (!sessionId) {
       respond(
-        true,
-        {
-          ok: true,
-          key: target.canonicalKey,
-          compacted: false,
-          reason: "no sessionId",
-        },
+        false,
         undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `Session ${key} not found. Run openclaw sessions list --json to choose a valid key.`,
+        ),
       );
       return;
     }

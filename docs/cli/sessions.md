@@ -335,6 +335,8 @@ openclaw sessions compact "agent:work:main" --agent work --json
 
 The command exits non-zero when the Gateway reports a failed compaction or is
 unreachable, so crons and scripts never mistake a silent no-op for success.
+A missing session is an error in both modes. An existing session with no history
+or nothing to truncate remains an explicit no-op.
 
 <Note>
 `openclaw agent --message '/compact ...'` is **not** a compaction path. Slash

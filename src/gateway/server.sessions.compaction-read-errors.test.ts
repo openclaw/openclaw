@@ -218,3 +218,24 @@ test.each([{ maxLines: undefined }, { maxLines: 50 }])(
     }
   },
 );
+
+test.each([undefined, 2])(
+  "sessions.compact rejects a missing session with maxLines=%s",
+  async (maxLines) => {
+    await createSessionStoreDir();
+    const { ws } = await openClient();
+    try {
+      const response = await rpcReq(ws, "sessions.compact", {
+        key: "agent:main:missing",
+        ...(maxLines === undefined ? {} : { maxLines }),
+      });
+      expect(response.ok).toBe(false);
+      expect(response.error).toMatchObject({
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining("Session agent:main:missing not found"),
+      });
+    } finally {
+      ws.close();
+    }
+  },
+);
