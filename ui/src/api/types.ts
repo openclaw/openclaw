@@ -331,3 +331,11 @@ export type {
 export type ProviderLoginOption = NonNullable<
   NonNullable<ModelAuthStatusResult["providerCapabilities"]>[number]["loginOptions"]
 >[number];
+/** Current deployment guidance supplied by the authenticated Gateway. */
+export type ExternalSupervisorGuidance = {
+  version: 1;
+  action: "update";
+  name: string;
+  runFrom?: string;
+  command: string;
+};

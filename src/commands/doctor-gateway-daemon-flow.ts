@@ -35,6 +35,7 @@ import {
   readGatewayRestartHandoffSync,
 } from "../infra/restart-handoff.js";
 import { isWSL } from "../infra/wsl.js";
+import { resolveExternalSupervisorGuidance } from "../plugins/supervisor-guidance-runtime.js";
 import { ExitError, type RuntimeEnv } from "../runtime.js";
 import { sleep } from "../utils.js";
 import { buildGatewayInstallPlan, gatewayInstallErrorHint } from "./daemon-install-helpers.js";
@@ -98,7 +99,13 @@ async function maybeRepairLaunchAgentBootstrap(params: {
 
   note("LaunchAgent is installed but not loaded in launchd.", `${params.title} LaunchAgent`);
   if (params.serviceRepairDeferred) {
-    note(formatServiceRepairDeferredNote(), `${params.title} LaunchAgent`);
+    note(
+      formatServiceRepairDeferredNote(
+        undefined,
+        await resolveExternalSupervisorGuidance("repair", { env: params.env }),
+      ),
+      `${params.title} LaunchAgent`,
+    );
     return { status: "not-loaded" };
   }
 
@@ -242,7 +249,13 @@ export async function maybeRepairGatewayDaemon(params: {
 
   if (!(await shouldManageGatewayService())) {
     await noteGatewayPortDiagnostics(params.cfg, params.options.deep ?? false);
-    note(formatServiceRepairDeferredNote(), "Gateway");
+    note(
+      formatServiceRepairDeferredNote(
+        undefined,
+        await resolveExternalSupervisorGuidance("repair", { config: params.cfg }),
+      ),
+      "Gateway",
+    );
     return;
   }
 
@@ -355,7 +368,13 @@ export async function maybeRepairGatewayDaemon(params: {
       }
     }
     if (serviceRepairDeferred) {
-      note(formatServiceRepairDeferredNote(), "Gateway");
+      note(
+        formatServiceRepairDeferredNote(
+          undefined,
+          await resolveExternalSupervisorGuidance("repair", { config: params.cfg }),
+        ),
+        "Gateway",
+      );
       return;
     }
     const install = await confirmDoctorServiceRepair(
@@ -439,7 +458,13 @@ export async function maybeRepairGatewayDaemon(params: {
       return;
     }
     if (serviceRepairDeferred) {
-      note(formatServiceRepairDeferredNote(), "Gateway");
+      note(
+        formatServiceRepairDeferredNote(
+          undefined,
+          await resolveExternalSupervisorGuidance("repair", { config: params.cfg }),
+        ),
+        "Gateway",
+      );
       return;
     }
     const start = await confirmDoctorServiceRepair(
@@ -477,7 +502,13 @@ export async function maybeRepairGatewayDaemon(params: {
       return;
     }
     if (serviceRepairDeferred) {
-      note(formatServiceRepairDeferredNote(), "Gateway");
+      note(
+        formatServiceRepairDeferredNote(
+          undefined,
+          await resolveExternalSupervisorGuidance("repair", { config: params.cfg }),
+        ),
+        "Gateway",
+      );
       return;
     }
 

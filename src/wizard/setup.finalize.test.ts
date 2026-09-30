@@ -8,9 +8,11 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { GatewayTlsConfig } from "../config/types.gateway.js";
 import * as programArgs from "../daemon/program-args.js";
 import * as runtimePaths from "../daemon/runtime-paths.js";
+import type { SupervisorDisplayGuidance } from "../plugins/supervisor-guidance.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { registerWizardExternalSupervisorTests } from "./setup.external-supervision.test-support.js";
 import {
   expectNoteContains,
   expectNoteTitleNotCalled,
@@ -22,6 +24,13 @@ type DefaultModelAuthStatus = ReturnType<typeof AuthChoiceModelCheck.resolveDefa
 type DefaultModelCatalogFacts = ReturnType<
   typeof AuthChoiceModelCheck.resolveDefaultModelCatalogFacts
 >;
+
+const resolveSupervisorGuidance = vi.hoisted(() =>
+  vi.fn<() => Promise<SupervisorDisplayGuidance | undefined>>(),
+);
+vi.mock("../plugins/supervisor-guidance-runtime.js", () => ({
+  resolveExternalSupervisorGuidance: resolveSupervisorGuidance,
+}));
 
 const readPin = vi.hoisted(() => vi.fn());
 vi.mock("../daemon/runtime-pin-state.js", () => ({ readDaemonRuntimePinForInstall: readPin }));
@@ -386,6 +395,7 @@ function requireMockArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex 
 
 describe("finalizeSetupWizard", () => {
   beforeEach(() => {
+    resolveSupervisorGuidance.mockReset().mockResolvedValue(undefined);
     readPin.mockReset().mockReturnValue({ revision: "empty", stored: false });
     runExec.mockReset();
     runTui.mockClear();
@@ -1084,40 +1094,23 @@ describe("finalizeSetupWizard", () => {
     expectNoteNotContains(prompter, "openclaw gateway install --force");
   });
 
-  it("preserves external supervision through unreachable container recovery", async () => {
-    await withPlatform("linux", async () => {
-      await withEnvAsync({ OPENCLAW_SUPERVISOR_MODE: "external" }, async () => {
-        isSystemdUserServiceAvailable.mockResolvedValue(false);
-        isContainerEnvironment.mockReturnValue(true);
-        waitForGatewayReachable.mockResolvedValue({
-          ok: false,
-          detail: "external gateway is offline",
-        });
-        probeGatewayReachable.mockResolvedValue({
-          ok: false,
-          detail: "external gateway is offline",
-        });
-        const prompter = createLaterPrompter();
-        await finalizeSetupWizard(
-          createFinalizeArgs("advanced", {
-            opts: { skipHealth: false, skipUi: false },
-            prompter,
-          }),
-        );
-
-        expect(isSystemdUserServiceAvailable).not.toHaveBeenCalled();
-        expect(isContainerEnvironment).not.toHaveBeenCalled();
-        expect(startGatewayServer).not.toHaveBeenCalled();
-        expectNoteContains(prompter, "Use that supervisor to start the gateway.", "Gateway");
-        expectNoteNotContains(prompter, "openclaw gateway run");
-        expectNoteNotContains(prompter, "openclaw onboard --install-daemon");
-        expect(prompter.outro).toHaveBeenCalledWith(
-          "Gateway not detected yet. OpenClaw gateway lifecycle is managed by an external " +
-            "supervisor (OPENCLAW_SUPERVISOR_MODE=external). Use that supervisor to start the " +
-            "gateway.",
-        );
-      });
-    });
+  registerWizardExternalSupervisorTests({
+    resolveSupervisorGuidance,
+    isSystemdUserServiceAvailable,
+    isContainerEnvironment,
+    createLaterPrompter,
+    ensureGatewayServiceForOnboarding,
+    createRuntime,
+    gatewayServiceInstall,
+    waitForGatewayReachable,
+    probeGatewayReachable,
+    finalizeSetupWizard,
+    createFinalizeArgs,
+    startGatewayServer,
+    readSystemdUserLingerStatus,
+    gatewayServiceIsLoaded,
+    gatewayServiceRestart,
+    startGatewayService,
   });
 
   it("installs a missing gateway service when onboarding resumes before installation", async () => {

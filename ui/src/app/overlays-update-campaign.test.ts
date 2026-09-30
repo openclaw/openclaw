@@ -243,9 +243,102 @@ describe("application update campaign overlays", () => {
     }
   });
 
+  it.each(["manual", "background", "completion"] as const)(
+    "clears supervisor guidance after a failed current %s status read",
+    async (mode) => {
+      const externalSupervisorGuidance = {
+        version: 1,
+        action: "update",
+        name: "Example Fleet",
+        command: "fleet update example",
+      };
+      let unavailable = false;
+      const request = vi.fn<RequestFn>(async (method) => {
+        if (method !== "update.status") {
+          return {};
+        }
+        if (unavailable) {
+          throw new Error("Current deployment status unavailable");
+        }
+        return { externalSupervisorGuidance };
+      });
+      const harness = createGatewayHarness(client(request));
+      const overlays = createApplicationOverlays(harness.gateway);
+      try {
+        await flushMicrotasks();
+        expect(overlays.snapshot.externalSupervisorGuidance).toEqual(externalSupervisorGuidance);
+        unavailable = true;
+        expect(await overlays.refreshUpdateStatus(mode)).toBe(false);
+        expect(overlays.snapshot.externalSupervisorGuidance).toBeNull();
+        if (mode === "background") {
+          expect(overlays.snapshot.updateStatusCheckBanner).toBeNull();
+        } else {
+          expect(overlays.snapshot.updateStatusCheckBanner?.text).toContain(
+            "Current deployment status unavailable",
+          );
+        }
+      } finally {
+        overlays.dispose();
+      }
+    },
+  );
+
+  it("retires supervisor guidance across a same-client reconnect and failed status read", async () => {
+    const externalSupervisorGuidance = {
+      version: 1,
+      action: "update",
+      name: "Example Fleet",
+      command: "fleet update example",
+    };
+    const retiredStatus = deferred<unknown>();
+    const currentStatus = deferred<unknown>();
+    let statusReads = 0;
+    let reconnected = false;
+    const request = vi.fn<RequestFn>((method) => {
+      if (method !== "update.status") {
+        return Promise.resolve({});
+      }
+      statusReads += 1;
+      if (statusReads === 1) {
+        return Promise.resolve({ externalSupervisorGuidance });
+      }
+      return reconnected ? currentStatus.promise : retiredStatus.promise;
+    });
+    const harness = createGatewayHarness(client(request));
+    const overlays = createApplicationOverlays(harness.gateway);
+    try {
+      await flushMicrotasks();
+      expect(overlays.snapshot.externalSupervisorGuidance).toEqual(externalSupervisorGuidance);
+      const refresh = overlays.refreshUpdateStatus();
+
+      harness.update({ phase: "reconnecting" });
+      expect(overlays.snapshot.externalSupervisorGuidance).toBeNull();
+      reconnected = true;
+      harness.update({ phase: "connected" });
+      expect(overlays.snapshot.externalSupervisorGuidance).toBeNull();
+
+      retiredStatus.resolve({ externalSupervisorGuidance });
+      expect(await refresh).toBe(false);
+      expect(overlays.snapshot.externalSupervisorGuidance).toBeNull();
+      currentStatus.reject(new Error("Current deployment status unavailable"));
+      await flushMicrotasks();
+      expect(overlays.snapshot.externalSupervisorGuidance).toBeNull();
+    } finally {
+      retiredStatus.resolve({});
+      currentStatus.resolve({});
+      overlays.dispose();
+    }
+  });
+
   it.each([false, true])(
     "discards an explicit refresh after administrator access is revoked (restored: %s)",
     async (restoreAdmin) => {
+      const externalSupervisorGuidance = {
+        version: 1,
+        action: "update",
+        name: "Example Fleet",
+        command: "fleet update example",
+      };
       const updateStatus = deferred<unknown>();
       let statusReads = 0;
       const request = vi.fn<RequestFn>((method, params) => {
@@ -258,11 +351,12 @@ describe("application update campaign overlays", () => {
         statusReads += 1;
         return statusReads === 1
           ? Promise.resolve({
+              externalSupervisorGuidance,
               sentinel: {
                 kind: "update",
-                status: "error",
+                status: "skipped",
                 ts: 500,
-                stats: { reason: "retained-admin-only-attempt" },
+                stats: { reason: "external-supervisor-update-required" },
               },
             })
           : Promise.resolve({});
@@ -271,7 +365,10 @@ describe("application update campaign overlays", () => {
       const overlays = createApplicationOverlays(harness.gateway);
       try {
         await flushMicrotasks();
-        expect(overlays.snapshot.recordedUpdateAttempt?.reason).toBe("retained-admin-only-attempt");
+        expect(overlays.snapshot.recordedUpdateAttempt?.reason).toBe(
+          "external-supervisor-update-required",
+        );
+        expect(overlays.snapshot.externalSupervisorGuidance).toEqual(externalSupervisorGuidance);
         const refresh = overlays.refreshUpdateStatus();
         harness.update({
           hello: {
@@ -281,6 +378,7 @@ describe("application update campaign overlays", () => {
         });
         expect(overlays.snapshot.updateStatusBanner).toBeNull();
         expect(overlays.snapshot.recordedUpdateAttempt).toBeNull();
+        expect(overlays.snapshot.externalSupervisorGuidance).toBeNull();
         if (restoreAdmin) {
           harness.update({
             hello: {
@@ -290,17 +388,19 @@ describe("application update campaign overlays", () => {
           });
         }
         updateStatus.resolve({
+          externalSupervisorGuidance,
           sentinel: {
             kind: "update",
-            status: "error",
+            status: "skipped",
             ts: 62_000,
-            stats: { reason: "admin-only-attempt" },
+            stats: { reason: "external-supervisor-update-required" },
           },
         });
         expect(await refresh).toBe(false);
 
         expect(overlays.snapshot.updateStatusBanner).toBeNull();
         expect(overlays.snapshot.recordedUpdateAttempt).toBeNull();
+        expect(overlays.snapshot.externalSupervisorGuidance).toBeNull();
         expect(overlays.snapshot.updateStatusRefreshing).toBe(false);
       } finally {
         updateStatus.resolve({});

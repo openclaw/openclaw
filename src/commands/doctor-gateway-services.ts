@@ -41,6 +41,7 @@ import { resolveGatewayService } from "../daemon/service.js";
 import { isSystemdUnitActive, uninstallLegacySystemdUnits } from "../daemon/systemd.js";
 import { NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON } from "../infra/gateway-supervision.js";
 import { parseTcpPortFromArgs } from "../infra/tcp-port.js";
+import { resolveExternalSupervisorGuidance } from "../plugins/supervisor-guidance-runtime.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveGatewayDaemonRuntime } from "./daemon-runtime.js";
 import { resolveGatewayAuthTokenForService } from "./doctor-gateway-auth-token.js";
@@ -513,7 +514,13 @@ export async function maybeRepairGatewayServiceConfig(
   }
 
   if (serviceRepairDeferred) {
-    note(formatServiceRepairDeferredNote(), "Gateway service config");
+    note(
+      formatServiceRepairDeferredNote(
+        undefined,
+        await resolveExternalSupervisorGuidance("repair", { config: cfg }),
+      ),
+      "Gateway service config",
+    );
     return cfg;
   }
 
@@ -683,7 +690,13 @@ export async function maybeScanExtraGatewayServices(
     const serviceRepairPolicy = resolveServiceRepairPolicy();
     const serviceRepairDeferred = isServiceRepairDeferred(serviceRepairPolicy);
     if (serviceRepairDeferred) {
-      note(formatServiceRepairDeferredNote(), "Legacy gateway cleanup skipped");
+      note(
+        formatServiceRepairDeferredNote(
+          undefined,
+          await resolveExternalSupervisorGuidance("repair"),
+        ),
+        "Legacy gateway cleanup skipped",
+      );
     }
     const shouldRemove = serviceRepairDeferred
       ? false

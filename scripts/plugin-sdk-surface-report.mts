@@ -197,12 +197,14 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
     // without its ratchet update; these pin exactly that growth.
     publicExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS",
-      4594,
+      // +4: versioned supervisor guidance contracts and bounded display-copy parser.
+      4598,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS",
-      2698,
+      // +1: bounded supervisor guidance parser for plugin manifests.
+      2699,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

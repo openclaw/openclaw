@@ -3,7 +3,7 @@ import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
-import { UpdateRunRecordSchema } from "./update-runs.js";
+import { ExternalSupervisorGuidanceSchema, UpdateRunRecordSchema } from "./update-runs.js";
 
 /**
  * Gateway config and update protocol schemas.
@@ -177,6 +177,7 @@ export const UpdateStatusResultSchema = closedObject({
     ]),
   ),
   schedule: Type.Optional(UpdateScheduleStateSchema),
+  externalSupervisorGuidance: Type.Optional(ExternalSupervisorGuidanceSchema),
 });
 
 /** Empty request payload for deferring the active update campaign. */

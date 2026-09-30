@@ -5,6 +5,7 @@ import {
   isSystemUnitActiveAndEnabled,
   uninstallUserSystemdGatewayUnit,
 } from "../daemon/systemd.js";
+import { resolveExternalSupervisorGuidance } from "../plugins/supervisor-guidance-runtime.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 import {
@@ -73,7 +74,10 @@ export async function maybeResolveDuelingSystemdGatewayScopes(
 
   const policy = resolveServiceRepairPolicy();
   if (isServiceRepairDeferred(policy)) {
-    note(formatServiceRepairDeferredNote(), "Gateway cleanup skipped");
+    note(
+      formatServiceRepairDeferredNote(undefined, await resolveExternalSupervisorGuidance("repair")),
+      "Gateway cleanup skipped",
+    );
     return;
   }
 
