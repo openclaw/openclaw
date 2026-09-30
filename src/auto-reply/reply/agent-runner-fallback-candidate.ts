@@ -1,9 +1,8 @@
 import { markAutoFallbackPrimaryProbe } from "../../agents/agent-scope.js";
 import { resolveCliBackendConfig } from "../../agents/cli-backends.js";
+import { resolveRunEntryCliRuntime } from "../../agents/embedded-agent-runner/run-entry-runtime.js";
 import { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
-import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
-import { isCliProvider } from "../../agents/model-selection.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
 import { buildGenericCliContextEngineHostSupport } from "../../context-engine/host-compat.js";
 import { revokeMessageActionTurnCapability } from "../../gateway/message-action-turn-capability.js";
@@ -96,37 +95,21 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
   ) => {
     const candidateRun = resolveFallbackCandidateRun(params.effectiveRun, provider, model);
     const activeEntry = params.liveModelSwitchRuntimeEntry ?? turn.getActiveSessionEntry();
-    const pinnedHarnessId = resolveSessionPinnedHarnessId(activeEntry);
-    const locksPersistedHarness =
-      pinnedHarnessId !== undefined && pinnedHarnessId === sessionRuntimeOverride;
     const selectedAuthProfile = resolveRunAuthProfile(candidateRun, provider, {
       config: params.runtimeConfig,
     });
-    const pinnedCliRuntime =
-      !locksPersistedHarness &&
-      sessionRuntimeOverride &&
-      isCliProvider(sessionRuntimeOverride, params.runtimeConfig)
-        ? sessionRuntimeOverride
-        : undefined;
-    const cliExecutionProvider =
-      pinnedCliRuntime ??
-      (sessionRuntimeOverride
-        ? provider
-        : (resolveCliRuntimeExecutionProvider({
-            provider,
-            cfg: params.runtimeConfig,
-            agentId: turn.followupRun.run.agentId,
-            modelId: model,
-            authProfileId: selectedAuthProfile.authProfileId,
-          }) ?? provider));
-    const useCliExecution =
-      pinnedCliRuntime !== undefined ||
-      (!sessionRuntimeOverride && isCliProvider(cliExecutionProvider, params.runtimeConfig));
     return {
       candidateRun,
       sessionRuntimeOverride,
-      cliExecutionProvider,
-      useCliExecution,
+      ...resolveRunEntryCliRuntime({
+        config: params.runtimeConfig,
+        provider,
+        model,
+        agentId: turn.followupRun.run.agentId,
+        authProfileId: selectedAuthProfile.authProfileId,
+        sessionRuntimeOverride,
+        pinnedHarnessId: resolveSessionPinnedHarnessId(activeEntry),
+      }),
     };
   };
   return params.timing.measure("model_fallback", () =>
@@ -284,6 +267,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
         );
         try {
           const common = {
+            ...runOptions,
             preparedRunAdmission: params.preparedRunAdmission,
             messageActionTurnCapability,
             turn,
@@ -296,16 +280,10 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
             runId: params.runId,
             runAbortSignal: params.runAbortSignal,
             runLane,
-            isFallbackRetry: runOptions.isFallbackRetry,
-            isFinalFallbackAttempt: runOptions?.isFinalFallbackAttempt,
             suppressQueuedUserPersistenceForCandidate:
               (turn.followupRun.run.suppressNextUserMessagePersistence ?? false) ||
               queuedUserMessagePersistedAcrossFallback,
             userTurnTranscriptRecorder,
-            contextEngineLogicalTurnLease: runOptions.contextEngineLogicalTurnLease,
-            onContextEngineTurnCandidate: runOptions.onContextEngineTurnCandidate,
-            assistantErrorTranscript: runOptions.assistantErrorTranscript,
-            authProfileFailurePolicy: runOptions.authProfileFailurePolicy,
             notifyUserMessagePersisted: () => {
               queuedUserMessagePersistedAcrossFallback = true;
             },
@@ -328,7 +306,6 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
             const candidate = await runCliFallbackCandidate({
               ...common,
               cliExecutionProvider: runtime.cliExecutionProvider,
-              classifyResult: runOptions.classifyResult,
               lifecycleGeneration: params.state.lifecycleGeneration,
             });
             params.state.bootstrapPromptWarningSignaturesSeen =
@@ -339,12 +316,10 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
             ...common,
             effectiveRun: params.effectiveRun,
             directBlockDeliveries: params.directBlockDeliveries,
-            sessionRuntimeOverride: runtime.sessionRuntimeOverride,
             getLifecycleGeneration: () => params.state.lifecycleGeneration,
             onLifecycleGeneration: (generation) => {
               params.state.lifecycleGeneration = generation;
             },
-            allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
             notifyUserAboutCompaction: params.notifyUserAboutCompaction,
             messageToolDeliveryState,
             onCompactionFacts: ({ accounting, postCompactionModelAttempted }) => {

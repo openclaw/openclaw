@@ -22,14 +22,10 @@ import {
 import { readWorkspaceStateSnapshotForDirectoryInDatabase } from "../agents/workspace-state-store.kernel.js";
 import { isChannelIngressReadCommand } from "../channels/message/ingress-queue-read-contract.js";
 import { readChannelIngressInDatabase } from "../channels/message/ingress-queue-read.worker.js";
-import { readCronScratchSnapshotInDatabase } from "../cron/scratch-read.kernel.js";
-import { readCronJobNamesInDatabase } from "../cron/store/job-name.js";
-import { resolveCronJobsStorePath } from "../cron/store/paths.js";
 import {
-  readActiveCronRunReceiptOwnersInDatabase,
-  readCronRunReceiptCurrentFactsInDatabase,
-} from "../cron/store/run-receipt-read.js";
-import { observeCronRunRecoveryInDatabase } from "../cron/store/run-recovery.read.js";
+  isCronStateReadCommand,
+  readCronStateCommandInDatabase,
+} from "../cron/store/read-command.js";
 import {
   readSharedGitHubPublicationRequestInDatabase,
   readSharedRepositoryGitHubPublicationInDatabase,
@@ -346,36 +342,8 @@ serveOwnedWorkerTasks(
                 record: inspectCurrentConversationBindingRecordInDatabase(db, command.conversation),
               };
             }
-            if (command.type === "cron.observeRunRecovery") {
-              return {
-                type: command.type,
-                observation: observeCronRunRecoveryInDatabase(db, command),
-              };
-            }
-            if (command.type === "cron.currentReceipt") {
-              return {
-                type: command.type,
-                facts: readCronRunReceiptCurrentFactsInDatabase(db, command),
-              };
-            }
-            if (command.type === "cron.scratch") {
-              return {
-                type: command.type,
-                snapshot: readCronScratchSnapshotInDatabase(db, command),
-              };
-            }
-            if (command.type === "cron.jobNames") {
-              const storePath = command.storePath ?? resolveCronJobsStorePath();
-              return {
-                type: command.type,
-                names: readCronJobNamesInDatabase(db, command.jobIds, storePath),
-              };
-            }
-            if (command.type === "cron.activeReceiptOwners") {
-              return {
-                type: command.type,
-                owners: readActiveCronRunReceiptOwnersInDatabase(db, command.agentId),
-              };
+            if (isCronStateReadCommand(command)) {
+              return readCronStateCommandInDatabase(db, command);
             }
             if (
               command.type === "devicePairing.list" ||

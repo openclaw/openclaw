@@ -209,6 +209,7 @@ export function buildSidebarSessionNavigationState(input: {
       kind: row.kind,
       pinned: row.pinned === true,
       pinnable: isPinnableUiSessionRow(row),
+      snoozedUntil: row.snoozedUntil,
       archived: row.archived === true,
       visibility: row.visibility,
       sharingRole: row.sharingRole,

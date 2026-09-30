@@ -2859,7 +2859,24 @@ openclaw-chat-ci-details {
   line-height: 1.4;
 }
 
-.chat-pr__publication-outcome[data-state="failed"] {
+.chat-pr__publication-history {
+  padding: 2px 12px;
+  font-size: 12px;
+}
+
+.chat-pr__publication-history > summary {
+  color: var(--danger);
+  cursor: var(--cursor-action);
+}
+
+.chat-pr__publication-recovery {
+  display: grid;
+  gap: 6px;
+  padding: 6px 0;
+}
+
+.chat-pr__publication-outcome[data-state="failed"] > [role="status"],
+.chat-pr__publication-outcome > [role="alert"] {
   color: var(--danger);
 }
 

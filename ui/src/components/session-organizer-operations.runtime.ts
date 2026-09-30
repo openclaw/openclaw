@@ -6,6 +6,7 @@ import { formatUiError } from "../lib/format-error.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { resolveSessionRenamePatch } from "../lib/session-rename.ts";
 import { resolveUiSessionRowAgentId } from "../lib/sessions/session-key.ts";
+import { formatSessionSnoozeWakeTime } from "../lib/sessions/session-snooze.ts";
 import {
   formatPreservedWorktreeConfirmation,
   formatPreservedWorktreesNotice,
@@ -65,7 +66,10 @@ export async function patchSession(
     agentId,
     ...(session.sessionId ? { expectedSessionId: session.sessionId } : {}),
   };
-  if (typeof patch.archived === "boolean" && !session.sessionId?.trim()) {
+  if (
+    (typeof patch.archived === "boolean" || patch.snoozedUntil !== undefined) &&
+    !session.sessionId?.trim()
+  ) {
     host.sessionData.publishSessionMutationError(
       scope,
       "Session lifecycle action requires a durable session identity.",
@@ -129,6 +133,25 @@ export async function patchSession(
     host.sessionData.publishSessionMutationError(scope, error);
     return "failed";
   }
+}
+
+export async function snoozeSessionWithUndo(
+  host: SessionActionHost,
+  session: SessionActionRow,
+  snoozedUntil: number,
+  scope: SidebarSessionMutationScope,
+) {
+  const result = await patchSession(host, session, { snoozedUntil }, scope, { sessionScope: true });
+  if (result !== "completed" || !host.sessionData.isSessionMutationScopeCurrent(scope)) {
+    return;
+  }
+  const undoHost = sessionUndoHost(host, scope);
+  showToast({
+    message: t("sessionsView.sessionSnoozed", { time: formatSessionSnoozeWakeTime(snoozedUntil) }),
+    actionLabel: t("common.undo"),
+    onAction: () =>
+      void patchSession(undoHost, session, { snoozedUntil: null }, scope, { sessionScope: true }),
+  });
 }
 
 export async function archiveSessionWithUndo(
@@ -204,10 +227,18 @@ function archiveUndoAction(
   archived: readonly { session: SessionActionRow; pinned: boolean }[],
   scope: SidebarSessionMutationScope,
 ): () => void {
+  const undoHost = sessionUndoHost(host, scope);
+  return () => void restoreArchivedSessions(undoHost, archived, scope);
+}
+
+function sessionUndoHost(
+  host: SessionActionHost,
+  scope: SidebarSessionMutationScope,
+): SessionActionHost {
   // The toast outlives its originating pane. The session owner fences reconnects;
   // the captured row IDs still fence replacement conversations during restore.
   const connection = scope.sessions.captureConnectionScope();
-  const undoHost: SessionActionHost = {
+  return {
     pruneSidebarSessionEntry: (key) => host.pruneSidebarSessionEntry(key),
     selectSession: (key) => host.selectSession(key),
     sidebarSessionStatusFilter: () => host.sidebarSessionStatusFilter(),
@@ -224,7 +255,6 @@ function archiveUndoAction(
       },
     },
   };
-  return () => void restoreArchivedSessions(undoHost, archived, scope);
 }
 
 // Undo restores captured rows; the roster owner refreshes whichever queries are now visible.

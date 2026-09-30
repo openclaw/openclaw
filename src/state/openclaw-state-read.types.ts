@@ -37,6 +37,7 @@ import type {
   CronRunRecoveryReadCommand,
   CronRunRecoveryObservation,
 } from "../cron/store/run-recovery-read.types.js";
+import type { CronQuarantinedJob } from "../cron/types-shared.js";
 import type { FleetCellRecord } from "../fleet/registry.types.js";
 import type {
   ListTerminalOperatorApprovalsInput,
@@ -182,6 +183,7 @@ export type OpenClawStateReadCommand =
   | CronScratchReadCommand
   | { type: "cron.activeReceiptOwners"; agentId: string }
   | { type: "cron.jobNames"; jobIds: string[]; storePath?: string }
+  | { type: "cron.quarantine"; storeKey: string }
   | { type: "subagents.forChildSession"; childSessionKey: string }
   | { type: "exec-approvals.read" }
   | {
@@ -362,6 +364,7 @@ export type OpenClawStateReadResult =
       observation: CronRunRecoveryObservation;
     }
   | { type: "cron.currentReceipt"; facts: CronRunReceiptCurrentFacts }
+  | { type: "cron.quarantine"; entries: CronQuarantinedJob[] }
   | { type: "cron.scratch"; snapshot: CronScratchSnapshot | undefined }
   | {
       type: "cron.jobNames";

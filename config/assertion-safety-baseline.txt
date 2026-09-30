@@ -1896,9 +1896,7 @@ src/commands/channels/add.ts	2
 src/commands/channels/capabilities.ts	4
 src/commands/channels/list.ts	1
 src/commands/channels/status.runtime.ts	8
-src/commands/configure.daemon.ts	1
-src/commands/configure.gateway.ts	1
-src/commands/configure.wizard.ts	2
+src/commands/configure.wizard.ts	1
 src/commands/daemon-install-helpers.ts	3
 src/commands/docs.ts	2
 src/commands/doctor-agent-memory-schema.ts	1
@@ -2153,7 +2151,7 @@ src/gateway/chat-display-projection.core.ts	5
 src/gateway/chat-display-projection.history.ts	1
 src/gateway/chat-display-projection.sanitize.ts	5
 src/gateway/chat-sanitize.ts	3
-src/gateway/cli-session-history.claude.ts	7
+src/gateway/cli-session-history.claude.ts	6
 src/gateway/cli-session-history.merge.ts	6
 src/gateway/control-ui-plugin-auth-cookie.ts	1
 src/gateway/control-ui-session-pr-subscriptions.ts	2

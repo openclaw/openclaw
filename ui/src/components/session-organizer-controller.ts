@@ -102,6 +102,12 @@ export class SessionOrganizerController {
     return operations.patchSession(this.host, session, patch, scope, options);
   };
 
+  async snoozeSessionWithUndo(session: SidebarRecentSession, snoozedUntil: number): Promise<void> {
+    await this.runOperation((operations, scope) =>
+      operations.snoozeSessionWithUndo(this.host, session, snoozedUntil, scope),
+    );
+  }
+
   async archiveSessionWithUndo(session: SidebarRecentSession): Promise<void> {
     await this.runOperation((operations, scope) =>
       operations.archiveSessionWithUndo(this.host, session, scope),

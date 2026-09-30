@@ -217,6 +217,89 @@ describe("sidebar projection memo", () => {
     expect(row(key("first"))).toBeNull();
   });
 
+  it.each(["active", "snoozed"] as const)(
+    "refreshes %s row visibility when a cached snooze expires without another input",
+    async (statusFilter) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(10_000);
+      const target = session("snoozed", { snoozedUntil: 11_000, snoozedAt: 9_000 });
+      const { sidebar, row } = await mount([target]);
+      sidebar.sessionsStatusFilter = statusFilter;
+      await settleLitElement(sidebar);
+      expect(row(target.key) !== null).toBe(statusFilter === "snoozed");
+
+      sidebar.teamOnlineExpanded = true;
+      await settleLitElement(sidebar);
+      await vi.advanceTimersByTimeAsync(999);
+      await settleLitElement(sidebar);
+      expect(row(target.key) !== null).toBe(statusFilter === "snoozed");
+
+      await vi.advanceTimersByTimeAsync(2);
+      await settleLitElement(sidebar);
+      expect(row(target.key) !== null).toBe(statusFilter === "active");
+    },
+  );
+
+  it("hides and wakes an adopted catalog row using its cached agent result", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const target = session("adopted", { key: "agent:work:adopted", agentId: "work" });
+    const { sidebar, sessions, row } = await mount([]);
+    const cachedResult = {
+      ...sessions.sessions.state.result!,
+      sessions: [target],
+      count: 1,
+    };
+    sidebar.sessionData.sessionResultsByAgent = { work: cachedResult };
+    sidebar.sessionData.sessionCatalogs = [
+      {
+        id: "fixture",
+        label: "Fixture",
+        capabilities: { continueSession: true, archive: true },
+        hosts: [
+          {
+            hostId: "gateway:fixture",
+            label: "Fixture host",
+            kind: "gateway",
+            connected: true,
+            sessions: [
+              {
+                threadId: "adopted-thread",
+                sessionKey: target.key,
+                name: "Adopted catalog thread",
+                status: "idle",
+                archived: false,
+                canContinue: true,
+                canArchive: true,
+              },
+            ],
+          },
+        ],
+      },
+    ];
+    sidebar.requestUpdate();
+    await settleLitElement(sidebar);
+    expect(row(target.key)?.hasAttribute("data-catalog-session-key")).toBe(true);
+
+    sidebar.sessionData.sessionResultsByAgent = {
+      work: {
+        ...cachedResult,
+        sessions: [{ ...target, snoozedUntil: 11_000, snoozedAt: 10_000 }],
+      },
+    };
+    sidebar.requestUpdate();
+    await settleLitElement(sidebar);
+    expect(row(target.key)).toBeNull();
+    await vi.advanceTimersByTimeAsync(999);
+    await settleLitElement(sidebar);
+    expect(row(target.key)).toBeNull();
+
+    await vi.advanceTimersByTimeAsync(2);
+    await settleLitElement(sidebar);
+    expect(row(target.key)?.hasAttribute("data-catalog-session-key")).toBe(true);
+    expect(row(target.key)?.textContent).toContain("adopted");
+  });
+
   it("updates roster selection and menu state without reprojecting rows or sections", async () => {
     const mounted = await mountRoster();
     const sidebar = mounted.sidebar as unknown as Sidebar;

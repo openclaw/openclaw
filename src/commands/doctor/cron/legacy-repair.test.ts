@@ -246,5 +246,5 @@ it("does not reactivate quarantined automations during startup repair", async ()
 
   expect(result).toEqual({ changes: [], warnings: [] });
   expect((await loadCronStore(storePath)).jobs).toEqual([]);
-  expect(loadCronQuarantinedJobs(storePath)).toHaveLength(1);
+  expect(await loadCronQuarantinedJobs(storePath)).toHaveLength(1);
 });

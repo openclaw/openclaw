@@ -322,6 +322,21 @@ function collectRestartPromotedSessionEntrySlotKeys(
   return staleSlotKeys;
 }
 
+// Only the child waiters belong to the returned observer's lifetime.
+function createPluginHostRetirementObserver(
+  waits: readonly PluginHostRegistryRetirement[],
+): PluginHostRegistryRetirement {
+  return async (options) => {
+    const results = await Promise.all(waits.map((wait) => wait(options)));
+    const deferredPluginIds = results.flatMap((result) => result.deferredPluginIds ?? []);
+    return {
+      cleanupCount: results.reduce((count, result) => count + result.cleanupCount, 0),
+      failures: results.flatMap((result) => result.failures),
+      ...(deferredPluginIds.length ? { deferredPluginIds } : {}),
+    };
+  };
+}
+
 /** Prepares one retirement; each waiter keeps its caller's exact instance admission. */
 export function createPluginHostRegistryRetirement(params: {
   cfg?: OpenClawConfig;
@@ -419,13 +434,5 @@ export function createPluginHostRegistryRetirement(params: {
       };
     });
   }
-  return async (options) => {
-    const results = await Promise.all(waits.map((wait) => wait(options)));
-    const deferredPluginIds = results.flatMap((result) => result.deferredPluginIds ?? []);
-    return {
-      cleanupCount: results.reduce((count, result) => count + result.cleanupCount, 0),
-      failures: results.flatMap((result) => result.failures),
-      ...(deferredPluginIds.length ? { deferredPluginIds } : {}),
-    };
-  };
+  return createPluginHostRetirementObserver(waits);
 }

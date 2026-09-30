@@ -13,6 +13,7 @@ import {
   publishSubagentRunPostimages,
   SubagentRegistryWriteError,
 } from "./subagent-registry-persistence.js";
+import type { RequesterInitialTransfer } from "./subagent-registry-requester-yield.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
   captureRequesterSettleRunIdentity,
@@ -117,19 +118,9 @@ export function hasRequesterWakeOwner(
 /** Initial intent and cohort writes retain their caller through the complete handoff. */
 export function commitRequesterInitialTransfer(
   context: SubagentLifecycleWakeContext,
-  params: {
-    kind: "intent" | "yielded-cohort" | "completed-cohort";
-    entries: readonly SubagentRunRecord[];
-    alreadyPublished?: boolean;
-    prepare?(): Promise<void>;
+  params: Parameters<RequesterInitialTransfer>[0] & {
     stateContext: OpenClawStateWorkerContext;
     assertCurrent(): void;
-    assertHandoffCurrent(): void;
-    mutate: () => void;
-    retire?: ReadonlySet<SubagentRunRecord>;
-    finish(): void;
-    release?: () => void;
-    afterRelease?(): void;
     scheduleRetry(entry: SubagentRunRecord): void;
   },
 ): Promise<void> {

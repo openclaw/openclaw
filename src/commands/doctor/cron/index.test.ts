@@ -817,7 +817,7 @@ describe("maybeRepairLegacyCronStore", () => {
     await maybeRepairLegacyCronStore({ cfg, options: {}, prompter: decline });
 
     expect((await loadCronStore(storePath)).jobs).toEqual([]);
-    expect(loadCronQuarantinedJobs(storePath)).toHaveLength(1);
+    expect(await loadCronQuarantinedJobs(storePath)).toHaveLength(1);
     expect(decline.confirm).toHaveBeenCalledOnce();
 
     const confirm = makePrompter(true);
@@ -831,7 +831,7 @@ describe("maybeRepairLegacyCronStore", () => {
       schedule: { kind: "cron", expr: "0 9 * * *", tz: "UTC" },
       state: { nextRunAtMs: 123 },
     });
-    expect(loadCronQuarantinedJobs(storePath)).toEqual([]);
+    expect(await loadCronQuarantinedJobs(storePath)).toEqual([]);
     expectNoteContaining("Recovered 1 quarantined automation", "Doctor changes");
   });
 
@@ -855,7 +855,7 @@ describe("maybeRepairLegacyCronStore", () => {
 
     await repairCronStore(storePath, prompter);
 
-    expect(loadCronQuarantinedJobs(storePath)).toEqual([historicalJob]);
+    expect(await loadCronQuarantinedJobs(storePath)).toEqual([historicalJob]);
     await expect(fs.stat(quarantinePath)).rejects.toMatchObject({ code: "ENOENT" });
     await expect(fs.stat(`${quarantinePath}.migrated`)).resolves.toBeDefined();
     expect(prompter.confirm).toHaveBeenCalledTimes(1);
@@ -880,14 +880,14 @@ describe("maybeRepairLegacyCronStore", () => {
 
     await repairCronStore(storePath);
 
-    expect(loadCronQuarantinedJobs(storePath)).toEqual([historicalJob]);
+    expect(await loadCronQuarantinedJobs(storePath)).toEqual([historicalJob]);
     await expect(fs.stat(quarantinePath)).resolves.toBeDefined();
     expectNoteContaining("could not archive the legacy cron file", "Doctor warnings");
     rename.mockRestore();
 
     await repairCronStore(storePath);
 
-    expect(loadCronQuarantinedJobs(storePath)).toEqual([historicalJob]);
+    expect(await loadCronQuarantinedJobs(storePath)).toEqual([historicalJob]);
     await expect(fs.stat(`${quarantinePath}.migrated`)).resolves.toBeDefined();
   });
 
@@ -2264,7 +2264,7 @@ describe("maybeRepairLegacyCronStore", () => {
       { id: "legacy-every-kind", enabled: true, kind: "every", mode: undefined },
       { id: "legacy-stream-kind", enabled: true, kind: "stream", mode: "line" },
     ]);
-    expect(loadCronQuarantinedJobs(storePath)).toEqual([]);
+    expect(await loadCronQuarantinedJobs(storePath)).toEqual([]);
   });
 
   it("quarantines invalid legacy rows before saving the repaired store", async () => {
@@ -2280,7 +2280,7 @@ describe("maybeRepairLegacyCronStore", () => {
     await repairCronStore(storePath);
 
     expect(await readPersistedJobs(storePath)).toEqual([]);
-    const quarantine = loadCronQuarantinedJobs(storePath);
+    const quarantine = await loadCronQuarantinedJobs(storePath);
     expect(quarantine[0]?.reason).toBe("invalid-schedule");
     expect(quarantine[0]?.job?.id).toBe("invalid-legacy-cron");
   });

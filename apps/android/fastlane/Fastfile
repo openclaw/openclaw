@@ -630,16 +630,26 @@ platform :android do
     UI.success("Uploaded Android Play build to #{play_track}: version=#{version_metadata[:version]} code=#{version_metadata[:version_code]}")
   end
 
-  desc "Upload Android metadata, archive release artifacts, then upload the Play AAB"
-  lane :release_upload do
+  desc "Build and upload Android phone and Wear bundles, with store assets for play-store releases"
+  lane :release_upload do |options|
+    destination = options.fetch(:destination, "play-store").to_s
+    UI.user_error!("Android release destination must be play-store or internal.") unless %w(play-store internal).include?(destination)
+    internal = destination == "internal"
+    if internal
+      ENV["GOOGLE_PLAY_TRACK"] = "internal"
+      ENV["GOOGLE_PLAY_RELEASE_STATUS"] = "completed"
+      %w(METADATA SCREENSHOTS IMAGES).each { |kind| ENV["SUPPLY_UPLOAD_#{kind}"] = "0" }
+    end
     sync_android_versioning!
     version_metadata = read_android_version_metadata
     validate_android_release_preflight!(version_metadata)
-    screenshots
-    ENV["SUPPLY_UPLOAD_METADATA"] = "1"
-    ENV["SUPPLY_UPLOAD_SCREENSHOTS"] = "1"
+    unless internal
+      screenshots
+      ENV["SUPPLY_UPLOAD_METADATA"] = "1"
+      ENV["SUPPLY_UPLOAD_SCREENSHOTS"] = "1"
+    end
     build_release_artifacts!
-    upload_play_store_build!(version_metadata, upload_metadata: true, upload_screenshots: true)
+    upload_play_store_build!(version_metadata, upload_metadata: !internal, upload_screenshots: !internal)
     UI.success("Uploaded Android Play build to #{play_track}: version=#{version_metadata[:version]} code=#{version_metadata[:version_code]}")
     UI.important("Production promotion remains manual in Google Play Console.")
   end

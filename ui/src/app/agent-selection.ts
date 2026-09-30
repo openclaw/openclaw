@@ -77,27 +77,24 @@ export function createAgentSelectionCapability(
   const reconcileSelectedId = (value: string | null): string | null => {
     const selectedId = value?.trim() ? normalizeAgentId(value) : null;
     const agentsList = roster.state.agentsList;
-    if (options.requireConfiguredAgent) {
-      const agents = agentsList?.agents.filter((agent) => agent.kind !== "system") ?? [];
-      const hasAgent = (id: string | null) =>
-        agents.some((agent) => normalizeAgentId(agent.id) === id);
-      const defaultId = agentsList ? normalizeAgentId(agentsList.defaultId) : null;
-      return hasAgent(selectedId)
-        ? selectedId
-        : hasAgent(defaultId)
-          ? defaultId
-          : agents[0]
-            ? normalizeAgentId(agents[0].id)
-            : null;
-    }
-    if (!agentsList || agentsList.agents.length === 0) {
+    if (!agentsList && !options.requireConfiguredAgent) {
       return selectedId;
     }
-    const defaultId = normalizeAgentId(agentsList.defaultId);
-    return !selectedId ||
-      !agentsList.agents.some((agent) => normalizeAgentId(agent.id) === selectedId)
-      ? defaultId
-      : selectedId;
+    const agents =
+      agentsList?.agents.filter(
+        (agent) => !options.requireConfiguredAgent || agent.kind !== "system",
+      ) ?? [];
+    const hasAgent = (id: string | null) =>
+      agents.some((agent) => normalizeAgentId(agent.id) === id);
+    // Gateway routing defaults can name an agent outside this caller's visible roster.
+    const defaultId = agentsList ? normalizeAgentId(agentsList.defaultId) : null;
+    return hasAgent(selectedId)
+      ? selectedId
+      : hasAgent(defaultId)
+        ? defaultId
+        : agents[0]
+          ? normalizeAgentId(agents[0].id)
+          : null;
   };
   const resolveScopeId = (value: string | null): string | null => {
     const scopeId = value?.trim() ? normalizeAgentId(value) : null;
@@ -249,7 +246,7 @@ export function createAgentSelectionCapability(
       roster.state.agentsList?.agents.map((agent) => normalizeAgentId(agent.id)),
     );
     let scopeId = state.scopeId;
-    if (nextIds.size > 0) {
+    if (roster.state.agentsList) {
       // A saved selection can disappear before the first roster arrives. Explicit
       // historical page filters remain valid even when they are no longer configured.
       if (

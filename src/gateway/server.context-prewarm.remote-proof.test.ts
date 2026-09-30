@@ -1,5 +1,6 @@
 import { performance } from "node:perf_hooks";
 import { afterEach, describe, expect, it } from "vitest";
+import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { prepareContextWindowCaches } from "../agents/context-cache-projection.js";
 import { getContextWindowCaches, replaceContextWindowCaches } from "../agents/context-cache.js";
@@ -42,14 +43,16 @@ describe("Gateway context cache remote proof", () => {
       controlUiEnabled: false,
       sidecarStartup: "defer",
     });
-    const client = await connectGatewayClient({
-      url: `ws://127.0.0.1:${port}`,
-      token,
-      clientDisplayName: "context-prewarm-proof",
-      requestTimeoutMs: 10_000,
-      scopes: ["operator.read", "operator.write", "operator.admin"],
-    });
-    try {
+    let disconnectClient: (() => Promise<void>) | undefined;
+    const runProof = async () => {
+      const client = await connectGatewayClient({
+        url: `ws://127.0.0.1:${port}`,
+        token,
+        clientDisplayName: "context-prewarm-proof",
+        requestTimeoutMs: 10_000,
+        scopes: ["operator.read", "operator.write", "operator.admin"],
+      });
+      disconnectClient = () => disconnectGatewayClient(client);
       const workspaceDir = await initializeManagedWorktreeTestRepository(
         repositories.make("openclaw-context-prewarm-"),
       );
@@ -241,9 +244,11 @@ describe("Gateway context cache remote proof", () => {
       expect(result.maxHealthRpcMs).toBeLessThan(1_000);
       expect(result.maxMetadataRpcMs).toBeLessThan(1_000);
       expect(result.maxBranchesRpcMs).toBeLessThan(1_000);
-    } finally {
-      await disconnectGatewayClient(client);
-      await server.close({ reason: "context prewarm remote proof complete" });
-    }
+    };
+    await runQaGatewayFixture(
+      runProof,
+      () => disconnectClient?.(),
+      () => server.close({ reason: "context prewarm remote proof complete" }),
+    );
   }, 120_000);
 });

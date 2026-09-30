@@ -14,7 +14,7 @@ import { requestCloudWorkerStop } from "../../components/cloud-worker-stop.runti
 import { resolveCloudWorkerStopAction } from "../../components/cloud-worker-stop.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { fetchSessionMenuWork } from "../../components/session-menu-work.ts";
-import type { SessionMenuAction, SessionMenuWork } from "../../components/session-menu.ts";
+import type { SessionMenuWork } from "../../components/session-menu.ts";
 import "../../components/session-menu.ts";
 import {
   formatBatchSessionRemovalError,
@@ -1250,7 +1250,7 @@ class SessionsPage extends OpenClawLightDomElement {
       groups: this.knownCategories(),
       work: this.sessionMenuWork,
       onClose: () => this.closeSessionMenu(),
-      onAction: (action: SessionMenuAction) => {
+      onAction: (action) => {
         switch (action.kind) {
           case "open-pr":
             openExternalUrlSafe(action.url);

@@ -17,6 +17,7 @@ import { t } from "../i18n/index.ts";
 import { formatUiExternalText } from "../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { uiConversationMatches } from "../lib/sessions/session-key.ts";
+import { nextSessionSnoozeWakeAt } from "../lib/sessions/session-snooze.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import {
   SIDEBAR_SESSION_NO_ATTENTION,
@@ -45,6 +46,7 @@ export class SessionAttentionController implements ReactiveController {
   private attentionGatewayConnected = false;
   private agentStatusExpiryTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   private agentStatusExpiryAt: number | null = null;
+  private snoozeWakeTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
 
   constructor(private readonly host: SessionAttentionControllerHost) {
     host.addController(this);
@@ -79,6 +81,10 @@ export class SessionAttentionController implements ReactiveController {
       globalThis.clearTimeout(this.agentStatusExpiryTimer);
       this.agentStatusExpiryTimer = null;
       this.agentStatusExpiryAt = null;
+    }
+    if (this.snoozeWakeTimer !== null) {
+      globalThis.clearTimeout(this.snoozeWakeTimer);
+      this.snoozeWakeTimer = null;
     }
     disposeQuestionPromptState(this.questionPromptState);
   }
@@ -148,6 +154,24 @@ export class SessionAttentionController implements ReactiveController {
         this.invalidate();
       },
       Math.max(0, expiresAt - Date.now() + 1),
+    );
+  }
+
+  scheduleSessionSnoozeWake(rows: Iterable<Pick<GatewaySessionRow, "snoozedUntil">>): void {
+    if (this.snoozeWakeTimer !== null) {
+      globalThis.clearTimeout(this.snoozeWakeTimer);
+      this.snoozeWakeTimer = null;
+    }
+    const wakeAt = nextSessionSnoozeWakeAt(rows, Date.now());
+    if (!this.host.isConnected || wakeAt === null) {
+      return;
+    }
+    this.snoozeWakeTimer = globalThis.setTimeout(
+      () => {
+        this.snoozeWakeTimer = null;
+        this.invalidate();
+      },
+      Math.min(2_147_483_647, Math.max(0, wakeAt - Date.now() + 1)),
     );
   }
 
