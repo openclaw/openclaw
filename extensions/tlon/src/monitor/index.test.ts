@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
+import { closeOpenClawAgentDatabasesAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TLON_PENDING_APPROVAL_LIMIT, type PendingApproval } from "../settings.js";
@@ -421,7 +422,19 @@ it("continues startup after an initial group invite write fails", async () => {
 });
 
 describe("monitorTlonProvider reply prefixes", () => {
-  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+    afterEach(async () => {
+      // Retire background maintenance before removing its database or changing clocks.
+      for (const dir of tempDirs.dirs) {
+        await closeOpenClawAgentDatabasesAsync(dir);
+      }
+      cleanup();
+      // A case that failed before holding maintenance has no fake clock to inspect.
+      if (vi.isFakeTimers()) {
+        expect.soft(vi.getTimerCount()).toBe(0);
+      }
+    }),
+  );
   it.for([
     { name: "global fallback", root: undefined, account: undefined, expected: "[global] reply" },
     { name: "channel override", root: "[root]", account: undefined, expected: "[root] reply" },
@@ -491,6 +504,8 @@ describe("monitorTlonProvider reply prefixes", () => {
         .map(([value]) => value)
         .find((value) => value.app === "chat");
       expect(subscription).toBeDefined();
+      // Hold automatic session maintenance queued so teardown must retire it.
+      vi.useFakeTimers({ toFake: ["setImmediate", "clearImmediate"] });
       await subscription.event({
         whom: "~nec",
         id: `dm-prefix-${name}`,
