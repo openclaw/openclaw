@@ -1,10 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { ensureSqliteLibrarySelected } from "../infra/bun-sqlite-library.js";
-import {
-  createRetainedOperation,
-  flatMapRetainedOperation,
-  type RetainedOperation,
-} from "../infra/retained-operation.js";
+import { createRetainedOperation, type RetainedOperation } from "../infra/retained-operation.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { captureRuntimeWorkerSource } from "../infra/runtime-worker-generation.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
@@ -389,18 +385,53 @@ function createReadTransport(
       { type: "admit" },
       authority,
     );
-    return inContext(() =>
-      flatMapRetainedOperation(run.operation, (outcome) => {
-        if ("error" in outcome) {
+    let release: RetainedOperation<void> | undefined;
+    const completion = createRetainedOperation<void>(() => inContext(service));
+    function service() {
+      if (completion.operation.read().status !== "pending") {
+        return;
+      }
+      try {
+        if (!release) {
+          run.operation.service();
+          const read = run.operation.read();
+          if (read.status === "pending") {
+            return;
+          }
+          if (read.status === "rejected") {
+            throw read.error;
+          }
+          if ("error" in read.value) {
+            throw read.value.error;
+          }
+          authority.assertCurrent();
+          if (!run.task) {
+            throw new Error("Shared-state admission completed without its retained task");
+          }
+          release = startCloseTask(run.task);
+          void release.result.then(
+            () => completion.operation.service(),
+            () => completion.operation.service(),
+          );
+        }
+        release.service();
+        const outcome = release.read();
+        if (outcome.status === "rejected") {
           throw outcome.error;
         }
-        authority.assertCurrent();
-        if (!run.task) {
-          throw new Error("Shared-state admission completed without its retained task");
+        if (outcome.status === "fulfilled") {
+          completion.resolve(undefined);
         }
-        return startCloseTask(run.task);
-      }),
+      } catch (error) {
+        completion.reject(error);
+      }
+    }
+    void run.operation.result.then(
+      () => completion.operation.service(),
+      () => completion.operation.service(),
     );
+    completion.operation.service();
+    return completion.operation;
   };
   const startRead = (source: OpenClawStateReadLocation, authority: OpenClawStateReadAuthority) =>
     startRun(
