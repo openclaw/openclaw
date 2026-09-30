@@ -367,7 +367,11 @@ export function scheduleRequesterSettleWake(
     scheduleRequesterSettleWakeRetry(context, runId, entry, stateContext);
     return;
   }
-  const admittedBatch = (admittedWake?.batchRunIds ?? [runId]).flatMap((id) => {
+  const admittedBatch = (
+    entry.pauseReason === "sessions_yield" && admittedWake?.pauseNotice
+      ? [runId]
+      : (admittedWake?.batchRunIds ?? [runId])
+  ).flatMap((id) => {
     const member = params.runs.get(id);
     return member ? [member] : [];
   });
@@ -452,6 +456,12 @@ export function scheduleRequesterSettleWake(
                   batch,
                   rearmGeneration,
                   async (members, episode) => {
+                    if (
+                      Boolean(admittedWake?.pauseNotice) !==
+                      Boolean(entry.requesterSettleWake?.pauseNotice)
+                    ) {
+                      return false;
+                    }
                     const committed = await completeRequesterSettleWakeBatch(
                       context,
                       members,

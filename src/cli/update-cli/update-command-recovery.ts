@@ -85,7 +85,7 @@ export function createUpdateCommandFinalizationFence(
 ): () => void {
   const originalRun = params.opts.run;
   const executor = originalRun?.executorFence;
-  const assertCurrent = () => {
+  return () => {
     try {
       if (params.opts.run !== originalRun || originalRun?.executorFence !== executor) {
         throw new Error("Package finalization lost its original executor.");
@@ -97,5 +97,4 @@ export function createUpdateCommandFinalizationFence(
       });
     }
   };
-  return assertCurrent;
 }

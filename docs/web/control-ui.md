@@ -34,7 +34,11 @@ Sidebar pull-request indicators reuse the last known snapshot. Opening a session
 
 The sidebar’s **Online** list shows compact person rows with avatar presence indicators: solid green means active, amber means idle, and a hollow green ring means connected with activity unavailable. Names stay on one line and fade at the edge when space is tight. The indicators, hovercard, and accessible description preserve the activity distinctions. A compact group at the end of each row shows a theme-accent spinner and running count, then a small message-circle icon and muted open count. Each icon-number pair keeps its natural width, with a wider gap between running and open groups. The group rests at the right edge; names and counts share a text baseline, without fixed digit columns. Counts have no pill background at rest, with explanatory tooltips; hovering or keyboard-focusing the row reveals a subtle grouping pill without shifting the content. Reduced motion keeps the spinner still. Known zero counts are omitted. Open counts each person’s owned, unarchived conversations that you can access across configured agents, excluding hidden subagents, automation, system, and global/unknown sessions. Running counts those conversations actively executing an agent turn, not queued work or activity in descendant sessions. Counts cover the matching sessions before pagination and do not change with your session-list filters. All connected people remain visible, ordered Active, Idle, then Online with activity unavailable. Unavailable counts show no placeholder; the row tooltip and accessible description identify them as unavailable rather than zero. A failed refresh keeps the last counts with a retry notice.
 
+Person hovercards keep their **Recent sessions** selection and order stable while open, so background activity does not move links under the pointer or keyboard focus. Reopening the card selects the latest sessions. Timestamps stay live, and sessions that leave the visible, eligible roster disappear without replacing them with other sessions. **Viewing now** continues to follow presence.
+
 Sidebar live narration pauses while the browser tab is hidden and resumes from current activity when you return. The selected chat and pending outbox keep their separately owned subscriptions.
+
+With sidebar previews enabled, running sessions show a small, static tool icon beside the progress text on the second row beneath the session name. The title row stays unchanged, and the tool name is available only in the icon’s tooltip and accessible label rather than repeated as visible text. The compact one-row sidebar and team roster add no tool icon or tool text, so tool changes do not shift the list. Tool progress uses only explicitly public progress text from the Gateway, never argument-derived metadata or raw command output. If a call’s progress becomes hidden, its displayed progress is withdrawn. Pending questions and other critical status keep their existing priority. The existing session indicator remains the only activity animation, and tool state clears when its live subscription ends.
 
 Live narration retains up to six visible running background sessions, plus the open session. Recency changes keep that window stable; when a session finishes or leaves the visible rows, the most recent eligible session fills its slot. Reconnecting selects a fresh window.
 
@@ -55,6 +59,8 @@ Provider authentication status is shared across views and refreshes after accoun
 
 The sidebar loads automation status once per connection and refreshes after automation or configuration changes. Failed reads retry once per minute while the tab is visible and stop retrying after success. Overdue warnings advance on a local deadline without polling the Gateway. Hidden tabs catch up when visible; returning to an unchanged tab does not poll automations. Command palette searches reuse their automation inventory on the same connection until one of those changes or a reconnect.
 
+For messages forwarded from an automation, the **From** link opens that automation's History tab and highlights the originating run. Open the run's transcript from History when needed.
+
 Thinking, speed, and context-window changes stay synchronized across panes showing the same session. While a change is pending, the latest selection remains visible. A rejected change restores the latest confirmed value. Delayed events from a replaced session leave the current transcript and unsent draft intact.
 
 While an agent works, completed commentary or preambles appear inline in the
@@ -74,6 +80,13 @@ Consecutive tool activity shares one expandable log, including when background
 work resumes in a new run. Visible messages, media, and conversation markers
 keep their place and separate logs; live response text and the working indicator
 stay outside the log. Grouping changes only the presentation, not the transcript.
+
+Inter-session messages appear as compact **updates from** activity rows instead
+of chat bubbles. Consecutive updates from the same source share one row; other
+messages and conversation markers keep them separate. Select the row to show
+the original messages and timestamps in one step, or select the source name to
+open that session. Search results and reply navigation reveal the matching
+messages. This changes only presentation, not stored messages or run ownership.
 
 When an incoming message causes an unstarted tool call to be skipped, its card
 and work summary show **Skipped**, including after reloading the conversation.
@@ -136,6 +149,8 @@ access. On plain HTTP LAN addresses or browsers without the camera API, choose
 mobile camera capture without silently substituting a picker for the preview;
 your browser decides whether it shows a camera or a file picker. If access is denied,
 allow the site in your browser and operating-system camera settings and retry.
+The explicit **Use device camera** option also remains available after a preview
+request fails, including permission denial; it never opens automatically.
 If no camera is available, choose **Upload photo** instead.
 
 The camera stops when you capture a photo, close the dialog, or leave its draft.
@@ -313,7 +328,7 @@ Every section heading from the previous single-page version keeps its anchor her
 - <a id="feature-and-rpc-reference" />[Feature and RPC reference](/web/control-ui/feature-reference#feature-and-rpc-reference)
 - <a id="chat-and-talk" />[chat and talk](/web/control-ui/feature-reference#chat-and-talk)
 - <a id="channels-sessions-memory" />[channels sessions memory](/web/control-ui/feature-reference#channels-sessions-memory)
-- <a id="cron-tasks-plugins-skills-devices-exec-approvals" />[cron tasks plugins skills devices exec approvals](/web/control-ui/feature-reference#cron-tasks-plugins-skills-devices-exec-approvals)
+- <a id="cron-tasks-plugins-skills-devices-exec-approvals" />[cron plugins skills devices exec approvals](/web/control-ui/feature-reference#cron-tasks-plugins-skills-devices-exec-approvals)
 - <a id="config" />[config](/web/control-ui/feature-reference#config)
 - <a id="usage" />[usage](/web/control-ui/feature-reference#usage)
 - <a id="debug-logs-update" />[debug logs update](/web/control-ui/feature-reference#debug-logs-update)

@@ -100,7 +100,11 @@ describe("worker turn execution", () => {
         expect(allowed.length).toBeGreaterThan(0);
         expect(allowed.filter((name) => !launchToolNames.includes(name))).toEqual([]);
         expect(allowed.includes("presence")).toBe(declared);
-        expect(authorize).toHaveBeenCalledExactlyOnceWith(request.turnClaim, allowed);
+        expect(authorize).toHaveBeenCalledExactlyOnceWith(
+          request.turnClaim,
+          allowed,
+          expect.any(Function),
+        );
       } finally {
         authorize.mockRestore();
         input.preparedRunAdmission.close();

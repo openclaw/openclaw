@@ -406,23 +406,27 @@ const lifetime = createFixtureLifetime();
 afterEach(() => lifetime.cleanup());
 
 it.runIf(process.platform !== "win32").each([
-  ["alias", ["root"]],
-  ["CI", ["--ci-graphs-json", '["test-root"]']],
-  ["mixed CI", ["--ci-graphs-json", '["scripts", "test-root"]']],
-] as const)("executes all root partitions serially through %s", async (_label, args) => {
-  await lifetime.run(async () => {
-    const root = fs.realpathSync(lifetime.createTempDir("openclaw-root-shards-"));
-    fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}');
-    fs.writeFileSync(path.join(root, "pnpm-workspace.yaml"), "packages: []\n");
-    fs.mkdirSync(path.join(root, "scripts"));
-    const driver = path.join(root, "scripts/run-tsgo-core-test-shards.mts");
-    fs.copyFileSync(path.resolve("scripts/run-tsgo-core-test-shards.mts"), driver);
-    fs.symlinkSync(path.resolve("scripts/lib"), path.join(root, "scripts/lib"), "dir");
-    // Exercise the CLI and evidence owner with a compiler stub that rejects
-    // overlap. Native cold graph checks separately prove the actual partitions.
-    fs.writeFileSync(
-      path.join(root, "scripts/run-tsgo.mts"),
-      `import fs from "node:fs";
+  ["alias", ["root"], [0, 1, 2, 3]],
+  ["CI", ["--ci-graphs-json", '["test-root"]'], [0, 1, 2, 3]],
+  ["mixed CI", ["--ci-graphs-json", '["scripts", "test-root"]'], [0, 1, 2, 3]],
+  ["odd stripe", ["--root-stripe", "1/2"], [0, 2]],
+  ["even stripe", ["--root-stripe", "2/2"], [1, 3]],
+] as const)(
+  "executes assigned root partitions serially through %s",
+  async (_label, args, indices) => {
+    await lifetime.run(async () => {
+      const root = fs.realpathSync(lifetime.createTempDir("openclaw-root-shards-"));
+      fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}');
+      fs.writeFileSync(path.join(root, "pnpm-workspace.yaml"), "packages: []\n");
+      fs.mkdirSync(path.join(root, "scripts"));
+      const driver = path.join(root, "scripts/run-tsgo-core-test-shards.mts");
+      fs.copyFileSync(path.resolve("scripts/run-tsgo-core-test-shards.mts"), driver);
+      fs.symlinkSync(path.resolve("scripts/lib"), path.join(root, "scripts/lib"), "dir");
+      // Exercise the CLI and evidence owner with a compiler stub that rejects
+      // overlap. Native cold graph checks separately prove the actual partitions.
+      fs.writeFileSync(
+        path.join(root, "scripts/run-tsgo.mts"),
+        `import fs from "node:fs";
 export function prepareTsgoCommand(args) { return args; }
 export async function runPreparedTsgoCommand(args, options) {
   const fd = fs.openSync("active-compiler", "wx");
@@ -439,58 +443,62 @@ export async function runPreparedTsgoCommand(args, options) {
   }
 }
 `,
-    );
-    for (const exitCode of [0, 2, 137]) {
-      fs.writeFileSync(path.join(root, "calls.jsonl"), "");
-      const result = await lifetime.track(
-        runNodeScript(
-          [
-            "--import",
-            pathToFileURL(path.resolve("scripts/tsx.mjs")).href,
-            driver,
-            ...args,
-            "--concurrency",
-            "4",
-          ],
-          {
-            ...process.env,
-            OPENCLAW_LOCAL_CHECK: "0",
-            OPENCLAW_CI_STATIC_EVIDENCE: "1",
-            FIXTURE_EXIT: String(exitCode),
-          },
-          undefined,
-          { cwd: root, requireProcessTreeExit: true },
-        ),
       );
-      expect(result.status, result.stderr).toBe(_label === "mixed CI" ? 2 : exitCode);
-      const calls = fs
-        .readFileSync(path.join(root, "calls.jsonl"), "utf8")
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line));
-      expect(calls).toEqual([
-        ...(_label === "mixed CI" ? ["tsconfig.scripts.json"] : []),
-        ...TSGO_ROOT_TEST_SHARDS.slice(0, exitCode ? 2 : 4).map((graph) => graph.config),
-      ]);
-      const completion = result.stdout
-        .split("\n")
-        .find((line) => line.startsWith("[ci-static:tsgo:completion] "));
-      if (exitCode === 0 && process.platform !== "win32") {
-        expect(completion).toBeDefined();
-        const evidence = JSON.parse(completion!.slice("[ci-static:tsgo:completion] ".length)) as {
-          planned: number;
-          completed: number;
-          leaves: string[];
-        };
-        const expectedLeaves = _label === "mixed CI" ? 5 : 4;
-        expect(evidence).toMatchObject({ planned: expectedLeaves, completed: expectedLeaves });
-        expect(new Set(evidence.leaves).size).toBe(expectedLeaves);
-      } else {
-        expect(completion).toBeUndefined();
+      for (const exitCode of [0, 2, 137]) {
+        fs.writeFileSync(path.join(root, "calls.jsonl"), "");
+        const result = await lifetime.track(
+          runNodeScript(
+            [
+              "--import",
+              pathToFileURL(path.resolve("scripts/tsx.mjs")).href,
+              driver,
+              ...args,
+              "--concurrency",
+              "4",
+            ],
+            {
+              ...process.env,
+              OPENCLAW_LOCAL_CHECK: "0",
+              OPENCLAW_CI_STATIC_EVIDENCE: "1",
+              FIXTURE_EXIT: String(exitCode),
+            },
+            undefined,
+            { cwd: root, requireProcessTreeExit: true },
+          ),
+        );
+        const selected = indices.map((index) => TSGO_ROOT_TEST_SHARDS[index]!);
+        const failureIndex = selected.findIndex((graph) => graph.name === "test-root-scripts");
+        const fails = exitCode !== 0 && failureIndex >= 0;
+        expect(result.status, result.stderr).toBe(_label === "mixed CI" ? 2 : fails ? exitCode : 0);
+        const calls = fs
+          .readFileSync(path.join(root, "calls.jsonl"), "utf8")
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line));
+        expect(calls).toEqual([
+          ...(_label === "mixed CI" ? ["tsconfig.scripts.json"] : []),
+          ...selected.slice(0, fails ? failureIndex + 1 : undefined).map((graph) => graph.config),
+        ]);
+        const completion = result.stdout
+          .split("\n")
+          .find((line) => line.startsWith("[ci-static:tsgo:completion] "));
+        if (!fails && process.platform !== "win32") {
+          expect(completion).toBeDefined();
+          const evidence = JSON.parse(completion!.slice("[ci-static:tsgo:completion] ".length)) as {
+            planned: number;
+            completed: number;
+            leaves: string[];
+          };
+          const expectedLeaves = selected.length + (_label === "mixed CI" ? 1 : 0);
+          expect(evidence).toMatchObject({ planned: expectedLeaves, completed: expectedLeaves });
+          expect(new Set(evidence.leaves).size).toBe(expectedLeaves);
+        } else {
+          expect(completion).toBeUndefined();
+        }
       }
-    }
-  });
-});
+    });
+  },
+);
 
 it.runIf(process.platform !== "win32")(
   "checks a helper type error in its transitive test consumers without repeating enumeration",

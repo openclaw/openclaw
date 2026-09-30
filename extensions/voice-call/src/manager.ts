@@ -501,14 +501,11 @@ export class CallManager {
       return false;
     }
 
-    const streamAwareProvider = this.provider as VoiceCallProvider & {
-      isConversationStreamConnectEnabled?: () => boolean;
-    };
-    if (typeof streamAwareProvider.isConversationStreamConnectEnabled !== "function") {
+    if (typeof this.provider.isConversationStreamConnectEnabled !== "function") {
       return false;
     }
 
-    return streamAwareProvider.isConversationStreamConnectEnabled();
+    return this.provider.isConversationStreamConnectEnabled();
   }
 
   private maybeSpeakInitialMessageOnAnswered(call: CallRecord): void {

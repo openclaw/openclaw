@@ -253,18 +253,13 @@ function createDeepgramRealtimeTranscriptionSession(
         if (!text) {
           return;
         }
-        if (event.is_final) {
-          const nextFinalized = joinTranscript(finalizedTranscript, text);
-          if (!updateTurn(nextFinalized, "", transport)) {
-            return;
-          }
-          config.onPartial?.(nextFinalized);
-        } else {
-          if (!updateTurn(finalizedTranscript, text, transport)) {
-            return;
-          }
-          config.onPartial?.(joinTranscript(finalizedTranscript, text));
+        const nextFinalized = event.is_final
+          ? joinTranscript(finalizedTranscript, text)
+          : finalizedTranscript;
+        if (!updateTurn(nextFinalized, event.is_final ? "" : text, transport)) {
+          return;
         }
+        config.onPartial?.(event.is_final ? nextFinalized : joinTranscript(nextFinalized, text));
         return;
       }
       case "SpeechStarted":

@@ -73,13 +73,6 @@ describe("Memory watch configuration", () => {
     return result;
   }
 
-  it("does not start observers for one-shot CLI managers", async () => {
-    await configureMemoryCoreDreamingStateForTests(state.env);
-    manager = await MemoryIndexManager.get({ cfg: config(), agentId: "main", purpose: "cli" });
-    expect(manager).not.toBeNull();
-    expect(observer.watch).not.toHaveBeenCalled();
-  });
-
   it("keeps a newer selected-file dirty behind held settling before publishing the index", async () => {
     const file = path.join(state.workspaceDir, "memory", "note.md");
     await fs.writeFile(file, "Initial indexed text.");

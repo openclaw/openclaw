@@ -8,7 +8,7 @@ import { normalizeSessionColorValue } from "../../../packages/gateway-protocol/s
 import type { GatewaySessionRow } from "../api/types.ts";
 import type { NavigationRouteId } from "../app-navigation.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "../app/context.ts";
-import { resolveControlUiAuthCandidates } from "../app/control-ui-auth.ts";
+import { resolveControlUiAvatarAuth } from "../app/control-ui-auth.ts";
 import { t } from "../i18n/index.ts";
 import { formatDurationCompact } from "../lib/format-duration.ts";
 import { renderHoverMarquee } from "../lib/hover-marquee.ts";
@@ -33,6 +33,7 @@ import {
   sidebarSessionMetaId,
   sidebarSessionStateId,
   type SidebarRecentSession,
+  type SidebarToolActivity,
   type SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
 import { icons } from "./icons.ts";
@@ -60,6 +61,7 @@ export interface SessionListHost {
   readonly sessionsShowPreview: boolean;
   readonly sessionsShowSystem: boolean;
   readonly sidebarNarrationLines: ReadonlyMap<string, string>;
+  readonly sidebarTools: ReadonlyMap<string, SidebarToolActivity>;
   readonly sidebarObserverDigests: ReadonlyMap<string, SessionObserverDigest>;
   readonly sessionProjection: Pick<SidebarSessionProjection, "resolveSubtitle">;
   readonly selectedSessionKeys: ReadonlySet<string>;
@@ -216,21 +218,11 @@ function renderSidebarSessionIndicators(
       ? undefined
       : ownerActor;
   const gateway = host.sessionDataContext?.gateway;
-  const channelAvatarAuth = {
-    authTokens: gateway
-      ? resolveControlUiAuthCandidates({
-          hello: gateway.snapshot.hello,
-          settings: { token: gateway.connection.token },
-          password: gateway.connection.password,
-        })
-      : [],
-    authReady: Boolean(
-      gateway &&
-      (gateway.snapshot.hello ||
-        gateway.connection.token.trim() ||
-        gateway.connection.password.trim()),
-    ),
-  };
+  const channelAvatarAuth = resolveControlUiAvatarAuth({
+    hello: gateway?.snapshot.hello,
+    settings: gateway?.connection,
+    password: gateway?.connection.password,
+  });
   const { running, leadingIndicator, renderedIdentities } = renderSessionLeadingState(
     session,
     leadingOwner,
@@ -354,12 +346,17 @@ export function renderRecentSession(params: {
   const team = host.sidebarAgentsMode === "roster";
   const ownAttention = session.ownAttention ?? session.attention;
   const label = session.label;
-  const { subtitle, narration } = host.sessionProjection.resolveSubtitle({
+  const toolActivity =
+    !team && host.sessionsShowPreview && session.hasActiveRun && host.sidebarLiveActivity
+      ? host.sidebarTools.get(session.key)
+      : undefined;
+  const { subtitle, narration, toolName } = host.sessionProjection.resolveSubtitle({
     session,
     hasDisplay: display !== undefined,
     sidebarLiveActivity: host.sidebarLiveActivity,
     showPreview: host.sessionsShowPreview,
     narrationLine: host.sidebarNarrationLines.get(session.key),
+    toolActivity,
     observerDigest: host.sidebarObserverDigests.get(session.key) ?? null,
   });
   const indicators = renderSidebarSessionIndicators(host, session, display, icon);
@@ -477,7 +474,7 @@ export function renderRecentSession(params: {
       >
         ${persistentIndicator}
         <span class="sidebar-recent-session__text">
-          <span class="sidebar-recent-session__title-row"> ${marqueeLabel} </span>
+          <span class="sidebar-recent-session__title-row">${marqueeLabel}</span>
           <span class="sidebar-recent-session__details">
             ${
               session.channelPresentation
@@ -491,7 +488,7 @@ export function renderRecentSession(params: {
                   </span>`
                 : nothing
             }
-            ${team ? nothing : renderSidebarSessionSubtitle({ subtitle, narration })}
+            ${team ? nothing : renderSidebarSessionSubtitle({ subtitle, narration, toolName })}
             ${indicators.content}
           </span>
         </span>

@@ -250,7 +250,7 @@ With `visible: true`, `group`, `model`, `cwd`, `projectId`, `projectGitUrl`, and
 
 If a call fails with `Parameters require visible=true`, omit the named project, group, or worktree options to keep the hidden or ACP runtime. To create a visible session instead, use `visible: true` with `runtime: "subagent"` and omit `mode`, `thread`, `thinking`, `lightContext`, `attachments`, `attachAs`, swarm options, and the ACP-only `streamTo` and `resumeSessionId`. Worktree names and base refs also require `worktree: true`. Adding `visible: true` alone does not make an ACP call compatible.
 
-A visible spawn is attributed to the requesting agent: the new session's creator and initial owner is that agent, shown with its configured identity name and avatar in the sidebar. The accepted result doubles as a receipt with `childSessionKey`, `runId`, a Control UI `sessionUrl` (omitted when the Control UI is disabled), and an `owner` record. When acknowledging the spawn in a channel, put the session URL on the first line and `Owner: <label>` on the second so the user can open the session and see who is responsible. Owners can be reassigned later; see [Multi-user mode](/concepts/multi-user#agent-spawned-sessions).
+A visible spawn normally retains the requesting agent as its creator; a required sandbox instead preserves the parent's creator provenance. Its initial owner is the verified active human requester only when that person matches the parent session's human owner; otherwise it is the requesting agent. The accepted result doubles as a receipt with `childSessionKey`, `runId`, a Control UI `sessionUrl` (omitted when the Control UI is disabled), and an `owner` record. When acknowledging the spawn in a channel, put the session URL on the first line and `Owner: <label>` on the second so the user can open the session and see who is responsible. Owners can be reassigned later; see [Multi-user mode](/concepts/multi-user#agent-spawned-sessions).
 
 ### Task names and targeting
 
@@ -289,8 +289,9 @@ tool has already finished and its result appears in the transcript.
 
 Use the optional `message` field for private context that the resumed turn
 should receive. OpenClaw sends a default waiting reply when an interactive
-parent turn would otherwise end silently; `acknowledgment` overrides its text. It is not sent from
-sub-agent, heartbeat, or silent turns, and it does not replace a reply or
+parent turn would otherwise end silently; `acknowledgment` overrides its text.
+This waiting reply is not sent to the user from sub-agent, heartbeat, or silent
+turns, and it does not replace a reply or
 message already delivered during the turn. This host-owned waiting status
 bypasses message-tool-only source suppression; ordinary model replies remain
 private unless the model sends them through the message tool.
@@ -311,12 +312,22 @@ This does not schedule that message; an operator or integration must send it.
 Without a real pending child/runtime completion or this explicit message intent,
 yield is rejected. Return completed work as the normal final response:
 `sessions_yield` is not a final-result submission. An accepted yield pauses
-the child run instead of completing it, so the requester receives no
-completion event yet and keeps waiting. A plugin can then continue that same run
+the child run instead of completing it. For a child with announced completion,
+`waitFor: "message"` wakes its requester once per pause with a continuation-needed
+notice containing the child's session key, run ID, label, and trimmed
+`acknowledgment` text (up to 12,000 UTF-16 code units, the announce text limit),
+or a default "Paused awaiting continuation." line. The acknowledgment is
+presented as child-provided data using the same escaping as completion results. The
+notice is distinct from a completion and uses the requester's existing message
+queue policy if it is already running. It does not resume the child: send the
+continuation with `sessions_send` to the named child session. Yielding again in
+the requester does not repeat an already delivered pause notice.
+
+A plugin can then continue that same run
 by calling `api.runtime.subagent.run` with the paused `sessionKey`, instead of
 starting a sibling. The requester is announced once such a follow-up finishes
-normally; a follow-up that yields again leaves the run paused and the requester
-waiting.
+normally; a follow-up that yields again with `waitFor: "message"` leaves the run
+paused and sends a new continuation-needed notice.
 
 A yield claim belongs to the turn that spawned the children. When a later turn
 of the same session calls `sessions_yield` while children spawned by an earlier
@@ -329,6 +340,13 @@ completion arrives in the session as a later turn. Do not re-spawn, re-send,
 or poll to wake them. A `paused` child yielded with `waitFor: "message"` and
 will not complete until it receives a continuation; send one with
 `sessions_send` if this session owns that follow-up.
+
+`sessions_yield` only waits for child sessions. With nothing to wait for, it
+returns `status: "nothing_pending"`: guidance for the model, not a tool failure,
+so the conversation gets no failure warning. Detached `image_generate`,
+`video_generate`, and `music_generate` runs deliver their result as a later
+turn; a turn that ends with such a run in flight and no final reply stays
+pending instead of reporting a missing reply.
 
 The controlling parent resumes a paused native child with an ordinary
 `sessions_send` continuation. The runtime preserves the original task and its

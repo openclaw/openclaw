@@ -98,24 +98,18 @@ function notifyMcpLoopbackToolCallCaptureActivity(capture: McpLoopbackToolCallCa
 }
 
 /** Start loopback tool-call result capture for one serialized CLI invocation. */
-export function beginMcpLoopbackToolCallCapture(
-  params: McpLoopbackToolCallObservers & { captureKey: string },
-): void {
-  const captureKey = params.captureKey.trim();
+export function beginMcpLoopbackToolCallCapture({
+  captureKey: rawCaptureKey,
+  ...observers
+}: McpLoopbackToolCallObservers & { captureKey: string }): void {
+  const captureKey = rawCaptureKey.trim();
   if (!captureKey) {
     return;
   }
   nextToolCallCaptureGeneration += 1;
   toolCallCaptures.set(captureKey, {
+    ...observers,
     generation: nextToolCallCaptureGeneration,
-    onYield: params.onYield,
-    onRequestStart: params.onRequestStart,
-    onRequestClassified: params.onRequestClassified,
-    onRequestFinish: params.onRequestFinish,
-    onToolCallStart: params.onToolCallStart,
-    onToolCallUpdate: params.onToolCallUpdate,
-    onToolCallFinish: params.onToolCallFinish,
-    onToolCallResult: params.onToolCallResult,
     inFlight: 0,
     activityVersion: 0,
     activityWaiters: new Set(),

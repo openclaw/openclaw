@@ -131,13 +131,8 @@ export function formatFileOperations(readFiles: string[], modifiedFiles: string[
     formatBoundedFileList("read-files", readFiles, MAX_FILE_OPS_LIST_CHARS),
     formatBoundedFileList("modified-files", modifiedFiles, MAX_FILE_OPS_LIST_CHARS),
   ].filter(Boolean);
-  if (sections.length === 0) {
-    return "";
-  }
-  const joined = `\n\n${sections.join("\n\n")}`;
-  return joined.length > MAX_FILE_OPS_SECTION_CHARS
-    ? joined.slice(0, MAX_FILE_OPS_SECTION_CHARS)
-    : joined;
+  // Both 900-character lists and their separators fit the 2,000-character section cap.
+  return sections.length > 0 ? `\n\n${sections.join("\n\n")}` : "";
 }
 
 /** Extract visible summary text without normalizing valid model output. */

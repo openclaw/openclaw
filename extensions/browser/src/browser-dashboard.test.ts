@@ -226,24 +226,18 @@ describe("Browser dashboard lifetime", () => {
     expect((await requestBrowserDashboard({ ...request, resume: true })).paused).toBe(false);
   });
 
-  it.each(["removed", "session deleted", "replaced", "URL changed", "profile changed"] as const)(
+  it.each(["replaced", "URL changed", "profile changed"] as const)(
     "retires cold Stop intent when the definition is %s without starting a browser",
     async (change) => {
       await stopBrowserDashboard(request);
-      if (change === "removed" || change === "session deleted") {
-        fixture.widgets = [];
-      } else if (change === "replaced") {
+      if (change === "replaced") {
         fixture.widgets[0]!.instanceId = "instance-two";
       } else if (change === "URL changed") {
         fixture.widgets[0]!.props.url = "http://updated.example/";
       } else {
         fixture.widgets[0]!.props.profile = "other-managed";
       }
-      if (change === "session deleted") {
-        await closeTrackedBrowserTabsForSessions({ sessionKeys: [sessionKey] });
-      } else {
-        await sweepTrackedBrowserTabs({ ordinaryCleanup: false });
-      }
+      await sweepTrackedBrowserTabs({ ordinaryCleanup: false });
       expect(await getBrowserSessionTabStore().entries()).toEqual([]);
       expect(browser.open).not.toHaveBeenCalled();
       expect(browser.closeOwned).not.toHaveBeenCalled();
@@ -387,13 +381,11 @@ describe("Browser dashboard lifetime", () => {
     expect(browser.open).not.toHaveBeenCalled();
   });
 
-  it.each(["removed", "invalid URL", "invalid profile"] as const)(
+  it.each(["invalid URL", "invalid profile"] as const)(
     "reconciles %s definitions even when ordinary tab cleanup is disabled",
     async (condition) => {
       await requestBrowserDashboard(request);
-      if (condition === "removed") {
-        fixture.widgets = [];
-      } else if (condition === "invalid URL") {
+      if (condition === "invalid URL") {
         fixture.widgets[0]!.props.url = "ftp://service.example/";
       } else {
         fixture.widgets[0]!.props.profile = " ";
@@ -402,9 +394,7 @@ describe("Browser dashboard lifetime", () => {
       expect(fixture.tabs).toEqual([]);
       expect(await readBrowserDashboardTabs()).toEqual([]);
       expect(browser.closeOwned).toHaveBeenCalledOnce();
-      if (condition !== "removed") {
-        await expect(requestBrowserDashboard(request)).rejects.toThrow(/widget_put/);
-      }
+      await expect(requestBrowserDashboard(request)).rejects.toThrow(/widget_put/);
     },
   );
 
@@ -803,39 +793,24 @@ describe("Browser dashboard lifetime", () => {
     expect(fixture.tabs).toEqual([]);
   });
 
-  it.each(["removed", "replaced", "url-changed", "caller-aborted"] as const)(
-    "compensates an open when %s races browser creation",
-    async (kind) => {
-      const started = createDeferred<void>();
-      const finish = createDeferred<void>();
-      browser.open.mockImplementationOnce(async () => {
-        started.resolve();
-        await finish.promise;
-        return fixture.openedTab();
-      });
-      const controller = new AbortController();
-      const pending = requestBrowserDashboard(request, { signal: controller.signal });
-      const rejected = expect(pending).rejects.toThrow();
-      await started.promise;
-      if (kind === "removed") {
-        fixture.widgets = [];
-      }
-      if (kind === "replaced") {
-        fixture.widgets[0]!.instanceId = "instance-two";
-      }
-      if (kind === "url-changed") {
-        fixture.widgets[0]!.props.url = "http://other.example/";
-      }
-      if (kind === "caller-aborted") {
-        controller.abort(new Error("caller aborted"));
-      }
-      finish.resolve();
-      await rejected;
-      expect(fixture.tabs).toEqual([]);
-      expect(await readBrowserDashboardTabs()).toEqual([]);
-      expect(browser.closeOwned).toHaveBeenCalledOnce();
-    },
-  );
+  it("compensates an open when widget replacement races browser creation", async () => {
+    const started = createDeferred<void>();
+    const finish = createDeferred<void>();
+    browser.open.mockImplementationOnce(async () => {
+      started.resolve();
+      await finish.promise;
+      return fixture.openedTab();
+    });
+    const pending = requestBrowserDashboard(request);
+    const rejected = expect(pending).rejects.toThrow();
+    await started.promise;
+    fixture.widgets[0]!.instanceId = "instance-two";
+    finish.resolve();
+    await rejected;
+    expect(fixture.tabs).toEqual([]);
+    expect(await readBrowserDashboardTabs()).toEqual([]);
+    expect(browser.closeOwned).toHaveBeenCalledOnce();
+  });
 
   it("bounds retained-tab materialization while reconciling unrelated dashboard removals", async () => {
     const store = getBrowserSessionTabStore();

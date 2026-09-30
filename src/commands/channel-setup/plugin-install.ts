@@ -14,7 +14,6 @@ import type { RuntimeEnv } from "../../runtime.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 import {
   ensureOnboardingPluginInstalled,
-  type OnboardingPluginInstallEntry,
   type OnboardingPluginInstallStatus,
 } from "../onboarding-plugin-install.js";
 import { getTrustedChannelPluginCatalogEntry } from "./trusted-catalog.js";
@@ -25,19 +24,6 @@ type InstallResult = {
   pluginId?: string;
   status: OnboardingPluginInstallStatus;
 };
-
-function toOnboardingPluginInstallEntry(
-  entry: ChannelPluginCatalogEntry,
-): OnboardingPluginInstallEntry {
-  return {
-    pluginId: entry.pluginId ?? entry.id,
-    label: entry.meta.label,
-    install: entry.install,
-    ...(entry.trustedSourceLinkedOfficialInstall
-      ? { trustedSourceLinkedOfficialInstall: true }
-      : {}),
-  };
-}
 
 /** Install or reuse the plugin package required by a trusted channel catalog entry. */
 export async function ensureChannelSetupPluginInstalled(params: {
@@ -52,7 +38,14 @@ export async function ensureChannelSetupPluginInstalled(params: {
 }): Promise<InstallResult> {
   const result = await ensureOnboardingPluginInstalled({
     cfg: params.cfg,
-    entry: toOnboardingPluginInstallEntry(params.entry),
+    entry: {
+      pluginId: params.entry.pluginId ?? params.entry.id,
+      label: params.entry.meta.label,
+      install: params.entry.install,
+      ...(params.entry.trustedSourceLinkedOfficialInstall
+        ? { trustedSourceLinkedOfficialInstall: true }
+        : {}),
+    },
     prompter: params.prompter,
     runtime: params.runtime,
     workspaceDir: params.workspaceDir,

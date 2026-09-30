@@ -45,7 +45,10 @@ export type EmbeddedAttemptExecutionPhaseInput = {
   };
   sessionLock: Pick<
     PreparedTranscriptLifecycle,
-    "compactionTimeoutMs" | "ownedTranscriptWriteContext" | "withOwnedTranscriptWrite"
+    | "compactionTimeoutMs"
+    | "assertCronRootCurrent"
+    | "ownedTranscriptWriteContext"
+    | "withOwnedTranscriptWrite"
   >;
   setup: Pick<
     EmbeddedAttemptSetup,

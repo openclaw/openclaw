@@ -57,8 +57,13 @@ export async function readSubagentRunAnnounceResultUsing(
 ): Promise<PreparedAnnounceResult> {
   const isCurrent = captureAnnounceResultAuthority(child);
   const terminalReply = child.completion?.terminalReply;
-  if (terminalReply?.disposition !== "visible" || child.execution.outcome?.status !== "ok") {
-    return { text: resolveSubagentCompletionResultText(child), isCurrent };
+  const capturedResult = resolveSubagentCompletionResultText(child);
+  if (
+    !capturedResult ||
+    terminalReply?.disposition !== "visible" ||
+    child.execution.outcome?.status !== "ok"
+  ) {
+    return { text: capturedResult, isCurrent };
   }
   const runId = child.runId;
   const childSessionKey = child.childSessionKey;

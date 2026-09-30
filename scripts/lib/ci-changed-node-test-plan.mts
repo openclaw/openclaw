@@ -552,18 +552,23 @@ export function resolveChangedNodeTestTargets(
 }
 
 function resolvePreciseChangedTargets(targets: readonly string[], cwd: string) {
-  return targets.map((target) => ({
-    target,
-    plans: buildVitestRunPlans([target], cwd).map((targetPlan) => {
-      const config =
-        path.resolve(cwd) === process.cwd()
-          ? resolveCanonicalNodeTestConfig(target, targetPlan.config)
-          : undefined;
-      return config && config !== targetPlan.config
-        ? Object.assign({}, targetPlan, { config, includePatterns: [target], forwardedArgs: [] })
-        : targetPlan;
-    }),
-  }));
+  return targets.map((target) => {
+    // Plugin opt-ins reuse source routing before canonical config remapping.
+    const sourcePlans = buildVitestRunPlans([target], cwd);
+    return {
+      target,
+      sourcePlans,
+      plans: sourcePlans.map((targetPlan) => {
+        const config =
+          path.resolve(cwd) === process.cwd()
+            ? resolveCanonicalNodeTestConfig(target, targetPlan.config)
+            : undefined;
+        return config && config !== targetPlan.config
+          ? Object.assign({}, targetPlan, { config, includePatterns: [target], forwardedArgs: [] })
+          : targetPlan;
+      }),
+    };
+  });
 }
 
 function createChangedTargetShards(
@@ -1043,6 +1048,9 @@ export function createChangedNodeTestShards(
       ? createSelectedNodeTestShardBundles(canonicalTargets, {
           runnerBackend: options.runnerBackend,
           onFallback: options.onFallback,
+          preparedTestPlans: new Map(
+            prTargetPlans.map(({ target, sourcePlans }) => [target, sourcePlans]),
+          ),
           // These exact targets already passed deferral above, including explicit policy watches.
           includeReleaseOnlyRuntimeTests: true,
           includePrExemptRuntimeTests: true,

@@ -71,6 +71,12 @@ afterEach(() => {
 });
 
 describe("PaletteSessionDraft", () => {
+  it("omits the worktree setting for a non-Git workspace", async () => {
+    const { host } = await mount();
+    expect(host.querySelector(".palette-session-settings__workspace")).not.toBeNull();
+    expect(host.querySelector('[role="switch"][aria-label="New worktree"]')).toBeNull();
+  });
+
   it.each(["connection", "account"] as const)(
     "retires a locked prompt when the %s owner changes",
     async (change) => {

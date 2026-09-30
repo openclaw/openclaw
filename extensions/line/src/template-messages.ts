@@ -85,8 +85,6 @@ function normalizeCarouselColumn(column: CarouselColumn): CarouselColumn {
       .map((action) => normalizeLineAction(action))
       .filter((action) => action.label !== undefined && action.label !== "")
       .slice(0, 3),
-    defaultAction:
-      column.defaultAction === undefined ? undefined : normalizeLineAction(column.defaultAction),
   };
 }
 

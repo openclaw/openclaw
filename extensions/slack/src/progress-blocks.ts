@@ -5,8 +5,8 @@ import {
   type AgentPlanStep,
   type ChannelProgressDraftCompositorSnapshot,
   type ChannelProgressDraftLine,
-  formatChannelProgressDraftDiffStat,
-  formatPlanChecklistLines,
+  compactChannelProgressDraftLine,
+  selectPlanChecklistSteps,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { SLACK_MAX_BLOCKS } from "./blocks-input.js";
 import { normalizeSlackOutboundText } from "./format.js";
@@ -103,8 +103,8 @@ function compactChunkText(value: string): string {
 }
 
 // Card text is transient status: render authored Markdown as mrkdwn, but never
-// let it ping anyone or nest the card's own bold/italic wrapper.
-function renderProgressCardText(text: string, enclosingStyle?: "bold" | "italic"): string {
+// let it ping anyone or nest the card's own italic wrapper.
+function renderProgressCardText(text: string, enclosingStyle?: "italic"): string {
   return normalizeSlackOutboundText(text, { mentions: "escape", enclosingStyle });
 }
 
@@ -117,17 +117,6 @@ function lineDetailParts(line: ChannelProgressDraftLine): string[] {
   ]
     .map((part) => part?.trim())
     .filter((part): part is string => Boolean(part));
-}
-
-function activityLineDetail(line: ChannelProgressDraftLine, maxChars: number): string {
-  const detail = lineDetailParts(line).join(" · ");
-  if (detail) {
-    return escapeSlackMrkdwn(compactDetail(detail, maxChars));
-  }
-  const text = line.text.replace(/^(?:🧠|💬)\s+/u, "").trim();
-  return line.kind === "item" && !line.toolName && text && text !== line.label
-    ? renderProgressCardText(compactDetail(text, maxChars))
-    : "—";
 }
 
 function lineTaskTitle(line: ChannelProgressDraftLine): string {
@@ -382,19 +371,22 @@ function joinRecentProgressRows(rows: readonly string[]): string {
 function buildActivityText(lines: readonly ChannelProgressDraftLine[], maxLineChars: number) {
   return joinRecentProgressRows(
     lines.slice(-SLACK_MAX_BLOCKS).map((line) => {
-      const title = `${line.icon ?? "•"} *${renderProgressCardText(line.label, "bold")}*`;
-      return `${title} — ${activityLineDetail(line, maxLineChars)}`;
+      if (line.kind === "item" && !line.toolName) {
+        return `_${renderProgressCardText(compactDetail(line.text, maxLineChars), "italic")}_`;
+      }
+      const detail = compactDetail(lineDetailParts(line).join(" · "), maxLineChars);
+      return escapeSlackMrkdwn(detail ? `${line.label} — ${detail}` : line.label);
     }),
   );
 }
 
 export function buildSlackProgressCardBlocks(params: {
   state: SlackProgressCardState;
+  detailed: boolean;
   title?: string;
-  titleFormat?: "plain";
   lines: readonly ChannelProgressDraftLine[];
   plan?: readonly AgentPlanStep[];
-  narration?: string | readonly SlackProgressText[];
+  narration?: readonly SlackProgressText[];
   maxLineChars?: number;
   toolCalls?: number;
   elapsedSeconds?: number;
@@ -405,54 +397,74 @@ export function buildSlackProgressCardBlocks(params: {
     params.maxLineChars,
     DEFAULT_SLACK_PROGRESS_DETAIL_MAX_CHARS,
   );
-  const planLines = formatPlanChecklistLines(params.plan ?? [], {
+  const selected = selectPlanChecklistSteps(params.detailed ? (params.plan ?? []) : [], {
     maxLines: SLACK_MAX_BLOCKS,
-    maxLineChars,
   });
-  const narration = (
-    typeof params.narration === "string" ? [{ text: params.narration }] : (params.narration ?? [])
-  )
-    .map(({ text, format }: SlackProgressText) => ({
-      text: text.replace(/\s+/g, " ").trim(),
-      format,
-    }))
-    .filter((part) => part.text);
-  const diffStat = formatChannelProgressDraftDiffStat(params.diffStat);
+  const planLines = [
+    ...(selected.summary ? [selected.summary] : []),
+    ...selected.steps.map(
+      ({ step, status }) =>
+        `${status === "completed" ? "✓" : status === "in_progress" ? "▸" : "▢"} ${step}`,
+    ),
+  ].map((line) => compactChannelProgressDraftLine(line, maxLineChars));
+  const narration = new Map<string, SlackProgressText["format"]>();
+  for (const part of params.narration ?? []) {
+    const text = part.text.replace(/\s+/g, " ").trim();
+    if (text) {
+      narration.set(text, part.format ?? narration.get(text));
+    }
+  }
+  const lines = params.lines.filter((line) =>
+    line.kind === "item" && !line.toolName
+      ? !narration.has(
+          line.text
+            .replace(/^_(.*)_$/gmu, "$1")
+            .replace(/\s+/g, " ")
+            .trim(),
+        )
+      : params.detailed || line.kind === "approval",
+  );
+  const { diffStat: diff, toolCalls, elapsedSeconds } = params;
+  const diffStat =
+    diff && (diff.files || diff.added || diff.removed)
+      ? [
+          `${diff.files} ${diff.files === 1 ? "file" : "files"}`,
+          ...(diff.added > 0 ? [`+${diff.added}`] : []),
+          ...(diff.removed > 0 ? [`−${diff.removed}`] : []),
+        ].join(" ")
+      : undefined;
   const workingFooter = [
-    ...(params.toolCalls && params.toolCalls > 0 ? [`🛠️ ${params.toolCalls} tools`] : []),
+    ...(toolCalls && toolCalls > 0 ? [`${toolCalls} ${toolCalls === 1 ? "tool" : "tools"}`] : []),
     ...(diffStat ? [diffStat] : []),
-    ...(params.elapsedSeconds && params.elapsedSeconds > 0 ? [`⏱ ${params.elapsedSeconds}s`] : []),
+    ...(elapsedSeconds && elapsedSeconds > 0 ? [`${elapsedSeconds}s`] : []),
   ].join(" · ");
   // A finished card keeps only the durable diff stat. Tool-call/elapsed counters
   // are live working state, not a receipt to leave behind in the transcript.
   const footer = params.state === "working" ? workingFooter : diffStat;
-  const icon = params.state === "working" ? "🔄" : params.state === "success" ? "✅" : "❌";
   const finalStatus =
     params.state === "working" ? undefined : params.state === "success" ? "complete" : "error";
-  const attention = params.lines.flatMap((line) => {
+  const attention = lines.flatMap((line) => {
     const title = formatProgressAttentionTitle(line, finalStatus);
     return title === undefined ? [] : [escapeSlackMrkdwn(title)];
   });
   const sections = [
     planLines.map((line) => renderProgressCardText(line)).join("\n"),
     buildActivityText(
-      params.lines.filter((line) => line.kind !== "approval" && lineTaskStatus(line) !== "error"),
+      lines.filter((line) => line.kind !== "approval" && lineTaskStatus(line) !== "error"),
       maxLineChars,
     ),
     // Attention has its own bounded section so activity truncation cannot hide it.
     joinRecentProgressRows(attention),
   ];
-  const title =
-    params.title?.trim() ||
-    (params.state === "working" ? "Working" : params.state === "success" ? "Done" : "Failed");
+  const title = params.title?.trim();
   const blocks: (Block | KnownBlock)[] = [
-    params.titleFormat === "plain"
-      ? progressTextSection({ text: `${icon} ${title}`, format: "plain" })
-      : { type: "section", text: field(`${icon} *${renderProgressCardText(title, "bold")}*`) },
-    ...narration.map((part) => progressTextSection(part, "italic")),
+    // A failed turn may end without any error reply; the card is its only visible outcome.
+    ...(params.state === "error" ? [progressTextSection({ text: "Failed", format: "plain" })] : []),
+    ...(title ? [progressTextSection({ text: title, format: "plain" })] : []),
+    ...[...narration].map(([text, format]) => progressTextSection({ text, format }, "italic")),
     ...sections.filter(Boolean).map((text) => ({ type: "section" as const, text: field(text) })),
   ];
-  if (footer) {
+  if (params.detailed && footer) {
     blocks.push({ type: "context", elements: [field(footer)] });
   }
   if (params.state !== "working" && params.sessionLinks?.length) {

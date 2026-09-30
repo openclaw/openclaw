@@ -170,7 +170,7 @@ describe("memory forget", () => {
     { label: "session key", selector: "agent:main:archived" },
   ])("purges an archived-only session selected by its $label", async ({ selector }) => {
     await seedMemoryForgetSession("archived");
-    recordMemoryEntryOrigins({
+    await recordMemoryEntryOrigins({
       agentId: "main",
       origins: [
         {
@@ -241,7 +241,7 @@ describe("memory forget", () => {
       curatedWrites: [{ relativePath: "USER.md", observedAt: expect.any(Number) }],
       artifacts: { memoryEntries: 1, sessionCorpusLines: 1, originRows: 1 },
     });
-    expect(listMemorySessionTombstones({ agentId: "main" })).toEqual([]);
+    expect(await listMemorySessionTombstones({ agentId: "main" })).toEqual([]);
 
     const report = await forgetMemoryEntries({ cfg, agentId: "main", sessionIds: [selector] });
     expect(report).toEqual({ ...preview, dryRun: false });
@@ -251,15 +251,15 @@ describe("memory forget", () => {
     expect(await fs.readFile(path.join(workspaceDir, "USER.md"), "utf8")).toContain(
       "Keep curated profile",
     );
-    expect(listMemoryEntryOrigins({ agentId: "main" })).toEqual([]);
-    expect(listMemorySessionTombstones({ agentId: "main" })).toMatchObject([
+    expect(await listMemoryEntryOrigins({ agentId: "main" })).toEqual([]);
+    expect(await listMemorySessionTombstones({ agentId: "main" })).toMatchObject([
       { sessionId: "archived", reason: "forgotten" },
     ]);
   });
 
   it("leaves the original memory file intact when a rewrite fails mid-write", async () => {
     await seedMemoryForgetSession("archived");
-    recordMemoryEntryOrigins({
+    await recordMemoryEntryOrigins({
       agentId: "main",
       origins: [
         {
@@ -370,7 +370,7 @@ describe("memory forget", () => {
         .filter(([name]) => name !== "embeddingCacheRows")
         .every(([, count]) => count === 0),
     ).toBe(true);
-    expect(listMemorySessionTombstones({ agentId: "main" })).toEqual([]);
+    expect(await listMemorySessionTombstones({ agentId: "main" })).toEqual([]);
 
     const report = await forgetMemoryEntries({
       cfg,
@@ -378,7 +378,7 @@ describe("memory forget", () => {
       sessionIds: ["unknown-session"],
     });
     expect(report).toEqual({ ...preview, dryRun: false });
-    const tombstones = listMemorySessionTombstones({ agentId: "main" });
+    const tombstones = await listMemorySessionTombstones({ agentId: "main" });
     expect(tombstones).toMatchObject([{ sessionId: "unknown-session", reason: "forgotten" }]);
     expect(
       await forgetMemoryEntries({ cfg, agentId: "main", sessionIds: ["unknown-session"] }),
@@ -386,7 +386,7 @@ describe("memory forget", () => {
       ...report,
       artifacts: { ...report.artifacts, embeddingCacheRows: 0 },
     });
-    expect(listMemorySessionTombstones({ agentId: "main" })).toEqual(tombstones);
+    expect(await listMemorySessionTombstones({ agentId: "main" })).toEqual(tombstones);
     expect(await fs.readFile(memoryPath, "utf8")).toBe(content);
     expect(db.prepare("SELECT id FROM memory_index_chunks").all()).toEqual([{ id: "unrelated" }]);
     expect(db.prepare("SELECT hash FROM memory_embedding_cache").all()).toEqual([]);
@@ -550,7 +550,7 @@ describe("memory forget", () => {
     async ({ failure, corpusExtension }) => {
       await seedMemoryForgetSession("survivor");
       await seedMemoryForgetSession("target", "gmail");
-      recordMemoryEntryOrigins({
+      await recordMemoryEntryOrigins({
         agentId: "main",
         origins: [
           {
@@ -860,7 +860,7 @@ describe("memory forget", () => {
             faultDb.exec("DROP TRIGGER abort_forget");
           }
         }
-        expect(listMemorySessionTombstones({ agentId: "main" })).toMatchObject([
+        expect(await listMemorySessionTombstones({ agentId: "main" })).toMatchObject([
           { sessionId: "target", reason: "forgotten" },
         ]);
       }
@@ -947,10 +947,10 @@ describe("memory forget", () => {
       expect(backups[0]?.value.contentHash).toBe(
         createHash("sha256").update(backups[0]!.value.content).digest("hex"),
       );
-      expect(listMemoryEntryOrigins({ agentId: "main" }).map((origin) => origin.entryKey)).toEqual([
-        "clean-entry",
-      ]);
-      const tombstones = listMemorySessionTombstones({ agentId: "main" });
+      expect(
+        (await listMemoryEntryOrigins({ agentId: "main" })).map((origin) => origin.entryKey),
+      ).toEqual(["clean-entry"]);
+      const tombstones = await listMemorySessionTombstones({ agentId: "main" });
       expect(tombstones).toEqual([
         {
           agentId: "main",
@@ -963,7 +963,7 @@ describe("memory forget", () => {
       const repeated = await forgetMemoryEntries({ cfg, agentId: "main", hookSources: ["gmail"] });
       expect(repeated.sessionIds).toEqual(["target"]);
       expect(Object.values(repeated.artifacts).every((count) => count === 0)).toBe(true);
-      expect(listMemorySessionTombstones({ agentId: "main" })).toEqual(tombstones);
+      expect(await listMemorySessionTombstones({ agentId: "main" })).toEqual(tombstones);
     },
   );
 
@@ -1012,7 +1012,7 @@ describe("memory forget", () => {
     const deleted = await forgetMemoryEntries({ cfg, agentId: "main", sessionIds: ["target"] });
     expect(deleted.artifacts.memoryFiles).toBe(0);
     expect(await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf8")).toBe(memoryContent);
-    expect(listMemorySessionTombstones({ agentId: "main" })).toMatchObject([
+    expect(await listMemorySessionTombstones({ agentId: "main" })).toMatchObject([
       { agentId: "main", sessionId: "target", reason: "forgotten" },
     ]);
     expect(

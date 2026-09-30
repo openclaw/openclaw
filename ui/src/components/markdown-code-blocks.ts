@@ -13,6 +13,7 @@ import rust from "highlight.js/lib/languages/rust";
 import typescript from "highlight.js/lib/languages/typescript";
 import xml from "highlight.js/lib/languages/xml";
 import yaml from "highlight.js/lib/languages/yaml";
+import { escapeHtml } from "../../../src/shared/html-escape.js";
 import { t } from "../i18n/index.ts";
 import { registerCodeBlocksEnglish } from "../i18n/locales/en-code-blocks.ts";
 import { copyMarkdownText } from "./markdown-copy.ts";
@@ -23,7 +24,7 @@ import {
   type MarkdownJson,
 } from "./markdown-json.ts";
 import type { MarkdownRenderEnv } from "./markdown-render-options.ts";
-import { escapeMarkdownHtml, isMarkdownBlockArtText } from "./markdown-text.ts";
+import { isMarkdownBlockArtText } from "./markdown-text.ts";
 
 registerCodeBlocksEnglish();
 
@@ -167,7 +168,7 @@ export function highlightCodeHtml(text: string, lang: string): string {
   } catch {
     // Fall back to escaped plaintext; malformed input should not break chat rendering.
   }
-  return escapeMarkdownHtml(text);
+  return escapeHtml(text);
 }
 
 /** Highlight a JSON/JSON5 snippet; output is escaped hljs markup safe for unsafeHTML in a code block. */
@@ -180,18 +181,18 @@ function codeClassAttribute(lang: string, highlighted: string): string {
     highlighted.includes("hljs-") ? "hljs" : "",
     lang ? `language-${lang}` : "",
   ].filter(Boolean);
-  return classes.length > 0 ? ` class="${escapeMarkdownHtml(classes.join(" "))}"` : "";
+  return classes.length > 0 ? ` class="${escapeHtml(classes.join(" "))}"` : "";
 }
 
 function renderCodeBlockHeader(lang: string, actions: string): string {
-  const language = escapeMarkdownHtml(lang || t("chat.codeBlock.languageFallback"));
+  const language = escapeHtml(lang || t("chat.codeBlock.languageFallback"));
   return `<div class="code-block-header" data-markdown-key="header"><span class="code-block-lang">${language}</span><div class="code-block-actions">${actions}</div></div>`;
 }
 
 function renderCodeBlockCopyButton(text: string): string {
   // Attribute sanitization trims plain values; encode copied whitespace with the text.
-  const attrSafe = escapeMarkdownHtml(encodeCodeBlockCopyPayload(text));
-  return `<button type="button" class="code-block-copy" data-markdown-key="copy" data-code="${attrSafe}" data-code-encoding="${blockArtCodeBlockCopyPayloadEncoding}" aria-label="${escapeMarkdownHtml(t("common.copyCode"))}"><span class="code-block-copy__idle" aria-hidden="true"></span><span class="code-block-copy__done" aria-hidden="true"></span><span class="code-block-copy__failed" aria-hidden="true">!</span></button>`;
+  const attrSafe = escapeHtml(encodeCodeBlockCopyPayload(text));
+  return `<button type="button" class="code-block-copy" data-markdown-key="copy" data-code="${attrSafe}" data-code-encoding="${blockArtCodeBlockCopyPayloadEncoding}" aria-label="${escapeHtml(t("common.copyCode"))}"><span class="code-block-copy__idle" aria-hidden="true"></span><span class="code-block-copy__done" aria-hidden="true"></span><span class="code-block-copy__failed" aria-hidden="true">!</span></button>`;
 }
 
 export function renderMarkdownCodeBlock(
@@ -203,7 +204,7 @@ export function renderMarkdownCodeBlock(
   const blockArt = options.blockArt || isMarkdownBlockArtText(text);
   const highlight = options.highlight;
   const highlighted =
-    blockArt || highlight === false ? escapeMarkdownHtml(text) : highlightCodeHtml(text, lang);
+    blockArt || highlight === false ? escapeHtml(text) : highlightCodeHtml(text, lang);
   const classAttr = blockArt
     ? ' class="markdown-block-art"'
     : codeClassAttribute(lang, highlighted);
@@ -240,9 +241,9 @@ export function renderMarkdownCodeBlock(
     hiddenCount,
   );
   const expandButton = hiddenLineCount
-    ? `<button type="button" class="code-block-expand" data-markdown-key="expand" aria-label="${escapeMarkdownHtml(expandLabel)}" aria-expanded="false"><span class="code-block-chevron" aria-hidden="true"></span><span>${escapeMarkdownHtml(hiddenLabel)}</span></button>`
+    ? `<button type="button" class="code-block-expand" data-markdown-key="expand" aria-label="${escapeHtml(expandLabel)}" aria-expanded="false"><span class="code-block-chevron" aria-hidden="true"></span><span>${escapeHtml(hiddenLabel)}</span></button>`
     : "";
-  const wrapLabel = escapeMarkdownHtml(t("chat.codeBlock.enableWrap"));
+  const wrapLabel = escapeHtml(t("chat.codeBlock.enableWrap"));
   const wrapButton = `<button type="button" class="code-block-wrap" data-markdown-key="wrap" aria-label="${wrapLabel}" title="${wrapLabel}" aria-pressed="false"><span class="code-block-wrap__enable" aria-hidden="true"></span><span class="code-block-wrap__disable" aria-hidden="true"></span></button>`;
   const header = renderCodeBlockHeader(
     lang,

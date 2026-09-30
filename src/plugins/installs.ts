@@ -1,4 +1,3 @@
-// Normalizes installed plugin config and install records.
 import {
   copyPluginInstallRecordMap,
   getPluginInstallRecordMapEntry,

@@ -101,25 +101,6 @@ export function mapSandboxSkillEntriesForPrompt(params: {
   });
 }
 
-function mapSandboxSkillUsagePaths(params: {
-  paths?: SkillUsagePath[];
-  skillsWorkspaceDir: string;
-  skillsPromptWorkspaceDir: string;
-}): SkillUsagePath[] | undefined {
-  if (!params.paths || params.skillsWorkspaceDir === params.skillsPromptWorkspaceDir) {
-    return params.paths;
-  }
-  return params.paths.map((entry) => ({
-    ...entry,
-    readPath:
-      mapPathFromWorkspaceToContainer({
-        filePath: entry.readPath,
-        sourceWorkspaceDir: params.skillsWorkspaceDir,
-        targetWorkspaceDir: params.skillsPromptWorkspaceDir,
-      }) ?? entry.readPath,
-  }));
-}
-
 export function resolveSandboxSkillRuntimeInputs(params: {
   sandbox?: SandboxSkillRuntimeContext | null;
   // Fallback skill discovery anchors to the configured agent workspace so
@@ -145,11 +126,18 @@ export function resolveSandboxSkillRuntimeInputs(params: {
             ...MATERIALIZED_SKILLS_WORKSPACE_CONTAINER_PARTS,
           )
         : (params.sandbox.containerWorkdir ?? skillsWorkspaceDir);
-    const skillUsagePaths = mapSandboxSkillUsagePaths({
-      paths: params.sandbox.skillUsagePaths,
-      skillsWorkspaceDir,
-      skillsPromptWorkspaceDir,
-    });
+    const skillUsagePaths =
+      skillsWorkspaceDir === skillsPromptWorkspaceDir
+        ? params.sandbox.skillUsagePaths
+        : params.sandbox.skillUsagePaths?.map((entry) => ({
+            ...entry,
+            readPath:
+              mapPathFromWorkspaceToContainer({
+                filePath: entry.readPath,
+                sourceWorkspaceDir: skillsWorkspaceDir,
+                targetWorkspaceDir: skillsPromptWorkspaceDir,
+              }) ?? entry.readPath,
+          }));
     // An explicit empty snapshot excludes instructions; it has no host paths to remap.
     let selectedSnapshot =
       params.skillsSnapshot && !params.skillsSnapshot.prompt.trim()

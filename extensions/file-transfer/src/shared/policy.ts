@@ -135,20 +135,10 @@ function matchesPendingReapproval(
 }
 
 function readPluginConfigFromRuntimeConfig(): Record<string, unknown> | null {
-  const cfg = getRuntimeConfig();
-  const plugins = asOptionalObjectRecord((cfg as { plugins?: unknown }).plugins);
-  if (!plugins) {
-    return null;
-  }
-  const entries = asOptionalObjectRecord(plugins.entries);
-  if (!entries) {
-    return null;
-  }
-  const entry = asOptionalObjectRecord(entries["file-transfer"]);
-  if (!entry) {
-    return null;
-  }
-  return asNullableRecord(entry.config);
+  const plugins = asOptionalObjectRecord(getRuntimeConfig().plugins);
+  const entries = asOptionalObjectRecord(plugins?.entries);
+  const entry = asOptionalObjectRecord(entries?.["file-transfer"]);
+  return asNullableRecord(entry?.config);
 }
 
 function readFileTransferConfig(
@@ -425,26 +415,14 @@ function evaluateFilePolicyInternal(
     };
   }
 
-  if (askMode === "on-miss") {
-    return {
-      ok: false,
-      code: "POLICY_DENIED",
-      reason: `path does not match any allow${input.kind === "read" ? "Read" : "Write"}Paths pattern`,
-      askable: true,
-      askMode,
-      maxBytes,
-      followSymlinks,
-    };
-  }
-
   return {
     ok: false,
     code: "POLICY_DENIED",
     reason:
-      allowPatterns.length === 0
+      askMode !== "on-miss" && allowPatterns.length === 0
         ? `no allow${input.kind === "read" ? "Read" : "Write"}Paths configured`
         : `path does not match any allow${input.kind === "read" ? "Read" : "Write"}Paths pattern`,
-    askable: false,
+    askable: askMode === "on-miss",
     askMode,
     maxBytes,
     followSymlinks,

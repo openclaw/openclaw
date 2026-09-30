@@ -158,7 +158,7 @@ export class MediaStreamHandler {
 
   handleUpgrade(request: IncomingMessage, socket: Duplex, head: Buffer): void {
     if (this.closing) {
-      this.rejectUpgrade(socket, 503, "Media stream handler is shutting down");
+      this.rejectUpgrade(socket, "Media stream handler is shutting down");
       return;
     }
 
@@ -175,7 +175,7 @@ export class MediaStreamHandler {
 
     const currentConnections = this.wss.clients.size + this.inflightUpgrades;
     if (currentConnections >= this.maxConnections) {
-      this.rejectUpgrade(socket, 503, "Too many media stream connections");
+      this.rejectUpgrade(socket, "Too many media stream connections");
       return;
     }
 
@@ -547,11 +547,10 @@ export class MediaStreamHandler {
     this.pendingByIp.set(pending.ip, current - 1);
   }
 
-  private rejectUpgrade(socket: Duplex, statusCode: 429 | 503, message: string): void {
-    const statusText = statusCode === 429 ? "Too Many Requests" : "Service Unavailable";
+  private rejectUpgrade(socket: Duplex, message: string): void {
     const body = `${message}\n`;
     socket.write(
-      `HTTP/1.1 ${statusCode} ${statusText}\r\n` +
+      "HTTP/1.1 503 Service Unavailable\r\n" +
         "Connection: close\r\n" +
         "Content-Type: text/plain; charset=utf-8\r\n" +
         `Content-Length: ${Buffer.byteLength(body)}\r\n` +

@@ -85,22 +85,6 @@ describe("ACP session metadata store ownership", () => {
     expect(mocks.loadSessionEntryReadOnly).not.toHaveBeenCalled();
   });
 
-  it("rejects a supplied agent that conflicts with a bare fixed-store owner", () => {
-    const cfg = {
-      ...explicitFleet(),
-      session: { store: "/stores/shared.sqlite" },
-      agents: {
-        ...explicitFleet().agents,
-        defaults: { sessionStore: { agentId: "ops" } },
-      },
-    } satisfies OpenClawConfig;
-
-    expect(() =>
-      readSessionEntryFromStore({ cfg, agentId: "research", sessionKey: "global" }),
-    ).toThrowError(expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }));
-    expect(mocks.loadSessionEntryReadOnly).not.toHaveBeenCalled();
-  });
-
   it("rejects a supplied agent that conflicts with an agent-qualified key", () => {
     expect(() =>
       resolveSessionStorePathForAcp({

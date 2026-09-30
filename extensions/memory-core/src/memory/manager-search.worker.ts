@@ -10,6 +10,11 @@ import {
   withOpenClawAgentDatabaseReadOnly,
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import { serveWorkerTasks } from "openclaw/plugin-sdk/worker-task-server";
+import { readMemoryOriginsInWorker } from "../memory-entry-origin-reads.js";
+import type {
+  MemoryOriginReadInput,
+  MemoryOriginReadOutput,
+} from "../memory-entry-origins-task.js";
 import { bm25RankToScore, buildFtsQuery } from "./keyword-query.js";
 import {
   readMemoryRetrievalIndexState,
@@ -34,6 +39,7 @@ export type MemoryVectorWorkerQuery = Omit<
   "db" | "signal"
 >;
 export type MemorySearchWorkerInput =
+  | MemoryOriginReadInput
   | { kind: "prewarm" }
   | { kind: "presence"; databasePath: string }
   | ({ databasePath: string; agentId: string } & (
@@ -51,6 +57,7 @@ export type MemorySearchWorkerInput =
     ));
 type QueryResult<T> = { rows: T; error?: string };
 export type MemorySearchWorkerOutput =
+  | MemoryOriginReadOutput
   | { kind: "prewarm" }
   | { kind: "presence"; present: boolean }
   | { kind: "index-state"; state: ReturnType<typeof readMemoryRetrievalIndexState> }
@@ -80,6 +87,14 @@ serveWorkerTasks(async (input): Promise<MemorySearchWorkerOutput> => {
   if (request.kind === "presence") {
     // This pre-manager probe also recognizes shipped memory-only databases.
     return { kind: "presence", present: inspectMemoryIndexPresenceInWorker(request.databasePath) };
+  }
+  if (
+    request.kind === "origin-rows" ||
+    request.kind === "origin-exists" ||
+    request.kind === "session-tombstones" ||
+    request.kind === "origin-index-keys"
+  ) {
+    return readMemoryOriginsInWorker(request);
   }
   if (request.kind === "recall-metadata") {
     const result = withOpenClawAgentDatabaseReadOnly(

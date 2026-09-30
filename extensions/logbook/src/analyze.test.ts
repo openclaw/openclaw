@@ -146,6 +146,19 @@ describe("parseCardsJson", () => {
     expect(rejected).toMatchObject({ ok: false, error: expect.stringContaining("overlap") });
   });
 
+  it.each(["10:30:10", "10:30:30"])(
+    "rejects an overlap that would leave no duration for a card ending at %s",
+    (endTime) => {
+      const result = parse(
+        JSON.stringify([
+          card({ startTime: "10:00:00", endTime: "10:30:30" }),
+          card({ startTime: "10:30:00", endTime, title: "Second" }),
+        ]),
+      );
+      expect(result).toMatchObject({ ok: false, error: expect.stringContaining("endTime") });
+    },
+  );
+
   it("reports actionable errors for the correction round-trip", () => {
     expect(parse(JSON.stringify([card({ startTime: "13:05 pm" })]))).toMatchObject({
       ok: false,

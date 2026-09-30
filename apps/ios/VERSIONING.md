@@ -58,7 +58,7 @@ Or use the same release entry point from a clean local `main` checkout that matc
 pnpm ios:release:upload
 ```
 
-GitHub releases freeze the `main` commit selected when the workflow is dispatched,
+GitHub releases freeze the `main` commit selected when the workflow is triggered,
 even if `main` advances while the run is queued. Local releases freeze current
 `main`. The entry point freezes the live plan, generates and reviews release
 notes from Git history, and saves them in an immutable JSON
@@ -83,6 +83,61 @@ overrides, never alternate release identities. No release arguments are required
 pnpm ios:release:archive -- --version 2026.7.2 --revision 1 --build-number 3
 ```
 
+## TestFlight distribution
+
+Run **iOS Store Release** with operation **testflight** from `main`:
+
+```bash
+gh workflow run ios-store-release.yml --ref main -f operation=testflight
+```
+
+The same local entry point accepts the destination explicitly:
+
+```bash
+OPENCLAW_TESTFLIGHT_GROUP_ID="<EXTERNAL_GROUP_ID>" pnpm ios:release:upload -- --destination testflight
+```
+
+The scheduled operation runs daily at **7:00 AM America/Los_Angeles**, including
+daylight saving time. GitHub may delay scheduled jobs. Both release destinations
+share the `ios-release` concurrency lock. Manual and scheduled TestFlight runs
+skip native release qualification; App Store releases require it to pass.
+TestFlight uses the main-only `ios-testflight` environment without per-run
+approval; App Store staging retains `ios-store-release` and its approval rules.
+See [environment setup](fastlane/SETUP.md#github-actions) for activation and
+credentials.
+
+TestFlight uses the existing **External Testing** group, pinned by
+`OPENCLAW_TESTFLIGHT_GROUP_ID`, and the beta metadata configured in App Store
+Connect. The preflight validates group ownership and external-testing status,
+and required beta contact and review information before archiving. It does not capture store screenshots, stage listing metadata, select
+an App Store build, or submit a public App Store version for App Review.
+
+The planner allocates builds within the current gateway's TestFlight train using
+Apple's upload history, independently of whether an App Store draft is editable.
+It preserves pending beta reviews and defers a new same-train upload while one
+is pending. An unchanged source SHA is skipped only when its build is awaiting
+review or available to testers and the group, notes, and automatic notification
+settings are verified. Each skip or deferral records its reason in
+`testflight-result.json`.
+
+If the same source already has a build selected by the App Store draft, is ready
+for beta submission, and has no beta notes, TestFlight reuses it. The attempt saves
+a TestFlight plan and new beta notes, then stages that exact build without another
+archive or upload. Builds with existing beta notes require their saved recovery
+artifacts so a partial distribution cannot silently regenerate its notes.
+
+After processing, the pipeline saves the immutable source ref, writes the saved
+What to Test notes, assigns the external group, and submits for TestFlight review
+when the build is eligible. Automatic tester notification distributes the build
+after Apple approves it. The result distinguishes pending review from a build
+available to testers; the runner does not wait for human review. Apple determines
+whether each build requires review, so the schedule is a daily distribution
+attempt rather than a guarantee of daily availability.
+
+If distribution fails after upload, use [staging recovery](#staging-recovery)
+with the saved artifacts. Recovery reads the destination from `ios-plan.json`
+and resumes the same build without another upload or regenerated notes.
+
 ## Screenshot-only validation
 
 Run **iOS Store Release** with operation **screenshots** and select the candidate
@@ -97,7 +152,7 @@ pnpm ios:screenshots
 The command builds the simulator app, captures four screenshots each on iPhone
 and 13-inch iPad, and captures the Apple Watch screenshot. It does not generate
 release notes, archive an IPA, or access signing assets or App Store credentials.
-The existing release operation remains restricted to `main`.
+Both upload operations remain restricted to `main`.
 
 Capture creates a fresh simulator for each selected device type and runtime,
 then shuts down and deletes that exact simulator before starting the next one.
@@ -144,7 +199,7 @@ therefore the appended App Store version.
   numbers; every Apple-visible upload reservation or attempt does.
 - App Review submission remains manual.
 
-Before screenshot or archive work, the upload lane checks App Store Connect:
+Before screenshot or archive work, the App Store destination checks App Store Connect:
 
 - an absent version may be created during metadata staging
 - the one editable version for the current gateway is reused
@@ -211,6 +266,7 @@ Generated or derived files:
 - `apps/ios/build/AppStoreRelease.xcconfig`
 - `apps/ios/SwiftSources.input.xcfilelist`
 - `ios-plan.json` and `release-notes.json` in the printed recovery directory
+- `testflight-result.json` for TestFlight outcomes, including skips and pending review
 - temporary Fastlane metadata for screenshots and the App Review attachment
 
 The canonical implementation is split across:
@@ -244,8 +300,8 @@ refs/openclaw/mobile-releases/ios/2026.7.21-3
 
 The ref is checked before archive/upload work and created only after App Store
 Connect finishes processing the upload, before notes and build selection are
-staged. Existing refs are immutable; their presence proves the uploaded source,
-not successful completion of later staging.
+staged or TestFlight distribution begins. Existing refs are immutable; their
+presence proves the uploaded source, not successful completion of later staging.
 
 ## Normal workflow
 
@@ -260,8 +316,9 @@ not successful completion of later staging.
 
 ## Staging recovery
 
-If upload and processing succeeded but saving notes or selecting the build
-failed, retain the printed recovery directory or download its workflow artifact.
+If upload and processing succeeded but saving notes, selecting the App Store
+build, or completing TestFlight distribution failed, retain the printed recovery
+directory or download its workflow artifact.
 Retry staging from a clean checkout using that original saved state:
 
 ```bash
@@ -271,12 +328,14 @@ node scripts/mobile-release.mjs stage --platform ios --recovery-dir /path/to/rec
 This verifies the immutable upload ref, restores the original source if needed,
 and uses the saved notes and build identity. It does not generate new notes,
 replan a release, build, or upload another IPA. App Store Connect credentials
-are required. A locked version, invalid or expired build, newer selected build,
-or mismatched source stops recovery for human resolution. Partial staging can
-be retried with the same command after the cause is fixed.
+are required. Invalid or expired builds and mismatched source stop recovery for
+human resolution. App Store recovery also refuses a locked version or newer
+selected build. TestFlight recovery uses the saved group identity and existing
+review submission, and records the current distribution state. Partial staging
+can be retried with the same command after the cause is fixed.
 
-The recovery directory contains the saved plan and notes, any exported signed
-binaries under `artifacts/`, and screenshot fixture PNGs and the capture-attempt
+The recovery directory contains the saved plan and notes, the TestFlight result
+when applicable, any exported signed binaries under `artifacts/`, and screenshot fixture PNGs and the capture-attempt
 ledger under `screenshot-diagnostics/`. Raw Xcode logs and XCTest results are
 excluded because they can contain credentials. Failed local attempts also keep
 their source worktree; staging recovery can restore source from the immutable

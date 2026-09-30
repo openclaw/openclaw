@@ -51,11 +51,11 @@ In the Control UI, the session context menu (kebab or right-click on a sidebar r
 - **Assign to me**: take responsibility for the session yourself.
 - **Assign to…**: pick any registered person or configured agent, including offline people and people who have not owned a session. Choices refresh when you open the menu and do not depend on session filters or archive status.
 
-Agents can reassign ownership with the [`sessions` tool](/concepts/session-tool#managing-session-settings-and-groups). Use `action: "assign_owner"` with `ownerType` (`"human"` or `"agent"`) and `ownerId`. It targets the current session by default, or another visible session via `sessionKey`.
+Agents can reassign ownership with the [`sessions` tool](/concepts/session-tool#managing-session-settings-and-groups), including non-owner agent turns when tool policy permits it. Those turns receive the assignment action, not session settings, reset/delete, or global group controls. Operators with `operator.write` also retain the separate archive, restore, and stop controls for sessions they created or are assigned to, subject to session access checks. Use `action: "assign_owner"` with `ownerType` (`"human"` or `"agent"`) and `ownerId`. It targets the current session by default, or another visible session via `sessionKey`.
 
 Both paths call the Gateway method `sessions.assignOwner` (`operator.write`). Assignment requires an identified caller — an authenticated Gateway profile or a trusted agent identity — and is authorized by session visibility. Agent owner ids must name a configured agent. After assignment the avatar tooltip switches from "Created by" to "Owned by".
 
-Reassigning the owner changes responsibility and display only. It does not transfer sharing authority (which stays with the creator) and does not grant or remove any access.
+Reassigning the owner changes responsibility and display. An assigned human also selects the session’s [personal instructions](/concepts/user-model#personal-user-files-on-a-shared-gateway) on later eligible turns, including turns from other participants. This is prompt selection, not impersonation: it does not replace the requesting person’s identity or privileges, transfer sharing authority (which stays with the creator), or grant or remove access. Personal instructions are not a secrecy boundary; do not store secrets in them.
 
 Creator source follows scheduled jobs and inherited creation policies. A required sandbox is a restriction, not evidence of profile identity. Historical automations that lost their creator source retain their attribution and content, but do not receive a guessed profile grant. An administrator can manage their sharing or create a new, explicitly attributed session. Assigning an owner does not repair creator authority. See [Creator namespace migration](/reference/database-schemas#creator-namespace-migration) before upgrading.
 
@@ -161,6 +161,35 @@ People presence is shared with operators who have read access (`operator.read`, 
 
 The Gateway also filters watched-session references for each recipient using `sessions.list` visibility rules, across connect snapshots, presence RPC responses, and events. Hidden or missing references are omitted without counts or placeholders. Opening someone's card never borrows that person's session access.
 
+## Reactions
+
+In the Control UI, you can react to any saved prompt or assistant reply, including
+your own prompts and other people's prompts. Reacting requires an identified
+author with permission to send to the session or suggest in it. Operators whose
+session role permits viewing only cannot react. Everyone who can read the
+session sees its reaction chips, counts, and reactor names, with live updates
+while the session is open.
+
+The agent receives each committed addition and removal as a separate `System:`
+line on its next turn, using the same event mechanism as channel reactions.
+Adding, removing, and adding the same reaction queues three notices in order;
+repeating an action that changes nothing queues no notice. Reactions never wake
+the agent or create notifications. They are stored separately from the transcript,
+so reacting does not rewrite messages. Permanently removing a message also
+removes its reactions and frees their space in the session's reaction limit.
+Resetting a session starts a new transcript instance without the previous
+instance's reactions.
+
+Reactions on channel-origin prompts are also mirrored to that channel as the
+bot's reaction when the channel supports them. A skipped or failed channel
+mirror does not remove the Control UI reaction. On channels where the bot holds
+one reaction per message, such as Telegram bots and WhatsApp, the channel shows
+the most recently mirrored emoji, and removing it clears the channel reaction
+even when other emoji remain in the Control UI. Reactions on assistant replies
+are not mirrored because the transcript does not retain their delivered channel
+message IDs. See [Chat reactions](/web/control-ui/chat#reactions) for the palette
+and toggle controls.
+
 ## Mentioning people
 
 In the transcript, selected mentions show a small inline avatar beside the original name. Missing photos use initials. The badge omits the visible `@`, while copied text keeps it.
@@ -208,7 +237,7 @@ In a turn steered by several people, `sessions_spawn` requires `user` (the reque
 and the child acts with that person's retained authority. This selection does not
 change the session's model account or the creator and owner rules below.
 
-Sessions an agent creates with `sessions_spawn` (`visible: true`) normally retain the requesting agent as their immutable creator. A required sandbox instead preserves the parent's creator provenance as an isolation policy. If the active human requester matches the requesting session's verified human owner, a new visible child assigns that person as its initial owner. A different owner, an unlinked requester, or a system-triggered spawn explicitly assigns the requesting agent as owner, even when sandbox policy retained human creator provenance. The sidebar shows the current owner's profile or configured agent identity rather than an internal session key. This assignment changes responsibility and display only; sharing and visibility authority remains anchored on the creator.
+Sessions an agent creates with `sessions_spawn` (`visible: true`) normally retain the requesting agent as their immutable creator. A required sandbox instead preserves the parent's creator provenance as an isolation policy. If the active human requester matches the requesting session's verified human owner, a new visible child assigns that person as its initial owner. A different owner, an unlinked requester, or a system-triggered spawn explicitly assigns the requesting agent as owner, even when sandbox policy retained human creator provenance. The sidebar shows the current owner's profile or configured agent identity rather than an internal session key. The assignment follows the same [owner and personal-context rules](/concepts/multi-user#assigning-an-owner); sharing and visibility authority remains anchored on the creator.
 
 The accepted spawn result doubles as a receipt. It includes the child session key, the run id, a direct Control UI `sessionUrl`, and an `owner` record naming the stored owner. The `sessionUrl` is omitted when the Control UI is disabled. When an agent acknowledges the spawn in a chat channel, it puts the session URL on the first line and `Owner: <label>` on the second. You can then open the session and see who is responsible at a glance. Use **Assign to me** or the `sessions` tool only when responsibility should move again. See [Sub-agents](/tools/subagents) for the spawn lifecycle.
 

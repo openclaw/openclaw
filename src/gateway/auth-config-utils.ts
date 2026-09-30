@@ -49,11 +49,8 @@ function shouldResolveGatewayAuthSecretRef(
   if (params.mode === "trusted-proxy") {
     return !isTokenPath;
   }
-  if (params.mode === "token" || params.mode === "none") {
+  if (params.mode === "token" || params.mode === "password" || params.mode === "none") {
     return false;
-  }
-  if (params.mode === "password") {
-    return !isTokenPath;
   }
   // With implicit mode, resolve the side that does not already have a concrete
   // competing credential so token and password defaults do not both get materialized.

@@ -389,7 +389,8 @@ extension GatewayLaunchAgentManager {
             return CommandResult(success: true, payload: payload, message: nil)
         }
 
-        let detail = message ?? self.summarize(response.stderr) ?? self.summarize(response.stdout)
+        let detail = message ?? TextSummarySupport.summarizeLastLine(response.stderr)
+            ?? TextSummarySupport.summarizeLastLine(response.stdout)
         if quiet {
             return CommandResult(success: false, payload: payload, message: detail)
         }
@@ -412,10 +413,6 @@ extension GatewayLaunchAgentManager {
     private static func withJsonFlag(_ args: [String]) -> [String] {
         if args.contains("--json") { return args }
         return args + ["--json"]
-    }
-
-    private static func summarize(_ text: String) -> String? {
-        TextSummarySupport.summarizeLastLine(text)
     }
 
     #if DEBUG

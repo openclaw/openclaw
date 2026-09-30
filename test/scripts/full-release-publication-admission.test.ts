@@ -110,6 +110,7 @@ const toolingPaths = [
   "scripts/full-release-candidate-contract.mjs",
   "scripts/full-release-validation-state.mjs",
   "scripts/full-release-validation-policy.mjs",
+  "scripts/full-release-flake-classification.mjs",
   "scripts/release-ci-summary.mjs",
   "scripts/lib/full-release-candidate-reuse.mjs",
   "scripts/lib/full-release-child-request.mjs",

@@ -41,6 +41,7 @@ function createReadApi(runs = new Map<string, SubagentRunRecord>()) {
     runs,
     persist: unexpectedMutation,
     persistOrThrow: unexpectedMutation,
+    persistAsyncOrThrow: unexpectedMutation,
     restoreOnce: unexpectedMutation,
     startAnnounceCleanup: unexpectedMutation,
     settleRequesterTurn: unexpectedMutation,

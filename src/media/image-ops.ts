@@ -30,7 +30,6 @@ class ImageProcessorUnavailableError extends Error {
   }
 }
 
-/** JPEG resize request passed through the media-runtime/plugin SDK surface. */
 type ResizeToJpegParams = {
   buffer: Buffer;
   maxSide: number;
@@ -38,10 +37,8 @@ type ResizeToJpegParams = {
   withoutEnlargement?: boolean;
 };
 
-/** Ordered JPEG quality ladder used when shrinking generated or attached images. */
 export const IMAGE_REDUCE_QUALITY_STEPS = [85, 75, 65, 55, 45, 35] as const;
 
-/** Detects either OpenClaw's wrapper error or Rastermill's native unavailable error. */
 export function isImageProcessorUnavailableError(err: unknown): boolean {
   return err instanceof ImageProcessorUnavailableError || isRastermillUnavailableError(err);
 }
@@ -84,6 +81,29 @@ export function isAnimatedWebpBuffer(buffer: Buffer): boolean {
   );
 }
 
+/** Confirm PNG is still without treating a truncated or capped scan as proof. */
+export function isStillPngBuffer(buffer: Buffer): boolean {
+  if (readImageProbeFromHeader(buffer)?.format !== "png") {
+    return false;
+  }
+  let offset = 8;
+  for (let chunks = 0; chunks < 512 && offset + 12 <= buffer.length; chunks += 1) {
+    const end = offset + 12 + buffer.readUInt32BE(offset);
+    if (end > buffer.length) {
+      return false;
+    }
+    const type = buffer.toString("ascii", offset + 4, offset + 8);
+    if (type === "acTL" || type === "IEND") {
+      return false;
+    }
+    if (type === "IDAT") {
+      return true;
+    }
+    offset = end;
+  }
+  return false;
+}
+
 function wrapRastermillUnavailable(operation: string, error: unknown): never {
   if (error instanceof RastermillUnavailableError) {
     throw new ImageProcessorUnavailableError(operation, error.message, error.causes);
@@ -122,12 +142,10 @@ async function encodeImageToJpeg(buffer: Buffer, operation: string): Promise<Buf
   }
 }
 
-/** Converts image bytes into JPEG through the shared image processor. */
 export async function convertImageToJpeg(buffer: Buffer): Promise<Buffer> {
   return await encodeImageToJpeg(buffer, "convertImageToJpeg");
 }
 
-/** Converts HEIC/HEIF-like image bytes into JPEG through the shared image processor. */
 export async function convertHeicToJpeg(buffer: Buffer): Promise<Buffer> {
   return await encodeImageToJpeg(buffer, "convertHeicToJpeg");
 }

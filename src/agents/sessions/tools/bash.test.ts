@@ -35,12 +35,6 @@ describe("bash tool timeout helpers", () => {
     expect(resolveBashTimeoutMs(undefined)).toBeUndefined();
   });
 
-  it.each([Number.NaN, 0, -1])("rejects invalid timeout %s", (timeout) => {
-    expect(() => resolveBashTimeoutMs(timeout)).toThrow(
-      "Invalid timeout: must be a positive finite number of seconds",
-    );
-  });
-
   it.each([Number.NaN, 0, -1])("rejects invalid timeout %s before execution", async (timeout) => {
     const exec = vi.fn<BashOperations["exec"]>();
     const tool = createBashTool(process.cwd(), { operations: { exec } });

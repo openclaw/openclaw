@@ -1,4 +1,4 @@
-import { ChildProcess } from "node:child_process";
+import { ChildProcess, type MessageOptions, type SendHandle } from "node:child_process";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -88,9 +88,7 @@ function brokerFixture(ready = true) {
   const send = vi.fn(
     (
       message: unknown,
-      _handle: unknown,
-      _options: unknown,
-      callback: (error: Error | null) => void,
+      ...args: Array<SendHandle | MessageOptions | ((error: Error | null) => void) | undefined>
     ) => {
       if (
         message &&
@@ -102,7 +100,7 @@ function brokerFixture(ready = true) {
       ) {
         requestSent.resolve(message.id);
       }
-      callback(null);
+      args.find((arg) => typeof arg === "function")?.(null);
       return true;
     },
   );
@@ -128,6 +126,9 @@ function brokerFixture(ready = true) {
   native.spawn.mockReturnValueOnce(worker);
   const host = createSpawnBrokerHost();
   hosts.push(host);
+  expect(send).toHaveBeenCalledExactlyOnceWith({ type: "bootstrap" }, expect.any(Function));
+  // Assertions below distinguish command transmission from transport bootstrap.
+  send.mockClear();
   const receive = (message: BrokerResponse) => worker.emit("message", message);
   if (ready) {
     receive({ type: "ready", pid: 41001 });

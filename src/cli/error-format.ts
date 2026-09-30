@@ -1,4 +1,3 @@
-// Reusable CLI error-message formatters that keep recovery hints consistent across commands.
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatCliCommand } from "./command-format.js";
 
@@ -8,12 +7,10 @@ function formatInlineCliCommand(command: string): string {
   return `\`${formatCliCommand(command)}\``;
 }
 
-/** Explain the valid TCP port range with a concrete example. */
 export function formatPortRangeHint(example = DEFAULT_GATEWAY_PORT_EXAMPLE): string {
   return `Use a port number from 1 to 65535, for example ${example}.`;
 }
 
-/** Format an invalid CLI port option using the shared port-range hint. */
 export function formatInvalidPortOption(
   option: string,
   example = DEFAULT_GATEWAY_PORT_EXAMPLE,
@@ -21,7 +18,6 @@ export function formatInvalidPortOption(
   return `Invalid ${option}. ${formatPortRangeHint(example)}`;
 }
 
-/** Explain a bad configured port and include the equivalent CLI override. */
 export function formatInvalidConfigPort(
   path: string,
   example = DEFAULT_GATEWAY_PORT_EXAMPLE,
@@ -29,7 +25,6 @@ export function formatInvalidConfigPort(
   return `Invalid ${path} in config. Set ${path} to a number from 1 to 65535, or pass --port ${example}.`;
 }
 
-/** Format the standard missing-channel error plus channel-list recovery command. */
 export function formatUnknownChannelMessage(params: {
   channel: string;
   listCommand?: string;
@@ -42,7 +37,6 @@ export function formatUnknownChannelMessage(params: {
   )} to see configured and installable channels.`;
 }
 
-/** Format a channel capability miss with the inspection command for that channel. */
 export function formatUnsupportedChannelActionMessage(params: {
   channel: string;
   action: string;
@@ -55,7 +49,6 @@ export function formatUnsupportedChannelActionMessage(params: {
   )} to inspect supported actions.`;
 }
 
-/** Format strict JSON parsing failures without exposing long untrusted input verbatim. */
 export function formatStrictJsonParseFailure(params: { value: string; cause: unknown }): string {
   const rawCause = params.cause instanceof Error ? params.cause.message : String(params.cause);
   const cause = rawCause.trim().replace(/[.。]+$/u, "");
@@ -71,7 +64,6 @@ export function formatStrictJsonParseFailure(params: { value: string; cause: unk
   ].join(" ");
 }
 
-/** Normalize gateway failure text and attach the deep-status recovery command. */
 export function formatGatewayCommandFailure(params: {
   action: string;
   error: unknown;
@@ -91,7 +83,6 @@ export function formatGatewayCommandFailure(params: {
   )} to inspect the active Gateway.`;
 }
 
-/** Format a generic lookup miss with the list command that can recover it. */
 export function formatLookupMiss(params: {
   noun: string;
   value: string;
@@ -104,7 +95,6 @@ export function formatLookupMiss(params: {
   )} to see recent ${valueLabel}s.`;
 }
 
-/** Format a plugin lookup miss with optional ClawHub search guidance. */
 export function formatMissingPluginMessage(params: {
   id: string;
   listCommand?: string;

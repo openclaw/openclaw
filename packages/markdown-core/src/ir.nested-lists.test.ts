@@ -19,6 +19,8 @@ describe("nested lists", () => {
   it("keeps loose continuation paragraphs inside the item span", () => {
     const result = markdownToIR("- first\n\n  continuation\n- next");
     const first = result.listItems?.find((item) => item.listMarker?.start === 0);
+    expect(first?.start).toBeTypeOf("number");
+    expect(first?.end).toBeTypeOf("number");
     expect(result.text.slice(first?.start, first?.end)).toContain("continuation");
   });
 

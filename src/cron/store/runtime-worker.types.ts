@@ -35,8 +35,33 @@ export type CronJobMutationRefusal =
   | { kind: "store-changed" }
   | { kind: "receipt-conflict"; receipt: CronRunReceipt };
 
+type CronExternalStreamSource = { scheduleKey: string; identity: string };
+
+export type CronExternalStateChange =
+  | {
+      kind: "state";
+      source: CronExternalStreamSource;
+      statePatch: Partial<CronJob["state"]>;
+    }
+  | { kind: "retire"; source: CronExternalStreamSource; nextIdentity: string }
+  | {
+      kind: "counters";
+      counters: Pick<CronJob["state"], "streamDroppedBatches" | "streamCoalescedBatches">;
+    }
+  | {
+      kind: "failure";
+      error: string;
+      statePatch: Partial<CronJob["state"]>;
+      source?: CronExternalStreamSource;
+    };
+
 export type CronRuntimeMutationInputs = {
-  "cron.writeScratch": CronJobScratchWriteInput;
+  "cron.mutateExternalState": {
+    storeKey: string;
+    jobId: string;
+    change: CronExternalStateChange;
+  };
+  "cron.writeScratch": CronJobScratchWriteInput & { createdAtMsFallback?: number };
   "cron.mutateJobs": {
     storeKey: string;
     changes: PreparedCronStoreChanges;

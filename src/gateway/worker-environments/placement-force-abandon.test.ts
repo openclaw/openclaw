@@ -56,9 +56,9 @@ describe("forced worker environment abandonment", () => {
     });
     store.markWorkspaceResultPending(claim);
     const binding = claim;
-    store.authorizeWorkerTurnTools(claim, ["sessions_send"]);
+    await store.authorizeWorkerTurnTools(claim, ["sessions_send"]);
     expect(
-      store.beginWorkerSessionToolOperation({
+      await store.beginWorkerSessionToolOperation({
         claim: binding,
         toolName: "sessions_send",
         toolCallId: "forced-send",
@@ -80,7 +80,7 @@ describe("forced worker environment abandonment", () => {
       turnClaim: { claimId: claim.claimId },
     });
     expect(
-      store.completeWorkerSessionToolOperation({
+      await store.completeWorkerSessionToolOperation({
         sourceSessionId: claim.sessionId,
         sourceClaimId: claim.claimId,
         toolCallId: "forced-send",
@@ -112,7 +112,7 @@ describe("forced worker environment abandonment", () => {
       runId: "reclaim-forced-missing-workspace",
       owner: { kind: "worker", environmentId, ownerEpoch: 2 },
     });
-    store.recordStagedWorkspaceResult(
+    await store.recordStagedWorkspaceResult(
       claim,
       "refs/openclaw/worker-results/reclaim-forced-missing-workspace",
     );

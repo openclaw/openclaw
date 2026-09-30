@@ -14,7 +14,10 @@ export type GatewayCronServiceContract = CronServiceContract & {
     family: { declarationKey: string; name: string; ownerPluginTag: string },
     opts?: { commitGuard?: () => void },
   ): Promise<number>;
-  readScratch(id: string): Promise<CronJobScratchState>;
+  readScratch(
+    id: string,
+    options?: { assertCurrent?: () => void; signal?: AbortSignal },
+  ): Promise<CronJobScratchState>;
   writeScratch(
     id: string,
     params: {

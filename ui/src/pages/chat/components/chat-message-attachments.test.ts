@@ -433,7 +433,7 @@ describe("attachment sidebar source ownership", () => {
     render(
       renderAssistantAttachments(
         [
-          svgAttachment("https://example.com/oversized.svg", "oversized.svg", {
+          svgAttachment(`${window.location.origin}/oversized.svg`, "oversized.svg", {
             sizeBytes: 256 * 1024 + 1,
           }),
         ],

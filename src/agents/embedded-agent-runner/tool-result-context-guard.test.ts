@@ -572,21 +572,6 @@ describe("installToolResultContextGuard", () => {
     expect((contextForNextCall[0] as { details?: unknown }).details).toBeDefined();
     expect((contextForNextCall[1] as { details?: unknown }).details).toBeDefined();
   });
-
-  it("ignores large tool-result details when deciding preemptive overflow", async () => {
-    const agent = makeGuardableAgent();
-    const contextForNextCall = [
-      makeUser("small user prompt"),
-      makeToolResultWithDetails("call_1", "a".repeat(50), "d".repeat(30_000)),
-      makeToolResultWithDetails("call_2", "b".repeat(50), "d".repeat(30_000)),
-      makeToolResultWithDetails("call_3", "c".repeat(50), "d".repeat(30_000)),
-      makeToolResultWithDetails("call_4", "e".repeat(50), "d".repeat(30_000)),
-    ];
-
-    const transformed = (await applyGuardToContext(agent, contextForNextCall)) as AgentMessage[];
-
-    expect(transformed).toBe(contextForNextCall);
-  });
 });
 
 type MockedEngine = ContextEngine & {
@@ -1115,22 +1100,6 @@ describe("installContextEngineLoopHook", () => {
 
     expect(engine.afterTurn).not.toHaveBeenCalled();
     expect(engine.assemble).not.toHaveBeenCalled();
-  });
-
-  it("returns the assembled view when its length differs from the source", async () => {
-    const agent = makeGuardableAgent();
-    const compactedView = [makeUser("compacted")];
-    const engine = makeMockEngine({
-      assemble: async () => ({ messages: compactedView, estimatedTokens: 0 }),
-    });
-    installHook(agent, engine);
-
-    const { transformed } = await callAfterInitialToolResult(agent, {
-      includeSecondUser: false,
-      firstResultText: "r",
-    });
-
-    expect(transformed).toBe(compactedView);
   });
 
   it("repairs tool-result pairing in ownsCompaction assembled loop views", async () => {

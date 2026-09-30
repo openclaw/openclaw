@@ -536,6 +536,17 @@ function readContributions(params: {
     : [{ participant: { state: "unknown" } }];
 }
 
+function sharedParticipantRef(contributions: readonly ChannelAdmissionContribution[]) {
+  const first = contributions[0]?.participant;
+  return first?.state === "present" &&
+    contributions.every(
+      ({ participant }) =>
+        participant.state === "present" && participant.rawPrincipalRef === first.rawPrincipalRef,
+    )
+    ? first.rawPrincipalRef
+    : undefined;
+}
+
 /** Compare opaque participants without exposing or consuming their raw references. */
 export function compareChannelAdmissionParticipants(
   evidence: readonly (ChannelAdmissionEvidence | undefined)[],
@@ -549,14 +560,7 @@ export function compareChannelAdmissionParticipants(
   ) {
     return "mixed-or-unknown";
   }
-  const participants = contributions.map((item) => item.participant);
-  const first = participants[0];
-  return first?.state === "present" &&
-    participants.every(
-      (item) => item.state === "present" && item.rawPrincipalRef === first.rawPrincipalRef,
-    )
-    ? "same"
-    : "mixed-or-unknown";
+  return sharedParticipantRef(contributions) !== undefined ? "same" : "mixed-or-unknown";
 }
 
 function freezeConsumed(value: ConsumedChannelAdmissionEvidence): ConsumedChannelAdmissionEvidence {
@@ -576,9 +580,9 @@ export function consumeChannelAdmissionEvidence(
     seen: new Set(),
     consume: true,
   });
-  const participants = contributions.map((item) => item.participant);
   const allUnsupported =
-    participants.length > 0 && participants.every((item) => item.state === "unsupported");
+    contributions.length > 0 &&
+    contributions.every(({ participant }) => participant.state === "unsupported");
   if (allUnsupported) {
     return freezeConsumed({
       ingressState: "unsupported",
@@ -588,14 +592,8 @@ export function consumeChannelAdmissionEvidence(
     });
   }
 
-  const present = participants.filter(
-    (item): item is Extract<(typeof participants)[number], { state: "present" }> =>
-      item.state === "present",
-  );
-  const sameParticipant =
-    present.length === participants.length &&
-    present.every((item) => item.rawPrincipalRef === present[0]?.rawPrincipalRef);
-  if (!sameParticipant || !present[0]) {
+  const rawPrincipalRef = sharedParticipantRef(contributions);
+  if (rawPrincipalRef === undefined) {
     return freezeConsumed({
       ingressState: "unknown",
       invoker: { state: "unknown" },
@@ -621,7 +619,7 @@ export function consumeChannelAdmissionEvidence(
     invoker: {
       state: "present",
       kind: "person",
-      rawPrincipalRef: present[0].rawPrincipalRef,
+      rawPrincipalRef,
     },
     assuranceRef: "channel-admission",
     decisionCoverage: everyDecisionEnforced ? "enforced" : "attribution-only",

@@ -20,12 +20,116 @@ export function registerGitActivationDoctorOutcomeTests(
     advanceRemote: () => Promise<string>;
     git: (root: string, ...args: string[]) => Promise<string>;
     update: (
-      opts: Pick<UpdateRunnerOptions, "runGitDoctor" | "onTransaction">,
+      opts: Partial<
+        Pick<
+          UpdateRunnerOptions,
+          "runGitDoctor" | "onTransaction" | "validateCandidate" | "beforeGitMutation"
+        >
+      >,
     ) => Promise<UpdateRunResult>;
     expectNoRuntimeStagingPaths: () => Promise<void>;
   },
 ) {
   registerGitRetainedTransactionTests(getFixture);
+  it.each(["complete", "refuse", "cleanup-failed"] as const)(
+    "keeps the Git validation runtime usable through late admission and finalization: %s",
+    async (outcome) => {
+      const fixture = getFixture();
+      const { root, beforeSha, advanceRemote, git, update, expectNoRuntimeStagingPaths } = fixture;
+      const target = await advanceRemote();
+      let candidateRoot: string | undefined;
+      let retained: PackageUpdateTransaction | undefined;
+      const boundaries: string[] = [];
+      let denyCleanup = false;
+      const validateRetained = async () => {
+        assert(candidateRoot);
+        expect(await git(candidateRoot, "rev-parse", "HEAD")).toBe(target);
+        await expectRuntime(candidateRoot, target);
+      };
+      fixture.setRunCommand(async (argv, options) => {
+        if (denyCleanup && argv.includes("worktree") && argv.includes("remove")) {
+          return { code: 1, stdout: "", stderr: "candidate cleanup denied" };
+        }
+        const boundary = argv.includes("index-pack")
+          ? "transfer"
+          : argv.includes("checkout")
+            ? "checkout"
+            : undefined;
+        if (
+          argv[0] === "git" &&
+          argv[2] === root &&
+          boundary &&
+          !argv.some((arg) => arg.startsWith("--git-dir="))
+        ) {
+          await validateRetained();
+          expect(await git(root, "rev-parse", "HEAD")).toBe(beforeSha);
+          boundaries.push(boundary);
+        }
+        return fixture.runCommand(argv, options);
+      });
+      const pending = update({
+        validateCandidate: async (directory) => {
+          candidateRoot = directory;
+          expect(fixture.isStopped()).toBe(false);
+          await validateRetained();
+        },
+        onTransaction: (transaction) => {
+          retained = transaction;
+        },
+        ...(outcome === "refuse"
+          ? {
+              beforeGitMutation: async () => {
+                await validateRetained();
+                expect(fixture.isStopped()).toBe(false);
+                throw new Error("synthetic late admission refusal");
+              },
+            }
+          : {}),
+      });
+      if (outcome === "refuse") {
+        await expect(pending).rejects.toThrow("synthetic late admission refusal");
+        expect(fixture.isStopped()).toBe(false);
+        expect(retained).toBeUndefined();
+        expect(await git(root, "rev-parse", "HEAD")).toBe(beforeSha);
+      } else {
+        const result = await pending;
+        expect(result.status, JSON.stringify(result)).toBe("ok");
+        expect(boundaries).toEqual(["transfer", "checkout"]);
+        assert(retained);
+        await validateRetained();
+        if (outcome === "cleanup-failed") {
+          denyCleanup = true;
+          const remove = fs.rm.bind(fs);
+          const preflightRoot = path.dirname(candidateRoot!);
+          const removal = vi.spyOn(fs, "rm").mockImplementation(async (entry, options) => {
+            if (entry === preflightRoot || entry === candidateRoot) {
+              throw Object.assign(new Error("candidate cleanup denied"), { code: "EACCES" });
+            }
+            return remove(entry, options);
+          });
+          try {
+            const warning = await retained.complete({ activationVerified: true }, () => {});
+            expect(warning).toMatchObject({
+              advisory: { kind: "recoverable-maintenance" },
+            });
+            expect(await retained.complete({ activationVerified: true }, () => {})).toBe(warning);
+            await validateRetained();
+            await expect(fs.stat(retained.backupRoot)).resolves.toBeDefined();
+            await expectRuntime(root, target);
+          } finally {
+            removal.mockRestore();
+          }
+          return;
+        }
+        await retained.complete({ activationVerified: true }, () => {});
+        await expectRuntime(root, target);
+      }
+      assert(candidateRoot);
+      await expect(fs.stat(candidateRoot)).rejects.toMatchObject({ code: "ENOENT" });
+      await expectNoRuntimeStagingPaths();
+    },
+  );
+
   it.each([
     "restore",
     "complete",
@@ -223,15 +327,7 @@ export function registerGitActivationDoctorOutcomeTests(
 }
 
 function registerGitRetainedTransactionTests(
-  getFixture: () => {
-    root: string;
-    beforeSha: string;
-    advanceRemote: () => Promise<string>;
-    update: (opts: Partial<UpdateRunnerOptions>) => Promise<UpdateRunResult>;
-    runCommand: CommandRunner;
-    setRunCommand: (runner: CommandRunner) => void;
-    expectNoRuntimeStagingPaths: () => Promise<void>;
-  },
+  getFixture: Parameters<typeof registerGitActivationDoctorOutcomeTests>[0],
 ) {
   it.each([
     ["source check", "tracked"],

@@ -71,14 +71,14 @@ function assertApprovalCheckpointBaseJson(params: {
   scenarioId: string;
   state: MantisApprovalCheckpointState;
 }) {
-  if (params.record.version !== 1) {
-    throw new Error(`${params.label} has unexpected version in ${params.filePath}`);
-  }
-  if (params.record.scenarioId !== params.scenarioId) {
-    throw new Error(`${params.label} has unexpected scenarioId in ${params.filePath}`);
-  }
-  if (params.record.state !== params.state) {
-    throw new Error(`${params.label} has unexpected state in ${params.filePath}`);
+  for (const [field, expected] of [
+    ["version", 1],
+    ["scenarioId", params.scenarioId],
+    ["state", params.state],
+  ] as const) {
+    if (params.record[field] !== expected) {
+      throw new Error(`${params.label} has unexpected ${field} in ${params.filePath}`);
+    }
   }
 }
 

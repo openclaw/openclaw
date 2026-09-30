@@ -1,7 +1,6 @@
 // Claw doctor diagnostics project the lifecycle ownership ledger into health findings.
-import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
-import { coerceErrorMessage, stableStringify } from "@openclaw/normalization-core";
+import { coerceErrorMessage } from "@openclaw/normalization-core";
 import { listConfiguredMcpServers } from "../config/mcp-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveDefaultCronStaggerMs } from "../cron/stagger.js";
@@ -14,6 +13,7 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
 import { clawCronGatewayInput } from "./cron.js";
+import { digestClawValue } from "./digest.js";
 import { isExperimentalClawsEnabled } from "./experimental.js";
 import { readClawStatus, type ClawStatusRecord } from "./lifecycle-state.js";
 
@@ -49,17 +49,13 @@ type CronInventorySnapshot =
   | { ok: false; error: string }
   | undefined;
 
-function cronExecutionDigest(value: unknown): string {
-  return `sha256:${createHash("sha256").update(stableStringify(value)).digest("hex")}`;
-}
-
 function expectedCronExecutionDigest(
   record: ClawStatusRecord,
   cron: ClawStatusRecord["cronJobs"][number],
 ): string {
   const input = clawCronGatewayInput(record.install.agentId, cron);
   const staggerMs = resolveDefaultCronStaggerMs(cron.job.schedule.cron);
-  return cronExecutionDigest({
+  return digestClawValue({
     declarationKey: input.declarationKey,
     ownerAgentId: input.owner.agentId,
     enabled: input.enabled,
@@ -75,7 +71,7 @@ function expectedCronExecutionDigest(
 }
 
 function liveCronExecutionDigest(job: CronJob): string {
-  return cronExecutionDigest({
+  return digestClawValue({
     declarationKey: job.declarationKey,
     ownerAgentId: job.owner?.agentId ?? job.agentId,
     enabled: job.enabled,

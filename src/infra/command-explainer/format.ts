@@ -25,7 +25,7 @@ function spanToCommandSpan(span: {
   return { startIndex: span.startIndex, endIndex: span.endIndex };
 }
 
-function isUnsupportedShellWrapperArgv(argv: readonly string[]): boolean {
+export function isUnsupportedShellWrapperArgv(argv: readonly string[]): boolean {
   const shellWrapperArgv = resolveShellWrapperTransportArgv([...argv]) ?? argv;
   const executable = shellWrapperArgv[0];
   if (!executable) {

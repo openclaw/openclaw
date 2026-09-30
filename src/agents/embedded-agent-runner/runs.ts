@@ -151,14 +151,6 @@ export function formatEmbeddedAgentQueueFailureSummary(
   const errorPart = outcome.errorMessage ? ` error=${outcome.errorMessage}` : "";
   return `queue_message_failed reason=${outcome.reason} sessionId=${outcome.sessionId} gatewayHealth=${outcome.gatewayHealth}${errorPart}`;
 }
-function setActiveRunSessionKey(sessionKey: string | undefined, sessionId: string): void {
-  const normalizedSessionKey = sessionKey?.trim();
-  if (!normalizedSessionKey) {
-    return;
-  }
-  ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.set(normalizedSessionKey, sessionId);
-}
-
 function clearActiveRunSessionIndex(
   index: Map<string, string>,
   sessionId: string,
@@ -200,14 +192,6 @@ function normalizeSessionFileRegistryKey(sessionFile: string | undefined): strin
   } catch {
     return resolved;
   }
-}
-
-function setActiveRunSessionFile(sessionFile: string | undefined, sessionId: string): void {
-  const normalizedSessionFile = normalizeSessionFileRegistryKey(sessionFile);
-  if (!normalizedSessionFile) {
-    return;
-  }
-  ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.set(normalizedSessionFile, sessionId);
 }
 
 function clearEmbeddedRunAbandonmentBySessionId(sessionId: string): void {
@@ -1696,9 +1680,15 @@ export function setActiveEmbeddedRun(
     ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.set(handle.runId, handle);
   }
   clearActiveRunSessionIndex(ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY, sessionId);
-  setActiveRunSessionKey(sessionKey, sessionId);
+  const normalizedSessionKey = sessionKey?.trim();
+  if (normalizedSessionKey) {
+    ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.set(normalizedSessionKey, sessionId);
+  }
   clearActiveRunSessionIndex(ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE, sessionId);
-  setActiveRunSessionFile(sessionFile, sessionId);
+  const normalizedSessionFile = normalizeSessionFileRegistryKey(sessionFile);
+  if (normalizedSessionFile) {
+    ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.set(normalizedSessionFile, sessionId);
+  }
   logSessionStateChange({
     sessionId,
     sessionKey,
@@ -1740,6 +1730,20 @@ export function updateActiveEmbeddedRunSnapshot(
   ACTIVE_EMBEDDED_RUN_SNAPSHOTS.set(sessionId, snapshot);
 }
 
+function removeActiveEmbeddedRun(
+  sessionId: string,
+  handle: EmbeddedAgentQueueHandle,
+  sessionKey?: string,
+  opts?: { retainFinalizing?: boolean },
+) {
+  handle.closeDiagnostics?.();
+  ACTIVE_EMBEDDED_RUNS.delete(sessionId);
+  clearEmbeddedRunAbortability(handle, opts);
+  ACTIVE_EMBEDDED_RUN_SNAPSHOTS.delete(sessionId);
+  clearActiveRunSessionIndex(ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY, sessionId, sessionKey?.trim());
+  clearActiveRunSessionIndex(ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE, sessionId);
+}
+
 export function clearActiveEmbeddedRun(
   sessionId: string,
   handle: EmbeddedAgentQueueHandle,
@@ -1749,16 +1753,7 @@ export function clearActiveEmbeddedRun(
 ) {
   const activeHandle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
   if (activeHandle === handle) {
-    handle.closeDiagnostics?.();
-    ACTIVE_EMBEDDED_RUNS.delete(sessionId);
-    clearEmbeddedRunAbortability(handle, { retainFinalizing: true });
-    ACTIVE_EMBEDDED_RUN_SNAPSHOTS.delete(sessionId);
-    clearActiveRunSessionIndex(
-      ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY,
-      sessionId,
-      sessionKey?.trim(),
-    );
-    clearActiveRunSessionIndex(ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE, sessionId);
+    removeActiveEmbeddedRun(sessionId, handle, sessionKey, { retainFinalizing: true });
     logSessionStateChange({
       sessionId,
       sessionKey,
@@ -1793,16 +1788,7 @@ async function forceClearEmbeddedAgentRun(
   if (handle && handle === expectedHandle) {
     forcedTerminalSettlement = EMBEDDED_RUN_FORCED_TERMINAL_SETTLEMENTS.get(handle);
     EMBEDDED_RUN_FORCED_TERMINAL_SETTLEMENTS.delete(handle);
-    handle.closeDiagnostics?.();
-    ACTIVE_EMBEDDED_RUNS.delete(sessionId);
-    clearEmbeddedRunAbortability(handle);
-    ACTIVE_EMBEDDED_RUN_SNAPSHOTS.delete(sessionId);
-    clearActiveRunSessionIndex(
-      ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY,
-      sessionId,
-      sessionKey?.trim(),
-    );
-    clearActiveRunSessionIndex(ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE, sessionId);
+    removeActiveEmbeddedRun(sessionId, handle, sessionKey);
     logSessionStateChange({ sessionId, sessionKey, state: "idle", reason });
     if (!handle.diagnosticOwner) {
       markDiagnosticEmbeddedRunEnded({ sessionId, sessionKey });

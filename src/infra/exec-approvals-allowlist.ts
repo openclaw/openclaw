@@ -209,11 +209,6 @@ type ExecAllowlistContext = {
   allowShellBuiltins?: boolean;
 };
 
-function normalizeSkillBinName(value: string | undefined): string | null {
-  const trimmed = normalizeOptionalLowercaseString(value);
-  return trimmed && trimmed.length > 0 ? trimmed : null;
-}
-
 function normalizeSkillBinResolvedPath(value: string | undefined): string | null {
   const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
@@ -234,7 +229,7 @@ function buildSkillBinTrustIndex(
     return trustByName;
   }
   for (const entry of entries) {
-    const name = normalizeSkillBinName(entry.name);
+    const name = normalizeOptionalLowercaseString(entry.name);
     const resolvedPath = normalizeSkillBinResolvedPath(entry.resolvedPath);
     if (!name || !resolvedPath) {
       continue;
@@ -264,7 +259,7 @@ function isSkillAutoAllowedSegment(params: {
   if (!rawExecutable || isPathScopedExecutableToken(rawExecutable)) {
     return false;
   }
-  const executableName = normalizeSkillBinName(execution.executableName);
+  const executableName = normalizeOptionalLowercaseString(execution.executableName);
   const resolvedPath = normalizeSkillBinResolvedPath(trustPath);
   if (!executableName || !resolvedPath) {
     return false;

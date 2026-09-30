@@ -4,27 +4,24 @@ export const REMOTE_WORKSPACE_MANIFEST_CANONICAL_JS = String.raw`function canoni
   return (mode & 0o111) === 0 ? 0o644 : 0o755;
 }
 function canonicalEntry(entry) {
-  if (entry.type === "directory") {
-    return { path: entry.path, type: entry.type, mode: canonicalMode(entry.type, entry.mode) };
+  if (!["directory", "file", "symlink"].includes(entry.type)) {
+    fail("unsupported worker workspace manifest entry");
   }
+  const canonical = { path: entry.path, type: entry.type, mode: canonicalMode(entry.type, entry.mode) };
   if (entry.type === "file") {
     return {
-      path: entry.path,
-      type: entry.type,
-      mode: canonicalMode(entry.type, entry.mode),
+      ...canonical,
       size: entry.size,
       sha256: entry.sha256,
     };
   }
   if (entry.type === "symlink") {
     return {
-      path: entry.path,
-      type: entry.type,
-      mode: canonicalMode(entry.type, entry.mode),
+      ...canonical,
       target: entry.target,
     };
   }
-  fail("unsupported worker workspace manifest entry");
+  return canonical;
 }
 function compareManifestPaths(left, right) {
   return left.path < right.path ? -1 : left.path > right.path ? 1 : 0;
@@ -133,9 +130,7 @@ function resolveManifest(manifestRoot, requestedDigest) {
       continue;
     }
     if (crypto.createHash("sha256").update(canonical).digest("hex") !== requestedDigest) continue;
-    if (publishManifest(manifestRoot, canonical) !== requestedDigest) {
-      fail("resolved workspace manifest digest mismatch");
-    }
+    publishManifest(manifestRoot, canonical);
     return requestedDigest;
   }
   fail("worker workspace manifest is unavailable: " + requestedDigest);

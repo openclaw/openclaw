@@ -434,12 +434,12 @@ export async function buildFileEntry(
   };
 }
 
-async function loadMultimodalEmbeddingInput(
+export async function buildMultimodalChunkForIndexing(
   entry: Pick<
     MemoryFileEntry,
-    "absPath" | "contentText" | "mimeType" | "kind" | "size" | "dataHash"
+    "absPath" | "contentText" | "mimeType" | "kind" | "hash" | "size" | "dataHash"
   >,
-): Promise<EmbeddingInput | null> {
+): Promise<MultimodalMemoryChunk | null> {
   if (entry.kind !== "multimodal" || !entry.contentText || !entry.mimeType) {
     return null;
   }
@@ -468,7 +468,7 @@ async function loadMultimodalEmbeddingInput(
   if (entry.dataHash && entry.dataHash !== dataHash) {
     return null;
   }
-  return {
+  const embeddingInput: EmbeddingInput = {
     text: entry.contentText,
     parts: [
       { type: "text", text: entry.contentText },
@@ -479,18 +479,6 @@ async function loadMultimodalEmbeddingInput(
       },
     ],
   };
-}
-
-export async function buildMultimodalChunkForIndexing(
-  entry: Pick<
-    MemoryFileEntry,
-    "absPath" | "contentText" | "mimeType" | "kind" | "hash" | "size" | "dataHash"
-  >,
-): Promise<MultimodalMemoryChunk | null> {
-  const embeddingInput = await loadMultimodalEmbeddingInput(entry);
-  if (!embeddingInput) {
-    return null;
-  }
   return {
     chunk: {
       startLine: 1,

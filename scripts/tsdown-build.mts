@@ -29,7 +29,7 @@ import {
   waitForManagedProcessGroupExit,
 } from "./lib/managed-child-process.mts";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
-import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
+import { assertRealOutputRoot, controlUiBuildSiblingPid } from "./lib/output-root-guard.mjs";
 import { readProcessMemoryCapacity, type MemoryLimitParams } from "./lib/process-memory.mts";
 import { sanitizeBundlerHelperDtsExportTree } from "./lib/sanitize-bundler-helper-dts-exports.mts";
 import {
@@ -282,7 +282,8 @@ function cleanOutputRootExcept(rootPath: string, protectedPaths: Set<string>, fs
   for (const entry of entries) {
     const entryPath = path.join(rootPath, entry.name);
     const resolvedEntryPath = path.resolve(entryPath);
-    if (protectedPaths.has(resolvedEntryPath)) {
+    // scripts/ui.mts owns in-flight Control UI staging trees.
+    if (protectedPaths.has(resolvedEntryPath) || controlUiBuildSiblingPid(entry.name) !== null) {
       continue;
     }
     try {

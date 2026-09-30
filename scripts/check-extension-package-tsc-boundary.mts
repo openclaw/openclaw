@@ -552,9 +552,13 @@ async function runCompileCheck(extensionIds: string[]) {
       const recordPath = resolveBoundaryTsStampPath(extensionId);
       mkdirSync(dirname(inputReceipt), { recursive: true });
       if (
-        before.matches(readArtifactRecord(recordPath), config, args, [
-          portableRelativePath(repoRoot, inputReceipt),
-        ])
+        before.matchesReceipt(
+          readArtifactRecord(recordPath),
+          config,
+          args,
+          [portableRelativePath(repoRoot, inputReceipt)],
+          inputReceipt,
+        )
       ) {
         skippedCompileCount += 1;
         if (verboseFreshLogs) {

@@ -175,7 +175,7 @@ describe("worker placement result recovery", () => {
       currentManifestRaw: current.raw,
     });
     if (params.record !== false) {
-      params.store.recordStagedWorkspaceResult(params.claim, stagedResultRef);
+      await params.store.recordStagedWorkspaceResult(params.claim, stagedResultRef);
     }
     await fs.rm(payload, { recursive: true, force: true });
     return { baseManifestRef: base.ref, currentManifestRef: current.ref, stagedResultRef };
@@ -422,10 +422,10 @@ describe("worker placement result recovery", () => {
       base: "base\n",
       current: "worker\n",
     });
-    placementStore.authorizeWorkerTurnTools(claim, ["sessions_send"]);
+    await placementStore.authorizeWorkerTurnTools(claim, ["sessions_send"]);
     const binding = claim;
     expect(
-      placementStore.beginWorkerSessionToolOperation({
+      await placementStore.beginWorkerSessionToolOperation({
         claim: binding,
         toolName: "sessions_send",
         toolCallId: "running-session-operation-call",
@@ -463,7 +463,7 @@ describe("worker placement result recovery", () => {
     } finally {
       // Join recovery even when a fence assertion fails, before database teardown.
       try {
-        completed = placementStore.completeWorkerSessionToolOperation({
+        completed = await placementStore.completeWorkerSessionToolOperation({
           sourceSessionId: claim.sessionId,
           sourceClaimId: claim.claimId,
           toolCallId: "running-session-operation-call",

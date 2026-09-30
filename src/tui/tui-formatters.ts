@@ -1,6 +1,5 @@
 import { asOptionalObjectRecord as asMessageRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-// Formats terminal-safe strings for TUI messages and status surfaces.
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { hasTerminalControl } from "../../packages/terminal-core/src/safe-text.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
@@ -48,7 +47,11 @@ export function formatTuiFooter(params: {
 }): string {
   const { sessionInfo } = params;
   const fastLabel =
-    sessionInfo.fastMode === "auto" ? "fast:auto" : sessionInfo.fastMode === true ? "fast" : null;
+    sessionInfo.fastMode === "auto" || sessionInfo.fastMode === "ultrafast"
+      ? `fast:${sessionInfo.fastMode}`
+      : sessionInfo.fastMode === true
+        ? "fast"
+        : null;
   const verbose = sessionInfo.verboseLevel ?? "off";
   const trace = sessionInfo.traceLevel ?? "off";
   const reasoning = sessionInfo.reasoningLevel ?? "off";
@@ -304,18 +307,10 @@ function collectBlockStrings(content: unknown, type: "text" | "thinking"): strin
   return parts;
 }
 
-/**
- * Extract ONLY thinking blocks from message content.
- * Model-agnostic: returns empty string if no thinking blocks exist.
- */
 export function extractThinkingFromMessage(message: unknown): string {
   return collectBlockStrings(asMessageRecord(message)?.content, "thinking").join("\n").trim();
 }
 
-/**
- * Extract ONLY text content blocks from message (excludes thinking).
- * Model-agnostic: works for any model with text content blocks.
- */
 export function extractContentFromMessage(message: unknown): string {
   const record = asMessageRecord(message);
   if (!record) {

@@ -1,7 +1,7 @@
 // Presentation-free by contract: confirmations and secret reveals belong to the owning
 // page, because native window.confirm/window.prompt silently answer in webviews with no
 // dialog bridge and would end the action with no outcome and no recorded reason.
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   ExecApprovalsNodeSnapshot as GatewayExecApprovalsNodeSnapshot,
   ExecApprovalsSnapshot as GatewayExecApprovalsSnapshot,
@@ -392,7 +392,7 @@ function classifyRotationOutcome(
   payload: unknown,
   requested: { deviceId: string; role: string },
 ): RotatedDeviceTokenOutcome {
-  const result = isRecord(payload) ? payload : undefined;
+  const result = asOptionalRecord(payload);
   const scopes = result?.scopes;
   const rotatedAtMs = result?.rotatedAtMs;
   const identified =

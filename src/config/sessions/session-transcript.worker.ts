@@ -473,6 +473,14 @@ serveOwnedWorkerTasks(
       return await runWithSessionTranscriptReadFence(
         request.admission,
         async (): Promise<SessionTranscriptWorkerValues[keyof SessionTranscriptWorkerValues]> => {
+          if (request.kind === "session-activity-summary-source") {
+            const { readActivitySummaryBatch } =
+              await import("../../gateway/session-activity-summary-source.js");
+            return {
+              kind: "session-activity-summary-source" as const,
+              source: readActivitySummaryBatch(request),
+            };
+          }
           if (request.kind === "session-title-fields") {
             const { readSessionTitleFieldsFromTranscript } =
               await import("../../gateway/session-transcript-title-reader.js");

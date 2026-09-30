@@ -15,6 +15,7 @@ import { ModelAccountConnectAuthorityError } from "../model-account-connect.js";
 import { prepareOperatorModelPresentation } from "../operator-model-presentation.js";
 import { readOperatorRolePolicyRevision } from "../operator-role-policy.js";
 import { SESSION_READ_SCOPE } from "../operator-scopes.js";
+import { projectModelFastModeCatalog } from "../session-fast-mode-presentation.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { hasSessionReadAccessChanged, hiddenSessionNotFound } from "../session-sharing-policy.js";
@@ -170,7 +171,10 @@ export async function handleChatMetadataRequest(
       policyConfig: context.getCommittedRuntimeConfig?.() ?? cfg,
       client,
     })?.forAgent(scope.agentId, metadata.models);
-    respond(true, policy ? policy.metadata(metadata) : metadata);
+    respond(
+      true,
+      projectModelFastModeCatalog(policy ? policy.metadata(metadata) : metadata, client),
+    );
   } catch (error) {
     if (error instanceof SessionMutationAuthorizationChangedError) {
       respond(false, undefined, error.error);

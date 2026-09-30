@@ -25,6 +25,7 @@ import {
   type ExecAsk,
   type ExecApprovalsFile,
   type ExecApprovalsResolved,
+  type ExecApprovalsSnapshot,
   type ExecSecurity,
 } from "../infra/exec-approvals.js";
 import { planShellAuthorization } from "../infra/exec-authorization-plan.js";
@@ -57,6 +58,7 @@ import {
 import { invokeDeviceApps } from "./invoke-device-apps.js";
 import { invokeNodeFileCommand } from "./invoke-file-commands.js";
 import { boundMcpToolResultPayload } from "./invoke-mcp-result.js";
+import { decodeNodeInvokeParams as decodeParams } from "./invoke-payload.js";
 import { withNodeHostPluginInvocation } from "./invoke-plugin-context.js";
 import { runCommand } from "./invoke-run-command.js";
 import { buildSystemRunPrepareCoverageEnv } from "./invoke-system-run-plan.js";
@@ -189,13 +191,6 @@ async function buildSystemRunAllowAlwaysCoverage(params: {
   });
 }
 
-type ExecApprovalsSnapshot = {
-  path: string;
-  exists: boolean;
-  hash: string;
-  file: ExecApprovalsFile;
-};
-
 export type { NodeInvokeRequestPayload, SkillBinsProvider } from "./invoke-types.js";
 
 function resolveExecSecurity(value?: string): ExecSecurity {
@@ -250,12 +245,7 @@ function requireExecApprovalsBaseHash(
 }
 
 function resolveEnvPath(env?: Record<string, string>): string[] {
-  const raw =
-    env?.PATH ??
-    (env as Record<string, string>)?.Path ??
-    process.env.PATH ??
-    process.env.Path ??
-    DEFAULT_NODE_PATH;
+  const raw = env?.PATH ?? env?.Path ?? process.env.PATH ?? process.env.Path ?? DEFAULT_NODE_PATH;
   return raw.split(path.delimiter).filter(Boolean);
 }
 
@@ -569,8 +559,7 @@ async function dispatchInvoke(
       return;
     }
 
-    const payload: ExecApprovalsSnapshot = redactExecApprovals(nextSnapshot);
-    await response.json(payload);
+    await response.json(redactExecApprovals(nextSnapshot));
     return;
   }
 
@@ -818,18 +807,6 @@ async function handleMcpToolsCall(
       "MCP_TOOL_ERROR",
       truncateUtf16Safe(String(error), MCP_ERROR_MESSAGE_MAX_CHARS),
     );
-  }
-}
-
-// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- CLI JSON params are typed by the invoked method.
-function decodeParams<T>(raw?: string | null): T {
-  if (!raw) {
-    throw new Error("INVALID_REQUEST: paramsJSON required");
-  }
-  try {
-    return JSON.parse(raw) as T;
-  } catch {
-    throw new Error("INVALID_REQUEST: paramsJSON malformed JSON");
   }
 }
 

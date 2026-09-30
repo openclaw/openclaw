@@ -1,6 +1,10 @@
 import type { ChildProcess } from "node:child_process";
 import { basename, dirname, resolve, win32 as pathWin32 } from "node:path";
-import { compareReleaseVersions } from "../release-version.mjs";
+import {
+  classifyReleaseTrain,
+  compareReleaseVersions,
+  parseReleaseVersion,
+} from "../release-version.mjs";
 import { trimForSummary } from "./shared.ts";
 import { type CrossOsSuite, parseCrossOsSuiteFilter } from "./suite-filter.mjs";
 
@@ -536,6 +540,42 @@ export function buildRealUpdateEnv(env: NodeJS.ProcessEnv) {
   return updateEnv;
 }
 
+function isExtendedStableBaselineVersion(baselineVersion: string | undefined) {
+  const parsed = baselineVersion ? parseReleaseVersion(baselineVersion) : null;
+  return parsed !== null && classifyReleaseTrain(parsed) === "extended-stable";
+}
+
+function isExtendedStableCandidateVersion(candidateVersion: string | undefined) {
+  const parsed = candidateVersion ? parseReleaseVersion(candidateVersion) : null;
+  return parsed !== null && classifyReleaseTrain(parsed) === "extended-stable";
+}
+
+function usesExtendedStableRegistryRoute(
+  baselineVersion: string | undefined,
+  candidateVersion: string | undefined,
+) {
+  return (
+    isExtendedStableBaselineVersion(baselineVersion) &&
+    isExtendedStableCandidateVersion(candidateVersion)
+  );
+}
+
+function buildPackagedUpgradeUpdateEnv(
+  env: NodeJS.ProcessEnv,
+  baselineVersion?: string,
+  candidateVersion?: string,
+) {
+  const updateEnv = buildRealUpdateEnv(env);
+  if (usesExtendedStableRegistryRoute(baselineVersion, candidateVersion)) {
+    updateEnv.OPENCLAW_UPDATE_PACKAGE_SPEC = "openclaw";
+    // The shipped updater requires the bare package name to admit the loopback
+    // registry. Select its candidate tag only for the update process so a
+    // baseline specified as openclaw@latest still installs the published tag.
+    updateEnv.NPM_CONFIG_TAG = "extended-stable";
+  }
+  return updateEnv;
+}
+
 export function verifyPackagedUpgradeUpdateResult(
   result: CommandResult,
   _options?: { candidateVersion?: string },
@@ -623,17 +663,38 @@ export function resolvePackagedUpgradeTimeouts(
 export function buildPackagedUpgradeUpdateArgs(
   candidateUrl: string,
   timeoutSeconds = resolvePackagedUpgradeTimeouts(0).stepTimeoutSeconds,
+  baselineVersion?: string,
+  candidateVersion?: string,
 ) {
   return [
     "update",
-    "--tag",
-    candidateUrl,
+    ...(usesExtendedStableRegistryRoute(baselineVersion, candidateVersion)
+      ? []
+      : ["--tag", candidateUrl]),
     "--yes",
     "--json",
     "--no-restart",
     "--timeout",
     String(timeoutSeconds),
   ];
+}
+
+export function buildPackagedUpgradeUpdateCommand(params: {
+  env: NodeJS.ProcessEnv;
+  candidateUrl: string;
+  candidateVersion: string;
+  timeoutSeconds?: number;
+  baselineVersion: string;
+}) {
+  return {
+    env: buildPackagedUpgradeUpdateEnv(params.env, params.baselineVersion, params.candidateVersion),
+    args: buildPackagedUpgradeUpdateArgs(
+      params.candidateUrl,
+      params.timeoutSeconds,
+      params.baselineVersion,
+      params.candidateVersion,
+    ),
+  };
 }
 
 export function isRecoverableWindowsPackagedUpgradeSwapCleanupFailure(
@@ -663,7 +724,7 @@ export function isRecoverableWindowsPackagedUpgradeTimeoutError(
   const message = error instanceof Error ? error.message : String(error);
   return (
     /\bCommand timed out:/u.test(message) &&
-    /[/\\]openclaw\.mjs update --tag http:\/\/127\.0\.0\.1:\d+\/openclaw[^/\s]*\.tgz --yes --json(?: --no-restart)? --timeout \d+/u.test(
+    /[/\\]openclaw\.mjs update(?: --tag http:\/\/127\.0\.0\.1:\d+\/openclaw[^/\s]*\.tgz)? --yes --json(?: --no-restart)? --timeout \d+/u.test(
       message,
     )
   );

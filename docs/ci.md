@@ -58,9 +58,16 @@ output contract. Missing or invalid inputs still reject current PR Node planning
 
 The [Testbox check workflow](/ci/local-proof#testbox-validation) requests the Blacksmith 32-class for dispatched proof and defaults to a four-hour outer job budget. PR hydration checks stay on hosted Ubuntu; individual test deadlines remain unchanged.
 
-Full GitHub and hybrid type checks run the five core stripes independently, retaining two compiler children per job. Current hybrid full runs use three hosted extension-lint jobs; targeted layouts retain six stripe identities. Trusted hybrid first attempts place both packed core-lint rows on the Blacksmith 16-class and the final gate on the 4-class to avoid serial hosted assignment delays. Frozen targets keep their earlier layout; see [static checks](/ci/runners#runner-backend-modes).
+Full GitHub and hybrid type checks run the five core stripes independently, retaining two compiler children per job. The last four rows then each run one root-test partition serially, leaving extension tests and scripts in the central row. Narrow plans reuse four already-selected rows when available; smaller selections retain central root checking. This adds no jobs or compiler overlap. Current hybrid full runs use three hosted extension-lint jobs; targeted layouts retain six stripe identities. Trusted hybrid first attempts place both packed core-lint rows on the Blacksmith 16-class and the final gate on the 4-class to avoid serial hosted assignment delays. Frozen targets keep their earlier layout; see [static checks](/ci/runners#runner-backend-modes).
 
-Additional checks start directly after preflight. Known full compiler selections skip discovery while retaining the core graph boundary in an existing required owner; see [pipeline ordering](/ci/pipeline#fail-fast-order).
+Additional checks and narrow-PR dependency scans start directly after preflight. Known full compiler selections skip discovery while retaining the core graph boundary in an existing required owner; see [pipeline ordering](/ci/pipeline#fail-fast-order).
+
+The extension package boundary row has a 30-minute job budget for SDK preparation,
+all selected plugin compiles, input-receipt validation, the required negative
+canary, and cleanup. Hosted four-CPU runs spent about 19 minutes in the compile
+command alone; one completed compile and canary but exceeded the former
+20-minute whole-job deadline. Other additional-check rows retain 20 minutes.
+This changes no compiler concurrency, coverage, runner routing, or cache guards.
 
 Core lint discovers separate source and UI TypeScript projects, retaining shared ambient declarations and imported dependencies. The source project also includes `src/**/*.test-support.cjs`; unrelated JavaScript files are not added as roots. See [local checks](/ci/local-proof#local-equivalents).
 

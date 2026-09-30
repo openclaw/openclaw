@@ -247,18 +247,6 @@ async function listRegisteredWorktreePaths(params: {
   );
 }
 
-async function isDirectoryEmptyBeforeDeadline(
-  directoryPath: string,
-  deadline: MantisCleanupDeadline,
-): Promise<boolean> {
-  const entries = await runBeforeMantisCleanupDeadline(
-    deadline,
-    "checking an unregistered worktree directory",
-    async () => await fs.readdir(directoryPath),
-  );
-  return entries.length === 0;
-}
-
 function createCleanupVerificationAggregate(params: {
   errors: [unknown, unknown];
   lane: "baseline" | "candidate";
@@ -408,7 +396,14 @@ async function removeMantisWorktreeBeforeDeadline(
         repoRoot: params.repoRoot,
         worktreeDir: params.worktreeDir,
       });
-      if (stillOwned && (await isDirectoryEmptyBeforeDeadline(params.worktreeDir, deadline))) {
+      const entries = stillOwned
+        ? await runBeforeMantisCleanupDeadline(
+            deadline,
+            "checking an unregistered worktree directory",
+            () => fs.readdir(params.worktreeDir),
+          )
+        : undefined;
+      if (entries?.length === 0) {
         // Git no longer owns this unique prepared directory. Keep the empty
         // inode rather than deleting through a pathname race.
         return;

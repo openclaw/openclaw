@@ -553,7 +553,43 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         scheduleRecoveryRestart("runtime commit", configCommitFailure?.error ?? error);
         return "applied-restart-required";
       }
-      // Model refresh has not taken ownership yet; a failed exit must release its waiting readers.
+      const canRepublishModels = () =>
+        isCurrentGatewayReloadGeneration(myGeneration) && !isPluginReloadAborted();
+      if (
+        runtimeCommitted &&
+        error instanceof PluginRuntimeApplicationError &&
+        error.details.committed &&
+        canRepublishModels()
+      ) {
+        // Failed activation leaves the committed registry authoritative. Restore its
+        // model/reply owners independently, without clearing the plugin failure.
+        try {
+          await withPluginRuntimeRegistryScope(params.getPluginRegistry(), () =>
+            mrReload.refreshModelRuntimeAfterHotReload({
+              config: nextConfig,
+              agentIds: modelRuntimeAgentIds,
+              pluginMetadataSnapshot: params.getPluginMetadataSnapshot?.(),
+              isPublicationCurrent: canRepublishModels,
+            }),
+          );
+        } catch (refreshError) {
+          rejectPendingPreparedModelRuntimeReplacement(
+            preparedModelRuntimeReplacementGateId,
+            refreshError,
+          );
+          throw new PluginRuntimeApplicationError(
+            `Plugin model/reply recovery failed: ${formatErrorMessage(refreshError)}. Retry the plugin reload or restart the Gateway. Original failure: ${formatErrorMessage(error)}`,
+            error.details,
+            {
+              cause: new AggregateError(
+                [error, refreshError],
+                "Plugin model/reply recovery failed",
+              ),
+            },
+          );
+        }
+      }
+      // Release the original gate if recovery did not replace it with a fresh publication.
       if (preparedModelRuntimeReplacementGateId) {
         rejectPendingPreparedModelRuntimeReplacement(preparedModelRuntimeReplacementGateId, error);
       }

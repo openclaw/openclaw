@@ -608,7 +608,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
                   replyToSender: state.hookState.hookContext.replyToSender,
                   replyToIsQuote: state.hookState.hookContext.replyToIsQuote,
                 },
-                state.assertCurrentBindingRoute,
+                { prepare: state.assertCurrentBindingRoute },
               ),
               pluginSubagentRequester,
             ),

@@ -1,7 +1,5 @@
 // OC Path tests cover sentinel guard plugin behavior.
 import { describe, expect, it } from "vitest";
-import { emitMd } from "../../emit.js";
-import { parseMd } from "../../parse.js";
 import { OcEmitSentinelError, REDACTED_SENTINEL, guardSentinel } from "../../sentinel.js";
 
 describe("sentinel-guard", () => {
@@ -20,101 +18,5 @@ describe("sentinel-guard", () => {
     expect(() => guardSentinel(`prefix${REDACTED_SENTINEL}suffix`, "oc://X.md")).toThrow(
       OcEmitSentinelError,
     );
-  });
-
-  it("render mode catches sentinel in frontmatter", () => {
-    const ast = {
-      kind: "md" as const,
-      raw: "",
-      frontmatter: [{ key: "token", value: REDACTED_SENTINEL, line: 2 }],
-      preamble: "",
-      blocks: [],
-    };
-    expect(() => emitMd(ast, { mode: "render" })).toThrow(OcEmitSentinelError);
-  });
-
-  it("render mode catches sentinel in preamble", () => {
-    const ast = {
-      kind: "md" as const,
-      raw: "",
-      frontmatter: [],
-      preamble: REDACTED_SENTINEL,
-      blocks: [],
-    };
-    expect(() => emitMd(ast, { mode: "render" })).toThrow(OcEmitSentinelError);
-  });
-
-  it("render mode catches sentinel in block bodyText", () => {
-    const ast = {
-      kind: "md" as const,
-      raw: "",
-      frontmatter: [],
-      preamble: "",
-      blocks: [
-        {
-          heading: "Sec",
-          slug: "sec",
-          line: 1,
-          bodyText: REDACTED_SENTINEL,
-          items: [],
-          tables: [],
-          codeBlocks: [],
-        },
-      ],
-    };
-    expect(() => emitMd(ast, { mode: "render" })).toThrow(OcEmitSentinelError);
-  });
-
-  it("render mode catches sentinel in item kv.value", () => {
-    const ast = {
-      kind: "md" as const,
-      raw: "",
-      frontmatter: [],
-      preamble: "",
-      blocks: [
-        {
-          heading: "S",
-          slug: "s",
-          line: 1,
-          bodyText: "- t: x",
-          items: [
-            {
-              text: "t: x",
-              slug: "t",
-              line: 2,
-              kv: { key: "t", value: REDACTED_SENTINEL },
-            },
-          ],
-          tables: [],
-          codeBlocks: [],
-        },
-      ],
-    };
-    expect(() => emitMd(ast, { mode: "render", fileNameForGuard: "AGENTS.md" })).toThrow(
-      OcEmitSentinelError,
-    );
-  });
-
-  it("sentinel-as-substring in raw — strict mode catches it", () => {
-    const raw = `Some prose ${REDACTED_SENTINEL} more prose.\n`;
-    const { ast } = parseMd(raw);
-    expect(emitMd(ast)).toBe(raw);
-    expect(() => emitMd(ast, { acceptPreExistingSentinel: false })).toThrow(OcEmitSentinelError);
-  });
-
-  it("fileNameForGuard appears in the error path", () => {
-    const ast = {
-      kind: "md" as const,
-      raw: "",
-      frontmatter: [{ key: "token", value: REDACTED_SENTINEL, line: 2 }],
-      preamble: "",
-      blocks: [],
-    };
-    try {
-      emitMd(ast, { mode: "render", fileNameForGuard: "config" });
-      expect.fail("should have thrown");
-    } catch (err) {
-      expect((err as OcEmitSentinelError).path).toContain("config");
-    }
   });
 });

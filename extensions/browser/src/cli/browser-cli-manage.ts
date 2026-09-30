@@ -104,22 +104,15 @@ function formatDoctorLine(check: BrowserDoctorCheck): string {
   return `${prefix} ${check.name}${check.detail ? `: ${check.detail}` : ""}`;
 }
 
-function isGatewaySecretRefUnavailableErrorShape(error: unknown): boolean {
-  if (!(error instanceof Error)) {
-    return false;
-  }
-  const errorRecord = error as Error & { code?: unknown };
-  return (
-    errorRecord.name === "GatewaySecretRefUnavailableError" ||
-    errorRecord.code === "GATEWAY_SECRET_REF_UNAVAILABLE"
-  );
-}
-
 function formatBrowserDoctorGatewayError(error: unknown): string {
-  if (!isGatewaySecretRefUnavailableErrorShape(error)) {
-    return String(error);
+  if (
+    error instanceof Error &&
+    (error.name === "GatewaySecretRefUnavailableError" ||
+      (error as Error & { code?: unknown }).code === "GATEWAY_SECRET_REF_UNAVAILABLE")
+  ) {
+    return "Gateway auth SecretRef is unavailable in this command path; browser doctor cannot reach the admin-scoped browser.request endpoint. Set OPENCLAW_GATEWAY_TOKEN or OPENCLAW_GATEWAY_PASSWORD, then retry.";
   }
-  return "Gateway auth SecretRef is unavailable in this command path; browser doctor cannot reach the admin-scoped browser.request endpoint. Set OPENCLAW_GATEWAY_TOKEN or OPENCLAW_GATEWAY_PASSWORD, then retry.";
+  return String(error);
 }
 
 async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string, deep?: boolean) {

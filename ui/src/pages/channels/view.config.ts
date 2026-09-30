@@ -1,4 +1,3 @@
-// Control UI view renders channels screen content.
 import { html } from "lit";
 import {
   analyzeConfigSchema,

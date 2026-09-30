@@ -326,7 +326,7 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
       if (role === null) {
         return;
       }
-      if (role !== "owner" && role !== "admin") {
+      if (!canManageSessionSharing(role)) {
         respond(
           false,
           undefined,

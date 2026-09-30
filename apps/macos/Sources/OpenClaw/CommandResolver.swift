@@ -31,11 +31,9 @@ enum CommandResolver {
         profile: AppProfile = .current,
         homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser) -> URL
     {
-        if let stored = defaults.string(forKey: projectRootDefaultsKey),
-           let url = expandPath(stored),
-           FileManager().fileExists(atPath: url.path)
-        {
-            return url
+        if let stored = defaults.string(forKey: projectRootDefaultsKey) {
+            let url = self.expandPath(stored)
+            if FileManager().fileExists(atPath: url.path) { return url }
         }
         if profile.isActive {
             return profile.stateDirectoryURL(homeDirectory: homeDirectory)
@@ -173,12 +171,7 @@ enum CommandResolver {
 
     private static func versionedNodeBinPaths(base: URL, suffix: String) -> [String] {
         guard FileManager().fileExists(atPath: base.path) else { return [] }
-        let entries: [String]
-        do {
-            entries = try FileManager().contentsOfDirectory(atPath: base.path)
-        } catch {
-            return []
-        }
+        guard let entries = try? FileManager().contentsOfDirectory(atPath: base.path) else { return [] }
 
         let sorted = entries.compactMap { entry -> (name: String, version: RuntimeVersion)? in
             guard let version = RuntimeVersion.from(string: entry),
@@ -240,7 +233,7 @@ enum CommandResolver {
         // Packaging and optimization are independent: even DEBUG apps must use
         // their signed payload, including after relocation or checkout removal.
         if bundle.bundleURL.pathExtension == "app" {
-            return try BundledNodeWorker.launch(bundle: bundle, desktopSharingEnabled: desktopSharingEnabled)
+            return try BundledRuntime.launch(bundle: bundle, desktopSharingEnabled: desktopSharingEnabled)
         }
         #if DEBUG
         let root = projectRoot ?? self.projectRoot()
@@ -470,7 +463,7 @@ enum CommandResolver {
         return nil
     }
 
-    private static func expandPath(_ path: String) -> URL? {
+    private static func expandPath(_ path: String) -> URL {
         var expanded = path
         if expanded.hasPrefix("~") {
             let home = FileManager().homeDirectoryForCurrentUser.path

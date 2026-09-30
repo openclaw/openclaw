@@ -1,7 +1,10 @@
 // MCP loopback runtime scope cache.
 // Resolves Gateway-visible tools for MCP clients with short-lived schema caching.
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
-import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import type {
+  AdmittedRunContext,
+  AdmittedRunOperatorAuthority,
+} from "../agents/admitted-run-context.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import {
   loadPairedComputerUseAvailabilityForSurface,
@@ -51,6 +54,7 @@ type CachedScopedTools = {
 };
 
 type McpLoopbackScopeParams = {
+  admittedRunContext?: AdmittedRunContext;
   context: Omit<McpLoopbackRequestContext, "senderIsOwner"> & { senderIsOwner?: boolean };
   cfg: OpenClawConfig;
   sessionControlAuthority?: AdmittedRunOperatorAuthority;
@@ -218,6 +222,7 @@ function resolveMcpLoopbackTools(
     agentDir: params.authProfileStoreAgentDir,
     conversationReadOrigin: "delegated",
     surface: "loopback",
+    admittedRunContext: params.admittedRunContext,
     sessionControlAuthority: params.sessionControlAuthority,
     isGrantCurrent: params.isGrantCurrent,
     excludeToolNames,
@@ -307,7 +312,6 @@ function buildMcpLoopbackToolCacheKey(params: McpLoopbackScopeParams): string {
       clientCaps: [...new Set(context.clientCaps ?? [])].toSorted(),
       // Missing allows all; an empty list denies all.
       toolsAllow: context.toolsAllow ? [...new Set(context.toolsAllow)].toSorted() : undefined,
-      modelHasVision: context.modelHasVision,
       pinnedWidgetAuthoring: context.pinnedWidgetAuthoring === true,
       currentInboundAudio: context.currentInboundAudio === true,
       sourceReplyOnly: context.sourceReplyOnly === true,
@@ -316,6 +320,7 @@ function buildMcpLoopbackToolCacheKey(params: McpLoopbackScopeParams): string {
       delegationCapability:
         context.delegationCapability === "report_only" ? "report_only" : undefined,
     },
+    admittedRunInstance: params.admittedRunContext?.operationalRunInstance,
     sessionControlsAllowed: hasSessionControlAuthority(params.sessionControlAuthority),
     authProfileStoreAgentDir: params.authProfileStoreAgentDir,
     yieldContextCacheKey: params.yieldContextCacheKey,

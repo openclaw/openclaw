@@ -199,8 +199,7 @@ function assertNoRetiredCommitmentsForeignKeys(db: DatabaseSync): void {
   for (const table of tables) {
     const foreignKeys = db
       .prepare(`PRAGMA foreign_key_list(${quoteSqliteIdentifier(table.name)})`)
-      // SAFETY: PRAGMA foreign_key_list rows are widened to unknown before use.
-      .all() as Array<{ table?: unknown }>;
+      .all();
     if (
       foreignKeys.some(
         (foreignKey) =>

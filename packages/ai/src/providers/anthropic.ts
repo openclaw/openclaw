@@ -74,7 +74,7 @@ import {
 } from "./anthropic-tool-projection.js";
 import { resolveCacheRetention } from "./cache-retention.js";
 import { resolveCloudflareBaseUrl } from "./cloudflare.js";
-import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
+import { buildCopilotDynamicHeaders } from "./github-copilot-headers.js";
 import {
   adjustMaxTokensForThinking,
   buildBaseOptions,
@@ -182,14 +182,10 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
       } else {
         const apiKey = requestOptions?.apiKey ?? getEnvApiKey(model.provider) ?? "";
 
-        let copilotDynamicHeaders: Record<string, string> | undefined;
-        if (model.provider === "github-copilot") {
-          const hasImages = hasCopilotVisionInput(requestContext.messages);
-          copilotDynamicHeaders = buildCopilotDynamicHeaders({
-            messages: requestContext.messages,
-            hasImages,
-          });
-        }
+        const copilotDynamicHeaders =
+          model.provider === "github-copilot"
+            ? buildCopilotDynamicHeaders(requestContext.messages)
+            : undefined;
 
         const cacheRetention = requestOptions?.cacheRetention ?? resolveCacheRetention();
         const cacheSessionId = cacheRetention === "none" ? undefined : requestOptions?.sessionId;
