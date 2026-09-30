@@ -130,8 +130,8 @@ so failed or empty acquisitions reach the shared publication owner unchanged.
 Hosted publication uses the same native parser. It preserves metadata without
 cost for unsupported or absent schedules, retains declared zero prices, and
 leaves the previous hosted catalog intact if the native feed fails validation.
-The existing [hosted catalog refresh and Gateway restart lifecycle](/concepts/models#hosted-catalog-updates)
-is unchanged.
+These updates follow the shared
+[hosted catalog publication lifecycle](/concepts/models#hosted-catalog-updates).
 
 ## Notes
 

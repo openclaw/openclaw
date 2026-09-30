@@ -32,7 +32,7 @@ describe("models refresh", () => {
     });
     await modelsRefreshCommand({}, updatedRuntime);
     expect(updatedRuntime.log).toHaveBeenLastCalledWith(
-      "A running Gateway applies the updated catalog after its next restart.",
+      "A running Gateway applies the update on its next catalog check, without restarting.",
     );
 
     const freshRuntime = runtime();

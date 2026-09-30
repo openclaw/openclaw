@@ -3,8 +3,6 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { getRemoteModelCatalogProviderOverlay } from "../model-catalog/remote-overlay.js";
-import { setRemoteModelCatalogOverlaySourcesForTest } from "../model-catalog/remote-overlay.test-support.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import {
@@ -187,7 +185,7 @@ describe("update-startup", () => {
 
   type UpdateCheckFixtureParams = Omit<
     Parameters<typeof createGatewayUpdateCheck>[0],
-    "getConfig" | "log" | "isNixMode" | "lifecycle"
+    "getConfig" | "log" | "isNixMode" | "lifecycle" | "applyRemoteCatalogUpdate"
   > & {
     cfg: OpenClawConfig;
     log?: Parameters<typeof createGatewayUpdateCheck>[0]["log"];
@@ -205,6 +203,7 @@ describe("update-startup", () => {
       log,
       isNixMode,
       getConfig: () => cfg,
+      applyRemoteCatalogUpdate: async () => "unchanged",
       lifecycle: createGatewayUpdateLifecycle(scheduler),
     });
     updateChecks.add(check);
@@ -340,7 +339,6 @@ describe("update-startup", () => {
   afterEach(async () => {
     await Promise.all([...updateChecks].map((check) => check.stop()));
     updateChecks.clear();
-    setRemoteModelCatalogOverlaySourcesForTest();
     resetUpdateAvailableStateForTest(scheduler);
     await scheduler.stop();
     vi.useRealTimers();
@@ -1247,6 +1245,7 @@ describe("update-startup", () => {
     let cfg: OpenClawConfig = { update: { channel: "beta" } };
     const params = {
       getConfig: () => cfg,
+      applyRemoteCatalogUpdate: async () => "unchanged" as const,
       log: { info: vi.fn() },
       isNixMode: false,
       lifecycle: createGatewayUpdateLifecycle(scheduler),
@@ -1955,128 +1954,26 @@ describe("update-startup", () => {
     }
   });
 
-  function catalogFixture(startupModel?: string) {
-    const sourceUrl = "https://catalog.example.test/catalog.json";
-    let stored: ReturnType<
-      typeof import("../model-catalog/remote-store.js").readRemoteModelCatalog
-    >;
-    const fixture = {
-      cfg: {
-        update: { channel: "extended-stable", checkOnStart: false },
-        models: { catalogRefresh: { url: sourceUrl } },
-      } satisfies OpenClawConfig,
-      info: vi.fn(),
-      get stored() {
-        return stored;
-      },
-      publish(generatedAt: number, id: string) {
-        stored = {
-          id: 1,
-          generated_at: generatedAt,
-          min_version: null,
-          source_url: sourceUrl,
-          etag: null,
-          last_modified: null,
-          checked_at: Date.now(),
-          bundle_json: JSON.stringify({
-            schemaVersion: 1,
-            sourceCommit: "synthetic-catalog",
-            generatedAt,
-            providers: { anthropic: { models: [{ id }] } },
-          }),
-        };
-      },
-    };
-    if (startupModel) {
-      fixture.publish(200, startupModel);
-    }
-    setRemoteModelCatalogOverlaySourcesForTest({
-      bundledGeneratedAt: () => 100,
-      readStoredCatalog: () => fixture.stored,
+  it("uses the remaining stored TTL after a fresh startup check", async () => {
+    refreshRemoteModelCatalogMock.mockResolvedValueOnce({
+      status: "fresh",
+      providers: 1,
+      models: 1,
+      generatedAt: 1_753_500_000_000,
+      nextCheckInMs: 1_000,
     });
-    const check = createGatewayUpdateCheck({
-      lifecycle: createGatewayUpdateLifecycle(scheduler),
-      getConfig: () => fixture.cfg,
-      log: { info: fixture.info },
-      isNixMode: false,
+    const stop = scheduleGatewayUpdateCheck({
+      cfg: { update: { channel: "extended-stable", checkOnStart: false } },
     });
-    updateChecks.add(check);
-    return { fixture, check };
-  }
 
-  const freshCatalog = {
-    status: "fresh",
-    generatedAt: 300,
-    providers: 1,
-    models: 1,
-    nextCheckInMs: 1_000,
-  } as const;
-
-  it("announces a pending catalog only once and preserves the active catalog", async () => {
-    const { fixture, check } = catalogFixture("startup-model");
-    const activeModels = () =>
-      getRemoteModelCatalogProviderOverlay(fixture.cfg, "anthropic")?.models;
-    expect(activeModels()).toEqual([{ id: "startup-model" }]);
-    fixture.publish(300, "downloaded-model");
-    refreshRemoteModelCatalogMock.mockResolvedValue(freshCatalog);
-    check.start();
     await vi.advanceTimersByTimeAsync(0);
-    expect(fixture.info).toHaveBeenCalledWith(
-      "remote model catalog downloaded; restart the Gateway to apply it",
-      { providers: 1, models: 1, generatedAt: 300 },
-    );
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(
-      fixture.info.mock.calls.filter(([message]) => message.includes("restart the Gateway")),
-    ).toHaveLength(1);
-    expect(activeModels()).toEqual([{ id: "startup-model" }]);
+    expect(refreshRemoteModelCatalogMock).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(999);
+    expect(refreshRemoteModelCatalogMock).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(refreshRemoteModelCatalogMock).toHaveBeenCalledTimes(2);
+    await stop();
   });
 
-  it("discards a pending notice when the selected source changes during refresh", async () => {
-    const { fixture, check } = catalogFixture();
-    expect(getRemoteModelCatalogProviderOverlay(fixture.cfg, "anthropic")).toBeUndefined();
-    fixture.publish(300, "downloaded-model");
-    const finished = createDeferred<Awaited<ReturnType<typeof refreshRemoteModelCatalogMock>>>();
-    refreshRemoteModelCatalogMock.mockImplementationOnce(() => finished.promise);
-    try {
-      check.start();
-      await vi.advanceTimersByTimeAsync(0);
-      fixture.cfg = {
-        ...fixture.cfg,
-        models: { catalogRefresh: { url: "https://mirror.example.test/catalog.json" } },
-      };
-      finished.resolve(freshCatalog);
-      await vi.advanceTimersByTimeAsync(0);
-      expect(fixture.info).toHaveBeenCalledWith(
-        "remote model catalog check superseded; deferred to the next check",
-      );
-      expect(
-        fixture.info.mock.calls.some(([message]) => message.includes("restart the Gateway")),
-      ).toBe(false);
-    } finally {
-      finished.resolve({ status: "disabled", providers: 0, models: 0 });
-      await check.stop();
-    }
-  });
-
-  it("retries failed notice inspection at the remaining fresh-cache interval", async () => {
-    const { fixture, check } = catalogFixture();
-    expect(getRemoteModelCatalogProviderOverlay(fixture.cfg, "anthropic")).toBeUndefined();
-    fixture.publish(300, "downloaded-model");
-    fixture.stored!.bundle_json = "{";
-    refreshRemoteModelCatalogMock.mockResolvedValue(freshCatalog);
-    check.start();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(fixture.info).toHaveBeenCalledWith("remote model catalog check failed", {
-      error: expect.stringContaining("SyntaxError"),
-    });
-    fixture.publish(300, "downloaded-model");
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(fixture.info).toHaveBeenCalledWith(
-      "remote model catalog downloaded; restart the Gateway to apply it",
-      { providers: 1, models: 1, generatedAt: 300 },
-    );
-    expect(getRemoteModelCatalogProviderOverlay(fixture.cfg, "anthropic")).toBeUndefined();
-  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -11,6 +11,7 @@ import {
 import { tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope-config.js";
 import { refreshExpiredPreparedModelCatalog } from "../../agents/prepared-model-catalog.js";
 import { PreparedModelRuntimePublicationSupersededError } from "../../agents/prepared-model-runtime.errors.js";
+import { applyRemoteModelCatalogUpdate } from "../../agents/prepared-model-runtime.js";
 import { roleScopesAllow } from "../../shared/operator-scope-compat.js";
 import { ModelAccountConnectAuthorityError } from "../model-account-connect.js";
 import { prepareOperatorModelPresentation } from "../operator-model-presentation.js";
@@ -142,6 +143,15 @@ export const modelsHandlers: GatewayRequestHandlers = {
         projectModelFastModeCatalog(policy ? policy.catalog(projected) : projected, client),
         undefined,
       );
+      if (params.refresh === true) {
+        void Promise.resolve()
+          .then(() => applyRemoteModelCatalogUpdate(context.getRuntimeConfig))
+          .catch((error: unknown) => {
+            context.logGateway.warn("remote model catalog adoption failed", {
+              error: String(error),
+            });
+          });
+      }
     } catch (error) {
       if (error instanceof UnknownModelCatalogProviderError) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, error.message));
