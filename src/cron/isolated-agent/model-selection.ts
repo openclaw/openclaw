@@ -29,6 +29,8 @@ import {
   type ResolvedPublishedModelCatalogOwner,
 } from "./run-model-selection.runtime.js";
 
+const CRON_THINKING_HYDRATION_WAIT_MS = 5_000;
+
 type CronSessionModelOverrides = {
   modelOverride?: string;
   providerOverride?: string;
@@ -130,16 +132,28 @@ async function resolveCronThinkingCatalog(params: {
     return catalog;
   }
   // Thinking capability is a per-model fact; never materialize the full live catalog on cron turns.
-  return normalizeThinkingCatalogProviders(
-    await loadProviderScopedThinkingCatalog({
-      config: params.owner.config,
-      provider: params.provider,
-      model: params.model,
-      agentId: params.owner.agentId,
-      agentDir: params.owner.agentDir,
-      workspaceDir: params.owner.workspaceDir,
-    }),
-  );
+  const hydration = loadProviderScopedThinkingCatalog({
+    config: params.owner.config,
+    provider: params.provider,
+    model: params.model,
+    agentId: params.owner.agentId,
+    agentDir: params.owner.agentDir,
+    workspaceDir: params.owner.workspaceDir,
+  });
+  hydration.catch(() => undefined);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const refreshed = await Promise.race([
+      hydration.then(normalizeThinkingCatalogProviders),
+      new Promise<undefined>((resolve) => {
+        timer = setTimeout(() => resolve(undefined), CRON_THINKING_HYDRATION_WAIT_MS);
+        timer.unref?.();
+      }),
+    ]);
+    return refreshed ?? catalog;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export async function resolveCronThinkingSelection(params: {

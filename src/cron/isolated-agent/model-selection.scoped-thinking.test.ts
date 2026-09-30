@@ -67,4 +67,30 @@ describe("resolveCronThinkingSelection scoped hydration", () => {
     expect(selection.requestedThinkLevel).toBe("off");
     expect(scopedThinkingCatalogMock).not.toHaveBeenCalled();
   });
+
+  it("uses the admitted catalog when hydration outlasts the foreground wait", async () => {
+    vi.useFakeTimers();
+    let resolveHydration: (value: Array<Record<string, unknown>>) => void = () => {};
+    scopedThinkingCatalogMock.mockReturnValue(
+      new Promise((resolve) => {
+        resolveHydration = resolve;
+      }),
+    );
+    try {
+      const carried = { provider: "ollama", id: "minimax-m3:cloud", reasoning: true };
+      const { resolveCronThinkingSelection } = await import("./model-selection.js");
+      const pending = resolveCronThinkingSelection({
+        cfg: {},
+        owner: { ...owner, modelCatalog: { entries: [carried], routeVariants: [] } },
+        provider: carried.provider,
+        model: carried.id,
+        jobThinking: "medium",
+      });
+      await vi.advanceTimersByTimeAsync(5_000);
+      await expect(pending).resolves.toMatchObject({ catalog: [carried] });
+    } finally {
+      resolveHydration([]);
+      vi.useRealTimers();
+    }
+  });
 });
