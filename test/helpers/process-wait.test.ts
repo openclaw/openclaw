@@ -179,9 +179,9 @@ child.once('close', (_code, signal) => {
   }
 });
 
-it.each(["borrower completion", "persistent file"] as const)(
+it.for(["borrower completion", "persistent file"] as const)(
   "observes readiness from %s without a file-watch event",
-  async (observation) => {
+  async (observation, { signal }) => {
     const filename = path.join(tempDirs.make("openclaw-process-receipt-"), "ready");
     const { promise: completion, resolve: finish } = createDeferred();
     const watchFile = fsSync.watchFile;
@@ -205,7 +205,7 @@ it.each(["borrower completion", "persistent file"] as const)(
         await nextTurn();
         expect(ready).toBe(true);
       }
-      await waiting;
+      await withinTest(waiting, signal);
       expect(ready).toBe(true);
     } finally {
       finish();

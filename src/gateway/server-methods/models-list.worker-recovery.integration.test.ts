@@ -6,7 +6,7 @@ import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { getPreparedModelFullCatalogAuth } from "../../agents/prepared-model-runtime-auth.js";
 import {
   getPreparedModelRuntimeSnapshot,
@@ -200,12 +200,16 @@ it("models.list retains a failed renewal before shared worker recovery", async (
       providerFacts.expiresAt = 0;
       const retained = await list();
       expect(retained.models).toEqual(initial.models);
-      await Promise.race([
-        renewal,
-        renewalFailed.promise.then((error) => {
-          throw error;
-        }),
-      ]);
+      // Bind waits to the test signal so a stall still reaches held-response and Gateway cleanup.
+      await withinTest(
+        Promise.race([
+          renewal,
+          renewalFailed.promise.then((error) => {
+            throw error;
+          }),
+        ]),
+        signal,
+      );
       const acceptedCatalog = original!.readFullModelCatalog!()!;
       const catalogAuth = getPreparedModelFullCatalogAuth(acceptedCatalog)!;
       const acceptedAuth = {
@@ -231,12 +235,15 @@ it("models.list retains a failed renewal before shared worker recovery", async (
       });
       const recovered = once(events, "recovered");
       await worker!.terminate();
-      await Promise.race([
-        recovered,
-        recoveryFailed.promise.then((error) => {
-          throw error;
-        }),
-      ]);
+      await withinTest(
+        Promise.race([
+          recovered,
+          recoveryFailed.promise.then((error) => {
+            throw error;
+          }),
+        ]),
+        signal,
+      );
       for (let read = 0; read < 3; read++) {
         const saved = await list();
         expect(saved.models).toEqual(initial.models);

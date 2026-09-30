@@ -35,7 +35,7 @@ import {
   testing,
 } from "./openclaw-test-instance.js";
 import { isProcessAlive, waitForDead, waitForFile, waitForFixtureFile } from "./process-wait.js";
-import { awaitGateBeforeSettlement, createDeferred } from "./promise.js";
+import { awaitGateBeforeSettlement, createDeferred, withinTest } from "./promise.js";
 import { runQaGatewayFixture } from "./qa-gateway-cleanup.js";
 
 const MIGRATION_CONVERGENCE_REFUSAL =
@@ -592,7 +592,7 @@ describe("openclaw test instance", () => {
     const serverSpy = vi.spyOn(net, "createServer");
     const probe = net.connect(instance.port, "127.0.0.1");
     try {
-      await once(probe, "close");
+      await withinTest(once(probe, "close"), signal);
       await startGatewayForPortLifecycle(instance, signal);
       expect(instance.readiness).toMatchObject([
         { outcome: "ready", lastProbe: { phase: "complete", status: 200, ready: true } },
@@ -1835,7 +1835,7 @@ describe("openclaw test instance", () => {
             expect(inspectManagedProcessGroup(leader, { errorPolicy: "indeterminate" })).toBe(
               "dead",
             );
-            await closed;
+            await withinTest(closed, signal);
             await waitForDead(resistantPid, 500);
             expect(inspectManagedProcessGroup(leader, { errorPolicy: "indeterminate" })).toBe(
               "dead",
