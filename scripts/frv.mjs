@@ -1436,12 +1436,11 @@ async function verifyRerunAttemptJobs(child, runAttempt, client, operationDeadli
     }
     const remaining = deadline - Date.now();
     if (remaining <= 0) {
-      if (duplicates.length > 0) {
-        throw new Error(
-          `${child.key} run ${child.runId} attempt ${runAttempt} holds duplicate jobs: ${duplicates.join(", ")}; cancel that attempt before another rerun`,
-        );
-      }
-      return;
+      throw new Error(
+        duplicates.length > 0
+          ? `${child.key} run ${child.runId} attempt ${runAttempt} holds duplicate jobs: ${duplicates.join(", ")}; cancel that attempt before another rerun`
+          : `${child.key} run ${child.runId} attempt ${runAttempt} exposed no jobs; inspect it before another rerun`,
+      );
     }
     await sleep(Math.min(configuredTimeout("OPENCLAW_FRV_POLL_MS", DEFAULT_POLL_MS), remaining));
   }
@@ -1509,7 +1508,7 @@ export async function continueFailed(plan, rootRunId, client, options = {}) {
         return { action: "would-rerun", ...(childRerun ? { childRerun } : {}), status };
       }
       if (childRerun) {
-        reportChildRerun(ready[0], childRerun, options.log ?? console.log);
+        reportChildRerun(ready[0], childRerun, options.log ?? console.error);
       }
       const requests = await Promise.all(
         ready.map(async (child) => {
@@ -2415,20 +2414,22 @@ async function pollRelease(state, client, pending, readOptions) {
     ...releaseChildSpecs().map((spec) => [spec.parentJobName, spec.key]),
     ...ARTIFACT_DISPATCH_JOBS,
   ]);
-  for (const job of (await read("parent jobs", () =>
+  const parentJobs = await read("parent jobs", () =>
     client.getParentJobs(parentRunId, readOptions),
-  )) ?? []) {
+  );
+  // A relay snapshot can lag the parent run; completion waits for every dispatch log.
+  let dispatchPending = parentJobs === undefined;
+  for (const job of parentJobs ?? []) {
     const failure = failedJobEvent("parent", job, parent.run_attempt);
     if (failure) {
       report(...failure);
     }
     const key = dispatchKeys.get(job.name);
-    if (
-      !key ||
-      job.status !== "completed" ||
-      job.conclusion === "skipped" ||
-      state.reported.has(`log:${job.id}`)
-    ) {
+    if (!key || job.conclusion === "skipped" || state.reported.has(`log:${job.id}`)) {
+      continue;
+    }
+    if (job.status !== "completed") {
+      dispatchPending = true;
       continue;
     }
     const log = await read(`${job.name} log`, () => client.getJobLog(job.id, readOptions));
@@ -2466,9 +2467,9 @@ async function pollRelease(state, client, pending, readOptions) {
         run.html_url,
       );
       // Earlier attempts are final; scan each once so a late start still reports them.
+      let scansComplete = true;
       for (let attempt = 1; attempt <= current; attempt += 1) {
         const scanned = `jobs:${runId}:${attempt}`;
-        const final = attempt < current || done;
         if (state.reported.has(scanned)) {
           continue;
         }
@@ -2478,6 +2479,10 @@ async function pollRelease(state, client, pending, readOptions) {
         if (!jobs) {
           return false;
         }
+        // A relay snapshot can lag the run; only an all-terminal job list is final.
+        const final =
+          (attempt < current || done) && jobs.every((job) => job.status === "completed");
+        scansComplete &&= final;
         for (const job of jobs) {
           const failure = failedJobEvent(child.key, job, attempt);
           if (failure) {
@@ -2498,11 +2503,12 @@ async function pollRelease(state, client, pending, readOptions) {
           state.reported.add(scanned);
         }
       }
-      return done;
+      return done && scansComplete;
     },
   );
-  const childrenDone = childStates.every(Boolean);
-  return { complete: parentDone && childrenDone && failedReads.length === 0, events, failedReads };
+  const complete =
+    parentDone && !dispatchPending && childStates.every(Boolean) && failedReads.length === 0;
+  return { complete, events, failedReads };
 }
 
 /** Report parent and child transitions once, resuming from a small local state file. */
@@ -2543,7 +2549,7 @@ function appendRerunAudit(repository, record) {
   const line = JSON.stringify({ at: new Date().toISOString(), repository, ...record });
   mkdirSync(dirname(path), { recursive: true });
   appendFileSync(path, `${line}\n`);
-  console.log(`[frv] audit ${path}: ${line}`);
+  console.error(`[frv] audit ${path}: ${line}`);
 }
 
 function print(value, json) {

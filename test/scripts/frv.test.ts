@@ -1640,19 +1640,22 @@ describe("FRV child rerun", () => {
     expect(log).toHaveBeenCalledWith(`[frv]   failed: ${consumer} [ubuntu-24.04]`);
   });
 
-  it("fails after one POST when the new attempt keeps duplicate queued jobs", async () => {
+  it.each([
+    ["keeps duplicate queued jobs", 2, "attempt 2 holds duplicate jobs: test"],
+    ["exposes no jobs", 0, "attempt 2 exposed no jobs"],
+  ])("fails after one POST when the new attempt %s", async (_case, copies, message) => {
     const scenario = rerunScenario({});
     const queued = { ...job("test"), conclusion: null, status: "queued" };
     const client = {
       ...scenario.client,
       getAttemptJobs: async (_runId: string, attempt: number) =>
-        attempt === 1 ? [job("test", "failure")] : [queued, { ...queued }],
+        attempt === 1 ? [job("test", "failure")] : Array.from({ length: copies }, () => queued),
     };
     await withFastPolling(
       () =>
         expect(
           continueFailed(plan([scenario.selected]), "77", client, { child: "101", log: vi.fn() }),
-        ).rejects.toThrow("attempt 2 holds duplicate jobs: test"),
+        ).rejects.toThrow(message),
       "5",
     );
     expect(scenario.counters.posts.child).toBe(1);
@@ -1746,6 +1749,34 @@ describe("FRV watch", () => {
       "parent 77 and every dispatched child are terminal",
     ]);
     expect(getJobLog).toHaveBeenCalledExactlyOnceWith(5, expect.anything());
+  });
+});
+
+describe("FRV watch completion", () => {
+  it("waits for lagging dispatch and job snapshots before declaring the release terminal", async () => {
+    const statePath = path.join(tempDirs.make("frv-watch-"), "state.json");
+    const ci = child("normalCi", "101");
+    let snapshot: "in_progress" | "completed" = "in_progress";
+    const client = {
+      repository: REPOSITORY,
+      getRun: async (runId: string) =>
+        runId === "77" ? rootRun(1, "failure") : runFor(ci, 1, "failure"),
+      getParentJobs: async () => [
+        { conclusion: null, id: 5, name: "Run normal full CI", run_attempt: 1, status: snapshot },
+      ],
+      getJobLog: async () =>
+        `Dispatched ci.yml: https://github.com/${REPOSITORY}/actions/runs/101 (attempt 1)`,
+      getAttemptJobs: async (): Promise<Record<string, unknown>[]> => [
+        { ...job("late"), conclusion: null, id: 7, status: "queued" },
+      ],
+    };
+    const poll = () => watchRelease("77", client, { emit: () => undefined, once: true, statePath });
+
+    await expect(poll()).resolves.toMatchObject({ complete: false });
+    snapshot = "completed";
+    await expect(poll()).resolves.toMatchObject({ complete: false });
+    client.getAttemptJobs = async () => [{ ...job("late", "failure"), id: 7 }];
+    await expect(poll()).resolves.toMatchObject({ complete: true });
   });
 });
 
