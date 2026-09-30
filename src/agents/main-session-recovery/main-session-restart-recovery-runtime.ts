@@ -366,15 +366,18 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
       attempt: async (finalAttempt) => {
         exhaustedTargets = new Map();
         const result = await runRecoveryAttempt(exhaustedTargets);
-        if (result.failed === 0 && result.skipped === 0) {
+        const capacityDeferred = result.capacityDeferred ?? 0;
+        if (result.failed === 0 && result.skipped === 0 && capacityDeferred === 0) {
           return true;
         }
-        // Only capacity-deferred rows should retry without consuming an
-        // attempt. Other skips (ineligible, already handled, deferred
-        // delivery) are terminal for their rows and must consume the bounded
-        // retry budget, otherwise the startup sweep re-scans them forever.
-        const capacityDeferred = result.capacityDeferred ?? 0;
-        if (result.failed === 0 && capacityDeferred > 0 && result.skipped === capacityDeferred) {
+        // A capacity deferral means the sole recovery slot was occupied, so
+        // the waiting session could not dispatch this sweep. Retry without
+        // consuming an attempt so it dispatches when capacity frees. Other
+        // skips (ineligible, already handled, deferred delivery) are terminal
+        // for their rows; when no deferral is present they fall through to
+        // the false return and consume the bounded retry budget instead of
+        // being re-scanned for the Gateway lifetime.
+        if (result.failed === 0 && capacityDeferred > 0) {
           return "skip";
         }
         if (finalAttempt && exhaustedTargets.size > 0) {
