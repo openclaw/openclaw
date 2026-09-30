@@ -177,6 +177,13 @@ files. A self-hosted deployment without this provider must configure it or use
 an OpenAI-hosted environment for attachments. This does not add native image
 input or automatic self-hosted output transfer. See the
 [official files guide](https://developers.openai.com/api/docs/guides/agents-api/environments/files).
+Inline images, including rendered document pages, do not abort the turn. The
+harness tells the model that inline images were omitted so it can use supplied
+text or inspect prepared original attachments with its tools. If no originals
+were transferred, the notice says so. Image-bearing steering follows the existing
+queue policy and is handled as a follow-up turn with its complete input.
+Gateway sandbox placement is a separate unsupported configuration and produces
+a specific preflight error without retrying other models on the same harness.
 Gateway function availability follows the configured OpenClaw tool policy.
 Native Agents API apps and connectors are not configured by this
 plugin, and the Gateway image-generation tool is not exposed.

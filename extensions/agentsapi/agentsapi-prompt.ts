@@ -33,6 +33,25 @@ const SELF_HOSTED_ENVIRONMENT_INSTRUCTIONS = [
   "OpenClaw does not automatically transfer output files from this executor through the Agents API.",
 ].join("\n\n");
 
+const INLINE_IMAGE_INPUT_CAPABILITY_NOTICE =
+  "Input capability feedback: The Agents API harness does not support inline image inputs. The inline images for this message were not sent.";
+const OMITTED_IMAGE_REPLY_GUIDANCE =
+  "Continue the task without claiming to have viewed the omitted images.";
+
+// The attachment owner prepared originals, so the model can inspect their execution paths.
+const IMAGE_RECOVERY_WITH_PREPARED_ATTACHMENTS = [
+  INLINE_IMAGE_INPUT_CAPABILITY_NOTICE,
+  "Original attachments are available at the prepared execution paths above. Use any supplied text or inspect those files with available tools to try another approach.",
+  OMITTED_IMAGE_REPLY_GUIDANCE,
+].join(" ");
+
+// Inline image data arrived without an original attachment prepared for execution.
+const IMAGE_RECOVERY_WITHOUT_PREPARED_ATTACHMENTS = [
+  INLINE_IMAGE_INPUT_CAPABILITY_NOTICE,
+  "No original attachment files were transferred for this message. Use any supplied text, or ask for a text description if the image is necessary.",
+  OMITTED_IMAGE_REPLY_GUIDANCE,
+].join(" ");
+
 /** The native session owns this snapshot until OpenClaw resets its binding. */
 export async function buildAgentsApiInstructions(
   params: AgentHarnessAttemptParamsV2,
@@ -142,9 +161,26 @@ export function buildAgentsApiTurnInput(
   // the workspace owner's freshly prepared executor paths.
   const attachmentNote =
     environmentType === "self_hosted" && prompt.endsWith(`\n\n${mappingText}`) ? "" : mappingText;
-  return [buildAgentsApiTurnContext(params, tools), prompt, attachmentNote]
+  return [
+    buildAgentsApiTurnContext(params, tools),
+    prompt,
+    attachmentNote,
+    buildAgentsApiImageInputNotice(params.images, mappingText),
+  ]
     .filter(Boolean)
     .join("\n\n");
+}
+
+function buildAgentsApiImageInputNotice(
+  images: AgentHarnessAttemptParamsV2["images"],
+  mappingText: string,
+): string | undefined {
+  if (!images?.length) {
+    return undefined;
+  }
+  return mappingText
+    ? IMAGE_RECOVERY_WITH_PREPARED_ATTACHMENTS
+    : IMAGE_RECOVERY_WITHOUT_PREPARED_ATTACHMENTS;
 }
 
 /** Current facts use the existing input carrier, not immutable session instructions. */

@@ -1,6 +1,9 @@
 import path from "node:path";
 import type { Turn } from "openai/resources/beta/agents/sessions/turns";
-import type { AgentHarnessAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  AgentHarnessPreflightError,
+  type AgentHarnessAttemptParamsV2,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import { AuthStorage, ModelRegistry } from "openclaw/plugin-sdk/agent-sessions";
 import type { OpenClawConfig, OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import {
@@ -12,6 +15,7 @@ import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { createSandboxTestContext } from "openclaw/plugin-sdk/test-fixtures";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { AgentsApiBinding } from "./agentsapi-bindings.js";
@@ -22,12 +26,12 @@ const { createSession } = vi.hoisted(() => ({
   createSession: vi.fn<typeof import("./agentsapi-session.js").createAgentsApiSession>(),
 }));
 
-// The provider turn, instructions, and transfers are separate contracts. Keep the
-// registered harness, host generation, binding lifecycle, and SQLite stores real.
+// Keep the registered harness, input formatting, host generation, binding lifecycle,
+// and SQLite stores real; provider execution and file transfers are separate contracts.
 vi.mock("./agentsapi-session.js", () => ({ createAgentsApiSession: createSession }));
-vi.mock("./agentsapi-prompt.js", () => ({
+vi.mock("./agentsapi-prompt.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./agentsapi-prompt.js")>()),
   buildAgentsApiInstructions: async () => "Fixture instructions",
-  buildAgentsApiTurnInput: (_params: unknown, _tools: unknown, prompt: string) => prompt,
 }));
 vi.mock("./agentsapi-files.js", () => ({
   prepareInputs: async () => ({ files: [], mappingText: "" }),
@@ -101,26 +105,7 @@ it("reopens an existing hosted binding and requires reset before persisting a fr
     const message = vi.spyOn(AgentsApiClient.prototype, "message").mockResolvedValue(undefined);
     vi.spyOn(AgentsApiClient.prototype, "items").mockResolvedValue([]);
     let config: OpenClawConfig = {};
-    const runtime = createPluginRuntimeMock({ config: { current: () => config } });
-    runtime.state.openKeyedStore = <T>(
-      options: Parameters<typeof runtime.state.openKeyedStore>[0],
-    ) => createPluginStateKeyedStoreForTests<T>("agentsapi", { ...options, env: state.env });
-    runtime.state.openSyncKeyedStore = <T>(
-      options: Parameters<typeof runtime.state.openSyncKeyedStore>[0],
-    ) => createPluginStateSyncKeyedStoreForTests<T>("agentsapi", { ...options, env: state.env });
-    const register = () => {
-      const registerAgentHarness = vi.fn<OpenClawPluginApi["registerAgentHarness"]>();
-      plugin.register(createTestPluginApi({ id: "agentsapi", runtime, registerAgentHarness }));
-      const harness = registerAgentHarness.mock.calls[0]?.[0];
-      if (!harness?.runAttempt || !harness.reset || !harness.dispose) {
-        throw new Error("The registered Agents API harness requires run, reset, and disposal");
-      }
-      return {
-        runAttempt: harness.runAttempt.bind(harness),
-        reset: harness.reset.bind(harness),
-        dispose: harness.dispose.bind(harness),
-      };
-    };
+    const register = () => registerHarness(state.env, () => config);
     let harness = register();
     try {
       expect(await harness.runAttempt(params)).toEqual(
@@ -129,7 +114,7 @@ it("reopens an existing hosted binding and requires reset before persisting a fr
       expect(await openStore().lookup(params.sessionId)).toEqual(hosted);
       expect(message).toHaveBeenCalledExactlyOnceWith(
         hosted.sessionId,
-        params.prompt,
+        expect.stringContaining(params.prompt),
         expect.any(AbortSignal),
       );
       expect(create).toHaveBeenCalledTimes(0);
@@ -190,6 +175,88 @@ it("reopens an existing hosted binding and requires reset before persisting a fr
     }
   });
 });
+
+it("continues image-bearing input and the following turn on the same native session", async () => {
+  await withOpenClawTestState({ label: "agentsapi-image-recovery" }, async (state) => {
+    const params = await createAttempt(state.stateDir);
+    const create = vi.spyOn(AgentsApiClient.prototype, "create").mockResolvedValue("image-session");
+    vi.spyOn(AgentsApiClient.prototype, "setReasoningEffort").mockResolvedValue(undefined);
+    const message = vi.spyOn(AgentsApiClient.prototype, "message").mockResolvedValue(undefined);
+    vi.spyOn(AgentsApiClient.prototype, "items").mockResolvedValue([]);
+    const harness = registerHarness(state.env);
+    try {
+      const result = await harness.runAttempt({
+        ...params,
+        prompt: "Read the supplied image.",
+        images: [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }],
+      });
+      expect(result).toMatchObject({ terminal: { kind: "ok" } });
+      const input = message.mock.calls[0]![1];
+      expect(input).toContain("Read the supplied image.");
+      expect(input).toContain("The Agents API harness does not support inline image inputs.");
+      expect(input).toContain("No original attachment files were transferred for this message.");
+      expect(input).toContain("ask for a text description if the image is necessary");
+      expect(await harness.runAttempt({ ...params, runId: "following-turn" })).toMatchObject({
+        terminal: { kind: "ok" },
+      });
+      expect(message.mock.calls.map(([sessionId]) => sessionId)).toEqual([
+        "image-session",
+        "image-session",
+      ]);
+      expect(create).toHaveBeenCalledTimes(1);
+    } finally {
+      await harness.dispose();
+    }
+  });
+});
+
+it.each([false, true])(
+  "reports Gateway sandbox placement independently of images (%s)",
+  async (withImages) => {
+    await withOpenClawTestState({ label: "agentsapi-sandbox-preflight" }, async (state) => {
+      const params = await createAttempt(state.stateDir);
+      const harness = registerHarness(state.env);
+      try {
+        const pending = harness.runAttempt({
+          ...params,
+          sandbox: createSandboxTestContext(),
+          images: withImages
+            ? [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }]
+            : undefined,
+        });
+        await expect(pending).rejects.toBeInstanceOf(AgentHarnessPreflightError);
+        await expect(pending).rejects.toMatchObject({
+          scope: "harness",
+          message: "Agents API does not support Gateway sandbox placement.",
+          userMessage:
+            "Agents API cannot run in the configured Gateway sandbox. Choose a harness that supports Gateway sandbox placement before retrying.",
+        });
+      } finally {
+        await harness.dispose();
+      }
+    });
+  },
+);
+
+function registerHarness(env: NodeJS.ProcessEnv, readConfig: () => OpenClawConfig = () => ({})) {
+  const runtime = createPluginRuntimeMock({ config: { current: readConfig } });
+  runtime.state.openKeyedStore = <T>(options: Parameters<typeof runtime.state.openKeyedStore>[0]) =>
+    createPluginStateKeyedStoreForTests<T>("agentsapi", { ...options, env });
+  runtime.state.openSyncKeyedStore = <T>(
+    options: Parameters<typeof runtime.state.openSyncKeyedStore>[0],
+  ) => createPluginStateSyncKeyedStoreForTests<T>("agentsapi", { ...options, env });
+  const registerAgentHarness = vi.fn<OpenClawPluginApi["registerAgentHarness"]>();
+  plugin.register(createTestPluginApi({ id: "agentsapi", runtime, registerAgentHarness }));
+  const harness = registerAgentHarness.mock.calls[0]?.[0];
+  if (!harness?.runAttempt || !harness.reset || !harness.dispose) {
+    throw new Error("The registered Agents API harness requires run, reset, and disposal");
+  }
+  return {
+    runAttempt: harness.runAttempt.bind(harness),
+    reset: harness.reset.bind(harness),
+    dispose: harness.dispose.bind(harness),
+  };
+}
 
 async function reopenState() {
   await closeOpenClawStateDatabaseAsync();

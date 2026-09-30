@@ -209,10 +209,12 @@ function validateAgentsApiInput(params: AgentHarnessAttemptParamsV2) {
   if (!params.resolvedApiKey) {
     throw new Error("Agents API MVP requires an OpenAI API key");
   }
-  if (params.images?.length || params.sandbox) {
-    throw new Error(
-      "Agents API MVP supports text in its selected execution environment only; images and Gateway sandbox placement are unsupported",
-    );
+  if (params.sandbox) {
+    throw new AgentHarnessPreflightError("Agents API does not support Gateway sandbox placement.", {
+      scope: "harness",
+      userMessage:
+        "Agents API cannot run in the configured Gateway sandbox. Choose a harness that supports Gateway sandbox placement before retrying.",
+    });
   }
   if (params.contextEngine && params.contextEngine.info.id !== "legacy") {
     throw new Error("Agents API MVP currently supports only the default legacy context engine");
