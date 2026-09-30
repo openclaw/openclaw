@@ -72,6 +72,7 @@ export async function beginDoctorMaintenance(
   // Repair discovery can execute plugins and open writable state. Establish
   // ownership for every explicit repair before running those inspections.
   let stopped: PreManagedServiceStop | undefined;
+  let serviceUpdateVerdict: PreManagedServiceStop["serviceUpdateVerdict"];
   let stopDeadline: number | undefined;
   const warnings: string[] = [];
   const warn = (message: string) => {
@@ -416,6 +417,7 @@ export async function beginDoctorMaintenance(
           phase: "inspect",
         });
         assertDoctorMaintenanceInspection(inspection, env);
+        serviceUpdateVerdict = inspection.serviceUpdateVerdict;
         if (inspection.serviceUpdateVerdict?.kind !== "absent" && inspection.offline !== true) {
           assertAuthority(() => {
             const admitted = resolveDoctorUpdateAdmission(env);
@@ -583,6 +585,7 @@ export async function beginDoctorMaintenance(
   let custody: "held" | "restoring" | "released" = "held";
   const maintenance = {
     signal: exit.signal,
+    serviceUpdateVerdict,
     warnings,
     failureFacts,
     get databaseWrites() {

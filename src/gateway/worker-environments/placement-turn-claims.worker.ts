@@ -14,7 +14,10 @@ import type {
   PlacementTurnClaimReceipt,
   PlacementTurnClaimWorkerOperations,
 } from "./placement-turn-claims.worker-contract.js";
-import { createPlacementWorkspaceResultOps } from "./placement-workspace-result.js";
+import {
+  createPlacementWorkspaceResultOps,
+  recordStagedWorkerWorkspaceResult,
+} from "./placement-workspace-result.js";
 
 export function executePlacementTurnClaimCommand(
   command: SqliteWorkerCommand<PlacementTurnClaimWorkerOperations>,
@@ -39,6 +42,14 @@ export function executePlacementTurnClaimCommand(
       if (command.type === "placementTurns.claim") {
         const claim = claims.claimTurn(command.input.claim);
         receipt = { claim, placement: getRequired(db, claim.sessionId) };
+      } else if (command.type === "placementTurns.recordStagedResult") {
+        recordStagedWorkerWorkspaceResult(
+          db,
+          command.input.claim,
+          command.input.stagedResultRef,
+          command.input.repositoryWorkspaceId,
+        );
+        receipt = { placement: getRequired(db, command.input.claim.sessionId) };
       } else if (command.type === "placementTurns.recoverWorkspace") {
         const results = createPlacementWorkspaceResultOps(runtime);
         results.markWorkspaceResultPending(command.input.claim);

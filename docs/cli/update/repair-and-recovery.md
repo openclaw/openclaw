@@ -386,8 +386,13 @@ remain visible; the original update history is preserved.
 
 After post-update or finalization work fails and its child processes settle,
 OpenClaw probes the installed Gateway using the normal startup and readiness
-budget. Update history and failure reports record the observed serving version
-and readiness, including for a foreground Gateway. A failed finalization step
+budget. If maintenance found no Gateway service or listener, recovery records
+that readiness observation was skipped instead of waiting for a Gateway to appear.
+Package and database restoration checks still apply, and the original failure
+remains recorded. Update history and failure reports record the observed serving version
+and readiness. A standalone repair failure before Doctor maintenance begins uses
+one bounded observation because that repair has not requested Gateway startup.
+Observations also cover foreground Gateways. A failed finalization step
 can therefore report **verified serving** while retaining its original failure
 and repair guidance. The observation does not restart the Gateway or grant
 maintenance authority. Failed probes retain their specific diagnostic; a

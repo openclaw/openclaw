@@ -127,6 +127,7 @@ export function createRepositoryWorkspaceMutationService(options: {
                       claim,
                       ref,
                       workspace.repository.workspaceId,
+                      assertCurrent,
                     ),
                 },
                 assertCurrent,

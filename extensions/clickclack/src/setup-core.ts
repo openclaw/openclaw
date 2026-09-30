@@ -208,10 +208,9 @@ export function applyClickClackCredentialConfig(params: {
   });
 }
 
-const clickClackSetupAdapter: ChannelSetupAdapter = {
+const clickClackSetupAdapter: ChannelSetupAdapter<ClickClackSetupInput> = {
   resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
-  prepareAccountConfigInput: async ({ cfg, accountId, input }) => {
-    const setupInput = input as ClickClackSetupInput;
+  prepareAccountConfigInput: async ({ cfg, accountId, input: setupInput }) => {
     if (!setupInput.code?.trim()) {
       return setupInput;
     }
@@ -261,15 +260,14 @@ const clickClackSetupAdapter: ChannelSetupAdapter = {
       accountId,
       name,
     }),
-  validateInput: createSetupInputPresenceValidator({
+  validateInput: createSetupInputPresenceValidator<ClickClackSetupInput>({
     defaultAccountOnlyEnvError: "CLICKCLACK_BOT_TOKEN can only be used for the default account.",
     whenNotUseEnv: [
       { someOf: ["token", "tokenFile"], message: REQUIRED_INPUT_ERROR },
       { someOf: ["baseUrl"], message: REQUIRED_INPUT_ERROR },
       { someOf: ["workspace"], message: REQUIRED_INPUT_ERROR },
     ],
-    validate: ({ cfg, accountId, input }) => {
-      const setupInput = input as ClickClackSetupInput;
+    validate: ({ cfg, accountId, input: setupInput }) => {
       const baseUrl = normalizeClickClackBaseUrl(setupInput.baseUrl);
       if (setupInput.baseUrl && !baseUrl) {
         return INVALID_BASE_URL_ERROR;
@@ -291,8 +289,7 @@ const clickClackSetupAdapter: ChannelSetupAdapter = {
       return null;
     },
   }),
-  applyAccountConfig: ({ cfg, accountId, input }) => {
-    const setupInput = input as ClickClackSetupInput;
+  applyAccountConfig: ({ cfg, accountId, input: setupInput }) => {
     const existing = setupInput.useEnv
       ? resolveClickClackAccountConfig(cfg as CoreConfig, accountId)
       : undefined;

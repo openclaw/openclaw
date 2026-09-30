@@ -213,7 +213,7 @@ describe("cloud transcript write admission", () => {
             throw new Error("expected local staged result");
           }
           if (!cleared) {
-            request.source.stagedResult.record(request.source.stagedResult.ref);
+            await request.source.stagedResult.record(request.source.stagedResult.ref);
           }
           request.source.journal.commit(MANIFEST_REF);
           return {
