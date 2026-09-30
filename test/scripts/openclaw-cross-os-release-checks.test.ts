@@ -25,7 +25,7 @@ import {
   buildCrossOsReleaseSmokeMemorySlotConfigArgs,
   buildDiscordFetchInit,
   buildPackagedUpgradeUpdateArgs,
-  buildPackagedUpgradeUpdateEnv,
+  buildPackagedUpgradeUpdateCommand,
   buildReleaseOnboardArgs,
   buildWindowsDevUpdateToolchainCheckScript,
   buildWindowsFreshShellVersionCheckScript,
@@ -1167,19 +1167,38 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(args.at(-2)).toBe("--timeout");
   });
 
-  it("uses the loopback registry seam for extended-stable packaged upgrades", () => {
-    const args = buildPackagedUpgradeUpdateArgs(
-      "http://127.0.0.1:49152/openclaw-current.tgz",
-      1200,
-      "2026.8.34",
-    );
-    expect(args).toEqual(["update", "--yes", "--json", "--no-restart", "--timeout", "1200"]);
-    expect(
-      buildPackagedUpgradeUpdateEnv({ NPM_CONFIG_REGISTRY: "http://127.0.0.1:49152" }, "2026.8.34"),
-    ).toMatchObject({
-      NPM_CONFIG_REGISTRY: "http://127.0.0.1:49152",
-      OPENCLAW_UPDATE_PACKAGE_SPEC: "openclaw",
+  it.each([
+    {
+      label: "stable predecessor",
+      baselineVersion: "2026.8.32",
+      expectedArgs: [
+        "update",
+        "--tag",
+        "http://127.0.0.1:49152/openclaw-current.tgz",
+        "--yes",
+        "--json",
+        "--no-restart",
+        "--timeout",
+        "1200",
+      ],
+      expectedPackageSpec: undefined,
+    },
+    {
+      label: "extended-stable predecessor",
+      baselineVersion: "2026.8.33",
+      expectedArgs: ["update", "--yes", "--json", "--no-restart", "--timeout", "1200"],
+      expectedPackageSpec: "openclaw",
+    },
+  ])("routes packaged upgrades from the $label channel", (testCase) => {
+    const candidateUrl = "http://127.0.0.1:49152/openclaw-current.tgz";
+    const updateCommand = buildPackagedUpgradeUpdateCommand({
+      env: { NPM_CONFIG_REGISTRY: "http://127.0.0.1:49152" },
+      candidateUrl,
+      timeoutSeconds: 1200,
+      baselineVersion: testCase.baselineVersion,
     });
+    expect(updateCommand.args).toEqual(testCase.expectedArgs);
+    expect(updateCommand.env.OPENCLAW_UPDATE_PACKAGE_SPEC).toBe(testCase.expectedPackageSpec);
   });
 
   it("uses forced shutdown only when the installed gateway supports it", () => {
@@ -2357,6 +2376,14 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     );
 
     expect(isRecoverableWindowsPackagedUpgradeTimeoutError(error, "win32")).toBe(true);
+    expect(
+      isRecoverableWindowsPackagedUpgradeTimeoutError(
+        new Error(
+          "Command timed out: C:\\prefix\\node_modules\\openclaw\\openclaw.mjs update --yes --json --no-restart --timeout 1200",
+        ),
+        "win32",
+      ),
+    ).toBe(true);
     expect(
       isRecoverableWindowsPackagedUpgradeTimeoutError(
         new Error(

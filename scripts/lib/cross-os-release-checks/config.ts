@@ -540,14 +540,14 @@ export function buildRealUpdateEnv(env: NodeJS.ProcessEnv) {
   return updateEnv;
 }
 
-function isExtendedStableCandidateVersion(candidateVersion: string | undefined) {
-  const parsed = candidateVersion ? parseReleaseVersion(candidateVersion) : null;
+function isExtendedStableBaselineVersion(baselineVersion: string | undefined) {
+  const parsed = baselineVersion ? parseReleaseVersion(baselineVersion) : null;
   return parsed !== null && classifyReleaseTrain(parsed) === "extended-stable";
 }
 
-export function buildPackagedUpgradeUpdateEnv(env: NodeJS.ProcessEnv, candidateVersion?: string) {
+function buildPackagedUpgradeUpdateEnv(env: NodeJS.ProcessEnv, baselineVersion?: string) {
   const updateEnv = buildRealUpdateEnv(env);
-  if (isExtendedStableCandidateVersion(candidateVersion)) {
+  if (isExtendedStableBaselineVersion(baselineVersion)) {
     updateEnv.OPENCLAW_UPDATE_PACKAGE_SPEC = "openclaw";
   }
   return updateEnv;
@@ -640,17 +640,33 @@ export function resolvePackagedUpgradeTimeouts(
 export function buildPackagedUpgradeUpdateArgs(
   candidateUrl: string,
   timeoutSeconds = resolvePackagedUpgradeTimeouts(0).stepTimeoutSeconds,
-  candidateVersion?: string,
+  baselineVersion?: string,
 ) {
   return [
     "update",
-    ...(isExtendedStableCandidateVersion(candidateVersion) ? [] : ["--tag", candidateUrl]),
+    ...(isExtendedStableBaselineVersion(baselineVersion) ? [] : ["--tag", candidateUrl]),
     "--yes",
     "--json",
     "--no-restart",
     "--timeout",
     String(timeoutSeconds),
   ];
+}
+
+export function buildPackagedUpgradeUpdateCommand(params: {
+  env: NodeJS.ProcessEnv;
+  candidateUrl: string;
+  timeoutSeconds?: number;
+  baselineVersion: string;
+}) {
+  return {
+    env: buildPackagedUpgradeUpdateEnv(params.env, params.baselineVersion),
+    args: buildPackagedUpgradeUpdateArgs(
+      params.candidateUrl,
+      params.timeoutSeconds,
+      params.baselineVersion,
+    ),
+  };
 }
 
 export function isRecoverableWindowsPackagedUpgradeSwapCleanupFailure(
@@ -680,7 +696,7 @@ export function isRecoverableWindowsPackagedUpgradeTimeoutError(
   const message = error instanceof Error ? error.message : String(error);
   return (
     /\bCommand timed out:/u.test(message) &&
-    /[/\\]openclaw\.mjs update --tag http:\/\/127\.0\.0\.1:\d+\/openclaw[^/\s]*\.tgz --yes --json(?: --no-restart)? --timeout \d+/u.test(
+    /[/\\]openclaw\.mjs update(?: --tag http:\/\/127\.0\.0\.1:\d+\/openclaw[^/\s]*\.tgz)? --yes --json(?: --no-restart)? --timeout \d+/u.test(
       message,
     )
   );
