@@ -168,7 +168,6 @@ describe("runReplyAgent stalled turn continuation", () => {
     const recovery = drainedRuns.mock.calls[0]?.[0];
     expect(recovery?.stalledTurnRecovery).toBe(true);
     expect(recovery?.prompt).toContain("previous turn stopped making progress");
-    expect(recovery?.prompt).toContain("Answer the user's outstanding request now");
     // Replay safety: the inbound request is not re-sent or re-persisted.
     expect(recovery?.run.suppressNextUserMessagePersistence).toBe(true);
     expect(recovery?.transcriptPrompt).toBeUndefined();

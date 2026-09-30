@@ -6,8 +6,9 @@ import type { ReplyOperation } from "./reply-run-registry.js";
 export const STALLED_TURN_NOTICE_TEXT =
   "⚠️ This turn was interrupted because it stopped making progress. Please try again.";
 export const STALLED_TURN_GUIDANCE =
-  "Your previous turn stopped making progress and was stopped before you replied. " +
-  "Answer the user's outstanding request now from what the transcript already contains. " +
+  "Your previous turn stopped making progress and was stopped before you replied, so the " +
+  "user's request from that turn is still unanswered. Answer it now, together with any newer " +
+  "message, from what the transcript already contains. " +
   "Keep further tool use to a minimum, do not repeat actions that already ran, and briefly " +
   "say what you could not verify.";
 
