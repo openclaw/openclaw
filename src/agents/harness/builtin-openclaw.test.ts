@@ -100,6 +100,24 @@ describe("createOpenClawAgentHarness", () => {
     expect(finalizationAttempt).not.toHaveProperty("onPartialReply");
   });
 
+  it("keeps the host-owned transcript for detached finalization", async () => {
+    const sessionManager = { owner: "host" };
+    const attempt = {
+      prompt: "finalize",
+      sessionManager,
+      sessionPersistence: "detached",
+    } as never;
+
+    await createOpenClawAgentHarness().finalizeSettledTurn?.({
+      attempt,
+      settledAttempt: {} as never,
+    });
+
+    expect(runEmbeddedAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionManager, sessionPersistence: "detached" }),
+    );
+  });
+
   it("runs isolated completion through the prepared zero-tool transport", async () => {
     const params = {
       authorization: {

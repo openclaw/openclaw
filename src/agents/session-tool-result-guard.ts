@@ -665,6 +665,7 @@ export function installSessionToolResultGuard(
   flushPendingToolResults: () => void;
   clearPendingToolResults: () => void;
   clearNextUserMessagePersistenceSuppression: () => void;
+  setNextUserMessagePersistenceSuppression: (suppress: boolean) => void;
   getPendingIds: () => string[];
   setTranscriptRunId: (runId: string | undefined) => void;
 } {
@@ -1023,6 +1024,9 @@ export function installSessionToolResultGuard(
     clearPendingToolResults,
     clearNextUserMessagePersistenceSuppression: () => {
       suppressNextUserMessagePersistence = false;
+    },
+    setNextUserMessagePersistenceSuppression: (suppress) => {
+      suppressNextUserMessagePersistence = suppress;
     },
     getPendingIds: pendingState.getPendingIds,
     setTranscriptRunId: (runId) => {

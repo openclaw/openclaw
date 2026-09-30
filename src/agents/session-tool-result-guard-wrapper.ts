@@ -47,6 +47,7 @@ type GuardedSessionManager = SessionManager & {
     runId: string | undefined,
     prepareAssistantTranscriptMessage: PrepareAssistantTranscriptMessage | undefined,
     skipBeforeMessageWriteHooks: boolean | undefined,
+    suppressNextUserMessagePersistence: boolean | undefined,
   ) => void;
 };
 
@@ -103,17 +104,23 @@ export function guardSessionManager(
   let prepareAssistantTranscriptMessage =
     opts?.trigger === "memory" ? undefined : opts?.prepareAssistantTranscriptMessage;
   let skipBeforeMessageWriteHooks = opts?.skipBeforeMessageWriteHooks;
+  let pendingPreparedUserTurnMessage = opts?.preparedUserTurnMessage;
+  const preparedUserReplayKey =
+    opts?.preparedUserTurnTranscriptRecorder?.getPersistedMessage?.()?.idempotencyKey ===
+    pendingPreparedUserTurnMessage?.idempotencyKey
+      ? pendingPreparedUserTurnMessage?.idempotencyKey
+      : undefined;
   if (typeof guardedSessionManager.flushPendingToolResults === "function") {
     guardedSessionManager.setTranscriptRunContext?.(
       opts?.runId,
       prepareAssistantTranscriptMessage,
       skipBeforeMessageWriteHooks,
+      preparedUserReplayKey === undefined && opts?.suppressNextUserMessagePersistence,
     );
     return guardedSessionManager;
   }
 
   const hookRunner = getGlobalHookRunner();
-  let pendingPreparedUserTurnMessage = opts?.preparedUserTurnMessage;
   let queuedUserTurnTranscriptRecorder: UserTurnTranscriptRecorder | undefined;
   const runtimeUserMessageByPersistedMessage = new WeakMap<
     AgentMessage,
@@ -281,8 +288,16 @@ export function guardSessionManager(
   guardedSessionManager.clearPendingToolResults = guard.clearPendingToolResults;
   guardedSessionManager.clearNextUserMessagePersistenceSuppression =
     guard.clearNextUserMessagePersistenceSuppression;
-  guardedSessionManager.setTranscriptRunContext = (runId, prepare, skipHooks) => {
+  guardedSessionManager.setTranscriptRunContext = (
+    runId,
+    prepare,
+    skipHooks,
+    suppressUserPersistence,
+  ) => {
     guard.setTranscriptRunId(runId);
+    if (suppressUserPersistence !== undefined) {
+      guard.setNextUserMessagePersistenceSuppression(suppressUserPersistence);
+    }
     prepareAssistantTranscriptMessage = prepare;
     skipBeforeMessageWriteHooks = skipHooks;
   };
