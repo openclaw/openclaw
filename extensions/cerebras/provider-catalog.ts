@@ -79,7 +79,6 @@ export const CEREBRAS_MODEL_DISCOVERY: OpenAICompatibleModelDiscoveryOptions = {
   projectRows: projectCerebrasModels,
 };
 
-/** Builds the Cerebras OpenAI-compatible model provider config. */
 export function buildCerebrasProvider(): ModelProviderConfig {
   return buildManifestModelProviderConfig({
     providerId: "cerebras",

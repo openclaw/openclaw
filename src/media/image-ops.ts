@@ -30,7 +30,6 @@ class ImageProcessorUnavailableError extends Error {
   }
 }
 
-/** JPEG resize request passed through the media-runtime/plugin SDK surface. */
 type ResizeToJpegParams = {
   buffer: Buffer;
   maxSide: number;
@@ -38,10 +37,8 @@ type ResizeToJpegParams = {
   withoutEnlargement?: boolean;
 };
 
-/** Ordered JPEG quality ladder used when shrinking generated or attached images. */
 export const IMAGE_REDUCE_QUALITY_STEPS = [85, 75, 65, 55, 45, 35] as const;
 
-/** Detects either OpenClaw's wrapper error or Rastermill's native unavailable error. */
 export function isImageProcessorUnavailableError(err: unknown): boolean {
   return err instanceof ImageProcessorUnavailableError || isRastermillUnavailableError(err);
 }
@@ -122,12 +119,10 @@ async function encodeImageToJpeg(buffer: Buffer, operation: string): Promise<Buf
   }
 }
 
-/** Converts image bytes into JPEG through the shared image processor. */
 export async function convertImageToJpeg(buffer: Buffer): Promise<Buffer> {
   return await encodeImageToJpeg(buffer, "convertImageToJpeg");
 }
 
-/** Converts HEIC/HEIF-like image bytes into JPEG through the shared image processor. */
 export async function convertHeicToJpeg(buffer: Buffer): Promise<Buffer> {
   return await encodeImageToJpeg(buffer, "convertHeicToJpeg");
 }

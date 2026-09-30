@@ -2171,10 +2171,6 @@ html[dir="rtl"] .chat-attachment-loading > span {
   justify-content: center;
 }
 
-.chat-controls__permission-label--full {
-  color: var(--accent);
-}
-
 .chat-controls__permission-trigger--full .chat-controls__permission-icon {
   color: var(--accent);
 }
@@ -3211,12 +3207,6 @@ html[dir="rtl"] .chat-attachment-loading > span {
     padding-inline: 0;
   }
 
-  .agent-chat__composer-lead
-    .chat-controls__permission-trigger
-    .chat-controls__inline-select-label {
-    display: none;
-  }
-
   .agent-chat__input--mobile-toolbar .chat-controls__trigger-provider-icon {
     display: none;
   }
@@ -3395,12 +3385,6 @@ html[dir="rtl"] .chat-attachment-loading > span {
     width: 44px;
     justify-content: center;
     padding-inline: 0;
-  }
-
-  .agent-chat__composer-meta
-    .chat-controls__permission-trigger
-    .chat-controls__inline-select-label {
-    display: none;
   }
 
   .agent-chat__composer-controls {

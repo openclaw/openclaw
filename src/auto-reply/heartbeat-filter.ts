@@ -31,13 +31,6 @@ const HEARTBEAT_TASK_PROMPT_COMPLETIONS = [
 ];
 type HeartbeatTranscriptMessage = { role: string; content?: unknown };
 
-function collectToolCallBlocks(content: unknown): Array<Record<string, unknown>> {
-  if (!Array.isArray(content)) {
-    return [];
-  }
-  return content.filter(isContractToolCallBlock);
-}
-
 function collectToolResultBlocks(content: unknown): Array<Record<string, unknown>> {
   if (!Array.isArray(content)) {
     return [];
@@ -45,41 +38,21 @@ function collectToolResultBlocks(content: unknown): Array<Record<string, unknown
   return content.filter(isContractToolResultBlock);
 }
 
-function readNestedToolCallArguments(record: Record<string, unknown>): unknown {
-  const value = record.function;
-  if (!isRecord(value)) {
-    return undefined;
-  }
-  return value.arguments ?? value.args ?? value.input;
-}
-
-function readToolCallArguments(block: Record<string, unknown>): unknown {
-  return block.arguments ?? block.args ?? block.input ?? readNestedToolCallArguments(block);
-}
-
-function parseToolCallArguments(value: unknown): Record<string, unknown> | undefined {
-  if (isRecord(value)) {
-    return value;
-  }
-  return typeof value === "string" ? safeParseJsonRecord(value) : undefined;
-}
-
 function isVisibleHeartbeatResponseToolCall(block: Record<string, unknown>): boolean {
-  const args = parseToolCallArguments(readToolCallArguments(block));
-  if (!args) {
-    return false;
-  }
-  return args.notify === true || args.notify === "true";
-}
-
-function collectVisibleHeartbeatResponseToolCalls(
-  message: HeartbeatTranscriptMessage,
-): Array<Record<string, unknown>> {
-  return collectAssistantToolCalls(message).filter(
-    (block) =>
-      readToolCallName(block) === HEARTBEAT_RESPONSE_TOOL_NAME &&
-      isVisibleHeartbeatResponseToolCall(block),
-  );
+  const nested = isRecord(block.function) ? block.function : undefined;
+  const value =
+    block.arguments ??
+    block.args ??
+    block.input ??
+    nested?.arguments ??
+    nested?.args ??
+    nested?.input;
+  const args = isRecord(value)
+    ? value
+    : typeof value === "string"
+      ? safeParseJsonRecord(value)
+      : undefined;
+  return args?.notify === true || args?.notify === "true";
 }
 
 function collectAssistantToolCalls(message: HeartbeatTranscriptMessage) {
@@ -89,24 +62,8 @@ function collectAssistantToolCalls(message: HeartbeatTranscriptMessage) {
   const toolCalls = (message as Record<string, unknown>).tool_calls;
   return [
     ...(Array.isArray(toolCalls) ? toolCalls.filter(isRecord) : []),
-    ...collectToolCallBlocks(message.content),
+    ...(Array.isArray(message.content) ? message.content.filter(isContractToolCallBlock) : []),
   ];
-}
-
-function hasAssistantToolCall(message: HeartbeatTranscriptMessage): boolean {
-  return collectAssistantToolCalls(message).length > 0;
-}
-
-function isRemovableHeartbeatResponseToolCall(message: HeartbeatTranscriptMessage): boolean {
-  return collectAssistantToolCalls(message).some(
-    (block) =>
-      readToolCallName(block) === HEARTBEAT_RESPONSE_TOOL_NAME &&
-      !isVisibleHeartbeatResponseToolCall(block),
-  );
-}
-
-function hasVisibleHeartbeatResponseToolCall(message: HeartbeatTranscriptMessage): boolean {
-  return collectVisibleHeartbeatResponseToolCalls(message).length > 0;
 }
 
 function isEmbeddedToolResultOnlyContent(content: unknown): boolean {
@@ -248,7 +205,7 @@ export function isHeartbeatOkResponse(
   if (message.role !== "assistant") {
     return false;
   }
-  if (hasAssistantToolCall(message)) {
+  if (collectAssistantToolCalls(message).length > 0) {
     return false;
   }
   const { text, hasNonTextContent } = resolveMessageText(message.content);
@@ -280,15 +237,8 @@ function isToolResultCompletionCandidate(message: HeartbeatTranscriptMessage): b
 function hasCompletedVisibleHeartbeatResponseToolCall(
   messages: HeartbeatTranscriptMessage[],
   index: number,
+  visibleCalls: Array<Record<string, unknown>>,
 ): boolean {
-  const message = messages.at(index);
-  if (!message) {
-    return false;
-  }
-  const visibleCalls = collectVisibleHeartbeatResponseToolCalls(message);
-  if (visibleCalls.length === 0) {
-    return false;
-  }
   const callIds = new Set(visibleCalls.flatMap((call) => collectToolCallIds(call)));
   for (let resultIndex = index + 1; resultIndex < messages.length; resultIndex++) {
     const result = expectDefined(messages[resultIndex], "messages entry at resultIndex");
@@ -333,23 +283,24 @@ function resolveHeartbeatArtifactSpanEnd(
       index = advancePastAdjacentToolResults(messages, index + 1);
       continue;
     }
-    if (hasVisibleHeartbeatResponseToolCall(message)) {
-      if (hasCompletedVisibleHeartbeatResponseToolCall(messages, index)) {
+    const toolCalls = collectAssistantToolCalls(message);
+    const heartbeatCalls = toolCalls.filter(
+      (block) => readToolCallName(block) === HEARTBEAT_RESPONSE_TOOL_NAME,
+    );
+    const visibleCalls = heartbeatCalls.filter(isVisibleHeartbeatResponseToolCall);
+    if (visibleCalls.length > 0) {
+      if (hasCompletedVisibleHeartbeatResponseToolCall(messages, index, visibleCalls)) {
         return undefined;
       }
       index++;
       continue;
     }
-    if (isRemovableHeartbeatResponseToolCall(message)) {
+    if (heartbeatCalls.length > 0) {
       sawTerminalHeartbeatArtifact = true;
       index = advancePastAdjacentToolResults(messages, index + 1);
       continue;
     }
-    if (
-      sawTerminalHeartbeatArtifact ||
-      isToolResultMessage(message) ||
-      hasAssistantToolCall(message)
-    ) {
+    if (sawTerminalHeartbeatArtifact || isToolResultMessage(message) || toolCalls.length > 0) {
       index++;
       continue;
     }

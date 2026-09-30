@@ -7,18 +7,6 @@ import {
   normalizeOptionalLowercaseString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-const KILOCODE_FEATURE_HEADER = "X-KILOCODE-FEATURE";
-const KILOCODE_FEATURE_DEFAULT = "openclaw";
-const KILOCODE_FEATURE_ENV_VAR = "KILOCODE_FEATURE";
-
-type ThinkLevel = NonNullable<ProviderWrapStreamFnContext["thinkingLevel"]>;
-type ProviderStreamFn = NonNullable<ProviderWrapStreamFnContext["streamFn"]>;
-
-function resolveKilocodeAppHeaders(): Record<string, string> {
-  const feature = process.env[KILOCODE_FEATURE_ENV_VAR]?.trim() || KILOCODE_FEATURE_DEFAULT;
-  return { [KILOCODE_FEATURE_HEADER]: feature };
-}
-
 function normalizeKilocodeStopAfterCaller(
   value: unknown,
   fallbackPayload: Record<string, unknown> | undefined,
@@ -30,21 +18,17 @@ function normalizeKilocodeStopAfterCaller(
   return value;
 }
 
-function resolveKilocodeThinkingLevel(ctx: ProviderWrapStreamFnContext): ThinkLevel | undefined {
-  if (ctx.modelId === "kilo-auto/balanced" || isProxyReasoningUnsupportedModelHint(ctx.modelId)) {
-    return undefined;
-  }
-  return ctx.thinkingLevel;
-}
-
-function createKilocodeStreamWrapper(
-  baseStreamFn: ProviderWrapStreamFnContext["streamFn"],
-  thinkingLevel?: ThinkLevel,
+export function wrapKilocodeProviderStream(
+  ctx: ProviderWrapStreamFnContext,
 ): ProviderWrapStreamFnContext["streamFn"] {
-  if (!baseStreamFn) {
+  if (normalizeOptionalLowercaseString(ctx.provider) !== "kilocode" || !ctx.streamFn) {
     return undefined;
   }
-  const underlying = baseStreamFn;
+  const underlying = ctx.streamFn;
+  const thinkingLevel =
+    ctx.modelId === "kilo-auto/balanced" || isProxyReasoningUnsupportedModelHint(ctx.modelId)
+      ? undefined
+      : ctx.thinkingLevel;
   return (model, context, options) => {
     const originalOnPayload = options?.onPayload;
     const headers = resolveProviderRequestHeaders({
@@ -54,7 +38,7 @@ function createKilocodeStreamWrapper(
       capability: "llm",
       transport: "stream",
       callerHeaders: options?.headers,
-      defaultHeaders: resolveKilocodeAppHeaders(),
+      defaultHeaders: { "X-KILOCODE-FEATURE": process.env.KILOCODE_FEATURE?.trim() || "openclaw" },
       precedence: "defaults-win",
     });
     return underlying(model, context, {
@@ -77,13 +61,4 @@ function createKilocodeStreamWrapper(
       },
     });
   };
-}
-
-export function wrapKilocodeProviderStream(
-  ctx: ProviderWrapStreamFnContext,
-): ProviderStreamFn | undefined {
-  if (normalizeOptionalLowercaseString(ctx.provider) !== "kilocode") {
-    return undefined;
-  }
-  return createKilocodeStreamWrapper(ctx.streamFn, resolveKilocodeThinkingLevel(ctx));
 }

@@ -334,7 +334,10 @@ describe("DraftSubmissionFlow submit gates", () => {
       if (result !== "git") {
         expect(place.repository.kind).toBe("unavailable");
         expect(place.preferenceSelection().worktree).toBe(true);
-        expect(flow.submitBlock()?.gate).toBe("worktree-unavailable");
+        expect(flow.submitBlock()).toEqual({
+          gate: "worktree-unavailable",
+          reason: "Couldn't verify Git for this folder. Choose it again to retry.",
+        });
         await flow.submit();
         await flow.submit(undefined, true);
         flow.setMessage("");

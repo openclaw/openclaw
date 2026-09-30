@@ -8,11 +8,6 @@ import { VoiceCallConfigSchema } from "../config.js";
 import { CallManager } from "../manager.js";
 import { RealtimeCallHandler } from "./realtime-handler.js";
 
-// The published minimum host has no WebSocket SDK subpath at all.
-vi.mock("openclaw/plugin-sdk/websocket-runtime", () => {
-  throw new Error("websocket-runtime is not exported by OpenClaw 2026.9.2");
-});
-
 function createHandler() {
   const config = VoiceCallConfigSchema.parse({ realtime: { enabled: true } });
   const resolveRegistration = vi.fn((): never => {
@@ -35,7 +30,7 @@ function upgradeRequest() {
   return { request, transport };
 }
 
-describe("realtime upgrade rejection on the minimum SDK", () => {
+describe("realtime upgrade rejection", () => {
   it.each([
     [401, "Unauthorized"],
     [503, "Service Unavailable"],
