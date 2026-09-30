@@ -261,12 +261,17 @@ export function createFinalizableDraftLifecycle<TMessageId, TUpdate = string>(
     clearTail = stopRun;
     return stopRun;
   };
-  const resetMessage = () => {
+  const resetMessage = (throttle: "reset" | "keep" = "reset") => {
     params.clearMessageId();
     controls.loop.resetPending();
-    controls.loop.resetThrottleWindow();
+    if (throttle === "reset") {
+      controls.loop.resetThrottleWindow();
+    }
   };
-  const reset = (mode: "preserve" | "discard" = "preserve") => {
+  const reset = (
+    mode: "preserve" | "discard" = "preserve",
+    throttle: "reset" | "keep" = "reset",
+  ) => {
     // A later rotation cannot revoke an earlier request to discard an in-flight create.
     if (mode === "discard") {
       discardThroughGeneration = generation;
@@ -274,11 +279,12 @@ export function createFinalizableDraftLifecycle<TMessageId, TUpdate = string>(
     generation += 1;
     params.state.stopped = false;
     params.state.final = false;
-    resetMessage();
+    resetMessage(throttle);
   };
   const createMessage = async (
     send: () => Promise<TMessageId | undefined>,
     publish: (messageId: TMessageId | undefined) => boolean,
+    retirementOptions?: { defer?: boolean },
   ): Promise<boolean> => {
     const startedGeneration = generation;
     const messageId = await send();
@@ -287,7 +293,7 @@ export function createFinalizableDraftLifecycle<TMessageId, TUpdate = string>(
       return publish(messageId);
     }
     if (startedGeneration <= discardThroughGeneration && params.isValidMessageId(messageId)) {
-      await retire(messageId);
+      await retire(messageId, retirementOptions);
     }
     return true;
   };
