@@ -58,6 +58,7 @@ import {
   createTransportActivityStatusPatch,
 } from "./channel-status-patches.js";
 import { restartRunningChannelAccounts } from "./channel-thaw-restart.js";
+import { registerChannelCleanExitTests } from "./server-channels.clean-exit.test-support.js";
 import { createChannelManager, type ChannelManager } from "./server-channels.js";
 import { createTestPlugin, healthOf, type TestAccount } from "./server-channels.test-support.js";
 import { AUTH_NONE, createTestGatewayServer } from "./server-http.test-harness.js";
@@ -503,31 +504,12 @@ describe("server-channels auto restart", () => {
     }
   });
 
-  it("caps crash-loop restarts after max attempts", async () => {
-    const startAccount = vi.fn(async () => {});
-    installTestRegistry(
-      createTestPlugin({
-        startAccount,
-      }),
-    );
-    const manager = createManager();
-
-    await manager.startChannels();
-    await advanceTimersUntil(
-      () => startAccount.mock.calls.length >= 11,
-      "expected crash-loop restarts to reach the maximum attempt cap",
-      { stepMs: 10, maxMs: 500 },
-    );
-
-    expect(startAccount).toHaveBeenCalledTimes(11);
-    const snapshot = manager.getRuntimeSnapshot();
-    const account = snapshot.channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
-    expect(account?.running).toBe(false);
-    expect(account?.reconnectAttempts).toBe(11);
-    expect(account?.lastError).toBe("channel exited without an error");
-
-    await vi.advanceTimersByTimeAsync(200);
-    expect(startAccount).toHaveBeenCalledTimes(11);
+  registerChannelCleanExitTests({
+    installTestRegistry,
+    createManager,
+    flushMicrotasks,
+    advanceTimersUntil,
+    waitForAbort,
   });
 
   it("clears a previous lifecycle's dead-ingress verdict once ingress starts again", async () => {
@@ -562,41 +544,6 @@ describe("server-channels auto restart", () => {
     );
 
     expect(healthOf(readAccount()).reason).not.toBe("ingress-unavailable");
-  });
-
-  it("claims auto-restart ownership between crash-loop attempts", async () => {
-    const startAccount = vi.fn(async () => {});
-    installTestRegistry(createTestPlugin({ startAccount }));
-    const manager = createManager();
-
-    await manager.startChannels();
-    await flushMicrotasks();
-
-    // The health monitor must see the supervisor own recovery here, otherwise it
-    // resets the attempt ladder and the give-up below never happens.
-    expect(manager.isAutoRestartScheduled("discord", DEFAULT_ACCOUNT_ID)).toBe(true);
-    expect(
-      manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID],
-    ).toMatchObject({
-      running: false,
-      restartPending: true,
-      lifecycle: "recovering",
-      lastError: "channel exited without an error",
-    });
-
-    // A competing restart request cannot help while the supervisor holds the
-    // account task; it returns without booting anything.
-    const startsBeforeRequest = startAccount.mock.calls.length;
-    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
-    expect(startAccount).toHaveBeenCalledTimes(startsBeforeRequest);
-
-    await advanceTimersUntil(
-      () => startAccount.mock.calls.length >= 11,
-      "expected crash-loop restarts to reach the maximum attempt cap",
-      { stepMs: 10, maxMs: 500 },
-    );
-
-    expect(manager.isAutoRestartScheduled("discord", DEFAULT_ACCOUNT_ID)).toBe(false);
   });
 
   it("binds and rebinds a channel port after concurrent native SDK imports", async () => {

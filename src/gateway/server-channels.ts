@@ -974,16 +974,14 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                 abort.signal.aborted ||
                 manuallyStopped.has(rKey) ||
                 opts.isClosing?.() ||
-                !isCurrentTask()
+                !isCurrentTask() ||
+                // Preserve terminal diagnosis and restart policy before recovery consumes them.
+                getRuntime(channelId, id).terminalDisconnect
               ) {
                 return;
               }
-              if (getRuntime(channelId, id).terminalDisconnect) {
-                // Terminal status carries the operator-facing diagnosis and restart policy.
-                // Do not replace it with a generic clean-exit error before policy consumes it.
-                return;
-              }
-              const message = "channel exited without an error";
+              const message =
+                getRuntime(channelId, id).lastError || "channel exited without an error";
               setRuntime(channelId, id, { lastError: message });
               log.error?.(`[${id}] ${message}`);
             })
@@ -1002,9 +1000,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               if (!isCurrentTask() || store.stops.has(id) || opts.isClosing?.()) {
                 return;
               }
-              setStoppedRuntime(channelId, id, {
-                lastStopAt: Date.now(),
-              });
+              setStoppedRuntime(channelId, id, { lastStopAt: Date.now() });
             })
             .then(async () => {
               if (!isCurrentTask() || store.stops.has(id) || opts.isClosing?.()) {
