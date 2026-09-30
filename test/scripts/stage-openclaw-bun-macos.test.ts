@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { copyFile, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { hasNodeErrorCode } from "@openclaw/fs-safe/path";
 import { describe } from "vitest";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { runMacFixtureTool } from "./mac-native-fixtures.test-support.js";
@@ -154,12 +155,12 @@ exit 2
           },
         },
       );
-      const downloadsMade = await readFile(curlLog, "utf8").catch(
-        (error: NodeJS.ErrnoException) => {
-          if (error.code === "ENOENT") return "";
-          throw error;
-        },
-      );
+      const downloadsMade = await readFile(curlLog, "utf8").catch((error: unknown) => {
+        if (hasNodeErrorCode(error, "ENOENT")) {
+          return "";
+        }
+        throw error;
+      });
       expect(downloadsMade).toBe(
         ["download", "archive-checksum"].includes(scenario) ? "download\n" : "",
       );
@@ -178,7 +179,7 @@ exit 2
       expect(result.status, result.stderr).toBe(0);
       expect((await stat(bun)).mode & 0o777).toBe(0o755);
       const stagedArches = await runMacFixtureTool("/usr/bin/lipo", ["-archs", bun], root, mac);
-      expect(stagedArches.split(/\s+/).sort()).toEqual([...arches].sort());
+      expect(stagedArches.split(/\s+/).toSorted()).toEqual(arches.toSorted());
       expect(await runMacFixtureTool(bun, ["--revision"], root, mac)).toBe(revision);
       expect(await runMacFixtureTool(bun, ["-p", "Bun.revision"], root, mac)).toBe(commit);
       expect(JSON.parse(await readFile(path.join(runtime, "bun-manifest.json"), "utf8")).tag).toBe(
