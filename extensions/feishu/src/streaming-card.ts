@@ -9,7 +9,6 @@ import {
   resolveExpiresAtMsFromDurationSeconds,
 } from "openclaw/plugin-sdk/number-runtime";
 import { fetchWithSsrFGuard, type LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
-import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { FEISHU_HTTP_TIMEOUT_MS } from "./client-timeout.js";
 import { getFeishuUserAgent } from "./client.js";
 import { requestFeishuApi } from "./comment-shared.js";
@@ -17,6 +16,13 @@ import { readFeishuJsonResponse } from "./json-response.js";
 import { resolveFeishuCardTemplate } from "./native-card.js";
 import type { CardHeaderConfig } from "./send.js";
 import { resolveStreamingCardSendMode } from "./streaming-card-send-mode.js";
+import {
+  STREAMING_WINDOW_RENEW_MS,
+  buildFinalCardJson,
+  buildStreamingModeSettings,
+  isStreamingWindowClosedError,
+  truncateSummary,
+} from "./streaming-card-window.js";
 import type { FeishuDomain } from "./types.js";
 
 type Credentials = {
@@ -32,6 +38,11 @@ type CardState = {
   currentText: string;
   sentText: string;
   hasNote: boolean;
+  header?: CardHeaderConfig;
+  /** When streaming_mode was last switched on; Feishu closes it about ten minutes later. */
+  streamingOpenedAt?: number;
+  /** Feishu closed the streaming window and renewal failed; element writes are rejected until close. */
+  streamingWindowClosed?: boolean;
 };
 
 type FeishuStreamingFetch = typeof fetch;
@@ -188,15 +199,6 @@ async function getToken(creds: Credentials, deps?: FeishuStreamingDeps): Promise
   return data.tenant_access_token;
 }
 
-function truncateSummary(text: string, max = 50): string {
-  if (!text) {
-    return "";
-  }
-  const clean = text.replace(/\n/g, " ").trim();
-  // Slice on a code-point boundary so CardKit never receives a lone surrogate at the limit.
-  return clean.length <= max ? clean : sliceUtf16Safe(clean, 0, max - 3) + "...";
-}
-
 function shouldPushStreamingUpdate(previousText: string, nextText: string): boolean {
   return (
     !previousText ||
@@ -245,6 +247,7 @@ export class FeishuStreamingSession {
   private pendingText: string | null = null;
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private updateThrottleMs = STREAMING_UPDATE_THROTTLE_MS;
+  private windowRenewMs = STREAMING_WINDOW_RENEW_MS;
   private fetchImpl?: FeishuStreamingFetch;
   private lookupFn?: LookupFn;
 
@@ -409,6 +412,8 @@ export class FeishuStreamingSession {
       currentText: "",
       sentText: "",
       hasNote: Boolean(options?.note),
+      ...(options?.header ? { header: options.header } : {}),
+      streamingOpenedAt: Date.now(),
     };
     this.log?.(`Started streaming: cardId=${cardId}${messageId ? `, messageId=${messageId}` : ""}`);
   }
@@ -448,6 +453,103 @@ export class FeishuStreamingSession {
     }
   }
 
+  /** Toggling streaming_mode off then on restarts Feishu's window, even after the server closed it. */
+  private async renewStreamingWindow(reason: string): Promise<boolean> {
+    if (!this.state || this.state.streamingWindowClosed) {
+      return false;
+    }
+    try {
+      for (const on of [false, true]) {
+        this.state.sequence += 1;
+        await this.requestCardKit(
+          `/${this.state.cardId}/settings`,
+          "window-renew",
+          "PATCH",
+          () => ({
+            settings: buildStreamingModeSettings(on),
+            sequence: this.state!.sequence,
+            uuid: `k_${this.state!.cardId}_${this.state!.sequence}`,
+          }),
+          (response, auditContext) =>
+            assertSuccessfulCardKitResponse(
+              response,
+              auditContext,
+              `Set streaming_mode=${String(on)}`,
+            ),
+        );
+      }
+      this.state.streamingOpenedAt = Date.now();
+      this.log?.(`Renewed streaming window (${reason}): cardId=${this.state.cardId}`);
+      return true;
+    } catch (error) {
+      this.log?.(`Streaming window renew failed (${reason}): ${String(error)}`);
+      return false;
+    }
+  }
+
+  /**
+   * Element write that keeps the streaming window alive. Once Feishu has closed the
+   * window and it cannot be re-opened, returns false without reporting an error so
+   * the caller stops pushing; the final text is then landed by a full-card update.
+   */
+  private async writeStreamingContent(
+    text: string,
+    replace: boolean,
+    onError?: (error: unknown) => void,
+  ): Promise<boolean> {
+    if (!this.state || this.state.streamingWindowClosed) {
+      return false;
+    }
+    const openedAt = this.state.streamingOpenedAt;
+    if (openedAt !== undefined && Date.now() - openedAt >= this.windowRenewMs) {
+      await this.renewStreamingWindow("age");
+    }
+    let lastError: unknown;
+    const capture = (error: unknown) => {
+      lastError = error;
+    };
+    if (await this.writeCardContent(text, replace, capture)) {
+      return true;
+    }
+    const windowClosed = isStreamingWindowClosedError(lastError);
+    if (windowClosed && (await this.renewStreamingWindow("server-closed"))) {
+      if (await this.writeCardContent(text, replace, capture)) {
+        return true;
+      }
+    }
+    if (windowClosed && this.state) {
+      this.state.streamingWindowClosed = true;
+      this.log?.(
+        `Streaming window closed by server; buffering until close: cardId=${this.state.cardId}`,
+      );
+    }
+    onError?.(lastError);
+    return false;
+  }
+
+  /** A full-card update does not depend on streaming_mode; it lands the final text after the window closed. */
+  private async replaceFullCard(state: CardState, text: string, note?: string): Promise<void> {
+    state.sequence += 1;
+    await this.requestCardKit(
+      `/${state.cardId}`,
+      "full-update",
+      "PUT",
+      () => ({
+        card: {
+          type: "card_json",
+          data: JSON.stringify(buildFinalCardJson({ text, note, header: state.header })),
+        },
+        sequence: state.sequence,
+        uuid: `f_${state.cardId}_${state.sequence}`,
+      }),
+      (response, auditContext) =>
+        assertSuccessfulCardKitResponse(response, auditContext, "Full card update"),
+    );
+    state.sentText = text;
+    state.currentText = text;
+    this.log?.(`Finalized via full card update: cardId=${state.cardId}`);
+  }
+
   private clearFlushTimer(): void {
     if (this.flushTimer) {
       clearTimeout(this.flushTimer);
@@ -485,7 +587,7 @@ export class FeishuStreamingSession {
       if (nextText === this.state.sentText) {
         return;
       }
-      const sent = await this.writeCardContent(nextText, false, (e) =>
+      const sent = await this.writeStreamingContent(nextText, false, (e) =>
         this.log?.(`Update failed: ${String(e)}`),
       );
       if (sent && this.state) {
@@ -502,6 +604,9 @@ export class FeishuStreamingSession {
     // The caller supplies the complete current card text. CardKit derives its own
     // display delta, so merging snapshots here can duplicate divergent reasoning.
     this.state.currentText = text;
+    if (this.state.streamingWindowClosed) {
+      return;
+    }
     this.pendingText = text;
     this.clearFlushTimer();
 
@@ -562,7 +667,7 @@ export class FeishuStreamingSession {
     // An explicit empty final text clears a transient preview before closeout.
     if ((text || finalText !== undefined) && text !== this.state.sentText) {
       const replace = !text.startsWith(this.state.sentText);
-      const sent = await this.writeCardContent(text, replace, (e) => {
+      const sent = await this.writeStreamingContent(text, replace, (e) => {
         finalWriteError = e;
         this.log?.(`Final ${replace ? "replace" : "update"} failed: ${String(e)}`);
       });
@@ -573,37 +678,50 @@ export class FeishuStreamingSession {
       }
     }
 
-    // Update note with final model/provider info
-    if (options?.note) {
+    if (this.state.streamingWindowClosed) {
+      // Element writes are rejected once Feishu closed the window; a full-card
+      // update lands the final text (and note) without streaming_mode.
+      try {
+        await this.replaceFullCard(this.state, text, options?.note);
+        finalWriteError = undefined;
+        visibleContentSent = Boolean(text.trim());
+      } catch (error) {
+        finalWriteError = error;
+        this.log?.(`Full card update failed: ${String(error)}`);
+      }
+    } else if (options?.note) {
+      // Update note with final model/provider info
       await this.updateNoteContent(options.note);
     }
 
-    // Close streaming mode
+    // Close streaming mode (the full-card update above already closed it).
     // A rejected final write must not advertise content that CardKit never accepted.
     const acceptedText = this.state.sentText;
-    this.state.sequence += 1;
     let closeError: unknown;
-    try {
-      await this.requestCardKit(
-        `/${this.state.cardId}/settings`,
-        "close",
-        "PATCH",
-        () => ({
-          settings: JSON.stringify({
-            config: {
-              streaming_mode: false,
-              summary: { content: truncateSummary(acceptedText) },
-            },
+    if (!this.state.streamingWindowClosed) {
+      this.state.sequence += 1;
+      try {
+        await this.requestCardKit(
+          `/${this.state.cardId}/settings`,
+          "close",
+          "PATCH",
+          () => ({
+            settings: JSON.stringify({
+              config: {
+                streaming_mode: false,
+                summary: { content: truncateSummary(acceptedText) },
+              },
+            }),
+            sequence: this.state!.sequence,
+            uuid: `c_${this.state!.cardId}_${this.state!.sequence}`,
           }),
-          sequence: this.state!.sequence,
-          uuid: `c_${this.state!.cardId}_${this.state!.sequence}`,
-        }),
-        (response, auditContext) =>
-          assertSuccessfulCardKitResponse(response, auditContext, "Close streaming card"),
-      );
-    } catch (error: unknown) {
-      closeError = error;
-      this.log?.(`Close failed: ${String(error)}`);
+          (response, auditContext) =>
+            assertSuccessfulCardKitResponse(response, auditContext, "Close streaming card"),
+        );
+      } catch (error: unknown) {
+        closeError = error;
+        this.log?.(`Close failed: ${String(error)}`);
+      }
     }
     const finalState = this.state;
     this.state = null;

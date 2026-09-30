@@ -19,6 +19,8 @@ type StreamingSessionState = {
   currentText: string;
   sentText: string;
   hasNote: boolean;
+  streamingOpenedAt?: number;
+  header?: { title: string };
 };
 
 type LocalServer = {
@@ -213,6 +215,8 @@ function createActiveSession(
     text?: string;
     hasNote?: boolean;
     lastUpdateTime?: number;
+    streamingOpenedAt?: number;
+    header?: { title: string };
     log?: (message: string) => void;
   },
 ): FeishuStreamingSession {
@@ -230,6 +234,10 @@ function createActiveSession(
       currentText: options.text ?? "",
       sentText: options.text ?? "",
       hasNote: options.hasNote ?? false,
+      ...(options.streamingOpenedAt === undefined
+        ? {}
+        : { streamingOpenedAt: options.streamingOpenedAt }),
+      ...(options.header ? { header: options.header } : {}),
     },
     lastUpdateTime: options.lastUpdateTime,
   });
@@ -1196,6 +1204,190 @@ describe("FeishuStreamingSession", () => {
 
     expect(authTokens).toEqual(["token-1", "token-2"]);
     dateNow.mockRestore();
+  });
+
+  type WindowRequest = { method: string; path: string; body: Record<string, unknown> };
+
+  function createWindowFetch(options: {
+    requests: WindowRequest[];
+    windowOpen: () => boolean;
+    onSettings: (streamingMode: boolean) => Response;
+    fullUpdate?: () => Response;
+  }): StreamingFetchDeps {
+    return createMemoryFetch((url, rawBody) => {
+      if (url.pathname.includes("/auth/")) {
+        return jsonResponse({ code: 0, msg: "ok", tenant_access_token: "token", expire: 7200 });
+      }
+      const body = rawBody ? (JSON.parse(rawBody) as Record<string, unknown>) : {};
+      const method = url.pathname.endsWith("/settings") ? "PATCH" : "PUT";
+      options.requests.push({ method, path: url.pathname, body });
+      if (url.pathname.endsWith("/settings")) {
+        const settings = JSON.parse(String(body.settings)) as {
+          config: { streaming_mode: boolean };
+        };
+        return options.onSettings(settings.config.streaming_mode);
+      }
+      if (url.pathname.includes("/elements/")) {
+        return options.windowOpen()
+          ? jsonResponse({ code: 0, msg: "ok" })
+          : jsonResponse({ code: 300309, msg: "streaming mode is closed" });
+      }
+      return (options.fullUpdate ?? (() => jsonResponse({ code: 0, msg: "ok" })))();
+    });
+  }
+
+  const cardPath = (request: WindowRequest) => request.path.split("/").slice(5).join("/");
+
+  it("renews the streaming window before Feishu's ten-minute limit on the same card", async () => {
+    const requests: WindowRequest[] = [];
+    let windowOpen = true;
+    const deps = createWindowFetch({
+      requests,
+      windowOpen: () => windowOpen,
+      onSettings: (streamingMode) => {
+        windowOpen = streamingMode;
+        return jsonResponse({ code: 0, msg: "ok" });
+      },
+    });
+    const log = vi.fn();
+    const session = createActiveSession(deps, {
+      cardId: "card_window",
+      messageId: "om_window",
+      text: "hello",
+      streamingOpenedAt: Date.now() - 9 * 60_000,
+      log,
+    });
+
+    await session.update("hello world\n");
+
+    expect(requests.map((request) => [cardPath(request), request.body.sequence])).toEqual([
+      ["card_window/settings", 2],
+      ["card_window/settings", 3],
+      ["card_window/elements/content/content", 4],
+    ]);
+    expect(
+      requests
+        .slice(0, 2)
+        .map((request) => JSON.parse(String(request.body.settings)).config.streaming_mode),
+    ).toEqual([false, true]);
+    expect(log).toHaveBeenCalledWith("Renewed streaming window (age): cardId=card_window");
+    expect(log).not.toHaveBeenCalledWith(expect.stringContaining("Update failed"));
+
+    // The renewed window is not toggled again on the next push.
+    await session.update("hello world\nmore\n");
+    expect(requests.filter((request) => request.path.endsWith("/settings"))).toHaveLength(2);
+  });
+
+  it("re-opens a window Feishu already closed and retries the rejected write once", async () => {
+    const requests: WindowRequest[] = [];
+    let windowOpen = false;
+    const deps = createWindowFetch({
+      requests,
+      windowOpen: () => windowOpen,
+      onSettings: (streamingMode) => {
+        windowOpen = streamingMode;
+        return jsonResponse({ code: 0, msg: "ok" });
+      },
+    });
+    const log = vi.fn();
+    const session = createActiveSession(deps, {
+      cardId: "card_reopen",
+      messageId: "om_reopen",
+      text: "hello",
+      streamingOpenedAt: Date.now(),
+      log,
+    });
+
+    const result = await session.closeWithResult("hello final");
+
+    expect(result).toEqual({
+      visibleReplySent: true,
+      content: "hello final",
+      messageId: "om_reopen",
+    });
+    expect(requests.map(cardPath)).toEqual([
+      "card_reopen/elements/content/content",
+      "card_reopen/settings",
+      "card_reopen/settings",
+      "card_reopen/elements/content/content",
+      "card_reopen/settings",
+    ]);
+    expect(log).toHaveBeenCalledWith(
+      "Renewed streaming window (server-closed): cardId=card_reopen",
+    );
+    expect(log).not.toHaveBeenCalledWith(expect.stringContaining("Final update failed"));
+  });
+
+  it("stops element writes and lands the final text with a full-card update when the window cannot be renewed", async () => {
+    const requests: WindowRequest[] = [];
+    const deps = createWindowFetch({
+      requests,
+      windowOpen: () => false,
+      onSettings: () => jsonResponse({ code: 300309, msg: "streaming mode is closed" }),
+    });
+    const log = vi.fn();
+    const session = createActiveSession(deps, {
+      cardId: "card_full",
+      messageId: "om_full",
+      text: "hello",
+      hasNote: true,
+      streamingOpenedAt: Date.now(),
+      header: { title: "Reply" },
+      log,
+    });
+
+    await session.update("hello more\n");
+    expect(log).toHaveBeenCalledWith(
+      "Streaming window closed by server; buffering until close: cardId=card_full",
+    );
+    const requestsAfterClose = requests.length;
+    await session.update("hello more still\n");
+    await session.update("hello more still again\n");
+    expect(requests).toHaveLength(requestsAfterClose);
+
+    const result = await session.closeWithResult("hello final", { note: "model: x" });
+
+    expect(result).toEqual({
+      visibleReplySent: true,
+      content: "hello final",
+      messageId: "om_full",
+    });
+    const fullUpdate = requests.at(-1) as WindowRequest;
+    expect(fullUpdate.path).toBe("/open-apis/cardkit/v1/cards/card_full");
+    const card = JSON.parse((fullUpdate.body.card as { data: string }).data) as {
+      config: { streaming_mode: boolean };
+      header: { title: { content: string } };
+      body: { elements: Array<{ element_id?: string; content?: string }> };
+    };
+    expect(card.config.streaming_mode).toBe(false);
+    expect(card.header.title.content).toBe("Reply");
+    expect(card.body.elements[0]?.content).toBe("hello final");
+    expect(card.body.elements.some((element) => element.element_id === "note")).toBe(true);
+    // One failed renewal (off/on) for the first rejected write; no streaming close PATCH afterwards.
+    expect(requests.filter((request) => request.path.endsWith("/settings"))).toHaveLength(1);
+    expect(log).toHaveBeenCalledWith("Finalized via full card update: cardId=card_full");
+  });
+
+  it("keeps the accepted preview visible when both the window and the full-card update are rejected", async () => {
+    const requests: WindowRequest[] = [];
+    const deps = createWindowFetch({
+      requests,
+      windowOpen: () => false,
+      onSettings: () => jsonResponse({ code: 300309, msg: "streaming mode is closed" }),
+      fullUpdate: () => jsonResponse({ code: 11310, msg: "card too large" }),
+    });
+    const session = createActiveSession(deps, {
+      cardId: "card_fail",
+      messageId: "om_fail",
+      text: "hello",
+      streamingOpenedAt: Date.now(),
+    });
+
+    await expect(session.closeWithResult("hello final")).rejects.toMatchObject({
+      name: "FeishuStreamingFinalizationError",
+      message: "Full card update failed: card too large (code=11310)",
+      result: { visibleReplySent: true, content: "hello", messageId: "om_fail" },
+    });
   });
 });
 
