@@ -10,6 +10,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatInstallOwnerMessage, readInstallOwner } from "../../infra/install-owner.js";
 import { resolveOcmUpdateManager } from "../../infra/ocm-update-client.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
+import { tryProcessCwd } from "../../infra/safe-cwd.js";
 import { normalizeUpdateChannel } from "../../infra/update-channels.js";
 import { currentUpdateCheckLifecycle } from "../../infra/update-check-lifecycle.js";
 import { createUpdateErrorFact } from "../../infra/update-failure-facts.js";
@@ -43,7 +44,7 @@ export async function admitGatewayUpdateRequest(request: GatewayRequestHandlerOp
     await resolveOpenClawPackageRoot({
       moduleUrl: import.meta.url,
       argv1: process.argv[1],
-      cwd: process.cwd(),
+      cwd: tryProcessCwd(),
     }),
   );
   if (installOwner) {
