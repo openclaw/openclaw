@@ -203,10 +203,7 @@ class UsagePage extends OpenClawLightDomElement {
       () => this.context?.agentSelection,
       (selection) => this.observeAgentScope(selection),
     )
-    .watch(
-      () => this.context?.agents,
-      (agents, notify) => agents.subscribe(notify),
-    );
+    .watchStore(() => this.context?.agents);
 
   override willUpdate(changed: PropertyValues<this>) {
     if (changed.has("routeData")) {

@@ -94,27 +94,14 @@ export class OpenClawApp extends OpenClawLightDomElement {
   constructor() {
     super();
     this.subscriptions
-      .watch(
+      .watchStore(
         () => this.context?.gateway,
-        (gateway, notify) => gateway.subscribe(notify),
         (gateway) => this.synchronizeGateway(gateway),
       )
-      .watch(
-        () => (this.terminalOnly ? this.context?.config : undefined),
-        (config, notify) => config.subscribe(notify),
-      )
-      .watch(
-        () => this.context?.agentSelection,
-        (selection, notify) => selection.subscribe(notify),
-      )
-      .watch(
-        () => (this.terminalOnly ? this.context?.theme : undefined),
-        (theme, notify) => theme.subscribe(notify),
-      )
-      .watch(
-        () => this.context?.router,
-        (router, notify) => router.subscribe(notify),
-      )
+      .watchStore(() => (this.terminalOnly ? this.context?.config : undefined))
+      .watchStore(() => this.context?.agentSelection)
+      .watchStore(() => (this.terminalOnly ? this.context?.theme : undefined))
+      .watchStore(() => this.context?.router)
       .effect(() => this.ownerDocument, installTitleTooltips);
   }
 

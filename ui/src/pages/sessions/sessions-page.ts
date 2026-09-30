@@ -168,22 +168,13 @@ class SessionsPage extends OpenClawLightDomElement {
     this.requestUpdate();
   });
   private readonly subscriptions = new SubscriptionsController(this)
-    .watch(
-      () => this.context?.agentIdentity,
-      (agentIdentity, notify) => agentIdentity.subscribe(notify),
-    )
+    .watchStore(() => this.context?.agentIdentity)
     .effect(
       () => this.context?.agentSelection,
       (agentSelection) => this.observeAgentScope(agentSelection),
     )
-    .watch(
-      () => this.context?.runtimeConfig,
-      (runtimeConfig, notify) => runtimeConfig.subscribe(notify),
-    )
-    .watch(
-      () => this.context?.plugins,
-      (plugins, notify) => plugins.subscribe(notify),
-    );
+    .watchStore(() => this.context?.runtimeConfig)
+    .watchStore(() => this.context?.plugins);
   private readonly gatewayLifecycle = new GatewayPageController(this, {
     getGateway: () => this.context?.gateway,
     onIdentityChange: () => {
