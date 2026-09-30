@@ -431,7 +431,9 @@ export class DraftSubmissionFlow {
         return;
       }
       this.startedSession.current = null;
-      const placementTarget = startup ? null : this.placement().target;
+      const placementTarget = startup
+        ? null
+        : resolveDraftSessionPlacement(this.pendingPlacement, this.place).target;
       promptNewSessionNotifications(
         context,
         input.message,
@@ -682,8 +684,6 @@ export class DraftSubmissionFlow {
     this.attachmentDraft.reset({ release: true });
     this.composerTextarea.disconnect();
   }
-
-  private placement = () => resolveDraftSessionPlacement(this.pendingPlacement, this.place);
 
   private setPlacementRecoveryUnavailable(phase: "creating" | "created") {
     this.error =

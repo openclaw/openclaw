@@ -9,12 +9,14 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelCatalogResult } from "../../api/types.ts";
 import {
   invalidateModelCatalogCache,
+  getModelCatalogCache,
   modelCatalogKey,
   modelCatalogParams,
 } from "../model-catalog-cache.ts";
 import {
   loadModelCatalog,
   peekModelCatalog,
+  pendingModelCatalogResult,
   settleModelCatalogRequests,
   subscribeModelCatalogCache,
 } from "../model-catalog-store.ts";
@@ -42,12 +44,8 @@ function notifyChatMetadataListeners(entry: ChatMetadataEntry, update: ChatMetad
   }
 }
 
-function metadataScopeKey(scope: ChatMetadataParams): string {
-  return JSON.stringify([
-    scope.agentId?.trim() ?? "",
-    scope.sessionKey ?? null,
-    scope.authProfileId ?? null,
-  ]);
+function metadataScopeKey({ agentId, sessionKey, authProfileId }: ChatMetadataParams): string {
+  return JSON.stringify([agentId?.trim() ?? "", sessionKey ?? null, authProfileId ?? null]);
 }
 
 const MAX_CACHED_CHAT_METADATA = 64;
@@ -104,10 +102,18 @@ function metadataEntryFor(
       // Retire every affected writer before subscribers can synchronously start replacements.
       const sessionOnly =
         scope?.sessionKey !== undefined && isSessionMetadataInvalidation(sessionEvent);
+      const catalog = sessionOnly ? getModelCatalogCache(client) : undefined;
+      const validation =
+        catalog &&
+        new Set(
+          Array.from(catalog.requests.values()).flatMap((lanes) =>
+            Array.from(lanes.values()).flatMap(({ active }) => (active ? active.read : [])),
+          ),
+        );
       for (const entry of invalidated) {
         entry.refreshRevision += 1;
         entry.refreshAfter = sessionOnly ? Date.now() + SESSION_METADATA_DEBOUNCE_MS : undefined;
-        entry.validateCatalog = sessionOnly && entry.listeners.size > 0;
+        entry.validateCatalog = entry.listeners.size > 0 ? validation : undefined;
         entry.result = undefined;
         entry.writer = undefined;
       }
@@ -120,10 +126,7 @@ function metadataEntryFor(
         entry.release();
       }
     };
-    cache = {
-      entries,
-      invalidate,
-    };
+    cache = { entries, invalidate };
     chatMetadataCache.set(client, cache);
   }
   const entries = cache.entries;
@@ -218,25 +221,17 @@ async function requestChatMetadata(
   }
 }
 
-function catalogProjectionKey(
-  models: ModelCatalogResult["models"],
-  accountSelection: ModelCatalogResult["accountSelection"],
-  modelSelectionPolicy: ModelCatalogResult["modelSelectionPolicy"],
-) {
+function catalogProjectionKey(projection: Partial<ModelCatalogResult>) {
   // Metadata omits direct-picker policy, including on alternate runtime choices.
   return stableStringify([
-    models.map(({ manualSelectionAllowed: _manual, runtimeChoices, ...model }) => ({
+    projection.models?.map(({ manualSelectionAllowed: _manual, runtimeChoices, ...model }) => ({
       ...model,
-      ...(runtimeChoices
-        ? {
-            runtimeChoices: runtimeChoices.map(
-              ({ manualSelectionAllowed: _choiceManual, ...choice }) => choice,
-            ),
-          }
-        : {}),
+      runtimeChoices: runtimeChoices?.map(
+        ({ manualSelectionAllowed: _choiceManual, ...choice }) => choice,
+      ),
     })),
-    accountSelection,
-    modelSelectionPolicy,
+    projection.accountSelection,
+    projection.modelSelectionPolicy,
   ]);
 }
 
@@ -254,23 +249,36 @@ function preparePublication(
       const { models, accountSelection, modelSelectionPolicy, ...metadata } = result;
       if (isCurrent()) {
         let catalogChanged = false;
-        if (entry.validateCatalog) {
-          entry.validateCatalog = false;
+        const validateCatalog = entry.validateCatalog;
+        if (validateCatalog) {
+          entry.validateCatalog = undefined;
+          const catalogRevision = entry.catalogRevision;
           const catalog = peekModelCatalog(client, entry.scope);
-          // A patch can also change a session's account/runtime projection. Metadata
-          // is only an invalidation signal; the direct catalog remains the display owner.
-          if (
-            !catalog ||
-            models === undefined ||
-            catalogProjectionKey(models, accountSelection, modelSelectionPolicy) !==
-              catalogProjectionKey(
-                catalog.models,
-                catalog.accountSelection,
-                catalog.modelSelectionPolicy,
-              )
-          ) {
+          const hasCatalogChanged = (validatedCatalog: ModelCatalogResult | undefined) =>
+            !validatedCatalog ||
+            catalogRevision !== entry.catalogRevision ||
+            catalogProjectionKey({ models, accountSelection, modelSelectionPolicy }) !==
+              catalogProjectionKey(validatedCatalog);
+          const pending = !catalog
+            ? pendingModelCatalogResult(client, entry.scope, validateCatalog)
+            : undefined;
+          if (pending) {
+            // Commands are ready now; only catalog validation waits for its existing producer.
+            void pending.then((validatedCatalog) => {
+              if (isCurrent() && hasCatalogChanged(validatedCatalog)) {
+                invalidateModelCatalogCache(client, entry.scope);
+                notifyChatMetadataListeners(entry, {
+                  type: "result",
+                  result: metadata,
+                  catalogChanged: true,
+                });
+              }
+            });
+          } else {
+            catalogChanged = hasCatalogChanged(catalog);
+          }
+          if (catalogChanged) {
             invalidateModelCatalogCache(client, entry.scope);
-            catalogChanged = true;
           }
         }
         entry.result = metadata;
@@ -403,7 +411,7 @@ export function subscribeChatMetadata(
       entry.refreshRevision += 1;
       entry.writer = undefined;
       if (entry.validateCatalog) {
-        entry.validateCatalog = false;
+        entry.validateCatalog = undefined;
         invalidateModelCatalogCache(client, scope);
       }
     }

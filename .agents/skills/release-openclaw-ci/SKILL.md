@@ -81,7 +81,8 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   pending platforms accurately and repair native-only failures in parallel.
 - Do not set GitHub secrets from unvalidated 1Password candidates. If a candidate returns 401/403, leave the existing secret alone and report the exact missing provider.
 - Use `$one-password` for secret reads/writes: one persistent tmux session, targeted items only, no secret output.
-- Watch one parent run plus compact child summaries. Avoid broad `gh run view` polling loops; REST quota is easy to burn.
+- Watch one parent run with `pnpm frv watch --run <parent>` (see [Watch](#watch)).
+  Avoid broad `gh run view` polling loops; REST quota is easy to burn.
 - Fetch logs only for failed or currently-blocking jobs. If quota is low, stop polling and wait for reset.
 - Treat live-provider flakes separately from code failures: prove key validity, provider HTTP status, retry evidence, and exact failing lane before editing code.
 - A model-list response proves authentication, not billing or inference
@@ -125,7 +126,7 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   temporarily returns duplicate jobs in the newest retry attempt. The run tuple
   and attempt stay pinned; persistent duplicates and older-attempt conflicts
   remain errors.
-- Use `pnpm frv status|rerun --job|continue --failed|verify` for attempt-aware recovery.
+- Use `pnpm frv status|watch|rerun --job|rerun --child|continue --failed|verify` for attempt-aware recovery.
   The controller is stateless: the immutable execution plan, exact GitHub run
   attempts, Diagnostic Drain, and final manifest are the only authorities. It
   never writes a tag, package, registry entry, release candidate, or
@@ -146,7 +147,7 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   strict-verifier invocation. Never use a real Full Release Validation run for
   this proof. See
   [Full Release Validation](/reference/full-release-validation#post-merge-continuation-proof).
-- Use one release operator, one transition-only watcher, and at most one
+- Use one release operator, one `frv watch`, and at most one
   investigator for the current failed surface. Do not build audit-review-plan
   trees around a single workflow transition.
 - For regular beta/stable releases, Code SHA may already contain final notes
@@ -186,9 +187,9 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
 
 Release validation does not pause CI or supporting workflows. The legacy
 `OPENCLAW_RELEASE_PRIORITY_RUN` variable is ignored by current workflow
-admission. Do not use `pnpm frv prioritize --run` for routine validation;
-it still cancels queued runs. Use `pnpm frv prioritize --restore <record>`
-to recover runs deferred by older workflow revisions and clear their variable.
+admission, and `pnpm frv prioritize --run` is retired. Use
+`pnpm frv prioritize --restore <record>` to recover runs deferred by older
+workflow revisions and clear their variable.
 Keep the required publication proofs and soak gates intact.
 
 ## Continuous release readiness
@@ -285,6 +286,18 @@ until their dependent enforcement changes land.
   Actions job ID. Get the child key and exact name from `frv status --json`.
   GitHub also reruns dependent jobs. The controller waits only for that child
   before sending the request; it does not retry unrelated failures.
+- `pnpm frv rerun --run <parent-run-id> --child <child-key|run-id>
+[--max-attempts N]` records one of those bounded reruns. It waits for the
+  child to finish, sends exactly one rerun-failed-jobs request, and returns once
+  the new attempt exists without duplicate jobs. Before the request it prints
+  each failed job's runner labels and the current `OPENCLAW_CI_RUNNER_BACKEND`;
+  afterwards it appends an audit line to
+  `$TMPDIR/openclaw-frv/<repo>-<parent>-reruns.jsonl`. It refuses a passed
+  child, an artifact producer (use `continue --failed`), and a child past its
+  attempt budget: the default 2 allows one rerun; pass `--max-attempts 3` only
+  for a recorded flake. When a failed consumer binds a green producer's run
+  attempt (the install-smoke candidate payload, #161317), it reruns that
+  producer job and its dependents instead. Reseal with `continue --failed`.
 - `pnpm frv continue --failed --run <parent-run-id>` reruns each failed child
   as soon as it is terminal, even while the parent or siblings remain active.
   It adopts active attempts and preserves green children. Once every required
@@ -756,7 +769,25 @@ them requires a new request, never continuation.
 
 ## Watch
 
-Use the transition-only summary watcher instead of repeated raw polling:
+Watch children with the attempt-aware controller:
+
+```bash
+pnpm frv watch --run <full-release-run-id>
+```
+
+It resolves child run IDs from the parent's dispatch-job log lines
+(`Dispatched <workflow>: <url> (attempt N)`), never from display titles, and
+reports each parent and child attempt transition and each failed job once, with
+runner labels and advisory Windows jobs marked. Transient GitHub 5xx or HTML
+error bodies are retried on the next poll, never reported as job results.
+State lives in `$TMPDIR/openclaw-frv/<repo>-<parent>-watch.json` (`--state`
+overrides), so a restart after a harness or Monitor timeout does not re-report.
+`--once` takes one snapshot, `--interval <seconds>` sets polling (default 60),
+and `--json` prints NDJSON. It exits once the parent and every dispatched child
+are terminal; restart it after a later rerun. Do not hand-roll bash or `gh`
+watchers.
+
+For the parent's Release Decision, use the transition-only summary watcher:
 
 ```bash
 node scripts/release-ci-summary.mjs <full-release-run-id> --watch
@@ -815,11 +846,8 @@ run-ID-cached bytes first.
 ## Failure Triage
 
 1. Confirm parent SHA and child run IDs.
-2. List failed jobs only:
-   ```bash
-   gh run view <child-run-id> --repo openclaw/openclaw --json jobs \
-     --jq '.jobs[] | select(.conclusion=="failure" or .conclusion=="timed_out" or .conclusion=="cancelled") | [.databaseId,.name,.conclusion,.url] | @tsv'
-   ```
+2. List failed jobs with `pnpm frv watch --run <parent> --once`; it prints each
+   failed job with its attempt, runner labels, and URL.
 3. Fetch one failed job log. If rate-limited, note reset time and avoid more REST calls.
 4. For secret-looking failures, validate a real completion from the same secret source before editing code. A successful model-list request is insufficient.
    Claude CLI subscription credentials are a separate native auth path; prove
@@ -854,7 +882,15 @@ run-ID-cached bytes first.
      `ClawHub dispatch blocked by waiting run`: see [Publish children](#publish-children)
      Only the first class changes the Code SHA. After one diagnosis/fix/narrow
      retry, reassess instead of starting another all-group cycle.
-7. If a required PR CI run is capacity-stalled with queued jobs and no active
+7. Runner routing: FRV-dispatched CI and Plugin Prerelease children always run
+   hosted `ubuntu-24.04` (or the release runner group). Other release lanes
+   follow `OPENCLAW_CI_RUNNER_BACKEND`, so a flip to `github` during a Blacksmith
+   outage moves them to hosted runners, except the QA Lab runtime-pair lane: it
+   fails on hosted runners and stays pinned to Blacksmith, queuing through an
+   outage. Release Checks prints a `Release runner routing` notice while the
+   flip is active. Codex extension tests run as file-bounded Plugin Prerelease
+   jobs because one hosted Codex batch took 36-60 minutes.
+8. If a required PR CI run is capacity-stalled with queued jobs and no active
    jobs, do not cancel unrelated work or accept a generic manual dispatch.
    First verify the PR head carries the current fallback schema:
    `gh api 'repos/openclaw/openclaw/contents/.github/workflows/ci.yml?ref=<pr-head-branch>'

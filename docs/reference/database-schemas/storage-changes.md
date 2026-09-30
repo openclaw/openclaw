@@ -607,6 +607,23 @@ First-use schema opening still belongs to the canonical mutable worker; Doctor's
 named maintenance readers remain synchronous. This changes no schema, retention
 policy, public API or installed-updater contract.
 
+Stream state, source retirement, loss counters, and external failure updates also
+use the retained-outcome Cron worker. The transaction rereads the target row and
+its runtime authority, preserves grant projections, and checks logical source
+ownership before changing source-qualified state. Counters remain monotonic across
+source replacement. The host captures its physical store, service generation, and
+default-agent resolver before waiting for the service lock, then checks them at
+transaction and commit admission. Shutdown can still retire its stream source.
+External failures retain the existing policy and do not terminalize a run receipt.
+After a known commit, the host joins the history attempt under that original source
+before publishing the finished event and alert. A lost ordinary reply does not skip
+those effects or replay the write; uncertain outcomes do not publish. A committed
+source retirement carries its exact identity through an operation failure so the
+stream owner can finish its conditional status write without replaying retirement.
+The original failure is still reported, and the final write retains its source checks. Other native
+scheduler transaction callers retain the shared row kernel and remain separate
+caller-migration work. No stored format, public method, or retention policy changes.
+
 Cron recovery observes each batch in one shared-state read-worker snapshot. Healthy
 live receipts need no writer admission. A missing receipt table uses its existing
 writable first-use initializer before observation resumes. Process liveness and

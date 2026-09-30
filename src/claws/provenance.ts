@@ -10,7 +10,7 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
-import { digestClawAgentConfig } from "./agent-config-digest.js";
+import { digestClawValue } from "./digest.js";
 import {
   CLAW_PACKAGE_REF_SCHEMA_VERSION,
   rowToPackageRef,
@@ -141,7 +141,7 @@ export function clawInstallRecordMatchesPlan(
     record.manifestSchemaVersion === plan.manifestSchemaVersion &&
     record.planIntegrity === plan.planIntegrity &&
     record.workspace === plan.agent.workspace &&
-    record.agentConfigDigest === digestClawAgentConfig(plan.agent.config) &&
+    record.agentConfigDigest === digestClawValue(plan.agent.config) &&
     stableStringify(record.agentOwnedPaths) === stableStringify(agentOwnedPaths(plan)) &&
     record.bootstrap?.sourcePath === bootstrap?.sourcePath &&
     record.bootstrap?.contentDigest === bootstrap?.contentDigest
@@ -191,7 +191,7 @@ export function persistClawInstallRecord(
 ): PersistedClawInstall {
   const nowMs = options.nowMs ?? Date.now();
   const status = options.status ?? "complete";
-  const agentConfigDigest = digestClawAgentConfig(plan.agent.config);
+  const agentConfigDigest = digestClawValue(plan.agent.config);
   const ownedPaths = agentOwnedPaths(plan);
   const bootstrap = bootstrapProvenance(plan);
   const persistedRecord = runOpenClawStateWriteTransaction(({ db }) => {
@@ -357,7 +357,7 @@ export function updateClawInstallRecord(
   }
   const updatedAtMs = options.nowMs ?? Date.now();
   const status = options.status ?? "complete";
-  const agentConfigDigest = digestClawAgentConfig(plan.agent.config);
+  const agentConfigDigest = digestClawValue(plan.agent.config);
   const ownedAgentPaths = plan.actions
     .filter((action) => action.kind === "agent")
     .map((action) => action.target);
