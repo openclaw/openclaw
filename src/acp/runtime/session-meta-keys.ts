@@ -147,16 +147,47 @@ export function legacyAcpDatabaseSessionKeys(
   return [...new Set(keys)];
 }
 
+/**
+ * A closed row keeps the fence it was closed with behind this prefix. Readers that
+ * predate closed rows match only `null`, the lifecycle revision, or the session id,
+ * so after a rollback they see no row at all and cannot resume the closed session.
+ */
+const CLOSED_ACP_SESSION_FENCE_PREFIX = "closed:";
+
+export function buildClosedAcpSessionFence(fence: string | null): string {
+  return `${CLOSED_ACP_SESSION_FENCE_PREFIX}${fence ?? ""}`;
+}
+
+function readClosedAcpSessionFence(sessionId: string | null): string | undefined {
+  return sessionId?.startsWith(CLOSED_ACP_SESSION_FENCE_PREFIX)
+    ? sessionId.slice(CLOSED_ACP_SESSION_FENCE_PREFIX.length)
+    : undefined;
+}
+
+function acpSessionFenceMatchesEntry(
+  fence: string,
+  row: Pick<AcpSessionRow, "updated_at">,
+  entry: AcpSessionEntryBinding | undefined,
+): boolean {
+  return (
+    fence === entry?.lifecycleRevision ||
+    (fence === entry?.sessionId &&
+      (entry?.sessionStartedAt === undefined || row.updated_at >= entry.sessionStartedAt))
+  );
+}
+
 export function acpSessionRowMatchesEntry(
   row: AcpSessionRow,
   entry: AcpSessionEntryBinding | undefined,
 ): boolean {
-  return (
-    row.session_id == null ||
-    row.session_id === entry?.lifecycleRevision ||
-    (row.session_id === entry?.sessionId &&
-      (entry?.sessionStartedAt === undefined || row.updated_at >= entry.sessionStartedAt))
-  );
+  if (row.session_id == null) {
+    return true;
+  }
+  const closedFence = readClosedAcpSessionFence(row.session_id);
+  if (closedFence !== undefined) {
+    return closedFence.length > 0 && acpSessionFenceMatchesEntry(closedFence, row, entry);
+  }
+  return acpSessionFenceMatchesEntry(row.session_id, row, entry);
 }
 
 /** Only raw free-runtime ACP aliases have the historical case-fold lookup contract. */

@@ -54,6 +54,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/acp/control-plane/spawn.test.ts",
   "src/acp/runtime/session-meta.alias-lifecycle.test.ts",
   "src/acp/runtime/session-meta.changes.test.ts",
+  "src/acp/runtime/session-meta.closed.test.ts",
   "src/acp/runtime/session-meta.test.ts",
   "src/acp/runtime/session-meta-list.test.ts",
   "src/acp/runtime/session-meta-read.test.ts",

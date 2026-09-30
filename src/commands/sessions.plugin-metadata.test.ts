@@ -88,6 +88,7 @@ describe("sessions plugin metadata preparation", () => {
     expect(readAcpMetadata).toHaveBeenCalledExactlyOnceWith({
       cfg: config,
       entries: [{ sessionKey: "agent:main:fixture-0", agentId: "main", entry: expect.any(Object) }],
+      includeClosed: true,
     });
     expect(resolveRuntime).toHaveBeenCalledTimes(1);
     expect(payload.sessions[0]).not.toHaveProperty("displayModelRef");

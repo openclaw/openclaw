@@ -164,15 +164,19 @@ export async function withSessionRowDatabaseFacts(
             ? [{ row, prepared, entry: prepared.entry }]
             : [];
         });
-        const acpMetadata = await readAcpSessionMetaForEntries({
-          env,
-          cfg: owner.cfg,
-          entries: acpRows.map(({ row, entry }) => ({
-            agentId: row.agentId,
-            sessionKey: row.key,
-            entry,
-          })),
-        });
+        // Rows project provenance, so a closed ACP session still names its backend.
+        const acpMetadata = await readAcpSessionMetaForEntries(
+          {
+            env,
+            cfg: owner.cfg,
+            entries: acpRows.map(({ row, entry }) => ({
+              agentId: row.agentId,
+              sessionKey: row.key,
+              entry,
+            })),
+          },
+          { includeClosed: true },
+        );
         for (const [index, { prepared }] of acpRows.entries()) {
           prepared.acpMeta = acpMetadata[index] ?? null;
         }

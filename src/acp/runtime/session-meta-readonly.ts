@@ -20,6 +20,14 @@ import {
   selectAcpSessionRowForStoreEntry,
 } from "./session-meta-keys.js";
 
+/** Closed metadata is terminal provenance: readers hide it unless they opt in. */
+export function isClosedAcpSessionMeta(meta: SessionAcpMeta | undefined): boolean {
+  return meta?.state === "closed";
+}
+
+/** Reader options: `current` selects the live database; `includeClosed` returns terminal rows. */
+type AcpSessionMetaReadOptions = { current?: true; includeClosed?: boolean };
+
 /** Each result stays bound to the entry lifecycle captured by the row reader. */
 export async function readAcpSessionMetaForEntries(
   params: {
@@ -32,7 +40,7 @@ export async function readAcpSessionMetaForEntries(
     env?: NodeJS.ProcessEnv;
     databasePath?: string;
   },
-  options: { current?: true } = {},
+  options: AcpSessionMetaReadOptions = {},
 ): Promise<Array<SessionAcpMeta | null>> {
   if (params.entries.length === 0) {
     return [];
@@ -61,7 +69,7 @@ export async function readAcpSessionMetaForEntries(
         entry,
       })),
     },
-    options,
+    { current: options.current },
   );
   if (result === undefined) {
     return entries.map(() => null);
@@ -72,7 +80,8 @@ export async function readAcpSessionMetaForEntries(
         row: row ?? undefined,
         entry: entries[index]?.entry,
       });
-      return readable ? rowToAcpSessionMeta(readable) : null;
+      const meta = readable ? rowToAcpSessionMeta(readable) : undefined;
+      return meta && (options.includeClosed || !isClosedAcpSessionMeta(meta)) ? meta : null;
     });
   }
   throw new Error("Unexpected ACP session metadata read result");
@@ -93,9 +102,14 @@ export function rowToAcpSessionMeta(row: AcpSessionRow): SessionAcpMeta {
     mode: row.mode === "oneshot" ? "oneshot" : "persistent",
     ...(runtimeOptions ? { runtimeOptions } : {}),
     ...(row.cwd != null ? { cwd: row.cwd } : {}),
-    state: row.state === "running" || row.state === "error" ? row.state : "idle",
+    state:
+      row.state === "running" || row.state === "error" || row.state === "closed"
+        ? row.state
+        : "idle",
     lastActivityAt: row.last_activity_at,
     ...(row.last_error != null ? { lastError: row.last_error } : {}),
+    // A close is the row's final activity, so the existing column carries its time.
+    ...(row.state === "closed" ? { closedAt: row.last_activity_at } : {}),
   };
 }
 
@@ -108,7 +122,7 @@ export function readAcpSessionMetaForEntry(
     env?: NodeJS.ProcessEnv;
     databasePath?: string;
   },
-  options: { current?: true } = {},
+  options: AcpSessionMetaReadOptions = {},
 ): SessionAcpMeta | undefined {
   const sessionKey = params.sessionKey.trim();
   if (!sessionKey) {
@@ -134,5 +148,6 @@ export function readAcpSessionMetaForEntry(
   if (!row) {
     return undefined;
   }
-  return rowToAcpSessionMeta(row);
+  const meta = rowToAcpSessionMeta(row);
+  return options.includeClosed || !isClosedAcpSessionMeta(meta) ? meta : undefined;
 }

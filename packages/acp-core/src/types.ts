@@ -84,7 +84,10 @@ export type SessionAcpMeta = {
   mode: "persistent" | "oneshot";
   runtimeOptions?: AcpSessionRuntimeOptions;
   cwd?: string;
-  state: "idle" | "running" | "error";
+  /** `closed` is terminal: the runtime session ended and the row is kept for provenance only. */
+  state: "idle" | "running" | "error" | "closed";
   lastActivityAt: number;
   lastError?: string;
+  /** Close time of a `closed` session; persisted as its final activity. */
+  closedAt?: number;
 };

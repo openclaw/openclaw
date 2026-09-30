@@ -46,7 +46,7 @@ function classifyAcpStatusProbeError(params: {
 }
 
 function resolveRunningActivityAgeMs(params: {
-  storedState?: "idle" | "running" | "error";
+  storedState?: "idle" | "running" | "error" | "closed";
   lastActivityAt?: number;
 }): number {
   if (params.storedState !== "running") {
@@ -66,7 +66,7 @@ export async function probeDiscordAcpBindingHealth(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   agentId?: string;
-  storedState?: "idle" | "running" | "error";
+  storedState?: "idle" | "running" | "error" | "closed";
   lastActivityAt?: number;
   providerSessionRuntime: DiscordProviderSessionRuntimeModule;
 }): Promise<{ status: "healthy" | "stale" | "uncertain"; reason?: string }> {

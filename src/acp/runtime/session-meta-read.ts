@@ -23,6 +23,8 @@ export type AcpSessionEntryReadInput = AcpSessionReadContextInput & {
   sessionKey: string;
   agentId?: string;
   clone?: boolean;
+  /** Return closed (terminal) metadata too; only provenance projections need it. */
+  includeClosed?: boolean;
 };
 
 /** Retain the canonical session source through its lifecycle-bound ACP metadata join. */
@@ -63,7 +65,7 @@ export async function withAcpSessionEntryRead<T>(
         env,
         databasePath,
       },
-      { current: options.currentMetadata },
+      { current: options.currentMetadata, includeClosed: input.includeClosed },
     );
     assertCurrent();
     return consume(
@@ -83,7 +85,7 @@ export async function withAcpSessionEntryRead<T>(
           env,
           databasePath,
         },
-        { current: options.currentMetadata },
+        { current: options.currentMetadata, includeClosed: input.includeClosed },
       );
       assertCurrent();
       return consume(

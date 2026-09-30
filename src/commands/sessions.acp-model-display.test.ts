@@ -166,6 +166,28 @@ describe("sessionsCommand ACP model display", () => {
     ]);
   });
 
+  it("keeps ACP provenance for a closed ACP session instead of the native runtime policy", async () => {
+    writeSession("copilot", ACP_SESSION_KEY);
+    await writeAcpRuntimeMeta("copilot", ACP_SESSION_KEY);
+    await upsertAcpSessionMeta({
+      cfg,
+      agentId: "copilot",
+      sessionKey: ACP_SESSION_KEY,
+      mutate: (current) =>
+        current ? { ...current, state: "closed", lastActivityAt: 500, closedAt: 500 } : null,
+    });
+
+    expect(await readSessions()).toMatchObject([
+      {
+        key: ACP_SESSION_KEY,
+        model: "copilot-acp",
+        modelProvider: "acpx",
+        acpRuntime: true,
+        agentRuntime: { id: "copilot", source: "session-key" },
+      },
+    ]);
+  });
+
   it("keeps each selected owner's metadata and rejects a replaced lifecycle", async () => {
     configureAgents(["copilot", "reviewer"]);
     const reviewerSessionKey = "agent:reviewer:acp:current-session";

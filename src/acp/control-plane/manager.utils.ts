@@ -7,6 +7,7 @@ import { isAcpSessionKey } from "../../sessions/session-key-utils.js";
 /** Shared ACP manager normalization, resolution, and error helpers. */
 import { ACP_ERROR_CODES, AcpRuntimeError } from "../runtime/errors.js";
 import { buildAcpDatabaseSessionKey } from "../runtime/session-meta-keys.js";
+import { isClosedAcpSessionMeta } from "../runtime/session-meta-readonly.js";
 import {
   resolveSessionStorePathForAcp,
   type AcpSessionStoreEntry,
@@ -27,13 +28,36 @@ function resolveMissingMetaError(sessionKey: string): AcpRuntimeError {
   );
 }
 
+/** Structured detail code for turns and controls that reach a closed ACP session. */
+const ACP_SESSION_CLOSED_DETAIL_CODE = "ACP_SESSION_CLOSED";
+
+/** Builds the terminal-session error shown when ACP metadata is closed. */
+function resolveClosedSessionError(sessionKey: string, closedAt?: number): AcpRuntimeError {
+  const closedText = closedAt === undefined ? "" : ` at ${new Date(closedAt).toISOString()}`;
+  return new AcpRuntimeError(
+    "ACP_SESSION_INIT_FAILED",
+    `ACP session ${sessionKey} was closed${closedText}. Start a new ACP session with /acp spawn and rebind the thread.`,
+    { detailCode: ACP_SESSION_CLOSED_DETAIL_CODE },
+  );
+}
+
 /** Project the selected store result without reopening storage. */
 export function resolveStoredAcpSession(
   target: AcpSessionTarget,
   stored: AcpSessionStoreEntry | null,
 ): AcpSessionResolution {
-  if (stored?.acp) {
-    return { kind: "ready", ...target, meta: stored.acp, entry: stored.entry };
+  const acp = stored?.acp;
+  if (acp && isClosedAcpSessionMeta(acp)) {
+    // A closed row keeps provenance but can never accept a turn or control again.
+    return {
+      kind: "stale",
+      ...target,
+      error: resolveClosedSessionError(target.sessionKey, acp.closedAt),
+      closedMeta: acp,
+    };
+  }
+  if (acp) {
+    return { kind: "ready", ...target, meta: acp, entry: stored.entry };
   }
   return isAcpSessionKey(target.sessionKey)
     ? { kind: "stale", ...target, error: resolveMissingMetaError(target.sessionKey) }

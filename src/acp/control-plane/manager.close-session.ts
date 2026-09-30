@@ -3,7 +3,7 @@ import {
   identityHasStableSessionId,
   resolveSessionIdentityFromMeta,
 } from "@openclaw/acp-core/runtime/session-identity";
-import type { SessionEntry } from "../../config/sessions/types.js";
+import type { SessionAcpMeta, SessionEntry } from "../../config/sessions/types.js";
 import { toAcpRuntimeError } from "../runtime/errors.js";
 import { matchesAcpSessionControlBinding } from "../runtime/session-control-owner.js";
 import type { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
@@ -28,6 +28,26 @@ import {
   requireReadySessionMeta,
   resolveAcpSessionResolutionError,
 } from "./manager.utils.js";
+
+/** Terminal metadata for a closed session: provenance stays, execution state is gone. */
+function buildClosedSessionMeta(params: {
+  current: SessionAcpMeta;
+  closedAt: number;
+}): SessionAcpMeta {
+  const { current, closedAt } = params;
+  return {
+    backend: current.backend,
+    agent: current.agent,
+    runtimeSessionName: current.runtimeSessionName,
+    ...(current.identity ? { identity: current.identity } : {}),
+    mode: current.mode,
+    ...(current.runtimeOptions ? { runtimeOptions: current.runtimeOptions } : {}),
+    ...(current.cwd ? { cwd: current.cwd } : {}),
+    state: "closed",
+    lastActivityAt: closedAt,
+    closedAt,
+  };
+}
 
 /** Closes an ACP session runtime handle and optionally discards persistent state/meta. */
 export async function runManagerCloseSession(params: {
@@ -55,6 +75,28 @@ export async function runManagerCloseSession(params: {
     assertCurrent,
   });
   assertCurrent();
+  if (resolution.kind === "stale" && resolution.closedMeta) {
+    // Already closed: nothing to close at the runtime. A discarding close prunes
+    // the retained row (acpx `sessions prune`); an ordinary close is terminal already.
+    if (input.discardPersistentState) {
+      await params.writeSessionMeta({
+        assertCommitAllowed: assertCurrent,
+        expectedControlBinding,
+        cfg: input.cfg,
+        sessionKey,
+        agentId,
+        isCurrentActor: params.isCurrentActor,
+        mutate: () => null,
+        failOnError: true,
+      });
+      assertCurrent();
+      return { runtimeClosed: false, metaCleared: true };
+    }
+    if (input.requireAcpSession ?? true) {
+      throw resolution.error;
+    }
+    return { runtimeClosed: false, metaCleared: false };
+  }
   const resolutionError = resolveAcpSessionResolutionError(resolution);
   if (resolutionError) {
     if (input.requireAcpSession ?? true) {
@@ -191,6 +233,9 @@ export async function runManagerCloseSession(params: {
   assertCurrent();
   const metaCleared = Boolean(input.clearMeta);
   if (metaCleared) {
+    // Mirror acpx: a discarding close deletes the record, an ordinary close keeps a
+    // closed one. The retained row is terminal provenance, never a resumable session.
+    const closedAt = Date.now();
     await params.writeSessionMeta({
       assertCommitAllowed: assertCurrent,
       expectedControlBinding,
@@ -198,7 +243,10 @@ export async function runManagerCloseSession(params: {
       sessionKey,
       agentId,
       isCurrentActor: params.isCurrentActor,
-      mutate: () => null,
+      mutate: (current) =>
+        input.discardPersistentState || !current
+          ? null
+          : buildClosedSessionMeta({ current, closedAt }),
       failOnError: true,
     });
     assertCurrent();

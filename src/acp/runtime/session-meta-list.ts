@@ -7,7 +7,7 @@ import {
   resolveReadableAcpSessionRow,
 } from "./session-meta-keys.js";
 import { captureAcpSessionReadContext } from "./session-meta-read-context.js";
-import { rowToAcpSessionMeta } from "./session-meta-readonly.js";
+import { isClosedAcpSessionMeta, rowToAcpSessionMeta } from "./session-meta-readonly.js";
 import { resolveSessionStorePathForAcp, type AcpSessionStoreEntry } from "./session-meta-store.js";
 
 /** Join ACP metadata through the existing shared-state and physical session readers. */
@@ -52,16 +52,10 @@ export async function listAcpSessionEntries(params: {
           }
           const entry = read.value;
           const readableRow = resolveReadableAcpSessionRow({ row, entry });
-          return readableRow
-            ? {
-                cfg,
-                agentId,
-                storePath,
-                sessionKey,
-                storeSessionKey,
-                entry,
-                acp: rowToAcpSessionMeta(readableRow),
-              }
+          const acp = readableRow ? rowToAcpSessionMeta(readableRow) : undefined;
+          // Closed rows are provenance only; lifecycle scans must not resume or clean them.
+          return acp && !isClosedAcpSessionMeta(acp)
+            ? { cfg, agentId, storePath, sessionKey, storeSessionKey, entry, acp }
             : undefined;
         },
       );

@@ -9,6 +9,7 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import {
+  type AcpSessionRow,
   acpSessionRowMatchesEntry,
   buildAcpDatabaseSessionKey,
   getAcpSessionKysely,
@@ -19,7 +20,11 @@ import {
   selectLegacyFreeAcpSessionRows,
   upsertAcpSessionMetaRow,
 } from "./session-meta-keys.js";
-import { readAcpSessionMetaForEntry, rowToAcpSessionMeta } from "./session-meta-readonly.js";
+import {
+  isClosedAcpSessionMeta,
+  readAcpSessionMetaForEntry,
+  rowToAcpSessionMeta,
+} from "./session-meta-readonly.js";
 import { readSessionEntryFromStore, type AcpSessionStoreEntry } from "./session-meta-store.js";
 import { bindAcpSessionMeta } from "./session-meta-write.kernel.js";
 
@@ -35,6 +40,7 @@ export function readAcpSessionMeta(params: {
   cfg?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   databasePath?: string;
+  includeClosed?: boolean;
 }): SessionAcpMeta | undefined {
   return readAcpSessionEntry({
     ...params,
@@ -52,8 +58,13 @@ export function readAcpSessionMetaBatch(params: {
   env?: NodeJS.ProcessEnv;
   databasePath?: string;
   cfg?: OpenClawConfig;
+  includeClosed?: boolean;
 }): Map<SessionEntry, SessionAcpMeta | undefined> {
   const result = new Map<SessionEntry, SessionAcpMeta | undefined>();
+  const toReadableMeta = (row: AcpSessionRow | undefined): SessionAcpMeta | undefined => {
+    const meta = row ? rowToAcpSessionMeta(row) : undefined;
+    return params.includeClosed || !isClosedAcpSessionMeta(meta) ? meta : undefined;
+  };
   const entriesByKey = new Map<
     string,
     Array<{ entry: SessionEntry; rawSessionKey: string; legacyKeys: string[] }>
@@ -110,7 +121,7 @@ export function readAcpSessionMetaBatch(params: {
               resolveReadableAcpSessionRow({ row: candidateRow, entry: item.entry }),
             )
             .find((candidateRow) => candidateRow !== undefined);
-          result.set(item.entry, row ? rowToAcpSessionMeta(row) : undefined);
+          result.set(item.entry, toReadableMeta(row));
           const legacyKey = !row && resolveLegacyFreeAcpSessionKey(item.rawSessionKey);
           if (legacyKey) {
             unresolved.push({ entry: item.entry, key: legacyKey });
@@ -125,7 +136,7 @@ export function readAcpSessionMetaBatch(params: {
         const row = legacyRows
           .get(key)
           ?.find((candidate) => acpSessionRowMatchesEntry(candidate, entry));
-        result.set(entry, row ? rowToAcpSessionMeta(row) : undefined);
+        result.set(entry, toReadableMeta(row));
       }
     },
     { env: params.env, path: params.databasePath },
@@ -181,6 +192,7 @@ export function readAcpSessionEntry(params: {
   clone?: boolean;
   env?: NodeJS.ProcessEnv;
   databasePath?: string;
+  includeClosed?: boolean;
 }): AcpSessionStoreEntry | null {
   const sessionKey = params.sessionKey.trim();
   if (!sessionKey) {
@@ -190,14 +202,17 @@ export function readAcpSessionEntry(params: {
   if (!storeEntry.storePath) {
     return null;
   }
-  const acp = readAcpSessionMetaForEntry({
-    sessionKey: storeEntry.storeSessionKey,
-    agentId: storeEntry.agentId,
-    cfg: storeEntry.cfg,
-    entry: storeEntry.entry,
-    env: params.env,
-    databasePath: params.databasePath,
-  });
+  const acp = readAcpSessionMetaForEntry(
+    {
+      sessionKey: storeEntry.storeSessionKey,
+      agentId: storeEntry.agentId,
+      cfg: storeEntry.cfg,
+      entry: storeEntry.entry,
+      env: params.env,
+      databasePath: params.databasePath,
+    },
+    { includeClosed: params.includeClosed },
+  );
   return {
     cfg: storeEntry.cfg,
     agentId: storeEntry.agentId,

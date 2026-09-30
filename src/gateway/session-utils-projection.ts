@@ -196,7 +196,8 @@ export function resolveGatewaySessionRuntimeSelectionLocked(
   entry: Pick<SessionEntry, "modelSelectionLocked"> | undefined,
   acpMeta: SessionEntry["acp"],
 ): boolean {
-  return entry?.modelSelectionLocked === true || acpMeta != null;
+  // A closed ACP session no longer owns runtime selection; only its provenance remains.
+  return entry?.modelSelectionLocked === true || (acpMeta != null && acpMeta.state !== "closed");
 }
 
 export function resolveGatewaySessionRuntimeProjection(params: {
@@ -212,14 +213,16 @@ export function resolveGatewaySessionRuntimeProjection(params: {
 }) {
   const { cfg, agentId, sessionKey, entry } = params;
   // Keep metadata bound to the projected row; rereading its key can adopt a
-  // replacement lifecycle while projecting the original entry.
+  // replacement lifecycle while projecting the original entry. Closed rows still
+  // name the ACP backend that ran the session, so provenance never falls back to
+  // the native runtime policy.
   const acpMeta =
     entry?.acp ??
     (params.preparedAcpMeta !== undefined
       ? (params.preparedAcpMeta ?? undefined)
       : entry
-        ? readAcpSessionMetaForEntry({ cfg, sessionKey, agentId, entry })
-        : readAcpSessionMeta({ sessionKey, agentId }));
+        ? readAcpSessionMetaForEntry({ cfg, sessionKey, agentId, entry }, { includeClosed: true })
+        : readAcpSessionMeta({ sessionKey, agentId, includeClosed: true }));
   const agentRuntime = resolveCurrentSessionAgentRuntimeMetadata({
     cfg: params.cfg,
     agentScope: { kind: "prepared", agentId: params.agentId },

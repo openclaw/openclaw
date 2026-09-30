@@ -5,6 +5,7 @@ import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import {
   acpSessionRowMatchesEntry,
   buildAcpDatabaseSessionKey,
+  buildClosedAcpSessionFence,
   getAcpSessionKysely,
   resolveLegacyFreeAcpSessionKey,
   selectAcpSessionRow,
@@ -24,8 +25,12 @@ export function bindAcpSessionMeta(params: {
   return {
     session_key: params.sessionKey,
     // Kept in the existing column for schema neutrality. New rows prefer the
-    // lifecycle revision; pre-revision entries retain the session-id fence.
-    session_id: params.lifecycleRevision ?? params.sessionId ?? null,
+    // lifecycle revision; pre-revision entries retain the session-id fence. A
+    // closed row prefixes that fence so readers without closed-row support drop it.
+    session_id:
+      params.meta.state === "closed"
+        ? buildClosedAcpSessionFence(params.lifecycleRevision ?? params.sessionId ?? null)
+        : (params.lifecycleRevision ?? params.sessionId ?? null),
     backend: params.meta.backend,
     agent: params.meta.agent,
     runtime_session_name: params.meta.runtimeSessionName,
