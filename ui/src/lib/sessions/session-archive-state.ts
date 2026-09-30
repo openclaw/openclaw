@@ -190,11 +190,16 @@ export function createSessionArchiveState(
     visibility: (key: string): SessionArchiveVisibility | undefined => {
       const normalizedKey = key.trim();
       const pendingArchive = pending.get(normalizedKey);
+      const archive = confirmed.get(normalizedKey);
+      // Ordinary rows and confirmed restores need no incarnation check. Avoid
+      // scanning the published roster for every visible sidebar row.
+      if (!pendingArchive && !archive?.archived) {
+        return undefined;
+      }
       const row = publishedRow(normalizedKey);
       if (pendingArchive && (!row || row.sessionId === pendingArchive.sessionId)) {
         return "pending";
       }
-      const archive = confirmed.get(normalizedKey);
       if (!archive?.archived) {
         return undefined;
       }
