@@ -97,6 +97,7 @@ async function postAgentHook(
   options: {
     admissionTimeoutMs?: number;
     rejectInitialConfig?: boolean;
+    persistentConfigFailure?: boolean;
     mapping?: HookMappingConfig;
     logger?: ReturnType<typeof createSubsystemLogger>;
   } = {},
@@ -146,12 +147,19 @@ async function postAgentHook(
     }),
   } as unknown as ServerResponse;
 
-  if (options.rejectInitialConfig !== false) {
-    mocks.getRuntimeConfig.mockImplementationOnce(() => {
-      throw new Error("required system config unavailable");
+  if (options.persistentConfigFailure) {
+    // An invalid config file keeps throwing, so the reporter's own read throws too.
+    mocks.getRuntimeConfig.mockImplementation(() => {
+      throw Object.assign(new Error("invalid config"), { code: "INVALID_CONFIG" });
     });
+  } else {
+    if (options.rejectInitialConfig !== false) {
+      mocks.getRuntimeConfig.mockImplementationOnce(() => {
+        throw new Error("required system config unavailable");
+      });
+    }
+    mocks.getRuntimeConfig.mockReturnValue(config);
   }
-  mocks.getRuntimeConfig.mockReturnValue(config);
   expect(await handler(req, res)).toBe(true);
   return { body: JSON.parse(responseBody) as { runId: string }, status: res.statusCode, logHooks };
 }
@@ -529,6 +537,28 @@ describe("gateway hook early-failure recovery", () => {
       ...(global ? {} : { sessionKey: testCase.eventSessionKey }),
     });
     await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+  });
+
+  it("keeps the Gateway alive when the failure report hits the same config failure", async () => {
+    const unhandled = vi.fn();
+    process.on("unhandledRejection", unhandled);
+    try {
+      const response = await postAgentHook(false, { persistentConfigFailure: true });
+
+      expect(response.status).toBe(502);
+      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+      // An unhandled INVALID_CONFIG rejection would reach the process handler and exit 78.
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(unhandled).not.toHaveBeenCalled();
+      expect(response.logHooks.warn).toHaveBeenCalledWith(
+        "hook failure announce failed",
+        expect.objectContaining({ error: expect.stringContaining("invalid config") }),
+      );
+    } finally {
+      process.off("unhandledRejection", unhandled);
+    }
   });
 
   it.each(["startTurn", "runTurn"] as const)(

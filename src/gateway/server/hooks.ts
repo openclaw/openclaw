@@ -401,16 +401,29 @@ export function createGatewayHookDispatcher(params: {
     };
     const reportHookFailure = (err: unknown) => {
       completion.resolve(logHookRunTerminal({ status: "error", error: String(err) }));
-      announceHookEvent(
-        hookEventTarget ??
-          resolveHookEventTarget({
-            cfg: getRuntimeConfig(),
-            resolvedAgentId: value.effectiveAgentId,
-          }),
-        `Hook ${safeName} (error): ${String(err)}`,
-        "error",
-        `hook:${jobId}:error`,
-      );
+      try {
+        announceHookEvent(
+          hookEventTarget ??
+            resolveHookEventTarget({
+              cfg: getRuntimeConfig(),
+              resolvedAgentId: value.effectiveAgentId,
+            }),
+          `Hook ${safeName} (error): ${String(err)}`,
+          "error",
+          `hook:${jobId}:error`,
+        );
+      } catch (announceError) {
+        // The announcement target is resolved from config, so the failure being
+        // reported can repeat here. Every caller either floats this in a voided
+        // promise or is itself a `.catch` handler, so a throw escapes as an
+        // unhandled rejection and takes the Gateway down with exit 78. The run is
+        // already resolved as failed above; losing the announcement is the lesser
+        // outcome.
+        logHooks.warn("hook failure announce failed", {
+          ...logContext,
+          ...sanitizeHookLogMetadata({ error: formatErrorMessage(announceError) }),
+        });
+      }
     };
     let dispatchCfg: OpenClawConfig;
     try {
