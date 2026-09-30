@@ -2637,7 +2637,7 @@ src/plugins/hook-decision-types.ts	1
 src/plugins/hook-isolation.ts	3
 src/plugins/hook-runner-global-state.ts	1
 src/plugins/hook-types.ts	2
-src/plugins/hooks.ts	9
+src/plugins/hooks.ts	6
 src/plugins/host-hook-attachments.ts	1
 src/plugins/host-hook-runtime.ts	1
 src/plugins/host-hook-scheduled-turns.ts	4
