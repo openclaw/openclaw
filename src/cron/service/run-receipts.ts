@@ -2,8 +2,10 @@ import { isDeepStrictEqual } from "node:util";
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateReadWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import {
   isCronSelfRemovalCurrent,
+  isCronActiveJobMarkerCurrent,
   markCronJobActive,
   noteActiveCronJobMessageActionAuthorityMutation,
   noteActiveCronJobMessageSourceAuthorityMutation,
@@ -13,14 +15,15 @@ import {
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { cronStoreKey } from "../store/key.js";
 import {
-  assertCronRunReceiptCurrent,
   CronRunReceiptRevisionError,
   prepareCronRunReceiptAdjudication,
   readCronRunReceiptCurrentJob,
+  readCronRunReceiptCurrentJobFromFacts,
   trackCronRunReceiptSettlement,
 } from "../store/run-receipt-store.js";
 import type {
   CronRunReceiptHandle,
+  CronRunReceiptCurrentReadCommand,
   CronRunReceiptOwnerObservation,
   CronRunReceiptStatus,
   PreparedCronRunReceiptAdjudication,
@@ -197,17 +200,43 @@ export function publishCronRunReceiptMutation(params: {
   }
 }
 
-export function assertServiceCronRunReceiptCurrent(
+export async function assertServiceCronRunReceiptCurrent(
   state: CronServiceState,
-  handle: CronRunReceiptHandle,
-  activeJobMarker?: CronActiveJobMarker,
-): void {
-  assertCronRunReceiptCurrent({
+  originalHandle: CronRunReceiptHandle,
+  activeJobMarker: CronActiveJobMarker | undefined,
+  context: OpenClawStateWorkerContext,
+  signal?: AbortSignal,
+): Promise<void> {
+  const handle = { ...originalHandle };
+  const isAgentAvailable = state.deps.isAgentAvailable;
+  const allowMissingJob = () =>
+    activeJobMarker?.jobId === handle.jobId && isCronSelfRemovalCurrent(activeJobMarker);
+  const command: CronRunReceiptCurrentReadCommand = {
+    type: "cron.currentReceipt",
     handle,
+    includeJob: !allowMissingJob(),
+    includeAvailability: isAgentAvailable !== undefined,
+  };
+  const result = await executeExistingOpenClawStateRead(
+    { path: context.admission.databasePath, env: context.environment },
+    command,
+    { context, current: true, signal },
+  );
+  context.admission.assertCurrent();
+  signal?.throwIfAborted();
+  if (!isCronActiveJobMarkerCurrent(activeJobMarker)) {
+    throw new CronRunReceiptRevisionError(handle.receiptId, "cron run fence is no longer current");
+  }
+  if (result && (!result.ok || result.type !== command.type)) {
+    throw new Error("Cron current receipt read did not return its admitted snapshot");
+  }
+  readCronRunReceiptCurrentJobFromFacts({
+    handle,
+    facts: result?.ok && result.type === command.type ? result.facts : undefined,
     resolveAgentId: (job) => resolveCronRunReceiptAgentId(state, job),
-    isAgentAvailable: state.deps.isAgentAvailable,
-    allowMissingJob:
-      activeJobMarker?.jobId === handle.jobId && isCronSelfRemovalCurrent(activeJobMarker),
+    isAgentAvailable,
+    allowMissingJob: allowMissingJob(),
+    env: context.environment,
   });
 }
 
