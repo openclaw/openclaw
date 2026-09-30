@@ -82,7 +82,7 @@ def assert_testflight_upload_ready!(plan)
   end
 end
 
-def stage_ios_testflight_release!(api_key:, short_version:, build_number:, notes:)
+def stage_ios_testflight_release!(api_key:, short_version:, build_number:, notes:, processing_timeout:)
   frozen = JSON.parse(File.read(ENV.fetch("OPENCLAW_IOS_RELEASE_PLAN")))
   unless frozen.fetch("destination") == "testflight" && frozen.fetch("appStoreVersion") == short_version && frozen.fetch("buildNumber").to_s == build_number
     UI.user_error!("TestFlight staging requires the exact saved release destination and build identity.")
@@ -125,7 +125,7 @@ def stage_ios_testflight_release!(api_key:, short_version:, build_number:, notes
     build_number: build_number,
     distribute_only: true,
     skip_waiting_for_build_processing: false,
-    wait_processing_timeout_duration: APP_STORE_BUILD_PROCESSING_TIMEOUT_SECONDS,
+    wait_processing_timeout_duration: processing_timeout,
     distribute_external: true,
     groups: [group.id],
     localized_build_info: { "en-US" => { whats_new: expected_notes } },

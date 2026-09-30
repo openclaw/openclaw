@@ -319,15 +319,18 @@ presence proves the uploaded source, not successful completion of later staging.
 If upload and processing succeeded but saving notes, selecting the App Store
 build, or completing TestFlight distribution failed, retain the printed recovery
 directory or download its workflow artifact.
-Retry staging from a clean checkout using that original saved state:
+Retry staging from a clean checkout containing any staging fixes, using that
+original saved state:
 
 ```bash
 node scripts/mobile-release.mjs stage --platform ios --recovery-dir /path/to/recovery
 ```
 
-This verifies the immutable upload ref, restores the original source if needed,
-and uses the saved notes and build identity. It does not generate new notes,
-replan a release, build, or upload another IPA. App Store Connect credentials
+This runs the current checkout's staging tooling, verifies the immutable upload
+ref, and restores the original source if needed to validate the saved notes and
+build identity. The staging fixes do not change the uploaded source. Recovery
+does not generate new notes, replan a release, build, or upload another IPA.
+App Store Connect credentials
 are required. Invalid or expired builds and mismatched source stop recovery for
 human resolution. App Store recovery also refuses a locked version or newer
 selected build. TestFlight recovery uses the saved group identity and existing
