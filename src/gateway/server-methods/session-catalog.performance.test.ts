@@ -230,12 +230,12 @@ it("measures 100 composed catalog lists against real session and plugin stores",
         expect(io.pluginStateWorkerReadOperations).toBe(0);
         expect(io.sessionEntryReads).toBe(0);
         expect(io.sessionPayloadReads).toBe(0);
-        // Cached-handle and reused-read admission each check published/content freshness.
+        // Cached-handle admission shares one freshness probe with reused reads.
         // The adopted cohort still shares one bulk binding query without rescanning rows.
         for (const work of workPerList) {
           expect(work).toEqual({
-            sqliteReadCalls: 5,
-            sqliteFreshnessReads: 4,
+            sqliteReadCalls: 2,
+            sqliteFreshnessReads: 1,
             bindingAuthorityReads: 1,
             pluginStateWorkerOperations: 0,
           });

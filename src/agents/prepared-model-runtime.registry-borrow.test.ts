@@ -12,8 +12,12 @@ import { PluginInstance } from "../plugins/plugin-instance.js";
 import { bindPluginRuntimeArtifactSelection } from "../plugins/plugin-runtime-artifact-binding.js";
 import { resolvePluginRuntimeArtifactSelection } from "../plugins/plugin-runtime-artifact-selection.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { isPluginRegistryRetired } from "../plugins/registry-lifecycle.js";
+import {
+  bindPluginRegistryGatewayOwner,
+  isPluginRegistryRetired,
+} from "../plugins/registry-lifecycle.js";
 import { clearActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
+import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { setPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
@@ -60,7 +64,10 @@ async function acquireConfiguredRegistryBorrower(source: "owned" | "gateway" = "
     workspaceDir,
     ...(source === "gateway" ? { allowGatewaySubagentBinding: true } : {}),
   };
+  const runInScope = <T>(run: () => T) =>
+    withPluginRuntimeRegistryScope(source === "gateway" ? registry : undefined, run);
   if (source === "gateway") {
+    bindPluginRegistryGatewayOwner(registry, { current: () => registry });
     bindPluginRuntimeArtifactSelection(record, {
       runtimeEntry: resolvePluginRuntimeArtifactSelection({
         ...manifest,
@@ -80,19 +87,21 @@ async function acquireConfiguredRegistryBorrower(source: "owned" | "gateway" = "
       logger: { info() {}, warn() {}, error() {}, debug() {} },
     });
     setActivePluginRegistry(registry, undefined, "gateway-bindable", workspaceDir);
-    expect(loadPreparedInboundPluginRegistry(input, metadata)).toBe(registry);
+    expect(runInScope(() => loadPreparedInboundPluginRegistry(input, metadata))).toBe(registry);
     expect(mocks.loadAgentRuntimePluginRegistryHandle).not.toHaveBeenCalled();
   }
-  await refreshPreparedModelRuntimeSnapshots(config, {
-    gatewayLifecycle: true,
-    catalogMode: "static",
-    ...(source === "gateway"
-      ? { allowGatewaySubagentBinding: true, pluginMetadataSnapshot: metadata }
-      : {}),
+  return await runInScope(async () => {
+    await refreshPreparedModelRuntimeSnapshots(config, {
+      gatewayLifecycle: true,
+      catalogMode: "static",
+      ...(source === "gateway"
+        ? { allowGatewaySubagentBinding: true, pluginMetadataSnapshot: metadata }
+        : {}),
+    });
+    const borrower = await acquirePublishedPreparedModelRuntime(input);
+    await borrower.snapshot.loadFullModelCatalog?.();
+    return { registry, config, input, borrower, instance, metadata, runInScope };
   });
-  const borrower = await acquirePublishedPreparedModelRuntime(input);
-  await borrower.snapshot.loadFullModelCatalog?.();
-  return { registry, config, input, borrower, instance, metadata };
 }
 
 describe("prepared registry construction borrows", () => {
@@ -221,7 +230,7 @@ describe("prepared registry construction borrows", () => {
   });
 
   it("retains borrowed Gateway work through post-facts projection, then releases it", async () => {
-    const { registry, config, input, borrower, instance, metadata } =
+    const { registry, config, input, borrower, instance, metadata, runInScope } =
       await acquireConfiguredRegistryBorrower("gateway");
     const projecting = createDeferred();
     const finishProjection = createDeferred();
@@ -230,12 +239,15 @@ describe("prepared registry construction borrows", () => {
       await finishProjection.promise;
       return { entries: [], routeVariants: [] };
     });
-    const pending = refreshPreparedModelRuntimeSnapshots(config, {
-      gatewayLifecycle: true,
-      catalogMode: "live",
-      allowGatewaySubagentBinding: true,
-      pluginMetadataSnapshot: metadata,
-    }).then(() => prepareModelRuntimeSnapshot(input));
+    const pending = runInScope(async () => {
+      await refreshPreparedModelRuntimeSnapshots(config, {
+        gatewayLifecycle: true,
+        catalogMode: "live",
+        allowGatewaySubagentBinding: true,
+        pluginMetadataSnapshot: metadata,
+      });
+      return await prepareModelRuntimeSnapshot(input);
+    });
     const settled = Promise.allSettled([pending]);
     try {
       await Promise.race([

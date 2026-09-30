@@ -225,13 +225,13 @@ export async function callPersonalPublicationRpc(
   }
 }
 
-export function restartPersonalPublicationFixture(
+export async function restartPersonalPublicationFixture(
   fixture: Awaited<ReturnType<typeof createPersonalPublicationFixture>>,
 ) {
   const previous = fixture.placements;
   resetGatewayWorkAdmission();
   fixture.placements = createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() });
-  fixture.placements.recoverWorkerSessionToolOperationsAfterRestart();
+  await fixture.placements.recoverWorkerSessionToolOperationsAfterRestart();
   fixture.placements.clearLocalTurnClaimsAfterRestart();
   expect(fixture.placements.workspaceResultInstanceId()).not.toBe(
     previous.workspaceResultInstanceId(),

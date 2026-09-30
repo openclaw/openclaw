@@ -256,6 +256,12 @@ Operator clients may advertise optional capabilities in `connect.params.caps`:
 
 - `tool-events`: accepts structured tool lifecycle events.
 - `inline-widgets`: can render hosted inline widget tool results.
+- `ultrafast`: accepts the explicit `"ultrafast"` fast-mode value in session metadata.
+  Without it, session responses and events present that value as Fast (`true`)
+  for released native decoders that only accept booleans and `"auto"`. This is a
+  per-connection presentation: stored selection and execution stay `"ultrafast"`.
+  Upgraded clients advertise this capability to retain the explicit selection;
+  remove the legacy projection only when those released clients are no longer supported.
 - `chat-only-assistant-text`: renders assistant text from `chat` and omits the
   redundant assistant-text `agent` stream. See [event families](/gateway/protocol/rpc-bootstrap-and-events#common-event-families).
 

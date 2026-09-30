@@ -7,6 +7,7 @@ import {
   createChangedNodeTestShards,
 } from "../../scripts/lib/ci-changed-node-test-plan.mts";
 import { rebalanceMeasuredSerialJobs } from "../../scripts/lib/ci-measured-compact-packing.mts";
+import * as nodeTestInventory from "../../scripts/lib/ci-node-test-inventory.mts";
 import {
   type CompactNodeTestShard,
   createNodeTestShardBundles,
@@ -105,6 +106,7 @@ describe("Control UI release-only inventories", () => {
   const automationManagement =
     "extensions/qa-lab/src/control-ui-automation-management.real-gateway.e2e.test.ts";
   const releaseOnlyRealGateway = new Set([
+    "ui/src/e2e/activity-run-inspector.real-gateway.e2e.test.ts",
     "ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts",
     "ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts",
     automationManagement,
@@ -2658,6 +2660,61 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       });
       expect(expensive[0]!.groups).toHaveLength(1);
       expect(expensive[0]!.groups[0]!.includePatterns?.toSorted()).toEqual(runtimeFiles);
+    } finally {
+      restore();
+    }
+  });
+
+  it("shares the serial CLI budget between complete regular CLI children", () => {
+    const config = "test/vitest/vitest.cli.config.ts";
+    const files = ["src/cli/budget-a.test.ts", "src/cli/budget-b.test.ts"];
+    const restore = selectFixtureProjects((candidate) => candidate === config);
+    const listFiles = nodeTestInventory.listWholeConfigSplitFiles;
+    vi.spyOn(nodeTestInventory, "listWholeConfigSplitFiles").mockImplementation((name) =>
+      name === "agentic-cli" ? files : listFiles(name),
+    );
+    vi.spyOn(shardMetadata, "estimateVitestTestFileSeconds").mockReturnValue(120);
+    const timings = vi.spyOn(testTimings, "readCompactGroupTimings").mockReturnValue({
+      "agentic-cli": 240,
+    });
+    const options = {
+      includeReleaseOnlyPluginShards: false,
+      compactMode: "pull-request" as const,
+      runnerBackend: "hybrid",
+    };
+    try {
+      const plan = createNodeTestShardBundles(options);
+      expect(plan).toHaveLength(1);
+      const [job] = plan;
+      expect(job).toMatchObject({
+        planConcurrency: 1,
+        requiresDist: false,
+        predictedSeconds: 240,
+        predictedTestSeconds: 240,
+      });
+      expect(job!.pretestBuildMode).toBeUndefined();
+      expect(job!.groups).toHaveLength(2);
+      expect(
+        job!.groups.map(({ configs, includePatterns, env }) => ({ configs, includePatterns, env })),
+      ).toEqual(
+        files.map((file) => ({ configs: [config], includePatterns: [file], env: undefined })),
+      );
+      const keys = job!.groups.map((group) => group.timing_key!);
+      for (const costs of [
+        [140, 140],
+        [160, 60],
+      ]) {
+        timings.mockReturnValue({
+          "agentic-cli": 240,
+          ...Object.fromEntries(keys.map((key, index) => [key, costs[index]!])),
+        });
+        const separate = createNodeTestShardBundles(options);
+        expect(separate).toHaveLength(2);
+        expect(separate.every((row) => row.planConcurrency === 1 && row.groups.length === 1)).toBe(
+          true,
+        );
+        expect(separate.flatMap((row) => row.groups)).toEqual(job!.groups);
+      }
     } finally {
       restore();
     }

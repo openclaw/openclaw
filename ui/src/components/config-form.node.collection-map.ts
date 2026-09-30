@@ -9,6 +9,7 @@ import {
 } from "./config-form-collection-draft.ts";
 import { defaultValue, NO_SAFE_DEFAULT } from "./config-form.constraints.ts";
 import {
+  configChildRenderOptions,
   getSensitiveRenderState,
   isAnySchema,
   jsonValue,
@@ -36,9 +37,6 @@ export function renderMapField(
     value,
     path,
     hints,
-    rawAvailable,
-    maskSensitive,
-    unsupported,
     disabled,
     reservedKeys,
     validateKey,
@@ -233,24 +231,15 @@ export function renderMapField(
                             }),
                           })
                         : renderNode({
+                            ...configChildRenderOptions(params),
                             schema,
                             value: entryValue,
                             path: valuePath,
-                            hints,
-                            rawAvailable,
-                            maskSensitive,
-                            unsupported,
-                            disabled,
-                            compact: params.compact,
-                            commitOnBlur: params.commitOnBlur,
                             isRequired: true,
                             sourceIdentity: entryValue,
                             controlIdentity: value,
                             searchCriteria,
                             showLabel: false,
-                            revealSensitive,
-                            isSensitivePathRevealed,
-                            onToggleSensitivePath,
                             onPatch,
                           })
                     }

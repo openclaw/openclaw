@@ -750,6 +750,47 @@ describe("subagent registry seam flow", () => {
     ]);
   });
 
+  it("admits a restored pause notice and retires a revoked wake without completing the child", async () => {
+    const runId = "run-restored-pause";
+    const restored = createSubagentRunRecord({
+      runId,
+      createdAt: Date.now() - 2_000,
+      endedAt: Date.now() - 1_000,
+      pauseReason: "sessions_yield",
+      expectsCompletionMessage: true,
+      completion: { required: true },
+      delivery: { status: "pending" },
+      requesterSettleWake: {
+        status: "pending",
+        attemptCount: 0,
+        batchRunIds: [runId],
+        requesterYieldBatch: true,
+        rearmGeneration: 1,
+        pauseNotice: { acknowledgment: "RESTORED-PAUSE" },
+      },
+    });
+    mockRestoredRuns(() => [restored]);
+    wakeRequester.mockImplementation(async (params) => {
+      bindWakeMutation([params.settledEntry]);
+      await params.completeBatch([params.settledEntry], 1);
+      return true;
+    });
+    const settleRootWork = observeRootWork();
+    try {
+      await hydrateAndActivateRegistry();
+    } finally {
+      await settleRootWork();
+    }
+    expect(wakeRequester).toHaveBeenCalledOnce();
+    expect(findRequesterRun(runId)).toMatchObject({
+      pauseReason: "sessions_yield",
+      delivery: { status: "pending" },
+    });
+    expect(findRequesterRun(runId)?.requesterSettleWake).toBeUndefined();
+    expect(findRequesterRun(runId)?.execution.outcome).toBeUndefined();
+    expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
+  });
+
   it("retries registry restore after a transient partial-merge failure", async () => {
     const runId = "run-restore-retry";
     const restored = createSubagentRunRecord({
@@ -3947,6 +3988,10 @@ describe("subagent registry seam flow", () => {
 
     await mod.testing.sweepOnceForTests();
 
+    const expectedConfig = {
+      agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
+      session: { mainKey: "main", scope: "per-sender" },
+    };
     await waitForFast(() => {
       findRecordCallArg(
         mocks.resolveContextEngine,
@@ -3964,26 +4009,16 @@ describe("subagent registry seam flow", () => {
           record.agentDir === "/tmp/agent-archive" &&
           record.workspaceDir === "/tmp/workspace-archive",
       );
-      expect(mocks.resolveContextEngine).toHaveBeenCalledWith(
-        {
-          agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
-          session: { mainKey: "main", scope: "per-sender" },
-        },
-        {
-          agentDir: "/tmp/agent-session",
-          workspaceDir: "/tmp/workspace-session",
-        },
-      );
-      expect(mocks.resolveContextEngine).toHaveBeenCalledWith(
-        {
-          agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
-          session: { mainKey: "main", scope: "per-sender" },
-        },
-        {
-          agentDir: "/tmp/agent-archive",
-          workspaceDir: "/tmp/workspace-archive",
-        },
-      );
+      expect(mocks.resolveContextEngine).toHaveBeenCalledWith(expectedConfig, {
+        agentDir: "/tmp/agent-session",
+        workspaceDir: "/tmp/workspace-session",
+        initialize: mocks.ensureContextEnginesInitialized,
+      });
+      expect(mocks.resolveContextEngine).toHaveBeenCalledWith(expectedConfig, {
+        agentDir: "/tmp/agent-archive",
+        workspaceDir: "/tmp/workspace-archive",
+        initialize: mocks.ensureContextEnginesInitialized,
+      });
     });
   });
 

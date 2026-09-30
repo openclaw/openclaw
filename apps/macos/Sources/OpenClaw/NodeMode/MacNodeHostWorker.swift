@@ -1,3 +1,4 @@
+import ConcurrencyExtras
 import CoreFoundation
 import Darwin
 import Foundation
@@ -80,21 +81,8 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
         case cancel
     }
 
-    private final class InvokeReservation: @unchecked Sendable {
-        private let lock = NSLock()
-        private var cancelled = false
-
-        func cancel() {
-            self.lock.withLock { self.cancelled = true }
-        }
-
-        var isCancelled: Bool {
-            self.lock.withLock { self.cancelled }
-        }
-    }
-
     private struct PendingInvoke {
-        let reservation: InvokeReservation
+        let cancellationState: LockIsolated<Bool>
         let processGeneration: UUID
         let gatewayGeneration: UInt64
         let continuation: CheckedContinuation<BridgeInvokeResponse, Never>
@@ -195,11 +183,11 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
     }
 
     func invoke(_ request: BridgeInvokeRequest) async -> BridgeInvokeResponse {
-        let reservation = InvokeReservation()
+        let cancellationState = LockIsolated(false)
         return await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in
                 self.queue.async {
-                    guard !reservation.isCancelled else {
+                    guard !cancellationState.value else {
                         _ = self.takePendingInvokeControlsLocked(invokeId: request.id)
                         continuation.resume(returning: Self.unavailableResponse(
                             request.id,
@@ -221,7 +209,7 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
                         return
                     }
                     self.pendingInvokes[request.id] = PendingInvoke(
-                        reservation: reservation,
+                        cancellationState: cancellationState,
                         processGeneration: processGeneration,
                         gatewayGeneration: self.gatewayGeneration,
                         continuation: continuation)
@@ -253,16 +241,17 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
                 }
             }
         } onCancel: {
-            reservation.cancel()
+            cancellationState.setValue(true)
             self.queue.async {
-                self.cancelInvokeLocked(invokeId: request.id, reservation: reservation)
+                self.cancelInvokeLocked(invokeId: request.id, cancellationState: cancellationState)
             }
         }
     }
 
-    private func cancelInvokeLocked(invokeId: String, reservation: InvokeReservation) {
+    private func cancelInvokeLocked(invokeId: String, cancellationState: LockIsolated<Bool>) {
         // The queued handler must not cancel a later reuse of this ID or a replacement worker.
-        guard let pending = self.pendingInvokes[invokeId], pending.reservation === reservation else { return }
+        guard let pending = self.pendingInvokes[invokeId], pending.cancellationState === cancellationState
+        else { return }
         if pending.processGeneration == self.processGeneration,
            pending.gatewayGeneration == self.gatewayGeneration
         {

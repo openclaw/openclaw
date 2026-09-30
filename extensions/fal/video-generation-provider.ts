@@ -217,10 +217,6 @@ function resolveFalQueueBaseUrl(baseUrl: string): string {
   }
 }
 
-function isFalMiniMaxLiveModel(model: string): boolean {
-  return normalizeLowercaseStringOrEmpty(model) === DEFAULT_FAL_VIDEO_MODEL;
-}
-
 function isFalSeedance2Model(model: string): boolean {
   return SEEDANCE_2_VIDEO_MODELS.includes(model as (typeof SEEDANCE_2_VIDEO_MODELS)[number]);
 }
@@ -229,10 +225,6 @@ function isFalSeedance2ReferenceModel(model: string): boolean {
   return SEEDANCE_2_REFERENCE_VIDEO_MODELS.includes(
     model as (typeof SEEDANCE_2_REFERENCE_VIDEO_MODELS)[number],
   );
-}
-
-function isFalHeyGenVideoAgentModel(model: string): boolean {
-  return normalizeLowercaseStringOrEmpty(model) === HEYGEN_VIDEO_AGENT_MODEL;
 }
 
 function resolveFalResolution(resolution: VideoGenerationRequest["resolution"], model: string) {
@@ -278,14 +270,6 @@ function resolveFalReferenceUrl(
   return toDataUrl(asset.buffer, normalizeOptionalString(asset.mimeType) ?? defaultMimeType);
 }
 
-function resolveFalReferenceUrls(
-  assets: VideoGenerationRequest["inputImages"],
-  defaultMimeType: string,
-  label: string,
-): string[] {
-  return (assets ?? []).map((asset) => resolveFalReferenceUrl(asset, defaultMimeType, label));
-}
-
 function applyFalSeedanceControls(params: {
   req: VideoGenerationRequest;
   model: string;
@@ -326,7 +310,7 @@ function buildFalVideoRequestBody(params: {
       ["video_urls", params.req.inputVideos, "video/mp4", "reference video"],
       ["audio_urls", params.req.inputAudios, "audio/mpeg", "reference audio"],
     ] as const) {
-      const urls = resolveFalReferenceUrls(assets, mimeType, label);
+      const urls = (assets ?? []).map((asset) => resolveFalReferenceUrl(asset, mimeType, label));
       if (urls.length > 0) {
         requestBody[field] = urls;
       }
@@ -346,7 +330,8 @@ function buildFalVideoRequestBody(params: {
   // MiniMax Live on fal currently documents prompt + optional image_url only.
   // Keep the default model conservative so queue requests do not hang behind
   // unsupported knobs such as duration/resolution/aspect-ratio overrides.
-  if (isFalMiniMaxLiveModel(params.model) || isFalHeyGenVideoAgentModel(params.model)) {
+  const normalizedModel = normalizeLowercaseStringOrEmpty(params.model);
+  if (normalizedModel === DEFAULT_FAL_VIDEO_MODEL || normalizedModel === HEYGEN_VIDEO_AGENT_MODEL) {
     return requestBody;
   }
   applyFalSeedanceControls({ req: params.req, model: params.model, body: requestBody });
@@ -504,13 +489,6 @@ function resolveFalQueueRemainingMs(
   return Math.max(1, Math.min(defaultMs, remainingMs));
 }
 
-function extractFalVideoPayload(payload: FalQueueResponse): FalVideoResponse {
-  if (payload.response) {
-    return payload.response;
-  }
-  return readFalVideoPayload(payload);
-}
-
 function buildFalVideoModeCapabilities(models: readonly string[]) {
   return {
     maxVideos: 1,
@@ -600,7 +578,7 @@ export function buildFalVideoGenerationProvider(): VideoGenerationProvider {
         deadline: operationDeadline,
         dispatcherPolicy,
       });
-      const videoPayload = extractFalVideoPayload(payload);
+      const videoPayload = payload.response || readFalVideoPayload(payload);
       const entry = extractFalVideoEntry(videoPayload);
       const url = entry?.url;
       if (!url) {

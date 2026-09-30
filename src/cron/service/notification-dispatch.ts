@@ -6,9 +6,14 @@ import { noteCronJobsStoreCommit } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import type { CronFailureNotificationDelivery } from "../types.js";
 import { locked } from "./locked.js";
-import type { CronNotificationIntent } from "./notification-intents.js";
+import {
+  captureCronNotificationRouting,
+  resolveCronNotificationQueueOwner,
+  type CronNotificationIntent,
+  type CronNotificationRouting,
+} from "./notification-intents.js";
 import { runCronRuntimeMutation } from "./runtime-mutation.js";
-import { applyCronRuntimeRowsToState } from "./runtime-store.js";
+import { applyCronRuntimeRowsToState } from "./runtime-publication.js";
 import type { CronServiceState } from "./state.js";
 import { enqueueCronNotification } from "./wake.js";
 
@@ -16,10 +21,23 @@ export function dispatchCronNotification(
   state: CronServiceState,
   notification: CronNotificationIntent,
 ): void {
+  let routing = notification.routing ? { ...notification.routing } : undefined;
+  if (!routing) {
+    const hasOwner =
+      notification.kind === "failure-alert" && state.deps.sendCronFailureAlert
+        ? Boolean(notification.job.agentId?.trim())
+        : Boolean(resolveCronNotificationQueueOwner(notification.job, notification.kind).agentId);
+    routing = hasOwner
+      ? {}
+      : captureCronNotificationRouting(
+          state.deps.resolveDefaultAgentId?.(),
+          state.deps.defaultAgentId,
+        );
+  }
   if (notification.kind === "auto-disabled") {
-    enqueueCronNotification(state, notification.job, notification.text, notification.kind);
+    enqueueCronNotification(state, notification.job, notification.text, notification.kind, routing);
   } else {
-    transportFailureAlert(state, notification);
+    transportFailureAlert(state, notification, routing);
   }
 }
 
@@ -97,6 +115,7 @@ async function recordFailureAlertOutcome(
 function transportFailureAlert(
   state: CronServiceState,
   params: Extract<CronNotificationIntent, { kind: "failure-alert" }>,
+  routing: CronNotificationRouting,
 ): void {
   const jobId = params.job.id;
   const alertAtMs = params.job.state.lastFailureAlertAtMs;
@@ -107,12 +126,13 @@ function transportFailureAlert(
     // No transport means no send whose outcome could be recorded: the alert
     // goes straight to the in-app fallback queue and the intent stays
     // "unknown", matching the pre-existing contract for transport-less setups.
-    enqueueCronNotification(state, params.job, params.payload.text ?? "", "failure-alert");
+    enqueueCronNotification(state, params.job, params.payload.text ?? "", "failure-alert", routing);
     return;
   }
   void state.deps
     .sendCronFailureAlert({
       job: params.job,
+      routing,
       payload: params.payload,
       runAtMs: params.runAtMs,
       channel: params.route.channel,
@@ -128,7 +148,13 @@ function transportFailureAlert(
           outcome,
         );
         if (recordResult !== "stale" && outcome.status === "not-delivered") {
-          enqueueCronNotification(state, params.job, params.payload.text ?? "", "failure-alert");
+          enqueueCronNotification(
+            state,
+            params.job,
+            params.payload.text ?? "",
+            "failure-alert",
+            routing,
+          );
         }
       },
     })

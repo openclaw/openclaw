@@ -92,10 +92,7 @@ export type UpdateCommandOptions = Pick<UpdateRunResult, "sourceRuntimePrepared"
   yes?: boolean;
 };
 
-export type UpdateStatusOptions = {
-  json?: boolean;
-  timeout?: string;
-};
+export type UpdateStatusOptions = Pick<UpdateCommandOptions, "json" | "timeout">;
 
 /** Only package updates hand admission to a privately staged candidate. */
 export function usesCandidateUpdateAdmission(
@@ -105,21 +102,18 @@ export function usesCandidateUpdateAdmission(
   return installKind === "package" && !opts.dryRun && opts.admission !== "installed";
 }
 
-export type UpdateFinalizeOptions = {
-  acceptCapabilities?: boolean;
-  json?: boolean;
-  channel?: string;
-  timeout?: string;
-  yes?: boolean;
+export type UpdateFinalizeOptions = Pick<
+  UpdateCommandOptions,
+  "acceptCapabilities" | "json" | "channel" | "timeout" | "yes"
+> & {
   /** Internal external-supervisor handshake; public repair always leaves this false. */
   deferCompletionCache?: boolean;
 };
 
-export type UpdateWizardOptions = {
-  runtimeRecoveryEnv?: NodeJS.ProcessEnv;
-  acceptCapabilities?: boolean;
-  timeout?: string;
-};
+export type UpdateWizardOptions = Pick<
+  UpdateCommandOptions,
+  "runtimeRecoveryEnv" | "acceptCapabilities" | "timeout"
+>;
 
 export class UpdatePreMutationError<Reason extends string = string> extends Error {
   readonly origin?: "candidate-admission";
@@ -185,9 +179,6 @@ export function normalizeTag(value?: string | null): string | null {
 
 function normalizeVersionTag(tag: string): string | null {
   const trimmed = tag.trim();
-  if (!trimmed) {
-    return null;
-  }
   const cleaned = trimmed.startsWith("v") ? trimmed.slice(1) : trimmed;
   return parseSemver(cleaned) ? cleaned : null;
 }
@@ -293,13 +284,9 @@ type StagedGitCheckout = (
   storageRoot: string,
 ) => Promise<void>;
 
-async function cloneGitCheckoutTransactionally(params: {
-  dir: string;
-  timeoutMs: number;
-  progress?: UpdateStepProgress;
-  env?: NodeJS.ProcessEnv;
-  useStagedCheckout?: StagedGitCheckout;
-}): Promise<GitCheckoutResult> {
+async function cloneGitCheckoutTransactionally(
+  params: Parameters<typeof ensureGitCheckout>[0],
+): Promise<GitCheckoutResult> {
   const parentDir = path.dirname(params.dir);
   await fs.mkdir(parentDir, { recursive: true });
   const canonicalParentDir = await fs.realpath(parentDir);

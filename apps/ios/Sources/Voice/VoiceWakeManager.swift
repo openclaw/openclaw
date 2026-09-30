@@ -75,7 +75,7 @@ final class VoiceWakeManager: NSObject {
     private var isStarting: Bool = false
     private var audioSessionIsActive = false
 
-    private var lastDispatched: String?
+    private var lastDispatched: (generation: UInt64, command: String)?
     private var onCommand: (@MainActor @Sendable (String) async throws -> Void)?
     private var userDefaultsObserver: NSObjectProtocol?
     private var suppressionReasons: Set<VoiceWakeSuppressionReason> = []
@@ -407,8 +407,9 @@ final class VoiceWakeManager: NSObject {
             from: transcript, segments: segments, triggers: self.activeTriggerWords)
         else { return }
 
-        if cmd == self.lastDispatched { return }
-        self.lastDispatched = cmd
+        if self.lastDispatched?.generation == recognitionGeneration,
+           self.lastDispatched?.command == cmd { return }
+        self.lastDispatched = (recognitionGeneration, cmd)
         self.lastTriggeredCommand = cmd
         self.statusText = String(localized: "Triggered")
 

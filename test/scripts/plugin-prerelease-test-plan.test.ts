@@ -622,9 +622,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       ".github/workflows/full-release-validation.yml",
       "utf8",
     );
-    const manifestScript = preflight.steps.find(
-      (step: WorkflowStep) => step.name === "Build CI manifest",
-    ).run;
+    const manifestScript = readFileSync("scripts/ci-build-manifest.mjs", "utf8");
     const manifestEnv = preflight.steps.find(
       (step: WorkflowStep) => step.name === "Build CI manifest",
     ).env;

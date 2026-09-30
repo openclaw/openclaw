@@ -1,4 +1,8 @@
 import type { CronJobScratchWriteOutcome } from "../scratch-contract.js";
+import type {
+  CronNotificationRouting,
+  ResolvedFailureAlert,
+} from "../service/notification-intents.js";
 import type { DeferredCronNotifications } from "../service/state.js";
 import type { CronJob, CronStoreFile } from "../types.js";
 import type { CronRunReceiptHandle, PreparedCronRunReceiptClaim } from "./run-receipt.types.js";
@@ -12,6 +16,53 @@ type CronScheduleOwnershipFacts = {
 };
 
 export type CronRuntimeMutationContracts = {
+  "cron.recordSkippedRuns": {
+    input: CronRuntimeMutationInputs["cron.recordSkippedRuns"];
+    facts: { jobs: Array<Pick<CronJob, "id" | "delivery" | "failureAlert">> };
+    preparation: {
+      nowMs: number;
+      defaultAgentId?: string;
+      notificationRouting: CronNotificationRouting;
+      cronConfig?: CronRunRecoveryPreparation["cronConfig"];
+      ownership: CronScheduleOwnershipFacts[];
+      failureAlerts: Array<{ jobId: string; value: ResolvedFailureAlert | null }>;
+    };
+    outcome: {
+      jobs: CronJob[];
+      rejected: CronJob[];
+      nowMs: number;
+      notifications: DeferredCronNotifications;
+      logs: CronRunRecoveryOutcome["logs"];
+    };
+  };
+  "cron.planStartup": {
+    input: CronRuntimeMutationInputs["cron.planStartup"];
+    facts: { jobIds: string[]; notificationNeedsDefault: boolean };
+    preparation: {
+      nowMs: number;
+      skipMissedJobs: boolean;
+      notificationRouting: CronNotificationRouting;
+      ownership: CronScheduleOwnershipFacts[];
+    };
+    outcome: {
+      jobs: CronJob[];
+      missed: CronJob[];
+      skippedJobIds: string[];
+      notifications: DeferredCronNotifications;
+      logs: CronRunRecoveryOutcome["logs"];
+    };
+  };
+  "cron.mutateExternalState": {
+    input: CronRuntimeMutationInputs["cron.mutateExternalState"];
+    facts: Pick<CronJob, "id" | "delivery" | "failureAlert">;
+    preparation: Pick<CronRunRecoveryPreparation, "nowMs" | "cronConfig" | "failureAlert">;
+    outcome: {
+      job?: CronJob;
+      nowMs: number;
+      notifications: DeferredCronNotifications;
+      logs: CronRunRecoveryOutcome["logs"];
+    };
+  };
   "cron.writeScratch": {
     input: CronRuntimeMutationInputs["cron.writeScratch"];
     facts: { configRevision?: string };
@@ -53,10 +104,11 @@ export type CronRuntimeMutationContracts = {
   };
   "cron.releaseReservations": {
     input: CronRuntimeMutationInputs["cron.releaseReservations"];
-    facts: { deletionBlocked: boolean };
+    facts: { deletionBlocked: boolean; notificationNeedsDefault: boolean };
     preparation: {
       nowMs: number;
       defaultAgentId?: string;
+      notificationRouting: CronNotificationRouting;
       reservations: Array<{
         jobId: string;
         markerAtMs: number;

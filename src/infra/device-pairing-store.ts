@@ -25,7 +25,9 @@ import {
   type OpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import { sha256Base64Url } from "./crypto-digest.js";
 import { clearDeviceAuthTokenFromDatabase } from "./device-auth-store.kernel.js";
+import { resolveDeviceBootstrapTokenExpiresAtMs } from "./device-bootstrap.worker-types.js";
 import { bindCloudWorkerSetupCompletion } from "./device-pairing-cloud-worker.js";
 import type { PairedDeviceMetadataPatch } from "./device-pairing-core.types.js";
 import type { CloudWorkerSetupCompletionPublication } from "./device-pairing-read.types.js";
@@ -532,7 +534,7 @@ export function consumeDeviceBootstrapTokenWithSetupCompletionInTransaction(para
   token: string;
   deviceId: string;
   completedAtMs: number;
-  oldestValidIssuedAtMs: number;
+  nowMs: number;
   retentionNowMs: number;
   retainUntilMs: number;
   pairedDeviceMatches?: (
@@ -555,16 +557,15 @@ export function consumeDeviceBootstrapTokenWithSetupCompletionInTransaction(para
     // against the authoritative row before consumption becomes terminal.
     const tokenRow = executeSqliteQueryTakeFirstSync(
       db,
-      kysely
-        .selectFrom("device_bootstrap_tokens")
-        .selectAll()
-        .where("token_key", "=", token)
-        .where("issued_at_ms", ">=", params.oldestValidIssuedAtMs),
+      kysely.selectFrom("device_bootstrap_tokens").selectAll().where("token_key", "=", token),
     );
     if (!tokenRow || tokenRow.token !== token || tokenRow.device_id?.trim() !== deviceId) {
       return null;
     }
     const record = fromBootstrapRow(tokenRow);
+    if (params.nowMs > resolveDeviceBootstrapTokenExpiresAtMs(record)) {
+      return null;
+    }
     const paired =
       record.setupId || params.pairedDeviceMatches
         ? loadPairedDevicePairingStoreRecordFromDatabase(db, deviceId)
@@ -595,7 +596,13 @@ export function consumeDeviceBootstrapTokenWithSetupCompletionInTransaction(para
     }
     if (completion) {
       if (record.profile?.purpose === "cloud-worker") {
-        params.recordWorkerEnvironment(bindCloudWorkerSetupCompletion({ db, completion }));
+        params.recordWorkerEnvironment(
+          bindCloudWorkerSetupCompletion({
+            db,
+            completion,
+            credentialDigest: sha256Base64Url(tokenRow.token),
+          }),
+        );
       }
       executeSqliteQuerySync(
         db,

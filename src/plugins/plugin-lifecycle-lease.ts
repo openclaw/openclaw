@@ -49,6 +49,17 @@ type PluginLifecycleLeaseOptions = Pick<
 };
 
 const activePluginLifecycleLease = new AsyncLocalStorage<ActivePluginLifecycleLease>();
+const lifecycleLeaseDemand = new Map<
+  string,
+  { acquisitions: number; holders: number; waiters: number }
+>();
+
+/** Lease holders use this to stop waiting on work that may be queued behind their lease. */
+export function hasPluginLifecycleLeaseDemand(): boolean {
+  return [...lifecycleLeaseDemand.values()].some(
+    ({ holders, waiters }) => holders > 0 && waiters > 0,
+  );
+}
 
 export function hasPluginLifecycleLease(): boolean {
   return activePluginLifecycleLease.getStore() !== undefined;
@@ -160,6 +171,23 @@ export async function withPluginLifecycleLease<T>(
     return await runWithLease(active.lease);
   }
 
+  const waitMs = options.waitMs ?? DEFAULT_PLUGIN_LIFECYCLE_WAIT_MS;
+  const demand = lifecycleLeaseDemand.get(databasePath) ?? {
+    acquisitions: 0,
+    holders: 0,
+    waiters: 0,
+  };
+  lifecycleLeaseDemand.set(databasePath, demand);
+  demand.acquisitions += 1;
+  let waiting = waitMs > 0;
+  let acquired = false;
+  demand.waiters += Number(waiting);
+  const stopWaiting = () => {
+    if (waiting) {
+      waiting = false;
+      demand.waiters -= 1;
+    }
+  };
   return await withOpenClawStateLease(
     {
       ...PLUGIN_LIFECYCLE_LEASE_IDENTITY,
@@ -173,13 +201,16 @@ export async function withPluginLifecycleLease<T>(
         },
       },
       leaseMs: options.leaseMs ?? DEFAULT_PLUGIN_LIFECYCLE_LEASE_MS,
-      waitMs: options.waitMs ?? DEFAULT_PLUGIN_LIFECYCLE_WAIT_MS,
+      waitMs,
       processBound: options.processBound,
       ...(options.signal ? { signal: options.signal } : {}),
       leaseLabel: "plugin lifecycle lease",
       operationLabel: "plugins.lifecycle.lease",
     },
     async (lease) => {
+      stopWaiting();
+      acquired = true;
+      demand.holders += 1;
       const pluginLease: PluginLifecycleLeaseContext = {
         databasePath,
         stateLease: lease,
@@ -217,5 +248,12 @@ export async function withPluginLifecycleLease<T>(
       }
       return result;
     },
-  );
+  ).finally(() => {
+    stopWaiting();
+    demand.holders -= Number(acquired);
+    demand.acquisitions -= 1;
+    if (demand.acquisitions === 0) {
+      lifecycleLeaseDemand.delete(databasePath);
+    }
+  });
 }

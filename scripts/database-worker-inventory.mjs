@@ -89,6 +89,27 @@ const reviewed = new Map([
     "src/config/sessions/session-sharing-store.kernel.ts",
     { priority: 7, evidence: "Member-row kernel shared by session readers" },
   ],
+  [
+    "src/config/sessions/session-reaction-store.kernel.ts",
+    {
+      priority: 99,
+      evidence: "Durable reads use worker; writes and incognito reads remain native",
+    },
+  ],
+  [
+    "src/config/sessions/session-reaction-store.ts",
+    {
+      priority: 99,
+      evidence: "Native reaction writer; worker broker excludes process-held incognito",
+    },
+  ],
+  [
+    "src/config/sessions/conversation-registry.ts",
+    {
+      priority: 99,
+      evidence: "Reaction bindings use worker; other synchronous registry callers remain",
+    },
+  ],
 ]);
 const workerModules = new Set([
   "src/channels/message/ingress-queue-health.kernel.ts",
@@ -310,6 +331,8 @@ function render(rows) {
     "The warm `sessions.list` baseline used 5,000 rows, 50 viewers, and 350 calls: **zero host Kysely reads**, **3.07538 ms CPU per call**, and **3.12680 ms amortized wall time per call**. The original per-request store scan was already gone, so this lane does not claim another warm-list database cutover or speedup. These numbers do not cover projection hydration, dirty-row refresh, archived-row materialization, or membership reads.",
     "",
     "The history cutover leaves selected/current session entries, pending-input/receipt reads, the retained transcript-session key, and lazy subagent source/run-input visibility reads as native work. Ordinary full pages were already worker-backed; raw cursor delta reads now share that worker. Process-held incognito database lifetime and the existing CLI-import history path remain explicit migration gaps. Incognito data cannot be reopened by a durable path in another isolate; this is remaining owner/lifetime work, not a new synchronous exception. A failed durable worker read never selects that local path.",
+    "",
+    "Durable session reaction summaries and target-message reads use the admitted history worker. The reaction row kernel remains T1: writes and process-held incognito reads retain their existing native owner. The write cutover is blocked by the current broker contract: `supportsOpenClawAgentDatabaseExecution` excludes incognito scopes, and `openOpenClawAgentSqliteWorkerStore` requires a file identity. Supporting process-held databases requires their owner/lifetime cutover; this partial migration adds no broker or synchronous exception. Reaction mirroring reads durable source conversation bindings through the history worker, including a final read after account/config preparation and immediately before dispatch; synchronous handoff guards retain live reactor, session, and config checks. The conversation registry remains T1 because other synchronous callers are outside this cutover. Schemas, stored bytes, retention, and update behavior are unchanged.",
     "",
     "## Next five independent lanes",
     "",

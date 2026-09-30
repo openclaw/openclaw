@@ -25,7 +25,7 @@ import {
 import { hasComposedVisibleAnswerAfterSettledTools } from "./incomplete-turn-classification.js";
 import { shouldTreatEmptyAssistantReplyAsSilent } from "./incomplete-turn-recovery.js";
 import { resolveSilentToolResultReplyPayload } from "./incomplete-turn-resolution.js";
-import type { EmbeddedAttemptClientToolCallSlot, EmbeddedRunAttemptResult } from "./types.js";
+import type { EmbeddedRunAttemptResult } from "./types.js";
 
 type EmbeddedAttemptSubscription = ReturnType<typeof subscribeEmbeddedAgentSession>;
 
@@ -167,23 +167,6 @@ function normalizeEmbeddedAttemptToolMetas(
     });
 }
 
-function collectCompletedClientToolCalls(
-  slots: readonly EmbeddedAttemptClientToolCallSlot[],
-): NonNullable<EmbeddedRunAttemptResult["clientToolCalls"]> {
-  return slots.flatMap((slot) =>
-    slot.completed && slot.params ? [{ name: slot.name, params: slot.params }] : [],
-  );
-}
-
-function hasVisiblePendingToolMediaReply(
-  reply: { mediaUrls?: string[]; audioAsVoice?: boolean } | null | undefined,
-): boolean {
-  return Boolean(
-    reply &&
-    ((reply.mediaUrls ?? []).some((url) => url.trim().length > 0) || reply.audioAsVoice === true),
-  );
-}
-
 export function completeEmbeddedAttemptResult(
   input: EmbeddedAttemptExecutionPhaseInput & { preparedStreamRuntime: PreparedStreamRuntime },
   settled: Awaited<ReturnType<typeof settleEmbeddedAttemptStream>>,
@@ -301,7 +284,9 @@ export function completeEmbeddedAttemptResult(
     observeReplayMetadata(subscription.getReplayState(), observedReplayMetadata),
   );
   const currentAttemptReplayMetadata = buildAttemptReplayMetadata(replayEvidence);
-  const completedClientToolCalls = collectCompletedClientToolCalls(clientToolCallSlots);
+  const completedClientToolCalls = clientToolCallSlots.flatMap((slot) =>
+    slot.completed && slot.params ? [{ name: slot.name, params: slot.params }] : [],
+  );
   const clientToolCalls =
     completedClientToolCalls.length > 0 ? completedClientToolCalls : undefined;
   const didSendDeterministicApprovalPromptNow = subscription.didSendDeterministicApprovalPrompt();
@@ -360,9 +345,11 @@ export function completeEmbeddedAttemptResult(
   // The coarse messaging flag was never terminal evidence at this boundary.
   const { didSendViaMessagingTool: _coarseDelivery, ...terminalEvidence } = resultEvidence;
   const hasTerminalOutput = hasAttemptTerminalState(terminalEvidence);
-  const pendingToolMediaPayloadCount = hasVisiblePendingToolMediaReply(pendingToolMediaReply)
-    ? 1
-    : 0;
+  const pendingToolMediaPayloadCount =
+    pendingToolMediaReply?.mediaUrls?.some((url) => url.trim().length > 0) ||
+    pendingToolMediaReply?.audioAsVoice === true
+      ? 1
+      : 0;
   const visibleBlockReplyCount = subscription.getVisibleBlockReplyCount();
   const silentToolResultReplyPayload = resolveSilentToolResultReplyPayload({
     isCronTrigger: attempt.trigger === "cron",

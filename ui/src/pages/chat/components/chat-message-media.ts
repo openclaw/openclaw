@@ -26,7 +26,7 @@ export type ImageBlock = {
 } & ({ url: string; artifactId?: string } | { url?: undefined; artifactId: string });
 
 export type ArtifactDownloadResolver = (
-  params: { sessionKey: string; artifactId: string },
+  params: { sessionKey: string; artifactId: string; variant?: "full" | "thumbnail" },
   signal?: AbortSignal,
 ) => Promise<{ url: string; expiresAt?: string; blob?: Blob } | null>;
 
@@ -249,7 +249,7 @@ function trimIdleChatMediaResources() {
   }
 }
 
-export function isChatMediaResourceCurrent<Value>(resource: ChatMediaResource<Value>): boolean {
+export function isChatMediaResourceCurrent(resource: ChatMediaResource<unknown>): boolean {
   return (
     chatMediaResources.get(chatMediaResourceKey(resource.kind, resource.cacheKey)) === resource
   );
@@ -259,7 +259,7 @@ export function getChatMediaRenderVersion(): number {
   return chatMediaRenderVersion;
 }
 
-export function notifyChatMediaResourceSubscribers<Value>(resource: ChatMediaResource<Value>) {
+export function notifyChatMediaResourceSubscribers(resource: ChatMediaResource<unknown>) {
   if (!isChatMediaResourceCurrent(resource)) {
     return;
   }
@@ -280,8 +280,8 @@ export function clearChatMediaResourceRefresh(resource: ChatMediaResource<unknow
   }
 }
 
-export function scheduleChatMediaResourceRefresh<Value>(
-  resource: ChatMediaResource<Value>,
+export function scheduleChatMediaResourceRefresh(
+  resource: ChatMediaResource<unknown>,
   refreshAt: number | undefined,
   onRefresh: () => void,
 ) {

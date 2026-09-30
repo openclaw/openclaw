@@ -29,8 +29,15 @@ interface SessionAttentionControllerHost extends ReactiveControllerHost {
   readonly sessionAttentionContext: ApplicationContext | undefined;
 }
 
+type SessionAttentionResolver = (
+  row: Partial<GatewaySessionRow> & { key: string },
+) => SidebarSessionAttention;
+
 /** Session-scoped question, approval, and failed-run attention ownership. */
 export class SessionAttentionController implements ReactiveController {
+  revision = 0;
+  private resolverInputs: readonly unknown[] = [];
+  private resolver: SessionAttentionResolver | undefined;
   private readonly attentionSubscriptions: SubscriptionsController;
   private readonly questionPromptState: ReturnType<typeof createQuestionPromptState>;
   private attentionGateway: ApplicationContext["gateway"] | null = null;
@@ -42,11 +49,10 @@ export class SessionAttentionController implements ReactiveController {
   constructor(private readonly host: SessionAttentionControllerHost) {
     host.addController(this);
     this.attentionSubscriptions = new SubscriptionsController(host);
-    this.questionPromptState = createQuestionPromptState(() => host.requestUpdate());
+    this.questionPromptState = createQuestionPromptState(this.invalidate);
     this.attentionSubscriptions
-      .watch(
+      .watchStore(
         () => host.sessionAttentionContext?.gateway,
-        (gateway, notify) => gateway.subscribe(notify),
         (gateway) => this.synchronizeAttentionGateway(gateway),
       )
       .effect(
@@ -56,13 +62,16 @@ export class SessionAttentionController implements ReactiveController {
             handleQuestionPromptEvent(this.questionPromptState, event);
           }),
       )
-      .watch(
-        () => host.sessionAttentionContext?.overlays,
-        (overlays, notify) => overlays.subscribe(notify),
-      );
+      .watchStore(() => host.sessionAttentionContext?.overlays, this.invalidate);
   }
 
+  private readonly invalidate = () => {
+    this.revision += 1;
+    this.host.requestUpdate();
+  };
+
   hostDisconnected(): void {
+    this.revision += 1;
     this.attentionGateway = null;
     this.attentionGatewayClient = null;
     this.attentionGatewayConnected = false;
@@ -92,6 +101,7 @@ export class SessionAttentionController implements ReactiveController {
     this.attentionGateway = gateway;
     this.attentionGatewayClient = client;
     this.attentionGatewayConnected = connected;
+    this.invalidate();
     setQuestionPromptClient(this.questionPromptState, client);
     if (client) {
       refreshPendingQuestionsWithRetry(
@@ -135,18 +145,26 @@ export class SessionAttentionController implements ReactiveController {
       () => {
         this.agentStatusExpiryTimer = null;
         this.agentStatusExpiryAt = null;
-        this.host.requestUpdate();
+        this.invalidate();
       },
       Math.max(0, expiresAt - Date.now() + 1),
     );
   }
 
-  createResolver(): (row: Partial<GatewaySessionRow> & { key: string }) => SidebarSessionAttention {
+  createResolver(): SessionAttentionResolver {
     const context = this.host.sessionAttentionContext;
     const identity = {
       hello: context?.gateway.snapshot.hello,
       agentsList: context?.agents.state.agentsList,
     };
+    const inputs = [this.revision, identity.hello, identity.agentsList, context?.overlays];
+    if (
+      this.resolver &&
+      inputs.every((value, index) => Object.is(value, this.resolverInputs[index]))
+    ) {
+      return this.resolver;
+    }
+    this.resolverInputs = inputs;
     const requests = [
       ...listQuestionPrompts(this.questionPromptState)
         .filter((prompt) => prompt.status === "pending")
@@ -172,7 +190,7 @@ export class SessionAttentionController implements ReactiveController {
         createdAtMs: approval.createdAtMs,
       })),
     ];
-    return (row) => {
+    return (this.resolver = (row) => {
       const knownAttention = summarizeSidebarSessionAttention(
         requests
           .filter((request) =>
@@ -208,7 +226,7 @@ export class SessionAttentionController implements ReactiveController {
             : "sessionsView.runErrorUnknown",
         );
       return { kind: "error", reason };
-    };
+    });
   }
 }
 

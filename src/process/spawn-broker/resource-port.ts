@@ -27,13 +27,6 @@ export class BrokerResourcePort
     }
   }
 
-  fail(error: unknown): void {
-    if (!this.closed) {
-      this.emit("messageerror", error);
-      this.close();
-    }
-  }
-
   close(): void {
     if (!this.closed) {
       this.closed = true;

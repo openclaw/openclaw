@@ -6051,10 +6051,7 @@ td.data-table-key-col {
 
 .provider-brand-icon[data-provider-icon="llamacpp"],
 .provider-brand-icon[data-provider-icon="lmstudio"],
-.provider-brand-icon[data-provider-icon="ollama"] {
-  color: var(--text-strong);
-}
-
+.provider-brand-icon[data-provider-icon="ollama"],
 .provider-brand-icon[data-provider-icon="opencode"],
 .provider-brand-icon[data-provider-icon="opencodego"],
 .provider-brand-icon[data-provider-icon="pi"] {

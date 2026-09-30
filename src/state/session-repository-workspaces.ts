@@ -13,7 +13,7 @@ import {
 } from "../infra/sqlite-worker-operation-admission.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
-import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
+import { resolveDatabasePath } from "./openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 import {
   executeOpenClawStateWorker,
@@ -94,7 +94,7 @@ export function createSessionRepositoryWorkspaceStore(
   } = {},
 ) {
   const env = options.env && cloneEnvWithPlatformSemantics(options.env);
-  const databasePath = path.resolve(options.path ?? resolveOpenClawStateSqlitePath(env));
+  const databasePath = resolveDatabasePath({ path: options.path, env });
   const now = options.now;
   const context = () => captureOpenClawStateWorkerContext({ path: databasePath, env });
   async function mutate(

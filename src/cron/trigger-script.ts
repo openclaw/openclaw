@@ -35,9 +35,14 @@ import {
   type CodeModeHeadlessResult,
 } from "../agents/code-mode.js";
 import {
+  resolveConversationCapabilityProfile,
+  type ResolvedConversationCapabilityProfile,
+} from "../agents/conversation-capability-profile.js";
+import {
   applyEmbeddedAttemptToolsAllow,
   resolveEmbeddedAttemptToolConstructionPlan,
 } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
+import { runAgentCleanupStep } from "../agents/run-cleanup-timeout.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../agents/runtime-plugins.js";
 import { resolveSandboxContext } from "../agents/sandbox.js";
 import {
@@ -60,6 +65,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayContextResolver } from "../gateway/server-methods/types.js";
 import { formatErrorMessageWithCode } from "../infra/errors.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { logWarn } from "../logger.js";
 import { PluginInstanceUnavailableError } from "../plugins/plugin-instance-error.js";
 import { capturePluginLifecycleAuthority } from "../plugins/registry-lifecycle.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
@@ -82,6 +88,7 @@ import {
   MAX_CRON_SCRIPT_TOOL_BUDGET,
 } from "./script-payload.js";
 import type { CronServiceDeps } from "./service/state.js";
+import { acquireCronScriptMcpTools, type CronScriptMcpTools } from "./trigger-script-mcp.js";
 import {
   parseScriptPayloadResult,
   parseTriggerResult,
@@ -98,6 +105,9 @@ const MAX_CONCURRENT_TRIGGER_EVALS = 3;
 const MAX_CACHED_TRIGGER_RUNTIMES = 128;
 const HEADLESS_TRIGGER_WALL_CLOCK_MS = 30_000;
 const HEADLESS_TRIGGER_TOOL_BUDGET = 5;
+// Holds a finished evaluation for MCP teardown at most this long; a hung connect or shutdown
+// keeps retiring as tracked work instead of holding the result and trigger slot.
+const CRON_SCRIPT_MCP_CLEANUP_GRACE_MS = 1_000;
 
 let activeTriggerEvaluations = 0;
 
@@ -113,6 +123,11 @@ void assertTriggerCodesCoverHeadless;
 
 type PreparedTriggerRuntime = {
   createTools: (admitted: AdmittedRunContext, signal: AbortSignal) => AnyAgentTool[];
+  /** Starts this evaluation's own MCP runtime for servers its toolsAllow names by prefix. */
+  acquireMcpTools?: (
+    admitted: AdmittedRunContext,
+    reservedToolNames: readonly string[],
+  ) => CronScriptMcpTools | undefined;
   context: HookContext & { config: OpenClawConfig; agentId: string; sessionKey: string };
   pluginRegistry?: PluginRegistry;
 };
@@ -214,7 +229,36 @@ async function prepareTriggerRuntime(
       toolsEnabled: true,
       toolsAllow: params.toolsAllow,
     });
-    // Bundle MCP tools are source:"mcp", which the headless bridge excludes.
+    const scheduledToolPolicy = resolveScheduledToolPolicyContext({
+      toolsAllow: params.toolsAllow,
+      scheduledToolPolicy: params.scheduledToolPolicy,
+      execTarget: params.execTarget,
+    });
+    // Core and MCP tools of one evaluation share one policy owner, like embedded runs.
+    const capabilityProfiles = new WeakMap<
+      AdmittedRunContext,
+      ResolvedConversationCapabilityProfile
+    >();
+    const resolveCapabilityProfile = (admitted: AdmittedRunContext) => {
+      let profile = capabilityProfiles.get(admitted);
+      if (!profile) {
+        profile = resolveConversationCapabilityProfile({
+          config,
+          sessionKey,
+          runId: admitted.operationalRunInstance.runId,
+          agentId,
+          workspaceDir: effectiveWorkspace,
+          cwd: effectiveWorkspace,
+          spawnWorkspaceDir: workspaceDir,
+          sandboxToolPolicy: sandbox?.enabled ? sandbox.tools : undefined,
+          runtimeToolAllowlist: toolPlan.runtimeToolAllowlist,
+          inheritRuntimeToolAllowlist: Boolean(toolPlan.runtimeToolAllowlist),
+          scheduledToolPolicy,
+        });
+        capabilityProfiles.set(admitted, profile);
+      }
+      return profile;
+    };
     // LSP runtimes are session-scoped and intentionally outside trigger v1.
     const createTools: PreparedTriggerRuntime["createTools"] = (admitted, signal) => {
       const allTools = toolPlan.constructTools
@@ -237,11 +281,8 @@ async function prepareTriggerRuntime(
             includeCoreTools: toolPlan.includeCoreTools,
             runtimeToolAllowlist: toolPlan.runtimeToolAllowlist,
             inheritRuntimeToolAllowlist: Boolean(toolPlan.runtimeToolAllowlist),
-            scheduledToolPolicy: resolveScheduledToolPolicyContext({
-              toolsAllow: params.toolsAllow,
-              scheduledToolPolicy: params.scheduledToolPolicy,
-              execTarget: params.execTarget,
-            }),
+            scheduledToolPolicy,
+            conversationCapabilityProfile: resolveCapabilityProfile(admitted),
             toolConstructionPlan: toolPlan.codingToolConstructionPlan,
           })
         : [];
@@ -257,8 +298,27 @@ async function prepareTriggerRuntime(
       sessionKey,
       loopDetection: resolveToolLoopDetectionConfig({ cfg: config, agentId }),
     };
+    const acquireMcpTools: PreparedTriggerRuntime["acquireMcpTools"] = (
+      admitted,
+      reservedToolNames,
+    ) => {
+      const runId = admitted.operationalRunInstance.runId;
+      return acquireCronScriptMcpTools({
+        sessionId: runId,
+        sessionKey,
+        agentId,
+        config,
+        workspaceDir: effectiveWorkspace,
+        agentDir,
+        toolsAllow: params.toolsAllow,
+        capabilityProfile: resolveCapabilityProfile(admitted),
+        reservedToolNames,
+        hookContext: { ...context, runId, trigger: "cron" },
+      });
+    };
     return {
       createTools,
+      acquireMcpTools,
       context,
       ...(pluginRegistry ? { pluginRegistry } : {}),
     };
@@ -375,7 +435,9 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
       params.label,
     );
     const catalogRef = createToolSearchCatalogRef();
+    const runId = `cron-trigger:${params.job.id}:${crypto.randomUUID()}`;
     let admission: PreparedAgentRunAdmission | undefined;
+    let mcp: CronScriptMcpTools | undefined;
     try {
       const request = {
         runtimeConfig: resolveCronActiveRuntimeConfig(deps.config),
@@ -389,7 +451,6 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
         }),
         execTarget: params.job.toolsAllowExecTarget,
       };
-      const runId = `cron-trigger:${params.job.id}:${crypto.randomUUID()}`;
       let runtime: CachedTriggerRuntime | undefined;
       let tools: AnyAgentTool[];
       let admitted: AdmittedRunContext | undefined;
@@ -452,6 +513,13 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
           if (!runtime.isCurrent()) {
             throw new PluginInstanceUnavailableError();
           }
+          // A script that never names MCP cannot reach it, so it starts no server.
+          if (/\bMCP\b/.test(params.script)) {
+            const reservedToolNames = tools.map((tool) => tool.name);
+            mcp = withPluginRuntimeRegistryScope(selected.pluginRegistry, () =>
+              selected.acquireMcpTools?.(authority, reservedToolNames),
+            );
+          }
           break;
         } catch (error) {
           if (
@@ -474,6 +542,13 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
           runtime?.invalidate();
           // Retry setup once with the same admission and deadline, never script execution.
         }
+      }
+      let mcpUnavailable: string | undefined;
+      if (mcp) {
+        // Server connection and tool listing spend the evaluation's own deadline.
+        const surface = await evaluationScope.wait(mcp.surface);
+        tools = [...tools, ...surface.tools];
+        mcpUnavailable = surface.unavailable;
       }
       const ctx: ToolSearchToolContext = {
         ...runtime.context,
@@ -526,7 +601,11 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
           signal: evaluationScope.signal,
         });
         if (result.status === "failed") {
-          return scriptFailure(result.error, result.code);
+          // A failed server is absent from `MCP`; name why when the script fails.
+          return scriptFailure(
+            mcpUnavailable ? `${result.error} (${mcpUnavailable})` : result.error,
+            result.code,
+          );
         }
         assertActive();
         return { kind: "completed" as const, result };
@@ -544,6 +623,16 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
       admission?.close();
       clearToolSearchCatalog({ catalogRef });
       evaluationScope.cleanup();
+      if (mcp) {
+        await runAgentCleanupStep({
+          runId,
+          sessionId: runId,
+          step: "cron-script-mcp-retire",
+          timeoutMs: CRON_SCRIPT_MCP_CLEANUP_GRACE_MS,
+          log: { warn: logWarn },
+          cleanup: mcp.dispose,
+        });
+      }
     }
   };
 }

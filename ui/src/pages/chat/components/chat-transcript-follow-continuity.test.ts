@@ -67,6 +67,97 @@ describe("transcript follow continuity", () => {
     }
   });
 
+  it.each(["none", "wheel", "programmatic"] as const)(
+    "keeps measured growth after a no-op smooth follow, reader departure=%s",
+    async (departure) => {
+      const flushFrames = stubAnimationFrames();
+      transcriptDomState.measuredRowHeight = 120;
+      let followEnabled = true;
+      const transcript = new ChatTranscriptController(
+        {
+          addController: vi.fn(),
+          removeController: vi.fn(),
+          requestUpdate: vi.fn(),
+          updateComplete: Promise.resolve(true),
+        },
+        () => "smooth-no-op",
+        {
+          canFollowEnd: () => followEnabled,
+          onReaderScroll: () => {
+            followEnabled = false;
+          },
+        },
+      );
+      const rows: TestContentRow[] = Array.from({ length: 40 }, (_, index) => ({
+        kind: "content",
+        key: "row:" + index,
+        content: html`<div>row ${index}</div>`,
+      }));
+      const { container, session, renderRows } = await mountTestTranscript(
+        "smooth-no-op",
+        rows,
+        transcript,
+      );
+      let scrollHeight = 4800;
+      Object.defineProperties(container, {
+        clientHeight: { configurable: true, value: 600 },
+        scrollHeight: { configurable: true, get: () => scrollHeight },
+      });
+      const scrollTo = vi.fn((options?: ScrollToOptions | number) => {
+        if (typeof options === "object" && options.top !== undefined) {
+          const previous = container.scrollTop;
+          container.scrollTop = options.top;
+          if (previous !== container.scrollTop) {
+            container.dispatchEvent(new Event("scroll"));
+          }
+        }
+      });
+      container.scrollTo = scrollTo;
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        session.setContentReady(true);
+        container.scrollTop = 4200;
+        container.dispatchEvent(new Event("scroll"));
+        renderRows(rows);
+        await vi.advanceTimersByTimeAsync(150);
+        flushFrames();
+        renderRows(rows);
+        flushFrames();
+        scrollTo.mockClear();
+
+        // The old maximum is still current. TanStack retires this no-op on
+        // its next frame, with no native offset/idle event to hand off follow.
+        transcript.scrollToEnd({ source: "auto", behavior: "smooth" });
+        flushFrames();
+        expect(scrollTo).toHaveBeenCalledExactlyOnceWith({ top: 4200, behavior: "smooth" });
+        if (departure === "wheel") {
+          container.dispatchEvent(new WheelEvent("wheel", { deltaY: -100 }));
+        }
+        if (departure !== "none") {
+          container.scrollTop -= 100;
+          container.dispatchEvent(new Event("scroll"));
+        }
+        const readerOffset = container.scrollTop;
+        const lastRow = expectDefined(
+          container.querySelector<HTMLElement>('[data-virtual-row-key="row:39"]'),
+          "measured final row",
+        );
+        lastRow.style.height = "155px";
+        for (const observer of resizeObservers) {
+          observer.emitTarget(lastRow, 800, 155);
+        }
+        scrollHeight += 35;
+        renderRows(rows);
+        flushFrames();
+        expect(container.scrollTop).toBe(departure === "none" ? 4235 : readerOffset);
+        expect(followEnabled).toBe(departure !== "wheel");
+      } finally {
+        transcript.hostDisconnected();
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it.each([
     { source: "auto", settled: false },
     { source: "manual", settled: false },

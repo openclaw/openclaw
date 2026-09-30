@@ -227,24 +227,17 @@ export function readSessionEntryCache(
   options: SessionEntryCacheReadOptions,
 ): SessionEntryCacheSnapshot {
   return runSqliteReadOperationSync(database.db, () => {
-    const projection = options.retainFullEntry ? "full" : options.projection;
+    const projection = options.projection;
     const prepared = assertCanonicalSqliteSessionKeysCurrent(database, projection !== "full");
     if (
       !options.cache ||
       options.deferParticipants ||
-      options.retainFullEntry ||
       options.latest ||
       projection === "full" ||
       database.db.isTransaction ||
       !getAdmittedSqliteSchemaFacts(database.db)
     ) {
-      return loadSessionEntrySnapshot(
-        database,
-        projection,
-        prepared,
-        options.retainFullEntry,
-        options.deferParticipants,
-      );
+      return loadSessionEntrySnapshot(database, projection, prepared, options.deferParticipants);
     }
     const validityToken = readSessionEntryCacheValidityToken(database.db, "cached");
     const cached = sessionEntryCaches.get(database.db);

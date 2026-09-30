@@ -147,22 +147,23 @@ function createIMessageTargetAliases(resourceAliases: string[] = []) {
   };
 }
 
-async function rememberOutboundBridgeMessage(params: {
+async function completeOutboundBridgeMessage(params: {
   accountId: string;
-  messageId?: string;
+  messageId: string;
   chatGuid: string;
-}): Promise<void> {
+  details?: Record<string, unknown>;
+}) {
   const messageId = normalizeIMessageMessageId(params.messageId);
-  if (!messageId) {
-    return;
+  if (messageId) {
+    await rememberIMessageReplyCache({
+      accountId: params.accountId,
+      messageId,
+      chatGuid: params.chatGuid,
+      timestamp: Date.now(),
+      isFromMe: true,
+    });
   }
-  await rememberIMessageReplyCache({
-    accountId: params.accountId,
-    messageId,
-    chatGuid: params.chatGuid,
-    timestamp: Date.now(),
-    isFromMe: true,
-  });
+  return jsonResult({ ok: true, messageId: params.messageId, ...params.details });
 }
 
 /** An omitted action reference targets the most recent inbound in the same chat. */
@@ -259,28 +260,16 @@ function buildChatContextFromActionParams(params: {
 
 function mapTapbackReaction(emoji?: string): string | undefined {
   const value = normalizeOptionalLowercaseString(emoji)?.replace(/\ufe0f/g, "");
-  if (!value) {
-    return undefined;
-  }
-  if (["love", "heart", "❤", "❤️"].includes(value)) {
-    return "love";
-  }
-  if (["like", "+1", "thumbsup", "👍"].includes(value)) {
-    return "like";
-  }
-  if (["dislike", "-1", "thumbsdown", "👎"].includes(value)) {
-    return "dislike";
-  }
-  if (["laugh", "haha", "😂", "🤣"].includes(value)) {
-    return "laugh";
-  }
-  if (["emphasize", "!!", "‼", "‼️"].includes(value)) {
-    return "emphasize";
-  }
-  if (["question", "?", "？", "❓"].includes(value)) {
-    return "question";
-  }
-  return undefined;
+  return value
+    ? [
+        ["love", "heart", "❤"],
+        ["like", "+1", "thumbsup", "👍"],
+        ["dislike", "-1", "thumbsdown", "👎"],
+        ["laugh", "haha", "😂", "🤣"],
+        ["emphasize", "!!", "‼"],
+        ["question", "?", "？", "❓"],
+      ].find((aliases) => aliases.includes(value))?.[0]
+    : undefined;
 }
 
 function decodeBase64Buffer(params: Record<string, unknown>, action: string): Uint8Array {
@@ -488,7 +477,6 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
       dbPath: account.config.dbPath?.trim() || undefined,
       remoteHost,
       timeoutMs: account.config.probeTimeoutMs,
-      chatGuid: "",
     };
     const attestedConversationReadOrigin = conversationReadOrigin ?? "delegated";
     const chatGuid = async () =>
@@ -561,7 +549,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
           reaction: kind,
           remove: remove || undefined,
           partIndex,
-          options: { ...opts, chatGuid: reference.chatGuid },
+          options: opts,
         });
       }
       return jsonResult({ ok: true, ...(remove ? { removed: true } : { added: reaction }) });
@@ -584,7 +572,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
         text,
         backwardsCompatMessage,
         partIndex,
-        options: { ...opts, chatGuid: reference.chatGuid },
+        options: opts,
       });
       return jsonResult({ ok: true, edited: reference.messageId });
     }
@@ -596,7 +584,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
         chatGuid: reference.chatGuid,
         messageId: reference.messageId,
         partIndex,
-        options: { ...opts, chatGuid: reference.chatGuid },
+        options: opts,
       });
       return jsonResult({ ok: true, unsent: reference.messageId });
     }
@@ -639,14 +627,14 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
         replyToMessageId: reference.messageId,
         partIndex,
         attachment: attachment?.spec ?? undefined,
-        options: { ...opts, chatGuid: reference.chatGuid },
+        options: opts,
       });
-      await rememberOutboundBridgeMessage({
+      return await completeOutboundBridgeMessage({
         accountId: account.accountId,
         messageId: result.messageId,
         chatGuid: reference.chatGuid,
+        details: { repliedTo: reference.messageId },
       });
-      return jsonResult({ ok: true, messageId: result.messageId, repliedTo: reference.messageId });
     }
 
     if (action === "sendWithEffect") {
@@ -662,14 +650,14 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
         chatGuid: resolvedChatGuid,
         text,
         effectId,
-        options: { ...opts, chatGuid: resolvedChatGuid },
+        options: opts,
       });
-      await rememberOutboundBridgeMessage({
+      return await completeOutboundBridgeMessage({
         accountId: account.accountId,
         messageId: result.messageId,
         chatGuid: resolvedChatGuid,
+        details: { effect: effectId },
       });
-      return jsonResult({ ok: true, messageId: result.messageId, effect: effectId });
     }
 
     if (action === "renameGroup") {
@@ -681,7 +669,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
       await runtime.renameGroup({
         chatGuid: resolvedChatGuid,
         displayName,
-        options: { ...opts, chatGuid: resolvedChatGuid },
+        options: opts,
       });
       return jsonResult({ ok: true, renamed: resolvedChatGuid, displayName });
     }
@@ -694,7 +682,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
         chatGuid: resolvedChatGuid,
         buffer: decodeBase64Buffer(params, action),
         filename,
-        options: { ...opts, chatGuid: resolvedChatGuid },
+        options: opts,
       });
       return jsonResult({ ok: true, chatGuid: resolvedChatGuid, iconSet: true });
     }
@@ -708,7 +696,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
       await runtime[action]({
         chatGuid: resolvedChatGuid,
         address,
-        options: { ...opts, chatGuid: resolvedChatGuid },
+        options: opts,
       });
       return jsonResult({
         ok: true,
@@ -721,7 +709,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
       const resolvedChatGuid = await chatGuid();
       await runtime.leaveGroup({
         chatGuid: resolvedChatGuid,
-        options: { ...opts, chatGuid: resolvedChatGuid },
+        options: opts,
       });
       return jsonResult({ ok: true, left: resolvedChatGuid });
     }
@@ -735,14 +723,13 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
         buffer: decodeBase64Buffer(params, action),
         filename,
         asVoice: asVoice ?? undefined,
-        options: { ...opts, chatGuid: resolvedChatGuid },
+        options: opts,
       });
-      await rememberOutboundBridgeMessage({
+      return await completeOutboundBridgeMessage({
         accountId: account.accountId,
         messageId: result.messageId,
         chatGuid: resolvedChatGuid,
       });
-      return jsonResult({ ok: true, messageId: result.messageId });
     }
 
     if (action === "poll") {
@@ -765,14 +752,13 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
         chatGuid: resolvedChatGuid,
         question: poll.question,
         choices: poll.options,
-        options: { ...opts, chatGuid: resolvedChatGuid },
+        options: opts,
       });
-      await rememberOutboundBridgeMessage({
+      return await completeOutboundBridgeMessage({
         accountId: account.accountId,
         messageId: result.messageId,
         chatGuid: resolvedChatGuid,
       });
-      return jsonResult({ ok: true, messageId: result.messageId });
     }
 
     if (action === "poll-vote") {
@@ -839,17 +825,13 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
         optionIndex,
         optionId: optionId ?? undefined,
         optionText: optionText ?? undefined,
-        options: { ...opts, chatGuid: pollReference.chatGuid },
+        options: opts,
       });
-      await rememberOutboundBridgeMessage({
+      return await completeOutboundBridgeMessage({
         accountId: account.accountId,
         messageId: result.messageId,
         chatGuid: pollReference.chatGuid,
-      });
-      return jsonResult({
-        ok: true,
-        messageId: result.messageId,
-        ...(result.optionText ? { pollVotedOption: result.optionText } : {}),
+        details: result.optionText ? { pollVotedOption: result.optionText } : undefined,
       });
     }
 

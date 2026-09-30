@@ -225,10 +225,10 @@ final class VoiceWakeTester {
             self.holdingAfterDetect = true
             let detectedText = match.command.isEmpty ? (match.trigger ?? text) : match.command
             self.logger.info("voice wake detected (test) (len=\(detectedText.count))")
-            await MainActor.run { AppStateStore.shared.startVoiceEars() }
+            await MainActor.run { AppStateStore.shared.earBoostActive = true }
             self.stop()
             await MainActor.run {
-                AppStateStore.shared.stopVoiceEars()
+                AppStateStore.shared.earBoostActive = false
                 onUpdate(.detected(detectedText))
             }
             return
@@ -340,10 +340,10 @@ final class VoiceWakeTester {
             self.holdingAfterDetect = true
             let detectedText = match.command.isEmpty ? (match.trigger ?? lastText) : match.command
             self.logger.info("voice wake detected (test, silence) (len=\(detectedText.count))")
-            await MainActor.run { AppStateStore.shared.startVoiceEars() }
+            await MainActor.run { AppStateStore.shared.earBoostActive = true }
             self.stop()
             await MainActor.run {
-                AppStateStore.shared.stopVoiceEars()
+                AppStateStore.shared.earBoostActive = false
                 onUpdate(.detected(detectedText))
             }
         }

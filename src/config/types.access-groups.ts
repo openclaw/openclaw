@@ -1,4 +1,3 @@
-// Defines access-group config types for channel audiences.
 import type { z } from "zod";
 import type { AccessGroupsSchema } from "./zod-schema.root-support.js";
 

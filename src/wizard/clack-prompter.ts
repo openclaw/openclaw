@@ -1,4 +1,3 @@
-// Clack prompter adapts wizard prompt requests to Clack terminal prompts.
 import {
   autocomplete,
   autocompleteMultiselect,

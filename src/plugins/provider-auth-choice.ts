@@ -1,4 +1,3 @@
-// Formats provider authentication choices exposed by plugin setup flows.
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import {
   resolveDefaultAgentId,
@@ -23,10 +22,7 @@ import { enablePluginWithCapabilityConsent } from "./enable.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
 import { applyProviderAuthConfigPatch } from "./provider-auth-choice-helpers.js";
-import {
-  resolveManifestProviderAuthChoice,
-  type ProviderAuthChoiceMetadata,
-} from "./provider-auth-choices.js";
+import { resolveManifestProviderAuthChoice } from "./provider-auth-choices.js";
 import { applyAuthProfileConfig } from "./provider-auth-helpers.js";
 import { runProviderPluginAuthMethodUnpersisted } from "./provider-auth-method.js";
 import { persistProviderAuthProfileBatch } from "./provider-auth-persistence.js";
@@ -83,13 +79,6 @@ function preparedWithoutAuthProfiles(
     authProfiles: [],
     persistAuthProfiles: async () => {},
   };
-}
-
-function formatModelRefForDisplay(modelRef: string, provider: ProviderPlugin): string {
-  if (!provider.preserveLiteralProviderPrefix) {
-    return modelRef;
-  }
-  return formatLiteralProviderPrefixedModelRef(provider.id, modelRef);
 }
 
 function restoreConfiguredPrimaryModel(
@@ -223,20 +212,6 @@ async function applyDefaultModelFromAuthChoice(params: {
     prompter: params.prompter,
   });
   return nextConfig;
-}
-
-function resolveManifestAuthChoiceScope(params: {
-  authChoice: string;
-  config: OpenClawConfig;
-  workspaceDir: string;
-  env?: NodeJS.ProcessEnv;
-}): ProviderAuthChoiceMetadata | undefined {
-  return resolveManifestProviderAuthChoice(params.authChoice, {
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-    includeUntrustedWorkspacePlugins: false,
-  });
 }
 
 function withProviderPluginId(provider: ProviderPlugin, pluginId: string): ProviderPlugin {
@@ -397,11 +372,11 @@ export async function prepareAuthChoiceLoadedPluginProvider<T>(
       let nextConfig = params.config;
       let pendingPluginInstalls: Record<string, PluginInstallRecord> | undefined;
       let enabledConfig = params.config;
-      const manifestAuthChoice = resolveManifestAuthChoiceScope({
-        authChoice: params.authChoice,
+      const manifestAuthChoice = resolveManifestProviderAuthChoice(params.authChoice, {
         config: nextConfig,
         workspaceDir,
         env: params.env,
+        includeUntrustedWorkspacePlugins: false,
       });
       const installCatalogEntry = resolveProviderInstallCatalogEntry(params.authChoice, {
         config: nextConfig,
@@ -611,7 +586,9 @@ export async function prepareAuthChoiceLoadedPluginProvider<T>(
           utilityModelOverride: selectedModel,
         });
       }
-      const selectedModelDisplay = formatModelRefForDisplay(selectedModel, resolved.provider);
+      const selectedModelDisplay = resolved.provider.preserveLiteralProviderPrefix
+        ? formatLiteralProviderPrefixedModelRef(resolved.provider.id, selectedModel)
+        : selectedModel;
       if (params.setDefaultModel) {
         const defaultModelConfig = await applyDefaultModelFromAuthChoice({
           config: nextConfig,

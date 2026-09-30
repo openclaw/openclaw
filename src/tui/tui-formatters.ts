@@ -47,7 +47,11 @@ export function formatTuiFooter(params: {
 }): string {
   const { sessionInfo } = params;
   const fastLabel =
-    sessionInfo.fastMode === "auto" ? "fast:auto" : sessionInfo.fastMode === true ? "fast" : null;
+    sessionInfo.fastMode === "auto" || sessionInfo.fastMode === "ultrafast"
+      ? `fast:${sessionInfo.fastMode}`
+      : sessionInfo.fastMode === true
+        ? "fast"
+        : null;
   const verbose = sessionInfo.verboseLevel ?? "off";
   const trace = sessionInfo.traceLevel ?? "off";
   const reasoning = sessionInfo.reasoningLevel ?? "off";
@@ -101,13 +105,6 @@ function redactBinaryLikeLine(line: string): string {
   return line;
 }
 
-function isolateRtlLine(line: string): string {
-  if (!RTL_SCRIPT_RE.test(line)) {
-    return line;
-  }
-  return `${RTL_ISOLATE_START}${line}${RTL_ISOLATE_END}`;
-}
-
 export function isolateRtlRenderedLine(line: string): string {
   if (!RTL_SCRIPT_RE.test(line) || !RTL_SCRIPT_RE.test(stripAnsi(line))) {
     return line;
@@ -125,7 +122,9 @@ function applyRtlIsolation(text: string): string {
   }
   return text
     .split("\n")
-    .map((line) => isolateRtlLine(line))
+    .map((line) =>
+      RTL_SCRIPT_RE.test(line) ? `${RTL_ISOLATE_START}${line}${RTL_ISOLATE_END}` : line,
+    )
     .join("\n");
 }
 

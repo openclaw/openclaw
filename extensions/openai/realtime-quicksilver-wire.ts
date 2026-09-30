@@ -1,6 +1,9 @@
 // GPT-Live frameless session, call-creation, and sideband event wire contracts.
 import { randomBytes, randomUUID } from "node:crypto";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/realtime-voice-provider";
+import {
+  type RealtimeVoiceAgentConsultTranscriptEntry,
+  truncateUtf16Safe,
+} from "openclaw/plugin-sdk/realtime-voice-provider";
 import { readResponseTextPrefix } from "openclaw/plugin-sdk/response-limit-runtime";
 import type { OpenAIRealtimeHost } from "./realtime-host.js";
 import { createOpenAILiveCall, OPENAI_LIVE_SESSIONS_URL } from "./realtime-live-api.js";
@@ -64,11 +67,6 @@ export function createOpenAIQuicksilverRequestIds(): OpenAIQuicksilverRequestIds
   };
 }
 
-export type OpenAIQuicksilverInitialItem = {
-  role: "user" | "assistant";
-  text: string;
-};
-
 type OpenAIQuicksilverSession = {
   model: string;
   instructions: string;
@@ -107,7 +105,7 @@ export function buildOpenAIQuicksilverSession(params: {
   hostControlsInput?: boolean;
   instructions?: string;
   voice?: string;
-  initialItems?: readonly OpenAIQuicksilverInitialItem[];
+  initialItems?: readonly RealtimeVoiceAgentConsultTranscriptEntry[];
 }): OpenAIQuicksilverSession {
   const history = boundOpenAIQuicksilverContextItems(params.initialItems ?? []);
   const publicApi = isOpenAIGptLiveApiModel(params.model);
@@ -159,7 +157,7 @@ export function buildOpenAIQuicksilverSessionUpdate(params: {
   hostControlsInput?: boolean;
   instructions?: string;
   voice?: string;
-  initialItems?: readonly OpenAIQuicksilverInitialItem[];
+  initialItems?: readonly RealtimeVoiceAgentConsultTranscriptEntry[];
 }): OpenAIQuicksilverSessionUpdate {
   const configured = buildOpenAIQuicksilverSession(params);
   if (isOpenAIGptLiveApiModel(params.model)) {
@@ -199,10 +197,10 @@ function truncateOpenAIQuicksilverContextText(text: string, maxBytes: number): s
 }
 
 export function boundOpenAIQuicksilverContextItems(
-  items: readonly OpenAIQuicksilverInitialItem[],
-): OpenAIQuicksilverInitialItem[] {
+  items: readonly RealtimeVoiceAgentConsultTranscriptEntry[],
+): RealtimeVoiceAgentConsultTranscriptEntry[] {
   let remainingBytes = OPENAI_QUICKSILVER_CONTEXT_MAX_UTF8_BYTES;
-  const newestFirst: OpenAIQuicksilverInitialItem[] = [];
+  const newestFirst: RealtimeVoiceAgentConsultTranscriptEntry[] = [];
   for (
     let index = items.length - 1;
     index >= 0 && newestFirst.length < OPENAI_QUICKSILVER_CONTEXT_MAX_ENTRIES;

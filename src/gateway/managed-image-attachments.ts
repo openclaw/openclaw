@@ -8,7 +8,6 @@ import { sanitizeUntrustedFileName } from "@openclaw/fs-safe/advanced";
 import { maxBytesForKind, mediaKindFromMime } from "@openclaw/media-core/constants";
 import { mimeTypeFromFilePath } from "@openclaw/media-core/mime";
 import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
-import { expectDefined } from "@openclaw/normalization-core";
 import {
   asDateTimestampMs,
   asNonNegativeFiniteNumber,
@@ -84,7 +83,10 @@ import {
   readManagedImageRecord,
   type ManagedImageRecord,
 } from "./managed-image-record-store.js";
-import { resolveManagedImageThumbnail } from "./managed-image-thumbnail-cache.js";
+import {
+  encodeImageThumbnail,
+  resolveManagedImageThumbnail,
+} from "./managed-image-thumbnail-cache.js";
 import {
   MANAGED_OUTGOING_ATTACHMENT_ID_RE,
   MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX,
@@ -108,8 +110,6 @@ const OUTGOING_IMAGE_ROUTE_PREFIX = "/api/chat/media/outgoing";
 const DEFAULT_TRANSIENT_OUTGOING_IMAGE_TTL_MS = 15 * 60 * 1000;
 const MANAGED_OUTGOING_IMAGE_TICKET_SCOPE = "managed-outgoing-image";
 const MANAGED_OUTGOING_IMAGE_TICKET_TTL_MS = 5 * 60 * 1000;
-// Chat previews occupy up to 400 CSS pixels on displays with up to 3× density.
-const MANAGED_IMAGE_THUMBNAIL_MAX_SIDE = 1200;
 const managedOutgoingImageTicketSecret = randomBytes(32);
 
 export const DEFAULT_MANAGED_IMAGE_ATTACHMENT_LIMITS = {
@@ -181,14 +181,7 @@ export type ManagedOutgoingMediaArtifactDownload = {
   expiresAt: string;
 };
 
-function buildSessionManagedOutgoingAttachmentIndexCacheKey(
-  sessionKey: string,
-  agentId?: string,
-): string {
-  return sessionKey === "global" && agentId ? `agent:${agentId}:global` : sessionKey;
-}
-
-export function resolveManagedImageAttachmentLimits(
+function resolveManagedImageAttachmentLimits(
   config?: ManagedImageAttachmentLimitsConfig | null,
 ): ManagedImageAttachmentLimits {
   return {
@@ -214,25 +207,17 @@ function createManagedImageAttachmentError(message: string) {
   return error;
 }
 
-function isManagedImageAttachmentSafeError(error: unknown): error is Error {
-  if (!(error instanceof Error)) {
-    return false;
-  }
-  if (error.name === "ManagedImageAttachmentError") {
-    return true;
-  }
-  return (
-    error.message.startsWith("Managed image attachment ") ||
-    error.message.startsWith("Invalid image data URL")
-  );
-}
-
 function getSanitizedManagedImageAttachmentError(
   error: unknown,
   label: string,
   kind: ManagedMediaKind | "media",
 ): Error {
-  if (isManagedImageAttachmentSafeError(error)) {
+  if (
+    error instanceof Error &&
+    (error.name === "ManagedImageAttachmentError" ||
+      error.message.startsWith("Managed image attachment ") ||
+      error.message.startsWith("Invalid image data URL"))
+  ) {
     return error;
   }
   return createManagedImageAttachmentError(
@@ -312,30 +297,6 @@ function getManagedImageMetadataLimitError(
     return `Managed image attachment ${JSON.stringify(alt)} exceeds the ${limits.maxPixels.toLocaleString("en-US")} pixel limit`;
   }
   return null;
-}
-
-async function resizeManagedImageBufferToLimits(params: {
-  buffer: Buffer;
-  limits: ManagedImageAttachmentLimits;
-}): Promise<{ buffer: Buffer; contentType: string; width: number; height: number }> {
-  const resized = await createImageProcessor().encode(params.buffer, {
-    format: "auto",
-    limits: {
-      maxWidth: params.limits.maxWidth,
-      maxHeight: params.limits.maxHeight,
-      maxPixels: params.limits.maxPixels,
-    },
-    opaque: { format: "jpeg", quality: 92 },
-    transparent: { format: "png", compressionLevel: 9 },
-    transparency: "auto",
-  });
-
-  return {
-    buffer: resized.data,
-    contentType: resized.mimeType,
-    width: resized.width,
-    height: resized.height,
-  };
 }
 
 function resolveManagedImageOriginalsDir(stateDir: string): string {
@@ -547,13 +508,10 @@ function parseMediaDataUrl(
 }
 
 async function getVariantStats(params: { buffer: Buffer; sizeBytes: number }) {
-  const metadata = (await getImageMetadata(params.buffer).catch(() => null)) ?? {
-    width: null,
-    height: null,
-  };
+  const metadata = await getImageMetadata(params.buffer).catch(() => null);
   return {
-    width: metadata.width ?? null,
-    height: metadata.height ?? null,
+    width: metadata?.width ?? null,
+    height: metadata?.height ?? null,
     sizeBytes: Number.isFinite(params.sizeBytes) ? params.sizeBytes : null,
   };
 }
@@ -610,11 +568,7 @@ export async function cleanupManagedOutgoingMediaRecords(params?: {
     }
 
     let shouldDelete = entry.cleanupPending;
-    if (
-      !entry.cleanupPending &&
-      forceDeleteSessionRecords &&
-      (!sessionKeyFilter || record.sessionKey === sessionKeyFilter)
-    ) {
+    if (!entry.cleanupPending && forceDeleteSessionRecords) {
       shouldDelete = true;
     } else if (!entry.cleanupPending && record.messageId) {
       const transcriptMatch = await recordMatchesTranscriptMessage(
@@ -751,21 +705,6 @@ function buildManagedOutgoingAttachmentRefKey(messageId: string, attachmentId: s
   return `${messageId}::${attachmentId}`;
 }
 
-function buildManagedImageResizeWarningBlock(params: {
-  alt: string;
-  originalWidth: number;
-  originalHeight: number;
-  resizedWidth: number;
-  resizedHeight: number;
-}): ManagedMediaBlock {
-  return {
-    type: "text",
-    text:
-      `[Image warning] ${params.alt} exceeded gateway dimension/pixel limits and was resized from ` +
-      `${params.originalWidth}×${params.originalHeight} to ${params.resizedWidth}×${params.resizedHeight}.`,
-  };
-}
-
 function toRecordFilename(
   filePath: string,
   attachmentName?: string,
@@ -824,18 +763,17 @@ export function parseManagedOutgoingRoute(value: string) {
     if (!match) {
       return null;
     }
+    const [, encodedSessionKey, attachmentId] = match;
     if (
-      !MANAGED_OUTGOING_ATTACHMENT_ID_RE.test(
-        expectDefined(match[2], "managed image attachments regex capture 2"),
-      )
+      !encodedSessionKey ||
+      !attachmentId ||
+      !MANAGED_OUTGOING_ATTACHMENT_ID_RE.test(attachmentId)
     ) {
       return null;
     }
     return {
-      sessionKey: decodeURIComponent(
-        expectDefined(match[1], "managed image attachments regex capture 1"),
-      ),
-      attachmentId: expectDefined(match[2], "managed image attachments regex capture 2"),
+      sessionKey: decodeURIComponent(encodedSessionKey),
+      attachmentId,
     };
   } catch {
     return null;
@@ -910,7 +848,7 @@ async function recordMatchesTranscriptMessage(
   }
   const { sessionKey, agentId, messageId: requestedMessageId } = record;
   const refKey = buildManagedOutgoingAttachmentRefKey(requestedMessageId, record.attachmentId);
-  const cacheKey = buildSessionManagedOutgoingAttachmentIndexCacheKey(sessionKey, agentId);
+  const cacheKey = sessionKey === "global" && agentId ? `agent:${agentId}:global` : sessionKey;
   if (cache?.has(cacheKey)) {
     return cache.get(cacheKey)?.has(refKey) ? "match" : "missing";
   }
@@ -1132,13 +1070,7 @@ async function readManagedImageThumbnailFromFile(
     if (maxBytes !== undefined && source.byteLength > maxBytes) {
       throw new Error("Managed image exceeds the preview byte limit");
     }
-    return (
-      await createImageProcessor().encode(source, {
-        format: "png",
-        resize: { maxSide: MANAGED_IMAGE_THUMBNAIL_MAX_SIDE, enlarge: false },
-        compressionLevel: 8,
-      })
-    ).data;
+    return await encodeImageThumbnail(source);
   });
 }
 
@@ -1337,66 +1269,61 @@ export async function createManagedOutgoingMediaBlocks(params: {
               ? parsedDataUrl.buffer
               : (await readLocalFileSafely({ filePath: savedOriginal.path })).buffer;
           validateManagedImageBuffer(originalBuffer, label, limits);
-          originalStats = await getVariantStats({
-            buffer: originalBuffer,
-            sizeBytes: savedOriginal.size,
-          });
-
-          const originalDisplayMetadata =
-            originalStats.width != null && originalStats.height != null
-              ? { width: originalStats.width, height: originalStats.height }
-              : await getImageMetadata(originalBuffer);
-          let effectiveMetadata = originalDisplayMetadata;
-          let metadataLimitError = getManagedImageMetadataLimitError(
-            effectiveMetadata,
-            label,
-            limits,
-          );
-          for (let resizeAttempt = 0; metadataLimitError; resizeAttempt += 1) {
+          let originalDisplayMetadata: { width: number; height: number } | undefined;
+          for (let resizeAttempt = 0; ; resizeAttempt += 1) {
+            originalStats = await getVariantStats({
+              buffer: originalBuffer,
+              sizeBytes: savedOriginal.size,
+            });
+            const effectiveMetadata =
+              originalStats.width != null && originalStats.height != null
+                ? { width: originalStats.width, height: originalStats.height }
+                : await getImageMetadata(originalBuffer);
+            const metadataLimitError = getManagedImageMetadataLimitError(
+              effectiveMetadata,
+              label,
+              limits,
+            );
+            if (!metadataLimitError) {
+              if (originalDisplayMetadata && effectiveMetadata) {
+                resizeWarning = {
+                  type: "text",
+                  text:
+                    `[Image warning] ${label} exceeded gateway dimension/pixel limits and was resized from ` +
+                    `${originalDisplayMetadata.width}×${originalDisplayMetadata.height} to ` +
+                    `${effectiveMetadata.width}×${effectiveMetadata.height}.`,
+                };
+              }
+              break;
+            }
             if (!effectiveMetadata || resizeAttempt >= 3) {
               throw createManagedImageAttachmentError(metadataLimitError);
             }
-            const resized = await resizeManagedImageBufferToLimits({
-              buffer: originalBuffer,
-              limits,
+            originalDisplayMetadata ??= effectiveMetadata;
+            const resized = await createImageProcessor().encode(originalBuffer, {
+              format: "auto",
+              limits: {
+                maxWidth: limits.maxWidth,
+                maxHeight: limits.maxHeight,
+                maxPixels: limits.maxPixels,
+              },
+              opaque: { format: "jpeg", quality: 92 },
+              transparent: { format: "png", compressionLevel: 9 },
+              transparency: "auto",
             });
-            validateManagedImageBuffer(resized.buffer, label, limits);
+            validateManagedImageBuffer(resized.data, label, limits);
             const replacement = await saveMediaBuffer(
-              resized.buffer,
-              resized.contentType,
+              resized.data,
+              resized.mimeType,
               "outgoing/originals",
               limits.maxBytes,
               toRecordFilename(savedOriginal.path) ?? `generated-image-${index + 1}`,
             );
             await unlinkIfExists(savedOriginal.path);
             savedOriginal = replacement;
-            savedOriginalContentType = replacement.contentType ?? resized.contentType;
+            savedOriginalContentType = replacement.contentType ?? resized.mimeType;
             savedOriginalPath = savedOriginal.path;
-            originalBuffer = resized.buffer;
-            originalStats = await getVariantStats({
-              buffer: originalBuffer,
-              sizeBytes: savedOriginal.size,
-            });
-            effectiveMetadata =
-              originalStats.width != null && originalStats.height != null
-                ? { width: originalStats.width, height: originalStats.height }
-                : await getImageMetadata(originalBuffer);
-            metadataLimitError = getManagedImageMetadataLimitError(
-              effectiveMetadata,
-              label,
-              limits,
-            );
-            if (!metadataLimitError) {
-              resizeWarning = buildManagedImageResizeWarningBlock({
-                alt: label,
-                originalWidth:
-                  originalDisplayMetadata?.width ?? effectiveMetadata?.width ?? resized.width,
-                originalHeight:
-                  originalDisplayMetadata?.height ?? effectiveMetadata?.height ?? resized.height,
-                resizedWidth: effectiveMetadata?.width ?? resized.width,
-                resizedHeight: effectiveMetadata?.height ?? resized.height,
-              });
-            }
+            originalBuffer = resized.data;
           }
         }
 
@@ -1631,6 +1558,23 @@ export async function handleManagedOutgoingMediaHttpRequest(
     return true;
   }
   const respondNotFound = () => sendStatus(res, 404, "not found");
+  const immutableCacheControl = hasValidMediaTicket
+    ? `private, max-age=${MANAGED_OUTGOING_IMAGE_TICKET_TTL_MS / 1000}, immutable`
+    : "private, max-age=31536000, immutable";
+  const writeMediaHeaders = (
+    contentType: string,
+    filename: string | null,
+    cacheControl = immutableCacheControl,
+  ) => {
+    res.setHeader("content-type", contentType);
+    res.setHeader("x-content-type-options", "nosniff");
+    res.setHeader("referrer-policy", "no-referrer");
+    res.setHeader("cache-control", cacheControl);
+    res.setHeader(
+      "content-disposition",
+      buildManagedMediaContentDisposition(filename, contentType),
+    );
+  };
   let byteStream = createGatewayByteStream(res, opened.handle, respondNotFound);
   try {
     let responseContentType = record.original.contentType || "application/octet-stream";
@@ -1650,20 +1594,8 @@ export async function handleManagedOutgoingMediaHttpRequest(
       }
       const sourceName = path.parse(responseFilename ?? "generated-image").name;
       res.statusCode = 200;
-      res.setHeader("content-type", "image/png");
       res.setHeader("content-length", String(thumbnail.byteLength));
-      res.setHeader("x-content-type-options", "nosniff");
-      res.setHeader("referrer-policy", "no-referrer");
-      res.setHeader(
-        "cache-control",
-        hasValidMediaTicket
-          ? `private, max-age=${MANAGED_OUTGOING_IMAGE_TICKET_TTL_MS / 1000}, immutable`
-          : "private, max-age=31536000, immutable",
-      );
-      res.setHeader(
-        "content-disposition",
-        buildManagedMediaContentDisposition(`${sourceName}-thumbnail.png`, "image/png"),
-      );
+      writeMediaHeaders("image/png", `${sourceName}-thumbnail.png`);
       res.end(req.method === "HEAD" ? undefined : thumbnail);
       return true;
     }
@@ -1711,20 +1643,10 @@ export async function handleManagedOutgoingMediaHttpRequest(
     // Stream from the verified descriptor so a path swap cannot bypass fs-safe after validation.
     await byteStream.pipe(byteResponse, req.method, () => {
       assertCurrent?.();
-      res.setHeader("content-type", responseContentType);
-      res.setHeader("x-content-type-options", "nosniff");
-      res.setHeader("referrer-policy", "no-referrer");
-      res.setHeader(
-        "cache-control",
-        isPlayback
-          ? "private, no-cache"
-          : hasValidMediaTicket
-            ? `private, max-age=${MANAGED_OUTGOING_IMAGE_TICKET_TTL_MS / 1000}, immutable`
-            : "private, max-age=31536000, immutable",
-      );
-      res.setHeader(
-        "content-disposition",
-        buildManagedMediaContentDisposition(responseFilename, responseContentType),
+      writeMediaHeaders(
+        responseContentType,
+        responseFilename,
+        isPlayback ? "private, no-cache" : immutableCacheControl,
       );
       writeByteHeaders(res, byteResponse);
     });

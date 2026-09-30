@@ -142,8 +142,11 @@ describe("litellm image generation provider", () => {
     const cases = [
       "http://127.255.255.254:4000",
       "http://[::1]:4000",
+      "http://[0:0:0:0:0:0:0:1]:4000",
       "http://host.docker.internal:4000",
       "https://localhost:4000",
+      "https://LOCALHOST:4000",
+      "http://proxy.localhost:4000",
     ] as const;
     for (const baseUrl of cases) {
       await generateAt(baseUrl);
@@ -159,6 +162,7 @@ describe("litellm image generation provider", () => {
       "http://192.168.5.10:4000",
       "http://printer.local:4000",
       "http://127.evil.com:4000",
+      "http://[::ffff:127.0.0.1]:4000",
     ] as const;
     for (const baseUrl of cases) {
       await generateAt(baseUrl);

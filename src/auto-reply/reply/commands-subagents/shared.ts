@@ -1,4 +1,3 @@
-// Shared helpers for subagent command actions and target resolution.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,

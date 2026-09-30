@@ -38,8 +38,10 @@ export async function updateCleanupCommand(options: {
 }): Promise<void> {
   let report: RecoveryCleanupReport | undefined;
   try {
-    const readConfig = () => readSourceConfigBestEffort();
-    report = inspectSessionSqliteRecovery({ cfg: await readConfig(), env: process.env });
+    report = inspectSessionSqliteRecovery({
+      cfg: await readSourceConfigBestEffort(),
+      env: process.env,
+    });
     if (!options.dryRun) {
       if (report.artifacts.length === 0 && !options.yes) {
         report.status = "complete";
@@ -49,7 +51,7 @@ export async function updateCleanupCommand(options: {
         report = await retireSessionSqliteRecovery({
           env: process.env,
           preview: report,
-          readConfig,
+          readConfig: readSourceConfigBestEffort,
           confirm: async (verified) => {
             if (options.yes || verified.artifacts.length === 0) {
               return true;

@@ -71,8 +71,16 @@ function isOperatorCriticalSubtitle(session: SidebarRecentSession): boolean {
 }
 
 export class SidebarSessionProjection {
-  constructor(private readonly now: () => number = () => Date.now()) {}
+  constructor(
+    private readonly now: () => number = () => Date.now(),
+    private readonly host?: { readonly isConnected: boolean; requestUpdate(): void },
+  ) {}
 
+  revision = 0;
+  createdOrderRevision = 0;
+  private observedResults: readonly { sessions: readonly { key: string }[] }[] = [];
+  private subtitleTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
+  private subtitleDeadline = Infinity;
   private readonly observedOrder = new Map<string, number>();
   private nextCreatedOrder = 0;
   private readonly stickySections = new Map<string, Set<string>>();
@@ -92,12 +100,24 @@ export class SidebarSessionProjection {
   }
 
   observeRows(results: readonly { sessions: readonly { key: string }[] }[]): void {
+    if (
+      results.length === this.observedResults.length &&
+      results.every((value, index) => Object.is(value, this.observedResults[index]))
+    ) {
+      return;
+    }
+    this.observedResults = results;
+    const previousOrder = this.nextCreatedOrder;
     for (const result of results) {
       for (const { key } of result.sessions) {
         if (key && !this.observedOrder.has(key)) {
           this.observedOrder.set(key, this.nextCreatedOrder++);
         }
       }
+    }
+    if (previousOrder !== this.nextCreatedOrder) {
+      this.createdOrderRevision += 1;
+      this.revision += 1;
     }
     // Paging gaps must retain their tie-break index; evict absent keys only
     // when the sidebar-lifetime registry actually exceeds its memory bound.
@@ -130,10 +150,15 @@ export class SidebarSessionProjection {
     }
     this.observedOrder.set(key, 0);
     this.nextCreatedOrder = Math.max(this.nextCreatedOrder, 1);
+    this.createdOrderRevision += 1;
+    this.revision += 1;
     return true;
   }
 
   project(input: SidebarProjectionInput): SidebarVisibleSections {
+    // Record the state published by this pass, including sticky membership and subtitles.
+    this.revision += 1;
+    this.clearSubtitleTimer();
     const previous = this.previousInput;
     const scopeChanged =
       previous !== null &&
@@ -288,6 +313,7 @@ export class SidebarSessionProjection {
   }
 
   resetMembership(sectionId?: string): void {
+    this.revision += 1;
     if (sectionId === undefined) {
       this.stickySections.clear();
     } else {
@@ -305,6 +331,7 @@ export class SidebarSessionProjection {
   }
 
   toggleChildren(session: SidebarRecentSession): { expanded: boolean } {
+    this.revision += 1;
     if (this.isChildrenExpanded(session.key)) {
       // The explicit closed mode prevents a still-active descendant from
       // immediately undoing the user's collapse on the next update pass.
@@ -318,16 +345,49 @@ export class SidebarSessionProjection {
   showMoreChildren(key: string): void {
     if (this.isChildrenExpanded(key)) {
       this.childModes.set(key, "expanded-fully");
+      this.revision += 1;
     }
   }
 
-  resolveSubtitle(params: SidebarSubtitleParams): SidebarSubtitleValue {
-    if (!params.session.hasActiveRun || !params.showPreview) {
-      return resolveSidebarSessionSubtitle(params);
+  dispose(): void {
+    this.clearSubtitleTimer();
+    this.revision += 1;
+  }
+
+  private clearSubtitleTimer(): void {
+    if (this.subtitleTimer !== null) {
+      globalThis.clearTimeout(this.subtitleTimer);
     }
+    this.subtitleTimer = null;
+    this.subtitleDeadline = Infinity;
+  }
+
+  private scheduleSubtitleUpdate(deadline: number): void {
+    if (!this.host?.isConnected || this.subtitleDeadline <= deadline) {
+      return;
+    }
+    this.clearSubtitleTimer();
+    this.subtitleDeadline = deadline;
+    this.subtitleTimer = globalThis.setTimeout(
+      () => {
+        this.subtitleTimer = null;
+        this.subtitleDeadline = Infinity;
+        this.revision += 1;
+        this.host?.requestUpdate();
+      },
+      Math.max(0, deadline - this.now()),
+    );
+  }
+
+  resolveSubtitle(params: SidebarSubtitleParams): SidebarSubtitleValue {
     // While a run is live the held value is the display: observeSubtitle
     // refreshed it this update pass, applying the minimum-display floor.
-    const held = this.heldSubtitles.get(params.session.key);
+    // Tool identity and its prepared progress must advance together; the
+    // ambient narration hold must not pair a new glyph with an old tool label.
+    const held =
+      params.session.hasActiveRun && params.showPreview && !params.toolActivity
+        ? this.heldSubtitles.get(params.session.key)
+        : undefined;
     if (!held) {
       return resolveSidebarSessionSubtitle(params);
     }
@@ -372,6 +432,7 @@ export class SidebarSessionProjection {
       now - held.shownAt < SIDEBAR_SUBTITLE_MIN_DISPLAY_MS &&
       !isOperatorCriticalSubtitle(session)
     ) {
+      this.scheduleSubtitleUpdate(held.shownAt + SIDEBAR_SUBTITLE_MIN_DISPLAY_MS);
       return;
     }
     const catalogValue = resolveSidebarSessionSubtitle({ ...params, hasDisplay: true });

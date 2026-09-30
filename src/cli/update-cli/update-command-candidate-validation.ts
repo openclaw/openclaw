@@ -127,7 +127,7 @@ export function createUpdateCandidateConfigRefresh(params: {
 export async function assertUpdateCandidateExecutor(params: {
   root: string;
   env: NodeJS.ProcessEnv;
-  opts: UpdateCommandOptions;
+  run: UpdateCommandOptions["run"];
   shouldRestart: boolean;
   serviceOwned: boolean;
   invocationCwd?: string;
@@ -135,10 +135,11 @@ export async function assertUpdateCandidateExecutor(params: {
   nodeRunner?: string;
   assertCurrent: () => void;
 }): Promise<void> {
-  if (!params.shouldRestart || !params.opts.run || !params.serviceOwned) {
+  if (!params.shouldRestart || !params.run || !params.serviceOwned) {
     return;
   }
-  const executor = params.opts.run.executorFence;
+  params.assertCurrent();
+  const executor = params.run.executorFence;
   if (!executor) {
     throw new UpdatePreMutationError(
       "target-native-unsupported",

@@ -1,4 +1,3 @@
-// Defines Zod schema fragments for agent default configuration.
 import { z } from "zod";
 import { isValidNonNegativeByteSizeString } from "./byte-size.js";
 import { AgentModelMapSchema, AgentModelPolicySchema } from "./zod-schema.agent-entry-base.js";
@@ -244,7 +243,7 @@ export const AgentDefaultsBaseSchema = z
       .optional(),
     embeddedAgent: EmbeddedAgentConfigSchema.optional(),
     thinkingDefault: AgentThinkingLevelSchema.optional(),
-    fastModeDefault: z.union([z.boolean(), z.literal("auto")]).optional(),
+    fastModeDefault: z.union([z.boolean(), z.literal("auto"), z.literal("ultrafast")]).optional(),
     verboseDefault: z.union([z.literal("off"), z.literal("on"), z.literal("full")]).optional(),
     toolProgressDetail: z.union([z.literal("explain"), z.literal("raw")]).optional(),
     reasoningDefault: z.union([z.literal("off"), z.literal("on"), z.literal("stream")]).optional(),

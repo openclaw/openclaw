@@ -389,7 +389,7 @@ describe("worker placement dispatch", () => {
       },
     });
     placementStore.markWorkspaceResultPending(claim);
-    placementStore.updateWorkspaceBaseManifest({
+    await placementStore.updateWorkspaceBaseManifest({
       claim,
       manifestRef: harness.reconciledManifestRef,
     });
@@ -741,7 +741,7 @@ describe("worker placement dispatch", () => {
     if (active?.state !== "active") {
       return;
     }
-    placementStore.beginWorkspaceReconciliation(
+    await placementStore.beginWorkspaceReconciliation(
       {
         sessionId: active.sessionId,
         environmentId: active.environmentId,
@@ -918,9 +918,9 @@ describe("worker placement dispatch", () => {
       },
     });
     const binding = claim;
-    placementStore.authorizeWorkerTurnTools(claim, ["sessions_send"]);
+    await placementStore.authorizeWorkerTurnTools(claim, ["sessions_send"]);
     expect(
-      placementStore.beginWorkerSessionToolOperation({
+      await placementStore.beginWorkerSessionToolOperation({
         claim: binding,
         toolName: "sessions_send",
         toolCallId: "call-owner-mismatch",
@@ -958,7 +958,7 @@ describe("worker placement dispatch", () => {
       // Failed fence assertions must still unblock and join recovery before
       // afterEach closes the shared-state database.
       try {
-        completed = placementStore.completeWorkerSessionToolOperation({
+        completed = await placementStore.completeWorkerSessionToolOperation({
           sourceSessionId: claim.sessionId,
           sourceClaimId: claim.claimId,
           toolCallId: "call-owner-mismatch",

@@ -192,16 +192,11 @@ export async function inspectGatewayRestart(params: {
         ) || listenerAttributionGap
       : gatewayListeners.length > 0 || listenerAttributionGap;
   let healthy = running && ownsPort && !startupPhase;
-  if (requiresGatewayProbe && healthy && portUsage.status === "busy") {
-    const reachable = (reachability ??= await loadReachability());
-    healthy = reachable.reachable;
-  }
   if (
-    !healthy &&
     !startupPhase &&
     running &&
     portUsage.status === "busy" &&
-    !requiresGatewayProbe
+    (requiresGatewayProbe ? healthy : !healthy)
   ) {
     const reachable = (reachability ??= await loadReachability());
     healthy = reachable.reachable;

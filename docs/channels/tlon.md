@@ -219,8 +219,12 @@ full, the monitor sends the owner one saturation notice and does not admit more 
 until pending items are resolved. Failed notice delivery is retried up to three times per full-queue
 episode. Admitting a new request after capacity becomes available starts a new episode, so filling
 the queue again can send another notice in the same monitor run. Rejected requesters must retry
-after capacity is available; pending DM and group invite snapshots remain retryable rather than
+after capacity is available; pending DM and group invite updates remain retryable rather than
 being acknowledged.
+
+Group invite updates apply to one group at a time. Revoked, removed, or completed invitations
+clear that group's duplicate suppression so a later invitation can be handled under the current
+auto-accept and allowlist settings.
 
 ## Auto-accept settings
 

@@ -534,13 +534,13 @@ export async function installPackageDir<
                 // Verified on Blacksmith Ubuntu/Node 24/npm 11: `--silent` can make npm fail
                 // with empty stdout/stderr for bad specs like `workspace:^`; `--loglevel=error`
                 // stays quiet on success while preserving the actionable npm failure text.
-                resolveNpmCommand([
-                  ...createSafeNpmInstallArgs({
+                resolveNpmCommand(
+                  createSafeNpmInstallArgs({
                     omitDev: true,
                     loglevel: "error",
                     ignoreWorkspaces: true,
                   }),
-                ]),
+                ),
                 {
                   timeoutMs: resolveInstallWorkTimeoutMs(
                     params.workTimeoutMs,

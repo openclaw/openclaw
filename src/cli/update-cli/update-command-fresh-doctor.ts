@@ -33,7 +33,6 @@ import {
   createUpdateFailureFact,
   normalizeUpdateFailureFacts,
   parseConfigFailureFacts,
-  type UpdateFailureFact,
 } from "../../infra/update-failure-facts.js";
 import { POST_CORE_UPDATE_ENV } from "../../infra/update-post-core-context.js";
 import { UpdateRequesterRevokedError } from "../../infra/update-requester-authority.js";
@@ -90,27 +89,6 @@ export async function withPrePluginUpdateDoctorEnv<T>(run: () => Promise<T>): Pr
     },
     run,
   );
-}
-
-function createPostPluginDoctorExecutionFailure(
-  pluginUpdate: PostCorePluginUpdateResult,
-  reason: string,
-  failureFacts?: UpdateFailureFact[],
-): PostCorePluginUpdateResult {
-  return {
-    ...pluginUpdate,
-    status: "error",
-    reason: POST_PLUGIN_DOCTOR_EXECUTION_FAILED_REASON,
-    ...(failureFacts?.length ? { failureFacts } : {}),
-    warnings: [
-      ...(pluginUpdate.warnings ?? []),
-      {
-        reason,
-        message: `Post-update plugin Doctor did not complete: ${reason}`,
-        guidance: ["Run `openclaw update repair` to retry post-update plugin repair."],
-      },
-    ],
-  };
 }
 
 export async function runUpdateFinalizationDoctorInFreshProcess(params: {
@@ -541,11 +519,23 @@ export async function completePostCorePluginUpdate(
       }
       // Lost updater authority must not become an advisory that starts more children.
       assertCurrent();
-      pluginUpdate = createPostPluginDoctorExecutionFailure(
-        params.pluginUpdate,
-        String(err),
-        err instanceof UpdateDoctorError ? err.failureFacts : undefined,
-      );
+      const failedUpdate = params.pluginUpdate;
+      const reason = String(err);
+      const failureFacts = err instanceof UpdateDoctorError ? err.failureFacts : undefined;
+      pluginUpdate = {
+        ...failedUpdate,
+        status: "error",
+        reason: POST_PLUGIN_DOCTOR_EXECUTION_FAILED_REASON,
+        ...(failureFacts?.length ? { failureFacts } : {}),
+        warnings: [
+          ...(failedUpdate.warnings ?? []),
+          {
+            reason,
+            message: `Post-update plugin Doctor did not complete: ${reason}`,
+            guidance: ["Run `openclaw update repair` to retry post-update plugin repair."],
+          },
+        ],
+      };
     }
   }
 

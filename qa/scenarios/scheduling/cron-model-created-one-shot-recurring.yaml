@@ -270,10 +270,13 @@ flow:
             expr: "JSON.stringify([...(finalRecurring.payload.toolsAllow ?? [])].sort()) === JSON.stringify([...(recurringJob.payload.toolsAllow ?? [])].sort()) && finalRecurring.payload.toolsAllowIsDefault === true"
             message:
               expr: "`recurring authority changed across restart: before=${JSON.stringify(recurringJob.payload)} after=${JSON.stringify(finalRecurring?.payload)}`"
+        - set: finalOwnedJobs
+          value:
+            expr: "finalList.jobs.filter((job) => job.name === oneShotName || job.name === recurringName)"
         - assert:
-            expr: "finalList.jobs.length === 1 && finalList.jobs[0].id === recurringJob.id"
+            expr: "finalOwnedJobs.length === 1 && finalOwnedJobs[0].id === recurringJob.id"
             message:
-              expr: "`gateway restart replayed or created unexpected cron jobs: ${JSON.stringify(finalList.jobs.map((job) => ({ id: job.id, name: job.name, schedule: job.schedule })))}`"
+              expr: "`gateway restart replayed or created unexpected scenario cron jobs: ${JSON.stringify(finalOwnedJobs.map((job) => ({ id: job.id, name: job.name, schedule: job.schedule })))}`"
         - call: env.gateway.call
           saveAs: oneShotRunsPage
           args:

@@ -8,6 +8,7 @@ import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { CronActiveJobMarker } from "../active-jobs.js";
 import type { CronRunReceiptSettlementDisposition } from "../store/run-receipt-store.js";
 import type { CronRunReceiptHandle } from "../store/run-receipt.types.js";
+import type { StartupDeferredJob } from "../store/runtime-worker.types.js";
 import type {
   CronAgentExecutionPhaseUpdate,
   CronAgentExecutionStarted,
@@ -16,7 +17,6 @@ import type {
   CronNextCheckProposal,
   CronResolvedDeliveryState,
   CronRunOutcome,
-  CronRunStatus,
   CronRunTelemetry,
 } from "../types.js";
 import type { CronRunDeliveryResult, CronServiceState } from "./state.js";
@@ -98,18 +98,6 @@ export type StartupCatchupCandidate = {
   job: CronJob;
   reservedAtMs: number;
   reservationIdentity: object;
-};
-
-export type StartupDeferredJob = {
-  jobId: string;
-  delayMs?: number;
-  scheduleIdentity: string | undefined;
-  createdAtMs: number;
-  payloadKind: CronJob["payload"]["kind"];
-  scheduleActivatedAtMs: number | undefined;
-  nextRunAtMs: number | undefined;
-  lastRunAtMs: number | undefined;
-  lastRunStatus: CronRunStatus | undefined;
 };
 
 export type StartupCatchupPlan = {

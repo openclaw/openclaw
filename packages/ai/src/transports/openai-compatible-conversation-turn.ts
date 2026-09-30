@@ -1,9 +1,4 @@
-/**
- * OpenAI-compatible conversation turn detector.
- *
- * Some providers reject requests without a non-empty user/assistant turn; this
- * helper checks the loose message payload shape before transport submission.
- */
+// Some providers require a non-empty user or assistant turn before submission.
 import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 
 function hasNonEmptyContentPart(part: unknown): boolean {
@@ -27,16 +22,6 @@ function hasNonEmptyMessageContent(content: unknown): boolean {
   return content.some(hasNonEmptyContentPart);
 }
 
-function hasAssistantToolCall(message: Record<string, unknown>): boolean {
-  const toolCalls = message.tool_calls;
-  return (
-    Array.isArray(toolCalls) &&
-    toolCalls.some((toolCall) => {
-      return Boolean(toolCall && typeof toolCall === "object");
-    })
-  );
-}
-
 /** Returns whether an OpenAI-compatible messages payload contains a usable turn. */
 export function hasOpenAICompatibleConversationTurn(messages: unknown): boolean {
   if (!Array.isArray(messages)) {
@@ -51,7 +36,14 @@ export function hasOpenAICompatibleConversationTurn(messages: unknown): boolean 
       return hasNonEmptyMessageContent(record.content);
     }
     if (record.role === "assistant") {
-      return hasNonEmptyMessageContent(record.content) || hasAssistantToolCall(record);
+      if (hasNonEmptyMessageContent(record.content)) {
+        return true;
+      }
+      const toolCalls = record.tool_calls;
+      return (
+        Array.isArray(toolCalls) &&
+        toolCalls.some((toolCall) => toolCall && typeof toolCall === "object")
+      );
     }
     return false;
   });

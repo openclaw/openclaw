@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { Writable } from "node:stream";
 import { isDeepStrictEqual } from "node:util";
 import { resolveStateDir } from "../config/paths.js";
 import { sha256Hex } from "../infra/crypto-digest.js";
+import { createNullWriter } from "../shared/null-writer.js";
 import { resolveLaunchAgentLabel } from "./launchd-label.js";
 import { probeLaunchAgentState, resolveLaunchAgentGuiDomain } from "./launchd-runtime.js";
 import {
@@ -413,11 +413,7 @@ async function restorePreparedGatewayServiceDefinitionBackup(
       // its inputs; only the caller's later restart may bootstrap the restored plist.
       await stopLaunchAgent({
         env: params.env,
-        stdout: new Writable({
-          write(_chunk, _encoding, done) {
-            done();
-          },
-        }),
+        stdout: createNullWriter(),
         assertCurrent: hooks.assertCurrent,
       });
       await hooks.beforeWrite();

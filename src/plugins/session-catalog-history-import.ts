@@ -99,13 +99,6 @@ function fitSessionCatalogItemToBytes(
   return Buffer.byteLength(JSON.stringify(bounded), "utf8") <= maxBytes ? bounded : undefined;
 }
 
-function importableSessionCatalogItem(
-  item: SessionCatalogTranscriptItem,
-): SessionCatalogTranscriptItem {
-  const { raw: _raw, ...importable } = item;
-  return importable;
-}
-
 async function readBoundedSessionCatalogHistory(params: {
   read: (params: { cursor?: string; limit: number }) => Promise<SessionsCatalogReadResult>;
 }): Promise<SessionCatalogTranscriptItem[]> {
@@ -123,7 +116,7 @@ async function readBoundedSessionCatalogHistory(params: {
     // Catalog reads are newest-first. Bound that recent suffix before restoring
     // source order for persistence; timestamps do not define transcript order.
     for (const item of page.items) {
-      const importableItem = importableSessionCatalogItem(item);
+      const { raw: _raw, ...importableItem } = item;
       const itemBytes = Buffer.byteLength(JSON.stringify(importableItem), "utf8");
       const remainingBytes = SESSION_CATALOG_HISTORY_IMPORT_MAX_BYTES - bytes;
       if (items.length > 0 && itemBytes > remainingBytes) {

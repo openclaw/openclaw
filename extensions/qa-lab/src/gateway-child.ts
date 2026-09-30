@@ -109,7 +109,7 @@ async function startOwnedGatewayChild(
       cwd: gatewayCwd,
       env: prepared?.env ?? launch.env,
       detached: process.platform !== "win32",
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["pipe", "pipe", "pipe"],
     });
     // Register synchronously: acceptance/readiness may reject with descendants
     // still alive, and replacement must immediately supersede its stopped parent.

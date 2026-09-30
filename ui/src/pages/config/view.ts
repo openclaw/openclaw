@@ -191,9 +191,7 @@ export function renderConfig(props: ConfigProps) {
     ...(showRootTab
       ? [{ key: null as string | null, label: props.navRootLabel ?? t("nav.settings") }]
       : []),
-    ...allCategories.flatMap((category) =>
-      category.sections.map((section) => ({ key: section.key, label: section.label })),
-    ),
+    ...allCategories.flatMap((category) => category.sections),
   ];
   const settingsLayout = props.settingsLayout ?? "tabs";
 

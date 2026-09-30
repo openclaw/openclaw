@@ -194,17 +194,6 @@ function remoteSlashCommandCacheKey(agentId: string | undefined, sessionKey?: st
   return JSON.stringify([agentId ?? null, sessionKey ?? null]);
 }
 
-function getRemoteSlashCommandCache(
-  client: GatewayBrowserClient,
-): Map<string, RemoteSlashCommandCacheEntry> {
-  let cache = remoteSlashCommandCache.get(client);
-  if (!cache) {
-    cache = new Map();
-    remoteSlashCommandCache.set(client, cache);
-  }
-  return cache;
-}
-
 async function requestRemoteSlashCommands(
   client: GatewayBrowserClient,
   agentId: string | undefined,
@@ -237,7 +226,11 @@ function loadRemoteSlashCommands(
   if (Array.isArray(metadata?.commands)) {
     return Promise.resolve(buildSlashCommandsFromEntries(getRemoteCommandEntries(metadata)));
   }
-  const cache = getRemoteSlashCommandCache(client);
+  let cache = remoteSlashCommandCache.get(client);
+  if (!cache) {
+    cache = new Map();
+    remoteSlashCommandCache.set(client, cache);
+  }
   const key = remoteSlashCommandCacheKey(agentId, sessionKey);
   const cached = cache.get(key);
   const now = Date.now();
@@ -279,15 +272,13 @@ export function invalidateSessionSlashCommands(
     ?.delete(remoteSlashCommandCacheKey(scope.agentId, scope.sessionKey));
 }
 
-export function applyRemoteSlashCommandsResult(params: {
-  client: GatewayBrowserClient | null;
-  agentId?: string | null;
-  result: CommandsListResult | null | undefined;
-}): boolean {
-  if (!Array.isArray(params.result?.commands)) {
+export function applyRemoteSlashCommandsResult(
+  result: CommandsListResult | null | undefined,
+): boolean {
+  if (!Array.isArray(result?.commands)) {
     return false;
   }
-  const commands = buildSlashCommandsFromEntries(getRemoteCommandEntries(params.result));
+  const commands = buildSlashCommandsFromEntries(getRemoteCommandEntries(result));
   refreshSeq += 1;
   replaceSlashCommands(commands);
   return true;
@@ -301,18 +292,13 @@ export async function refreshSlashCommands(params: {
 }): Promise<void> {
   const seq = ++refreshSeq;
   const agentId = params.agentId?.trim();
-  if (!params.client) {
-    if (seq !== refreshSeq || params.shouldApply?.() === false) {
-      return;
-    }
-    replaceSlashCommands(buildFallbackSlashCommands());
-    return;
-  }
-  const commands = await loadRemoteSlashCommands(params.client, agentId, params.sessionKey);
+  const commands = params.client
+    ? await loadRemoteSlashCommands(params.client, agentId, params.sessionKey)
+    : undefined;
   if (seq !== refreshSeq || params.shouldApply?.() === false) {
     return;
   }
-  replaceSlashCommands(commands);
+  replaceSlashCommands(commands ?? buildFallbackSlashCommands());
 }
 
 export function shouldQueueLocalSlashCommand(name: string): boolean {

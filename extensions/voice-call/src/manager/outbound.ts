@@ -367,10 +367,7 @@ function shouldStartListeningAfterInitialMessage(ctx: ConversationContext): bool
   if (!ctx.config.streaming.enabled) {
     return true;
   }
-  const streamAwareProvider = ctx.provider as typeof ctx.provider & {
-    isConversationStreamConnectEnabled?: () => boolean;
-  };
-  return streamAwareProvider.isConversationStreamConnectEnabled?.() !== true;
+  return ctx.provider.isConversationStreamConnectEnabled?.() !== true;
 }
 
 export async function sendDtmf(

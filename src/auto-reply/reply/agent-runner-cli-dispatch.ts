@@ -1,4 +1,4 @@
-// Builds CLI runtime dispatch inputs for agent runner executions.
+import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Value } from "typebox/value";
@@ -106,13 +106,8 @@ function createReasoningProgressBridge(
       if (evt.stream !== "thinking") {
         return undefined;
       }
-      const progressTokens = evt.data.progressTokens;
-      if (
-        typeof progressTokens !== "number" ||
-        !Number.isFinite(progressTokens) ||
-        progressTokens <= 0 ||
-        progressTokens === lastProgressTokens
-      ) {
+      const progressTokens = asPositiveFiniteNumber(evt.data.progressTokens);
+      if (progressTokens === undefined || progressTokens === lastProgressTokens) {
         return undefined;
       }
       lastProgressTokens = progressTokens;

@@ -36,10 +36,7 @@ class PendingSessionCreate extends OpenClawLightDomElement {
           notify();
         }),
     )
-    .watch(
-      () => this.context?.placementStartup,
-      (startup, notify) => startup.subscribe(notify),
-    );
+    .watchStore(() => this.context?.placementStartup);
   private readonly closeImage = () => {
     this.image?.release?.();
     this.image = null;

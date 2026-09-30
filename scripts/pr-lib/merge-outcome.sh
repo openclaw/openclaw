@@ -555,12 +555,43 @@ verify_prior_ci_main_advance() {
   [ "$main" != "$previous" ] || [ "$main" != "$PR_MAIN_SHA" ] || return 0
   if [ "$local_only" = true ]; then
     # The CLI switch fails closed on Git versions that ignore the environment variable.
-    local GIT_NO_LAZY_FETCH=1 revision
+    local GIT_NO_LAZY_FETCH=1 revision role git_diagnostic git_exit
     export GIT_NO_LAZY_FETCH
-    for revision in "$previous" "$main" "$PR_MAIN_SHA"; do
-      pr_git --no-lazy-fetch cat-file -e "$revision^{commit}" 2>/dev/null || {
-        merge_outcome_stop "final prior-CI main cannot be verified with local-only Git; no fetch after authority verification"; return 1;
-      }
+    for role in previous-main reread-main verified-main; do
+      case "$role" in
+        previous-main) revision="$previous" ;;
+        reread-main) revision="$main" ;;
+        verified-main) revision="$PR_MAIN_SHA" ;;
+      esac
+      if git_diagnostic=$(pr_git --no-lazy-fetch cat-file -e "$revision^{commit}" 2>&1 >/dev/null); then
+        continue
+      else
+        git_exit=$?
+      fi
+      # Redact complete bounded input before clipping; never print raw reporting failures.
+      git_diagnostic=$(
+        unset PNPM_CONFIG_MODULES_DIR pnpm_config_modules_dir npm_config_modules_dir
+        printf '%s' "$git_diagnostic" | TSX_TSCONFIG_PATH="$script_parent_dir/../tsconfig.json" \
+          node --import "$script_parent_dir/tsx.mjs" --input-type=module -e '
+        import { pathToFileURL } from "node:url";
+        const chunks = [];
+        let bytes = 0;
+        for await (const chunk of process.stdin) {
+          bytes += chunk.length;
+          if (bytes <= 8192) chunks.push(chunk);
+          else chunks.length = 0;
+        }
+        let diagnostic = "[Git diagnostic exceeded 8192 bytes]";
+        if (bytes <= 8192) {
+          const { redactSensitiveText } = await import(pathToFileURL(process.argv[1]).href);
+          diagnostic = redactSensitiveText(Buffer.concat(chunks).toString("utf8"), { mode: "tools" })
+            .replace(/\s+/g, " ").trim().slice(0, 512) || "[Git produced no diagnostic]";
+        }
+        process.stdout.write(JSON.stringify(diagnostic));
+        ' "$script_parent_dir/../src/logging/redact.ts" 2>/dev/null
+      ) || git_diagnostic='"[Git diagnostic unavailable]"'
+      merge_outcome_stop "final prior-CI main cannot be verified with local-only Git; role=$role oid=$revision git-exit=$git_exit diagnostic=$git_diagnostic; no fetch after authority verification"
+      return 1
     done
   else
     merge_outcome_require_main "$previous" || return 1

@@ -53,6 +53,10 @@ import {
   setChannelSourceTurnId,
   shouldMintChannelSourceTurnId,
 } from "./source-turn-id.js";
+import {
+  isReplyOperationStalledBeforeOutput,
+  STALLED_TURN_NOTICE_TEXT,
+} from "./stalled-turn-recovery.js";
 
 export async function prepareDispatchOperationContext(state: PrepareDispatchDeliveryReadyState) {
   const {
@@ -453,17 +457,12 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     recordReplyOperationAgentTurn([state.replyOperationRunState], operation);
     // Feedback only for pre-run drops: the user never saw output. Finalization or
     // terminal-settle stalls already produced/settled output, so a notice is noise.
-    const droppedBeforeOutput =
-      operation?.result?.kind === "failed" &&
-      operation.result.code === "run_stalled" &&
-      (operation.staleExpiryReason === "no_activity" ||
-        operation.staleExpiryReason === "stuck_recovery");
-    const queuedFinal = droppedBeforeOutput
-      ? dispatcher.sendFinalReply({
-          text: "⚠️ This turn was interrupted because it stopped making progress. Please try again.",
-          isError: true,
-        })
-      : false;
+    // Last resort: an armed run owner first hands the request to the follow-up lane.
+    const queuedFinal =
+      isReplyOperationStalledBeforeOutput(operation) &&
+      state.replyOperationRunState.continueStalledTurn?.() !== true
+        ? dispatcher.sendFinalReply({ text: STALLED_TURN_NOTICE_TEXT, isError: true })
+        : false;
     if (
       state.turnAdoptionState &&
       !state.turnAdoptionState.adopted &&

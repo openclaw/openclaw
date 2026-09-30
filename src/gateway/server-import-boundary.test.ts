@@ -283,6 +283,6 @@ describe("gateway startup import boundaries", () => {
     expect(workerStartup).toContain(
       "const loadWorkerSessionToolExecutorModule = createLazyRuntimeModule(",
     );
-    expect(workerStartup).toContain("loadWorkerSessionToolExecutorModule().then(");
+    expect(workerStartup).toContain("await loadWorkerSessionToolExecutorModule()");
   });
 });

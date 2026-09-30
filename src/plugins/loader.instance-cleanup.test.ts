@@ -12,7 +12,12 @@ import {
   useNoBundledPlugins,
   writePlugin,
 } from "./loader.test-fixtures.js";
-import { createPluginCache, retirePluginCache, withPluginCache } from "./plugin-cache.js";
+import {
+  createPluginCache,
+  retirePluginCache,
+  withPluginCache,
+  type PluginCache,
+} from "./plugin-cache.js";
 import { PluginInstance } from "./plugin-instance.js";
 import {
   clearActivePluginRegistry,
@@ -222,6 +227,66 @@ it.each([false, true])(
     }
   },
 );
+
+it("keeps a module-scope resource open for the republished instance after the old one retires", async () => {
+  useNoBundledPlugins();
+  const id = "module-resource-republish";
+  // Canonical external-plugin pattern: open a resource at import, close it in onDispose.
+  const plugin = writePlugin({
+    id,
+    body: `const { DatabaseSync } = require("node:sqlite");
+      const db = new DatabaseSync(":memory:");
+      module.exports = { id: ${JSON.stringify(id)}, register(api) {
+        api.lifecycle.onDispose(() => { if (db.isOpen) db.close(); });
+        api.registerTool({ name: "resource_probe", description: "Query the module database",
+          parameters: { type: "object", properties: {} },
+          async execute() {
+            return { content: [{ type: "text", text: String(db.prepare("select 7 as v").get().v) }] };
+          }
+        });
+      } };`,
+  });
+  writeFileSync(
+    path.join(plugin.dir, "openclaw.plugin.json"),
+    JSON.stringify({
+      id,
+      configSchema: { type: "object", properties: {} },
+      contracts: { tools: ["resource_probe"] },
+    }),
+  );
+  // A republish loads the unchanged plugin through a fresh inventory, then retires the old one.
+  const load = (cache: PluginCache) =>
+    withPluginCache(cache, () =>
+      loadOpenClawPlugins({
+        config: {
+          plugins: { allow: [id], load: { paths: [plugin.file] }, slots: { memory: "none" } },
+        },
+        activate: false,
+        cache: false,
+      }),
+    );
+  const previousCache = createPluginCache();
+  const nextCache = createPluginCache();
+  const previous = load(previousCache);
+  const next = load(nextCache);
+  try {
+    const tool = next.tools[0]?.factory({});
+    if (!tool || Array.isArray(tool)) {
+      throw new Error("Expected the registered resource probe");
+    }
+    await disposePluginRegistryInstances(previous);
+    await retirePluginCache(previousCache);
+    await expect(tool.execute("after-republish", {})).resolves.toMatchObject({
+      content: [{ type: "text", text: "7" }],
+    });
+  } finally {
+    await disposePluginRegistryInstances(previous);
+    await disposePluginRegistryInstances(next);
+    await retirePluginCache(previousCache);
+    await retirePluginCache(nextCache);
+    resetPluginLoaderTestStateForTest();
+  }
+});
 
 it("preserves body and unexpected registry retirement failures with async disposal", async () => {
   const operationError = new Error("operation failed");

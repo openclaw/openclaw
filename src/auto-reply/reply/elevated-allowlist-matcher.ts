@@ -1,4 +1,3 @@
-// Matches elevated-command allowlists against normalized sender identities.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,

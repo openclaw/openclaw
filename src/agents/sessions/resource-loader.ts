@@ -273,41 +273,31 @@ export class DefaultResourceLoader implements ResourceLoader {
   }
 
   extendResources(paths: ResourceExtensionPaths): void {
-    const skillPaths = this.normalizeExtensionPaths(paths.skillPaths ?? []);
-    const promptPaths = this.normalizeExtensionPaths(paths.promptPaths ?? []);
-    const themePaths = this.normalizeExtensionPaths(paths.themePaths ?? []);
-
-    for (const entry of skillPaths) {
-      this.extensionSkillSourceInfos.set(entry.path, createSourceInfo(entry.path, entry.metadata));
-    }
-    for (const entry of promptPaths) {
-      this.extensionPromptSourceInfos.set(entry.path, createSourceInfo(entry.path, entry.metadata));
-    }
-    for (const entry of themePaths) {
-      this.extensionThemeSourceInfos.set(entry.path, createSourceInfo(entry.path, entry.metadata));
-    }
+    const skillPaths = this.registerExtensionPaths(
+      paths.skillPaths,
+      this.extensionSkillSourceInfos,
+    );
+    const promptPaths = this.registerExtensionPaths(
+      paths.promptPaths,
+      this.extensionPromptSourceInfos,
+    );
+    const themePaths = this.registerExtensionPaths(
+      paths.themePaths,
+      this.extensionThemeSourceInfos,
+    );
 
     if (skillPaths.length > 0) {
-      this.lastSkillPaths = this.mergePaths(
-        this.lastSkillPaths,
-        skillPaths.map((entry) => entry.path),
-      );
+      this.lastSkillPaths = this.mergePaths(this.lastSkillPaths, skillPaths);
       this.updateSkillsFromPaths(this.lastSkillPaths);
     }
 
     if (promptPaths.length > 0) {
-      this.lastPromptPaths = this.mergePaths(
-        this.lastPromptPaths,
-        promptPaths.map((entry) => entry.path),
-      );
+      this.lastPromptPaths = this.mergePaths(this.lastPromptPaths, promptPaths);
       this.updatePromptsFromPaths(this.lastPromptPaths);
     }
 
     if (themePaths.length > 0) {
-      this.lastThemePaths = this.mergePaths(
-        this.lastThemePaths,
-        themePaths.map((entry) => entry.path),
-      );
+      this.lastThemePaths = this.mergePaths(this.lastThemePaths, themePaths);
       this.updateThemesFromPaths(this.lastThemePaths);
     }
   }
@@ -494,13 +484,15 @@ export class DefaultResourceLoader implements ResourceLoader {
     this.loaded = true;
   }
 
-  private normalizeExtensionPaths(
-    entries: Array<{ path: string; metadata: PathMetadata }>,
-  ): Array<{ path: string; metadata: PathMetadata }> {
-    return entries.map((entry) => ({
-      path: this.resolveResourcePath(entry.path),
-      metadata: entry.metadata,
-    }));
+  private registerExtensionPaths(
+    entries: Array<{ path: string; metadata: PathMetadata }> | undefined,
+    sourceInfos: Map<string, SourceInfo>,
+  ): string[] {
+    return (entries ?? []).map((entry) => {
+      const path = this.resolveResourcePath(entry.path);
+      sourceInfos.set(path, createSourceInfo(path, entry.metadata));
+      return path;
+    });
   }
 
   private updateSkillsFromPaths(

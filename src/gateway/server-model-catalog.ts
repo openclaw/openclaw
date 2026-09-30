@@ -143,6 +143,7 @@ export async function loadPreparedGatewayModelCatalogSnapshot(
       pluginRegistry: owner.pluginRegistry,
       isCurrent: owner.isCurrent,
       observationConfig: owner.observationConfig,
+      accountCatalog: owner.accountCatalog,
     };
   }
 }
@@ -158,6 +159,7 @@ export async function loadGatewayModelCatalogSnapshot(
     pluginRegistry: _pluginRegistry,
     isCurrent: _isCurrent,
     observationConfig: _observationConfig,
+    accountCatalog: _accountCatalog,
     ...snapshot
   } = await loadPreparedGatewayModelCatalogSnapshot(params);
   return snapshot;
@@ -274,5 +276,6 @@ export async function readPreparedGatewayModelCatalogOwnerSnapshot(
     pluginRegistry: owner.pluginRegistry,
     isCurrent: owner.isCurrent,
     observationConfig: owner.observationConfig,
+    accountCatalog: owner.accountCatalog,
   };
 }

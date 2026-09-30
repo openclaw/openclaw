@@ -91,7 +91,7 @@ function qualifyBoundaryDeadline(context, job, seconds, cancelledAnnotationCount
   return { workflowBlob, workflowJob, step: shard, steps };
 }
 
-/** A cancelled job can retain a failed test step or an exhausted execution deadline. */
+/** A cancelled job can retain a failed execution step or an exhausted deadline. */
 export function qualifyPriorCiCancelledRoots(context) {
   const { evidence, run, jobs, gate, requireEvidence } = context;
   const readJson = (endpoint, paginate = false) =>
@@ -135,12 +135,12 @@ export function qualifyPriorCiCancelledRoots(context) {
         check.conclusion === "cancelled" &&
         check.started_at === job.started_at &&
         check.completed_at === job.completed_at,
-      "cancelled deadline/test root requires a matching live GitHub Actions check-run",
+      "cancelled deadline/failed-step root requires a matching live GitHub Actions check-run",
     );
     const attribution = evidence.failures.find((value) => value.jobId === job.id);
     if (attribution.failedStep !== undefined) {
       roots.set(job.id, {
-        failedStep: qualifyNodeTestFailure(context, attribution, job, checkRunId),
+        failedStep: qualifyFailedStep(context, attribution, job, checkRunId),
       });
       continue;
     }
@@ -207,10 +207,12 @@ export function qualifyPriorCiCancelledRoots(context) {
   return roots;
 }
 
-function qualifyNodeTestFailure(context, entry, job, checkRunId) {
+function qualifyFailedStep(context, entry, job, checkRunId) {
   const { requireEvidence } = context;
-  const workflowJob = "checks-node-core-test-nondist-shard";
   const binding = entry.failedStep;
+  const productionTypes = binding?.workflowJob === "check-shard";
+  const workflowJob = productionTypes ? "check-shard" : "checks-node-core-test-nondist-shard";
+  const stepName = productionTypes ? "Run check shard" : "Run Node test shard";
   const steps = job.steps;
   requireEvidence(
     binding?.workflowJob === workflowJob &&
@@ -225,44 +227,94 @@ function qualifyNodeTestFailure(context, entry, job, checkRunId) {
       ) &&
       new Set(steps.map((step) => step.number)).size === steps.length &&
       steps.filter((step) => step.conclusion === "failure").length === 1 &&
-      steps.filter((step) => step.name === "Run Node test shard").length === 1 &&
+      steps.filter((step) => step.name === stepName).length === 1 &&
       steps.at(-1)?.name === "Complete job" &&
       steps.at(-1).conclusion === "success",
-    "cancelled test root requires complete steps with only one failed Node test",
+    `cancelled root requires complete steps with only one failed ${stepName}`,
   );
   const step = steps.find((value) => value.number === binding.number);
   const times = [job.started_at, step?.started_at, step?.completed_at, job.completed_at].map(
     Date.parse,
   );
   requireEvidence(
-    step?.name === "Run Node test shard" &&
+    step?.name === stepName &&
       step.conclusion === "failure" &&
       times.every(Number.isFinite) &&
       times.every((time, index) => index === 0 || time >= times[index - 1]),
-    "cancelled test root has mismatched step identity or timestamps",
+    "cancelled root has mismatched step identity or timestamps",
   );
   const { workflow, workflowBlob } = readWorkflow(context);
   const owner = workflow?.jobs?.[workflowJob];
   const sourceSteps = owner?.steps?.filter((value) => value.name === step.name);
   const source = sourceSteps?.[0];
   requireEvidence(
-    owner?.name === "${{ matrix.check_name || 'checks-node-core-test-nondist-shard' }}" &&
+    owner?.name ===
+      (productionTypes
+        ? "${{ matrix.check_name || 'check-shard' }}"
+        : "${{ matrix.check_name || 'checks-node-core-test-nondist-shard' }}") &&
       Array.isArray(owner.needs) &&
       owner.needs.includes("preflight") &&
       owner.strategy?.matrix ===
-        "${{ fromJson(needs.preflight.outputs.checks_node_core_nondist_matrix) }}" &&
+        (productionTypes
+          ? "${{ fromJSON((needs.preflight.outputs.run_check_plan == 'true' && needs.check-plan.outputs.check_matrix || needs.preflight.outputs.check_matrix)) }}"
+          : "${{ fromJson(needs.preflight.outputs.checks_node_core_nondist_matrix) }}") &&
+      (!productionTypes ||
+        (owner.needs.includes("check-plan") &&
+          owner.strategy["fail-fast"] === false &&
+          source?.env?.TASK === "${{ matrix.task }}" &&
+          source.if ===
+            "matrix.task != 'lint' || !(needs.preflight.outputs.run_check_plan == 'true' && needs.check-plan.outputs.central_lint_selection_json || needs.preflight.outputs.central_lint_selection_json)")) &&
       [undefined, false].includes(owner["continue-on-error"]) &&
       sourceSteps?.length === 1 &&
       source.shell === "bash" &&
       source.uses === undefined &&
       [undefined, false].includes(source["continue-on-error"]) &&
       typeof source.run === "string" &&
-      // Recognize the inspected Node shard entrypoint, not arbitrary workflow commands.
-      digest(source.run) === "43a70550e9537ea675a8052ebd4821200d24ffa6a48ccd3b44c047f667490691",
-    "cancelled test root requires the unchanged canonical Node shard workflow owner",
+      // Recognize audited entrypoints, not arbitrary workflow commands.
+      digest(source.run) ===
+        (productionTypes
+          ? "bcaa8c10327d52a2964e7b14a085554c34e969eb4c23621198c57800f3a7cc2d"
+          : "43a70550e9537ea675a8052ebd4821200d24ffa6a48ccd3b44c047f667490691"),
+    `cancelled root requires the unchanged canonical ${productionTypes ? "production-type" : "Node shard"} workflow owner`,
   );
+  if (productionTypes) {
+    const jobStart = Date.parse(job.started_at);
+    const jobEnd = Date.parse(job.completed_at);
+    requireEvidence(
+      job.name === "check-prod-types" &&
+        context.jobs.filter((candidate) => candidate.name === job.name).length === 1 &&
+        step.number === owner.steps.indexOf(source) + 2 &&
+        steps[0].number === 1 &&
+        steps[0].name === "Set up job" &&
+        owner.steps.every((expected, index) =>
+          steps.some((actual) => actual.number === index + 2 && actual.name === expected.name),
+        ) &&
+        steps.every((current, index) => {
+          const start = Date.parse(current.started_at);
+          const end = Date.parse(current.completed_at);
+          return (
+            Number.isFinite(start) &&
+            Number.isFinite(end) &&
+            jobStart <= start &&
+            start <= end &&
+            end <= jobEnd &&
+            (index === 0 ||
+              (current.number > steps[index - 1].number &&
+                Date.parse(steps[index - 1].completed_at) <= start))
+          );
+        }),
+      "cancelled production-type root requires complete ordered source-matching steps",
+    );
+  }
   // Matrix membership and causal baseline qualification remain inspected evidence.
-  return { ...binding, checkRunId, conclusion: job.conclusion, workflowBlob, step };
+  return {
+    ...binding,
+    checkRunId,
+    conclusion: job.conclusion,
+    workflowBlob,
+    step,
+    ...(productionTypes ? { steps } : {}),
+  };
 }
 
 function verifyMatrixCancellation(context, cancellation, members) {

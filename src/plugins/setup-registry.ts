@@ -561,13 +561,11 @@ export const resolvePluginSetupRegistry = withPluginSetupCache(function (params?
     }
   }
 
-  const providers: SetupProviderEntry[] = [];
-  const cliBackends: SetupCliBackendEntry[] = [];
+  const providers = new Map<string, SetupProviderEntry>();
+  const cliBackends = new Map<string, SetupCliBackendEntry>();
   const configMigrations: SetupConfigMigrationEntry[] = [];
   const autoEnableProbes: SetupAutoEnableProbeEntry[] = [];
   const diagnostics: PluginSetupRegistryDiagnostic[] = [];
-  const providerKeys = new Set<string>();
-  const cliBackendKeys = new Set<string>();
 
   const plugins =
     params?.manifestRegistry == null
@@ -605,14 +603,14 @@ export const resolvePluginSetupRegistry = withPluginSetupCache(function (params?
       handlers: {
         registerProvider(provider) {
           const key = `${record.id}:${normalizeProviderId(provider.id)}`;
-          if (providerKeys.has(key) || recordProviders.has(key)) {
+          if (providers.has(key) || recordProviders.has(key)) {
             return;
           }
           recordProviders.set(key, { pluginId: record.id, provider });
         },
         registerCliBackend(backend) {
           const key = `${record.id}:${normalizeProviderId(backend.id)}`;
-          if (cliBackendKeys.has(key) || recordCliBackends.has(key)) {
+          if (cliBackends.has(key) || recordCliBackends.has(key)) {
             return;
           }
           recordCliBackends.set(key, { pluginId: record.id, backend });
@@ -651,12 +649,10 @@ export const resolvePluginSetupRegistry = withPluginSetupCache(function (params?
     configMigrations.push(...recordConfigMigrations);
     autoEnableProbes.push(...recordAutoEnableProbes);
     for (const [key, entry] of recordProviders) {
-      providerKeys.add(key);
-      providers.push(entry);
+      providers.set(key, entry);
     }
     for (const [key, entry] of recordCliBackends) {
-      cliBackendKeys.add(key);
-      cliBackends.push(entry);
+      cliBackends.set(key, entry);
     }
     pushSetupDescriptorDriftDiagnostics({
       record,
@@ -667,8 +663,8 @@ export const resolvePluginSetupRegistry = withPluginSetupCache(function (params?
   }
 
   const registry = {
-    providers,
-    cliBackends,
+    providers: [...providers.values()],
+    cliBackends: [...cliBackends.values()],
     configMigrations,
     autoEnableProbes,
     diagnostics,

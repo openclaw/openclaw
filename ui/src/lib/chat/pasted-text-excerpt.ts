@@ -1,6 +1,6 @@
 import type { Token } from "markdown-it";
+import { escapeHtml } from "../../../../src/shared/html-escape.js";
 import { createMarkdownParser } from "../../components/markdown-parser.ts";
-import { escapeMarkdownHtml } from "../../components/markdown-text.ts";
 import { takeGraphemes } from "../graphemes.ts";
 
 const parser = createMarkdownParser();
@@ -22,13 +22,13 @@ function inlineText(tokens: readonly Token[]): string {
   const html = tokens
     .map((token) => {
       if (token.type === "text" || token.type === "code_inline") {
-        return escapeMarkdownHtml(token.content);
+        return escapeHtml(token.content);
       }
       if (token.type === "html_inline") {
         return token.content;
       }
       if (token.type === "image") {
-        return escapeMarkdownHtml(inlineText(token.children ?? []));
+        return escapeHtml(inlineText(token.children ?? []));
       }
       return token.type === "softbreak" || token.type === "hardbreak" ? " " : "";
     })

@@ -1,3 +1,5 @@
+import { syncBuiltinESMExports } from "node:module";
+import os from "node:os";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { clearHealthChecksForTest } from "../flows/health-check-registry.js";
@@ -78,6 +80,7 @@ async function runLintFixture(
   options: DoctorLintCliOptions = {},
   copied = true,
 ) {
+  const processTempDir = os.tmpdir();
   return withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const cfg: OpenClawConfig = {
       agents: {
@@ -110,6 +113,10 @@ async function runLintFixture(
     );
     recordUpdateRunPhase(run.runId, "validating", {}, { env });
     closeOpenClawStateDatabaseForTest();
+    // Emulate the child's rehearsal env without moving the process-lived broker
+    // socket into state that this fixture removes after each case.
+    vi.spyOn(os, "tmpdir").mockReturnValue(processTempDir);
+    syncBuiltinESMExports();
     for (const [key, value] of Object.entries(env)) {
       if (value !== process.env[key]) {
         vi.stubEnv(key, value);
@@ -135,6 +142,7 @@ async function runLintFixture(
     } finally {
       stdout.mockRestore();
       vi.restoreAllMocks();
+      syncBuiltinESMExports();
       vi.unstubAllEnvs();
     }
   });

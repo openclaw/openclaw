@@ -46,7 +46,7 @@ export async function loadRecentSessions(
 export function buildSessionChoices(sessions: readonly TuiSessionEntry[]): SessionPickerChoice[] {
   return sessions.map((session) => {
     const title = session.derivedTitle ?? session.displayName;
-    const formattedKey = formatSessionKey(session.key);
+    const formattedKey = parseAgentSessionKey(session.key)?.rest ?? session.key;
     const label = title && title !== formattedKey ? `${title} (${formattedKey})` : formattedKey;
     const timePart = session.updatedAt
       ? formatRelativeTimestamp(session.updatedAt, { dateFallback: true, fallback: "" })
@@ -99,8 +99,4 @@ export function resolveResumeSession(
     return { kind: "ambiguous", candidates: matches };
   }
   return { kind: "none" };
-}
-
-function formatSessionKey(key: string): string {
-  return parseAgentSessionKey(key)?.rest ?? key;
 }

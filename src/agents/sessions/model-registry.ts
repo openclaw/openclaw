@@ -6,14 +6,7 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { projectConfigOntoRuntimeSourceSnapshot } from "../../config/runtime-source-projection.js";
 import type { ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type {
-  AnthropicMessagesCompat,
-  Api,
-  Model,
-  OpenAICompletionsCompat,
-  OpenAIResponsesCompat,
-  SimpleStreamOptions,
-} from "../../llm/types.js";
+import type { Api, Model, OpenAICompletionsCompat, SimpleStreamOptions } from "../../llm/types.js";
 import type { OAuthProviderInterface } from "../../llm/utils/oauth/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeOptionalSecretInput } from "../../utils/normalize-secret-input.js";
@@ -145,32 +138,28 @@ function mergeCompat(
     return baseCompat;
   }
 
-  const base = baseCompat;
-  const override = overrideCompat;
-  const merged = { ...base, ...override } as
-    | OpenAICompletionsCompat
-    | OpenAIResponsesCompat
-    | AnthropicMessagesCompat;
-
-  const baseCompletions = base as OpenAICompletionsCompat | undefined;
-  const overrideCompletions = override as OpenAICompletionsCompat;
-  const mergedCompletions = merged as OpenAICompletionsCompat;
-
-  if (baseCompletions?.openRouterRouting || overrideCompletions.openRouterRouting) {
-    mergedCompletions.openRouterRouting = {
-      ...baseCompletions?.openRouterRouting,
-      ...overrideCompletions.openRouterRouting,
-    };
-  }
-
-  if (baseCompletions?.vercelGatewayRouting || overrideCompletions.vercelGatewayRouting) {
-    mergedCompletions.vercelGatewayRouting = {
-      ...baseCompletions?.vercelGatewayRouting,
-      ...overrideCompletions.vercelGatewayRouting,
-    };
-  }
-
-  return merged as Model["compat"];
+  const baseCompletions = baseCompat as OpenAICompletionsCompat | undefined;
+  const overrideCompletions = overrideCompat as OpenAICompletionsCompat;
+  return {
+    ...baseCompat,
+    ...overrideCompat,
+    ...(baseCompletions?.openRouterRouting || overrideCompletions.openRouterRouting
+      ? {
+          openRouterRouting: {
+            ...baseCompletions?.openRouterRouting,
+            ...overrideCompletions.openRouterRouting,
+          },
+        }
+      : {}),
+    ...(baseCompletions?.vercelGatewayRouting || overrideCompletions.vercelGatewayRouting
+      ? {
+          vercelGatewayRouting: {
+            ...baseCompletions?.vercelGatewayRouting,
+            ...overrideCompletions.vercelGatewayRouting,
+          },
+        }
+      : {}),
+  };
 }
 
 /**
@@ -634,9 +623,6 @@ export class ModelRegistry {
           );
         }
 
-        if (!modelDef.id) {
-          throw new Error(`Provider ${providerName}: model missing "id"`);
-        }
         // Validate contextWindow/maxTokens only if provided (they have defaults)
         if (modelDef.contextWindow !== undefined && modelDef.contextWindow <= 0) {
           throw new Error(`Provider ${providerName}, model ${modelDef.id}: invalid contextWindow`);

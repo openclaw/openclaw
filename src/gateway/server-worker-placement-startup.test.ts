@@ -35,8 +35,8 @@ function placementStoreDefaults(
     }),
     workspaceResultInstanceId: () => "gateway-test",
     retireSessionPlacement: vi.fn(),
-    pruneOrphanedWorkspaceReconciliations: () => [],
-    listWorkspaceReconciliationOwners: () => [],
+    pruneOrphanedWorkspaceReconciliations: async () => [],
+    listWorkspaceReconciliationOwners: async () => [],
     listPendingWorkspaceResults: () => [],
   };
 }

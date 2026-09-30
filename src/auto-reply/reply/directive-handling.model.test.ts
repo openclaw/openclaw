@@ -2003,6 +2003,14 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     });
     expect(statusReply?.text).toContain("Current fast mode: on");
 
+    const ultrafastReply = await runHandleCommand("/fast ultrafast", { sessionEntry });
+    expect(ultrafastReply?.text).toContain("Ultrafast mode enabled.");
+    expect(sessionEntry.fastMode).toBe("ultrafast");
+    expect(enqueueSystemEvent).toHaveBeenCalledWith(
+      "Ultrafast mode enabled.",
+      expect.objectContaining({ contextKey: "fast:ultrafast" }),
+    );
+
     const offReply = await runHandleCommand("/fast off", {
       sessionEntry,
       currentFastMode: sessionEntry.fastMode,

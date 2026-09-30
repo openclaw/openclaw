@@ -638,9 +638,6 @@ function buildGoogleTransportRequestUrl(
 
 function resolveGoogleGemini3FirstResponseRetryMs(env = process.env): number {
   const raw = env[GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_ENV];
-  if (raw === undefined || raw.trim() === "") {
-    return GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_DEFAULT_MS;
-  }
   return parseStrictNonNegativeInteger(raw) ?? GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_DEFAULT_MS;
 }
 
@@ -657,14 +654,6 @@ function shouldRetryGoogleGemini3FirstResponse(params: {
   return isGoogleGemini3ProModel(params.model.id) || isGoogleGemini3FlashModel(params.model.id);
 }
 
-// Retry copies retain JSON wire semantics, including omitted undefined fields.
-function cloneGoogleGenerateContentRequest(
-  params: GoogleGenerateContentRequest,
-): GoogleGenerateContentRequest {
-  const serialized = JSON.stringify(params);
-  return JSON.parse(serialized) as GoogleGenerateContentRequest;
-}
-
 function buildGoogleGemini3FirstResponseRetryParams(params: {
   model: GoogleTransportModel;
   request: GoogleGenerateContentRequest;
@@ -676,7 +665,9 @@ function buildGoogleGemini3FirstResponseRetryParams(params: {
   if (!thinkingLevel) {
     return undefined;
   }
-  const retryRequest = cloneGoogleGenerateContentRequest(params.request);
+  // Retry copies retain JSON wire semantics, including omitted undefined fields.
+  const serializedRequest = JSON.stringify(params.request);
+  const retryRequest = JSON.parse(serializedRequest) as GoogleGenerateContentRequest;
   const generationConfig =
     retryRequest.generationConfig && typeof retryRequest.generationConfig === "object"
       ? retryRequest.generationConfig
@@ -825,15 +816,9 @@ async function openGoogleSseAttempt(params: {
     return handleTimedOperationError(error);
   }
   attemptSignal?.clearDeadline();
-  if (first.done) {
-    return {
-      type: "ready",
-      chunks: iteratorToAsyncGenerator(iterator, attemptSignal?.cleanup),
-    };
-  }
   return {
     type: "ready",
-    firstChunk: first.value,
+    ...(!first.done ? { firstChunk: first.value } : {}),
     chunks: iteratorToAsyncGenerator(iterator, attemptSignal?.cleanup),
   };
 }

@@ -601,47 +601,34 @@ export function countImageInputs(value: unknown): number {
   return count;
 }
 
-function extractLatestImageUserTurn(input: ResponsesInputItem[]) {
-  const latestUserItem = input.findLast(isUserTurn);
-  if (!latestUserItem) {
-    return { text: "", imageInputCount: 0 };
-  }
-  const imageInputCount = countImageInputs([latestUserItem.content]);
-  if (imageInputCount === 0) {
-    return { text: "", imageInputCount: 0 };
-  }
-  return {
-    text: extractInputText(latestUserItem.content),
-    imageInputCount,
-  };
-}
-
 export function extractCurrentImageRequest(
   input: ResponsesInputItem[],
   body: Record<string, unknown>,
 ) {
   // Match only the current request. Historical image prompts must not override
   // a later non-image turn just because they remain in transcript context.
-  const imageUserTurn = extractLatestImageUserTurn(input);
-  if (imageUserTurn.imageInputCount === 0) {
-    return imageUserTurn;
+  const latestUserItem = input.findLast(isUserTurn);
+  const imageInputCount = countImageInputs([latestUserItem?.content]);
+  if (imageInputCount === 0) {
+    return { text: "", imageInputCount: 0 };
   }
   const developerInstructions = input
     .filter((item) => item.role === "developer")
     .map((item) => extractInputText(item.content))
     .filter(Boolean);
   return {
-    text: [extractInstructionsText(body), ...developerInstructions, imageUserTurn.text]
+    text: [
+      extractInstructionsText(body),
+      ...developerInstructions,
+      extractInputText(latestUserItem?.content),
+    ]
       .filter(Boolean)
       .join("\n"),
-    imageInputCount: imageUserTurn.imageInputCount,
+    imageInputCount,
   };
 }
 
 export function parseToolOutputJson(toolOutput: string): Record<string, unknown> | null {
-  if (!toolOutput.trim()) {
-    return null;
-  }
   try {
     return JSON.parse(toolOutput) as Record<string, unknown>;
   } catch {

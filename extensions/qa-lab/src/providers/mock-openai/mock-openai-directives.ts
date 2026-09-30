@@ -292,24 +292,6 @@ export function buildQaA2aMessageToolMirrorSessionsSendArgs(
   };
 }
 
-export function extractToolErrorForNamedCall(params: {
-  input: ResponsesInputItem[];
-  name: string;
-  toolJson: Record<string, unknown> | null;
-}) {
-  const error = typeof params.toolJson?.error === "string" ? params.toolJson.error.trim() : "";
-  if (!error) {
-    return undefined;
-  }
-  const namedFunctionCall = params.input.some(
-    (item) => item.type === "function_call" && item.name === params.name,
-  );
-  if (namedFunctionCall) {
-    return error;
-  }
-  return undefined;
-}
-
 export function hasToolErrorOutput(toolJson: Record<string, unknown> | null, toolOutput: string) {
   if (typeof toolJson?.error === "string" && toolJson.error.trim()) {
     return true;

@@ -338,6 +338,8 @@ export const icons = {
   arrowRight: strokeIcon(keyboardIconShapes["→"]),
   arrowLeft: strokeIcon(keyboardIconShapes["←"]),
   cornerDownLeft: strokeIcon(keyboardIconShapes["⏎"]),
+  cornerUpLeft: strokeIcon(svg` <polyline points="9 14 4 9 9 4" />
+    <path d="M20 20v-7a4 4 0 0 0-4-4H4" />`),
   cornerDownRight: strokeIcon(svg` <polyline points="15 10 20 15 15 20" />
     <path d="M4 4v7a4 4 0 0 0 4 4h12" />`),
   copy: strokeIcon(svg` <rect width="14" height="14" x="8" y="8" rx="2" ry="2" />

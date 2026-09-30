@@ -132,7 +132,8 @@ it.each([false, true])(
       [
         {
           environmentId: environment.environmentId,
-          recordAuthority: "unknown",
+          environmentAuthority: "unknown",
+          credentialAuthority: "unknown",
           transferAuthority: "unknown",
           attachmentAuthority: "unknown",
         },
@@ -248,10 +249,43 @@ it.each([
       token,
     );
     expect(() => owner.get(environment.environmentId)).toThrow("unsettled mutation");
-    expect(() => owner.credentialByHash(credential.credentialHash)).toThrow("unsettled mutation");
+    expect(() => owner.hasNodeEnrollmentOwner("node")).toThrow("unsettled mutation");
+    expect(() => owner.hasPendingNodeEnrollmentSetup("setup", "node")).toThrow(
+      "unsettled mutation",
+    );
+    expect(owner.credential(environment.environmentId)).toEqual(credential);
+    expect(owner.credentialByHash(credential.credentialHash)).toEqual(credential);
     expect(owner.withAdmission(token, () => owner.get(environment.environmentId))).toEqual(
       after.environments[0],
     );
+  },
+);
+
+it.each(["delivery", "rotation", "revocation"] as const)(
+  "keeps environment authority readable during credential %s",
+  (change) => {
+    const owner = acquireProjection();
+    owner.install(facts(environment, true), owner.nextSequence(), false);
+    const after = facts(environment);
+    if (change !== "revocation") {
+      after.credentials.push({
+        ...credential,
+        ...(change === "delivery" ? { deliveredAtMs: 2 } : { credentialHash: "c".repeat(43) }),
+      });
+    }
+    const token = {};
+    owner.fence(createWorkerEnvironmentCommitAdmission(after), token);
+    expect(owner.get(environment.environmentId)).toEqual(environment);
+    expect(owner.hasNodeEnrollmentOwner("node")).toBe(true);
+    expect(owner.hasPendingNodeEnrollmentSetup("setup", "node")).toBe(true);
+    expect(() => owner.credential(environment.environmentId)).toThrow("unsettled mutation");
+    expect(() => owner.credentialByHash(credential.credentialHash)).toThrow("unsettled mutation");
+    expect(owner.withAdmission(token, () => owner.credential(environment.environmentId))).toEqual(
+      credential,
+    );
+    owner.install(after, owner.nextSequence(), false);
+    owner.release(token);
+    expect(owner.credential(environment.environmentId)).toEqual(after.credentials[0]);
   },
 );
 

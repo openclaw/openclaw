@@ -354,6 +354,10 @@ export async function persistSubagentRegistryChangesAsync(
 export function captureSubagentRunMutationSnapshot(entry: SubagentRunRecord): SubagentRunRecord {
   const snapshot = structuredClone(entry);
   snapshot.execution = entry.execution;
+  // Announcements retain this immutable fact while unrelated completion fields are staged.
+  if (snapshot.completion && entry.completion?.terminalReply) {
+    snapshot.completion.terminalReply = entry.completion.terminalReply;
+  }
   // An absent optional owner must remain absent for exact preimage comparison.
   if (Object.hasOwn(entry, "killIntent")) {
     snapshot.killIntent = entry.killIntent;
@@ -381,13 +385,14 @@ function replaceSubagentRunRecord(entry: SubagentRunRecord, value: SubagentRunRe
 
 function matchesSubagentRunPreimages(
   runs: ReadonlyMap<string, SubagentRunRecord>,
-  previous: ReadonlyMap<SubagentRunRecord, SubagentRunRecord>,
+  previous: ReadonlyMap<SubagentRunRecord, SubagentRunRecord | undefined>,
   retired?: ReadonlySet<SubagentRunRecord>,
 ): boolean {
-  return [...previous].every(
-    ([entry, snapshot]) =>
-      runs.get(snapshot.runId) === (retired?.has(entry) ? undefined : entry) &&
-      isDeepStrictEqual(entry, snapshot),
+  return [...previous].every(([entry, snapshot]) =>
+    snapshot === undefined
+      ? !runs.has(entry.runId)
+      : runs.get(snapshot.runId) === (retired?.has(entry) ? undefined : entry) &&
+        isDeepStrictEqual(entry, snapshot),
   );
 }
 
@@ -433,7 +438,7 @@ function retainUnchangedSubagentOwners(
 /** Native receipts and staged writes publish through the same live preimage authority. */
 export function captureSubagentRunPostimagePublication(params: {
   runs: Map<string, SubagentRunRecord>;
-  previous: ReadonlyMap<SubagentRunRecord, SubagentRunRecord>;
+  previous: ReadonlyMap<SubagentRunRecord, SubagentRunRecord | undefined>;
   /** Already published native retirements, retained by their original receipt owner. */
   retiredPreimages?: ReadonlySet<SubagentRunRecord>;
   context: OpenClawStateWorkerContext;
@@ -508,23 +513,29 @@ export function captureSubagentRunPostimagePublication(params: {
         throw new SubagentRegistryWriteError("committed", error, "superseded");
       }
       // Prepare all records before installing any row; decoding failure is not partial publication.
-      const selected = [...postimages].map(([entry, next]) => ({
-        entry,
-        next:
-          next && params.fromWorker
-            ? retainUnchangedSubagentOwners(
-                originals.get(entry)!,
-                next,
-                runtimeOwners.get(entry)!,
-                params.fromWorker.deliveryReceipt === "retain-unchanged",
-              )
-            : next,
-      }));
+      const selected = [...postimages].map(([entry, next]) => {
+        const previous = originals.get(entry);
+        return {
+          entry,
+          next:
+            next && params.fromWorker && previous
+              ? retainUnchangedSubagentOwners(
+                  previous,
+                  next,
+                  runtimeOwners.get(entry)!,
+                  params.fromWorker.deliveryReceipt === "retain-unchanged",
+                )
+              : next,
+        };
+      });
       for (const { entry, next } of selected) {
         if (next === null) {
           params.runs.delete(entry.runId);
         } else {
           replaceSubagentRunRecord(entry, next);
+          if (!originals.get(entry)) {
+            params.runs.set(entry.runId, entry);
+          }
         }
       }
       published = true;
@@ -536,7 +547,8 @@ export function captureSubagentRunPostimagePublication(params: {
 /** The existing writer captures staged rows synchronously; live preimages remain until ACK. */
 export async function publishSubagentRunPostimages(params: {
   runs: Map<string, SubagentRunRecord>;
-  previous: ReadonlyMap<SubagentRunRecord, SubagentRunRecord>;
+  /** An undefined preimage registers a new row without exposing it before ACK. */
+  previous: ReadonlyMap<SubagentRunRecord, SubagentRunRecord | undefined>;
   retire?: ReadonlySet<SubagentRunRecord>;
   pendingKillClaim?: SubagentRunRecord;
   persist: (
@@ -592,9 +604,28 @@ export async function publishSubagentRunPostimages(params: {
       ...selected.map(({ entry }) => entry.runId),
     );
   } finally {
-    if (matchesSubagentRunPreimages(params.runs, nextSnapshots)) {
+    // Registration hides its provisional row even if an older tombstone changed during capture.
+    const registration = selected.some((selection) => selection.previous === undefined);
+    if (registration || matchesSubagentRunPreimages(params.runs, nextSnapshots)) {
       for (const selection of selected) {
-        replaceSubagentRunRecord(selection.entry, selection.previous);
+        if (
+          registration &&
+          (params.runs.get(selection.entry.runId) !== selection.entry ||
+            !isDeepStrictEqual(selection.entry, nextSnapshots.get(selection.entry)))
+        ) {
+          continue;
+        }
+        if (selection.previous) {
+          const { previous, next } = selection;
+          // Unchanged staging must not revoke a native writer's captured delivery owner.
+          const restored =
+            previous.delivery && isDeepStrictEqual(previous.delivery, next.delivery)
+              ? { ...previous, delivery: next.delivery }
+              : previous;
+          replaceSubagentRunRecord(selection.entry, restored);
+        } else {
+          params.runs.delete(selection.entry.runId);
+        }
       }
     }
     capturing = false;

@@ -216,7 +216,9 @@ async function forgetWorkspaceMemory(
 ): Promise<MemoryForgetAttempt> {
   const targets = context.targets;
   const sessionIds = new Set(targets.map((target) => target.sessionId));
-  const allOrigins = context.origins ?? listMemoryEntryOrigins({ agentId: params.agentId });
+  const allOrigins =
+    context.origins ??
+    (await listMemoryEntryOrigins({ agentId: params.agentId }, context.databaseOptions));
   for (const origin of allOrigins) {
     if (sessionIds.has(origin.sessionId)) {
       context.selectedEntryKeys.add(origin.entryKey);

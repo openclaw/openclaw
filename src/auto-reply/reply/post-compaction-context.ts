@@ -1,4 +1,3 @@
-// Loads post-compaction context summaries for continuation prompts.
 import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";

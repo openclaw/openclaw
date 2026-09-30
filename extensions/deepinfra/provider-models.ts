@@ -54,8 +54,6 @@ interface DeepInfraAgentModelEntry {
   metadata: DeepInfraAgentModelMetadata | null;
 }
 
-type DeepInfraSurface = "chat" | "vlm" | "embed" | "image-gen" | "video-gen" | "tts" | "stt";
-
 interface DeepInfraDiscoveredCatalog {
   chat: DeepInfraSurfaceModel[];
   vlm: DeepInfraSurfaceModel[];
@@ -67,16 +65,6 @@ interface DeepInfraDiscoveredCatalog {
   /** True iff served from a successful live fetch; false for the static fallback. */
   live: boolean;
 }
-
-const SURFACE_FOR_TAG: Record<string, DeepInfraSurface> = {
-  chat: "chat",
-  vlm: "vlm",
-  embed: "embed",
-  "image-gen": "image-gen",
-  "video-gen": "video-gen",
-  tts: "tts",
-  stt: "stt",
-};
 
 function entryToSurfaceModel(entry: DeepInfraAgentModelEntry): DeepInfraSurfaceModel | null {
   const id = typeof entry?.id === "string" ? entry.id.trim() : "";
@@ -120,23 +108,18 @@ function bucketBySurface(models: DeepInfraSurfaceModel[]): DeepInfraDiscoveredCa
     stt: [],
     live: true,
   };
-  const buckets: Record<DeepInfraSurface, DeepInfraSurfaceModel[]> = {
-    chat: catalog.chat,
-    vlm: catalog.vlm,
-    embed: catalog.embed,
-    "image-gen": catalog.imageGen,
-    "video-gen": catalog.videoGen,
-    tts: catalog.tts,
-    stt: catalog.stt,
-  };
+  const buckets = new Map<string, DeepInfraSurfaceModel[]>([
+    ["chat", catalog.chat],
+    ["vlm", catalog.vlm],
+    ["embed", catalog.embed],
+    ["image-gen", catalog.imageGen],
+    ["video-gen", catalog.videoGen],
+    ["tts", catalog.tts],
+    ["stt", catalog.stt],
+  ]);
   for (const model of models) {
-    const seen = new Set<DeepInfraSurface>();
-    for (const tag of model.tags) {
-      const surface = SURFACE_FOR_TAG[tag];
-      if (surface && !seen.has(surface)) {
-        seen.add(surface);
-        buckets[surface].push(model);
-      }
+    for (const tag of new Set(model.tags)) {
+      buckets.get(tag)?.push(model);
     }
   }
   return catalog;

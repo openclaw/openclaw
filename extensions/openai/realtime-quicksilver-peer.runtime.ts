@@ -1,6 +1,6 @@
 // Control-plane facade; codecs, WebRTC sockets and packet clocks live in the worker.
 import type { Worker } from "node:worker_threads";
-import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { toErrorObject, toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   createCpuTrackedWorker,
@@ -105,7 +105,7 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
       try {
         this.handleMessage(message);
       } catch (error) {
-        this.fail(error instanceof Error ? error : new Error(String(error)));
+        this.fail(toStringifiedError(error));
       }
     });
     worker.on("error", (error) => this.fail(toErrorObject(error, "GPT-Live audio worker failed")));
@@ -200,8 +200,7 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
     if (this.closed || this.inputInFlight || this.pendingAudio.length === 0) {
       return;
     }
-    const audio = Buffer.alloc(this.pendingAudio.length);
-    this.pendingAudio.readInto(audio);
+    const audio = this.pendingAudio.take();
     this.inputInFlight = true;
     this.post({ type: "audio", audio }, [audio.buffer]);
   }
@@ -231,36 +230,26 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
         this.flushInput();
         return;
       case "audio":
-        try {
-          // A sideband clear can beat PCM already posted by the worker. Retire
-          // delivery here immediately, but always return its output credit below.
-          if (message.generation !== this.outputGeneration) {
-            return;
-          }
-          this.callbacks.onAudio(
-            Buffer.from(message.audio.buffer, message.audio.byteOffset, message.audio.byteLength),
-          );
-        } finally {
-          if (!this.closed) {
-            this.post({ type: "audio-ack" });
-          }
-        }
-        return;
       case "rtp":
-        try {
-          this.callbacks.onRtpPacket?.();
-        } finally {
-          if (!this.closed) {
-            this.post({ type: "rtp-ack" });
-          }
-        }
-        return;
       case "media-error":
         try {
-          this.callbacks.onMediaError?.(new Error(message.message));
+          if (message.type === "audio") {
+            // A sideband clear can beat PCM already posted by the worker. Retire
+            // delivery here immediately, but always return its output credit below.
+            if (message.generation !== this.outputGeneration) {
+              return;
+            }
+            this.callbacks.onAudio(
+              Buffer.from(message.audio.buffer, message.audio.byteOffset, message.audio.byteLength),
+            );
+          } else if (message.type === "rtp") {
+            this.callbacks.onRtpPacket?.();
+          } else {
+            this.callbacks.onMediaError?.(new Error(message.message));
+          }
         } finally {
           if (!this.closed) {
-            this.post({ type: "media-error-ack" });
+            this.post({ type: `${message.type}-ack` });
           }
         }
         return;

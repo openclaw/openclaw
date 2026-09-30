@@ -239,6 +239,44 @@ describe("renderActivity", () => {
     expect(onToolFilterChange).toHaveBeenCalledWith("read");
   });
 
+  it("restores the selected tool when Live controls mount", () => {
+    const props = createProps({
+      entries: [createEntry({ toolName: "exec" }), createEntry({ id: "read", toolName: "read" })],
+      toolFilter: "read",
+    });
+    render(renderActivity(props), container);
+
+    const tool = container.querySelector<HTMLSelectElement>(".activity-live-filter-popover select");
+    expect(tool?.value).toBe("read");
+    expect(tool?.selectedOptions[0]?.textContent).toBe("read");
+    expect(
+      Array.from(container.querySelectorAll(".activity-entry__tool"), (entry) =>
+        entry.textContent?.trim(),
+      ),
+    ).toEqual(["read"]);
+
+    render(renderActivity({ ...props, toolFilter: "" }), container);
+    expect(tool?.value).toBe("");
+    expect(tool?.selectedOptions[0]?.textContent).toBe("All tools");
+    expect(container.querySelectorAll(".activity-entry")).toHaveLength(2);
+  });
+
+  it("keeps the selected tool as older tool entries leave the stream", () => {
+    const read = createEntry({ id: "read", toolName: "read" });
+    const props = createProps({ entries: [createEntry({ toolName: "exec" }), read] });
+    render(renderActivity(props), container);
+    for (const toolFilter of ["exec", "read"]) {
+      render(renderActivity({ ...props, toolFilter }), container);
+    }
+    render(renderActivity({ ...props, entries: [read], toolFilter: "read" }), container);
+
+    const tool = container.querySelector<HTMLSelectElement>(".activity-live-filter-popover select");
+    expect(tool?.value).toBe("read");
+    expect(tool?.selectedOptions[0]?.textContent).toBe("read");
+    expect(container.querySelectorAll(".activity-entry")).toHaveLength(1);
+    expect(container.querySelector(".activity-entry__tool")?.textContent?.trim()).toBe("read");
+  });
+
   it("renders selected answer candidates without tool-only facts", async () => {
     render(
       renderActivity(

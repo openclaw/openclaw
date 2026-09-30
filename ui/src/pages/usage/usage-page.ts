@@ -203,10 +203,7 @@ class UsagePage extends OpenClawLightDomElement {
       () => this.context?.agentSelection,
       (selection) => this.observeAgentScope(selection),
     )
-    .watch(
-      () => this.context?.agents,
-      (agents, notify) => agents.subscribe(notify),
-    );
+    .watchStore(() => this.context?.agents);
 
   override willUpdate(changed: PropertyValues<this>) {
     if (changed.has("routeData")) {
@@ -421,15 +418,11 @@ class UsagePage extends OpenClawLightDomElement {
     return this.usageRequest.run([client, refreshSessionKey]);
   }
 
-  private clearSelections() {
+  private clearSelectionsAndDetails() {
+    this.usageExportRequest.cancel();
     this.usageSelectedDays = [];
     this.usageSelectedHours = [];
     this.usageSelectedSessions = [];
-  }
-
-  private clearSelectionsAndDetails() {
-    this.usageExportRequest.cancel();
-    this.clearSelections();
     this.details.clear();
   }
 

@@ -200,13 +200,9 @@ export function resolveImplicitCurrentMessageReplyAllowance(
   policy?: ReplyThreadingPolicy,
 ): boolean {
   const implicitCurrentMessage = policy?.implicitCurrentMessage ?? "default";
-  if (implicitCurrentMessage === "allow") {
-    return true;
-  }
-  if (implicitCurrentMessage === "deny") {
-    return false;
-  }
-  return mode !== "batched";
+  return (
+    implicitCurrentMessage === "allow" || (implicitCurrentMessage !== "deny" && mode !== "batched")
+  );
 }
 
 /** Build threading policy for batched reply-to mode. */

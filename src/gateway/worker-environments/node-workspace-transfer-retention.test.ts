@@ -169,15 +169,15 @@ it.each([
               kind: "local",
               path: localPath,
               journal: {
-                load: () => pending,
-                begin: (next) => {
+                load: async () => pending,
+                begin: async (next) => {
                   pending = next;
                 },
-                commit: (accepted) => {
+                commit: async (accepted) => {
                   baseManifestRef = accepted;
                   pending = undefined;
                 },
-                abort: () => {
+                abort: async () => {
                   pending = undefined;
                 },
               },
@@ -468,15 +468,15 @@ it("restores node reconciliation after Gateway bootstrap changes without replaci
         kind: "local" as const,
         path: localPath,
         journal: {
-          load: () => pending,
-          begin: (next: WorkerWorkspaceReconciliationJournal) => {
+          load: async () => pending,
+          begin: async (next: WorkerWorkspaceReconciliationJournal) => {
             pending = next;
           },
-          commit: (ref: string) => {
+          commit: async (ref: string) => {
             accepted = ref;
             pending = undefined;
           },
-          abort: () => {
+          abort: async () => {
             pending = undefined;
           },
         },
