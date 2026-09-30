@@ -614,7 +614,6 @@ extensions/memory-core/src/short-term-promotion-rehydrate.ts	1
 extensions/memory-core/src/short-term-promotion-utils.ts	4
 extensions/memory-core/src/short-term-promotion.ts	1
 extensions/memory-core/src/standing-intents-tool.ts	1
-extensions/memory-core/src/standing-intents.ts	2
 extensions/memory-core/src/tools.ts	2
 extensions/memory-lancedb/doctor-contract-api.ts	1
 extensions/memory-lancedb/embeddings.ts	1

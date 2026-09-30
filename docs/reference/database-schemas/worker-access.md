@@ -192,6 +192,15 @@ survives cleanup failure while the failed native owner retires. Use `run` when
 dependent commands share a binding or host publication must stay inside the
 same FIFO interval.
 
+Memory Core standing-intent operations queue through the canonical agent writer
+before acquiring their database generation. Their connection-bound worker handles
+creation, listing, cancellation, matching, and lifecycle maintenance. Schema
+preparation commits separately before the business transaction, preserving first-use
+recovery. Both transactions recheck the original caller at mutation and commit.
+Scope matching, FTS scan bounds, fire budgets, and hidden-context limits are unchanged.
+Cold agent opening and lease/bootstrap control retain their existing owners; this
+cut does not claim that all agent-database work has left the host thread.
+
 The exported `OpenClawAgentSqliteWorkerStore` type retains its `run` and `close`
 contract for existing adapters. The factory's inferred return type additionally
 provides the typed single-command `execute` method.

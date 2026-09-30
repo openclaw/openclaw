@@ -81,6 +81,16 @@ install/upgrade combinations across Linux, Windows, and macOS. Coverage otherwis
 varies by profile and selected operating systems. Check the release's recorded
 coverage: skipped or deferred checks are not passes.
 
+Dependency advisories never block or delay a release. Release dependency
+evidence records every advisory finding, at any severity, and CI dispatched by
+release validation or publication reports a failing dependency audit as a
+warning. The dependency fix ships through `main` after publication. Only a
+known-malware finding stops publication.
+
+The health of `main` CI does not gate a release. Validation and publication run
+from the release branch with pinned release tooling, so a red `main` is not a
+reason to wait, re-cut, or pause.
+
 See [Full release validation](/reference/full-release-validation) for coverage
 by profile and how to interpret the results.
 
