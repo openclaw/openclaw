@@ -57,6 +57,30 @@ async function select(params: {
 }
 
 describe("session auth selection prepared facts", () => {
+  it("rejects a required child profile that was revoked after spawn", async () => {
+    await withAuthState(async (state) => {
+      configureProfiles();
+      delete authStoreMocks.state.store.profiles[TEST_PRIMARY_PROFILE_ID];
+      const sessionEntry: SessionEntry = {
+        sessionId: "required-child-profile",
+        updatedAt: 1,
+        model: "gpt-5.6-sol",
+        authProfileOverride: TEST_PRIMARY_PROFILE_ID,
+        authProfileOverrideSource: "user",
+        authProfileOverrideRequired: true,
+      };
+
+      await expect(select({ agentDir: state.agentDir(), sessionEntry })).rejects.toMatchObject({
+        code: "selected_auth_profile_unavailable",
+        profileId: TEST_PRIMARY_PROFILE_ID,
+      });
+      expect(sessionEntry).toMatchObject({
+        authProfileOverride: TEST_PRIMARY_PROFILE_ID,
+        authProfileOverrideRequired: true,
+      });
+    });
+  });
+
   it.each([
     { source: "auto", selectedModel: "gpt-4.1", expected: TEST_SECONDARY_PROFILE_ID },
     { source: "user", selectedModel: "gpt-4.1", expected: TEST_PRIMARY_PROFILE_ID },

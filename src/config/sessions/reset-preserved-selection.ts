@@ -13,6 +13,7 @@ type ResetPreservedSelectionState = Pick<
   | "authProfileOverride"
   | "authProfileOverrideSource"
   | "authProfileOverrideCompactionCount"
+  | "authProfileOverrideRequired"
 >;
 
 /**
@@ -56,6 +57,9 @@ export function resolveResetPreservedSelection(params: {
     preserved.authProfileOverrideSource = authProfileOverrideSource;
     if (entry.authProfileOverrideCompactionCount !== undefined) {
       preserved.authProfileOverrideCompactionCount = entry.authProfileOverrideCompactionCount;
+    }
+    if (entry.authProfileOverrideRequired) {
+      preserved.authProfileOverrideRequired = true;
     }
   }
 

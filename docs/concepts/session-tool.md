@@ -321,7 +321,7 @@ See [Session state awareness](/concepts/session-state) for the full model: event
 Key options:
 
 - `runtime: "subagent"` (default) or `"acp"` for external harness agents.
-- `model` and `thinking` overrides for the child session.
+- `model` and `thinking` overrides for the child session. For a native sub-agent, append `@<auth-profile-id>` to `model` to require that exact credential profile. OpenClaw preserves this credential binding through retries and session recovery, and fails the run instead of substituting another profile if it becomes unavailable. ACP spawns reject explicit auth-profile suffixes.
 - `runTimeoutSeconds` to override the configured child-run timeout; `0` disables it.
 - `thread: true` to bind the spawn to a chat thread (Discord, Slack, etc.).
 - `sandbox: "require"` to enforce sandboxing on the child.

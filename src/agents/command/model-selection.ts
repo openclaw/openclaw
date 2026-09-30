@@ -43,6 +43,7 @@ import {
   resolveNativeModelPrimary,
 } from "../agent-scope.js";
 import { isStoredCredentialCompatibleWithAuthProvider } from "../auth-profiles/order.js";
+import { createSelectedAuthProfileUnavailableError } from "../auth-profiles/selection-error.js";
 import { clearSessionAuthProfileOverride } from "../auth-profiles/session-override.js";
 import { ensureAuthProfileStore } from "../auth-profiles/store-runtime.js";
 import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
@@ -501,6 +502,13 @@ export async function resolveEmbeddedModelSelection(params: {
       provider: providerForAuthProfileValidation,
       metadataSnapshot: params.pluginsEnabled ? params.manifestMetadataSnapshot : { plugins: [] },
     });
+    if (!profileMatchesRuntime && entry.authProfileOverrideRequired) {
+      throw createSelectedAuthProfileUnavailableError({
+        profileId: authProfileId,
+        provider: providerForAuthProfileValidation,
+        modelId: model,
+      });
+    }
     if (!profileMatchesRuntime && !preserveUnavailableSelection) {
       if (hasExplicitRunOverride || autoFallbackPrimaryProbe || operatorModelOverride) {
         sessionEntryForAttempt = {
@@ -508,6 +516,7 @@ export async function resolveEmbeddedModelSelection(params: {
           authProfileOverride: undefined,
           authProfileOverrideSource: undefined,
           authProfileOverrideCompactionCount: undefined,
+          authProfileOverrideRequired: undefined,
         };
       } else if (
         params.sessionStore &&

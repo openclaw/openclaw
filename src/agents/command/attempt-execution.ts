@@ -174,8 +174,7 @@ export function runAgentAttempt(params: {
 }) {
   const sessionAuthProfileId = params.sessionEntry?.authProfileOverride?.trim();
   const sessionAuthProfileSource = resolveCollapsedSessionAuthPinSource(params.sessionEntry);
-  // An explicit session choice owns the conversation. Otherwise the profile
-  // bound to the configured model replaces a stale automatic session choice.
+  // Explicit session choices own the conversation; configured profiles replace stale auto pins.
   const selectedAuthProfile =
     sessionAuthProfileId && sessionAuthProfileSource !== "auto"
       ? { id: sessionAuthProfileId, source: sessionAuthProfileSource }
@@ -447,12 +446,6 @@ export function runAgentAttempt(params: {
     config: params.cfg,
     workspaceDir: params.workspaceDir,
   });
-  const embeddedAgentHarnessOverride =
-    requestedAgentHarnessId ??
-    sessionRuntimeOverride ??
-    (agentHarnessPolicy.runtime === "openclaw" && agentHarnessPolicy.runtimeSource !== "implicit"
-      ? "openclaw"
-      : undefined);
   // Read session fields at invocation time, after admitted CLI binding recovery.
   const buildCommonRunParams = () =>
     ({
@@ -871,7 +864,12 @@ export function runAgentAttempt(params: {
     ...(params.pluginGeneration ? { pluginGeneration: params.pluginGeneration } : {}),
     agentHarnessId: pinnedHarnessId,
     modelSelectionLocked: !isRawModelRun && params.sessionEntry?.modelSelectionLocked === true,
-    agentHarnessRuntimeOverride: embeddedAgentHarnessOverride,
+    agentHarnessRuntimeOverride:
+      requestedAgentHarnessId ??
+      sessionRuntimeOverride ??
+      (agentHarnessPolicy.runtime === "openclaw" && agentHarnessPolicy.runtimeSource !== "implicit"
+        ? "openclaw"
+        : undefined),
     agentHarnessRuntimePreparationHint:
       agentHarnessPolicy.runtimeSource !== "implicit" ? agentHarnessPolicy.runtime : undefined,
     prompt: effectivePrompt,
@@ -887,6 +885,7 @@ export function runAgentAttempt(params: {
     modelFallbacksOverride: params.modelFallbacksOverride,
     authProfileId,
     authProfileIdSource: authProfileId ? harnessAuthSelection.authProfileIdSource : undefined,
+    allowAuthProfileFallback: params.sessionEntry?.authProfileOverrideRequired ? false : undefined,
     isFinalFallbackAttempt: params.isFinalFallbackAttempt,
     verboseLevel: params.resolvedVerboseLevel,
     execSession: params.sessionEntry,

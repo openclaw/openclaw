@@ -154,7 +154,12 @@ export function applyModelOverrideToSessionEntry(params: {
   }
   updated = profileUpdated || updated;
   if (profileOverride || !params.preserveAuthProfileOverride) {
-    updated = clearDefinedFields(entry, "authProfileOverrideCompactionCount") || updated;
+    updated =
+      clearDefinedFields(
+        entry,
+        "authProfileOverrideCompactionCount",
+        "authProfileOverrideRequired",
+      ) || updated;
   }
 
   // Clear stale fallback notice when the user explicitly switches models.

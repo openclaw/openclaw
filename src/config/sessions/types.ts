@@ -500,6 +500,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     authProfileOverride?: string;
     authProfileOverrideSource?: "auto" | "user" | "user-link";
     authProfileOverrideCompactionCount?: number;
+    /** Exact credential delegated by an explicit native subagent model@profile request. */
+    authProfileOverrideRequired?: true;
     /**
      * Set on explicit user-driven session model changes (for example `/model`
      * and `sessions.patch`) during an active run. The embedded runner checks

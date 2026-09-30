@@ -39,7 +39,10 @@ const sessionAccessorLoader = createLazyImportLoader(
 
 type SessionAuthProfileOverrideState = Pick<
   SessionEntry,
-  "authProfileOverride" | "authProfileOverrideSource" | "authProfileOverrideCompactionCount"
+  | "authProfileOverride"
+  | "authProfileOverrideSource"
+  | "authProfileOverrideCompactionCount"
+  | "authProfileOverrideRequired"
 >;
 type SessionAuthProfileOverrideSnapshot = SessionAuthProfileOverrideState &
   Pick<SessionEntry, "sessionId">;
@@ -88,6 +91,11 @@ function applySessionAuthProfileOverrideState(
   } else {
     entry.authProfileOverrideCompactionCount = state.authProfileOverrideCompactionCount;
   }
+  if (state.authProfileOverrideRequired === undefined) {
+    delete entry.authProfileOverrideRequired;
+  } else {
+    entry.authProfileOverrideRequired = state.authProfileOverrideRequired;
+  }
   entry.updatedAt = Math.max(entry.updatedAt ?? 0, updatedAt);
 }
 
@@ -99,7 +107,8 @@ function matchesSessionAuthProfileOverrideSnapshot(
     entry.sessionId === snapshot.sessionId &&
     entry.authProfileOverride === snapshot.authProfileOverride &&
     entry.authProfileOverrideSource === snapshot.authProfileOverrideSource &&
-    entry.authProfileOverrideCompactionCount === snapshot.authProfileOverrideCompactionCount
+    entry.authProfileOverrideCompactionCount === snapshot.authProfileOverrideCompactionCount &&
+    entry.authProfileOverrideRequired === snapshot.authProfileOverrideRequired
   );
 }
 
@@ -280,6 +289,7 @@ export async function clearSessionAuthProfileOverride(params: {
       authProfileOverride: undefined,
       authProfileOverrideSource: undefined,
       authProfileOverrideCompactionCount: undefined,
+      authProfileOverrideRequired: undefined,
     },
     storePath,
     assertCommitAllowed: params.assertCommitAllowed,
@@ -366,6 +376,13 @@ async function resolveSessionAuthProfileOverride(params: {
       }),
     )
   ) {
+    if (sessionEntry.authProfileOverrideRequired) {
+      throw createSelectedAuthProfileUnavailableError({
+        profileId: currentProfileId,
+        provider,
+        modelId: sessionEntry.model ?? "unknown",
+      });
+    }
     if (isUserModelAuthProfileId(currentProfileId)) {
       // A missing personal owner must not let the next participant claim this session's billing.
       throw new Error(
@@ -402,6 +419,13 @@ async function resolveSessionAuthProfileOverride(params: {
   }
 
   if (current && !isProfileForProvider({ cfg, providers, profileId: current, store })) {
+    if (sessionEntry.authProfileOverrideRequired) {
+      throw createSelectedAuthProfileUnavailableError({
+        profileId: current,
+        provider,
+        modelId: sessionEntry.model ?? "unknown",
+      });
+    }
     await clearSessionAuthProfileOverride(overrideTarget);
     current = undefined;
   }
@@ -429,6 +453,7 @@ async function resolveSessionAuthProfileOverride(params: {
           authProfileOverride: linked.profileId,
           authProfileOverrideSource: "user-link",
           authProfileOverrideCompactionCount: undefined,
+          authProfileOverrideRequired: undefined,
         },
       });
       return linked;
@@ -454,12 +479,14 @@ async function resolveSessionAuthProfileOverride(params: {
           authProfileOverride: undefined,
           authProfileOverrideSource: undefined,
           authProfileOverrideCompactionCount: undefined,
+          authProfileOverrideRequired: undefined,
         },
         expectedSnapshot: {
           sessionId: sessionEntry.sessionId,
           authProfileOverride: sessionEntry.authProfileOverride,
           authProfileOverrideSource: sessionEntry.authProfileOverrideSource,
           authProfileOverrideCompactionCount: sessionEntry.authProfileOverrideCompactionCount,
+          authProfileOverrideRequired: sessionEntry.authProfileOverrideRequired,
         },
       });
       const latestProfileId = latest?.authProfileOverride;
@@ -572,6 +599,7 @@ async function resolveSessionAuthProfileOverride(params: {
         authProfileOverride: next,
         authProfileOverrideSource: "auto",
         authProfileOverrideCompactionCount: compactionCount,
+        authProfileOverrideRequired: undefined,
       },
     });
   }

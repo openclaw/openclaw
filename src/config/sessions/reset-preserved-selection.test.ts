@@ -60,11 +60,13 @@ describe("resolveResetPreservedSelection", () => {
           sessionId: "legacy-user",
           updatedAt: 1,
           authProfileOverride: "openai:work",
+          authProfileOverrideRequired: true,
         },
       }),
     ).toEqual({
       authProfileOverride: "openai:work",
       authProfileOverrideSource: "user",
+      authProfileOverrideRequired: true,
     });
 
     expect(

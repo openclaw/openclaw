@@ -172,7 +172,12 @@ function createSessionsSpawnToolSchema(params: {
       { description: 'Runtime; visible=true requires "subagent".' },
     ),
     agentId: Type.Optional(Type.String()),
-    model: Type.Optional(Type.String()),
+    model: Type.Optional(
+      Type.String({
+        description:
+          "Child model override. For native subagents, append @<auth-profile-id> to require that exact credential profile for the child run.",
+      }),
+    ),
     runTimeoutSeconds: Type.Optional(
       Type.Integer({
         minimum: 0,

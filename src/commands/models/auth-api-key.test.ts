@@ -290,6 +290,25 @@ describe("shared API-key editing and removal", () => {
         prevAuthProfileOverrideCompactionCount: 1,
       },
     });
+    const requiredScope = { ...scope, sessionKey: "agent:writer:required-chat" };
+    await replaceSessionEntry(requiredScope, {
+      sessionId: "required-chat",
+      updatedAt: 1,
+      modelOverride: "astra",
+      providerOverride: "sample",
+      authProfileOverride: removedId,
+      authProfileOverrideSource: "user",
+      authProfileOverrideRequired: true,
+      modelFallback: {
+        source: "agent-patch",
+        ts: 3,
+        prevModel: "luna",
+        prevProvider: "sample",
+        prevAuthProfileOverride: removedId,
+        prevAuthProfileOverrideSource: "user",
+        prevAuthProfileOverrideRequired: true,
+      },
+    });
     await removeModelAuthCredentials({
       cfg: await readConfig(),
       agentDir: agentDir("writer"),
@@ -315,6 +334,34 @@ describe("shared API-key editing and removal", () => {
       prevProvider: "sample",
     });
     expect(existing?.modelFallback?.prevAuthProfileOverride).toBeUndefined();
+    const required = loadSessionEntryReadOnly({
+      ...requiredScope,
+      readConsistency: "latest",
+    });
+    expect(required).toMatchObject({
+      authProfileOverride: removedId,
+      authProfileOverrideSource: "user",
+      authProfileOverrideRequired: true,
+      modelFallback: {
+        prevAuthProfileOverride: removedId,
+        prevAuthProfileOverrideSource: "user",
+        prevAuthProfileOverrideRequired: true,
+      },
+    });
+    await expect(
+      resolveSessionAuthSelection({
+        cfg,
+        agentId: "writer",
+        agentDir: agentDir("writer"),
+        provider: "sample",
+        modelId: "astra",
+        sessionEntry: required!,
+        sessionStore: { [requiredScope.sessionKey]: required! },
+        sessionKey: requiredScope.sessionKey,
+        storePath: requiredScope.storePath,
+        isNewSession: false,
+      }),
+    ).rejects.toThrow(/selected auth profile.*unavailable/i);
     await upsertAuthProfileWithLockOrThrow({
       agentDir: agentDir("writer"),
       profileId: replacementId,

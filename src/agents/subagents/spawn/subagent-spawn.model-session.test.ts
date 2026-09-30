@@ -68,6 +68,7 @@ describe("spawnSubagentDirect runtime model persistence", () => {
         authProfileOverride: "openai:test-profile",
         authProfileOverrideSource: "user",
       });
+      expect(entry?.authProfileOverrideRequired).toBe(source === "user" ? true : undefined);
       if (source === "auto") {
         expect(entry).toMatchObject({
           modelOverrideFallbackOriginProvider: "openai",

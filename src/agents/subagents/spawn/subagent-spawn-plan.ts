@@ -163,6 +163,9 @@ export async function resolveSubagentModelAndThinkingPlan(params: {
         ? {
             authProfileOverride: authProfileId,
             authProfileOverrideSource: "user" as const,
+            ...(modelOverrideSource === "user"
+              ? { authProfileOverrideRequired: true as const }
+              : {}),
           }
         : {}),
       ...thinkingPlan.initialSessionPatch,
