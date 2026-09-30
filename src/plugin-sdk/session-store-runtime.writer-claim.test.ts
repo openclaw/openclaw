@@ -2,11 +2,9 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import { projectPublicSessionEntryPatch } from "../config/sessions/session-entry-projection.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
-import {
-  projectPluginSessionEntry,
-  projectPluginSessionEntryPatch,
-} from "./session-store-runtime-internal.js";
+import { projectPluginSessionEntry } from "./session-store-runtime-internal.js";
 import {
   patchSessionEntry,
   updateSessionStore,
@@ -158,7 +156,7 @@ describe("plugin session writer claim projection", () => {
       updatedAt: 10,
     });
     expect(
-      projectPluginSessionEntryPatch({
+      projectPublicSessionEntryPatch({
         activeWriterRunId: "run-next",
         lifecycleRunId: "run-lifecycle-next",
         sessionDiffBaselineCapture: {

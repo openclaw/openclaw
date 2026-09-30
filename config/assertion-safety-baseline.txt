@@ -2614,12 +2614,11 @@ src/plugin-sdk/provider-auth-runtime.ts	1
 src/plugin-sdk/provider-auth.ts	1
 src/plugin-sdk/provider-catalog-shared.ts	1
 src/plugin-sdk/provider-entry.ts	3
-src/plugin-sdk/provider-onboard.ts	5
+src/plugin-sdk/provider-onboard.ts	3
 src/plugin-sdk/provider-stream-shared.ts	14
 src/plugin-sdk/provider-stream.ts	1
 src/plugin-sdk/provider-tools.ts	4
 src/plugin-sdk/qa-channel-protocol.ts	1
-src/plugin-sdk/qa-lab.ts	2
 src/plugin-sdk/qa-runtime.ts	5
 src/plugin-sdk/reply-payload.ts	2
 src/plugin-sdk/runtime-store.ts	2

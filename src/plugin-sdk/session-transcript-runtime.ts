@@ -301,13 +301,7 @@ export async function readSessionTranscriptVisibleMessageDelta(
   const { events, ...page } = result;
   return {
     ...page,
-    entries: events.flatMap((entry) =>
-      projectVisibleMessageEntry({
-        event: entry.event,
-        parentId: entry.parentId,
-        seq: entry.seq,
-      }),
-    ),
+    entries: events.flatMap(projectVisibleMessageEntry),
   };
 }
 
@@ -412,7 +406,7 @@ export async function appendAssistantMirrorMessageByIdentity(
           true,
         );
       }
-      const correlatedMessage = {
+      message = {
         ...message,
         openclawDeliveryMirror: {
           kind: "channel-final",
@@ -422,7 +416,6 @@ export async function appendAssistantMirrorMessageByIdentity(
           ...(sourceAssistantMessageId !== undefined ? { sourceAssistantMessageId } : {}),
         },
       };
-      message = correlatedMessage;
     }
     params.signal?.throwIfAborted();
     const appendResult = await locked.appendMessage({

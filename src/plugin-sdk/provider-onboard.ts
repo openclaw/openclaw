@@ -207,17 +207,14 @@ function createProviderPresetAppliers<
     primaryModelRef?: string;
   },
 >(params: {
-  resolveParams: (
-    cfg: OpenClawConfig,
-    ...args: TArgs
-  ) => Omit<TParams, "primaryModelRef"> | null | undefined;
+  resolveParams: (cfg: OpenClawConfig, ...args: TArgs) => TParams | null | undefined;
   applyPreset: (cfg: OpenClawConfig, preset: TParams) => OpenClawConfig;
   primaryModelRef: string;
 }): ProviderOnboardPresetAppliers<TArgs> {
   return {
     applyProviderConfig(cfg, ...args) {
       const resolved = params.resolveParams(cfg, ...args);
-      return resolved ? params.applyPreset(cfg, resolved as TParams) : cfg;
+      return resolved ? params.applyPreset(cfg, resolved) : cfg;
     },
     applyConfig(cfg, ...args) {
       const resolved = params.resolveParams(cfg, ...args);
@@ -225,7 +222,7 @@ function createProviderPresetAppliers<
         return cfg;
       }
       return params.applyPreset(cfg, {
-        ...(resolved as TParams),
+        ...resolved,
         primaryModelRef: params.primaryModelRef,
       });
     },
@@ -454,11 +451,8 @@ export function applyProviderConfigWithDefaultModels(
         : [...providerState.existingModels, ...defaultModels]
       : defaultModels;
   return applyProviderConfigWithMergedModels(cfg, {
-    agentModels: params.agentModels,
-    providerId: params.providerId,
+    ...params,
     providerState,
-    api: params.api,
-    baseUrl: params.baseUrl,
     mergedModels,
   });
 }
@@ -476,10 +470,7 @@ export function applyProviderConfigWithDefaultModel(
   },
 ): OpenClawConfig {
   return applyProviderConfigWithDefaultModels(cfg, {
-    agentModels: params.agentModels,
-    providerId: params.providerId,
-    api: params.api,
-    baseUrl: params.baseUrl,
+    ...params,
     defaultModels: [params.defaultModel],
     defaultModelId: params.defaultModelId ?? params.defaultModel.id,
   });
@@ -499,13 +490,8 @@ export function applyProviderConfigWithDefaultModelPreset(
   },
 ): OpenClawConfig {
   return applyProviderConfigWithDefaultModelsPreset(cfg, {
-    providerId: params.providerId,
-    api: params.api,
-    baseUrl: params.baseUrl,
+    ...params,
     defaultModels: [params.defaultModel],
-    defaultModelId: params.defaultModelId,
-    aliases: params.aliases,
-    primaryModelRef: params.primaryModelRef,
   });
 }
 
@@ -521,9 +507,8 @@ export function createDefaultModelPresetAppliers<TArgs extends unknown[]>(params
   primaryModelRef: string;
 }): ProviderOnboardPresetAppliers<TArgs> {
   return createProviderPresetAppliers({
-    resolveParams: params.resolveParams,
+    ...params,
     applyPreset: applyProviderConfigWithDefaultModelPreset,
-    primaryModelRef: params.primaryModelRef,
   });
 }
 
@@ -541,12 +526,9 @@ export function applyProviderConfigWithDefaultModelsPreset(
   },
 ): OpenClawConfig {
   const next = applyProviderConfigWithDefaultModels(cfg, {
+    ...params,
     agentModels: withAgentModelAliases(cfg.agents?.defaults?.models, params.aliases ?? []),
-    providerId: params.providerId,
-    api: params.api,
-    baseUrl: params.baseUrl,
     defaultModels: resolvePresetModels(params.defaultModels),
-    defaultModelId: params.defaultModelId,
   });
   return completeProviderPreset(cfg, next, params.primaryModelRef);
 }
@@ -563,9 +545,8 @@ export function createDefaultModelsPresetAppliers<TArgs extends unknown[]>(param
   primaryModelRef: string;
 }): ProviderOnboardPresetAppliers<TArgs> {
   return createProviderPresetAppliers({
-    resolveParams: params.resolveParams,
+    ...params,
     applyPreset: applyProviderConfigWithDefaultModelsPreset,
-    primaryModelRef: params.primaryModelRef,
   });
 }
 
@@ -606,11 +587,8 @@ export function applyProviderConfigWithModelCatalog(
         ]
       : catalogModels;
   return applyProviderConfigWithMergedModels(cfg, {
-    agentModels: params.agentModels,
-    providerId: params.providerId,
+    ...params,
     providerState,
-    api: params.api,
-    baseUrl: params.baseUrl,
     mergedModels,
   });
 }
@@ -628,10 +606,8 @@ export function applyProviderConfigWithModelCatalogPreset(
   },
 ): OpenClawConfig {
   const next = applyProviderConfigWithModelCatalog(cfg, {
+    ...params,
     agentModels: withAgentModelAliases(cfg.agents?.defaults?.models, params.aliases ?? []),
-    providerId: params.providerId,
-    api: params.api,
-    baseUrl: params.baseUrl,
     catalogModels: resolvePresetModels(params.catalogModels),
   });
   return completeProviderPreset(cfg, next, params.primaryModelRef);
@@ -649,9 +625,8 @@ export function createModelCatalogPresetAppliers<TArgs extends unknown[]>(params
   primaryModelRef: string;
 }): ProviderOnboardPresetAppliers<TArgs> {
   return createProviderPresetAppliers({
-    resolveParams: params.resolveParams,
+    ...params,
     applyPreset: applyProviderConfigWithModelCatalogPreset,
-    primaryModelRef: params.primaryModelRef,
   });
 }
 

@@ -12,25 +12,19 @@ export type ActiveMemorySearchManagerResult = {
   error?: string;
 };
 
-type MemoryHostSearchRuntimeModule = typeof import("./memory-host-search.runtime.js");
-
-async function loadMemoryHostSearchRuntime(): Promise<MemoryHostSearchRuntimeModule> {
-  return await import("./memory-host-search.runtime.js");
-}
-
 /** Loads the active memory search manager for one agent and purpose. */
 export async function getActiveMemorySearchManager(params: {
   cfg: OpenClawConfig;
   agentId: string;
   purpose?: ActiveMemorySearchPurpose;
 }): Promise<ActiveMemorySearchManagerResult> {
-  const runtime = await loadMemoryHostSearchRuntime();
+  const runtime = await import("./memory-host-search.runtime.js");
   return await runtime.getActiveMemorySearchManager(params);
 }
 
 /** Closes every active memory search manager for the provided config. */
 export async function closeActiveMemorySearchManagers(cfg?: OpenClawConfig): Promise<void> {
-  const runtime = await loadMemoryHostSearchRuntime();
+  const runtime = await import("./memory-host-search.runtime.js");
   await runtime.closeActiveMemorySearchManagers(cfg);
 }
 
@@ -39,6 +33,6 @@ export async function closeActiveMemorySearchManager(params: {
   cfg: OpenClawConfig;
   agentId: string;
 }): Promise<void> {
-  const runtime = await loadMemoryHostSearchRuntime();
+  const runtime = await import("./memory-host-search.runtime.js");
   await runtime.closeActiveMemorySearchManager(params);
 }

@@ -32,6 +32,7 @@ import {
   readTranscriptStatsSync as readAccessorTranscriptStatsSync,
   updateSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import { projectPublicSessionEntryPatch } from "../config/sessions/session-entry-projection.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { resolveSessionStoreEntryCore as resolveSessionStoreEntryFromStore } from "../config/sessions/store-entry.js";
 import { normalizeResolvedMaintenanceConfigInput } from "../config/sessions/store-maintenance.js";
@@ -46,7 +47,6 @@ import {
   clearGenerationPrivateFieldsForRotatedSessionPatch,
   generationValidPrivateFieldsForSameSession,
   projectPluginSessionEntry,
-  projectPluginSessionEntryPatch,
   projectPluginSessionStore,
   reconcilePluginSessionStore,
   type SessionStoreReadParams,
@@ -468,7 +468,7 @@ export async function patchSessionEntry(
       if (!patch) {
         return null;
       }
-      return preserveGenerationPrivateFields(persistedEntry, projectPluginSessionEntryPatch(patch));
+      return preserveGenerationPrivateFields(persistedEntry, projectPublicSessionEntryPatch(patch));
     },
     {
       assertCommitAllowed: params.assertCommitAllowed,
@@ -514,7 +514,7 @@ export async function updateSessionStoreEntry(
         return null;
       }
       const persistedEntry = internalEntry as InternalSessionEntry;
-      return preserveGenerationPrivateFields(persistedEntry, projectPluginSessionEntryPatch(patch));
+      return preserveGenerationPrivateFields(persistedEntry, projectPublicSessionEntryPatch(patch));
     },
     {
       skipMaintenance: params.skipMaintenance,
