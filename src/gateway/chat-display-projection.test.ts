@@ -517,9 +517,9 @@ it.each(["next-renderable", "last-renderable", "last-assistant"] as const)(
 const hostTab = { targetId: "tab-1", target: "host", profile: "work" };
 const nodeTab = { ...hostTab, target: "node", node: "node-1" };
 it.each([
-  [{ ...hostTab, url: 42, title: [], extra: "drop" }, hostTab],
-  [
-    {
+  { browserTab: { ...hostTab, url: 42, title: [], extra: "drop" }, expected: hostTab },
+  {
+    browserTab: {
       targetId: "x".repeat(128),
       target: "node",
       profile: "p".repeat(128),
@@ -528,7 +528,7 @@ it.each([
       title: "t".repeat(511) + "😀",
       extra: "drop",
     },
-    {
+    expected: {
       targetId: "x".repeat(128),
       target: "node",
       profile: "p".repeat(128),
@@ -536,7 +536,7 @@ it.each([
       url: "u".repeat(2047),
       title: "t".repeat(511),
     },
-  ],
+  },
   ...[
     { ...hostTab, target: "sandbox" },
     { ...hostTab, target: "node" },
@@ -545,23 +545,26 @@ it.each([
     { ...nodeTab, targetId: "x".repeat(129) },
     { ...nodeTab, targetId: "" },
     { ...nodeTab, profile: "p".repeat(129) },
-  ].map((invalid) => [invalid, undefined] as const),
-])("preserves complete browser routes and bounded display fields (%j)", (browserTab, expected) => {
-  const block = (tab: unknown) => ({
-    type: "toolResult",
-    toolName: "browser",
-    ...(tab ? { details: { browserTab: tab } } : {}),
-  });
-  expect(
-    sanitizeChatHistoryMessages([
-      { role: "toolResult", ...block(browserTab) },
-      { role: "assistant", content: [block(browserTab)] },
-    ]),
-  ).toEqual([
-    { role: "toolResult", ...block(expected) },
-    { role: "assistant", content: [block(expected)] },
-  ]);
-});
+  ].map((browserTab) => ({ browserTab, expected: undefined })),
+])(
+  "preserves complete browser routes and bounded display fields (%j)",
+  ({ browserTab, expected }) => {
+    const block = (tab: unknown) => ({
+      type: "toolResult",
+      toolName: "browser",
+      ...(tab ? { details: { browserTab: tab } } : {}),
+    });
+    expect(
+      sanitizeChatHistoryMessages([
+        { role: "toolResult", ...block(browserTab) },
+        { role: "assistant", content: [block(browserTab)] },
+      ]),
+    ).toEqual([
+      { role: "toolResult", ...block(expected) },
+      { role: "assistant", content: [block(expected)] },
+    ]);
+  },
+);
 
 it("keeps authoritative write booleans and strips unrelated details", () => {
   const result = (details: Record<string, unknown>) => ({
