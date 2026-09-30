@@ -1,6 +1,7 @@
 // Tests queue setting normalization and directive parsing.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { resolveQueueSettings } from "./settings-runtime.js";
 import { resolveQueueSettingsCore } from "./settings.js";
 
 describe("resolveQueueSettingsCore", () => {
@@ -31,6 +32,15 @@ describe("resolveQueueSettingsCore", () => {
       cap: 20,
       dropPolicy: "summarize",
     });
+  });
+
+  it("resolves plugin channel queue overrides", () => {
+    expect(
+      resolveQueueSettings({
+        cfg: { messages: { queue: { byChannel: { buzz: "collect" } } } } as OpenClawConfig,
+        channel: "buzz",
+      }).mode,
+    ).toBe("collect");
   });
 
   it("maps retired persisted session queue modes to compatible modes", () => {

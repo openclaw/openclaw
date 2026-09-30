@@ -202,6 +202,14 @@ describe("config schema regressions", () => {
     }
   });
 
+  it("accepts plugin queue byChannel providers", () => {
+    expect(
+      validateConfigObject({
+        messages: { queue: { byChannel: { buzz: "collect" } } },
+      }).ok,
+    ).toBe(true);
+  });
+
   it("accepts an explicitly configured main variant", () => {
     expect(validateBinding("MAIN", { MAIN: { model: "anthropic/claude-3-5-sonnet" } }).ok).toBe(
       true,

@@ -45,23 +45,7 @@ const QueueModeSchema = z.union([
   z.literal("interrupt"),
 ]);
 const QueueDropSchema = z.union([z.literal("old"), z.literal("new"), z.literal("summarize")]);
-const QueueModeBySurfaceSchema = z
-  .object({
-    whatsapp: QueueModeSchema.optional(),
-    telegram: QueueModeSchema.optional(),
-    discord: QueueModeSchema.optional(),
-    irc: QueueModeSchema.optional(),
-    googlechat: QueueModeSchema.optional(),
-    slack: QueueModeSchema.optional(),
-    mattermost: QueueModeSchema.optional(),
-    signal: QueueModeSchema.optional(),
-    imessage: QueueModeSchema.optional(),
-    msteams: QueueModeSchema.optional(),
-    webchat: QueueModeSchema.optional(),
-    matrix: QueueModeSchema.optional(),
-  })
-  .strict()
-  .optional();
+const QueueModeBySurfaceSchema = z.record(z.string(), QueueModeSchema).optional();
 const DebounceMsBySurfaceSchema = z.record(z.string(), z.number().int().nonnegative()).optional();
 
 export const QueueSchema = z
