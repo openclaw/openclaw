@@ -5,7 +5,10 @@ import {
   readNonBlankString,
 } from "@openclaw/normalization-core/string-coerce";
 import JSON5 from "json5";
-import { rejectConfigNonFiniteNumbers } from "../config/value-tree.js";
+import {
+  rejectConfigNonFiniteNumbers,
+  rejectConfigLostIntegerDigits,
+} from "../config/value-tree.js";
 import { readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
 import { hasErrnoCode } from "../infra/errors.js";
 
@@ -140,6 +143,7 @@ function parseJson5Raw(raw: string, label: string): unknown {
     throw new Error(`Failed to parse ${label}: ${String(err)}`, { cause: err });
   }
   rejectConfigNonFiniteNumbers(parsed);
+  rejectConfigLostIntegerDigits(raw);
   return parsed;
 }
 

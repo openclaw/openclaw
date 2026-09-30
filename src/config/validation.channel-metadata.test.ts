@@ -423,6 +423,30 @@ describe("validateConfigObjectWithPlugins channel metadata (applyDefaults: true)
     },
   );
 
+  it("warns on, but still loads, channel ids that parsing already rounded", () => {
+    // A config saved before input refused them: the unquoted 19-digit id is already rounded.
+    const rounded = Number("1471383327500481391");
+    const result = validateConfigObjectWithPlugins({
+      channels: {
+        zalo: {
+          allowFrom: ["1471383327500481391", rounded, -1001234567890],
+          accounts: { work: { groupAllowFrom: [rounded] } },
+          // Not an id list: no id warning.
+          mediaMaxMb: rounded,
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    const unsafe = result.warnings.filter((warning) =>
+      warning.message.includes("too large to store exactly"),
+    );
+    expect(unsafe.map((warning) => warning.path)).toEqual([
+      "channels.zalo.allowFrom.1",
+      "channels.zalo.accounts.work.groupAllowFrom.0",
+    ]);
+  });
+
   it('warns on Mattermost dmPolicy="open" without wildcard allowFrom', () => {
     const result = validateConfigObjectWithPlugins({
       channels: {

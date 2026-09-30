@@ -35,6 +35,30 @@ describe("parseConfigSetValue", () => {
     expect(() => parseConfigSetValue(raw, false)).toThrow("Value must be a finite number");
   });
 
+  it.each([
+    { raw: "1471383327500481391", strictJson: false, literal: "1471383327500481391" },
+    { raw: "[1471383327500481391]", strictJson: false, literal: "1471383327500481391" },
+    {
+      raw: '{"allowFrom":[-1471383327500481391]}',
+      strictJson: true,
+      literal: "-1471383327500481391",
+    },
+  ])("rejects $raw, which would be saved as a different number", ({ raw, strictJson, literal }) => {
+    expect(() => parseConfigSetValue(raw, strictJson)).toThrow(
+      `${literal} is too large to store exactly`,
+    );
+  });
+
+  it("keeps quoted long ids and numbers that are stored as written", () => {
+    // 2^54 and the already-rounded id are stored exactly as written, so nothing changes.
+    expect(
+      parseConfigSetValue(
+        `["1471383327500481391", 18014398509481984, 1471383327500481300, -1001234567890] // 1471383327500481391`,
+        false,
+      ),
+    ).toEqual(["1471383327500481391", 18014398509481984, 1471383327500481300, -1001234567890]);
+  });
+
   it("rejects overflow exponent in strict JSON mode with the finite-number error", () => {
     expect(() => parseConfigSetValue("1e999", true)).toThrow("Value must be a finite number");
   });

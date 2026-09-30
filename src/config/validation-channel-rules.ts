@@ -9,6 +9,7 @@ import { isRecord } from "../utils.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
 import type { ChannelDmPolicyMetadata } from "./channel-config-metadata.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "./types.js";
+import { isUnsafeConfigInteger, visitConfigValueTree } from "./value-tree.js";
 import {
   type DmPolicyAllowFromViolation,
   evaluateDmPolicyAllowFromDependency,
@@ -175,6 +176,39 @@ export function collectChannelDmPolicyDependencyWarnings(
       }
     }
   }
+  return warnings;
+}
+
+/**
+ * Numeric entries in channel lists are ids (allowFrom, groupAllowFrom, users, approvers...). One
+ * beyond Number.MAX_SAFE_INTEGER (an unquoted 19-digit Zalo id, for one) may have been rounded when
+ * the config was parsed, so it may not match the sender it names. Warn rather than reject: configs
+ * saved before input started refusing such ids must keep loading.
+ */
+export function collectChannelUnsafeIntegerWarnings(
+  config: OpenClawConfig,
+): ConfigValidationIssue[] {
+  if (!config.channels || !isRecord(config.channels)) {
+    return [];
+  }
+  const warnings: ConfigValidationIssue[] = [];
+  visitConfigValueTree(
+    config.channels,
+    (candidate, path) => {
+      if (Array.isArray(candidate)) {
+        for (const [index, entry] of candidate.entries()) {
+          if (isUnsafeConfigInteger(entry)) {
+            warnings.push({
+              path: [...path, index].join("."),
+              message: `id ${String(entry)} is too large to store exactly and may not be the id written; quote the original id as a string`,
+            });
+          }
+        }
+      }
+      return true;
+    },
+    ["channels"],
+  );
   return warnings;
 }
 
