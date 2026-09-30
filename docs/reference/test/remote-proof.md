@@ -20,16 +20,11 @@ offload. The configured Testbox workflow hydrates credentials, so untrusted
 contributor or fork code must use secretless fork CI or sanitized direct AWS
 Crabbox instead.
 
-When the operator selects remote validation for the task, run the first
-format, lint, type, and behavior checks there too. Local source inspection,
-editing, Git, and remote transport do not execute validation.
-
-Prepare the selected backend once the task and its first required command are
-known; preparation may overlap source work. Reuse the returned `tbx_...` id
-for later commands and corrections, sync the current checkout on every run,
-and stop the owned lease when proof and corrections finish. One lease has one
-active command: let its command and cleanup settle before another sync or
-reuse. Do not allocate speculative capacity for unrelated future work.
+Do not pre-warm for anticipated work. Acquire the backend lazily when the
+first environment-sensitive command is ready, reuse the returned `tbx_...` id
+for later remote commands, sync the current checkout on every run, and stop it
+before handoff. Let the previous command and its cleanup finish before
+another synchronization or reuse of that lease.
 
 At allocation, the wrapper records the caller task, physical checkout, HEAD,
 base, dependency inputs, and Testbox preparation fingerprint under
@@ -92,8 +87,8 @@ names must be UTF-8; symlink targets remain raw bytes. Symlinked repository Crab
 configuration or ignore files, and privacy-excluded runtime configuration, are
 rejected before upload rather than changing their trust or privacy treatment.
 
-Use the maintained [test commands](/reference/test/local) inside the prepared
-remote checkout. Keep proof proportional to the touched contract.
+The [local test commands](/reference/test/local) are the normal trusted development path. Keep proof
+proportional to the touched contract.
 
 For untrusted proof, lazily warm with `--provider aws`. Every run must set
 `CRABBOX_ENV_ALLOW=CI`, pass `--provider aws --no-hydrate`, and use

@@ -47,6 +47,18 @@ describe("Testbox lease freshness", () => {
     expect(existsSync(fixture.statePath)).toBe(false);
   });
 
+  it.each([undefined, "invalid-sha"])("rejects incomplete allocation HEAD %s", (headSha) => {
+    const fixture = createLeaseFixture();
+    fixture.allocate();
+    const prepared = fixture.reuse();
+    const receipt = JSON.parse(readFileSync(fixture.statePath, "utf8"));
+    const invalid = JSON.stringify({ ...receipt, headSha });
+    writeFileSync(fixture.statePath, invalid);
+    expect(() => fixture.reuse()).toThrow("headSha");
+    expect(() => prepared?.assertCurrent()).toThrow("headSha");
+    expect(readFileSync(fixture.statePath, "utf8")).toBe(invalid);
+  });
+
   it("records and reuses a lease with more than a buffer of source deletions", () => {
     const fixture = createLeaseFixture();
     const blob = fixture.git(["hash-object", "-w", "--stdin"], "");

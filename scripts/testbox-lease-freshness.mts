@@ -155,6 +155,14 @@ export function testboxLeaseStaleReasons(saved: unknown, current: unknown) {
   if (!isRecord(saved) || saved.version !== STATE_VERSION || !isRecord(current)) {
     return ["state schema"];
   }
+  // Allocation HEAD remains required provenance even though compatible commands
+  // may select another revision. Git object formats use full SHA-1 or SHA-256 IDs.
+  if (
+    typeof saved.headSha !== "string" ||
+    !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(saved.headSha)
+  ) {
+    return ["headSha"];
+  }
   return [
     "taskKey",
     "checkoutKey",
