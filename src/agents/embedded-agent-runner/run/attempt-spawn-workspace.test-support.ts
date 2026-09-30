@@ -1344,18 +1344,10 @@ export async function createContextEngineAttemptRunner(params: {
       contextTokenBudget: 2048,
       contextEngine: {
         ...contextEngineRest,
-        ingest:
-          params.contextEngine.ingest ??
-          (async () => ({
-            ingested: true,
-          })),
+        ingest: params.contextEngine.ingest ?? (async () => ({ ingested: true })),
         compact:
           params.contextEngine.compact ??
-          (async () => ({
-            ok: false,
-            compacted: false,
-            reason: "not used in this test",
-          })),
+          (async () => ({ ok: false, compacted: false, reason: "not used in this test" })),
         ...(maintain ? { maintain } : {}),
         info: {
           ...params.contextEngine.info,
@@ -1366,13 +1358,10 @@ export async function createContextEngineAttemptRunner(params: {
       },
       ...params.attemptOverrides,
     };
-    if (params.attemptOverrides?.admittedRunContext) {
+    if (attempt.admittedRunContext) {
       return await (
         await loadRunEmbeddedAttempt()
-      )({
-        ...attempt,
-        admittedRunContext: params.attemptOverrides.admittedRunContext,
-      });
+      )(attempt);
     }
     const admission = prepareSystemAgentRunAdmission(
       attempt.config ?? {},
