@@ -1603,7 +1603,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/auto-reply/reply/get-reply.fast-path.test.ts",
   "src/auto-reply/reply/get-reply.message-hooks.test.ts",
   "src/auto-reply/reply/get-reply.reset-hooks-fallback.test.ts",
-  "src/auto-reply/reply/get-reply.text-directives.test.ts",
   "src/auto-reply/reply/get-reply.timeout.test.ts",
   "src/auto-reply/reply/memory-flush-session.test.ts",
   "src/auto-reply/reply/memory-flush.test.ts",
