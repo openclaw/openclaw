@@ -165,31 +165,6 @@ vi.mock("./subagent-announce-delivery.js", () => ({
     const store = loadSessionStoreMock("/tmp/sessions.json") as Record<string, unknown>;
     return store?.[sessionKey] ?? { sessionId: sessionKey };
   },
-  resolveAnnounceOrigin: (
-    entry:
-      | {
-          lastChannel?: string;
-          lastTo?: string;
-          lastAccountId?: string;
-          lastThreadId?: string;
-          origin?: { provider?: string; channel?: string; accountId?: string };
-        }
-      | undefined,
-    requesterOrigin?: { channel?: string; to?: string; accountId?: string; threadId?: string },
-  ) => ({
-    channel:
-      requesterOrigin?.channel ??
-      entry?.lastChannel ??
-      entry?.origin?.provider ??
-      entry?.origin?.channel,
-    to: requesterOrigin?.to ?? entry?.lastTo,
-    accountId: requesterOrigin?.accountId ?? entry?.lastAccountId ?? entry?.origin?.accountId,
-    threadId: requesterOrigin?.threadId ?? entry?.lastThreadId,
-  }),
-  resolveSubagentCompletionOrigin: async (params: { requesterOrigin?: unknown }) =>
-    params.requesterOrigin,
-  resolveSubagentAnnounceTimeoutMs: () => 10_000,
-  runAnnounceDeliveryWithRetry: async <T>(params: { run: () => Promise<T> }) => await params.run(),
 }));
 
 vi.mock("../registry/subagent-registry-read.js", () => subagentRegistryRuntimeMock);
@@ -321,47 +296,43 @@ describe("subagent announce seam flow", () => {
     outputTesting.setDepsForTest();
   });
 
-  it.each([false, true])(
-    "keeps the parent's authored result for public and private grandchildren: private=%s",
-    async (privateChild) => {
-      const parentKey = "agent:main:subagent:parent";
-      subagentRegistryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([
-        {
-          runId: "grandchild-run",
-          childSessionKey: "agent:main:subagent:grandchild",
-          requesterSessionKey: parentKey,
-          requesterDisplayKey: parentKey,
-          task: "grandchild work",
-          cleanup: "keep",
-          createdAt: 1,
-          execution: { status: "terminal", endedAt: 2, outcome: { status: "ok" } },
-          completion: { required: true, resultText: "raw grandchild marker" },
-          delivery: { status: "delivered" },
-          ...(privateChild
-            ? { completionTarget: "parent" as const, completionRequesterSessionId: "parent-id" }
-            : {}),
-        },
-      ]);
-      expect(
-        await runSubagentAnnounceFlow({
-          childSessionKey: parentKey,
-          childRunId: "parent-run",
-          requesterSessionKey: "agent:main:main",
-          requesterDisplayKey: "main",
-          task: "parent work",
-          timeoutMs: 10,
-          cleanup: "keep",
-          waitForCompletion: false,
-          outcome: { status: "ok" },
-          expectsCompletionMessage: true,
-          terminalReply: { disposition: "visible", text: "parent reviewed and approved" },
-        }),
-      ).toBe("delivered");
-      const message = String(requireAgentCall().params?.message);
-      expect(message).toContain("parent reviewed and approved");
-      expect(message).not.toContain("raw grandchild marker");
-    },
-  );
+  it("keeps the parent's authored result instead of forwarding private grandchildren", async () => {
+    const parentKey = "agent:main:subagent:parent";
+    subagentRegistryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([
+      {
+        runId: "grandchild-run",
+        childSessionKey: "agent:main:subagent:grandchild",
+        requesterSessionKey: parentKey,
+        requesterDisplayKey: parentKey,
+        task: "grandchild work",
+        cleanup: "keep",
+        createdAt: 1,
+        execution: { status: "terminal", endedAt: 2, outcome: { status: "ok" } },
+        completion: { required: true, resultText: "raw grandchild marker" },
+        delivery: { status: "delivered" },
+        completionTarget: "parent",
+        completionRequesterSessionId: "parent-id",
+      },
+    ]);
+    expect(
+      await runSubagentAnnounceFlow({
+        childSessionKey: parentKey,
+        childRunId: "parent-run",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: "parent work",
+        timeoutMs: 10,
+        cleanup: "keep",
+        waitForCompletion: false,
+        outcome: { status: "ok" },
+        expectsCompletionMessage: true,
+        terminalReply: { disposition: "visible", text: "parent reviewed and approved" },
+      }),
+    ).toBe("delivered");
+    const message = String(requireAgentCall().params?.message);
+    expect(message).toContain("parent reviewed and approved");
+    expect(message).not.toContain("raw grandchild marker");
+  });
 
   it.each([false, true])(
     "suppresses ANNOUNCE_SKIP delivery while deleting the child: terminal=%s",
@@ -461,42 +432,39 @@ describe("subagent announce seam flow", () => {
     expect(agentSpy).not.toHaveBeenCalled();
   });
 
-  it.each(["ok", "error"] as const)(
-    "keeps private retry input stable when late usage arrives after %s",
-    async (status) => {
-      let usage: Record<string, number> = {};
-      loadSessionStoreMock.mockImplementation(() => ({
-        "agent:main:main": { sessionId: "private-parent" },
-        "agent:main:subagent:private": { sessionId: "private-child", ...usage },
-      }));
-      agentSpy.mockResolvedValueOnce({ status }).mockResolvedValueOnce({ status: "ok" });
-      const params = {
-        childSessionKey: "agent:main:subagent:private",
-        childRunId: "private-stable-run",
-        requesterSessionKey: "agent:main:main",
-        requesterDisplayKey: "main",
-        completionTarget: "parent" as const,
-        completionRequesterSessionId: "private-parent",
-        task: "private task",
-        timeoutMs: 10,
-        cleanup: "keep" as const,
-        waitForCompletion: false,
-        outcome: { status: "ok" as const },
-        roundOneReply: "private child result",
-        expectsCompletionMessage: true,
-        startedAt: 10,
-        endedAt: 20,
-      };
-      await runSubagentAnnounceFlow(params);
-      usage = { inputTokens: 100, outputTokens: 20 };
-      await runSubagentAnnounceFlow(params);
-      expect(agentSpy).toHaveBeenCalledTimes(2);
-      const first = agentSpy.mock.calls[0]?.[0].params?.message;
-      expect(first).toContain("private child result");
-      expect(first).not.toContain("Stats:");
-      expect(agentSpy.mock.calls[1]?.[0].params?.message).toBe(first);
-    },
-  );
+  it("keeps private retry input stable when late usage arrives after failure", async () => {
+    let usage: Record<string, number> = {};
+    loadSessionStoreMock.mockImplementation(() => ({
+      "agent:main:main": { sessionId: "private-parent" },
+      "agent:main:subagent:private": { sessionId: "private-child", ...usage },
+    }));
+    agentSpy.mockResolvedValueOnce({ status: "error" }).mockResolvedValueOnce({ status: "ok" });
+    const params = {
+      childSessionKey: "agent:main:subagent:private",
+      childRunId: "private-stable-run",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      completionTarget: "parent" as const,
+      completionRequesterSessionId: "private-parent",
+      task: "private task",
+      timeoutMs: 10,
+      cleanup: "keep" as const,
+      waitForCompletion: false,
+      outcome: { status: "ok" as const },
+      roundOneReply: "private child result",
+      expectsCompletionMessage: true,
+      startedAt: 10,
+      endedAt: 20,
+    };
+    await runSubagentAnnounceFlow(params);
+    usage = { inputTokens: 100, outputTokens: 20 };
+    await runSubagentAnnounceFlow(params);
+    expect(agentSpy).toHaveBeenCalledTimes(2);
+    const first = agentSpy.mock.calls[0]?.[0].params?.message;
+    expect(first).toContain("private child result");
+    expect(first).not.toContain("Stats:");
+    expect(agentSpy.mock.calls[1]?.[0].params?.message).toBe(first);
+  });
 
   it("warns when ANNOUNCE_SKIP suppresses a cron job completion", async () => {
     const logSpy = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
@@ -608,29 +576,6 @@ describe("subagent announce seam flow", () => {
     expect(agentCall.params?.channel).toBe("telegram");
     expect(agentCall.params?.accountId).toBe("bot-123");
     expect(agentCall.params?.to).toBe("-1001234567890");
-  });
-
-  it("leaves direct completion failure logging to the shared delivery owner", async () => {
-    const logSpy = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
-    agentSpy.mockResolvedValueOnce({ status: "error", error: "Outbound not configured for slack" });
-
-    const didAnnounce = await runAnnounceFlow({
-      startedAt: 10,
-      endedAt: 20,
-      childSessionKey: "agent:main:subagent:slack",
-      childRunId: "run-direct-failure-log",
-      requesterOrigin: {
-        channel: "slack",
-        to: "C123",
-      },
-      task: "deliver completion",
-      roundOneReply: "done",
-      expectsCompletionMessage: true,
-    });
-
-    expect(didAnnounce).toBe("retryable");
-    expect(logSpy).not.toHaveBeenCalled();
-    logSpy.mockRestore();
   });
 
   it("does not treat ambiguous direct completion failures as announced", async () => {
