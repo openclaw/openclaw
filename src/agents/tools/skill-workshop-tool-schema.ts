@@ -16,6 +16,7 @@ export const SKILL_WORKSHOP_ACTIONS = [
   "evaluate",
   "apply",
   "reject",
+  "purge",
   "quarantine",
   "history",
   "restore_collection",
@@ -45,12 +46,12 @@ export function buildSkillWorkshopToolSchema(proposalRevision = false) {
       action: stringEnum(proposalRevision ? ["inspect", "revise"] : [...SKILL_WORKSHOP_ACTIONS], {
         description: proposalRevision
           ? "inspect = read the exact operator-reviewed proposal; revise = update only that proposal with the run-bound expected revision hash."
-          : "create = stage a pending proposal for a new skill; read = existing live skill when complete content fits; prepare_patch = authorize one exact non-empty span and return bounded context, with only one prepared span active per skill; patch = targeted find-and-replace after read or prepare_patch; update = stage a full-body rewrite; history = read historical collection review records (current runs use automation history); restore_collection = restore a retained backup from the previous collection reviewer; revise = existing pending proposal; list/inspect discover pending proposals (not filesystem search); evaluate runs plugin evaluators for the exact draft; apply/reject/quarantine are explicit lifecycle actions.",
+          : "create = stage a pending proposal for a new skill; read = existing live skill when complete content fits; prepare_patch = authorize one exact non-empty span and return bounded context, with only one prepared span active per skill; patch = targeted find-and-replace after read or prepare_patch; update = stage a full-body rewrite; history = read historical collection review records (current runs use automation history); restore_collection = restore a retained backup from the previous collection reviewer; revise = existing pending proposal; list/inspect discover pending proposals (not filesystem search); evaluate runs plugin evaluators for the exact draft; apply/reject/quarantine are explicit lifecycle actions; purge permanently removes a rejected proposal and its history only when explicitly requested by the operator.",
       }),
       proposal_id: Type.Optional(
         Type.String({
           description:
-            "Existing proposal id for action=inspect, action=revise, action=evaluate, action=apply, action=reject, or action=quarantine.",
+            "Existing proposal id for action=inspect, action=revise, action=evaluate, action=apply, action=reject, action=quarantine, or action=purge.",
         }),
       ),
       artifact_path: Type.Optional(

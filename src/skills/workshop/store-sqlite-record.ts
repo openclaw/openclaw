@@ -105,3 +105,34 @@ export function updateProposal(
     kysely.updateTable("skill_workshop_proposals").set(values).where("proposal_id", "=", record.id),
   );
 }
+
+/** Called inside the Workshop worker's guarded write transaction. */
+export function purgeRejectedProposalInDatabase(
+  db: DatabaseSync,
+  proposalId: string,
+  agentId?: string,
+): void {
+  const kysely = getNodeSqliteKysely<SkillWorkshopDatabase>(db);
+  const row = executeSqliteQueryTakeFirstSync(
+    db,
+    kysely
+      .selectFrom("skill_workshop_proposals")
+      .select(["status", "owner_agent_id"])
+      .where("proposal_id", "=", proposalId),
+  );
+  if (!row || row.owner_agent_id !== agentId || row.status !== "rejected") {
+    throw new Error("Only a rejected proposal owned by the selected agent can be purged.");
+  }
+  executeSqliteQuerySync(
+    db,
+    kysely.deleteFrom("skill_workshop_proposal_events").where("proposal_id", "=", proposalId),
+  );
+  executeSqliteQuerySync(
+    db,
+    kysely.deleteFrom("skill_workshop_proposal_rollbacks").where("proposal_id", "=", proposalId),
+  );
+  executeSqliteQuerySync(
+    db,
+    kysely.deleteFrom("skill_workshop_proposals").where("proposal_id", "=", proposalId),
+  );
+}
