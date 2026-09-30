@@ -6,6 +6,7 @@ import {
 import {
   assertTransactionUsable,
   runSqliteImmediateTransactionSync,
+  tableExists,
   withSqlitePostCommitPublications,
   type SqliteWorkerBackend,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
@@ -34,8 +35,10 @@ export function bindSqliteWorkerBackend(
       },
       { withCommit: admission.withCommit },
     );
-  // A rejected origin batch must not undo the original additive schema preparation.
-  withSqlitePostCommitPublications(db, () => transact(() => ensureMemoryEntryOriginsSchema(db)));
+  if (!tableExists(db, "memory_entry_origins")) {
+    // A rejected origin batch must not undo the original additive schema preparation.
+    withSqlitePostCommitPublications(db, () => transact(() => ensureMemoryEntryOriginsSchema(db)));
+  }
   let closed = false;
   return {
     execute(command) {

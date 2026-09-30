@@ -6,6 +6,7 @@ import {
   ensureMemoryEntryOriginsSchema,
   recordMemoryEntryOriginsInDatabase,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import {
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
@@ -13,6 +14,7 @@ import {
   runSqliteImmediateTransactionSync,
   withOpenClawAgentDatabaseWrite,
 } from "openclaw/plugin-sdk/sqlite-runtime";
+import * as sqliteRuntime from "openclaw/plugin-sdk/sqlite-runtime";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -30,6 +32,7 @@ import {
   reserveMemoryEntryOrigins,
   type MemoryEntryOrigin,
 } from "./memory-entry-origins.js";
+import { memoryCpuProcessEntrypoints } from "./memory/manager-cpu-entrypoints.js";
 import { buildPromotionMarker, extractPromotionKeys } from "./short-term-promotion-memory-write.js";
 import { recordShortTermRecalls } from "./short-term-promotion-record.js";
 import {
@@ -73,47 +76,89 @@ describe("memory entry origins", () => {
   }
 
   it("lazily restores the additive origins table without changing the agent schema version", async () => {
-    const pruning = {
-      workspaceDir: stateDir,
-      agentIds: ["main"],
-      entryKeys: ["candidate"],
-      retainedEntryKeys: new Set<string>(),
-    };
-    await pruneMemoryEntryOrigins(pruning);
-    await expect(fs.access(resolveOpenClawAgentSqlitePath({ agentId: "main" }))).rejects.toThrow();
-    const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
-    const version = db.prepare("PRAGMA user_version").get();
-    db.exec("DROP TABLE IF EXISTS memory_entry_origins");
+    const open = sqliteRuntime.openOpenClawAgentSqliteWorkerStore;
+    let transactionAdmissions = 0;
+    const observed = vi
+      .spyOn(sqliteRuntime, "openOpenClawAgentSqliteWorkerStore")
+      .mockImplementation((options, source, worker) => {
+        if (
+          worker.moduleUrl.href !==
+          resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.entryOrigins).href
+        ) {
+          return open(options, source, worker);
+        }
+        return open(options, source, {
+          ...worker,
+          assertAdmission(request) {
+            if (request.stage === "transaction") {
+              transactionAdmissions += 1;
+            }
+            return worker.assertAdmission ? worker.assertAdmission(request) : request;
+          },
+        });
+      });
+    try {
+      const pruning = {
+        workspaceDir: stateDir,
+        agentIds: ["main"],
+        entryKeys: ["candidate"],
+        retainedEntryKeys: new Set<string>(),
+      };
+      await pruneMemoryEntryOrigins(pruning);
+      await expect(
+        fs.access(resolveOpenClawAgentSqlitePath({ agentId: "main" })),
+      ).rejects.toThrow();
+      const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
+      const version = db.prepare("PRAGMA user_version").get();
+      db.exec("DROP TABLE IF EXISTS memory_entry_origins");
 
-    expect(listMemoryEntryOrigins({ agentId: "main" })).toEqual([]);
-    await pruneMemoryEntryOrigins(pruning);
-    expect(
-      db.prepare("SELECT name FROM sqlite_schema WHERE name = 'memory_entry_origins'").get(),
-    ).toBeUndefined();
-    await expect(
-      recordMemoryEntryOrigins({
+      expect(listMemoryEntryOrigins({ agentId: "main" })).toEqual([]);
+      await pruneMemoryEntryOrigins(pruning);
+      expect(
+        db.prepare("SELECT name FROM sqlite_schema WHERE name = 'memory_entry_origins'").get(),
+      ).toBeUndefined();
+      await expect(
+        recordMemoryEntryOrigins({
+          agentId: "main",
+          origins: [
+            origin("rejected", "session-1"),
+            { ...origin("rejected", "other"), agentId: "other" },
+          ],
+        }),
+      ).rejects.toThrow("memory entry origin belongs to another agent");
+      expect(
+        db.prepare("SELECT name FROM sqlite_schema WHERE name = 'memory_entry_origins'").get(),
+      ).toEqual({ name: "memory_entry_origins" });
+      expect(listMemoryEntryOrigins({ agentId: "main" })).toEqual([]);
+      expect(transactionAdmissions).toBe(2);
+      await recordMemoryEntryOrigins({
         agentId: "main",
-        origins: [
-          origin("rejected", "session-1"),
-          { ...origin("rejected", "other"), agentId: "other" },
-        ],
-      }),
-    ).rejects.toThrow("memory entry origin belongs to another agent");
-    expect(
-      db.prepare("SELECT name FROM sqlite_schema WHERE name = 'memory_entry_origins'").get(),
-    ).toEqual({ name: "memory_entry_origins" });
-    expect(listMemoryEntryOrigins({ agentId: "main" })).toEqual([]);
-    await recordMemoryEntryOrigins({
-      agentId: "main",
-      origins: [origin("candidate", "session-1")],
-    });
-    await recordMemoryEntryOrigins({
-      agentId: "main",
-      origins: [origin("candidate", "session-1")],
-    });
+        origins: [origin("candidate", "session-1")],
+      });
+      expect(transactionAdmissions).toBe(3);
+      await recordMemoryEntryOrigins({
+        agentId: "main",
+        origins: [origin("candidate", "session-1")],
+      });
+      expect(transactionAdmissions).toBe(4);
 
-    expect(listMemoryEntryOrigins({ agentId: "main" })).toEqual([origin("candidate", "session-1")]);
-    expect(db.prepare("PRAGMA user_version").get()).toEqual(version);
+      expect(listMemoryEntryOrigins({ agentId: "main" })).toEqual([
+        origin("candidate", "session-1"),
+      ]);
+      expect(db.prepare("PRAGMA user_version").get()).toEqual(version);
+      db.exec("DROP TABLE memory_entry_origins");
+      await recordMemoryEntryOrigins({
+        agentId: "main",
+        origins: [origin("recovered", "session-2")],
+      });
+      expect(transactionAdmissions).toBe(6);
+      expect(listMemoryEntryOrigins({ agentId: "main" })).toEqual([
+        origin("recovered", "session-2"),
+      ]);
+      expect(db.prepare("PRAGMA user_version").get()).toEqual(version);
+    } finally {
+      observed.mockRestore();
+    }
   });
 
   it("keeps queued origin input and state placement with the original caller", async () => {
