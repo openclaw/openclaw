@@ -315,11 +315,7 @@ export async function planClawPackageRemovals(
     const hasConflicts =
       affectedClawAgentIds.length > 0 || independentlyOwned || packageRef.origin === "pre-existing";
     if (!explicitlySelected && hasConflicts) {
-      retain(
-        affectedClawAgentIds.length > 0
-          ? "Another Claw still references this package."
-          : "Package has a current non-Claw owner or pre-existing origin.",
-      );
+      retain("Package has a current non-Claw owner or pre-existing origin.");
       continue;
     }
     if (!explicitlySelected && packageRef.origin !== "claw-introduced") {

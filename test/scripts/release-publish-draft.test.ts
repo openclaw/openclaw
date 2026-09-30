@@ -67,56 +67,110 @@ function publicationFixture({
   ]) {
     copyFileSync(join(repository, source), join(root, ".release-harness", source));
   }
+  symlinkSync(
+    join(repository, "scripts/full-release-validation-policy.mjs"),
+    join(root, ".release-harness/scripts/full-release-validation-policy.mjs"),
+  );
   symlinkSync(join(repository, "node_modules"), join(root, "node_modules"), "dir");
   return { root, repository, targetSha };
 }
 
-it("renders and verifies an old pinned target using trusted publication tooling", () => {
-  const { root, repository, targetSha } = publicationFixture();
-  const workflow = parse(
-    readFileSync(join(repository, ".github/workflows/openclaw-release-publish.yml"), "utf8"),
-  );
-  const prepare = workflow.jobs.publish.steps.find(
-    (step: { name?: string }) => step.name === "Prepare GitHub release notes",
-  );
-  const notes = join(root, "helper-notes.md");
-  const proof = join(root, "proof.md");
-  writeFileSync(proof, `### Release verification\n\n- Source: ${targetSha}\n`);
-  const result = spawnSync(
-    process.platform === "darwin" ? "/bin/bash" : "bash",
-    [
-      "-c",
-      `
+it.each([true, false])(
+  "renders and verifies an old pinned target with manifest present=%s",
+  (hasManifest) => {
+    const { root, repository, targetSha } = publicationFixture();
+    const workflow = parse(
+      readFileSync(join(repository, ".github/workflows/openclaw-release-publish.yml"), "utf8"),
+    );
+    for (const name of [
+      "Dispatch publish workflows",
+      "Start core npm publication",
+      "Complete publish workflows",
+    ]) {
+      const step = workflow.jobs.publish.steps.find(
+        (candidate: { name?: string }) => candidate.name === name,
+      );
+      expect(step?.env.FULL_RELEASE_VALIDATION_MANIFEST_DIR).toBe(
+        "${{ runner.temp }}/full-release-validation-manifest",
+      );
+    }
+    const prepare = workflow.jobs.publish.steps.find(
+      (step: { name?: string }) => step.name === "Prepare GitHub release notes",
+    );
+    const notes = join(root, "helper-notes.md");
+    const proof = join(root, "proof.md");
+    writeFileSync(proof, `### Release verification\n\n- Source: ${targetSha}\n`);
+    const advisory = {
+      class: "windows-node-ci",
+      child: "normalCi",
+      job: "checks-windows-node-test-2",
+      conclusion: "failure",
+      runId: "456",
+      url: "https://github.com/openclaw/openclaw/actions/runs/456/job/459",
+    };
+    if (hasManifest) {
+      writeFileSync(
+        join(root, "full-release-validation-manifest.json"),
+        JSON.stringify({
+          childRuns: { normalCi: "456" },
+          childEvidence: {
+            normalCi: {
+              runId: "456",
+              jobs: [
+                {
+                  name: advisory.job,
+                  status: "completed",
+                  conclusion: "failure",
+                  url: advisory.url,
+                },
+              ],
+            },
+          },
+          advisoryJobs: [advisory],
+        }),
+      );
+    }
+    const result = spawnSync(
+      process.platform === "darwin" ? "/bin/bash" : "bash",
+      [
+        "-c",
+        `
 set -euo pipefail
 ${prepare.run}
 source "$GITHUB_WORKSPACE/.release-harness/scripts/lib/release-publish-children.sh"
 render_github_release_notes "$NOTES_FILE" "$PROOF_FILE"
 canonical_release_body_matches "$NOTES_FILE"
 `,
-    ],
-    {
-      cwd: root,
-      encoding: "utf8",
-      env: {
-        ...createNestedGitEnv(),
-        GITHUB_WORKSPACE: root,
-        RUNNER_TEMP: root,
-        GITHUB_REPOSITORY: "fixture/repository",
-        RELEASE_TAG: "v2026.9.4",
-        TARGET_SHA: targetSha,
-        GITHUB_REF: "refs/tags/release-publish/aaaaaaaaaaaa-1",
-        PARENT_WORKFLOW_SHA: "a".repeat(40),
-        NOTES_FILE: notes,
-        PROOF_FILE: proof,
+      ],
+      {
+        cwd: root,
+        encoding: "utf8",
+        env: {
+          ...createNestedGitEnv(),
+          GITHUB_WORKSPACE: root,
+          RUNNER_TEMP: root,
+          GITHUB_REPOSITORY: "fixture/repository",
+          RELEASE_TAG: "v2026.9.4",
+          TARGET_SHA: targetSha,
+          GITHUB_REF: "refs/tags/release-publish/aaaaaaaaaaaa-1",
+          PARENT_WORKFLOW_SHA: "a".repeat(40),
+          NOTES_FILE: notes,
+          PROOF_FILE: proof,
+          RELEASE_EVIDENCE_MODE: "full-release-validation",
+          ...(hasManifest ? { FULL_RELEASE_VALIDATION_MANIFEST_DIR: root } : {}),
+        },
       },
-    },
-  );
-  expect(result.status, result.stderr).toBe(0);
-  const prepared = readFileSync(join(root, "release-notes.md"), "utf8");
-  const verified = readFileSync(notes, "utf8");
-  expect(prepared).toContain("Frozen release fix.");
-  expect(verified).toBe(`${prepared}\n\n${readFileSync(proof, "utf8").trimEnd()}`);
-});
+    );
+    expect(result.status, result.stderr).toBe(0);
+    const prepared = readFileSync(join(root, "release-notes.md"), "utf8");
+    const verified = readFileSync(notes, "utf8");
+    expect(prepared).toContain("Frozen release fix.");
+    const advisoryLine = hasManifest
+      ? `\n- Advisory job (windows-node-ci): normalCi / checks-windows-node-test-2 (failure): ${advisory.url}`
+      : "";
+    expect(verified).toBe(`${prepared}\n\n${readFileSync(proof, "utf8").trimEnd()}${advisoryLine}`);
+  },
+);
 
 it("renders the extended-stable context through the real publication entry point", () => {
   const releaseVersion = "2026.7.35";
@@ -305,6 +359,7 @@ it.each([
     }),
   );
   writeFileSync(join(root, "manifest.json"), '{"source":"frozen"}');
+  writeFileSync(join(root, "full-release-validation-manifest.json"), "{}");
   writeFileSync(
     join(root, "existing.json"),
     state === "different" ? '{"source":"changed"}' : '{"source":"frozen"}',
@@ -353,6 +408,8 @@ attach_or_verify_release_asset "$RUNNER_TEMP/manifest.json" "$ASSET_NAME"
         PARENT_WORKFLOW_SHA: "a".repeat(40),
         PUBLISH_OPENCLAW_NPM: "true",
         RELEASE_NPM_DIST_TAG: "latest",
+        RELEASE_EVIDENCE_MODE: "full-release-validation",
+        FULL_RELEASE_VALIDATION_MANIFEST_DIR: root,
         ASSET_NAME: assetName,
       },
     },

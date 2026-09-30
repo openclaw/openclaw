@@ -37,10 +37,6 @@ type PendingMemoryImport = {
   attempted: boolean;
 };
 
-function toErrorMessage(error: unknown): string {
-  return formatUiError(error, "request failed");
-}
-
 export class MemoryImportPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
@@ -186,7 +182,9 @@ export class MemoryImportPage extends OpenClawLightDomElement {
   }
 
   private get error(): string | null {
-    return this.planTask.status === TaskStatus.ERROR ? toErrorMessage(this.planTask.error) : null;
+    return this.planTask.status === TaskStatus.ERROR
+      ? formatUiError(this.planTask.error, "request failed")
+      : null;
   }
 
   private get canAdmin(): boolean {
@@ -318,7 +316,7 @@ export class MemoryImportPage extends OpenClawLightDomElement {
       await this.refresh();
     } catch (error) {
       if (applyEpoch === this.applyEpoch) {
-        this.applyError = toErrorMessage(error);
+        this.applyError = formatUiError(error, "request failed");
       }
     } finally {
       if (applyEpoch === this.applyEpoch) {
@@ -447,7 +445,7 @@ export class MemoryImportPage extends OpenClawLightDomElement {
       }
     } catch (error) {
       if (isCurrent()) {
-        this.backfillError = toErrorMessage(error);
+        this.backfillError = formatUiError(error, "request failed");
       }
     } finally {
       if (isCurrent()) {

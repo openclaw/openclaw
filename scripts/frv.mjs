@@ -16,6 +16,7 @@ import process from "node:process";
 import { pathToFileURL } from "node:url";
 import { promisify, stripVTControlCharacters } from "node:util";
 import { validateArtifactProducerRun } from "./full-release-artifacts.mjs";
+import { loadFlakeClassifications } from "./full-release-flake-classification.mjs";
 import {
   publicationAdmissionContract,
   publicationSourceContract,
@@ -800,18 +801,25 @@ export async function inspectContinuation(plan, client, options = {}) {
         };
       }
       const active = run.status !== "completed";
-      const passed =
-        !active &&
-        terminalPolicyPass(
-          {
-            conclusion: run.conclusion,
-            jobs: evidence.jobs,
-            key: child.key,
-            status: run.status,
-          },
-          plan.releaseProfile,
-          child.workflowRef,
+      const policyChild = {
+        conclusion: run.conclusion,
+        jobs: evidence.jobs,
+        key: child.key,
+        runId: child.runId,
+        status: run.status,
+      };
+      if (!active && child.key === "normalCi" && run.conclusion !== "success") {
+        Object.assign(
+          policyChild,
+          await client.loadFlakeClassifications({
+            child: policyChild,
+            parentRunId: plan.parentRunId,
+            parentRunAttempt: plan.parentRunAttempt,
+            targetSha: plan.targetSha,
+          }),
         );
+      }
+      const passed = !active && terminalPolicyPass(policyChild);
       return {
         compositeJobsSha256: evidence.compositeJobsSha256,
         conclusion: String(run.conclusion ?? ""),
@@ -899,6 +907,9 @@ export function createClient(repository, dependencies = {}) {
   };
   return {
     repository,
+    loadFlakeClassifications(request) {
+      return loadFlakeClassifications({ ...request, repo: repository });
+    },
     getReleaseEvidenceClient() {
       releaseEvidenceClient ??= createReleaseEvidenceClient(repository);
       return releaseEvidenceClient;

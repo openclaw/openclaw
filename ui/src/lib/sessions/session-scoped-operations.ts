@@ -1,5 +1,14 @@
 import { GatewayProtocolRequestTimeoutError } from "@openclaw/gateway-client/browser";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type {
+  SessionsBranchesListResult,
+  SessionsBranchesSwitchResult,
+  SessionsForkResult,
+  SessionsRewindResult,
+  SessionWorkspaceGetResult,
+  SessionWorkspaceListResult,
+  SessionWorkspaceSetResult,
+} from "../../api/types.ts";
 import { requestSessionRecovery } from "./recover.ts";
 import type {
   SessionCompactResult,
@@ -9,16 +18,7 @@ import type {
   SessionRefreshOutcome,
 } from "./session-capability.ts";
 import { areUiSessionKeysEquivalent, normalizeAgentId } from "./session-key.ts";
-import {
-  requestSessionBranchSwitch,
-  requestSessionBranches,
-  requestSessionCompact,
-  requestSessionFile,
-  requestSessionFilesList,
-  requestSessionFileSet,
-  requestSessionFork,
-  requestSessionRewind,
-} from "./session-requests.ts";
+import { buildSessionRequestParams } from "./session-requests.ts";
 
 type SessionScopedOperationsHost = {
   connection: SessionConnectionOwner;
@@ -28,6 +28,11 @@ type SessionScopedOperationsHost = {
 };
 
 const retiredFailedSubscriptionRecoveries = new WeakSet<AggregateError>();
+
+function buildTranscriptMutationParams(sessionKey: string, agentId?: string | null) {
+  const { key, ...owner } = buildSessionRequestParams(sessionKey, agentId);
+  return { sessionKey: key, ...owner };
+}
 
 export function createSessionScopedOperations(host: SessionScopedOperationsHost) {
   const ownedSubscriptions = new Set<SessionMessageSubscription>();
@@ -73,7 +78,10 @@ export function createSessionScopedOperations(host: SessionScopedOperationsHost)
     if (!scope) {
       throw new Error("Session compaction requires an active Gateway connection");
     }
-    const result = await requestSessionCompact(scope.client, key, options);
+    const result = await scope.client.request<SessionCompactResult>(
+      "sessions.compact",
+      buildSessionRequestParams(key, options.agentId),
+    );
     if (!host.connection.isCurrent(scope)) {
       throw new Error("Session compaction completed on a replaced Gateway connection");
     }
@@ -92,13 +100,34 @@ export function createSessionScopedOperations(host: SessionScopedOperationsHost)
   };
 
   const listFiles: SessionCapability["listFiles"] = (key, options = {}) =>
-    requestCurrent((client) => requestSessionFilesList(client, key, options));
+    requestCurrent((client) =>
+      client.request<SessionWorkspaceListResult | null>("sessions.files.list", {
+        sessionKey: key,
+        path: options.path ?? "",
+        search: options.search ?? "",
+        ...(options.agentId?.trim() ? { agentId: options.agentId.trim() } : {}),
+      }),
+    );
 
   const getFile: SessionCapability["getFile"] = (key, path, options = {}) =>
-    requestCurrent((client) => requestSessionFile(client, key, path, options));
+    requestCurrent((client) =>
+      client.request<SessionWorkspaceGetResult | null>("sessions.files.get", {
+        sessionKey: key,
+        path,
+        ...(options.agentId?.trim() ? { agentId: options.agentId.trim() } : {}),
+      }),
+    );
 
   const setFile: SessionCapability["setFile"] = (key, path, content, options) =>
-    requestCurrent((client) => requestSessionFileSet(client, key, path, content, options));
+    requestCurrent((client) =>
+      client.request<SessionWorkspaceSetResult | null>("sessions.files.set", {
+        sessionKey: key,
+        path,
+        content,
+        expectedHash: options.expectedHash,
+        ...(options.agentId?.trim() ? { agentId: options.agentId.trim() } : {}),
+      }),
+    );
 
   const unsubscribeMessages = async (subscription: SessionMessageSubscription): Promise<void> => {
     const runtime = subscriptionRuntime ?? (await loadSubscriptionRuntime());
@@ -175,24 +204,44 @@ export function createSessionScopedOperations(host: SessionScopedOperationsHost)
   const rewind: SessionCapability["rewind"] = (key, entryId, options = {}) =>
     requestCommittedMutation(
       "Session rewind requires an active Gateway connection",
-      (client) => requestSessionRewind(client, key, entryId, options),
+      (client) =>
+        client.request<SessionsRewindResult>("sessions.rewind", {
+          ...buildTranscriptMutationParams(key, options.agentId),
+          entryId,
+        }),
       options.agentId,
     );
 
   const forkAtMessage: SessionCapability["forkAtMessage"] = (key, entryId, options = {}) =>
     requestCommittedMutation(
       "Session fork requires an active Gateway connection",
-      (client) => requestSessionFork(client, key, entryId, options),
+      (client) =>
+        client.request<SessionsForkResult>("sessions.fork", {
+          ...buildTranscriptMutationParams(key, options.agentId),
+          entryId,
+        }),
       options.agentId,
     );
 
   const listBranches: SessionCapability["listBranches"] = async (key, options = {}) =>
-    (await requestCurrent((client) => requestSessionBranches(client, key, options))) ?? [];
+    (await requestCurrent(
+      async (client) =>
+        (
+          await client.request<SessionsBranchesListResult>(
+            "sessions.branches.list",
+            buildTranscriptMutationParams(key, options.agentId),
+          )
+        ).branches,
+    )) ?? [];
 
   const switchBranch: SessionCapability["switchBranch"] = (key, leafEntryId, options = {}) =>
     requestCommittedMutation(
       "Session branch switch requires an active Gateway connection",
-      (client) => requestSessionBranchSwitch(client, key, leafEntryId, options),
+      (client) =>
+        client.request<SessionsBranchesSwitchResult>("sessions.branches.switch", {
+          ...buildTranscriptMutationParams(key, options.agentId),
+          leafEntryId,
+        }),
       options.agentId,
     );
 

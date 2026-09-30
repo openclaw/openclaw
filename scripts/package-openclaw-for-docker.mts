@@ -1028,11 +1028,24 @@ export async function packOpenClawPackageForDocker(
     if (packageOptions.packJsonPath) {
       // npm's original receipt predates normalization. Inspect the finished bytes;
       // dry-run preserves the archive while npm owns hashes, modes, and inventory.
+      // npm streams a file spec through its cache while extracting it, so give this
+      // inspection a private cache that leaves with the receipt instead of copying
+      // the artifact into, and waiting on, the caller's shared npm cache.
       packReceiptDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-npm-pack-receipt-"));
       const packReceiptPath = path.join(packReceiptDir, "pack.json");
       await runCaptureImpl(
         "npm",
-        ["pack", tarball, "--dry-run", "--json", "--ignore-scripts", "--offline", "--silent"],
+        [
+          "pack",
+          tarball,
+          "--dry-run",
+          "--json",
+          "--ignore-scripts",
+          "--offline",
+          "--silent",
+          "--cache",
+          path.join(packReceiptDir, "npm-cache"),
+        ],
         sourcePath,
         {
           stdoutFilePath: packReceiptPath,

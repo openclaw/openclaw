@@ -476,7 +476,7 @@ function createStore(gateway: ApplicationGateway): SessionProgressCardStore {
         continue;
       }
       entry.generation += 1;
-      if (!entry.load && watched.has(key)) {
+      if (watched.has(key)) {
         void load(entry.target).catch(() => undefined);
       }
     }
@@ -542,16 +542,14 @@ function createStore(gateway: ApplicationGateway): SessionProgressCardStore {
       const retry = entry.refresh?.state === "failed" || entry.refresh?.state === "timeout";
       // A timed-out request may still be running. Retry the same intent rather
       // than starting duplicate agent work after an uncertain outcome.
+      const retained =
+        entry.refresh && entry.refresh.state !== "updated" && !entry.refresh.retryNewIntent
+          ? entry.refresh
+          : undefined;
       const refresh: ProgressCardRefresh = {
         state: "pending",
-        idempotencyKey:
-          entry.refresh && entry.refresh.state !== "updated" && !entry.refresh.retryNewIntent
-            ? entry.refresh.idempotencyKey
-            : generateUUID(),
-        baseline:
-          entry.refresh && entry.refresh.state !== "updated" && !entry.refresh.retryNewIntent
-            ? entry.refresh.baseline
-            : card.revision,
+        idempotencyKey: retained?.idempotencyKey ?? generateUUID(),
+        baseline: retained?.baseline ?? card.revision,
         accepted: false,
       };
       retireRefresh(entry);
