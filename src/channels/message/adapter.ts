@@ -1,8 +1,3 @@
-/**
- * Channel message adapter definition helper.
- *
- * Supplies manual receive acknowledgement defaults while preserving adapter-specific types.
- */
 import type {
   ChannelMessageAdapter,
   ChannelMessageAdapterShape,

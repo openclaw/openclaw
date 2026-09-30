@@ -3,10 +3,15 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, vi } from "vitest";
+import { decodeLaunchAgentPlistFixture } from "../../daemon/launchd-plist.test-support.js";
 import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveNpmGlobalPrefixLayoutFromPrefix } from "../../infra/update-npm-prefix.js";
-import type { runCommandWithTimeout, runUtf8CommandWithTimeout } from "../../process/exec.js";
+import type {
+  runCommandWithTimeout,
+  runExec,
+  runUtf8CommandWithTimeout,
+} from "../../process/exec.js";
 import { createCommandResult as commandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 
 export function isLegacyUpdateDoctorCommand(argv: readonly string[]) {
@@ -15,6 +20,53 @@ export function isLegacyUpdateDoctorCommand(argv: readonly string[]) {
     argv[3] === "--non-interactive" &&
     (argv.length === 4 || argv[4] === "--fix")
   );
+}
+
+// The real snapshot worker has separate WAL/source-inode boundary coverage.
+// Retain real rehearsal config projection and drift checks in this CLI fixture.
+export async function runUpdateStateSnapshotFixture(
+  ...[, options]: [string[], { input: string; timeoutMs?: number }]
+) {
+  const input: unknown = JSON.parse(options.input);
+  const mode = isRecord(input) ? input.mode : undefined;
+  if (mode !== "inventory" && mode !== "snapshot") {
+    throw new Error("Unexpected update state worker mode");
+  }
+  return {
+    code: 0,
+    stdout: Buffer.from(
+      JSON.stringify(
+        mode === "inventory"
+          ? { databases: [], pluginBytes: 0, pluginPlan: "plugin-copy-plan.json" }
+          : { versions: [], pluginPaths: {} },
+      ),
+    ),
+    stderr: Buffer.alloc(0),
+  };
+}
+
+export function createUpdateExecTransportFixture(params: {
+  run: typeof runExec;
+  nativeRun: typeof runExec;
+  hostPlatform: NodeJS.Platform;
+  isMacosAclInspection: (command: string, args: readonly string[]) => boolean;
+  isPlistStdinConversion: (command: string, args: readonly string[]) => boolean;
+}): typeof runExec {
+  return async (...args: Parameters<typeof runExec>) => {
+    const options = args[2];
+    if (
+      params.isPlistStdinConversion(args[0], args[1]) &&
+      typeof options === "object" &&
+      options.input !== undefined
+    ) {
+      return params.hostPlatform === "darwin"
+        ? params.nativeRun(...args)
+        : decodeLaunchAgentPlistFixture(options.input, args[1][1]);
+    }
+    return params.isMacosAclInspection(args[0], args[1])
+      ? params.nativeRun(...args)
+      : params.run(...args);
+  };
 }
 
 // Native effects/results remain fixture-owned. Preserve real child admission,

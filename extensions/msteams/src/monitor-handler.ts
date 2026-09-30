@@ -14,14 +14,10 @@ import { buildGroupWelcomeText, buildWelcomeCard } from "./welcome-card.js";
 async function isInvokeAuthorized(params: {
   context: Pick<MSTeamsTurnContext, "activity">;
   deps: MSTeamsMessageHandlerDeps;
-  deniedLogs: {
-    dm: string;
-    channel: string;
-    group: string;
-  };
+  invokeKind: "feedback" | "signin" | "card action";
   includeInvokeName?: boolean;
 }): Promise<boolean> {
-  const { context, deps, deniedLogs, includeInvokeName = false } = params;
+  const { context, deps, invokeKind, includeInvokeName = false } = params;
   const resolved = await resolveMSTeamsSenderAccess({
     cfg: deps.cfg,
     activity: context.activity,
@@ -42,7 +38,7 @@ async function isInvokeAuthorized(params: {
   }
 
   if (isDirectMessage && resolved.senderAccess.decision !== "allow") {
-    deps.log.debug?.(deniedLogs.dm, {
+    deps.log.debug?.(`dropping ${invokeKind} invoke (dm sender not allowlisted)`, {
       sender: senderId,
       conversationId,
       ...maybeInvokeName,
@@ -55,7 +51,7 @@ async function isInvokeAuthorized(params: {
     resolved.channelGate.allowlistConfigured &&
     !resolved.channelGate.allowed
   ) {
-    deps.log.debug?.(deniedLogs.channel, {
+    deps.log.debug?.(`dropping ${invokeKind} invoke (not in team/channel allowlist)`, {
       conversationId,
       teamKey: resolved.channelGate.teamKey ?? "none",
       channelKey: resolved.channelGate.channelKey ?? "none",
@@ -65,7 +61,7 @@ async function isInvokeAuthorized(params: {
   }
 
   if (!isDirectMessage && !resolved.senderAccess.allowed) {
-    deps.log.debug?.(deniedLogs.group, {
+    deps.log.debug?.(`dropping ${invokeKind} invoke (group sender not allowlisted)`, {
       sender: senderId,
       conversationId,
       ...maybeInvokeName,
@@ -83,11 +79,7 @@ export async function isFeedbackInvokeAuthorized(
   return isInvokeAuthorized({
     context,
     deps,
-    deniedLogs: {
-      dm: "dropping feedback invoke (dm sender not allowlisted)",
-      channel: "dropping feedback invoke (not in team/channel allowlist)",
-      group: "dropping feedback invoke (group sender not allowlisted)",
-    },
+    invokeKind: "feedback",
   });
 }
 
@@ -98,11 +90,7 @@ export async function isSigninInvokeAuthorized(
   return isInvokeAuthorized({
     context,
     deps,
-    deniedLogs: {
-      dm: "dropping signin invoke (dm sender not allowlisted)",
-      channel: "dropping signin invoke (not in team/channel allowlist)",
-      group: "dropping signin invoke (group sender not allowlisted)",
-    },
+    invokeKind: "signin",
     includeInvokeName: true,
   });
 }
@@ -114,11 +102,7 @@ export async function isCardActionInvokeAuthorized(
   return isInvokeAuthorized({
     context,
     deps,
-    deniedLogs: {
-      dm: "dropping card action invoke (dm sender not allowlisted)",
-      channel: "dropping card action invoke (not in team/channel allowlist)",
-      group: "dropping card action invoke (group sender not allowlisted)",
-    },
+    invokeKind: "card action",
     includeInvokeName: true,
   });
 }

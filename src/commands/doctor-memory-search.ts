@@ -194,10 +194,9 @@ function inspectRememberAcrossConversationsHealth(params: {
   cfg: OpenClawConfig;
   agentId: string;
   report: MemorySearchHealthReporter;
-}): { enabled: boolean } {
-  const enabled = resolveRememberAcrossConversations(params.cfg, params.agentId);
-  if (!enabled) {
-    return { enabled: false };
+}): boolean {
+  if (!resolveRememberAcrossConversations(params.cfg, params.agentId)) {
+    return false;
   }
   const activeMemoryAvailable = isActiveMemoryPluginAvailable(params.cfg);
   const conversationRecallSupport = resolveActiveMemoryConversationRecallSupport(params.cfg);
@@ -215,7 +214,7 @@ function inspectRememberAcrossConversationsHealth(params: {
       `Remember across conversations is effectively enabled for agent "${params.agentId}", but Active Memory does not allow memory_search. Add memory_search to the plugin toolsAllow list or set memory.search.rememberAcrossConversations to false.`,
     );
   }
-  return { enabled: true };
+  return true;
 }
 
 type MemorySearchHealthOptions = {
@@ -326,17 +325,17 @@ async function inspectMemorySearchHealthForAgent(
   const resolved = resolveMemorySearchConfig(cfg, agentId);
 
   if (!resolved) {
-    const recallHealth = inspectRememberAcrossConversationsHealth({
+    const recallEnabled = inspectRememberAcrossConversationsHealth({
       cfg,
       agentId,
       report,
     });
     report(
-      recallHealth.enabled
+      recallEnabled
         ? `Remember across conversations is effectively enabled for agent "${agentId}", but memory search is disabled. Enable memory search or set memory.search.rememberAcrossConversations to false.`
         : "Memory search is explicitly disabled (enabled: false).",
       "memory.search.provider",
-      !recallHealth.enabled,
+      !recallEnabled,
     );
     return;
   }

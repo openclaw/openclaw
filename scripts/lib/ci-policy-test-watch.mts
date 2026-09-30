@@ -1404,6 +1404,13 @@ const policyTestWatches = [
     ],
   },
   {
+    testFile: "src/commands/doctor-lint.native-capture.test.ts",
+    watchGlobs: [
+      "src/commands/doctor-lint.native-capture.test-support.ts",
+      "src/cli/run-main-plugin-cache.ts",
+    ],
+  },
+  {
     testFile: "src/gateway/server.models-native-retirement.test.ts",
     watchGlobs: ["extensions/xai/openclaw.plugin.json"],
   },

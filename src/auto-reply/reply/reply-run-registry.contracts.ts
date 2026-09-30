@@ -359,8 +359,6 @@ export type ReplyOperation = {
   readonly staleExpiryReason?: ReplyOperationStaleReason;
   readonly startedAtMs: number;
   readonly lastActivityAtMs: number;
-  /** True when this operation has owned the supplied session ID. */
-  hasOwnedSessionId(sessionId: string): boolean;
   /** Capture lineage before a pending barrier outlives this operation's lane. */
   captureOwnedSessionIds(): Set<string>;
   recordActivity(): void;
@@ -412,11 +410,6 @@ export type ReplyOperation = {
   /** Settles after the lifecycle owner's final delivery/persistence barrier. */
   readonly ownerSettlement?: Promise<void>;
   complete(): void;
-  /**
-   * Complete the operation, clear active-run state, then run follow-up work.
-   * Use when the follow-up can create another ReplyOperation for this session.
-   */
-  completeThen(afterClear: () => void): void;
   /**
    * Clear active-run state immediately, but delay registered after-clear work
    * until delivery or another external barrier settles.

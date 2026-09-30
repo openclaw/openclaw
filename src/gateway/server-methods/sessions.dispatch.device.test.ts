@@ -53,10 +53,10 @@ const environmentMethods = await import("./environments.js");
 const dispatchTestMocks = getDispatchTestMocks();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function useDeviceSession(agentRuntimeOverride?: string): void {
+function useDeviceSession(agentRuntimeOverride?: string, sessionId = dispatchTestSessionId): void {
   dispatchTestMocks.resolveTarget.mockReturnValue(
     makeSessionTarget({
-      sessionId: dispatchTestSessionId,
+      sessionId,
       ...(agentRuntimeOverride
         ? {
             agentHarnessId: agentRuntimeOverride,
@@ -508,17 +508,7 @@ describe("sessions.dispatch device targets", () => {
           harness.markEnvironmentNodeDeviceId("second");
           return minted as Awaited<ReturnType<typeof harness.environments.attachSession>>;
         });
-        dispatchTestMocks.resolveTarget.mockReturnValue(
-          makeSessionTarget({
-            sessionId: "session-1",
-            worktree: { id: "worktree-1", branch: "openclaw/device-test", repoRoot: "/repo" },
-          }),
-        );
-        dispatchTestMocks.findLiveByOwner.mockReturnValue({
-          id: "worktree-1",
-          ownerKind: "session",
-          ownerId: dispatchTestSessionKey,
-        });
+        useDeviceSession(undefined, "session-1");
 
         const respond = await invokeSessionDispatch(
           makeDispatchTestContext({
@@ -615,13 +605,7 @@ describe("sessions.dispatch device targets", () => {
                   : undefined,
           };
           bindDeviceWorkerAvailability(environments, availability);
-          useDeviceSession();
-          dispatchTestMocks.resolveTarget.mockReturnValue(
-            makeSessionTarget({
-              sessionId: "session-1",
-              worktree: { id: "worktree-1", branch: "openclaw/device-test", repoRoot: "/repo" },
-            }),
-          );
+          useDeviceSession(undefined, "session-1");
           const respond = await invokeSessionDispatch(
             makeDispatchTestContext({
               nodeRegistry: {

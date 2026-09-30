@@ -122,7 +122,6 @@ private final class TalkPushToTalkOnceOperation {
 @MainActor
 @Observable
 final class TalkModeManager: NSObject {
-    private typealias SpeechRequest = SFSpeechAudioBufferRecognitionRequest
     private static let defaultModelIdFallback = "eleven_v3"
     private static let defaultRealtimeModelIdFallback = "gpt-realtime-2"
     private static let defaultTalkProvider = "elevenlabs"
@@ -230,7 +229,6 @@ final class TalkModeManager: NSObject {
 
     private let audioEngine = AVAudioEngine()
     private var inputTapInstalled = false
-    private var audioTapDiagnostics: AudioTapDiagnostics?
     private var speechRecognizer: SFSpeechRecognizer?
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
@@ -1447,11 +1445,9 @@ final class TalkModeManager: NSObject {
             self.recognitionRequest?.shouldReportPartialResults = true
             return
         }
-        if !self.allowSimulatorCapture {
-            throw NSError(domain: "TalkMode", code: 2, userInfo: [
-                NSLocalizedDescriptionKey: "Talk mode is not supported on the iOS simulator",
-            ])
-        }
+        throw NSError(domain: "TalkMode", code: 2, userInfo: [
+            NSLocalizedDescriptionKey: "Talk mode is not supported on the iOS simulator",
+        ])
         #endif
 
         let resolvedSpeech = TalkSpeechLocale.makeRecognizer(
@@ -1479,12 +1475,11 @@ final class TalkModeManager: NSObject {
             ])
         }
         input.removeTap(onBus: 0)
-        let tapDiagnostics = AudioTapDiagnostics(label: "talk") { [weak self] level in
+        let tapDiagnostics = AudioTapDiagnostics { [weak self] level in
             Task { @MainActor in
                 self?.updateMicLevel(level, recognitionGeneration: recognitionGeneration)
             }
         }
-        self.audioTapDiagnostics = tapDiagnostics
         let tapBlock = Self.makeAudioTapAppendCallback(request: request, diagnostics: tapDiagnostics)
         input.installTap(onBus: 0, bufferSize: 2048, format: format, block: tapBlock)
         self.inputTapInstalled = true
@@ -1672,7 +1667,6 @@ final class TalkModeManager: NSObject {
         self.noiseFloorSamples.removeAll(keepingCapacity: true)
         self.noiseFloor = nil
         self.noiseFloorReady = false
-        self.audioTapDiagnostics = nil
         if self.inputTapInstalled {
             self.audioEngine.inputNode.removeTap(onBus: 0)
             self.inputTapInstalled = false
@@ -1693,7 +1687,7 @@ final class TalkModeManager: NSObject {
     }
 
     private nonisolated static func makeAudioTapAppendCallback(
-        request: SpeechRequest,
+        request: SFSpeechAudioBufferRecognitionRequest,
         diagnostics: AudioTapDiagnostics) -> AVAudioNodeTapBlock
     {
         { buffer, _ in
@@ -2852,12 +2846,7 @@ final class TalkModeManager: NSObject {
         let params = TalkClientCloseParams(
             sessionkey: sessionKey,
             voicesessionid: voiceSessionId)
-        let data = try JSONEncoder().encode(params)
-        guard let json = String(data: data, encoding: .utf8) else {
-            throw NSError(domain: "TalkRealtimeVoiceSession", code: 1, userInfo: [
-                NSLocalizedDescriptionKey: "Failed to encode close request",
-            ])
-        }
+        let json = try String(bytes: JSONEncoder().encode(params), encoding: .utf8)!
         #if DEBUG
         if let testRealtimeVoiceSessionCloseRequest {
             try await testRealtimeVoiceSessionCloseRequest("talk.client.close", json)
@@ -3394,14 +3383,7 @@ final class TalkModeManager: NSObject {
         let route = AVAudioSession.sharedInstance().currentRoute
         // Built-in speaker/receiver often feeds TTS back into STT, causing false interrupts.
         // Allow barge-in for isolated outputs (headphones/Bluetooth/USB/CarPlay/AirPlay).
-        return !route.outputs.contains { output in
-            switch output.portType {
-            case .builtInSpeaker, .builtInReceiver:
-                true
-            default:
-                false
-            }
-        }
+        return !route.outputs.contains { $0.portType == .builtInSpeaker || $0.portType == .builtInReceiver }
     }
 
     private var isSpeechOutputActive: Bool {
@@ -3420,17 +3402,14 @@ final class TalkModeManager: NSObject {
         if !usesGatewayVoiceIds, requestedVoice?.isEmpty == false, resolvedVoice == nil {
             self.logger.warning("unknown voice alias \(requestedVoice ?? "?", privacy: .public)")
         }
+        guard directive?.once != true else { return }
         if let voice = resolvedVoice {
-            if directive?.once != true {
-                self.currentVoiceId = voice
-                self.voiceOverrideActive = true
-            }
+            self.currentVoiceId = voice
+            self.voiceOverrideActive = true
         }
         if let model = directive?.modelId {
-            if directive?.once != true {
-                self.currentModelId = model
-                self.modelOverrideActive = true
-            }
+            self.currentModelId = model
+            self.modelOverrideActive = true
         }
     }
 
@@ -4625,14 +4604,10 @@ extension TalkModeManager {
         try? session.setPreferredSampleRate(48000)
         try? session.setPreferredIOBufferDuration(0.02)
         try session.setActive(true, options: [])
-        if TalkAudioRoute.shouldForceSpeaker(
+        let shouldForceSpeaker = TalkAudioRoute.shouldForceSpeaker(
             preferenceEnabled: forceSpeaker,
             outputPortTypes: session.currentRoute.outputs.map(\.portType))
-        {
-            try? session.overrideOutputAudioPort(.speaker)
-        } else {
-            try? session.overrideOutputAudioPort(.none)
-        }
+        try? session.overrideOutputAudioPort(shouldForceSpeaker ? .speaker : .none)
         // A speaker override also forces the built-in microphone; apply an explicit input last.
         self.applyPreferredInput(preferredInputDeviceID, to: session)
         GatewayDiagnostics.log(
@@ -4669,16 +4644,14 @@ extension TalkModeManager {
 }
 
 private final class AudioTapDiagnostics: @unchecked Sendable {
-    private let label: String
-    private let onLevel: (@Sendable (Float) -> Void)?
+    private let onLevel: @Sendable (Float) -> Void
     private let lock = NSLock()
     private var bufferCount: Int = 0
     private var lastLoggedAt = Date.distantPast
     private var lastLevelEmitAt = Date.distantPast
     private var maxRmsWindow: Float = 0
 
-    init(label: String, onLevel: (@Sendable (Float) -> Void)? = nil) {
-        self.label = label
+    init(onLevel: @escaping @Sendable (Float) -> Void) {
         self.onLevel = onLevel
     }
 
@@ -4715,13 +4688,13 @@ private final class AudioTapDiagnostics: @unchecked Sendable {
         }
         self.lock.unlock()
 
-        if shouldEmitLevel, let onLevel {
-            onLevel(resolvedRms)
+        if shouldEmitLevel {
+            self.onLevel(resolvedRms)
         }
 
         guard shouldLog else { return }
         GatewayDiagnostics.log(
-            "\(self.label) mic: buffers=\(count) frames=\(frames) rate=\(Int(rate))Hz ch=\(ch) "
+            "talk mic: buffers=\(count) frames=\(frames) rate=\(Int(rate))Hz ch=\(ch) "
                 + "rms=\(String(format: "%.4f", resolvedRms)) max=\(String(format: "%.4f", maxRms))")
     }
 }

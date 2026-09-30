@@ -105,7 +105,7 @@ function isGeminiModelId(modelId: string): boolean {
   return /(?:^|[/:])gemini(?:$|[-/:.])/.test(modelId);
 }
 
-function extractEnumValues(schema: unknown): unknown[] | undefined {
+function extractEnumValues(schema: unknown, requireAllVariants = false): unknown[] | undefined {
   if (!schema || typeof schema !== "object") {
     return undefined;
   }
@@ -122,16 +122,32 @@ function extractEnumValues(schema: unknown): unknown[] | undefined {
       ? record.oneOf
       : null;
   if (variants) {
+    let complete = true;
     const values = variants.flatMap((variant) => {
-      const extracted = extractEnumValues(variant);
+      const extracted = extractEnumValues(variant, requireAllVariants);
+      complete &&= extracted !== undefined;
       return extracted ?? [];
     });
-    return values.length > 0 ? values : undefined;
+    return (!requireAllVariants || complete) && values.length > 0 ? values : undefined;
   }
   return undefined;
 }
 
-function mergePropertySchemas(existing: unknown, incoming: unknown): unknown {
+function isUnconstrainedStringSchema(schema: unknown): schema is Record<string, unknown> {
+  return (
+    isSchemaRecord(schema) &&
+    schema.type === "string" &&
+    Object.keys(schema).every((key) =>
+      ["type", "title", "description", "default", "examples"].includes(key),
+    )
+  );
+}
+
+function mergePropertySchemas(
+  existing: unknown,
+  incoming: unknown,
+  allowUnconstrainedString: boolean,
+): unknown {
   if (!existing) {
     return incoming;
   }
@@ -153,6 +169,22 @@ function mergePropertySchemas(existing: unknown, incoming: unknown): unknown {
         if (!(key in merged) && key in record) {
           merged[key] = record[key];
         }
+      }
+    }
+    // The caller checks every alternative before allowing a free string to
+    // absorb presets, so a later non-string branch cannot discard those presets.
+    if (allowUnconstrainedString) {
+      if (
+        existingEnum?.every((value) => typeof value === "string") &&
+        isUnconstrainedStringSchema(incoming)
+      ) {
+        return { ...incoming, ...merged };
+      }
+      if (
+        incomingEnum?.every((value) => typeof value === "string") &&
+        isUnconstrainedStringSchema(existing)
+      ) {
+        return { ...existing, ...merged };
       }
     }
     const types = new Set(values.map((value) => typeof value));
@@ -455,9 +487,9 @@ function normalizeToolParameterSchemaUncached(
   }
   const variants = schemaRecord[flattenableVariantKey] as unknown[];
   // Root-required properties must survive branch merging when additionalProperties is false.
-  const mergedProperties: Record<string, unknown> = isSchemaRecord(schemaRecord.properties)
-    ? { ...schemaRecord.properties }
-    : {};
+  const rootProperties = isSchemaRecord(schemaRecord.properties) ? schemaRecord.properties : {};
+  const mergedProperties: Record<string, unknown> = { ...rootProperties };
+  const propertyAlternatives = new Map<string, unknown[]>();
   const requiredCounts = new Map<string, number>();
   let objectVariants = 0;
 
@@ -471,8 +503,12 @@ function normalizeToolParameterSchemaUncached(
     }
     objectVariants += 1;
     for (const [key, value] of Object.entries(props as Record<string, unknown>)) {
-      const existing = Object.hasOwn(mergedProperties, key) ? mergedProperties[key] : undefined;
-      setOwnSchemaProperty(mergedProperties, key, mergePropertySchemas(existing, value));
+      const alternatives = propertyAlternatives.get(key);
+      if (alternatives) {
+        alternatives.push(value);
+      } else {
+        propertyAlternatives.set(key, [value]);
+      }
     }
     const required = Array.isArray((entry as { required?: unknown }).required)
       ? (entry as { required: unknown[] }).required
@@ -483,6 +519,23 @@ function normalizeToolParameterSchemaUncached(
       }
       requiredCounts.set(key, (requiredCounts.get(key) ?? 0) + 1);
     }
+  }
+
+  for (const [key, alternatives] of propertyAlternatives) {
+    // Root properties constrain every branch and retain the existing merge policy.
+    const allowUnconstrainedString =
+      !Object.hasOwn(rootProperties, key) &&
+      alternatives.every(
+        (alternative) =>
+          isUnconstrainedStringSchema(alternative) ||
+          extractEnumValues(alternative, true)?.every((value) => typeof value === "string") ===
+            true,
+      );
+    let merged = Object.hasOwn(mergedProperties, key) ? mergedProperties[key] : undefined;
+    for (const alternative of alternatives) {
+      merged = mergePropertySchemas(merged, alternative, allowUnconstrainedString);
+    }
+    setOwnSchemaProperty(mergedProperties, key, merged);
   }
 
   const baseRequired = Array.isArray(schemaRecord.required)

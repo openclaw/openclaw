@@ -100,7 +100,12 @@ export type MediaUnderstandingProviderRequestAuth =
   | { kind: "api-key"; apiKey: string; source?: string }
   | { kind: "none"; source: string };
 
-export type AudioTranscriptionRequest = {
+export type AudioTranscriptionRequest = MediaUnderstandingProviderRequest & {
+  language?: string;
+  query?: Record<string, string | number | boolean>;
+};
+
+type MediaUnderstandingProviderRequest = {
   buffer: Buffer;
   fileName: string;
   mime?: string;
@@ -111,9 +116,7 @@ export type AudioTranscriptionRequest = {
   headers?: Record<string, string>;
   request?: MediaUnderstandingProviderRequestTransportOverrides;
   model?: string;
-  language?: string;
   prompt?: string;
-  query?: Record<string, string | number | boolean>;
   timeoutMs: number;
   signal?: AbortSignal;
   fetchFn?: typeof fetch;
@@ -132,22 +135,7 @@ type AudioTranscriptionContext = Omit<AudioTranscriptionRequest, "apiKey" | "aut
   preferredProfile?: string;
 };
 
-export type VideoDescriptionRequest = {
-  buffer: Buffer;
-  fileName: string;
-  mime?: string;
-  /** Compatibility field for existing providers; prefer auth.kind/apiKey. */
-  apiKey: string;
-  auth?: MediaUnderstandingProviderRequestAuth;
-  baseUrl?: string;
-  headers?: Record<string, string>;
-  request?: MediaUnderstandingProviderRequestTransportOverrides;
-  model?: string;
-  prompt?: string;
-  timeoutMs: number;
-  signal?: AbortSignal;
-  fetchFn?: typeof fetch;
-};
+export type VideoDescriptionRequest = MediaUnderstandingProviderRequest;
 
 export type VideoDescriptionResult = {
   text: string;
@@ -193,11 +181,8 @@ export type StructuredExtractionTextInput = {
   text: string;
 };
 
-export type StructuredExtractionImageInput = {
+export type StructuredExtractionImageInput = ImagesDescriptionInput & {
   type: "image";
-  buffer: Buffer;
-  fileName: string;
-  mime?: string;
 };
 
 export type StructuredExtractionInput =

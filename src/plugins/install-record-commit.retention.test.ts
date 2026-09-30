@@ -15,7 +15,7 @@ import {
   resolveRetainedManagedNpmInstallMarkerPath,
 } from "./managed-npm-retention.js";
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
-import { publishPluginSourceAdmission } from "./plugin-source-admission-store.js";
+import { createPluginSourceAdmissionPublisher } from "./plugin-source-admission-store.js";
 import {
   readPersistedInstalledPluginIndexRowSync,
   seedInstalledPluginIndex,
@@ -53,7 +53,6 @@ describe("retained managed npm record commits", () => {
       const removedPath = records.removed!.installPath!;
       const configBefore = fs.readFileSync(state.configPath, "utf8");
       const publication = {
-        env: state.env,
         pluginId: unchanged.pluginId,
         rootDir: unchanged.rootDir,
         installRecordHash: unchanged.installRecordHash,
@@ -65,6 +64,7 @@ describe("retained managed npm record commits", () => {
           nativeNamespaces: {},
         },
       };
+      const publish = createPluginSourceAdmissionPublisher({ env: state.env })!;
       const failure = new Error("config commit failed after plugin retirement");
       let published: boolean | undefined;
       let publicationRewroteIndex: boolean | undefined;
@@ -77,7 +77,7 @@ describe("retained managed npm record commits", () => {
             beforeCommit: async () => {
               expect(hasRetainedManagedNpmInstallMarker(removedPath)).toBe(true);
               const before = readPersistedInstalledPluginIndexRowSync({ env: state.env });
-              published = await publishPluginSourceAdmission(publication);
+              published = await publish(publication);
               publicationRewroteIndex =
                 readPersistedInstalledPluginIndexRowSync({ env: state.env })?.value_json !==
                 before?.value_json;
@@ -92,7 +92,7 @@ describe("retained managed npm record commits", () => {
       expect(published).toBe(false);
       expect(publicationRewroteIndex).toBe(false);
 
-      expect(await publishPluginSourceAdmission(publication)).toBe(true);
+      expect(await publish(publication)).toBe(true);
       expect(
         JSON.parse(readPersistedInstalledPluginIndexRowSync({ env: state.env })!.value_json),
       ).toMatchObject({

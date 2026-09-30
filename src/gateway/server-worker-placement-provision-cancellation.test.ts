@@ -76,7 +76,9 @@ describe("dispatch Stop before provider allocation", () => {
     moveDestinationMocks.resolveGatewaySessionTarget.mockReturnValue(target);
     moveDestinationMocks.resolveCanonicalSession.mockReturnValue(entry);
     moveDestinationMocks.findManagedWorktree.mockReturnValue(worktree);
-    moveDestinationMocks.resolveSessionTarget.mockReturnValue({
+    moveDestinationMocks.resolveSessionTarget.mockResolvedValue({
+      assertCurrent: () => {},
+      assertBindingCurrent: () => {},
       config: support.testState.config,
       target,
       entry,

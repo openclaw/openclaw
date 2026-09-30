@@ -20,7 +20,7 @@ vi.mock("../../../config/sessions/session-accessor.sqlite-replacement-projection
   spy: true,
 });
 
-export const { applySessionEntryExactReplacements: replaceCanonicalSessionEntries } =
+const { applySessionEntryExactReplacements: replaceCanonicalSessionEntries } =
   await vi.importActual<
     typeof import("../../../config/sessions/session-accessor.sqlite-replacement-projection.js")
   >("../../../config/sessions/session-accessor.sqlite-replacement-projection.js");

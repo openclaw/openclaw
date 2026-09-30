@@ -21,6 +21,7 @@ import type { ProxyHandle } from "../infra/net/proxy/proxy-lifecycle.js";
 import { tryProcessCwd } from "../infra/safe-cwd.js";
 import type { PluginCliLoadSession } from "../plugins/cli-registry-loader.js";
 import { getPluginCache } from "../plugins/plugin-cache.js";
+import { withDeferredDebugProxyCapture } from "../proxy-capture/runtime-deferral.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
 import {
   normalizeGeneratedHelpCommandArgv,
@@ -37,8 +38,7 @@ import { maybeRunCliInContainer, parseCliContainerArgs } from "./container-targe
 import { tryRunGatewayServiceUpdateCapabilityProbe } from "./daemon-cli/update-capability.js";
 import { shouldStartLocalOnboarding } from "./fresh-install-config.js";
 import {
-  consumeGatewayFastPathRootOptionToken,
-  consumeGatewayRunOptionToken,
+  isGatewayRunInvocationArgv,
   resolveGatewayCatalogCommandPath,
   resolveGatewayRunPreBootstrapOptions,
 } from "./gateway-run-argv.js";
@@ -60,6 +60,7 @@ import { getSubCliEntriesCore } from "./program/subcli-descriptors.js";
 import { withCliPluginInvocation } from "./run-main-plugin-cache.js";
 import {
   isAgentExecInvocation,
+  isGatewayRunFastPathArgv,
   isRemoteAgentDispatchInvocation,
   resolveMissingPluginCommandMessage,
   rewriteUpdateFlagArgv,
@@ -97,61 +98,6 @@ const CLI_PROXY_ENV_KEYS = [
   "all_proxy",
 ] as const;
 const UNKNOWN_COMMAND_DISPLAY_LIMIT = 128;
-
-export function isGatewayRunFastPathArgv(argv: string[]): boolean {
-  const invocation = resolveCliArgvInvocation(argv);
-  if (invocation.hasHelpOrVersion) {
-    return false;
-  }
-  const args = argv.slice(2);
-  let sawGateway = false;
-  let sawRun = false;
-
-  for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index];
-    if (!arg || arg === "--") {
-      return false;
-    }
-    if (!sawGateway) {
-      const consumed = consumeGatewayFastPathRootOptionToken(args, index);
-      if (consumed > 0) {
-        index += consumed - 1;
-        continue;
-      }
-      if (arg !== "gateway") {
-        return false;
-      }
-      sawGateway = true;
-      continue;
-    }
-
-    const rootConsumed = consumeGatewayFastPathRootOptionToken(args, index);
-    if (rootConsumed > 0) {
-      index += rootConsumed - 1;
-      continue;
-    }
-    const consumed = consumeGatewayRunOptionToken(args, index);
-    if (consumed > 0) {
-      index += consumed - 1;
-      continue;
-    }
-    if (!sawRun && arg === "run") {
-      sawRun = true;
-      continue;
-    }
-    return false;
-  }
-
-  return sawGateway;
-}
-
-function isGatewayRunInvocationArgv(argv: string[]): boolean {
-  const commandPath = resolveGatewayCatalogCommandPath(argv);
-  return (
-    commandPath?.length === 1 ||
-    (commandPath?.length === 2 && commandPath[0] === "gateway" && commandPath[1] === "run")
-  );
-}
 
 async function tryRunGatewayRunFastPath(
   argv: string[],
@@ -868,56 +814,62 @@ export async function runCli(
     return;
   }
   const builtInMachineOutput = resolveBuiltInMachineOutput(originalArgv);
-  return await withConsoleLogsRoutedToStderrForJson(
-    originalArgv,
-    () => {
-      const run = async (harnessCleanup?: CliHarnessCleanup) => {
-        try {
-          return await runCliWithPreparedOutputMode(originalArgv, {
-            ...options,
-            runtimeRecoveryEnv,
-            builtInMachineOutput,
-            harnessCleanup,
-          });
-        } catch (error) {
-          // Selection and Commander preactions run before the Gateway action's failure boundary.
-          if (
-            isGatewayRunInvocationArgv(originalArgv) &&
-            !resolveCliArgvInvocation(originalArgv).hasHelpOrVersion
-          ) {
-            const { handleGatewayStartupMaintenance } =
-              await import("./gateway-cli/startup-maintenance.js");
-            if (await handleGatewayStartupMaintenance(error)) {
-              return;
+  const invoke = () =>
+    withConsoleLogsRoutedToStderrForJson(
+      originalArgv,
+      () => {
+        const run = async (harnessCleanup?: CliHarnessCleanup) => {
+          try {
+            return await runCliWithPreparedOutputMode(originalArgv, {
+              ...options,
+              runtimeRecoveryEnv,
+              builtInMachineOutput,
+              harnessCleanup,
+            });
+          } catch (error) {
+            // Selection and Commander preactions run before the Gateway action's failure boundary.
+            if (
+              isGatewayRunInvocationArgv(originalArgv) &&
+              !resolveCliArgvInvocation(originalArgv).hasHelpOrVersion
+            ) {
+              const { handleGatewayStartupMaintenance } =
+                await import("./gateway-cli/startup-maintenance.js");
+              if (await handleGatewayStartupMaintenance(error)) {
+                return;
+              }
+            }
+            throw error;
+          } finally {
+            const resources = harnessCleanup?.pluginResources;
+            if (resources) {
+              await runCliDisposer("plugin-registration-resources", async () => {
+                try {
+                  await resources.release();
+                } catch (error) {
+                  console.error(`Plugin CLI resource disposal failed: ${String(error)}`);
+                  throw error;
+                }
+              });
+              pauseNonTtyStdinForCliExit();
             }
           }
-          throw error;
-        } finally {
-          const resources = harnessCleanup?.pluginResources;
-          if (resources) {
-            await runCliDisposer("plugin-registration-resources", async () => {
-              try {
-                await resources.release();
-              } catch (error) {
-                console.error(`Plugin CLI resource disposal failed: ${String(error)}`);
-                throw error;
-              }
-            });
-            pauseNonTtyStdinForCliExit();
-          }
-        }
-      };
-      // Nested registrars and late actions share this lightweight owner, even when no
-      // top-level plugin preparation is needed. Gateway retains its boot/process owner.
-      const gatewayRun = isGatewayRunInvocationArgv(originalArgv);
-      return withCliPluginInvocation(gatewayRun, run);
-    },
-    {
-      machineOutput: builtInMachineOutput,
-      restoreChanges: true,
-      retainRoutingUntilProcessExit: options.retainConsoleRoutingUntilProcessExit,
-    },
-  );
+        };
+        // Nested registrars and late actions share this lightweight owner, even when no
+        // top-level plugin preparation is needed. Gateway retains its boot/process owner.
+        const gatewayRun = isGatewayRunInvocationArgv(originalArgv);
+        return withCliPluginInvocation(gatewayRun, run);
+      },
+      {
+        machineOutput: builtInMachineOutput,
+        restoreChanges: true,
+        retainRoutingUntilProcessExit: options.retainConsoleRoutingUntilProcessExit,
+      },
+    );
+  const invocation = resolveCliArgvInvocation(rewriteUpdateFlagArgv(originalArgv));
+  return !invocation.hasHelpOrVersion &&
+    (invocation.primary === "update" || invocation.primary === "doctor")
+    ? await withDeferredDebugProxyCapture(invoke)
+    : await invoke();
 }
 
 async function runCliWithPreparedOutputMode(

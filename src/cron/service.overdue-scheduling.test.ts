@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { createMockCronStateForJobs } from "./service.test-harness.js";
 import { recomputeNextRunsForMaintenance } from "./service/jobs-scheduling.js";
 import { reserveQueuedCronRun } from "./service/run-admission.js";
@@ -87,6 +88,7 @@ describe("cron maintenance ownership", () => {
       const state = createMockCronStateForJobs({ jobs: [job], nowMs: now });
       reserveQueuedCronRun(state, job.id, futureMarker, {
         runReceipt: testReceipt(job.id, futureMarker),
+        runReceiptContext: captureOpenClawStateWorkerContext(),
       });
 
       recomputeNextRunsForMaintenance(state, { deferredNotifications: [] });

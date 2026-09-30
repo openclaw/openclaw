@@ -140,11 +140,6 @@ async function runWhatsAppScenarioAttempt(params: {
     sutPhoneE164: runtimeEnv.sutPhoneE164,
     target,
     targetKind: scenarioRun.target,
-    waitForReady: async () =>
-      await waitForWhatsAppChannelStable(
-        params.environment.gateway as never,
-        params.environment.sutAccountId,
-      ),
   };
   const afterSendDetails = await scenarioRun.afterSend?.(scenarioContext);
   if (!scenarioRun.expectReply) {

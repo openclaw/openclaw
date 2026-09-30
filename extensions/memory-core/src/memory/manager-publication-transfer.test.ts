@@ -54,7 +54,6 @@ function createBackend(owner: MemoryIndexDatabase) {
         busy_timeout: 5000,
         synchronous: 2,
         foreign_keys: 1,
-        wal_autocheckpoint: 1000,
         journal_size_limit: 67108864,
         checkpoint_fullfsync: 1,
       },

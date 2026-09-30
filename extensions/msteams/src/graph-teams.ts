@@ -15,36 +15,13 @@ type ListChannelsMSTeamsParams = {
   teamId: string;
 };
 
-type ListChannelsMSTeamsResult = {
-  channels: Array<{
-    id: string | undefined;
-    displayName: string | undefined;
-    description: string | undefined;
-    membershipType: string | undefined;
-  }>;
-  truncated?: boolean;
-};
-
 type GetChannelInfoMSTeamsParams = {
   cfg: OpenClawConfig;
   teamId: string;
   channelId: string;
 };
 
-type GetChannelInfoMSTeamsResult = {
-  channel: {
-    id: string | undefined;
-    displayName: string | undefined;
-    description: string | undefined;
-    membershipType: string | undefined;
-    webUrl: string | undefined;
-    createdDateTime: string | undefined;
-  };
-};
-
-export async function listChannelsMSTeams(
-  params: ListChannelsMSTeamsParams,
-): Promise<ListChannelsMSTeamsResult> {
+export async function listChannelsMSTeams(params: ListChannelsMSTeamsParams) {
   const token = await resolveGraphToken(params.cfg);
   const result = await fetchAllGraphPages<GraphTeamsChannel>({
     token,
@@ -60,9 +37,7 @@ export async function listChannelsMSTeams(
   return { channels, truncated: result.truncated };
 }
 
-export async function getChannelInfoMSTeams(
-  params: GetChannelInfoMSTeamsParams,
-): Promise<GetChannelInfoMSTeamsResult> {
+export async function getChannelInfoMSTeams(params: GetChannelInfoMSTeamsParams) {
   const token = await resolveGraphToken(params.cfg);
   const path = `/teams/${encodeURIComponent(params.teamId)}/channels/${encodeURIComponent(params.channelId)}?$select=id,displayName,description,membershipType,webUrl,createdDateTime`;
   const ch = await fetchGraphJson<GraphTeamsChannel>({ token, path });

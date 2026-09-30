@@ -9,6 +9,10 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { flushLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
+import {
+  resolvePackageActivationAnchor,
+  resolvePackageActivationControl,
+} from "./package-update-activation-paths.js";
 import { captureRuntimeWorkerSource } from "./runtime-worker-generation.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { openSqliteWorkerStore, type SqliteWorkerStore } from "./sqlite-worker-store.js";
@@ -231,6 +235,51 @@ async function fixture(
   await writeFile(path.join(root, ".git/private"), "unrelated checkout data");
   return root;
 }
+
+it.each([false, true])(
+  "separates package control from runtime assets (explicitLink=%s)",
+  async (explicitLink) => {
+    const root = await fixture(tempDirs.make("retained-control-boundary-"), "npm");
+    const control = resolvePackageActivationControl(
+      resolvePackageActivationAnchor(path.join(root, "node_modules/openclaw")),
+    );
+    const journal = path.join(control, "operation.sqlite");
+    await mkdir(control, { mode: 0o700 });
+    await writeFile(journal, "mutable control", { mode: 0o600 });
+    const assets = [
+      path.join("node_modules", "runtime.control", "asset.sqlite"),
+      path.join("dist", path.basename(control), "asset.sqlite"),
+    ];
+    for (const relative of assets) {
+      await mkdir(path.dirname(path.join(root, relative)), { recursive: true });
+      await writeFile(path.join(root, relative), "runtime asset");
+    }
+    if (explicitLink) {
+      await symlink(journal, path.join(root, "dist/control-link"));
+    }
+    const moduleUrl = pathToFileURL(path.join(root, "dist/updater.mjs"));
+    const operation = withRetainedUpdateRuntime(moduleUrl.href, async (retain) => {
+      await retain({ mutationRoots: [root], timeoutMs: 30_000, assertCurrent() {} });
+      const retained = fileURLToPath(captureRuntimeWorkerSource(moduleUrl).moduleUrl);
+      expect(retained).not.toBe(fileURLToPath(moduleUrl));
+      const retainedRoot = path.resolve(path.dirname(retained), "..");
+      for (const relative of assets) {
+        expect(await readFile(path.join(retainedRoot, relative), "utf8")).toBe("runtime asset");
+      }
+      expect(fsSync.existsSync(path.join(retainedRoot, path.relative(root, control)))).toBe(false);
+      expect((await stat(journal)).nlink).toBe(1);
+    });
+    if (explicitLink) {
+      await expect(operation).rejects.toThrow(
+        "Package recovery state cannot be a runtime dependency",
+      );
+    } else {
+      await operation;
+    }
+    expect(await readFile(journal, "utf8")).toBe("mutable control");
+    expect((await stat(journal)).nlink).toBe(1);
+  },
+);
 
 it("runs default inspection from the retained updater and explicit inspection from the target", async () => {
   const base = await fs.realpath(tempDirs.make("retained-inspection-transport-"));

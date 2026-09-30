@@ -115,9 +115,7 @@ export async function runCliFallbackCandidate(
     commandDetailsVisible,
     shouldEmitToolResult: turn.shouldEmitToolResult,
     shouldEmitToolOutput: turn.shouldEmitToolOutput,
-    deliver: async (payload) => {
-      await turn.opts?.onToolResult?.(payload);
-    },
+    deliver: (payload) => turn.opts?.onToolResult?.(payload),
   });
   // CLI backends report a tool's outcome on the result event and never repeat it,
   // so the terminal fact has to be projected here. The embedded path gets this
@@ -260,9 +258,7 @@ export async function runCliFallbackCandidate(
           },
           onReasoningText: createCliReasoningStreamBridge(turn.opts?.onReasoningStream),
           onPlanUpdate: turn.opts?.onPlanUpdate,
-          onReasoningProgress: async (payload) => {
-            await turn.opts?.onReasoningProgress?.(payload);
-          },
+          onReasoningProgress: (payload) => turn.opts?.onReasoningProgress?.(payload),
           onCompactionStart: turn.opts?.onCompactionStart,
           onCompactionEnd: turn.opts?.onCompactionEnd,
           onToolEvent: async (payload) => {
@@ -324,9 +320,7 @@ export async function runCliFallbackCandidate(
                   await Promise.all(deliveries);
                 }
               : undefined,
-          onFastModeAutoProgress: async (payload) => {
-            await turn.opts?.onToolResult?.(payload);
-          },
+          onFastModeAutoProgress: (payload) => turn.opts?.onToolResult?.(payload),
           transformResult:
             turn.followupRun.currentInboundEventKind === "room_event"
               ? (resultLocal) =>

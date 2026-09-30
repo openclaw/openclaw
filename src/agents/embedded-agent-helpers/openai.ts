@@ -22,45 +22,30 @@ type OpenAIToolCallBlock = {
   id?: unknown;
 };
 
-type OpenAIReasoningSignature = {
-  id: string;
-  type: string;
-};
-
-function parseOpenAIReasoningSignature(value: unknown): OpenAIReasoningSignature | null {
+function hasOpenAIReasoningSignature(value: unknown): boolean {
   if (!value) {
-    return null;
+    return false;
   }
   let candidate: { id?: unknown; type?: unknown } | null = null;
   if (typeof value === "string") {
     const trimmed = value.trim();
     if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
-      return null;
+      return false;
     }
     try {
       candidate = JSON.parse(trimmed) as { id?: unknown; type?: unknown };
     } catch {
-      return null;
+      return false;
     }
   } else if (typeof value === "object") {
     candidate = value as { id?: unknown; type?: unknown };
   }
   if (!candidate) {
-    return null;
+    return false;
   }
   const id = typeof candidate.id === "string" ? candidate.id : "";
   const type = typeof candidate.type === "string" ? candidate.type : "";
-  if (!id.startsWith("rs_")) {
-    return null;
-  }
-  if (type === "reasoning" || type.startsWith("reasoning.")) {
-    return { id, type };
-  }
-  return null;
-}
-
-function parseTimestampMs(value: unknown): number | null {
-  return parseDateFirstTimestampMs(value) ?? null;
+  return id.startsWith("rs_") && (type === "reasoning" || type.startsWith("reasoning."));
 }
 
 function isOpenAIToolCallType(type: unknown): boolean {
@@ -84,6 +69,39 @@ function createOpenAIResponsesToolCallIdResolver(): (id: string) => string {
   };
 }
 
+function rewriteReplayMessages(
+  messages: AgentMessage[],
+  rewrite: (message: AgentMessage) => AgentMessage,
+): AgentMessage[] {
+  let changed = false;
+  const result: AgentMessage[] = [];
+  for (const message of messages) {
+    const next = rewrite(message);
+    changed ||= !Object.is(next, message);
+    result.push(next);
+  }
+  return changed ? result : messages;
+}
+
+type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
+type AssistantContentBlock = AssistantMessage["content"][number];
+
+function rewriteAssistantContent(
+  message: AssistantMessage,
+  rewrite: (block: AssistantContentBlock) => AssistantContentBlock,
+): AssistantMessage {
+  if (!Array.isArray(message.content)) {
+    return message;
+  }
+  let changed = false;
+  const content = message.content.map((block) => {
+    const next = rewrite(block);
+    changed ||= !Object.is(next, block);
+    return next;
+  });
+  return changed ? replaceCompactionReplayOwnerContent(message, content) : message;
+}
+
 /**
  * OpenAI Responses rejects replayed `function_call.call_id`,
  * `function_call.id`, and matching `function_call_output.call_id` values
@@ -92,26 +110,16 @@ function createOpenAIResponsesToolCallIdResolver(): (id: string) => string {
  * pairs directly into the provider payload, so OpenClaw must normalize here.
  */
 export function normalizeOpenAIResponsesToolCallIds(messages: AgentMessage[]): AgentMessage[] {
-  let changed = false;
   const resolveId = createOpenAIResponsesToolCallIdResolver();
-  const rewrittenMessages: AgentMessage[] = [];
-
-  for (const msg of messages) {
+  return rewriteReplayMessages(messages, (msg) => {
     if (!msg || typeof msg !== "object") {
-      rewrittenMessages.push(msg);
-      continue;
+      return msg;
     }
 
     const role = (msg as { role?: unknown }).role;
     if (role === "assistant") {
       const assistantMsg = msg as Extract<AgentMessage, { role: "assistant" }>;
-      if (!Array.isArray(assistantMsg.content)) {
-        rewrittenMessages.push(msg);
-        continue;
-      }
-
-      let assistantChanged = false;
-      const nextContent = assistantMsg.content.map((block) => {
+      return rewriteAssistantContent(assistantMsg, (block) => {
         if (!block || typeof block !== "object") {
           return block;
         }
@@ -124,38 +132,21 @@ export function normalizeOpenAIResponsesToolCallIds(messages: AgentMessage[]): A
         if (nextId === toolCallBlock.id) {
           return block;
         }
-        assistantChanged = true;
         return {
           ...block,
           id: nextId,
         } as typeof block;
       });
-
-      if (!assistantChanged) {
-        rewrittenMessages.push(msg);
-        continue;
-      }
-      changed = true;
-      rewrittenMessages.push(replaceCompactionReplayOwnerContent(assistantMsg, nextContent));
-      continue;
     }
 
     if (role === "toolResult") {
-      const next = rewriteToolResultIds({
+      return rewriteToolResultIds({
         message: msg as Extract<AgentMessage, { role: "toolResult" }>,
         resolveId,
       });
-      if (next !== msg) {
-        changed = true;
-      }
-      rewrittenMessages.push(next);
-      continue;
     }
-
-    rewrittenMessages.push(msg);
-  }
-
-  return changed ? rewrittenMessages : messages;
+    return msg;
+  });
 }
 
 /**
@@ -168,30 +159,19 @@ export function normalizeOpenAIResponsesToolCallIds(messages: AgentMessage[]): A
 export function downgradeOpenAIFunctionCallReasoningPairs(
   messages: AgentMessage[],
 ): AgentMessage[] {
-  let changed = false;
-  const rewrittenMessages: AgentMessage[] = [];
   let pendingRewrittenIds: Map<string, string> | null = null;
-
-  for (const msg of messages) {
+  return rewriteReplayMessages(messages, (msg) => {
     if (!msg || typeof msg !== "object") {
       pendingRewrittenIds = null;
-      rewrittenMessages.push(msg);
-      continue;
+      return msg;
     }
 
     const role = (msg as { role?: unknown }).role;
     if (role === "assistant") {
       const assistantMsg = msg as Extract<AgentMessage, { role: "assistant" }>;
-      if (!Array.isArray(assistantMsg.content)) {
-        pendingRewrittenIds = null;
-        rewrittenMessages.push(msg);
-        continue;
-      }
-
       const localRewrittenIds = new Map<string, string>();
       let seenReplayableReasoning = false;
-      let assistantChanged = false;
-      const nextContent = assistantMsg.content.map((block) => {
+      const next = rewriteAssistantContent(assistantMsg, (block) => {
         if (!block || typeof block !== "object") {
           return block;
         }
@@ -199,7 +179,7 @@ export function downgradeOpenAIFunctionCallReasoningPairs(
         const thinkingBlock = block as OpenAIThinkingBlock;
         if (
           thinkingBlock.type === "thinking" &&
-          parseOpenAIReasoningSignature(thinkingBlock.thinkingSignature)
+          hasOpenAIReasoningSignature(thinkingBlock.thinkingSignature)
         ) {
           seenReplayableReasoning = true;
           return block;
@@ -215,64 +195,34 @@ export function downgradeOpenAIFunctionCallReasoningPairs(
           return block;
         }
 
-        assistantChanged = true;
         localRewrittenIds.set(toolCallBlock.id, pairing.callId);
         return {
           ...block,
           id: pairing.callId,
         } as typeof block;
       });
-
       pendingRewrittenIds = localRewrittenIds.size > 0 ? localRewrittenIds : null;
-      if (!assistantChanged) {
-        rewrittenMessages.push(msg);
-        continue;
-      }
-      changed = true;
-      rewrittenMessages.push(replaceCompactionReplayOwnerContent(assistantMsg, nextContent));
-      continue;
+      return next;
     }
 
     if (role === "toolResult" && pendingRewrittenIds && pendingRewrittenIds.size > 0) {
       const toolResult = msg as Extract<AgentMessage, { role: "toolResult" }> & {
         toolUseId?: unknown;
       };
-      let toolResultChanged = false;
       const updates: Record<string, string> = {};
-
-      if (typeof toolResult.toolCallId === "string") {
-        const nextToolCallId = pendingRewrittenIds.get(toolResult.toolCallId);
-        if (nextToolCallId && nextToolCallId !== toolResult.toolCallId) {
-          updates.toolCallId = nextToolCallId;
-          toolResultChanged = true;
+      for (const field of ["toolCallId", "toolUseId"] as const) {
+        const id = toolResult[field];
+        const nextId = typeof id === "string" ? pendingRewrittenIds.get(id) : undefined;
+        if (nextId && nextId !== id) {
+          updates[field] = nextId;
         }
       }
-
-      if (typeof toolResult.toolUseId === "string") {
-        const nextToolUseId = pendingRewrittenIds.get(toolResult.toolUseId);
-        if (nextToolUseId && nextToolUseId !== toolResult.toolUseId) {
-          updates.toolUseId = nextToolUseId;
-          toolResultChanged = true;
-        }
-      }
-
-      if (!toolResultChanged) {
-        rewrittenMessages.push(msg);
-        continue;
-      }
-      changed = true;
-      rewrittenMessages.push({
-        ...toolResult,
-        ...updates,
-      } as AgentMessage);
-      continue;
+      return Object.keys(updates).length > 0 ? { ...toolResult, ...updates } : msg;
     }
 
     pendingRewrittenIds = null;
-    rewrittenMessages.push(msg);
-  }
-
-  return changed ? rewrittenMessages : messages;
+    return msg;
+  });
 }
 
 /**
@@ -325,35 +275,28 @@ export function dropStaleOpenAIReasoning(
       out.push(msg);
       continue;
     }
-    const messageTimestamp = parseTimestampMs((assistantMsg as { timestamp?: unknown }).timestamp);
+    const messageTimestamp = parseDateFirstTimestampMs(assistantMsg.timestamp);
     // Timestamp-less legacy entries cannot prove they belong to the new route;
     // treat them as pre-switch so stale provider ids never re-enter replay.
-    if (messageTimestamp !== null && messageTimestamp > dropBefore) {
+    if (messageTimestamp !== undefined && messageTimestamp > dropBefore) {
       out.push(msg);
       continue;
     }
 
     let changed = false;
     let droppedReplayableReasoning = false;
-    type AssistantContentBlock = (typeof assistantMsg.content)[number];
-
     const nextContent: AssistantContentBlock[] = [];
     for (const block of assistantMsg.content) {
       if (!block) {
         changed = true;
         continue;
       }
-      if (typeof block !== "object") {
-        nextContent.push(block);
-        continue;
-      }
       const record = block as OpenAIThinkingBlock;
-      if (record.type !== "thinking") {
-        nextContent.push(block);
-        continue;
-      }
-      const signature = parseOpenAIReasoningSignature(record.thinkingSignature);
-      if (!signature) {
+      if (
+        typeof block !== "object" ||
+        record.type !== "thinking" ||
+        !hasOpenAIReasoningSignature(record.thinkingSignature)
+      ) {
         nextContent.push(block);
         continue;
       }

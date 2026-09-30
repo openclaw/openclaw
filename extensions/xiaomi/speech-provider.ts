@@ -1,4 +1,3 @@
-// Xiaomi provider module implements model/runtime integration.
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type {
@@ -46,13 +45,6 @@ type XiaomiTtsProviderConfig = {
   style?: string;
 };
 
-type XiaomiTtsOverrides = {
-  model?: string;
-  voice?: string;
-  format?: XiaomiTtsFormat;
-  style?: string;
-};
-
 function normalizeXiaomiTtsBaseUrl(baseUrl?: string): string {
   return (baseUrl?.trim() || DEFAULT_XIAOMI_TTS_BASE_URL).replace(/\/+$/, "");
 }
@@ -77,6 +69,7 @@ function normalizeXiaomiTtsProviderConfig(
   rawConfig: Record<string, unknown>,
 ): XiaomiTtsProviderConfig {
   const raw = resolveXiaomiTtsConfigRecord(rawConfig);
+  const options = readXiaomiTtsOptions(raw);
   return {
     apiKey: normalizeResolvedSecretInputString({
       value: raw?.apiKey,
@@ -86,22 +79,14 @@ function normalizeXiaomiTtsProviderConfig(
       trimToUndefined(raw?.baseUrl) ?? trimToUndefined(process.env.XIAOMI_BASE_URL),
     ),
     model:
-      trimToUndefined(raw?.model) ??
-      trimToUndefined(raw?.modelId) ??
-      trimToUndefined(process.env.XIAOMI_TTS_MODEL) ??
-      DEFAULT_XIAOMI_TTS_MODEL,
+      options.model ?? trimToUndefined(process.env.XIAOMI_TTS_MODEL) ?? DEFAULT_XIAOMI_TTS_MODEL,
     voice:
-      trimToUndefined(raw?.speakerVoice) ??
-      trimToUndefined(raw?.speakerVoiceId) ??
-      trimToUndefined(raw?.voice) ??
-      trimToUndefined(raw?.voiceId) ??
-      trimToUndefined(process.env.XIAOMI_TTS_VOICE) ??
-      DEFAULT_XIAOMI_TTS_VOICE,
+      options.voice ?? trimToUndefined(process.env.XIAOMI_TTS_VOICE) ?? DEFAULT_XIAOMI_TTS_VOICE,
     format:
-      normalizeXiaomiTtsFormat(raw?.format) ??
+      options.format ??
       normalizeXiaomiTtsFormat(process.env.XIAOMI_TTS_FORMAT) ??
       DEFAULT_XIAOMI_TTS_FORMAT,
-    style: trimToUndefined(raw?.style),
+    style: options.style,
   };
 }
 
@@ -117,21 +102,16 @@ function resolveXiaomiTtsProviderConfig(config: SpeechProviderConfig): XiaomiTts
   };
 }
 
-function readXiaomiTtsOverrides(
-  overrides: SpeechProviderOverrides | undefined,
-): XiaomiTtsOverrides {
-  if (!overrides) {
-    return {};
-  }
+function readXiaomiTtsOptions(options: SpeechProviderOverrides | undefined) {
   return {
-    model: trimToUndefined(overrides.model) ?? trimToUndefined(overrides.modelId),
+    model: trimToUndefined(options?.model) ?? trimToUndefined(options?.modelId),
     voice:
-      trimToUndefined(overrides.speakerVoice) ??
-      trimToUndefined(overrides.speakerVoiceId) ??
-      trimToUndefined(overrides.voice) ??
-      trimToUndefined(overrides.voiceId),
-    format: normalizeXiaomiTtsFormat(overrides.format),
-    style: trimToUndefined(overrides.style),
+      trimToUndefined(options?.speakerVoice) ??
+      trimToUndefined(options?.speakerVoiceId) ??
+      trimToUndefined(options?.voice) ??
+      trimToUndefined(options?.voiceId),
+    format: normalizeXiaomiTtsFormat(options?.format),
+    style: trimToUndefined(options?.style),
   };
 }
 
@@ -291,7 +271,7 @@ export function buildXiaomiSpeechProvider(): SpeechProviderPlugin {
       Boolean(resolveXiaomiTtsProviderConfig(providerConfig).apiKey),
     synthesize: async (req) => {
       const config = resolveXiaomiTtsProviderConfig(req.providerConfig);
-      const overrides = readXiaomiTtsOverrides(req.providerOverrides);
+      const overrides = readXiaomiTtsOptions(req.providerOverrides);
       if (!config.apiKey) {
         throw new Error("Xiaomi API key missing");
       }

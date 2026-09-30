@@ -314,6 +314,11 @@ async function worker(stateDir: string, profile: Profile, operation: Operation) 
       const explain = database.db.prepare(`EXPLAIN QUERY PLAN ${record.sql}`);
       return { ...record, plan: Reflect.apply(explain.all.bind(explain), undefined, bindings) };
     });
+    const timingPercentile = (metric: keyof Sample, percent: number) =>
+      percentile(
+        timings.map((sample) => sample[metric]),
+        percent,
+      );
     console.log(
       JSON.stringify({
         profile,
@@ -322,26 +327,11 @@ async function worker(stateDir: string, profile: Profile, operation: Operation) 
         firstRead,
         warm: {
           samples,
-          p50Ms: percentile(
-            timings.map((sample) => sample.wallMs),
-            50,
-          ),
-          p95Ms: percentile(
-            timings.map((sample) => sample.wallMs),
-            95,
-          ),
-          cpuP50Ms: percentile(
-            timings.map((sample) => sample.cpuMs),
-            50,
-          ),
-          cpuP95Ms: percentile(
-            timings.map((sample) => sample.cpuMs),
-            95,
-          ),
-          heapDeltaP50Bytes: percentile(
-            timings.map((sample) => sample.heapDeltaBytes),
-            50,
-          ),
+          p50Ms: timingPercentile("wallMs", 50),
+          p95Ms: timingPercentile("wallMs", 95),
+          cpuP50Ms: timingPercentile("cpuMs", 50),
+          cpuP95Ms: timingPercentile("cpuMs", 95),
+          heapDeltaP50Bytes: timingPercentile("heapDeltaBytes", 50),
           maxRssBytes: Math.max(...timings.map((sample) => sample.rssBytes)),
         },
         result: await read(),

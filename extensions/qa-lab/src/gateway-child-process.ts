@@ -12,6 +12,7 @@ import {
   isQaPosixProcessGroupAlive,
   type QaLinuxProcessGroupInspector,
 } from "./posix-process-group.js";
+import { boundProcessGroupDiagnostics } from "./posix-process-stat.js";
 import { runQaWindowsTaskkill } from "./windows-system-tools.js";
 
 const QA_GATEWAY_CHILD_GRACEFUL_SHUTDOWN_TIMEOUT_MS = 30_000;
@@ -207,13 +208,6 @@ export function formatQaGatewayProcessBoundaryStartupFailure(error: unknown, log
   return `${formatErrorMessage(error)}${formatQaGatewayLogsForError(logTail)}`;
 }
 
-function boundQaGatewayProcessTreeDiagnostics(details: string) {
-  if (details.length <= 2_048) {
-    return details;
-  }
-  return `${sliceUtf16Safe(details, 0, 2_045)}...`;
-}
-
 function isQaGatewayChildProcessTreeAlive(
   child: ChildProcess,
   inspectLinuxProcessGroupFn: QaLinuxProcessGroupInspector = inspectLinuxProcessGroup,
@@ -281,7 +275,7 @@ function formatQaGatewayProcessTreeDiagnostics(
   const inspection = inspectLinuxProcessGroupFn(child.pid);
   const processGroupDetails =
     inspection?.diagnostics ?? `pgid=${child.pid} members=unknown (/proc unavailable)`;
-  return boundQaGatewayProcessTreeDiagnostics(
+  return boundProcessGroupDiagnostics(
     `${processGroupDetails} childExitRecorded=${childExitRecorded}`,
   );
 }

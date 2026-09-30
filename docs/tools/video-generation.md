@@ -69,9 +69,10 @@ Video generation is asynchronous:
    an idempotent direct fallback with the media.
 
 While a job is in flight, duplicate `video_generate` calls in the same
-session return the current task status instead of starting another
+chat return the current task status instead of starting another
 generation. Use `action: "status"` to check without triggering a new
-generation.
+generation. Direct chats keep separate tasks even when they share the main
+session transcript; completion returns to the requesting peer.
 
 Outside of session-backed agent runs (for example, direct tool invocations),
 the tool falls back to inline generation and returns the final media path

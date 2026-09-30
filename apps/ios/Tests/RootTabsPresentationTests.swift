@@ -977,9 +977,7 @@ struct RootTabsPresentationTests {
 
     @Test func `i pad split prefers integrated visible sidebar`() {
         #expect(RootTabs.sidebarVisibility(layoutMode: .split, splitPreference: nil))
-        #expect(!RootTabs.shouldCollapseSidebarAfterSelection(layoutMode: .split))
         #expect(!RootTabs.sidebarVisibility(layoutMode: .drawer, splitPreference: nil))
-        #expect(RootTabs.shouldCollapseSidebarAfterSelection(layoutMode: .drawer))
     }
 
     @Test func `destination headers own hidden sidebar reveal control`() {

@@ -231,6 +231,7 @@ describe("sessions.files touched-file folds", () => {
       const sessionId = sessionKey.endsWith(":slow") ? "sess-touched-slow" : "sess-touched-fast";
       const storePath = path.join(workspaceRoot, `${sessionId}.sqlite`);
       return {
+        agentId: "main",
         canonicalKey: sessionKey,
         cfg: {},
         storePath,
@@ -261,6 +262,11 @@ describe("sessions.files touched-file folds", () => {
 
     expect(slowFinished).toBe(false);
     expectOkPayload(await slow);
+    expect(
+      hoisted.readSessionTranscriptVisibleMessageDeltaCore.mock.calls.map(
+        ([scope]) => scope.sessionId,
+      ),
+    ).toEqual(["sess-touched-slow", "sess-touched-fast", "sess-touched-slow"]);
   });
 
   it("isolates touched-file folds for the same session across stores", async () => {

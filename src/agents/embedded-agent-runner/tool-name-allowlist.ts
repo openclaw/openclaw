@@ -44,14 +44,7 @@ export function collectCoreBuiltinToolNames(
   tools: Array<{ name?: string }>,
   options?: { isPluginTool?: (tool: { name?: string }) => boolean },
 ): Set<string> {
-  const names = new Set<string>();
-  for (const tool of tools) {
-    if (options?.isPluginTool?.(tool)) {
-      continue;
-    }
-    addName(names, tool.name);
-  }
-  return names;
+  return collectRegisteredToolNames(tools.filter((tool) => !options?.isPluginTool?.(tool)));
 }
 
 export function toSessionToolAllowlist(allowedToolNames: Iterable<string>): string[] {

@@ -63,10 +63,6 @@ const GPT_PARALLEL_TOOL_CALLS_APIS = new Set([
   "azure-openai-responses",
 ]);
 
-/**
- * Resolve provider-specific extra params from model config.
- * Used to pass through stream params like temperature/maxTokens.
- */
 export function resolveExtraParams(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
@@ -521,11 +517,8 @@ function applyPostPluginStreamWrappers(
     });
     ctx.agent.streamFn = createDeepSeekV4NonNativeCompatSanitizerWrapper(ctx.agent.streamFn);
 
-    // MiMo reasoning models use the same DeepSeek-style reasoning_content wire
-    // format. When MiMo is reached through an unowned proxy/custom provider
-    // (e.g. `xiaomi-orbit` pointed at token-plan-*.xiaomimimo.com), the bundled
-    // xiaomi plugin's wrapStreamFn does not fire, so apply the shared wrapper
-    // here as a fallback so multi-turn tool calls succeed.
+    // Unowned MiMo proxy routes bypass the Xiaomi hook but still need its
+    // DeepSeek-style reasoning_content format for multi-turn tool calls.
     ctx.agent.streamFn = createDeepSeekV4OpenAICompatibleThinkingWrapper({
       baseStreamFn: ctx.agent.streamFn,
       thinkingLevel: ctx.thinkingLevel,
@@ -617,14 +610,9 @@ function isMicrosoftFoundryProviderId(provider: unknown): boolean {
 }
 
 /**
- * The DeepSeek V4 wrapper emits the deepseek-native `thinking: { type }` wire
- * format (plus `reasoning_effort`). Honor an explicit `compat.thinkingFormat`
- * override that selects a different reasoning format: some OpenAI-compatible
- * deployments — notably Azure AI Foundry DeepSeek V4 — reject the `thinking`
- * parameter outright, even `thinking: { type: "disabled" }`. When no override
- * exists, honor provider-level detection for non-native formats such as
- * OpenRouter while keeping id-based fallback for unknown DeepSeek-compatible
- * proxy routes.
+ * Foundry and other non-native routes reject even thinking.type=disabled.
+ * Explicit compat wins, then detected non-native formats; unknown proxy routes
+ * retain the model-ID fallback to DeepSeek's native wire format.
  */
 function deepSeekV4NativeThinkingAllowedByCompat(model: Parameters<StreamFn>[0]): boolean {
   const thinkingFormat = resolveDeepSeekV4ThinkingFormatOverride(model);
@@ -712,10 +700,6 @@ function isMiMoReasoningAsVisibleTextOpenAICompatibleModel(
   );
 }
 
-/**
- * Apply extra params (like temperature) to an agent's streamFn.
- * Also applies verified provider-specific request wrappers, such as OpenRouter attribution.
- */
 export function applyExtraParamsToAgent(
   agent: { streamFn?: StreamFn },
   cfg: OpenClawConfig | undefined,

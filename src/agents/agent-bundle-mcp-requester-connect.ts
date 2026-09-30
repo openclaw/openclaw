@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { BundleMcpServerConfig } from "../plugins/bundle-mcp.js";
+import { compareMcpCatalogTools } from "./agent-bundle-mcp-names.js";
 import type {
   McpToolCatalog,
   RequesterMcpConnect,
@@ -179,11 +180,6 @@ export function mergeMcpConnectCatalog(
     tools: [
       ...liveCatalog.tools,
       ...connectCatalog.tools.filter((tool) => missingServerNames.has(tool.serverName)),
-    ].toSorted(
-      (left, right) =>
-        left.safeServerName.localeCompare(right.safeServerName) ||
-        left.toolName.localeCompare(right.toolName) ||
-        left.serverName.localeCompare(right.serverName),
-    ),
+    ].toSorted(compareMcpCatalogTools),
   };
 }

@@ -45,6 +45,7 @@ import type {
   SessionHistoryWorkerInput,
   SessionTranscriptWorkerReply,
 } from "./session-transcript-worker.types.js";
+import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
 const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionTranscript);
 function createHistoryPool() {
@@ -502,7 +503,11 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
       const readStoreTargetResult = async (
         request: Omit<SessionStoreTargetReadRequest, "candidates">,
       ): Promise<Result<SessionStoreTargetReadResult, unknown>> => {
-        const preparedRequest = { ...request, candidates: capturedCandidates };
+        const preparedRequest = {
+          ...request,
+          env: captureSessionTranscriptStorageEnvironment(request.env),
+          candidates: capturedCandidates,
+        };
         const reply = await lane.pool.run(
           () => {
             assertCurrent();
@@ -538,7 +543,11 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
           return read.value;
         },
         readTargetInventory: async (request) => {
-          const preparedRequest = { ...request, candidates: capturedCandidates };
+          const preparedRequest = {
+            ...request,
+            env: captureSessionTranscriptStorageEnvironment(request.env),
+            candidates: capturedCandidates,
+          };
           const reply = await lane.pool.run(
             () => {
               assertCurrent();

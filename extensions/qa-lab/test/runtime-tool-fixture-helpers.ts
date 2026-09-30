@@ -39,6 +39,59 @@ async function makeEnv(overrides: Partial<QaSuiteRuntimeEnv> = {}): Promise<QaSu
 type RuntimeToolFixtureConfig = Parameters<typeof runRuntimeToolFixture>[1];
 type RuntimeToolFixtureDeps = Parameters<typeof runRuntimeToolFixture>[2];
 
+function transcriptToolCall(
+  toolName: string,
+  phase: "happy" | "failure",
+  input: Record<string, unknown>,
+) {
+  return {
+    role: "assistant",
+    content: [
+      {
+        type: "tool_use",
+        id: `call-${toolName}-${phase}`,
+        name: toolName,
+        input,
+      },
+    ],
+  };
+}
+
+function transcriptToolResult(
+  toolName: string,
+  phase: "happy" | "failure",
+  content: string,
+  isError?: boolean,
+) {
+  return {
+    role: "tool",
+    toolName,
+    tool_call_id: `call-${toolName}-${phase}`,
+    ...(isError === undefined ? {} : { isError }),
+    content,
+  };
+}
+
+function runLiveRuntimeToolFixture(
+  env: QaSuiteRuntimeEnv,
+  params: {
+    toolName?: string;
+    config?: RuntimeToolFixtureConfig;
+    tools?: Iterable<string>;
+    runAgentPrompt?: RuntimeToolFixtureDeps["runAgentPrompt"];
+  } = {},
+) {
+  const toolName = params.toolName ?? "read";
+  return runRuntimeToolFixture(
+    env,
+    params.config ?? runtimeToolFixtureConfig(toolName),
+    runtimeToolFixtureDeps({
+      tools: params.tools ?? [toolName],
+      runAgentPrompt: params.runAgentPrompt,
+    }),
+  );
+}
+
 const MOCK_BASE_URL = "http://127.0.0.1:9999";
 
 function runtimeToolFixtureConfig(
@@ -227,11 +280,14 @@ export {
   makeEnv,
   MOCK_BASE_URL,
   mockToolRequests,
+  runLiveRuntimeToolFixture,
   runMockRuntimeToolFixture,
   runtimePatchAddInput,
   runtimePatchUpdateInput,
   runtimeToolFixtureConfig,
   runtimeToolFixtureDeps,
   simulateRuntimePatchHappyTurn,
+  transcriptToolCall,
+  transcriptToolResult,
 };
 export type { RuntimeToolFixtureConfig, RuntimeToolFixtureDeps };

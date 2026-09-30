@@ -5,33 +5,18 @@ import { isJsonObject, type CodexServerNotification } from "./protocol.js";
 
 type ReceiptParent = Readonly<{
   parentThreadId: string;
-  requesterSessionKey?: string;
   deliveryReceipts: CodexNativeSubagentDeliveryReceipts;
 }>;
 type KnownReceiptChild<Parent extends ReceiptParent> = Readonly<{
   parent: Parent;
-  nativeParentThreadId: string;
   deliveryReceipts: CodexNativeSubagentDeliveryReceipts;
   agentPaths: Set<string>;
-  pendingTurns: readonly Readonly<{ turnId: string }>[];
 }>;
 export function buildCodexNativeSubagentAgentPathKey(
   parentThreadId: string,
   agentPath: string,
 ): string {
   return `${parentThreadId}\0${agentPath}`;
-}
-
-export function resolveCodexNativeSubagentReceiptOwner<Parent extends ReceiptParent>(params: {
-  state: Parent;
-  childThreadId: string;
-  known: KnownReceiptChild<Parent> | undefined;
-}): CodexNativeSubagentDeliveryReceipts {
-  const { state, known } = params;
-  if (known?.parent === state) {
-    return known.deliveryReceipts;
-  }
-  return state.deliveryReceipts;
 }
 
 export function registerCodexNativeSubagentReceiptAlias<Parent extends ReceiptParent>(params: {

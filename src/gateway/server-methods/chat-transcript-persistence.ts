@@ -52,7 +52,7 @@ type AssistantTranscriptScopeParams = {
 
 type ResolvedAssistantTranscriptScope = SessionTranscriptWriteScope & { sessionId: string };
 
-export type SourceReplyTranscriptMirrorMetadata = NonNullable<
+type SourceReplyTranscriptMirrorMetadata = NonNullable<
   ReturnType<typeof getReplyPayloadMetadata>
 >["sourceReplyTranscriptMirror"];
 
@@ -61,6 +61,15 @@ export type SourceReplyContentState = {
   persistedContent: AssistantDisplayContentBlock[];
   hasManagedOutgoingContent: boolean;
   backedManagedOutgoingContent: boolean;
+};
+
+export type SourceReplyTranscriptMirror = {
+  idempotencyKey: string;
+  metadata: SourceReplyTranscriptMirrorMetadata;
+};
+
+export type SourceReplyTranscriptRewrite = SourceReplyTranscriptMirror & {
+  state: SourceReplyContentState;
 };
 
 function mergeAssistantDisplayContent(
@@ -136,11 +145,7 @@ function buildAssistantDisplayRewrite(params: {
     if (block.type === "text") {
       inCommentary = retainedCommentary.has(block);
     }
-    if (inCommentary) {
-      content.push(block);
-      continue;
-    }
-    if (block.type === "thinking" || block.type === "toolCall") {
+    if (inCommentary || block.type === "thinking" || block.type === "toolCall") {
       content.push(block);
       continue;
     }
@@ -229,7 +234,7 @@ function findAssistantTranscriptMessageByIdempotencyKeyInEvents(
   if (!trimmedIdempotencyKey) {
     return null;
   }
-  const target = events.toReversed().find((event) => {
+  const target = events.findLast((event) => {
     const message = transcriptEventMessage(event);
     return message?.role === "assistant" && message.idempotencyKey === trimmedIdempotencyKey;
   });
@@ -290,11 +295,9 @@ function extractAssistantTranscriptText(message: Record<string, unknown>): strin
   return text || undefined;
 }
 
-function findSourceReplyTranscriptMirrorByMetadataInEvents(params: {
-  events: readonly TranscriptEvent[];
-  idempotencyKey: string;
-  metadata: SourceReplyTranscriptMirrorMetadata;
-}): { messageId: string; message: Record<string, unknown> } | null {
+function findSourceReplyTranscriptMirrorByMetadataInEvents(
+  params: SourceReplyTranscriptMirror & { events: readonly TranscriptEvent[] },
+): { messageId: string; message: Record<string, unknown> } | null {
   const byIdempotencyKey = findAssistantTranscriptMessageByIdempotencyKeyInEvents(
     params.events,
     params.idempotencyKey,
@@ -312,7 +315,7 @@ function findSourceReplyTranscriptMirrorByMetadataInEvents(params: {
   if (!expectedText) {
     return null;
   }
-  const target = params.events.toReversed().find((event) => {
+  const target = params.events.findLast((event) => {
     const message = transcriptEventMessage(event);
     return (
       typeof transcriptEventId(event) === "string" &&
@@ -443,26 +446,10 @@ async function touchAssistantTranscriptSessionEntry(
 }
 
 export async function rewriteSourceReplyTranscriptMirrors(params: {
-  candidates: readonly {
-    idempotencyKey: string;
-    metadata: SourceReplyTranscriptMirrorMetadata;
-  }[];
-  requests: readonly {
-    idempotencyKey: string;
-    metadata: SourceReplyTranscriptMirrorMetadata;
-    state: SourceReplyContentState;
-  }[];
+  candidates: readonly SourceReplyTranscriptMirror[];
+  requests: readonly SourceReplyTranscriptRewrite[];
   scope: SessionTranscriptWriteScope;
-}): Promise<
-  Array<{
-    messageId: string;
-    request: {
-      idempotencyKey: string;
-      metadata: SourceReplyTranscriptMirrorMetadata;
-      state: SourceReplyContentState;
-    };
-  }>
-> {
+}): Promise<Array<{ messageId: string; request: SourceReplyTranscriptRewrite }>> {
   if (params.requests.length === 0 || params.candidates.length === 0) {
     return [];
   }

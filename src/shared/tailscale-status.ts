@@ -45,17 +45,17 @@ const TailscaleServeConfigSchema = z.object({
   AllowFunnel: z.record(z.string(), z.boolean()).optional(),
 });
 
-function parsePossiblyNoisyStatus(raw: string): z.infer<typeof TailscaleStatusSchema> | null {
+function parsePossiblyNoisyStatus<T>(schema: z.ZodType<T>, raw: string): T | null {
   const start = raw.indexOf("{");
   const end = raw.lastIndexOf("}");
   if (start === -1 || end <= start) {
     return null;
   }
-  return safeParseJsonWithSchema(TailscaleStatusSchema, raw.slice(start, end + 1));
+  return safeParseJsonWithSchema(schema, raw.slice(start, end + 1));
 }
 
 function extractTailnetHostFromStatusJson(raw: string): string | null {
-  const parsed = parsePossiblyNoisyStatus(raw);
+  const parsed = parsePossiblyNoisyStatus(TailscaleStatusSchema, raw);
   const dns = parsed?.Self?.DNSName;
   if (dns && dns.length > 0) {
     return dns.replace(/\.$/, "");
@@ -94,12 +94,7 @@ export function extractTailscaleServeGatewayUrls(
   gatewayPort: number,
   forAdoption = false,
 ): string[] | null {
-  const start = raw.indexOf("{");
-  const end = raw.lastIndexOf("}");
-  const config =
-    end > start && start >= 0
-      ? safeParseJsonWithSchema(TailscaleServeConfigSchema, raw.slice(start, end + 1))
-      : null;
+  const config = parsePossiblyNoisyStatus(TailscaleServeConfigSchema, raw);
   if (!config) {
     return null;
   }

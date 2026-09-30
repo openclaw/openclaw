@@ -305,7 +305,3 @@ export const CAPABILITY_METADATA: CapabilityMetadata[] = [
     resultShape: "provider ids and default models",
   },
 ];
-
-export function findCapabilityMetadata(id: string): CapabilityMetadata | undefined {
-  return CAPABILITY_METADATA.find((entry) => entry.id === id);
-}

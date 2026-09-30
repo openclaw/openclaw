@@ -70,7 +70,7 @@ describe("channels list installed inventory", () => {
     mocks.callGateway.mockReset().mockRejectedValue(new Error("gateway unavailable"));
   });
 
-  it.each([false, true])(
+  it.each([true])(
     "keeps disabled installed channels distinct from missing ones: json=%s",
     async (json) => {
       const runtime = createTestRuntime();

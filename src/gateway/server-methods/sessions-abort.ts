@@ -1,4 +1,3 @@
-// Session active-run cancellation and agent-scope resolution.
 import {
   normalizeOptionalString,
   readStringValue,
@@ -67,7 +66,7 @@ import { requireSessionKey } from "./sessions-shared.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
-export function resolveAbortSessionKey(params: {
+function resolveAbortSessionKey(params: {
   context: Pick<GatewayRequestContext, "chatAbortControllers">;
   requestedKey: string;
   canonicalKey: string;

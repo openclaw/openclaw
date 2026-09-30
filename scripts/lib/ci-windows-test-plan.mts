@@ -109,7 +109,6 @@ const fileSeconds: Readonly<Record<string, number>> = {
   "src/shared/pid-alive.env.test.ts": 1.4,
   "src/shared/runtime-import.test.ts": 1.4,
   "src/shared/worker-bundle-archive.test.ts": 4,
-  "src/skills/runtime/refresh-watch-close.test.ts": 0.1,
   "src/skills/runtime/refresh-watch-path.test.ts": 0.2,
   "src/skills/runtime/refresh.missing-root.integration.test.ts": 5.4,
   "src/skills/runtime/refresh.windows.test.ts": 0.3,
@@ -154,6 +153,11 @@ const runtimeBuildSeconds = 68;
 const fallbackFileSeconds = 3;
 const targetSeconds = 420;
 
+function addTimingSeconds(total: number, seconds: number): number {
+  // Preserve measured 0.1s precision so floating-point drift cannot inflate Math.ceil.
+  return Math.round((total + seconds) * 10) / 10;
+}
+
 function readWindowsTargets(scripts: Readonly<Record<string, string | undefined>>): string[] {
   const targets = [1, 2].flatMap((part) => {
     const script = scripts[`test:windows:ci:${part}`];
@@ -184,13 +188,13 @@ export function createWindowsTestShards(
     if (resolveVitestPretestBuildMode([{ includePatterns: [file] }]) !== undefined) {
       // test-projects prepares one runtime before all serial project borrowers.
       runtime.targets.push(file);
-      runtime.seconds += seconds;
+      runtime.seconds = addTimingSeconds(runtime.seconds, seconds);
     } else {
       const configs = buildVitestRunPlans([file]).map((plan) => plan.config);
       const key = configs.toSorted().join("\n") || file;
       const project = projects.get(key) ?? { targets: [], seconds: 0 };
       project.targets.push(file);
-      project.seconds += seconds;
+      project.seconds = addTimingSeconds(project.seconds, seconds);
       projects.set(key, project);
     }
   }
@@ -225,7 +229,7 @@ export function createWindowsTestShards(
       const shard = shards.reduce((best, candidate) =>
         candidate.predicted_seconds < best.predicted_seconds ? candidate : best,
       );
-      shard.predicted_seconds += envelope.seconds;
+      shard.predicted_seconds = addTimingSeconds(shard.predicted_seconds, envelope.seconds);
       shard.targets.push(...envelope.targets);
     }
     // Keep whole files: splitting a fixture file would repeat its prepared compiler.

@@ -5,10 +5,12 @@ import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { assertSqliteIntegrityInWorker } from "../infra/sqlite-integrity-worker.js";
 import {
   runSqliteIntegrityCheckSync,
+  runSqliteIntegrityOperationSync,
   type SqliteIntegrityCheck,
   type SqliteIntegrityOperation,
 } from "../infra/sqlite-integrity.js";
 import { registerDeferredSqliteWalWriteAdmission } from "../infra/sqlite-wal-write-admission.js";
+import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { assertAgentDatabaseAdmitted } from "./agent-database-admission.js";
@@ -19,7 +21,9 @@ import {
 import type {
   OpenClawAgentDatabase,
   OpenClawAgentDatabaseOptions,
+  OpenClawAgentDatabaseRegistrationObserver,
 } from "./openclaw-agent-db-contract.js";
+import type { prepareOpenClawAgentDatabaseWorkerLease } from "./openclaw-agent-db-lease.js";
 import {
   agentDatabaseLifecycle as cache,
   retainAgentDatabase,
@@ -85,13 +89,40 @@ function assertAgentDatabaseOperationCurrent(
   assertCurrent?.();
 }
 
-/** Bind both admission drivers to the canonical private database-open generator. */
+/** Bind admission drivers to the canonical private database-open generator. */
 export function createOpenClawAgentDatabaseAdmissionOwner(
   openSteps: (
     options: OpenClawAgentDatabaseOptions,
-    pending: PendingAgentDatabaseOpen,
+    pending?: PendingAgentDatabaseOpen,
+    preparedLease?: ReturnType<typeof prepareOpenClawAgentDatabaseWorkerLease>,
+    registrationObserver?: OpenClawAgentDatabaseRegistrationObserver,
   ) => SqliteIntegrityOperation<OpenClawAgentDatabase>,
 ) {
+  /** Open or return a cached per-agent database after schema and owner validation. */
+  function openOpenClawAgentDatabase(
+    options: OpenClawAgentDatabaseOptions,
+    preparedLease?: ReturnType<typeof prepareOpenClawAgentDatabaseWorkerLease>,
+    registrationObserver?: OpenClawAgentDatabaseRegistrationObserver,
+  ): OpenClawAgentDatabase {
+    const run = () => {
+      const steps = openSteps(options, undefined, preparedLease, registrationObserver);
+      return runSqliteIntegrityOperationSync(
+        steps,
+        preparedLease && !isMainThread
+          ? () =>
+              assertAgentDatabaseOpenAuthority(steps, () =>
+                requestSqliteWorkerOperationAdmission({
+                  stage: "prepare",
+                  facts: { kind: "agent-open-resume", lease: preparedLease.receipt },
+                }),
+              )
+          : undefined,
+      );
+    };
+    const scope = getOpenClawDatabaseMaintenanceScope();
+    return scope ? scope.run(run) : run();
+  }
+
   /** The initiating caller guards its physical open; each coalesced caller guards its own operation. */
   function withOpenClawAgentDatabaseAsync<T>(
     inputOptions: OpenClawAgentDatabaseOptions,
@@ -390,5 +421,9 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
     return pending;
   }
 
-  return { withOpenClawAgentDatabaseAsync, withOpenClawAgentDatabaseAdmission };
+  return {
+    openOpenClawAgentDatabase,
+    withOpenClawAgentDatabaseAsync,
+    withOpenClawAgentDatabaseAdmission,
+  };
 }

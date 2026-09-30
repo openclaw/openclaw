@@ -15,15 +15,9 @@ import { log } from "./logger.js";
 import { rewriteTranscriptEntriesInSessionManager } from "./transcript-rewrite.js";
 import { resolveRuntimeTranscriptReadTarget } from "./transcript-runtime-state.js";
 
-/**
- * Attach runtime-owned transcript rewrite helpers to an existing
- * context-engine runtime context payload.
- */
 function buildContextEngineMaintenanceRuntimeContext(
-  params: Omit<ContextEngineMaintenanceParams, "reason"> & {
+  params: ContextEngineMaintenanceParams & {
     allowDeferredCompactionExecution?: boolean;
-    purpose?: string;
-    contextEnginePluginId?: string;
   },
 ): ContextEngineRuntimeContext {
   return {
@@ -33,8 +27,8 @@ function buildContextEngineMaintenanceRuntimeContext(
       sessionKey: params.sessionKey,
       explicitAgentId: params.contextEngineAgentId,
       authProfileId: normalizeOptionalString(params.runtimeContext?.authProfileId),
-      contextEnginePluginId: params.contextEnginePluginId,
-      purpose: params.purpose ?? "context-engine.maintenance",
+      contextEnginePluginId: resolveContextEngineOwnerPluginId(params.contextEngine),
+      purpose: `context-engine.${params.reason}.maintenance`,
     }),
     ...(params.sessionTarget ? { sessionTarget: params.sessionTarget } : {}),
     ...(params.allowDeferredCompactionExecution ? { allowDeferredCompactionExecution: true } : {}),
@@ -113,8 +107,6 @@ export async function executeContextEngineMaintenance(
       withSessionManagerRewriteLock:
         params.executionMode === "background" ? undefined : params.withSessionManagerRewriteLock,
       allowDeferredCompactionExecution: params.executionMode === "background",
-      purpose: `context-engine.${params.reason}.maintenance`,
-      contextEnginePluginId: resolveContextEngineOwnerPluginId(params.contextEngine),
     }),
     ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
   });

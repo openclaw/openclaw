@@ -1,4 +1,4 @@
-import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
+import { findNormalizedProviderValue } from "openclaw/plugin-sdk/provider-auth";
 import {
   applyAgentDefaultModelPrimary,
   applyOnboardAuthAgentModelsAndProviders,
@@ -23,12 +23,8 @@ function applyMinimaxApiProviderConfigWithBaseUrl(
   params: MinimaxApiProviderConfigParams,
 ): OpenClawConfig {
   const providers = { ...cfg.models?.providers } as Record<string, ModelProviderConfig>;
-  const normalizedProviderId = normalizeProviderId(params.providerId);
   const existingProvider =
-    providers[params.providerId] ??
-    Object.entries(providers).find(
-      ([providerId]) => normalizeProviderId(providerId) === normalizedProviderId,
-    )?.[1];
+    providers[params.providerId] ?? findNormalizedProviderValue(providers, params.providerId);
   const existingModels = existingProvider?.models ?? [];
   const apiModel = buildMinimaxApiModelDefinition(params.modelId);
   const hasApiModel = existingModels.some((model) => model.id === params.modelId);

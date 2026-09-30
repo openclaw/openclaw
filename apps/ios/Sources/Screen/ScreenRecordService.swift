@@ -46,7 +46,6 @@ final class ScreenRecordService: @unchecked Sendable {
         private enum Phase {
             case idle
             case starting
-            case startRequested
             case cancelling
             case cancelled
             case finished
@@ -90,7 +89,7 @@ final class ScreenRecordService: @unchecked Sendable {
                 switch state.phase {
                 case .idle:
                     state.phase = .cancelled
-                case .starting, .startRequested:
+                case .starting:
                     state.phase = .cancelling
                 case .cancelling, .cancelled, .finished:
                     break
@@ -109,7 +108,7 @@ final class ScreenRecordService: @unchecked Sendable {
                 case .cancelled:
                     state.phase = .finished
                     return false
-                case .starting, .startRequested, .cancelling, .finished:
+                case .starting, .cancelling, .finished:
                     preconditionFailure("ReplayKit capture start operation can only run once")
                 }
             }
@@ -121,17 +120,6 @@ final class ScreenRecordService: @unchecked Sendable {
             self.startAction { [weak self] error in
                 self?.captureDidStart(error: error)
             }
-
-            self.withLock { state in
-                switch state.phase {
-                case .starting:
-                    state.phase = .startRequested
-                case .cancelling, .finished:
-                    break
-                case .idle, .startRequested, .cancelled:
-                    break
-                }
-            }
         }
 
         private func captureDidStart(error: Error?) {
@@ -139,7 +127,7 @@ final class ScreenRecordService: @unchecked Sendable {
             var shouldStop = false
             let completion = self.withLock { state -> (CheckedContinuation<Void, Error>, Result<Void, Error>)? in
                 switch state.phase {
-                case .starting, .startRequested:
+                case .starting:
                     state.phase = .finished
                     guard let continuation = state.continuation else { return nil }
                     state.continuation = nil

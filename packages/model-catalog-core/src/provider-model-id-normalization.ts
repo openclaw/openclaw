@@ -209,21 +209,15 @@ export function normalizeConfiguredProviderCatalogModelId(
 
 /** Normalize embedded Google model aliases inside provider/model catalog refs. */
 export function normalizeConfiguredProviderCatalogModelRef(providerModel: string): string {
-  const googlePrefix = "google/";
-  if (!providerModel.startsWith(googlePrefix)) {
-    const parsed = parseModelCatalogRef(providerModel);
-    if (!parsed) {
-      return providerModel;
-    }
-    if (!parsed.modelId.startsWith(googlePrefix)) {
-      return providerModel;
-    }
-    const normalizedModelId = normalizeGooglePreviewModelId(parsed.modelId);
-    return normalizedModelId === parsed.modelId
-      ? providerModel
-      : `${parsed.provider}/${normalizedModelId}`;
+  if (providerModel.startsWith("google/")) {
+    return normalizeGooglePreviewModelId(providerModel);
   }
-  const modelId = providerModel.slice(googlePrefix.length);
-  const normalizedModelId = normalizeGooglePreviewModelId(modelId);
-  return normalizedModelId === modelId ? providerModel : `${googlePrefix}${normalizedModelId}`;
+  const parsed = parseModelCatalogRef(providerModel);
+  if (!parsed?.modelId.startsWith("google/")) {
+    return providerModel;
+  }
+  const normalizedModelId = normalizeGooglePreviewModelId(parsed.modelId);
+  return normalizedModelId === parsed.modelId
+    ? providerModel
+    : `${parsed.provider}/${normalizedModelId}`;
 }

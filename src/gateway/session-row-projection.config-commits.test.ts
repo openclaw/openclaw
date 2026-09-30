@@ -1,4 +1,3 @@
-import chokidar from "chokidar";
 import { expect, it, vi, onTestFinished } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { readConfigFileSnapshot } from "../config/io.js";
@@ -18,7 +17,7 @@ import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { startGatewayConfigReloader, type GatewayReloadPlan } from "./config-reload.js";
-import { createWatcherMock } from "./config-reload.watcher.test-support.js";
+import { installWatcherMock } from "./config-reload.watcher.test-support.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import { listProjectedSessions } from "./session-utils-list.js";
@@ -60,9 +59,8 @@ it("retains resident rows across projection-neutral commits and unchanged admiss
       getConfig: () => getRuntimeConfigSnapshot()!,
       modelCatalog: [],
     });
-    const watcher = createWatcherMock();
-    const watch = vi.spyOn(chokidar, "watch").mockReturnValue(watcher as never);
-    onTestFinished(() => watch.mockRestore());
+    const watcher = installWatcherMock();
+    onTestFinished(watcher.restore);
     let applied = createDeferred<GatewayReloadPlan>();
     let dirtyAtCommit = 0;
     const commit: Parameters<typeof startGatewayConfigReloader>[0]["onHotReload"] = async (

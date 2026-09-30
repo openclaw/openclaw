@@ -6,11 +6,10 @@ import { writeFileWindowFully } from "../../infra/file-descriptor.js";
 import { root as fsRoot, FsSafeError, type Root } from "../../infra/fs-safe.js";
 import { runGitWorkerOperation } from "../../infra/git-worker.js";
 import { gitPathspecBatches, splitNullBuffer } from "./git-path-inventory.js";
-import { requireGitBuffer } from "./git.js";
+import { lstatIfExists, requireGitBuffer } from "./git.js";
 import {
   hasSafeParentDirectories,
   inspectProvisionedFiles,
-  lstatIfExists,
   normalizeProvisionedRelativePath,
   resolveGitPath,
 } from "./provisioned-file-inspection.js";

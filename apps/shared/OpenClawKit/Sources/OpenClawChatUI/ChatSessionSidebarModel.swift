@@ -230,17 +230,14 @@ public enum ChatSessionSidebarModel {
             return sessions.map { self.node(session: $0, children: []) }
         }
 
-        var entriesByKey: [String: OpenClawChatSessionEntry] = [:]
-        for session in sessions where entriesByKey[session.key] == nil {
-            entriesByKey[session.key] = session
-        }
+        let sessionKeys = Set(sessions.map(\.key))
         var parentByChild: [String: String] = [:]
         // The gateway child roster is freshness-filtered and omitted when
         // empty. Persisted parent metadata can outlive that freshness window,
         // so it is display metadata only and must not recreate stale edges.
         for parent in sessions {
             for childKey in parent.childSessions ?? [] where childKey != parent.key {
-                if entriesByKey[childKey] != nil, parentByChild[childKey] == nil {
+                if sessionKeys.contains(childKey), parentByChild[childKey] == nil {
                     parentByChild[childKey] = parent.key
                 }
             }
@@ -276,21 +273,13 @@ public enum ChatSessionSidebarModel {
             }
         }
 
-        func build(_ session: OpenClawChatSessionEntry, ancestors: Set<String>) -> Node {
-            guard !ancestors.contains(session.key) else {
-                return Self.node(session: session, children: [])
-            }
-            var nextAncestors = ancestors
-            nextAncestors.insert(session.key)
-            let children = (childrenByParent[session.key] ?? []).map {
-                build($0, ancestors: nextAncestors)
-            }
-            return Self.node(session: session, children: children)
+        func build(_ session: OpenClawChatSessionEntry) -> Node {
+            Self.node(session: session, children: (childrenByParent[session.key] ?? []).map(build))
         }
 
         return sessions.compactMap { session in
             guard parentByChild[session.key] == nil else { return nil }
-            return build(session, ancestors: [])
+            return build(session)
         }
     }
 

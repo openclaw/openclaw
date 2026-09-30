@@ -156,7 +156,6 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     // capture their own mutation baseline.
     sessionState.sessionEntry = persistedInitialEntry;
     sessionState.sessionEntryHandle.replaceCurrent(persistedInitialEntry);
-    sessionState.sessionStore[sessionState.sessionKey] = persistedInitialEntry;
     sessionState.sessionId = persistedInitialEntry.sessionId;
   }
   const command = buildCommandContext({
@@ -355,7 +354,7 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
           model: params.model,
         }),
         isGroup: sessionState.isGroup,
-        ...createSkillCommandLoaders(() => skillCommandsRuntimeLoader.load(), {
+        ...createSkillCommandLoaders(skillCommandsRuntimeLoader.load, {
           workspaceDir: params.workspaceDir,
           cfg: params.cfg,
           agentId: params.agentId,
@@ -427,6 +426,7 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     : undefined;
 
   const inlineActionResult = await handleInlineActions({
+    ...directiveResult.result,
     ctx: params.ctx,
     sessionCtx: sessionState.sessionCtx,
     cfg: params.cfg,
@@ -446,29 +446,10 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     isGroup: sessionState.isGroup,
     opts: params.opts,
     typing: params.typing,
-    allowTextCommands: directiveResult.result.allowTextCommands,
-    inlineStatusRequested: directiveResult.result.inlineStatusRequested,
-    inlineCommand: directiveResult.result.inlineCommand,
-    command: directiveResult.result.command,
     skillCommands: loadedSkillCommands ?? directiveResult.result.skillCommands,
-    directives: directiveResult.result.directives,
-    cleanedBody: directiveResult.result.cleanedBody,
-    elevatedEnabled: directiveResult.result.elevatedEnabled,
-    elevatedAllowed: directiveResult.result.elevatedAllowed,
-    elevatedFailures: directiveResult.result.elevatedFailures,
     defaultActivation: () => directiveResult.result.defaultActivation,
     thinkingCatalog,
-    resolveModelLevels: directiveResult.result.resolveModelLevels,
-    resolvedVerboseLevel: directiveResult.result.resolvedVerboseLevel,
-    resolvedElevatedLevel: directiveResult.result.resolvedElevatedLevel,
-    execOverrides: directiveResult.result.execOverrides,
-    blockReplyChunking: directiveResult.result.blockReplyChunking,
-    resolvedBlockStreamingBreak: directiveResult.result.resolvedBlockStreamingBreak,
     resolveDefaultThinkingLevel: directiveResult.result.modelState.resolveDefaultThinkingLevel,
-    provider: directiveResult.result.provider,
-    model: directiveResult.result.model,
-    contextTokens: directiveResult.result.contextTokens,
-    directiveAck: directiveResult.result.directiveAck,
     abortedLastRun: sessionState.abortedLastRun,
     skillFilter: params.skillFilter,
   });

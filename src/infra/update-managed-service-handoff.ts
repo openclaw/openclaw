@@ -581,6 +581,8 @@ function isLaunchdNotLoaded(result) {
   return /no such process|could not find service|not found/i.test(result.stderr || result.stdout);
 }
 
+const parseLaunchdPid = (stdout) => Number(/^\s*pid\s*=\s*([1-9]\d*)\s*$/im.exec(stdout)?.[1]);
+
 let parkedServiceGeneration = null;
 let parkedServiceInvocation = null;
 let parkedServiceFragment = null;
@@ -672,8 +674,7 @@ async function parkGatewayService() {
   if (recovery.kind !== "launchd") throw new Error("unsupported managed update supervisor");
   const target = "gui/" + recovery.uid + "/" + recovery.label;
   const inspection = await runServiceCommand("launchctl", ["print", target], undefined, params.parentExitDeadlineAt);
-  const parentMatch = /^\s*pid\s*=\s*([1-9]\d*)\s*$/im.exec(inspection.stdout);
-  if (inspection.code !== 0 || Number(parentMatch?.[1]) !== params.parentPid) {
+  if (inspection.code !== 0 || parseLaunchdPid(inspection.stdout) !== params.parentPid) {
     throw new Error("launchd service does not match the exact active gateway parent");
   }
   assertGatewayParkOwner();
@@ -767,7 +768,7 @@ async function restoreGatewayService(reason, decision = params.recovery, childSt
     const run = (args) => runOwned("launchctl", args, undefined, deadline);
     const before = await run(["print", target]);
     if (before.code === 0) {
-      const pid = Number(/^\s*pid\s*=\s*([1-9]\d*)\s*$/im.exec(before.stdout)?.[1]);
+      const pid = parseLaunchdPid(before.stdout);
       if (pid && pid !== params.parentPid) {
         appendLog("recovery refused: launchd service has another process generation");
         record(false);
@@ -783,7 +784,7 @@ async function restoreGatewayService(reason, decision = params.recovery, childSt
       const current = ownsRecovery()
         ? await runOwned("launchctl", ["print", target]) : null;
       const pid = current?.code === 0
-        ? Number(/^\s*pid\s*=\s*([1-9]\d*)\s*$/im.exec(current.stdout)?.[1]) : 0;
+        ? parseLaunchdPid(current.stdout) : 0;
       serviceRunning = current?.code === 0 ? Boolean(pid && isPidAlive(pid)) : undefined;
       servicePid = serviceRunning ? pid : undefined;
       restored = !restarted.signal && restarted.code === 0 && Boolean(pid && pid !== params.parentPid && serviceRunning);
@@ -793,7 +794,7 @@ async function restoreGatewayService(reason, decision = params.recovery, childSt
     for (let inspection = enabled; enabled.code === 0 && Date.now() < deadline;) {
       inspection = await run(["print", target]);
       if (inspection.code === 0) {
-        const pid = Number(/^\s*pid\s*=\s*([1-9]\d*)\s*$/im.exec(inspection.stdout)?.[1]);
+        const pid = parseLaunchdPid(inspection.stdout);
         if (pid !== params.parentPid && isPidAlive(pid)) {
           restored = true;
           servicePid = pid;
