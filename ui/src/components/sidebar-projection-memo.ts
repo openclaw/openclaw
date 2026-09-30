@@ -37,7 +37,7 @@ export type SidebarProjectionHost = {
     agentIds: readonly string[];
     collapsedAgentIds: ReadonlySet<string>;
   } | null;
-  readonly activeRouteId: RouteId | undefined;
+  readonly activeRouteId?: RouteId;
   readonly sessionSortMode: SidebarSessionSortMode;
   readonly sessionsStatusFilter: SidebarSessionStatusFilter;
   readonly sessionsEmptyGroupsMode: SidebarEmptyGroupsMode;
@@ -55,7 +55,7 @@ export type SidebarProjectionHost = {
   readonly storedOutboxes:
     | ReturnType<ReturnType<typeof createStoredChatOutboxReader>["read"]>
     | undefined;
-  resolveSessionAttention(row: GatewaySessionRow): SidebarRecentSession["attention"];
+  resolveSessionAttention: Parameters<typeof projectSidebarHomeSession>[0]["resolveAttention"];
   getRouteSessionKey(): string;
   getSessionNavigationState(): SidebarSessionNavigationState;
   effectiveSessionSortMode(): SidebarSessionSortMode;
