@@ -1951,6 +1951,32 @@ describe("scheduleRestartSentinelWake", () => {
     );
   });
 
+  it("does not count private reasoning media as an owning-transcript reply", async () => {
+    mocks.dispatchGatewayMethodInProcess.mockResolvedValueOnce({
+      status: "ok",
+      result: {
+        payloads: [{ isReasoning: true, mediaUrls: ["/tmp/proof.png"] }],
+      },
+    });
+
+    await expect(
+      deliverGeneratedMedia({
+        id: "session-delivery-media-internal-reasoning",
+        messageId: "image:task-internal-reasoning:agent-loop",
+        route: { channel: "webchat", to: "agent:main:main", chatType: "direct" },
+        expectedMediaUrls: ["/tmp/proof.png"],
+      }),
+    ).rejects.toThrow("missed expected media: /tmp/proof.png");
+
+    expect(mocks.advanceSessionDeliveryAgentRun).toHaveBeenCalledWith(
+      "session-delivery-media-internal-reasoning",
+      expect.objectContaining({ expectedMediaUrls: ["/tmp/proof.png"] }),
+      expectQueueContext(),
+    );
+    expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
+    expect(mocks.createManagedOutgoingMediaBlocks).not.toHaveBeenCalled();
+  });
+
   it("accepts a suppressed visible automatic completion notice", async () => {
     mocks.dispatchGatewayMethodInProcess.mockResolvedValueOnce({
       status: "ok",

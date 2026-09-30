@@ -433,6 +433,21 @@ describe("skills-clawhub", () => {
     expect(downloadClawHubSkillArchiveUrlMock).toHaveBeenCalled();
   });
 
+  it("fails closed when ClawHub skill trust checks are unavailable", async () => {
+    fetchClawHubSkillSecurityVerdictsMock.mockRejectedValueOnce(
+      new Error("security verdicts unavailable"),
+    );
+
+    const result = await installTestSkill(testWorkspaceDir, "agentreceipt");
+
+    expectFailure(result);
+    expect(result.code).toBe("clawhub_security_unavailable");
+    expect(result.error).toContain("ClawHub release trust check failed");
+    expect(result.error).toContain("security verdicts unavailable");
+    expect(downloadClawHubSkillArchiveUrlMock).not.toHaveBeenCalled();
+    expect(downloadClawHubSkillArchiveMock).not.toHaveBeenCalled();
+  });
+
   it("fails closed when ClawHub returns no skill trust verdict", async () => {
     fetchClawHubSkillSecurityVerdictsMock.mockResolvedValueOnce({
       schema: "clawhub.skill.security-verdicts.v1",

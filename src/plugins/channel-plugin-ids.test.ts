@@ -1096,6 +1096,23 @@ describe("resolveGatewayStartupPluginPlanFromRegistry", () => {
     });
   });
 
+  it("keeps hook-policy plugins behind restrictive allowlists", () => {
+    expectStartupPluginIds({
+      config: {
+        channels: {},
+        plugins: {
+          allow: ["browser"],
+          slots: { memory: "none" },
+          entries: {
+            browser: { enabled: false },
+            "external-hook-policy": { hooks: { allowPromptInjection: true } },
+          },
+        },
+      },
+      expected: [],
+    });
+  });
+
   it("does not let effective-only hook policy bypass the authored startup allowlist", () => {
     const activationSourceConfig = {
       channels: {},

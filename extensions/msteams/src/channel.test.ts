@@ -1,11 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
+import { isImplicitSameChatApprovalAuthorization } from "openclaw/plugin-sdk/approval-auth-runtime";
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MSTeamsConfigSchema } from "../config-api.js";
-import { msTeamsApprovalAuth } from "./approval-auth.js";
 import { msteamsPlugin } from "./channel.js";
 import { msteamsSetupPlugin } from "./channel.setup.js";
 
@@ -338,23 +338,38 @@ describe("msteams config schema", () => {
   });
 });
 
-describe("msTeamsApprovalAuth", () => {
+describe("msteamsPlugin.approvalCapability", () => {
   const ownerId = "123e4567-e89b-12d3-a456-426614174000";
   const otherUserId = "22222222-2222-4222-8222-222222222222";
 
-  function authorizeApproval(allowFrom: string[], senderId: string) {
-    return msTeamsApprovalAuth.authorizeActorAction({
+  function authorizeApproval(
+    allowFrom: string[],
+    senderId: string,
+    approvalKind: "exec" | "plugin" | "system-agent" = "exec",
+  ) {
+    return msteamsPlugin.approvalCapability?.authorizeActorAction?.({
       cfg: { channels: { msteams: { allowFrom } } },
       senderId,
       action: "approve",
-      approvalKind: "exec",
+      approvalKind,
     });
   }
 
-  it("authorizes only the configured owner after normalizing an AAD principal", () => {
-    const allowFrom = [`MSTEAMS:USER:${ownerId.toUpperCase()}`];
-    expect(authorizeApproval(allowFrom, ownerId)).toEqual({ authorized: true });
-    expect(authorizeApproval(allowFrom, otherUserId)).toMatchObject({ authorized: false });
+  it.each(["exec", "plugin", "system-agent"] as const)(
+    "authorizes only the configured owner for %s after normalizing an AAD principal",
+    (approvalKind) => {
+      const allowFrom = [`MSTEAMS:USER:${ownerId.toUpperCase()}`];
+      expect(authorizeApproval(allowFrom, ownerId, approvalKind)).toEqual({ authorized: true });
+      expect(authorizeApproval(allowFrom, otherUserId, approvalKind)).toMatchObject({
+        authorized: false,
+      });
+    },
+  );
+
+  it("preserves implicit same-chat authorization when no approvers are configured", () => {
+    const result = authorizeApproval([], ownerId);
+    expect(result).toEqual({ authorized: true });
+    expect(isImplicitSameChatApprovalAuthorization(result)).toBe(true);
   });
 
   it("does not authorize a conversation id as an approval principal", () => {

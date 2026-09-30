@@ -2012,64 +2012,76 @@ describe("tryDispatchAcpReplyCore", () => {
     },
   );
 
-  it("never leaks a marked private inbound prompt across routed ACP live text deltas", async () => {
-    const marker = "[Current message - respond to this]";
-    const conversationContext = `${marker}\nPrivate secret. Keep hidden.`;
-    const dispatcher = createReplyDispatcher({
-      deliver: async () => {
-        throw new Error("ACP output must use the origin route");
-      },
-    });
-    const ctx = buildTestCtx({
-      Provider: "discord",
-      Surface: "discord",
-      SessionKey: sessionKey,
-      Body: conversationContext,
-      BodyForAgent: conversationContext,
-    });
-    managerMocks.runTurn.mockImplementationOnce(
-      async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
-        await onEvent({
-          type: "text_delta",
-          text: "Visible answer before. ",
-          tag: "agent_message_chunk",
-        });
-        await onEvent({
-          type: "text_delta",
-          text: `${marker}\nPrivate secret. `,
-          tag: "agent_message_chunk",
-        });
-        await onEvent({
-          type: "text_delta",
-          text: "Keep hidden. Visible answer after.",
-          tag: "agent_message_chunk",
-        });
-        await onEvent({ type: "done", status: "completed" });
-      },
-    );
+  it.each(["direct", "routed"] as const)(
+    "never leaks a marked private inbound prompt across ACP live text deltas via %s delivery",
+    async (deliveryPath) => {
+      const marker = "[Current message - respond to this]";
+      const conversationContext = `${marker}\nPrivate secret. Keep hidden.`;
+      const directTexts: string[] = [];
+      const dispatcher = createReplyDispatcher({
+        deliver: async (payload) => {
+          if (deliveryPath === "routed") {
+            throw new Error("ACP output must use the origin route");
+          }
+          if (payload.text) {
+            directTexts.push(payload.text);
+          }
+        },
+      });
+      const ctx = buildTestCtx({
+        Provider: "discord",
+        Surface: "discord",
+        SessionKey: sessionKey,
+        Body: conversationContext,
+        BodyForAgent: conversationContext,
+      });
+      managerMocks.runTurn.mockImplementationOnce(
+        async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
+          await onEvent({
+            type: "text_delta",
+            text: "Visible answer before. ",
+            tag: "agent_message_chunk",
+          });
+          await onEvent({
+            type: "text_delta",
+            text: `${marker}\nPrivate secret. `,
+            tag: "agent_message_chunk",
+          });
+          await onEvent({
+            type: "text_delta",
+            text: "Keep hidden. Visible answer after.",
+            tag: "agent_message_chunk",
+          });
+          await onEvent({ type: "done", status: "completed" });
+        },
+      );
 
-    await runDispatch({
-      bodyForAgent: conversationContext,
-      cfg: createAcpTestConfig({
-        acp: { enabled: true, stream: { deliveryMode: "live" } },
-      }),
-      ctx,
-      dispatcher,
-      shouldRouteToOriginating: true,
-      originatingChannel: "discord",
-    });
+      await runDispatch({
+        bodyForAgent: conversationContext,
+        cfg: createAcpTestConfig({
+          acp: { enabled: true, stream: { deliveryMode: "live" } },
+        }),
+        ctx,
+        dispatcher,
+        shouldRouteToOriginating: deliveryPath === "routed",
+        originatingChannel: "discord",
+      });
+      dispatcher.markComplete();
+      await dispatcher.waitForIdle();
 
-    const deliveredTexts = routeMocks.routeReply.mock.calls.map((_, index) =>
-      String(routePayload(index).text),
-    );
-    expect(deliveredTexts.join("")).toContain("Visible answer before.");
-    expect(deliveredTexts.join("")).toContain("Visible answer after.");
-    for (const text of deliveredTexts) {
-      expect(text).not.toContain(marker);
-      expect(text).not.toContain("Private secret.");
-      expect(text).not.toContain("Keep hidden.");
-    }
-  });
+      const deliveredTexts =
+        deliveryPath === "direct"
+          ? directTexts
+          : routeMocks.routeReply.mock.calls.map((_, index) => String(routePayload(index).text));
+      expect(deliveredTexts.join("")).toContain("Visible answer before.");
+      expect(deliveredTexts.join("")).toContain("Visible answer after.");
+      for (const text of deliveredTexts) {
+        expect(text).not.toContain(marker);
+        expect(text).not.toContain("Private secret.");
+        expect(text).not.toContain("Keep hidden.");
+      }
+    },
+  );
 
   it("honors the configured default account for ACP projector chunking when AccountId is omitted", async () => {
     const cfg = createAcpTestConfig({

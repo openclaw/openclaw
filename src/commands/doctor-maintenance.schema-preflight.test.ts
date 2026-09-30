@@ -119,33 +119,42 @@ it("fails repair when a configured agentDir database remains on an older schema"
   });
 });
 
-it("refuses a newer configured SQLite database before repairing an old registry", async () => {
-  const fixture = createLegacyRegistryFixture();
-  const customDir = path.join(fixture.root, "custom");
-  const agentPath = path.join(customDir, "sessions.sqlite");
-  fixture.config.session = { store: agentPath };
-  fs.mkdirSync(path.dirname(agentPath), { recursive: true });
-  const { DatabaseSync } = requireNodeSqlite();
-  const registry = new DatabaseSync(fixture.databasePath);
-  registry.exec(extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "agent_deletion_journal"));
-  registry.exec(extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "migration_sources"));
-  registry.close();
-  const agent = new DatabaseSync(agentPath);
-  agent.exec(`
+it.each(["configured", "registered"] as const)(
+  "refuses a newer %s SQLite database before repairing an old registry",
+  async (discovery) => {
+    const fixture = createLegacyRegistryFixture();
+    const customDir = path.join(fixture.root, "custom");
+    const agentPath = path.join(customDir, "sessions.sqlite");
+    fixture.config.session = { store: agentPath };
+    fs.mkdirSync(path.dirname(agentPath), { recursive: true });
+    const { DatabaseSync } = requireNodeSqlite();
+    const registry = new DatabaseSync(fixture.databasePath);
+    registry.exec(extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "agent_deletion_journal"));
+    registry.exec(extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "migration_sources"));
+    if (discovery === "registered") {
+      fixture.config.agents!.entries!.ops = {};
+      registry
+        .prepare("INSERT INTO agent_databases VALUES (?, ?, ?, ?, ?)")
+        .run("ops", agentPath, OPENCLAW_AGENT_SCHEMA_VERSION, 1, null);
+    }
+    registry.close();
+    const agent = new DatabaseSync(agentPath);
+    agent.exec(`
       PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION + 1};
       CREATE TABLE schema_meta (meta_key TEXT PRIMARY KEY, agent_id TEXT);
       INSERT INTO schema_meta VALUES ('primary', 'main');
     `);
-  agent.close();
-  fs.writeFileSync(fixture.configPath, JSON.stringify(fixture.config));
-  const paths = [fixture.configPath, fixture.databasePath, agentPath];
-  const before = paths.map((pathname) => fs.readFileSync(pathname));
+    agent.close();
+    fs.writeFileSync(fixture.configPath, JSON.stringify(fixture.config));
+    const paths = [fixture.configPath, fixture.databasePath, agentPath];
+    const before = paths.map((pathname) => fs.readFileSync(pathname));
 
-  await expect(
-    runDoctorHealthFlow(createRuntime(), { repair: true, nonInteractive: true }),
-  ).rejects.toThrow("newer than this build");
-  expect(paths.map((pathname) => fs.readFileSync(pathname))).toEqual(before);
-});
+    await expect(
+      runDoctorHealthFlow(createRuntime(), { repair: true, nonInteractive: true }),
+    ).rejects.toThrow(discovery === "registered" ? "for agent ops" : "newer than this build");
+    expect(paths.map((pathname) => fs.readFileSync(pathname))).toEqual(before);
+  },
+);
 
 it("lets the schema repair owner restore a noncanonical shared-state index", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {

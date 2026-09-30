@@ -1,12 +1,22 @@
 import { afterEach, describe, expect, it, vi, type MockInstance } from "vitest";
+import {
+  findMediaGenerationOperation,
+  getActiveMediaGenerationRunCount,
+} from "../agents/media-generation-activity.js";
 import { resetGeneratedMediaTaskActivityForTests } from "../agents/media-generation-activity.test-support.js";
-import { createMediaGenerationTaskLifecycle } from "../agents/tools/media-generate-background-shared.js";
+import {
+  createMediaGenerationTaskLifecycle,
+  scheduleMediaGenerationTaskCompletion,
+} from "../agents/tools/media-generate-background-shared.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { loadTranscriptEvents, replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import * as transcript from "../config/sessions/transcript.js";
 import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { drainPendingSessionDelivery } from "../infra/session-delivery-queue-recovery.js";
+import * as queueRuntime from "../infra/session-delivery-queue-runtime.js";
 import * as queue from "../infra/session-delivery-queue-storage.js";
 import * as systemEvents from "../infra/system-events.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import {
   withOpenClawTestState,
@@ -210,5 +220,103 @@ describe("original requester media handoff", () => {
         ).toEqual([]);
       },
     );
+  });
+
+  it("retries one refused queue admission without losing media when transcript retention is also unavailable", async () => {
+    await withMediaSession(
+      async ({ lifecycle, handle, mediaPath, queueContext, dispatch, drain }) => {
+        const firstRefused = createDeferredCore();
+        const queueSettled = createDeferredCore();
+        const enqueue = vi.spyOn(queue, "enqueueClaimedSessionDelivery");
+        enqueue.mockImplementationOnce(async () => {
+          firstRefused.resolve();
+          throw new Error("temporary queue write refusal");
+        });
+        vi.spyOn(queueRuntime, "scheduleSessionDelivery").mockImplementation(async (id) => {
+          await drain(id);
+          queueSettled.resolve();
+          return true;
+        });
+        vi.spyOn(transcript, "appendAssistantMessageToSessionTranscript").mockRejectedValue(
+          new Error("temporary retention refusal"),
+        );
+        const scheduled: Array<() => Promise<void>> = [];
+        const generated = vi.fn(async () => ({
+          provider: "synthetic",
+          model: "fixture",
+          count: 1,
+          wakeResult: "generated lighthouse",
+          attachments: [{ type: "image" as const, path: mediaPath, mimeType: "image/png" }],
+        }));
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+        scheduleMediaGenerationTaskCompletion({
+          lifecycle,
+          handle,
+          scheduleBackgroundWork: (work) => scheduled.push(work),
+          progressSummary: "Generating image",
+          toolName: "image_generate",
+          onWakeFailure: vi.fn(),
+          run: generated,
+        });
+        const completion = scheduled[0]!();
+        await firstRefused.promise;
+        await vi.advanceTimersByTimeAsync(250);
+        await Promise.race([
+          queueSettled.promise,
+          completion.then(() => {
+            throw new Error("media completion ended without durable queue custody");
+          }),
+        ]);
+        await vi.advanceTimersByTimeAsync(500);
+        await completion;
+        expect(generated).toHaveBeenCalledOnce();
+        expect(dispatch).toHaveBeenCalledOnce();
+        expect(new Set(enqueue.mock.calls.map(([payload]) => payload.idempotencyKey)).size).toBe(1);
+        expect(await queue.loadPendingSessionDeliveries(queueContext)).toEqual([]);
+        expect(getActiveMediaGenerationRunCount()).toBe(0);
+      },
+    );
+  });
+
+  it("ends bounded handoff without claiming durability when both storage paths remain unavailable", async () => {
+    await withMediaSession(async ({ lifecycle, handle, mediaPath, queueContext }) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      const startedAt = Date.now();
+      vi.spyOn(queue, "enqueueClaimedSessionDelivery").mockImplementation(async () => {
+        vi.setSystemTime(startedAt + 120_001);
+        throw new Error("queue remains unavailable");
+      });
+      vi.spyOn(transcript, "appendAssistantMessageToSessionTranscript").mockRejectedValue(
+        new Error("transcript remains unavailable"),
+      );
+      const diagnostic = vi.fn();
+      const scheduled: Array<() => Promise<void>> = [];
+      scheduleMediaGenerationTaskCompletion({
+        lifecycle,
+        handle,
+        scheduleBackgroundWork: (work) => scheduled.push(work),
+        progressSummary: "Generating image",
+        toolName: "image_generate",
+        onWakeFailure: diagnostic,
+        run: async () => ({
+          provider: "synthetic",
+          model: "fixture",
+          count: 1,
+          wakeResult: "generated lighthouse",
+          attachments: [{ type: "image", path: mediaPath, mimeType: "image/png" }],
+        }),
+      });
+      await scheduled[0]!();
+      expect(getActiveMediaGenerationRunCount()).toBe(0);
+      expect(await queue.loadPendingSessionDeliveries(queueContext)).toEqual([]);
+      expect(findMediaGenerationOperation(handle.runId)).toMatchObject({
+        terminalOutcome: "blocked",
+        terminalSummary: expect.stringContaining(mediaPath),
+      });
+      expect(diagnostic).toHaveBeenCalledWith(
+        "image_generate blocked completion retention failed",
+        expect.objectContaining({ error: expect.any(Error) }),
+      );
+    });
   });
 });

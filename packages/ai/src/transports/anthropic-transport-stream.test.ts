@@ -632,9 +632,15 @@ describe("anthropic transport stream", () => {
   });
 
   it("uses the guarded fetch transport for api-key Anthropic requests", async () => {
-    const model = makeAnthropicTransportModel({
-      headers: { "user-agent": "configured-client/1.0", "X-Provider": "anthropic" },
-    });
+    const model = {
+      ...makeAnthropicTransportModel({
+        headers: { "user-agent": "configured-client/1.0", "X-Provider": "anthropic" },
+      }),
+      [Symbol.for("openclaw.modelProviderRequestTransport")]: {
+        proxy: { mode: "explicit-proxy", url: "http://proxy.example:8443" },
+        tls: { ca: "synthetic-ca-pem" },
+      },
+    };
 
     await runTransportStream(model, undefined, {
       apiKey: "sk-ant-api",
@@ -1208,6 +1214,28 @@ describe("anthropic transport stream", () => {
     expect(eventTypes).toEqual(["error"]);
     expect(result.stopReason).toBe("error");
     expect(result.content).toEqual([]);
+    expect(result.errorMessage).toBe("Anthropic stream ended before message_stop");
+  });
+
+  it("rejects ordinary Anthropic output when the stream ends before message_stop", async () => {
+    mockSse([
+      anthropicMessageStart({ id: "msg_partial", usage: { input_tokens: 3, output_tokens: 0 } }),
+      anthropicContentBlockStart(0, { type: "text", text: "" }),
+      anthropicContentBlockDelta(0, { type: "text_delta", text: "truncated answer" }),
+      { type: "content_block_stop", index: 0 },
+      anthropicMessageDelta({ stop_reason: "end_turn" }, { input_tokens: 3, output_tokens: 2 }),
+    ]);
+
+    const stream = await startTransportStream();
+    const eventTypes: string[] = [];
+    for await (const event of stream) {
+      eventTypes.push(event.type);
+    }
+    const result = await stream.result();
+
+    expect(eventTypes.at(-1)).toBe("error");
+    expect(eventTypes).not.toContain("done");
+    expect(result.stopReason).toBe("error");
     expect(result.errorMessage).toBe("Anthropic stream ended before message_stop");
   });
 
