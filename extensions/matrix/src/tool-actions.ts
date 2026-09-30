@@ -153,7 +153,7 @@ export async function handleMatrixAction(
           conversationReadOrigin: ctx.conversationReadOrigin,
         },
         opts: clientOpts,
-        run: ({ roomId, client }) => run(roomId, { ...clientOpts, client }),
+        run: ({ roomId: resolvedRoomId, client }) => run(resolvedRoomId, { ...clientOpts, client }),
       });
     return { accountId, clientOpts, withReadTarget };
   };
