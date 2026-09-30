@@ -111,7 +111,6 @@ export async function startGatewayCoreRuntime(input: {
     broadcastToConnIds,
     controlUiBasePath,
     workerEnvironmentService,
-    workerPlacementDispatchAvailable,
     workerPlacementControlAvailable,
     desktopSessionRegistry,
     gatewayComputerService,
@@ -412,7 +411,7 @@ export async function startGatewayCoreRuntime(input: {
           (descriptor.name !== "environments.create" &&
             descriptor.name !== "environments.destroy" &&
             !descriptor.name.startsWith("environments.session."))) &&
-        (workerPlacementDispatchAvailable || descriptor.name !== "sessions.dispatch") &&
+        (workerPlacementControlAvailable || descriptor.name !== "sessions.dispatch") &&
         (workerPlacementControlAvailable ||
           (descriptor.name !== "sessions.reclaim" && descriptor.name !== "sessions.move")) &&
         (workerEnvironmentService ||

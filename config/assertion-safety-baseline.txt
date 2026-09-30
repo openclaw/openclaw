@@ -2154,7 +2154,7 @@ src/gateway/chat-display-projection.core.ts	5
 src/gateway/chat-display-projection.history.ts	1
 src/gateway/chat-display-projection.sanitize.ts	5
 src/gateway/chat-sanitize.ts	3
-src/gateway/cli-session-history.claude.ts	7
+src/gateway/cli-session-history.claude.ts	6
 src/gateway/cli-session-history.merge.ts	6
 src/gateway/control-ui-plugin-auth-cookie.ts	1
 src/gateway/control-ui-session-pr-subscriptions.ts	2

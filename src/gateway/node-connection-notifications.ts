@@ -116,9 +116,7 @@ class NodeConnectionNotificationRouter {
       .filter(isMacNotificationNode)
       .filter((node) => node.connId !== attemptedConnId);
     await Promise.all(targets.map(async (node) => await this.notify(node, source, pending)));
-    if (this.attemptIsCurrent(pending)) {
-      this.finishAlert(pending);
-    }
+    this.finishAlert(pending);
   }
 
   private currentSource(
