@@ -19,6 +19,7 @@ import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-con
 import type { PluginHookBeforeModelResolveAttachment } from "../../plugins/hook-before-agent-start.types.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { HookRunner } from "../../plugins/hooks.js";
+import { resolveCliBackendConfig } from "../cli-backends.js";
 import {
   buildBeforeModelResolveAttachments,
   resolveHookModelSelection,
@@ -29,6 +30,8 @@ import {
   overlayConfiguredModelCatalog,
 } from "../model-catalog.js";
 import { resolveCliRuntimeExecutionProvider } from "../model-runtime-aliases.js";
+import { isClaudeCliBackendId, normalizeCliModel } from "./helpers.js";
+import { CLAUDE_CLI_CONTEXT_MODEL_ALIASES } from "./prepare-claude.js";
 import type { RunCliAgentParams } from "./types.js";
 
 const log = createSubsystemLogger("agents/cli-runner");
@@ -170,13 +173,18 @@ async function runCliModelResolveHookForTurn(
 
 /**
  * Re-derives image support for a routed model from the same catalog CLI preparation
- * reads. Returns undefined when the routed model has no catalog entry: an entry is
+ * reads, following preparation's alias contract: the hook may route to a CLI alias
+ * (the claude-cli context aliases or a backend's alias table) whose catalog row
+ * carries different image support than the caller's model. Returns undefined when
+ * the routed model has no catalog entry under any of those identities: an entry is
  * the only evidence that can overturn the caller's derived capability, and keeping
  * the caller's value for unknown models avoids inventing a capability change.
  */
 function resolveRoutedModelVisionCapability(params: {
   config?: OpenClawConfig;
   workspaceDir: string;
+  executionProvider: string;
+  agentId?: string;
   provider: string;
   modelId: string;
 }): boolean | undefined {
@@ -191,15 +199,40 @@ function resolveRoutedModelVisionCapability(params: {
     config: params.config,
     workspaceDir: params.workspaceDir,
   });
-  // Literal identity only: the routed id came from the hook and needs no route
-  // canonicalization, and a miss must keep the caller's capability instead of
-  // consulting the provider policy surface (an aliasing side quest here).
-  const provider = params.provider.trim().toLowerCase();
-  const modelId = params.modelId.trim();
-  const entry = catalog.find(
-    (candidate) => candidate.provider.trim().toLowerCase() === provider && candidate.id === modelId,
+  // Literal routed identity first, then the alias identities preparation itself
+  // would resolve the model through. Catalog matches only, never the provider
+  // policy surface: a total miss must keep the caller's capability rather than
+  // consult policy machinery the CLI turn path does not own.
+  const trimmedModelId = params.modelId.trim();
+  const candidates = [trimmedModelId];
+  if (isClaudeCliBackendId(params.executionProvider)) {
+    const contextAlias = CLAUDE_CLI_CONTEXT_MODEL_ALIASES[trimmedModelId.toLowerCase()];
+    if (contextAlias && !candidates.includes(contextAlias)) {
+      candidates.push(contextAlias);
+    }
+  }
+  const backend = resolveCliBackendConfig(
+    params.executionProvider,
+    params.config,
+    params.agentId ? { agentId: params.agentId } : {},
   );
-  return entry ? modelSupportsVision(entry) : undefined;
+  if (backend) {
+    const aliasNormalized = normalizeCliModel(trimmedModelId, backend.config).trim();
+    if (aliasNormalized && !candidates.includes(aliasNormalized)) {
+      candidates.push(aliasNormalized);
+    }
+  }
+  const provider = params.provider.trim().toLowerCase();
+  for (const modelId of candidates) {
+    const entry = catalog.find(
+      (candidate) =>
+        candidate.provider.trim().toLowerCase() === provider && candidate.id === modelId,
+    );
+    if (entry) {
+      return modelSupportsVision(entry);
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -248,6 +281,8 @@ export async function applyCliModelResolveHookForRun(params: RunCliAgentParams):
     const routedVision = resolveRoutedModelVisionCapability({
       config: params.config,
       workspaceDir: params.workspaceDir,
+      executionProvider: params.provider,
+      agentId: params.agentId,
       provider: params.hookModelProvider ?? params.modelProvider ?? params.provider,
       modelId: hookModelId,
     });

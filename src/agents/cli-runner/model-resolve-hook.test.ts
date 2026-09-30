@@ -86,6 +86,11 @@ const VISION_CATALOG_CONFIG: OpenClawConfig = {
         "anthropic/claude-sonnet-5": { agentRuntime: { id: "claude-cli" } },
         "anthropic/claude-vision-sonnet": { agentRuntime: { id: "claude-cli" } },
         "anthropic/claude-vision-unlisted": { agentRuntime: { id: "claude-cli" } },
+        // CLI aliases stay routable through the same backend, so the alias
+        // vision tests exercise the same-backend override path.
+        "anthropic/sonnet": { agentRuntime: { id: "claude-cli" } },
+        "anthropic/fable": { agentRuntime: { id: "claude-cli" } },
+        "anthropic/opus-4-6": { agentRuntime: { id: "claude-cli" } },
         "openai/gpt-5.6": { agentRuntime: { id: "openclaw" } },
       },
     },
@@ -93,10 +98,48 @@ const VISION_CATALOG_CONFIG: OpenClawConfig = {
   models: {
     providers: {
       anthropic: {
+        baseUrl: "https://api.anthropic.com",
         models: [
-          { id: "claude-opus-5-5", input: ["text", "image"] },
-          { id: "claude-sonnet-5", input: ["text"] },
-          { id: "claude-vision-sonnet", input: ["text", "image"] },
+          {
+            id: "claude-opus-5-5",
+            name: "Claude Opus 5.5",
+            reasoning: false,
+            input: ["text", "image"],
+            maxTokens: 128_000,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          },
+          {
+            id: "claude-sonnet-5",
+            name: "Claude Sonnet 5",
+            reasoning: false,
+            input: ["text"],
+            maxTokens: 128_000,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          },
+          {
+            id: "claude-vision-sonnet",
+            name: "Claude Vision Sonnet",
+            reasoning: false,
+            input: ["text", "image"],
+            maxTokens: 128_000,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          },
+          {
+            id: "claude-sonnet-5-5",
+            name: "Claude Sonnet 5.5",
+            reasoning: false,
+            input: ["text"],
+            maxTokens: 128_000,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          },
+          {
+            id: "claude-fable-5-1",
+            name: "Claude Fable 5.1",
+            reasoning: false,
+            input: ["text", "image"],
+            maxTokens: 128_000,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          },
         ],
       },
     },
@@ -280,6 +323,51 @@ describe("applyCliModelResolveHookForRun", () => {
       params as Parameters<typeof applyCliModelResolveHookForRun>[0],
     );
     expect(params.model).toBe("claude-opus-5-5");
+    expect(params.modelHasVision).toBe(true);
+  });
+
+  it("resolves a claude-cli context alias before re-deriving vision capability", async () => {
+    // `sonnet` is the claude-cli shorthand for claude-sonnet-5-5; the catalog row
+    // for the alias target is text-only, so a stale vision grant must be cleared.
+    stubHookRunner({
+      hasBeforeModelResolve: true,
+      override: { providerOverride: "anthropic", modelOverride: "sonnet" },
+    });
+    const params = { ...BASE_PARAMS, config: VISION_CATALOG_CONFIG, modelHasVision: true };
+    await applyCliModelResolveHookForRun(
+      params as Parameters<typeof applyCliModelResolveHookForRun>[0],
+    );
+    expect(params.model).toBe("sonnet");
+    expect(params.modelHasVision).toBe(false);
+  });
+
+  it("grants vision through an alias whose catalog target supports images", async () => {
+    // `fable` resolves to claude-fable-5-1, which carries image input; routing
+    // from a text-only model through the alias must grant vision.
+    stubHookRunner({
+      hasBeforeModelResolve: true,
+      override: { providerOverride: "anthropic", modelOverride: "fable" },
+    });
+    const params = { ...BASE_PARAMS, config: VISION_CATALOG_CONFIG, modelHasVision: false };
+    await applyCliModelResolveHookForRun(
+      params as Parameters<typeof applyCliModelResolveHookForRun>[0],
+    );
+    expect(params.model).toBe("fable");
+    expect(params.modelHasVision).toBe(true);
+  });
+
+  it("keeps the caller vision capability when an alias target has no catalog entry", async () => {
+    // opus-4-6 resolves to claude-opus-4-6, which is not in the test catalog:
+    // no entry may overturn the caller's derived capability.
+    stubHookRunner({
+      hasBeforeModelResolve: true,
+      override: { providerOverride: "anthropic", modelOverride: "opus-4-6" },
+    });
+    const params = { ...BASE_PARAMS, config: VISION_CATALOG_CONFIG, modelHasVision: true };
+    await applyCliModelResolveHookForRun(
+      params as Parameters<typeof applyCliModelResolveHookForRun>[0],
+    );
+    expect(params.model).toBe("opus-4-6");
     expect(params.modelHasVision).toBe(true);
   });
 });
