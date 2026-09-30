@@ -364,6 +364,8 @@ describe("run-oxlint", () => {
     { extraArgs: ["scripts/unmeasured.mts"], bounded: false },
   ])("passes batch admission to every child (bounded=$bounded)", ({ extraArgs, bounded }) => {
     const cwd = createTempDir("openclaw-oxlint-batch-budget-");
+    // The batch must acquire its own fixture lock, not an ancestor checkout lock.
+    mkdirSync(join(cwd, ".git"));
     for (const directory of ["src/a", "src/b", "scripts"]) {
       mkdirSync(join(cwd, directory), { recursive: true });
     }
@@ -404,6 +406,7 @@ describe("run-oxlint", () => {
     "retains the canonical budget after file selection (splitCore=%s)",
     (splitCore) => {
       const cwd = createTempDir("openclaw-oxlint-file-budget-");
+      mkdirSync(join(cwd, ".git"));
       for (const directory of ["agents", "b", "c", "d", "e", "gateway"]) {
         mkdirSync(join(cwd, "src", directory), { recursive: true });
       }
@@ -954,6 +957,7 @@ describe("run-oxlint", () => {
     "records every native lint shard after an ordinary failure without hiding its exit",
     () => {
       const cwd = createTempDir("openclaw-oxlint-evidence-");
+      mkdirSync(join(cwd, ".git"));
       for (const directory of ["src/alpha", "ui", "packages", "scripts", "config/tsconfig"]) {
         mkdirSync(join(cwd, directory), { recursive: true });
       }
@@ -1039,6 +1043,7 @@ describe("run-oxlint", () => {
     "partitions explicit extension stripes through the CLI on nonserial hosts",
     () => {
       const cwd = createTempDir("openclaw-oxlint-cli-stripes-");
+      mkdirSync(join(cwd, ".git"));
       const receivedArgsPath = join(cwd, "received-args.jsonl");
       for (const directory of PLUGIN_FIXTURE_DIRECTORIES) {
         mkdirSync(join(cwd, "extensions", directory), { recursive: true });

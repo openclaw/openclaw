@@ -5142,13 +5142,7 @@ jobs:
         run: |
           set -euo pipefail
           source .ci-harness/scripts/lib/swift-toolchain.sh
-          simulator_id="$(prepare_ios_test_simulator)"
-          if [[ -x ./scripts/install-simslim.sh && -x ./scripts/ios-simulator-prepare.sh ]]; then
-            simslim_dir="$RUNNER_TEMP/openclaw-simslim"
-            ./scripts/install-simslim.sh "$simslim_dir"
-            OPENCLAW_CI_SIMSLIM_BINARY="$simslim_dir/simslim" \
-              ./scripts/ios-simulator-prepare.sh "$simulator_id"
-          fi
+          simulator_id="$(select_ios_test_simulator)"
           echo "IOS_SIMULATOR_ID=$simulator_id" >> "$GITHUB_ENV"
           if [[ "$IOS_CI_PHASE" == "smoke" || "$IOS_MAIN_TIER" == "true" ]]; then
             # Apply to the embedded Watch build and the later XCTest build too.
@@ -5165,7 +5159,52 @@ jobs:
             # Full manual validation retains the universal simulator build.
             export IOS_DEST="platform=iOS Simulator,id=${IOS_SIMULATOR_ID:?}"
           fi
-          pnpm ios:build
+          python3 - <<'PY'
+          import os
+          import signal
+          import subprocess
+          import time
+
+          def interrupted(signum, _frame):
+              raise SystemExit(128 + signum)
+
+          signal.signal(signal.SIGTERM, interrupted)
+          preparation = None
+          log_path = os.path.join(os.environ["RUNNER_TEMP"], "ios-simulator-prepare.log")
+          started = time.monotonic()
+          with open(log_path, "w+") as log:
+              try:
+                  if os.environ.get("IOS_SIMULATOR_ID"):
+                      preparation = subprocess.Popen(["/bin/bash", "-euo", "pipefail", "-c", '''
+          xcrun simctl bootstatus "$IOS_SIMULATOR_ID" -b
+          if [[ -x ./scripts/install-simslim.sh && -x ./scripts/ios-simulator-prepare.sh ]]; then
+            simslim_dir="$RUNNER_TEMP/openclaw-simslim"
+            ./scripts/install-simslim.sh "$simslim_dir"
+            OPENCLAW_CI_SIMSLIM_BINARY="$simslim_dir/simslim" \
+              ./scripts/ios-simulator-prepare.sh "$IOS_SIMULATOR_ID"
+          fi
+          '''], stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+                  subprocess.run(["pnpm", "ios:build"], check=True)
+                  print(f"iOS app build: {time.monotonic() - started:.1f}s", flush=True)
+                  if preparation:
+                      # Bound the join even if boot or SimSlim never completes.
+                      result = preparation.wait(timeout=max(1, 600 - (time.monotonic() - started)))
+                      if result:
+                          raise SystemExit(result if result > 0 else 1)
+              except subprocess.TimeoutExpired:
+                  print("::error::iOS simulator preparation exceeded 600s", flush=True)
+                  raise SystemExit(1)
+              finally:
+                  if preparation and preparation.poll() is None:
+                      try:
+                          os.killpg(preparation.pid, signal.SIGKILL)
+                      except ProcessLookupError:
+                          pass
+                      preparation.wait()
+                  log.seek(0)
+                  print(log.read(), flush=True)
+                  print(f"iOS build and simulator preparation: {time.monotonic() - started:.1f}s", flush=True)
+          PY
 
       - name: Build iOS app (Release)
         if: matrix.phase == 'release'

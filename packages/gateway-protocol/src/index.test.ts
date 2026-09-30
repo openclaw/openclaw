@@ -210,6 +210,7 @@ describe("lazy protocol validators", () => {
       ttlMinutes: 30,
       archived: false,
       pinned: true,
+      snoozedUntil: 1_800_000_000_000,
       unread: true,
       contextWindow: "1m",
       thinkingLevel: "high",

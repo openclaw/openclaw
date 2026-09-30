@@ -130,6 +130,7 @@ import {
   resolveSessionDeliveryRoute,
 } from "./session-delivery.js";
 import { createReplySessionEntryHandle } from "./session-entry-handle.js";
+import { projectSessionEntryLifecycleCarry } from "./session-entry-lifecycle-carry.js";
 import {
   buildSessionEndHookPayload,
   buildSessionStartHookPayload,
@@ -909,11 +910,9 @@ async function initSessionStateAttemptLocked(
     sessionStartedAt: isNewSession
       ? now
       : (baseEntry?.sessionStartedAt ?? lifecycleTimestamps.sessionStartedAt),
-    lastInteractionAt: isSystemEvent ? baseEntry?.lastInteractionAt : now,
-    agentStatus: isSystemEvent ? baseEntry?.agentStatus : undefined,
+    ...projectSessionEntryLifecycleCarry({ entry, baseEntry, isSystemEvent, now }),
     systemSent,
     abortedLastRun: recoveredTerminalEntry ? undefined : abortedLastRun,
-    pinnedAt: entry?.pinnedAt,
     usageFamilyKey,
     usageFamilySessionIds,
     previousSessionId: baseEntry?.previousSessionId,

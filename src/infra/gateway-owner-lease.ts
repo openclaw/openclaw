@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
 import type { DatabaseSync } from "node:sqlite";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import type { OpenClawStateSchemaReadAdmission } from "../state/openclaw-state-db-contract.js";
@@ -9,114 +8,31 @@ import {
   withExistingOpenClawStateDatabaseCurrentReadOnly,
   withExistingOpenClawStateDatabaseReadOnly,
 } from "../state/openclaw-state-db-readonly.js";
-import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import { withOpenClawStateStartupMigrationCheckpointDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { startOpenClawStateLeaseHeartbeat } from "../state/openclaw-state-lease-heartbeat.js";
 import {
   acquireOpenClawStateLeaseInTransaction,
-  readOpenClawStateLease,
   reclaimDeadOpenClawStateLeaseInTransaction,
   releaseOpenClawStateLeaseInTransaction,
 } from "../state/openclaw-state-lease-store.js";
 import { assertOpenClawStateWriteAllowed } from "../state/openclaw-state-ownership.js";
+import { gatewayOwnerKey, readGatewayOwnerLeaseFromDatabase } from "./gateway-owner-lease.read.js";
+import type {
+  GatewayOwnerLeaseIdentity,
+  GatewayOwnerSupervisor,
+} from "./gateway-owner-lease.types.js";
 import { resolveDiagnosticProcessEnv } from "./process-env.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import { STARTUP_MIGRATION_LEASE_TTL_MS } from "./startup-migration-checkpoint.js";
-import {
-  parseStateLeaseProcessOwner,
-  readStateLeaseProcessOwnerStatus,
-  type StateLeaseProcessOwner,
-} from "./state-lease-process-owner.js";
 
-const gatewayOwnerKey = { scope: "gateway-owner", key: "global" };
 const log = createSubsystemLogger("gateway");
-
-export type GatewayOwnerSupervisor = {
-  kind: "launchd" | "systemd" | "schtasks" | "external";
-  name: string | null;
-};
-
-export type GatewayOwnerLeaseIdentity = StateLeaseProcessOwner & {
-  owner: string;
-  port: number;
-  mode: "foreground" | "supervised";
-  supervisor: GatewayOwnerSupervisor | null;
-  state: "live" | "dead" | "unknown";
-  expired: boolean;
-};
 
 export type GatewayOwnerLease = {
   owner: string;
   ready: Promise<void>;
   release: () => Promise<void>;
 };
-
-function parseSupervisor(value: unknown): GatewayOwnerSupervisor | null {
-  if (value === null) {
-    return null;
-  }
-  if (
-    !isRecord(value) ||
-    (value.kind !== "launchd" &&
-      value.kind !== "systemd" &&
-      value.kind !== "schtasks" &&
-      value.kind !== "external") ||
-    (value.name !== null && (typeof value.name !== "string" || !value.name.trim()))
-  ) {
-    throw new Error("Gateway owner lease supervisor could not be verified");
-  }
-  return { kind: value.kind, name: value.name };
-}
-
-/** Read through the caller's admitted connection when ownership guards a write. */
-export function readGatewayOwnerLeaseFromDatabase(
-  db: DatabaseSync,
-  port?: number,
-): GatewayOwnerLeaseIdentity | undefined {
-  if (!tableExists(db, "state_leases")) {
-    return undefined;
-  }
-  const row = readOpenClawStateLease(db, gatewayOwnerKey);
-  if (!row) {
-    return undefined;
-  }
-  const processOwner = parseStateLeaseProcessOwner(row.payloadJson);
-  let payload: unknown;
-  try {
-    payload = row.payloadJson ? JSON.parse(row.payloadJson) : null;
-  } catch {
-    payload = null;
-  }
-  if (
-    !processOwner ||
-    !isRecord(payload) ||
-    typeof payload.port !== "number" ||
-    !Number.isInteger(payload.port) ||
-    payload.port <= 0 ||
-    payload.port > 65535 ||
-    (payload.mode !== "foreground" && payload.mode !== "supervised")
-  ) {
-    throw new Error("Gateway owner lease identity could not be verified");
-  }
-  if (port !== undefined && payload.port !== port) {
-    return undefined;
-  }
-  const supervisor = parseSupervisor(payload.supervisor);
-  if ((payload.mode === "foreground") !== (supervisor === null)) {
-    throw new Error("Gateway owner lease supervisor does not match its listener mode");
-  }
-  return {
-    ...processOwner,
-    owner: row.owner,
-    port: payload.port,
-    mode: payload.mode,
-    supervisor,
-    // Expiry cannot revoke the separate physical Gateway coordinator.
-    state: readStateLeaseProcessOwnerStatus(processOwner),
-    expired: row.expiresAt === null || row.expiresAt <= Date.now(),
-  };
-}
 
 export function readGatewayOwnerLease(
   params: {

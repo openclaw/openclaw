@@ -6,9 +6,10 @@ import { isNonFatalSystemdInstallProbeError } from "../daemon/systemd.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { confirm, select } from "./configure.shared.js";
-import { buildGatewayInstallPlan, gatewayInstallErrorHint } from "./daemon-install-helpers.js";
+import { gatewayInstallErrorHint } from "./daemon-install-helpers.js";
 import { GATEWAY_DAEMON_RUNTIME_OPTIONS, type GatewayDaemonRuntime } from "./daemon-runtime.js";
 import { resolveGatewayInstallToken } from "./gateway-install-token.js";
+import { prepareGatewayServiceInstall } from "./gateway-service-setup.js";
 import { resolveGatewaySetupRuntime } from "./gateway-setup-runtime.js";
 import { guardCancel } from "./onboard-helpers.js";
 import { ensureSystemdUserLingerInteractive } from "./systemd-linger.js";
@@ -111,26 +112,17 @@ export async function maybeInstallDaemon(params: {
           progress.setLabel("Gateway service install blocked.");
           return;
         }
-        const plan = await buildGatewayInstallPlan({
-          env: selection.env,
+        const installation = await prepareGatewayServiceInstall({
+          service,
+          selection,
           port: params.port,
-          runtime: selection.runtime,
-          runtimeExplicit: selection.runtimeExplicit,
-          runtimePath: selection.runtimePath,
-          pinnedRuntimePath: selection.pinnedRuntimePath,
           existingCommand,
           warn: (message, title) => note(message, title),
           config: cfg,
         });
-
         progress.setLabel("Installing Gateway service…");
         try {
-          await service.install({
-            env: process.env,
-            stdout: process.stdout,
-            ...plan,
-            runtimePinUpdate: selection.runtimePinUpdate,
-          });
+          await installation.install();
           progress.setLabel("Gateway service installed.");
         } catch (err) {
           installError = formatErrorMessage(err);

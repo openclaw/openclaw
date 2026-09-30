@@ -108,6 +108,14 @@ Finalization reads that receipt through the read worker and rechecks its current
 owner before inspecting and adopting the stopped service. Receipt encoding,
 restart policy, and older-driver behavior are unchanged.
 
+After state-owner contention, Doctor observes the serving Gateway lease through
+the existing read worker using its captured installation path and environment.
+This finite read retains Doctor's private schema admission and never bootstraps a
+missing or older database. It refreshes process liveness and rechecks cancellation
+and caller authority after the read settles, before considering a service stop.
+Lease acquisition, transactional checks, and the later foreground retry loop
+retain their synchronous owners.
+
 The installed updater still owns its first upgrade hop. Shipped synchronous
 ledger APIs, effect guards, general command progress, and other finalization writes
 remain with their existing owners until their separate worker cutovers.

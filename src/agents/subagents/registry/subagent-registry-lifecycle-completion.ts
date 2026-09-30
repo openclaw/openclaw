@@ -655,7 +655,7 @@ export async function completeSubagentRunAttempt(
     // Only the canonical state/capture transition is serialized. Cleanup
     // remains re-entrant so a stalled browser close cannot strand a duplicate callback.
     releaseCompletionLock();
-    collectorSession?.release();
+    await collectorSession?.release();
   }
 
   if (!entry) {

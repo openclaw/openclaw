@@ -195,6 +195,21 @@ export function createControlUiSessionFixtures(
       );
       set("pinned", next.pinnedAt !== undefined);
     }
+    // Mirror the Gateway: archive and pin clear a snooze; null wakes; a new wake time restamps.
+    if (Object.hasOwn(fields, "snoozedUntil")) {
+      const snoozedUntil = fields.snoozedUntil;
+      if (typeof snoozedUntil === "number" && next.snoozedUntil !== snoozedUntil) {
+        set("snoozedUntil", snoozedUntil);
+        set("snoozedAt", ++timestamp);
+      } else if (snoozedUntil === null) {
+        set("snoozedUntil", undefined);
+        set("snoozedAt", undefined);
+      }
+    }
+    if (fields.archived === true || fields.pinned === true) {
+      set("snoozedUntil", undefined);
+      set("snoozedAt", undefined);
+    }
     // Advance the fixture's synthetic timeline without making its later events stale.
     const latestUpdatedAt = Math.max(
       0,
