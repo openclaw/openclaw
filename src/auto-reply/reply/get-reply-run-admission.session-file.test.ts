@@ -169,6 +169,8 @@ describe("prepared reply transcript identity", () => {
         params: { ...context.params, sessionKey: undefined },
       });
       expect(prepared.kind).toBe("ready");
+      release.resolve();
+      await blocker;
       expect(await result).toEqual([
         {
           status: "rejected",
