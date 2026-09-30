@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import {
   link,
@@ -19,6 +20,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { createNodeEvalArgs } from "../test-utils/node-process.js";
+import { formatErrorMessageWithCode } from "./errors.js";
 import {
   SQLITE_WORKER_MAX_RESULT_BYTES,
   type SqliteWorkerReply,
@@ -29,6 +31,7 @@ import {
   readWorkerRows as read,
 } from "./sqlite-worker-fixture.test-support.js";
 import {
+  openSharedStateSqliteWorkerCleanupStore,
   openSharedStateSqliteWorkerStore,
   closeUnclaimedSharedStateSqliteWorkers,
   hasUnclaimedSharedStateSqliteCleanup,
@@ -43,7 +46,7 @@ vi.mock("node:os", async (importOriginal) => ({
   availableParallelism: () => 32,
 }));
 
-const { stores, tempDirs, databasePath, open } = useSqliteWorkerStoreFixture(
+const { stores, tempDirs, databasePath, open, openOwned } = useSqliteWorkerStoreFixture(
   "openclaw-sqlite-worker-store-",
 );
 
@@ -66,6 +69,29 @@ async function expectRejectedOpen(
 const nodeIt = process.versions.bun ? it.skip : it;
 
 describe("SQLite worker store", () => {
+  it("preserves nested native failures while opening a cleanup store", async () => {
+    const file = databasePath();
+    await writeFile(file, "");
+
+    const failure: unknown = await openSharedStateSqliteWorkerCleanupStore(
+      {
+        moduleUrl: new URL("./sqlite-worker-open-failure.test-support.ts", import.meta.url),
+        databasePath: file,
+        existingOnly: true,
+      },
+      {
+        environment: { OPENCLAW_STATE_DIR: path.dirname(file) },
+      },
+    ).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect(failure).toMatchObject({
+      message: "Fixture native open failed",
+      cause: { message: "Fixture native open detail", code: "SQLITE_CANTOPEN" },
+      errors: [{ message: "Fixture native open detail", code: "SQLITE_CANTOPEN" }],
+    });
+  });
+
   it("registers storage-worker CPU sources until native close", async () => {
     const initial = getTrackedWorkerCpuSources();
     const store = await open(databasePath());
@@ -723,22 +749,52 @@ describe("SQLite worker store", () => {
     ]);
   });
 
-  it("surfaces native-close cleanup failure and permits explicit recovery of committed data", async () => {
-    const file = databasePath();
-    const store = await open(file);
-    const receipt = await append(store, "preserved");
-    await store.execute({ type: "failClose", input: undefined });
-    const closed = store.close();
-    stores.delete(store);
-    await expect(closed).rejects.toThrow("Fixture native database closed with a cleanup failure");
+  it.each([
+    { owner: "agent", aggregate: false },
+    { owner: "agent", aggregate: true },
+    { owner: "shared", aggregate: true },
+  ] as const)(
+    "preserves $owner close diagnostics and committed data (aggregate: $aggregate)",
+    async ({ owner, aggregate }) => {
+      const file = databasePath();
+      const store = await openOwned(file, owner);
+      try {
+        const receipt = await append(store, "preserved");
+        await store.execute({ type: "failClose", input: { aggregate } });
+        const failure: unknown = await store.close().catch((error: unknown) => error);
+        stores.delete(store);
+        assert(failure instanceof Error);
+        const nativeFailure = aggregate ? failure.cause : failure;
+        assert(nativeFailure instanceof Error);
+        expect(nativeFailure.message).toBe("Fixture native database closed with a cleanup failure");
+        expect(nativeFailure.cause).toMatchObject({
+          message: "Fixture native close detail Authorization: Bearer synthetic-close-secret",
+          code: "SQLITE_BUSY",
+          errcode: 5,
+          errno: -16,
+        });
+        if (aggregate) {
+          assert(failure instanceof AggregateError);
+          expect(failure.errors).toHaveLength(2);
+          expect(failure.errors[0]).toBe(nativeFailure);
+          expect(failure.errors[1]).toBe(nativeFailure.cause);
+        }
+        const displayed = formatErrorMessageWithCode(failure);
+        expect(displayed).toContain("Fixture native close detail");
+        expect(displayed).toContain("SQLITE_BUSY");
+        expect(displayed).not.toContain("synthetic-close-secret");
 
-    const recovered = await open(file);
-    expect(await read(recovered)).toEqual(["preserved"]);
-    const recoveredReceipt = await append(recovered, "after recovery");
-    expect(recoveredReceipt.actor).not.toBe(receipt.actor);
-    expect(recoveredReceipt.writes).toBe(1);
-    expect(await read(recovered)).toEqual(["preserved", "after recovery"]);
-  });
+        const recovered = await open(file);
+        expect(await read(recovered)).toEqual(["preserved"]);
+        const recoveredReceipt = await append(recovered, "after recovery");
+        expect(recoveredReceipt.actor).not.toBe(receipt.actor);
+        expect(recoveredReceipt.writes).toBe(1);
+        expect(await read(recovered)).toEqual(["preserved", "after recovery"]);
+      } finally {
+        await store.close();
+      }
+    },
+  );
 
   it.each([
     { reject: false, owner: "client" },

@@ -51,6 +51,7 @@ import {
   isCanonicalNodeTestConfig,
   isRuntimeTestFileIncluded,
   SOURCE_CHANNEL_TEST_POLICY,
+  type CompactNodeTestShard,
   type NodeTestShardGroup,
   type RuntimeTestSelection,
 } from "./ci-node-test-plan.mts";
@@ -223,6 +224,7 @@ const MAX_CHANGED_EXTENSION_FALLBACK_JOBS = 50;
 // processes starve each other on 4-vCPU runners and push otherwise healthy
 // integration tests past the global timeout.
 const SERIAL_CHANGED_TARGET_RE = /^extensions\/memory-core\//u;
+const CHANGED_SYSTEM_RUNTIME_GROUP_RE = /^core-runtime-infra-system-runtime(?:-hosted-\d+)?$/u;
 const BOUNDARY_NODE_TEST_CONFIG = "test/vitest/vitest.boundary.config.ts";
 const TUI_PTY_ASSERTION_TEST = "src/tui/tui-pty-harness-assertion-test-support.test.ts";
 const publicPluginSdkEntrySources = Object.values(
@@ -670,6 +672,28 @@ function createChangedTargetShards(
   });
 }
 
+function serializeChangedSystemRuntimeShards(
+  shards: readonly CompactNodeTestShard[],
+): CompactNodeTestShard[] {
+  return shards.map((shard) => {
+    if (!shard.groups?.some((group) => CHANGED_SYSTEM_RUNTIME_GROUP_RE.test(group.shard_name))) {
+      return shard;
+    }
+    return {
+      ...shard,
+      planConcurrency: 1,
+      groups: shard.groups.map((group) =>
+        CHANGED_SYSTEM_RUNTIME_GROUP_RE.test(group.shard_name)
+          ? {
+              ...group,
+              env: { ...group.env, OPENCLAW_VITEST_MAX_WORKERS: "2" },
+            }
+          : group,
+      ),
+    };
+  });
+}
+
 /** Narrow canonical envelopes without changing their workers, routing, or isolation. */
 function boundChangedNodeRows(
   shards: ChangedNodeTestShard[],
@@ -1052,8 +1076,9 @@ export function createChangedNodeTestShards(
   if (canonicalShards === null) {
     return fallback("test targets lack canonical shard metadata");
   }
+  const changedCanonicalShards = serializeChangedSystemRuntimeShards(canonicalShards);
   const artifactBoundaryOwned =
-    changedBuildArtifacts || canonicalShards.some((shard) => shard.requiresDist);
+    changedBuildArtifacts || changedCanonicalShards.some((shard) => shard.requiresDist);
   const boundaryShards = artifactBoundaryOwned ? [] : [createBoundaryShard()];
   const channelTargets = new Set(
     options.dedicatedBuildArtifacts === false
@@ -1121,7 +1146,7 @@ export function createChangedNodeTestShards(
 
   const otherShards = [
     ...channelShards,
-    ...canonicalShards.map((shard) => Object.assign({}, shard, { configs: [] })),
+    ...changedCanonicalShards.map((shard) => Object.assign({}, shard, { configs: [] })),
     ...packChangedExtensionConfigShards(
       createChangedExtensionConfigShards(
         resolveChangedExtensionRoots(

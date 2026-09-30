@@ -23,6 +23,7 @@ export function runSqliteWorkerClientOperation<Operations extends SqliteWorkerOp
   track: (pending: Promise<void>) => () => void,
   assertCurrent?: (commandType: PropertyKey) => void,
   createAdmission?: SqliteWorkerAdmissionFactory,
+  includeOrdinaryErrors?: true,
 ): Promise<T> {
   if (!client || client.sealed) {
     return Promise.reject(new SqliteWorkerError("SQLite worker store is closed", "closed"));
@@ -31,6 +32,7 @@ export function runSqliteWorkerClientOperation<Operations extends SqliteWorkerOp
     maintenanceScope: getOpenClawDatabaseMaintenanceScope(),
     createAdmission,
     assertCurrent,
+    includeOrdinaryErrors,
     active: true,
     pending: new Set(),
     ...(stateContext ? { stateContext: captureSqliteWorkerStateContext(stateContext) } : {}),

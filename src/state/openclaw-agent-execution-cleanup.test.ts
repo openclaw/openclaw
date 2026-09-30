@@ -49,7 +49,7 @@ vi.mock("./openclaw-state-worker-store.js", () => ({
   },
 }));
 vi.mock("../infra/sqlite-worker-store.js", () => ({
-  runSqliteWorkerStoreOperation: async (
+  runSqliteWorkerStoreCleanupOperation: async (
     store: SqliteWorkerStore<
       Pick<OpenClawStateWorkerCleanupOperations, "agentDatabases.releaseExitedLease">
     >,

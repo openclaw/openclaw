@@ -61,7 +61,7 @@ export type FixtureOperations = {
   takeReplyOwnership: { input: undefined; output: ReplyOwnership[] };
   commitThenExit: { input: { value: string }; output: never };
   commitUnserializable: { input: { value: string }; output: symbol };
-  failClose: { input: undefined; output: undefined };
+  failClose: { input: { aggregate: boolean } | undefined; output: undefined };
   delayClose: { input: { markerPath: string; reject: boolean }; output: undefined };
   illegalAsync: {
     input: { value: string; gatePath: string; reject: boolean };
@@ -123,7 +123,7 @@ function createFixtureBackend(
   let writes = 0;
   let prepared = false;
   const preparationOwners: (SqliteReaderOwner | undefined)[] = [];
-  let failClose = false;
+  let failClose: { aggregate: boolean } | undefined;
   let delayedClose: { markerPath: string; reject: boolean } | undefined;
   function append(value: string): Receipt {
     runSqliteImmediateTransactionSync(db, () => {
@@ -154,7 +154,16 @@ function createFixtureBackend(
     clearNodeSqliteKyselyCacheForDatabase(db);
     db.close();
     if (failClose) {
-      throw new Error("Fixture native database closed with a cleanup failure");
+      const cause = Object.assign(
+        new Error("Fixture native close detail Authorization: Bearer synthetic-close-secret"),
+        { code: "SQLITE_BUSY", errcode: 5, errno: -16 },
+      );
+      const failure = new Error("Fixture native database closed with a cleanup failure", { cause });
+      throw failClose.aggregate
+        ? new AggregateError([failure, cause], "Fixture database cleanup aggregate", {
+            cause: failure,
+          })
+        : failure;
     }
   }
   return {
@@ -188,7 +197,7 @@ function createFixtureBackend(
         return waitForFile(command.input.gatePath).then(() => append(command.input.value));
       }
       if (command.type === "failClose") {
-        failClose = true;
+        failClose = command.input ?? { aggregate: false };
         return undefined;
       }
       if (command.type === "read") {

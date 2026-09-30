@@ -1814,8 +1814,14 @@ later requests; genuine native-close and lease-cleanup failures retain their
 existing retry custody. The next admitted agent operation retries that cleanup
 before opening a replacement generation, so transient lifecycle contention does
 not permanently disable history eviction. Cleanup rechecks the original database
-identity and request authority; it never replays the failed operation. Explicit
-resource revocation remains terminal. Schemas, retention, and update behavior are unchanged.
+identity and request authority; it never replays the failed operation. A failed
+idle close stays with its owning agent outside the existing single reusable-idle
+slot, so healthy agents continue normal idle-worker reuse without adopting or
+retrying that failure. Readiness reports the retained failure until that owner
+safely closes, while the established optional-agent policy keeps isolatable
+failures diagnostic.
+Explicit resource revocation remains terminal. Schemas, retention, and update
+behavior are unchanged.
 Successful pooled-agent close relays its recorded WAL checkpoint after native and
 lease cleanup settle. The original generation and physical database identities
 fence that observation, and the budget owner releases deferral only for a newer

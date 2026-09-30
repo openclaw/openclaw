@@ -56,6 +56,8 @@ export type SqliteWorkerRequest = {
   id: number;
   actor: number;
   stateContext?: SqliteWorkerStateContext;
+  /** Private worker transport policy; public store contexts cannot select error projection. */
+  includeOrdinaryErrors?: true;
   operationAdmission?: MessagePort;
   stateDatabasePath?: string;
 } & (

@@ -192,7 +192,13 @@ function decodeSqliteWorkerReplyValue(
     }
     return {
       type: "continue",
-      request: { type: "execute-frame", id: job.request.id, actor: job.request.actor, input },
+      request: {
+        type: "execute-frame",
+        id: job.request.id,
+        actor: job.request.actor,
+        input,
+        ...(job.request.includeOrdinaryErrors ? { includeOrdinaryErrors: true } : {}),
+      },
     };
   }
   if (job.inputTransfer) {
@@ -260,14 +266,22 @@ function decodeSqliteWorkerReplyError(
     name: error.name,
     ...(error.code === undefined ? {} : { code: error.code }),
   });
-  if (job.request.stateContext && error.code !== "outcome-unknown" && error.sharedState) {
+  if (
+    (job.request.stateContext ||
+      job.request.type === "close" ||
+      job.request.includeOrdinaryErrors) &&
+    error.code !== "outcome-unknown" &&
+    error.sharedState
+  ) {
     retainOpenClawStateWorkerErrorPayload(failure, error.sharedState);
   }
   return failure;
 }
 
 function decodeSqliteWorkerCleanupError(payload: OpenClawStateWorkerErrorPayload): Error {
-  const failure = new Error("SQLite worker native cleanup failed");
+  const failure = Object.assign(new Error("SQLite coordinator cleanup failed"), {
+    name: "SqliteCoordinatorError",
+  });
   retainOpenClawStateWorkerErrorPayload(failure, payload);
   return hydrateOpenClawStateWorkerError(failure, { includeOrdinary: true });
 }

@@ -131,8 +131,8 @@ vi.mock(${JSON.stringify(import.meta.resolve("../src/infra/sqlite-worker-identit
     canonicalPath,
   }),
 }));
-vi.mock(${JSON.stringify(import.meta.resolve("../src/infra/sqlite-worker-store.ts"))}, () => ({
-  openSharedStateSqliteWorkerStore: async (
+vi.mock(${JSON.stringify(import.meta.resolve("../src/infra/sqlite-worker-store.ts"))}, () => {
+  const openStore = async (
     options: { databasePath: string },
     context: SqliteWorkerStateContext,
   ) => {
@@ -146,13 +146,19 @@ vi.mock(${JSON.stringify(import.meta.resolve("../src/infra/sqlite-worker-store.t
       close: edge.close,
     };
     return store;
-  },
-  runSqliteWorkerStoreOperation: async (
+  };
+  const runOperation = async (
     store: SqliteWorkerStore<OpenClawStateWorkerCleanupOperations>,
     operation: (scope: SqliteWorkerStore<OpenClawStateWorkerCleanupOperations>) => Promise<void>,
     context: SqliteWorkerStateContext,
-  ) => runWithSqliteWorkerStateContext(context, () => operation(store)),
-}));
+  ) => runWithSqliteWorkerStateContext(context, () => operation(store));
+  return {
+    openSharedStateSqliteWorkerStore: openStore,
+    openSharedStateSqliteWorkerCleanupStore: openStore,
+    runSqliteWorkerStoreOperation: runOperation,
+    runSqliteWorkerStoreCleanupOperation: runOperation,
+  };
+});
 
 function inspectRepairPolicy(phase: string, databasePath: string) {
   let error: unknown;

@@ -7,6 +7,7 @@ import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 import type { SqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import {
   openSharedStateSqliteWorkerStore,
+  openSharedStateSqliteWorkerCleanupStore,
   closeUnclaimedSharedStateSqliteWorkers,
   hasUnclaimedSharedStateSqliteCleanup,
   isSqliteWorkerStoreAvailable,
@@ -438,7 +439,7 @@ function createSharedStateWorkerOwner() {
     retainOperation,
     // Source and bundled callers must share the owner's backend URL.
     openCleanup(databasePath: string, context: SqliteWorkerStateContext, assertOwned: () => void) {
-      return openSharedStateSqliteWorkerStore<OpenClawStateWorkerCleanupOperations>(
+      return openSharedStateSqliteWorkerCleanupStore<OpenClawStateWorkerCleanupOperations>(
         { ...captureRuntimeWorkerSource(moduleUrl), databasePath, existingOnly: true },
         context,
         assertOwned,

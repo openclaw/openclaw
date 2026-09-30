@@ -2,6 +2,10 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { resolveTestGitCommits } from "../../.github/actions/git-owner/test-prerequisites.mjs";
 import { resolveShardPlans } from "../../scripts/ci-run-node-test-shard.mts";
+import {
+  createChangedNodeTestShards as createChangedNodeTestShardsWithSmoke,
+  resolveChangedNodeTestTargets,
+} from "../../scripts/lib/ci-changed-node-test-plan.mts";
 import { encodeNodeTestGroups } from "../../scripts/lib/ci-node-test-groups-codec.mts";
 import {
   createNodeTestShardBundles,
@@ -15,6 +19,45 @@ import {
 } from "./ci-changed-node-test-plan.test-support.js";
 
 describe("CI changed Node test plan", () => {
+  it("keeps system-runtime process proofs serial beside SQLite worker coverage", () => {
+    const changedPaths = [
+      "src/infra/sqlite-worker-store.ts",
+      "src/state/openclaw-agent-execution.ts",
+    ];
+    const selectedTestTargets = resolveChangedNodeTestTargets(changedPaths, {
+      includePrExemptRuntimeTests: false,
+      includeReleaseOnlyRuntimeTests: false,
+    });
+    const shards = expectDefined(
+      createChangedNodeTestShardsWithSmoke(changedPaths, {
+        compactNodeJobCap: 130,
+        dedicatedBuildArtifacts: false,
+        dedicatedMaxLinesRatchet: true,
+        dedicatedNativeChecks: { android: false, ios: false, macos: false },
+        dedicatedUiE2e: true,
+        dedicatedUiTests: true,
+        includePrExemptRuntimeTests: false,
+        includeReleaseOnlyRuntimeTests: false,
+        runnerBackend: "hybrid",
+        selectedTestTargets,
+      }),
+      "changed process and storage plan",
+    );
+    const systemRuntime = expectDefined(
+      shards
+        .flatMap((job) => job.groups ?? [])
+        .find((group) => group.shard_name.startsWith("core-runtime-infra-system-runtime-hosted-")),
+      "system-runtime process owner",
+    );
+    const job = expectDefined(
+      shards.find((candidate) => candidate.groups?.includes(systemRuntime)),
+      "system-runtime process job",
+    );
+
+    expect(systemRuntime.env?.OPENCLAW_VITEST_MAX_WORKERS).toBe("2");
+    expect(job.planConcurrency).toBe(1);
+  });
+
   it.each(["blacksmith", "github", "hybrid"])(
     "retains the complete paired tooling descriptor and job metadata (%s)",
     (runnerBackend) => {

@@ -492,6 +492,39 @@ describe("gateway probe endpoints", () => {
     });
   });
 
+  it("keeps /readyz healthy when agent cleanup is retained", async () => {
+    const cleanup = {
+      agentId: "main",
+      reason: "Agent native cleanup failed: database is locked",
+      repairHint: "Restart the Gateway if cleanup remains blocked.",
+    };
+    const channelManager = {
+      getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
+      getAutostartSuppression: () => null,
+      isAmbientAutostartSuppressed: () => false,
+    } as unknown as ChannelManager;
+    const getReadiness = createReadinessChecker({
+      channelManager,
+      startedAt: Date.now(),
+      getAgentDatabaseCleanupFailures: () => [cleanup],
+    });
+
+    await withGatewayServer({
+      prefix: "probe-agent-cleanup",
+      resolvedAuth: AUTH_NONE,
+      overrides: { getReadiness, openAiChatCompletionsEnabled: true },
+      run: async (server) => {
+        const { res, getBody } = await sendRequest(server, { path: "/readyz" });
+        expect(res.statusCode).toBe(200);
+        expect(JSON.parse(getBody())).toMatchObject({
+          ready: true,
+          failing: [],
+          agentDatabaseCleanup: [cleanup],
+        });
+      },
+    });
+  });
+
   it("returns only readiness state for unauthenticated remote /ready requests", async () => {
     const getReadiness: ReadinessChecker = () => ({
       ready: false,

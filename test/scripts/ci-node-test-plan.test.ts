@@ -3158,7 +3158,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     const entries = [
       ["src/infra/env.test.ts", "core-runtime-infra-env-auth", 170],
       ["src/infra/os-summary.test.ts", "core-runtime-infra-misc-os", 170],
-      ["src/infra/ports-probe.test.ts", "core-runtime-infra-system-runtime", 160],
+      ["src/infra/backoff.test.ts", "core-runtime-infra-core-utils", 160],
       ["src/infra/provider-usage.test.ts", "core-runtime-infra-provider-push", 160],
       ["src/infra/channel-runtime-context.test.ts", "core-runtime-infra-channel-plugin", 150],
       ["src/infra/diagnostic-trace-context.test.ts", "core-runtime-infra-diagnostics-state", 150],

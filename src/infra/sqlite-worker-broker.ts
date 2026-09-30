@@ -234,6 +234,7 @@ export class SqliteWorkerBroker {
               ? { openAdmission: "identity" as const }
               : {}),
           ...(options.existingOnly ? { existingIdentity: key } : {}),
+          ...(options.includeOrdinaryErrors ? { includeOrdinaryErrors: true as const } : {}),
           input,
           ...(options.preparation ? { preparation: options.preparation } : {}),
           ...(runtimeNeedsTypeScriptLoader(modulePath)
@@ -325,6 +326,7 @@ export class SqliteWorkerBroker {
             actor: owned.id,
             input: payload,
             ...(scope?.stateContext ? { stateContext: scope.stateContext } : {}),
+            ...(scope?.includeOrdinaryErrors ? { includeOrdinaryErrors: true as const } : {}),
           },
           sqliteWorkerRequestBytes(payload, scope?.stateContext),
           {
@@ -367,6 +369,7 @@ export class SqliteWorkerBroker {
     stateContext?: SqliteWorkerStateContext,
     assertCurrent?: (commandType: PropertyKey) => void,
     createAdmission?: SqliteWorkerAdmissionFactory,
+    includeOrdinaryErrors?: true,
   ): Promise<T> {
     return runSqliteWorkerClientOperation(
       this.draining ? undefined : this.stores.get(store),
@@ -378,6 +381,7 @@ export class SqliteWorkerBroker {
       },
       assertCurrent,
       createAdmission,
+      includeOrdinaryErrors,
     );
   }
 
@@ -671,6 +675,7 @@ export class SqliteWorkerBroker {
     }
     const error = toErrorObject(reason, "SQLite worker failed");
     slot.failed = new SqliteWorkerError(error.message, "unavailable");
+    slot.failed.cause = error;
     for (const resume of this.waiters.get(slot) ?? []) {
       resume(slot.failed);
     }
