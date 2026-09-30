@@ -64,21 +64,33 @@ function participantHostCapabilities(assertNativeSubagentSpawnAllowed: () => voi
 describe("Codex participant native admission", () => {
   setupRunAttemptTestHooks({ sessionOwner: null });
   it.each([
-    { hooks: "optional", lifecycle: "fresh", participants: "solo" },
-    { hooks: "disabled", lifecycle: "fresh", participants: "solo" },
-    { hooks: "disabled", lifecycle: "resumed", participants: "solo" },
-    { hooks: "managed-only", lifecycle: "fresh", participants: "solo" },
-    { hooks: "managed-only", lifecycle: "resumed", participants: "solo" },
-    { hooks: "disabled", lifecycle: "fresh", participants: "multiple" },
-    { hooks: "managed-only", lifecycle: "fresh", participants: "multiple" },
+    { hooks: "optional", lifecycle: "fresh", participants: "solo", policy: "normal" },
+    { hooks: "disabled", lifecycle: "fresh", participants: "solo", policy: "normal" },
+    { hooks: "disabled", lifecycle: "resumed", participants: "solo", policy: "normal" },
+    { hooks: "managed-only", lifecycle: "fresh", participants: "solo", policy: "normal" },
+    { hooks: "managed-only", lifecycle: "resumed", participants: "solo", policy: "normal" },
+    { hooks: "disabled", lifecycle: "fresh", participants: "multiple", policy: "normal" },
+    { hooks: "managed-only", lifecycle: "fresh", participants: "multiple", policy: "normal" },
+    { hooks: "disabled", lifecycle: "fresh", participants: "multiple", policy: "token-sharing" },
   ] as const)(
-    "admits $participants participants with $hooks native admission on a $lifecycle thread",
-    async ({ hooks, lifecycle, participants }) => {
+    "handles $participants participants with $hooks native admission on a $lifecycle $policy thread",
+    async ({ hooks, lifecycle, participants, policy }) => {
       const params = createParams(
         path.join(tempDir, "participant-model-hooks.jsonl"),
         path.join(tempDir, "participant-model-hooks-workspace"),
       );
       params.sessionKey = undefined;
+      if (policy === "token-sharing") {
+        const runtimePlan = createCodexRuntimePlanFixture();
+        params.runtimePlan = {
+          ...runtimePlan,
+          auth: {
+            ...runtimePlan.auth,
+            selectedAuthMode: "oauth",
+            selectedAuthFlow: "chatgpt-token-sharing",
+          },
+        };
+      }
       registerCodexTestSessionIdentity(params.sessionFile, params.sessionId, params.sessionKey);
       const dynamicTools: CodexDynamicToolSpec[] = [
         {
@@ -165,6 +177,9 @@ describe("Codex participant native admission", () => {
                 buildFinalConfigPatch: resources.buildNativeHookRelayFinalConfigPatch,
               });
             if (participants === "multiple") {
+              spawnFailure = ambiguity;
+            }
+            if (participants === "multiple" && policy === "normal") {
               for (const message of [
                 "Alice's access changed; ask them again",
                 "This turn has ended; ask again in a new turn.",
@@ -191,7 +206,12 @@ describe("Codex participant native admission", () => {
             resources.state.thread = binding;
             expect(preflight).toHaveBeenCalledWith(
               expect.objectContaining({
-                nativeModelAdmission: hooks === "disabled" ? "disabled" : "optional",
+                nativeModelAdmission:
+                  policy === "token-sharing"
+                    ? undefined
+                    : hooks === "disabled"
+                      ? "disabled"
+                      : "optional",
               }),
             );
             const admission = await preflight.mock.results[0]?.value;
@@ -204,15 +224,28 @@ describe("Codex participant native admission", () => {
             const route = getCodexInferenceThread(harness.client, binding.threadId);
             expect(route).toBeDefined();
             expect(request).toMatchObject({
-              config: { "features.shell_tool": true, openai_base_url: route?.baseUrl },
+              config: {
+                ...(policy === "normal" ? { "features.shell_tool": true } : {}),
+                openai_base_url: route?.baseUrl,
+              },
               ...(lifecycle === "fresh" ? { dynamicTools } : {}),
             });
             expect(harness.request.mock.calls.some(([method]) => method === "turn/start")).toBe(
               false,
             );
-            expect(request).not.toHaveProperty(["config", "agents.enabled"], false);
-            expect(request).not.toHaveProperty(["config", "features.multi_agent"], false);
-            expect(request).not.toHaveProperty(["config", "features.multi_agent_v2"], false);
+            if (policy === "token-sharing") {
+              expect(request).toMatchObject({
+                config: {
+                  "agents.enabled": false,
+                  "features.multi_agent": false,
+                  "features.multi_agent_v2": false,
+                },
+              });
+            } else {
+              expect(request).not.toHaveProperty(["config", "agents.enabled"], false);
+              expect(request).not.toHaveProperty(["config", "features.multi_agent"], false);
+              expect(request).not.toHaveProperty(["config", "features.multi_agent_v2"], false);
+            }
             if (hooks === "optional") {
               expect(admission?.nativeModelInputTools).toContain("spawn_agent");
               const relayId = extractRelayIdFromThreadRequest(request);
@@ -246,9 +279,15 @@ describe("Codex participant native admission", () => {
               });
             } else {
               expect(admission?.nativeModelInputTools).toBeUndefined();
-              expect(
-                getCodexInferenceThreadQualification(harness.client, binding.threadId),
-              ).toBeUndefined();
+              const qualification = getCodexInferenceThreadQualification(
+                harness.client,
+                binding.threadId,
+              );
+              if (policy === "token-sharing") {
+                expect(qualification).toBeDefined();
+              } else {
+                expect(qualification).toBeUndefined();
+              }
               expect(request).not.toHaveProperty(["config", "hooks.PreToolUse", 0]);
             }
           } finally {

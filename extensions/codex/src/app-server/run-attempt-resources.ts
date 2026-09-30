@@ -56,6 +56,7 @@ import {
   isSameCodexAppServerThreadOwner,
   retainCodexAppServerBindingSubscription,
 } from "./thread-ownership.js";
+import { isCodexNativeDelegationDisabledForRun } from "./thread-requests.js";
 import { createCodexTrajectoryRecorder } from "./trajectory.js";
 import type { CodexAppServerTurnRouter, CodexThreadRouteReservation } from "./turn-router.js";
 
@@ -603,7 +604,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       decision.nativeModelInputTools?.includes("spawn_agent") &&
       params.hostCapabilities.assertNativeSubagentSpawnAllowed,
     );
-    if (!state.nativeSpawnAdmissionInstalled) {
+    if (!state.nativeSpawnAdmissionInstalled && !isCodexNativeDelegationDisabledForRun(params)) {
       // A prior backend attempt may already have accepted another participant.
       try {
         params.hostCapabilities.assertNativeSubagentSpawnAllowed?.();

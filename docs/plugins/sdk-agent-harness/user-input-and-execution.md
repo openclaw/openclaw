@@ -136,7 +136,7 @@ optional mode. When native admission is disabled or unavailable, solo Codex turn
 keep native delegation, and another person's input queues as a follow-up when native
 spawn remains available. Threads whose effective policy already disables native
 delegation still permit cross-profile steering.
-If a fallback attempt already includes several people and native hook admission is unavailable, Codex refuses the attempt and asks the sender to send the request again as a new message so it runs as its own turn.
+If a fallback attempt already includes several people and native spawn remains available without hook admission, Codex refuses the attempt and asks the sender to send the request again as a new message so it runs as its own turn.
 
 Backend handles can declare `supportsCrossProfileSteering: false` when steering
 must stay with the turn owner's operator profile; omitting the field permits
