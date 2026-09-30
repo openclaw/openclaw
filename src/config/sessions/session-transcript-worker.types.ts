@@ -18,6 +18,10 @@ import type { SensitiveTextRedactionSnapshot } from "../../logging/redact.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import type { OpenClawRegisteredAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { AgentDatabaseExecutionFileIdentity } from "../../state/openclaw-agent-execution-contract.js";
+import type {
+  SessionActivitySummaryBatchInput,
+  SessionActivitySummaryBatchResult,
+} from "./activity-summary-source.types.js";
 import type { SessionLifecycleTimestamps } from "./lifecycle.types.js";
 import type { SessionTranscriptBoundedActiveContext } from "./session-accessor.sqlite-active-context.js";
 import type { TranscriptArchivePresenceRead } from "./session-accessor.sqlite-archive-types.js";
@@ -193,6 +197,12 @@ type SessionTitleFieldsWorkerInput = {
   database: { agentId: string; path: string };
   scope: SessionTranscriptReadScope;
   includeInterSession?: boolean;
+  admission?: UserTurnTranscriptAdmissionReceipt;
+};
+
+type SessionActivitySummarySourceWorkerInput = SessionActivitySummaryBatchInput & {
+  kind: "session-activity-summary-source";
+  database: { agentId: string; path: string };
   admission?: UserTurnTranscriptAdmissionReceipt;
 };
 
@@ -461,6 +471,7 @@ export type SessionHistoryWorkerInput =
   | SessionTranscriptHistoryWorkerInput
   | SessionPreviewWorkerInput
   | SessionTitleFieldsWorkerInput
+  | SessionActivitySummarySourceWorkerInput
   | SessionRowBackfillWorkerInput
   | SessionRowPresenceWorkerInput
   | SessionProjectionStatusWorkerInput
@@ -517,6 +528,10 @@ export type SessionTranscriptWorkerValues = {
   "history-page": SessionHistoryWorkerResult;
   "session-preview": { kind: "session-preview"; items: SessionPreviewItem[] };
   "session-title-fields": { kind: "session-title-fields"; fields: SessionTitleFields };
+  "session-activity-summary-source": {
+    kind: "session-activity-summary-source";
+    source: SessionActivitySummaryBatchResult;
+  };
   "session-row-backfill": { kind: "session-row-backfill"; fields: SessionRowTranscriptFields };
   "session-row-presence": boolean;
   "projection-status": boolean;
@@ -613,6 +628,10 @@ export type SessionHistoryWorkerDatabase = {
   ) => Promise<SessionHistoryWorkerResult>;
   readPreview: SessionHistoryReader<SessionPreviewWorkerInput, SessionPreviewItem[]>;
   readTitleFields: SessionHistoryReader<SessionTitleFieldsWorkerInput, SessionTitleFields>;
+  readActivitySummarySource: SessionHistoryReader<
+    SessionActivitySummarySourceWorkerInput,
+    SessionActivitySummaryBatchResult
+  >;
   readRowBackfill: (
     params: SessionRowBackfillWorkerInput["params"],
   ) => Promise<SessionRowTranscriptFields>;

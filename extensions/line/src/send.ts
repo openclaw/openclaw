@@ -282,10 +282,6 @@ async function postLineProviderMessages(
   }
 }
 
-function createTextMessage(text: string): TextMessage {
-  return { type: "text", text };
-}
-
 function isValidLineLocation(location: LineLocation): boolean {
   // LINE rejects either blank required field atomically, so every delivery path
   // must use this gate before adding a location to a provider request.
@@ -481,7 +477,7 @@ export async function sendMessageLine(
   }
 
   if (text?.trim()) {
-    messages.push(createTextMessage(text.trim()));
+    messages.push({ type: "text", text: text.trim() });
   }
 
   if (messages.length === 0) {
@@ -596,11 +592,12 @@ export async function pushTextMessageWithQuickReplies(
   quickReplyLabels: string[],
   opts: LinePushOpts,
 ): Promise<LineSendResult> {
-  const message = createTextMessageWithQuickReplies(text, quickReplyLabels);
-
-  return pushLineMessages(to, [message], opts, {
-    verboseMessage: (chatId) => `line: pushed message with quick replies to ${chatId}`,
-  });
+  return pushLineMessages(
+    to,
+    [{ type: "text", text, quickReply: createQuickReplyItems(quickReplyLabels) }],
+    opts,
+    { verboseMessage: (chatId) => `line: pushed message with quick replies to ${chatId}` },
+  );
 }
 
 export function createQuickReplyItems(labels: string[]): QuickReply {
@@ -609,17 +606,6 @@ export function createQuickReplyItems(labels: string[]): QuickReply {
     action: messageAction(label, label),
   }));
   return { items };
-}
-
-function createTextMessageWithQuickReplies(
-  text: string,
-  quickReplyLabels: string[],
-): TextMessage & { quickReply: QuickReply } {
-  return {
-    type: "text",
-    text,
-    quickReply: createQuickReplyItems(quickReplyLabels),
-  };
 }
 
 export async function showLoadingAnimation(

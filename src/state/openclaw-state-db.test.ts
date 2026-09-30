@@ -1,4 +1,5 @@
 // OpenClaw state database tests cover state DB migrations and persistence.
+import { deepStrictEqual } from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
@@ -1339,9 +1340,9 @@ describe("openclaw state database", () => {
 
       expect(() => repairOpenClawStateDatabaseReadabilityForDoctor(options)).toThrow(reason);
       expect(readStableSqliteFileGeneration(databasePath)).toEqual(before);
-      expect(fs.readFileSync(databasePath)).toEqual(beforeDatabase);
+      deepStrictEqual(fs.readFileSync(databasePath), beforeDatabase);
       if (beforeWal) {
-        expect(fs.readFileSync(`${databasePath}-wal`)).toEqual(beforeWal);
+        deepStrictEqual(fs.readFileSync(`${databasePath}-wal`), beforeWal);
       }
       expect(fs.existsSync(`${databasePath}-shm`)).toBe(false);
       expect(() => openOpenClawStateDatabase(options)).toThrow(reason);
@@ -1351,9 +1352,8 @@ describe("openclaw state database", () => {
   it.each(["foreign-role", "damaged-table-index"] as const)(
     "rolls back Doctor readability repair for %s",
     (damage) => {
-      const stateDir = createTempStateDir();
-      const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
-      const databasePath = materializeCurrentStateDatabase(stateDir);
+      const options = { env: { OPENCLAW_STATE_DIR: createTempStateDir() } };
+      const databasePath = materializeCurrentStateDatabase(options.env.OPENCLAW_STATE_DIR);
       const { DatabaseSync } = requireNodeSqlite();
       const database = new DatabaseSync(databasePath);
       try {
@@ -1395,7 +1395,7 @@ describe("openclaw state database", () => {
           ),
         ],
       });
-      expect(fs.readFileSync(databasePath)).toEqual(before);
+      deepStrictEqual(fs.readFileSync(databasePath), before);
       expect(readDanglingSkillWorkshopReviewIndex(databasePath)).toMatchObject({ rootpage });
     },
   );
@@ -4056,8 +4056,8 @@ INSERT INTO device_identities VALUES (
     expect(database?.walMaintenance.close()).toBe(true);
 
     expect(fs.existsSync(privateDirectory)).toBe(false);
-    expect(fs.readFileSync(writer.path)).toEqual(beforeMain);
-    expect(fs.readFileSync(`${writer.path}-wal`)).toEqual(beforeWal);
+    deepStrictEqual(fs.readFileSync(writer.path), beforeMain);
+    deepStrictEqual(fs.readFileSync(`${writer.path}-wal`), beforeWal);
     expect(fs.statSync(`${writer.path}-shm`).size).toBe(beforeShmSize);
     expect(fs.readdirSync(stateDir).toSorted()).toEqual(beforeEntries);
   });

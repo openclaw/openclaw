@@ -70,6 +70,31 @@ async function runCli(...args: string[]) {
 }
 
 describe("Crabbox warm-image CLI", () => {
+  it("prints cold-only guidance for unsupported capture without changing local state", async () => {
+    const record: WarmProfileRecord = {
+      version: 3,
+      allocations: {},
+      captureUnsupported: {
+        atMs: Date.now(),
+        provider: "hetzner",
+        message: "Native capture is unsupported by this coordinator.",
+      },
+    };
+    openWarmImageStore().register("profile", record);
+
+    await runCli();
+
+    expect(output).toContain(
+      "Capture unsupported: Native capture is unsupported by this coordinator.",
+    );
+    expect(output).toContain("use an existing compatible snapshot when one is available");
+    expect(output).toContain("each eligible worker retries capture");
+    expect(output).toContain("Crabbox configuration changes apply to the next dispatch");
+    expect(output).toContain("settings.warmImage: false");
+    expect(output).not.toContain("--recover");
+    expect(openWarmImageStore().lookup("profile")).toEqual(record);
+  });
+
   it("recovers a legacy allocation only after acknowledgment of the exact unchanged row", async () => {
     const legacy = createPluginStateSyncKeyedStoreForTests<{ machineClass: string }>("crabbox", {
       namespace: "warm-leases",

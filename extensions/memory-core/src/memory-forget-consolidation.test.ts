@@ -16,6 +16,7 @@ import {
   DREAMING_MEMORY_BACKUP_NAMESPACE,
   readMemoryCoreWorkspaceEntries,
 } from "./dreaming-state.js";
+import { failMemoryEntryOriginWrites } from "./memory-entry-origins-fault.test-support.js";
 import { listMemoryEntryOrigins, recordMemoryEntryOrigins } from "./memory-entry-origins.js";
 import { forgetMemoryEntries } from "./memory-forget.js";
 import {
@@ -46,6 +47,7 @@ describe("memory forget", () => {
 
   afterEach(async () => {
     vi.restoreAllMocks();
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
@@ -107,7 +109,7 @@ describe("memory forget", () => {
       const notePath = path.join(workspaceDir, "memory", "2026-08-26.md");
       await fs.mkdir(path.dirname(notePath), { recursive: true });
       await fs.writeFile(notePath, `${snippet}\n`);
-      recordMemoryEntryOrigins({
+      await recordMemoryEntryOrigins({
         agentId: "gamma",
         origins: [
           {
@@ -165,13 +167,17 @@ describe("memory forget", () => {
         complete: vi.fn(async () => ({ text: output })),
       };
 
-      if (failOrigins) {
-        openOpenClawAgentDatabase({ agentId: "gamma" }).db.exec(`
-          CREATE TRIGGER fail_origin_reservation BEFORE INSERT ON memory_entry_origins
-          WHEN NEW.entry_key != 'retired-entry'
-          BEGIN SELECT RAISE(ABORT, 'injected origin write failure'); END;
-        `);
-      }
+      const restoreOriginFailure = failOrigins
+        ? failMemoryEntryOriginWrites({
+            agentId: "gamma",
+            trigger: "fail_origin_reservation",
+            createSql: `
+              CREATE TRIGGER fail_origin_reservation BEFORE INSERT ON memory_entry_origins
+              WHEN NEW.entry_key != 'retired-entry'
+              BEGIN SELECT RAISE(ABORT, 'injected origin write failure'); END;
+            `,
+          })
+        : undefined;
       let renamed = false;
       let fileFaultInjected = false;
       let memoryRenameCalls = 0;
@@ -319,11 +325,15 @@ describe("memory forget", () => {
         return;
       }
       if (failOrigins) {
-        await expect(application).rejects.toThrow("injected origin write failure");
-        await expect(fs.readFile(memoryPath, "utf8")).resolves.toBe(previousMemory);
-        expect(
-          (await readShortTermRecallEntries({ workspaceDir, nowMs }))[0]?.promotedAt,
-        ).toBeUndefined();
+        try {
+          await expect(application).rejects.toThrow("injected origin write failure");
+          await expect(fs.readFile(memoryPath, "utf8")).resolves.toBe(previousMemory);
+          expect(
+            (await readShortTermRecallEntries({ workspaceDir, nowMs }))[0]?.promotedAt,
+          ).toBeUndefined();
+        } finally {
+          restoreOriginFailure?.();
+        }
         return;
       }
       const applied = await application;
@@ -383,7 +393,7 @@ describe("memory forget", () => {
     "warns and preserves historical untraceable highlights in %s",
     async (diaryName) => {
       await seedSession("target");
-      recordMemoryEntryOrigins({
+      await recordMemoryEntryOrigins({
         agentId: "main",
         origins: [
           {

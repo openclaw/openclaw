@@ -53,9 +53,6 @@ function consumeLegacyAcpMigrationSources(params: {
     params.expectedControlBinding,
     "legacy source consumption",
   );
-  if (current.sources.length === 0) {
-    return;
-  }
   for (const source of current.sources) {
     if (legacyAcpMigrationBindingMatches(source, current.entry)) {
       recordLegacyAcpMigrationCompletion(params.database, source, params.now);

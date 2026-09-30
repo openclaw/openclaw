@@ -165,6 +165,11 @@ describe("check-extension-package-tsc-boundary", () => {
     expect(warm.status, warm.stdout + warm.stderr).toBe(0);
     expect(warm.stdout).toContain("compiled plugins: 0");
     expect(warm.stdout).toContain("skipped plugins: 2");
+    write("test/new-unrelated.test.ts", 'export const unrelated: number = "invalid";\n');
+    const unrelated = run();
+    expect(unrelated.status, unrelated.stdout + unrelated.stderr).toBe(0);
+    expect(unrelated.stdout).toContain("compiled plugins: 0");
+    expect(unrelated.stdout).toContain("skipped plugins: 2");
     write(
       "extensions/demo/package.json",
       JSON.stringify({

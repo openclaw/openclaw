@@ -13,6 +13,7 @@ import {
 import { isChatStopCommandText } from "../gateway/chat-abort.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { normalizeTerminalChatSendAckStatus } from "../shared/chat-send-ack-status.js";
+import { formatFastModeValue } from "../shared/fast-mode.js";
 import {
   formatTuiLevelCommandUsage,
   helpText,
@@ -50,10 +51,6 @@ import {
   type TuiChatSubmitSnapshot,
 } from "./tui-submit-state.js";
 import type { AgentSummary, GatewayStatusSummary } from "./tui-types.js";
-
-function formatTuiFastMode(mode: unknown): "auto" | "on" | "off" {
-  return mode === "auto" ? "auto" : mode === true ? "on" : "off";
-}
 
 function isBtwCommand(text: string): boolean {
   return /^\/(?:btw|side)(?::|\s|$)/i.test(text.trim());
@@ -653,7 +650,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     },
     fast: async (args) => {
       if (!args || args === "status") {
-        chatLog.addSystem(`fast mode: ${formatTuiFastMode(state.sessionInfo.fastMode)}`);
+        chatLog.addSystem(`fast mode: ${formatFastModeValue(state.sessionInfo.fastMode)}`);
         return;
       }
       const reset = isSessionDefaultDirectiveValue(args);

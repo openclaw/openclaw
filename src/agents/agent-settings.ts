@@ -144,27 +144,6 @@ export function isSilentOverflowProneModel(model: {
 }
 
 /**
- * Disable OpenClaw runtime's `_checkCompaction → _runAutoCompaction` (which would otherwise
- * fire from inside `Session.prompt()` and reassign `agent.state.messages`
- * before the provider call) when OpenClaw or a plugin owns compaction:
- * `contextEngineInfo.ownsCompaction === true`, effective safeguard compaction,
- * or an active model that is silent-overflow-prone (openclaw#75799).
- * Default-mode runs against ordinary providers keep OpenClaw runtime's auto-compaction as
- * the existing baseline.
- */
-function shouldDisableAgentAutoCompaction(params: {
-  contextEngineInfo?: ContextEngineInfo;
-  compactionMode?: AgentCompactionMode;
-  silentOverflowProneProvider?: boolean;
-}): boolean {
-  return (
-    params.contextEngineInfo?.ownsCompaction === true ||
-    params.compactionMode === "safeguard" ||
-    params.silentOverflowProneProvider === true
-  );
-}
-
-/**
  * Apply the auto-compaction guard. Callers that reload a `DefaultResourceLoader`
  * MUST call this AGAIN after each `reload()` — `settingsManager.reload()`
  * rehydrates `compaction.enabled` from disk and silently restores OpenClaw runtime's
@@ -177,11 +156,12 @@ export function applyAgentAutoCompactionGuard(params: {
   compactionMode?: AgentCompactionMode;
   silentOverflowProneProvider?: boolean;
 }): { supported: boolean; disabled: boolean } {
-  const disable = shouldDisableAgentAutoCompaction({
-    contextEngineInfo: params.contextEngineInfo,
-    compactionMode: params.compactionMode,
-    silentOverflowProneProvider: params.silentOverflowProneProvider,
-  });
+  // Leave compaction with its selected owner so prompt-time runtime compaction
+  // cannot rewrite the transcript before OpenClaw's provider call.
+  const disable =
+    params.contextEngineInfo?.ownsCompaction === true ||
+    params.compactionMode === "safeguard" ||
+    params.silentOverflowProneProvider === true;
   const hasMethod = typeof params.settingsManager.setCompactionEnabled === "function";
   if (!disable || !hasMethod) {
     return { supported: hasMethod, disabled: false };

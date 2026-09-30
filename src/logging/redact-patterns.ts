@@ -84,7 +84,7 @@ const AMBIGUOUS_QUOTED_SECRET_FIELD_REDACT_PATTERN = String.raw`(^|[\s,{])["']?(
 const AMBIGUOUS_QUOTED_AUTH_FIELD_REDACT_PATTERN = String.raw`(^|[\s,{])["']?(?:authorization|proxy-authorization|cookie|set-cookie|x-api-key|x-auth-token)["']?\s*[:=]\s*(["'])([^"'\r\n]+)\2`;
 // Pure-base64 prefixes require a non-alphanumeric boundary and skip explicit data-URL payloads.
 // Match the token first: the lookbehind rescans the whole base64 run, quadratic per `+`/`/`/`=`.
-export const BASE64_SAFE_TOKEN_BOUNDARY = String.raw`(^|[^A-Za-z0-9])`;
+const BASE64_SAFE_TOKEN_BOUNDARY = String.raw`(^|[^A-Za-z0-9])`;
 const base64SafeToken = (token: string) =>
   String.raw`${BASE64_SAFE_TOKEN_BOUNDARY}(?=${token})(?<!;base64,[A-Za-z0-9+/=]*)(${token})`;
 export const IDENTIFIER_SAFE_TOKEN_BOUNDARY = String.raw`(^|[^A-Za-z0-9_])`;
@@ -390,16 +390,6 @@ export const SHELL_REFERENCE_PRESERVING_PATTERN_SOURCES = new Set([
   STANDALONE_ASSIGNMENT_QUOTED_REDACT_PATTERN,
   STANDALONE_ASSIGNMENT_REDACT_PATTERN,
 ]);
-export const CHUNK_UNSAFE_PATTERN_SOURCES = new Set([
-  TELEGRAM_BOT_TOKEN_REDACT_PATTERN,
-  TELEGRAM_TOKEN_REDACT_PATTERN,
-  AUTHORIZATION_BEARER_REDACT_PATTERN,
-  AUTHORIZATION_BASIC_REDACT_PATTERN,
-  AUTHORIZATION_BOT_REDACT_PATTERN,
-  STANDALONE_BEARER_REDACT_PATTERN,
-  ...HTTP_AUTH_HEADER_REDACT_PATTERNS,
-]);
-
 const DEFAULT_REDACT_FIELD_PATTERNS: readonly RedactPattern[] = [
   ENV_ASSIGNMENT_REDACT_PATTERN,
   ESCAPED_ENV_ASSIGNMENT_REDACT_PATTERN,
@@ -524,6 +514,17 @@ export const VENDOR_TOKEN_REDACT_PATTERNS: readonly string[] = [
   TELEGRAM_BOT_TOKEN_REDACT_PATTERN,
   TELEGRAM_TOKEN_REDACT_PATTERN,
 ];
+
+export const CHUNK_UNSAFE_PATTERN_SOURCES = new Set([
+  TELEGRAM_BOT_TOKEN_REDACT_PATTERN,
+  TELEGRAM_TOKEN_REDACT_PATTERN,
+  AUTHORIZATION_BEARER_REDACT_PATTERN,
+  AUTHORIZATION_BASIC_REDACT_PATTERN,
+  AUTHORIZATION_BOT_REDACT_PATTERN,
+  STANDALONE_BEARER_REDACT_PATTERN,
+  ...HTTP_AUTH_HEADER_REDACT_PATTERNS,
+  ...VENDOR_TOKEN_REDACT_PATTERNS.filter((source) => source.startsWith(BASE64_SAFE_TOKEN_BOUNDARY)),
+]);
 
 export const DEFAULT_REDACT_PATTERNS: readonly RedactPattern[] = [
   ...DEFAULT_REDACT_FIELD_PATTERNS,

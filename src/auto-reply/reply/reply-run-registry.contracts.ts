@@ -189,6 +189,8 @@ export type ReplyBackendHandle = {
   readonly taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   /** True only when queueMessage preserves images supplied in its options. */
   readonly supportsQueueMessageImages?: boolean;
+  /** False keeps inbound steering with the turn owner's profile; omission permits other profiles. */
+  readonly supportsCrossProfileSteering?: boolean;
   claimPendingUserInputAnswer?: (
     text: string,
     options?: ReplyBackendQueueMessageOptions,
@@ -232,6 +234,7 @@ type ReplyMessageInjectionOwner = {
   projectToolAuthorityFingerprint(overlay: ReplyToolAuthorityOverlay): string | undefined;
   resolve(params: {
     options?: ReplyBackendQueueMessageOptions;
+    personalToolParticipant?: ReplyTurnParticipantInput;
     inboundAudio?: boolean;
     allowPendingUserInputAnswer?: false;
     assertCurrent?: () => void;

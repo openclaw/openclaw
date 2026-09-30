@@ -130,7 +130,7 @@ export async function consumeAnthropicStream(params: {
       const key = eventIndexKey(eventIndex);
       let contentIndex = indexes.get(key);
       let block = contentIndex === undefined ? undefined : blocks[contentIndex];
-      if (!block || block.type !== kind) {
+      if (contentIndex === undefined || !block || block.type !== kind) {
         block =
           kind === "thinking"
             ? { type: "thinking", thinking: "", thinkingSignature: "reasoning_content" }
@@ -139,9 +139,6 @@ export async function consumeAnthropicStream(params: {
         contentIndex = output.content.length - 1;
         indexes.set(key, contentIndex);
         eventSink.push({ type: `${kind}_start`, contentIndex, partial: output });
-      }
-      if (contentIndex === undefined) {
-        return false;
       }
       if (block.type === "thinking") {
         appendAssistantThinking(block, text);

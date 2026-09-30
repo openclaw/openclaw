@@ -16,11 +16,14 @@ import {
 } from "./ci-workflow.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const typeSelection = vi.hoisted(() => ({
+  graphs: null as { name: string; config: string }[] | null,
+}));
 
 vi.mock("../../scripts/run-tsgo-core-test-shards.mts", () => ({
   createChangedCiTypeCheckPlan: async () => ({
     mode: "targeted",
-    graphs: [
+    graphs: typeSelection.graphs ?? [
       {
         name: "core-test-agents-root",
         config: "test/tsconfig/tsconfig.core.test.agents-root.json",
@@ -90,6 +93,60 @@ function materializePlan(runnerProfile: string, rows: number) {
 }
 
 describe("CI check-plan completion count", () => {
+  it.each([
+    ["hybrid", [1, 2, 4, 5]],
+    ["github", [1, 2, 3, 4, 5]],
+    ["hybrid", [1, 2, 5]],
+    ["blacksmith", [1, 2, 3, 4, 5]],
+  ] as const)(
+    "assigns root partitions without adding %s rows (%j)",
+    async (runnerProfile, stripes) => {
+      const core = [
+        "agents-root",
+        "agents-other",
+        "agents-tools",
+        "gateway-root",
+        "gateway-server",
+      ];
+      typeSelection.graphs = [
+        ...stripes.map((stripe) => ({
+          name: `core-test-${core[stripe - 1]}`,
+          config: `test/tsconfig/tsconfig.core.test.${core[stripe - 1]}.json`,
+        })),
+        { name: "scripts", config: "tsconfig.scripts.json" },
+        { name: "test-root", config: "test/tsconfig/tsconfig.test.root.json" },
+      ];
+      try {
+        const plan = await createCiCheckPlan({
+          typeGraphBoundaryOwner: "check-plan",
+          changedPaths: ["src/shared.ts"],
+          changedCoreTestPaths: null,
+          runnerProfile,
+          checkMatrix: {
+            include: [{ check_name: "check-test-types", task: "test-types", runner: "unused" }],
+          },
+          coreTypeMatrix: { include: [1, 2, 3, 4, 5].map((stripe) => ({ stripe })) },
+          lintCoreMatrix: { include: [] },
+          lintExtensionMatrix: { include: [] },
+        });
+        const hosted = runnerProfile !== "blacksmith";
+        const moved = hosted && stripes.length >= 4;
+        expect(plan.core_type_matrix.include.map((row) => row.stripe)).toEqual(
+          hosted ? stripes : [],
+        );
+        expect(plan.core_type_matrix.include.flatMap((row) => row.root_type_stripe ?? [])).toEqual(
+          moved ? ["1/4", "2/4", "3/4", "4/4"] : [],
+        );
+        expect(JSON.parse(plan.check_matrix.include[0]!.type_graph_names_json!)).toEqual(
+          moved ? ["scripts"] : hosted ? ["scripts", "test-root"] : ["test-root", "scripts"],
+        );
+        expect(plan.check_job_count).toBe(1 + (hosted ? stripes.length : 0));
+      } finally {
+        typeSelection.graphs = null;
+      }
+    },
+  );
+
   it.each(["blacksmith", "github", "hybrid"] as const)(
     "publishes the admitted workflow expansion for %s, including an empty plan",
     (runnerProfile) => {

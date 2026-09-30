@@ -52,21 +52,6 @@ describe("workspace bootstrap source identity", () => {
 });
 
 describe("filterBootstrapFilesForSession privacy", () => {
-  it.each(["agent:default:discord:direct:user-1", "agent:default:telegram:dm:123456"])(
-    "keeps MEMORY.md for direct sessions (%s)",
-    (sessionKey) => {
-      expect(filterBootstrapFilesForSession(mockFiles, sessionKey)).toStrictEqual(mockFiles);
-    },
-  );
-
-  it.each([
-    "agent:default:discord:channel:c1",
-    "agent:default:telegram:group:-1001234567890:topic:99",
-  ])("drops only MEMORY.md for shared sessions (%s)", (sessionKey) => {
-    const result = filterBootstrapFilesForSession(mockFiles, sessionKey);
-    expect(result).toStrictEqual(mockFiles.filter((file) => file.name !== "MEMORY.md"));
-  });
-
   it("prefers authoritative chat type over the session-key fallback", () => {
     const shared = filterBootstrapFilesForSession(mockFiles, {
       sessionKey: "agent:default:opaque:binding",

@@ -15,7 +15,10 @@ import { buildCachedChatItems } from "../chat-thread.ts";
 import { agentEvent, createHost } from "../tool-stream.test-helpers.ts";
 import { handleAgentEvent } from "../tool-stream.ts";
 import { renderChatNotice } from "./chat-divider.ts";
+import { dismissConfirmedActionPopovers } from "./chat-message-confirmation.ts";
+import { renderActivityGroup, renderMessageGroup } from "./chat-message-group.ts";
 import { releaseChatMediaResourceSubscriber } from "./chat-message-media.ts";
+import { renderStreamGroup } from "./chat-message-stream.ts";
 import {
   createAssistantMessage,
   createCanvasPreview,
@@ -36,12 +39,6 @@ import {
   type TestMessage,
   type TestMessageEntry,
 } from "./chat-message.test-support.ts";
-import {
-  dismissConfirmedActionPopovers,
-  renderActivityGroup,
-  renderMessageGroup,
-  renderStreamGroup,
-} from "./chat-message.ts";
 import "./chat-sidebar.ts";
 
 let view: HTMLDivElement;
@@ -1094,6 +1091,37 @@ describe("grouped chat rendering", () => {
     );
   });
 
+  it("keeps streaming participant attribution on the shared reply renderer", () => {
+    const container = document.createElement("div");
+    render(
+      renderStreamGroup([
+        {
+          kind: "stream",
+          key: "stream:participant",
+          text: "Reviewing the checklist.",
+          startedAt: 1,
+          isStreaming: true,
+          replyToSender: { name: "Alice Chen", identity: { type: "profile", id: "alice" } },
+          replyToMessage: {
+            key: "prompt",
+            message: {
+              role: "user",
+              content: "Review the release checklist.",
+              __openclaw: { id: "prompt" },
+            },
+          },
+        },
+      ]),
+      container,
+    );
+    expect(container.querySelectorAll(".chat-reply-attribution--reply")).toHaveLength(1);
+    expect(container.querySelector(".chat-reply-attribution__name")?.textContent).toBe(
+      "Alice Chen",
+    );
+    expect(container.querySelectorAll(".chat-reply-connector")).toHaveLength(1);
+    expect(container.querySelector(".chat-group--reply")).not.toBeNull();
+  });
+
   it("morphs one assistant turn from working status to its terminal recap", () => {
     const message = {
       role: "assistant",
@@ -1316,25 +1344,6 @@ describe("grouped chat rendering", () => {
     expect(legacy.querySelector("a.chat-sender-name")).toBeNull();
     expect(legacy.querySelector(".chat-sender-name")?.textContent).toBe("Alice Example");
     expect(renderSender("profile-alice", false).querySelector("a.chat-sender-name")).toBeNull();
-  });
-
-  it("renders assistant reply attribution for a multi-sender thread", () => {
-    render(
-      renderMessageGroup(
-        createMessageGroup({ role: "assistant", content: "hello" }, "assistant", {
-          key: "reply-attribution",
-          replyToSender: { id: "alice@example.com", name: "Alice" },
-          timestamp: 1000,
-        }),
-        { showReasoning: true, showToolCalls: true },
-      ),
-      view,
-    );
-
-    const attribution = view.querySelector<HTMLElement>(".chat-reply-attribution");
-    expect(attribution?.textContent?.trim()).toBe("Alice");
-    expect(attribution?.getAttribute("title")).toBe("Replying to Alice");
-    expect(attribution?.nextElementSibling?.classList.contains("chat-bubble")).toBe(true);
   });
 
   it("renders multiline system notices as sanitized markdown", () => {
@@ -1871,9 +1880,8 @@ describe("grouped chat rendering", () => {
     });
 
     const summary = expectElement(view, ".chat-tool-msg-summary", HTMLButtonElement);
-    expect(summary.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe(
-      "Heartbeat Respond",
-    );
+    expect(summary.querySelector(".chat-tool-msg-summary__label")).toBeNull();
+    expect(summary.querySelector("[role=img]")?.ariaLabel).toBe("heartbeat_respond");
     expect(summary.querySelector(".chat-tool-msg-summary__names")).toBeNull();
   });
 
@@ -2044,7 +2052,7 @@ describe("grouped chat rendering", () => {
     expect(view.querySelector(".chat-tool-msg-body .chat-tool-msg-summary")).not.toBeNull();
   });
 
-  it("renders assistant MEDIA attachments and reply preview", async () => {
+  it("renders assistant MEDIA attachments without a strip for an unresolved current reply", async () => {
     const container = document.body.appendChild(document.createElement("div"));
     const onOpenImage = vi.fn();
     renderAssistantMessage(
@@ -2059,9 +2067,7 @@ describe("grouped chat rendering", () => {
       container,
     );
 
-    expect(container.querySelector(".chat-reply-preview__label")?.textContent?.trim()).toBe(
-      "Replying to current message",
-    );
+    expect(container.querySelector(".chat-reply-attribution")).toBeNull();
     expect(container.querySelector(".chat-text")?.textContent?.trim()).toBe("Here is the image.");
     expect(expectElement(container, ".chat-message-image", HTMLImageElement).src).toBe(
       "https://example.com/photo.png",
@@ -2103,16 +2109,15 @@ describe("grouped chat rendering", () => {
               },
       });
     show(true);
-    const button = expectElement(view, ".chat-reply-preview--message", HTMLButtonElement);
+    const button = expectElement(view, ".chat-reply-attribution__target", HTMLButtonElement);
     expect(button.disabled).toBe(true);
     expect(button.getAttribute("aria-busy")).toBe("true");
-    expect(button.querySelector(".session-run-spinner")).toBeInstanceOf(HTMLElement);
     button.click();
     expect(onOpenReply).not.toHaveBeenCalled();
     show(false);
     expect(button.disabled).toBe(false);
-    expect(button.textContent).toContain("Replying to Marie");
-    expect(button.textContent).toContain("The original answer");
+    expect(button.getAttribute("aria-label")).toBe("Replying to Marie");
+    expect(button.textContent).not.toContain("The original answer");
     button.click();
     expect(onOpenReply).toHaveBeenCalledWith("transcript-123");
     expect(view.querySelector(".chat-text")?.textContent?.trim()).toBe("Follow up");

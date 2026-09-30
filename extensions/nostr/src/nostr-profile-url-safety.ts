@@ -1,4 +1,3 @@
-// Nostr plugin module implements nostr profile url safety behavior.
 import { isBlockedHostnameOrIp } from "openclaw/plugin-sdk/ssrf-runtime";
 
 export function normalizeNostrProfileUrlForRuntime(urlStr: string): string {
@@ -18,13 +17,9 @@ export function normalizeNostrProfileUrlForRuntime(urlStr: string): string {
   );
 }
 
-function parseNostrProfileUrl(urlStr: string): URL {
-  return new URL(normalizeNostrProfileUrlForRuntime(urlStr));
-}
-
 export function validateUrlSafety(urlStr: string): { ok: true } | { ok: false; error: string } {
   try {
-    const url = parseNostrProfileUrl(urlStr);
+    const url = new URL(normalizeNostrProfileUrlForRuntime(urlStr));
 
     if (url.protocol !== "https:") {
       return { ok: false, error: "URL must use https:// protocol" };

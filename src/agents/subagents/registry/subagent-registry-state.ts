@@ -2,6 +2,7 @@ import {
   emitSessionLifecycleEvent,
   type SessionLifecycleEvent,
 } from "../../../sessions/session-lifecycle-events.js";
+import { notifyListeners } from "../../../shared/listeners.js";
 import { getActiveOpenClawStateDatabaseReadSnapshot } from "../../../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
 import {
@@ -44,6 +45,7 @@ import {
   prepareSubagentSessionRunReadSnapshot,
   type PreparedSubagentRunsRead,
   type SubagentRunReadSelection,
+  type SubagentRunReadScope,
 } from "./subagent-registry-read-snapshot.js";
 import { resolveControllerSessionKey } from "./subagent-registry-read-topology.js";
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
@@ -154,13 +156,7 @@ function emitSubagentRegistryPersisted(
   runIds?: readonly string[],
 ): void {
   publishSubagentRunChanges(keys, runIds);
-  for (const listener of SUBAGENT_REGISTRY_PERSIST_LISTENERS) {
-    try {
-      listener(keys);
-    } catch {
-      // Persistence already succeeded; observers are best-effort.
-    }
-  }
+  notifyListeners(SUBAGENT_REGISTRY_PERSIST_LISTENERS, keys);
 }
 
 /** Wake process-local readers after a registry mutation, even if persistence failed. */
@@ -474,6 +470,7 @@ export async function withSubagentRunReadSnapshot<S extends SubagentRunReadSelec
   inMemoryRuns: Map<string, SubagentRunRecord>,
   select: (snapshot: Map<string, SubagentRunReadRecord>) => S,
   consume: (selection: S, runs: ReadonlyMap<string, SubagentRunRecord>) => T,
+  readScope: SubagentRunReadScope,
 ): Promise<T> {
   for (;;) {
     const prepared = await prepareSubagentRunReadSnapshot({
@@ -481,6 +478,7 @@ export async function withSubagentRunReadSnapshot<S extends SubagentRunReadSelec
       fullCache: persistedSubagentRunsReadCache,
       compactCache: persistedSubagentSessionListRunsReadCache,
       select,
+      readScope,
     });
     const result = prepared.consume(consume);
     if (result.ready) {
@@ -511,7 +509,7 @@ export async function prepareSubagentRunsSnapshotForRunIds(
     inMemoryRuns,
     fullCache: persistedSubagentRunsReadCache,
     compactCache: persistedSubagentSessionListRunsReadCache,
-    requestedRunIds: requested,
+    readScope: { runIds: requested },
     select: (snapshot) => ({
       runIds: [...snapshot.values()].filter(matches).map((entry) => entry.runId),
       sessionKeys: [],

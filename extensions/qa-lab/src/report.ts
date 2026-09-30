@@ -103,3 +103,11 @@ export function renderQaMarkdownReport(params: {
 export function escapeTableCell(value: string): string {
   return value.replace(/\\/gu, "\\\\").replace(/\|/gu, "\\|").replace(/\s+/gu, " ").trim();
 }
+
+export function pushQaReportListSection(lines: string[], title: string, items: readonly string[]) {
+  lines.push(`## ${title}`, "");
+  for (const item of items) {
+    lines.push(`- ${item}`);
+  }
+  lines.push("");
+}

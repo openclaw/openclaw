@@ -85,19 +85,15 @@ function normalizeRequestHash(value: unknown): string {
   return value;
 }
 
-function isNonEmptyStringArray(value: unknown): value is string[] {
-  return (
-    Array.isArray(value) &&
-    value.length > 0 &&
-    value.every((entry: unknown) => typeof entry === "string" && entry.length > 0)
-  );
-}
-
 function isCommitResult(value: unknown): value is WorkerTranscriptCommitResult {
-  if (!isRecord(value) || !isNonEmptyStringArray(value.entryIds)) {
-    return false;
-  }
-  return typeof value.newLeafId === "string" && value.newLeafId.length > 0;
+  return (
+    isRecord(value) &&
+    Array.isArray(value.entryIds) &&
+    value.entryIds.length > 0 &&
+    value.entryIds.every((entry: unknown) => typeof entry === "string" && entry.length > 0) &&
+    typeof value.newLeafId === "string" &&
+    value.newLeafId.length > 0
+  );
 }
 
 function isCommitErrorReason(value: unknown): value is WorkerTranscriptCommitErrorReason {
@@ -112,7 +108,7 @@ function isCommitErrorReason(value: unknown): value is WorkerTranscriptCommitErr
 function parseOutcomeJson(value: string): WorkerTranscriptCommitOutcome {
   let parsed: unknown;
   try {
-    parsed = JSON.parse(value) as unknown;
+    parsed = JSON.parse(value);
   } catch (error) {
     throw new Error("Worker transcript commit cached outcome is invalid", { cause: error });
   }
@@ -126,14 +122,6 @@ function parseOutcomeJson(value: string): WorkerTranscriptCommitOutcome {
     return { ok: false, reason: parsed.reason };
   }
   throw new Error("Worker transcript commit cached outcome is invalid");
-}
-
-function serializeOutcome(outcome: WorkerTranscriptCommitOutcome): string {
-  const serialized = JSON.stringify(outcome);
-  if (!serialized) {
-    throw new Error("Worker transcript commit outcome is not serializable");
-  }
-  return serialized;
 }
 
 function normalizeInput(input: WorkerTranscriptCommitInput, nowMs: number): NormalizedCommitInput {
@@ -258,7 +246,7 @@ export function createWorkerTranscriptCommitStore(
     rawInput: WorkerTranscriptCommitInput & { outcome: WorkerTranscriptCommitOutcome },
   ): WorkerTranscriptCommitOutcome => {
     const input = normalizeInput(rawInput, now());
-    const resultJson = serializeOutcome(rawInput.outcome);
+    const resultJson = JSON.stringify(rawInput.outcome);
     return write<WorkerTranscriptCommitOutcome>((db) => {
       const head = findHead(db, input);
       const commit = findCommit(db, input);

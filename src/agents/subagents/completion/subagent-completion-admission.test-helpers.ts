@@ -2,6 +2,9 @@ import { expect, vi } from "vitest";
 import { loadPendingSessionDeliveries } from "../../../infra/session-delivery-queue-storage.js";
 import { prepareClaimedSessionDelivery } from "../../../infra/session-delivery-queue.records.js";
 import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../../../state/openclaw-state-db.js";
@@ -14,7 +17,10 @@ import { persistSubagentRunsToDiskAsyncOrThrow } from "../registry/subagent-regi
 import { observeRootWork } from "../registry/subagent-registry.browser-cleanup.test-support.js";
 import { bindSubagentRunRecord } from "../registry/subagent-registry.store.codec.js";
 import { upsertSubagentRunRowInDatabase } from "../registry/subagent-registry.store.kernel.js";
-import { saveSubagentRegistryToSqlite } from "../registry/subagent-registry.store.sqlite.js";
+import {
+  loadSubagentRegistryFromSqlite,
+  saveSubagentRegistryToSqlite,
+} from "../registry/subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 
 /** Admit the actual worker before tests add deliberate runtime write-failure triggers. */
@@ -162,4 +168,15 @@ export function failedRecords(
   input.subagent.execution.outcome = outcome;
   input.subagent.completion!.resultText = "original failure summary";
   return armRequesterWake(input);
+}
+
+export async function reopenCompletionFixtureOwners() {
+  await closeOpenClawStateDatabaseAsync();
+  closeOpenClawStateDatabaseForTest();
+  subagentRuns.clear();
+  const database = openOpenClawStateDatabase();
+  for (const [runId, entry] of loadSubagentRegistryFromSqlite()) {
+    subagentRuns.set(runId, entry);
+  }
+  return database;
 }

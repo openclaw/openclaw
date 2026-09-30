@@ -141,12 +141,9 @@ export async function prepareDoctorToolSchemaFrames(
       const capabilityProfile = resolveConversationCapabilityProfile({
         config: cfg,
         agentId,
-        agentDir,
         workspaceDir,
         modelProvider: modelRef.provider,
         modelId: modelRef.model,
-        modelApi: model.api,
-        modelContextWindowTokens: model.contextWindow,
       });
       frames.push({ agentId, agentDir, workspaceDir, modelRef, model, capabilityProfile });
     };

@@ -29,7 +29,6 @@ import {
 import {
   type CronAttentionJob,
   buildSidebarAttentionEntries,
-  compareSidebarAttentionEntries,
   cronOverdueAt,
 } from "./sidebar-attention-items.ts";
 import { resolveSidebarUpdateAttention } from "./sidebar-attention-update.ts";
@@ -251,7 +250,7 @@ export class SidebarAttentionStoreController implements StoreController {
       modelAuthStatus: this.modelAuthStatus,
       modelAuthAgentId: this.modelAuthAgentId,
       now: Date.now(),
-    }).toSorted(compareSidebarAttentionEntries);
+    });
     return buildSidebarInboxEntries({
       approvals: overlay.approvalQueue,
       attention,

@@ -112,7 +112,14 @@ also defers Package Acceptance Telegram, broad live/E2E, QA-live and Parallels.
 Package Telegram deferral applies to beta-profile `main` too, but it does not
 qualify for `npm-beta-v1`.
 
-Selected native-app CI and Windows Node tests block validation on failure.
+FRV `normalCi` Windows Node shards are policy-advisory (`windows-node-ci`).
+Eligible `normalCi` failures with authenticated `recorded-flake` receipts are
+also advisory; all other selected failures block. Decide blocker or flake for
+every failure, rerun flakes on the same Release SHA at most twice, and file a
+fix-in-parallel issue/PR on `main`. Do not re-cut, change tooling, or start another
+FRV for a flake. See the [CI skill](../../release-openclaw-ci/SKILL.md#publication-requirements).
+Other children and package/install/update, artifact, and evidence gates stay
+strict; extending classification beyond `normalCi` is follow-up work.
 Native platform publication remains independent and follows its own gates.
 All-group cross-OS qualification requires all nine Linux/Windows/macOS
 install/upgrade pairs. Focused recovery may select individual lanes but does

@@ -1,4 +1,3 @@
-// Defines the top-level OpenClaw configuration type.
 import type { z } from "zod";
 import type { TranscriptsConfig } from "../transcripts/config.js";
 import type { ConfigIncludeOwnership } from "./includes.js";

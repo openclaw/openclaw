@@ -1,3 +1,5 @@
+import { asNullableObjectRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
+
 /**
  * Inline diff data for tool-call rendering.
  *
@@ -30,6 +32,20 @@ export type DiffLine = {
 };
 
 export type DiffStat = { added: number; removed: number };
+
+export function readLiveDiffStat(value: unknown): DiffStat | undefined {
+  const diff = readRecord(value);
+  const added = diff?.added;
+  const removed = diff?.removed;
+  return typeof added === "number" &&
+    Number.isInteger(added) &&
+    added >= 0 &&
+    typeof removed === "number" &&
+    Number.isInteger(removed) &&
+    removed >= 0
+    ? { added, removed }
+    : undefined;
+}
 
 type LineDiffResult =
   | { kind: "complete"; lines: DiffLine[]; stat: DiffStat }

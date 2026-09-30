@@ -1,5 +1,4 @@
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-contract";
-// Nostr plugin module implements gateway behavior.
 import type { StableChannelIngressIdentityParams } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   bindIngressLifecycleToReplyOptions,

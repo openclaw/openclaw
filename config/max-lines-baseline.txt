@@ -244,7 +244,6 @@ src/agents/agent-tools.before-tool-call.e2e.test.ts
 src/agents/agent-tools.before-tool-call.integration.e2e.test.ts
 src/agents/agent-tools.create-openclaw-coding-tools.test.ts
 src/agents/agent-tools.read.ts
-src/agents/agent-tools.ts
 src/agents/auth-profiles/oauth-manager.ts
 src/agents/auth-profiles/persisted.ts
 src/agents/auth-profiles/profiles.test.ts
@@ -586,7 +585,6 @@ src/logging/redact.ts
 src/media-understanding/apply.test.ts
 src/media-understanding/runner.entries.ts
 src/media-understanding/runner.ts
-src/media-understanding/runner.vision-skip.test.ts
 src/media/fetch.test.ts
 src/media/web-media.test.ts
 src/media/web-media.ts

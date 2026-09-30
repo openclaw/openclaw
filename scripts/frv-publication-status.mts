@@ -1,5 +1,12 @@
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
+import {
+  diagnosticStates as diagnosticState,
+  diagnosticError as errorSchema,
+  diagnosticPackage as packageSchema,
+  diagnosticStage as stageSchema,
+  diagnosticStageNames as stageNames,
+} from "./lib/release-postpublish-diagnostic-schema.mts";
 
 // Observation limits are independent of the continuation controller's wait budget.
 export const PUBLICATION_LIMITS = Object.freeze({
@@ -83,14 +90,6 @@ const conclusion = z.enum([
   "neutral",
   "stale",
   "startup_failure",
-]);
-const diagnosticState = z.enum([
-  "unattempted",
-  "skipped",
-  "started",
-  "success",
-  "failure",
-  "unknown",
 ]);
 const diagnosticConclusion = z.enum([...conclusion.options, "unknown"]);
 const actor = z.object({
@@ -202,51 +201,6 @@ export function parsePublicationJobs(values: unknown[], runId: string, attempt: 
   });
 }
 
-const errorSchema = z.object({
-  class: z.enum([
-    "registry-not-visible",
-    "selector-mismatch",
-    "identity-mismatch",
-    "transport",
-    "malformed-response",
-    "command-failure",
-    "evidence-write-failure",
-  ]),
-  status: z.number().int().min(0).max(255).nullable(),
-});
-const packageSchema = z.object({
-  name: z
-    .string()
-    .max(128)
-    .regex(/^@openclaw\/[a-z0-9][a-z0-9._-]*$/u),
-  state: diagnosticState,
-  publication: z.enum(["unknown", "observed"]),
-  error: errorSchema.nullable(),
-});
-const stageSchema = z.object({
-  state: diagnosticState,
-  publication: z.enum(["unknown", "observed"]),
-  error: errorSchema.nullable(),
-  packages: z.array(packageSchema).max(256),
-  packagesTruncated: z.boolean(),
-});
-const stageNames = [
-  "checkout",
-  "githubRelease",
-  "coreNpm",
-  "postpublish",
-  "pluginNpm",
-  "clawHub",
-  "fullReleaseValidation",
-  "pluginNpmRun",
-  "pluginClawHubRun",
-  "pluginClawHubBootstrap",
-  "openclawNpm",
-  "npmTelegram",
-  "evidence",
-  "binding",
-  "assets",
-] as const;
 export const PUBLICATION_CHILDREN = {
   openclawNpm: { workflow: ".github/workflows/openclaw-npm-release.yml", surface: "coreNpm" },
   pluginNpm: { workflow: ".github/workflows/plugin-npm-release.yml", surface: "pluginNpm" },

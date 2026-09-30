@@ -589,10 +589,7 @@ function shouldBootstrapCliProxyBeforeFastPath(env: NodeJS.ProcessEnv = process.
   if (isDebugProxyCaptureEnvEnabled(env)) {
     return true;
   }
-  return CLI_PROXY_ENV_KEYS.some((key) => {
-    const value = env[key];
-    return typeof value === "string" && value.trim().length > 0;
-  });
+  return CLI_PROXY_ENV_KEYS.some((key) => normalizeOptionalString(env[key]) !== undefined);
 }
 
 function isKnownBuiltInCommandRoot(primary: string): boolean {

@@ -55,6 +55,8 @@ import { mutateSessionGroupCatalogInDatabase } from "../gateway/session-group-ca
 import { isWorkerInferenceStoreCommand } from "../gateway/worker-environments/inference-store.worker-contract.js";
 import { executeWorkerInferenceStoreCommand } from "../gateway/worker-environments/inference-store.worker.js";
 import { startWorkerPlacementDispatchInWorker } from "../gateway/worker-environments/placement-dispatch-store.worker.js";
+import { isPlacementSessionToolCommand } from "../gateway/worker-environments/placement-session-tool-operations.worker-contract.js";
+import { executePlacementSessionToolCommand } from "../gateway/worker-environments/placement-session-tool-operations.worker.js";
 import { isPlacementTurnClaimCommand } from "../gateway/worker-environments/placement-turn-claims.worker-contract.js";
 import { executePlacementTurnClaimCommand } from "../gateway/worker-environments/placement-turn-claims.worker.js";
 import { isWorkerEnvironmentCommand } from "../gateway/worker-environments/store-worker-contract.js";
@@ -213,6 +215,9 @@ export function executeSharedStateCommand(
   }
   if (isWorkerInferenceStoreCommand(command)) {
     return executeWorkerInferenceStoreCommand(command, open());
+  }
+  if (isPlacementSessionToolCommand(command)) {
+    return executePlacementSessionToolCommand(command, open());
   }
   if (isPlacementTurnClaimCommand(command)) {
     return executePlacementTurnClaimCommand(command, open());

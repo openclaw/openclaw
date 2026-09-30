@@ -24,6 +24,7 @@ import { handleWorkerBootstrapArtifactTransferHttpRequest } from "./worker-boots
 import { createWorkerBootstrapArtifactTransferService } from "./worker-bootstrap-artifact-transfer-service.js";
 
 vi.mock("../../infra/device-bootstrap.js", () => ({
+  revokeDeviceBootstrapToken: vi.fn(async () => ({ removed: true })),
   ensureDevicePairSetupBootstrapToken: vi.fn(async ({ setupId }: { setupId: string }) => ({
     status: "pending",
     token: "bootstrap-token",
@@ -692,6 +693,7 @@ describe("worker node enrollment", () => {
         token: setup.bootstrapToken,
         deviceId: "paired-cloud-node",
         completedAtMs: 1_100,
+        admitsCloudWorkerSetup: manager.admitsNodeSetupCompletion,
       });
       expect(store.get(record.environmentId)).toMatchObject({
         nodeSetupId: enrollment.setupId,

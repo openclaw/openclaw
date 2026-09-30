@@ -47,7 +47,6 @@ const skippedInboundAuditReasons = new Map<
 >([
   ["duplicate", "duplicate"],
   ["reply-operation-active", "reply_operation_active"],
-  ["reply_operation_aborted", "reply_operation_aborted"],
 ]);
 
 function resolveInboundMessageAuditTerminal(

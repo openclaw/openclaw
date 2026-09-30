@@ -660,16 +660,9 @@ export function renderMemoryImport(props: MemoryImportViewProps) {
     <div class="memory-import" data-test-id="memory-import-page">
       ${renderSettingsPage(html`
         ${renderIntroSection(props)} ${renderBackfillSection(props)}
-        ${
-          props.error
-            ? html`<div class="callout danger" role="alert">${props.error}</div>`
-            : nothing
-        }
-        ${
-          props.applyError
-            ? html`<div class="callout danger" role="alert">${props.applyError}</div>`
-            : nothing
-        }
+        ${[props.error, props.applyError].map((error) =>
+          error ? html`<div class="callout danger" role="alert">${error}</div>` : nothing,
+        )}
         ${
           props.loading && !props.plan
             ? html`<div class="settings-group memory-import__loading" aria-busy="true">

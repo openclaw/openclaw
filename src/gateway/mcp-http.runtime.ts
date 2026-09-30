@@ -312,7 +312,6 @@ function buildMcpLoopbackToolCacheKey(params: McpLoopbackScopeParams): string {
       clientCaps: [...new Set(context.clientCaps ?? [])].toSorted(),
       // Missing allows all; an empty list denies all.
       toolsAllow: context.toolsAllow ? [...new Set(context.toolsAllow)].toSorted() : undefined,
-      modelHasVision: context.modelHasVision,
       pinnedWidgetAuthoring: context.pinnedWidgetAuthoring === true,
       currentInboundAudio: context.currentInboundAudio === true,
       sourceReplyOnly: context.sourceReplyOnly === true,

@@ -1,36 +1,8 @@
-import type { SessionParticipantIdentity } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
 import type { SessionsListResult } from "../api/types.ts";
+import { sessionParticipantIdentityKey } from "../lib/chat/sender-label.ts";
 import { findSidebarSessionInTree } from "./app-sidebar-session-navigation-logic.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { sessionSelfOwner, type SessionOwnerOption } from "./session-owner-chip.ts";
-
-function sessionParticipantIdentityKey(identity: SessionParticipantIdentity): string {
-  switch (identity.type) {
-    case "profile":
-    case "agent":
-      return JSON.stringify([identity.type, identity.id]);
-    case "remote":
-      return JSON.stringify([
-        identity.type,
-        identity.pluginId,
-        identity.domain,
-        identity.idKind,
-        identity.id,
-      ]);
-    case "observation":
-      return JSON.stringify([
-        identity.type,
-        identity.pluginId,
-        identity.accountId,
-        identity.senderKind,
-        identity.id,
-      ]);
-    case "legacy":
-      return JSON.stringify([identity.type, identity.actorType, identity.source, identity.id]);
-    default:
-      return identity satisfies never;
-  }
-}
 
 function hasMultipleSidebarSessionIdentities(
   ownerOptions: readonly SessionOwnerOption[],

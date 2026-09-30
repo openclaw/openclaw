@@ -235,7 +235,7 @@ function summarizeDay(day: string, candidates: SessionIngestionCandidate[]): Ses
   };
 }
 
-function buildSessionBackfillDiaryEntries(params: {
+async function buildSessionBackfillDiaryEntries(params: {
   agentId: string;
   days: Array<{ day: string; candidates: SessionIngestionCandidate[] }>;
   rem?: boolean;
@@ -299,7 +299,7 @@ function buildSessionBackfillDiaryEntries(params: {
     return { isoDay: day, sourcePath: `memory/.dreams/session-corpus/${day}.txt`, bodyLines };
   });
   // Reserve lineage before publication, even when subsequent corpus/staging work fails.
-  recordMemoryEntryOrigins({ agentId: params.agentId, origins });
+  await recordMemoryEntryOrigins({ agentId: params.agentId, origins });
   return entries;
 }
 
@@ -469,7 +469,7 @@ async function executeSessionBackfillBatchCore(
   let stagedEntries = 0;
 
   if (selectedDays.length > 0 && (params.rem || params.apply)) {
-    const diaryEntries = buildSessionBackfillDiaryEntries({
+    const diaryEntries = await buildSessionBackfillDiaryEntries({
       agentId: params.agentId,
       days: selectedDays,
       rem: params.rem,

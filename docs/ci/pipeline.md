@@ -832,8 +832,13 @@ Completed canonical-main extension boundary jobs publish their existing compiler
 receipts into a cache separated by OS, architecture, and runner environment. PRs
 restore that archive, falling back to the SDK warmer's declaration-only archive.
 Every restored receipt still validates its compiler, configuration, source,
-resolution topology, and output hashes; the negative boundary canary always runs.
-This reuses work the boundary job already completed and adds no producer job.
+resolution lookups, and output hashes; the negative boundary canary always runs.
+Receipts include missing candidates, directory listings, and symlink resolutions,
+so an unrelated new test can retain a hit while a newly effective type dependency
+invalidates it. Each validation snapshot shares actual probe results across
+receipts, while comparing every recorded fact. Fresh compiles still seal the
+whole resolution namespace against changes during compilation. Old or malformed
+receipts recompile. This adds no producer job or package-selection exemption.
 
 Declaration caches hash the selected writer's transitive generator imports,
 package and plugin metadata, explicit schema and build metadata inputs, and

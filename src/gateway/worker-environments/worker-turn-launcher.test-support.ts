@@ -4,6 +4,7 @@ import {
   WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
   WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
@@ -402,6 +403,7 @@ export function attachedEnvironment(): WorkerTurnEnvironmentRecord {
       protocolFeatures: [
         WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
         WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
+        WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE,
       ],
       installKind: "bundle",
     },

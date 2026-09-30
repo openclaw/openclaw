@@ -53,7 +53,6 @@ import {
   imessageSecurityAdapter,
   imessageSetupWizard,
 } from "./shared.js";
-import { probeIMessageStatusAccount } from "./status-core.js";
 import { isIMessagePhoneLikeHandle } from "./target-identifiers.js";
 import {
   inferIMessageTargetChatType,
@@ -382,11 +381,13 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
             dbPath: snapshot.dbPath ?? null,
           }),
         probeAccount: async ({ account, timeoutMs }) =>
-          await probeIMessageStatusAccount({
-            account,
+          await (
+            await loadIMessageChannelRuntime()
+          ).probeIMessageAccount({
             timeoutMs,
-            probeIMessageAccount: async (params) =>
-              await (await loadIMessageChannelRuntime()).probeIMessageAccount(params),
+            cliPath: account.config.cliPath,
+            dbPath: account.config.dbPath,
+            ...(account.config.remoteHost ? { remoteHost: account.config.remoteHost } : {}),
           }),
         resolveAccountSnapshot: ({ account, runtime }) => ({
           accountId: account.accountId,

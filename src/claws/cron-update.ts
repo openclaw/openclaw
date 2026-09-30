@@ -34,7 +34,6 @@ export class ClawCronUpdateError extends Error {
 function targetRef(params: {
   agentId: string;
   job: ClawCronJob;
-  schedulerJobId?: string;
   previous?: PersistedClawCronRef;
   nowMs: number;
 }): PersistedClawCronRef {
@@ -43,7 +42,6 @@ function targetRef(params: {
     agentId: params.agentId,
     manifestId: params.job.id,
     declarationKey: `claw:${params.agentId}:${params.job.id}`,
-    ...(params.schedulerJobId ? { schedulerJobId: params.schedulerJobId } : {}),
     status: "pending",
     job: params.job,
     createdAtMs: params.previous?.createdAtMs ?? params.nowMs,

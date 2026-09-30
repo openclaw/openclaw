@@ -41,6 +41,7 @@ import type {
 } from "../gateway/session-group-catalog.types.js";
 import type { WorkerInferenceStoreOperations } from "../gateway/worker-environments/inference-store.worker-contract.js";
 import type { WorkerPlacementDispatchStoreOperations } from "../gateway/worker-environments/placement-record.js";
+import type { PlacementSessionToolWorkerOperations } from "../gateway/worker-environments/placement-session-tool-operations.worker-contract.js";
 import type { PlacementTurnClaimWorkerOperations } from "../gateway/worker-environments/placement-turn-claims.worker-contract.js";
 import type { WorkerEnvironmentWorkerOperations } from "../gateway/worker-environments/store-worker-contract.js";
 import type {
@@ -152,6 +153,7 @@ export type OpenClawStateWorkerOperations = UpdateRunReconciliationOperations &
   WorkerEnvironmentWorkerOperations &
   WorkerInferenceStoreOperations &
   PlacementTurnClaimWorkerOperations &
+  PlacementSessionToolWorkerOperations &
   WorkerPlacementDispatchStoreOperations &
   SessionDeliveryWorkerOperations &
   DeliveryQueueWorkerOperations &

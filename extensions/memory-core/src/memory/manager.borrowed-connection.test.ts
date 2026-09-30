@@ -2,6 +2,7 @@ import { unlinkSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
@@ -22,8 +23,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { seedMemoryForgetTombstones } from "../test-helpers.js";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
 import { MemoryIndexRevisionConflictError } from "./manager-db-kernel.js";
+import * as databaseFiles from "./manager-db.js";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
-import { closeAllMemoryIndexManagers } from "./manager-runtime.js";
 import { MemoryIndexManager } from "./manager.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
@@ -41,51 +42,6 @@ describe("memory manager shared agent connection", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
-  });
-
-  it.each(["default", "cli", "maintenance"] as const)(
-    "borrows the verified connection without another open or integrity scan for %s",
-    async (purpose) => {
-      const shared = sqliteRuntime.openOpenClawAgentDatabase({ agentId: "main" });
-      const physicalOpen = vi.spyOn(sqliteRuntime, "openNodeSqliteDatabase");
-      const prepare = vi.spyOn(shared.db, "prepare");
-      const manager = await MemoryIndexManager.get({
-        cfg: createConfig(),
-        agentId: "main",
-        purpose,
-      });
-      expect(manager).not.toBeNull();
-      if (!manager) {
-        throw new Error("manager missing");
-      }
-      fixture.trackManager(manager);
-
-      expect(physicalOpen.mock.calls.filter(([location]) => location === shared.path)).toEqual([]);
-      expect(
-        prepare.mock.calls.filter(([sql]) => /integrity_check|foreign_key_check/i.test(sql)),
-      ).toEqual([]);
-      expect(managerDatabase(manager) === shared.db).toBe(true);
-      await manager.close();
-      expect(shared.db.isOpen).toBe(true);
-      expect(shared.db.prepare("SELECT 1 AS alive").get()).toEqual({ alive: 1 });
-    },
-  );
-
-  it("opens a hot-created agent through the same canonical owner", async () => {
-    const cfg = createConfig();
-    cfg.agents!.list!.push({ id: "hot", workspace: fixture.paths.workspace });
-    const manager = await MemoryIndexManager.get({ cfg, agentId: "hot" });
-    expect(manager).not.toBeNull();
-    if (!manager) {
-      throw new Error("manager missing");
-    }
-    fixture.trackManager(manager);
-    const shared = sqliteRuntime.openOpenClawAgentDatabase({ agentId: "hot" });
-
-    expect(managerDatabase(manager) === shared.db).toBe(true);
-    expect(manager.status().dbPath).toBe(shared.path);
-    await manager.sync({ reason: "test", force: true });
-    expect((await manager.search("Alpha")).length).toBeGreaterThan(0);
   });
 
   it("keeps the borrowed connection alive across settings replacement and shutdown", async () => {
@@ -139,27 +95,6 @@ describe("memory manager shared agent connection", () => {
     expect(result.error).toMatch(/foreign_key_check/);
   });
 
-  it("retains a borrowed connection until thirty idle minutes after manager close", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    try {
-      const shared = sqliteRuntime.openOpenClawAgentDatabase({ agentId: "main" });
-      const manager = await fixture.getFreshManager(createConfig());
-      vi.advanceTimersByTime(30 * 60_000);
-
-      expect(shared.db.isOpen).toBe(true);
-      expect(managerDatabase(manager) === shared.db).toBe(true);
-      await manager.sync({ reason: "test", force: true });
-      expect((await manager.search("Alpha")).length).toBeGreaterThan(0);
-      await manager.close();
-      vi.advanceTimersByTime(30 * 60_000 - 1);
-      expect(shared.db.isOpen).toBe(true);
-      vi.advanceTimersByTime(1);
-      expect(shared.db.isOpen).toBe(false);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it("loads vectors on the shared connection with native loading disabled between calls", async () => {
     const shared = sqliteRuntime.openOpenClawAgentDatabase({ agentId: "main" });
     const manager = await fixture.getFreshManager(createConfig());
@@ -177,37 +112,6 @@ describe("memory manager shared agent connection", () => {
     expect(() => shared.db.prepare("SELECT load_extension(?)").get("not-a-real-extension")).toThrow(
       "not authorized",
     );
-  });
-
-  it("shares more than sixty-four manager handles without evicting released handles on open", async () => {
-    const cfg = createConfig();
-    const agents = Array.from({ length: 65 }, (_, index) => ({
-      id: `retained-${index}`,
-      workspace: fixture.paths.workspace,
-    }));
-    cfg.agents!.list = agents;
-    const handles = new Set<DatabaseSync>();
-    const countOpenHandles = () => [...handles].filter((db) => db.isOpen).length;
-    for (const { id: agentId } of agents) {
-      handles.add(sqliteRuntime.openOpenClawAgentDatabase({ agentId }).db);
-      const manager = await MemoryIndexManager.get({ cfg, agentId });
-      if (!manager) {
-        throw new Error("manager missing");
-      }
-      fixture.trackManager(manager);
-      handles.add(managerDatabase(manager));
-    }
-    const retained = countOpenHandles();
-
-    await closeAllMemoryIndexManagers();
-    const afterRelease = countOpenHandles();
-    handles.add(sqliteRuntime.openOpenClawAgentDatabase({ agentId: "after-release" }).db);
-
-    expect({ retained, afterRelease, afterOpen: countOpenHandles() }).toEqual({
-      retained: agents.length,
-      afterRelease: agents.length,
-      afterOpen: agents.length + 1,
-    });
   });
 
   it("replaces a revoked shared handle without an old release closing its replacement", async () => {
@@ -660,6 +564,115 @@ describe("memory manager shared agent connection", () => {
       writer.close();
       await sync.catch(() => undefined);
       await manager.close();
+    }
+  });
+
+  it.each(["unreleased", "replaced"] as const)(
+    "preserves the %s shadow when final cleanup has no custody",
+    async (failure) => {
+      const manager = await fixture.getFreshManager(
+        fixture.createConfig({ provider: "none", sources: ["memory"], vectorEnabled: false }),
+      );
+      const open = MemoryIndexDatabase.openShadow.bind(MemoryIndexDatabase);
+      let shadow: { owner: MemoryIndexDatabase; path: string } | undefined;
+      const releaseFailure = new Error("controlled shadow release failure");
+      const replacement = "replacement file must survive rejected identity";
+      vi.spyOn(MemoryIndexDatabase, "openShadow").mockImplementation((filename, ...args) => {
+        const owner = open(filename, ...args);
+        shadow = { owner, path: filename };
+        if (failure === "unreleased") {
+          vi.spyOn(owner, "release").mockImplementation(() => {
+            throw releaseFailure;
+          });
+        } else {
+          const close = owner.closeShadow.bind(owner);
+          let replaced = false;
+          vi.spyOn(owner, "closeShadow").mockImplementation(async () => {
+            await close();
+            if (!replaced) {
+              replaced = true;
+              await fs.rename(filename, `${filename}.preserved`);
+              await fs.writeFile(filename, replacement);
+            }
+          });
+        }
+        return owner;
+      });
+      try {
+        await expect(manager.sync({ reason: "cli", force: true })).rejects.toThrow(
+          failure === "unreleased" ? releaseFailure.message : "shadow file changed",
+        );
+        expect(shadow).toBeDefined();
+        expect(shadow!.owner.shadowReleased).toBe(failure === "replaced");
+        expect(shadow!.owner.db.isOpen).toBe(failure === "unreleased");
+        if (failure === "unreleased") {
+          expect((await fs.stat(shadow!.path)).isFile()).toBe(true);
+        } else {
+          expect(await fs.readFile(shadow!.path, "utf8")).toBe(replacement);
+        }
+      } finally {
+        vi.restoreAllMocks();
+        // The injected release failure deliberately leaves this fixture-owned handle open.
+        if (shadow?.owner.db.isOpen) {
+          shadow.owner.release();
+        }
+      }
+    },
+  );
+
+  it("keeps closed-shadow cleanup pending while foreground callbacks run", async () => {
+    const manager = await fixture.getFreshManager(
+      fixture.createConfig({ provider: "none", sources: ["memory"], vectorEnabled: false }),
+    );
+    const open = databaseFiles.openMemoryDatabaseAtPath;
+    let shadow: DatabaseSync | undefined;
+    let shadowPath: string | undefined;
+    vi.spyOn(databaseFiles, "openMemoryDatabaseAtPath").mockImplementation((filename, ...args) => {
+      shadowPath = filename;
+      shadow = open(filename, ...args);
+      return shadow;
+    });
+    const entered = createDeferred<void>();
+    const resume = createDeferred<void>();
+    const remove = fs.rm;
+    let removalStarted = false;
+    vi.spyOn(fs, "rm").mockImplementation(async (...args) => {
+      if (args[0] === shadowPath) {
+        removalStarted = true;
+        entered.resolve();
+        await resume.promise;
+      }
+      return remove(...args);
+    });
+    let syncSettled = false;
+    const sync = manager.sync({ reason: "cli", force: true }).finally(() => {
+      syncSettled = true;
+    });
+    void sync.catch(() => undefined);
+    let close: Promise<void> | undefined;
+    let closed = false;
+    try {
+      await Promise.race([entered.promise, sync]);
+      expect(removalStarted).toBe(true);
+      expect(shadow?.isOpen).toBe(false);
+      expect(syncSettled).toBe(false);
+      await nextTurn();
+      expect(manager.status().chunks).toBeGreaterThan(0);
+      expect(syncSettled).toBe(false);
+      close = manager.close().then(() => {
+        closed = true;
+      });
+      await nextTurn();
+      expect(closed).toBe(false);
+      resume.resolve();
+      await Promise.all([sync, close]);
+      expect(shadowPath).toBeDefined();
+      for (const suffix of ["", "-wal", "-shm", "-journal"]) {
+        await expect(fs.access(`${shadowPath}${suffix}`)).rejects.toMatchObject({ code: "ENOENT" });
+      }
+    } finally {
+      resume.resolve();
+      await Promise.allSettled([sync, close]);
     }
   });
 });

@@ -53,6 +53,7 @@ export async function prepareChatMetadataModelProjection(params: {
     snapshot,
     metadataSnapshot: params.facts.owner.metadataSnapshot,
     preparedAuthStore: params.facts.authStore,
+    accountCatalog: params.facts.owner.accountCatalog,
     requesterProfileId: params.requesterProfileId,
     // The owner records usable auth at discovery; metadata must share that exact generation fact.
     preparedRuntimeAuthModes: params.facts.authModes,

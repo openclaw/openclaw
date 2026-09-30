@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/slack-huddles",
-  "version": "2026.9.6",
+  "version": "2026.9.7",
   "description": "OpenClaw Slack huddle browser meeting participant plugin.",
   "repository": {
     "type": "git",
@@ -15,7 +15,7 @@
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.9.6"
+    "openclaw": ">=2026.9.7"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -36,7 +36,7 @@
       "pluginApi": ">=2026.9.8"
     },
     "build": {
-      "openclawVersion": "2026.9.6",
+      "openclawVersion": "2026.9.7",
       "bundledDist": false
     },
     "release": {

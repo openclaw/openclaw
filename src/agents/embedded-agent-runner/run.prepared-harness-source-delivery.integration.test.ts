@@ -84,6 +84,8 @@ describe("prepared harness source delivery", () => {
   let state: OpenClawTestState;
   let restoreSynthesis: (() => void) | undefined;
   async function loadSourceDeliveryHarness() {
+    // This integration constructs the real tool surface; dispatch mocks only readiness.
+    vi.doUnmock("../tools/ask-user-tool.js");
     // The runner resets modules; keep its private payload metadata shared with dispatch.
     vi.doMock("../../auto-reply/reply-payload.js", () => replyPayloadRuntime);
     const loaded = await loadRunOverflowCompactionHarness();
@@ -476,6 +478,8 @@ describe("prepared harness source delivery", () => {
       replyOptions: { onPartialReply },
     });
     await settleReplyDispatcher({ dispatcher });
+    // Dispatch catches resolver errors; retain their original failure at this boundary.
+    await expect(replyResolver.mock.results[0]?.value).resolves.toBeDefined();
 
     if (genuineTtsDelivery) {
       expect(retainedHost).toBeDefined();

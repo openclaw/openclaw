@@ -1,6 +1,7 @@
 import type { Chat, Message } from "grammy/types";
 import { firstDefined } from "openclaw/plugin-sdk/allow-from";
 import { formatLocationText } from "openclaw/plugin-sdk/channel-inbound";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type {
   OpenClawConfig,
   DmPolicy,
@@ -77,19 +78,11 @@ function cacheTelegramForumFlag(chatId: string | number, isForum: boolean, nowMs
     telegramForumFlagByChatId.delete(cacheKey);
     return;
   }
-  if (
-    !telegramForumFlagByChatId.has(cacheKey) &&
-    telegramForumFlagByChatId.size >= TELEGRAM_FORUM_FLAG_CACHE_MAX_CHATS
-  ) {
-    const oldestKey = telegramForumFlagByChatId.keys().next().value;
-    if (oldestKey !== undefined) {
-      telegramForumFlagByChatId.delete(oldestKey);
-    }
-  }
   telegramForumFlagByChatId.set(cacheKey, {
     expiresAtMs,
     isForum,
   });
+  pruneMapToMaxSize(telegramForumFlagByChatId, TELEGRAM_FORUM_FLAG_CACHE_MAX_CHATS);
 }
 
 export function getCachedTelegramForumFlag(

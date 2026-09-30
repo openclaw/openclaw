@@ -3,12 +3,12 @@ import { nothing, render } from "lit";
 import { afterEach, expect, it, vi } from "vitest";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
+import { renderMessageGroup } from "./chat-message-group.ts";
 import {
   createAssistantMessage,
   createAttachmentBlock,
   createMessageGroup,
 } from "./chat-message.test-support.ts";
-import { renderMessageGroup } from "./chat-message.ts";
 import { projectTurnVideoMessages } from "./chat-turn-video-gallery.ts";
 
 const container = document.createElement("div");

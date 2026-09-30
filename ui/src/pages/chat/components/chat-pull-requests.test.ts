@@ -204,7 +204,9 @@ describe("renderChatPullRequests", () => {
       expect(chip?.getAttribute("data-state")).toBe("merged");
       expect(chip?.querySelector(".chat-pr__state")?.textContent?.trim()).toBe("Merged");
       expect(chip?.querySelector(".chat-pr__diff")).toBeNull();
-      expect(chip?.querySelector(".chat-pr__checks")).toBeNull();
+      expect(chip?.querySelector(".chat-pr__checks")?.getAttribute("data-checks")).toBe("none");
+      expect(chip?.querySelector("openclaw-chat-ci-automation")).not.toBeNull();
+      expect(chip?.querySelector("openclaw-chat-ci-details")).toBeNull();
       // Merged is terminal, so the stale-data warning stays off merged chips.
       expect(chip?.querySelector(".chat-pr__warning")).toBeNull();
       expect(container.querySelectorAll(".chat-pr")).toHaveLength(1);

@@ -34,10 +34,11 @@ import {
   updateTransition,
 } from "./placement-row-codec.js";
 import type { PlacementStoreRuntime } from "./placement-runtime.js";
+import { createPlacementSessionToolOperationOps } from "./placement-session-tool-operations.js";
 import {
   assertNoRunningWorkerSessionToolOperations,
   clearWorkerTurnToolState,
-} from "./placement-session-tool-operations.js";
+} from "./placement-session-tool-operations.kernel.js";
 import {
   canTransitionWorkerSessionPlacement,
   type WorkerSessionPlacementState,
@@ -125,6 +126,11 @@ export function createWorkerSessionPlacementStore(
   const store = {
     ...createPlacementWorkspaceReservationOps(runtime),
     ...createPlacementTurnClaimOps(runtime),
+    ...createPlacementSessionToolOperationOps({
+      path,
+      instanceId: runtime.instanceId,
+      now: options.now,
+    }),
     ...createPlacementTurnClaimWorkerOps({
       path,
       instanceId: runtime.instanceId,
