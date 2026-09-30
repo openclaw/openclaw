@@ -87,6 +87,8 @@ export async function updateFinalizeCommand(
   opts: UpdateFinalizeOptions,
   recoveryRunIds?: readonly string[],
 ): Promise<void> {
+  // Refuse retained recovery before discovery; preflight rechecks before state writes.
+  await assertUpdateRecoveryAdmission({ env: process.env });
   await refuseHostOwnedUpdate(await resolveUpdateRoot(), opts);
   const invocationCwd = tryProcessCwd();
   suppressDeprecations();
