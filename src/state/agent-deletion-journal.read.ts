@@ -12,6 +12,7 @@ type RetainedAgentDeletion = {
   agentId: string;
   databasePaths: readonly string[];
   state: "pending" | "retained";
+  warning?: string;
 };
 
 type RetainedAgentDeletionReadFailure = { status: "unavailable"; warning?: string };
@@ -36,15 +37,26 @@ export function retainedAgentDeletionHistoryAbsent(
 export function retainedAgentDeletionReadWarning(
   disposition: RetainedAgentDeletionDisposition,
 ): string | undefined {
-  return retainedAgentDeletionHistoryUnavailable(disposition) ? disposition.warning : undefined;
+  if (retainedAgentDeletionHistoryUnavailable(disposition)) {
+    return disposition.warning;
+  }
+  if (retainedAgentDeletionHistoryAbsent(disposition)) {
+    return undefined;
+  }
+  const warnings = [...new Set(disposition.flatMap((entry) => entry.warning ?? []))];
+  return warnings.length > 0 ? warnings.join(" ") : undefined;
 }
 
-function parseDatabasePaths(value: string): string[] {
-  const parsed: unknown = JSON.parse(value);
-  if (Array.isArray(parsed) && parsed.every((entry) => typeof entry === "string")) {
-    return parsed;
+function parseDatabasePaths(value: string): string[] | undefined {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (Array.isArray(parsed) && parsed.every((entry) => typeof entry === "string")) {
+      return parsed;
+    }
+  } catch {
+    // The readable identity still fences this deletion below.
   }
-  throw new Error("Invalid agent deletion database path journal.");
+  return undefined;
 }
 
 /** Read deletions that currently revoke database writes without mutating journal history. */
@@ -73,14 +85,21 @@ export function readRetainedAgentDeletions(
                   ]),
                 )
                 .orderBy("agent_id", "asc"),
-            ).rows.map((row) => ({
-              agentId: row.agent_id,
-              databasePaths: [
-                path.join(row.agent_dir, "openclaw-agent.sqlite"),
-                ...parseDatabasePaths(row.database_paths_json),
-              ],
-              state: row.cleanup_completed === 0 ? ("pending" as const) : ("retained" as const),
-            })),
+            ).rows.map((row) => {
+              const databasePaths = parseDatabasePaths(row.database_paths_json);
+              const entry: RetainedAgentDeletion = {
+                agentId: row.agent_id,
+                databasePaths: [
+                  path.join(row.agent_dir, "openclaw-agent.sqlite"),
+                  ...(databasePaths ?? []),
+                ],
+                state: row.cleanup_completed === 0 ? ("pending" as const) : ("retained" as const),
+              };
+              if (!databasePaths) {
+                entry.warning = `Could not read database paths for deleted agent ${row.agent_id}; its known database identity remains held.`;
+              }
+              return entry;
+            }),
           );
         },
         { env },

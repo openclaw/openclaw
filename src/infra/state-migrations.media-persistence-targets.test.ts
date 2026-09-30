@@ -265,8 +265,9 @@ describe("media persistence migration targets", () => {
     const result = await migrateLegacyMediaPersistence({ env });
 
     expect(result.warnings).toContain(
-      `Skipped unowned agent database ${databasePath}; deletion journal history is unavailable.`,
+      `Could not read database paths for deleted agent ${agentId}; its known database identity remains held.`,
     );
+    expect(result.notices).toEqual([RETAINED_NOTICE(databasePath, agentId)]);
     expect(readUserVersion(databasePath)).toBe(PREVIOUS_VERSION);
     expect(
       listOpenClawRegisteredAgentDatabases({
@@ -308,10 +309,55 @@ describe("media persistence migration targets", () => {
 
     expect(result.warnings).toEqual(
       expect.arrayContaining([
-        expect.stringContaining("Could not read retained agent deletion history"),
+        expect.stringContaining("Could not read database paths for deleted agent retired"),
       ]),
     );
     expect(readUserVersion(databasePath)).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
+  });
+
+  it("fences a configured pending deletion with malformed paths before final I/O", async () => {
+    const stateDir = fs.realpathSync.native(
+      makeTempDir(tempDirs, "media-persistence-malformed-pending-race-"),
+    );
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const agentId = "deleting-configured";
+    const operationId = "malformed-pending-race";
+    const databasePath = createLegacyAgentDatabase({ agentId, env });
+    const bytesBefore = fs.readFileSync(databasePath);
+
+    const result = await migrateLegacyMediaPersistence({
+      configuredAgentDatabaseTargets: [{ agentId, path: databasePath }],
+      env,
+      hooks: {
+        beforeDatabaseWrite: () => {
+          beginAgentDeletionJournal(
+            {
+              agentId,
+              operationId,
+              agentDir: path.dirname(databasePath),
+              workspaceDir: path.join(stateDir, "workspaces", agentId),
+              sessionsDir: path.join(stateDir, "agents", agentId, "sessions"),
+              databasePaths: [databasePath],
+              deleteFiles: true,
+            },
+            { env },
+          );
+          openOpenClawStateDatabase({ env })
+            .db.prepare(
+              "UPDATE agent_deletion_journal SET database_paths_json = ? WHERE agent_id = ?",
+            )
+            .run("{}", agentId);
+          closeOpenClawStateDatabaseForTest();
+        },
+      },
+    });
+
+    expect(result.warnings).toContain(
+      `Could not read database paths for deleted agent ${agentId}; its known database identity remains held.`,
+    );
+    expect(result.notices).toEqual([PENDING_NOTICE(databasePath, agentId)]);
+    expect(fs.readFileSync(databasePath)).toEqual(bytesBefore);
+    expect(readUserVersion(databasePath)).toBe(PREVIOUS_VERSION);
   });
 
   it.each([PREVIOUS_VERSION, 18])(

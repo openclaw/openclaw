@@ -928,7 +928,7 @@ describe("historical transcript directive migration", () => {
         : expect.arrayContaining([expect.stringMatching(/maintenance lease.*was lost/u)]),
     );
     if (interruption === "deletion") {
-      expect(result.notices.join("\n")).toContain("deletion of agent main is pending");
+      expect((result.notices ?? []).join("\n")).toContain("deletion of agent main is pending");
     }
     expect(fs.readFileSync(archivePath)).toEqual(archiveBytes);
     expect(readMigrationCursor(opened.path)).toEqual({
@@ -986,7 +986,7 @@ describe("historical transcript directive migration", () => {
     });
     const result = await migrateHistoricalTranscriptDirectives({ env });
     expect(result.warnings).toEqual([]);
-    expect(result.notices.join("\n")).toContain(`deletion of agent ${agentId} is pending`);
+    expect((result.notices ?? []).join("\n")).toContain(`deletion of agent ${agentId} is pending`);
     expect(readEventJson(opened.path, finalSessionId, 0)).toBe(finalEventJson);
     expect(readMigrationCursor(opened.path)).toEqual({
       phase: "transcripts",
