@@ -883,9 +883,13 @@ export function startGatewayDiagnosticHeartbeat(
     const shouldEmitLivenessReport = shouldEmitLivenessEvent || shouldEmitLivenessWarning;
     const shouldRecordMemorySample =
       shouldEmitLivenessReport || hasRecentDiagnosticActivity(now) || hasOpenDiagnosticWork(work);
-    (opts?.emitMemorySample ?? emitDiagnosticMemorySample)({
-      emitSample: shouldRecordMemorySample,
-    });
+    if (opts?.emitMemorySample) {
+      opts.emitMemorySample({ emitSample: shouldRecordMemorySample });
+    } else {
+      emitDiagnosticMemorySample({
+        emitSample: shouldRecordMemorySample,
+      });
+    }
 
     if (!shouldRecordMemorySample) {
       return;
