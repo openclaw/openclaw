@@ -29,7 +29,6 @@ import {
 import type { CronRuntimeMutationInputs } from "../store/runtime-worker.types.js";
 import { CronJobsStoreChangedError } from "../store/save-error.js";
 import { prepareCronStoreChanges } from "../store/save.kernel.js";
-import type { CronStoreTransactionHooks } from "../store/transaction-hooks.types.js";
 import type { CronJob, CronStoreFile } from "../types.js";
 import { assertTimeScheduleSatisfiable } from "./jobs-validation.js";
 import { dispatchCronNotification } from "./notification-dispatch.js";
@@ -42,13 +41,6 @@ const loadedCronStoreRevisions = new WeakMap<
   CronServiceState,
   { revision: number; jobsFingerprint?: string; runtimeFingerprint?: string }
 >();
-
-type PersistOptions = {
-  stateOnly?: boolean;
-  suppressScheduledJobId?: string;
-  postPersistNotifications?: DeferredCronNotifications;
-  transactionHooks?: CronStoreTransactionHooks;
-};
 
 export type CronRollbackSnapshot = {
   store: CronStoreFile | null;
@@ -239,7 +231,7 @@ export async function ensureLoaded(
     quarantinedConfigJobs.sort((left, right) => left.sourceIndex - right.sourceIndex);
     state.pendingQuarantineConfigJobs = quarantinedConfigJobs;
     try {
-      if (await persist(state)) {
+      if (await persistQuarantinedJobs(state, state.store)) {
         state.deps.log.warn(
           {
             storePath: state.deps.storePath,
@@ -289,35 +281,19 @@ export function warnIfDisabled(state: CronServiceState, action: string) {
   );
 }
 
-/** Persists cron rows and pending quarantine records in one SQLite transaction. */
-export async function persist(state: CronServiceState, opts?: PersistOptions): Promise<boolean> {
-  const store = state.store;
-  if (!store) {
-    return false;
-  }
-  const quarantine =
-    state.pendingQuarantineConfigJobs.length > 0
-      ? { entries: state.pendingQuarantineConfigJobs, nowMs: state.deps.nowMs() }
-      : undefined;
-  const stateOnly = !quarantine && opts?.stateOnly === true;
-  const previousFingerprint = loadedCronStoreRevisions.get(state)?.jobsFingerprint;
-  let revision: number;
-  let jobsFingerprint: string | undefined;
-  let runtimeFingerprint: string | undefined;
+/** Persists quarantine and the surviving rows in one SQLite transaction. */
+async function persistQuarantinedJobs(
+  state: CronServiceState,
+  store: CronStoreFile,
+): Promise<boolean> {
+  const quarantine = { entries: state.pendingQuarantineConfigJobs, nowMs: state.deps.nowMs() };
   try {
     const committed = await saveCronJobsStoreWithRevision(state.deps.storePath, store, {
       quarantine,
-      stateOnly,
-      transactionHooks: opts?.transactionHooks,
     });
-    // Runtime-only writes do not refresh the service's definition snapshot.
-    revision =
-      stateOnly && committed.jobsFingerprint !== previousFingerprint ? -1 : committed.revision;
-    jobsFingerprint = stateOnly ? previousFingerprint : committed.jobsFingerprint;
-    runtimeFingerprint = committed.runtimeFingerprint;
+    loadedCronStoreRevisions.set(state, committed);
   } catch (error) {
     if (
-      !quarantine ||
       error instanceof CronRunReceiptConflictError ||
       error instanceof CronRunReceiptRevisionError
     ) {
@@ -334,18 +310,12 @@ export async function persist(state: CronServiceState, opts?: PersistOptions): P
     }
     return false;
   }
-  loadedCronStoreRevisions.set(state, { revision, jobsFingerprint, runtimeFingerprint });
-  if (quarantine) {
-    state.pendingQuarantineConfigJobs = [];
-    state.lastQuarantineFailureWarnKey = null;
-  }
+  state.pendingQuarantineConfigJobs = [];
+  state.lastQuarantineFailureWarnKey = null;
   publishDurableNextRunChanges({
     state,
     storeJobs: store.jobs,
-    stateOnly,
-    suppressScheduledJobId: opts?.suppressScheduledJobId,
   });
-  runPostPersistCronNotifications(state, opts?.postPersistNotifications);
   return true;
 }
 
@@ -534,7 +504,6 @@ export async function persistCronJobMutation(params: {
           publishDurableNextRunChanges({
             state,
             storeJobs: store.jobs,
-            stateOnly: false,
             suppressScheduledJobId: params.suppressScheduledJobId,
           });
           runPostPersistCronNotifications(state, params.postPersistNotifications);

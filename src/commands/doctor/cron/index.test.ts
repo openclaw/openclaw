@@ -239,7 +239,7 @@ describe("collectLegacyCronStoreHealthFindings", () => {
     expect(await fs.readFile(storePath, "utf8")).toBe(original);
     await expect(fs.stat(`${storePath}.migrated`)).rejects.toMatchObject({ code: "ENOENT" });
     expect((await loadCronStore(storePath)).jobs).toEqual([]);
-    expect(loadCronQuarantinedJobs(storePath)).toEqual([]);
+    expect(await loadCronQuarantinedJobs(storePath)).toEqual([]);
     expect(
       openOpenClawStateDatabase()
         .db.prepare("SELECT source_path FROM migration_sources WHERE source_path = ?")

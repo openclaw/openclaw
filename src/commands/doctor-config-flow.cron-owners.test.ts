@@ -4,15 +4,20 @@ import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import { readConfigFileSnapshot, transformConfigFile } from "../config/config.js";
+import { resolveCronJobConfigRevision } from "../cron/config-revision.js";
 import { makeCronJob } from "../cron/delivery.test-helpers.js";
 import { CronService } from "../cron/service.js";
 import { saveCronJobsStore } from "../cron/store.js";
 import { cronStoreKey } from "../cron/store/key.js";
-import { loadCronRows } from "../cron/store/row-codec.js";
+import { loadCronRows, loadedCronStoreFromRows } from "../cron/store/row-codec.js";
 import { runInitialConfigWriteHealth } from "../flows/doctor-health-contribution-runners.config.js";
+import { mintCronStandingGrantLocked } from "../gateway/operator-approval-standing-grants.js";
 import * as sqliteSnapshot from "../infra/sqlite-snapshot.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
@@ -384,6 +389,7 @@ it.each([
           jobs: [
             makeCronJob({
               id: "delivery-repair",
+              agentId: "ops",
               schedule: { kind: "every", everyMs: 60_000, anchorMs: Date.now() },
               payload: { kind: "agentTurn", message: "synthetic delivery repair", toolsAllow: [] },
               delivery: { mode: "announce" },
@@ -537,13 +543,28 @@ it.each([
            ) VALUES ('historical-approval', ?, 'exec', 'allowed', '{}', '[]', '[]',
                      'historical-epoch', 1, 3, 2, 'allow-always', 'user', 2, 'device')`,
         ).run("a".repeat(43));
-        db.exec(`INSERT INTO operator_approval_standing_grants (
-          grant_id, minted_by_approval_id, agent_id, cron_job_id, job_config_revision,
-          operation_binding, created_at_ms
-        ) VALUES ('historical-grant', 'historical-approval', 'ops', 'historical',
-                  'historical-revision', 'historical-operation', 2)`);
+        const historical = expectDefined(
+          loadedCronStoreFromRows(rows(storePath)).store.jobs.find(
+            (job) => job.id === "historical",
+          ),
+          "historical cron job",
+        );
+        runOpenClawStateWriteTransaction((database) =>
+          mintCronStandingGrantLocked(database, {
+            approvalId: "historical-approval",
+            agentId: "ops",
+            cronJobId: "historical",
+            jobConfigRevision: resolveCronJobConfigRevision(historical),
+            operationBinding: "historical-operation",
+            nowMs: 2,
+            expiresAtMs: null,
+          }),
+        );
         db.prepare(
-          "INSERT INTO operator_approval_standing_grant_generations (grant_id, job_definition_generation) VALUES ('historical-grant', ?)",
+          `UPDATE operator_approval_standing_grant_generations
+           SET job_definition_generation = ?
+           WHERE grant_id = (SELECT grant_id FROM operator_approval_standing_grants
+                             WHERE minted_by_approval_id = 'historical-approval')`,
         ).run(retainedGrantGeneration);
         // A released writer recreates the row without the additive generation projections.
         const releasedColumns =
@@ -642,7 +663,7 @@ it.each([
               `SELECT grants.revoked_at_ms, generations.job_definition_generation
                FROM operator_approval_standing_grants AS grants
                JOIN operator_approval_standing_grant_generations AS generations USING (grant_id)
-               WHERE grant_id = 'historical-grant'`,
+               WHERE grants.minted_by_approval_id = 'historical-approval'`,
             )
             .get(),
         ).toEqual({ revoked_at_ms: null, job_definition_generation: retainedGrantGeneration });

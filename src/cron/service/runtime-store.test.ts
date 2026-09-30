@@ -32,7 +32,10 @@ import { claimCronRunReceiptInDatabaseForTest } from "../store/run-receipt-store
 import { mutateCronRuntimeRowsInDatabase } from "../store/runtime-rows.kernel.js";
 import type { CronStoredJob } from "../types.js";
 import { stop } from "./ops-lifecycle.js";
-import { applyCronRuntimeRowsToState } from "./runtime-publication.js";
+import {
+  applyCronRuntimeRowsToState,
+  publishDurableNextRunChanges,
+} from "./runtime-publication.js";
 import { armTimer } from "./timer.js";
 
 const runtimeStoreFixtures = setupCronRegressionFixtures({ prefix: "cron-runtime-store-" });
@@ -52,6 +55,49 @@ function trackCronRowReads() {
 
 describe("cron runtime row publication", () => {
   afterEach(() => vi.useRealTimers());
+
+  it("publishes committed wake transitions once while tracking topology and suppressed slots", () => {
+    const now = Date.now();
+    const job = createDueIsolatedJob({ id: "published-wake", nowMs: now, nextRunAtMs: now });
+    const onEvent = vi.fn();
+    const state = createCronRegressionState({
+      storePath: "/tmp/cron-published-wake.json",
+      runIsolatedAgentJob: vi.fn(),
+      onEvent,
+    });
+    onEvent.mockImplementation(() => publishDurableNextRunChanges({ state, storeJobs: [job] }));
+    publishDurableNextRunChanges({ state, storeJobs: [job] });
+    expect(onEvent).not.toHaveBeenCalled();
+    expect(state.durableNextRunAtMsByJobId.get(job.id)).toBe(now);
+
+    job.state.nextRunAtMs = now + 60_000;
+    publishDurableNextRunChanges({ state, storeJobs: [job], suppressScheduledJobId: job.id });
+    expect(onEvent).not.toHaveBeenCalled();
+    expect(state.durableNextRunAtMsByJobId.get(job.id)).toBe(now + 60_000);
+
+    job.state.nextRunAtMs = now + 120_000;
+    publishDurableNextRunChanges({ state, storeJobs: [job] });
+    expect(onEvent).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ action: "scheduled", jobId: job.id, nextRunAtMs: now + 120_000 }),
+    );
+    publishDurableNextRunChanges({ state, storeJobs: [job] });
+    expect(onEvent).toHaveBeenCalledOnce();
+
+    job.state.nextRunAtMs = undefined;
+    publishDurableNextRunChanges({ state, storeJobs: [job] });
+    expect(onEvent).toHaveBeenCalledTimes(2);
+    expect(onEvent).toHaveBeenLastCalledWith(
+      expect.objectContaining({ action: "scheduled", jobId: job.id, nextRunAtMs: undefined }),
+    );
+    expect(state.durableNextRunAtMsByJobId.has(job.id)).toBe(true);
+
+    publishDurableNextRunChanges({ state, storeJobs: [] });
+    expect(state.durableNextRunAtMsByJobId.size).toBe(0);
+    job.state.nextRunAtMs = now + 180_000;
+    publishDurableNextRunChanges({ state, storeJobs: [job] });
+    expect(state.durableNextRunAtMsByJobId.get(job.id)).toBe(now + 180_000);
+    expect(onEvent).toHaveBeenCalledTimes(2);
+  });
 
   it("materializes only selected jobs and authority while preserving ordered, exact targets", async () => {
     const { storePath } = runtimeStoreFixtures.makeStorePath();
