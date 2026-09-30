@@ -51,10 +51,7 @@ function resolveConfiguredBindingWorkspaceCwd(params: {
   const explicitAgentWorkspace = normalizeText(
     resolveAgentConfig(params.cfg, params.agentId)?.workspace,
   );
-  if (explicitAgentWorkspace) {
-    return resolveAgentWorkspaceDir(params.cfg, params.agentId);
-  }
-  if (normalizeText(params.cfg.agents?.defaults?.workspace)) {
+  if (explicitAgentWorkspace || normalizeText(params.cfg.agents?.defaults?.workspace)) {
     return resolveAgentWorkspaceDir(params.cfg, params.agentId);
   }
   return undefined;
