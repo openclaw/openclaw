@@ -253,9 +253,7 @@ describe("tool-card outcomes", () => {
 
     const summaryButton = container.querySelector("button.chat-tool-msg-summary");
     expect(summaryButton?.classList.contains("chat-tool-msg-summary--error")).toBe(false);
-    expect(summaryButton?.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe(
-      "Web Search",
-    );
+    expect(summaryButton?.querySelector("[role=img]")?.ariaLabel).toBe("web_search");
     const expandedCard = container.querySelector(".chat-tool-card");
     expect(expandedCard?.classList.contains("chat-tool-card--error")).toBe(true);
     expect(container.querySelector(".chat-tool-card__status-badge")).toBeNull();
@@ -282,7 +280,7 @@ describe("tool-card outcomes", () => {
     );
 
     const summary = container.querySelector(".chat-tool-msg-summary");
-    expect(summary?.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe("Sub-agent");
+    expect(summary?.querySelector("[role=img]")?.ariaLabel).toBe("sessions_spawn");
     expect(container.querySelector(".chat-tool-msg-summary--error")).toBeNull();
     expect(container.querySelector(".chat-tool-card--error")).not.toBeNull();
     expect(container.querySelector(".chat-tool-card__outcome")?.textContent).toBe("failed");
@@ -304,9 +302,7 @@ describe("tool-card outcomes", () => {
 
     const summaryButton = container.querySelector("button.chat-tool-msg-summary");
     expect(summaryButton?.classList.contains("chat-tool-msg-summary--error")).toBe(false);
-    expect(summaryButton?.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe(
-      "Unknown",
-    );
+    expect(summaryButton?.querySelector("[role=img]")?.ariaLabel).toBe("Unknown");
     expect(container.querySelector(".chat-tool-msg-body")).toBeNull();
     expect(summaryButton?.textContent).toContain("failed");
     expect(container.textContent).not.toContain("Tool not found");
