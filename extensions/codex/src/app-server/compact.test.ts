@@ -59,6 +59,20 @@ async function writeTestBinding(
   return writeCompactionTestBinding(tempDir, options, sessionKey);
 }
 
+function createContextEngineBinding() {
+  return {
+    schemaVersion: 1 as const,
+    engineId: "lossless-claw",
+    policyFingerprint: "policy-1",
+    projection: {
+      schemaVersion: 1 as const,
+      mode: "thread_bootstrap" as const,
+      epoch: "epoch-1",
+      fingerprint: "fingerprint-1",
+    },
+  };
+}
+
 function startCompaction(
   sessionFile: string,
   options: {
@@ -693,17 +707,7 @@ describe("maybeCompactCodexAppServerSession", () => {
     const fake = createFakeCodexClient({ retainedThreadId: null });
     setCodexAppServerClientFactoryForTest(async () => fake.client);
     const sessionFile = await writeTestBinding({
-      contextEngine: {
-        schemaVersion: 1,
-        engineId: "lossless-claw",
-        policyFingerprint: "policy-1",
-        projection: {
-          schemaVersion: 1,
-          mode: "thread_bootstrap",
-          epoch: "epoch-1",
-          fingerprint: "fingerprint-1",
-        },
-      },
+      contextEngine: createContextEngineBinding(),
     });
 
     const result = requireCompactResult(
@@ -760,17 +764,7 @@ describe("maybeCompactCodexAppServerSession", () => {
     const fake = createFakeCodexClient();
     setCodexAppServerClientFactoryForTest(async () => fake.client);
     const sessionFile = await writeTestBinding({
-      contextEngine: {
-        schemaVersion: 1,
-        engineId: "lossless-claw",
-        policyFingerprint: "policy-1",
-        projection: {
-          schemaVersion: 1,
-          mode: "thread_bootstrap",
-          epoch: "epoch-1",
-          fingerprint: "fingerprint-1",
-        },
-      },
+      contextEngine: createContextEngineBinding(),
     });
 
     await expect(startCompaction(sessionFile)).resolves.toMatchObject({
@@ -859,17 +853,7 @@ describe("maybeCompactCodexAppServerSession", () => {
     const fake = createFakeCodexClient({ retainedThreadId: null });
     setCodexAppServerClientFactoryForTest(async () => fake.client);
     const sessionFile = await writeTestBinding({
-      contextEngine: {
-        schemaVersion: 1,
-        engineId: "lossless-claw",
-        policyFingerprint: "policy-1",
-        projection: {
-          schemaVersion: 1,
-          mode: "thread_bootstrap",
-          epoch: "epoch-1",
-          fingerprint: "fingerprint-1",
-        },
-      },
+      contextEngine: createContextEngineBinding(),
     });
 
     const result = requireCompactResult(
@@ -914,17 +898,7 @@ describe("maybeCompactCodexAppServerSession", () => {
     const abortController = new AbortController();
     abortController.abort("cancelled");
     const sessionFile = await writeTestBinding({
-      contextEngine: {
-        schemaVersion: 1,
-        engineId: "lossless-claw",
-        policyFingerprint: "policy-1",
-        projection: {
-          schemaVersion: 1,
-          mode: "thread_bootstrap",
-          epoch: "epoch-1",
-          fingerprint: "fingerprint-1",
-        },
-      },
+      contextEngine: createContextEngineBinding(),
     });
 
     const result = requireCompactResult(
@@ -969,17 +943,7 @@ describe("maybeCompactCodexAppServerSession", () => {
   it("skips post-context-engine native compaction when the binding changes before projection clear", async () => {
     const fake = createFakeCodexClient();
     setCodexAppServerClientFactoryForTest(async () => fake.client);
-    const originalContextEngine = {
-      schemaVersion: 1 as const,
-      engineId: "lossless-claw",
-      policyFingerprint: "policy-1",
-      projection: {
-        schemaVersion: 1 as const,
-        mode: "thread_bootstrap" as const,
-        epoch: "epoch-1",
-        fingerprint: "fingerprint-1",
-      },
-    };
+    const originalContextEngine = createContextEngineBinding();
     const sessionFile = await writeTestBinding({
       contextEngine: originalContextEngine,
     });
@@ -1048,17 +1012,7 @@ describe("maybeCompactCodexAppServerSession", () => {
   it("reports a recoverable stale-binding failure when a required-preflight native request sees the binding change", async () => {
     const fake = createFakeCodexClient();
     setCodexAppServerClientFactoryForTest(async () => fake.client);
-    const originalContextEngine = {
-      schemaVersion: 1 as const,
-      engineId: "lossless-claw",
-      policyFingerprint: "policy-1",
-      projection: {
-        schemaVersion: 1 as const,
-        mode: "thread_bootstrap" as const,
-        epoch: "epoch-1",
-        fingerprint: "fingerprint-1",
-      },
-    };
+    const originalContextEngine = createContextEngineBinding();
     const sessionFile = await writeTestBinding({
       contextEngine: originalContextEngine,
     });

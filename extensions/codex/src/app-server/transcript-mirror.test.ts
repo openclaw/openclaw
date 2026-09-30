@@ -77,6 +77,27 @@ function messageContent(message: AgentMessage | undefined) {
 
 const { makeRoot, createSqliteMirrorTarget } = createTranscriptMirrorTestHarness();
 
+function mirrorFinalSnapshot(
+  target: Awaited<ReturnType<typeof createSqliteMirrorTarget>>,
+  messagesSnapshot: AgentMessage[],
+) {
+  return mirrorTranscriptBestEffort({
+    params: {
+      sessionId: target.sessionId,
+      sessionKey: target.sessionKey,
+      sessionTarget: target,
+      suppressNextUserMessagePersistence: true,
+    } as unknown as Parameters<typeof mirrorTranscriptBestEffort>[0]["params"],
+    result: { messagesSnapshot } as Parameters<typeof mirrorTranscriptBestEffort>[0]["result"],
+    agentId: target.agentId,
+    sessionKey: target.sessionKey,
+    notifyUserMessagePersisted: () => undefined,
+    cwd: target.storePath,
+    threadId: "thread-1",
+    turnId: "turn-1",
+  });
+}
+
 afterEach(() => {
   resetGlobalHookRunner();
   publishSessionTranscriptUpdateByIdentityMock.mockReset();
@@ -1198,23 +1219,7 @@ describe("mirrorCodexAppServerTranscript", () => {
     });
     const currentMessage = mirroredAssistant("current answer", "turn-1:assistant", Date.now() + 1);
 
-    const mirrorOutcome = await mirrorTranscriptBestEffort({
-      params: {
-        sessionId: target.sessionId,
-        sessionKey: target.sessionKey,
-        sessionTarget: target,
-        suppressNextUserMessagePersistence: true,
-      } as unknown as Parameters<typeof mirrorTranscriptBestEffort>[0]["params"],
-      result: {
-        messagesSnapshot: [currentMessage],
-      } as Parameters<typeof mirrorTranscriptBestEffort>[0]["result"],
-      agentId: target.agentId,
-      sessionKey: target.sessionKey,
-      notifyUserMessagePersisted: () => undefined,
-      cwd: target.storePath,
-      threadId: "thread-1",
-      turnId: "turn-1",
-    });
+    const mirrorOutcome = await mirrorFinalSnapshot(target, [currentMessage]);
 
     expect(mirrorOutcome.assistantTranscriptOwned).toBe(false);
     expect(mirrorOutcome.mirroredMessages).toEqual([]);
@@ -1237,23 +1242,7 @@ describe("mirrorCodexAppServerTranscript", () => {
     const target = await createSqliteMirrorTarget("openclaw-codex-mirror-attested-hook-");
     const sourceMessage = mirroredAssistant("sensitive answer", "turn-1:assistant", Date.now());
 
-    const mirrorOutcome = await mirrorTranscriptBestEffort({
-      params: {
-        sessionId: target.sessionId,
-        sessionKey: target.sessionKey,
-        sessionTarget: target,
-        suppressNextUserMessagePersistence: true,
-      } as unknown as Parameters<typeof mirrorTranscriptBestEffort>[0]["params"],
-      result: {
-        messagesSnapshot: [sourceMessage],
-      } as Parameters<typeof mirrorTranscriptBestEffort>[0]["result"],
-      agentId: target.agentId,
-      sessionKey: target.sessionKey,
-      notifyUserMessagePersisted: () => undefined,
-      cwd: target.storePath,
-      threadId: "thread-1",
-      turnId: "turn-1",
-    });
+    const mirrorOutcome = await mirrorFinalSnapshot(target, [sourceMessage]);
 
     expect(mirrorOutcome.assistantTranscriptOwned).toBe(true);
     expect(mirrorOutcome.assistantTranscriptIdempotencyKey).toBe(
@@ -1285,23 +1274,7 @@ describe("mirrorCodexAppServerTranscript", () => {
       "turn-1:tool-result:call-1",
     );
 
-    const mirrorOutcome = await mirrorTranscriptBestEffort({
-      params: {
-        sessionId: target.sessionId,
-        sessionKey: target.sessionKey,
-        sessionTarget: target,
-        suppressNextUserMessagePersistence: true,
-      } as unknown as Parameters<typeof mirrorTranscriptBestEffort>[0]["params"],
-      result: {
-        messagesSnapshot: [assistantMessage, toolResultMessage],
-      } as Parameters<typeof mirrorTranscriptBestEffort>[0]["result"],
-      agentId: target.agentId,
-      sessionKey: target.sessionKey,
-      notifyUserMessagePersisted: () => undefined,
-      cwd: target.storePath,
-      threadId: "thread-1",
-      turnId: "turn-1",
-    });
+    const mirrorOutcome = await mirrorFinalSnapshot(target, [assistantMessage, toolResultMessage]);
     const terminalEvent = (await readSessionTranscriptEvents(target)).find(
       (event): event is { id: string; message: { role: string } } =>
         Boolean(
@@ -1314,6 +1287,7 @@ describe("mirrorCodexAppServerTranscript", () => {
     );
 
     expect(mirrorOutcome.assistantTranscriptOwned).toBe(true);
+    expect(terminalEvent?.id).toEqual(expect.any(String));
     expect(mirrorOutcome.terminalAnchor?.entryId).toBe(terminalEvent?.id);
   });
 
@@ -1321,23 +1295,7 @@ describe("mirrorCodexAppServerTranscript", () => {
     const target = await createSqliteMirrorTarget("openclaw-codex-mirror-user-terminal-");
     const userMessage = mirroredUser("run silently", "turn-1:prompt", Date.now());
 
-    const mirrorOutcome = await mirrorTranscriptBestEffort({
-      params: {
-        sessionId: target.sessionId,
-        sessionKey: target.sessionKey,
-        sessionTarget: target,
-        suppressNextUserMessagePersistence: true,
-      } as unknown as Parameters<typeof mirrorTranscriptBestEffort>[0]["params"],
-      result: {
-        messagesSnapshot: [userMessage],
-      } as Parameters<typeof mirrorTranscriptBestEffort>[0]["result"],
-      agentId: target.agentId,
-      sessionKey: target.sessionKey,
-      notifyUserMessagePersisted: () => undefined,
-      cwd: target.storePath,
-      threadId: "thread-1",
-      turnId: "turn-1",
-    });
+    const mirrorOutcome = await mirrorFinalSnapshot(target, [userMessage]);
     const terminalEvent = (await readSessionTranscriptEvents(target)).find(
       (event): event is { id: string; message: { role: string } } =>
         Boolean(
@@ -1350,6 +1308,7 @@ describe("mirrorCodexAppServerTranscript", () => {
     );
 
     expect(mirrorOutcome.assistantTranscriptOwned).toBe(false);
+    expect(terminalEvent?.id).toEqual(expect.any(String));
     expect(mirrorOutcome.terminalAnchor?.entryId).toBe(terminalEvent?.id);
   });
 
