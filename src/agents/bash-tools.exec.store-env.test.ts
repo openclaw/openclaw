@@ -400,6 +400,14 @@ describe("exec store environment", () => {
           allowedHosts: ["API.EXAMPLE.COM"],
         },
       ]);
+      const baselineEnv =
+        host === "gateway"
+          ? undefined
+          : await captureStoreExecEnvironment({
+              host,
+              callId: `call-egress-baseline-${host}`,
+              config: { secrets: { egressProxy: { enabled: false } } },
+            });
       mocks.egressActive = true;
       const env = await captureStoreExecEnvironment({
         host,
@@ -429,10 +437,14 @@ describe("exec store environment", () => {
 
       expect(env).not.toHaveProperty("AWS_REGION");
       expect(env).not.toHaveProperty("SERVICE_API_KEY");
-      expect(JSON.stringify(env)).not.toContain("oc-sent-v2.");
-      for (const [key, value] of Object.entries(EGRESS_ENV)) {
-        expect(env[key]).not.toBe(value);
+      // Remote hosts may inherit proxy settings and sentinels from the test runner.
+      // Enabling Gateway egress must not add or replace any of those values.
+      for (const key of Object.keys(EGRESS_ENV)) {
+        expect(env[key]).toBe(baselineEnv?.[key]);
       }
+      const sentinels = (values: Record<string, string>) =>
+        Object.entries(values).filter(([, value]) => looksLikeSecretSentinel(value));
+      expect(sentinels(env)).toEqual(sentinels(baselineEnv ?? {}));
       expect(mocks.proxyBindings).toEqual([]);
     },
   );
