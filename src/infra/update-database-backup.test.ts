@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -56,6 +57,7 @@ async function fixture(externalAgents = false) {
   const inspectionPlan = await discoverUpdateStateSchemaInspectionInProcess(input);
   return {
     root,
+    stateDir,
     shared,
     directory,
     external,
@@ -85,6 +87,210 @@ it.each(["", "-wal", "-shm", "-journal"])(
     expect((await fs.lstat(alias)).ino).toBe((await fs.lstat(source)).ino);
   },
 );
+
+async function originalCaptureFixture(externalAgents = false) {
+  const f = await fixture(externalAgents);
+  const configPath = path.join(f.stateDir, "openclaw.json");
+  const authoredConfig = path.join(f.stateDir, "authored.json5");
+  const include = path.join(f.stateDir, "settings.json5");
+  const plugin = path.join(f.root, "plugin-data");
+  const workshop = path.join(f.root, "workshop");
+  await fs.mkdir(plugin);
+  await fs.mkdir(workshop);
+  const applicationFile = path.join(plugin, "credential.bin");
+  const skill = path.join(workshop, "SKILL.md");
+  const bytes = new Map([
+    [authoredConfig, Buffer.from('// authored root\n{ $include: "./settings.json5" }\n')],
+    [include, Buffer.from('// authored include\n{ gateway: { mode: "local" } }\n')],
+    [applicationFile, Buffer.from([0, 255, 19, 10, 128])],
+    [skill, Buffer.from("# Original skill\nKeep these authored bytes.\n")],
+  ]);
+  for (const [file, raw] of bytes) {
+    await fs.writeFile(file, raw);
+  }
+  await fs.symlink(path.basename(authoredConfig), configPath);
+  const skillLink = path.join(workshop, "current.md");
+  await fs.symlink("SKILL.md", skillLink);
+  const pluginDatabase = path.join(plugin, "state.sqlite");
+  await fs.copyFile(f.shared, pluginDatabase);
+  const missingFile = path.join(plugin, "future.bin");
+  const missingDatabase = path.join(plugin, "future.sqlite");
+  const missingDirectory = path.join(f.root, "future-workshop");
+
+  // Retain a real committed WAL family after closing its fixture writer. A native
+  // source open can alter/remove these sidecars even though it requests read-only.
+  const db = new DatabaseSync(f.shared);
+  let family: Buffer[];
+  const familyPaths = [f.shared, `${f.shared}-wal`, `${f.shared}-shm`];
+  try {
+    db.exec(`
+      PRAGMA journal_mode=WAL;
+      PRAGMA wal_autocheckpoint=0;
+      CREATE TABLE state_leases(token TEXT);
+      INSERT INTO state_leases(rowid,token) VALUES(87,'original-lease');
+    `);
+    family = await Promise.all(familyPaths.map((file) => fs.readFile(file)));
+  } finally {
+    db.close();
+  }
+  for (const [index, file] of familyPaths.entries()) {
+    await fs.writeFile(file, family[index]!);
+  }
+
+  // Only declaration producers are synthetic; acquisition, copying, revalidation,
+  // manifest parsing, and publication all use their production owners.
+  const registry = await import("../plugins/doctor-contract-registry.js");
+  vi.spyOn(registry, "preparePluginDoctorMigrationBackupResources").mockResolvedValue({
+    resources: [
+      { path: plugin, kind: "directory" },
+      { path: missingFile, kind: "file" },
+      { path: missingDatabase, kind: "sqlite" },
+    ],
+    deferredPluginIds: new Set(),
+    notices: [],
+    assertCurrent: () => {},
+  });
+  const workshopOwner = await import("../commands/doctor-update-rehearsal-workshop.js");
+  vi.spyOn(workshopOwner, "collectDoctorSkillWorkshopBackupResources").mockResolvedValue([
+    { path: workshop, kind: "directory" },
+    { path: missingDirectory, kind: "directory" },
+  ]);
+  const { captureUpdateRecoveryBaseline } = await import("./update-recovery-baseline-capture.js");
+  const env = {
+    ...process.env,
+    HOME: f.root,
+    USERPROFILE: f.root,
+    OPENCLAW_HOME: f.root,
+    OPENCLAW_STATE_DIR: f.stateDir,
+    OPENCLAW_CONFIG_PATH: configPath,
+    OPENCLAW_AGENT_DIR: undefined,
+    PI_CODING_AGENT_DIR: undefined,
+  };
+  return {
+    ...f,
+    bytes,
+    family,
+    familyPaths,
+    configPath,
+    authoredConfig,
+    include,
+    skillLink,
+    pluginDatabase,
+    missingFile,
+    missingDatabase,
+    missingDirectory,
+    captureOriginal: (runId: string) =>
+      captureUpdateRecoveryBaseline({
+        runId,
+        installRoot: f.root,
+        env,
+        drivers: [],
+        assertCurrent: () => {},
+      }),
+  };
+}
+
+it("seals original bytes and declared resources without changing the SQLite source family", async () => {
+  const f = await originalCaptureFixture(true);
+  const externalBytes = await Promise.all(f.external.map((source) => fs.readFile(source)));
+  const result = await f.captureOriginal("original");
+  const raw = await fs.readFile(result.ref.manifestPath, "utf8");
+  const { parseUpdateRecoveryBackupManifest } =
+    await import("../commands/backup-verify-manifest.js");
+  const manifest = parseUpdateRecoveryBackupManifest(raw);
+  expect(createHash("sha256").update(raw).digest("hex")).toBe(result.ref.manifestSha256);
+  expect(manifest).toMatchObject({ schemaVersion: 2, generation: { kind: "baseline" } });
+  const entries = new Map(manifest.entries.map((entry) => [entry.sourcePath, entry]));
+  const payload = (source: string) => {
+    const entry = entries.get(source);
+    assert(entry?.kind === "file", `Missing captured file: ${source}`);
+    return path.join(result.ref.directory, entry.archivePath);
+  };
+  for (const [source, bytes] of f.bytes) {
+    expect(await fs.readFile(payload(source))).toEqual(bytes);
+    expect(await fs.readFile(source)).toEqual(bytes);
+  }
+  for (const source of [f.shared, f.pluginDatabase, ...f.external]) {
+    expect(entries.get(source)).toMatchObject({ kind: "file", sqlite: true });
+    const snapshot = new DatabaseSync(payload(source), { readOnly: true });
+    try {
+      expect(snapshot.prepare("SELECT rowid,value FROM payload").all()).toEqual([
+        {
+          rowid: 42,
+          value: f.external.includes(source) ? path.basename(path.dirname(source)) : "retained",
+        },
+      ]);
+      if (source === f.shared) {
+        expect(snapshot.prepare("SELECT rowid,token FROM state_leases").all()).toEqual([
+          { rowid: 87, token: "original-lease" },
+        ]);
+      }
+      if (f.external.includes(source)) {
+        expect(snapshot.prepare("SELECT agent_id FROM schema_meta").get()).toEqual({
+          agent_id: "main",
+        });
+      }
+    } finally {
+      snapshot.close();
+    }
+  }
+  expect(await Promise.all(f.familyPaths.map((file) => fs.readFile(file)))).toEqual(f.family);
+  expect(await Promise.all(f.external.map((source) => fs.readFile(source)))).toEqual(externalBytes);
+  expect(manifest.databases?.filter((database) => f.external.includes(database.path))).toEqual([]);
+  expect(manifest.configPaths).toEqual(
+    expect.arrayContaining([f.configPath, f.authoredConfig, f.include]),
+  );
+  expect(entries.get(f.configPath)).toMatchObject({
+    kind: "symlink",
+    target: "authored.json5",
+    contentPath: f.authoredConfig,
+  });
+  expect(entries.get(f.skillLink)).toMatchObject({ kind: "symlink", target: "SKILL.md" });
+  for (const [sourcePath, sqlite, directory] of [
+    [f.missingFile, false, false],
+    [f.missingDatabase, true, false],
+    [f.missingDirectory, false, true],
+  ] as const) {
+    expect(entries.get(sourcePath)).toEqual({ kind: "missing", sourcePath, sqlite, directory });
+    await expect(fs.lstat(sourcePath)).rejects.toMatchObject({ code: "ENOENT" });
+  }
+  expect(manifest.entries.some((entry) => /-(wal|shm|journal)$/.test(entry.sourcePath))).toBe(
+    false,
+  );
+});
+
+it("retains an unsealed capture when the database changes after its snapshot", async () => {
+  const f = await originalCaptureFixture();
+  const owner = await import("./update-database-backup.js");
+  const capture = owner.createUpdateDatabaseBackup;
+  vi.spyOn(owner, "createUpdateDatabaseBackup").mockImplementationOnce(async (params) => {
+    const captured = await capture(params);
+    const writer = new DatabaseSync(f.shared);
+    try {
+      writer.exec("INSERT INTO payload VALUES ('later')");
+    } finally {
+      writer.close();
+    }
+    return captured;
+  });
+  await expect(f.captureOriginal("changed")).rejects.toMatchObject({
+    cause: expect.objectContaining({ message: expect.stringContaining("generation changed") }),
+  });
+  const directory = path.join(`${f.stateDir}.update-captures`, "changed");
+  await expect(fs.lstat(path.join(directory, "manifest.json"))).rejects.toMatchObject({
+    code: "ENOENT",
+  });
+  expect((await fs.readdir(path.join(directory, "payload"))).length).toBeGreaterThan(0);
+  const source = new DatabaseSync(f.shared, { readOnly: true });
+  try {
+    expect(source.prepare("SELECT value FROM payload ORDER BY rowid").all()).toEqual([
+      { value: "retained" },
+      { value: "later" },
+    ]);
+  } finally {
+    source.close();
+  }
+});
 
 it.each(["insufficient", "unknown"] as const)(
   "preflights a separate source volume whose available capacity is %s",

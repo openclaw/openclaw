@@ -1,4 +1,3 @@
-// Custom editor component handles multiline TUI input and key bindings.
 import { Editor, getKeybindings, isKeyRelease, Key, matchesKey } from "@earendil-works/pi-tui";
 
 // Kitty keyboard protocol uses CSI-u sequences for AltGr on international layouts.

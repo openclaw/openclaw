@@ -208,18 +208,16 @@ class CustodianSurface extends OpenClawLightDomElement {
         >
           ${alertCard}
           ${
-            this.channelOnboardingError
-              ? eventNudgeState.renderCustodianChannelOnboardingError({
+            this.channelOnboardingError || this.showChannelOnboardingNudge
+              ? eventNudgeState.renderCustodianChannelOnboardingNudge({
+                  error: Boolean(this.channelOnboardingError),
                   retrying: this.channelOnboardingRetrying,
-                  onRetry: this.onRetryChannelOnboarding,
+                  onAction: this.channelOnboardingError
+                    ? this.onRetryChannelOnboarding
+                    : () => store.openChannelsFromOnboarding(),
                   onDismiss: () => store.dismissChannelOnboardingNudge(),
                 })
-              : this.showChannelOnboardingNudge
-                ? eventNudgeState.renderCustodianChannelOnboardingNudge({
-                    onOpenChannels: () => store.openChannelsFromOnboarding(),
-                    onDismiss: () => store.dismissChannelOnboardingNudge(),
-                  })
-                : nothing
+              : nothing
           }
           ${
             !this.onboarding && store.eventNudge && !store.eventNudgePending

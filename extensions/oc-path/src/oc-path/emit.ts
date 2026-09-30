@@ -58,27 +58,43 @@ export function emitMd(ast: MdAst, opts: EmitOptions = {}): string {
 // Editing guards new values separately, preserving unrelated pre-existing sentinel text.
 export function rebuildMdRaw(ast: MdAst): MdAst {
   const parts: string[] = [];
+  let nextLine = 1;
+  const append = (text: string) => {
+    parts.push(text);
+    nextLine += text.split("\n").length;
+  };
   if (ast.frontmatter.length > 0) {
-    parts.push("---");
+    append("---");
     for (const fm of ast.frontmatter) {
-      parts.push(`${fm.key}: ${formatFrontmatterValue(fm.value)}`);
+      append(`${fm.key}: ${formatFrontmatterValue(fm.value)}`);
     }
-    parts.push("---");
+    append("---");
   }
   if (ast.preamble.length > 0) {
     if (parts.length > 0) {
-      parts.push("");
+      append("");
     }
-    parts.push(ast.preamble);
+    append(ast.preamble);
   }
-  for (const block of ast.blocks) {
+  const blocks = ast.blocks.map((block) => {
     if (parts.length > 0) {
-      parts.push("");
+      append("");
     }
-    parts.push(`## ${block.heading}`);
+    const line = nextLine;
+    append(`## ${block.heading}`);
     if (block.bodyText.length > 0) {
-      parts.push(block.bodyText);
+      append(block.bodyText);
     }
-  }
-  return { ...ast, raw: parts.join("\n") };
+    // Rendering can move a block without changing its body. Keep item offsets
+    // aligned for subsequent writes without reparsing explicit field values.
+    const shift = line - block.line;
+    return shift === 0
+      ? block
+      : {
+          ...block,
+          line,
+          items: block.items.map((item) => ({ ...item, line: item.line + shift })),
+        };
+  });
+  return { ...ast, blocks, raw: parts.join("\n") };
 }

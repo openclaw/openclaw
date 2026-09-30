@@ -604,7 +604,7 @@ describe("node workspace retain coordinator", () => {
     const options = {
       placements,
       node: { ...node, connId: "connection-1" },
-      additionalManifestRefs: () => [baseManifest],
+      additionalManifestRefs: async () => () => [baseManifest],
     };
     const { coordinator, invoke } = createHarness(options);
     try {
@@ -629,6 +629,68 @@ describe("node workspace retain coordinator", () => {
       await coordinator.stop();
     }
   });
+
+  it.each(["current", "placement", "environment", "session", "pending"] as const)(
+    "rechecks %s ownership after repository manifest preparation",
+    async (change) => {
+      const baseManifest = `sha256:${"1".repeat(64)}`;
+      const placements = [placement()];
+      const environments = [environment()];
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      let sessionCurrent = true;
+      const { coordinator, invoke } = createHarness({
+        placements,
+        environments,
+        additionalManifestRefs: async () => {
+          entered.resolve();
+          await release.promise;
+          return () => (sessionCurrent ? [baseManifest] : null);
+        },
+      });
+      const startup = coordinator.start();
+      try {
+        await entered.promise;
+        expect(invoke).not.toHaveBeenCalled();
+        if (change === "placement") {
+          placements[0] = placement({ generation: 4 });
+        } else if (change === "environment") {
+          environments[0] = environment({ ownerEpoch: 8 });
+        } else if (change === "session") {
+          sessionCurrent = false;
+        } else if (change === "pending") {
+          placements[0] = placement({
+            turnClaim: {
+              owner: "worker",
+              claimId: "claim",
+              runId: "run",
+              generation: 3,
+              ownerEpoch: 7,
+            },
+          });
+        }
+        release.resolve();
+        await startup;
+        expect(invoke).toHaveBeenCalledOnce();
+        expect(invoke.mock.calls[0]?.[0].params).toMatchObject({
+          retain: [
+            expect.objectContaining({
+              manifestRefs:
+                change === "current" ? [baseManifest, `sha256:${"a".repeat(64)}`] : null,
+            }),
+          ],
+        });
+        if (change === "current") {
+          sessionCurrent = false;
+          expect(invoke.mock.calls[0]?.[0].isDispatchAuthorized?.()).toBe(false);
+        }
+      } finally {
+        release.resolve();
+        await startup;
+        await coordinator.stop();
+      }
+    },
+  );
 
   it("retains the current build without installing it or keeping unreferenced older builds", async () => {
     const artifact = {

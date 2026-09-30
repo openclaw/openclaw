@@ -18,6 +18,12 @@ import {
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import { parseSqliteSessionEntryRecord } from "./session-entry-json.js";
+import {
+  attachSessionEntrySnapshots,
+  sessionEntrySnapshotColumns,
+  splitSessionEntrySnapshots,
+  writeSessionEntrySnapshots,
+} from "./session-entry-snapshots.js";
 import { stripRuntimeOnlySessionSkillsFields } from "./store-entry-shape.js";
 import type { SessionEntry } from "./types.js";
 
@@ -47,6 +53,7 @@ export function rewriteDoctorSessionEntries(params: {
             db
               .selectFrom("session_nodes")
               .select(["session_key", "current_session_id", "entry_json", "updated_at"])
+              .select(sessionEntrySnapshotColumns)
               .where("session_key", "=", sessionKey),
           ).rows[0];
           if (!row) {
@@ -56,15 +63,16 @@ export function rewriteDoctorSessionEntries(params: {
           if (!entry) {
             continue;
           }
+          attachSessionEntrySnapshots(entry, row);
+          const previousJson = JSON.stringify(entry);
           const transformedEntry = params.transform(entry, sessionKey);
           const transformedJson = JSON.stringify(transformedEntry);
           // Incognito repair scans unrelated rows; only its changed entries may be rewritten.
-          if (transformedJson === row.entry_json) {
+          if (transformedJson === previousJson) {
             continue;
           }
           const nextEntry = stripRuntimeOnlySessionSkillsFields(transformedEntry);
-          const entryJson =
-            nextEntry === transformedEntry ? transformedJson : JSON.stringify(nextEntry);
+          const { entryJson, snapshots } = splitSessionEntrySnapshots(nextEntry);
           if (!parseSqliteSessionEntryRecord({ ...row, entry_json: entryJson })) {
             continue;
           }
@@ -77,6 +85,7 @@ export function rewriteDoctorSessionEntries(params: {
                 .set({ entry_json: entryJson })
                 .where("session_key", "=", sessionKey),
             );
+            writeSessionEntrySnapshots(database, sessionKey, snapshots);
             executeSqliteQuerySync(
               database.db,
               db
@@ -99,7 +108,7 @@ export function rewriteDoctorSessionEntries(params: {
           });
           publishSessionEntryCacheInvalidation(
             database,
-            { sessionKey, entry: nextEntry },
+            { sessionKey, entry: nextEntry, entryJson },
             writeGeneration,
           );
           batchRewritten += 1;

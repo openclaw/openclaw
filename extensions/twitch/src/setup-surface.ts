@@ -13,8 +13,8 @@ import {
   patchTopLevelChannelConfigSection,
   createSetupTranslator,
   setSetupChannelEnabled,
+  splitSetupEntries,
 } from "openclaw/plugin-sdk/setup";
-import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   DEFAULT_ACCOUNT_ID,
   getAccountConfig,
@@ -389,7 +389,7 @@ const twitchDmPolicy = createChannelDmPolicy({
       initialValue: existingAllowFrom[0] || undefined,
     });
 
-    const allowFrom = normalizeStringEntries((entry ?? "").split(/[\n,;]+/g));
+    const allowFrom = splitSetupEntries(entry ?? "");
 
     return setTwitchAccount(
       cfg,

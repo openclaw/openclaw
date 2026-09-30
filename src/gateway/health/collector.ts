@@ -636,7 +636,7 @@ export async function collectGatewayHealthSnapshot(params: {
   }
 
   const pluginHealth = buildPluginHealthSummary(cfg);
-  const contextEngineHealth = buildContextEngineHealthSummary();
+  const contextEngineHealth = await buildContextEngineHealthSummary();
   const deliveryQueueHealth = await buildDeliveryQueueHealthSummary(undefined, stateContext);
   return {
     ok: true,

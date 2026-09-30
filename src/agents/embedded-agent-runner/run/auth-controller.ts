@@ -153,19 +153,6 @@ export function createEmbeddedRunAuthController(params: {
   const baseRuntimeModel = state.models.runtime;
   const baseEffectiveModel = state.models.effective;
 
-  const commitPreparedModel = (
-    preparedModel:
-      | Awaited<ReturnType<NonNullable<typeof params.prepareModelForAuthProfile>>>
-      | undefined,
-  ) => {
-    preparedModel?.commit();
-    if (preparedModel?.authRequirement) {
-      return;
-    }
-    state.models.runtime = baseRuntimeModel;
-    state.models.effective = baseEffectiveModel;
-  };
-
   const applyPreparedRuntimeRequestOverrides = (paramsForApply: {
     runtimeModel: Model;
     preparedAuth: {
@@ -378,10 +365,9 @@ export function createEmbeddedRunAuthController(params: {
   const resolveAuthProfileFailoverReason = (failoverParams: {
     allInCooldown: boolean;
     message: string;
-    profileIds?: Array<string | undefined>;
   }): FailoverReason => {
     if (failoverParams.allInCooldown) {
-      const profileIds = (failoverParams.profileIds ?? params.profileCandidates).filter(
+      const profileIds = params.profileCandidates.filter(
         (id): id is string => typeof id === "string" && id.length > 0,
       );
       return (
@@ -391,10 +377,7 @@ export function createEmbeddedRunAuthController(params: {
         }) ?? "unknown"
       );
     }
-    const classified = classifyFailoverReason(failoverParams.message, {
-      provider: params.provider,
-    });
-    return classified ?? "auth";
+    return classifyFailoverReason(failoverParams.message, { provider: params.provider }) ?? "auth";
   };
 
   const recordOAuthRefreshFailure = async (
@@ -454,7 +437,6 @@ export function createEmbeddedRunAuthController(params: {
     const reason = resolveAuthProfileFailoverReason({
       allInCooldown: failoverParams.allInCooldown,
       message: messageForReason,
-      profileIds: params.profileCandidates,
     });
     const message =
       failoverParams.message?.trim() ||
@@ -541,7 +523,11 @@ export function createEmbeddedRunAuthController(params: {
       const runtimeModel = preparedModel?.runtimeModel ?? state.models.runtime;
       throw new MissingProviderAuthError(runtimeModel.provider, apiKeyInfo);
     }
-    commitPreparedModel(preparedModel);
+    preparedModel?.commit();
+    if (!preparedModel?.authRequirement) {
+      state.models.runtime = baseRuntimeModel;
+      state.models.effective = baseEffectiveModel;
+    }
     const runtimeModel = state.models.runtime;
     // AWS's default credential chain has no explicit key. The sentinel admits
     // runtime auth preparation or, without a plugin token, SDK request signing.

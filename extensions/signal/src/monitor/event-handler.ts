@@ -70,6 +70,7 @@ import {
   maybeResolveSignalApprovalReaction,
   resolveSignalApprovalConversationKey,
 } from "../approval-reactions.js";
+import type { SignalSseEvent } from "../client-types.js";
 import {
   formatSignalPairingIdLine,
   formatSignalSenderDisplay,
@@ -941,7 +942,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
   }
 
   return async (
-    event: { event?: string; data?: string },
+    event: SignalSseEvent,
     turnAdoptionLifecycle?: SignalIngressLifecycle,
     preparedPayload?: SignalReceivePayload,
   ): Promise<{ kind: "deferred" } | { kind: "failed-retryable"; error: unknown } | void> => {
@@ -1167,6 +1168,11 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       },
     });
     const effectiveWasMentioned = mentionDecision.effectiveWasMentioned;
+    const attachments = dataMessage.attachments ?? [];
+    const mediaFacts: ChannelInboundMediaInput[] = attachments.map((attachment) => {
+      const contentType = attachment?.contentType ?? undefined;
+      return { contentType, kind: kindFromMime(contentType) ?? "unknown" };
+    });
     if (isGroup && requireMention && canDetectMention && mentionDecision.shouldSkip) {
       logInboundDrop({
         log: deps.runtime.log,
@@ -1176,14 +1182,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         onceKey: JSON.stringify([deps.accountId, groupId]),
         hint: `Mention patterns can be derived from the agent identity name. Set ${groupsConfigPath}[${JSON.stringify(groupId)}].requireMention=false to process messages without a mention. Preserve existing groups entries; when adding the first groups map, include "*": {} to keep other chats admitted.`,
       });
-      const pendingMedia: ChannelInboundMediaInput[] = (dataMessage.attachments ?? []).map(
-        (attachment) => {
-          const contentType = attachment?.contentType ?? undefined;
-          return { contentType, kind: kindFromMime(contentType) ?? "unknown" };
-        },
-      );
       // Skipped messages intentionally avoid downloads; facts stay type-only.
-      const pendingMediaText = formatSignalMediaText(pendingMedia);
+      const pendingMediaText = formatSignalMediaText(mediaFacts);
       const pendingBodyText = messageText || pendingMediaText || visibleQuoteText;
       const historyKey = groupId ?? "unknown";
       createChannelHistoryWindow({ historyMap: deps.groupHistories }).record({
@@ -1192,7 +1192,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         entry: {
           sender: envelope.sourceName ?? senderDisplay,
           body: messageText || visibleQuoteText,
-          media: toHistoryMediaEntries(pendingMedia),
+          media: toHistoryMediaEntries(mediaFacts),
           timestamp: inboundTimestamp,
           messageId,
         },
@@ -1203,7 +1203,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         replyToId,
         author: senderRecipient,
         body: messageText || visibleQuoteText,
-        media: pendingMedia,
+        media: mediaFacts,
         sourceTimestamp: inboundTimestamp,
       });
       const signalGroupPolicy = resolveChannelGroupPolicy({
@@ -1248,11 +1248,6 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       return;
     }
 
-    const attachments = dataMessage.attachments ?? [];
-    const mediaFacts: ChannelInboundMediaInput[] = attachments.map((attachment) => {
-      const contentType = attachment?.contentType ?? undefined;
-      return { contentType, kind: kindFromMime(contentType) ?? "unknown" };
-    });
     let unavailableAttachmentCount = deps.ignoreAttachments ? attachments.length : 0;
     if (!deps.ignoreAttachments) {
       for (const [index, attachment] of attachments.entries()) {

@@ -361,7 +361,9 @@ describe("runDetachedWebhookWork", () => {
       },
     );
 
-    await expect(inherited).rejects.toThrow("Gateway is draining");
+    await expect(inherited).rejects.toThrow(
+      "Gateway is temporarily unavailable. Please try again shortly.",
+    );
   });
 
   it("keeps tracked work accepted after the caller's async work scope closes", async () => {

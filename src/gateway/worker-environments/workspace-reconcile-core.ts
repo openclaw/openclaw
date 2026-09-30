@@ -2,12 +2,7 @@ import fs from "node:fs/promises";
 import { FsSafeError, root as openFsSafeRoot } from "../../infra/fs-safe.js";
 import { stagedInputDirectoriesFromEntries } from "../../media/staged-inputs.js";
 import { activeWorkspaceHashContext, withWorkspaceHashMemo } from "./workspace-hash-memo.js";
-import {
-  hasPathAncestor,
-  manifestNodes,
-  sameEntry,
-  type WorkspaceNode,
-} from "./workspace-manifest-comparison.js";
+import { hasPathAncestor, manifestNodes, sameEntry } from "./workspace-manifest-comparison.js";
 import {
   captureWorkspaceManifest,
   preflightWorkspaceApply,
@@ -46,11 +41,7 @@ export async function assertWorkspaceMatchesManifest(params: {
   entries?: readonly WorkerWorkspaceManifestEntry[];
 }): Promise<void> {
   const root = await fs.realpath(params.root);
-  const expectedNodes = params.entries
-    ? params.entries
-    : [...manifestNodes(params.manifest).values()].filter(
-        (entry): entry is Exclude<WorkspaceNode, undefined> => entry !== undefined,
-      );
+  const expectedNodes = params.entries ?? [...manifestNodes(params.manifest).values()];
   const actual = await readWorkspaceNodes(
     root,
     expectedNodes.map((entry) => entry.path),

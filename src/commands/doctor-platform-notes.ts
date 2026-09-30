@@ -1,4 +1,3 @@
-/** Platform-specific doctor notes for gateway service state and startup tuning. */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -21,7 +20,6 @@ import { shortenHomePath } from "../utils.js";
 
 const DOCTOR_LAUNCHCTL_TIMEOUT_MS = 5_000;
 
-/** Returns the macOS marker warning when LaunchAgent writes are locally disabled. */
 function collectMacLaunchAgentOverrideWarning(): string | null {
   if (process.platform !== "darwin") {
     return null;
@@ -43,7 +41,6 @@ function collectMacLaunchAgentOverrideWarning(): string | null {
   ].join("\n");
 }
 
-/** Emits the macOS LaunchAgent override warning when present. */
 export async function noteMacLaunchAgentOverrides() {
   const warning = collectMacLaunchAgentOverrideWarning();
   if (warning) {
@@ -74,7 +71,6 @@ export async function noteMacDisabledGatewayLaunchAgent(env: NodeJS.ProcessEnv =
   );
 }
 
-/** Returns a warning for stale OpenClaw updater launchd jobs left after interrupted updates. */
 async function collectMacStaleOpenClawUpdateLaunchdJobsWarning(): Promise<string | null> {
   if (process.platform !== "darwin") {
     return null;
@@ -99,7 +95,6 @@ async function collectMacStaleOpenClawUpdateLaunchdJobsWarning(): Promise<string
   ].join("\n");
 }
 
-/** Emits stale updater launchd job notes using the gateway service environment when available. */
 export async function noteMacStaleOpenClawUpdateLaunchdJobs() {
   const warning = await collectMacStaleOpenClawUpdateLaunchdJobsWarning();
   if (warning) {
@@ -128,7 +123,6 @@ function hasConfigGatewayCreds(cfg: OpenClawConfig): boolean {
   ].some((credential) => hasConfiguredSecretInput(credential, cfg.secrets?.defaults));
 }
 
-/** Returns a warning for host-wide launchctl gateway auth env overrides. */
 async function collectMacLaunchctlGatewayEnvOverrideWarning(
   cfg: OpenClawConfig,
 ): Promise<string | null> {
@@ -162,7 +156,6 @@ async function collectMacLaunchctlGatewayEnvOverrideWarning(
     .join("\n");
 }
 
-/** Emits macOS launchctl gateway auth override warnings. */
 export async function noteMacLaunchctlGatewayEnvOverrides(cfg: OpenClawConfig) {
   const warning = await collectMacLaunchctlGatewayEnvOverrideWarning(cfg);
   if (warning) {
@@ -182,7 +175,6 @@ async function resolveGatewayServiceEnvForPlatformNotes(): Promise<NodeJS.Proces
     : baseEnv;
 }
 
-/** Collects gateway platform warnings without emitting notes or repairing services. */
 export async function collectGatewayPlatformWarnings(
   cfg: OpenClawConfig,
 ): Promise<readonly string[]> {
@@ -227,7 +219,6 @@ function isTmpCompileCachePath(cachePath: string): boolean {
   );
 }
 
-/** Emits startup tuning hints for low-power Linux hosts when env settings are suboptimal. */
 export function noteStartupOptimizationHints(env: NodeJS.ProcessEnv = process.env) {
   const platform = process.platform;
   if (platform === "win32") {

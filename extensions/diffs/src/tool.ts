@@ -1,15 +1,17 @@
 import fs from "node:fs/promises";
 import { optionalFiniteNumberSchema, stringEnum } from "openclaw/plugin-sdk/channel-actions";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { readFiniteNumberParam } from "openclaw/plugin-sdk/param-readers";
+import type { AnyAgentTool, OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   asNonArrayRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { textResult } from "openclaw/plugin-sdk/tool-results";
 import { Type } from "typebox";
 import type { Static } from "typebox";
-import type { AnyAgentTool, OpenClawConfig, OpenClawPluginToolContext } from "../api.js";
 import type { DiffScreenshotter } from "./browser.runtime.js";
 import { resolveDiffImageRenderOptions } from "./config.js";
 import { DiffRenderInputError, renderDiffDocument } from "./render.js";
@@ -25,8 +27,6 @@ import {
   DIFF_OUTPUT_FORMATS,
   DIFF_THEMES,
   type DiffInput,
-  type DiffImageQualityPreset,
-  type DiffLayout,
   type DiffMode,
   type DiffOutputFormat,
   type DiffTheme,
@@ -145,22 +145,16 @@ export function createDiffsTool(params: {
       const artifactContext = buildArtifactContext(params.context);
       const input = normalizeDiffInput(toolParams);
       if (input.kind === "before_after" && input.before === input.after) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: "Before and after are identical — no changes to render.",
-            },
-          ],
-          details: {
-            changed: false,
-            ...(artifactContext ? { context: artifactContext } : {}),
-          },
-        };
+        return textResult("Before and after are identical — no changes to render.", {
+          changed: false,
+          ...(artifactContext ? { context: artifactContext } : {}),
+        });
       }
-      const mode = normalizeMode(toolParams.mode, params.defaults.mode);
-      const theme = normalizeTheme(toolParams.theme, params.defaults.theme);
-      const layout = normalizeLayout(toolParams.layout, params.defaults.layout);
+      const mode = DIFF_MODES.find((value) => value === toolParams.mode) ?? params.defaults.mode;
+      const theme =
+        DIFF_THEMES.find((value) => value === toolParams.theme) ?? params.defaults.theme;
+      const layout =
+        DIFF_LAYOUTS.find((value) => value === toolParams.layout) ?? params.defaults.layout;
       const expandUnchanged = toolParams.expandUnchanged === true;
       const ttlSeconds =
         readFiniteNumberParam(rawRecord, "ttlSeconds") ?? params.defaults.ttlSeconds;
@@ -169,8 +163,8 @@ export function createDiffsTool(params: {
       const ttlMs = normalizeTtlMs(ttlSeconds);
       const image = resolveDiffImageRenderOptions({
         defaults: params.defaults,
-        fileFormat: normalizeOutputFormat(toolParams.fileFormat),
-        fileQuality: normalizeFileQuality(toolParams.fileQuality),
+        fileFormat: DIFF_OUTPUT_FORMATS.find((value) => value === toolParams.fileFormat),
+        fileQuality: DIFF_IMAGE_QUALITY_PRESETS.find((value) => value === toolParams.fileQuality),
         fileScale,
         fileMaxWidth,
       });
@@ -230,15 +224,7 @@ export function createDiffsTool(params: {
         : undefined;
 
       if (mode === "view") {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Diff viewer ready.\n${viewerUrl}`,
-            },
-          ],
-          details: viewerDetails,
-        };
+        return textResult(`Diff viewer ready.\n${viewerUrl}`, viewerDetails);
       }
 
       try {
@@ -253,19 +239,14 @@ export function createDiffsTool(params: {
           context: artifactContext,
         });
 
-        return {
-          content: [
-            {
-              type: "text",
-              text: buildFileArtifactMessage({
-                format: image.format,
-                filePath: artifactFile.path,
-                viewerUrl,
-              }),
-            },
-          ],
-          details: buildArtifactDetails({
-            baseDetails: viewerDetails ?? {
+        return textResult(
+          buildFileArtifactMessage({
+            format: image.format,
+            filePath: artifactFile.path,
+            viewerUrl,
+          }),
+          {
+            ...(viewerDetails ?? {
               changed: true,
               ...(artifactFile.artifactId ? { artifactId: artifactFile.artifactId } : {}),
               ...(artifactFile.expiresAt ? { expiresAt: artifactFile.expiresAt } : {}),
@@ -274,41 +255,32 @@ export function createDiffsTool(params: {
               fileCount: rendered.fileCount,
               mode,
               ...(artifactContext ? { context: artifactContext } : {}),
-            },
-            artifactFile,
-            image,
-          }),
-        };
+            }),
+            filePath: artifactFile.path,
+            // `path` mirrors filePath so the message tool can send the artifact directly.
+            path: artifactFile.path,
+            fileBytes: artifactFile.bytes,
+            fileFormat: image.format,
+            fileQuality: image.qualityPreset,
+            fileScale: image.scale,
+            fileMaxWidth: image.maxWidth,
+          },
+        );
       } catch (error) {
         if (mode === "both") {
           const errorMessage = formatErrorMessage(error);
-          return {
-            content: [
-              {
-                type: "text",
-                text: `Diff viewer ready.\n${viewerUrl}\nFile rendering failed: ${errorMessage}`,
-              },
-            ],
-            details: {
+          return textResult(
+            `Diff viewer ready.\n${viewerUrl}\nFile rendering failed: ${errorMessage}`,
+            {
               ...viewerDetails,
               fileError: errorMessage,
             },
-          };
+          );
         }
         throw error;
       }
     },
   };
-}
-
-function normalizeFileQuality(
-  fileQuality: DiffImageQualityPreset | undefined,
-): DiffImageQualityPreset | undefined {
-  return fileQuality && DIFF_IMAGE_QUALITY_PRESETS.includes(fileQuality) ? fileQuality : undefined;
-}
-
-function normalizeOutputFormat(format: DiffOutputFormat | undefined): DiffOutputFormat | undefined {
-  return format && DIFF_OUTPUT_FORMATS.includes(format) ? format : undefined;
 }
 
 function isArtifactOnlyMode(mode: DiffMode): mode is "image" | "file" {
@@ -330,24 +302,6 @@ function requireRenderedHtml(html: string | undefined, target: DiffRenderTarget)
     return html;
   }
   throw new Error(`Missing ${target} render output.`);
-}
-
-function buildArtifactDetails(params: {
-  baseDetails: Record<string, unknown>;
-  artifactFile: { path: string; bytes: number };
-  image: DiffRenderOptions["image"];
-}) {
-  return {
-    ...params.baseDetails,
-    filePath: params.artifactFile.path,
-    // `path` mirrors filePath so the message tool can send the artifact directly.
-    path: params.artifactFile.path,
-    fileBytes: params.artifactFile.bytes,
-    fileFormat: params.image.format,
-    fileQuality: params.image.qualityPreset,
-    fileScale: params.image.scale,
-    fileMaxWidth: params.image.maxWidth,
-  };
 }
 
 function buildFileArtifactMessage(params: {
@@ -484,18 +438,6 @@ function normalizeBaseUrl(baseUrl?: string): string | undefined {
   } catch {
     throw new PluginToolInputError(`Invalid baseUrl: ${normalized}`);
   }
-}
-
-function normalizeMode(mode: DiffMode | undefined, fallback: DiffMode): DiffMode {
-  return mode && DIFF_MODES.includes(mode) ? mode : fallback;
-}
-
-function normalizeTheme(theme: DiffTheme | undefined, fallback: DiffTheme): DiffTheme {
-  return theme && DIFF_THEMES.includes(theme) ? theme : fallback;
-}
-
-function normalizeLayout(layout: DiffLayout | undefined, fallback: DiffLayout): DiffLayout {
-  return layout && DIFF_LAYOUTS.includes(layout) ? layout : fallback;
 }
 
 function normalizeTtlMs(ttlSeconds?: number): number | undefined {

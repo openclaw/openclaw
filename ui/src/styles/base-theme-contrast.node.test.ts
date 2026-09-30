@@ -556,7 +556,7 @@ describe("Control UI theme contrast", () => {
     }
   });
 
-  it("keeps GitHub item ink and focus legible across every tone, theme and bubble", () => {
+  it("keeps GitHub item surfaces neutral and ink and focus legible across themes and bubbles", () => {
     const css = fs.readFileSync(path.join(stylesDir, "chat", "text.css"), "utf8");
     const bubble = readBubbleBackgrounds(
       fs.readFileSync(path.join(stylesDir, "chat", "grouped.css"), "utf8"),
@@ -600,6 +600,10 @@ describe("Control UI theme contrast", () => {
         // Forwarded assistant messages retain the translucent sender skin in light mode.
         hosts.push(composite(resolveColor(bubble.senderTint, tokens), page));
       }
+      const neutralTokens = new Map(palette).set(
+        "--github-item-tone",
+        declaration(base, "--github-item-tone"),
+      );
       for (const tone of ["unknown", "neutral", "positive", "negative", "accent", "attention"]) {
         const rule =
           tone === "unknown" || tone === "neutral"
@@ -610,6 +614,11 @@ describe("Control UI theme contrast", () => {
           declaration(rule, "--github-item-tone"),
         );
         for (const surface of surfaces) {
+          const fill = resolveColor(surface, tokens);
+          expect(fill, `${theme}/${tone}: chip fill is opaque and independent of status`).toEqual({
+            ...resolveColor(surface, neutralTokens),
+            alpha: 1,
+          });
           for (const host of hosts) {
             const background = composite(resolveColor(surface, tokens), host);
             const ink = composite(resolveColor(foreground, tokens), background);

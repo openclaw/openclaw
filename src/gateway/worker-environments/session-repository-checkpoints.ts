@@ -4,6 +4,7 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { runGitWorkerOperation } from "../../infra/git-worker.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import {
   getSessionRepositoryWorkspaceStore,
   type SessionRepositoryWorkspaceStore,
@@ -40,13 +41,19 @@ const publicationRef = (ref: string) =>
   workerWorkspaceResultRef(`publication-${createHash("sha256").update(ref).digest("hex")}`);
 const workspaceLog = createSubsystemLogger("gateway/worker-workspace");
 
-function owner(params: CheckpointOwner) {
+async function owner(params: CheckpointOwner) {
   const store = params.store ?? getSessionRepositoryWorkspaceStore();
-  const workspace = store.get(params.workspaceId);
+  const prepared = await store.prepare(params.workspaceId);
+  const workspace = prepared.workspace;
   if (!workspace) {
     throw new Error("Repository workspace no longer exists");
   }
-  return { store, workspace, root: store.artifactPath(params.workspaceId) };
+  return {
+    store,
+    workspace,
+    current: prepared.current,
+    root: store.artifactPath(params.workspaceId),
+  };
 }
 
 function checkpointRef(workspace: SessionRepositoryWorkspaceRecord, ref?: string): string {
@@ -96,7 +103,7 @@ async function refObjects(
 export async function readSessionRepositoryArtifacts(
   params: CheckpointSource & { previewPath?: string; assertCurrent: () => void },
 ): Promise<StagedWorkerArtifactInventory> {
-  const { workspace, root } = owner(params);
+  const { workspace, root } = await owner(params);
   const ref = checkpointRef(workspace, params.checkpointRef);
   const snapshot = await runGitWorkerOperation(
     { type: "workspace.artifacts", input: { root, ref, previewPath: params.previewPath } },
@@ -130,7 +137,7 @@ export async function withSessionRepositoryCheckpoint<T>(
   params: CheckpointSource & { includePublication?: boolean },
   use: (snapshot: SessionRepositoryCheckpointPayload) => Promise<T>,
 ): Promise<T> {
-  const { workspace, root } = owner(params);
+  const { workspace, root } = await owner(params);
   const ref = checkpointRef(workspace, params.checkpointRef);
   return await withStagedWorkerWorkspaceResult({ root, stagedResultRef: ref }, async (snapshot) => {
     assertBase(workspace, snapshot);
@@ -179,38 +186,6 @@ export async function withSessionRepositoryCheckpoint<T>(
   });
 }
 
-async function stagePublication(params: {
-  root: string;
-  assertCurrent: () => void;
-  candidateRef: string;
-  publicationStagingRoot: string;
-  publicationDigest: string;
-  currentManifestRef: string;
-  baseCommit: string;
-}) {
-  params.assertCurrent();
-  const { raw: metadata, snapshot } = await readGitHubRepositoryPublicationMetadata(
-    params.publicationStagingRoot,
-    params.publicationDigest,
-  );
-  if (snapshot.baseCommit !== params.baseCommit) {
-    throw new Error("Repository publication checkpoint base changed");
-  }
-  params.assertCurrent();
-  return await workerWorkspaceResultStaging.stageWorkerWorkspaceResult({
-    assertCurrent: params.assertCurrent,
-    root: params.root,
-    stagingRoot: params.publicationStagingRoot,
-    stagedResultRef: params.candidateRef,
-    publication: {
-      metadata,
-      publicationDigest: params.publicationDigest,
-      currentManifestRef: params.currentManifestRef,
-      baseCommit: params.baseCommit,
-    },
-  });
-}
-
 export async function recoverSessionRepositoryCheckpoint(
   params: CheckpointOwner & {
     checkpointRef: string;
@@ -218,10 +193,10 @@ export async function recoverSessionRepositoryCheckpoint(
     assertCurrent: () => void;
   },
 ): Promise<SessionRepositoryWorkspaceRecord> {
-  const { store, workspace } = owner(params);
+  const { store, workspace, current: currentWorkspace } = await owner(params);
   const snapshot = await readSessionRepositoryArtifacts(params);
   params.assertCurrent();
-  const current = store.get(params.workspaceId);
+  const current = currentWorkspace();
   if (
     current?.checkpointRef === params.checkpointRef &&
     current.manifestHash === snapshot.currentManifestRef
@@ -251,7 +226,7 @@ export async function stageSessionRepositoryCheckpoint(
     assertCurrent: () => void;
   },
 ) {
-  const { store, workspace, root } = owner(params);
+  const { store, workspace, current: currentWorkspace, root } = await owner(params);
   params.assertCurrent();
   const ref = checkpointRef(
     workspace,
@@ -274,7 +249,7 @@ export async function stageSessionRepositoryCheckpoint(
   });
   const assertRevision = () => {
     params.assertCurrent();
-    const latest = store.get(params.workspaceId);
+    const latest = currentWorkspace();
     if (
       !latest ||
       (latest.revision !== params.expectedRevision &&
@@ -315,14 +290,27 @@ export async function stageSessionRepositoryCheckpoint(
         if (!params.publicationStagingRoot || !params.publicationDigest) {
           throw new Error("Repository publication checkpoint is incomplete");
         }
-        companionId = await stagePublication({
+        const { publicationStagingRoot, publicationDigest, currentManifestRef } = params;
+        assertRevision();
+        const { raw: metadata, snapshot } = await readGitHubRepositoryPublicationMetadata(
+          publicationStagingRoot,
+          publicationDigest,
+        );
+        if (snapshot.baseCommit !== baseCommit) {
+          throw new Error("Repository publication checkpoint base changed");
+        }
+        assertRevision();
+        companionId = await workerWorkspaceResultStaging.stageWorkerWorkspaceResult({
           root,
           assertCurrent: assertRevision,
-          candidateRef: companionCandidate,
-          publicationStagingRoot: params.publicationStagingRoot,
-          publicationDigest: params.publicationDigest,
-          currentManifestRef: params.currentManifestRef,
-          baseCommit,
+          stagedResultRef: companionCandidate,
+          stagingRoot: publicationStagingRoot,
+          publication: {
+            metadata,
+            publicationDigest,
+            currentManifestRef,
+            baseCommit,
+          },
         });
       } catch (error) {
         // A rejected publication payload cannot discard independently validated
@@ -410,25 +398,32 @@ export async function forkSessionRepositoryWorkspace(params: {
   store?: SessionRepositoryWorkspaceStore;
 }): Promise<SessionRepositoryWorkspaceRecord> {
   const store = params.store ?? getSessionRepositoryWorkspaceStore();
-  const source = owner({ workspaceId: params.sourceWorkspaceId, store }).workspace;
-  const existing = store.find(params);
+  const sourceContext = captureOpenClawStateWorkerContext({ path: store.path });
+  const assertCurrent = () => {
+    sourceContext.admission.assertCurrent();
+    params.assertCurrent();
+  };
+  const source = (await owner({ workspaceId: params.sourceWorkspaceId, store })).workspace;
+  const existing = await store.find(params);
   if (existing !== undefined) {
     throw new Error("Fork session already owns a repository workspace");
   }
-  let target = store.create({
+  let target = await store.create({
     ...params,
     url: source.url,
     requestedRef: source.requestedRef ?? undefined,
     runSetupScript: source.runSetupScript,
+    assertCurrent,
   });
   try {
+    assertCurrent();
     if (source.baseCommit) {
-      target = store.bindBase({
+      target = await store.bindBase({
         workspaceId: target.workspaceId,
         expectedRevision: target.revision,
         baseCommit: source.baseCommit,
         baseManifestHash: source.baseManifestHash ?? undefined,
-        assertCurrent: params.assertCurrent,
+        assertCurrent,
       });
     }
     if (source.checkpointRef) {
@@ -440,7 +435,7 @@ export async function forkSessionRepositoryWorkspace(params: {
             store,
             workspaceId: target.workspaceId,
             expectedRevision: target.revision,
-            assertCurrent: params.assertCurrent,
+            assertCurrent,
           });
           try {
             return await prepared.publish();
@@ -450,10 +445,14 @@ export async function forkSessionRepositoryWorkspace(params: {
         },
       );
     }
+    assertCurrent();
     return target;
   } catch (error) {
     // This unexposed owner belongs exclusively to this failed fork operation.
-    await store.delete({ workspaceId: target.workspaceId, assertCurrent: () => {} });
+    await store.delete({
+      workspaceId: target.workspaceId,
+      assertCurrent: () => sourceContext.admission.assertCurrent(),
+    });
     throw error;
   }
 }

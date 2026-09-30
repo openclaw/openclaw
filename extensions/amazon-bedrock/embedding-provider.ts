@@ -2,6 +2,7 @@
  * Amazon Bedrock embedding provider runtime. It normalizes model-specific
  * request/response shapes across Titan, Cohere, Nova, and TwelveLabs models.
  */
+import type { AwsCredentialIdentityProvider } from "@smithy/types";
 import {
   debugEmbeddingsLog,
   sanitizeAndNormalizeEmbedding,
@@ -13,7 +14,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { refreshAwsSharedConfigCacheForBedrock } from "./aws-credential-refresh.js";
+import { bedrockCredentialDefaultProvider } from "./aws-credential-refresh.js";
 
 // ---------------------------------------------------------------------------
 // Types & constants
@@ -311,9 +312,17 @@ export async function createBedrockEmbeddingProvider(
     family,
   });
 
+  let credentialProvider: AwsCredentialIdentityProvider | undefined;
+  const credentialDefaultProvider: typeof bedrockCredentialDefaultProvider = (init) => {
+    const shared = (credentialProvider ??= bedrockCredentialDefaultProvider(init));
+    // SDK force-refresh calls share an in-flight resolution, but reread rotated
+    // profiles on the next request even when the previous role is not expired.
+    return (credentialOptions) => shared({ ...credentialOptions, forceRefresh: true });
+  };
+
   const invoke = async (body: string, signal?: AbortSignal): Promise<Uint8Array | undefined> => {
-    await refreshAwsSharedConfigCacheForBedrock();
     const sdk = new BedrockRuntimeClient({
+      credentialDefaultProvider,
       region: client.region,
       endpoint: client.endpoint,
       useFipsEndpoint: client.useFipsEndpoint,
@@ -494,6 +503,7 @@ export async function hasAwsCredentials(
   }
   try {
     const credentials = await defaultProvider({
+      ignoreCache: true,
       timeout: 1000,
       maxRetries: 0,
     })();

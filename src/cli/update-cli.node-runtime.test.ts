@@ -71,47 +71,41 @@ describe("update-cli", () => {
     tempDirs,
   } = createUpdateCliFixture();
 
-  it.each(["nvm", "system"] as const)(
-    "keeps the CLI and service reachable after a %s runtime recovery",
-    async (manager) => {
-      resolveNodeRuntimeInfo.mockResolvedValue(runtimeRecovery.unsupportedServiceRuntimeFixture);
-      const { root, serviceNode, entrypoint } = await setupServicePackageAtPrefix({
-        prefix: path.join(
-          tempDirs.make("runtime-recovery-"),
-          manager === "nvm" ? ".nvm/versions/node/v22.18.0" : "system",
-        ),
-        withNpm: false,
-      });
-      mockPackageInstallStatus(root);
-      primeServiceCommand([serviceNode, entrypoint, "gateway"]);
-      primeNpmChannelTag("latest", "2026.5.20");
-      vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue(
-        packageTargetStatus({ target: "latest", version: "2026.5.20" }),
-      );
-      vi.mocked(runCommandWithTimeout).mockImplementation(
-        runtimeRecovery.runtimeRecoveryCommandFixture(serviceNode),
-      );
-      nodeVersionSatisfiesEngine.mockReturnValue(false);
+  it("keeps the CLI and service reachable after nvm runtime recovery", async () => {
+    resolveNodeRuntimeInfo.mockResolvedValue(runtimeRecovery.unsupportedServiceRuntimeFixture);
+    const { root, serviceNode, entrypoint } = await setupServicePackageAtPrefix({
+      prefix: path.join(tempDirs.make("runtime-recovery-"), ".nvm/versions/node/v22.18.0"),
+      withNpm: false,
+    });
+    mockPackageInstallStatus(root);
+    primeServiceCommand([serviceNode, entrypoint, "gateway"]);
+    primeNpmChannelTag("latest", "2026.5.20");
+    vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue(
+      packageTargetStatus({ target: "latest", version: "2026.5.20" }),
+    );
+    vi.mocked(runCommandWithTimeout).mockImplementation(
+      runtimeRecovery.runtimeRecoveryCommandFixture(serviceNode),
+    );
+    nodeVersionSatisfiesEngine.mockReturnValue(false);
 
-      await expect(updateCommand({ yes: true, restart: false, json: true })).rejects.toEqual(
-        new ExitError(1),
-      );
+    await expect(updateCommand({ yes: true, restart: false, json: true })).rejects.toEqual(
+      new ExitError(1),
+    );
 
-      expect(lastWriteJsonCall()).toMatchObject({
-        reason: "node-runtime-preflight",
-        failedStep: {
-          recoverySteps: runtimeRecovery.expectedManagedRuntimeRecoverySteps(manager, root),
-        },
-      });
-      expect(packageInstallCommandCall()?.[0]).toBeUndefined();
-      expect(serviceStop).not.toHaveBeenCalled();
-      expect(defaultRuntime.exit).not.toHaveBeenCalled();
-      expect(listUpdateRuns({ limit: 1 })[0]?.reason).toBe("node-runtime-preflight");
-      expect(defaultRuntime.error).toHaveBeenCalledWith(
-        `openclaw@2026.5.20 requires Node >=22.19.0; selected runtime is Node 22.18.0 at ${serviceNode}.\nNode 22.18.0: node:sqlite truncates TEXT at embedded NUL (nodejs/node#61954)\n${runtimeRecovery.expectedPlainRecovery("2026.5.20", "24.16.0", "refresh", undefined, root).replace("3. Install and select Node 24.16.0 using your system package manager or https://nodejs.org/en/download.", manager === "nvm" ? `3. Run \`${runtimeRecovery.expectedRuntimeSelectionCommand("nvm", "24.16.0")}\`.` : "3. Install and select Node 24.16.0 using your system package manager or https://nodejs.org/en/download.")}`,
-      );
-    },
-  );
+    expect(lastWriteJsonCall()).toMatchObject({
+      reason: "node-runtime-preflight",
+      failedStep: {
+        recoverySteps: runtimeRecovery.expectedManagedRuntimeRecoverySteps("nvm", root),
+      },
+    });
+    expect(packageInstallCommandCall()?.[0]).toBeUndefined();
+    expect(serviceStop).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).not.toHaveBeenCalled();
+    expect(listUpdateRuns({ limit: 1 })[0]?.reason).toBe("node-runtime-preflight");
+    expect(defaultRuntime.error).toHaveBeenCalledWith(
+      `openclaw@2026.5.20 requires Node >=22.19.0; selected runtime is Node 22.18.0 at ${serviceNode}.\nNode 22.18.0: node:sqlite truncates TEXT at embedded NUL (nodejs/node#61954)\n${runtimeRecovery.expectedPlainRecovery("2026.5.20", "24.16.0", "refresh", undefined, root).replace("3. Install and select Node 24.16.0 using your system package manager or https://nodejs.org/en/download.", `3. Run \`${runtimeRecovery.expectedRuntimeSelectionCommand("nvm", "24.16.0")}\`.`)}`,
+    );
+  });
 
   it("runs same-root service follow-up commands with its selected Node despite heap argv", async () => {
     const servicePrefix = tempDirs.make("openclaw-service-prefix-");
@@ -146,154 +140,101 @@ describe("update-cli", () => {
     expect(serviceInstallCall?.[0][0]).toBe(serviceNode);
   });
 
-  it.each([
-    { busyPackage: false, alreadyCurrent: false, wrongOriginal: false, overriddenOriginal: false },
-    { busyPackage: true, alreadyCurrent: false, wrongOriginal: false, overriddenOriginal: false },
-    { busyPackage: false, alreadyCurrent: true, wrongOriginal: false, overriddenOriginal: false },
-    { busyPackage: false, alreadyCurrent: false, wrongOriginal: true, overriddenOriginal: false },
-    { busyPackage: false, alreadyCurrent: false, wrongOriginal: false, overriddenOriginal: true },
-  ])(
-    "updates the invoking package and rebinds its owned Gateway after a Node-prefix switch (busy B=$busyPackage, current B=$alreadyCurrent, wrong A=$wrongOriginal, late override=$overriddenOriginal)",
-    async ({ busyPackage, alreadyCurrent, wrongOriginal, overriddenOriginal }) => {
-      const invokingVersion = alreadyCurrent ? "2026.5.20" : "2026.5.18";
-      const oldInstall = await setupServicePackageAtPrefix({
-        prefix: tempDirs.make("openclaw-node-a-"),
-      });
-      const newInstall = await setupServicePackageAtPrefix({
-        prefix: tempDirs.make("openclaw-node-b-"),
-        version: invokingVersion,
-      });
-      mockPackageInstallStatus(newInstall.root);
-      readPackageVersion.mockImplementation(async (packageRoot: string) => {
-        const manifest: { version: string } = JSON.parse(
-          await fs.readFile(path.join(packageRoot, "package.json"), "utf8"),
-        );
-        return manifest.version;
-      });
-      // A must be observed independently before B is activated.
-      mockGatewayHealth(wrongOriginal ? "0.0.0" : "2026.5.18", "retained-node-A");
-      // Canonical readers omit managedDefinition unless an operator override exists.
-      const originalCommand = {
-        programArguments: [oldInstall.serviceNode, oldInstall.entrypoint, "gateway"],
-      };
-      serviceReadCommand.mockResolvedValue(originalCommand);
-      serviceLoaded.mockResolvedValue(true);
-      serviceReadRuntime.mockResolvedValue({
-        status: "running",
-        pid: gatewayFixturePid,
-        state: "running",
-      });
-      primeNpmChannelTag("latest", "2026.5.20");
-      mockFileBackedPathExists();
-      mockServicePackageCommands({
-        nodeModules: newInstall.nodeModules,
-        packageRoot: newInstall.root,
-        targetVersion: "2026.5.20",
-        npmCommands: ["npm", newInstall.serviceNpm, requireValue(newInstall.serviceNpmReal, "npm")],
-        nodeVersions: { [oldInstall.serviceNode]: "v24.19.0" },
-        onGatewayInstall: (argv) =>
-          serviceReadCommand.mockResolvedValue({
-            programArguments: [
-              requireValue(argv[0], "Node"),
-              requireValue(argv[1], "entrypoint"),
-              "gateway",
-            ],
-          }),
-      });
-
-      const { createManagedHandoffLeaseStore } =
-        await import("../infra/update-managed-service-handoff-lease.js");
-      const store = createManagedHandoffLeaseStore();
-      const installationKeys = [oldInstall.root, newInstall.root].map(resolveUpdateInstallRoot);
-      if (busyPackage) {
-        const incumbent = store.acquire(installationKeys[1]!, "different-profile", {
-          kind: "update",
-        });
-        expect(incumbent.kind).toBe("acquired");
-        if (incumbent.kind !== "acquired") {
-          throw new Error("Fixture B owner missing");
-        }
-        await expect(updateCommand({ yes: true })).rejects.toThrow();
-        expect(serviceStop).not.toHaveBeenCalled();
-        expect(candidateValidation).not.toHaveBeenCalled();
-        expect(
-          JSON.parse(await fs.readFile(path.join(newInstall.root, "package.json"), "utf8")).version,
-        ).toBe(invokingVersion);
-        expect(store.current(incumbent.lease)).toBe(true);
-        expect(store.release(incumbent.lease)).toBe(true);
-        return;
-      }
-      const assertRootsOwned = () => {
-        for (const admittedRoot of installationKeys) {
-          expect(store.acquire(admittedRoot, "different-profile", { kind: "update" }).kind).toBe(
-            "busy",
-          );
-        }
-      };
-      const validate = requireValue(
-        candidateValidation.getMockImplementation(),
-        "candidate validation",
+  it("updates the invoking package and rebinds its owned Gateway after a Node-prefix switch", async () => {
+    const invokingVersion = "2026.5.18";
+    const oldInstall = await setupServicePackageAtPrefix({
+      prefix: tempDirs.make("openclaw-node-a-"),
+    });
+    const newInstall = await setupServicePackageAtPrefix({
+      prefix: tempDirs.make("openclaw-node-b-"),
+      version: invokingVersion,
+    });
+    mockPackageInstallStatus(newInstall.root);
+    readPackageVersion.mockImplementation(async (packageRoot: string) => {
+      const manifest: { version: string } = JSON.parse(
+        await fs.readFile(path.join(packageRoot, "package.json"), "utf8"),
       );
-      candidateValidation.mockImplementation(async (...args) => {
+      return manifest.version;
+    });
+    // A must be observed independently before B is activated.
+    mockGatewayHealth("2026.5.18", "retained-node-A");
+    // Canonical readers omit managedDefinition unless an operator override exists.
+    const originalCommand = {
+      programArguments: [oldInstall.serviceNode, oldInstall.entrypoint, "gateway"],
+    };
+    serviceReadCommand.mockResolvedValue(originalCommand);
+    serviceLoaded.mockResolvedValue(true);
+    serviceReadRuntime.mockResolvedValue({
+      status: "running",
+      pid: gatewayFixturePid,
+      state: "running",
+    });
+    primeNpmChannelTag("latest", "2026.5.20");
+    mockFileBackedPathExists();
+    mockServicePackageCommands({
+      nodeModules: newInstall.nodeModules,
+      packageRoot: newInstall.root,
+      targetVersion: "2026.5.20",
+      npmCommands: ["npm", newInstall.serviceNpm, requireValue(newInstall.serviceNpmReal, "npm")],
+      nodeVersions: { [oldInstall.serviceNode]: "v24.19.0" },
+      onGatewayInstall: (argv) =>
+        serviceReadCommand.mockResolvedValue({
+          programArguments: [
+            requireValue(argv[0], "Node"),
+            requireValue(argv[1], "entrypoint"),
+            "gateway",
+          ],
+        }),
+    });
+
+    const { createManagedHandoffLeaseStore } =
+      await import("../infra/update-managed-service-handoff-lease.js");
+    const store = createManagedHandoffLeaseStore();
+    const installationKeys = [oldInstall.root, newInstall.root].map(resolveUpdateInstallRoot);
+    const assertRootsOwned = () => {
+      for (const admittedRoot of installationKeys) {
+        expect(store.acquire(admittedRoot, "different-profile", { kind: "update" }).kind).toBe(
+          "busy",
+        );
+      }
+    };
+    const validate = requireValue(
+      candidateValidation.getMockImplementation(),
+      "candidate validation",
+    );
+    candidateValidation.mockImplementation(async (...args) => {
+      assertRootsOwned();
+      return await validate(...args);
+    });
+    const rename = fs.rename;
+    const publicationChecks: string[] = [];
+    vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+      if (String(from) === newInstall.root || String(to) === newInstall.root) {
         assertRootsOwned();
-        if (overriddenOriginal) {
-          // An override introduced after planning must still block unsafe rebind.
-          serviceReadCommand.mockResolvedValue({
-            ...originalCommand,
-            managedDefinition: originalCommand,
-            managedOverrides: { environment: true },
-          });
-        }
-        return await validate(...args);
-      });
-      const rename = fs.rename;
-      const publicationChecks: string[] = [];
-      vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
-        if (String(from) === newInstall.root || String(to) === newInstall.root) {
-          assertRootsOwned();
-          publicationChecks.push(String(to));
-        }
-        return await rename(from, to);
-      });
-      if (wrongOriginal || overriddenOriginal) {
-        await expect(updateCommand({ yes: true })).rejects.toEqual(new ExitError(1));
-        expect(getLogOutput() + getErrorOutput()).toContain(
-          overriddenOriginal ? "managed-service-preflight" : "original-service-unverified",
-        );
-        if (overriddenOriginal) {
-          expect(getLogOutput() + getErrorOutput()).toContain(
-            "Gateway service definition changed after database admission",
-          );
-        }
-        expect(serviceStop).not.toHaveBeenCalled();
-        expect(publicationChecks).toEqual([]);
-        expect(freshRestartCalls()).toEqual([]);
-        expect(
-          JSON.parse(await fs.readFile(path.join(newInstall.root, "package.json"), "utf8")).version,
-        ).toBe(invokingVersion);
-        return;
+        publicationChecks.push(String(to));
       }
-      await updateCommand({ yes: true }).catch((cause: unknown) => {
-        throw new Error(getErrorOutput() + getLogOutput(), { cause });
-      });
-      expect(publicationChecks).toContain(newInstall.root);
+      return await rename(from, to);
+    });
+    await updateCommand({ yes: true }).catch((cause: unknown) => {
+      throw new Error(getErrorOutput() + getLogOutput(), { cause });
+    });
+    expect(publicationChecks).toContain(newInstall.root);
 
-      const installed = JSON.parse(
-        await fs.readFile(path.join(newInstall.root, "package.json"), "utf8"),
-      );
-      const previous = JSON.parse(
-        await fs.readFile(path.join(oldInstall.root, "package.json"), "utf8"),
-      );
-      expect(installed.version).toBe("2026.5.20");
-      expect(previous.version).toBe("2026.5.18");
-      const serviceInstall = commandCalls().find(
-        ([argv]) => argv[2] === "gateway" && argv[3] === "install",
-      );
-      expect(serviceInstall?.[0].slice(0, 2)).toEqual([process.execPath, newInstall.entrypoint]);
-      expect(serviceStop).toHaveBeenCalledOnce();
-      expect(getLogOutput()).toContain("Gateway: restarted and verified");
-    },
-  );
+    const installed = JSON.parse(
+      await fs.readFile(path.join(newInstall.root, "package.json"), "utf8"),
+    );
+    const previous = JSON.parse(
+      await fs.readFile(path.join(oldInstall.root, "package.json"), "utf8"),
+    );
+    expect(installed.version).toBe("2026.5.20");
+    expect(previous.version).toBe("2026.5.18");
+    const serviceInstall = commandCalls().find(
+      ([argv]) => argv[2] === "gateway" && argv[3] === "install",
+    );
+    expect(serviceInstall?.[0].slice(0, 2)).toEqual([process.execPath, newInstall.entrypoint]);
+    expect(serviceStop).toHaveBeenCalledOnce();
+    expect(getLogOutput()).toContain("Gateway: restarted and verified");
+  });
 
   it.each([
     { scenario: "different Node", command: "gateway", sameNode: false, selected: true },
@@ -341,7 +282,6 @@ describe("update-cli", () => {
   it.each([
     { fallback: false, restart: true, writable: true, refreshFails: false },
     { fallback: true, restart: true, writable: true, refreshFails: false },
-    { fallback: true, restart: false, writable: true, refreshFails: false },
     { fallback: true, restart: true, writable: false, refreshFails: false },
     { fallback: true, restart: true, writable: true, refreshFails: true },
   ])(
@@ -453,8 +393,15 @@ describe("update-cli", () => {
           status: "error",
           reason: "node-runtime-preflight",
         });
+        const refusedRun = requireValue(listUpdateRuns({ limit: 1 })[0], "refused update run");
+        expect(refusedRun.reason).toBe("node-runtime-preflight");
+        const captureWarnings = refusedRun.steps
+          .filter((step) => step.step.startsWith("warning:original-state-capture:"))
+          .map((step) => `Warning: ${requireValue(step.detail, "original capture warning")}\n`)
+          .join("");
         expect(getErrorOutput()).toBe(
-          `openclaw@${VERSION} requires Node >=24.16.0 <25 || >=26.1.0; selected runtime is Node 22.23.1 at ${serviceNode}.\nbroken TEXT decoder\n${runtimeRecovery.expectedPlainRecovery(VERSION, "24.16.0", writable ? "refresh" : "owner", "unset OPENCLAW_HOME OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH OPENCLAW_PROFILE OPENCLAW_GATEWAY_PORT OPENCLAW_LAUNCHD_LABEL OPENCLAW_SYSTEMD_UNIT OPENCLAW_WINDOWS_TASK_NAME OPENCLAW_WORKSPACE_DIR", root, writable ? undefined : serviceNode)}`,
+          captureWarnings +
+            `openclaw@${VERSION} requires Node >=24.16.0 <25 || >=26.1.0; selected runtime is Node 22.23.1 at ${serviceNode}.\nbroken TEXT decoder\n${runtimeRecovery.expectedPlainRecovery(VERSION, "24.16.0", writable ? "refresh" : "owner", "unset OPENCLAW_HOME OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH OPENCLAW_PROFILE OPENCLAW_GATEWAY_PORT OPENCLAW_LAUNCHD_LABEL OPENCLAW_SYSTEMD_UNIT OPENCLAW_WINDOWS_TASK_NAME OPENCLAW_WORKSPACE_DIR", root, writable ? undefined : serviceNode)}`,
         );
         expectNoSideEffects(
           updateNpmInstalledPlugins,

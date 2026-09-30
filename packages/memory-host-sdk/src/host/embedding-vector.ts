@@ -40,9 +40,6 @@ export function decodeMemoryEmbedding(bytes: Uint8Array): number[] {
 }
 
 export function cosineSimilarity(a: number[], b: number[]): number {
-  if (a.length === 0 || b.length === 0) {
-    return 0;
-  }
   const len = Math.min(a.length, b.length);
   let dot = 0;
   let normA = 0;

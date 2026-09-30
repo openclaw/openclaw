@@ -33,9 +33,12 @@ subjects unchanged and all remaining checks finish. Retries retain native matrix
 fail-fast. Main and manual runs retain complete matrices. See
 [failure cancellation](/ci/pipeline#fail-fast-order).
 
-First-hop compatibility uses a 30-minute container budget and a 35-minute lane budget,
-based on measured hosted hops with a slow-host margin. The release self-upgrade
-job allows 80 minutes for two waves of six source versions plus setup; see
+First-hop compatibility uses a 3,200-second container budget and a 3,500-second lane
+budget, based on hosted 4-vCPU measurements with a slow-host margin. The release
+self-upgrade job allows 130 minutes for two waves of six source versions plus setup.
+Authenticated update restart uses a 2,280-second container budget, a 43-minute lane
+budget, and a lane-specific 1,500-second command timeout. Its OpenAI/recovery chunk
+allows 160 minutes for the npm-serialized lanes plus setup; see
 [release-path chunks](/ci/release-validation/install-smoke-and-docker-e2e#release-path-chunks).
 
 For the published-upgrade regression gate, see [selection and routing](/ci/scope-and-routing#scope-and-routing), [runner budgets](/ci/capacity#runner-registration-budget), and [Package Acceptance baselines](/ci/release-validation#suite-profiles). Weekly validation is listed under [Update Migration](/ci/scheduled-workflows#update-migration).
@@ -58,6 +61,13 @@ The [Testbox check workflow](/ci/local-proof#testbox-validation) requests the Bl
 Full GitHub and hybrid type checks run the five core stripes independently, retaining two compiler children per job. Current hybrid full runs use three hosted extension-lint jobs; targeted layouts retain six stripe identities. Trusted hybrid first attempts place both packed core-lint rows on the Blacksmith 16-class and the final gate on the 4-class to avoid serial hosted assignment delays. Frozen targets keep their earlier layout; see [static checks](/ci/runners#runner-backend-modes).
 
 Additional checks start directly after preflight. Known full compiler selections skip discovery while retaining the core graph boundary in an existing required owner; see [pipeline ordering](/ci/pipeline#fail-fast-order).
+
+The extension package boundary row has a 30-minute job budget for SDK preparation,
+all selected plugin compiles, input-receipt validation, the required negative
+canary, and cleanup. Hosted four-CPU runs spent about 19 minutes in the compile
+command alone; one completed compile and canary but exceeded the former
+20-minute whole-job deadline. Other additional-check rows retain 20 minutes.
+This changes no compiler concurrency, coverage, runner routing, or cache guards.
 
 Core lint discovers separate source and UI TypeScript projects, retaining shared ambient declarations and imported dependencies. The source project also includes `src/**/*.test-support.cjs`; unrelated JavaScript files are not added as roots. See [local checks](/ci/local-proof#local-equivalents).
 

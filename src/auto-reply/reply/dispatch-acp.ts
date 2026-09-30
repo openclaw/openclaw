@@ -1,4 +1,3 @@
-// Dispatches reply turns through ACP runtimes and projects their events.
 import {
   isSessionIdentityPending,
   resolveSessionIdentityFromMeta,
@@ -77,6 +76,7 @@ import {
   type AcpDispatchDeliveryCoordinator,
 } from "./dispatch-acp-delivery.js";
 import { finalizeAcpTurnOutput } from "./dispatch-acp-finalize.js";
+import type { InboundMessageAuditTerminalRecorder } from "./dispatch-from-config.audit.js";
 import { appendRecentHistoryImageContext } from "./history-media.js";
 import { hasInboundMediaForUnderstanding } from "./inbound-media.js";
 import type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
@@ -123,21 +123,13 @@ const loadDispatchAcpTranscriptRuntime = createLazyPromise(
   () => import("./dispatch-acp-transcript.runtime.js"),
 );
 
-type DispatchProcessedRecorder = (
-  outcome: "completed" | "skipped" | "error",
-  opts?: {
-    reason?: string;
-    error?: string;
-  },
-) => void;
+type DispatchProcessedRecorder = InboundMessageAuditTerminalRecorder["note"];
 
 function resolveAcpRequestId(ctx: FinalizedRuntimeMsgContext): string {
   const id = ctx.MessageSidFull ?? ctx.MessageSid ?? ctx.MessageSidFirst ?? ctx.MessageSidLast;
-  if (typeof id === "string") {
-    const normalizedId = normalizeOptionalString(id);
-    if (normalizedId) {
-      return normalizedId;
-    }
+  const normalizedId = normalizeOptionalString(id);
+  if (normalizedId) {
+    return normalizedId;
   }
   if (typeof id === "number" || typeof id === "bigint") {
     return String(id);
@@ -163,10 +155,10 @@ function resolveAcpTurnText(params: {
 }
 
 function isRestrictiveRuntimeToolsAllow(toolsAllow: string[] | undefined): boolean {
-  if (toolsAllow === undefined) {
-    return false;
-  }
-  return !toolsAllow.some((entry) => normalizeLowercaseStringOrEmpty(entry) === "*");
+  return (
+    toolsAllow !== undefined &&
+    !toolsAllow.some((entry) => normalizeLowercaseStringOrEmpty(entry) === "*")
+  );
 }
 
 async function hasBoundConversationForSession(params: {

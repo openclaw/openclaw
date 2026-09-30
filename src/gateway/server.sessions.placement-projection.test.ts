@@ -56,17 +56,17 @@ test.each([
   {
     state: "pending-approval",
     disabledReason:
-      "Ask an administrator to approve the pending runtime.repository.v1 request, or pick another device.",
+      "paired-device command runtime.repository.v1 is awaiting pairing approval for node node-host; find its updated command surface request with openclaw nodes pending, then run openclaw nodes approve <requestId>",
   },
   {
     state: "unauthorized",
     disabledReason:
-      "Authorize runtime.repository.v1 in the Gateway node command policy, or pick another device.",
+      "paired-device command runtime.repository.v1 is blocked by Gateway policy for node node-host; allow it in gateway.nodes.commands.allow and remove any matching gateway.nodes.commands.deny entry",
   },
   {
     state: "undeclared",
     disabledReason:
-      "Make runtime.repository.v1 available on this device, then reconnect, or pick another device.",
+      "paired-device command runtime.repository.v1 is not advertised by node node-host; enable the plugin or node capability that provides this command on that node, then restart the node (openclaw node restart) and approve its updated command surface",
   },
 ] as const)(
   "sessions.list carries automatic runtime requirements through the recovery picker: $state",
@@ -163,7 +163,7 @@ test.each([
       expect(
         catalog.payload?.environments.find((environment) => environment.id === "node:node-host")
           ?.requiredNodeCommand,
-      ).toEqual({ command, state });
+      ).toEqual({ command, state, ...(disabledReason ? { message: disabledReason } : {}) });
       const devices = projectDevicePlacements(
         readDraftEnvironments(catalog.payload?.environments),
         runtime?.devicePlacement,

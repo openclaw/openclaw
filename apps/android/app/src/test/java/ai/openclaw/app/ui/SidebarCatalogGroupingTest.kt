@@ -251,9 +251,9 @@ class SidebarCatalogGroupingTest {
     assertFalse(sections.any { it.catalog.id == "archived" })
     assertEquals(
       setOf("codex", "claude"),
-      toggleSidebarCatalogExpansion(listOf("claude"), "codex").toSet(),
+      toggleSidebarExpansion(listOf("claude"), "codex").toSet(),
     )
-    assertEquals(emptyList<String>(), toggleSidebarCatalogExpansion(listOf("claude"), "claude"))
+    assertEquals(emptyList<String>(), toggleSidebarExpansion(listOf("claude"), "claude"))
   }
 
   @Test

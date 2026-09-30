@@ -117,7 +117,7 @@ const PACKAGE_UPDATE_CHUNKS = [
   "package-update-self-upgrade",
 ];
 
-const STABLE_DOCKER_CHUNKS = [
+const FULL_DOCKER_CHUNKS = [
   "core",
   ...PACKAGE_UPDATE_CHUNKS,
   "plugins-runtime-plugins",
@@ -131,6 +131,11 @@ const STABLE_DOCKER_CHUNKS = [
   "plugins-runtime-install-g",
   "plugins-runtime-install-h",
 ];
+
+// The six-way first-hop self-upgrade aggregate stays full-only until it runs in waves.
+const STABLE_DOCKER_CHUNKS = FULL_DOCKER_CHUNKS.filter(
+  (chunk) => chunk !== "package-update-self-upgrade",
+);
 
 const PROFILE_EXPECTATIONS = [
   {
@@ -150,7 +155,7 @@ const PROFILE_EXPECTATIONS = [
   },
   {
     profile: "full",
-    dockerE2eChunks: STABLE_DOCKER_CHUNKS,
+    dockerE2eChunks: FULL_DOCKER_CHUNKS,
     liveModelProviders: [
       "anthropic",
       "google",
@@ -618,11 +623,19 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
       expect(plan.dockerE2e.matrix.include.map((entry: MatrixEntry) => entry.chunk_id)).toEqual(
         dockerE2eChunks,
       );
+      const selfUpgrade = plan.dockerE2e.matrix.include.find(
+        (entry: MatrixEntry) => entry.chunk_id === "package-update-self-upgrade",
+      );
+      if (dockerE2eChunks.includes("package-update-self-upgrade")) {
+        expect(selfUpgrade).toMatchObject({ timeout_minutes: 130 });
+      } else {
+        expect(selfUpgrade).toBeUndefined();
+      }
       expect(
         plan.dockerE2e.matrix.include.find(
-          (entry: MatrixEntry) => entry.chunk_id === "package-update-self-upgrade",
+          (entry: MatrixEntry) => entry.chunk_id === "package-update-openai",
         ),
-      ).toMatchObject({ timeout_minutes: 80 });
+      ).toMatchObject({ timeout_minutes: 160 });
       expect(plan.liveModels.matrix.include.map((entry: MatrixEntry) => entry.providers)).toEqual(
         liveModelProviders,
       );

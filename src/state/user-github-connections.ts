@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
+import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { z } from "zod";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
@@ -121,13 +122,7 @@ function retireAfterCommit(db: DatabaseSync, ids: string[]): void {
 }
 
 function parseConnection(raw: string): UserGitHubConnection {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    throw new PersonalGitHubStateError();
-  }
-  const result = connectionSchema.safeParse(parsed);
+  const result = connectionSchema.safeParse(safeParseJson(raw));
   if (!result.success) {
     throw new PersonalGitHubStateError();
   }

@@ -190,6 +190,8 @@ Gateway shutdown also joins actual harness, MCP, LSP, embedding, and media clean
 
 Shutdown closes admission before waiting for config reloads to settle. Those reloads can still defer cleanup held by existing consumers. Final Gateway close releases those consumers, joins retained cleanup, and reports its failures before another Gateway can start.
 
+Gateway config reload and startup metadata persistence use process-bound plugin lifecycle leases. After a forced stop, the next process can reclaim a lease whose recorded same-host process identity is proven dead. Package installation leases retain their expiry protection because installer subprocesses can outlive their parent. A contended lease logs its holder and observed expiry while waiting; older leases without process identity must still expire before startup can safely refresh the plugin index. This uses the existing state schema and requires no update migration.
+
 Executable CLI cleanup reports each disposer that exceeds five seconds and proceeds with later cleanup without canceling the pending work. On macOS with Node's system CA support enabled, automatic exit after command completion waits for this pending cleanup to finish. Explicit command exit requests and the update exit watchdog retain their bounded behavior.
 
 Standalone plugin and Codex supervision MCP stdio services retain their discovered registrations through accepted tool work, harness cleanup, and nested SDK provider lookups. Terminal shutdown cancels and joins handlers before releasing these registrations and awaiting their resource disposers. Transport-close and registration-disposal failures reach the serving caller. Programmatic servers created from supplied tools leave those resources with the caller; closing and reconnecting the same server does not dispose them.
@@ -236,6 +238,10 @@ directory snapshot per admitted identity, preserving old binary and companion
 bytes through in-place edits. Files in this namespace are prepared at admission;
 module execution remains on demand. Registrations share admission facts without
 sharing their runtime authority.
+Private Doctor inspections keep their native admission facts separate from the
+operator's state. Their temporary captures never become deferred writes to the
+installed index after inspection ends; ordinary deferred writes retain their
+original state directory.
 When native packages share a dependency, admission reconciles identities only for
 its own hardlinks, even when the filesystem's ctime has not advanced. Recorded
 digests are checked against installed bytes before promotion, including companions
@@ -255,6 +261,12 @@ Ctime-only uncertainty is resolved
 with a bounded rehash, including ordinary companion files whose inodes another
 capture retains or releases. Legacy reload receipts keep their framed raw-byte value,
 so a changed receipt still requires streaming its native payloads.
+Read-only inspection never publishes its native admissions during later settlement.
+Deferred publication retains the original database authority and state directory.
+Doctor's private checks keep captured code in profile-qualified temporary storage,
+so removing their database snapshots cannot remove an image still loaded in the process.
+An entirely missing retired capture can be rebuilt from its installed source;
+missing files in a retained or partially present namespace remain load errors.
 Identity reuse cannot detect an edit that preserves every recorded identity field.
 Source code outside an admitted native namespace is captured and verified separately.
 Published native captures survive ordinary scratch cleanup. Doctor maintenance

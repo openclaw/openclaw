@@ -2,12 +2,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { normalizeHomeDirValue } from "@openclaw/normalization-core/home-dir";
 import { normalizeProfileName, resolveProfileStateDir } from "../cli/profile-utils.js";
 import { resolveGatewayNativeServiceIdentityConflict } from "../daemon/constants.js";
 import {
   resolveHomeRelativePath,
   resolveRequiredHomeDir,
+  resolveRequiredOsHomeDir,
   resolveUserPath,
 } from "../infra/home-dir.js";
 import { parseTcpPort } from "../infra/tcp-port.js";
@@ -35,6 +35,20 @@ export function resolveIsConfigReadOnly(env: NodeJS.ProcessEnv = process.env): b
 }
 const CONFIG_FILENAME = "openclaw.json";
 const LEGACY_CONFIG_FILENAMES = ["clawdbot.json"] as const;
+
+function configPathsInStateDir(stateDir: string): string[] {
+  return [CONFIG_FILENAME, ...LEGACY_CONFIG_FILENAMES].map((name) => path.join(stateDir, name));
+}
+
+function findExistingConfigPath(candidates: readonly string[]): string | undefined {
+  return candidates.find((candidate) => {
+    try {
+      return fs.existsSync(candidate);
+    } catch {
+      return false;
+    }
+  });
+}
 
 /** True when the root CLI selected a non-default isolated profile. */
 export function isNamedProfile(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -110,17 +124,13 @@ export function isDefaultInstallIdentity(
   platform: NodeJS.Platform = process.platform,
 ): boolean {
   const accountHome = resolveRequiredHomeDir({}, homedir);
-  // Profiles have distinct host-service names; relocated homes do not. Keep
-  // OPENCLAW_HOME isolated so an alternate state tree cannot adopt that service.
-  // Normalize first: the rest of this gate and every home resolution treat the
-  // literal "undefined"/"null" as unset, so a raw truthiness test here would
-  // deny service management to a default install.
-  if (normalizeHomeDirValue(env.OPENCLAW_HOME)) {
-    return false;
-  }
+  // Native service paths use the process home independently of OPENCLAW_HOME.
+  // A canonical runtime override must not hide a relocated service home.
   if (
+    normalizePathForComparison(resolveRequiredOsHomeDir(env, homedir)) !==
+      normalizePathForComparison(accountHome) ||
     normalizePathForComparison(resolveRequiredHomeDir(env, homedir)) !==
-    normalizePathForComparison(accountHome)
+      normalizePathForComparison(accountHome)
   ) {
     return false;
   }
@@ -246,18 +256,10 @@ export function resolveConfigPathCandidate(
   if (isFastTestRuntimeEnv(env)) {
     return resolveCanonicalConfigPath(env, resolveStateDir(env, homedir));
   }
-  const candidates = resolveDefaultConfigCandidates(env, homedir);
-  const existing = candidates.find((candidate) => {
-    try {
-      return fs.existsSync(candidate);
-    } catch {
-      return false;
-    }
-  });
-  if (existing) {
-    return existing;
-  }
-  return resolveCanonicalConfigPath(env, resolveStateDir(env, homedir));
+  return (
+    findExistingConfigPath(resolveDefaultConfigCandidates(env, homedir)) ??
+    resolveCanonicalConfigPath(env, resolveStateDir(env, homedir))
+  );
 }
 
 /**
@@ -277,17 +279,7 @@ export function resolveConfigPath(
     return path.join(selectedStateDir, CONFIG_FILENAME);
   }
   const stateOverride = env.OPENCLAW_STATE_DIR?.trim();
-  const candidates = [
-    path.join(selectedStateDir, CONFIG_FILENAME),
-    ...LEGACY_CONFIG_FILENAMES.map((name) => path.join(selectedStateDir, name)),
-  ];
-  const existing = candidates.find((candidate) => {
-    try {
-      return fs.existsSync(candidate);
-    } catch {
-      return false;
-    }
-  });
+  const existing = findExistingConfigPath(configPathsInStateDir(selectedStateDir));
   if (existing) {
     return existing;
   }
@@ -341,23 +333,12 @@ export function resolveDefaultConfigCandidates(
     return [resolveUserPath(explicit, env, effectiveHomedir)];
   }
 
-  const candidates: string[] = [];
   const openclawStateDir = env.OPENCLAW_STATE_DIR?.trim();
-  if (openclawStateDir) {
-    const resolved = resolveUserPath(openclawStateDir, env, effectiveHomedir);
-    candidates.push(path.join(resolved, CONFIG_FILENAME));
-    candidates.push(...LEGACY_CONFIG_FILENAMES.map((name) => path.join(resolved, name)));
-  }
-
-  const defaultDirs = [
+  return [
+    ...(openclawStateDir ? [resolveUserPath(openclawStateDir, env, effectiveHomedir)] : []),
     resolveNewStateDir(effectiveHomedir),
     ...resolveLegacyStateDirs(effectiveHomedir),
-  ];
-  for (const dir of defaultDirs) {
-    candidates.push(path.join(dir, CONFIG_FILENAME));
-    candidates.push(...LEGACY_CONFIG_FILENAMES.map((name) => path.join(dir, name)));
-  }
-  return candidates;
+  ].flatMap(configPathsInStateDir);
 }
 
 export const DEFAULT_GATEWAY_PORT = 18789;

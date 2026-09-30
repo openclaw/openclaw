@@ -131,19 +131,13 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
       this.boardWidgetMenu?.onSelect(value.slice("board-widget:".length));
       return;
     }
-    const compactView = compactSessionMenuViewForValue(value) ?? COMPACT_MENU_VIEW_BY_VALUE[value];
+    const managementView = compactSessionMenuViewForValue(value);
+    const compactView = managementView ?? COMPACT_MENU_VIEW_BY_VALUE[value];
     if (compactView) {
       event.preventDefault();
       this.compactView = compactView;
-      if (
-        compactView === "root" ||
-        compactView === "open-in" ||
-        compactView === "copy" ||
-        compactView === "assign-owner" ||
-        compactView === "icon" ||
-        compactView === "group"
-      ) {
-        this.managementActions.prepareCompactView(compactView);
+      if (managementView) {
+        this.managementActions.prepareCompactView(managementView);
       } else if (compactView === "sharing" && !this.sharing?.openDisabledReason) {
         this.sharing?.onOpen();
       }

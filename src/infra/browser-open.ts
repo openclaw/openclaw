@@ -1,7 +1,6 @@
-import path from "node:path";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { detectBinary } from "./detect-binary.js";
-import { getWindowsInstallRoots } from "./windows-install-roots.js";
+import { getWindowsSystem32ExePath } from "./windows-install-roots.js";
 import { isWSL } from "./wsl.js";
 
 type BrowserOpenCommand = {
@@ -20,11 +19,6 @@ type BrowserOpenEnvironment = {
   env?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
 };
-
-function resolveWindowsRundll32Path(): string {
-  const { systemRoot } = getWindowsInstallRoots();
-  return path.win32.join(systemRoot, "System32", "rundll32.exe");
-}
 
 function normalizeBrowserOpenUrl(raw: string): string | null {
   try {
@@ -52,7 +46,7 @@ export async function resolveBrowserOpenCommand(
   }
 
   if (platform === "win32") {
-    const rundll32 = resolveWindowsRundll32Path();
+    const rundll32 = getWindowsSystem32ExePath("rundll32.exe");
     return {
       argv: [rundll32, "url.dll,FileProtocolHandler"],
       command: rundll32,

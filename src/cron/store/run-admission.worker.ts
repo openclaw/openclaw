@@ -10,6 +10,7 @@ import { recomputeJobNextRunAtMs } from "../service/jobs-scheduling.js";
 import { retainManualOneShotOccurrence } from "../service/one-shot-schedule.js";
 import type { CronJobPolicyContext } from "../service/state.js";
 import {
+  deleteCronJobRowInDatabase,
   deleteStaleCronJobFamilyRows,
   loadedCronStoreFromRows,
   loadCronRows,
@@ -20,12 +21,14 @@ import {
   activateCronRunReceiptInDatabase,
   adjudicateActiveCronRunReceiptInDatabase,
   assertCronRunReceiptCurrentInDatabase,
+  assertCronRunReceiptOwnedInDatabase,
   claimCronRunReceiptInDatabase,
   CronRunReceiptConflictError,
   CronRunReceiptRevisionError,
   ensureCronRunReceiptSchema,
   finishCronRunReceiptInDatabase,
 } from "./run-receipt-store.js";
+import { isCronRunTriggerStateRetiredInDatabase } from "./run-receipt-trigger-state.js";
 import { prepareCronRunReceiptWriteSchema } from "./run-receipt-write-admission.js";
 import {
   loadCronRuntimeAuthorities,
@@ -315,6 +318,92 @@ export function finishCronReceiptInWorker(
     { database, path: database.path, env: getSqliteWorkerStateContext().environment },
     { operationLabel: "cron.run-receipt.finish" },
   );
+}
+
+/** Job state and its terminal receipt share the same authoritative write transaction. */
+export function finalizeCronRunsInWorker(
+  database: OpenClawStateDatabase,
+  input: CronRuntimeWorkerOperations["cron.finalizeRuns"]["input"],
+): CronRuntimeWorkerOperations["cron.finalizeRuns"]["output"] {
+  let transactionRefusal: CronRunReceiptRevisionError | undefined;
+  try {
+    return runOpenClawStateWriteTransaction(
+      ({ db }) => {
+        try {
+          const { rows, jobs } = loadRuntimeRows(db, input.storeKey, input.jobIds);
+          const receiptSchema = prepareCronRunReceiptWriteSchema(db);
+          const preparation = prepareCronRuntimeMutation("cron.finalizeRuns", input.nonce, {
+            jobs: [...jobs.values()],
+            receipts: input.receipts.map(({ terminal }) => ({
+              receiptId: terminal.handle.receiptId,
+              deletionBlocked: isAgentDeletionBlocked(terminal.handle.agentId, {}, db),
+              triggerStateRetired: isCronRunTriggerStateRetiredInDatabase({
+                database: db,
+                handle: terminal.handle,
+              }),
+            })),
+          });
+          for (const { terminal, allowMissingJob } of input.receipts) {
+            if (allowMissingJob) {
+              assertCronRunReceiptOwnedInDatabase({ database: db, handle: terminal.handle });
+            } else {
+              assertCronRunReceiptCurrentInDatabase({
+                database: db,
+                handle: terminal.handle,
+                resolveAgentId: (job) =>
+                  resolveCronJobEffectiveAgentId(job, preparation.defaultAgentId),
+              });
+            }
+          }
+          const deleted = new Set(preparation.deletedJobIds);
+          for (const jobId of deleted) {
+            if (!input.jobIds.includes(jobId)) {
+              throw new Error("Cron finalization attempted to delete an unrelated job");
+            }
+            deleteCronJobRowInDatabase(db, input.storeKey, jobId);
+          }
+          for (const job of preparation.jobs) {
+            const row = rows.get(job.id);
+            if (row && !deleted.has(job.id)) {
+              upsertCronJobRow(db, input.storeKey, job, row.sort_order, { knownExistingRow: row });
+            }
+          }
+          for (const { terminal } of input.receipts) {
+            if (!preparation.deferredReceiptIds.includes(terminal.handle.receiptId)) {
+              finishCronRunReceiptInDatabase({ database: db, receiptSchema, ...terminal });
+            }
+          }
+          return retainCronRuntimeMutationOutcome("cron.finalizeRuns", db, input.nonce, {
+            changed: preparation.jobs.length > 0 || deleted.size > 0,
+          });
+        } catch (error) {
+          if (error instanceof CronRunReceiptRevisionError) {
+            transactionRefusal = error;
+          }
+          throw error;
+        }
+      },
+      { database, path: database.path, env: getSqliteWorkerStateContext().environment },
+      { operationLabel: "cron.run-finalization" },
+    );
+  } catch (error) {
+    if (!transactionRefusal || error !== transactionRefusal) {
+      throw error;
+    }
+    assertTransactionUsable(database.db);
+    if (!database.db.isOpen || database.db.isTransaction) {
+      throw error;
+    }
+    // Preserve domain identity only after rollback, never through an uncertain write failure.
+    return {
+      nonce: input.nonce,
+      receiptRevision: {
+        receiptId: transactionRefusal.receiptId,
+        message: transactionRefusal.message,
+        reason: transactionRefusal.reason,
+      },
+    };
+  }
 }
 
 export function removeStaleCronFamilyInWorker(

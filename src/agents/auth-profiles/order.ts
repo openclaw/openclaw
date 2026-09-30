@@ -104,24 +104,6 @@ function listProfilesCompatibleWithAuthProvider(params: {
     .map(([profileId]) => profileId);
 }
 
-function resolveProviderAuthMode(
-  cfg: OpenClawConfig | undefined,
-  provider: string,
-): string | undefined {
-  const providers = cfg?.models?.providers;
-  if (!providers) {
-    return undefined;
-  }
-  const entry = findNormalizedProviderValue(providers, provider);
-  const auth = entry?.auth;
-  return typeof auth === "string" ? auth : undefined;
-}
-
-function providerAllowsAwsSdkAuth(cfg: OpenClawConfig | undefined, provider: string): boolean {
-  const authMode = resolveProviderAuthMode(cfg, provider);
-  return authMode === "aws-sdk";
-}
-
 /** Returns true when config declares an aws-sdk auth profile for a provider. */
 export function isConfiguredAwsSdkAuthProfileForProvider(params: {
   cfg?: OpenClawConfig;
@@ -146,7 +128,9 @@ export function isConfiguredAwsSdkAuthProfileForProvider(params: {
   ) {
     return false;
   }
-  return providerAllowsAwsSdkAuth(params.cfg, providerAuthKey);
+  return (
+    findNormalizedProviderValue(params.cfg?.models?.providers, providerAuthKey)?.auth === "aws-sdk"
+  );
 }
 
 /** Resolves whether a profile can be used for a provider right now. */

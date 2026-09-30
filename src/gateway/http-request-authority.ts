@@ -5,7 +5,7 @@ import { getRuntimeConfig } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginGatewayAccessAuthority } from "../plugins/gateway-access-policy.types.js";
 import { readUserProfileAliasRevision } from "../state/user-profile-events.js";
-import { isGatewayAuthPolicyCurrent, resolveGatewayAuthPolicyGeneration } from "./auth-policy.js";
+import { isGatewayAuthPolicyCurrent, captureGatewayAuthPolicy } from "./auth-policy.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { sendUnauthorized } from "./http-common.js";
@@ -60,7 +60,8 @@ export function captureHttpRequestAuthority(
   params: GatewayHttpRequestAuthOptions & { req: IncomingMessage },
 ): () => boolean {
   const cfg = params.cfg ?? getRuntimeConfig();
-  const generation = resolveGatewayAuthPolicyGeneration(cfg);
+  // HTTP scopes come from credential/header grants and role ceilings, never identityScopes.
+  const policy = captureGatewayAuthPolicy(cfg, null);
   const authGeneration = resolveSharedGatewaySessionGeneration(
     params.auth,
     params.trustedProxies ?? cfg.gateway?.trustedProxies,
@@ -71,7 +72,7 @@ export function captureHttpRequestAuthority(
     const current = params.getRuntimeConfig?.() ?? getRuntimeConfig();
     return (
       !params.req.socket?.destroyed &&
-      isGatewayAuthPolicyCurrent(generation, current) &&
+      isGatewayAuthPolicyCurrent(policy, current) &&
       (roleRevision === undefined || roleRevision === readOperatorRolePolicyRevision()) &&
       aliasRevision === readUserProfileAliasRevision() &&
       authGeneration ===

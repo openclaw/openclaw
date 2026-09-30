@@ -69,7 +69,7 @@ describe("worker placement read projection", () => {
     });
     store.markWorkspaceResultPending(claim);
     const stagedResultRef = `refs/openclaw/worker-results/${claim.claimId}`;
-    store.recordStagedWorkspaceResult(claim, stagedResultRef);
+    await store.recordStagedWorkspaceResult(claim, stagedResultRef);
     store.recordWorkspaceResultConflict(claim, { paths: ["changed.txt"], stagedResultRef });
     const draining = store.startWorkspaceResultDrain(claim);
     const pendingResult = store.listPendingWorkspaceResults("pending")[0];

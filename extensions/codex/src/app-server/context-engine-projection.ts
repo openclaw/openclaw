@@ -389,7 +389,7 @@ function normalizeProjectedContextRange(
   return { start, end };
 }
 
-function resolveProjectionPromptBudgetTokens(params: {
+export function resolveProjectionPromptBudgetTokens(params: {
   contextTokenBudget: number;
   reserveTokens?: number;
 }): number {

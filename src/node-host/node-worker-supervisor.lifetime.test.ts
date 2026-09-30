@@ -292,6 +292,9 @@ describe("node worker environment lifetime", () => {
       expect(await supervisor.status(first.launchId)).toEqual({
         ...completed,
         workerLineageSettled: completed.workerCleanupMode === "owned-anchor",
+        ...(completed.workerCleanupMode === "linux-subreaper"
+          ? { workerDescendantsReaped: true }
+          : {}),
       });
       expect((await supervisor.status(waiting.launchId))?.state).toBe("cancelled");
     } finally {
@@ -322,6 +325,9 @@ describe("node worker environment lifetime", () => {
       expect(await supervisor.status(input.launchId)).toEqual({
         ...completed,
         workerLineageSettled: completed.workerCleanupMode === "owned-anchor",
+        ...(completed.workerCleanupMode === "linux-subreaper"
+          ? { workerDescendantsReaped: true }
+          : {}),
       });
       await vi.waitFor(() => expectBackgroundRetired(connection!, running.worker!, server));
     } finally {
@@ -464,6 +470,9 @@ describe("node worker environment lifetime", () => {
       expect(await supervisor.status(first.launchId)).toEqual({
         ...completed,
         workerLineageSettled: completed.workerCleanupMode === "owned-anchor",
+        ...(completed.workerCleanupMode === "linux-subreaper"
+          ? { workerDescendantsReaped: true }
+          : {}),
       });
       if (binding === "owner epoch" || binding === "session") {
         await supervisor.stopEnvironment(testNodeWorkerEnvironmentIdentity(first));
@@ -705,6 +714,9 @@ describe("node worker environment lifetime", () => {
         expect(await supervisor.status(first.launchId)).toEqual({
           ...completed,
           workerLineageSettled: completed.workerCleanupMode === "owned-anchor",
+          ...(completed.workerCleanupMode === "linux-subreaper"
+            ? { workerDescendantsReaped: true }
+            : {}),
         });
         expect(await supervisor.status(next.launchId)).toBeUndefined();
         expect(fs.existsSync(path.join(workspaceDir, `${next.launchId}.started.json`))).toBe(false);

@@ -1,4 +1,3 @@
-import chokidar from "chokidar";
 import { expect, it, vi, onTestFinished } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { readConfigFileSnapshot } from "../config/io.js";
@@ -18,7 +17,7 @@ import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { startGatewayConfigReloader, type GatewayReloadPlan } from "./config-reload.js";
-import { createWatcherMock } from "./config-reload.watcher.test-support.js";
+import { installWatcherMock } from "./config-reload.watcher.test-support.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import { listProjectedSessions } from "./session-utils-list.js";
@@ -60,9 +59,8 @@ it("retains resident rows across projection-neutral commits and unchanged admiss
       getConfig: () => getRuntimeConfigSnapshot()!,
       modelCatalog: [],
     });
-    const watcher = createWatcherMock();
-    const watch = vi.spyOn(chokidar, "watch").mockReturnValue(watcher as never);
-    onTestFinished(() => watch.mockRestore());
+    const watcher = installWatcherMock();
+    onTestFinished(watcher.restore);
     let applied = createDeferred<GatewayReloadPlan>();
     let dirtyAtCommit = 0;
     const commit: Parameters<typeof startGatewayConfigReloader>[0]["onHotReload"] = async (
@@ -180,7 +178,50 @@ it("retains resident rows across projection-neutral commits and unchanged admiss
         { agentId: "main", sessionKey: "agent:main:config-0" },
         { owner: { type: "agent", id: "main" }, assignedBy: { type: "system", id: "test" } },
       );
-      await listProjectedSessions({ projection, opts: { archived: "all", limit: 247 } });
+      const resident = await listProjectedSessions({
+        projection,
+        opts: { archived: "all", limit: 247 },
+      });
+      const residentRows = resident.sessions.map(({ snapshotAt: _snapshotAt, ...row }) => row);
+      for (const [operation, model] of [
+        ["add", "unit-test/talk-a"],
+        ["change", "unit-test/talk-b"],
+        ["remove", undefined],
+      ] as const) {
+        const event = `talk.realtime.model:${operation}`;
+        const before = projection.materializedCount;
+        const started = performance.now();
+        applied = createDeferred<GatewayReloadPlan>();
+        await state.writeConfig({
+          ...cfg,
+          talk: { realtime: model === undefined ? {} : { model } },
+        });
+        watcher.emit("change", state.configPath);
+        const plan = await applied.promise;
+        expect(plan.restartGateway).toBe(false);
+        const dirtyRows = dirtyAtCommit;
+        const result = await listProjectedSessions({
+          projection,
+          opts: { archived: "all", limit: 247 },
+        });
+        const materializations = projection.materializedCount - before;
+        console.log(
+          JSON.stringify({
+            event,
+            count,
+            dirtyRows,
+            materializations,
+            elapsedMs: performance.now() - started,
+          }),
+        );
+        expect(result.totalCount).toBe(count);
+        expect(result.sessions.map(({ snapshotAt: _snapshotAt, ...row }) => row)).toEqual(
+          residentRows,
+        );
+        expect.soft(dirtyRows, event).toBe(0);
+        expect.soft(materializations, event).toBe(0);
+        expect(projection.state.cfg).toBe(cfg);
+      }
       const beforeRename = projection.materializedCount;
       const previousConfig = cfg;
       cfg = {

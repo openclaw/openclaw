@@ -183,8 +183,8 @@ export class CronService implements CronServiceContract {
     return await readOps.readJob(this.state, id);
   }
 
-  async readScratch(id: string) {
-    return await readOps.readScratch(this.state, id);
+  async readScratch(id: string, options?: { assertCurrent?: () => void; signal?: AbortSignal }) {
+    return await readOps.readScratch(this.state, id, options);
   }
 
   async writeScratch(

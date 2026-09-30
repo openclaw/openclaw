@@ -482,23 +482,11 @@ class SmsManager(
     }
   }
 
-  fun hasSmsPermission(): Boolean =
-    ContextCompat.checkSelfPermission(
-      context,
-      Manifest.permission.SEND_SMS,
-    ) == PackageManager.PERMISSION_GRANTED
+  fun hasSmsPermission(): Boolean = hasPermission(Manifest.permission.SEND_SMS)
 
-  fun hasReadSmsPermission(): Boolean =
-    ContextCompat.checkSelfPermission(
-      context,
-      Manifest.permission.READ_SMS,
-    ) == PackageManager.PERMISSION_GRANTED
+  fun hasReadSmsPermission(): Boolean = hasPermission(Manifest.permission.READ_SMS)
 
-  fun hasReadContactsPermission(): Boolean =
-    ContextCompat.checkSelfPermission(
-      context,
-      Manifest.permission.READ_CONTACTS,
-    ) == PackageManager.PERMISSION_GRANTED
+  fun hasReadContactsPermission(): Boolean = hasPermission(Manifest.permission.READ_CONTACTS)
 
   fun canSendSms(): Boolean = hasSmsPermission() && hasTelephonyFeature()
 
@@ -652,8 +640,10 @@ class SmsManager(
       }
     }
 
+  private fun hasPermission(permission: String): Boolean = ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
+
   private suspend fun ensurePermission(permission: String): Boolean {
-    if (ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED) return true
+    if (hasPermission(permission)) return true
     val requester = permissionRequester ?: return false
     return requester.requestIfMissing(listOf(permission))[permission] == true
   }

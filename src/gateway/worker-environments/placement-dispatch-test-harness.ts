@@ -280,7 +280,7 @@ export function createHarness(
         throw options.terminalizedReclaimError ?? new WorkerTunnelOwnerDisconnectedError();
       }
       if (options.reconcileConflictPaths?.length && stagedResult) {
-        stagedResult.record(stagedResult.ref);
+        await stagedResult.record(stagedResult.ref);
       }
       await options.afterReconcile?.();
       const verifyLocalStable = async () => {

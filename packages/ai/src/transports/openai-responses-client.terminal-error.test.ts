@@ -54,17 +54,31 @@ const model = {
 } satisfies Model<"openai-responses">;
 
 describe("managed Responses transport terminal errors", () => {
-  it.each(["incomplete", "completed", "filtered", "failed", "eof", "aborted"] as const)(
-    "fences later tool completions after truncated output until %s",
-    async (ending) => {
+  it.each(
+    ["incomplete", "in_progress", "malformed", "truncated"].flatMap((rejection) =>
+      ["incomplete", "completed", "filtered", "failed", "eof", "aborted", "error"].map(
+        (ending) => ({ rejection, ending }),
+      ),
+    ),
+  )(
+    "fences later tool completions after $rejection output until $ending",
+    async ({ rejection, ending }) => {
       const controller = new AbortController();
       const calls = [0, 1].map((index) => ({
         type: "function_call",
         id: `fc_parallel_${index}`,
         call_id: `call_parallel_${index}`,
         name: "probe",
-        arguments: index === 0 ? '{"token":"unfinished' : '{"token":"complete"}',
-        status: index === 0 ? "incomplete" : "completed",
+        arguments:
+          index !== 0
+            ? '{"token":"complete"}'
+            : rejection === "malformed"
+              ? '{"token":!}'
+              : '{"token":"unfinished',
+        status:
+          index === 0 && (rejection === "incomplete" || rejection === "in_progress")
+            ? rejection
+            : "completed",
         async: true,
       }));
       sseState.outcomes.push({
@@ -78,6 +92,10 @@ describe("managed Responses transport terminal errors", () => {
           }
           for (const [output_index, item] of calls.entries()) {
             yield { type: "response.output_item.done", output_index, item };
+          }
+          if (ending === "error") {
+            yield { type: "error", code: "server_error", message: "provider stream error" };
+            return;
           }
           if (ending === "aborted") {
             controller.abort();
@@ -122,20 +140,50 @@ describe("managed Responses transport terminal errors", () => {
       expect(events).not.toContain("toolcall_end");
       expect(events.filter((type) => type === "done" || type === "error")).toEqual(["error"]);
       expect(result.stopReason).toBe(ending === "aborted" ? "aborted" : "error");
-      if (ending !== "eof" && ending !== "aborted") {
+      if (ending !== "eof" && ending !== "aborted" && ending !== "error") {
         expect(result.usage).toMatchObject({ input: 20, output: 9, totalTokens: 29 });
         expect(result.responseId).toBe("resp_parallel_truncated");
         expect(result.responseModel).toBe("served-model");
       }
-      if (ending === "incomplete" || ending === "completed") {
-        expect(result.errorCode).toBe("incomplete_tool_call");
+      if (ending === "incomplete" || ending === "completed" || ending === "eof") {
+        expect(result.errorCode).toBe(
+          rejection === "incomplete" || rejection === "in_progress"
+            ? "incomplete_tool_call"
+            : "malformed_tool_call_arguments",
+        );
+        expect(result.errorMessage).toBe(
+          rejection === "incomplete" || rejection === "in_progress"
+            ? "Responses stream completed with an incomplete terminal tool call"
+            : "Responses stream completed tool call with invalid JSON arguments",
+        );
+        if (rejection === "malformed" || rejection === "truncated") {
+          expect(JSON.parse(result.errorBody ?? "null")).toMatchObject({
+            code: "malformed_tool_call_arguments",
+            argumentChars: calls[0]?.arguments.length,
+            repairAttempted: false,
+          });
+        }
       } else {
         expect(result.errorCode).not.toBe("incomplete_tool_call");
+        expect(result.errorCode).not.toBe("malformed_tool_call_arguments");
+      }
+      if (ending === "incomplete") {
+        expect(result.diagnostics).toContainEqual(
+          expect.objectContaining({
+            type: "openai_responses_terminal",
+            details: expect.objectContaining({
+              eventType: "response.incomplete",
+              incompleteReason: "max_output_tokens",
+            }),
+          }),
+        );
       }
       if (ending === "filtered") {
         expect(result.errorMessage).toBe("Provider incomplete_reason: content_filter");
       } else if (ending === "failed") {
         expect(result.errorMessage).toContain("provider failed");
+      } else if (ending === "error") {
+        expect(result.errorMessage).toContain("provider stream error");
       }
     },
   );

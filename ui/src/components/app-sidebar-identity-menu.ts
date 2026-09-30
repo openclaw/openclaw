@@ -12,6 +12,7 @@ import { requestDebugOverlayToggle } from "../pages/debug/debug-overlay-contract
 import {
   closeMenuAfterOwnDropdownHide,
   COMMAND_VALUE_PREFIX,
+  consumeSidebarMenuSelection,
   LINK_VALUE_PREFIX,
   moveSidebarMenuFocus,
   renderSidebarHelpMenu,
@@ -139,18 +140,10 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams) {
       .distance=${0}
       aria-label=${t("profilePage.identity.menuLabel")}
       @wa-select=${(event: CustomEvent<{ item: HTMLElement & { value?: string } }>) => {
-        event.preventDefault();
-        const item = event.detail.item;
-        if (item.dataset.nativeNavigation) {
-          delete item.dataset.nativeNavigation;
-          params.onClose(false);
-          return;
-        }
-        const value = item.value;
+        const value = consumeSidebarMenuSelection(event, params.onClose);
         if (!value) {
           return;
         }
-        params.onClose(false);
         const capability = nativeGatewaysCapability();
         if (value.startsWith("gateway:")) {
           const id = decodeURIComponent(value.slice("gateway:".length));

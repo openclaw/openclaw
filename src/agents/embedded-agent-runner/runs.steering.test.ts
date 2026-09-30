@@ -716,6 +716,7 @@ describe("embedded-agent active-run steering", () => {
       const options = {
         isInboundUserMessage: true,
         onQueueAccepted: vi.fn(),
+        onQueueSettled: vi.fn(),
         pendingInputAuthorityFingerprint: "fallback-authority",
         toolAuthorityFingerprint: "default-authority",
       } as const;
@@ -727,9 +728,11 @@ describe("embedded-agent active-run steering", () => {
       if (unconfirmed) {
         await expect(outcome).rejects.toBe(error);
         expect(options.onQueueAccepted).not.toHaveBeenCalled();
+        expect(options.onQueueSettled).not.toHaveBeenCalled();
       } else {
         await expect(outcome).resolves.toMatchObject({ queued: true, target: "embedded_run" });
         expect(options.onQueueAccepted).toHaveBeenCalledExactlyOnceWith(true);
+        expect(options.onQueueSettled).toHaveBeenCalledOnce();
       }
       expect(claimPendingUserInputAnswer).toHaveBeenCalledExactlyOnceWith("2", options);
       expect(queueMessage).not.toHaveBeenCalled();
@@ -892,17 +895,21 @@ describe("embedded-agent active-run steering", () => {
     },
   );
 
-  it("rejects transcript-commit waits for active handles without support", async () => {
+  it("keeps custody open while retrying an unsupported transcript wait", async () => {
     const queueMessage = vi.fn(async () => {});
-    setActiveEmbeddedRun("session-no-transcript-wait", {
+    const handle = {
       ...createEmbeddedRunHandle(),
       queueMessage,
-    });
+      messageInjectionV2: { version: 2 as const, isAvailable: () => true, queueMessage },
+    };
+    setActiveEmbeddedRun("session-no-transcript-wait", handle);
+    const onQueueSettled = vi.fn();
 
-    const outcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
+    const outcome = await queueGuardedEmbeddedAgentMessageWithOutcomeAsync(
       "session-no-transcript-wait",
       "continue",
-      { waitForTranscriptCommit: true },
+      { waitForTranscriptCommit: true, onQueueSettled },
+      () => true,
     );
 
     expect(outcome).toEqual({
@@ -912,6 +919,18 @@ describe("embedded-agent active-run steering", () => {
       gatewayHealth: "live",
     });
     expect(queueMessage).not.toHaveBeenCalled();
+    expect(onQueueSettled).not.toHaveBeenCalled();
+    await expect(
+      queueGuardedEmbeddedAgentMessageWithOutcomeAsync(
+        "session-no-transcript-wait",
+        "continue",
+        { onQueueSettled },
+        () => true,
+      ),
+    ).resolves.toMatchObject({ queued: true });
+    expect(onQueueSettled).not.toHaveBeenCalled();
+    clearActiveEmbeddedRun("session-no-transcript-wait", handle);
+    expect(onQueueSettled).toHaveBeenCalledOnce();
   });
 
   it("rejects transcript-commit waits before reply-run fallback without an active handle", async () => {

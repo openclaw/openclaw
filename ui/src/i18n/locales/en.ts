@@ -2159,6 +2159,9 @@ export const en: TranslationMap & {
       cancelFailed: "Could not confirm cancellation: {error}",
       sessionExpired:
         "The Gateway no longer has this setup session. It may already have finished. Close this dialog and choose Check again to review the current setup.",
+      gatewayNotResponding:
+        "The Gateway is not responding. Check that it is running, then try again.",
+      gatewayReconnecting: "The Gateway is not responding. Waiting for it to reconnect.",
       notComplete: "Sign-in finished, but model setup is not complete yet.",
     },
   },
@@ -2472,7 +2475,6 @@ export const en: TranslationMap & {
     agent: "Agent override",
     publishAs: "Publish as @{account}",
     account: "Publication account",
-    choose: "Choose an account",
     newAction: "Choose a new publication",
     capacity:
       'Too many publications are awaiting review. Finish an existing publication, then select "{newAction}" to make room. Existing retries remain available.',
@@ -2493,12 +2495,9 @@ export const en: TranslationMap & {
     effectPush: "push",
     effectPullRequest: "pull request",
     personalWorkspace:
-      "My GitHub requires an idle, reconciled local workspace. Wait for work to finish and reclaim the workspace. System and agent publication keep their existing shared flow.",
-    scopeHelp:
-      "My GitHub applies only to this explicit Publish PR action. Agent commands, previews, and cloud workers keep the shared account.",
+      "Wait for work to finish and reclaim the workspace to publish with My GitHub.",
     unidentified: "Sign in with a personal profile to use My GitHub.",
-    connectHelp:
-      "Connect or repair My GitHub in Settings \u2192 Profile \u2192 GitHub connections.",
+    connectHelp: "Connect GitHub in Settings \u2192 Profile \u2192 GitHub connections.",
   },
   githubConnections: {
     title: "GitHub connections",
@@ -3023,6 +3022,13 @@ export const en: TranslationMap & {
         "{percent}% used · {free} free. Delete unneeded files or stop the cloud worker before large writes.",
       criticalBody:
         "{percent}% used · {free} free. New writes may fail and stop the agent. Delete unneeded files or stop the cloud worker before large writes.",
+    },
+    workerRuntimeInstall: {
+      transferringTitle: "Updating worker runtime · {transferred} of {total} ({percent}%)",
+      installingTitle: "Installing worker runtime",
+      transferringBody:
+        "Transferring the new worker runtime to this device: {transferred} of {total} ({percent}%). The next turn starts when it finishes.",
+      installingBody: "Installing the new worker runtime on this device.",
     },
     sendErrors: {
       outboxPayloadCopied:
@@ -3762,6 +3768,10 @@ export const en: TranslationMap & {
       askLabel: "Ask in side chat",
       askPlaceholder: "Ask a question",
       askImageQuestion: "What does this image show?",
+      selectionTooLong:
+        "These comments are too long for Side chat. Use a shorter selection or comment.",
+      selectionQuoteOnly:
+        "The selection is too long to attach. A short quote is ready in Side chat.",
       askSubmit: "Ask",
       askPending: "Answering from this session…",
       askBusy: "Side chat is already answering a question.",

@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentIdFromSessionKey, resolveAgentMainSessionKey } from "../../config/sessions.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginSubagentRequesterContext } from "../../plugins/runtime/subagent-requester-context.js";
 import {
@@ -74,7 +75,7 @@ export async function registerPluginSubagentRunFromGateway(params: {
   requester?: PluginSubagentRequesterContext;
   pluginId?: string;
   gatewayContextResolver?: GatewayContextResolver;
-  assertCurrent: () => void;
+  assertCurrent: () => SessionEntry | undefined;
 }): Promise<void> {
   const childSessionKey = params.childSessionKey.trim();
   if (!childSessionKey) {
@@ -87,22 +88,16 @@ export async function registerPluginSubagentRunFromGateway(params: {
   const requesterSessionKey = params.requester?.sessionKey ?? ownerSessionKey;
   const { adoptPausedSubagentRunForFollowUp, registerSubagentRun } =
     await import("../../agents/subagents/registry/subagent-registry.js");
-  params.assertCurrent();
-  // A follow-up aimed at a session paused by sessions_yield continues that run.
-  // Registering a sibling row here would reassign the requester to this agent's
-  // own main session and leave the original requester waiting behind a row that
-  // can no longer announce. A follow-up that names its own requester is opting
-  // into its own delivery, so it registers normally rather than silently
-  // inheriting the paused row's audience.
+  const sessionEntry = params.assertCurrent();
+  // Resume a yielded run with its original audience unless the follow-up names
+  // a requester and therefore owns a separate delivery.
   if (
     !params.requester &&
     adoptPausedSubagentRunForFollowUp({
       childSessionKey,
       runId: params.runId,
       task: params.task,
-      ...(params.gatewayContextResolver
-        ? { gatewayContextResolver: params.gatewayContextResolver }
-        : {}),
+      gatewayContextResolver: params.gatewayContextResolver,
     })
   ) {
     return;
@@ -111,6 +106,7 @@ export async function registerPluginSubagentRunFromGateway(params: {
     {
       runId: params.runId,
       childSessionKey,
+      sessionEntry,
       controllerSessionKey: ownerSessionKey,
       requesterSessionKey,
       requesterOrigin: params.requester?.origin,
@@ -120,9 +116,7 @@ export async function registerPluginSubagentRunFromGateway(params: {
       ...(params.pluginId ? { label: `plugin:${params.pluginId}` } : {}),
       expectsCompletionMessage: params.requester !== undefined,
       spawnMode: "run",
-      ...(params.gatewayContextResolver
-        ? { gatewayContextResolver: params.gatewayContextResolver }
-        : {}),
+      gatewayContextResolver: params.gatewayContextResolver,
     },
     { assertCurrent: params.assertCurrent },
   );

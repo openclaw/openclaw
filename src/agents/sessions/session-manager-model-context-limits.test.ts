@@ -530,7 +530,7 @@ it.each(["sync", "async"])(
       await verifyRead(async () => {
         const limits = { maxBytes: 4096, maxEvents: 8 };
         expect(() => SessionManager.openModelContext(scope, { limits })).toThrow(
-          /without splitting a tool frame/u,
+          "The latest messages exceed this session's context limit. Start a new session with a brief summary to continue.",
         );
         const options = { limits: { ...limits, toolResultOverflow: "omit" as const } };
         let oversizedPayloadReads = 0;

@@ -1,4 +1,3 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -20,7 +19,6 @@ import {
 import {
   getGatewayRestartDrainSignal,
   getGatewaySuspendAdmissionPhase,
-  isGatewayRestartDraining,
   tryBeginGatewayPreparedRestartRootWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
@@ -42,7 +40,6 @@ import {
   isCoreGatewayMethodClassified,
   type GatewayMethodRegistry,
 } from "./methods/registry.js";
-import { canSelectQuestion } from "./question-access.js";
 import {
   coreGatewayHandlers,
   gatewayRouterUploadPolicyError,
@@ -66,6 +63,7 @@ import type {
 } from "./server-methods/types.js";
 import type { GatewayRequestEntry } from "./server-request-entry.js";
 import {
+  runGatewayPendingWorkContinuation,
   runWithGatewayObservationScope,
   workAdmissionUnavailableError,
 } from "./server-request-lifecycle.js";
@@ -88,6 +86,7 @@ import {
   resolveSessionMutationAuthorization,
   SessionMutationAuthorizationChangedError,
 } from "./session-sharing.js";
+import { resolveRuntimeSessionParticipantRequest } from "./session-tool-participant.js";
 import { classifyGatewayStaleInstall } from "./stale-install.js";
 
 export { coreGatewayHandlers };
@@ -98,73 +97,6 @@ const SUSPEND_CONTROL_METHODS = new Set([
   "gateway.suspend.resume",
   "gateway.suspend.handoff",
 ]);
-
-function runGatewayPendingWorkContinuation<T>(params: {
-  method: string;
-  client: GatewayRequestOptions["client"];
-  requestParams: unknown;
-  context: GatewayRequestContext;
-  admission?: "continuation";
-  run: () => Promise<T>;
-}): Promise<T> | null {
-  if (!isRecord(params.requestParams)) {
-    return null;
-  }
-  const request = params.requestParams;
-  if (params.client?.connect.role === "node") {
-    if (
-      params.admission !== "continuation" &&
-      getGatewaySuspendAdmissionPhase() !== "draining" &&
-      !isGatewayRestartDraining()
-    ) {
-      return null;
-    }
-    const invokeId =
-      params.method === "node.invoke.progress"
-        ? request.invokeId
-        : params.method === "node.invoke.result"
-          ? request.id
-          : undefined;
-    if (typeof invokeId !== "string" || typeof request.nodeId !== "string") {
-      return null;
-    }
-    return params.context.nodeRegistry.runPendingInvokeContinuation({
-      invokeId,
-      nodeId: request.nodeId,
-      connId: params.client.connId,
-      run: params.run,
-    });
-  }
-  if (
-    params.admission === "continuation" ||
-    (getGatewaySuspendAdmissionPhase() !== "draining" && !isGatewayRestartDraining()) ||
-    params.client?.connect.role !== "operator" ||
-    typeof request.id !== "string"
-  ) {
-    return null;
-  }
-  if (params.method === "question.resolve" || params.method === "question.get") {
-    const questionManager = params.context.questionManager;
-    return questionManager && canSelectQuestion(questionManager, request.id, params.client)
-      ? questionManager.runPendingContinuation(request.id, params.run)
-      : null;
-  }
-  const manager =
-    params.method === "exec.approval.resolve"
-      ? params.context.execApprovalManager
-      : params.method === "plugin.approval.resolve"
-        ? params.context.pluginApprovalManager
-        : params.method === "approval.resolve"
-          ? request.kind === "exec"
-            ? params.context.execApprovalManager
-            : request.kind === "plugin"
-              ? params.context.pluginApprovalManager
-              : request.kind === "system-agent"
-                ? params.context.systemAgentApprovalManager
-                : undefined
-          : undefined;
-  return manager?.runPendingContinuation(request.id, params.run) ?? null;
-}
 
 /** Builds the per-request method registry from core, plugin, and explicit extra handlers. */
 export function createRequestGatewayMethodRegistry(
@@ -566,6 +498,10 @@ export async function handleGatewayRequest(
   diagnostics?: GatewayRpcDiagnostics,
 ): Promise<void> {
   const { req, client, isWebchatConnect, context, signal, hasCurrentClientAuthority } = opts;
+  const runtimeParticipant = resolveRuntimeSessionParticipantRequest(opts);
+  if (runtimeParticipant === null) {
+    return;
+  }
   const profileBinding =
     opts.expectedProfileBinding ??
     (req.expectedProfileId === undefined
@@ -576,16 +512,26 @@ export async function handleGatewayRequest(
           readGatewayRequestMutationAuthority(opts).assertLifetimeCurrent,
         ));
   // WS publication already owns the shared guard, including policy-close responses.
-  const respond =
+  const profileRespond =
     profileBinding && !opts.expectedProfileBinding
       ? profileBinding.guardResponse(opts.respond)
       : opts.respond;
-  const sessionMutationCommitGuard = profileBinding
-    ? () => {
-        profileBinding.assertCurrent();
-        opts.sessionMutationCommitGuard?.();
+  const respond: GatewayRequestOptions["respond"] = runtimeParticipant
+    ? (ok, ...response) => {
+        if (ok) {
+          runtimeParticipant.assertCurrent();
+        }
+        profileRespond(ok, ...response);
       }
-    : opts.sessionMutationCommitGuard;
+    : profileRespond;
+  const sessionMutationCommitGuard =
+    profileBinding || runtimeParticipant
+      ? () => {
+          profileBinding?.assertCurrent();
+          runtimeParticipant?.assertCurrent();
+          opts.sessionMutationCommitGuard?.();
+        }
+      : opts.sessionMutationCommitGuard;
   const entry = opts.requestEntry ?? context.requestEntryLifetime?.enter(opts);
   const releaseForegroundWork = retainSessionListForegroundWork();
   let sessionAccessAuthority: GatewaySessionAccessAuthority | undefined;
@@ -607,6 +553,7 @@ export async function handleGatewayRequest(
       expectedProfileBinding: profileBinding,
       hasCurrentClientAuthority,
       assertInvocationCurrent: () => {
+        runtimeParticipant?.assertCurrent();
         profileBinding?.assertCurrent();
         // Profile hydration binds the operator guard later; retain the original request lifetime.
         readGatewayRequestMutationAuthority(opts).assertOperatorCurrent?.();
@@ -631,6 +578,7 @@ export async function handleGatewayRequest(
     const sessionMutationAuthorization = withSessionMutationCommitGuard(
       authorization.sessionMutationAuthorization,
       () => {
+        runtimeParticipant?.assertCurrent();
         assertOperatorCurrent();
         requestMutationAuthority.assertCurrent();
       },
@@ -667,7 +615,7 @@ export async function handleGatewayRequest(
         }
       : respondAuthorized;
     const invokeHandler = async () => {
-      const preparedHandler = await prepareGatewayRequestHandler(handler, entry);
+      const preparedHandler = await prepareGatewayRequestHandler(handler, entry, opts);
       // Lazy preparation may yield across a hot config change. Keep the router fence
       // unless the canonical owner reconciles accepted input before new admission.
       const uploadError = gatewayRouterUploadPolicyError(requestFacts, methodRegistry);
@@ -730,6 +678,11 @@ export async function handleGatewayRequest(
         }
       },
     });
+  } catch (error) {
+    if (!(error instanceof SessionMutationAuthorizationChangedError)) {
+      throw error;
+    }
+    respond(false, undefined, error.error);
   } finally {
     sessionAccessAuthority?.release();
     releaseForegroundWork();

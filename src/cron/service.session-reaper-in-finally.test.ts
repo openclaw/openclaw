@@ -1,5 +1,6 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveStateDir } from "../config/paths.js";
 import {
   listSessionEntriesCore,
   replaceSessionEntry,
@@ -302,6 +303,7 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
       expect(isAgentAvailable.mock.calls).toEqual([["live"], ["blocked"]]);
       expect(readExpired).toHaveBeenCalledExactlyOnceWith({
         agentId: "live",
+        env: { OPENCLAW_STATE_DIR: resolveStateDir() },
         storePath: sessionStorePath,
         updatedBefore: baseNow - 24 * 3_600_000,
       });

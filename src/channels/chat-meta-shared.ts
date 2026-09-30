@@ -1,8 +1,3 @@
-/**
- * Built-in chat channel metadata builder.
- *
- * Converts bundled channel catalog entries into setup/status metadata records.
- */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { PluginPackageChannel } from "../plugins/manifest.js";
 import { listBundledChannelCatalogEntries } from "./bundled-channel-catalog-read.js";
@@ -46,11 +41,10 @@ export function buildChatChannelMetaById(): Record<ChatChannelId, ChatChannelMet
   for (const entry of listBundledChannelCatalogEntries()) {
     // The catalog can contain non-chat bundled channels. Keep this map restricted to the
     // generated chat-channel order so setup/status views stay stable.
-    const rawId = normalizeOptionalString(entry.id);
-    if (!rawId || !CHAT_CHANNEL_ID_SET.has(rawId)) {
+    const id = normalizeOptionalString(entry.id);
+    if (!id || !CHAT_CHANNEL_ID_SET.has(id)) {
       continue;
     }
-    const id = rawId;
     entries.set(
       id,
       toChatChannelMeta({

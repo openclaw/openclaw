@@ -1,4 +1,3 @@
-/** Coordinates explicit Doctor repair with the managed Gateway lifecycle. */
 import { formatCliCommand } from "../cli/command-format.js";
 import type { PreManagedServiceStop } from "../cli/update-cli/update-command-service-maintenance.js";
 import { isDefaultInstallIdentity } from "../config/paths.js";
@@ -569,7 +568,7 @@ export async function beginDoctorMaintenance(
       retainStoppedInstallation =
         stopped?.serviceUpdateVerdict?.kind === "owned" &&
         stopped.serviceUpdateVerdict.requiresInstallRootRefresh === true;
-      await state.relocateLegacyRoot();
+      await state.prepareRepair();
     });
   } catch (error) {
     try {
@@ -591,6 +590,18 @@ export async function beginDoctorMaintenance(
     },
     run: <T>(operation: () => T) => state.resources!.run(operation),
     releaseState: () => settle(releaseState),
+    async repairSqliteNoCow(paths: readonly string[]) {
+      if (this !== maintenance || custody !== "held") {
+        throw new Error("SQLite NOCOW repair requires its original live maintenance owner.");
+      }
+      const result = await settle(() => state.repairSqliteNoCow(paths));
+      for (const message of result.changes) {
+        params.runtime.log(message);
+      }
+      for (const message of result.warnings) {
+        warn(message);
+      }
+    },
     async release() {
       if (this !== maintenance) {
         throw new Error("Gateway restoration requires its original live maintenance owner.");

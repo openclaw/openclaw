@@ -65,14 +65,11 @@ export function createDispatchBlockReplyHandler(state: PrepareDispatchExecutionR
       ) {
         return;
       }
-      // Durable reasoning is a channel-owned lane; generic channels
-      // keep the historical suppression unless they explicitly opt in.
-      if (inputPayload.isReasoning === true && !reasoningPayloadsEnabled) {
-        return;
-      }
-      // Durable commentary is a channel-owned lane; generic channels keep the
-      // historical suppression unless they explicitly opt in.
-      if (inputPayload.isCommentary === true && !commentaryPayloadsEnabled) {
+      // Channels opt in to durable reasoning and commentary independently.
+      if (
+        (inputPayload.isReasoning === true && !reasoningPayloadsEnabled) ||
+        (inputPayload.isCommentary === true && !commentaryPayloadsEnabled)
+      ) {
         return;
       }
       const payload = preparePayload(
@@ -85,10 +82,7 @@ export function createDispatchBlockReplyHandler(state: PrepareDispatchExecutionR
       if (!payload) {
         return;
       }
-      // Accumulate block text for TTS generation after streaming.
-      // Exclude status notices — they are informational UI signals
-      // and must not be synthesised into the spoken reply. Display
-      // lanes stay out too: they are presentation, never final text.
+      // Notices and display lanes are not part of the final spoken answer.
       const isStatusNotice = isReplyPayloadStatusNotice(payload);
       const contributesToFinalReply =
         !isStatusNotice &&
@@ -109,22 +103,20 @@ export function createDispatchBlockReplyHandler(state: PrepareDispatchExecutionR
         state.progressState.blockCount++;
       }
       let source: BlockReplySource | undefined;
-      const cleanedPayload =
-        payload.text && cleanBlockTtsDirectiveText && contributesToFinalReply
-          ? (() => {
-              if (!deferFinalTtsText) {
-                source = pendingBlockSource ?? createBlockReplySource();
-              }
-              const text = cleanBlockTtsDirectiveText.push(payload.text);
-              const buffered = cleanBlockTtsDirectiveText.hasBufferedDirectiveText();
-              source?.setComplete(!buffered);
-              pendingBlockSource = buffered ? source : undefined;
-              return copyReplyPayloadMetadata(payload, {
-                ...payload,
-                text: text.trim() ? text : undefined,
-              });
-            })()
-          : payload;
+      let cleanedPayload = payload;
+      if (payload.text && cleanBlockTtsDirectiveText && contributesToFinalReply) {
+        if (!deferFinalTtsText) {
+          source = pendingBlockSource ?? createBlockReplySource();
+        }
+        const text = cleanBlockTtsDirectiveText.push(payload.text);
+        const buffered = cleanBlockTtsDirectiveText.hasBufferedDirectiveText();
+        source?.setComplete(!buffered);
+        pendingBlockSource = buffered ? source : undefined;
+        cleanedPayload = copyReplyPayloadMetadata(payload, {
+          ...payload,
+          text: text.trim() ? text : undefined,
+        });
+      }
       const sendPrepared = async (preparedPayload: ReplyPayload, terminal = false) => {
         let visiblePayload = preparedPayload;
         if (terminal) {

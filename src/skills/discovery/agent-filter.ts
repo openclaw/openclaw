@@ -1,5 +1,4 @@
 import { resolveAgentEntry } from "../../agents/agent-scope-config.js";
-// Agent skill filter helpers select skills that apply to a configured agent.
 import type { OpenClawConfig } from "../../config/types.js";
 import { normalizeSkillFilter } from "./filter.js";
 

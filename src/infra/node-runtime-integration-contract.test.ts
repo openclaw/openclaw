@@ -76,6 +76,7 @@ function resolveAuthority(snapshot: AuthoritySnapshot, command: string): Authori
     gateway: { nodes: { commands: snapshot.gatewayPolicy } },
   });
   const authority = resolveRequiredNodeCommandAuthority({
+    nodeId: "integration-node",
     requiredCommands: [command],
     declaredCommands: snapshot.declaredCommands,
     effectiveCommands: snapshot.effectiveCommands,

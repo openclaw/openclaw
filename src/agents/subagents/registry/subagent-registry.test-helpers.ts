@@ -1,14 +1,12 @@
 export * from "./subagent-registry.js";
 export {
   buildSubagentSessionListReadIndex,
-  countActiveDescendantRuns,
   countPendingDescendantRuns,
   getLatestLiveSubagentRunByChildSessionKey,
   getLatestSubagentRunByChildSessionKey,
   getSubagentRunByChildSessionKey,
   getSubagentSessionRuntimeMs,
   getSubagentSessionStartedAt,
-  hasDescendantRunAwaitingSettle,
   isSubagentRunLive,
   isSubagentSessionRunActive,
   listSubagentRunsForController,
@@ -37,7 +35,7 @@ type RegistryTestApi = {
     suppressSessionEffects?: boolean;
   }): Promise<number>;
   releaseSubagentRun(runId: string): void;
-  resetSubagentRegistryForTests(opts?: { persist?: boolean }): void;
+  resetSubagentRegistryForTests(opts?: { persist?: boolean }): Promise<void>;
   testing: {
     failQueuedSubagentRun(runId: string, error: string): boolean;
     sweepOnceForTests(): Promise<void>;
@@ -52,7 +50,8 @@ function getRegistryTestApi(): RegistryTestApi {
 }
 
 export function resetSubagentRegistryForTests(opts?: { persist?: boolean }) {
-  getRegistryTestApi().resetSubagentRegistryForTests(opts);
+  // Fixture state resets synchronously; the file runner joins accepted sweeps before retirement.
+  void getRegistryTestApi().resetSubagentRegistryForTests(opts);
 }
 
 export function addSubagentRunForTests(entry: SubagentRunRecordOverrides) {

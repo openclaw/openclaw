@@ -68,7 +68,8 @@ export function createRequesterYieldCallback(params: {
           requesterAgentId: params.requesterAgentId,
           requesterTurnRunId: params.requesterTurnRunId as string,
         });
-      registryClaimed = (withCronAuthority ? withCronAuthority(markYielded) : markYielded()) > 0;
+      registryClaimed =
+        (await (withCronAuthority ? withCronAuthority(markYielded) : markYielded())) > 0;
     }
     if (runtimeClaimed || registryClaimed) {
       return true;
@@ -98,7 +99,7 @@ export function createRequesterYieldCallback(params: {
     if (requesterSessionKey) {
       const { listUnsettledRequesterChildren } =
         await import("./subagents/registry/subagent-registry.js");
-      const pendingChildren = listUnsettledRequesterChildren({
+      const pendingChildren = await listUnsettledRequesterChildren({
         requesterSessionKey,
         requesterAgentId: params.requesterAgentId,
         excludeRequesterTurnRunId: params.requesterTurnRunId,

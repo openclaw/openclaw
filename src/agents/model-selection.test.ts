@@ -17,7 +17,6 @@ import {
   buildModelAliasIndex,
   normalizeModelSelection,
   normalizeProviderId,
-  resolvePersistedModelRef,
   resolvePersistedSelectedModelRef,
   resolveAllowedModelRef,
   resolveConfiguredModelRef,
@@ -452,7 +451,7 @@ describe("model-selection", () => {
     });
   });
 
-  describe("resolvePersistedModelRef", () => {
+  describe("resolvePersistedSelectedModelRef legacy metadata", () => {
     it.each([
       {
         name: "splits legacy combined refs when provider is not stored separately",
@@ -490,7 +489,7 @@ describe("model-selection", () => {
         },
       },
     ])("$name", ({ params, expected }) => {
-      expect(resolvePersistedModelRef(params)).toEqual(expected);
+      expect(resolvePersistedSelectedModelRef(params)).toEqual(expected);
     });
   });
 

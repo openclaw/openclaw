@@ -71,7 +71,8 @@ export function createWorkerWorkspaceReconcileRequest(params: {
             params.assertCurrent();
             // The immutable ref is discoverable if the process stops between
             // checkpoint acceptance and recording its pending-result pointer.
-            stagedResult.record(prepared.checkpointRef);
+            await stagedResult.record(prepared.checkpointRef);
+            params.assertCurrent();
             journal.commit(payload.currentManifestRef);
             return accepted;
           },

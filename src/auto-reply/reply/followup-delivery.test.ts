@@ -573,8 +573,8 @@ describe("resolveFollowupDeliveryDecision", () => {
         accounting: createAccounting(),
       }),
     ).toMatchObject({
-      kind: "deliver-diagnostic",
-      payload: { isError: true, isStatusNotice: true },
+      kind: "deliver",
+      payloads: [{ isError: true, isStatusNotice: true }],
     });
   });
 
@@ -909,14 +909,14 @@ describe("deliverFollowupDecision", () => {
         execution: createSettledExecution("Still unable to send the reply."),
         accounting: createAccounting(),
       });
-      if (diagnostic.kind !== "deliver-diagnostic") {
+      if (diagnostic.kind !== "deliver") {
         throw new Error("Recovery did not prepare its terminal delivery diagnostic");
       }
       await retryRun.queuedFollowupReplyDisposition.deliver({
         kind: "queued-followup",
         runId: retryTurn.runId,
         originatingChannel: "webchat",
-        payloads: [diagnostic.payload],
+        payloads: diagnostic.payloads,
         completion: { kind: "completed" },
       });
       expect(deliveryState.enqueue).toHaveBeenCalledOnce();

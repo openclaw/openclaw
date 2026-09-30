@@ -34,8 +34,6 @@ import {
 } from "./protocol.js";
 import { resolveCodexToolAbortTerminalReason } from "./tool-abort-terminal-reason.js";
 
-export { resolveCodexToolAbortTerminalReason } from "./tool-abort-terminal-reason.js";
-
 const CODEX_DYNAMIC_TOOL_TIMEOUT_MS = 90_000;
 const CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS = 600_000;
 // timeoutSeconds is an inner tool budget. Keep enough outer-watchdog headroom
@@ -81,9 +79,7 @@ function readNumericTimeoutMs(value: unknown): number | undefined {
   }
   if (typeof value === "string") {
     const parsed = parseStrictNonNegativeInteger(value);
-    if (parsed !== undefined) {
-      return Math.max(0, Math.floor(parsed));
-    }
+    return parsed === undefined ? undefined : Math.max(0, parsed);
   }
   return undefined;
 }

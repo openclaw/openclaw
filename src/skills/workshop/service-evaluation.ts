@@ -62,18 +62,15 @@ export async function evaluateSkillProposal(
   const request = { ...input, env: store.env, eventActor: structuredClone(input.eventActor) };
   const correlationId = normalizeSkillProposalCorrelationId(request.correlationId);
   const shouldRunEvaluators = hasSkillProposalEvaluators();
-  const initial = await readRequiredProposal(request.proposalId, request.env, request.agentId, {
-    config: request.config,
-    store,
-  });
+  const initial = await readRequiredProposal(request.proposalId, store);
   const snapshot = await withSkillProposalTargetLock(
     initial.record,
     async (lockedStore) => {
-      const read = await readRequiredProposal(request.proposalId, request.env, request.agentId, {
-        config: request.config,
-        reconcile: false,
-        store: lockedStore,
-      });
+      const read = await readRequiredProposal(
+        request.proposalId,
+        { ...lockedStore, config: request.config },
+        { reconcile: false },
+      );
       if (read.record.status !== "pending") {
         throw new Error(
           `Only pending proposals can be evaluated. Current status: ${read.record.status}.`,
@@ -165,11 +162,11 @@ export async function evaluateSkillProposal(
   const stored = await withSkillProposalTargetLock(
     read.record,
     async (lockedStore) => {
-      const current = await readRequiredProposal(request.proposalId, request.env, request.agentId, {
-        config: request.config,
-        reconcile: false,
-        store: lockedStore,
-      });
+      const current = await readRequiredProposal(
+        request.proposalId,
+        { ...lockedStore, config: request.config },
+        { reconcile: false },
+      );
       if (
         current.record.status !== "pending" ||
         current.record.proposedVersion !== read.record.proposedVersion ||
