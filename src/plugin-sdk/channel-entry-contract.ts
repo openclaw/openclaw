@@ -483,6 +483,16 @@ function createBundledEntryRuntimeSetter(
     : undefined;
 }
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Sidecar export types are supplied by the entry contract, not module references.
+function createBundledEntryExportLoader<T>(
+  importMetaUrl: string,
+  reference: BundledEntryModuleRef | undefined,
+): ((options?: BundledEntryModuleLoadOptions) => T) | undefined {
+  return reference
+    ? (options) => loadBundledEntryExportSync<T>(importMetaUrl, reference, options)
+    : undefined;
+}
+
 /** Defines the full bundled channel entry contract used by core plugin registration. */
 export function defineBundledChannelEntry<TPlugin = ChannelPlugin>({
   id,
@@ -503,30 +513,17 @@ export function defineBundledChannelEntry<TPlugin = ChannelPlugin>({
   const getConfigSchema = createCachedLazyValueGetter(configSchema ?? emptyChannelConfigSchema);
   const loadChannelPlugin = (options?: BundledEntryModuleLoadOptions) =>
     loadBundledEntryExportSync<TPlugin>(importMetaUrl, plugin, options);
-  const loadChannelOutbound = outbound
-    ? (options?: BundledEntryModuleLoadOptions) =>
-        loadBundledEntryExportSync<ChannelOutboundAdapter | undefined>(
-          importMetaUrl,
-          outbound,
-          options,
-        )
-    : undefined;
-  const loadChannelSecrets = secrets
-    ? (options?: BundledEntryModuleLoadOptions) =>
-        loadBundledEntryExportSync<ChannelPlugin["secrets"] | undefined>(
-          importMetaUrl,
-          secrets,
-          options,
-        )
-    : undefined;
-  const loadChannelAccountInspector = accountInspect
-    ? (options?: BundledEntryModuleLoadOptions) =>
-        loadBundledEntryExportSync<NonNullable<ChannelPlugin["config"]["inspectAccount"]>>(
-          importMetaUrl,
-          accountInspect,
-          options,
-        )
-    : undefined;
+  const loadChannelOutbound = createBundledEntryExportLoader<ChannelOutboundAdapter | undefined>(
+    importMetaUrl,
+    outbound,
+  );
+  const loadChannelSecrets = createBundledEntryExportLoader<ChannelPlugin["secrets"] | undefined>(
+    importMetaUrl,
+    secrets,
+  );
+  const loadChannelAccountInspector = createBundledEntryExportLoader<
+    NonNullable<ChannelPlugin["config"]["inspectAccount"]>
+  >(importMetaUrl, accountInspect);
   const setChannelRuntime = createBundledEntryRuntimeSetter(importMetaUrl, runtime);
 
   return {
@@ -545,28 +542,25 @@ export function defineBundledChannelEntry<TPlugin = ChannelPlugin>({
         registerCliMetadata?.(api);
         return;
       }
+      const profile = createProfiler({ pluginId: id, source: importMetaUrl });
       if (api.registrationMode === "tool-discovery") {
-        const profile = createProfiler({ pluginId: id, source: importMetaUrl });
         profile("bundled-register:registerFull", () => registerFull?.(api));
         profile("bundled-register:registerCapabilities", () => registerCapabilities?.(api));
         return;
       }
-      const profile = createProfiler({ pluginId: id, source: importMetaUrl });
       const channelPlugin = profile("bundled-register:loadChannelPlugin", loadChannelPlugin);
       profile("bundled-register:registerChannel", () =>
         api.registerChannel({ plugin: channelPlugin as ChannelPlugin }),
       );
       profile("bundled-register:setChannelRuntime", () => setChannelRuntime?.(api.runtime));
-      if (api.registrationMode === "discovery") {
-        profile("bundled-register:registerCliMetadata", () => registerCliMetadata?.(api));
-        profile("bundled-register:registerCapabilities", () => registerCapabilities?.(api));
-        return;
-      }
-      if (api.registrationMode !== "full") {
+      const registrationMode = api.registrationMode;
+      if (registrationMode !== "discovery" && registrationMode !== "full") {
         return;
       }
       profile("bundled-register:registerCliMetadata", () => registerCliMetadata?.(api));
-      profile("bundled-register:registerFull", () => registerFull?.(api));
+      if (registrationMode === "full") {
+        profile("bundled-register:registerFull", () => registerFull?.(api));
+      }
       profile("bundled-register:registerCapabilities", () => registerCapabilities?.(api));
     },
     loadChannelPlugin,
@@ -591,37 +585,26 @@ export function defineBundledChannelSetupEntry<TPlugin = ChannelPlugin>({
   // Setup loads stay light; expose only the setter needed to inject the active runtime
   // without importing the full channel entry.
   const setChannelRuntime = createBundledEntryRuntimeSetter(importMetaUrl, runtime);
-  const loadLegacyStateMigrationDetector = legacyStateMigrations
-    ? (options?: BundledEntryModuleLoadOptions) =>
-        loadBundledEntryExportSync<BundledChannelLegacyStateMigrationDetector>(
-          importMetaUrl,
-          legacyStateMigrations,
-          options,
-        )
-    : undefined;
-  const loadLegacySessionSurface = legacySessionSurface
-    ? (options?: BundledEntryModuleLoadOptions) =>
-        loadBundledEntryExportSync<BundledChannelLegacySessionSurface>(
-          importMetaUrl,
-          legacySessionSurface,
-          options,
-        )
-    : undefined;
+  const loadSetupSecrets = createBundledEntryExportLoader<ChannelPlugin["secrets"] | undefined>(
+    importMetaUrl,
+    secrets,
+  );
+  const loadLegacyStateMigrationDetector =
+    createBundledEntryExportLoader<BundledChannelLegacyStateMigrationDetector>(
+      importMetaUrl,
+      legacyStateMigrations,
+    );
+  const loadLegacySessionSurface =
+    createBundledEntryExportLoader<BundledChannelLegacySessionSurface>(
+      importMetaUrl,
+      legacySessionSurface,
+    );
 
   return {
     kind: "bundled-channel-setup-entry",
     loadSetupPlugin: (options) =>
       loadBundledEntryExportSync<TPlugin>(importMetaUrl, plugin, options),
-    ...(secrets
-      ? {
-          loadSetupSecrets: (options) =>
-            loadBundledEntryExportSync<ChannelPlugin["secrets"] | undefined>(
-              importMetaUrl,
-              secrets,
-              options,
-            ),
-        }
-      : {}),
+    ...(loadSetupSecrets ? { loadSetupSecrets } : {}),
     ...(loadLegacyStateMigrationDetector ? { loadLegacyStateMigrationDetector } : {}),
     ...(loadLegacySessionSurface ? { loadLegacySessionSurface } : {}),
     ...(setChannelRuntime ? { setChannelRuntime } : {}),
