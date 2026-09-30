@@ -130,7 +130,7 @@ private struct ChatSidebarRow: View {
                 if self.facts.unreadDescendants { self.unreadDot }
                 if self.facts.failedDescendants {
                     Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.red)
+                        .foregroundStyle(OpenClawChatTheme.danger)
                         .help(String(localized: "Thread failed"))
                         .accessibilityLabel(String(localized: "Thread failed"))
                 }
@@ -239,10 +239,10 @@ private struct ChatSidebarRow: View {
     private func color(_ tone: ChatSessionSidebarRowFacts.Tone) -> Color {
         switch tone {
         case .secondary: .secondary
-        case .accent: .accentColor
-        case .success: .green
+        case .accent: OpenClawChatTheme.accent
+        case .success: OpenClawChatTheme.success
         case .warning: OpenClawChatTheme.warning
-        case .danger: .red
+        case .danger: OpenClawChatTheme.danger
         }
     }
 }
