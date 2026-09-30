@@ -127,6 +127,10 @@ vi.mock("../state/openclaw-state-db-async-lifecycle.js", async (importOriginal) 
     };
   },
 }));
+vi.mock("../state/openclaw-state-maintenance-context.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/openclaw-state-maintenance-context.js")>()),
+  admitOpenClawMaintenanceLiveAuthorityReads: () => {},
+}));
 vi.mock("../state/openclaw-agent-db-lease.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../state/openclaw-agent-db-lease.js")>()),
   assertNoOpenClawAgentDatabaseLeasesReadOnly: boundary.lease,
