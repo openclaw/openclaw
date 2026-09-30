@@ -253,10 +253,10 @@ function rewriteArchiveRow(database: DatabaseSync, planned: ArchiveRowPlan): boo
   return true;
 }
 
-function repairPublishedArchiveFile(params: {
+function resolvePublishedArchivePath(params: {
   archiveDirectory: string;
   planned: ArchiveRowPlan;
-}): boolean {
+}): string {
   const archiveDirectory = path.resolve(params.archiveDirectory);
   const archivePath = path.resolve(archiveDirectory, params.planned.archiveName);
   if (
@@ -265,6 +265,14 @@ function repairPublishedArchiveFile(params: {
   ) {
     throw new Error(`Cannot migrate transcript archive outside ${archiveDirectory}`);
   }
+  return archivePath;
+}
+
+function repairPublishedArchiveFile(params: {
+  archiveDirectory: string;
+  planned: ArchiveRowPlan;
+}): boolean {
+  const archivePath = resolvePublishedArchivePath(params);
   if (!fs.existsSync(archivePath)) {
     return false;
   }
@@ -299,18 +307,17 @@ function publishedArchiveFileIsCurrent(params: {
   archiveDirectory: string;
   planned: ArchiveRowPlan;
 }): boolean {
-  const archiveDirectory = path.resolve(params.archiveDirectory);
-  const archivePath = path.resolve(archiveDirectory, params.planned.archiveName);
-  if (
-    path.dirname(archivePath) !== archiveDirectory ||
-    path.basename(archivePath) !== params.planned.archiveName
-  ) {
-    throw new Error(`Cannot migrate transcript archive outside ${archiveDirectory}`);
+  try {
+    const archivePath = resolvePublishedArchivePath(params);
+    return (
+      fs.existsSync(archivePath) &&
+      sha256Hex(fs.readFileSync(archivePath)) === params.planned.nextSha256
+    );
+  } catch {
+    // Defer inspection errors to per-row repair so earlier progress and the
+    // failing archive's notification retain their original order.
+    return false;
   }
-  return (
-    fs.existsSync(archivePath) &&
-    sha256Hex(fs.readFileSync(archivePath)) === params.planned.nextSha256
-  );
 }
 
 function finalizeArchiveCursor(params: {
@@ -372,7 +379,8 @@ export async function migrateCanonicalTranscriptArchives(
   });
   while (true) {
     const batch = listArchiveBatch(params.database, cursor, params.transformContent);
-    if (batch.length === 0) {
+    const last = batch.at(-1);
+    if (!last) {
       runSqliteImmediateTransactionSync(
         params.database,
         () => {
@@ -407,10 +415,6 @@ export async function migrateCanonicalTranscriptArchives(
       batch.every((planned) => !planned.changed) &&
       batch.every((planned) => publishedArchiveFileIsCurrent({ archiveDirectory, planned }))
     ) {
-      const last = batch.at(-1);
-      if (!last) {
-        throw new Error("Transcript archive migration produced an empty batch");
-      }
       for (const planned of batch) {
         params.onArchive?.(path.resolve(archiveDirectory, planned.archiveName));
       }
@@ -420,12 +424,6 @@ export async function migrateCanonicalTranscriptArchives(
           assertAgentDatabaseMaintenanceAuthority();
           for (const planned of batch) {
             assertArchiveSourceUnchanged(params.database, planned);
-            finalizeArchiveCursor({
-              database: params.database,
-              fileCurrent: true,
-              planned,
-              writeCursor: () => {},
-            });
           }
           params.writeCursor({ generation: last.generation, sessionId: last.sessionId });
           assertAgentDatabaseMaintenanceAuthority();

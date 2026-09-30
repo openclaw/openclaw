@@ -14,12 +14,15 @@ import {
   resolveRegisteredSqliteTranscriptArchiveName,
 } from "../config/sessions/session-accessor.sqlite-archive-artifact.js";
 import { resolveSqliteTranscriptArchiveDirectory } from "../config/sessions/session-accessor.sqlite-scope.js";
-import * as agentDatabaseLease from "../state/openclaw-agent-db-lease.js";
+import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lifecycle.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
+  withAgentDatabaseMaintenanceLease,
 } from "../state/openclaw-agent-db.js";
 import { ensureSessionTranscriptArchiveSchema } from "../state/openclaw-agent-session-transcript-archive-schema.js";
+import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "./kysely-sync.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { migrateLegacyMediaPersistence } from "./state-migrations.media-persistence.js";
@@ -197,67 +200,192 @@ function expectPreservedIdentity(before: ArchiveRow, after: ArchiveRow): void {
   });
 }
 
-afterEach(() => {
+afterEach(async () => {
   vi.restoreAllMocks();
+  await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
   cleanupMediaPersistenceFixtures(tempDirs);
 });
 
 describe("media migration of canonical SQLite transcript archives", () => {
-  it("advances a fully current archive batch with one cursor transaction", async () => {
-    const f = fixture({ content: canonicalContent });
-    const { DatabaseSync } = requireNodeSqlite();
-    const database = new DatabaseSync(f.databasePath);
-    const rows = Array.from({ length: 31 }, (_, index) => {
-      const session = `archive-${String(index).padStart(3, "0")}`;
-      const archiveName = `${session}.jsonl`;
-      const bytes = Buffer.from(canonicalContent, "utf8");
-      database
-        .prepare(
-          `INSERT INTO session_transcript_archives(
+  it.each([32, 33])(
+    "bounds maintenance checks for %i current archives without changing retained data",
+    async (count) => {
+      const f = fixture({ content: canonicalContent });
+      const { DatabaseSync } = requireNodeSqlite();
+      const database = new DatabaseSync(f.databasePath);
+      const rows = Array.from({ length: count - 1 }, (_, index) => {
+        const session = `archive-${String(index).padStart(3, "0")}`;
+        const archiveName = `${session}.jsonl`;
+        const bytes = Buffer.from(canonicalContent, "utf8");
+        database
+          .prepare(
+            `INSERT INTO session_transcript_archives(
             session_id,generation,session_key,reason,encoding,archive_blob,archive_sha256,
             archive_name,created_at,published_at
           ) VALUES(?,?,?,?,?,?,?,?,?,?)`,
-        )
-        .run(
-          session,
-          "generation",
-          `agent:main:${session}`,
-          "deleted",
-          "identity",
-          bytes,
-          sha256(bytes),
-          archiveName,
-          publishedAt,
-          publishedAt,
-        );
-      fs.writeFileSync(path.join(f.archiveDirectory, archiveName), bytes);
-      return session;
-    });
-    database.close();
-
-    const authority = vi
-      .spyOn(agentDatabaseLease, "assertAgentDatabaseMaintenanceAuthority")
-      .mockImplementation(() => {});
-    const cursors: Array<{ generation: string; sessionId: string } | { phase: "complete" }> = [];
-    const opened = new DatabaseSync(f.databasePath);
-    try {
-      await migrateCanonicalTranscriptArchives({
-        agentId: "main",
-        database: opened,
-        pathname: f.databasePath,
-        start: { generation: "", sessionId: "" },
-        transformContent: (content) => ({ changed: false, content }),
-        writeCursor: (cursor) => cursors.push(cursor),
+          )
+          .run(
+            session,
+            "generation",
+            `agent:main:${session}`,
+            "deleted",
+            "identity",
+            bytes,
+            sha256(bytes),
+            archiveName,
+            publishedAt,
+            publishedAt,
+          );
+        fs.writeFileSync(path.join(f.archiveDirectory, archiveName), bytes);
+        return session;
       });
-    } finally {
-      clearNodeSqliteKyselyCacheForDatabase(opened);
-      opened.close();
-      authority.mockRestore();
-    }
+      database.close();
 
-    expect(rows).toHaveLength(31);
-    expect(cursors.filter((cursor) => "phase" in cursor)).toEqual([{ phase: "complete" }]);
-    expect(cursors.filter((cursor) => !("phase" in cursor))).toHaveLength(1);
+      const before = f.read();
+      let policyChecks = 0;
+      let archiveChecks = 0;
+      const scope = createOpenClawDatabaseMaintenanceScope({
+        schemaMaintenance: true,
+        assertOwnerCurrent: () => {
+          policyChecks++;
+        },
+      });
+      const cursors: Array<{ generation: string; sessionId: string } | { phase: "complete" }> = [];
+      try {
+        await scope.run(() =>
+          withAgentDatabaseMaintenanceLease({ env: f.env }, async () => {
+            const opened = new DatabaseSync(f.databasePath);
+            policyChecks = 0;
+            try {
+              await migrateCanonicalTranscriptArchives({
+                agentId: "main",
+                database: opened,
+                pathname: f.databasePath,
+                start: { generation: "", sessionId: "" },
+                transformContent: (content) => ({ changed: false, content }),
+                writeCursor: (cursor) => cursors.push(cursor),
+              });
+              archiveChecks = policyChecks;
+            } finally {
+              clearNodeSqliteKyselyCacheForDatabase(opened);
+              opened.close();
+            }
+          }),
+        );
+      } finally {
+        await scope.close();
+      }
+
+      expect(rows).toHaveLength(count - 1);
+      expect(archiveChecks).toBeGreaterThan(0);
+      expect(archiveChecks).toBeLessThanOrEqual(16 * (Math.ceil(count / 32) + 1));
+      expect(f.read()).toEqual(before);
+      expect(fs.readFileSync(f.archivePath)).toEqual(Buffer.from(before.archive_blob));
+      expect(cursors.filter((cursor) => "phase" in cursor)).toEqual([{ phase: "complete" }]);
+      expect(cursors.filter((cursor) => !("phase" in cursor))).toHaveLength(Math.ceil(count / 32));
+    },
+  );
+
+  it("retains earlier progress when a later published copy cannot be read", async () => {
+    const f = fixture({ content: canonicalContent });
+    const { DatabaseSync } = requireNodeSqlite();
+    const database = new DatabaseSync(f.databasePath);
+    try {
+      database
+        .prepare(`INSERT INTO session_transcript_archives
+        (session_id,generation,session_key,reason,encoding,archive_blob,archive_sha256,
+          archive_name,created_at,published_at)
+        SELECT 'zzz-unreadable', generation, session_key, reason, encoding, archive_blob,
+          archive_sha256, 'zzz-unreadable.jsonl', created_at, published_at
+        FROM session_transcript_archives WHERE session_id = ?`)
+        .run(sessionId);
+    } finally {
+      database.close();
+    }
+    fs.mkdirSync(path.join(f.archiveDirectory, "zzz-unreadable.jsonl"));
+    const visited: string[] = [];
+    const cursors: unknown[] = [];
+    await expect(
+      withAgentDatabaseMaintenanceLease({ env: f.env }, async () => {
+        const opened = new DatabaseSync(f.databasePath);
+        try {
+          await migrateCanonicalTranscriptArchives({
+            agentId: "main",
+            database: opened,
+            pathname: f.databasePath,
+            start: { generation: "", sessionId: "" },
+            transformContent: (content) => ({ changed: false, content }),
+            onArchive: (archive) => {
+              visited.push(archive);
+            },
+            writeCursor: (cursor) => {
+              cursors.push(cursor);
+            },
+          });
+        } finally {
+          clearNodeSqliteKyselyCacheForDatabase(opened);
+          opened.close();
+        }
+      }),
+    ).rejects.toThrow();
+    expect(visited).toEqual([f.archivePath, path.join(f.archiveDirectory, "zzz-unreadable.jsonl")]);
+    expect(cursors).toEqual([{ generation, sessionId }]);
+    expect(fs.readFileSync(f.archivePath)).toEqual(Buffer.from(f.read().archive_blob));
+  });
+
+  it("rolls back a batch cursor when its maintenance owner rejects commit", async () => {
+    const f = fixture({ content: canonicalContent });
+    const { DatabaseSync } = requireNodeSqlite();
+    let rejectCommit = false;
+    const scope = createOpenClawDatabaseMaintenanceScope({
+      schemaMaintenance: true,
+      assertOwnerCurrent: () => {
+        if (rejectCommit) {
+          rejectCommit = false;
+          throw new Error("maintenance owner revoked");
+        }
+      },
+    });
+    try {
+      await expect(
+        scope.run(() =>
+          withAgentDatabaseMaintenanceLease({ env: f.env }, async () => {
+            const opened = new DatabaseSync(f.databasePath);
+            try {
+              await migrateCanonicalTranscriptArchives({
+                agentId: "main",
+                database: opened,
+                pathname: f.databasePath,
+                start: { generation: "", sessionId: "" },
+                transformContent: (content) => ({ changed: false, content }),
+                writeCursor: (cursor) => {
+                  opened
+                    .prepare(`INSERT INTO schema_meta
+                (meta_key, role, agent_id, schema_version, app_version, created_at, updated_at)
+                VALUES ('archive-test-cursor', 'agent', 'main', 1, ?, 1, 1)`)
+                    .run(JSON.stringify(cursor));
+                  rejectCommit = true;
+                },
+              });
+            } finally {
+              clearNodeSqliteKyselyCacheForDatabase(opened);
+              opened.close();
+            }
+          }),
+        ),
+      ).rejects.toThrow("failed to verify agent database maintenance lease");
+    } finally {
+      await scope.close();
+    }
+    const reopened = new DatabaseSync(f.databasePath, { readOnly: true });
+    try {
+      expect(
+        reopened.prepare("SELECT 1 FROM schema_meta WHERE meta_key = 'archive-test-cursor'").get(),
+      ).toBeUndefined();
+    } finally {
+      reopened.close();
+    }
   });
 
   it("seeks across archive batches without skipping retained generations", async () => {
