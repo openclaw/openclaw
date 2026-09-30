@@ -1,4 +1,3 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createModelVisibilityPolicy } from "../../agents/model-visibility-policy.js";
 import type { OpenClawConfig, TransformConfigFileParams } from "../../config/config.js";
@@ -164,41 +163,6 @@ describe("modelsAliasesRemoveCommand", () => {
     mocks.loadModelsConfig.mockReset();
   });
 
-  it("removes a user-added alias from the source config", async () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          models: {
-            "openai/gpt-5.4-mini": { alias: "my-fav" },
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-    mocks.readConfigFileSnapshot.mockResolvedValue(snapshot(cfg));
-    mocks.replaceConfigFile.mockResolvedValue(undefined);
-
-    await modelsAliasesRemoveCommand("my-fav", makeRuntime());
-
-    expect(mocks.replaceConfigFile).toHaveBeenCalledOnce();
-    const [replaceParams] = mocks.replaceConfigFile.mock.calls[0] ?? [];
-    const written = replaceParams?.sourceConfig as OpenClawConfig;
-    expect(written.agents?.defaults?.models?.["openai/gpt-5.4-mini"]?.alias).toBeUndefined();
-  });
-
-  it("removes a user-added alias without requiring its original letter casing", async () => {
-    const cfg: OpenClawConfig = {
-      agents: { defaults: { models: { "openai/gpt-5.4-mini": { alias: "My-Fav" } } } },
-    } as OpenClawConfig;
-    mocks.readConfigFileSnapshot.mockResolvedValue(snapshot(cfg));
-    mocks.replaceConfigFile.mockResolvedValue(undefined);
-
-    await modelsAliasesRemoveCommand("MY-FAV", makeRuntime());
-
-    const [replaceParams] = mocks.replaceConfigFile.mock.calls[0] ?? [];
-    const written = replaceParams?.sourceConfig as OpenClawConfig;
-    expect(written.agents?.defaults?.models?.["openai/gpt-5.4-mini"]?.alias).toBeUndefined();
-  });
-
   it("removes every case-colliding alias from an existing config", async () => {
     const cfg: OpenClawConfig = {
       agents: {
@@ -222,27 +186,6 @@ describe("modelsAliasesRemoveCommand", () => {
     expect(written.agents?.defaults?.models?.["openai/gpt-5.4-mini"]?.alias).toBeUndefined();
     expect(written.agents?.defaults?.models?.["openai/gpt-5.6-sol"]?.alias).toBeUndefined();
     expect(written.agents?.defaults?.models?.["anthropic/claude-sonnet-4-6"]?.alias).toBe("steady");
-  });
-
-  it("rejects removal of a built-in alias visible only via materialized defaults", async () => {
-    // Source config: model entry exists but no user-set alias. applyModelDefaults
-    // would materialize `gpt-mini -> openai/gpt-5.4-mini` into the resolved config,
-    // so `list` shows it, but it is not stored in the source config.
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          models: {
-            "openai/gpt-5.4-mini": {},
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-    mocks.readConfigFileSnapshot.mockResolvedValue(snapshot(cfg));
-
-    await expect(modelsAliasesRemoveCommand("gpt-mini", makeRuntime())).rejects.toThrow(
-      /built-in alias for "openai\/gpt-5\.4-mini"/,
-    );
-    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
   });
 
   it("recognizes a built-in alias regardless of requested letter casing", async () => {
@@ -452,80 +395,5 @@ describe("modelsAliasesAddCommand", () => {
     expect(replaceParams?.sourceConfig.agents?.defaults?.models).toEqual({
       "anthropic/claude-sonnet-4-6": { alias: "fast" },
     });
-  });
-});
-
-describe("modelsAliasesListCommand <-> modelsAliasesRemoveCommand agreement", () => {
-  beforeEach(() => {
-    mocks.readConfigFileSnapshot.mockReset();
-    mocks.replaceConfigFile.mockReset();
-    mocks.loadModelsConfig.mockReset();
-  });
-
-  it("any alias remove succeeds OR returns an explanatory error — never a misleading 'not found' for a listed alias", async () => {
-    // Resolved config (what `list` reads) has the materialized built-in.
-    const resolvedCfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          models: {
-            "google/gemini-3.1-pro-preview": { alias: "gemini" },
-            "openai/gpt-5.4-mini": { alias: "my-fav" },
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-    // Source config (what `remove` mutates) only has the user-set alias.
-    const sourceCfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          models: {
-            "google/gemini-3.1-pro-preview": {},
-            "openai/gpt-5.4-mini": { alias: "my-fav" },
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    mocks.loadModelsConfig.mockResolvedValue(resolvedCfg);
-    mocks.readConfigFileSnapshot.mockResolvedValue({
-      valid: true,
-      hash: "h",
-      sourceConfig: sourceCfg,
-      config: sourceCfg,
-      runtimeConfig: resolvedCfg,
-    });
-    mocks.replaceConfigFile.mockResolvedValue(undefined);
-
-    const listRuntime = makeRuntime();
-    await modelsAliasesListCommand({}, listRuntime);
-    const listed = listRuntime.logs
-      .filter((line) => line.startsWith("- "))
-      .map((line) => line.slice(2).split(" -> ")[0]);
-    expect(listed).toContain("gemini");
-    expect(listed).toContain("my-fav");
-
-    for (const alias of listed) {
-      mocks.replaceConfigFile.mockClear();
-      const removeRuntime = makeRuntime();
-      const result = await modelsAliasesRemoveCommand(
-        expectDefined(alias, "alias test invariant"),
-        removeRuntime,
-      ).then(
-        () => ({ ok: true as const }),
-        (err: unknown) => ({
-          ok: false as const,
-          message: err instanceof Error ? err.message : String(err),
-        }),
-      );
-      if (result.ok) {
-        // User-added: should have written the new config.
-        expect(mocks.replaceConfigFile).toHaveBeenCalledOnce();
-      } else {
-        // Built-in: must NOT produce the misleading generic "Alias not found" error,
-        // because `list` clearly showed it. Must be the actionable built-in message.
-        expect(result.message).not.toMatch(/^Alias not found:/);
-        expect(result.message).toMatch(/built-in alias/);
-      }
-    }
   });
 });

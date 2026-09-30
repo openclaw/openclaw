@@ -83,7 +83,10 @@ import {
   readManagedImageRecord,
   type ManagedImageRecord,
 } from "./managed-image-record-store.js";
-import { resolveManagedImageThumbnail } from "./managed-image-thumbnail-cache.js";
+import {
+  encodeImageThumbnail,
+  resolveManagedImageThumbnail,
+} from "./managed-image-thumbnail-cache.js";
 import {
   MANAGED_OUTGOING_ATTACHMENT_ID_RE,
   MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX,
@@ -107,8 +110,6 @@ const OUTGOING_IMAGE_ROUTE_PREFIX = "/api/chat/media/outgoing";
 const DEFAULT_TRANSIENT_OUTGOING_IMAGE_TTL_MS = 15 * 60 * 1000;
 const MANAGED_OUTGOING_IMAGE_TICKET_SCOPE = "managed-outgoing-image";
 const MANAGED_OUTGOING_IMAGE_TICKET_TTL_MS = 5 * 60 * 1000;
-// Chat previews occupy up to 400 CSS pixels on displays with up to 3× density.
-const MANAGED_IMAGE_THUMBNAIL_MAX_SIDE = 1200;
 const managedOutgoingImageTicketSecret = randomBytes(32);
 
 export const DEFAULT_MANAGED_IMAGE_ATTACHMENT_LIMITS = {
@@ -180,7 +181,7 @@ export type ManagedOutgoingMediaArtifactDownload = {
   expiresAt: string;
 };
 
-export function resolveManagedImageAttachmentLimits(
+function resolveManagedImageAttachmentLimits(
   config?: ManagedImageAttachmentLimitsConfig | null,
 ): ManagedImageAttachmentLimits {
   return {
@@ -241,18 +242,6 @@ export function buildManagedMediaFailureBlock(params: {
   };
 }
 
-function validateManagedImageBuffer(
-  buffer: Buffer,
-  alt: string,
-  limits: ManagedImageAttachmentLimits,
-): void {
-  if (buffer.byteLength > limits.maxBytes) {
-    throw createManagedImageAttachmentError(
-      `Managed image attachment ${JSON.stringify(alt)} exceeds the ${formatLimitMiB(limits.maxBytes)} byte limit`,
-    );
-  }
-}
-
 function maxBytesForManagedMediaKind(
   kind: ManagedMediaKind,
   imageLimits: ManagedImageAttachmentLimits,
@@ -260,14 +249,17 @@ function maxBytesForManagedMediaKind(
   return kind === "image" ? imageLimits.maxBytes : maxBytesForKind(kind);
 }
 
-function createManagedMediaByteLimitError(params: {
-  kind: ManagedMediaKind;
-  label: string;
-  maxBytes: number;
-}): Error {
-  return createManagedImageAttachmentError(
-    `Managed ${params.kind} attachment ${JSON.stringify(params.label)} exceeds the ${formatLimitMiB(params.maxBytes)} byte limit`,
-  );
+function assertManagedMediaByteLimit(
+  size: number,
+  kind: ManagedMediaKind,
+  label: string,
+  maxBytes: number,
+): void {
+  if (size > maxBytes) {
+    throw createManagedImageAttachmentError(
+      `Managed ${kind} attachment ${JSON.stringify(label)} exceeds the ${formatLimitMiB(maxBytes)} byte limit`,
+    );
+  }
 }
 
 function estimateBase64DecodedByteLength(base64: string): number {
@@ -494,9 +486,12 @@ function parseMediaDataUrl(
   }
 
   const maxBytes = maxBytesForManagedMediaKind(mediaKind, imageLimits);
-  if (estimateBase64DecodedByteLength(base64Part) > maxBytes) {
-    throw createManagedMediaByteLimitError({ kind: mediaKind, label, maxBytes });
-  }
+  assertManagedMediaByteLimit(
+    estimateBase64DecodedByteLength(base64Part),
+    mediaKind,
+    label,
+    maxBytes,
+  );
 
   return {
     kind: "media-data-url",
@@ -1069,13 +1064,7 @@ async function readManagedImageThumbnailFromFile(
     if (maxBytes !== undefined && source.byteLength > maxBytes) {
       throw new Error("Managed image exceeds the preview byte limit");
     }
-    return (
-      await createImageProcessor().encode(source, {
-        format: "png",
-        resize: { maxSide: MANAGED_IMAGE_THUMBNAIL_MAX_SIDE, enlarge: false },
-        compressionLevel: 8,
-      })
-    ).data;
+    return await encodeImageThumbnail(source);
   });
 }
 
@@ -1259,9 +1248,7 @@ export async function createManagedOutgoingMediaBlocks(params: {
           throw new Error("Local audio/video media requires an explicitly trusted reply payload");
         }
         const maxBytes = maxBytesForManagedMediaKind(mediaKind, limits);
-        if (savedOriginal.size > maxBytes) {
-          throw createManagedMediaByteLimitError({ kind: mediaKind, label, maxBytes });
-        }
+        assertManagedMediaByteLimit(savedOriginal.size, mediaKind, label, maxBytes);
 
         let originalStats: Awaited<ReturnType<typeof getVariantStats>> = {
           width: null,
@@ -1273,7 +1260,7 @@ export async function createManagedOutgoingMediaBlocks(params: {
             parsedDataUrl.kind === "media-data-url"
               ? parsedDataUrl.buffer
               : (await readLocalFileSafely({ filePath: savedOriginal.path })).buffer;
-          validateManagedImageBuffer(originalBuffer, label, limits);
+          assertManagedMediaByteLimit(originalBuffer.byteLength, "image", label, limits.maxBytes);
           let originalDisplayMetadata: { width: number; height: number } | undefined;
           for (let resizeAttempt = 0; ; resizeAttempt += 1) {
             originalStats = await getVariantStats({
@@ -1316,7 +1303,7 @@ export async function createManagedOutgoingMediaBlocks(params: {
               transparent: { format: "png", compressionLevel: 9 },
               transparency: "auto",
             });
-            validateManagedImageBuffer(resized.data, label, limits);
+            assertManagedMediaByteLimit(resized.data.byteLength, "image", label, limits.maxBytes);
             const replacement = await saveMediaBuffer(
               resized.data,
               resized.mimeType,

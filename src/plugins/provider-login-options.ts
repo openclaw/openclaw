@@ -32,18 +32,12 @@ export type ProviderChannelLoginResolution =
   | { status: "providers"; providers: ProviderOAuthLoginGroup[] }
   | { status: "ambiguous" | "unsupported"; choices: ProviderChannelLoginChoice[] };
 
-function supportsProviderAuthChoiceTextInference(
-  scopes?: ProviderAuthChoiceMetadata["onboardingScopes"],
-): boolean {
-  return !scopes || scopes.includes("text-inference");
-}
-
 function isEligible(choice: ProviderAuthChoiceMetadata): boolean {
   return (
     Boolean(choice.choiceId.trim()) &&
     choice.assistantVisibility !== "manual-only" &&
     choice.assistantVisibility !== "detected-only" &&
-    supportsProviderAuthChoiceTextInference(choice.onboardingScopes)
+    (!choice.onboardingScopes || choice.onboardingScopes.includes("text-inference"))
   );
 }
 
@@ -133,15 +127,11 @@ function projectChannelChoice(choice: ProviderAuthChoiceMetadata): ProviderChann
   };
 }
 
-function readChoices(params?: Parameters<typeof resolveManifestDeclaredProviderAuthChoices>[0]) {
-  return resolveManifestDeclaredProviderAuthChoices(params).filter(isEligible);
-}
-
 export function resolveProviderChannelLoginChoice(
   input: string | undefined,
   params?: Parameters<typeof resolveManifestDeclaredProviderAuthChoices>[0],
 ): ProviderChannelLoginResolution {
-  const metadata = readChoices(params);
+  const metadata = resolveManifestDeclaredProviderAuthChoices(params).filter(isEligible);
   const choices = metadata.map(projectChannelChoice);
   const raw = input?.trim() ?? "";
   const normalized = normalizeInput(input);

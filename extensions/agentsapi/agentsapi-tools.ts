@@ -51,6 +51,7 @@ import {
   resolveLiveToolResultMaxChars,
   sliceToolResultTextToBudget,
 } from "openclaw/plugin-sdk/text-utility-runtime";
+import { textResult } from "openclaw/plugin-sdk/tool-results";
 import type { AgentsApiFunctionCall, AgentsApiFunctionResult } from "./agentsapi-client.js";
 import { recordAgentsApiToolTranscript } from "./agentsapi-transcript.js";
 
@@ -509,10 +510,7 @@ export function buildAgentsApiToolSurface(
           const disposition =
             getBeforeToolCallFailureDisposition(error) ??
             (signal.aborted ? "cancelled" : resolveToolExecutionErrorKind(error));
-          const failed = {
-            content: [{ type: "text" as const, text: message }],
-            details: { status: disposition, error: message },
-          };
+          const failed = textResult(message, { status: disposition, error: message });
           observeTerminal(rawResult ?? error, "failure", message);
           finishPresentation(failed, true);
           signal.throwIfAborted();

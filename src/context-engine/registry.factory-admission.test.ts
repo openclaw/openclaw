@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -6,6 +7,7 @@ import { PluginRegistryInspectionResources } from "../plugins/registry-inspectio
 import { retireInspectionInstances } from "../plugins/registry-inspection.test-support.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { AsyncWorkScope, getAsyncWorkSignal, trackAsyncWork } from "../shared/async-work-scope.js";
+import { ensureContextEnginesInitialized } from "./init.js";
 import { LegacyContextEngine } from "./legacy.js";
 import {
   listContextEngineQuarantines,
@@ -13,11 +15,12 @@ import {
   resolveContextEngine,
 } from "./registry.js";
 import { resetContextEngineRuntimeQuarantineForTests } from "./registry.test-support.js";
+import type { ContextEngine } from "./types.js";
 
 beforeEach(() => resetContextEngineRuntimeQuarantineForTests());
 
-afterEach(() => {
-  resetContextEngineRuntimeQuarantineForTests();
+afterEach(async () => {
+  await resetContextEngineRuntimeQuarantineForTests();
   vi.restoreAllMocks();
 });
 
@@ -170,6 +173,77 @@ it.each(["reason", "wrapped-reason", "abort-error", "unrelated-error"] as const)
       await result;
       await owner.drain();
       await resources.release();
+    }
+  },
+);
+
+it.each(["success", "failure", "abort"] as const)(
+  "retains the foreground source until initialization settles (%s)",
+  async (mode) => {
+    const registry = createEmptyPluginRegistry();
+    const resources = new PluginRegistryInspectionResources(retireInspectionInstances);
+    resources.attach(registry);
+    const database = new DatabaseSync(":memory:");
+    const retired = vi.fn(() => database.close());
+    resources.register("fixture", { id: "native", dispose: retired });
+    const factory = vi.fn(() => {
+      expect(database.prepare("SELECT 42 AS value").get()?.value).toBe(42);
+      return new LegacyContextEngine();
+    });
+    registerContextEngineInRegistry(registry, "initialized-source", factory, "plugin:fixture");
+    const started = createDeferred();
+    const gate = createDeferred();
+    const owner = new AsyncWorkScope();
+    const failure = new Error("initialization rejected");
+    const pending = owner.run(() =>
+      withPluginRuntimeRegistryScope(registry, () =>
+        resolveContextEngine(
+          { plugins: { slots: { contextEngine: "initialized-source" } } },
+          {
+            initialize: async () => {
+              await ensureContextEnginesInitialized();
+              started.resolve();
+              await gate.promise;
+            },
+          },
+        ),
+      ),
+    );
+    void pending.catch(() => {});
+    let engine: ContextEngine | undefined;
+    try {
+      await started.promise;
+      await resources.release();
+      expect(database.isOpen).toBe(true);
+      expect(factory).not.toHaveBeenCalled();
+      if (mode === "failure" || mode === "abort") {
+        if (mode === "failure") {
+          gate.reject(failure);
+        } else {
+          owner.beginClose(failure);
+          gate.resolve();
+        }
+        await expect(pending).rejects.toBe(failure);
+        expect(factory).not.toHaveBeenCalled();
+        expect(await listContextEngineQuarantines()).toEqual([]);
+      } else {
+        gate.resolve();
+        engine = await pending;
+        expect(factory).toHaveBeenCalledOnce();
+        await engine.dispose?.();
+      }
+      await owner.drain();
+      expect(retired).toHaveBeenCalledOnce();
+      expect(database.isOpen).toBe(false);
+    } finally {
+      gate.resolve();
+      await pending.catch(() => {});
+      await engine?.dispose?.();
+      await owner.drain();
+      await resources.release();
+      if (database.isOpen) {
+        database.close();
+      }
     }
   },
 );

@@ -1,4 +1,3 @@
-// JSON schema default helpers fill object values from TypeBox schema defaults.
 import {
   normalizeJsonSchemaForTypeBox,
   type JsonSchemaValue,
@@ -122,13 +121,7 @@ function validateTypeKeyword(type: unknown, path: string): string | undefined {
 }
 
 function decodePointerSegment(segment: string): string {
-  let decodedSegment;
-  try {
-    decodedSegment = decodeURIComponent(segment);
-  } catch {
-    decodedSegment = segment;
-  }
-  return decodedSegment.replace(/~1/g, "/").replace(/~0/g, "~");
+  return segment.replace(/~1/g, "/").replace(/~0/g, "~");
 }
 
 function parseJsonPointerArrayIndex(segment: string): number | undefined {
@@ -169,14 +162,25 @@ function resolveLocalRef(
       return resolveLocalRef(resourceRoot, ref.slice(resourceRoot.$id.length), resourceBaseId);
     }
   }
-  if (ref === "#") {
+  if (!ref.startsWith("#")) {
+    return { found: false };
+  }
+  // Decode the URI fragment before recognizing or splitting its JSON Pointer;
+  // encoded slashes are separators, while ~1 belongs to a single token.
+  let fragment: string;
+  try {
+    fragment = decodeURIComponent(ref.slice(1));
+  } catch {
+    return { found: false };
+  }
+  if (fragment === "") {
     return { found: true, schema: resourceRoot, resourceRoot, resourceBaseId };
   }
-  if (ref.startsWith("#/")) {
+  if (fragment.startsWith("/")) {
     let current: unknown = resourceRoot;
     let currentResourceRoot = resourceRoot;
     let currentResourceBaseId = resourceBaseId;
-    for (const segment of ref.slice(2).split("/").map(decodePointerSegment)) {
+    for (const segment of fragment.slice(1).split("/").map(decodePointerSegment)) {
       if (Array.isArray(current)) {
         const index = parseJsonPointerArrayIndex(segment);
         if (index === undefined) {
@@ -202,22 +206,10 @@ function resolveLocalRef(
         }
       : { found: false };
   }
-  if (ref.startsWith("#")) {
-    // The pointer branch decodes through decodePointerSegment's try/catch;
-    // anchor fragments deserve the same tolerance so a malformed escape
-    // resolves to "not found" instead of throwing a raw URIError.
-    let anchor: string;
-    try {
-      anchor = decodeURIComponent(ref.slice(1));
-    } catch {
-      return { found: false };
-    }
-    const resolved = resolveLocalAnchor(resourceRoot, anchor);
-    return resolved === undefined
-      ? { found: false }
-      : { found: true, schema: resolved, resourceRoot, resourceBaseId };
-  }
-  return { found: false };
+  const resolved = resolveLocalAnchor(resourceRoot, fragment);
+  return resolved === undefined
+    ? { found: false }
+    : { found: true, schema: resolved, resourceRoot, resourceBaseId };
 }
 
 function splitResourceRef(ref: string): { resource: string; fragment: string } {

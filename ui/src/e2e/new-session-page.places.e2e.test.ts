@@ -214,12 +214,12 @@ suite.define(() => {
           .getByRole("switch", { name: "Incognito" })
           .count(),
       ).toBe(0);
-      const fastMode = page.locator(".new-session-page__composer [data-chat-speed-toggle]");
+      const fastMode = page.locator('.new-session-page__composer [data-chat-speed-option="on"]');
       expect(await fastMode.count()).toBe(1);
       expect(await fastMode.getAttribute("aria-checked")).toBe("false");
       expect(
         await fastMode.evaluate((element) =>
-          element.classList.contains("chat-controls__speed-toggle"),
+          element.classList.contains("chat-controls__speed-option"),
         ),
       ).toBe(true);
       expect(await incognitoToggle.getAttribute("aria-checked")).toBe("false");
@@ -363,7 +363,7 @@ suite.define(() => {
       expect(
         await page
           .locator(".chat-controls__model-menu")
-          .getByText(/Effort|Fast mode/)
+          .getByText(/Effort|Speed/)
           .count(),
       ).toBe(0);
       await page.keyboard.press("Escape");

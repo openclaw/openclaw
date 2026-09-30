@@ -215,13 +215,6 @@ function sanitizeEnv(overrides?: Record<string, string> | null): Record<string, 
   return sanitizeHostExecEnv({ overrides, blockPathOverrides: true });
 }
 
-function truncateOutput(raw: string, maxChars: number): { text: string; truncated: boolean } {
-  if (raw.length <= maxChars) {
-    return { text: raw, truncated: false };
-  }
-  return { text: `... (truncated) ${sliceUtf16Safe(raw, raw.length - maxChars)}`, truncated: true };
-}
-
 function requireExecApprovalsBaseHash(
   params: SystemExecApprovalsSetParams,
   snapshot: ExecApprovalsSnapshot,
@@ -297,8 +290,13 @@ function buildExecEventPayload(payload: ExecEventPayload): ExecEventPayload {
   if (!trimmed) {
     return payload;
   }
-  const { text } = truncateOutput(trimmed, OUTPUT_EVENT_TAIL);
-  return { ...payload, output: text };
+  return {
+    ...payload,
+    output:
+      trimmed.length <= OUTPUT_EVENT_TAIL
+        ? trimmed
+        : `... (truncated) ${sliceUtf16Safe(trimmed, trimmed.length - OUTPUT_EVENT_TAIL)}`,
+  };
 }
 
 async function sendExecFinishedEvent(

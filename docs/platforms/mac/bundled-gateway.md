@@ -7,17 +7,35 @@ read_when:
 title: "Gateway on macOS"
 ---
 
-OpenClaw.app bundles a private Node runtime and matching OpenClaw package for
-its app-owned `node worker` helper and a fixed local Chrome-extension setup
-entry point. The private package does not expose the full CLI or start a Gateway.
-Rebuilding or replacing the app replaces these helpers too, including rebuilds
-with the same public version. They run from the signed bundle, so moving the app
-or removing its build checkout does not change which runtime they use.
+OpenClaw.app bundles a private runtime built from the OpenClaw Bun fork, a signed
+SQLite library with extension loading, and the full matching OpenClaw package
+(CLI, Gateway, and Control UI). Its app-owned `node worker` helper and fixed local
+Chrome-extension setup entry point run on this Bun runtime. The app bundle
+contains no Node executable.
+
+The payload lives in one `Contents/Resources/runtime` directory. Universal apps
+share the JavaScript package between architectures and include universal Bun and
+SQLite binaries plus each architecture's native dependencies. Rebuilding or
+replacing the app replaces this runtime too, including rebuilds with the same
+public version. The app validates the package's version, commit, build time, and
+build ID before launch. Moving the app or removing its build checkout does not
+change which runtime it uses.
 
 The **Gateway remains external**. The app uses an external `openclaw` CLI to
 manage a per-user launchd service, or attaches to an already-running Gateway.
-It does not start the Gateway inside its private worker runtime. Packaging the
-worker never installs, updates, or restarts a Gateway service.
+It does not yet start the Gateway inside its private runtime; bundled Gateway
+hosting is a separate, subsequent change. Packaging the runtime never installs,
+updates, or restarts a Gateway service.
+
+For an app-owned full Gateway payload, packaging writes
+`openclaw-install-owner.json` at the OpenClaw package root with `schemaVersion: 1`,
+`owner: "macos-app"`, `displayName: "OpenClaw.app"`, and
+`updateHint: "Update OpenClaw.app to update this Gateway."`. This contract keeps
+payload and runtime updates with the app updater (Sparkle): core reports the
+owner, skips package-registry update checks, and refuses self-update and runtime
+migration. A launching host can set `OPENCLAW_GATEWAY_HOST_LIFELINE=stdin` and
+retain the stdin pipe writer; EOF or a pipe error requests graceful Gateway
+shutdown. These contracts are opt-in and do not change the app's current launch behavior.
 
 The private worker validates core and node configuration through a read-only
 bootstrap, without Gateway-wide Doctor preflight or channel-schema validation.
@@ -49,7 +67,7 @@ the CLI as root.
 
 Gateway setup still needs an internet connection to download its separate
 runtime and matching OpenClaw package. The bundled installer owns that setup;
-the private worker is not a replacement for a CLI or Gateway installation.
+the bundled runtime does not replace this external CLI or Gateway installation.
 
 Remote connections and attachment to an independently managed local Gateway
 skip this installation. Attach-only mode never prompts for a CLI to run the

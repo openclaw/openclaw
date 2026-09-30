@@ -50,15 +50,12 @@ export type QuestionPanelProps = {
   onNextRequest?: () => void;
 };
 
-export type QuestionPanelOptions = {
-  onChange?: () => void;
-  onSubmit?: (answers: Record<string, string[]>) => void | Promise<void>;
-  onSkip?: () => void | Promise<void>;
+export type QuestionPanelOptions = Pick<
+  QuestionPanelProps,
+  "onChange" | "onSubmit" | "onSkip" | "onCollapsedChange" | "onPreviousRequest" | "onNextRequest"
+> & {
   collapsed?: boolean;
-  onCollapsedChange?: (collapsed: boolean) => void;
-  requestPosition?: { current: number; total: number };
-  onPreviousRequest?: () => void;
-  onNextRequest?: () => void;
+  requestPosition?: QuestionPanelViewModel["requestPosition"];
 };
 
 export function createGatewayQuestionPanelProps(

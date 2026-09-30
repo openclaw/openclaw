@@ -1,4 +1,3 @@
-// Implements session commands for list, show, fork, reset, and routing state.
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
@@ -29,6 +28,7 @@ import {
   writeRestartSentinel,
 } from "../../infra/restart-sentinel.js";
 import { scheduleGatewayRestart, triggerOpenClawRestart } from "../../infra/restart.js";
+import { formatFastModeConfirmation } from "../../shared/fast-mode.js";
 import { parseActivationCommand } from "../group-activation.js";
 import { parseSendPolicyCommand } from "../send-policy.js";
 import {
@@ -97,14 +97,6 @@ function parseSessionDurationMs(raw: string): number {
 
 function formatSessionExpiry(expiresAt: number) {
   return timestampMsToIsoString(expiresAt) ?? "n/a";
-}
-
-function resolveSessionBindingDurationMs(
-  binding: SessionBindingRecord,
-  key: "idleTimeoutMs" | "maxAgeMs",
-  fallbackMs: number,
-): number {
-  return resolveNonNegativeIntegerOption(binding.metadata?.[key], fallbackMs);
 }
 
 function resolveSessionBindingLastActivityAt(binding: SessionBindingRecord): number {
@@ -306,7 +298,7 @@ export const handleFastCommand: CommandHandler = defineAuthorizedTextCommand(
     const resetsToDefault = isSessionDefaultDirectiveValue(rawMode);
     const nextMode = resetsToDefault ? undefined : normalizeFastMode(rawMode);
     if (nextMode === undefined && !resetsToDefault) {
-      return sessionCommandReply("⚙️ Usage: /fast status|auto|on|off|default");
+      return sessionCommandReply("⚙️ Usage: /fast status|auto|on|off|ultrafast|default");
     }
 
     if (targetSessionEntry && params.sessionStore && params.sessionKey) {
@@ -329,9 +321,7 @@ export const handleFastCommand: CommandHandler = defineAuthorizedTextCommand(
     return sessionCommandReply(
       resetsToDefault
         ? "⚙️ Fast mode reset to default."
-        : nextMode === "auto"
-          ? "⚙️ Fast mode set to auto."
-          : `⚙️ Fast mode ${nextMode ? "enabled" : "disabled"}.`,
+        : `⚙️ ${formatFastModeConfirmation(nextMode)}`,
     );
   },
 );
@@ -413,16 +403,15 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
     }
   }
 
-  const idleTimeoutMs = resolveSessionBindingDurationMs(
-    activeBinding,
-    "idleTimeoutMs",
+  const idleTimeoutMs = resolveNonNegativeIntegerOption(
+    activeBinding.metadata?.idleTimeoutMs,
     24 * 60 * 60 * 1000,
   );
   const idleExpiresAt = resolveSessionBindingExpiryAt(
     resolveSessionBindingLastActivityAt(activeBinding),
     idleTimeoutMs,
   );
-  const maxAgeMs = resolveSessionBindingDurationMs(activeBinding, "maxAgeMs", 0);
+  const maxAgeMs = resolveNonNegativeIntegerOption(activeBinding.metadata?.maxAgeMs, 0);
   const maxAgeExpiresAt = resolveSessionBindingExpiryAt(activeBinding.boundAt, maxAgeMs);
   const isIdle = action === SESSION_ACTION_IDLE;
   const settingLabel = isIdle ? "Idle timeout" : "Max age";

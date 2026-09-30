@@ -1,4 +1,3 @@
-// Shared filesystem, path, and process helpers for the CLI.
 import fs from "node:fs";
 import os from "node:os";
 import { normalizeHomeDirValue } from "@openclaw/normalization-core/home-dir";

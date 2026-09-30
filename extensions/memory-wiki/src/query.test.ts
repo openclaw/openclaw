@@ -487,6 +487,31 @@ describe("searchMemoryWiki", () => {
     expect(results[0]?.snippet).toContain("Teams");
   });
 
+  it("matches non-ASCII query terms without an exact phrase", async () => {
+    const { rootDir, config } = await createQueryVault({
+      initialize: true,
+    });
+    const pages = [
+      ["ru", "Альфа — это новый внутренний проект."],
+      ["ja", "会議は来週東京で開きます。"],
+      ["de", "Die Straße gehört Herrn Müller."],
+      ["controller", "The controller strategy is documented here."],
+    ] as const;
+    for (const [slug, body] of pages) {
+      await writePage(path.join(rootDir, "entities", `${slug}.md`), {
+        frontmatter: { pageType: "entity", id: `entity.${slug}`, title: `Notes ${slug}` },
+        body: `# Notes ${slug}\n\n${body}\n`,
+      });
+    }
+
+    const search = async (query: string) =>
+      (await searchMemoryWiki({ config, query, maxResults: 10 })).map((result) => result.path);
+
+    expect(await search("проект альфа")).toEqual(["entities/ru.md"]);
+    expect(await search("東京 会議")).toEqual(["entities/ja.md"]);
+    expect(await search("Müller Straße")).toEqual(["entities/de.md"]);
+  });
+
   it("supports people-routing search modes and claim evidence drilldown metadata", async () => {
     const { rootDir, config } = await createQueryVault({
       initialize: true,

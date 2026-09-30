@@ -75,7 +75,6 @@ function writeGoogleMeetCreateOutput(
 }
 
 export function registerGoogleMeetCreateCommands(context: GoogleMeetCliCommandContext): void {
-  const params = context;
   const {
     root,
     callGateway,
@@ -118,13 +117,13 @@ export function registerGoogleMeetCreateCommands(context: GoogleMeetCliCommandCo
           return;
         }
       }
-      if (!hasCreateOAuth(params.config, options)) {
+      if (!hasCreateOAuth(context.config, options)) {
         if (hasCreateSpaceConfigInput(options as Record<string, unknown>)) {
           throw new Error(
             "Google Meet access policy options require OAuth/API room creation. Configure Google Meet OAuth or remove --access-type/--entry-point-access.",
           );
         }
-        const rt = await params.ensureRuntime();
+        const rt = await context.ensureRuntime();
         const result = await rt.createViaBrowser();
         const join =
           options.join !== false
@@ -148,7 +147,7 @@ export function registerGoogleMeetCreateCommands(context: GoogleMeetCliCommandCo
         return;
       }
       const token = await resolveGoogleMeetTokenFromParams(
-        params.config,
+        context.config,
         resolveCliParams(options),
       );
       const result = await createGoogleMeetSpace({
@@ -158,7 +157,7 @@ export function registerGoogleMeetCreateCommands(context: GoogleMeetCliCommandCo
       const join =
         options.join !== false
           ? await (
-              await params.ensureRuntime()
+              await context.ensureRuntime()
             ).join(resolveCliJoinRequest(result.meetingUri, options))
           : undefined;
       writeGoogleMeetCreateOutput(
@@ -181,12 +180,12 @@ export function registerGoogleMeetCreateCommands(context: GoogleMeetCliCommandCo
     .option("--json", "Print JSON output", false)
     .action(async (meeting: string | undefined, options: ResolveSpaceOptions & JsonOptions) => {
       const token = await resolveGoogleMeetTokenFromParams(
-        params.config,
+        context.config,
         resolveCliParams(options),
       );
       const result = await endGoogleMeetActiveConference({
         accessToken: token.accessToken,
-        meeting: resolveMeetingInput(params.config, meeting ?? options.meeting),
+        meeting: resolveMeetingInput(context.config, meeting ?? options.meeting),
       });
       if (options.json) {
         writeStdoutJson({
@@ -205,7 +204,6 @@ export function registerGoogleMeetCreateCommands(context: GoogleMeetCliCommandCo
 }
 
 export function registerGoogleMeetApiCommands(context: GoogleMeetCliCommandContext): void {
-  const params = context;
   const { root, resolveCliParams, resolveMeetingInput } = context;
 
   addGoogleMeetOAuthOptions(
@@ -217,8 +215,8 @@ export function registerGoogleMeetApiCommands(context: GoogleMeetCliCommandConte
   )
     .option("--json", "Print JSON output", false)
     .action(async (options: ResolveSpaceOptions) => {
-      const meeting = resolveMeetingInput(params.config, options.meeting);
-      const { space, token } = await resolveSpaceFromParams(params.config, {
+      const meeting = resolveMeetingInput(context.config, options.meeting);
+      const { space, token } = await resolveSpaceFromParams(context.config, {
         ...resolveCliParams(options),
         meeting,
       });
@@ -250,15 +248,15 @@ export function registerGoogleMeetApiCommands(context: GoogleMeetCliCommandConte
   )
     .option("--json", "Print JSON output", false)
     .action(async (options: ResolveSpaceOptions) => {
-      const meeting = resolveMeetingInput(params.config, options.meeting);
-      const { space, token } = await resolveSpaceFromParams(params.config, {
+      const meeting = resolveMeetingInput(context.config, options.meeting);
+      const { space, token } = await resolveSpaceFromParams(context.config, {
         ...resolveCliParams(options),
         meeting,
       });
       const report = buildGoogleMeetPreflightReport({
         input: meeting,
         space,
-        previewAcknowledged: params.config.preview.enrollmentAcknowledged,
+        previewAcknowledged: context.config.preview.enrollmentAcknowledged,
         tokenSource: token.refreshed ? "refresh-token" : "cached-access-token",
       });
       if (options.json) {
@@ -296,9 +294,9 @@ export function registerGoogleMeetApiCommands(context: GoogleMeetCliCommandConte
     .option("--json", "Print JSON output", false)
     .action(async (options: ResolveSpaceOptions) => {
       const raw = resolveCliParams(options);
-      const token = await resolveGoogleMeetTokenFromParams(params.config, raw);
+      const token = await resolveGoogleMeetTokenFromParams(context.config, raw);
       if (!options.today && !options.event?.trim()) {
-        const meeting = options.meeting?.trim() || params.config.defaults.meeting;
+        const meeting = options.meeting?.trim() || context.config.defaults.meeting;
         if (!meeting) {
           throw new Error(
             "Meeting input is required. Pass --meeting, --today, --event, or configure defaults.meeting.",
@@ -307,7 +305,7 @@ export function registerGoogleMeetApiCommands(context: GoogleMeetCliCommandConte
         raw.meeting = meeting;
       }
       const resolved = await resolveMeetingFromParams({
-        config: params.config,
+        config: context.config,
         raw,
         accessToken: token.accessToken,
       });
@@ -345,7 +343,7 @@ export function registerGoogleMeetApiCommands(context: GoogleMeetCliCommandConte
     .option("--json", "Print JSON output", false)
     .action(async (options: ResolveSpaceOptions) => {
       const token = await resolveGoogleMeetTokenFromParams(
-        params.config,
+        context.config,
         resolveCliParams(options),
       );
       const window = options.today ? buildGoogleMeetCalendarDayWindow() : {};

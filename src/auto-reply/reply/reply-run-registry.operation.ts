@@ -216,7 +216,7 @@ export function createReplyOperation(params: {
         isReplyOperationPreBackendPhase(phaseBeforeAbort) &&
         !retainStateUntilCompleteOperations.has(operation)
       ) {
-        clearState();
+        operation.complete();
       } else {
         scheduleTerminalSettle();
       }
@@ -527,13 +527,6 @@ export function createReplyOperation(params: {
       setResult({ kind: "failed", code: "run_stalled" });
       phase = "failed";
     }
-    const logStaleTakeoverRelease = () => {
-      diag.warn(
-        `reply run stale takeover: forced release sessionKey=${currentSessionKey} reason=${reason} phase=${phase} result=${replyRunSettle.formatReplyOperationResult(
-          result,
-        )} ageMs=${Date.now() - lastActivityAtMs} ranForMs=${Date.now() - startedAtMs}`,
-      );
-    };
     if (options?.afterClearBarrier) {
       // Prepare the recovery fence before cancellation, but retain exact lane
       // ownership until cancel returns or the backend re-enters completion.
@@ -555,7 +548,11 @@ export function createReplyOperation(params: {
     }
     controller.abort(createAbortError("Reply operation expired as stale"));
     if (stateCleared) {
-      logStaleTakeoverRelease();
+      diag.warn(
+        `reply run stale takeover: forced release sessionKey=${currentSessionKey} reason=${reason} phase=${phase} result=${replyRunSettle.formatReplyOperationResult(
+          result,
+        )} ageMs=${Date.now() - lastActivityAtMs} ranForMs=${Date.now() - startedAtMs}`,
+      );
       return true;
     }
     // cancel() only requests shutdown. A missing backend can also be a live

@@ -302,7 +302,7 @@ export async function applyStagedWorkerWorkspaceResult(params: {
         throw new Error("Cloud workspace staged result does not match the placement base");
       }
       params.assertCurrent?.();
-      params.journal.commit(accepted.manifestRef);
+      await params.journal.commit(accepted.manifestRef);
       return {
         ...accepted,
         changed: staged.changed,
@@ -357,7 +357,7 @@ async function prepareRequestedWorkerWorkspaceResult(params: {
     if (unchanged) {
       await unchanged.verifyLocalStable();
       params.request.assertCurrent?.();
-      params.request.journal.commit(unchanged.manifestRef);
+      await params.request.journal.commit(unchanged.manifestRef);
       appliedWorkspaceResult = unchanged;
       return;
     }

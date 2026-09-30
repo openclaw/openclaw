@@ -1573,6 +1573,9 @@ update_candidate() {
       'out="$1"; err="$2"; shift 2; exec "$@" >"$out" 2>"$err"' recovery-update \
       "$update_json" "$update_err" "${update_env[@]}" openclaw "${update_args[@]}" \
       >"$ARTIFACT_ROOT/recovery-update-metrics.log" 2>&1 || update_status=$?
+  elif [ "$SCENARIO" = "legacy-operator-state" ] && [ "$after_repair" != "1" ]; then
+    openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" node scripts/e2e/lib/upgrade-survivor/update-timeout-diagnostics.mjs \
+      -- "${update_env[@]}" openclaw "${update_args[@]}" >"$update_json" 2>"$update_err" || update_status=$?
   else
     openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" "${update_env[@]}" openclaw "${update_args[@]}" >"$update_json" 2>"$update_err" || update_status=$?
   fi
@@ -2453,6 +2456,11 @@ if [ "$SCENARIO" = "custom-plugin-siblings" ]; then
   phase update-sibling-candidate update_candidate
   phase canary-sibling-runtime node scripts/e2e/lib/upgrade-survivor/custom-plugin-siblings.mjs assert-canary
   phase candidate-sibling-runtime node scripts/e2e/lib/upgrade-survivor/custom-plugin-siblings.mjs candidate
+  phase sibling-activation-previous-gateway-stop stop_gateway
+  OPENCLAW_UPGRADE_SURVIVOR_CONTEXT_ACTIVATION=1 phase sibling-activation-gateway-start start_gateway
+  phase sibling-activation-gateway-probes check_gateway_probes
+  phase assert-sibling-activation node scripts/e2e/lib/upgrade-survivor/custom-plugin-siblings.mjs assert-activation
+  phase sibling-activation-gateway-stop stop_gateway
   run_completed="1"
   echo "Upgrade survivor Docker E2E passed baseline=${baseline_spec} scenario=${SCENARIO} candidate=${candidate_version}."
   exit 0

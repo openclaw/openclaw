@@ -184,8 +184,6 @@ async function resizeImageBase64IfNeeded(params: {
   base64: string;
   mimeType: string;
   resized: boolean;
-  width?: number;
-  height?: number;
 }> {
   const buf = Buffer.from(params.base64, "base64");
   const meta = readImageMetadataFromHeader(buf) ?? (await getImageMetadata(buf));
@@ -203,8 +201,6 @@ async function resizeImageBase64IfNeeded(params: {
       base64: params.base64,
       mimeType: params.mimeType,
       resized: false,
-      width,
-      height,
     };
   }
 
@@ -268,8 +264,6 @@ async function resizeImageBase64IfNeeded(params: {
           base64: out.toString("base64"),
           mimeType: "image/jpeg",
           resized: true,
-          width,
-          height,
         };
       }
     }

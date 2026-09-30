@@ -94,6 +94,7 @@ export const GATEWAY_CLIENT_CAPS = {
   TERMINAL_UPLOAD_PATH_STYLE: "terminal-upload-path-style",
   TOOL_EVENTS: "tool-events",
   UI_COMMANDS: "ui-commands",
+  ULTRAFAST: "ultrafast",
   USAGE_REFRESHING: "usage-refreshing",
 } as const;
 

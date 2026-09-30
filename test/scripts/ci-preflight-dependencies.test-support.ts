@@ -1,7 +1,51 @@
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+
+export function exportPreflightHarness(directory: string): string {
+  const workspace = path.join(directory, "workspace");
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) {
+    if (key.toUpperCase().startsWith("GIT_")) {
+      delete env[key];
+    }
+  }
+  execFileSync("git", ["init", "--quiet", workspace], { env });
+  execFileSync(
+    "git",
+    [
+      `--git-dir=${path.join(workspace, ".git")}`,
+      `--work-tree=${process.cwd()}`,
+      "add",
+      "--",
+      ".github/actions",
+      "scripts",
+    ],
+    { env },
+  );
+  const result = spawnSync(
+    "python3",
+    ["-I", "-S", ".github/actions/git-owner/owner.py", "--policy", "-"],
+    {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: { ...env, WORKFLOW_SHA: "a".repeat(40) },
+      input: `import os
+import ci_git_owner
+ci_git_owner.kind = "preflight"
+ci_git_owner.workspace = ${JSON.stringify(workspace)}
+ci_git_owner.checkout_harness(os.environ["WORKFLOW_SHA"])
+`,
+    },
+  );
+  if (result.status !== 0) {
+    throw new Error(
+      `Preflight harness export failed: ${result.error?.message ?? ""}\n${result.stdout}\n${result.stderr}`,
+    );
+  }
+  return path.join(workspace, ".ci-harness");
+}
 
 /** Execute the workflow's native Node manifest with runtime dependencies forbidden. */
 export function runDependencyFreePreflight(

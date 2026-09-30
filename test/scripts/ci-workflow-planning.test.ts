@@ -468,6 +468,7 @@ function runCheckShardFixture(options: {
     profile?: "blacksmith" | "github" | "hybrid";
     eventName?: "pull_request" | "push" | "workflow_dispatch" | "schedule";
     stripeSupport?: boolean;
+    rootStripeSupport?: boolean;
     hostedContract?: boolean;
     failStripe?: string;
     changedPathsJson?: string;
@@ -499,7 +500,9 @@ function runCheckShardFixture(options: {
     );
     writeFileSync(
       path.join(root, "scripts/run-tsgo-core-test-shards.mts"),
-      options.types?.stripeSupport === false ? "// legacy runner\n" : "// --stripe\n",
+      options.types?.stripeSupport === false
+        ? "// legacy runner\n"
+        : `// --stripe${options.types?.rootStripeSupport ? " --root-stripe" : ""}\n`,
     );
     writeFileSync(
       path.join(root, "scripts/run-tsgo-core-test-shards.mjs"),
@@ -728,8 +731,8 @@ function runDependencyCheckFixture(options: {
       "fi",
       'printf "%s\\n" "$*" >> "$PNPM_CALLS"',
     ]);
-    const checkShardRun = readCiWorkflow().jobs["check-shard"].steps.find(
-      (step: WorkflowStep) => step.name === "Run check shard",
+    const checkShardRun = readCiWorkflow().jobs["check-additional-shard"].steps.find(
+      (step: WorkflowStep) => step.name === "Run dependency checks",
     ).run;
     const run = spawnSync("bash", ["-c", checkShardRun], {
       cwd: root,
@@ -1118,7 +1121,7 @@ describe("release fast lane", () => {
     expect(result.outputs.release_fast_lane).toBe("true");
     expect(result.outputs.run_docker_seed_e2e).toBe("true");
     expect(result.outputs.docker_seed_lanes).toBe(
-      "published-upgrade-survivor mcp-channels cron-mcp-cleanup mcp-code-mode-gateway",
+      "mcp-channels cron-mcp-cleanup mcp-code-mode-gateway",
     );
     expect(result.outputs.run_qa_smoke_ci).toBe("true");
     expect(result.outputs.run_check).toBe("true");
@@ -1251,6 +1254,7 @@ describe("ci workflow guards", () => {
       },
       {
         path: "extensions/telegram/src/send.ts",
+        boundaryOwner: "additional-checks",
         tasks: ["guards", "prod-types", "lint", "dependencies", "test-types"],
         fastTasks: [],
         baselineRatchets: true,
@@ -1262,6 +1266,20 @@ describe("ci workflow guards", () => {
         lintExtensionStripes: [3],
         lintCentralScripts: false,
         graphs: ["extensions", "extensions-test", "test-root"],
+      },
+      {
+        path: "src/wizard/i18n/locales/en.ts",
+        nodeDataOnly: true,
+        tasks: ["guards", "prod-types", "lint", "dependencies", "test-types"],
+        fastTasks: [],
+        baselineRatchets: false,
+        contracts: false,
+        channelContracts: false,
+        performance: false,
+        coreStripes: [1, 4],
+        lintCoreStripes: [1, 2],
+        lintExtensionStripes: [],
+        lintCentralScripts: true,
       },
     ])(
       "emits and wires narrow families for $path",
@@ -1278,6 +1296,8 @@ describe("ci workflow guards", () => {
         lintExtensionStripes,
         lintCentralScripts,
         graphs,
+        boundaryOwner,
+        nodeDataOnly = false,
       }) => {
         const paths = [changedPath];
         const lintPlan: NonNullable<Awaited<ReturnType<typeof createChangedCiLintPlan>>> = {
@@ -1316,6 +1336,7 @@ describe("ci workflow guards", () => {
           runnerProfile: "hybrid",
           changedPaths: paths,
           ciTypeGraphNames: graphs,
+          scopeEnv: { OPENCLAW_CI_NODE_TEST_DATA_ONLY: String(nodeDataOnly) },
           ciLintPlan: lintPlan,
           changedPlannerSource: changedPlannerSource(),
         });
@@ -1340,7 +1361,43 @@ describe("ci workflow guards", () => {
             workflow.jobs["check-shard"].strategy.matrix,
             context,
           ).include.map((row: { task: string }) => row.task),
-        ).toEqual(tasks);
+        ).toEqual(nodeDataOnly ? tasks : tasks.filter((task) => task !== "dependencies"));
+        const additional = workflow.jobs["check-additional-shard"];
+        const dependencyRows = evaluateWorkflowExpression(
+          additional.strategy.matrix,
+          context,
+        ).include.filter((row: { group: string }) => row.group === "dependencies");
+        expect(dependencyRows).toEqual(
+          tasks.includes("dependencies") && !nodeDataOnly
+            ? [
+                {
+                  check_name: "check-dependencies",
+                  group: "dependencies",
+                  runner: "blacksmith-16vcpu-ubuntu-2404",
+                },
+              ]
+            : [],
+        );
+        if (nodeDataOnly) {
+          expect(manifest.outputs.run_check).toBe("true");
+          expect(manifest.outputs.run_check_additional).toBe("false");
+        }
+        if (dependencyRows.length) {
+          // The dependency gate must start while the installed compiler planner is pending.
+          expect(additional.needs).toEqual(["preflight"]);
+          expect(
+            evaluateWorkflowExpression(additional.if, {
+              ...context,
+              additionalNeeds: { "check-plan": { outputs: {}, result: "skipped" } },
+            }),
+          ).toBe(true);
+          expect(
+            evaluateWorkflowExpression(additional["runs-on"], {
+              ...context,
+              matrix: dependencyRows[0],
+            }),
+          ).toBe("blacksmith-16vcpu-ubuntu-2404");
+        }
         expect(
           JSON.parse(
             expectDefined(manifest.outputs.checks_fast_core_matrix, "fast check matrix"),
@@ -1367,7 +1424,7 @@ describe("ci workflow guards", () => {
         );
         expect(
           evaluateWorkflowExpression(boundaryStep.env.TYPE_GRAPH_BOUNDARY_OWNER, context),
-        ).toBe(tasks.includes("test-types") ? "check-plan" : "");
+        ).toBe(boundaryOwner ?? (tasks.includes("test-types") ? "check-plan" : ""));
         expect(
           evaluateWorkflowExpression(
             workflow.jobs["check-test-types-hosted-core-shard"].if,
@@ -1450,6 +1507,16 @@ describe("ci workflow guards", () => {
     it.each([
       { paths: ["src/config/settings.json"], owner: "check-plan", boundaryRow: false },
       {
+        paths: ["extensions/telegram/src/send.ts"],
+        owner: "additional-checks",
+        boundaryRow: true,
+      },
+      {
+        paths: ["extensions/telegram/src/send.ts", "docs/plugins/example.md", "ui/styles/chat.css"],
+        owner: "additional-checks",
+        boundaryRow: true,
+      },
+      {
         paths: ["src/shared/runtime.ts", "src/config/settings.json"],
         owner: "additional-checks",
         boundaryRow: true,
@@ -1463,10 +1530,20 @@ describe("ci workflow guards", () => {
           eventName: "pull_request",
           runnerProfile: "hybrid",
           changedPaths: paths,
+          ciTypeGraphNames: paths[0]?.startsWith("extensions/")
+            ? ["extensions", "extensions-test", "test-root"]
+            : undefined,
           changedPlannerSource: changedPlannerSource(),
         });
         expect(manifest.status, manifest.output).toBe(0);
         expect(manifest.outputs.type_graph_boundary_owner).toBe(owner);
+        if (paths[0]?.startsWith("extensions/")) {
+          expect(JSON.parse(manifest.checkPlanOutputs.core_type_matrix!).include).toEqual([]);
+        }
+        expect(
+          JSON.parse(expectDefined(manifest.outputs.check_plan_input_json, "check plan input"))
+            .typeGraphBoundaryOwner,
+        ).toBe(owner);
         const rows = JSON.parse(
           expectDefined(manifest.outputs.check_additional_matrix, "additional matrix"),
         ).include;
@@ -2347,8 +2424,8 @@ describe("ci workflow guards", () => {
             ].includes(name),
         );
       }
-      const packageStep = workflow.jobs["docker-seed-e2e"].steps.find(
-        (step: WorkflowStep) => step.name === "Prepare main Docker smoke package",
+      const packageStep = workflow.jobs["docker-seed-e2e"].steps.find((step: WorkflowStep) =>
+        step.run?.includes("scripts/package-openclaw-for-docker.mjs"),
       );
       expect(evaluateWorkflowExpression("${{ " + packageStep.if + " }}", context)).toBe(!release);
     },
@@ -3261,9 +3338,9 @@ describe("ci workflow guards", () => {
     invalid?: boolean;
   }>([
     { eventName: "pull_request" as const, production: false, expected: false },
-    { eventName: "pull_request" as const, production: true, expected: true },
+    { eventName: "pull_request" as const, production: true, expected: false },
     { eventName: "workflow_dispatch", releaseGate: true, production: false, expected: false },
-    { eventName: "workflow_dispatch", releaseGate: true, production: true, expected: true },
+    { eventName: "workflow_dispatch", releaseGate: true, production: true, expected: false },
     { eventName: "push" as const, production: false, expected: true },
     { eventName: "push" as const, production: true, expected: true },
     { eventName: "workflow_dispatch" as const, production: false, expected: true },
@@ -6532,6 +6609,39 @@ describe("ci workflow guards", () => {
     },
   );
 
+  it.each(["pull_request", "schedule", "workflow_dispatch"] as const)(
+    "runs every root partition after its existing core stripe on %s",
+    (eventName) => {
+      const result = runCheckShardFixture({
+        task: "test-types",
+        scripts: ["tsgo:scripts", "tsgo:test:root"],
+        frozenTarget: false,
+        types: { compose: true, profile: "hybrid", eventName, rootStripeSupport: true },
+      });
+      expect(result.status, result.output).toBe(0);
+      expect(result.rows).toHaveLength(6);
+      expect(result.calls).toEqual(["tsgo:extensions:test", "tsgo:scripts"]);
+      for (let stripe = 1; stripe <= 5; stripe++) {
+        expect(result.typeCalls.filter((call) => call.row === `core-${stripe}`)).toEqual([
+          {
+            row: `core-${stripe}`,
+            command: `node --stripe ${stripe}/5 --concurrency 2`,
+            localCheck: null,
+          },
+          ...(stripe >= 2
+            ? [
+                {
+                  row: `core-${stripe}`,
+                  command: `node --root-stripe ${stripe - 1}/4`,
+                  localCheck: "0",
+                },
+              ]
+            : []),
+        ]);
+      }
+    },
+  );
+
   it.each([
     { failStripe: "1/5", frozenTarget: false },
     { failStripe: "5/5", frozenTarget: false },
@@ -7835,12 +7945,12 @@ describe("ci workflow guards", () => {
           {
             check_name: "android-test-third-party",
             task: "test-third-party",
-            app_lint: "third-party",
           },
           {
             check_name: "android-test-wear",
             task: "test-wear",
             lint: true,
+            app_lint: "third-party",
           },
           { check_name: "android-ktlint", task: "ktlint", app_lint: "play" },
         ]);
@@ -8398,12 +8508,12 @@ describe("ci workflow guards", () => {
       {
         check_name: "android-test-third-party",
         task: "test-third-party",
-        app_lint: "third-party",
       },
       {
         check_name: "android-test-wear",
         task: "test-wear",
         lint: true,
+        app_lint: "third-party",
       },
       { check_name: "android-ktlint", task: "ktlint", app_lint: "play" },
     ]);
@@ -11315,6 +11425,7 @@ describe("ci workflow guards", () => {
           { FRV_WINDOWS_NODE_ADVISORY: "true", GITHUB_STEP_SUMMARY: summary },
         );
         expect(outcome.status, `${job}: ${outcome.stdout}\n${outcome.stderr}`).toBe(1);
+        expect(outcome.stdout.split("\n")).toContain(`${job}: failure (selected=true)`);
         expect(outcome.stdout).toContain(`${job} finished with failure (selected=true)`);
       }
     },

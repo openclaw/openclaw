@@ -492,31 +492,26 @@ export class GatewayBoardProvider implements BoardProvider {
     const widgets = snapshot.widgets.map((widget) => {
       const previous = previousWidgets.get(widget.name);
       if (
-        preserveMissingViewContracts &&
         previous &&
         !changedWidgets.has(widget.name) &&
         previous.revision === widget.revision &&
-        previous.instanceId === widget.instanceId &&
-        widget.viewGeneration === undefined
+        previous.instanceId === widget.instanceId
       ) {
-        // Mutation snapshots contain board state but not the view contract minted
-        // by board.get. Keep that contract only while the document revision matches.
-        const preserved = preserveBoardWidgetViewContract(widget, previous);
-        copyBoardWidgetTicketReceipt(preserved, previous, receivedAtMs);
-        return preserved;
-      }
-      if (
-        previous &&
-        !changedWidgets.has(widget.name) &&
-        previous.revision === widget.revision &&
-        previous.instanceId === widget.instanceId &&
-        previous.viewGeneration === widget.viewGeneration &&
-        !widget.sandboxUrl &&
-        previous.frameUrl
-      ) {
-        const preserved = { ...widget, frameUrl: previous.frameUrl };
-        recordBoardWidgetTicketReceipt(preserved, receivedAtMs);
-        return preserved;
+        if (preserveMissingViewContracts && widget.viewGeneration === undefined) {
+          // Mutation snapshots omit the view contract minted by board.get.
+          const preserved = preserveBoardWidgetViewContract(widget, previous);
+          copyBoardWidgetTicketReceipt(preserved, previous, receivedAtMs);
+          return preserved;
+        }
+        if (
+          previous.viewGeneration === widget.viewGeneration &&
+          !widget.sandboxUrl &&
+          previous.frameUrl
+        ) {
+          const preserved = { ...widget, frameUrl: previous.frameUrl };
+          recordBoardWidgetTicketReceipt(preserved, receivedAtMs);
+          return preserved;
+        }
       }
       recordBoardWidgetTicketReceipt(widget, receivedAtMs);
       return widget;

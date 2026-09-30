@@ -177,17 +177,13 @@ function diffSnapshots(
       detail: `${previous.modelApi ?? "unknown"} -> ${next.modelApi ?? "unknown"}`,
     });
   }
-  if (previous.cacheRetention !== next.cacheRetention) {
-    changes.push({
-      code: "cacheRetention",
-      detail: `${previous.cacheRetention ?? "default"} -> ${next.cacheRetention ?? "default"}`,
-    });
-  }
-  if (previous.transport !== next.transport) {
-    changes.push({
-      code: "transport",
-      detail: `${previous.transport ?? "default"} -> ${next.transport ?? "default"}`,
-    });
+  for (const code of ["cacheRetention", "transport"] as const) {
+    if (previous[code] !== next[code]) {
+      changes.push({
+        code,
+        detail: `${previous[code] ?? "default"} -> ${next[code] ?? "default"}`,
+      });
+    }
   }
   if (previous.streamStrategy !== next.streamStrategy) {
     changes.push({

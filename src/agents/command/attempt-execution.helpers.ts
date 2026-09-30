@@ -27,6 +27,7 @@ import {
 import { buildAgentRunTerminalReplySnapshot } from "../agent-run-terminal-reply.js";
 import type { AgentRunTerminalReplySnapshot } from "../agent-run-terminal-reply.types.js";
 import type { ExecApprovalContinuationPromptRange } from "../bash-tools.exec-approval-output.js";
+import { isClaudeToolResultBlockType, isClaudeToolUseBlockType } from "../cli-output-records.js";
 import { cliBackendLog } from "../cli-runner/log.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "./claude-cli-project-dir.js";
 
@@ -176,16 +177,6 @@ function toToolContentBlocks(content: unknown): ToolContentBlock[] | undefined {
   );
 }
 
-function isClaudeTranscriptToolUseBlock(block: ToolContentBlock): boolean {
-  const type = block.type;
-  return type === "tool_use" || type === "server_tool_use" || type === "mcp_tool_use";
-}
-
-function isClaudeTranscriptToolResultBlock(block: ToolContentBlock): boolean {
-  const type = block.type;
-  return type === "tool_result" || (typeof type === "string" && type.endsWith("_tool_result"));
-}
-
 async function jsonlFileHasOrphanedTrailingToolUse(filePath: string): Promise<boolean> {
   return await readCliTranscriptFile(filePath, false, async (fh, size) => {
     const tailBytes = Math.min(size, CLAUDE_CLI_ORPHAN_PROBE_TAIL_BYTES);
@@ -223,9 +214,9 @@ async function jsonlFileHasOrphanedTrailingToolUse(filePath: string): Promise<bo
       }
       for (const block of toToolContentBlocks(message?.content) ?? []) {
         const target =
-          role === "assistant" && isClaudeTranscriptToolUseBlock(block)
+          role === "assistant" && isClaudeToolUseBlockType(block.type)
             ? lastAssistantToolUseIds
-            : isClaudeTranscriptToolResultBlock(block)
+            : isClaudeToolResultBlockType(block.type)
               ? answeredToolResultIds
               : undefined;
         if (target) {

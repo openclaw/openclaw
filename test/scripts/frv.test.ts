@@ -8,6 +8,7 @@ import {
   preflightContinuation,
   watchRelease,
 } from "../../scripts/frv.mjs";
+import type { FlakeClassification } from "../../scripts/full-release-flake-classification.mjs";
 import {
   releaseChildSpec,
   releaseCompositeJobsSha256,
@@ -56,6 +57,7 @@ function preflightMethods(
     })),
   ];
   return {
+    loadFlakeClassifications: async () => ({}),
     getReleaseEvidenceClient: () => ({
       ...createReleaseEvidenceClient(REPOSITORY),
       getWorkflowSource: () => "name: Full Release Validation\n",
@@ -603,6 +605,7 @@ describe("FRV continuation preflight", () => {
 
     await expect(
       continueFailed(parentOwnedPlan, "77", {
+        loadFlakeClassifications: read,
         getReleaseEvidenceClient: () => {
           reads += 1;
           throw new Error("unexpected evidence client");
@@ -685,6 +688,7 @@ describe("FRV continuation preflight", () => {
 
     await expect(
       continueFailed(plan([first, second]), "77", {
+        loadFlakeClassifications: downstreamRead,
         getReleaseEvidenceClient: () => {
           downstreamReads += 1;
           throw new Error("unexpected evidence client");
@@ -748,6 +752,7 @@ describe("FRV same-parent recovery", () => {
     const runReads: string[] = [];
     const attemptReads: Array<[string, number]> = [];
     const result = await inspectContinuation(plan([selected, missing]), {
+      loadFlakeClassifications: async () => ({}),
       getAttemptJobs: async (runId: string, attempt: number) => {
         attemptReads.push([runId, attempt]);
         return [job("test")];
@@ -784,6 +789,7 @@ describe("FRV same-parent recovery", () => {
   it("reports the effective attempt and composite job evidence", async () => {
     const selected = child("normalCi", "101");
     const result = await inspectContinuation(plan([selected]), {
+      loadFlakeClassifications: async () => ({}),
       getAttemptJobs: async (_runId: string, attempt: number) => [
         job("test", attempt === 1 ? "failure" : "success"),
       ],
@@ -900,6 +906,81 @@ describe("FRV same-parent recovery", () => {
     expect(parentReruns).toBe(1);
   });
 
+  it("reports waiting transitions, bounded heartbeats, and exact started attempts on stderr", async () => {
+    vi.useFakeTimers();
+    const started = Date.now();
+    const selected = child("normalCi", "101");
+    const childRuns = new Map<string, { attempt: number; conclusion: string | null }>([
+      ["101", { attempt: 1, conclusion: null }],
+    ]);
+    const parent = { attempt: 1, conclusion: null as string | null };
+    const base = controllerClient([selected], childRuns, parent);
+    const stderr = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const stdout = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const client = {
+      ...base,
+      getRun: async (runId: string) => {
+        const elapsed = Date.now() - started;
+        const current = childRuns.get("101")!;
+        current.conclusion =
+          elapsed >= 390_000
+            ? "success"
+            : elapsed >= 360_000 && current.attempt === 1
+              ? "failure"
+              : null;
+        parent.conclusion =
+          elapsed >= 450_000
+            ? "success"
+            : elapsed >= 420_000 && parent.attempt === 1
+              ? "failure"
+              : null;
+        const run = await base.getRun(runId);
+        return runId === "101" && elapsed >= 30_000 && elapsed < 360_000
+          ? { ...run, status: "queued" }
+          : run;
+      },
+      rerunFailed: vi.fn(async () => {
+        childRuns.get("101")!.attempt = 2;
+      }),
+      rerunParent: vi.fn(async () => {
+        parent.attempt = 2;
+      }),
+      verify: vi.fn(async () => "{}"),
+    };
+    try {
+      const result = continueFailed(plan([selected]), "77", client);
+      await Promise.all([result, vi.advanceTimersByTimeAsync(480_000)]);
+      const lines = stderr.mock.calls.map(([line]) => String(line));
+      expect(
+        lines.filter((line) => line.includes("waiting for normalCi run 101 attempt 1 in_progress")),
+      ).toHaveLength(1);
+      expect(
+        lines.filter((line) => line.includes("waiting for normalCi run 101 attempt 1 queued")),
+      ).toHaveLength(2);
+      expect(lines).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining("normalCi run 101 attempt 1 completed failure"),
+          expect.stringContaining(
+            "normalCi run 101 attempt 2 started https://github.com/openclaw/openclaw/actions/runs/101/attempts/2",
+          ),
+          expect.stringContaining("waiting for normalCi run 101 attempt 2 in_progress"),
+          expect.stringContaining("waiting for parent 77 attempt 1 in_progress"),
+          expect.stringContaining(
+            "parent 77 attempt 2 started https://github.com/openclaw/openclaw/actions/runs/77/attempts/2",
+          ),
+          expect.stringContaining("parent 77 attempt 2 completed success"),
+        ]),
+      );
+      expect(lines.filter((line) => line.includes(" started "))).toHaveLength(2);
+      expect(client.rerunFailed).toHaveBeenCalledExactlyOnceWith("101");
+      expect(client.rerunParent).toHaveBeenCalledExactlyOnceWith("77");
+      expect(stdout).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    }
+  });
+
   it("retries each terminal child while the parent and other child attempts are still active", async () => {
     const first = child("normalCi", "101");
     const second = child("pluginPrerelease", "202");
@@ -952,6 +1033,63 @@ describe("FRV same-parent recovery", () => {
     }
     expect(events).toEqual(["101", "202", "parent"]);
     expect(client.verify).toHaveBeenCalledOnce();
+  });
+
+  it("reseals the failed parent without rerunning a classified child or its failed gate", async () => {
+    const scenario = rerunScenario({ parentSource: [1, "failure"] });
+    const receipt: FlakeClassification = {
+      schema: "openclaw.frv-flake-classification.v1",
+      parentRunId: "77",
+      parentRunAttempt: 1,
+      child: "normalCi",
+      childRunId: "101",
+      childRunAttempt: 1,
+      targetSha: TARGET_SHA,
+      jobId: "501",
+      jobName: "checks-node-test-2",
+      jobUrl: `https://github.com/${REPOSITORY}/actions/runs/101/job/501`,
+      conclusion: "failure",
+      trackingUrl: `https://github.com/${REPOSITORY}/issues/789`,
+      reason: "Shared test fixture races during cleanup; repair tracked on main.",
+      classifiedBy: "release-operator",
+      receiptRunId: "890",
+      receiptRunAttempt: 1,
+    };
+    const client = {
+      ...scenario.client,
+      getAttemptJobs: async () => [
+        {
+          ...job(receipt.jobName, "failure"),
+          id: 501,
+          run_id: 101,
+          run_attempt: 1,
+          html_url: receipt.jobUrl,
+        },
+        {
+          ...job("openclaw/ci-gate", "failure"),
+          id: 502,
+          run_id: 101,
+          run_attempt: 1,
+        },
+      ],
+      loadFlakeClassifications: vi.fn(async () => ({
+        flakeClassifications: [receipt],
+        gateEntries: [
+          { name: "preflight", result: "success", selected: true },
+          { name: "checks-node", result: "failure", selected: true },
+          { name: "pr-fail-fast", result: "skipped", selected: false },
+        ],
+      })),
+    };
+    await expect(continueFailed(plan([scenario.selected]), "77", client)).resolves.toMatchObject({
+      action: "reran-parent",
+      reruns: [],
+      finalRunId: "77",
+    });
+    expect(scenario.counters).toMatchObject({ posts: { child: 0, parent: 1 }, verifies: 1 });
+    expect(client.loadFlakeClassifications).toHaveBeenCalledWith(
+      expect.objectContaining({ parentRunId: "77", parentRunAttempt: 1, targetSha: TARGET_SHA }),
+    );
   });
 
   it.each([false, true])(
@@ -1162,6 +1300,7 @@ describe("FRV same-parent recovery", () => {
       const selected = child(key, "101");
       let latestReads = 0;
       const client = {
+        loadFlakeClassifications: async () => ({}),
         getRun: async () =>
           runFor(
             selected,

@@ -836,18 +836,18 @@ describe("gateway sessions patch", () => {
     expect(entry.fastMode).toBeUndefined();
   });
 
-  test("sets fastMode to auto", async () => {
+  test.each(["auto", "ultrafast"] as const)("sets fastMode to %s", async (fastMode) => {
     const store: Record<string, SessionEntry> = {
       [MAIN_SESSION_KEY]: {} as SessionEntry,
     };
     const entry = expectPatchOk(
       await runPatch({
         store,
-        patch: { key: MAIN_SESSION_KEY, fastMode: "auto" },
+        patch: { key: MAIN_SESSION_KEY, fastMode },
       }),
     );
 
-    expect(entry.fastMode).toBe("auto");
+    expect(entry.fastMode).toBe(fastMode);
   });
 
   test("sets, replaces, clears, and normalizes tool overrides", async () => {

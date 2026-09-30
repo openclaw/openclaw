@@ -27,28 +27,22 @@ export async function ensureBoardViewElement(): Promise<boolean> {
   return true;
 }
 
-function renderBoardView(props: BoardSessionSurfaceProps) {
-  return html`
-    <div class="board-session-surface__board">
-      <openclaw-board-view
-        .active=${props.active}
-        .session=${props.session}
-        .snapshot=${props.snapshot}
-        .activeTabId=${props.activeTabId}
-        .pageWidgetName=${props.pageWidgetName ?? ""}
-        .widgetFrameUrl=${props.widgetFrameUrl}
-        .callbacks=${props.callbacks}
-        .canMutate=${props.canMutate}
-        .canGrant=${props.canGrant}
-      ></openclaw-board-view>
-    </div>
-  `;
-}
-
 export function renderBoardSessionSurface(props: BoardSessionSurfaceProps) {
   return html`
     <div class="board-session-surface" ?hidden=${!props.active} ?inert=${!props.active}>
-      ${renderBoardView(props)}
+      <div class="board-session-surface__board">
+        <openclaw-board-view
+          .active=${props.active}
+          .session=${props.session}
+          .snapshot=${props.snapshot}
+          .activeTabId=${props.activeTabId}
+          .pageWidgetName=${props.pageWidgetName ?? ""}
+          .widgetFrameUrl=${props.widgetFrameUrl}
+          .callbacks=${props.callbacks}
+          .canMutate=${props.canMutate}
+          .canGrant=${props.canGrant}
+        ></openclaw-board-view>
+      </div>
     </div>
   `;
 }

@@ -233,7 +233,11 @@ async function resolveSelectedContextEngineInfo(params: {
     return { info: { id: engineId, name: engineId }, warnings: [] };
   }
 
-  ensureContextEnginesInitialized();
+  const initializeDuringResolution =
+    getContextEngineRegistration(engineId)?.lifecycle === "runtime";
+  if (!initializeDuringResolution) {
+    await ensureContextEnginesInitialized();
+  }
   let pluginRegistry: PluginRegistry | undefined;
   let inspection: Awaited<ReturnType<typeof acquirePluginRegistryForInspection>> | undefined;
   let engine: ContextEngine | undefined;
@@ -270,6 +274,7 @@ async function resolveSelectedContextEngineInfo(params: {
       });
       const resolve = () =>
         resolveContextEngine(params.cfg, {
+          initialize: initializeDuringResolution ? ensureContextEnginesInitialized : undefined,
           agentDir: resolveAgentDir(params.cfg, agentId, params.env),
           workspaceDir: params.cfg.agents?.defaults?.workspace
             ? resolveUserPath(params.cfg.agents.defaults.workspace, params.env)

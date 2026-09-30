@@ -40,6 +40,7 @@ const openContexts = new Set<BrowserContext>();
 
 async function createPage(): Promise<Page> {
   const context = await browser.newContext({
+    locale: "en-US",
     viewport,
     ...(artifactDir ? { recordVideo: { dir: artifactDir, size: viewport } } : {}),
   });
@@ -59,7 +60,7 @@ function decodeProofPng(png: Buffer) {
 }
 
 async function createPageWithoutRecording(): Promise<Page> {
-  const context = await browser.newContext();
+  const context = await browser.newContext({ locale: "en-US" });
   openContexts.add(context);
   return context.newPage();
 }

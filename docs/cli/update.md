@@ -130,6 +130,12 @@ keeps the retained runtime for later cleanup, and preserves the command's exit
 status. This protection belongs to the installed updater: installing a release
 with the fix enables it for the next update that release performs.
 
+Updating from inside the installation keeps captured paths anchored to the
+invoking directory while the package is replaced. The updater keeps a valid
+working directory for background workers and restores the original directory
+when it still exists. This protection also belongs to the installed updater;
+a new candidate cannot change the working directory of an older driver.
+
 When a Dashboard update fails while the Gateway handles the request, the Gateway
 logs a warning with the public reason and a safe error summary. Successful and
 intentional no-op update logs are unchanged. This only affects Gateway logging,
@@ -332,6 +338,12 @@ require storing a task password.
 
 This target-CLI protection does not cover every Doctor or plugin child or the
 in-process service preparation before package mutation.
+
+After Scheduled Task autostart has been suspended, cancelling before installation
+mutation restores it before exit, while retaining checks on the original update
+owner and task identity. This protection belongs to the installed updater;
+installing a release with the fix enables it for the next update that release
+performs.
 
 ## Options
 

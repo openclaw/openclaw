@@ -351,21 +351,21 @@ export function resolvePoolAcquire(params: AttemptParamsLike): {
     resolvedApiKey: readNonEmptyString(params.resolvedApiKey),
     authProfileId: readNonEmptyString(params.authProfileId),
   });
+  const authContext = {
+    agentId: readNonEmptyString(params.agentId),
+    agentDir: readNonEmptyString(params.agentDir),
+    workspaceDir: readNonEmptyString(params.workspaceDir),
+    copilotHome: readNonEmptyString(params.copilotHome),
+  };
   const auth =
     provider.mode === "byok"
       ? createCopilotByokAuth({
-          agentId: readNonEmptyString(params.agentId),
-          agentDir: readNonEmptyString(params.agentDir),
-          workspaceDir: readNonEmptyString(params.workspaceDir),
-          copilotHome: readNonEmptyString(params.copilotHome),
+          ...authContext,
           authProfileId: provider.authProfileId,
           authProfileVersion: provider.authProfileVersion,
         })
       : resolveCopilotAuth({
-          agentId: readNonEmptyString(params.agentId),
-          agentDir: readNonEmptyString(params.agentDir),
-          workspaceDir: readNonEmptyString(params.workspaceDir),
-          copilotHome: readNonEmptyString(params.copilotHome),
+          ...authContext,
           auth: params.auth,
           resolvedApiKey: readNonEmptyString(params.resolvedApiKey),
           authProfileId: readNonEmptyString(params.authProfileId),

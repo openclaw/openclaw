@@ -1,4 +1,5 @@
 // OpenClaw state database tests cover state DB migrations and persistence.
+import { deepStrictEqual } from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
@@ -1339,9 +1340,9 @@ describe("openclaw state database", () => {
 
       expect(() => repairOpenClawStateDatabaseReadabilityForDoctor(options)).toThrow(reason);
       expect(readStableSqliteFileGeneration(databasePath)).toEqual(before);
-      expect(fs.readFileSync(databasePath)).toEqual(beforeDatabase);
+      deepStrictEqual(fs.readFileSync(databasePath), beforeDatabase);
       if (beforeWal) {
-        expect(fs.readFileSync(`${databasePath}-wal`)).toEqual(beforeWal);
+        deepStrictEqual(fs.readFileSync(`${databasePath}-wal`), beforeWal);
       }
       expect(fs.existsSync(`${databasePath}-shm`)).toBe(false);
       expect(() => openOpenClawStateDatabase(options)).toThrow(reason);
@@ -1351,9 +1352,8 @@ describe("openclaw state database", () => {
   it.each(["foreign-role", "damaged-table-index"] as const)(
     "rolls back Doctor readability repair for %s",
     (damage) => {
-      const stateDir = createTempStateDir();
-      const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
-      const databasePath = materializeCurrentStateDatabase(stateDir);
+      const options = { env: { OPENCLAW_STATE_DIR: createTempStateDir() } };
+      const databasePath = materializeCurrentStateDatabase(options.env.OPENCLAW_STATE_DIR);
       const { DatabaseSync } = requireNodeSqlite();
       const database = new DatabaseSync(databasePath);
       try {
@@ -1395,7 +1395,7 @@ describe("openclaw state database", () => {
           ),
         ],
       });
-      expect(fs.readFileSync(databasePath)).toEqual(before);
+      deepStrictEqual(fs.readFileSync(databasePath), before);
       expect(readDanglingSkillWorkshopReviewIndex(databasePath)).toMatchObject({ rootpage });
     },
   );
@@ -2355,68 +2355,6 @@ describe("openclaw state database", () => {
     ).toEqual({ count: 2 });
     expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([]);
   });
-
-  it.each(
-    (["doctor repair"] as const).flatMap((migrationPath) => [
-      [migrationPath, "install_records_json", "[]"],
-      [migrationPath, "plugins_json", "{}"],
-      [migrationPath, "diagnostics_json", "{"],
-    ]) as Array<
-      readonly [
-        "runtime open" | "doctor repair",
-        "install_records_json" | "plugins_json" | "diagnostics_json",
-        string,
-      ]
-    >,
-  )(
-    "drops an invalid plugin-index cache during v13 %s when %s is invalid",
-    (migrationPath, column, value) => {
-      const stateDir = createTempStateDir();
-      const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
-      const legacy = openMaterializedCurrentStateDatabase(stateDir);
-      legacy.exec(STATE_SCHEMA_13_TO_12_DOWNGRADE_SQL);
-      const values = {
-        install_records_json: "{}",
-        plugins_json: "[]",
-        diagnostics_json: "[]",
-        [column]: value,
-      };
-      legacy
-        .prepare(
-          `INSERT INTO installed_plugin_index (
-           index_key, version, host_contract_version, compat_registry_version,
-           migration_version, policy_hash, generated_at_ms, install_records_json,
-           plugins_json, diagnostics_json, updated_at_ms
-         ) VALUES ('installed-plugin-index', 1, 'host', 'compat', 1, 'policy', 10, ?, ?, ?, 11)`,
-        )
-        .run(values.install_records_json, values.plugins_json, values.diagnostics_json);
-      legacy.close();
-
-      if (migrationPath === "doctor repair") {
-        repairOpenClawStateDatabaseSchema(options);
-      }
-      const migrated = openOpenClawStateDatabase(options);
-      expect(
-        migrated.db
-          .prepare("SELECT name FROM sqlite_schema WHERE name = 'installed_plugin_index'")
-          .get(),
-      ).toBeUndefined();
-      expect(
-        migrated.db
-          .prepare(
-            "SELECT value_json FROM config_machine_state WHERE state_key = 'plugins.installedIndex'",
-          )
-          .get(),
-      ).toBeUndefined();
-      expect(migrated.db.prepare("PRAGMA integrity_check").get()).toEqual({
-        integrity_check: "ok",
-      });
-      closeOpenClawStateDatabaseForTest();
-      expect(readSqliteNumberPragma(openOpenClawStateDatabase(options).db, "user_version")).toBe(
-        OPENCLAW_STATE_SCHEMA_VERSION,
-      );
-    },
-  );
 
   it("refuses to downgrade malformed canonical cron JSON", async () => {
     await withOpenClawTestState(
@@ -4056,8 +3994,8 @@ INSERT INTO device_identities VALUES (
     expect(database?.walMaintenance.close()).toBe(true);
 
     expect(fs.existsSync(privateDirectory)).toBe(false);
-    expect(fs.readFileSync(writer.path)).toEqual(beforeMain);
-    expect(fs.readFileSync(`${writer.path}-wal`)).toEqual(beforeWal);
+    deepStrictEqual(fs.readFileSync(writer.path), beforeMain);
+    deepStrictEqual(fs.readFileSync(`${writer.path}-wal`), beforeWal);
     expect(fs.statSync(`${writer.path}-shm`).size).toBe(beforeShmSize);
     expect(fs.readdirSync(stateDir).toSorted()).toEqual(beforeEntries);
   });

@@ -67,6 +67,9 @@ export async function runNativeResourceLifecycle(
   const { captureRetainedNativeWorkerSource, createRetainedNativeWorker } =
     await import("./worker-native-lifecycle.js");
   const { SpawnBrokerHost } = await import("../process/spawn-broker/host.js");
+  const { drainGlobalSingletonLifecycleState } = await import("../shared/global-singleton.js");
+  const shutdown = !supervisorLoss && !edge;
+  const brokerCloses = shutdown ? mock.method(SpawnBrokerHost.prototype, "close") : undefined;
   const databasePath = path.join(directory, "native-child.sqlite");
   const createControl = () => {
     const channel = new MessageChannel();
@@ -227,10 +230,12 @@ export async function runNativeResourceLifecycle(
   const replies: unknown[] = [];
   const errors: Error[] = [];
   const joined = createDeferredCore();
+  const supervisorJoined = createDeferredCore();
   let exited = false;
   let supervisorExited = false;
   supervisor.once("exit", () => {
     supervisorExited = true;
+    supervisorJoined.resolve();
   });
   target.on("message", (reply) => replies.push(reply));
   target.on("error", (error) => errors.push(error));
@@ -466,6 +471,20 @@ export async function runNativeResourceLifecycle(
       assert.equal(failure.status, "rejected");
       if (failure.status === "rejected") {
         assert.match(String(failure.error), /synthetic first resource close failure/);
+        if (shutdown) {
+          source.retain(target, async () => await first.result);
+          await assert.rejects(drainGlobalSingletonLifecycleState(), (error: unknown) => {
+            const failures = [error];
+            for (const member of failures) {
+              if (member instanceof AggregateError) {
+                failures.push(...member.errors);
+              }
+            }
+            return failures.includes(failure.error);
+          });
+          assert.equal(supervisorExited, false);
+          assert.equal(captureRetainedNativeWorkerSource({ runtimeGeneration: undefined }), source);
+        }
       }
       assert.equal(facts.attempts, 1);
       assertHeld();
@@ -491,6 +510,17 @@ export async function runNativeResourceLifecycle(
     assert.equal(facts.childClosed, true);
     assert.equal(exited, true);
     assert.equal(target.threadId, -1);
+    if (shutdown) {
+      await supervisorJoined.promise;
+      await nextTurn();
+      assert.ok(brokerCloses);
+      for (const call of brokerCloses.mock.calls) {
+        assert.ok(call.result instanceof Promise);
+        await call.result;
+      }
+      assert.throws(() => process.kill(facts.brokerPid, 0), { code: "ESRCH" });
+      assert.notEqual(captureRetainedNativeWorkerSource({ runtimeGeneration: undefined }), source);
+    }
     if (supervisorLoss) {
       assert.notEqual(
         captureRetainedNativeWorkerSource({ runtimeGeneration: undefined }),
@@ -536,9 +566,11 @@ export async function runNativeResourceLifecycle(
         sameOwnerRetried: true,
         childClosedBeforeStopped: true,
         sqliteReusable: true,
+        ...(shutdown ? { shutdownRefused: true, lateNativeJoin: true } : {}),
       }),
     );
   } finally {
+    brokerCloses?.mock.restore();
     ownerDeliveries?.mock.restore();
     if (!control.disposed) {
       channel.port1.postMessage({ type: "fail-first-close" });

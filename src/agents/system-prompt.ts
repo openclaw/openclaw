@@ -951,15 +951,13 @@ export function buildAgentSystemPrompt(params: {
       ...skillsSection,
       ...skillWorkshopSection,
       ...memorySection,
-      params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal
-        ? "## Model Aliases"
-        : "",
-      params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal
-        ? "Model override: aliases are shortcuts for unqualified model requests. Use explicit provider/model references verbatim; do not substitute an alias or another provider."
-        : "",
-      params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal
-        ? params.modelAliasLines.join("\n")
-        : "",
+      ...(params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal
+        ? [
+            "## Model Aliases",
+            "Model override: aliases are shortcuts for unqualified model requests. Use explicit provider/model references verbatim; do not substitute an alias or another provider.",
+            params.modelAliasLines.join("\n"),
+          ]
+        : []),
       ...directorySection,
       workspaceOnlyGuidance,
       ...workspaceNotes,

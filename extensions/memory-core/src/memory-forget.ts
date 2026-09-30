@@ -1,4 +1,5 @@
 import path from "node:path";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   resolveAgentWorkspaceDir,
   resolveStateDir,
@@ -11,19 +12,13 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import {
   isFileMissingError,
-  loadSqliteVecExtension,
-  readMemoryEntryOriginsInDatabase,
   type MemoryEntryOrigin,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { listMemoryArtifactProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-paths";
 import {
   borrowOpenClawAgentDatabase,
-  executeSqliteQuerySync,
-  getNodeSqliteKysely,
   resolveOpenClawAgentSqlitePath,
-  runSqliteImmediateTransactionSync,
-  tableExists,
   withOpenClawAgentDatabaseWrite,
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import { readMemoryPreimages } from "./dreaming-consolidation-artifacts.js";
@@ -39,19 +34,14 @@ import {
   writeMemoryCoreWorkspaceEntries,
 } from "./dreaming-state.js";
 import {
-  deleteMemoryEntryOriginsInDatabase,
-  listMemoryEntryOrigins,
-  recordMemorySessionTombstonesInDatabase,
-} from "./memory-entry-origins.js";
+  selectedMemoryLineageIdentity,
+  type MemoryForgetLineageResult,
+} from "./memory-entry-origins-task.js";
+import { listMemoryEntryOrigins } from "./memory-entry-origins.js";
 import { collectTranscriptWrites } from "./memory-forget-curated-writes.js";
-import {
-  deleteMemoryIndexSources,
-  planMemoryIndex,
-  referencesSession,
-  type ForgetDatabase,
-} from "./memory-forget-index-sources.js";
+import { planMemoryIndex, referencesSession } from "./memory-forget-index-sources.js";
 import { summarizeParticipantMatches, type MemoryForgetReport } from "./memory-forget-report.js";
-import { ensureMemorySessionTombstones } from "./memory-session-tombstones.js";
+import { withMemoryForgetWorker } from "./memory-forget-worker.js";
 import {
   listWorkspaceDirectory,
   listWorkspaceMemoryFiles,
@@ -156,19 +146,6 @@ type MemoryForgetContext = {
 
 type MemoryForgetAttempt = { kind: "complete"; report: MemoryForgetReport } | { kind: "reprepare" };
 
-function selectedLineageIdentity(
-  origins: readonly MemoryEntryOrigin[],
-  sessionIds: ReadonlySet<string>,
-  entryKeys: ReadonlySet<string>,
-): string {
-  // Selected sessions and every contributor to their entries determine the purge.
-  return JSON.stringify(
-    origins
-      .filter((origin) => sessionIds.has(origin.sessionId) || entryKeys.has(origin.entryKey))
-      .map(({ entryKey, sessionId }) => [entryKey, sessionId]),
-  );
-}
-
 export async function forgetMemoryEntries(params: MemoryForgetParams): Promise<MemoryForgetReport> {
   if (!params.sessionIds?.length && !params.hookSources?.length && !params.participants?.length) {
     throw new Error("memory forget requires a session, hook source, or participant selector");
@@ -216,14 +193,16 @@ async function forgetWorkspaceMemory(
 ): Promise<MemoryForgetAttempt> {
   const targets = context.targets;
   const sessionIds = new Set(targets.map((target) => target.sessionId));
-  const allOrigins = context.origins ?? listMemoryEntryOrigins({ agentId: params.agentId });
+  const allOrigins =
+    context.origins ??
+    (await listMemoryEntryOrigins({ agentId: params.agentId }, context.databaseOptions));
   for (const origin of allOrigins) {
     if (sessionIds.has(origin.sessionId)) {
       context.selectedEntryKeys.add(origin.entryKey);
     }
   }
   const entryKeys = new Set(context.selectedEntryKeys);
-  const lineageIdentity = selectedLineageIdentity(allOrigins, sessionIds, entryKeys);
+  const lineageIdentity = selectedMemoryLineageIdentity(allOrigins, sessionIds, entryKeys);
   const allOriginKeys = new Set([...entryKeys, ...allOrigins.map((origin) => origin.entryKey)]);
   const mixedLineageEntryKeys = new Set(
     allOrigins
@@ -485,87 +464,55 @@ async function forgetWorkspaceMemory(
     borrowOpenClawAgentDatabase(context.databaseOptions),
   );
   const { db } = context.database;
-  const lineageIsCurrent = () => {
-    const origins = tableExists(db, "memory_entry_origins")
-      ? readMemoryEntryOriginsInDatabase(db, { agentId: params.agentId })
-      : [];
-    if (selectedLineageIdentity(origins, sessionIds, entryKeys) === lineageIdentity) {
+  const acceptLineage = (lineage: MemoryForgetLineageResult): boolean => {
+    if (lineage.current) {
       return true;
     }
     // Keep observed selected keys even if another workspace later removes their rows.
-    context.origins = origins;
-    for (const origin of origins) {
+    context.origins = lineage.origins;
+    for (const origin of lineage.origins) {
       if (sessionIds.has(origin.sessionId)) {
         context.selectedEntryKeys.add(origin.entryKey);
       }
     }
     return false;
   };
-  const kysely = getNodeSqliteKysely<ForgetDatabase>(db);
   const chunkIds = indexPlan.chunks.map((chunk) => chunk.id);
-  if (chunkIds.length > 0 && indexPlan.hasVectorTable) {
-    const loaded = await loadSqliteVecExtension({ db });
-    if (!loaded.ok) {
-      throw new Error(`memory forget cannot purge vector index: ${loaded.error ?? "load failed"}`);
-    }
-  }
-
-  const purged = await withOpenClawAgentDatabaseWrite(
+  const extensionPath =
+    chunkIds.length > 0 && indexPlan.hasVectorTable
+      ? expectDefined(indexPlan.extensionPath, "memory forget vector preparation")
+      : undefined;
+  const lineage = {
+    agentId: params.agentId,
+    sessionIds: [...sessionIds],
+    entryKeys: [...entryKeys],
+    identity: lineageIdentity,
+  };
+  const purged = await withMemoryForgetWorker(
     context.databaseOptions,
-    () => {
+    db,
+    { kind: "forget", prepareTombstones: !context.tombstoned, extensionPath },
+    async (scope) => {
       if (!context.tombstoned) {
-        // Prepare additive schema before the guarded transaction: its cache must
-        // not survive a rollback that also removes the newly created table.
-        ensureMemorySessionTombstones(db);
-        const marked = runSqliteImmediateTransactionSync(db, () => {
-          if (!lineageIsCurrent()) {
-            return false;
-          }
-          const recorded = recordMemorySessionTombstonesInDatabase(db, {
-            agentId: params.agentId,
-            sessionIds: [...sessionIds],
-          });
-          if (recorded === 0) {
-            executeSqliteQuerySync(
-              db,
-              kysely
-                .updateTable("memory_index_state")
-                .set((expression) => ({ revision: expression("revision", "+", 1) }))
-                .where("id", "=", 1),
-            );
-          }
-          return true;
-        });
-        if (!marked) {
+        const marked = await scope.execute({ type: "forget.mark", input: lineage });
+        if (!acceptLineage(marked)) {
           return false;
         }
         context.tombstoned = true;
       }
       // The marker has committed. A purge failure must leave it durable for retry.
-      return runSqliteImmediateTransactionSync(db, () => {
-        if (!lineageIsCurrent()) {
-          return false;
-        }
-        if (chunkIds.length > 0) {
-          if (indexPlan.hasVectorTable) {
-            executeSqliteQuerySync(
-              db,
-              kysely.deleteFrom("memory_index_chunks_vec").where("id", "in", chunkIds),
-            );
-          }
-          executeSqliteQuerySync(
-            db,
-            kysely.deleteFrom("memory_index_chunks").where("id", "in", chunkIds),
-          );
-        }
-        deleteMemoryIndexSources(db, indexPlan.sources);
-        if (tableExists(db, "memory_embedding_cache")) {
-          executeSqliteQuerySync(db, kysely.deleteFrom("memory_embedding_cache"));
-        }
-        return true;
-      });
+      return acceptLineage(
+        await scope.execute({
+          type: "forget.purge",
+          input: {
+            ...lineage,
+            chunkIds,
+            sources: indexPlan.sources,
+            hasVectorTable: indexPlan.hasVectorTable,
+          },
+        }),
+      );
     },
-    db,
   );
   if (!purged) {
     return { kind: "reprepare" };
@@ -615,14 +562,15 @@ async function forgetWorkspaceMemory(
       content: rewrite.remove ? null : rewrite.content,
     });
   }
-  await withOpenClawAgentDatabaseWrite(
+  await withMemoryForgetWorker(
     context.databaseOptions,
-    () =>
-      deleteMemoryEntryOriginsInDatabase(db, {
-        agentId: params.agentId,
-        entryKeys: [...entryKeys],
-      }),
     db,
+    { kind: "forget", prepareTombstones: false },
+    (scope) =>
+      scope.execute({
+        type: "delete",
+        input: { agentId: params.agentId, entryKeys: [...entryKeys] },
+      }),
   );
   return { kind: "complete", report };
 }

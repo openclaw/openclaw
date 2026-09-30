@@ -1,5 +1,6 @@
 import { execFile, spawnSync } from "node:child_process";
 import fs from "node:fs";
+import { tmpdir } from "node:os";
 import { performance } from "node:perf_hooks";
 import { formatByteSize } from "@openclaw/normalization-core";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
@@ -12,6 +13,7 @@ import {
   SQLITE_READONLY_CHILD_ARG,
 } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import { tryProcessCwd } from "./safe-cwd.js";
 import { retainSnapshotWork } from "./sqlite-readonly-location-cleanup.js";
 import {
   readOnlyWorkerScope,
@@ -218,7 +220,7 @@ export function captureSqliteReadOnlyWorkerLaunch(
   const broker = source === "canonical" ? getSpawnBroker() : undefined;
   return {
     env: { ...resolveNodeCompileCacheEnv(env) },
-    cwd: process.cwd(),
+    cwd: tryProcessCwd() ?? tmpdir(),
     transport: broker ? { kind: "broker", owner: broker } : { kind: "native" },
   };
 }

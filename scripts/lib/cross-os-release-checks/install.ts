@@ -114,7 +114,7 @@ export async function prepareCandidate(params: {
   };
 }
 
-export function resolvePackageCandidatePackCommand(sourceDir: string, packDir: string) {
+function resolvePackageCandidatePackCommand(sourceDir: string, packDir: string) {
   const packageHelper = join(sourceDir, "scripts", "package-openclaw-for-docker.mjs");
   if (existsSync(packageHelper)) {
     return {
@@ -367,7 +367,7 @@ export function normalizeWindowsInstalledCliPath(cliPath: string) {
   return normalizeWindowsCommandShimPath(cliPath);
 }
 
-export function normalizeWindowsCommandShimPath(commandPath: string) {
+function normalizeWindowsCommandShimPath(commandPath: string) {
   if (typeof commandPath !== "string") {
     return commandPath;
   }

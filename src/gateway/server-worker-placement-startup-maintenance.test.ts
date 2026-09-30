@@ -122,14 +122,14 @@ function createMaintenanceRuntime(params: {
             (sessionKey === undefined || placement.sessionKey === sessionKey),
         ),
       retireSessionPlacement: vi.fn(),
-      pruneOrphanedWorkspaceReconciliations: () => {
+      pruneOrphanedWorkspaceReconciliations: async () => {
         params.onRecovery?.();
         if (params.recoveryError) {
           throw params.recoveryError;
         }
         return [];
       },
-      listWorkspaceReconciliationOwners: () => [],
+      listWorkspaceReconciliationOwners: async () => [],
       listPendingWorkspaceResults: () => [],
     } as never,
     environments: environments as never,

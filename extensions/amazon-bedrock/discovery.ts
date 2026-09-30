@@ -23,6 +23,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
+  normalizeSortedUniqueTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   loadBedrockControlPlaneSdk,
@@ -53,13 +54,7 @@ const DEFAULT_MAX_TOKENS = 4096;
  */
 const KNOWN_CONTEXT_WINDOWS: Record<string, number> = {
   // Anthropic Claude
-  "anthropic.claude-fable-5": 1_000_000,
-  "anthropic.claude-mythos-5": 1_000_000,
-  // AWS publishes Sonnet 5 on both bedrock-runtime (Invoke/Converse) and Mantle.
-  "anthropic.claude-sonnet-5": 1_000_000,
-  "anthropic.claude-opus-5": 1_000_000,
   "anthropic.claude-3-7-sonnet-20250219-v1:0": 200_000,
-  "anthropic.claude-opus-4-8": 1_000_000,
   "anthropic.claude-opus-4-7": 1_000_000,
   "anthropic.claude-opus-4-6-v1": 1_000_000,
   "anthropic.claude-sonnet-4-6": 1_000_000,
@@ -179,18 +174,6 @@ type BedrockDiscoveryCacheEntry = {
 };
 
 const discoveryCache = new Map<string, BedrockDiscoveryCacheEntry>();
-
-function normalizeProviderFilter(filter?: string[]): string[] {
-  if (!filter || filter.length === 0) {
-    return [];
-  }
-  const normalized = new Set(
-    filter
-      .map((entry) => normalizeOptionalLowercaseString(entry))
-      .filter((entry): entry is string => Boolean(entry)),
-  );
-  return Array.from(normalized).toSorted();
-}
 
 function includesTextModalities(modalities?: Array<string>): boolean {
   return (modalities ?? []).some((entry) => normalizeOptionalLowercaseString(entry) === "text");
@@ -411,7 +394,9 @@ export async function discoverBedrockModels(params: {
     0,
     Math.floor(params.config?.refreshInterval ?? DEFAULT_REFRESH_INTERVAL_SECONDS),
   );
-  const providerFilter = normalizeProviderFilter(params.config?.providerFilter);
+  const providerFilter = normalizeSortedUniqueTrimmedStringList(
+    params.config?.providerFilter?.map(normalizeOptionalLowercaseString),
+  );
   const defaultContextWindow = resolveDefaultContextWindow(params.config);
   const defaultMaxTokens = resolveDefaultMaxTokens(params.config);
   const cacheKey = JSON.stringify({

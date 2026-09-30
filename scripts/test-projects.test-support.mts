@@ -4017,7 +4017,8 @@ function resolveToolingTestTargets(
   const semanticTargets = resolveSemanticToolingTargets(implementationPath).filter(boundedOwner);
   const facts = getChangedPathFacts(changedPath);
   const toolingTestSource =
-    changedPath.startsWith("test/scripts/") &&
+    (changedPath.startsWith("test/scripts/") ||
+      (!options.boundedOwners && /^test\/vitest\/vitest\.[^/]+-paths\.mjs$/u.test(changedPath))) &&
     TOOLING_IMPORTABLE_FILE_EXTENSIONS.some((ext) => implementationPath.endsWith(ext));
   const hasToolingOwner =
     exactTargets.length > 0 ||

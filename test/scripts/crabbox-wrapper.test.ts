@@ -2498,6 +2498,7 @@ describe("scripts/crabbox-wrapper", () => {
       ...testHomeEnv(home),
       XDG_STATE_HOME: stateRoot,
       CODEX_THREAD_ID: "private-fixture-session",
+      OPENCLAW_FAKE_GIT_HEAD_SHA: "d".repeat(40),
       OPENCLAW_TESTBOX_LEASE_STATE_DIR: stateDir,
       OPENCLAW_FAKE_CRABBOX_TIMING_LEASE_ID: id,
     };
@@ -4267,6 +4268,9 @@ process.on("exit", () => {
       const nodeExecPath = resolveTestNodeExecPath();
       const env = {
         ...testHomeEnv(home),
+        TMPDIR: root,
+        TMP: root,
+        TEMP: root,
         PATH: [fakeBin, path.dirname(nodeExecPath), process.env.PATH ?? ""].join(path.delimiter),
         GIT_CONFIG_GLOBAL: "/dev/null",
         GIT_CONFIG_NOSYSTEM: "1",

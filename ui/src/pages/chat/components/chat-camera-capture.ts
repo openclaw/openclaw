@@ -276,7 +276,7 @@ export class OpenClawChatCameraCapture extends OpenClawLitElement {
   };
 
   private useNativeCamera = () => {
-    if (!this.isCurrent(this.generation) || this.stage !== "error" || !this.nativeFallback) {
+    if (!this.isCurrent(this.generation) || this.stage !== "error") {
       return;
     }
     const destination = this.nativeCaptureDestination;
@@ -378,6 +378,13 @@ export class OpenClawChatCameraCapture extends OpenClawLitElement {
             <button type="button" class="upload" @click=${this.upload}>
               ${icons.image}${t("chat.camera.upload")}
             </button>
+            ${
+              failed && !nativeFallback && Boolean(this.nativeCaptureDestination)
+                ? html`<button type="button" class="upload" @click=${this.useNativeCamera}>
+                    ${icons.camera}${t("chat.camera.useNativeCamera")}
+                  </button>`
+                : nothing
+            }
             <div class="actions">
               <button
                 type="button"

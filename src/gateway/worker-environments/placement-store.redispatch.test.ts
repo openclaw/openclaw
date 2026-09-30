@@ -144,7 +144,7 @@ describe("failed worker placement redispatch", () => {
         }
       } else if (scenario === "journal") {
         const basePack = Buffer.from("retained workspace rollback");
-        store.beginWorkspaceReconciliation(
+        await store.beginWorkspaceReconciliation(
           {
             sessionId: SESSION.sessionId,
             environmentId: active.environmentId,

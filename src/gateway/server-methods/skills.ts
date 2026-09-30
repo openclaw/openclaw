@@ -1,4 +1,4 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import {
   ErrorCodes,
   errorShape,
@@ -102,12 +102,6 @@ function projectGatewaySkillProposalReadResult(proposal: SkillProposalReadResult
         }
       : {}),
   };
-}
-
-function collectClawHubTrustWarnings(results: Array<{ warning?: string }>): string[] {
-  return results
-    .map((result) => normalizeOptionalString(result.warning))
-    .filter((warning): warning is string => Boolean(warning));
 }
 
 function buildRevisionAgentInstruction(proposal: SkillProposalReadResult) {
@@ -231,8 +225,8 @@ export const skillsHandlers: GatewayRequestHandlers = {
     }
     try {
       const results = await searchSkillsFromClawHub({
-        query: (params as { query?: string }).query,
-        limit: (params as { limit?: number }).limit,
+        query: params.query,
+        limit: params.limit,
       });
       registerClawHubCatalogIconUrls(results.map((result) => result.icon ?? undefined));
       respond(true, { results }, undefined);
@@ -247,7 +241,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
     try {
       // Same reference grammar as skills.install, so a client cannot review one publisher's
       // card and then install another's.
-      const requested = parseRequestedClawHubSkillRef((params as { slug: string }).slug);
+      const requested = parseRequestedClawHubSkillRef(params.slug);
       if (requested.requestedReference) {
         // ClawHub has no source-qualified read endpoint, so reading this by bare slug would
         // show a same-slug registry skill while install resolves the external artifact.
@@ -532,7 +526,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
         config: resolved.cfg,
       });
       const errors = results.filter((result) => !result.ok);
-      const warnings = collectClawHubTrustWarnings(results);
+      const warnings = normalizeTrimmedStringList(results.map((result) => result.warning));
       respond(
         errors.length === 0,
         {

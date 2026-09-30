@@ -137,9 +137,6 @@ async function resolveGuildIdForGuildAdminAction(params: {
 }
 
 function readChannelScopedPermissionTargetId(action: string, values: Record<string, unknown>) {
-  if (action === "eventCreate") {
-    return readStringParam(values, "channelId");
-  }
   if (action === "categoryEdit" || action === "categoryDelete") {
     return readStringParam(values, "categoryId");
   }

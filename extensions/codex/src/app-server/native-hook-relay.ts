@@ -14,6 +14,7 @@ import {
   addTimerTimeoutGraceMs,
   finiteSecondsToTimerSafeMilliseconds,
 } from "openclaw/plugin-sdk/number-runtime";
+import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { PluginHookToolContext } from "openclaw/plugin-sdk/types";
 import type { CodexAppServerClient } from "./client.js";
 import { fingerprintCodexPolicy } from "./config-policy-json.js";
@@ -659,8 +660,5 @@ function buildCodexNativeToolMatcher(toolNames: readonly string[] | undefined): 
   if (!hasCustomToolName && sortedNames.every((toolName) => /^[A-Za-z0-9_]+$/.test(toolName))) {
     return sortedNames.join("|");
   }
-  const escapedNames = sortedNames.map((toolName) =>
-    toolName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
-  );
-  return `(?i)^(?:${escapedNames.join("|")})$`;
+  return `(?i)^(?:${sortedNames.map(escapeRegExp).join("|")})$`;
 }

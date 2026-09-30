@@ -1,4 +1,3 @@
-// Session goal state tracks objective progress and token budgets in the session store.
 import {
   recordSessionGoalChanged,
   type SessionStateActorType,

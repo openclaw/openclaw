@@ -261,9 +261,6 @@ export function buildInboundHistoryFromEntries(params: {
   if (params.limit <= 0) {
     return undefined;
   }
-  if (params.entries.length === 0) {
-    return [];
-  }
   return params.entries.slice(-params.limit).map((entry) => {
     const historyEntry: HistoryEntry = {
       sender: entry.sender,
@@ -273,7 +270,7 @@ export function buildInboundHistoryFromEntries(params: {
     if (entry.messageId) {
       historyEntry.messageId = entry.messageId;
     }
-    if (entry.media && entry.media.length > 0) {
+    if (entry.media?.length) {
       historyEntry.media = entry.media;
     }
     return historyEntry;

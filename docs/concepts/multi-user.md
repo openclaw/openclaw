@@ -161,6 +161,35 @@ People presence is shared with operators who have read access (`operator.read`, 
 
 The Gateway also filters watched-session references for each recipient using `sessions.list` visibility rules, across connect snapshots, presence RPC responses, and events. Hidden or missing references are omitted without counts or placeholders. Opening someone's card never borrows that person's session access.
 
+## Reactions
+
+In the Control UI, you can react to any saved prompt or assistant reply, including
+your own prompts and other people's prompts. Reacting requires an identified
+author with permission to send to the session or suggest in it. Operators whose
+session role permits viewing only cannot react. Everyone who can read the
+session sees its reaction chips, counts, and reactor names, with live updates
+while the session is open.
+
+The agent receives each committed addition and removal as a separate `System:`
+line on its next turn, using the same event mechanism as channel reactions.
+Adding, removing, and adding the same reaction queues three notices in order;
+repeating an action that changes nothing queues no notice. Reactions never wake
+the agent or create notifications. They are stored separately from the transcript,
+so reacting does not rewrite messages. Permanently removing a message also
+removes its reactions and frees their space in the session's reaction limit.
+Resetting a session starts a new transcript instance without the previous
+instance's reactions.
+
+Reactions on channel-origin prompts are also mirrored to that channel as the
+bot's reaction when the channel supports them. A skipped or failed channel
+mirror does not remove the Control UI reaction. On channels where the bot holds
+one reaction per message, such as Telegram bots and WhatsApp, the channel shows
+the most recently mirrored emoji, and removing it clears the channel reaction
+even when other emoji remain in the Control UI. Reactions on assistant replies
+are not mirrored because the transcript does not retain their delivered channel
+message IDs. See [Chat reactions](/web/control-ui/chat#reactions) for the palette
+and toggle controls.
+
 ## Mentioning people
 
 In the transcript, selected mentions show a small inline avatar beside the original name. Missing photos use initials. The badge omits the visible `@`, while copied text keeps it.

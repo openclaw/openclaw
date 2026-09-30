@@ -40,26 +40,15 @@ type SetAtPathOptions = {
   schema?: JsonSchemaRecord;
 };
 
-function isIndexSegment(raw: string): boolean {
-  return parseConfigPathArrayIndex(raw) !== undefined;
-}
-
 export function parseConfigSetValue(raw: string, strictJson: boolean): unknown {
   const trimmed = raw.trim();
-  if (strictJson) {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(trimmed);
-    } catch (err) {
-      throw new Error(formatStrictJsonParseFailure({ value: raw, cause: err }), { cause: err });
-    }
-    rejectConfigNonFiniteNumbers(parsed);
-    return parsed;
-  }
   let parsed: unknown;
   try {
-    parsed = JSON5.parse(trimmed);
-  } catch {
+    parsed = strictJson ? JSON.parse(trimmed) : JSON5.parse(trimmed);
+  } catch (err) {
+    if (strictJson) {
+      throw new Error(formatStrictJsonParseFailure({ value: raw, cause: err }), { cause: err });
+    }
     return raw;
   }
   rejectConfigNonFiniteNumbers(parsed);
@@ -68,7 +57,7 @@ export function parseConfigSetValue(raw: string, strictJson: boolean): unknown {
 
 export function validatePathSegments(path: PathSegment[]): void {
   for (const segment of path) {
-    if (!isIndexSegment(segment) && isBlockedObjectKey(segment)) {
+    if (isBlockedObjectKey(segment)) {
       throw new Error(`Invalid path segment: ${segment}`);
     }
   }
@@ -110,14 +99,8 @@ export function formatConfigUnsetMissingPathMessage(params: {
   return `Config path not found: ${params.path}. Nothing was changed. Run ${formatCliCommand("openclaw config get <path>")} first if you are unsure of the path.`;
 }
 
-function schemaTypes(schema: JsonSchemaRecord): Set<string> {
-  if (typeof schema.type === "string") {
-    return new Set([schema.type]);
-  }
-  if (Array.isArray(schema.type)) {
-    return new Set(schema.type.filter((entry): entry is string => typeof entry === "string"));
-  }
-  return new Set();
+function schemaHasType(schema: JsonSchemaRecord, type: string): boolean {
+  return schema.type === type || (Array.isArray(schema.type) && schema.type.includes(type));
 }
 
 function schemaAlternatives(
@@ -145,14 +128,13 @@ function schemaAlternatives(
 
 function schemaLooksArray(schema: JsonSchemaRecord): boolean {
   return (
-    schemaTypes(schema).has("array") || isPlainRecord(schema.items) || Array.isArray(schema.items)
+    schemaHasType(schema, "array") || isPlainRecord(schema.items) || Array.isArray(schema.items)
   );
 }
 
 function schemaLooksObject(schema: JsonSchemaRecord): boolean {
-  const types = schemaTypes(schema);
   return (
-    types.has("object") ||
+    schemaHasType(schema, "object") ||
     isPlainRecord(schema.properties) ||
     schema.additionalProperties === true ||
     isPlainRecord(schema.additionalProperties)
@@ -174,9 +156,7 @@ function propertySchema(schema: JsonSchemaRecord, segment: PathSegment): JsonSch
       }
       continue;
     }
-    const properties = isPlainRecord(alternative.properties)
-      ? (alternative.properties as Record<string, unknown>)
-      : undefined;
+    const properties = isPlainRecord(alternative.properties) ? alternative.properties : undefined;
     const explicit = properties?.[segment];
     if (isPlainRecord(explicit)) {
       schemas.push(explicit);
@@ -223,13 +203,7 @@ function schemaPrefersArrayAtPath(
   }
   const hasArray = candidates.some((candidate) => schemaLooksArray(candidate));
   const hasObject = candidates.some((candidate) => schemaLooksObject(candidate));
-  if (hasArray && !hasObject) {
-    return true;
-  }
-  if (hasObject && !hasArray) {
-    return false;
-  }
-  return undefined;
+  return hasArray === hasObject ? undefined : hasArray;
 }
 
 function shouldCreateArrayForMissingPathSegment(params: {
@@ -238,7 +212,11 @@ function shouldCreateArrayForMissingPathSegment(params: {
   next?: PathSegment;
   options?: SetAtPathOptions;
 }): boolean {
-  if (!params.next || params.options?.numericObjectKeys || !isIndexSegment(params.next)) {
+  if (
+    !params.next ||
+    params.options?.numericObjectKeys ||
+    parseConfigPathArrayIndex(params.next) === undefined
+  ) {
     return false;
   }
   const nextToken = params.options?.pathTokens?.[params.segmentIndex + 1];
@@ -490,31 +468,30 @@ export function assertNonDestructiveReplacement(params: {
   if (!existing.found) {
     return;
   }
-  const pathLabel = toDotPath(params.path);
+  let removed: string[];
+  let mergeHint: string;
   if (isProtectedMapReplacementPath(params.path) && isPlainRecord(existing.value)) {
     if (!isPlainRecord(params.value)) {
       return;
     }
     const nextKeys = new Set(Object.keys(params.value));
-    const removed = Object.keys(existing.value).filter((key) => !nextKeys.has(key));
-    if (removed.length > 0) {
-      throw new Error(
-        `Refusing to replace ${pathLabel}; it would remove existing entries: ${formatRemovedEntries(removed)}. Use --merge to merge object values or --replace to replace intentionally.`,
-      );
-    }
-  }
-  if (isProviderModelListPath(params.path)) {
+    removed = Object.keys(existing.value).filter((key) => !nextKeys.has(key));
+    mergeHint = "object values";
+  } else if (isProviderModelListPath(params.path)) {
     const existingIds = modelArrayIds(existing.value);
     const nextIds = modelArrayIds(params.value);
     if (!existingIds || !nextIds) {
       return;
     }
-    const removed = [...existingIds].filter((id) => !nextIds.has(id));
-    if (removed.length > 0) {
-      throw new Error(
-        `Refusing to replace ${pathLabel}; it would remove existing entries: ${formatRemovedEntries(removed)}. Use --merge to merge by id or --replace to replace intentionally.`,
-      );
-    }
+    removed = [...existingIds].filter((id) => !nextIds.has(id));
+    mergeHint = "by id";
+  } else {
+    return;
+  }
+  if (removed.length > 0) {
+    throw new Error(
+      `Refusing to replace ${toDotPath(params.path)}; it would remove existing entries: ${formatRemovedEntries(removed)}. Use --merge to merge ${mergeHint} or --replace to replace intentionally.`,
+    );
   }
 }
 

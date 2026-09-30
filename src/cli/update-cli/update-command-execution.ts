@@ -6,7 +6,6 @@ import type { UpdateStateSchemaVersion } from "../../infra/update-candidate-stat
 import type { UpdateDoctorConfigChange } from "../../infra/update-doctor-config.js";
 import { resolveUpdateFinalizationTimeoutMs } from "../../infra/update-finalization-budget.js";
 import { canResolveRegistryVersionForPackageTarget } from "../../infra/update-global.js";
-import { recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -105,6 +104,7 @@ export async function executeMutableUpdate(
     onStateHandoff,
     admitExecutor,
     captureWriteOptions,
+    recordPhase,
   } = createUpdateCommandExecutionGuards(opts, params.root);
   let retentionInstallTarget = params.packageInstallTarget;
   const prepareMutableUpdate = async (env?: NodeJS.ProcessEnv, activationTimeoutMs?: number) => {
@@ -241,7 +241,9 @@ export async function executeMutableUpdate(
           timeoutMs: updateStepTimeoutMs,
           phase,
           expectedService: admission?.services.get(mutationRoot),
-          updateRun: opts.run,
+          updateRun: originalRun,
+          recordPhase,
+          assertCurrent: assertExecutionCurrent,
           recovery: opts.recovery,
           onStopped: (state) => {
             preManagedServiceStop = { ...state, ...(serviceIdentity ? { serviceIdentity } : {}) };
@@ -374,9 +376,8 @@ export async function executeMutableUpdate(
   const validateCandidate = async (root: string) => {
     assertUpdateCommandRecovery(opts);
     const env = ownedManagedUpdateContext?.env ?? opts.run?.env ?? process.env;
-    if (opts.run) {
-      recordUpdateRunPhase(opts.run.runId, "validating", undefined, { env: opts.run.env });
-    }
+    await recordPhase("validating");
+    assertExecutionCurrent();
     try {
       if (params.updateInstallKind === "package") {
         // The staged manifest owns schema support, including artifacts without registry metadata.
@@ -397,7 +398,7 @@ export async function executeMutableUpdate(
       await assertUpdateCandidateExecutor({
         root,
         env,
-        opts,
+        run: originalRun,
         shouldRestart: params.shouldRestart,
         serviceOwned: preManagedServiceStop?.serviceUpdateVerdict?.kind === "owned",
         invocationCwd: params.invocationCwd,
@@ -526,9 +527,8 @@ export async function executeMutableUpdate(
       await parkForegroundUpdateForActivation(params, assertExecutionCurrent);
       await prepareMutableUpdate(env, activationTimeoutMs);
       assertExecutionCurrent();
-      if (opts.run) {
-        recordUpdateRunPhase(opts.run.runId, "activating", undefined, { env: opts.run.env });
-      }
+      await recordPhase("activating");
+      assertExecutionCurrent();
       const publication = {
         roots,
         env,
@@ -638,7 +638,8 @@ export async function executeMutableUpdate(
         devTarget: params.devTarget,
         inspectGitTarget: async (target, installTarget) => {
           retentionInstallTarget = installTarget;
-          recordInspectedGitTarget(opts.run, target, assertExecutionCurrent);
+          await recordInspectedGitTarget(target, recordPhase, assertExecutionCurrent);
+          assertExecutionCurrent();
           await recheckSchemas(target.schemaVersions);
           if (!gitContextPrepared) {
             await stopManagedServiceBeforeMutableUpdate(gitMutationRoots ?? undefined, "inspect");

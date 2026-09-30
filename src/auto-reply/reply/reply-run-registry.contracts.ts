@@ -189,6 +189,8 @@ export type ReplyBackendHandle = {
   readonly taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   /** True only when queueMessage preserves images supplied in its options. */
   readonly supportsQueueMessageImages?: boolean;
+  /** False keeps inbound steering with the turn owner's profile; omission permits other profiles. */
+  readonly supportsCrossProfileSteering?: boolean;
   claimPendingUserInputAnswer?: (
     text: string,
     options?: ReplyBackendQueueMessageOptions,
@@ -203,10 +205,7 @@ export type ReplyBackendHandle = {
   isStopped?: () => boolean;
   isAbortable?: () => boolean;
   /** @deprecated Compatibility for shipped embedded handles. Use messageInjection. */
-  queueMessage?: (
-    text: string,
-    options?: ReplyBackendQueueMessageOptions,
-  ) => Promise<void | ReplyBackendQueueMessageResult>;
+  queueMessage?: ReplyBackendMessageInjection["queueMessage"];
   /**
    * Compatibility-only hook so legacy "abort compacting runs" paths can still
    * find embedded runs that are compacting during the main run phase.
@@ -232,6 +231,7 @@ type ReplyMessageInjectionOwner = {
   projectToolAuthorityFingerprint(overlay: ReplyToolAuthorityOverlay): string | undefined;
   resolve(params: {
     options?: ReplyBackendQueueMessageOptions;
+    personalToolParticipant?: ReplyTurnParticipantInput;
     inboundAudio?: boolean;
     allowPendingUserInputAnswer?: false;
     assertCurrent?: () => void;
@@ -358,15 +358,7 @@ export type ReplyOperation = {
   /** Capture lineage before a pending barrier outlives this operation's lane. */
   captureOwnedSessionIds(): Set<string>;
   recordActivity(): void;
-  setPhase(
-    next:
-      | "queued"
-      | "waiting_for_deferred_maintenance"
-      | "waiting_for_global_lane"
-      | "preflight_compacting"
-      | "memory_flushing"
-      | "running",
-  ): void;
+  setPhase(next: Exclude<ReplyOperationPhase, "completed" | "failed" | "aborted">): void;
   markWaitingForDeferredMaintenance(): void;
   /** Return a maintenance-waiting operation to queued if the run has not started. */
   markDeferredMaintenanceWaitEnded(): void;

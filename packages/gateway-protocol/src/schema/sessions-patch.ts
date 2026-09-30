@@ -45,7 +45,9 @@ const SessionsPatchMutationProperties = {
   ),
   contextWindow: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   thinkingLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
-  fastMode: Type.Optional(Type.Union([Type.Boolean(), Type.Literal("auto"), Type.Null()])),
+  fastMode: Type.Optional(
+    Type.Union([Type.Boolean(), Type.Literal("auto"), Type.Literal("ultrafast"), Type.Null()]),
+  ),
   toolOverrides: Type.Optional(Type.Union([SessionToolOverridesSchema, Type.Null()])),
   verboseLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   traceLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),

@@ -728,11 +728,12 @@ if (runCheckPlan && narrowCheckScope.types) {
   const { resolveChangedCiTsgoInputs } = await import(
     fromTarget("./scripts/lib/tsgo-core-test-shards.mts")
   );
+  const compilerPaths = resolveChangedCiTsgoInputs(changedPaths, existsSync);
   typeGraphBoundaryOwner =
     runNodeFull &&
     !releaseFastLane &&
     narrowCheckScope.additionalGroups.includes("boundaries") &&
-    !resolveChangedCiTsgoInputs(changedPaths, existsSync)
+    (!compilerPaths || compilerPaths.every((file) => file.startsWith("extensions/")))
       ? "additional-checks"
       : "check-plan";
 }
@@ -1226,6 +1227,15 @@ const checkTasks = [
     : narrowCheckScope.checkTasks.includes(row.task);
 });
 
+// Move dependencies only when the preflight-only family is admitted.
+if (runCheckPlan && runNodeFull && !releaseFastLane) {
+  const index = checkTasks.findIndex(({ task }) => task === "dependencies");
+  if (index >= 0) {
+    const { task, ...row } = checkTasks.splice(index, 1)[0];
+    additionalChecks.push({ ...row, group: task });
+  }
+}
+
 // The selected guards row owns the same coercion scan; fast-only plans retain its row.
 if (
   !frozenTarget &&
@@ -1399,14 +1409,13 @@ const manifest = {
           {
             check_name: "android-test-third-party",
             task: "test-third-party",
-            ...(androidTestTier ? { app_lint: "third-party" } : {}),
           },
           ...(!useCompatibleAndroidCi
             ? [
                 {
                   check_name: "android-test-wear",
                   task: "test-wear",
-                  ...(androidTestTier ? { lint: true } : {}),
+                  ...(androidTestTier ? { lint: true, app_lint: "third-party" } : {}),
                 },
               ]
             : []),
@@ -1464,6 +1473,7 @@ if (hybridHostedEligible) {
         "extension-package-boundary",
         "runtime-topology-architecture",
         "plugin-sdk-api-diff",
+        "dependencies",
       ].includes(row.group) || !row.runner.startsWith("blacksmith-"),
   ).length;
   const hostedControlJobs =
@@ -1555,7 +1565,9 @@ const hybridHostedCheckRows =
     : 0) +
   (manifest.run_check_additional
     ? manifest.check_additional_matrix.include.filter((row) =>
-        ["extension-package-boundary", "runtime-topology-architecture"].includes(row.group),
+        ["extension-package-boundary", "runtime-topology-architecture", "dependencies"].includes(
+          row.group,
+        ),
       ).length
     : 0);
 const hybridHostedExistingRows =

@@ -1,15 +1,17 @@
 /* @vitest-environment jsdom */
-import { nothing, render } from "lit";
-import { afterEach, assert, describe, expect, it, vi } from "vitest";
+import { html, nothing, render } from "lit";
+import { afterEach, assert, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow, ModelCatalogResult } from "../../api/types.ts";
+import { disposeQuestionPromptState } from "../../app/question-prompt.ts";
 import { buildCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import { resetComposerFixture } from "./chat-composer.test-support.ts";
 import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
+import { ChatPane } from "./chat-pane-render.ts";
 import { createGatewayBrowserClientFixture } from "./chat-pane.test-support.ts";
 import { refreshChatMetadata, retireChatMetadataRequests } from "./chat-state-refresh.ts";
-import { renderChat } from "./chat-view.ts";
+import { renderChat, type ChatProps } from "./chat-view.ts";
 import { renderChatComposer } from "./components/chat-composer.ts";
 import {
   installTranscriptDomMocks,
@@ -21,6 +23,193 @@ const defaults = { modelProvider: null, model: null, contextTokens: null };
 afterEach(async () => {
   await resetComposerFixture();
 });
+
+function createRecoveringComposer(draft: string) {
+  let recoveryReady = false;
+  const client = createGatewayBrowserClientFixture();
+  Object.defineProperty(client, "recoveryScopeReady", { get: () => recoveryReady });
+  const { pane, state, context } = createRefreshChatPane(client);
+  context.gateway.snapshot.hello = sessionMutationGatewayHello(["operator.write"]);
+  state.chatLoading = true;
+  state.currentSessionId = null;
+  state.chatMessage = draft;
+  state.handleSendChat = vi.fn();
+  const container = document.createElement("div");
+  const draw = () => {
+    pane.render();
+    assert(pane.chatProps);
+    render(renderChatComposer(pane.chatProps), container);
+    const input = container.querySelector<HTMLTextAreaElement>("textarea");
+    const send = container.querySelector<HTMLButtonElement>(".chat-send-btn--send");
+    assert(input);
+    assert(send);
+    return { input, send, props: pane.chatProps };
+  };
+  return {
+    pane,
+    state,
+    context,
+    container,
+    draw,
+    finishRecovery: () => {
+      recoveryReady = true;
+    },
+  };
+}
+
+class SuggestionRecoveryPane extends ChatPane {
+  chatProps: ChatProps | undefined;
+
+  initialize({ state, context }: ReturnType<typeof createRefreshChatPane>) {
+    this.state = state;
+    this.context = context;
+    this.connectedClient = state.client;
+    Object.defineProperty(this, "isConnected", { value: true });
+    this.presencePayload = {
+      presence: [
+        { user: { id: "owner" }, ts: 1 },
+        { user: { id: "viewer" }, ts: 1 },
+      ],
+    };
+    onTestFinished(() => disposeQuestionPromptState(this.questionPromptState));
+  }
+
+  protected override renderChatPaneLayout({ chatProps }: { chatProps: ChatProps }) {
+    this.chatProps = chatProps;
+    return html``;
+  }
+}
+customElements.define("openclaw-suggestion-recovery-test", SuggestionRecoveryPane);
+
+it.each([
+  { draft: "Keep this draft", control: false },
+  { draft: "/stop", control: true },
+  { draft: "/approve approval-123 allow-once", control: true },
+])(
+  "holds early input until recovery is ready, preserving live controls: $draft",
+  ({ draft, control }) => {
+    const { state, container, draw, finishRecovery } = createRecoveringComposer(draft);
+    try {
+      const held = draw();
+      expect(held.input.disabled).toBe(false);
+      expect(held.input.value).toBe(draft);
+      expect(held.send.disabled).toBe(!control);
+      if (!control) {
+        expect(held.send.getAttribute("aria-label")).toBe(
+          "Finishing connection recovery. Try sending again when it is ready.",
+        );
+        expect(held.send.getAttribute("aria-busy")).toBe("true");
+        held.send.click();
+        held.input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+        void held.props.onSend();
+        expect(state.handleSendChat).not.toHaveBeenCalled();
+        expect(held.input.value).toBe(draft);
+      } else {
+        held.send.click();
+        expect(state.handleSendChat).toHaveBeenCalledOnce();
+      }
+
+      finishRecovery();
+      const ready = draw();
+      expect(state.chatLoading).toBe(true);
+      expect(ready.input.value).toBe(draft);
+      expect(ready.send.disabled).toBe(false);
+      expect(ready.send.getAttribute("aria-busy")).toBe("false");
+      ready.send.click();
+      expect(state.handleSendChat).toHaveBeenCalledTimes(control ? 2 : 1);
+    } finally {
+      render(nothing, container);
+    }
+  },
+);
+
+it("updates held Send when an edited draft changes between control and ordinary input", () => {
+  const { state, container, draw } = createRecoveringComposer("/stop");
+  let renderRequested = false;
+  state.requestUpdate = () => {
+    renderRequested = true;
+  };
+  let view = draw();
+  const edit = (draft: string) => {
+    renderRequested = false;
+    view.input.value = draft;
+    view.input.dispatchEvent(new Event("input", { bubbles: true }));
+    // Exercise the draft-only fast path instead of unconditionally redrawing the pane.
+    if (renderRequested) {
+      view = draw();
+    }
+  };
+  try {
+    expect(view.send.disabled).toBe(false);
+    edit("Keep this ordinary draft");
+    expect(view.input.value).toBe("Keep this ordinary draft");
+    expect(view.send.disabled).toBe(true);
+    view.send.click();
+    view.input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    expect(state.handleSendChat).not.toHaveBeenCalled();
+
+    edit("/approve approval-123 allow-once");
+    expect(view.send.disabled).toBe(false);
+    view.send.click();
+    expect(state.handleSendChat).toHaveBeenCalledOnce();
+  } finally {
+    render(nothing, container);
+  }
+});
+
+it.each(["Keep this suggestion", "/stop"])(
+  "keeps suggestion submission independent of chat recovery: %s",
+  async (draft) => {
+    const fixture = createRecoveringComposer(draft);
+    const { state, context, container } = fixture;
+    state.sessionKey = "agent:main:suggestion-recovery";
+    const pane = new SuggestionRecoveryPane();
+    pane.initialize(fixture);
+    const methods = context.gateway.snapshot.hello?.features?.methods;
+    assert(methods);
+    methods.push("session.suggestions.add", "session.suggestions.list");
+    state.sessionsResult = {
+      ts: 1,
+      path: "",
+      count: 1,
+      defaults,
+      sessions: [
+        { key: state.sessionKey, kind: "direct", visibility: "suggest", sharingRole: "viewer" },
+      ],
+    };
+    assert(state.client);
+    try {
+      pane.render();
+      const props = pane.chatProps;
+      assert(props);
+      render(renderChatComposer(props), container);
+      const send = container.querySelector<HTMLButtonElement>(".chat-send-btn--send");
+      assert(send);
+      expect(props.suggestionComposer).toBe(true);
+      expect(send.disabled).toBe(false);
+      const request = vi.spyOn(state.client, "request").mockResolvedValue({
+        suggestion: {
+          id: "suggestion-1",
+          sessionKey: state.sessionKey,
+          agentId: "main",
+          author: { type: "human", id: "viewer", label: "Viewer" },
+          text: draft,
+          createdAt: 1,
+          state: "pending",
+        },
+      });
+      await props.onSend();
+      expect(request).toHaveBeenCalledExactlyOnceWith("session.suggestions.add", {
+        sessionKey: state.sessionKey,
+        text: draft,
+      });
+      expect(state.chatMessage).toBe("");
+      expect(state.handleSendChat).not.toHaveBeenCalled();
+    } finally {
+      render(nothing, container);
+    }
+  },
+);
 
 it.each([
   { reason: "Your operator role requires a sandboxed session.", scope: "operator.write" },

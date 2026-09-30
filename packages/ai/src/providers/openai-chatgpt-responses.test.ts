@@ -592,14 +592,8 @@ describe("streamOpenAICodexResponses transport", () => {
       throw new Error("fetch should not run");
     });
     vi.stubGlobal("fetch", fetchMock);
-    class FailingWebSocket {
-      constructor() {
-        throw new Error("websocket connect failed");
-      }
-      send(): void {}
-      close(): void {}
-      addEventListener(): void {}
-      removeEventListener(): void {}
+    function FailingWebSocket() {
+      throw new Error("websocket connect failed");
     }
     vi.stubGlobal("WebSocket", FailingWebSocket);
 

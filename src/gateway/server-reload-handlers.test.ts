@@ -4,7 +4,7 @@
 import fs from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createInfoWarnErrorLogger } from "../../test/helpers/mock-logger.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -131,6 +131,7 @@ import {
   createPluginReloadPlan,
   createTestCronState,
   createValidConfigSnapshot,
+  enableChannelReloadsForTest,
   publishConfigWrite,
 } from "./server-reload-handlers.config.test-support.js";
 import { createGatewayReloadHandlers as createGatewayReloadHandlersImpl } from "./server-reload-hot.js";
@@ -545,25 +546,6 @@ function makePluginReloadResult(
   };
 }
 
-function enableChannelReloadsForTest() {
-  const previousSkipChannels = process.env.OPENCLAW_SKIP_CHANNELS;
-  const previousSkipProviders = process.env.OPENCLAW_SKIP_PROVIDERS;
-  delete process.env.OPENCLAW_SKIP_CHANNELS;
-  delete process.env.OPENCLAW_SKIP_PROVIDERS;
-  return () => {
-    if (previousSkipChannels === undefined) {
-      delete process.env.OPENCLAW_SKIP_CHANNELS;
-    } else {
-      process.env.OPENCLAW_SKIP_CHANNELS = previousSkipChannels;
-    }
-    if (previousSkipProviders === undefined) {
-      delete process.env.OPENCLAW_SKIP_PROVIDERS;
-    } else {
-      process.env.OPENCLAW_SKIP_PROVIDERS = previousSkipProviders;
-    }
-  };
-}
-
 function createTestCronReconciliation() {
   const complete = vi.fn<() => Promise<void>>(async () => {});
   return {
@@ -647,6 +629,8 @@ function createReloadHandlersForTest(
 async function createManagedRestartSequenceHarness(
   options: { invalidateGenerationOnReconcile?: boolean } = {},
 ) {
+  const watcher = installWatcherMock();
+  onTestFinished(() => watcher.restore());
   const {
     initialConfig,
     deferredConfig,
@@ -658,6 +642,7 @@ async function createManagedRestartSequenceHarness(
   setRuntimeConfigSnapshot(initialConfig, initialConfig);
   activateSecretsRuntimeSnapshot(makePreparedSecretsSnapshot(initialConfig));
   const terminalPolicy = createTerminalLaunchPolicy(initialConfig);
+  const acceptTerminalConfig = vi.fn(terminalPolicy.acceptConfig);
   const writeListenerRef = createConfigWriteListenerRef();
   let snapshotConfig = initialConfig;
   let snapshotHash = "initial";
@@ -736,7 +721,7 @@ async function createManagedRestartSequenceHarness(
       }
     }),
     commitRuntimePolicy: terminalPolicy.commitConfig,
-    acceptTerminalConfig: terminalPolicy.acceptConfig,
+    acceptTerminalConfig,
     sharedGatewaySessionGenerationState,
     requestRecoveryRestart,
   });
@@ -761,6 +746,7 @@ async function createManagedRestartSequenceHarness(
   };
 
   return {
+    acceptTerminalConfig,
     activateRuntimeSecrets,
     assertRestartReady: hoisted.assertOpenClawDatabasesReady,
     deferredConfig,
@@ -779,6 +765,7 @@ async function createManagedRestartSequenceHarness(
     requestRecoveryRestart,
     sharedGatewaySessionGenerationState,
     terminalPolicy,
+    watcher,
     setSecretAvailable: (id: string) => unavailableSecretIds.delete(id),
     setSecretUnavailable: (id: string) => unavailableSecretIds.add(id),
     writeConfig,
@@ -5059,64 +5046,74 @@ describe("gateway Gmail hot reload handlers", () => {
     }
   });
 
-  it("revalidates restart secrets after held promotion and before emission retries", async () => {
-    vi.useFakeTimers();
-    const harness = await createManagedRestartSequenceHarness();
-    const leaseClock = createPluginLifecycleLeaseTestClock();
-    const promotionGate = createDeferred();
-    const promote = harness.promoteSnapshot.getMockImplementation();
-    assert.isDefined(promote);
-    harness.promoteSnapshot.mockImplementationOnce(async (...args) => {
-      const accepted = await promote(...args);
-      await promotionGate.promise;
-      return accepted;
-    });
-    hoisted.activeAgentRunCount.value = 1;
-
-    try {
-      const promotion = harness.nextPromotion();
-      harness.writeConfig(harness.deferredConfig, "deferred-emission-preflight", 1);
-      await vi.advanceTimersByTimeAsync(0);
-      await leaseClock.waitFor(promotion);
-
-      harness.setSecretUnavailable("RESTART_A_TOKEN");
-      expect(getActiveGatewayRootWorkCount()).toBeGreaterThan(0);
-      hoisted.activeAgentRunCount.value = 0;
-      await vi.advanceTimersByTimeAsync(500);
-      expect(harness.assertRestartReady).not.toHaveBeenCalled();
-      expect(harness.logReload.warn).not.toHaveBeenCalledWith(
-        "gateway restart recovery emission failed; retrying",
-      );
-      expect(harness.requestRecoveryRestart).not.toHaveBeenCalled();
+  it.each(["absent", "during acceptance"])(
+    "revalidates restart secrets after held promotion and before emission retries (watcher readiness: %s)",
+    async (readiness) => {
+      vi.useFakeTimers();
+      const harness = await createManagedRestartSequenceHarness();
+      if (readiness === "during acceptance") {
+        harness.acceptTerminalConfig.mockImplementationOnce((acceptance) => {
+          harness.terminalPolicy.acceptConfig(acceptance);
+          // The accepted restart target exists, but its config audit write has not settled.
+          harness.watcher.emit("ready");
+        });
+      }
+      const leaseClock = createPluginLifecycleLeaseTestClock();
+      const promotionGate = createDeferred();
+      const promote = harness.promoteSnapshot.getMockImplementation();
+      assert.isDefined(promote);
+      harness.promoteSnapshot.mockImplementationOnce(async (...args) => {
+        const accepted = await promote(...args);
+        await promotionGate.promise;
+        return accepted;
+      });
       hoisted.activeAgentRunCount.value = 1;
-      promotionGate.resolve();
-      // Restart preparation reacquires the outer plugin lease after reload root admission ends.
-      await leaseClock.waitForFirstLease();
-      expect(harness.assertRestartReady).not.toHaveBeenCalled();
-      hoisted.activeAgentRunCount.value = 0;
-      const retryScheduled = harness.nextReloadWarning(
-        "gateway restart recovery emission failed; retrying",
-      );
-      await vi.advanceTimersByTimeAsync(500);
-      await leaseClock.waitFor(retryScheduled);
-      expect(harness.requestRecoveryRestart).not.toHaveBeenCalled();
-      expect(harness.assertRestartReady).toHaveBeenCalledOnce();
-      expect(harness.logReload.warn).toHaveBeenCalledWith(
-        expect.stringContaining("gateway restart preflight failed"),
-      );
 
-      harness.setSecretAvailable("RESTART_A_TOKEN");
-      await vi.advanceTimersByTimeAsync(1_000);
-      await leaseClock.waitFor(harness.restartEmitted);
-      expect(harness.requestRecoveryRestart).toHaveBeenCalledOnce();
-      expect(harness.assertRestartReady).toHaveBeenCalledTimes(2);
-      expect(harness.activateRuntimeSecrets.prepareSnapshot).toHaveBeenCalledTimes(3);
-    } finally {
-      promotionGate.resolve();
-      hoisted.activeAgentRunCount.value = 0;
-      await harness.reloader.stop();
-    }
-  });
+      try {
+        const promotion = harness.nextPromotion();
+        harness.writeConfig(harness.deferredConfig, "deferred-emission-preflight", 1);
+        await vi.advanceTimersByTimeAsync(0);
+        await leaseClock.waitFor(promotion);
+
+        harness.setSecretUnavailable("RESTART_A_TOKEN");
+        expect(getActiveGatewayRootWorkCount()).toBeGreaterThan(0);
+        hoisted.activeAgentRunCount.value = 0;
+        await vi.advanceTimersByTimeAsync(500);
+        expect(harness.assertRestartReady).not.toHaveBeenCalled();
+        expect(harness.logReload.warn).not.toHaveBeenCalledWith(
+          "gateway restart recovery emission failed; retrying",
+        );
+        expect(harness.requestRecoveryRestart).not.toHaveBeenCalled();
+        hoisted.activeAgentRunCount.value = 1;
+        promotionGate.resolve();
+        // Restart preparation reacquires the outer plugin lease after reload root admission ends.
+        await leaseClock.waitForFirstLease();
+        expect(harness.assertRestartReady).not.toHaveBeenCalled();
+        hoisted.activeAgentRunCount.value = 0;
+        const retryScheduled = harness.nextReloadWarning(
+          "gateway restart recovery emission failed; retrying",
+        );
+        await vi.advanceTimersByTimeAsync(500);
+        await leaseClock.waitFor(retryScheduled);
+        expect(harness.requestRecoveryRestart).not.toHaveBeenCalled();
+        expect(harness.assertRestartReady).toHaveBeenCalledOnce();
+        expect(harness.logReload.warn).toHaveBeenCalledWith(
+          expect.stringContaining("gateway restart preflight failed"),
+        );
+
+        harness.setSecretAvailable("RESTART_A_TOKEN");
+        await vi.advanceTimersByTimeAsync(1_000);
+        await leaseClock.waitFor(harness.restartEmitted);
+        expect(harness.requestRecoveryRestart).toHaveBeenCalledOnce();
+        expect(harness.assertRestartReady).toHaveBeenCalledTimes(2);
+        expect(harness.activateRuntimeSecrets.prepareSnapshot).toHaveBeenCalledTimes(3);
+      } finally {
+        promotionGate.resolve();
+        hoisted.activeAgentRunCount.value = 0;
+        await harness.reloader.stop();
+      }
+    },
+  );
 
   it("supersedes a blocked emission preflight without marking sessions or signaling", async () => {
     vi.useFakeTimers();

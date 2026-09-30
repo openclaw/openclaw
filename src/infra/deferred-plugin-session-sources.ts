@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
@@ -23,6 +22,7 @@ import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-sta
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import { sha256Hex } from "./crypto-digest.js";
 import type { DeferredPluginMigration } from "./deferred-plugin-migrations.js";
 import { verifyDeferredSessionDatabase } from "./deferred-plugin-session-verification.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
@@ -272,7 +272,7 @@ function preservesRecordedIndexValue(bytes: Buffer, identity: MigrationArtifactI
   return candidates.some(
     (original) =>
       original.length === identity.size &&
-      createHash("sha256").update(original).digest("hex") === identity.sha256 &&
+      sha256Hex(original) === identity.sha256 &&
       isDeepStrictEqual(JSON.parse(original.toString("utf8")), value),
   );
 }
@@ -342,7 +342,7 @@ function assertVerifiedSessionSources(
     issues.some((issue) => issue.code !== "entry_invalid") ||
     !source.bytes ||
     source.bytes.length !== index.identity.size ||
-    createHash("sha256").update(source.bytes).digest("hex") !== index.identity.sha256
+    sha256Hex(source.bytes) !== index.identity.sha256
   ) {
     throw new Error(
       `Retained session migration source changed in ${path.dirname(params.target.storePath)}: ${params.target.storePath}. Run ${formatCliCommand("openclaw doctor --fix --non-interactive --yes", params.env)} against the same state/config to preserve and reverify it.`,

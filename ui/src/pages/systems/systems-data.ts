@@ -123,13 +123,11 @@ export function projectSystemsInventory(
         (environment.worker?.state !== "destroyed" && environment.worker?.state !== "failed")
       );
     })
-    .map((environment) => {
-      return {
-        environment,
-        node: environment.type === "node" ? nodes.get(environment.id) : undefined,
-        gatewaySystemInfo:
-          environment.id === "gateway" ? (inventory.gatewaySystemInfo ?? undefined) : undefined,
-        sessions: relations.get(environment.id) ?? [],
-      };
-    });
+    .map((environment) => ({
+      environment,
+      node: environment.type === "node" ? nodes.get(environment.id) : undefined,
+      gatewaySystemInfo:
+        environment.id === "gateway" ? (inventory.gatewaySystemInfo ?? undefined) : undefined,
+      sessions: relations.get(environment.id) ?? [],
+    }));
 }

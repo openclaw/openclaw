@@ -28,9 +28,7 @@ actor CameraCaptureService {
                 "Microphone unavailable"
             case let .permissionDenied(kind):
                 "\(kind) permission denied"
-            case let .captureFailed(msg):
-                msg
-            case let .exportFailed(msg):
+            case let .captureFailed(msg), let .exportFailed(msg):
                 msg
             }
         }

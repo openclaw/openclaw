@@ -8868,6 +8868,22 @@ public struct MessageActionParams: Codable, Sendable {
     }
 }
 
+public struct MessageReactionSummary: Codable, Sendable {
+    public let emoji: String
+    public let count: Int
+    public let identities: [[String: AnyCodable]]
+
+    public init(
+        emoji: String,
+        count: Int,
+        identities: [[String: AnyCodable]])
+    {
+        self.emoji = emoji
+        self.count = count
+        self.identities = identities
+    }
+}
+
 public struct MessageSendApprovalScope: Codable, Sendable {
     public let kind: String
     public let target: String
@@ -8939,6 +8955,7 @@ public struct ModelChoice: Codable, Sendable {
     public let thinkinglevels: [[String: AnyCodable]]?
     public let thinkingdefault: String?
     public let effectivefastmode: AnyCodable?
+    public let servicetiers: [String]?
     public let supportsfastmode: Bool?
     public let supportstools: Bool?
     public let input: [AnyCodable]?
@@ -8965,6 +8982,7 @@ public struct ModelChoice: Codable, Sendable {
         thinkinglevels: [[String: AnyCodable]]? = nil,
         thinkingdefault: String? = nil,
         effectivefastmode: AnyCodable? = nil,
+        servicetiers: [String]? = nil,
         supportsfastmode: Bool? = nil,
         supportstools: Bool? = nil,
         input: [AnyCodable]? = nil,
@@ -8990,6 +9008,7 @@ public struct ModelChoice: Codable, Sendable {
         self.thinkinglevels = thinkinglevels
         self.thinkingdefault = thinkingdefault
         self.effectivefastmode = effectivefastmode
+        self.servicetiers = servicetiers
         self.supportsfastmode = supportsfastmode
         self.supportstools = supportstools
         self.input = input
@@ -9017,6 +9036,7 @@ public struct ModelChoice: Codable, Sendable {
         case thinkinglevels = "thinkingLevels"
         case thinkingdefault = "thinkingDefault"
         case effectivefastmode = "effectiveFastMode"
+        case servicetiers = "serviceTiers"
         case supportsfastmode = "supportsFastMode"
         case supportstools = "supportsTools"
         case input
@@ -9041,6 +9061,7 @@ public struct ModelRuntimeChoice: Codable, Sendable {
     public let thinkinglevels: [[String: AnyCodable]]?
     public let thinkingdefault: String?
     public let effectivefastmode: AnyCodable?
+    public let servicetiers: [String]?
     public let supportsfastmode: Bool?
     public let supportstools: Bool?
     public let input: [AnyCodable]?
@@ -9060,6 +9081,7 @@ public struct ModelRuntimeChoice: Codable, Sendable {
         thinkinglevels: [[String: AnyCodable]]? = nil,
         thinkingdefault: String? = nil,
         effectivefastmode: AnyCodable? = nil,
+        servicetiers: [String]? = nil,
         supportsfastmode: Bool? = nil,
         supportstools: Bool? = nil,
         input: [AnyCodable]? = nil)
@@ -9078,6 +9100,7 @@ public struct ModelRuntimeChoice: Codable, Sendable {
         self.thinkinglevels = thinkinglevels
         self.thinkingdefault = thinkingdefault
         self.effectivefastmode = effectivefastmode
+        self.servicetiers = servicetiers
         self.supportsfastmode = supportsfastmode
         self.supportstools = supportstools
         self.input = input
@@ -9098,6 +9121,7 @@ public struct ModelRuntimeChoice: Codable, Sendable {
         case thinkinglevels = "thinkingLevels"
         case thinkingdefault = "thinkingDefault"
         case effectivefastmode = "effectiveFastMode"
+        case servicetiers = "serviceTiers"
         case supportsfastmode = "supportsFastMode"
         case supportstools = "supportsTools"
         case input
@@ -15568,6 +15592,149 @@ public struct SessionPublicShareSetResult: Codable, Sendable {
         case ok
         case sessionkey = "sessionKey"
         case publicshare = "publicShare"
+    }
+}
+
+public struct SessionReactionEvent: Codable, Sendable {
+    public let sessionkey: String
+    public let agentid: String
+    public let sessionid: String
+    public let messageid: String
+    public let emoji: String
+    public let action: AnyCodable
+    public let actor: SessionSharingIdentity
+    public let reactions: [MessageReactionSummary]
+
+    public init(
+        sessionkey: String,
+        agentid: String,
+        sessionid: String,
+        messageid: String,
+        emoji: String,
+        action: AnyCodable,
+        actor: SessionSharingIdentity,
+        reactions: [MessageReactionSummary])
+    {
+        self.sessionkey = sessionkey
+        self.agentid = agentid
+        self.sessionid = sessionid
+        self.messageid = messageid
+        self.emoji = emoji
+        self.action = action
+        self.actor = actor
+        self.reactions = reactions
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case agentid = "agentId"
+        case sessionid = "sessionId"
+        case messageid = "messageId"
+        case emoji
+        case action
+        case actor
+        case reactions
+    }
+}
+
+public struct SessionReactionMirror: Codable, Sendable {
+    public let status: AnyCodable
+    public let reason: String?
+
+    public init(
+        status: AnyCodable,
+        reason: String? = nil)
+    {
+        self.status = status
+        self.reason = reason
+    }
+}
+
+public struct SessionReactionsListParams: Codable, Sendable {
+    public let sessionkey: String
+    public let agentid: String?
+
+    public init(
+        sessionkey: String,
+        agentid: String? = nil)
+    {
+        self.sessionkey = sessionkey
+        self.agentid = agentid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case agentid = "agentId"
+    }
+}
+
+public struct SessionReactionsListResult: Codable, Sendable {
+    public let sessionid: String
+    public let reactions: [String: AnyCodable]
+
+    public init(
+        sessionid: String,
+        reactions: [String: AnyCodable])
+    {
+        self.sessionid = sessionid
+        self.reactions = reactions
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionid = "sessionId"
+        case reactions
+    }
+}
+
+public struct SessionReactionsSetParams: Codable, Sendable {
+    public let sessionkey: String
+    public let agentid: String?
+    public let messageid: String
+    public let emoji: String
+    public let remove: Bool?
+
+    public init(
+        sessionkey: String,
+        agentid: String? = nil,
+        messageid: String,
+        emoji: String,
+        remove: Bool? = nil)
+    {
+        self.sessionkey = sessionkey
+        self.agentid = agentid
+        self.messageid = messageid
+        self.emoji = emoji
+        self.remove = remove
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case agentid = "agentId"
+        case messageid = "messageId"
+        case emoji
+        case remove
+    }
+}
+
+public struct SessionReactionsSetResult: Codable, Sendable {
+    public let messageid: String
+    public let reactions: [MessageReactionSummary]
+    public let mirror: SessionReactionMirror?
+
+    public init(
+        messageid: String,
+        reactions: [MessageReactionSummary],
+        mirror: SessionReactionMirror? = nil)
+    {
+        self.messageid = messageid
+        self.reactions = reactions
+        self.mirror = mirror
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case messageid = "messageId"
+        case reactions
+        case mirror
     }
 }
 

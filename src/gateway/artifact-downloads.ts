@@ -1,8 +1,9 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { normalizeMimeType } from "@openclaw/media-core/mime";
+import { normalizeMimeType, sliceMimeSniffBuffer } from "@openclaw/media-core/mime";
 import { ARTIFACT_DOWNLOAD_PATH } from "../../packages/gateway-protocol/src/artifact-download.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { isAnimatedWebpBuffer, isStillPngBuffer } from "../media/image-ops.js";
 import type {
   ArtifactDownloadResponse,
   ArtifactDownloadResponseRequest,
@@ -10,8 +11,12 @@ import type {
 } from "./artifact-download-projection.js";
 import { buildAssistantMediaContentDisposition } from "./assistant-media-content-disposition.js";
 import { respondNotFound } from "./control-ui-http-utils.js";
-import { writeByteHeaders } from "./http-byte-range.js";
+import { resolveByteResponse, writeByteHeaders } from "./http-byte-range.js";
 import { sendMethodNotAllowed } from "./http-common.js";
+import {
+  encodeImageThumbnail,
+  resolveManagedImageThumbnail,
+} from "./managed-image-thumbnail-cache.js";
 import type { GatewayClient } from "./server-methods/types.js";
 
 const DOWNLOAD_TTL_MS = 5 * 60_000;
@@ -20,6 +25,7 @@ const MAX_DOWNLOADS_PER_CONNECTION = 128;
 type Download = {
   expiresAt: number;
   digest: string;
+  image: boolean;
   assertCurrent: () => void;
   read: (request: ArtifactDownloadResponseRequest) => Promise<ArtifactDownloadResponse | undefined>;
 };
@@ -63,6 +69,7 @@ export function createArtifactDownload(params: {
   grants.set(ticket, {
     expiresAt,
     digest: params.prepared.digest,
+    image: params.prepared.artifact.type === "image",
     assertCurrent: params.assertCurrent,
     read: params.read,
   });
@@ -113,18 +120,59 @@ export async function handleArtifactDownloadHttpRequest(
     grant.assertCurrent();
   };
   let prepared: ArtifactDownloadResponse | undefined;
+  const thumbnail = grant.image && url.searchParams.get("variant") === "thumbnail";
   try {
     assertCurrent();
     prepared = await grant.read({
       expectedDigest: grant.digest,
-      method: req.method,
-      headers: {
-        range: req.headers.range,
-        "if-range": req.headers["if-range"],
-        "if-none-match": req.headers["if-none-match"],
-      },
+      method: thumbnail ? "GET" : req.method,
+      headers: thumbnail
+        ? {}
+        : {
+            range: req.headers.range,
+            "if-range": req.headers["if-range"],
+            "if-none-match": req.headers["if-none-match"],
+          },
     });
     assertCurrent();
+    if (thumbnail && prepared?.body) {
+      let bytes = prepared.body;
+      const source = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      const sourceType = await import("file-type")
+        .then(({ fileTypeFromBuffer }) => fileTypeFromBuffer(sliceMimeSniffBuffer(source)))
+        .catch(() => undefined);
+      // Rastermill has no frame count, and bounded MIME sniffing can miss APNG.
+      // Preserve containers whose still-image status we cannot establish.
+      const still =
+        (sourceType?.mime === "image/png" && isStillPngBuffer(source)) ||
+        sourceType?.mime === "image/jpeg" ||
+        (sourceType?.mime === "image/webp" && !isAnimatedWebpBuffer(source));
+      const cacheKey = createHash("sha256").update(bytes).digest("hex");
+      const encoded = still
+        ? await resolveManagedImageThumbnail(cacheKey, () => encodeImageThumbnail(bytes)).catch(
+            () => undefined,
+          )
+        : undefined;
+      if (encoded && encoded.byteLength < bytes.byteLength) {
+        bytes = new Uint8Array(encoded);
+        prepared.artifact = { ...prepared.artifact, mimeType: "image/png" };
+      }
+      const response = resolveByteResponse({
+        file: { size: bytes.byteLength },
+        method: req.method,
+        request: req,
+      });
+      prepared.response = response;
+      prepared.body =
+        req.method === "HEAD" ||
+        response.kind === "not-modified" ||
+        response.kind === "unsatisfiable"
+          ? undefined
+          : response.kind === "partial"
+            ? bytes.subarray(response.range.start, response.range.end + 1)
+            : bytes;
+      assertCurrent();
+    }
   } catch {
     respondNotFound(res);
     return true;

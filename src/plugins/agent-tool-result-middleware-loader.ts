@@ -1,4 +1,3 @@
-// Loads agent tool result middleware from plugin runtime surfaces.
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
 import type {

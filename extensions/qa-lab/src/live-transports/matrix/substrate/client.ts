@@ -22,7 +22,6 @@ import {
   findMatrixQaProvisionedRoom,
   type MatrixQaParticipantRole,
   type MatrixQaProvisionedTopology,
-  type MatrixQaTopologyRoomSpec,
   type MatrixQaTopologySpec,
 } from "./topology.js";
 
@@ -425,10 +424,6 @@ async function joinRoomWithRetry(params: {
   throw new Error(`Matrix join retry failed: ${formatErrorMessage(lastError)}`);
 }
 
-function resolveProvisionedRoomRequireMention(room: MatrixQaTopologyRoomSpec) {
-  return room.kind === "group" ? room.requireMention !== false : false;
-}
-
 function resolveTopologyMemberAccounts(
   accounts: Record<MatrixQaParticipantRole, MatrixQaRegisteredAccount>,
   memberRoles: MatrixQaParticipantRole[],
@@ -483,7 +478,7 @@ async function provisionMatrixQaTopology(params: {
       memberRoles: members.map((entry) => entry.role),
       memberUserIds: members.map((entry) => entry.account.userId),
       name: room.name,
-      requireMention: resolveProvisionedRoomRequireMention(room),
+      requireMention: room.kind === "group" && room.requireMention !== false,
       roomId,
     });
   }
@@ -518,25 +513,17 @@ export async function provisionMatrixQaRoom(params: {
     baseUrl: params.baseUrl,
     fetchImpl: params.fetchImpl,
   });
+  const registerActor = (role: MatrixQaParticipantRole, deviceName: string) =>
+    anonClient.registerWithToken({
+      deviceName,
+      localpart: params[`${role}Localpart`],
+      password: `${role}-${randomUUID()}`,
+      registrationToken: params.registrationToken,
+    });
   const [driver, sut, observer] = await Promise.all([
-    anonClient.registerWithToken({
-      deviceName: "OpenClaw Matrix QA Driver",
-      localpart: params.driverLocalpart,
-      password: `driver-${randomUUID()}`,
-      registrationToken: params.registrationToken,
-    }),
-    anonClient.registerWithToken({
-      deviceName: "OpenClaw Matrix QA SUT",
-      localpart: params.sutLocalpart,
-      password: `sut-${randomUUID()}`,
-      registrationToken: params.registrationToken,
-    }),
-    anonClient.registerWithToken({
-      deviceName: "OpenClaw Matrix QA Observer",
-      localpart: params.observerLocalpart,
-      password: `observer-${randomUUID()}`,
-      registrationToken: params.registrationToken,
-    }),
+    registerActor("driver", "OpenClaw Matrix QA Driver"),
+    registerActor("sut", "OpenClaw Matrix QA SUT"),
+    registerActor("observer", "OpenClaw Matrix QA Observer"),
   ]);
   const topology = await provisionMatrixQaTopology({
     accounts: {

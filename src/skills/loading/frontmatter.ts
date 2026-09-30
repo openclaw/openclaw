@@ -3,12 +3,12 @@ import {
   readNonEmptyStringPreservingWhitespace,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
+import { normalizeCsvOrLooseStringList } from "@openclaw/normalization-core/string-normalization";
 import { parseFrontmatterBlockResult } from "../../../packages/markdown-core/src/frontmatter.js";
 import { validateRegistryNpmSpec } from "../../infra/npm-registry-spec.js";
 import {
   applyOpenClawManifestInstallCommonFields,
   getFrontmatterString,
-  normalizeStringList,
   parseOpenClawManifestInstallBase,
   parseFrontmatterBool,
   resolveOpenClawManifestBlock,
@@ -91,7 +91,7 @@ function parseInstallSpec(input: unknown): SkillInstallSpec | undefined {
     },
     parsed,
   );
-  const osList = normalizeStringList(raw.os);
+  const osList = normalizeCsvOrLooseStringList(raw.os);
   if (osList.length > 0) {
     spec.os = osList;
   }

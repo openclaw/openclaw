@@ -31,6 +31,8 @@ import {
   type ResolvedPublishedModelCatalogOwner,
 } from "./run-model-selection.runtime.js";
 
+const CRON_THINKING_HYDRATION_WAIT_MS = 5_000;
+
 type CronSessionModelOverrides = {
   modelOverride?: string;
   providerOverride?: string;
@@ -135,18 +137,33 @@ async function resolveCronThinkingCatalog(params: {
     return catalog;
   }
   // Thinking capability is a per-model fact; never materialize the full live catalog on cron turns.
-  const refreshed = normalizeThinkingCatalogProviders(
-    await loadProviderScopedThinkingCatalog({
-      config: params.owner.config,
-      provider: params.provider,
-      model: params.model,
-      agentRuntime: params.agentRuntime,
-      agentId: params.owner.agentId,
-      agentDir: params.owner.agentDir,
-      workspaceDir: params.owner.workspaceDir,
-    }),
-  );
-  return findModelInCatalog(refreshed, params.provider, params.model) ? refreshed : catalog;
+  const hydration = loadProviderScopedThinkingCatalog({
+    config: params.owner.config,
+    provider: params.provider,
+    model: params.model,
+    agentRuntime: params.agentRuntime,
+    agentId: params.owner.agentId,
+    agentDir: params.owner.agentDir,
+    workspaceDir: params.owner.workspaceDir,
+  });
+  // Native discovery can queue behind catalog renewal for longer than the cron setup watchdog.
+  // Discovery keeps running under its owner; this turn uses the admitted catalog meanwhile.
+  hydration.catch(() => undefined);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const refreshed = await Promise.race([
+      hydration.then(normalizeThinkingCatalogProviders),
+      new Promise<undefined>((resolve) => {
+        timer = setTimeout(() => resolve(undefined), CRON_THINKING_HYDRATION_WAIT_MS);
+        timer.unref?.();
+      }),
+    ]);
+    return refreshed && findModelInCatalog(refreshed, params.provider, params.model)
+      ? refreshed
+      : catalog;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export async function resolveCronThinkingSelection(params: {

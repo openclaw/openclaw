@@ -296,16 +296,10 @@ export async function mintMcpAppViewFromTranscript(params: {
   authorizeAppInteraction?: () => boolean | Promise<boolean>;
   readOnly: boolean;
 }): Promise<ReconstructionResult | undefined> {
+  const { descriptor, ...request } = params;
   return await reconstructMcpAppView({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-    lookup: { descriptor: params.descriptor },
-    allowedAppToolNames: params.allowedAppToolNames,
-    ...(params.authorizeAppInteraction
-      ? { authorizeAppInteraction: params.authorizeAppInteraction }
-      : {}),
-    readOnly: params.readOnly,
+    ...request,
+    lookup: { descriptor },
   });
 }
 

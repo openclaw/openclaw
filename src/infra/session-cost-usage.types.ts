@@ -1,4 +1,3 @@
-// Shared session cost and usage accounting type contracts.
 import type { NormalizedUsage } from "../agents/usage.js";
 import type { Usage } from "../llm/types.js";
 export type {

@@ -105,7 +105,6 @@ describe("new-session route catalog target", () => {
       agentId: "main",
       requestedAgentId: "main",
       requestedModel: "example/model-one",
-      model: "example/model-one",
       startTerminal: false,
       catalogId: "",
     });
@@ -124,7 +123,6 @@ describe("new-session route catalog target", () => {
       context,
       `?agent=main&model=${encodeURIComponent(model)}`,
     );
-    expect(data.model).toBe("");
     expect(data.requestedModel).toBeUndefined();
     expect(request).not.toHaveBeenCalled();
   });

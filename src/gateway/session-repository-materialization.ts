@@ -219,10 +219,10 @@ export async function materializeSessionRepositoryWorkspaceOnGateway(params: {
             // The checkout is unbound until verification. Failed preparation rolls it
             // back; a crash leaves the immutable checkpoint available for a fresh retry.
             journal: {
-              load: () => undefined,
-              begin: assertCurrent,
-              commit: assertCurrent,
-              abort: () => {},
+              load: async () => undefined,
+              begin: async () => assertCurrent(),
+              commit: async () => assertCurrent(),
+              abort: async () => {},
             },
           });
           if (applied.conflictPaths.length || applied.manifestRef !== repository.manifestHash) {

@@ -2,6 +2,7 @@ import { isParentOwnedBackgroundAcpSession } from "@openclaw/acp-core/session-in
 import { readAcpSessionEntryAsync } from "../../acp/runtime/session-meta.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
@@ -91,12 +92,7 @@ export async function sendReplyRestartRecoveryNotice(params: {
       return;
     }
     notices.entries.delete(key);
-    if (notices.entries.size >= MAX_RECOVERY_NOTICES) {
-      const oldestKey = notices.entries.keys().next().value;
-      if (oldestKey !== undefined) {
-        notices.entries.delete(oldestKey);
-      }
-    }
+    pruneMapToMaxSize(notices.entries, MAX_RECOVERY_NOTICES - 1);
     // Claim before awaiting delivery; ambiguous failures must not produce a notice storm.
     notices.entries.set(key, {
       agentId: params.agentId,

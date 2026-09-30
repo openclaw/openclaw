@@ -7,7 +7,7 @@ function registerTransportTtsCommand<T>(
   command: Command,
   defaultTransport: "local" | "gateway",
   run: (opts: Record<string, unknown>, transport: "local" | "gateway") => Promise<T>,
-  formatText: (value: T) => string = (value) => JSON.stringify(value, null, 2),
+  formatText?: (value: T) => string,
 ): void {
   command
     .option("--local", "Force local execution", false)

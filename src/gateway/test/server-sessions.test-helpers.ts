@@ -111,6 +111,10 @@ export async function loadSeededTranscriptEvents(params: {
 }
 
 const sessionCleanupMocks = vi.hoisted(() => ({
+  clearSessionLifecycleQueues:
+    vi.fn<
+      (typeof import("../../auto-reply/reply/queue/cleanup.js"))["clearSessionLifecycleQueues"]
+    >(),
   clearSessionQueues: vi.fn((keys: Array<string | undefined>) => {
     const clearedKeys = Array.from(
       new Set(
@@ -200,6 +204,9 @@ vi.mock("../../auto-reply/reply/queue/cleanup.js", async () => {
   );
   return {
     ...actual,
+    clearSessionLifecycleQueues: sessionCleanupMocks.clearSessionLifecycleQueues.mockImplementation(
+      actual.clearSessionLifecycleQueues,
+    ),
     clearSessionQueues: sessionCleanupMocks.clearSessionQueues,
   };
 });
@@ -325,6 +332,7 @@ function createGatewaySessionsTestHarness(startServer: boolean, setup?: GatewayS
     const { clearConfigCache, clearRuntimeConfigSnapshot } = await getGatewayConfigModule();
     clearRuntimeConfigSnapshot();
     clearConfigCache();
+    sessionCleanupMocks.clearSessionLifecycleQueues.mockClear();
     sessionCleanupMocks.clearSessionQueues.mockClear();
     sessionCleanupMocks.stopSessionResetSubagents.mockClear();
     bootstrapCacheMocks.clearBootstrapSnapshot.mockReset();
@@ -544,22 +552,22 @@ export function expectActiveRunCleanup(
       agentId: requesterAgentId,
     }),
   );
-  expectSessionQueueCleanup(expectedQueueKeys);
+  expect(sessionCleanupMocks.clearSessionLifecycleQueues).toHaveBeenCalledTimes(1);
+  expect(sessionCleanupMocks.clearSessionLifecycleQueues).toHaveBeenCalledWith(
+    expect.objectContaining({
+      keys: expect.arrayContaining(expectedQueueKeys),
+      agentId: requesterAgentId,
+      sessionKey: requesterSessionKey,
+      sessionId,
+      assertCurrent: expect.any(Function),
+    }),
+  );
   expect(embeddedRunMock.abortCalls).toEqual([sessionId]);
   expect(embeddedRunMock.waitCalls).toEqual([sessionId]);
 }
 
-function expectSessionQueueCleanup(expectedQueueKeys: string[]) {
-  expect(sessionCleanupMocks.clearSessionQueues).toHaveBeenCalledTimes(1);
-  const clearedKeys = (
-    sessionCleanupMocks.clearSessionQueues.mock.calls as unknown as Array<[string[]]>
-  )[0]?.[0];
-  for (const key of expectedQueueKeys) {
-    expect(clearedKeys).toContain(key);
-  }
-}
-
 export function expectNoSessionQueueCleanup() {
+  expect(sessionCleanupMocks.clearSessionLifecycleQueues).not.toHaveBeenCalled();
   expect(sessionCleanupMocks.clearSessionQueues).not.toHaveBeenCalled();
 }
 

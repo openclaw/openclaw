@@ -1,8 +1,5 @@
 import type { ProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type { ToolResultContentSource } from "../../../packages/agent-core/src/types.js";
-/**
- * Shared types for preparing and executing CLI-backed agent runs.
- */
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { CliSessionBinding, SessionEntry } from "../../config/sessions.js";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.js";
@@ -42,6 +39,7 @@ import type {
   ResolvedToolPromptFinalizer,
 } from "../embedded-agent-runner/run/params.js";
 import type { ExecPolicyOverrides } from "../exec-defaults.js";
+import type { AgentExecutionAuthBinding } from "../execution-auth-binding.js";
 import type { PreparedQuestionAnswerAuthority } from "../harness/host-private-capabilities.js";
 import type { AgentHarnessIsolatedCompletionParamsV2 } from "../harness/types.js";
 import type { ReplyExpectation } from "../reply-completion.js";
@@ -136,16 +134,7 @@ export type RunCliAgentParams = {
   /** Atomically arm a cache-preserving fork before retrying a stalled resumed session. */
   onBeforeForkedCliSessionRetry?: (params: CliSessionRetryParams) => boolean | Promise<boolean>;
   /** Private seam: report the credential/runtime owner only after a successful real turn. */
-  onSuccessfulAuthBinding?: (binding: {
-    authProfileId?: string;
-    authFingerprint?: string;
-    runtimeOwnerFingerprint?: string;
-    runtimeOwnerKind?: "cli-runtime" | "plugin-harness" | "aws-sdk";
-    runtimeOwnerId?: string;
-    runtimeArtifactFingerprint?: string;
-    runtimeArtifactId?: string;
-    skipLocalCredential?: true;
-  }) => void;
+  onSuccessfulAuthBinding?: (binding: AgentExecutionAuthBinding) => void;
   onBeforeFreshCliSessionRetry?: (params: CliSessionRetryParams) => boolean | Promise<boolean>;
   bootstrapContextMode?: BootstrapContextMode;
   chatId?: string;

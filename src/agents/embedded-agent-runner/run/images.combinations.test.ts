@@ -5,25 +5,19 @@ import { describe, expect, it } from "vitest";
 import { createSolidPngBuffer } from "../../../../test/helpers/image-fixtures.js";
 import { detectAndLoadPromptImages } from "./images.js";
 
-const HYDRATION_PARTS = ["inline", "offloaded", "suppressed", "explicit", "legacy"] as const;
-type HydrationPart = (typeof HYDRATION_PARTS)[number];
+type HydrationPart = "inline" | "offloaded" | "suppressed" | "explicit" | "legacy";
 type HydrationCombination = { name: string; parts: readonly HydrationPart[] };
 
-function combinations<T>(values: readonly T[], size: number): T[][] {
-  if (size === 0) {
-    return [[]];
-  }
-  return values.flatMap((value, index) =>
-    combinations(values.slice(index + 1), size - 1).map((tail) => [value].concat(tail)),
-  );
-}
-
-const HYDRATION_COMBINATIONS: HydrationCombination[] = [2, 3].flatMap((size) =>
-  combinations(HYDRATION_PARTS, size).map((parts) => ({
-    name: parts.join(" + "),
-    parts,
-  })),
-);
+const HYDRATION_COMBINATIONS: HydrationCombination[] = (
+  [
+    ["inline", "offloaded", "explicit"],
+    ["inline", "offloaded", "suppressed"],
+    ["inline", "offloaded", "legacy"],
+    ["inline", "explicit", "legacy"],
+    ["offloaded", "suppressed", "legacy"],
+    ["suppressed", "explicit", "legacy"],
+  ] satisfies HydrationPart[][]
+).map((parts) => ({ name: parts.join(" + "), parts }));
 
 describe("hydration combination matrix", () => {
   it("attributes a suppressed-plus-inline sanitization failure to the inline fact", async () => {

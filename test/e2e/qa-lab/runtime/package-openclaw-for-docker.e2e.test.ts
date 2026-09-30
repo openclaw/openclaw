@@ -1141,15 +1141,25 @@ describe("package-openclaw-for-docker", () => {
         })}\n`,
       );
 
-      const tarball = await withEnvAsync({ npm_config_json: "true" }, async () =>
-        packOpenClawPackageForDocker(sourceDir, outputDir, {
-          ...skipDocsMapLifecycle,
-          outputName: "openclaw-current.tgz",
-          packJsonPath: path.join(outputDir, "pack.json"),
-          prepareBundledAiRuntime: skipBundledAiRuntime,
-          prepareChangelog: async () => {},
-          restoreChangelog: async () => {},
-        }),
+      const callerNpmCache = tempDirs.make("openclaw-package-modes-npm-cache-");
+      const tarball = await withEnvAsync(
+        {
+          npm_config_cache: callerNpmCache,
+          npm_config_json: "true",
+          // Keep each real packaging child inside this test's budget, so a stalled
+          // child fails through the owner's timeout and process-group teardown.
+          OPENCLAW_DOCKER_PACKAGE_INVENTORY_TIMEOUT_MS: "20000",
+          OPENCLAW_DOCKER_PACKAGE_PACK_TIMEOUT_MS: "20000",
+        },
+        async () =>
+          packOpenClawPackageForDocker(sourceDir, outputDir, {
+            ...skipDocsMapLifecycle,
+            outputName: "openclaw-current.tgz",
+            packJsonPath: path.join(outputDir, "pack.json"),
+            prepareBundledAiRuntime: skipBundledAiRuntime,
+            prepareChangelog: async () => {},
+            restoreChangelog: async () => {},
+          }),
       );
 
       const entryModes = new Map<string, number>();
@@ -1190,6 +1200,12 @@ describe("package-openclaw-for-docker", () => {
       ]);
       expect(receipt[0].files).toHaveLength(files.length);
       expect(fs.readdirSync(outputDir).toSorted()).toEqual(["openclaw-current.tgz", "pack.json"]);
+      // Inspecting the final archive must not copy it into the caller's npm cache.
+      const cachedArtifactCopies = fs
+        .readdirSync(callerNpmCache, { encoding: "utf8", recursive: true })
+        .map((entry) => path.join(callerNpmCache, entry))
+        .filter((entry) => fs.statSync(entry).isFile() && fs.readFileSync(entry).equals(bytes));
+      expect(cachedArtifactCopies).toEqual([]);
     },
   );
 

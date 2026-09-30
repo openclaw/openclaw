@@ -5,6 +5,7 @@ import type {
   SessionPlacementMachine,
 } from "../../../packages/gateway-protocol/src/schema/session-placement.js";
 import type { SessionCatalogPullRequestSummary } from "../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
+import type { SessionsPatchMutation } from "../../../packages/gateway-protocol/src/schema/sessions-patch.js";
 import type { SessionVisibility } from "../../../packages/gateway-protocol/src/schema/sessions-sharing.js";
 import type {
   SessionObserverDigest,
@@ -48,21 +49,13 @@ export type SidebarSessionAttention =
 
 export const SIDEBAR_SESSION_NO_ATTENTION: SidebarSessionAttention = { kind: "none" };
 
-function sidebarSessionAttentionPriority(attention: SidebarSessionAttention): number {
-  switch (attention.kind) {
-    case "question":
-    case "approval":
-      return 3;
-    case "agent":
-      return 2;
-    case "error":
-      return 1;
-    case "none":
-      return 0;
-    default:
-      return attention satisfies never;
-  }
-}
+const SIDEBAR_SESSION_ATTENTION_PRIORITY: Record<SidebarSessionAttention["kind"], number> = {
+  question: 3,
+  approval: 3,
+  agent: 2,
+  error: 1,
+  none: 0,
+};
 
 /** Preserve request identity while combining a session or collapsed group's attention. */
 export function summarizeSidebarSessionAttention(
@@ -87,7 +80,8 @@ export function summarizeSidebarSessionAttention(
   }
   return (
     values.toSorted(
-      (a, b) => sidebarSessionAttentionPriority(b) - sidebarSessionAttentionPriority(a),
+      (a, b) =>
+        SIDEBAR_SESSION_ATTENTION_PRIORITY[b.kind] - SIDEBAR_SESSION_ATTENTION_PRIORITY[a.kind],
     )[0] ?? SIDEBAR_SESSION_NO_ATTENTION
   );
 }
@@ -315,15 +309,10 @@ export type SidebarCatalogSessionMutationScope = SidebarSessionMutationScope & {
   catalogGeneration: number;
 };
 
-export type SidebarSessionPatch = {
-  archived?: boolean;
-  pinned?: boolean;
-  unread?: boolean;
-  label?: string | null;
-  icon?: string | null;
-  color?: string | null;
-  category?: string | null;
-};
+export type SidebarSessionPatch = Pick<
+  SessionsPatchMutation,
+  "archived" | "pinned" | "unread" | "label" | "icon" | "color" | "category"
+>;
 
 export const SIDEBAR_SESSION_PAGE_SIZE = 10;
 export const SIDEBAR_SESSION_SEE_LESS_THRESHOLD = 30;

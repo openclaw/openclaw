@@ -4,7 +4,7 @@ import { formatUiError } from "../format-error.ts";
 import { getCronJobPayload } from "./payload.ts";
 import type { CronJobsState } from "./types.ts";
 
-function readCanonicalCronJobsPage<Row>(
+export function readCanonicalCronJobsPage<Row>(
   value: CronJobsListResult<Row>,
   requestedLimit: number,
 ): CronJobsListResult<Row> {
@@ -35,7 +35,10 @@ function readCanonicalCronJobsPage<Row>(
   return value;
 }
 
-function assertCanonicalCronJobsCursor(page: CronJobsListResult<unknown>, requestedOffset: number) {
+export function assertCanonicalCronJobsCursor(
+  page: CronJobsListResult<unknown>,
+  requestedOffset: number,
+) {
   const nextOffset = requestedOffset + page.jobs.length;
   if (
     page.offset !== requestedOffset ||

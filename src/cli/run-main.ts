@@ -1,4 +1,3 @@
-// Main CLI entry orchestration: fast paths, env setup, plugin aliases, and Commander dispatch.
 import { existsSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
@@ -16,7 +15,7 @@ import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.opencla
 import { isLoopbackHost, isSecureWebSocketUrl } from "../gateway/net.js";
 import { normalizeWebSocketProtocol } from "../gateway/websocket-protocol.js";
 import { FLAG_TERMINATOR, isValueToken } from "../infra/cli-root-options.js";
-import { isTruthyEnvValue, normalizeEnv } from "../infra/env.js";
+import { normalizeEnv } from "../infra/env.js";
 import type { ProxyHandle } from "../infra/net/proxy/proxy-lifecycle.js";
 import { tryProcessCwd } from "../infra/safe-cwd.js";
 import type { PluginCliLoadSession } from "../plugins/cli-registry-loader.js";
@@ -60,11 +59,13 @@ import { getSubCliEntriesCore } from "./program/subcli-descriptors.js";
 import { withCliPluginInvocation } from "./run-main-plugin-cache.js";
 import {
   isAgentExecInvocation,
+  isDebugProxyCaptureEnvEnabled,
   isGatewayRunFastPathArgv,
   isRemoteAgentDispatchInvocation,
   resolveMissingPluginCommandMessage,
   rewriteUpdateFlagArgv,
   shouldHandleBareRoot,
+  shouldBootstrapCliProxyBeforeFastPath,
   shouldEnsureCliPath,
   shouldStartProxyForCli,
   shouldUseRootHelpFastPath,
@@ -89,14 +90,6 @@ import {
 } from "./startup-trace.js";
 import { normalizeWindowsArgv } from "./windows-argv.js";
 
-const CLI_PROXY_ENV_KEYS = [
-  "HTTP_PROXY",
-  "HTTPS_PROXY",
-  "ALL_PROXY",
-  "http_proxy",
-  "https_proxy",
-  "all_proxy",
-] as const;
 const UNKNOWN_COMMAND_DISPLAY_LIMIT = 128;
 
 async function tryRunGatewayRunFastPath(
@@ -578,23 +571,6 @@ async function ensureCliEnvProxyDispatcher(): Promise<void> {
   }
 }
 
-function isDebugProxyCaptureEnvEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-  return (
-    isTruthyEnvValue(env.OPENCLAW_DEBUG_PROXY_ENABLED) ||
-    isTruthyEnvValue(env.OPENCLAW_DEBUG_PROXY_REQUIRE)
-  );
-}
-
-function shouldBootstrapCliProxyBeforeFastPath(env: NodeJS.ProcessEnv = process.env): boolean {
-  if (isDebugProxyCaptureEnvEnabled(env)) {
-    return true;
-  }
-  return CLI_PROXY_ENV_KEYS.some((key) => {
-    const value = env[key];
-    return typeof value === "string" && value.trim().length > 0;
-  });
-}
-
 function isKnownBuiltInCommandRoot(primary: string): boolean {
   return (
     getCoreCliCommandNamesCore().includes(primary) ||
@@ -717,14 +693,14 @@ function resolveUnownedCliPrimaryCandidate(argv: string[]): string | null {
   return primary;
 }
 
-async function resolveUnownedCliPrimary(params: {
+async function assertCliPrimaryOwned(params: {
   argv: string[];
   config: OpenClawConfig;
   session?: PluginCliLoadSession;
-}): Promise<string | null> {
+}): Promise<void> {
   const primary = resolveUnownedCliPrimaryCandidate(params.argv);
   if (!primary) {
-    return null;
+    return;
   }
   const pluginRoot = await isPluginCliRoot({
     primary,
@@ -732,29 +708,24 @@ async function resolveUnownedCliPrimary(params: {
     session: params.session,
   });
   if (pluginRoot !== false) {
-    return null;
+    return;
   }
-  return primary;
-}
-
-async function resolveUnownedCliPrimaryError(params: {
-  argv: string[];
-  primary: string;
-  config: OpenClawConfig;
-}): Promise<Error> {
-  const pluginPolicyError = await resolveExpectedPluginPolicyError(params);
+  const pluginPolicyError = await resolveExpectedPluginPolicyError({
+    primary,
+    config: params.config,
+  });
   if (pluginPolicyError) {
-    return pluginPolicyError;
+    throw pluginPolicyError;
   }
-  const sanitizedPrimary = sanitizeTerminalText(params.primary);
+  const sanitizedPrimary = sanitizeTerminalText(primary);
   const displayPrimary =
     sanitizedPrimary.length <= UNKNOWN_COMMAND_DISPLAY_LIMIT
       ? sanitizedPrimary
       : `${truncateUtf16Safe(sanitizedPrimary, UNKNOWN_COMMAND_DISPLAY_LIMIT - 1)}…`;
   const { createCliUnknownCommandError } = await import("./program/error-output.js");
-  return createCliUnknownCommandError(displayPrimary, {
+  throw createCliUnknownCommandError(displayPrimary, {
     argv: params.argv,
-    ...(displayPrimary === params.primary ? {} : { commandNames: [] }),
+    ...(displayPrimary === primary ? {} : { commandNames: [] }),
   });
 }
 
@@ -977,6 +948,19 @@ async function runCliWithPreparedOutputMode(
 
   if (
     !isHelpOrVersionInvocation &&
+    (isGatewayRunInvocation ||
+      normalizedInvocation.primary === "worker" ||
+      (normalizedInvocation.primary === "node" &&
+        (normalizedInvocation.commandPath[1] === "run" ||
+          normalizedInvocation.commandPath[1] === "worker")))
+  ) {
+    // Gateway config selection and CLI bootstrap can create SQLite workers before the action.
+    const { initializeSqliteRuntimeCapabilities } = await import("../infra/bun-sqlite-library.js");
+    await initializeSqliteRuntimeCapabilities();
+  }
+
+  if (
+    !isHelpOrVersionInvocation &&
     !isDatabaseInvocation &&
     !isAgentExecInvocation(normalizedInvocation.commandPath) &&
     shouldLoadCliDotEnv(loadGlobalEnv)
@@ -1174,18 +1158,11 @@ async function runCliWithPreparedOutputMode(
     if (!isHelpOrVersionInvocation && shouldStartProxyForCli(normalizedArgv)) {
       const config = await withConsoleLogsRoutedToStderr(readBestEffortCliConfig);
       if (!bareSessionInvocation) {
-        const unownedPrimary = await resolveUnownedCliPrimary({
+        await assertCliPrimaryOwned({
           argv: normalizedArgv,
           config,
           session: pluginCliSession,
         });
-        if (unownedPrimary) {
-          throw await resolveUnownedCliPrimaryError({
-            argv: normalizedArgv,
-            primary: unownedPrimary,
-            config,
-          });
-        }
       }
       await replaceStartedProxy(config?.proxy ?? undefined);
     }
@@ -1249,23 +1226,13 @@ async function runCliWithPreparedOutputMode(
     // `openclaw <typo>` instead of silently showing generic top-level help.
     // Runs after legitimate precomputed help fast paths so known help commands
     // still dispatch normally. See #81077.
-    {
-      const unownedPrimaryCandidate = resolveUnownedCliPrimaryCandidate(normalizedArgv);
-      if (unownedPrimaryCandidate) {
-        const config = await readBestEffortCliConfig();
-        const unownedPrimary = await resolveUnownedCliPrimary({
-          argv: normalizedArgv,
-          config,
-          session: pluginCliSession,
-        });
-        if (unownedPrimary) {
-          throw await resolveUnownedCliPrimaryError({
-            argv: normalizedArgv,
-            primary: unownedPrimary,
-            config,
-          });
-        }
-      }
+    if (resolveUnownedCliPrimaryCandidate(normalizedArgv)) {
+      const config = await readBestEffortCliConfig();
+      await assertCliPrimaryOwned({
+        argv: normalizedArgv,
+        config,
+        session: pluginCliSession,
+      });
     }
 
     const shouldRunBareRootCommand = shouldHandleBareRoot(normalizedArgv);

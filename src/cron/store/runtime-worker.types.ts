@@ -1,5 +1,11 @@
 import type { CronJobScratchWriteInput } from "../scratch-contract.js";
-import type { CronFailureNotificationDelivery, CronJob, CronStoreFile } from "../types.js";
+import type {
+  CronFailureNotificationDelivery,
+  CronJob,
+  CronRunDiagnostics,
+  CronRunStatus,
+  CronStoreFile,
+} from "../types.js";
 import type { CronJobFamilyIdentity } from "./row-codec.js";
 import type {
   CronRunReceipt,
@@ -24,6 +30,53 @@ export type CronReceiptTerminal = {
   finishedAtMs: number;
   error?: string;
 };
+
+export type StartupDeferredJob = {
+  jobId: string;
+  delayMs?: number;
+  scheduleIdentity: string | undefined;
+  createdAtMs: number;
+  payloadKind: CronJob["payload"]["kind"];
+  scheduleActivatedAtMs: number | undefined;
+  nextRunAtMs: number | undefined;
+  lastRunAtMs: number | undefined;
+  lastRunStatus: CronRunStatus | undefined;
+};
+
+export type CronReservationReleasePolicy =
+  | {
+      kind: "general";
+      restoreLastError: boolean;
+      recompute: boolean;
+      terminal?: CronReceiptTerminal;
+      requireCurrentReceipt?: boolean;
+    }
+  | { kind: "manual-abandon" }
+  | { kind: "scheduled-ineligible" }
+  | { kind: "startup-settlement"; deferredJobs: StartupDeferredJob[]; staggerMs: number };
+
+type CronSkippedRunChange =
+  | {
+      kind: "ownerless";
+      proposals: Array<{
+        jobId: string;
+        enabled: boolean;
+        configRevision: string;
+        nextRunAtMs?: number;
+        lastRunAtMs?: number;
+        lastRunStatus?: CronJob["state"]["lastRunStatus"];
+      }>;
+      scheduleMode?: "advance" | "preserve";
+      scheduleOwnershipAtMs?: number;
+    }
+  | {
+      kind: "invalid-manual";
+      jobId: string;
+      configRevision: string;
+      error: string;
+      diagnostics?: CronRunDiagnostics;
+      scheduleMode: "advance" | "preserve";
+    };
 
 export type CronReceiptRevisionRefusal = {
   receiptId: string;
@@ -56,6 +109,8 @@ export type CronExternalStateChange =
     };
 
 export type CronRuntimeMutationInputs = {
+  "cron.recordSkippedRuns": { storeKey: string; change: CronSkippedRunChange };
+  "cron.planStartup": { storeKey: string; jobIds: string[]; skipJobIds?: string[] };
   "cron.mutateExternalState": {
     storeKey: string;
     jobId: string;
@@ -107,10 +162,7 @@ export type CronRuntimeMutationInputs = {
   "cron.releaseReservations": {
     storeKey: string;
     jobIds: string[];
-    restoreLastError: boolean;
-    recompute: boolean;
-    terminal?: CronReceiptTerminal;
-    requireCurrentReceipt?: boolean;
+    policy: CronReservationReleasePolicy;
   };
   "cron.finishReceipt": {
     storeKey: string;

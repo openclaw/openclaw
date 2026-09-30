@@ -61,12 +61,7 @@ export function requireMatrixQaPassword(
   context: MatrixQaScenarioContext,
   actor: "driver" | "observer" | "sut",
 ) {
-  const password =
-    actor === "driver"
-      ? context.driverPassword
-      : actor === "observer"
-        ? context.observerPassword
-        : context.sutPassword;
+  const password = context[`${actor}Password`];
   if (!password) {
     throw new Error(`Matrix E2EE ${actor} password is required for this scenario`);
   }

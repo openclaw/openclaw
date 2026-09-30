@@ -1,4 +1,3 @@
-// Cron store row normalization for doctor repair and quarantine decisions.
 import { randomUUID } from "node:crypto";
 import { asNullableRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { timestampMsToIsoString } from "../../../../packages/normalization-core/src/number-coercion.js";

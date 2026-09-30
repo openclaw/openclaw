@@ -35,9 +35,6 @@ function isToolCallBlock(block: AssistantContentBlock): boolean {
 }
 
 function isSignedThinkingBlock(block: AssistantContentBlock): boolean {
-  if (!isThinkingBlock(block)) {
-    return false;
-  }
   const record = block as {
     type?: unknown;
     signature?: unknown;
@@ -82,9 +79,6 @@ function filterAssistantContent(
 }
 
 function hasReplayableThinkingSignature(block: AssistantContentBlock): boolean {
-  if (!isThinkingBlock(block)) {
-    return false;
-  }
   const record = block as {
     data?: unknown;
     signature?: unknown;

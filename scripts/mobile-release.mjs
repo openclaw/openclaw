@@ -157,6 +157,7 @@ function releaseEnvironment(platform, recovery, sourceSha) {
       ? { OPENCLAW_ANDROID_RELEASE_PLAN: path.join(recovery, "android-plan.json") }
       : {
           OPENCLAW_IOS_RELEASE_PLAN: path.join(recovery, "ios-plan.json"),
+          OPENCLAW_IOS_RELEASE_SOURCE_ROOT: path.join(recovery, "source"),
           OPENCLAW_TESTFLIGHT_RESULT_FILE: path.join(recovery, "testflight-result.json"),
         }),
   };
@@ -458,8 +459,8 @@ function stageIos(root, recovery) {
   } else {
     git(root, "worktree", "add", "--detach", source, plan.sourceSha);
   }
-  bridgeLocalTools(root, source, "ios");
-  run("/bin/bash", ["scripts/ios-release-upload.sh", "--stage-only", ...uploadArgs(plan)], source, {
+  // Recover with corrected tooling while retaining the uploaded source for identity checks.
+  run("/bin/bash", ["scripts/ios-release-upload.sh", "--stage-only", ...uploadArgs(plan)], root, {
     stdio: "inherit",
     env: releaseEnvironment("ios", recovery, plan.sourceSha),
   });

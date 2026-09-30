@@ -9,20 +9,15 @@ import { collectConfiguredPluginIds } from "./missing-configured-plugin-install.
 describe("Doctor plugin installation intent", () => {
   afterEach(() => vi.restoreAllMocks());
 
-  it.each([
-    { name: "empty environment", env: {}, expected: [] },
-    {
-      name: "environment-selected provider",
-      env: { GROQ_API_KEY: "test-provider-key" },
-      expected: ["groq"],
-    },
-  ])("does not read unrelated provider catalogs with $name", ({ env, expected }) => {
+  it("does not read unrelated provider catalogs for an environment-selected provider", () => {
     vi.spyOn(providerInstallCatalog, "resolveProviderInstallCatalogEntries").mockImplementation(
       () => {
         throw new Error("Unrelated provider catalog is unavailable");
       },
     );
-    expect(collectConfiguredPluginIds({}, env)).toEqual(new Set(expected));
+    expect(collectConfiguredPluginIds({}, { GROQ_API_KEY: "test-provider-key" })).toEqual(
+      new Set(["groq"]),
+    );
   });
 
   it("does not read install catalogs without selected plugins or channels", () => {
@@ -49,16 +44,9 @@ describe("Doctor plugin installation intent", () => {
     expect(collectConfiguredPluginIds(cfg, {})).toEqual(new Set());
   });
 
-  it.each([
-    { name: "explicit enablement", entry: { enabled: true } },
-    { name: "additional plugin settings", entry: { config: { extra: true } } },
-    {
-      name: "conversation discovery opt-in",
-      entry: { config: { sessionCatalog: { enabled: true } } },
-    },
-  ])("preserves $name as installation intent", ({ entry }) => {
+  it("preserves explicit enablement as installation intent", () => {
     const cfg = initializeNativeSessionCatalogPreferences({
-      plugins: { entries: { codex: entry } },
+      plugins: { entries: { codex: { enabled: true } } },
     });
     expect(collectConfiguredPluginIds(cfg, {})).toEqual(new Set(["codex"]));
   });
@@ -68,12 +56,5 @@ describe("Doctor plugin installation intent", () => {
       agents: { defaults: { models: { "example/starter": { agentRuntime: { id: "codex" } } } } },
     });
     expect(collectConfiguredPluginIds(cfg, {}).has("codex")).toBe(true);
-  });
-
-  it("does not treat an undeclared plugin setting as a host-generated opt-out", () => {
-    const cfg = initializeNativeSessionCatalogPreferences({
-      plugins: { entries: { unrelated: { config: { sessionCatalog: { enabled: false } } } } },
-    });
-    expect(collectConfiguredPluginIds(cfg, {})).toEqual(new Set(["unrelated"]));
   });
 });

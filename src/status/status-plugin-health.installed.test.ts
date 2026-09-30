@@ -102,7 +102,7 @@ describe("installed plugin health should-run drift", () => {
         reason: "startup failed",
         failedAt: new Date(123),
       };
-      recordPersistedContextEngineQuarantine(quarantine);
+      await recordPersistedContextEngineQuarantine(quarantine);
 
       const rawConfig = {} as never;
       const snapshot = await collectInstalledPluginHealthSnapshot({

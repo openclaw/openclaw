@@ -3,7 +3,12 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { CliBackendConfig } from "../plugins/cli-backend.types.js";
-import type { CliOutput, CliTerminalFailure, CliUsage } from "./cli-output-contracts.js";
+import type {
+  CliOutput,
+  CliTerminalFailure,
+  CliToolUseStartDelta,
+  CliUsage,
+} from "./cli-output-contracts.js";
 import { normalizeUsage, type UsageLike } from "./usage.js";
 
 function isClaudeCliProvider(providerId: string): boolean {
@@ -397,7 +402,11 @@ export function isClaudeForegroundAgentToolName(name: string): boolean {
   return CLAUDE_FOREGROUND_AGENT_TOOL_NAMES.has(name);
 }
 
-function isClaudeToolResultBlockType(type: unknown): boolean {
+export function isClaudeToolUseBlockType(type: unknown): type is CliToolUseStartDelta["kind"] {
+  return type === "tool_use" || type === "server_tool_use" || type === "mcp_tool_use";
+}
+
+export function isClaudeToolResultBlockType(type: unknown): boolean {
   return typeof type === "string" && (type === "tool_result" || type.endsWith("_tool_result"));
 }
 
@@ -430,12 +439,7 @@ function isClaudeSemanticSubagentProgressRecord(parsed: Record<string, unknown>)
     return false;
   }
   const blockType = event.content_block.type;
-  return (
-    blockType === "tool_use" ||
-    blockType === "server_tool_use" ||
-    blockType === "mcp_tool_use" ||
-    isClaudeToolResultBlockType(blockType)
-  );
+  return isClaudeToolUseBlockType(blockType) || isClaudeToolResultBlockType(blockType);
 }
 
 /** Parent id of a semantic subagent record. Partial deltas and system chatter stay out. */
