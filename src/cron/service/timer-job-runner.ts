@@ -64,6 +64,7 @@ async function deliverPrimaryWebhook(
   abortSignal: AbortSignal,
   progress: CronRunProgress,
   assertRunCurrent?: () => Promise<void>,
+  activeJobMarker?: CronActiveJobMarker,
 ): Promise<CronCoreRunOutcome> {
   const settle = (settledResult: CronCoreRunOutcome) => {
     // Publish the terminal delivery fact before this async function resolves;
@@ -101,6 +102,12 @@ async function deliverPrimaryWebhook(
 
   if (assertRunCurrent) {
     await assertRunCurrent();
+    if (activeJobMarker?.cancellation?.kind === "requested") {
+      return undelivered(`cron webhook delivery cancelled: ${activeJobMarker.cancellation.reason}`);
+    }
+    if (!isCronActiveJobMarkerCurrent(activeJobMarker)) {
+      return undelivered("Gateway restarting.");
+    }
     if (abortSignal.aborted) {
       return undelivered(interruptionError());
     }
@@ -355,6 +362,7 @@ async function executeJobCoreWithTimeoutUnfinalized(
         runAbortController.signal,
         progress,
         assertRunCurrent,
+        opts?.activeJobMarker,
       );
     });
     // Timeout/cancel projects an outcome before an abort-ignoring core settles;

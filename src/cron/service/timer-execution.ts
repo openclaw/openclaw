@@ -131,6 +131,9 @@ export async function executeJobCore(
   }
   if (options?.assertRunCurrent) {
     await options.assertRunCurrent();
+    if (options.activeJobMarker?.cancellation?.kind === "requested") {
+      return { status: "error", error: options.activeJobMarker.cancellation.reason };
+    }
     if (abortSignal?.aborted) {
       return resolveAbortError();
     }
@@ -484,6 +487,9 @@ async function executeScriptCronJob(
   }
   if (options?.assertRunCurrent) {
     await options.assertRunCurrent();
+    if (options.activeJobMarker?.cancellation?.kind === "requested") {
+      return { status: "error" as const, error: options.activeJobMarker.cancellation.reason };
+    }
     if (!isCronActiveJobMarkerCurrent(options.activeJobMarker)) {
       return { status: "error" as const, error: "Gateway restarting." };
     }

@@ -225,6 +225,10 @@ export async function assertServiceCronRunReceiptCurrent(
   );
   context.admission.assertCurrent();
   signal?.throwIfAborted();
+  // Main-session runs can retain a removal request without a bound abort controller.
+  if (activeJobMarker?.cancellation?.kind === "requested") {
+    throw new CronRunReceiptRevisionError(handle.receiptId, activeJobMarker.cancellation.reason);
+  }
   if (!isCronActiveJobMarkerCurrent(activeJobMarker)) {
     throw new CronRunReceiptRevisionError(handle.receiptId, "cron run fence is no longer current");
   }
