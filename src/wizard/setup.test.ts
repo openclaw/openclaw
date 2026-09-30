@@ -513,7 +513,7 @@ describe("runSetupWizard", () => {
     configureGatewayForSetup.mockReset().mockImplementation(async (args) => ({
       nextConfig: args.nextConfig,
       settings: {
-        port: args.localPort ?? 18789,
+        port: args.quickstartGateway.port,
         bind: "loopback",
         authMode: "token",
         gatewayToken: "test-token",
