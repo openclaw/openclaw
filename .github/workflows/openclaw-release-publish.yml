@@ -1226,7 +1226,7 @@ jobs:
       contents: write
       id-token: write
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 180
     environment: npm-release
     steps:
       - name: Checkout release SHA
@@ -1663,6 +1663,19 @@ jobs:
             bootstrap_workflow_sha="$(verify_bootstrap_workflow_sha)"
           fi
 
+          # Resolve every stale-child blocker before starting any publisher.
+          sweep_superseded_children plugin-npm-release.yml
+          for target in normal bootstrap; do
+            if [[ "$(jq -r --arg target "$target" '.[$target].shouldDispatch' "${clawhub_plan_path}")" == "true" ]]; then
+              require_clawhub_dispatch_available \
+                "$(jq -r --arg target "$target" '.[$target].ref' "${clawhub_plan_path}")" \
+                "$(jq -r --arg target "$target" '.[$target].workflow' "${clawhub_plan_path}")"
+            fi
+          done
+          if [[ "${PUBLISH_OPENCLAW_NPM}" == "true" && "${openclaw_npm_already_published}" != "true" ]]; then
+            sweep_superseded_children openclaw-npm-release.yml
+          fi
+
           npm_args=(-f publish_scope="${PLUGIN_PUBLISH_SCOPE}" -f ref="${TARGET_SHA}" -f release_publish_run_id="${GITHUB_RUN_ID}" -f release_publish_run_attempt="${GITHUB_RUN_ATTEMPT}" -f release_publish_branch="${PARENT_WORKFLOW_BRANCH}" -f release_publish_full_ref="${PARENT_WORKFLOW_FULL_REF}")
           npm_args+=(-f defer_registry_verification="${PUBLISH_OPENCLAW_NPM}")
           if [[ -n "${PREPARED_PLUGINS}" ]]; then
@@ -2006,7 +2019,7 @@ jobs:
           if [[ "${openclaw_failed}" == "0" && ( -n "${openclaw_npm_run_id}" || "${openclaw_npm_already_published}" == "true" ) ]]; then
             wait_for_core_npm_visibility || { failed=1; openclaw_failed=1; }
             if [[ "${openclaw_failed}" == "0" ]]; then
-              sync_npm_beta_floor
+              sync_npm_beta_floor || { failed=1; openclaw_failed=1; }
             fi
           fi
 

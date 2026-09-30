@@ -314,7 +314,10 @@ prove availability. The parent's
 `Complete publish workflows` step polls the registry document for the version
 under the target dist-tag (bounded 10 minutes), then dispatches the
 `sync_beta_to_stable` ledger sync through a release-ledger app token and waits
-for it before verification; if its summary reports the token unavailable,
+up to 50 minutes (`RELEASE_NPM_DIST_TAG_SYNC_TIMEOUT_SECONDS`) before verification.
+Status changes and five-minute heartbeats identify the run. A still-running sync
+fails explicitly without judging the beta floor; inspect that run before resuming.
+If its summary reports the token unavailable,
 dispatch the sync by hand before the verify runs. For manual work, poll the
 registry yourself before the sync or verification. Run postpublish
 verification from a checkout of the Release SHA (a newer tooling checkout
