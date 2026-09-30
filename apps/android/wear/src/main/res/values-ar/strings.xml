@@ -74,8 +74,6 @@
     <string name="gateway_connected" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تم الاتصال بـ Gateway"</string>
     <string name="gateway_offline" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway غير متصل"</string>
     <string name="gateway_offline_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"أعِد توصيل Gateway في OpenClaw على الهاتف المقترن."</string>
-    <string name="open_phone_app" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"فتح OpenClaw على الهاتف"</string>
-    <string name="phone_not_ready_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"لا تشغّل الساعة Gateway أو تصادق عليه بنفسها مطلقًا."</string>
     <string name="phone_unavailable" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"لا يمكن الوصول إلى الهاتف"</string>
     <string name="phone_unavailable_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"أبقِ الهاتف المقترن قريبًا وثبّت تطبيق OpenClaw المطابق."</string>
     <string name="selection_not_found" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"لم يعد التحديد متاحًا"</string>

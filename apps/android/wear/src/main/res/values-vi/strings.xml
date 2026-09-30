@@ -74,8 +74,6 @@
     <string name="gateway_connected" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Đã kết nối Gateway"</string>
     <string name="gateway_offline" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway ngoại tuyến"</string>
     <string name="gateway_offline_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Kết nối lại Gateway trong OpenClaw trên điện thoại đã ghép đôi."</string>
-    <string name="open_phone_app" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Mở OpenClaw trên điện thoại"</string>
-    <string name="phone_not_ready_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Đồng hồ không bao giờ tự khởi động hoặc xác thực Gateway."</string>
     <string name="phone_unavailable" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Không thể kết nối với điện thoại"</string>
     <string name="phone_unavailable_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Giữ điện thoại đã ghép đôi ở gần và cài đặt ứng dụng OpenClaw tương ứng."</string>
     <string name="selection_not_found" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Mục đã chọn không còn khả dụng"</string>

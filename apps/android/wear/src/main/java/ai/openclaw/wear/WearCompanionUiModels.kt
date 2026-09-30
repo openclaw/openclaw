@@ -74,7 +74,6 @@ internal enum class WearConversationFailure(
   @StringRes val detail: Int,
 ) {
   PHONE_UNAVAILABLE(R.string.phone_unavailable, R.string.phone_unavailable_detail),
-  PHONE_NOT_READY(R.string.open_phone_app, R.string.phone_not_ready_detail),
   GATEWAY_OFFLINE(R.string.gateway_offline, R.string.gateway_offline_detail),
   NOT_FOUND(R.string.selection_not_found, R.string.refresh_and_try_again),
   ACTION_REJECTED(R.string.message_not_sent, R.string.try_again),

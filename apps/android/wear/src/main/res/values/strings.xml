@@ -78,8 +78,6 @@
     <string name="gateway_connected">Gateway connected</string>
     <string name="gateway_offline">Gateway offline</string>
     <string name="gateway_offline_detail">Reconnect the Gateway in OpenClaw on the paired phone.</string>
-    <string name="open_phone_app">Open OpenClaw on phone</string>
-    <string name="phone_not_ready_detail">The watch never starts or authenticates the Gateway itself.</string>
     <string name="phone_unavailable">Phone not reachable</string>
     <string name="phone_unavailable_detail">Keep the paired phone nearby and install the matching OpenClaw app.</string>
     <string name="selection_not_found">Selection no longer available</string>
