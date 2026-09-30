@@ -303,6 +303,38 @@ async function readWindowsTaskCommand(
     const action = registered?.status === "found" ? registered.actions?.[0] : undefined;
     if (
       registered?.status === "found" &&
+      normalizeWindowsTaskIdentity(registered.taskPath ?? "") ===
+        normalizeWindowsTaskIdentity(taskName) &&
+      registered.actions &&
+      registered.actions.length > 1 &&
+      options?.onLauncherContent
+    ) {
+      // Inventory needs evidence from later custom actions even though a multi-action
+      // task cannot supply one effective Gateway command or lifecycle authority.
+      for (const candidate of registered.actions) {
+        if (candidate.type !== 0) {
+          continue;
+        }
+        const argv = [
+          candidate.path,
+          ...splitArgsPreservingQuotes(candidate.arguments, { escapeMode: "backslash-quote-only" }),
+        ];
+        for (const pathname of argv.filter((arg) => /\.(?:bat|cmd|vbs)$/i.test(arg))) {
+          try {
+            assertStaticTaskPath(pathname);
+            const scriptPath = /\.bat$/i.test(pathname)
+              ? pathname
+              : (await readTaskLauncher(pathname, options.onLauncherContent, false, deadline))
+                  .scriptPath;
+            options.onLauncherContent(await readTaskFile(scriptPath, deadline), scriptPath);
+          } catch {
+            assertInspectionDeadline();
+          }
+        }
+      }
+    }
+    if (
+      registered?.status === "found" &&
       (!registered.taskPath ||
         normalizeWindowsTaskIdentity(registered.taskPath) !==
           normalizeWindowsTaskIdentity(taskName) ||
