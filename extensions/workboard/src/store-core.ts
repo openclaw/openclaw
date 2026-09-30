@@ -832,6 +832,7 @@ export class WorkboardCoreStore extends WorkboardStoreRuntime {
       delete next.metadata;
     }
     const expectedUpdatedAt = options.expectedUpdatedAt ?? existing.updatedAt;
+    let updated: boolean;
     if (options.ownerSlot) {
       const result = await this.store.claimIfOwnerAvailable(
         next.id,
@@ -843,14 +844,15 @@ export class WorkboardCoreStore extends WorkboardStoreRuntime {
       if (result === "owner_busy") {
         throw new Error(`Owner ${options.ownerSlot.ownerId} already has active Workboard work.`);
       }
-      if (result === "updated") {
-        this.recordCardMutation(existing, next);
-        await this.deleteDetachedAttachments(existing, next);
-        return next;
-      }
-    } else if (
-      await this.store.registerIfUpdatedAt(next.id, { version: 1, card: next }, expectedUpdatedAt)
-    ) {
+      updated = result === "updated";
+    } else {
+      updated = await this.store.registerIfUpdatedAt(
+        next.id,
+        { version: 1, card: next },
+        expectedUpdatedAt,
+      );
+    }
+    if (updated) {
       this.recordCardMutation(existing, next);
       await this.deleteDetachedAttachments(existing, next);
       return next;
