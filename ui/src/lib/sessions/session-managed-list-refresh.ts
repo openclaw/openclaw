@@ -81,6 +81,7 @@ export function createSessionManagedListRefresh(
         refresh.invalidated &&
         (!refresh.background || !entry.queued || entry.queued.background)
       ) {
+        entry.readGeneration += 1;
         entry.queued = refresh;
       }
       return entry.pending;
@@ -116,9 +117,29 @@ export function createSessionManagedListRefresh(
         publishManagedList(entry, { ...entry.snapshot, loading: true, error: null }, isCurrent);
         try {
           const issuedRevision = nextRevision();
-          const response = await requestSessionListParams(scope.client, requestParams);
+          const generation = entry.readGeneration;
+          const readIsCurrent = () =>
+            isCurrent() &&
+            (!requestParams.pageSize ||
+              (generation === entry.readGeneration && isPageActive() && entry.listeners.size > 0));
+          const response = await requestSessionListParams(
+            scope.client,
+            requestParams,
+            readIsCurrent,
+          );
           if (!isCurrent()) {
             return;
+          }
+          if (!readIsCurrent()) {
+            // Retired pages cannot start another RPC or publish a partial window.
+            // Automatic invalidation stays paced by the existing coordinator.
+            publishManagedList(entry, { ...entry.snapshot, loading: false }, isCurrent);
+            if (!entry.queued || entry.queued.background || !isPageActive()) {
+              return;
+            }
+            next = entry.queued;
+            entry.queued = null;
+            continue;
           }
           if (!response) {
             throw new Error("The session query did not return a result. Try again.");
