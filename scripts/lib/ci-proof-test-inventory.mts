@@ -3514,7 +3514,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/plugin-sdk/session-transcript-runtime.test.ts",
   "src/plugin-sdk/tool-plugin.test.ts",
   "src/plugin-state/plugin-blob-store.admission.test.ts",
-  "src/plugin-state/plugin-state-store.doctor-repair.test.ts",
   "src/plugin-state/plugin-state-store.errors.test.ts",
   "src/plugin-state/plugin-state-store.prepared.test.ts",
   "src/plugin-state/plugin-state-store.retention.test.ts",

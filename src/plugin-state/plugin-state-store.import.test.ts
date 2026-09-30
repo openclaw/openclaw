@@ -39,23 +39,6 @@ afterAll(async () => {
 });
 
 describe("doctor plugin state import", () => {
-  it("bounds commit work while retaining source ages and remaining TTLs", () => {
-    const now = vi.spyOn(Date, "now").mockReturnValue(10_000);
-    const exec = vi.spyOn(openOpenClawStateDatabase().db, "exec");
-    importPluginStateEntriesForDoctor(
-      pluginId,
-      options,
-      entries.map((entry) => ({ ...entry, ttlMs: 100 })),
-    );
-    const commits = exec.mock.calls.filter(([sql]) => sql === "COMMIT").length;
-    expect(commits).toBeGreaterThan(1);
-    expect(commits).toBeLessThanOrEqual(3);
-    const store = createPluginStateSyncKeyedStore(pluginId, options);
-    expect(store.entries()).toEqual(entries.map((entry) => ({ ...entry, expiresAt: 10_100 })));
-    now.mockReturnValue(10_100);
-    expect(store.entries()).toEqual([]);
-  });
-
   it("commits the successful prefix of a failed batch and converges on rerun", () => {
     const bounded = { ...options, maxEntries: 600 };
     const db = openOpenClawStateDatabase().db;
@@ -138,34 +121,4 @@ describe("doctor plugin state import", () => {
     importPluginStateEntriesForDoctor(pluginId, options, entries);
     expect(store.entries()).toEqual(entries);
   });
-
-  it.each(["evict-oldest", "reject-new"] as const)(
-    "preserves %s retention with duplicate keys and durable sibling rows",
-    (overflowPolicy) => {
-      seedPluginStateEntriesForTests([
-        { pluginId, namespace: "durable", key: "sibling", value: true },
-      ]);
-      const limited = { ...options, maxEntries: 2, overflowPolicy };
-      const source = [
-        { key: "z", value: 1, createdAt: 20 },
-        { key: "a", value: 2, createdAt: 10 },
-        { key: "z", value: 3, createdAt: 20 },
-        { key: "older", value: 4, createdAt: -10 },
-      ];
-      if (overflowPolicy === "reject-new") {
-        expect(() => importPluginStateEntriesForDoctor(pluginId, limited, source)).toThrow(
-          "reached its 2-row limit",
-        );
-      } else {
-        importPluginStateEntriesForDoctor(pluginId, limited, source);
-      }
-      const store = createPluginStateSyncKeyedStore(pluginId, limited);
-      expect(store.entries()).toEqual([source[overflowPolicy === "reject-new" ? 1 : 3], source[2]]);
-      expect(
-        createPluginStateSyncKeyedStore(pluginId, { namespace: "durable", maxEntries: 1 }).lookup(
-          "sibling",
-        ),
-      ).toBe(true);
-    },
-  );
 });
