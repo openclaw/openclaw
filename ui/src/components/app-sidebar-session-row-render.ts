@@ -8,7 +8,7 @@ import { normalizeSessionColorValue } from "../../../packages/gateway-protocol/s
 import type { GatewaySessionRow } from "../api/types.ts";
 import type { NavigationRouteId } from "../app-navigation.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "../app/context.ts";
-import { resolveControlUiAuthCandidates } from "../app/control-ui-auth.ts";
+import { resolveControlUiAvatarAuth } from "../app/control-ui-auth.ts";
 import { t } from "../i18n/index.ts";
 import { formatDurationCompact } from "../lib/format-duration.ts";
 import { renderHoverMarquee } from "../lib/hover-marquee.ts";
@@ -218,21 +218,11 @@ function renderSidebarSessionIndicators(
       ? undefined
       : ownerActor;
   const gateway = host.sessionDataContext?.gateway;
-  const channelAvatarAuth = {
-    authTokens: gateway
-      ? resolveControlUiAuthCandidates({
-          hello: gateway.snapshot.hello,
-          settings: { token: gateway.connection.token },
-          password: gateway.connection.password,
-        })
-      : [],
-    authReady: Boolean(
-      gateway &&
-      (gateway.snapshot.hello ||
-        gateway.connection.token.trim() ||
-        gateway.connection.password.trim()),
-    ),
-  };
+  const channelAvatarAuth = resolveControlUiAvatarAuth({
+    hello: gateway?.snapshot.hello,
+    settings: gateway?.connection,
+    password: gateway?.connection.password,
+  });
   const { running, leadingIndicator, renderedIdentities } = renderSessionLeadingState(
     session,
     leadingOwner,

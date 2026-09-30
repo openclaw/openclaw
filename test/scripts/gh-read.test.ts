@@ -7,7 +7,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildReadPermissions,
   githubJson,
-  normalizeRepo,
   parsePermissionKeys,
   parseRepoArg,
   readGitHubAppPrivateKey,
@@ -15,6 +14,7 @@ import {
   readBoundedGitHubJson,
   resolveGitHubFetchTimeoutMs,
 } from "../../scripts/gh-read.js";
+import { normalizeGitHubRepo as normalizeRepo } from "../../scripts/lib/github-repo.js";
 
 describe("gh-read helpers", () => {
   afterEach(() => {

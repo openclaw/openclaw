@@ -29,11 +29,10 @@ function normalizeUserId(value?: string | null): string {
 
 async function findStandardChannelMember(params: {
   token: string;
-  to: string;
+  conversation: ReturnType<typeof resolveConversationPath>;
   userId: string;
 }): Promise<GraphConversationMember | undefined> {
-  const conversationId = await resolveGraphConversationId(params.to);
-  const conversation = resolveConversationPath(conversationId);
+  const { conversation } = params;
   if (conversation.kind !== "channel" || !conversation.teamId) {
     return undefined;
   }
@@ -88,7 +87,7 @@ export async function getMemberInfoMSTeams(params: GetMemberInfoMSTeamsParams) {
     conversation.kind === "channel"
       ? await findStandardChannelMember({
           token: await resolveGraphToken(params.cfg),
-          to: params.to,
+          conversation,
           userId: params.userId,
         })
       : undefined;

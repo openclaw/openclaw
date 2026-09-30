@@ -487,18 +487,9 @@ export function sendStickerFeishu(
   return sendUploadedMediaFeishu(params, { file_key: params.fileKey }, "sticker");
 }
 
-function detectFileType(
-  fileName: string,
-): "opus" | "mp4" | "pdf" | "doc" | "xls" | "ppt" | "stream" {
+function detectFileType(fileName: string): "pdf" | "doc" | "xls" | "ppt" | "stream" {
   const ext = normalizeLowercaseStringOrEmpty(path.extname(fileName));
   switch (ext) {
-    case ".opus":
-    case ".ogg":
-      return "opus";
-    case ".mp4":
-    case ".mov":
-    case ".avi":
-      return "mp4";
     case ".pdf":
       return "pdf";
     case ".doc":

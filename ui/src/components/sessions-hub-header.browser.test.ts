@@ -1,7 +1,7 @@
 import { html, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
-import "../styles.css";
+import "../test-helpers/load-styles.ts";
 import { renderSessionsHubHeader } from "./sessions-hub-header.ts";
 
 const hasBrowserLayout = !navigator.userAgent.toLowerCase().includes("jsdom");

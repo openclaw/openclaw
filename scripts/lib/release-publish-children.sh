@@ -748,6 +748,9 @@ render_github_release_notes() {
 
   if [[ -n "${verification_file}" ]]; then
     render_args+=(--verification-file "${verification_file}")
+    if [[ "${RELEASE_EVIDENCE_MODE}" != "authorized-beta-focused-v1" && -f "${FULL_RELEASE_VALIDATION_MANIFEST_DIR:-}/full-release-validation-manifest.json" ]]; then
+      render_args+=(--validation-manifest "${FULL_RELEASE_VALIDATION_MANIFEST_DIR}/full-release-validation-manifest.json")
+    fi
   fi
   if [[ -n "${metadata_file}" ]]; then
     render_args+=(--metadata-output "${metadata_file}")
@@ -781,9 +784,15 @@ verify_release_tag_target() {
 
 canonical_release_body_matches() {
   local body_file="$1"
-  node --import tsx "${GITHUB_WORKSPACE}/.release-harness/scripts/render-github-release-notes.mts" \
-    --root "$GITHUB_WORKSPACE" --ref "$TARGET_SHA" \
+  local -a verify_args=(
+    --root "$GITHUB_WORKSPACE" --ref "$TARGET_SHA"
     --tag "$RELEASE_TAG" --repository "$GITHUB_REPOSITORY" --verify-body "$body_file"
+  )
+  if [[ "${RELEASE_EVIDENCE_MODE}" != "authorized-beta-focused-v1" && -f "${FULL_RELEASE_VALIDATION_MANIFEST_DIR:-}/full-release-validation-manifest.json" ]] && grep -q '^### Release verification$' "$body_file"; then
+    verify_args+=(--validation-manifest "${FULL_RELEASE_VALIDATION_MANIFEST_DIR}/full-release-validation-manifest.json")
+  fi
+  node --import tsx "${GITHUB_WORKSPACE}/.release-harness/scripts/render-github-release-notes.mts" \
+    "${verify_args[@]}"
 }
 
 assert_initial_release_body() {

@@ -573,6 +573,36 @@ describe("chat pane header", () => {
     },
   );
 
+  it.each(["keyup", "timeout"])(
+    "keeps a Safari composition-confirm Enter from committing a session rename until %s",
+    (release) => {
+      const { container, props } = mountHeader({ editing: true, renameValue: "日本語" });
+      const input = container.querySelector<HTMLInputElement>(".chat-pane__session-title-input")!;
+      input.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+      const end = new CompositionEvent("compositionend", { bubbles: true, data: "日本語" });
+      input.dispatchEvent(end);
+      for (const offset of [1, 100]) {
+        const enter = new KeyboardEvent("keydown", {
+          key: "Enter",
+          keyCode: 13,
+          bubbles: true,
+          cancelable: true,
+        });
+        Object.defineProperty(enter, "timeStamp", {
+          value: end.timeStamp + (release === "timeout" ? offset : 1),
+        });
+        if (offset === 100 && release === "keyup") {
+          input.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter" }));
+        }
+        input.dispatchEvent(enter);
+        expect(enter.defaultPrevented).toBe(offset === 100);
+        expect(props.onCommitRename).toHaveBeenCalledTimes(offset === 100 ? 1 : 0);
+        expect(props.onCancelRename).not.toHaveBeenCalled();
+        expect(input.value).toBe("日本語");
+      }
+    },
+  );
+
   it("keeps catalog sessions static and without a workspace chip", () => {
     const { container } = mountHeader({
       catalog: true,

@@ -291,10 +291,7 @@ function convertResponsesMessagesWithStyle(
     const normalized = sanitized.length > 64 ? sanitized.slice(0, 64) : sanitized;
     return normalized.replace(/_+$/, "");
   };
-  const buildForeignResponsesItemId = (itemId: string) => {
-    const normalized = `fc_${shortHash(itemId)}`;
-    return normalized.length > 64 ? normalized.slice(0, 64) : normalized;
-  };
+  const buildForeignResponsesItemId = (itemId: string) => `fc_${shortHash(itemId)}`;
   const buildSameProviderCopilotResponsesItemId = (itemId: string) => {
     const sanitized = sanitizeIdPart(itemId);
     const candidate = sanitized.startsWith("fc_") ? sanitized : `fc_${sanitized}`;

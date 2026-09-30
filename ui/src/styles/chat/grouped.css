@@ -528,7 +528,8 @@
 .chat-notice {
   display: grid;
   gap: 7px;
-  margin: 14px auto;
+  margin: 14px auto
+    calc(14px + var(--chat-footer-offset) + var(--chat-footer-row) + var(--chat-turn-gap));
   padding: 0 16px;
   color: var(--muted);
   font-size: 12px;
@@ -542,11 +543,7 @@
   line-height: inherit;
 }
 
-.chat-notice__body {
-  width: min(560px, 100%);
-  margin: 0 auto;
-}
-
+.chat-notice__body,
 .chat-notice__collapse {
   width: min(560px, 100%);
   margin: 0 auto;
@@ -586,7 +583,6 @@
 
 .chat-notice--danger {
   width: min(560px, calc(100% - 32px));
-  margin: 14px auto;
   text-align: left;
 }
 
