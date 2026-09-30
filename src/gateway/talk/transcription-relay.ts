@@ -188,30 +188,18 @@ function closeTalkTranscriptionRelaySessionsForConnection(connId: string): Promi
   });
 }
 
-function pruneExpiredTranscriptionSessions(nowMs = Date.now()): void {
+function enforceTranscriptionSessionLimits(connId: string): void {
   closeExpiredTalkRelaySessions({
     sessions: transcriptionSessions.values(),
     closeSession: (session) => closeTranscriptionSession(session, "completed"),
-    nowMs,
   });
-}
-
-function countTranscriptionSessionsForConn(connId: string): number {
-  let count = 0;
-  for (const session of transcriptionSessions.values()) {
-    if (session.connId === connId) {
-      count += 1;
-    }
-  }
-  return count;
-}
-
-function enforceTranscriptionSessionLimits(connId: string): void {
-  pruneExpiredTranscriptionSessions();
   if (transcriptionSessions.size >= MAX_TRANSCRIPTION_SESSIONS_GLOBAL) {
     throw new Error("Too many active transcription Talk sessions");
   }
-  if (countTranscriptionSessionsForConn(connId) >= MAX_TRANSCRIPTION_SESSIONS_PER_CONN) {
+  const connectionCount = [...transcriptionSessions.values()].filter(
+    (session) => session.connId === connId,
+  ).length;
+  if (connectionCount >= MAX_TRANSCRIPTION_SESSIONS_PER_CONN) {
     throw new Error("Too many active transcription Talk sessions for this connection");
   }
 }

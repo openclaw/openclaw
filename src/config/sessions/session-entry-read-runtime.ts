@@ -536,6 +536,7 @@ export function withSessionRegistryEntriesInWorker<T>(
         agentId: database.agentId,
         storePath: database.path,
         env: database.env,
+        cronRetention: true,
       });
       assertCurrent();
       return await consume(entries, assertCurrent);

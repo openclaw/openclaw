@@ -9,7 +9,8 @@ function itemDependencies(item: ChatRenderItem): readonly unknown[] {
     return [item.key, ...item.parts];
   }
   if (item.kind === "work-group") {
-    return [item.key, item.durationMs, ...item.groups];
+    const anchors = Array.from(item.previewAfterGroup ?? []).flat();
+    return [item.key, item.durationMs, ...item.groups, ...anchors];
   }
   if (item.kind === "activity-run") {
     return [item.key, ...item.groups];
