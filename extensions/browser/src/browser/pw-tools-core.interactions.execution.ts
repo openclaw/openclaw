@@ -306,7 +306,7 @@ export async function executeActViaPlaywright(
   }
 }
 
-export async function batchViaPlaywright(
+async function batchViaPlaywright(
   opts: GuardedInteractionOptions & {
     actions: BrowserActRequest[];
     stopOnError?: boolean;
