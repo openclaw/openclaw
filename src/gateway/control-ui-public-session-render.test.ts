@@ -219,4 +219,44 @@ describe("public session document", () => {
     expect(html).toContain('aria-label="Conversation"');
     expect(html).toContain('name="referrer" content="no-referrer"');
   });
+
+  it("never emits orphaned surrogate halves when truncation lands inside an emoji", () => {
+    const hasLoneSurrogate = (text: string) => {
+      for (let index = 0; index < text.length; index++) {
+        const code = text.charCodeAt(index);
+        if (code >= 0xd800 && code <= 0xdbff) {
+          const next = text.charCodeAt(index + 1);
+          if (!(next >= 0xdc00 && next <= 0xdfff)) {
+            return true;
+          }
+          index++;
+        } else if (code >= 0xdc00 && code <= 0xdfff) {
+          return true;
+        }
+      }
+      return false;
+    };
+
+    // Title: 199 code units + emoji pair; a raw slice(0, 200) would keep the high half.
+    const titleHtml = render([], { title: `${"a".repeat(199)}🙂` });
+    expect(titleHtml).toContain(`<title>${"a".repeat(199)} · OpenClaw</title>`);
+    expect(hasLoneSurrogate(titleHtml)).toBe(false);
+
+    // Message cap: 32,767 chars + emoji; the 32,768 code-unit budget must drop the whole pair.
+    const messageCapHtml = render([{ role: "user", content: `${"b".repeat(32_767)}🙂` }]);
+    expect(messageCapHtml).toContain("Message shortened for this public view");
+    expect(hasLoneSurrogate(messageCapHtml)).toBe(false);
+
+    // Document budget: 7×32,768 + 32,767 code units leave exactly 1, which cannot
+    // hold the emoji pair at the start of the oldest message.
+    const budgetMessages = [
+      { role: "user" as const, content: "🙂 visible tail" },
+      { role: "user" as const, content: "d".repeat(32_767) },
+      ...Array.from({ length: 7 }, () => ({ role: "user" as const, content: "c".repeat(32_768) })),
+    ];
+    const budgetHtml = render(budgetMessages);
+    expect(budgetHtml).toContain("Some messages or long text are omitted");
+    expect(budgetHtml).toContain("Message shortened for this public view");
+    expect(hasLoneSurrogate(budgetHtml)).toBe(false);
+  });
 });
