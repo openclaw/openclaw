@@ -67,18 +67,20 @@ describe("session activity semantics", () => {
     expect(container.querySelectorAll("main")).toHaveLength(0);
   });
 
-  it("renders today's pulse totals and hourly activity above the session list", () => {
-    const since = new Date(2026, 8, 27).getTime();
-    const now = since + 14.5 * 3_600_000;
-    vi.spyOn(Date, "now").mockReturnValue(now);
-    const input = props({ rows: [row("Recent session", { id: "owner" }, now)] });
-    const hours = Array.from({ length: 24 }, () => 0);
-    hours[10] = 12;
-    hours[14] = 3;
+  it("renders the selected window's pulse totals and hourly activity above the session list", () => {
+    const since = new Date(2026, 8, 26, 14).getTime();
+    const now = new Date(2026, 8, 27, 14, 30).getTime();
+    const input = props({
+      rows: [row("Recent session", { id: "owner" }, now)],
+      filters: { personId: null, query: "", time: "24h" },
+    });
+    const buckets = Array.from({ length: 25 }, () => 0);
+    buckets[10] = 12;
+    buckets[24] = 3;
     input.result!.activityPulse = {
       since,
-      until: new Date(2026, 8, 28).getTime(),
-      hours,
+      until: new Date(2026, 8, 27, 15).getTime(),
+      buckets,
       sessions: 38,
       started: 12,
       people: 6,
@@ -90,22 +92,32 @@ describe("session activity semantics", () => {
     const main = container.querySelector(".activity-feed__main")!;
     const pulse = main.querySelector(".activity-pulse")!;
     expect(main.firstElementChild).toBe(pulse);
+    expect(pulse.querySelector(".activity-pulse__heading")?.textContent?.trim()).toBe(
+      "Last 24 hours",
+    );
     expect(
       pulse.querySelector(".activity-pulse__stats")?.textContent?.replace(/\s+/g, " ").trim(),
     ).toBe("38 sessions · 12 started · 6 people · 3 running now");
     expect(pulse.querySelector(".activity-pulse__running")).not.toBeNull();
     const bars = pulse.querySelectorAll(".activity-pulse__bars > span");
-    expect(bars).toHaveLength(24);
-    expect(pulse.querySelectorAll('[data-hour="current"]')).toHaveLength(1);
-    expect(bars[14]?.getAttribute("data-hour")).toBe("current");
-    expect(bars[13]?.getAttribute("data-hour")).toBe("past");
-    expect(bars[15]?.getAttribute("data-hour")).toBe("future");
-    const peakHour = new Intl.DateTimeFormat(undefined, { hour: "numeric" }).format(
-      since + 10 * 3_600_000,
+    expect(bars).toHaveLength(25);
+    expect(pulse.querySelectorAll('[data-bucket="current"]')).toHaveLength(1);
+    expect(bars[24]?.getAttribute("data-bucket")).toBe("current");
+    expect(pulse.querySelectorAll('[data-bucket="past"]')).toHaveLength(24);
+    expect(pulse.querySelector('[data-bucket="future"]')).toBeNull();
+    const hour = new Intl.DateTimeFormat(undefined, { hour: "numeric" });
+    const peakHour = hour.format(since + 10 * 3_600_000);
+    expect(pulse.querySelector('[role="img"]')?.getAttribute("aria-label")).toBe(
+      `Last 24 hours: 38 sessions; busiest ${peakHour}`,
     );
-    expect(pulse.querySelector('[role="img"]')?.getAttribute("aria-label")).toContain("38");
-    expect(pulse.querySelector('[role="img"]')?.getAttribute("aria-label")).toContain(peakHour);
     expect(bars[10]?.getAttribute("title")).toBe(`${peakHour} · 12 sessions`);
+    expect(bars[10]?.getAttribute("style")).toContain("100%");
+    expect(bars[24]?.getAttribute("style")).toContain("25%");
+    expect(
+      [...pulse.querySelectorAll(".activity-pulse__axis > span > span")].map(
+        (label) => label.textContent,
+      ),
+    ).toEqual([0, 6, 12, 18, 24].map((index) => hour.format(since + index * 3_600_000)));
 
     input.result!.peopleIncomplete = true;
     render(renderSessionActivityView(input), container);
@@ -116,39 +128,75 @@ describe("session activity semantics", () => {
     );
   });
 
-  it("renders every elapsed hour and the next midnight on a 25-hour day", () => {
-    const since = new Date(2026, 10, 1).getTime();
-    const until = new Date(2026, 10, 2).getTime();
-    vi.spyOn(Date, "now").mockReturnValue(since + 24.5 * 3_600_000);
-    const input = props();
-    input.result!.activityPulse = {
-      since,
-      until,
-      hours: Array.from({ length: 25 }, () => 1),
-      sessions: 25,
-      started: 0,
-      running: 0,
-    };
-    render(renderSessionActivityView(input), container);
+  it.each([
+    {
+      time: "7d",
+      label: "Last 7 days",
+      count: 8,
+      since: new Date(2026, 2, 4),
+      options: { month: "short", day: "numeric" },
+      indices: [0, 4, 7],
+    },
+    {
+      time: "30d",
+      label: "Last 30 days",
+      count: 31,
+      since: new Date(2026, 2, 1),
+      options: { month: "short", day: "numeric" },
+      indices: [0, 8, 15, 23, 30],
+    },
+    {
+      time: "all",
+      label: "All time",
+      count: 12,
+      since: new Date(2025, 9, 1),
+      options: { month: "short" },
+      indices: [0, 6, 11],
+    },
+  ] as const)(
+    "labels $time buckets under evenly spaced axis positions",
+    ({ time, label, count, since, options, indices }) => {
+      const input = props({ filters: { personId: null, query: "", time } });
+      const bucketStart = (index: number) =>
+        new Date(
+          since.getFullYear(),
+          since.getMonth() + (time === "all" ? index : 0),
+          since.getDate() + (time === "all" ? 0 : index),
+        );
+      input.result!.activityPulse = {
+        since: since.getTime(),
+        until: bucketStart(count).getTime(),
+        buckets: Array.from({ length: count }, () => 1),
+        sessions: count,
+        running: 0,
+      };
+      render(renderSessionActivityView(input), container);
 
-    const pulse = container.querySelector(".activity-pulse")!;
-    const bars = pulse.querySelectorAll(".activity-pulse__bars > span");
-    expect(bars).toHaveLength(25);
-    expect(bars[24]?.getAttribute("data-hour")).toBe("current");
-    expect(pulse.querySelector(".activity-pulse__axis")?.lastElementChild?.textContent).toBe(
-      new Intl.DateTimeFormat(undefined, { hour: "numeric" }).format(until),
-    );
-  });
+      const pulse = container.querySelector(".activity-pulse")!;
+      expect(pulse.querySelector(".activity-pulse__heading")?.textContent?.trim()).toBe(label);
+      const bars = pulse.querySelectorAll(".activity-pulse__bars > span");
+      expect(bars).toHaveLength(count);
+      expect(pulse.querySelectorAll(".activity-pulse__axis > span")).toHaveLength(count);
+      expect(bars[count - 1]?.getAttribute("data-bucket")).toBe("current");
+      const formatter = new Intl.DateTimeFormat(undefined, options);
+      expect(bars[count - 1]?.getAttribute("title")).toBe(
+        `${formatter.format(bucketStart(count - 1))} · 1 sessions`,
+      );
+      expect(
+        [...pulse.querySelectorAll(".activity-pulse__axis > span > span")].map(
+          (axis) => axis.textContent,
+        ),
+      ).toEqual(indices.map((index) => formatter.format(bucketStart(index))));
+    },
+  );
 
-  it("keeps a zero-activity pulse and omits an unavailable people count", () => {
-    const since = new Date(2026, 8, 27).getTime();
-    const input = props();
+  it("keeps a zero-activity pulse and omits unavailable started and people counts", () => {
+    const input = props({ filters: { personId: null, query: "", time: "all" } });
     input.result!.activityPulse = {
-      since,
-      until: new Date(2026, 8, 28).getTime(),
-      hours: Array.from({ length: 24 }, () => 0),
+      since: new Date(2025, 9, 1).getTime(),
+      until: new Date(2026, 9, 1).getTime(),
+      buckets: Array.from({ length: 12 }, () => 0),
       sessions: 0,
-      started: 0,
       running: 0,
     };
     render(renderSessionActivityView(input), container);
@@ -156,8 +204,8 @@ describe("session activity semantics", () => {
     const pulse = container.querySelector(".activity-pulse")!;
     expect(
       pulse.querySelector(".activity-pulse__stats")?.textContent?.replace(/\s+/g, " ").trim(),
-    ).toBe("0 sessions · 0 started · 0 running now");
-    expect(pulse.querySelectorAll(".activity-pulse__bars > span")).toHaveLength(24);
+    ).toBe("0 sessions · 0 running now");
+    expect(pulse.querySelectorAll(".activity-pulse__bars > span")).toHaveLength(12);
     expect(pulse.querySelector(".activity-pulse__running")).toBeNull();
 
     render(renderSessionActivityView(props()), container);

@@ -1,5 +1,3 @@
-// MCP loopback tool schema projection.
-// Converts gateway-scoped tools into MCP tools/list-compatible schemas.
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { logWarn } from "../logger.js";
@@ -9,7 +7,6 @@ const MCP_LOOPBACK_LOG_PREFIX = "mcp-loopback";
 
 export type McpLoopbackTool = ReturnType<typeof resolveGatewayScopedTools>["tools"][number];
 
-/** MCP tools/list schema entry derived from a gateway loopback tool. */
 export type McpToolSchemaEntry = {
   name: string;
   description: string | undefined;
@@ -24,7 +21,6 @@ function readLoopbackToolField(tool: McpLoopbackTool, key: "name" | "description
   }
 }
 
-/** Safely reads and normalizes a loopback tool name from plugin-provided tool objects. */
 export function readMcpLoopbackToolName(tool: McpLoopbackTool): string | undefined {
   const value = readLoopbackToolField(tool, "name");
   if (typeof value !== "string") {
@@ -125,11 +121,11 @@ function flattenUnionSchema(
 ): Record<string, unknown> {
   // MCP clients vary in union-schema support. Merge only safe object variants
   // and keep common required fields so generated forms remain usable.
-  const variants = (raw.anyOf ?? raw.oneOf) as unknown[] | undefined;
+  const variants = raw.anyOf ?? raw.oneOf;
   if (!Array.isArray(variants) || variants.length === 0) {
     return raw;
   }
-  const mergedProps = Object.create(null) as Record<string, unknown>;
+  const mergedProps = Object.create(null) as Record<string, boolean | Record<string, unknown>>;
   const requiredSets: Set<string>[] = [];
   for (const variant of variants) {
     if (variant === true) {
@@ -152,36 +148,24 @@ function flattenUnionSchema(
           mergedProps[key] = schema;
           continue;
         }
-        const existing = mergedProps[key];
-        const incoming = schema;
-        if (existing === true || incoming === true) {
+        const existing = mergedProps[key]!;
+        if (existing === true || schema === true) {
           mergedProps[key] = true;
           continue;
         }
         if (existing === false) {
-          mergedProps[key] = incoming;
+          mergedProps[key] = schema;
           continue;
         }
-        if (incoming === false) {
+        if (schema === false) {
           continue;
         }
-        if (areSchemaValuesEquivalent(existing, incoming)) {
-          continue;
-        }
-        if (!isRecord(existing) || !isRecord(incoming)) {
-          if (existing !== incoming) {
-            warnSchemaOnce(
-              `${MCP_LOOPBACK_LOG_PREFIX}: conflicting schema definitions for "${toolName}.${key}", keeping the first variant`,
-            );
-          }
-          continue;
-        }
-        if (isDeepStrictEqual(existing, incoming)) {
+        if (areSchemaValuesEquivalent(existing, schema)) {
           continue;
         }
         // A prior const merge becomes an enum. Treat both as one literal family
         // so later union variants cannot silently disappear based on ordering.
-        const mergedLiterals = mergeLiteralSchemas(existing, incoming);
+        const mergedLiterals = mergeLiteralSchemas(existing, schema);
         if (mergedLiterals) {
           mergedProps[key] = mergedLiterals;
           continue;
@@ -272,7 +256,6 @@ function warnSchemaOnce(message: string) {
   logWarn(message);
 }
 
-/** Builds MCP-compatible tool schemas for loopback-visible gateway tools. */
 export function buildMcpToolSchema(tools: McpLoopbackTool[]): McpToolSchemaEntry[] {
   return tools.flatMap((tool) => {
     const name = readMcpLoopbackToolName(tool);

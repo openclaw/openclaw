@@ -15,7 +15,7 @@ export function resolveHookExternalContentSource(
   if (normalized.startsWith("hook:gmail:")) {
     return "gmail";
   }
-  if (normalized.startsWith("hook:webhook:") || normalized.startsWith("hook:")) {
+  if (normalized.startsWith("hook:")) {
     return "webhook";
   }
   return undefined;

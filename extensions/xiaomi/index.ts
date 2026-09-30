@@ -98,57 +98,50 @@ async function resolveXiaomiCatalog(params: {
   });
 }
 
-function buildXiaomiKeyMismatchMessage(params: {
-  actualKey: string;
+type XiaomiApiKeyAuthOptions = {
+  providerId: string;
+  optionKey: string;
+  flagName: `--${string}`;
+  envVar: string;
+  promptMessage: string;
   expectedKind: "payg" | "token-plan";
-}): string | undefined {
-  const normalized = params.actualKey.trim().toLowerCase();
-  const expectedPrefix = params.expectedKind === "payg" ? "sk-" : "tp-";
-  const kindLabel = params.expectedKind === "payg" ? "pay-as-you-go" : "Token Plan";
+  defaultModel: string;
+  applyConfig: (cfg: OpenClawConfig) => OpenClawConfig;
+};
+
+function assertCompatibleXiaomiKey(
+  actualKey: string,
+  expectedKind: XiaomiApiKeyAuthOptions["expectedKind"],
+): void {
+  const normalized = actualKey.trim().toLowerCase();
+  const expectedPrefix = expectedKind === "payg" ? "sk-" : "tp-";
+  const kindLabel = expectedKind === "payg" ? "pay-as-you-go" : "Token Plan";
 
   if (normalized.startsWith(expectedPrefix)) {
-    return undefined;
+    return;
   }
-  if (params.expectedKind === "payg" && normalized.startsWith("tp-")) {
-    return (
+  if (expectedKind === "payg" && normalized.startsWith("tp-")) {
+    throw new Error(
       "This looks like a Xiaomi MiMo Token Plan key (tp-...). " +
-      "Re-run onboarding with one of: --auth-choice xiaomi-token-plan-cn, " +
-      "--auth-choice xiaomi-token-plan-sgp, or --auth-choice xiaomi-token-plan-ams."
+        "Re-run onboarding with one of: --auth-choice xiaomi-token-plan-cn, " +
+        "--auth-choice xiaomi-token-plan-sgp, or --auth-choice xiaomi-token-plan-ams.",
     );
   }
-  if (params.expectedKind === "token-plan" && normalized.startsWith("sk-")) {
-    return (
+  if (expectedKind === "token-plan" && normalized.startsWith("sk-")) {
+    throw new Error(
       "This looks like a Xiaomi MiMo pay-as-you-go key (sk-...). " +
-      `Re-run onboarding with --auth-choice xiaomi-api-key or pass ${PAYG_FLAG_NAME}.`
+        `Re-run onboarding with --auth-choice xiaomi-api-key or pass ${PAYG_FLAG_NAME}.`,
     );
   }
-  return (
+  throw new Error(
     `Xiaomi MiMo ${kindLabel} keys must start with "${expectedPrefix}". ` +
-    "The entered key does not match the expected format."
+      "The entered key does not match the expected format.",
   );
-}
-
-function assertCompatibleXiaomiKey(params: {
-  actualKey: string;
-  expectedKind: "payg" | "token-plan";
-}): void {
-  const message = buildXiaomiKeyMismatchMessage(params);
-  if (message) {
-    throw new Error(message);
-  }
 }
 
 async function runXiaomiApiKeyAuth(
   ctx: ProviderAuthContext,
-  params: {
-    providerId: string;
-    optionKey: string;
-    envVar: string;
-    promptMessage: string;
-    expectedKind: "payg" | "token-plan";
-    defaultModel: string;
-    applyConfig: (cfg: OpenClawConfig) => OpenClawConfig;
-  },
+  params: XiaomiApiKeyAuthOptions,
 ): Promise<ProviderAuthResult> {
   const profileId = `${params.providerId}:default`;
   const { apiKey, input, mode } = await captureProviderApiKey(ctx, {
@@ -165,10 +158,7 @@ async function runXiaomiApiKeyAuth(
     promptMessage: params.promptMessage,
     missingInputMessage: `Missing Xiaomi API key for provider "${params.providerId}".`,
   });
-  assertCompatibleXiaomiKey({
-    actualKey: apiKey,
-    expectedKind: params.expectedKind,
-  });
+  assertCompatibleXiaomiKey(apiKey, params.expectedKind);
   return {
     profiles: [
       {
@@ -188,14 +178,7 @@ async function runXiaomiApiKeyAuth(
 
 async function runXiaomiApiKeyAuthNonInteractive(
   ctx: ProviderAuthMethodNonInteractiveContext,
-  params: {
-    providerId: string;
-    optionKey: string;
-    flagName: `--${string}`;
-    envVar: string;
-    expectedKind: "payg" | "token-plan";
-    applyConfig: (cfg: OpenClawConfig) => OpenClawConfig;
-  },
+  params: XiaomiApiKeyAuthOptions,
 ) {
   const resolved = await ctx.resolveApiKey({
     provider: params.providerId,
@@ -206,10 +189,7 @@ async function runXiaomiApiKeyAuthNonInteractive(
   if (!resolved) {
     return null;
   }
-  assertCompatibleXiaomiKey({
-    actualKey: resolved.key,
-    expectedKind: params.expectedKind,
-  });
+  assertCompatibleXiaomiKey(resolved.key, params.expectedKind);
 
   const profileId = `${params.providerId}:default`;
   if (

@@ -7,6 +7,14 @@ import { runCronRuntimeMutation } from "../service/runtime-mutation.js";
 import type { CronRunHistoryWrite } from "./run-history.types.js";
 import { isCronRunReceiptOwnerStale } from "./run-receipt-store.js";
 
+/** Original host authority for history that follows an awaited committed mutation. */
+export type CronRunHistorySource = {
+  context: OpenClawStateWorkerContext;
+  storeKey: string;
+  defaultAgentId?: string;
+  assertCurrent: () => void;
+};
+
 export async function maintainCronRunHistory(
   context: OpenClawStateWorkerContext,
   assertCurrent: () => void,
@@ -43,10 +51,16 @@ export async function maintainCronRunHistory(
   });
 }
 
-export async function recordCronRun(input: CronRunHistoryWrite): Promise<void> {
-  const context = captureOpenClawStateWorkerContext();
+export async function recordCronRun(
+  input: CronRunHistoryWrite,
+  source?: CronRunHistorySource,
+): Promise<void> {
+  const context = source?.context ?? captureOpenClawStateWorkerContext();
   const captured = structuredClone(input);
-  const assertCurrent = () => context.admission.assertCurrent();
+  const assertCurrent = () => {
+    context.admission.assertCurrent();
+    source?.assertCurrent();
+  };
   await runOpenClawStateWorkerOperation(
     context,
     (scope) => scope.execute({ type: "cron.recordRun", input: captured }),

@@ -6,6 +6,7 @@ import {
   parseGoogleMeetMode,
   parseGoogleMeetTransport,
   parsePositiveNumber,
+  resolveCliJoinRequest,
   type JoinOptions,
   type RecoverTabOptions,
   type SetupOptions,
@@ -29,15 +30,7 @@ export function registerGoogleMeetProbeCommands(context: GoogleMeetCliCommandCon
     .option("--pin <pin>", "Meet phone PIN; # is appended if omitted")
     .option("--dtmf-sequence <sequence>", "Explicit Twilio DTMF sequence")
     .action(async (url: string | undefined, options: JoinOptions) => {
-      const payload = {
-        url: resolveMeetingInput(context.config, url),
-        transport: parseGoogleMeetTransport(options.transport),
-        mode: parseGoogleMeetMode(options.mode),
-        message: options.message,
-        dialInNumber: options.dialInNumber,
-        pin: options.pin,
-        dtmfSequence: options.dtmfSequence,
-      };
+      const payload = resolveCliJoinRequest(resolveMeetingInput(context.config, url), options);
       const delegated = await callGoogleMeetGateway({
         callGateway,
         method: "googlemeet.join",

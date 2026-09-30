@@ -8,8 +8,7 @@ import {
 import { writeCalendarEventsSummary, writeLatestConferenceRecordSummary } from "./cli-export.js";
 import {
   callGoogleMeetGateway,
-  parseGoogleMeetMode,
-  parseGoogleMeetTransport,
+  resolveCliJoinRequest,
   type CreateOptions,
   type JsonOptions,
   type ResolveSpaceOptions,
@@ -128,15 +127,7 @@ export function registerGoogleMeetCreateCommands(context: GoogleMeetCliCommandCo
         const result = await rt.createViaBrowser();
         const join =
           options.join !== false
-            ? await rt.join({
-                url: result.meetingUri,
-                transport: parseGoogleMeetTransport(options.transport),
-                mode: parseGoogleMeetMode(options.mode),
-                message: options.message,
-                dialInNumber: options.dialInNumber,
-                pin: options.pin,
-                dtmfSequence: options.dtmfSequence,
-              })
+            ? await rt.join(resolveCliJoinRequest(result.meetingUri, options))
             : undefined;
         writeGoogleMeetCreateOutput(
           {
@@ -167,15 +158,7 @@ export function registerGoogleMeetCreateCommands(context: GoogleMeetCliCommandCo
         options.join !== false
           ? await (
               await context.ensureRuntime()
-            ).join({
-              url: result.meetingUri,
-              transport: parseGoogleMeetTransport(options.transport),
-              mode: parseGoogleMeetMode(options.mode),
-              message: options.message,
-              dialInNumber: options.dialInNumber,
-              pin: options.pin,
-              dtmfSequence: options.dtmfSequence,
-            })
+            ).join(resolveCliJoinRequest(result.meetingUri, options))
           : undefined;
       writeGoogleMeetCreateOutput(
         {
@@ -349,17 +332,14 @@ export function registerGoogleMeetApiCommands(context: GoogleMeetCliCommandConte
       );
     });
 
-  root
-    .command("calendar-events")
-    .description("Preview Calendar events with Google Meet links")
-    .option("--today", "Find Meet links on today's calendar")
-    .option("--event <query>", "Find matching calendar events with Meet links")
-    .option("--calendar <id>", "Calendar id for lookup", "primary")
-    .option("--access-token <token>", "Access token override")
-    .option("--refresh-token <token>", "Refresh token override")
-    .option("--client-id <id>", "OAuth client id override")
-    .option("--client-secret <secret>", "OAuth client secret override")
-    .option("--expires-at <ms>", "Cached access token expiry as unix epoch milliseconds")
+  addGoogleMeetOAuthOptions(
+    root
+      .command("calendar-events")
+      .description("Preview Calendar events with Google Meet links")
+      .option("--today", "Find Meet links on today's calendar")
+      .option("--event <query>", "Find matching calendar events with Meet links")
+      .option("--calendar <id>", "Calendar id for lookup", "primary"),
+  )
     .option("--json", "Print JSON output", false)
     .action(async (options: ResolveSpaceOptions) => {
       const token = await resolveGoogleMeetTokenFromParams(

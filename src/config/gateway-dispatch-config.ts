@@ -5,7 +5,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import { applyConfigEnvVars } from "./config-env-vars.js";
 import { resolveConfigEnvVars } from "./env-substitution.js";
-import { readConfigIncludeFileWithGuards, resolveConfigIncludes } from "./includes.js";
+import { resolveConfigIncludes } from "./includes.js";
 import { resolveConfigPath, resolveIncludeRoots } from "./paths.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
@@ -59,29 +59,6 @@ function applyGatewayDispatchSessionDefaults(config: OpenClawConfig): OpenClawCo
   };
 }
 
-function resolveIncludesForGatewayDispatch(
-  parsed: unknown,
-  configPath: string,
-  env: NodeJS.ProcessEnv,
-): unknown {
-  return resolveConfigIncludes(
-    parsed,
-    configPath,
-    {
-      readFile: (candidate) => fs.readFileSync(candidate, "utf-8"),
-      readFileWithGuards: ({ includePath, resolvedPath, rootRealDir }) =>
-        readConfigIncludeFileWithGuards({
-          includePath,
-          resolvedPath,
-          rootRealDir,
-          ioFs: fs,
-        }),
-      parseJson: parseJsonWithJson5Fallback,
-    },
-    { allowedRoots: resolveIncludeRoots(env) },
-  );
-}
-
 function readRawGatewayDispatchConfig(options: GatewayDispatchConfigReadOptions = {}): {
   config: OpenClawConfig;
   configPath: string;
@@ -94,7 +71,9 @@ function readRawGatewayDispatchConfig(options: GatewayDispatchConfigReadOptions 
 
   const raw = fs.readFileSync(configPath, "utf-8");
   const parsed = parseJsonWithJson5Fallback(raw);
-  const resolvedIncludes = resolveIncludesForGatewayDispatch(parsed, configPath, env);
+  const resolvedIncludes = resolveConfigIncludes(parsed, configPath, undefined, {
+    allowedRoots: resolveIncludeRoots(env),
+  });
   const resolvedConfig = resolveGatewayDispatchConfig(resolvedIncludes, env);
   return {
     config: applyGatewayDispatchSessionDefaults(resolvedConfig),

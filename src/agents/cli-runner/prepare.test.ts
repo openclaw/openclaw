@@ -127,6 +127,7 @@ import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
 import { finalizeCliContextEngineTurn } from "./cli-run-transcript.js";
 import { executePluginOwnedProcess } from "./execute-plugin.js";
 import { prepareCliHistoryBoundary } from "./history-boundary.js";
+import { registerCliMcpPreparationTests } from "./prepare-mcp.test-support.js";
 import { registerCliThinkingPreparationTests } from "./prepare-thinking.test-support.js";
 import { prepareCliRunContext } from "./prepare.js";
 import {
@@ -2852,39 +2853,9 @@ describe("prepareCliRunContext", () => {
     });
   });
 
-  it("binds the exact late prepared admission to the CLI MCP grant", async () => {
-    const bindMcpLoopbackClientGrantAdmission = vi.fn(() => true);
-    setCliRunnerPrepareTestDeps({
-      getActiveMcpLoopbackRuntime: vi.fn(createLoopbackRuntime),
-      bindMcpLoopbackClientGrantAdmission,
-    });
-    const preparedRunAdmission = prepareSystemAgentRunAdmission(
-      {},
-      "run-prepared-mcp",
-      "main",
-      "cli-late-grant-test",
-    );
-    try {
-      const context = await fixture.prepare({
-        runId: "run-prepared-mcp",
-        preparedRunAdmission,
-        config: createCliBackendConfig({ bundleMcp: true }),
-      });
-      try {
-        expect(context.params.admittedRunContext.operationalRunInstance).toBe(
-          preparedRunAdmission.operationalRunInstance,
-        );
-        expect(bindMcpLoopbackClientGrantAdmission).toHaveBeenCalledExactlyOnceWith({
-          token: "loopback-token",
-          runtimeOwnerToken: "loopback-owner-token",
-          admittedRunContext: context.params.admittedRunContext,
-        });
-      } finally {
-        await context.preparedBackend.cleanup?.();
-      }
-    } finally {
-      preparedRunAdmission.close();
-    }
+  registerCliMcpPreparationTests({
+    getFixture: () => fixture,
+    createConfig: () => createCliBackendConfig({ bundleMcp: true }),
   });
 
   it("uses loopback-scoped tools when building bundled MCP CLI prompts", async () => {

@@ -155,6 +155,18 @@ export function parseGoogleMeetTransport(
   throw new Error(`transport must be chrome, chrome-node, or twilio; received ${value}`);
 }
 
+export function resolveCliJoinRequest(url: string, options: JoinOptions) {
+  return {
+    url,
+    transport: parseGoogleMeetTransport(options.transport),
+    mode: parseGoogleMeetMode(options.mode),
+    message: options.message,
+    dialInNumber: options.dialInNumber,
+    pin: options.pin,
+    dtmfSequence: options.dtmfSequence,
+  };
+}
+
 export function parseGoogleMeetBrowserTransport(
   value: string | undefined,
 ): "chrome" | "chrome-node" | undefined {

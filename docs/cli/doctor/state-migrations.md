@@ -204,6 +204,12 @@ When Doctor runs inside an update or repair, let that command finish before
 following recovery advice from an intermediate plugin warning. The updater may
 complete package convergence and run Doctor again before it exits.
 
+Doctor can finish an installation-only deferral once the installed plugin's
+metadata confirms it has no state migration or inspection to run, including when
+its channel is disabled or it no longer has a config entry. This preserves the
+plugin's activation settings and saved configuration. Previously recorded state
+migration or inspection obligations still require the plugin to complete them.
+
 If the installed plugin still has not reported migration completion, run
 `openclaw doctor --fix`. If that cannot complete the migration, report the
 remaining warning to the plugin maintainer. Repeating a package update alone

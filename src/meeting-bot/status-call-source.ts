@@ -415,6 +415,10 @@ ${withLiveOwnership("  }\n")}${
     if (prior.speaker && current.speaker && prior.speaker !== current.speaker) return false;
     return prior.node === current.node;
   };
+  const sameCaptionRow = (left, right) =>
+    right.rowIdentity
+      ? left.rowIdentity === right.rowIdentity
+      : left.node === right.node;
   const commitCaptionLines = (state, entries) => {
     state.lines.push(...entries.map((entry) => {
       entry.utteranceId ||= crypto.randomUUID();
@@ -430,12 +434,6 @@ ${withLiveOwnership("  }\n")}${
       state.lines.splice(0, excess);
       state.droppedLines = (state.droppedLines || 0) + excess;
     }
-  };
-  const sameCaptionRow = (left, right) =>
-    right.rowIdentity
-      ? left.rowIdentity === right.rowIdentity
-      : left.node === right.node;
-  const retainSettledCaptionLines = (state, entries) => {
     const settled = [...state.settled];
     for (const entry of entries) {
       const priorIndex = settled.findIndex((candidate) => sameCaptionRow(candidate, entry));
@@ -452,7 +450,6 @@ ${withLiveOwnership("  }\n")}${
     pendingState.settleTimer = setTimeout(() => {
       if (window[${captionsGlobal}] !== pendingState) return;
       commitCaptionLines(pendingState, pendingState.visible);
-      retainSettledCaptionLines(pendingState, pendingState.visible);
       pendingState.visible = [];
       pendingState.settleTimer = undefined;
     }, ${captionSettleMs});
@@ -513,7 +510,6 @@ ${withLiveOwnership("  }\n")}${
       captionState.settleTimer = undefined;
       captionState.visible = captionState.visible.filter((entry) => !rowWasRemoved(entry));
       commitCaptionLines(captionState, removedVisible);
-      retainSettledCaptionLines(captionState, removedVisible);
     }
     const retainedLineIds = new Set(captionState.lines.map((entry) => entry.utteranceId));
     captionState.settled = captionState.settled.filter((entry) =>
@@ -598,7 +594,6 @@ ${withLiveOwnership("  }\n")}${
     }
     captionChanged ||= unmatchedPrevious.length > 0;
     commitCaptionLines(captionState, unmatchedPrevious);
-    retainSettledCaptionLines(captionState, unmatchedPrevious);
     captionState.visible = nextVisible;
     // Identity-less rows stay mutable while rendered; removal is their only
     // reliable utterance boundary. Stable logical rows may settle on quiet.

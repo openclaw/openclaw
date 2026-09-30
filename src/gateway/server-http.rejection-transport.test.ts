@@ -7,7 +7,8 @@ import { createWebSocketStream, WebSocketServer, type WebSocket } from "ws";
 import { readWebhookBodyOrReject } from "../plugin-sdk/webhook-request-guards.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "./server-constants.js";
-import { attachGatewayUpgradeHandler, createGatewayHttpServer } from "./server-http.js";
+import { attachGatewayUpgradeHandler } from "./server-http-upgrades.js";
+import { createGatewayHttpServer } from "./server-http.js";
 import { createPreauthConnectionBudget } from "./server/preauth-connection-budget.js";
 
 vi.mock("../config/io.js", () => ({ getRuntimeConfig: () => ({}) }));

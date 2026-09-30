@@ -11,7 +11,7 @@ import {
 } from "../plugins/install-artifact-inspection.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { readClawCronRefs, type PersistedClawCronRef } from "./cron.js";
-import { digestClawAgentConfig } from "./lifecycle-config-removal.js";
+import { digestClawValue } from "./digest.js";
 import {
   ClawRemoveError,
   inspectClawBootstrap,
@@ -253,7 +253,7 @@ export async function readClawStatus(
       ...(installAgentIds.has(install.agentId) ? {} : { orphaned: true }),
       agentState: !agent
         ? "missing"
-        : digestClawAgentConfig(agent) === install.agentConfigDigest
+        : digestClawValue(agent) === install.agentConfigDigest
           ? "present"
           : "modified",
       bootstrapState: bootstrap.state,

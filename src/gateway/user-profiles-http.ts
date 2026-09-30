@@ -170,13 +170,8 @@ async function readBoundedGravatarBody(
   if (totalBytes === 0) {
     return undefined;
   }
-  const bytes = new Uint8Array(totalBytes);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return bytes;
+  const bytes = Buffer.concat(chunks, totalBytes);
+  return new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength);
 }
 
 async function cancelGravatarBody(body: ReadableStream<Uint8Array> | null): Promise<void> {

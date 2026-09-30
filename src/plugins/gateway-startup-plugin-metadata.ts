@@ -188,16 +188,12 @@ export function createGatewayStartupMetadataPluginIdScope(params: {
     resolve: ({ index }) =>
       resolveGatewayStartupMetadataPluginIds({
         config: params.config,
-        ...(params.activationSourceConfig !== undefined
-          ? { activationSourceConfig: params.activationSourceConfig }
-          : {}),
+        activationSourceConfig: params.activationSourceConfig,
         env: params.env,
         index,
         ...(workerProviderIds.length > 0 ? { workerProviderIds } : {}),
-        ...(params.platform !== undefined ? { platform: params.platform } : {}),
-        ...(params.ambientEnvTriggers !== undefined
-          ? { ambientEnvTriggers: params.ambientEnvTriggers }
-          : {}),
+        platform: params.platform,
+        ambientEnvTriggers: params.ambientEnvTriggers,
       }),
   };
 }
