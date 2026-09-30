@@ -36,6 +36,13 @@ function stubSrt(opts: { supported: boolean; errors?: string[]; warnings?: strin
   } as Awaited<ReturnType<typeof SandboxManager.checkDependenciesAsync>>);
 }
 
+function expectError(error: unknown): Error {
+  if (error instanceof Error) {
+    return error;
+  }
+  throw new TypeError(`Expected Error rejection, received ${String(error)}`);
+}
+
 describe("srt dependency probe (fail-closed gate)", () => {
   afterEach(() => {
     setPlatform(originalPlatform);
@@ -51,7 +58,7 @@ describe("srt dependency probe (fail-closed gate)", () => {
   it("AC-L1: fails closed on Linux with actionable install guidance when bwrap is missing", async () => {
     setPlatform("linux");
     stubSrt({ supported: true, errors: ["bubblewrap (bwrap) not installed"] });
-    const err = await assertSrtSandboxAvailable().catch((e) => e);
+    const err = await assertSrtSandboxAvailable().catch(expectError);
     expect(err).toBeInstanceOf(SrtSandboxUnavailableError);
     expect(err.message).toContain("bubblewrap (bwrap) not installed");
     // Actionable: names the package and an install command, and states fail-closed.
@@ -66,7 +73,7 @@ describe("srt dependency probe (fail-closed gate)", () => {
       supported: true,
       errors: ["bubblewrap (bwrap) not installed", "socat not installed", "ripgrep (rg) not found"],
     });
-    const err = await assertSrtSandboxAvailable().catch((e) => e);
+    const err = await assertSrtSandboxAvailable().catch(expectError);
     expect(err.message).toMatch(/apt-get install bubblewrap ripgrep socat/);
   });
 
@@ -106,7 +113,7 @@ describe("srt dependency probe (fail-closed gate)", () => {
       errors: [],
       warnings: ["seccomp not available - unix socket access not restricted"],
     });
-    const err = await assertSrtSandboxAvailable().catch((e) => e);
+    const err = await assertSrtSandboxAvailable().catch(expectError);
     expect(err).toBeInstanceOf(SrtSandboxUnavailableError);
     expect(err.message).toMatch(/seccomp helper unavailable/);
     expect(err.message).toMatch(/@anthropic-ai\/sandbox-runtime@0\.0\.76/);
@@ -174,7 +181,7 @@ describe("srt dependency probe (fail-closed gate)", () => {
     setPlatform("win32");
     mockCheckWindows.mockResolvedValue({ errors: ["srt-win.exe not found"], warnings: [] });
     const srtWin = { exe: "C:\\srt-win.exe", prependArgs: ["--srt-win"] as const };
-    const err = await assertSrtSandboxAvailable(srtWin).catch((e) => e);
+    const err = await assertSrtSandboxAvailable(srtWin).catch(expectError);
     expect(err).toBeInstanceOf(SrtSandboxUnavailableError);
     expect(err.message).toMatch(/Windows/);
     expect(err.message).toMatch(/fail-closed/i);

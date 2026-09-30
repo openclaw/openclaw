@@ -106,5 +106,5 @@ export function buildSrtRuntimeConfig(
       allowWrite,
       denyWrite: [],
     },
-  } as SandboxRuntimeConfig;
+  };
 }

@@ -97,7 +97,7 @@ function linuxInstallGuidance(problems: readonly string[]): string {
   }
   const hints: string[] = [];
   if (packages.size > 0) {
-    const list = Array.from(packages).sort().join(" ");
+    const list = Array.from(packages).toSorted().join(" ");
     hints.push(
       `Install the missing Linux sandbox dependencies and retry — Debian/Ubuntu: 'sudo apt-get install ${list}'; Fedora/RHEL: 'sudo dnf install ${list}'.`,
     );

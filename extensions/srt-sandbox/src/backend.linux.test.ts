@@ -52,7 +52,9 @@ function makeParams(overrides: {
 describe.skipIf(!isLinux)("srt sandbox Linux bwrap filesystem matrix (AC-L2)", () => {
   const cleanups: Array<() => void> = [];
   afterEach(() => {
-    while (cleanups.length > 0) cleanups.pop()?.();
+    while (cleanups.length > 0) {
+      cleanups.pop()?.();
+    }
   });
 
   it("confines writes to the specified directory while the rest stays read-only", async () => {
@@ -144,7 +146,9 @@ describe.skipIf(!isLinux)("srt sandbox Linux bwrap filesystem matrix (AC-L2)", (
 describe.skipIf(!isLinux)("srt sandbox Linux network deny-all (AC-L3)", () => {
   const cleanups: Array<() => void> = [];
   afterEach(() => {
-    while (cleanups.length > 0) cleanups.pop()?.();
+    while (cleanups.length > 0) {
+      cleanups.pop()?.();
+    }
   });
 
   it("isolates the sandbox into a private (loopback-only routable) network namespace", async () => {

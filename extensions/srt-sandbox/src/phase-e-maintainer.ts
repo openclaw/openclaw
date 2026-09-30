@@ -48,7 +48,9 @@ export function inspectCanonicalPool(
   accounts: readonly { name: string; sid: string }[],
 ): "absent" | "ready" {
   const canonical = accounts.filter((account) => PHASE_E_POOL.includes(account.name));
-  if (canonical.length === 0) return "absent";
+  if (canonical.length === 0) {
+    return "absent";
+  }
   if (canonical.length !== PHASE_E_POOL.length) {
     throw new PhaseEMaintainerError("PHASE_E_NAMESPACE_AMBIGUOUS");
   }
@@ -94,8 +96,8 @@ export function manifestCrc(
 ): string {
   return leaseStoreCrc(
     generation,
-    [...accounts]
-      .sort((left, right) => left.name.localeCompare(right.name))
+    accounts
+      .toSorted((left, right) => left.name.localeCompare(right.name))
       .map((account) => `${account.name}:${account.sid}`),
   );
 }
@@ -119,7 +121,9 @@ export function createInitialLeaseStore(
   }
   const slots = PHASE_E_POOL.map((name) => {
     const account = accounts.find((entry) => entry.name === name);
-    if (!account) throw new PhaseEMaintainerError("PHASE_E_LEASE_STORE_INVALID");
+    if (!account) {
+      throw new PhaseEMaintainerError("PHASE_E_LEASE_STORE_INVALID");
+    }
     return { name, sid: account.sid, state: "free" as const };
   });
   return {
@@ -153,7 +157,8 @@ export function verifyInitialLeaseStore(store: PhaseELeaseStore): void {
 }
 
 /** Evidence is schema-checked at its source, never free-form then redacted. */
-export function redactPhaseEEvidence(_: string): never {
+export function redactPhaseEEvidence(redactedValue: string): never {
+  void redactedValue;
   throw new PhaseEMaintainerError("PHASE_E_EVIDENCE_MUST_BE_TYPED");
 }
 
@@ -169,7 +174,9 @@ export function verifyRestartIdentity(
   ) {
     throw new PhaseEMaintainerError("PHASE_E_PROCESS_IDENTITY_MISMATCH");
   }
-  if (!observed) return "dead";
+  if (!observed) {
+    return "dead";
+  }
   if (observed.pid !== recorded.pid || observed.creationTime !== recorded.creationTime) {
     throw new PhaseEMaintainerError("PHASE_E_STALE_PROCESS_IDENTITY");
   }
@@ -178,7 +185,9 @@ export function verifyRestartIdentity(
 
 /** The maintainer is Windows-only and never falls back to a subprocess. */
 export function assertPhaseEPlatform(platform = process.platform): void {
-  if (platform !== "win32") throw new PhaseEMaintainerError("PHASE_E_UNSUPPORTED_PLATFORM");
+  if (platform !== "win32") {
+    throw new PhaseEMaintainerError("PHASE_E_UNSUPPORTED_PLATFORM");
+  }
 }
 
 /**
@@ -205,14 +214,22 @@ function isAllowlistedRecord(
   value: unknown,
   allowedKeys: ReadonlySet<string>,
 ): value is Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  if (Object.getPrototypeOf(value) !== Object.prototype) return false;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  if (Object.getPrototypeOf(value) !== Object.prototype) {
+    return false;
+  }
   const names = Object.getOwnPropertyNames(value);
   return (
     names.every(
       (key) => allowedKeys.has(key) && Object.prototype.propertyIsEnumerable.call(value, key),
     ) && Object.getOwnPropertySymbols(value).length === 0
   );
+}
+
+function isPhaseENativeApi(value: unknown): value is PhaseENativeApi {
+  return isAllowlistedRecord(value, new Set(["run"])) && typeof value.run === "function";
 }
 
 export function parsePhaseEEvidence(value: string, mode: PhaseEMode): PhaseEEvidence {
@@ -222,8 +239,10 @@ export function parsePhaseEEvidence(value: string, mode: PhaseEMode): PhaseEEvid
   } catch {
     throw new PhaseEMaintainerError("PHASE_E_INVALID_EVIDENCE");
   }
-  if (!isAllowlistedRecord(parsed, allowedEvidence))
+  if (!isAllowlistedRecord(parsed, allowedEvidence)) {
     throw new PhaseEMaintainerError("PHASE_E_INVALID_EVIDENCE");
+  }
+  // SAFETY: every PhaseEEvidence field and nested record is validated below before return.
   const evidence = parsed as PhaseEEvidence;
   if (
     evidence.schema !== "phase-e-evidence/v1" ||
@@ -255,16 +274,19 @@ export function parsePhaseEEvidence(value: string, mode: PhaseEMode): PhaseEEvid
     evidence.maintainer.pid <= 0 ||
     typeof evidence.maintainer.creationTime !== "string" ||
     !/^[0-9]+$/.test(evidence.maintainer.creationTime)
-  )
+  ) {
     throw new PhaseEMaintainerError("PHASE_E_INVALID_EVIDENCE");
+  }
   return evidence;
 }
 
 export function loadPhaseENativeApi(requireFn = createRequire(import.meta.url)): PhaseENativeApi {
   try {
-    const addon = requireFn("../build/Release/phase_e_maintainer.node") as Partial<PhaseENativeApi>;
-    if (typeof addon.run !== "function") throw new Error("missing run");
-    return addon as PhaseENativeApi;
+    const addon: unknown = requireFn("../build/Release/phase_e_maintainer.node");
+    if (!isPhaseENativeApi(addon)) {
+      throw new Error("missing run");
+    }
+    return addon;
   } catch {
     throw new PhaseEMaintainerError("PHASE_E_NATIVE_ADDON_UNAVAILABLE");
   }
@@ -277,7 +299,9 @@ export function runPhaseEMaintainer(
   manifest?: PhaseEManifest,
 ): PhaseEEvidence {
   assertPhaseEPlatform(platform);
-  if (!validModes.has(mode)) throw new PhaseEMaintainerError("PHASE_E_INVALID_MODE");
+  if (!validModes.has(mode)) {
+    throw new PhaseEMaintainerError("PHASE_E_INVALID_MODE");
+  }
   if ((mode === "rollback" || mode === "teardown") && !manifest) {
     throw new PhaseEMaintainerError("PHASE_E_MANIFEST_REQUIRED");
   }
@@ -297,7 +321,9 @@ export function runPhaseEFaultInjection(
   try {
     (nativeApi ?? loadPhaseENativeApi()).run("setup", `fault:${fault}`);
   } catch (error) {
-    if (error instanceof Error && error.message.includes("PHASE_E_FAULT_INJECTED")) throw error;
+    if (error instanceof Error && error.message.includes("PHASE_E_FAULT_INJECTED")) {
+      throw error;
+    }
     throw new PhaseEMaintainerError("PHASE_E_FAULT_INJECTION_FAILED");
   }
   throw new PhaseEMaintainerError("PHASE_E_FAULT_INJECTION_FAILED");

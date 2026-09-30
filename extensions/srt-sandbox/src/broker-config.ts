@@ -16,7 +16,7 @@
 //      is NOT hot-swappable via the control fd (sandbox-manager.ts:1979-1982).
 //      It is baked into the settings file at spawn; a later change requires a
 //      broker re-init, never a live updateConfig (enforced in session-broker.ts).
-import type { SandboxRuntimeConfig } from "@anthropic-ai/sandbox-runtime";
+import type { NetworkConfig, SandboxRuntimeConfig } from "@anthropic-ai/sandbox-runtime";
 
 /** Upstream proxy the broker tunnels through. Shape mirrors SRT's parentProxy. */
 export type BrokerParentProxy = {
@@ -85,7 +85,7 @@ export function buildBrokerRuntimeConfig(
 ): SandboxRuntimeConfig {
   const allowedDomains = normalizeAllowedDomains(input.policy.allowedDomains);
   const parentProxy = normalizeParentProxy(input.policy.parentProxy);
-  const network: Record<string, unknown> = {
+  const network: NetworkConfig = {
     allowedDomains,
     deniedDomains: [],
     strictAllowlist: true,
@@ -101,7 +101,7 @@ export function buildBrokerRuntimeConfig(
       allowWrite: [...input.writableRoots],
       denyWrite: [],
     },
-  } as unknown as SandboxRuntimeConfig;
+  };
 }
 
 /** Serialize a broker config for the `srt --settings <file>` / control-fd JSON-lines. */

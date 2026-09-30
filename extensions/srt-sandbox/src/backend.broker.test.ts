@@ -74,8 +74,8 @@ describe.skipIf(!isLive)("srt sandbox backend — per-session broker wiring (S4-
   const disposers: Array<() => void> = [];
 
   beforeAll(async () => {
-    alpha = await startOrigin("alpha.localhost");
-    beta = await startOrigin("beta.localhost");
+    alpha = await startOrigin("localhost");
+    beta = await startOrigin("localhost");
   });
   afterAll(() => {
     alpha.server.close();

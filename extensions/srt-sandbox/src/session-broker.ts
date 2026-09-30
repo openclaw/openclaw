@@ -30,9 +30,8 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 //     fresh (still sandboxed, same-policy) broker — a crash never wedges the
 //     session and never drops it out of the sandbox.
 import { createRequire } from "node:module";
-import { tmpdir } from "node:os";
 import path from "node:path";
-import { shellEscape } from "openclaw/plugin-sdk/sandbox";
+import { resolvePreferredOpenClawTmpDir, shellEscape } from "openclaw/plugin-sdk/sandbox";
 import {
   buildBrokerRuntimeConfig,
   sameParentProxy,
@@ -139,7 +138,6 @@ export class SessionBroker {
   /** Ready-handshake latch for the currently-attached broker. */
   private readyResolve: (() => void) | undefined;
   private readyReject: ((error: Error) => void) | undefined;
-  private settingsPath: string | undefined;
   private settingsDir: string | undefined;
   private allowedDomains: string[];
   private readonly parentProxy: BrokerParentProxy | undefined;
@@ -228,11 +226,10 @@ export class SessionBroker {
   }
 
   private async spawnBroker(): Promise<BrokerChildHandle> {
-    const dir = mkdtempSync(path.join(tmpdir(), "srt-broker-"));
+    const dir = mkdtempSync(path.join(resolvePreferredOpenClawTmpDir(), "srt-broker-"));
     const settingsPath = path.join(dir, "settings.json");
     writeFileSync(settingsPath, this.buildRuntimeConfigJson(), { mode: 0o600 });
     this.settingsDir = dir;
-    this.settingsPath = settingsPath;
 
     let proc: BrokerChildHandle;
     try {
@@ -319,6 +316,7 @@ export class SessionBroker {
       }
       let message: BrokerResponse;
       try {
+        // SAFETY: every consumed response field is narrowed before use below.
         message = JSON.parse(trimmed) as BrokerResponse;
       } catch {
         // Non-JSON output is broker/executor diagnostics on the wrong stream;
@@ -375,7 +373,6 @@ export class SessionBroker {
         // Best-effort; a leaked temp settings file is not a correctness issue.
       }
       this.settingsDir = undefined;
-      this.settingsPath = undefined;
     }
   }
 

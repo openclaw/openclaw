@@ -37,6 +37,10 @@ type OwnerResponse = { id?: unknown; ok?: boolean; error?: string; errno?: strin
   unknown
 >;
 
+function isOwnerResponse(value: unknown): value is OwnerResponse {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
 type PendingCall = {
   resolve: (value: OwnerResponse) => void;
   reject: (error: Error) => void;
@@ -136,14 +140,18 @@ export class PinOwnerClient {
       if (trimmed === "") {
         continue;
       }
-      let message: OwnerResponse;
+      let parsed: unknown;
       try {
-        message = JSON.parse(trimmed) as OwnerResponse;
+        parsed = JSON.parse(trimmed);
       } catch {
         // A non-JSON line is owner diagnostics on the wrong stream; ignore it
         // rather than tearing down healthy in-flight calls.
         continue;
       }
+      if (!isOwnerResponse(parsed)) {
+        continue;
+      }
+      const message = parsed;
       const id = message.id;
       if (typeof id !== "number") {
         continue;
@@ -237,11 +245,19 @@ export class PinOwnerClient {
     path: string,
   ): Promise<{ type: "file" | "directory" | "other"; size: number; mtimeMs: number } | null> {
     const response = await this.request({ op: "stat", path });
-    const stat = response.stat as
-      | { type: "file" | "directory" | "other"; size: number; mtimeMs: number }
-      | null
-      | undefined;
-    return stat ?? null;
+    const stat = response.stat;
+    if (!isOwnerResponse(stat)) {
+      return null;
+    }
+    const type = stat.type;
+    if (
+      (type === "file" || type === "directory" || type === "other") &&
+      typeof stat.size === "number" &&
+      typeof stat.mtimeMs === "number"
+    ) {
+      return { type, size: stat.size, mtimeMs: stat.mtimeMs };
+    }
+    return null;
   }
 
   async rename(target: PinRenameTarget): Promise<void> {

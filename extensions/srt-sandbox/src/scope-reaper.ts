@@ -397,6 +397,7 @@ export class ScopeChildReaper {
       child,
       stdin: child.stdin,
       stdout: child.stdout,
+      // SAFETY: numeric stdio descriptors are rejected immediately above.
       control: controlEnd as NodeJS.WritableStream,
     };
   }

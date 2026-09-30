@@ -11,10 +11,10 @@ import { createServer, type Server } from "node:http";
 //      Gated to darwin + linux (the sandbox platforms); the identical matrix
 //      runs under Seatbelt on macOS and under bwrap + netns on Linux.
 //
-// The isolation matrix is hermetic: two loopback origin servers stand in for
-// two allow-listed domains. They are addressed as `*.localhost` names — a
-// loopback NAME, so SRT's SSRF resolved-address guard permits the loopback
-// answer (resolved-address-guard.js:162) — and the sandboxed curl clears
+// The isolation matrix is hermetic: two loopback origins on distinct ports
+// stand in for two allow-listed endpoints. They use the standard `localhost`
+// name, so SRT's SSRF resolved-address guard permits the loopback answer on
+// hosts that do not synthesize arbitrary `*.localhost` DNS records. Curl clears
 // no_proxy so the request actually traverses the broker's proxy rather than
 // being bypassed as a localhost direct-connect.
 import type { AddressInfo } from "node:net";
@@ -186,8 +186,8 @@ describe.skipIf(!isLive)("session broker — live per-session network isolation 
   const brokers: SessionBroker[] = [];
 
   beforeAll(async () => {
-    alpha = await startOrigin("ALPHA", "alpha.localhost");
-    beta = await startOrigin("BETA", "beta.localhost");
+    alpha = await startOrigin("ALPHA", "localhost");
+    beta = await startOrigin("BETA", "localhost");
   });
   afterAll(() => {
     stopOrigin(alpha);
@@ -218,7 +218,7 @@ describe.skipIf(!isLive)("session broker — live per-session network isolation 
     return broker;
   }
 
-  /** curl a `*.localhost` origin through the broker; return the HTTP status. */
+  /** Curl a localhost endpoint through the broker; return the HTTP status. */
   async function httpCode(broker: SessionBroker, o: Origin): Promise<string> {
     const url = `http://${o.host}:${o.port}/`;
     const r = await broker.exec({

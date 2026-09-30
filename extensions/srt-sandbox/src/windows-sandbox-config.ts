@@ -24,7 +24,6 @@ import {
   VENDORED_SRT_WIN_EXE,
   type SrtWinSpawn,
 } from "@anthropic-ai/sandbox-runtime";
-// eslint-disable-next-line import/no-internal-modules -- SRT does not surface the
 // Windows exec wrapper on its package index; the subpath is the only entrypoint.
 import { wrapCommandWithSandboxWindows } from "@anthropic-ai/sandbox-runtime/dist/sandbox/windows-sandbox-utils.js";
 

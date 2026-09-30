@@ -179,6 +179,7 @@ export class WindowsScopeReaper {
       }
       let message: WorkerResponse;
       try {
+        // SAFETY: every consumed response field is narrowed before use below.
         message = JSON.parse(line) as WorkerResponse;
       } catch {
         continue; // non-JSON diagnostics on the wrong stream
