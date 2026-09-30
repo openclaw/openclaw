@@ -26,6 +26,8 @@ export type TransportDropScenario = {
   compactionEnabled?: boolean;
   content?: AssistantMessage["content"];
   diagnostics?: AssistantMessage["diagnostics"];
+  acceptedSessionSpawns?: Parameters<typeof makeEmbeddedRunnerAttempt>[0]["acceptedSessionSpawns"];
+  clientToolCalls?: Parameters<typeof makeEmbeddedRunnerAttempt>[0]["clientToolCalls"];
   activeCount?: number;
   asyncStarted?: boolean;
   codeModeSuspended?: boolean;
@@ -42,6 +44,7 @@ export type TransportDropScenario = {
   providerRetryMaxDelayMs?: number;
   terminal?: Parameters<typeof makeEmbeddedRunnerAttempt>[0]["terminal"];
   usage?: AssistantMessage["usage"];
+  toolName?: string;
   terminate?: boolean;
   yieldDetected?: boolean;
 };
@@ -56,9 +59,10 @@ export const disabledCompactionRuntime = {
 // died while the model was still reasoning, so the errored turn is thinking-only.
 export async function recoverAfterTransportDrop(scenario: TransportDropScenario = {}) {
   const toolCalls = scenario.noTools ? [] : ["call_1", "call_2"];
+  const toolName = scenario.toolName ?? "exec";
   const toolAssistant = buildEmbeddedRunnerAssistant({
     stopReason: "toolUse",
-    content: toolCalls.map((id) => ({ type: "toolCall", id, name: "exec", arguments: {} })),
+    content: toolCalls.map((id) => ({ type: "toolCall", id, name: toolName, arguments: {} })),
   });
   const erroredAssistant =
     scenario.assistant ??
@@ -92,18 +96,20 @@ export async function recoverAfterTransportDrop(scenario: TransportDropScenario 
       .map((id) => ({
         role: "toolResult",
         toolCallId: id,
-        toolName: "exec",
+        toolName,
         isError: id === scenario.failedToolCallId,
       })),
     erroredAssistant,
   ] as never;
   const attempt = makeEmbeddedRunnerAttempt({
     assistantTexts: scenario.assistantTexts ?? [],
+    acceptedSessionSpawns: scenario.acceptedSessionSpawns,
+    clientToolCalls: scenario.clientToolCalls,
     messagesSnapshot,
     toolMetas: toolCalls.map((toolCallId) => ({
       toolCallId,
-      toolName: "exec",
-      replaySafe: false,
+      toolName,
+      replaySafe: scenario.replaySafe === true,
       ...(scenario.asyncStarted ? { asyncStarted: true } : {}),
       ...(scenario.terminate ? { terminate: true } : {}),
       ...(scenario.codeModeSuspended ? { codeModeSuspended: true } : {}),
