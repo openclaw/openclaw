@@ -670,7 +670,7 @@ export async function tryDispatchAcpReplyCore(
         sourceIndex: extractedFileImages[index]?.attachmentIndex,
       })),
     ]
-      .map((entry, sequence) => ({ ...entry, sequence }))
+      .map(({ attachment, sourceIndex }, sequence) => ({ attachment, sourceIndex, sequence }))
       .toSorted((left, right) => {
         if (left.sourceIndex !== undefined && right.sourceIndex !== undefined) {
           return left.sourceIndex - right.sourceIndex || left.sequence - right.sequence;
