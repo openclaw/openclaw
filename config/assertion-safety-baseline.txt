@@ -33,7 +33,6 @@ extensions/anthropic/session-catalog-runtime.ts	1
 extensions/anthropic/stream-wrappers.ts	3
 extensions/baseten/models.ts	3
 extensions/beam/src/mirror.ts	2
-extensions/beam/src/types.ts	2
 extensions/browser/src/browser-node-fallback.ts	1
 extensions/browser/src/browser-node-proxy.ts	2
 extensions/browser/src/browser-proxy-upload.ts	2
@@ -218,7 +217,6 @@ extensions/diagnostics-otel/src/service-logs.ts	10
 extensions/diagnostics-otel/src/service-propagation.ts	2
 extensions/diagnostics-otel/src/service-trace-context.ts	1
 extensions/diagnostics-otel/src/service.ts	1
-extensions/diagnostics-prometheus/src/service.ts	1
 extensions/diffs/src/config.ts	2
 extensions/diffs/src/language-hints.ts	6
 extensions/diffs/src/plugin.ts	4
@@ -334,7 +332,6 @@ extensions/discord/src/voice/realtime-turns.ts	3
 extensions/discord/src/voice/receive-recovery.ts	1
 extensions/discord/src/voice/sdk-runtime.ts	1
 extensions/discord/src/voice/segment.ts	1
-extensions/duckduckgo/src/config.ts	1
 extensions/duckduckgo/src/ddg-search-provider.ts	1
 extensions/elevenlabs/config-compat.ts	2
 extensions/exa/src/exa-web-search-provider.runtime.ts	1
@@ -476,7 +473,7 @@ extensions/llm-task/doctor-contract-api.ts	1
 extensions/llm-task/src/llm-task-tool.ts	2
 extensions/lmstudio/src/models.ts	2
 extensions/lmstudio/src/stream.ts	2
-extensions/lobster/src/lobster-runner.ts	3
+extensions/lobster/src/lobster-runner.ts	2
 extensions/logbook/index.ts	5
 extensions/logbook/src/analyze.ts	5
 extensions/logbook/src/service.ts	6
