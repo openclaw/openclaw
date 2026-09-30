@@ -349,6 +349,21 @@ export async function runSubagentAnnounceFlow(params: {
       ? (stripAndClassifyReply(fallbackReply ?? "") ?? undefined)
       : undefined;
 
+    if (
+      outcome.status === "ok" &&
+      params.terminalReply?.disposition === "visible" &&
+      isAnnounceSkip(params.terminalReply.text)
+    ) {
+      if (isCronSessionKey(targetRequesterSessionKey)) {
+        logWarn(
+          `cron job completion for session=${targetRequesterSessionKey} ` +
+            `run=${params.childRunId} suppressed by ANNOUNCE_SKIP; ` +
+            `the agent replied with the skip sentinel instead of delivering a result`,
+        );
+      }
+      return "delivered";
+    }
+
     if (!childCompletionFindings) {
       if (params.terminalReply?.disposition === "silent") {
         if (!hasVisibleFallback && (isAnnounceSkip(fallbackReply) || !expectsCompletionMessage)) {

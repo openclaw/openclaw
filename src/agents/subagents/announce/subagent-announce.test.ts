@@ -13,12 +13,10 @@ type AgentCallResponse = {
   disposition?: "ambiguous";
 };
 
-const agentSpy = vi.fn(
-  async (_req: AgentCallRequest): Promise<AgentCallResponse> => ({
-    runId: "run-main",
-    status: "ok",
-  }),
-);
+const agentSpy = vi.fn(async (_req: AgentCallRequest): Promise<AgentCallResponse> => ({
+  runId: "run-main",
+  status: "ok",
+}));
 const sessionsDeleteSpy = vi.fn((_req: AgentCallRequest) => undefined);
 const callGatewayMock = vi.fn(async (_request: unknown) => ({}));
 const loadSessionStoreMock = vi.fn((_storePath: string) => ({}));
@@ -359,6 +357,24 @@ describe("subagent announce seam flow", () => {
       },
       timeoutMs: 10_000,
     });
+  });
+
+  it("suppresses a captured visible ANNOUNCE_SKIP instead of using stale fallback", async () => {
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-captured-skip",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "do thing",
+      timeoutMs: 10,
+      cleanup: "keep",
+      waitForCompletion: false,
+      outcome: { status: "ok" },
+      terminalReply: { disposition: "visible", text: "ANNOUNCE_SKIP" },
+      fallbackReply: "stale result",
+    });
+    expect(didAnnounce).toBe("delivered");
+    expect(agentSpy).not.toHaveBeenCalled();
   });
 
   it("skips delete cleanup when the lifecycle owner invalidates the attempt", async () => {
