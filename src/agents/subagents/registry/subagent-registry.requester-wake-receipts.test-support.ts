@@ -328,7 +328,7 @@ export function registerRequesterWakeReceiptBoundaryTests({
         }
       : { ...betaBeforeYield.delivery, status: "in_progress" };
 
-    const settleWakeOwner = outcomeDrift ? observeRootWork() : undefined;
+    const settleWakeOwner = outcomeDrift || rejectPersistence ? observeRootWork() : undefined;
     const yieldTool = createSessionsYieldTool({
       sessionId: "sess-main",
       claimYield: async () =>
@@ -442,13 +442,22 @@ export function registerRequesterWakeReceiptBoundaryTests({
     });
     expect(getRequesterWakeCalls()).toHaveLength(rejectRequesterWake ? 0 : 1);
     if (rejectPersistence) {
+      // Alpha was already delivered before yield. Join the rejected wake owner
+      // before measuring its backoff; delivered cleanup does not imply it settled.
+      await settleWakeOwner?.(true);
       expect(registry.getSubagentRunByRunId(alpha.runId)?.requesterSettleWake).toMatchObject({
         status: "pending",
         attemptCount: 0,
       });
       await vi.advanceTimersByTimeAsync(29_999);
+      await settleWakeOwner?.(true);
+      expect(registry.getSubagentRunByRunId(alpha.runId)?.requesterSettleWake).toMatchObject({
+        status: "pending",
+        attemptCount: 0,
+      });
       expect(getRequesterWakeCalls()).toHaveLength(0);
       await vi.advanceTimersByTimeAsync(1);
+      await settleWakeOwner?.(true);
       await waitForDeliveredCleanup(alpha.runId);
       expect(getRequesterWakeCalls()).toHaveLength(0);
     }

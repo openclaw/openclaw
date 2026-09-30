@@ -17,6 +17,7 @@ import type {
   StructuredInputCompilerOptions,
   StructuredInputField,
   StructuredInputRecord,
+  StructuredInputValue,
 } from "./structured-input-boundary.js";
 import type { AgentHarnessUserInputOption } from "./user-input-types.js";
 
@@ -455,14 +456,7 @@ function readChoices(
     if (!Array.isArray(oneOfValue)) {
       return "has an invalid oneOf.";
     }
-    return normalizeChoices(
-      oneOfValue.map((entry) => ({
-        value: isStructuredInputRecord(entry) ? ownValue(entry, "const") : undefined,
-        label: isStructuredInputRecord(entry) ? ownValue(entry, "title") : undefined,
-        description: isStructuredInputRecord(entry) ? ownValue(entry, "description") : undefined,
-      })),
-      options.minimumChoiceCount ?? 1,
-    );
+    return normalizeChoices(oneOfValue.map(readChoice), options.minimumChoiceCount ?? 1);
   }
   return undefined;
 }
@@ -478,14 +472,15 @@ function readArrayChoices(
   if (!Array.isArray(entries)) {
     return "must declare string enum, anyOf, or oneOf array choices.";
   }
-  return normalizeChoices(
-    entries.map((entry) => ({
-      value: isStructuredInputRecord(entry) ? ownValue(entry, "const") : undefined,
-      label: isStructuredInputRecord(entry) ? ownValue(entry, "title") : undefined,
-      description: isStructuredInputRecord(entry) ? ownValue(entry, "description") : undefined,
-    })),
-    options.minimumChoiceCount ?? 1,
-  );
+  return normalizeChoices(entries.map(readChoice), options.minimumChoiceCount ?? 1);
+}
+
+function readChoice(entry: StructuredInputValue) {
+  return {
+    value: isStructuredInputRecord(entry) ? ownValue(entry, "const") : undefined,
+    label: isStructuredInputRecord(entry) ? ownValue(entry, "title") : undefined,
+    description: isStructuredInputRecord(entry) ? ownValue(entry, "description") : undefined,
+  };
 }
 
 function normalizeChoices(

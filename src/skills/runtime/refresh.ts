@@ -89,7 +89,8 @@ function createSkillsPathWatcher(
   let entryDirectoryObserved = false;
   // true means a directory/link/other entry was seen. Keep both sides of a
   // reconciliation so directory -> file and deletion cannot look supporting-only.
-  // Unioning scan passes is intentionally conservative for transient structure.
+  // Exclusion callbacks can cover only a directory slice, so omitted names do
+  // not imply deletion. Retain their kinds until observed again or detail fills.
   let entryKinds: Map<string, boolean> | undefined = new Map();
   let scannedKinds: Map<string, boolean> | undefined = new Map();
   let starting = Promise.resolve();
@@ -404,7 +405,17 @@ function createSkillsPathWatcher(
           if (health.state === "starting" || health.state === "reconciling") {
             scannedKinds = new Map();
           } else if (health.state === "ready") {
-            entryKinds = scannedKinds;
+            if (!scannedKinds) {
+              entryKinds = undefined;
+            } else if (entryKinds) {
+              for (const [name, kind] of scannedKinds) {
+                if (!entryKinds.has(name) && entryKinds.size >= MAX_SKILLS_WATCH_ENTRY_KINDS) {
+                  entryKinds = undefined;
+                  break;
+                }
+                entryKinds.set(name, kind);
+              }
+            }
             scannedKinds = new Map();
           }
           if (health.state === "unavailable") {

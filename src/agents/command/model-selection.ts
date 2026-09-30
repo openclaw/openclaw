@@ -69,9 +69,12 @@ import {
   resolveEffectiveAgentRuntime,
 } from "../thinking-runtime.js";
 import { persistAgentSession } from "./attempt-execution.shared.js";
-import { normalizeAgentCommandModelRef, parseAgentCommandModelRef } from "./model-ref.js";
+import {
+  normalizeAgentCommandModelRef,
+  normalizeExplicitOverrideInput,
+  parseAgentCommandModelRef,
+} from "./model-ref.js";
 import { prepareCommandModelCatalog } from "./model-selection-catalog.js";
-import { normalizeExplicitOverrideInput } from "./prepare.js";
 import { loadTranscriptResolveRuntime } from "./runtime-loaders.js";
 import type { AgentCommandOpts, AgentRunContext } from "./types.js";
 

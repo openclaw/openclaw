@@ -14,13 +14,11 @@ import {
   shouldClearFailedCliSessionBinding,
 } from "../../agents/cli-session.js";
 import { resolveDelegationCapability } from "../../agents/delegation-capability.js";
-import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import {
   getGeneratedMediaTaskIdsForSessionKey,
   hasNewGeneratedMediaTaskForSessionKey,
 } from "../../agents/media-generation-activity.js";
 import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
-import type { ModelFallbackResultClassification } from "../../agents/model-fallback-attempt.js";
 import { createAgentRunSupersededAbortError } from "../../agents/run-termination.js";
 import { withLocalSessionPlacementTurnSettlement } from "../../agents/session-placement-admission.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
@@ -47,7 +45,6 @@ import { resolveReplyOperationTerminationFields } from "./reply-operation-abort.
 export async function runCliFallbackCandidate(
   params: AgentFallbackCandidateCommonParams & {
     cliExecutionProvider: string;
-    classifyResult: (result: EmbeddedAgentRunResult) => ModelFallbackResultClassification;
     lifecycleGeneration: string;
   },
 ): Promise<{

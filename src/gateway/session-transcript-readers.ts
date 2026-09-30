@@ -148,21 +148,10 @@ export async function readSessionMessageByIdAsync(
 }
 
 /** Keep exact membership and its full-history validation in the admitted history worker. */
-export async function readSessionMessagesMatchingIdAsync(
-  scope: SessionTranscriptReadScope,
-  messageId: string,
-): Promise<unknown[]> {
-  const target = captureHistoryReadScope(scope);
-  if (usesProcessHeldTranscript(target)) {
-    return sessionTranscriptReader.readSessionMessagesMatchingIdAsync(target, messageId);
-  }
-  const { readSessionHistoryPageInWorker } =
-    await import("../config/sessions/session-history-worker-runtime.js");
-  return readSessionHistoryPageInWorker({
-    kind: "message-lookup",
-    params: { target, messageId },
-  });
-}
+export const readSessionMessagesMatchingIdAsync = createHistoryPageReader(
+  sessionTranscriptReader.readSessionMessagesMatchingIdAsync,
+  (read, target, messageId) => read({ kind: "message-lookup", params: { target, messageId } }),
+);
 
 /** Counts display messages asynchronously through the reader seam. */
 export async function readSessionMessageCountAsync(

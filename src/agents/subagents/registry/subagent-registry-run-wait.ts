@@ -196,13 +196,6 @@ export class SubagentWaitManager {
     return entry.cleanup === "delete" || !entry.retainAttachmentsOnKeep;
   }
 
-  protected restoreRunRecord(entry: SubagentRunRecord, snapshot: SubagentRunRecord): void {
-    for (const key of Object.keys(entry)) {
-      Reflect.deleteProperty(entry, key);
-    }
-    Object.assign(entry, snapshot);
-  }
-
   protected markOlderKillReconciliationsSuperseded(next: SubagentRunRecord) {
     const snapshots = new Map<SubagentRunRecord, SubagentRunRecord["killReconciliation"]>();
     for (const candidate of this.options.getRunsForChildSession(next.childSessionKey)) {

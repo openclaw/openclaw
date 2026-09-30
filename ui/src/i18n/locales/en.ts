@@ -2487,6 +2487,7 @@ export const en: TranslationMap & {
     publishAs: "Publish as @{account}",
     account: "Publication account",
     newAction: "Choose a new publication",
+    failedAttempt: "Publication attempt failed",
     capacity:
       'Too many publications are awaiting review. Finish an existing publication, then select "{newAction}" to make room. Existing retries remain available.',
     confirm: "Confirm original publication",
