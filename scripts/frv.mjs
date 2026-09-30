@@ -2481,7 +2481,9 @@ async function pollRelease(state, client, pending, readOptions) {
         }
         // A relay snapshot can lag the run; only an all-terminal job list is final.
         const final =
-          (attempt < current || done) && jobs.every((job) => job.status === "completed");
+          (attempt < current || done) &&
+          jobs.length > 0 &&
+          jobs.every((job) => job.status === "completed");
         scansComplete &&= final;
         for (const job of jobs) {
           const failure = failedJobEvent(child.key, job, attempt);
