@@ -1,17 +1,22 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { WatchSubscription } from "@openclaw/fs-safe/watch";
+import type { WatchOptions, WatchSubscription } from "@openclaw/fs-safe/watch";
 import { beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadWorkspaceSkills } from "../loading/workspace-skill-loader.js";
 import { resolveWorkspaceSkillSourcePlan } from "../loading/workspace-skill-sources.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
-import { getSkillsResourceVersion, getSkillsSourceVersion } from "./refresh-state.js";
+import {
+  getSkillsResourceVersion,
+  getSkillsSnapshotVersion,
+  getSkillsSourceVersion,
+} from "./refresh-state.js";
 import { toWatchRoot } from "./refresh-watch-path.js";
 import { pathWatchers } from "./refresh-watch-registry.js";
 import { useSkillsWatcherFixture } from "./refresh.watcher.test-support.js";
 
 const subscriptions: WatchSubscription[] = [];
+const observations = new Map<WatchSubscription, { rootDir: string; options: WatchOptions }>();
 const starts: Promise<void>[] = [];
 vi.mock("@openclaw/fs-safe/watch", async () => {
   const { createRequire } = await import("node:module");
@@ -32,6 +37,7 @@ vi.mock("@openclaw/fs-safe/watch", async () => {
       return scoped;
     };
     subscriptions.push(subscription);
+    observations.set(subscription, { rootDir: root.rootDir, options });
     starts.push(subscription.ready);
     return subscription;
   };
@@ -47,6 +53,7 @@ const planning: Promise<unknown>[] = [];
 const samples: Promise<unknown>[] = [];
 beforeEach(async () => {
   subscriptions.length = starts.length = planning.length = samples.length = 0;
+  observations.clear();
   const settling = await import("./refresh-file-stability.js");
   const createScheduler = settling.createSkillFileScheduler;
   vi.spyOn(settling, "createSkillFileScheduler").mockImplementation((options) =>
@@ -140,6 +147,38 @@ it("discovers a newly created root and keeps observing edits and deletion", asyn
   await fs.rm(root, { recursive: true });
   await reconcile();
   expect(read()).toEqual([]);
+});
+
+it("keeps admitted symlink coverage available after unchanged overflow", async () => {
+  const root = path.join(fixture.workspaceDir, "skills");
+  const target = await fixture.createFixtureDirectory("linked-target");
+  await fs.rm(root, { recursive: true });
+  await fs.symlink(target, root, linkType);
+  const config = { skills: { load: { allowSymlinkTargets: [target] } } };
+  await ensure(config);
+  const version = getSkillsSnapshotVersion(fixture.workspaceDir);
+  const changes = vi.fn();
+  const unsubscribe = refresh.registerSkillsChangeListener(changes);
+  const scopeUpdates = subscriptions.map((subscription) => vi.spyOn(subscription, "setScopes"));
+  const aliases = [...observations.values()].filter(({ rootDir, options }) =>
+    options.scopes.some(
+      (scope) => scope.kind === "entry" && path.resolve(rootDir, scope.path) === root,
+    ),
+  );
+  expect(aliases.length).toBeGreaterThan(0);
+  for (const { options } of aliases) {
+    options.onInvalidate({ reason: "overflow" });
+  }
+  expect(pathWatchers.get(toWatchRoot(root))).toMatchObject({
+    verified: true,
+    unavailable: false,
+  });
+  await ready();
+  await advance(250);
+  expect(scopeUpdates.every((update) => update.mock.calls.length === 0)).toBe(true);
+  expect(changes).not.toHaveBeenCalled();
+  expect(getSkillsSnapshotVersion(fixture.workspaceDir)).toBe(version);
+  unsubscribe();
 });
 
 it("refreshes supporting resources without invalidating discovery, including atomic saves", async () => {
