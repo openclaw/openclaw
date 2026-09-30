@@ -771,6 +771,7 @@ describe("subagent registry seam flow", () => {
     });
     mockRestoredRuns(() => [restored]);
     wakeRequester.mockImplementation(async (params) => {
+      bindWakeMutation([params.settledEntry]);
       await params.completeBatch([params.settledEntry], 1);
       return true;
     });
