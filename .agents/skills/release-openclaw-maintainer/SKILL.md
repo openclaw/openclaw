@@ -33,8 +33,18 @@ failures remain recorded in the decision, GitHub step summary, and release
 evidence manifest. It is policy-derived, never an operator input or waiver.
 Ordinary PR, push, scheduled, and main CI keep Windows blocking.
 
-Every other selected validation lane must succeed: macOS Node and other normal
-CI jobs, install smoke, survivor lanes, `update-first-hop-compat*`, pack/npm
+Every failed test needs an explicit blocker-or-flake decision. Flakes get at most
+two reruns on the same Release SHA and a fix-in-parallel issue/PR on `main`.
+Classify eligible still-failing `normalCi` jobs through the trusted-main
+`full-release-flake-classification.yml` workflow. Its `recorded-flake` receipt
+binds the exact parent, child/job attempt, SHA, reason, and tracking link; failures
+stay visible in summaries, the manifest, and release notes. Never re-cut, change
+tooling, or start another FRV for a flake. Follow the
+[CI skill](../release-openclaw-ci/SKILL.md#publication-requirements) for recovery.
+
+Other children stay strict in v1; extending classification is follow-up work.
+Never classify CI coverage gates, seal/evidence, Build Artifacts, install smoke,
+survivor lanes, `update-first-hop-compat*`, pack/npm
 qualification, package integrity, and Linux/Windows/macOS Gateway checks,
 including Windows packaged install/upgrade checks in Release Checks. A cancelled
 run still blocks. Preserve first failures and classify each one as below
@@ -160,7 +170,8 @@ Required publication proofs and enforced environment approvals remain required.
 A passing sibling cannot replace missing required evidence. npm + ClawHub is the
 priority path. macOS, Windows, Linux, and Android native publication runs in
 parallel and never gates npm/ClawHub, GitHub release finalization, or main closeout.
-Selected Windows/macOS Gateway, macOS Node, and native-app CI failures block
-release validation; only the `windows-node-ci` class above is advisory. Platform
+Selected Windows/macOS Gateway and native-app CI failures block release
+validation unless the exact `normalCi` job has a valid `recorded-flake` receipt;
+`windows-node-ci` remains policy-advisory. Platform
 publishers retain their own artifact
 and updater contracts; report pending platforms and proof gaps accurately.
