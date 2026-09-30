@@ -18,6 +18,7 @@ import {
   type MockOpenAiRequestSnapshot,
 } from "../../../../extensions/qa-lab/api.js";
 import { runQaGatewayFixture, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import { createQaPluginEntryObservation } from "../../../helpers/qa-plugin-entry-observation.js";
 
 let startedAdapter: StartedOpenClawCrablineAdapter | undefined;
 let retainedResources = false;
@@ -291,6 +292,10 @@ it.for(["nonstreaming", "default-streaming diagnostic"] as const)(
       assertActive();
       const channelConfig = transport.createGatewayConfig({ baseUrl: mock.baseUrl });
       runtimeIdentity = await slackRuntimeIdentity();
+      const entryObservation = await createQaPluginEntryObservation({
+        directory,
+        entry: runtimeIdentity.entry,
+      });
       assertActive();
       gateway = await gatewayOwner.start({
         repoRoot,
@@ -303,6 +308,7 @@ it.for(["nonstreaming", "default-streaming diagnostic"] as const)(
         controlUiEnabled: false,
         enabledPluginIds: [...transport.requiredPluginIds],
         runtimeEnvPatch: transport.createRuntimeEnvPatch(),
+        runtimePreloads: [entryObservation.preloadUrl],
         mutateConfig: (cfg) => ({
           ...cfg,
           logging: { ...cfg.logging, level: "debug", consoleLevel: "debug" },
@@ -331,13 +337,7 @@ it.for(["nonstreaming", "default-streaming diagnostic"] as const)(
       assertActive();
       await transport.waitReady({ gateway });
       assertActive();
-      const loaded = [...gateway.logs().matchAll(/\[plugins\] loading slack from ([^\r\n]+)/gu)]
-        .at(-1)?.[1]
-        ?.trim();
-      if (!loaded) {
-        throw new Error("Gateway did not report its actual Slack executable entry");
-      }
-      expect(await fs.realpath(loaded)).toBe(runtimeIdentity.entry);
+      await entryObservation.verify(gateway.pid, runtimeIdentity.entrySha256);
       const slack = gateway.cfg.channels?.slack;
       const accounts = slack?.accounts ?? {};
       const key = Object.hasOwn(accounts, "default")
