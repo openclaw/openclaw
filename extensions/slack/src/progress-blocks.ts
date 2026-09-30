@@ -458,6 +458,8 @@ export function buildSlackProgressCardBlocks(params: {
   ];
   const title = params.title?.trim();
   const blocks: (Block | KnownBlock)[] = [
+    // A failed turn may end without any error reply; the card is its only visible outcome.
+    ...(params.state === "error" ? [progressTextSection({ text: "Failed", format: "plain" })] : []),
     ...(title ? [progressTextSection({ text: title, format: "plain" })] : []),
     ...[...narration].map(([text, format]) => progressTextSection({ text, format }, "italic")),
     ...sections.filter(Boolean).map((text) => ({ type: "section" as const, text: field(text) })),

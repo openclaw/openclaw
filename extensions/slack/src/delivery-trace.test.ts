@@ -829,7 +829,7 @@ describe("slack delivery trace goldens", () => {
 
   it.each([
     { name: "success", isError: false, title: undefined, label: undefined },
-    { name: "error", isError: true, title: undefined, label: undefined },
+    { name: "error", isError: true, title: "Failed", label: undefined },
     { name: "explicit title only", isError: false, title: "Review", label: "Review" },
   ])(
     "keeps an explicit top-level card with the $name terminal title",

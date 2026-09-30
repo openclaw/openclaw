@@ -64,7 +64,7 @@ export const slackChannelConfigUiHints = {
   }),
   "streaming.progress.toolProgress": {
     label: "Slack Progress Tool Lines",
-    help: "Show individual tool activity, including intermediate failures, in progress drafts (default: false). Native cards add a task row per tool call. Block Kit cards add tool activity, the plan checklist, and tool/file/time totals while working; finished cards retain only file diff totals. Default Block Kit cards show commentary and text, approval requests, and available session links. Terminal task errors use normal error delivery.",
+    help: "Show individual tool activity, including intermediate failures, in progress drafts (default: false). Native cards add a task row per tool call. Block Kit cards add tool activity, the plan checklist, and tool/file/time totals while working; finished cards retain only file diff totals. Default Block Kit cards show commentary and text, approval requests, and available session links. Failed turns show a plain Failed line on the Block Kit card, even without an error reply.",
   },
   joinIntro: {
     label: "Slack Channel Join Introduction",

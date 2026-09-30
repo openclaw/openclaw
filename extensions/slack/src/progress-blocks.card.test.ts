@@ -5,16 +5,20 @@ import { itemLine, progressLine, toolLine } from "./progress-blocks.test-helpers
 
 describe("buildSlackProgressCardBlocks", () => {
   it.each(["working", "success", "error"] as const)(
-    "omits filler from an empty %s card",
+    "omits filler and preserves failures in an empty %s card",
     (state) => {
       for (const detailed of [false, true]) {
-        expect(buildSlackProgressCardBlocks({ detailed, state, lines: [] })).toEqual([]);
+        expect(buildSlackProgressCardBlocks({ detailed, state, lines: [] })).toEqual(
+          state === "error"
+            ? [{ type: "section", text: { type: "plain_text", text: "Failed", emoji: false } }]
+            : [],
+        );
       }
     },
   );
 
   it.each(["working", "success", "error"] as const)(
-    "keeps only text, commentary, approvals, and session links by default when %s",
+    "keeps text, commentary, approvals, session links, and any failure outcome by default when %s",
     (state) => {
       const blocks = buildSlackProgressCardBlocks({
         detailed: false,
@@ -44,6 +48,9 @@ describe("buildSlackProgressCardBlocks", () => {
         sessionLinks: [{ text: "Open work session", url: "https://example.com/session" }],
       });
       expect(blocks).toEqual([
+        ...(state === "error"
+          ? [{ type: "section", text: { type: "plain_text", text: "Failed", emoji: false } }]
+          : []),
         { type: "section", text: { type: "plain_text", text: "Review", emoji: false } },
         { type: "section", text: { type: "mrkdwn", text: "_Checking the workspace_" } },
         { type: "section", text: { type: "plain_text", text: "Read *literal*", emoji: false } },
@@ -328,10 +335,13 @@ describe("buildSlackProgressCardBlocks", () => {
         ],
       });
 
-      expect(blocks[0]).toEqual({
-        type: "section",
-        text: { type: "plain_text", text: "Implementing", emoji: false },
-      });
+      const headings = [
+        ...(state === "error"
+          ? [{ type: "section", text: { type: "plain_text", text: "Failed", emoji: false } }]
+          : []),
+        { type: "section", text: { type: "plain_text", text: "Implementing", emoji: false } },
+      ];
+      expect(blocks.slice(0, headings.length)).toEqual(headings);
       // Finished cards keep the diff stat only: no tool-call/elapsed receipt.
       expect(blocks).toContainEqual({
         type: "context",
@@ -351,7 +361,7 @@ describe("buildSlackProgressCardBlocks", () => {
 
       expect(
         buildSlackProgressCardBlocks({ detailed: true, state, title: "Implementing", lines: [] }),
-      ).toHaveLength(1);
+      ).toEqual(headings);
     },
   );
 

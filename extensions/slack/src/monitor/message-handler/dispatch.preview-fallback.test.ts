@@ -1546,8 +1546,9 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
   });
 
-  it("deletes an approval-only card when the run fails without a final reply", async () => {
+  it("keeps an approval-only card as Failed when the run fails without a final reply", async () => {
     const draftStream = useDraftStream();
+    finalizeSlackPreviewEditMock.mockResolvedValueOnce(undefined);
     mockedSlackStreamingMode = "progress";
     mockedDispatchSequence = [];
     mockedReplyOptionEvents = [
@@ -1564,12 +1565,22 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     ).rejects.toThrow("agent dispatch failed");
 
     expect(draftUpdateTexts(draftStream).at(-1)).toContain("Approval required: run checks");
-    expect(finalizeSlackPreviewEditMock).not.toHaveBeenCalled();
-    expect(draftStream.clear).toHaveBeenCalled();
+    expect(finalizeSlackPreviewEditMock).toHaveBeenCalledTimes(1);
+    const finalEdit = requireRecord(
+      requireMockCall(finalizeSlackPreviewEditMock, 0, "failed approval-only card edit")[0],
+      "failed approval-only card edit",
+    );
+    expect(finalEdit.text).toBe("Failed");
+    expect(finalEdit.blocks).toEqual([
+      { type: "section", text: { type: "plain_text", text: "Failed", emoji: false } },
+    ]);
+    expect(JSON.stringify(finalEdit.blocks)).not.toMatch(/\p{Extended_Pictographic}/u);
+    expect(draftStream.clear).not.toHaveBeenCalled();
   });
 
   it("terminalizes the progress card on a dispatch error", async () => {
     const draftStream = useDraftStream();
+    finalizeSlackPreviewEditMock.mockResolvedValueOnce(undefined);
 
     mockedDispatchSequence = [];
     mockedReplyOptionEvents = [{ kind: "item", progressText: "working" }];
@@ -1585,7 +1596,11 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       requireMockCall(finalizeSlackPreviewEditMock, 0, "dispatch error card edit")[0],
       "dispatch error card edit",
     );
-    expect(finalEdit.text).toBe("_working_");
+    expect(finalEdit.text).toBe("Failed\n\n_working_");
+    expect(finalEdit.blocks).toEqual([
+      { type: "section", text: { type: "plain_text", text: "Failed", emoji: false } },
+      { type: "section", text: { type: "mrkdwn", text: "_working_" } },
+    ]);
     expect(draftStream.clear).not.toHaveBeenCalled();
   });
 
@@ -1604,6 +1619,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     });
     expect(failedDraft.clear).not.toHaveBeenCalled();
     expect(finalizeSlackPreviewEditMock.mock.calls[0]?.[0]?.blocks).toEqual([
+      { type: "section", text: { type: "plain_text", text: "Failed", emoji: false } },
       { type: "section", text: { type: "mrkdwn", text: "_working_" } },
     ]);
 
@@ -3299,31 +3315,52 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     },
   );
 
-  it.each([false, true])(
-    "deletes a finished card with nothing left to show instead of keeping a stale approval (error=%s)",
-    async (isError) => {
-      const draftStream = useDraftStream();
-      mockedSlackStreamingMode = "progress";
-      mockedReplyOptionEvents = [
-        { kind: "approval", phase: "requested", approvalId: "approval-1", command: "run checks" },
-      ];
-      mockedDispatchSequence = [{ kind: "final", payload: { text: FINAL_REPLY_TEXT, isError } }];
-      await dispatchPreparedSlackMessage(
-        createPreparedSlackMessage({
-          accountConfig: { streaming: { mode: "progress", progress: { style: "card" } } },
-        }),
+  it.each([
+    {
+      name: "deletes a successful card with nothing left to show instead of keeping a stale approval",
+      isError: false,
+    },
+    {
+      name: "keeps a failed card marked Failed instead of keeping a stale approval",
+      isError: true,
+    },
+  ])("$name", async ({ isError }) => {
+    const draftStream = useDraftStream();
+    finalizeSlackPreviewEditMock.mockResolvedValueOnce(undefined);
+    mockedSlackStreamingMode = "progress";
+    mockedReplyOptionEvents = [
+      { kind: "approval", phase: "requested", approvalId: "approval-1", command: "run checks" },
+    ];
+    mockedDispatchSequence = [{ kind: "final", payload: { text: FINAL_REPLY_TEXT, isError } }];
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        accountConfig: { streaming: { mode: "progress", progress: { style: "card" } } },
+      }),
+    );
+    expect(draftUpdateTexts(draftStream).at(-1)).toContain("Approval required: run checks");
+    if (isError) {
+      expect(finalizeSlackPreviewEditMock).toHaveBeenCalledTimes(1);
+      const finalEdit = requireRecord(
+        requireMockCall(finalizeSlackPreviewEditMock, 0, "failed card without stale approval")[0],
+        "failed card without stale approval",
       );
-      expect(draftUpdateTexts(draftStream).at(-1)).toContain("Approval required: run checks");
+      expect(finalEdit.text).toBe("Failed");
+      expect(finalEdit.blocks).toEqual([
+        { type: "section", text: { type: "plain_text", text: "Failed", emoji: false } },
+      ]);
+      expect(draftStream.seal).toHaveBeenCalledTimes(1);
+      expect(draftStream.clear).not.toHaveBeenCalled();
+    } else {
       expect(finalizeSlackPreviewEditMock).not.toHaveBeenCalled();
       expect(draftStream.seal).not.toHaveBeenCalled();
       expect(draftStream.clear).toHaveBeenCalled();
-      expect(deliverRepliesMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          replies: [{ text: FINAL_REPLY_TEXT, isError }],
-        }),
-      );
-    },
-  );
+    }
+    expect(deliverRepliesMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [{ text: FINAL_REPLY_TEXT, isError }],
+      }),
+    );
+  });
 
   it("deletes a working card once a resolved approval was its last visible row", async () => {
     const draftStream = useDraftStream();
@@ -3365,7 +3402,11 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       requireMockCall(finalizeSlackPreviewEditMock, 0, "error session card edit")[0],
       "error session card edit",
     );
-    expect(finalEdit.text).toBe("_working_");
+    expect(finalEdit.text).toBe("Failed\n\n_working_");
+    expect(finalEdit.blocks).toEqual([
+      { type: "section", text: { type: "plain_text", text: "Failed", emoji: false } },
+      { type: "section", text: { type: "mrkdwn", text: "_working_" } },
+    ]);
     expect(draftStream.clear).not.toHaveBeenCalled();
   });
 
