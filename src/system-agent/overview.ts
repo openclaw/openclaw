@@ -352,19 +352,19 @@ function formatStartupAction(overview: SystemAgentOverview): string | undefined 
  */
 export function formatSystemAgentOnboardingWelcome(
   overview: SystemAgentOverview,
-  t: SetupTranslator = createSetupTranslator({ keyPrefix: "wizard.onboardingWelcome" }),
+  translate: SetupTranslator = createSetupTranslator({ keyPrefix: "wizard.onboardingWelcome" }),
 ): string {
   return [
-    `## ${t("inferenceReady")}`,
+    `## ${translate("inferenceReady")}`,
     "",
-    `- ${t(overview.defaultModel ? "verifiedModel" : "verifiedSetupModel", {
-      model: overview.defaultModel ?? overview.setupModel ?? t("notConfigured"),
+    `- ${translate(overview.defaultModel ? "verifiedModel" : "verifiedSetupModel", {
+      model: overview.defaultModel ?? overview.setupModel ?? translate("notConfigured"),
     })}`,
-    `- ${overview.gateway.reachable ? t("gatewayRunning", { url: overview.gateway.url }) : t("gatewayUnavailable")}`,
-    `- ${t("optionalSetup")}`,
-    `- ${t("channelCommands")}`,
+    `- ${overview.gateway.reachable ? translate("gatewayRunning", { url: overview.gateway.url }) : translate("gatewayUnavailable")}`,
+    `- ${translate("optionalSetup")}`,
+    `- ${translate("channelCommands")}`,
     "",
-    t(overview.defaultModel ? "readyNext" : "readySetupNext"),
+    translate(overview.defaultModel ? "readyNext" : "readySetupNext"),
   ].join("\n");
 }
 

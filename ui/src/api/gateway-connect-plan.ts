@@ -212,7 +212,7 @@ export async function buildBrowserGatewayConnectPlan({
       }),
       auth: nativeAuth?.auth ?? buildGatewayConnectAuth(selectedAuth),
       userAgent: navigator.userAgent,
-      locale: i18n.getLocale(),
+      locale: i18n.getRequestedLocale(),
     },
     explicitGatewayToken: nativeAuth ? undefined : explicitGatewayToken,
     selectedAuth,

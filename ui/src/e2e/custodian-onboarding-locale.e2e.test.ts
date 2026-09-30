@@ -2,7 +2,10 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import { buildOnboardingWelcome } from "../../../src/system-agent/onboarding-welcome.js";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  createControlUiE2eSuite,
+  holdModuleResponse,
+} from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI onboarding locale" });
 
@@ -11,6 +14,7 @@ suite.define(() => {
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { width: 1280, height: 1000 } },
       async ({ page }) => {
+        const localeLoad = await holdModuleResponse(page, /\/assets\/zh-CN-[^/]+\.js$/);
         await page.addInitScript(() => {
           localStorage.setItem("openclaw.i18n.locale", "zh-CN");
         });
@@ -37,8 +41,12 @@ suite.define(() => {
             },
           },
         });
-        await page.goto(`${suite.server.baseUrl}custodian?onboarding=1`);
+        await page.goto(`${suite.server.baseUrl}custodian?onboarding=1`, {
+          waitUntil: "domcontentloaded",
+        });
+        await localeLoad.request;
         const connect = await gateway.waitForRequest("connect");
+        localeLoad.release();
         await page.locator(".custodian__messages h2").first().waitFor();
         await expect.poll(() => page.evaluate(() => document.documentElement.lang)).toBe("zh-CN");
         await page.screenshot({
@@ -49,7 +57,7 @@ suite.define(() => {
         await page
           .getByRole("heading", { name: "你好，我是 OpenClaw — 我们来孵化你的智能体吧。" })
           .waitFor();
-        await page.getByRole("button", { name: /是的 — 开始设置/ }).click();
+        await page.getByRole("radio", { name: /是的 — 开始设置/ }).click();
         const answer = await gateway.waitForRequest("openclaw.chat", { match: { message: "yes" } });
         expect(answer.params).toMatchObject({ message: "yes" });
       },

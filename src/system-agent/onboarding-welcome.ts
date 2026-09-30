@@ -16,38 +16,38 @@ import { formatSystemAgentOnboardingWelcome } from "./overview.js";
  * engine already understands; the prose welcome always stands alone for
  * text-only clients (macOS app, TUI).
  */
-function readyWelcomeQuestion(t: SetupTranslator): SystemAgentChatQuestion {
+function readyWelcomeQuestion(translate: SetupTranslator): SystemAgentChatQuestion {
   return {
     id: "onboarding-next-step",
-    header: t("nextStep"),
-    question: t("firstAction"),
+    header: translate("nextStep"),
+    question: translate("firstAction"),
     options: [
       {
-        label: t("talkToAgent"),
+        label: translate("talkToAgent"),
         reply: "talk to agent",
         recommended: true,
-        description: t("meetAgent"),
+        description: translate("meetAgent"),
       },
-      { label: t("connectWhatsApp"), reply: "connect whatsapp" },
-      { label: t("connectTelegram"), reply: "connect telegram" },
-      { label: t("allChannels"), reply: "channels" },
+      { label: translate("connectWhatsApp"), reply: "connect whatsapp" },
+      { label: translate("connectTelegram"), reply: "connect telegram" },
+      { label: translate("allChannels"), reply: "channels" },
     ],
     isOther: true,
     skipAction: "exit",
   };
 }
 
-function setupWelcomeQuestion(t: SetupTranslator): SystemAgentChatQuestion {
+function setupWelcomeQuestion(translate: SetupTranslator): SystemAgentChatQuestion {
   return {
     id: "onboarding-apply-setup",
-    header: t("readyWhenYouAre"),
-    question: t("applyQuestion"),
+    header: translate("readyWhenYouAre"),
+    question: translate("applyQuestion"),
     options: [
-      { label: t("applyYes"), reply: "yes", recommended: true },
+      { label: translate("applyYes"), reply: "yes", recommended: true },
       {
-        label: t("inspectChanges"),
+        label: translate("inspectChanges"),
         reply: "what exactly will you set up?",
-        description: t("askBeforeWriting"),
+        description: translate("askBeforeWriting"),
       },
     ],
     isOther: true,
@@ -108,7 +108,7 @@ export async function buildOnboardingWelcome(params: {
   /** Only the local terminal can finish the machine-owned Gateway installation. */
   localRecovery?: true;
 }): Promise<OnboardingWelcome> {
-  const t = createSetupTranslator({
+  const translate = createSetupTranslator({
     keyPrefix: "wizard.onboardingWelcome",
     locale: params.locale === undefined ? undefined : resolveWizardLocale(params.locale),
   });
@@ -142,9 +142,9 @@ export async function buildOnboardingWelcome(params: {
     setupModel &&
     (!requestedWorkspace || requestedWorkspace === authoredWorkspace)
   ) {
-    const welcome = formatSystemAgentOnboardingWelcome(overview, t);
+    const welcome = formatSystemAgentOnboardingWelcome(overview, translate);
     params.engine.noteAssistantMessage(welcome);
-    return { text: welcome, question: readyWelcomeQuestion(t) };
+    return { text: welcome, question: readyWelcomeQuestion(translate) };
   }
   if (!setupModel) {
     throw new Error(
@@ -165,19 +165,19 @@ export async function buildOnboardingWelcome(params: {
     ...(params.agentName ? { agentName: params.agentName } : {}),
   });
   const welcome = [
-    `## ${t(overview.defaultModel ? "hatchIntro" : "setupIntro")}`,
+    `## ${translate(overview.defaultModel ? "hatchIntro" : "setupIntro")}`,
     "",
-    t("machineIntro"),
+    translate("machineIntro"),
     "",
-    `- ${t(overview.defaultModel ? "verifiedAi" : "verifiedSetupAi", { model: setupModel })}`,
-    `- ${t("workspace", { workspace: shortenHomePath(workspace) })}`,
-    `- ${t("localGateway")}`,
+    `- ${translate(overview.defaultModel ? "verifiedAi" : "verifiedSetupAi", { model: setupModel })}`,
+    `- ${translate("workspace", { workspace: shortenHomePath(workspace) })}`,
+    `- ${translate("localGateway")}`,
     "",
-    t("applyPrompt"),
+    translate("applyPrompt"),
     "",
-    t("security"),
-    t(overview.defaultModel ? "afterSetup" : "setupModelNext"),
+    translate("security"),
+    translate(overview.defaultModel ? "afterSetup" : "setupModelNext"),
   ].join("\n");
   params.engine.noteAssistantMessage(welcome);
-  return { text: welcome, question: setupWelcomeQuestion(t) };
+  return { text: welcome, question: setupWelcomeQuestion(translate) };
 }
