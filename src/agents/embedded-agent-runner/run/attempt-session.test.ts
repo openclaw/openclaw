@@ -685,6 +685,7 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
     expect(result.hasDeliveredSourceReply()).toBe(true);
     expect(onCompletedSourceReplyDelivered).not.toHaveBeenCalled();
     fixture.onCompletedSourceReply();
+    fixture.onCompletedSourceReply();
     expect(onCompletedSourceReplyDelivered).toHaveBeenCalledOnce();
   });
 

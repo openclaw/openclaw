@@ -38,6 +38,9 @@ export type AgentFallbackCandidateCommonParams = RunEntryCandidateOptions & {
   runLane: RunEmbeddedAgentParams["lane"];
   suppressQueuedUserPersistenceForCandidate: boolean;
   userTurnTranscriptRecorder: RunEmbeddedAgentParams["userTurnTranscriptRecorder"];
+  onCompletedSourceReplyDelivered: NonNullable<
+    RunEmbeddedAgentParams["onCompletedSourceReplyDelivered"]
+  >;
   notifyUserMessagePersisted: () => void;
   fastModeStartedAtMs: number;
   fastModeAutoProgressState: FastModeAutoProgressState;
