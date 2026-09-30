@@ -1458,7 +1458,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/agents/tools/sessions-spawn-outcome.test.ts",
   "src/agents/tools/sessions-spawn-tool.delivery-backlog.test.ts",
   "src/agents/tools/sessions-spawn-tool.test.ts",
-  "src/agents/tools/sessions-spawn-tool.visible-admission.test.ts",
   "src/agents/tools/sessions-tool.batch.test.ts",
   "src/agents/tools/sessions.test.ts",
   "src/agents/tools/skill-workshop-tool.collection-restore.test.ts",
