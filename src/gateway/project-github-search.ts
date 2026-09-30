@@ -23,9 +23,8 @@ type SearchCacheEntry = {
 
 const searchCache = new Map<string, SearchCacheEntry>();
 
-function boundedString(value: string | undefined, maxLength: number): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed.slice(0, maxLength) : undefined;
+function boundedString(value: unknown, maxLength: number): string | undefined {
+  return readNonBlankString(value)?.slice(0, maxLength);
 }
 
 function parseRepository(value: unknown): RemoteProject | null {
@@ -38,11 +37,11 @@ function parseRepository(value: unknown): RemoteProject | null {
     return null;
   }
   const clone = parseProjectGitUrl(readNonBlankString(value.clone_url) ?? "");
-  const webUrl = boundedString(readNonBlankString(value.html_url), 2048);
+  const webUrl = boundedString(value.html_url, 2048);
   if (!clone || !webUrl) {
     return null;
   }
-  const description = boundedString(readNonBlankString(value.description), 500);
+  const description = boundedString(value.description, 500);
   return {
     name: name.slice(0, 100),
     fullName: fullName.slice(0, 200),

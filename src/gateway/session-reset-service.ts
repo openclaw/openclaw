@@ -446,57 +446,49 @@ async function ensureSessionRuntimeCleanup(params: {
       },
     });
   };
-  const ensureMcpRetirementWatcher = (): Promise<void> => {
-    return getOrCreatePromise(
-      mcpRunEndWatchers,
-      sessionId,
-      async () => {
-        let cancelWatcher = () => {};
-        const cancelled = new Promise<false>((resolve) => {
-          cancelWatcher = () => resolve(false);
-        });
-        mcpRunEndWatcherState.cancellations.set(sessionId, cancelWatcher);
-        try {
-          while (
-            await Promise.race([
-              embeddedAgent.waitForEmbeddedAgentRunEnd(sessionId, null),
-              cancelled,
-            ])
-          ) {
-            // A replacement can register after the wait promise settles but before
-            // this continuation runs. Keep the required retirement armed for it.
-            if (embeddedAgent.isEmbeddedAgentRunActive(sessionId)) {
-              continue;
-            }
-            const retirement = retireMcpRuntime(false);
-            mcpRunEndWatcherState.retirements.add(retirement);
-            try {
-              await retirement;
-            } finally {
-              mcpRunEndWatcherState.retirements.delete(retirement);
-            }
-            if (embeddedAgent.isEmbeddedAgentRunActive(sessionId)) {
-              continue;
-            }
-            cleanupProviderResources();
-            return;
-          }
-        } catch (error) {
-          logVerbose(
-            `sessions cleanup: failed to disarm deferred MCP retirement: ${String(error)}`,
-          );
-        } finally {
-          if (mcpRunEndWatcherState.cancellations.get(sessionId) === cancelWatcher) {
-            mcpRunEndWatcherState.cancellations.delete(sessionId);
-          }
-        }
-      },
-      { evictOnSettled: true },
-    );
-  };
   // Register against the run being stopped before abort or any await allows a
   // later embedded or reply-backed run to replace it in the active registry.
-  const mcpRetirementWatcher = ensureMcpRetirementWatcher();
+  const mcpRetirementWatcher = getOrCreatePromise(
+    mcpRunEndWatchers,
+    sessionId,
+    async () => {
+      let cancelWatcher = () => {};
+      const cancelled = new Promise<false>((resolve) => {
+        cancelWatcher = () => resolve(false);
+      });
+      mcpRunEndWatcherState.cancellations.set(sessionId, cancelWatcher);
+      try {
+        while (
+          await Promise.race([embeddedAgent.waitForEmbeddedAgentRunEnd(sessionId, null), cancelled])
+        ) {
+          // A replacement can register after the wait promise settles but before
+          // this continuation runs. Keep the required retirement armed for it.
+          if (embeddedAgent.isEmbeddedAgentRunActive(sessionId)) {
+            continue;
+          }
+          const retirement = retireMcpRuntime(false);
+          mcpRunEndWatcherState.retirements.add(retirement);
+          try {
+            await retirement;
+          } finally {
+            mcpRunEndWatcherState.retirements.delete(retirement);
+          }
+          if (embeddedAgent.isEmbeddedAgentRunActive(sessionId)) {
+            continue;
+          }
+          cleanupProviderResources();
+          return;
+        }
+      } catch (error) {
+        logVerbose(`sessions cleanup: failed to disarm deferred MCP retirement: ${String(error)}`);
+      } finally {
+        if (mcpRunEndWatcherState.cancellations.get(sessionId) === cancelWatcher) {
+          mcpRunEndWatcherState.cancellations.delete(sessionId);
+        }
+      }
+    },
+    { evictOnSettled: true },
+  );
   embeddedAgent.abortEmbeddedAgentRun(sessionId);
   // Mark cleanup before waiting so the timeout path cannot strand MCP children.
   // Active tool/app leases keep in-flight work alive until their final release.

@@ -306,14 +306,10 @@ export function createGatewayPortalService(params: {
           }
           if (existing) {
             existing.portal.title = input.title?.trim() || existing.portal.title;
-            if (input.description !== undefined) {
-              existing.portal.description = input.description;
-            }
-            if (input.path !== undefined) {
-              existing.portal.path = input.path;
-            }
-            if (input.origin !== undefined) {
-              existing.portal.origin = input.origin;
+            for (const key of ["description", "path", "origin"] as const) {
+              if (input[key] !== undefined) {
+                existing.portal[key] = input[key];
+              }
             }
             return summarize(existing.portal);
           }

@@ -474,27 +474,21 @@ function buildTalkCatalog(config: OpenClawConfig, params: TalkCatalogParams) {
         if (capabilities?.transports) {
           entry.transports = [...capabilities.transports];
         }
-        if (capabilities?.inputAudioFormats) {
-          entry.inputAudioFormats = capabilities.inputAudioFormats.map((format) => ({
-            ...format,
-          }));
+        for (const key of ["inputAudioFormats", "outputAudioFormats"] as const) {
+          const formats = capabilities?.[key];
+          if (formats) {
+            entry[key] = formats.map((format) => ({ ...format }));
+          }
         }
-        if (capabilities?.outputAudioFormats) {
-          entry.outputAudioFormats = capabilities.outputAudioFormats.map((format) => ({
-            ...format,
-          }));
-        }
-        if (capabilities?.supportsBargeIn !== undefined) {
-          entry.supportsBargeIn = capabilities.supportsBargeIn;
-        }
-        if (capabilities?.supportsToolCalls !== undefined) {
-          entry.supportsToolCalls = capabilities.supportsToolCalls;
-        }
-        if (capabilities?.supportsVideoFrames !== undefined) {
-          entry.supportsVideoFrames = capabilities.supportsVideoFrames;
-        }
-        if (capabilities?.supportsSessionResumption !== undefined) {
-          entry.supportsSessionResumption = capabilities.supportsSessionResumption;
+        for (const key of [
+          "supportsBargeIn",
+          "supportsToolCalls",
+          "supportsVideoFrames",
+          "supportsSessionResumption",
+        ] as const) {
+          if (capabilities?.[key] !== undefined) {
+            entry[key] = capabilities[key];
+          }
         }
         return entry;
       }),
