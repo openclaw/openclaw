@@ -74,7 +74,7 @@ flow:
             - expr: liveTurnTimeoutMs(env, 60000)
         - set: uiSessionKey
           value:
-            expr: "buildAgentSessionKey({ agentId: env.cfg.agents?.list?.find((agent) => agent.default)?.id ?? env.cfg.agents?.list?.[0]?.id ?? 'main', channel: 'qa-channel', accountId: 'default', peer: { kind: 'direct', id: config.conversationId }, dmScope: env.cfg.session?.dmScope, identityLinks: env.cfg.session?.identityLinks })"
+            expr: "resolveAgentRoute({ cfg: env.cfg, channel: transport.id, accountId: transport.accountId, peer: { kind: 'direct', id: transport.buildAgentDelivery({ target: `dm:${config.conversationId}` }).replyTo } }).sessionKey"
         - set: outboundStartIndex
           value:
             expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
@@ -152,27 +152,50 @@ flow:
         - set: uiPageId
           value:
             expr: uiTab.pageId
-        - call: webWait
-          args:
-            - pageId:
-                ref: uiPageId
-              selector: openclaw-app
-              timeoutMs:
-                expr: liveTurnTimeoutMs(env, 45000)
-        - call: waitForCondition
-          saveAs: uiRoleState
-          args:
-            - lambda:
-                async: true
-                expr: "await (async () => { const result = await webEvaluate({ pageId: uiPageId, expression: `(() => ({ assistantRoleTexts: [...document.querySelectorAll('.chat-group.assistant code.assistant-transcript-role')].map((element) => element.textContent?.trim() ?? ''), assistantRoleParagraphTexts: [...document.querySelectorAll('.chat-group.assistant code.assistant-transcript-role')].map((element) => element.parentElement?.textContent?.trim() ?? ''), assistantOrdinaryCodeTexts: [...document.querySelectorAll('.chat-group.assistant code:not(.assistant-transcript-role)')].map((element) => element.textContent?.trim() ?? ''), userRoleMarkerCount: document.querySelectorAll('.chat-group.user code.assistant-transcript-role').length, userOrdinaryCodeTexts: [...document.querySelectorAll('.chat-group.user code:not(.assistant-transcript-role)')].map((element) => element.textContent?.trim() ?? '') }))()`, timeoutMs: liveTurnTimeoutMs(env, 15000) }); const hasRoleHeaders = [config.assistantReply.slice(0, config.assistantReply.indexOf(']') + 1), config.timestampRoleHeader.slice(0, config.timestampRoleHeader.indexOf(':') + 1), config.angleRoleHeader.slice(0, config.angleRoleHeader.indexOf('>') + 1), config.imageRoleHeader, config.largeRoleHeader].every((header) => result.assistantRoleTexts.includes(header)); const hasImageCaption = result.assistantRoleParagraphTexts.includes(`${config.imageRoleHeader} ${config.imageCaption}`); const hasCodeExamples = [config.inlineCodeText, config.fencedCodeText].every((example) => result.assistantOrdinaryCodeTexts.includes(example)); const userStayedUnmarked = result.userRoleMarkerCount === 0 && result.userOrdinaryCodeTexts.some((text) => text.includes(config.assistantReply)); return hasRoleHeaders && hasImageCaption && hasCodeExamples && userStayedUnmarked ? result : undefined; })()"
-            - expr: liveTurnTimeoutMs(env, 45000)
-            - 500
+        - set: uiRoleStateExpression
+          value: |-
+            (() => ({
+              assistantRoleTexts: [...document.querySelectorAll('.chat-group.assistant code.assistant-transcript-role')].map((element) => element.textContent?.trim() ?? ''),
+              assistantImageLabels: [...document.querySelectorAll('.chat-group.assistant .markdown-external-image code.assistant-transcript-role')].map((element) => ({ role: element.textContent?.trim() ?? '', caption: element.nextSibling?.textContent?.trim() ?? '' })),
+              assistantOrdinaryCodeTexts: [...document.querySelectorAll('.chat-group.assistant code:not(.assistant-transcript-role)')].map((element) => element.textContent?.trim() ?? ''),
+              userRoleMarkerCount: document.querySelectorAll('.chat-group.user code.assistant-transcript-role').length,
+              userOrdinaryCodeTexts: [...document.querySelectorAll('.chat-group.user code:not(.assistant-transcript-role)')].map((element) => element.textContent?.trim() ?? '')
+            }))()
+        - try:
+            actions:
+              - call: webWait
+                args:
+                  - pageId:
+                      ref: uiPageId
+                    selector: openclaw-app
+                    timeoutMs:
+                      expr: liveTurnTimeoutMs(env, 45000)
+              - call: waitForCondition
+                saveAs: uiRoleState
+                args:
+                  - lambda:
+                      async: true
+                      expr: "await (async () => { const result = await webEvaluate({ pageId: uiPageId, expression: uiRoleStateExpression, timeoutMs: liveTurnTimeoutMs(env, 15000) }); const hasRoleHeaders = [config.assistantReply.slice(0, config.assistantReply.indexOf(']') + 1), config.timestampRoleHeader.slice(0, config.timestampRoleHeader.indexOf(':') + 1), config.angleRoleHeader.slice(0, config.angleRoleHeader.indexOf('>') + 1), config.imageRoleHeader, config.largeRoleHeader].every((header) => result.assistantRoleTexts.includes(header)); const hasImageCaption = result.assistantImageLabels.some((label) => label.role === config.imageRoleHeader && label.caption === config.imageCaption); const hasCodeExamples = [config.inlineCodeText, config.fencedCodeText].every((example) => result.assistantOrdinaryCodeTexts.includes(example)); const userStayedUnmarked = result.userRoleMarkerCount === 0 && result.userOrdinaryCodeTexts.some((text) => text.includes(config.assistantReply)); return hasRoleHeaders && hasImageCaption && hasCodeExamples && userStayedUnmarked ? result : undefined; })()"
+                  - expr: liveTurnTimeoutMs(env, 45000)
+                  - 500
+            catchAs: uiFailure
+            catch:
+              - throw:
+                  expr: |-
+                    await (async () => {
+                      const diagnostics = await Promise.allSettled([
+                        webSnapshot({ pageId: uiPageId, maxChars: 12000, timeoutMs: liveTurnTimeoutMs(env, 15000) }).then(({ title, text, diagnostics }) => ({ title, text, diagnostics })),
+                        webEvaluate({ pageId: uiPageId, expression: uiRoleStateExpression, timeoutMs: liveTurnTimeoutMs(env, 15000) })
+                      ]);
+                      const message = `${formatErrorMessage(uiFailure)}; browser diagnostics=${JSON.stringify(diagnostics.map((result) => result.status === 'fulfilled' ? result.value : { error: formatErrorMessage(result.reason) }))}`;
+                      return env.gateway.token ? message.replaceAll(env.gateway.token, '[redacted]') : message;
+                    })()
         - assert:
             expr: uiRoleState.userRoleMarkerCount === 0
             message:
               expr: "`user-authored Markdown received an assistant transcript marker: ${JSON.stringify(uiRoleState)}`"
         - assert:
-            expr: "uiRoleState.assistantRoleParagraphTexts.includes(`${config.imageRoleHeader} ${config.imageCaption}`)"
+            expr: uiRoleState.assistantImageLabels.some((label) => label.role === config.imageRoleHeader && label.caption === config.imageCaption)
             message:
               expr: "`image alt caption was swallowed by the transcript marker: ${JSON.stringify(uiRoleState)}`"
         - assert:
