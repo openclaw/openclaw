@@ -31,6 +31,7 @@ import {
   applyRemoteModelCatalogUpdate,
   refreshPreparedModelRuntimeSnapshots,
 } from "./prepared-model-runtime.js";
+import { closePreparedModelRuntimeSnapshots } from "./prepared-model-runtime.lifecycle.js";
 import { registerPreparedModelRuntimePublicationListener } from "./prepared-model-runtime.publication-events.js";
 
 const fixture = usePreparedModelRuntimeHarness({
@@ -405,5 +406,31 @@ it("ends adoption instead of joining a timed-out owner build", async () => {
     stop();
     finish.resolve();
     vi.useRealTimers();
+  }
+});
+
+it("does not hold Gateway shutdown on an adoption's pricing preparation", async () => {
+  await setup();
+  const preparing = createDeferred();
+  const held = createDeferred();
+  const pricingSpy = vi
+    .spyOn(pricing, "prepareModelPricingContext")
+    .mockImplementation(async () => {
+      preparing.resolve();
+      await held.promise;
+    });
+  const adoption = applyRemoteModelCatalogUpdate(() => config);
+  try {
+    await preparing.promise;
+    await withTestTimeout(
+      closePreparedModelRuntimeSnapshots(),
+      5_000,
+      "shutdown waited for held pricing preparation",
+    );
+    expect(await adoption).toBe("superseded");
+    expect(captureRemoteModelCatalogStartupSnapshot()?.generatedAt).toBe(200);
+  } finally {
+    held.resolve();
+    pricingSpy.mockRestore();
   }
 });

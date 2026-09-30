@@ -446,8 +446,9 @@ async function publishPreparedModelRuntimeCatalogReplacement(params: {
       isOwnerRegistered: (key, owner) => (committed ? params.owners : staged).get(key) === owner,
       isOwnerPublished: (key, owner) => committed && params.owners.get(key) === owner,
     });
+    // Pricing preparation takes no signal; cancellation and shutdown must not wait on its I/O.
     for (const config of new Set(candidates.map((owner) => owner.input.config))) {
-      await prepareModelPricingContext(config);
+      await racePromiseWithAbortSignal(prepareModelPricingContext(config), controller.signal);
     }
     await params.commit(() => {
       assertCurrent();

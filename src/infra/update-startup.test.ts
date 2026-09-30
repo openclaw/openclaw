@@ -190,12 +190,16 @@ describe("update-startup", () => {
     cfg: OpenClawConfig;
     log?: Parameters<typeof createGatewayUpdateCheck>[0]["log"];
     isNixMode?: boolean;
+    applyRemoteCatalogUpdate?: Parameters<
+      typeof createGatewayUpdateCheck
+    >[0]["applyRemoteCatalogUpdate"];
   };
 
   function createTestUpdateCheck({
     cfg,
     log = { info: vi.fn() },
     isNixMode = false,
+    applyRemoteCatalogUpdate = async () => "unchanged",
     ...params
   }: UpdateCheckFixtureParams) {
     const check = createGatewayUpdateCheck({
@@ -203,7 +207,7 @@ describe("update-startup", () => {
       log,
       isNixMode,
       getConfig: () => cfg,
-      applyRemoteCatalogUpdate: async () => "unchanged",
+      applyRemoteCatalogUpdate,
       lifecycle: createGatewayUpdateLifecycle(scheduler),
     });
     updateChecks.add(check);
@@ -1954,25 +1958,42 @@ describe("update-startup", () => {
     }
   });
 
-  it("uses the remaining stored TTL after a fresh startup check", async () => {
-    refreshRemoteModelCatalogMock.mockResolvedValueOnce({
-      status: "fresh",
-      providers: 1,
-      models: 1,
-      generatedAt: 1_753_500_000_000,
-      nextCheckInMs: 1_000,
-    });
-    const stop = scheduleGatewayUpdateCheck({
-      cfg: { update: { channel: "extended-stable", checkOnStart: false } },
-    });
+  it.each(["unchanged", "failed"] as const)(
+    "uses the remaining stored TTL after a fresh startup check when adoption is %s",
+    async (adoption) => {
+      refreshRemoteModelCatalogMock.mockResolvedValueOnce({
+        status: "fresh",
+        providers: 1,
+        models: 1,
+        generatedAt: 1_753_500_000_000,
+        nextCheckInMs: 1_000,
+      });
+      const info = vi.fn();
+      const stop = scheduleGatewayUpdateCheck({
+        cfg: { update: { channel: "extended-stable", checkOnStart: false } },
+        log: { info },
+        applyRemoteCatalogUpdate: async () => {
+          if (adoption === "failed") {
+            throw new SyntaxError("synthetic corrupt stored catalog");
+          }
+          return adoption;
+        },
+      });
 
-    await vi.advanceTimersByTimeAsync(0);
-    expect(refreshRemoteModelCatalogMock).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(999);
-    expect(refreshRemoteModelCatalogMock).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(1);
-    expect(refreshRemoteModelCatalogMock).toHaveBeenCalledTimes(2);
-    await stop();
-  });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(refreshRemoteModelCatalogMock).toHaveBeenCalledTimes(1);
+      if (adoption === "failed") {
+        // A failed adoption retries with the stored catalog, not after a full TTL.
+        expect(info).toHaveBeenCalledWith("remote model catalog check failed", {
+          error: expect.stringContaining("SyntaxError"),
+        });
+      }
+      await vi.advanceTimersByTimeAsync(999);
+      expect(refreshRemoteModelCatalogMock).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(refreshRemoteModelCatalogMock).toHaveBeenCalledTimes(2);
+      await stop();
+    },
+  );
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
