@@ -1,4 +1,4 @@
-import { clearSessionQueues } from "../auto-reply/reply/queue/cleanup.js";
+import { clearSessionLifecycleQueues } from "../auto-reply/reply/queue/cleanup.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
 import {
@@ -94,7 +94,16 @@ export function createGatewayWorkerPlacementLocalDispatchBarrier(params: {
         assertCurrent(getRuntimeConfig());
         authorize?.();
         placement = await startDispatch();
-        clearSessionQueues(lifecycleIdentities);
+        clearSessionLifecycleQueues({
+          keys: lifecycleIdentities,
+          agentId: currentTarget.agentId,
+          sessionKey: currentTarget.canonicalKey,
+          sessionId,
+          assertCurrent: () => {
+            assertCurrent(getRuntimeConfig());
+            authorize?.();
+          },
+        });
         params.revokeSessionAuthority({
           sessionId,
           sessionKeys: lifecycleIdentities,

@@ -4,13 +4,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolveEmbeddedSessionLane } from "../../agents/embedded-agent-runner/lanes.js";
-import {
-  clearSessionQueues,
-  enqueueFollowupRun,
-  getFollowupQueueDepth,
-  type FollowupRun,
-} from "../../auto-reply/reply/queue.js";
-import { createQueueTestRun } from "../../auto-reply/reply/queue.test-helpers.js";
+import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
+import { enqueueFollowupRun, getFollowupQueueDepth } from "../../auto-reply/reply/queue/enqueue.js";
+import type { FollowupRun } from "../../auto-reply/reply/queue/types.js";
 import {
   CommandLaneClearedError,
   enqueueCommandInLane,
@@ -34,6 +30,40 @@ const mocks = vi.hoisted(() => ({
   upstreamFork: vi.fn(),
   readMediaBuffer: vi.fn(),
 }));
+
+// Queued sources stay idle: this boundary only cuts history and settles pending work.
+vi.mock("../../auto-reply/reply/queue/drain.js", () => ({
+  clearFollowupDrainCallback: vi.fn(),
+  dropAbortedFollowups: () => {
+    throw new Error("Unexpected followup drain");
+  },
+  kickFollowupDrainIfIdle: () => {
+    throw new Error("Unexpected followup drain");
+  },
+  rememberFollowupDrainCallback: () => {
+    throw new Error("Unexpected followup drain");
+  },
+}));
+vi.mock("../../auto-reply/reply/queue/delivery-context.js", () => ({
+  createOverflowSummaryRetrySource: () => {
+    throw new Error("Unexpected queue overflow");
+  },
+  resolveFollowupAuthorizationKey: () => {
+    throw new Error("Unexpected queue overflow");
+  },
+  resolveFollowupDeliveryContextKey: () => {
+    throw new Error("Unexpected queue overflow");
+  },
+}));
+vi.mock("../../agents/model-thinking-default.js", () => ({
+  resolveThinkingSelection: () => {
+    throw new Error("Unexpected model selection refresh");
+  },
+}));
+vi.mock("../../auto-reply/thinking.js", async () => {
+  const { normalizeThinkLevel } = await import("../../auto-reply/thinking.shared.js");
+  return { normalizeThinkLevel };
+});
 
 vi.mock("../../media/store.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../media/store.js")>();
@@ -248,14 +278,22 @@ type QueuedSessionWork = {
 };
 
 function enqueueSessionWork(label: string): QueuedSessionWork {
-  const followupFixture = createQueueTestRun({ prompt: `${label} follow-up` });
   const followup: FollowupRun = {
-    ...followupFixture,
+    prompt: `${label} follow-up`,
+    enqueuedAt: Date.now(),
+    turnAdoptionLifecycle: { admission: "cancel-only", onAdopted: () => {}, onSettled: vi.fn() },
     run: {
-      ...followupFixture.run,
       agentId: "main",
       sessionId: sourceSessionId,
       sessionKey,
+      agentDir: "/tmp",
+      sessionFile: "/tmp/session.json",
+      workspaceDir: "/tmp",
+      config: {},
+      provider: "openai",
+      model: "gpt-test",
+      timeoutMs: 10_000,
+      blockReplyBreak: "text_end",
     },
   };
   expect(
@@ -279,7 +317,7 @@ function enqueueSessionWork(label: string): QueuedSessionWork {
 
 function expectSessionWorkQueued(work: QueuedSessionWork): void {
   expect(getFollowupQueueDepth(sessionKey)).toBe(1);
-  expect(work.followup.queueAbortSignal?.aborted).toBe(false);
+  expect(work.followup.turnAdoptionLifecycle?.onSettled).not.toHaveBeenCalled();
   expect(getCommandLaneSnapshot(sessionLane)).toMatchObject({
     activeCount: 0,
     queuedCount: 1,
@@ -289,7 +327,7 @@ function expectSessionWorkQueued(work: QueuedSessionWork): void {
 
 async function expectSessionWorkCleared(work: QueuedSessionWork): Promise<void> {
   expect(getFollowupQueueDepth(sessionKey)).toBe(0);
-  expect(work.followup.queueAbortSignal?.aborted).toBe(true);
+  expect(work.followup.turnAdoptionLifecycle?.onSettled).toHaveBeenCalledOnce();
   expect(getCommandLaneSnapshot(sessionLane)).toMatchObject({
     activeCount: 0,
     queuedCount: 0,
@@ -504,6 +542,52 @@ describe("session message-cut methods", () => {
       undefined,
     );
     await expectSessionWorkCleared(work);
+  });
+
+  it("rewinds research's global session without clearing main's shared lane", async () => {
+    const key = "global";
+    const lane = resolveEmbeddedSessionLane(key);
+    const target = { agentId: "research", sessionKey: key, sessionId: "research-rewind" };
+    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+    await appendTranscriptMessage(target, {
+      eventId: "research-user",
+      message: { role: "user", content: "research question" },
+      parentId: null,
+    });
+    setCommandLaneConcurrency(lane, 0);
+    const commands = [
+      enqueueCommandInLane(lane, async () => "main tagged", {
+        sessionTarget: { agentId: "main", sessionKey: key, sessionId: "main-rewind" },
+      }),
+      enqueueCommandInLane(lane, async () => "main untagged"),
+      enqueueCommandInLane(lane, async () => "research", { sessionTarget: target }),
+    ];
+    const settled = Promise.allSettled(commands);
+    try {
+      const respond = vi.fn();
+      await sessionRewindHandlers["sessions.rewind"]!({
+        req: { id: "research-rewind" } as never,
+        params: { sessionKey: key, agentId: target.agentId, entryId: "research-user" },
+        respond,
+        context: {
+          ...context(),
+          getRuntimeConfig: () => ({ agents: { entries: { main: {}, research: {} } } }),
+        },
+        client: null,
+        isWebchatConnect: () => false,
+      });
+      expect(respond).toHaveBeenCalledWith(true, { editorText: "research question" }, undefined);
+      setCommandLaneConcurrency(lane, 1);
+      expect(await settled).toEqual([
+        { status: "fulfilled", value: "main tagged" },
+        { status: "fulfilled", value: "main untagged" },
+        { status: "rejected", reason: expect.any(CommandLaneClearedError) },
+      ]);
+    } finally {
+      clearSessionQueues([key]);
+      setCommandLaneConcurrency(lane, 1);
+      await settled;
+    }
   });
 
   it("preserves queued session work after a rejected branch switch", async () => {

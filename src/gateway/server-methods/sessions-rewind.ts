@@ -7,7 +7,7 @@ import {
   validateSessionsForkParams,
   validateSessionsRewindParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
+import { clearSessionLifecycleQueues } from "../../auto-reply/reply/queue/cleanup.js";
 import {
   forkSessionAtMessage,
   listSessionBranches,
@@ -623,7 +623,13 @@ async function mutateSessionAtMessage(
               )),
             ];
       if (action !== "fork") {
-        clearSessionQueues(lifecycleIdentities);
+        clearSessionLifecycleQueues({
+          keys: lifecycleIdentities,
+          agentId: current.target.agentId,
+          sessionKey: current.canonicalKey,
+          sessionId: initialSessionId,
+          assertCurrent: commitGuard,
+        });
       } else {
         recordSessionCreated(cfg, {
           sessionKey: result.key,
