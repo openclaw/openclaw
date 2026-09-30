@@ -138,7 +138,7 @@ it("returns undefined when the bounded wait budget is exhausted", async () => {
 
 it("forces capacity release after the hold budget is exhausted when the run is no longer live", async () => {
   vi.spyOn(agentRuns, "hasLiveAgentRunContext").mockReturnValue(false);
-  const runtime = recoveryRuntime(async <T>() => ({ status: "timeout" } as T));
+  const runtime = recoveryRuntime(async <T>() => ({ status: "timeout" }) as T);
   const capacity = createMainSessionRecoveryCapacity({ limit: 1 });
   const onSettled = vi.fn();
 
@@ -157,7 +157,7 @@ it("forces capacity release after the hold budget is exhausted when the run is n
 it("retains capacity slot when hold budget is exhausted but the run is still live, then releases when the run is no longer live", async () => {
   let live = true;
   vi.spyOn(agentRuns, "hasLiveAgentRunContext").mockImplementation(() => live);
-  const runtime = recoveryRuntime(async <T>() => ({ status: "timeout" } as T));
+  const runtime = recoveryRuntime(async <T>() => ({ status: "timeout" }) as T);
   const capacity = createMainSessionRecoveryCapacity({
     limit: 1,
     acquireTimeoutMs: 100,
@@ -179,6 +179,13 @@ it("retains capacity slot when hold budget is exhausted but the run is still liv
       }),
     ]),
   ).resolves.toBe("pending");
+  // While the run is still live, the sole capacity slot must be retained:
+  // a second acquire against the same capacity must time out and return
+  // undefined. This guards against an observer that releases the slot before
+  // the run is no longer live, which would otherwise let the final onSettled
+  // assertion pass on a false release.
+  const heldRelease = await capacity.acquire(() => true);
+  expect(heldRelease).toBeUndefined();
   live = false;
   await vi.waitFor(() => expect(onSettled).toHaveBeenCalledOnce());
   const release = await capacity.acquire(() => true);

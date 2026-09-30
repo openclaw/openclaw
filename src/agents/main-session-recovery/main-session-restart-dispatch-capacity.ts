@@ -2,12 +2,12 @@ import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runti
 import type { AgentRunRequest } from "../../gateway/server-methods/agent-request-types.js";
 import { hasLiveAgentRunContext } from "../../infra/agent-run-registry.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { MainSessionRecoveryCapacity } from "./main-session-recovery-capacity.js";
 import {
   dispatchRestartRecoveryUntilStarted,
   type RestartRecoveryDispatchStartOutcome,
 } from "./main-session-restart-dispatch-start.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
 
 const log = createSubsystemLogger("main-session-restart-recovery");
 
@@ -101,9 +101,7 @@ async function releaseCapacityAtTerminal(params: {
     }
     if (params.shouldContinue() && Date.now() >= deadline) {
       if (!hasLiveAgentRunContext(params.runId)) {
-        log.warn(
-          `recovery capacity held beyond budget for run ${params.runId}, releasing`,
-        );
+        log.warn(`recovery capacity held beyond budget for run ${params.runId}, releasing`);
         settled = true;
         return;
       }
