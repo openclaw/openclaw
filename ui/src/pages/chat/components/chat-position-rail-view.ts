@@ -4,6 +4,7 @@ import { guard } from "lit/directives/guard.js";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
+import { renderAgentIdentityAvatar } from "../../../components/identity-avatar-view.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { t } from "../../../i18n/index.ts";
 import { resolveMessageDisplayMarkdown } from "../../../lib/chat/message-display.ts";
@@ -14,8 +15,16 @@ import type { ChatTranscriptSession } from "./chat-transcript-session.ts";
 
 const PREVIEW_LENGTH = 140;
 
+export type PositionRailAssistant = {
+  id: string;
+  name: string;
+  avatar: string | null;
+  textAvatar: string | null;
+};
+
 type PositionRailViewParams = {
   transcript: ChatTranscriptSession;
+  assistant?: PositionRailAssistant;
   markers: Readonly<ChatPositionIndex["markers"]>;
   renderedIndexes: readonly number[];
   markerHeight: number;
@@ -39,6 +48,7 @@ type PositionRailViewParams = {
 /** Presentation only; the directive owns windowing, interaction, and DOM lifetime. */
 export function renderChatPositionRailView({
   transcript,
+  assistant,
   markers: candidates,
   renderedIndexes,
   markerHeight,
@@ -60,7 +70,7 @@ export function renderChatPositionRailView({
 }: PositionRailViewParams) {
   const count = candidates.length;
   const userLabel = t("chat.thread.positionUserMessage");
-  const assistantLabel = t("chat.thread.positionAssistantMessage");
+  const assistantLabel = assistant?.name.trim() || t("chat.thread.positionAssistantMessage");
   const markerLabel = (marker: ChatPositionIndex["markers"][number]) =>
     marker.role === "user" ? userLabel : assistantLabel;
   const previewMarker =
@@ -156,7 +166,17 @@ export function renderChatPositionRailView({
             ? html`
                 <div ${ref(bindPreview)} class="chat-position-rail__preview" aria-hidden="true">
                   <div class="chat-position-rail__preview-header">
-                    ${renderChatAuthorAvatar(previewSender)}
+                    ${
+                      previewMarker.role === "assistant" && assistant
+                        ? html`<span
+                            class="chat-author-avatar"
+                            role="img"
+                            aria-label=${assistantLabel}
+                          >
+                            ${renderAgentIdentityAvatar(assistant)}
+                          </span>`
+                        : renderChatAuthorAvatar(previewSender)
+                    }
                     <span class="chat-position-rail__preview-label">${previewLabel}</span>
                   </div>
                   <!-- Preview links remain non-interactive; the marker owns keyboard navigation. -->

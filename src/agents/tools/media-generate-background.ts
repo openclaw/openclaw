@@ -6,11 +6,6 @@ import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { captureAgentToolSourceExecutionGuard } from "../agent-tool-source-execution-guard.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { recordRecentMediaGenerationTaskStartForSession } from "../media-generation-task-status-shared.js";
-import {
-  IMAGE_GENERATION_TASK_KIND,
-  MUSIC_GENERATION_TASK_KIND,
-  VIDEO_GENERATION_TASK_KIND,
-} from "../media-generation-task-status.js";
 import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.types.js";
 import type { ToolFsPolicy } from "../tool-fs-policy.js";
 import { ToolInputError, readToolStringParam } from "./common.js";
@@ -45,6 +40,8 @@ export type MediaGenerateToolOptions = {
   agentDir?: string;
   authProfileStore?: AuthProfileStore;
   agentSessionKey?: string;
+  /** Durable requester transcript key; task ownership stays on agentSessionKey. */
+  requesterRunSessionKey?: string;
   requesterAgentId?: string;
   requesterOrigin?: DeliveryContext;
   workspaceDir?: string;
@@ -218,6 +215,7 @@ export async function prepareMediaGenerationTask<
   }
   return runMediaGenerationTask({
     ...prepared.params,
+    requesterRunSessionKey: options?.requesterRunSessionKey,
     generationLabel: params.generationLabel,
     resources,
     assertAdmissionCurrent: () => {
@@ -232,6 +230,7 @@ export async function runMediaGenerationTask<T extends MediaGenerationExecutionR
   lifecycle: ReturnType<typeof createMediaGenerationTaskLifecycle>;
   generationLabel: "image" | "video" | "music";
   sessionKey?: string;
+  requesterRunSessionKey?: string;
   requesterAgentId?: string;
   requesterOrigin?: DeliveryContext;
   prompt: string;
@@ -275,6 +274,7 @@ export async function runMediaGenerationTask<T extends MediaGenerationExecutionR
     const title = `${generationLabel.charAt(0).toUpperCase()}${generationLabel.slice(1)}`;
     const handle = await lifecycle.createTaskRun({
       sessionKey: params.sessionKey,
+      requesterRunSessionKey: params.requesterRunSessionKey,
       requesterAgentId: params.requesterAgentId,
       requesterOrigin: params.requesterOrigin,
       prompt: params.prompt,
@@ -357,33 +357,6 @@ export async function runMediaGenerationTask<T extends MediaGenerationExecutionR
   }
 }
 
-function createGenerationTaskLifecycle(
-  kind: "image" | "music" | "video",
-  taskKind: Parameters<typeof createMediaGenerationTaskLifecycle>[0]["taskKind"],
-) {
-  const title = `${kind.charAt(0).toUpperCase()}${kind.slice(1)}`;
-  return createMediaGenerationTaskLifecycle({
-    toolName: `${kind}_generate`,
-    taskKind,
-    label: `${title} generation`,
-    queuedProgressSummary: `Queued ${kind} generation`,
-    generatedLabel: kind === "music" ? "track" : kind,
-    failureProgressSummary: `${title} generation failed`,
-    eventSource: `${kind}_generation`,
-    announceType: `${kind} generation task`,
-    completionLabel: kind,
-  });
-}
-
-export const imageGenerationTaskLifecycle = createGenerationTaskLifecycle(
-  "image",
-  IMAGE_GENERATION_TASK_KIND,
-);
-export const musicGenerationTaskLifecycle = createGenerationTaskLifecycle(
-  "music",
-  MUSIC_GENERATION_TASK_KIND,
-);
-export const videoGenerationTaskLifecycle = createGenerationTaskLifecycle(
-  "video",
-  VIDEO_GENERATION_TASK_KIND,
-);
+export const imageGenerationTaskLifecycle = createMediaGenerationTaskLifecycle("image");
+export const musicGenerationTaskLifecycle = createMediaGenerationTaskLifecycle("music");
+export const videoGenerationTaskLifecycle = createMediaGenerationTaskLifecycle("video");

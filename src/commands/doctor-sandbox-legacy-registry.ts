@@ -244,17 +244,7 @@ async function migrateShardedIfNeeded(
   target: LegacyRegistryTarget,
   context: OpenClawStateWorkerContext,
 ): Promise<LegacySandboxRegistryMigrationResult> {
-  let dirExists = false;
-  try {
-    const stat = await fs.stat(target.shardedDir);
-    dirExists = stat.isDirectory();
-  } catch (error) {
-    const code = (error as { code?: string } | null)?.code;
-    if (code !== "ENOENT") {
-      throw error;
-    }
-  }
-  if (!dirExists) {
+  if (!(await shardedRegistryDirectoryExists(target.shardedDir))) {
     return { kind: target.kind, status: "missing" };
   }
   const { entries, invalidFiles } = await readShardedEntriesDetailed(target.shardedDir);
@@ -271,6 +261,17 @@ async function migrateShardedIfNeeded(
     : entries.length > 0
       ? { kind: target.kind, status: "migrated", entries: entries.length }
       : { kind: target.kind, status: "removed-empty" };
+}
+
+async function shardedRegistryDirectoryExists(directory: string): Promise<boolean> {
+  try {
+    return (await fs.stat(directory)).isDirectory();
+  } catch (error) {
+    if ((error as { code?: string } | null)?.code === "ENOENT") {
+      return false;
+    }
+    throw error;
+  }
 }
 
 function combineMigrationResults(
@@ -317,51 +318,31 @@ export async function inspectLegacySandboxRegistryFiles(): Promise<
 > {
   const inspections: LegacySandboxRegistryInspection[] = [];
   for (const target of legacyRegistryTargets()) {
-    try {
-      await fs.access(target.registryPath);
-    } catch (error) {
-      const code = (error as { code?: string } | null)?.code;
-      if (code === "ENOENT") {
-        inspections.push({
-          kind: target.kind,
-          path: target.registryPath,
-          source: "monolithic",
-          exists: false,
-          valid: true,
-          entries: 0,
-        });
-      } else {
+    const exists = await fs.access(target.registryPath).then(
+      () => true,
+      (error: unknown) => {
+        if ((error as { code?: string } | null)?.code === "ENOENT") {
+          return false;
+        }
         throw error;
-      }
-    }
-
-    if (!inspections.some((entry) => entry.kind === target.kind && entry.source === "monolithic")) {
-      const registry = await readLegacyRegistryFile(target.registryPath);
-      inspections.push({
-        kind: target.kind,
-        path: target.registryPath,
-        source: "monolithic",
-        exists: true,
-        valid: Boolean(registry),
-        entries: registry?.entries.length ?? 0,
-      });
-    }
+      },
+    );
+    const registry = exists ? await readLegacyRegistryFile(target.registryPath) : { entries: [] };
+    inspections.push({
+      kind: target.kind,
+      path: target.registryPath,
+      source: "monolithic",
+      exists,
+      valid: Boolean(registry),
+      entries: registry?.entries.length ?? 0,
+    });
 
     const sharded = await readShardedEntriesDetailed(target.shardedDir);
-    let shardedExists = false;
-    try {
-      shardedExists = (await fs.stat(target.shardedDir)).isDirectory();
-    } catch (error) {
-      const code = (error as { code?: string } | null)?.code;
-      if (code !== "ENOENT") {
-        throw error;
-      }
-    }
     inspections.push({
       kind: target.kind,
       path: target.shardedDir,
       source: "sharded",
-      exists: shardedExists,
+      exists: await shardedRegistryDirectoryExists(target.shardedDir),
       valid: sharded.invalidFiles.length === 0,
       entries: sharded.entries.length,
     });

@@ -749,10 +749,7 @@ func TestTranslateSnippetDoesNotCacheFallbackToSource(t *testing.T) {
 	tm := &TranslationMemory{entries: map[string]TMEntry{}}
 	source := "Gateway"
 
-	translated, err := translateSnippet(context.Background(), invalidFrontmatterTranslator{}, tm, "gateway/index.md:frontmatter:title", source, "en", "zh-CN")
-	if err != nil {
-		t.Fatalf("translateSnippet returned error: %v", err)
-	}
+	translated := translateSnippet(context.Background(), invalidFrontmatterTranslator{}, tm, "gateway/index.md:frontmatter:title", source, "en", "zh-CN")
 	if translated != source {
 		t.Fatalf("expected fallback to source text, got %q", translated)
 	}
@@ -769,10 +766,7 @@ func TestTranslateSnippetRejectsTranscriptArtifact(t *testing.T) {
 	tm := &TranslationMemory{entries: map[string]TMEntry{}}
 	source := "Working with reactions across channels"
 
-	translated, err := translateSnippet(context.Background(), transcriptFrontmatterTranslator{}, tm, "tools/reactions.md:frontmatter:read_when:0", source, "en", "th")
-	if err != nil {
-		t.Fatalf("translateSnippet returned error: %v", err)
-	}
+	translated := translateSnippet(context.Background(), transcriptFrontmatterTranslator{}, tm, "tools/reactions.md:frontmatter:read_when:0", source, "en", "th")
 	if translated != source {
 		t.Fatalf("expected fallback to source text, got %q", translated)
 	}
@@ -789,10 +783,7 @@ func TestTranslateSnippetFallsBackWhenFrontmatterTranslatorFails(t *testing.T) {
 	tm := &TranslationMemory{entries: map[string]TMEntry{}}
 	source := "LINE Messaging API plugin setup, config, and usage"
 
-	translated, err := translateSnippet(context.Background(), errorTranslator{}, tm, "channels/line.md:frontmatter:summary", source, "en", "zh-CN")
-	if err != nil {
-		t.Fatalf("translateSnippet returned error: %v", err)
-	}
+	translated := translateSnippet(context.Background(), errorTranslator{}, tm, "channels/line.md:frontmatter:summary", source, "en", "zh-CN")
 	if translated != source {
 		t.Fatalf("expected fallback to source text, got %q", translated)
 	}
@@ -810,10 +801,7 @@ func TestTranslateSnippetCachesDocumentSourcePath(t *testing.T) {
 	source := "Gateway"
 	segmentID := "gateway/index.md:frontmatter:title"
 
-	translated, err := translateSnippet(context.Background(), fakeDocsTranslator{}, tm, segmentID, source, "en", "zh-CN")
-	if err != nil {
-		t.Fatalf("translateSnippet returned error: %v", err)
-	}
+	translated := translateSnippet(context.Background(), fakeDocsTranslator{}, tm, segmentID, source, "en", "zh-CN")
 	if translated != source {
 		t.Fatalf("unexpected translation %q", translated)
 	}

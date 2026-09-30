@@ -6,6 +6,7 @@ import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { redactSupportString } from "../logging/diagnostic-support-redaction.js";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { runUtf8CommandWithTimeout } from "../process/exec.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import { formatDiskSpaceBytes, tryReadDiskSpace } from "./disk-space.js";
@@ -237,7 +238,8 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
   nodeRunner?: string;
   timeoutMs?: number;
   signal?: AbortSignal;
-  onProgress?: (step: UpdateRunStep) => void;
+  assertCurrent?: () => void;
+  onProgress?: (step: UpdateRunStep) => void | Promise<void>;
 }): Promise<{
   stateDir: string;
   pluginPaths: Record<string, string>;
@@ -247,6 +249,8 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
   cleanupDirectories: string[];
 }> {
   let { capacity } = await measureInitialUpdateSnapshotState(params);
+  params.signal?.throwIfAborted();
+  params.assertCurrent?.();
   let directory = await allocateSnapshotRoot(capacity);
   let selectedRoot = capacity.selection!;
   const inventoryDirectory = directory;
@@ -264,6 +268,25 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
   ) => {
     const workerEnv = params.workerEnv(directory);
     const outputController = new AbortController();
+    let progressPending = Promise.resolve();
+    let progressFailure: { error: unknown } | undefined;
+    const failProgress = (error: unknown) => {
+      if (!progressFailure) {
+        progressFailure = { error };
+      } else if (
+        !hasCommandProcessCleanupError(progressFailure.error) &&
+        hasCommandProcessCleanupError(error)
+      ) {
+        progressFailure = {
+          error: new AggregateError(
+            [progressFailure.error, error],
+            "Update snapshot progress recording failed",
+            { cause: progressFailure.error },
+          ),
+        };
+      }
+      outputController.abort(error);
+    };
     let stderrOutputExceeded = false;
     const diagnostics = createUpdateStateInspectionDiagnostics({
       operation: "State snapshot",
@@ -285,12 +308,20 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
           { env: params.env, stateDir: params.stateDir },
           { maxLength: UPDATE_RUN_TEXT_LIMIT },
         );
-        params.onProgress?.({
-          step: "candidate-state-snapshot",
-          status: "in_progress",
-          startedAtMs,
-          detail,
-        });
+        try {
+          // Invoke at emission so the writer captures this source before it yields.
+          const recording = Promise.resolve(
+            params.onProgress?.({
+              step: "candidate-state-snapshot",
+              status: "in_progress",
+              startedAtMs,
+              detail,
+            }),
+          ).catch(failProgress);
+          progressPending = Promise.all([progressPending, recording]).then(() => {});
+        } catch (error) {
+          failProgress(error);
+        }
         if (
           snapshot.status === "completed" &&
           snapshotDiagnostics.length < UPDATE_RUN_DIAGNOSTIC_LIMIT
@@ -299,7 +330,9 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
         }
       },
     });
-    return await withUpdateCandidateIoBudget(
+    params.signal?.throwIfAborted();
+    params.assertCurrent?.();
+    const outcome = await withUpdateCandidateIoBudget(
       {
         directory,
         bytes: capacity.sqliteBytes + (capacity.pluginBytes ?? 0),
@@ -310,6 +343,8 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
         env: workerEnv,
       },
       async (signal) => {
+        signal.throwIfAborted();
+        params.assertCurrent?.();
         const result = await runUtf8CommandWithTimeout(
           [
             params.nodeRunner ?? process.execPath,
@@ -353,6 +388,9 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
           });
         }
         signal.throwIfAborted();
+        if (progressFailure) {
+          throw progressFailure.error;
+        }
         if (
           result.code !== 0 ||
           result.termination !== "exit" ||
@@ -373,7 +411,30 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
         }
         return JSON.parse(result.stdout) as unknown;
       },
+    ).then(
+      (value) => ({ value }),
+      (error: unknown) => ({ error }),
     );
+    await progressPending;
+    if (progressFailure && hasCommandProcessCleanupError(progressFailure.error)) {
+      if ("error" in outcome && outcome.error !== progressFailure.error) {
+        throw new AggregateError(
+          [outcome.error, progressFailure.error],
+          "Update snapshot and progress recording failed",
+          { cause: outcome.error },
+        );
+      }
+      throw progressFailure.error;
+    }
+    if ("error" in outcome) {
+      throw outcome.error;
+    }
+    params.signal?.throwIfAborted();
+    params.assertCurrent?.();
+    if (progressFailure) {
+      throw progressFailure.error;
+    }
+    return outcome.value;
   };
   try {
     const inventory = UpdateCandidateSnapshotInventorySchema.parse(
@@ -386,6 +447,8 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
       pluginBytes: inventory.pluginBytes,
     };
     capacity = measureSnapshotCapacity(params.stateDir, size, params.env, capacity);
+    params.signal?.throwIfAborted();
+    params.assertCurrent?.();
     directory = await allocateSnapshotRoot(capacity, { root: selectedRoot.directory, directory });
     selectedRoot = capacity.selection!;
     const pluginPlanPath = path.join(inventoryDirectory, inventory.pluginPlan);
@@ -407,7 +470,10 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
       cleanupDirectories: cleanupDirectories(),
     };
   } catch (error) {
-    if (isRecord(error) && error.cleanup === "uncertain") {
+    if (
+      hasCommandProcessCleanupError(error) ||
+      (isRecord(error) && error.cleanup === "uncertain")
+    ) {
       throw Object.assign(
         new Error(
           `Update snapshot cleanup could not be confirmed; retained scratch: ${cleanupDirectories().join(", ")}`,

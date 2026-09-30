@@ -8,8 +8,10 @@ import {
 } from "../agents/workspace-legacy-state.js";
 import { pinDirectory, requireDirectorySync } from "./directory-durability.js";
 import { formatErrorMessage } from "./errors.js";
-import { LegacyMigrationSourceClaim } from "./state-migrations.source-snapshot.js";
-import type { SourceSnapshot } from "./state-migrations.workspace-setup-store.js";
+import {
+  LegacyMigrationSourceClaim,
+  type LegacyMigrationSourceSnapshot as SourceSnapshot,
+} from "./state-migrations.source-snapshot.js";
 import type { LegacyWorkspaceStateSource } from "./state-migrations.workspace-setup.types.js";
 
 const SETUP_MAX_BYTES = 64 * 1024;
@@ -85,7 +87,7 @@ export async function archiveWorkspaceSetupSource(
 export function createLegacySourceClaim(
   sourceRoot: Root,
   source: LegacyWorkspaceStateSource,
-): LegacyMigrationSourceClaim<SourceSnapshot> {
+): LegacyMigrationSourceClaim {
   return new LegacyMigrationSourceClaim({
     stateRoot: sourceRoot,
     stateDir: source.rootDir,

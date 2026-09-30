@@ -128,6 +128,37 @@ describe("external auth owner", () => {
     expect(getRuntimeExternalCliProfileIds(next)).toEqual(["claude-cli:default"]);
   });
 
+  it.each([false, true])("retains external account health during a scoped=%s refresh", (scoped) => {
+    const agentDir = "/tmp/openclaw-external-owner-health";
+    const profileId = "openai:external";
+    const external = credential();
+    const store: RuntimeAuthProfileStore = {
+      version: 1,
+      profiles: { [profileId]: external },
+      order: { openai: [profileId] },
+      lastGood: { openai: profileId },
+      usageStats: { [profileId]: { lastUsed: 17, cooldownUntil: 123_456 } },
+      runtimeExternalProfileIds: [profileId],
+    };
+    testing.setResolveExternalAuthProfilesForTest(() => [{ profileId, credential: external }]);
+    replaceRuntimeAuthProfileStoreSnapshots([{ agentDir, store }]);
+    const loaded = ensureAuthProfileStore(agentDir, {
+      ...(scoped ? { externalCliProviderIds: ["openai"] } : {}),
+      allowKeychainPrompt: false,
+      readOnly: true,
+      syncExternalCli: false,
+    });
+    // Scoped lookups publish retained health; ordinary lookups return it to the caller.
+    const retained = scoped ? getRuntimeAuthProfileStoreSnapshotCore(agentDir) : loaded;
+    expect(retained).toMatchObject({
+      profiles: store.profiles,
+      order: store.order,
+      lastGood: store.lastGood,
+      usageStats: store.usageStats,
+    });
+    expect(getRuntimeAuthProfileStoreSnapshotCore(agentDir)?.usageStats).toEqual(store.usageStats);
+  });
+
   it.each([undefined, "resolved-key"])(
     "keeps prepared API-key refs during ordinary scoped reads (%s)",
     (key) => {

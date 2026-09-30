@@ -42,10 +42,7 @@ export function assertAutonomousSkillSize(
     date: new Date().toISOString(),
     maxSkillBytes,
   });
-  if (!draft.ok) {
-    throw draft.error.cause;
-  }
-  const resultChars = stripProposalFrontmatterForSkill(draft.value.content).length;
+  const resultChars = stripProposalFrontmatterForSkill(draft.content).length;
   const sizeError = autonomousSkillSizeError(name, currentContent?.length ?? 0, resultChars);
   if (sizeError) {
     throw new ToolInputError(sizeError);

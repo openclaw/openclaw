@@ -248,19 +248,6 @@ function beginChatAvatarRequest(host: ChatAvatarHost): number {
   return nextVersion;
 }
 
-function shouldApplyChatAvatarResult(
-  host: ChatAvatarHost,
-  version: number,
-  sessionKey: string,
-  agentId: string,
-): boolean {
-  return (
-    chatAvatarRequestVersions.get(host) === version &&
-    host.sessionKey === sessionKey &&
-    resolveAgentIdForSession(host) === agentId
-  );
-}
-
 function clearChatAvatarState(host: ChatAvatarHost) {
   const references = chatAvatarReferences.get(host);
   references?.get(currentAvatarReference)?.();
@@ -269,18 +256,6 @@ function clearChatAvatarState(host: ChatAvatarHost) {
   host.chatAvatarSource = null;
   host.chatAvatarStatus = null;
   host.chatAvatarReason = null;
-}
-
-function applyChatAvatarSnapshot(
-  host: ChatAvatarHost,
-  agentId: string,
-  snapshot: ChatAvatarSnapshot,
-): void {
-  host.chatAvatarSource = snapshot.source;
-  host.chatAvatarStatus = snapshot.status;
-  host.chatAvatarReason = snapshot.reason;
-  host.chatAvatarUrl = snapshot.url;
-  chatAvatarDisplayedAgents.set(host, agentId);
 }
 
 function rememberChatAvatarReference(
@@ -468,14 +443,20 @@ export async function refreshChatAvatar(host: ChatAvatarHost) {
     !host.connected ||
     host.client !== client ||
     host.connectionEpoch !== epoch ||
-    !shouldApplyChatAvatarResult(host, requestVersion, sessionKey, agentId)
+    chatAvatarRequestVersions.get(host) !== requestVersion ||
+    host.sessionKey !== sessionKey ||
+    resolveAgentIdForSession(host) !== agentId
   ) {
     snapshot?.release();
     return;
   }
   if (snapshot) {
     rememberChatAvatarReference(host, currentAvatarReference, snapshot.release);
-    applyChatAvatarSnapshot(host, agentId, snapshot);
+    host.chatAvatarSource = snapshot.source;
+    host.chatAvatarStatus = snapshot.status;
+    host.chatAvatarReason = snapshot.reason;
+    host.chatAvatarUrl = snapshot.url;
+    chatAvatarDisplayedAgents.set(host, agentId);
   } else if (!showingSameAgent) {
     clearChatAvatarState(host);
   }

@@ -3,6 +3,7 @@ import type { SpawnResult } from "../../process/exec.js";
 import type { WorkerLaunchPlan } from "../../worker/launch-descriptor.js";
 import type {
   NodeWorkerWorkspaceSeedInput,
+  NodeWorkerWorkspaceQuiescenceInput,
   NodeWorkerWorkspaceProcessInput,
 } from "../../worker/node-workspace-protocol.js";
 import type { NodeWorkerWorkspaceTransferInput } from "../../worker/node-workspace-transfer-protocol.js";
@@ -83,6 +84,9 @@ export type WorkerWorkspaceCommand = {
   transfer?: NodeWorkerWorkspaceTransferInput;
   seed?: NodeWorkerWorkspaceSeedInput;
   process?: NodeWorkerWorkspaceProcessInput;
+  quiescence?: NodeWorkerWorkspaceQuiescenceInput;
+  /** Legacy scripts own their detached lease helper, not the foreground command scope. */
+  legacyQuiescence?: true;
 };
 
 export type WorkerLocalWorkspaceSyncRequest = {
@@ -172,7 +176,7 @@ export type WorkerLocalWorkspaceReconcileRequest = {
   assertCurrent?: () => void;
   stagedResult: {
     ref: string;
-    record(ref: string): void;
+    record(ref: string): void | Promise<void>;
   };
 };
 

@@ -382,8 +382,9 @@ struct LowCoverageHelperTests {
 
     @Test @MainActor func `canvas window helper functions`() {
         let rect = NSRect(x: 10, y: 12, width: 400, height: 420)
-        let key = CanvasWindowController._testStoredFrameKey(sessionKey: "test")
-        let loaded = CanvasWindowController._testStoreAndLoadFrame(sessionKey: "test", frame: rect)
+        let key = CanvasWindowController.storedFrameDefaultsKey(sessionKey: "test")
+        CanvasWindowController.storeRestoredFrame(rect, sessionKey: "test")
+        let loaded = CanvasWindowController.loadRestoredFrame(sessionKey: "test")
         UserDefaults.standard.removeObject(forKey: key)
         #expect(loaded?.size.width == rect.size.width)
     }

@@ -22,27 +22,26 @@ export function applyDirectCompletionsReasoningAndRouting(
       enable_thinking: reasoningEnabled,
       preserve_thinking: true,
     };
-  } else if (compat.thinkingFormat === "deepseek" && model.reasoning) {
-    params.thinking = { type: reasoningEnabled ? "enabled" : "disabled" };
-    if (reasoningEnabled && compat.supportsReasoningEffort && nativeEffort !== undefined) {
-      params.reasoning_effort = nativeEffort;
+  } else if (
+    (compat.thinkingFormat === "deepseek" || compat.thinkingFormat === "together") &&
+    model.reasoning
+  ) {
+    if (compat.thinkingFormat === "deepseek") {
+      params.thinking = { type: reasoningEnabled ? "enabled" : "disabled" };
+    } else {
+      params.reasoning = { enabled: reasoningEnabled };
     }
-  } else if (compat.thinkingFormat === "together" && model.reasoning) {
-    params.reasoning = { enabled: reasoningEnabled };
     if (reasoningEnabled && compat.supportsReasoningEffort && nativeEffort !== undefined) {
       params.reasoning_effort = nativeEffort;
     }
   } else if (model.reasoning && compat.supportsReasoningEffort && nativeEffort !== undefined) {
-    // OpenAI-style reasoning_effort
     params.reasoning_effort = nativeEffort;
   }
 
-  // OpenRouter provider routing preferences
   if (compat.openRouterRouting) {
     params.provider = compat.openRouterRouting;
   }
 
-  // Vercel AI Gateway provider routing preferences
   if (model.baseUrl.includes("ai-gateway.vercel.sh") && model.compat?.vercelGatewayRouting) {
     const routing = model.compat.vercelGatewayRouting;
     if (routing.only || routing.order) {

@@ -16,7 +16,11 @@ import {
   formatMSTeamsSendErrorHint,
   formatUnknownError,
 } from "./errors.js";
-import { prepareFileConsentActivityFs, requiresFileConsent } from "./file-consent-helpers.js";
+import {
+  FILE_CONSENT_THRESHOLD_BYTES,
+  prepareFileConsentActivityFs,
+  requiresFileConsent,
+} from "./file-consent-helpers.js";
 import { formatMSTeamsMarkdown } from "./format.js";
 import { buildTeamsFileInfoCard } from "./graph-chat.js";
 import {
@@ -24,7 +28,7 @@ import {
   requireMSTeamsSharePointSiteId,
   uploadAndShareSharePoint,
 } from "./graph-upload.js";
-import { extractFilename, extractMessageId } from "./media-helpers.js";
+import { extractFilename, extractMessageId, MSTEAMS_MAX_MEDIA_BYTES } from "./media-helpers.js";
 import {
   buildMSTeamsAdaptiveCardActivity,
   buildMSTeamsMessageActivity,
@@ -65,14 +69,6 @@ type SendMSTeamsMessageResult = {
   /** If a FileConsentCard was sent instead of the file, this contains the upload ID */
   pendingUploadId?: string;
 };
-
-const FILE_CONSENT_THRESHOLD_BYTES = 4 * 1024 * 1024;
-
-/**
- * MSTeams-specific media size limit (100MB).
- * Higher than the default to support Teams file-consent and SharePoint uploads.
- */
-const MSTEAMS_MAX_MEDIA_BYTES = 100 * 1024 * 1024;
 
 function createMSTeamsSendError(errorPrefix: string, error: unknown): Error {
   if (
@@ -238,7 +234,6 @@ export async function sendMessageMSTeams(
         conversationType,
         contentType: media.contentType,
         bufferSize: media.buffer.length,
-        thresholdBytes: FILE_CONSENT_THRESHOLD_BYTES,
       })
     ) {
       // Proactive CLI sends run in a different process from the gateway's

@@ -101,7 +101,6 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     replayAllowedToolNames: toolSearchRunPlan.replayAllowedToolNames,
     resolveActiveContextEnginePluginId: input.resolveActiveContextEnginePluginId,
     sessionAgentId,
-    transcriptLifecycle: sessionLock.transcriptLifecycle,
     withOwnedTranscriptWrite: sessionLock.withOwnedTranscriptWrite,
   });
   const { isOpenAIResponsesApi, preparedUserTurnMessage, sessionManager, transcriptPolicy } =

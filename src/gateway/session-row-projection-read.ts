@@ -12,6 +12,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { retainOpenClawAgentDatabaseReadCandidates } from "../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { findSessionRepositoryWorkspaces } from "../state/session-repository-workspaces.js";
 import { isColdArchivedSessionRow } from "./session-row-projection-archive.js";
 import {
   identity,
@@ -148,7 +150,11 @@ export async function withSessionRowDatabaseFacts(
           for (const row of group.rows) {
             const prepared = byKey.get(row.key);
             if (prepared) {
-              facts.set(identity(row), { ...prepared, acpMeta: prepared.entry?.acp ?? null });
+              facts.set(identity(row), {
+                ...prepared,
+                acpMeta: prepared.entry?.acp ?? null,
+                repositoryWorkspace: null,
+              });
             }
           }
         }
@@ -169,6 +175,23 @@ export async function withSessionRowDatabaseFacts(
         });
         for (const [index, { prepared }] of acpRows.entries()) {
           prepared.acpMeta = acpMetadata[index] ?? null;
+        }
+        const repositoryRows = rows.flatMap((row) => {
+          const prepared = facts.get(identity(row));
+          return prepared?.entry?.repositoryWorkspaceId ? [{ row, prepared }] : [];
+        });
+        if (repositoryRows.length) {
+          const workspaces = await findSessionRepositoryWorkspaces(
+            repositoryRows.map(({ row }) => ({ agentId: row.agentId, sessionKey: row.key })),
+            { path: resolveOpenClawStateSqlitePath(env), env },
+          );
+          const byWorkspace = new Map(
+            workspaces.map((workspace) => [workspace.workspaceId, workspace]),
+          );
+          for (const { prepared } of repositoryRows) {
+            prepared.repositoryWorkspace =
+              byWorkspace.get(prepared.entry!.repositoryWorkspaceId!) ?? null;
+          }
         }
         for (const databaseOwner of owners) {
           databaseOwner.assertCurrent();

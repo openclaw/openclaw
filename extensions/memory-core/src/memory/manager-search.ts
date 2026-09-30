@@ -111,12 +111,7 @@ function escapeLikePattern(term: string): string {
 }
 
 function isAscii(value: string): boolean {
-  for (const codePoint of value) {
-    if ((codePoint.codePointAt(0) ?? 0) > 0x7f) {
-      return false;
-    }
-  }
-  return true;
+  return !/[^\p{ASCII}]/u.test(value);
 }
 
 function resolveUnicodeCandidateAnchors(value: string): string[] {
@@ -174,16 +169,8 @@ function registerSubstringSqlFunction(db: DatabaseSync, terms: readonly string[]
   );
 }
 
-function buildSubstringFilter(params: { terms: string[]; column: string }): {
-  sql: string;
-  params: string[];
-} {
-  return {
-    sql: params.terms
-      .map(() => ` AND ${NORMALIZED_CONTAINS_SQL_FUNCTION}(${params.column}, ?) = 1`)
-      .join(""),
-    params: params.terms,
-  };
+function buildSubstringFilter(terms: string[], column: string): string {
+  return terms.map(() => ` AND ${NORMALIZED_CONTAINS_SQL_FUNCTION}(${column}, ?) = 1`).join("");
 }
 
 function buildExactPathCandidatePatterns(query: string): string[] {
@@ -343,10 +330,7 @@ export async function searchKeyword(params: {
     matchQuery: string | null,
     terms: string[],
   ): Array<MemorySearchRow & { rank: number }> => {
-    const filter = buildSubstringFilter({
-      terms,
-      column: "text",
-    });
+    const filter = buildSubstringFilter(terms, "text");
     if (terms.length > 0) {
       registerSubstringSqlFunction(params.db, terms);
     }
@@ -360,13 +344,13 @@ export async function searchKeyword(params: {
         `SELECT id, path, source, start_line, end_line, text,\n` +
           `       ${matchQuery ? `${params.ftsTable}.rank` : "0"} AS rank\n` +
           `  FROM ${params.ftsTable}\n` +
-          ` WHERE ${matchClause}${filter.sql}${liveChunkClause}${params.sourceFilter.sql}\n` +
+          ` WHERE ${matchClause}${filter}${liveChunkClause}${params.sourceFilter.sql}\n` +
           (matchQuery ? ` ORDER BY rank ASC\n` : "") +
           ` LIMIT ?`,
       )
       .all(
         ...(matchQuery ? [matchQuery] : []),
-        ...filter.params,
+        ...terms,
         ...params.sourceFilter.params,
         params.limit,
       ) as Array<MemorySearchRow & { rank: number }>;
@@ -433,10 +417,7 @@ export async function searchPathKeyword(params: {
     buildFtsQuery: params.buildFtsQuery,
   });
   const plan = pathPlans[0] ?? { query: params.query, matchQuery: null, substringTerms: [] };
-  const planSubstringFilter = buildSubstringFilter({
-    terms: plan.substringTerms,
-    column: pathColumn,
-  });
+  const planSubstringFilter = buildSubstringFilter(plan.substringTerms, pathColumn);
   registerSubstringSqlFunction(params.db, plan.substringTerms);
   const exactPathQuery = params.exactPathQuery ?? params.query;
   const matchExactPath = prepareExactPathMatcher(exactPathQuery);
@@ -464,7 +445,7 @@ export async function searchPathKeyword(params: {
       ? `candidates AS MATERIALIZED (\n` +
         `  SELECT ${params.pathFtsTable}.path, ${params.pathFtsTable}.source\n` +
         `    FROM ${params.pathFtsTable}\n` +
-        `   WHERE ${plan.matchQuery ? `${params.pathFtsTable} MATCH ?` : "1=1"}${planSubstringFilter.sql}${params.sourceFilter.sql}\n` +
+        `   WHERE ${plan.matchQuery ? `${params.pathFtsTable} MATCH ?` : "1=1"}${planSubstringFilter}${params.sourceFilter.sql}\n` +
         `), pattern_candidates AS MATERIALIZED (\n` +
         `  SELECT path, source FROM candidates\n` +
         `   WHERE (${exactCandidatePatterns.map(() => "path LIKE ? ESCAPE '\\'").join(" OR ")})\n` +
@@ -477,7 +458,7 @@ export async function searchPathKeyword(params: {
     const candidateParams = useLexicalCandidates
       ? [
           ...(plan.matchQuery ? [plan.matchQuery] : []),
-          ...planSubstringFilter.params,
+          ...plan.substringTerms,
           ...params.sourceFilter.params,
           ...exactCandidatePatterns,
         ]
@@ -544,15 +525,12 @@ export async function searchPathKeyword(params: {
     specificity: "exact" | "non-exact",
     resultLimit: number,
   ) => {
-    const filter = buildSubstringFilter({
-      terms,
-      column: pathColumn,
-    });
+    const filter = buildSubstringFilter(terms, pathColumn);
     const specificityOperator = specificity === "exact" ? ">" : "=";
     const qualifiedSpecificityClause = ` AND ${EXACT_PATH_SPECIFICITY_SQL_FUNCTION}(${pathColumn}) ${specificityOperator} 0`;
     const queryParams = [
       ...(matchQuery ? [matchQuery] : []),
-      ...filter.params,
+      ...terms,
       ...params.sourceFilter.params,
     ];
     // Filter empty sources before LIMIT, then resolve first chunks only for the
@@ -563,7 +541,7 @@ export async function searchPathKeyword(params: {
           `  SELECT ${params.pathFtsTable}.path, ${params.pathFtsTable}.source,\n` +
           `         ${matchQuery ? `bm25(${params.pathFtsTable})` : "0"} AS rank\n` +
           `    FROM ${params.pathFtsTable}\n` +
-          `   WHERE ${matchQuery ? `${params.pathFtsTable} MATCH ?` : "1=1"}${filter.sql}${params.sourceFilter.sql}${qualifiedSpecificityClause}\n` +
+          `   WHERE ${matchQuery ? `${params.pathFtsTable} MATCH ?` : "1=1"}${filter}${params.sourceFilter.sql}${qualifiedSpecificityClause}\n` +
           `     AND EXISTS (SELECT 1 FROM memory_index_chunks live\n` +
           `                  WHERE live.path = ${params.pathFtsTable}.path\n` +
           `                    AND live.source = ${params.pathFtsTable}.source)\n` +

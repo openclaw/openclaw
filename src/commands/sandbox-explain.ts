@@ -58,13 +58,10 @@ function normalizeExplainSessionKey(params: {
       agentId: params.agentId,
     });
   }
-  if (raw.includes(":")) {
+  if (raw.includes(":") || raw === "global") {
     // Fully-qualified session keys are already scoped; only short names need
     // agent/main-key expansion.
     return raw;
-  }
-  if (raw === "global") {
-    return "global";
   }
   return buildAgentMainSessionKey({
     agentId: params.agentId,

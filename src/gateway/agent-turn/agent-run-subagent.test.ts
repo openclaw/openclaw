@@ -84,7 +84,15 @@ describe("Gateway native subagent admission", () => {
   });
 
   it("registers plugin work with its execution owner before accepting it", async () => {
-    const params = parameters({ client: pluginClient() });
+    const sessionEntry = {
+      sessionId: "admitted-child",
+      lifecycleRevision: "admitted",
+      updatedAt: 1,
+    };
+    const params = parameters({
+      client: pluginClient(),
+      assertResumeAdmissionCurrent: () => sessionEntry,
+    });
     await expect(prepareGatewaySubagentRun(params)).resolves.toEqual({
       pluginSubagent: true,
       reactivateSubagent: false,
@@ -93,6 +101,7 @@ describe("Gateway native subagent admission", () => {
       expect.objectContaining({
         runId,
         childSessionKey,
+        sessionEntry,
         task: "Continue the child",
         requesterSessionKey: "agent:main:main",
       }),
@@ -109,6 +118,7 @@ describe("Gateway native subagent admission", () => {
           if (!admitted) {
             throw new Error("admission retired");
           }
+          return undefined;
         },
       }),
     );

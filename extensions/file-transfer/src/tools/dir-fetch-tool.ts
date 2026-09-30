@@ -11,7 +11,6 @@ import {
 } from "openclaw/plugin-sdk/archive";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
 import { wrapExternalContent } from "openclaw/plugin-sdk/security-runtime";
-import { appendFileTransferAudit } from "../shared/audit.js";
 import { DIR_FETCH_ARCHIVE_POLICY } from "../shared/dir-fetch-archive.js";
 import {
   DIR_FETCH_DEFAULT_MAX_BYTES,
@@ -109,7 +108,7 @@ export function createDirFetchTool(): AnyAgentTool {
         hardMax: DIR_FETCH_HARD_MAX_BYTES,
       });
 
-      const { nodeId, nodeDisplayName, payload, startedAt } = await invokeNodeToolPayload({
+      const { audit, payload } = await invokeNodeToolPayload({
         node,
         params,
         command: "dir.fetch",
@@ -169,18 +168,13 @@ export function createDirFetchTool(): AnyAgentTool {
           fs.rm(savedTar.path, { force: true }).catch(() => undefined),
         ]);
         const failure = classifyArchiveFailure(error);
-        await appendFileTransferAudit({
-          op: "dir.fetch",
-          nodeId,
-          nodeDisplayName,
-          requestedPath: dirPath,
+        await audit({
           canonicalPath,
           decision: "error",
           errorCode: failure.auditCode,
           errorMessage: failure.reason,
           sizeBytes: tarBytes,
           sha256,
-          durationMs: Date.now() - startedAt,
         });
         throw new Error(`dir.fetch ${failure.publicCode}: ${failure.reason}`, { cause: error });
       }
@@ -212,16 +206,11 @@ export function createDirFetchTool(): AnyAgentTool {
       const allOrdered = [...imageFiles, ...nonImageFiles];
       const mediaUrls = allOrdered.slice(0, MEDIA_URL_CAP).map((f) => f.localPath);
 
-      await appendFileTransferAudit({
-        op: "dir.fetch",
-        nodeId,
-        nodeDisplayName,
-        requestedPath: dirPath,
+      await audit({
         canonicalPath,
         decision: "allowed",
         sizeBytes: tarBytes,
         sha256,
-        durationMs: Date.now() - startedAt,
       });
 
       return {

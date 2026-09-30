@@ -55,6 +55,10 @@ import {
   triageTestRuntimeEntrypoints,
   triageMaintenanceRuntimeEntrypoints,
 } from "../../src/infra/triage-runtime.test-support.ts";
+import {
+  nativeWorkerLifecycleEntrypoint,
+  nativeWorkerResourceEntrypoint,
+} from "../../src/infra/worker-native-lifecycle.runtime.test-support.ts";
 import { workerTaskPoolEntrypoints } from "../../src/infra/worker-task-pool-runtime.test-support.ts";
 import { diagnosticProfileEntrypoints } from "../../src/logging/diagnostic-profile-runtime.test-support.ts";
 import { mediaNativeProcessEntrypoints } from "../../src/media/native-process-runtime.test-support.ts";
@@ -296,6 +300,8 @@ export const vitestWorkerBuildEntries = {
     ...Object.values(nativeProcessTestEntrypoints),
     ...Object.values(storageProcessTestEntrypoints),
     ...Object.values(workerTaskPoolEntrypoints),
+    nativeWorkerLifecycleEntrypoint,
+    nativeWorkerResourceEntrypoint,
     ...Object.values(stateNativeProcessEntrypoints),
     ...Object.values(agentProcessTestEntrypoints),
     ...Object.values(pluginProcessRuntimeEntrypoints),

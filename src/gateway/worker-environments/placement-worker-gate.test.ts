@@ -349,7 +349,7 @@ describe("worker session placement gate", () => {
       owner: { kind: "local", environmentId: ENVIRONMENT_ID, ownerEpoch: OWNER_EPOCH },
     });
     store.markWorkspaceResultPending(claim);
-    store.recordStagedWorkspaceResult(claim, "refs/openclaw/worker-results/local-staged");
+    await store.recordStagedWorkspaceResult(claim, "refs/openclaw/worker-results/local-staged");
 
     createWorkerSessionPlacementGate(store).prepareWorkspaceResultOwnerRevocation(
       { sessionId: claim.sessionId, environmentId: ENVIRONMENT_ID, ownerEpoch: OWNER_EPOCH },

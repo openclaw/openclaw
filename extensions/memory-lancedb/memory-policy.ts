@@ -4,10 +4,7 @@ import {
   asOptionalRecord,
   normalizeLowercaseStringOrEmpty,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  escapeHtml as escapeMemoryForPrompt,
-  truncateUtf16Safe,
-} from "openclaw/plugin-sdk/text-utility-runtime";
+import { escapeHtml, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   DEFAULT_CAPTURE_MAX_CHARS,
   DEFAULT_RECALL_MAX_CHARS,
@@ -181,9 +178,6 @@ export function looksLikePromptInjection(text: string): boolean {
   return PROMPT_INJECTION_PATTERNS.some((pattern) => pattern.test(normalized));
 }
 
-// Recalled context is model-only; hydration scans the bare turn/facts and masks legacy markers.
-export { escapeMemoryForPrompt };
-
 // Legacy label-only rows slip past now that header detection keys on the provenance marker, and the
 // marker-free checks catch only payload/bracket shapes. `doctor --fix` deletes sentinel and fenced rows
 // (memory-lancedb-legacy-envelope-rows); dynamic-label prose survives both, accepted over a reader here.
@@ -221,7 +215,7 @@ export function formatRecalledMemoryForModel(
   maxChars: number = DEFAULT_RECALL_MAX_CHARS,
 ): string {
   const limit = resolveNonNegativeIntegerOption(maxChars, DEFAULT_RECALL_MAX_CHARS);
-  return truncateUtf16Safe(escapeMemoryForPrompt(text), limit);
+  return truncateUtf16Safe(escapeHtml(text), limit);
 }
 
 export function formatRelevantMemoriesContext(

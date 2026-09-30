@@ -1663,7 +1663,7 @@ openclaw-session-progress-hovercard-provider {
 }
 
 .person-activity-card__status--idle > span {
-  background: var(--warn);
+  background: var(--presence-idle);
 }
 
 .person-activity-card__status--unknown > span,
@@ -3777,10 +3777,18 @@ td.data-table-key-col {
   width: 100%;
 }
 
+.agent-identity-editor__content {
+  display: grid;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+}
+
 .agent-identity-editor__actions {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
+  justify-content: space-between;
   gap: 8px;
 }
 
@@ -3805,20 +3813,29 @@ td.data-table-key-col {
 }
 
 .agent-identity-editor__fields {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(150px, 220px);
   gap: 12px;
-  flex: 1;
   min-width: 0;
 }
 
 .agent-identity-editor__fields .field {
-  flex: 1 1 200px;
   min-width: 0;
 }
 
-.agent-identity-editor__fields .agent-identity-editor__emoji {
-  flex: 0 1 96px;
+.agent-identity-editor__emoji-control {
+  position: relative;
+}
+
+.agent-identity-editor__emoji-control > input {
+  padding-inline-end: 42px;
+}
+
+.agent-identity-editor__emoji-control > openclaw-agent-emoji-picker {
+  position: absolute;
+  inset-inline-end: 3px;
+  top: 50%;
+  transform: translateY(-50%);
 }
 
 .agent-identity-editor__fields input {
@@ -3828,6 +3845,12 @@ td.data-table-key-col {
 
 .agent-identity-editor__hint {
   font-size: 12px;
+}
+
+@media (max-width: 640px) {
+  .agent-identity-editor__fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .workspace-link {

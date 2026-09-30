@@ -6,6 +6,7 @@ import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { findExistingAncestor } from "../infra/fs-safe.js";
 import { WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS } from "../infra/windows-powershell-spawn.js";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../utils/absolute-deadline.js";
 import { splitArgsPreservingQuotes } from "./arg-split.js";
 import {
@@ -150,7 +151,10 @@ async function scanLaunchdDir(params: {
   });
 
   for (const { name: labelFromName, fullPath, contents } of candidates) {
-    const plist = await decodeLaunchdPlistMetadata(contents).catch(() => {
+    const plist = await decodeLaunchdPlistMetadata(contents).catch((error: unknown) => {
+      if (hasCommandProcessCleanupError(error)) {
+        throw error;
+      }
       const contentHint = normalizeLowercaseStringOrEmpty(
         contents.toString("utf8").replaceAll("\0", ""),
       );
@@ -404,7 +408,10 @@ async function scanGatewayServices(
           push(svc);
         }
       }
-    } catch {
+    } catch (error) {
+      if (hasCommandProcessCleanupError(error)) {
+        throw error;
+      }
       errors.push({ source: "launchd", message: "Gateway service discovery could not finish." });
     }
     return inventory;
@@ -506,7 +513,10 @@ async function scanGatewayServices(
                 managedGateway: marker !== "clawdbot",
               });
             }
-          } catch {
+          } catch (error) {
+            if (hasCommandProcessCleanupError(error)) {
+              throw error;
+            }
             errors.push({
               source: scope === "user" ? "systemctl --user" : "systemctl --system",
               message: "Loaded systemd services could not be inspected.",
@@ -514,7 +524,10 @@ async function scanGatewayServices(
           }
         }
       }
-    } catch {
+    } catch (error) {
+      if (hasCommandProcessCleanupError(error)) {
+        throw error;
+      }
       errors.push({ source: "systemd", message: "Gateway service discovery could not finish." });
     }
     return inventory;

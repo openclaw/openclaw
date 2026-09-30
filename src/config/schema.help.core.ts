@@ -10,12 +10,6 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Global directory for new managed worktrees. Use an absolute path or ~ for your home directory; defaults to <state-dir>/worktrees. Existing worktrees keep their recorded paths when this changes.",
   worktreeAcceleration:
     "Use filesystem acceleration for new managed worktrees when supported (default: true). Set false to use normal Git checkout and file copying. Applies only to new worktrees.",
-  "channels.discord.activities":
-    "Discord Activities configuration for presenting core show_widget documents inside Discord. Leave unset to keep Activity routes, presentation, and handlers disabled.",
-  "channels.discord.activities.clientSecret":
-    "OAuth2 client secret for the Discord application that hosts Activities. Keep this value secret; DISCORD_CLIENT_SECRET is used when this field is unset.",
-  "channels.discord.activities.applicationId":
-    "Optional Discord application ID for Activities. Defaults to the bot application ID learned from Discord at gateway startup.",
   ...META_FIELD_HELP,
   env: "Environment import and override settings used to supply runtime variables to the gateway process. Use this section to control shell-env loading and explicit variable injection behavior.",
   "env.shellEnv":
@@ -139,7 +133,7 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "gateway.auth.trustedProxy.cloudflareAccessOidc.providerId":
     "Exact Access identity-provider ID for the trusted OIDC integration. A provider display name or a matching claim name alone does not establish trust.",
   "gateway.auth.trustedProxy.cloudflareAccessOidc.githubAccountIdClaim":
-    "Exact forwarded OIDC claim whose value is a verified positive decimal-string GitHub account ID. Configure Access to forward it in oidc_fields; never use an unverified user-editable claim.",
+    "Exact forwarded OIDC claim whose value is a verified positive decimal-string GitHub account ID. Configure Access to forward it, then inspect the authenticated Access identity response. OpenClaw reads oidc_fields, or custom when oidc_fields is absent. Never use an unverified user-editable claim.",
   "gateway.auth.trustedProxy.deviceAutoApprove":
     "Optional policy for automatically approving new browser and native UI operator devices and same-key scope upgrades after trusted-proxy authentication. Grants are capped by deviceAutoApprove.scopes and the proxy's x-openclaw-scopes header when present.",
   "gateway.auth.trustedProxy.deviceAutoApprove.enabled":

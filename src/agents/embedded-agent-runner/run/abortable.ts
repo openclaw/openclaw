@@ -83,6 +83,8 @@ export function joinWithRunLivenessDeadline(input: {
  */
 export function abortable<T>(signal: AbortSignal, promise: Promise<T>): Promise<T> {
   if (signal.aborted) {
+    // The provider may already be running; cancellation still owns the result.
+    void promise.catch(() => {});
     return Promise.reject(createAbortableError(signal));
   }
   return new Promise<T>((resolve, reject) => {

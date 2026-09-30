@@ -12,7 +12,7 @@ type QaWebSession = {
   ready?: { page: Page; diagnostics: QaWebDiagnosticEntry[] };
   acquisition: Promise<{ pageId: string; url: string; title: string }>;
   closing?: Promise<unknown[]>;
-  owner?: Set<string>;
+  owner: Set<string>;
   signal?: AbortSignal;
 };
 
@@ -21,7 +21,7 @@ type QaWebDiagnosticEntry = {
   text: string;
 };
 
-type QaWebOpenPageParams = {
+export type QaWebOpenPageParams = {
   url: string;
   headless?: boolean;
   channel?: "chrome";
@@ -176,7 +176,7 @@ function closeSession(pageId: string, session: QaWebSession): Promise<unknown[]>
     // A passing retry must not hide an earlier browser's failed cleanup.
     if (errors.length === 0) {
       sessions.delete(pageId);
-      session.owner?.delete(pageId);
+      session.owner.delete(pageId);
     }
     return errors;
   });
@@ -231,9 +231,9 @@ async function acquirePage(pageId: string, session: QaWebSession, params: QaWebO
   return { pageId, url: page.url(), title };
 }
 
-async function openPage(params: QaWebOpenPageParams, owner?: Set<string>, signal?: AbortSignal) {
+async function openPage(params: QaWebOpenPageParams, owner: Set<string>, signal?: AbortSignal) {
   signal?.throwIfAborted();
-  if (owner && closedSessionOwners.has(owner)) {
+  if (closedSessionOwners.has(owner)) {
     throw new Error("web session owner is closed");
   }
   const pageId = randomUUID();
@@ -245,7 +245,7 @@ async function openPage(params: QaWebOpenPageParams, owner?: Set<string>, signal
     acquisition: Promise.resolve().then(() => acquirePage(pageId, session, params)),
   };
   sessions.set(pageId, session);
-  owner?.add(pageId);
+  owner.add(pageId);
   const onAbort = () => {
     void closeSession(pageId, session);
   };
@@ -267,10 +267,6 @@ async function openPage(params: QaWebOpenPageParams, owner?: Set<string>, signal
     // The signal owns only acquisition; ready pages remain owned by the suite.
     signal?.removeEventListener("abort", onAbort);
   }
-}
-
-export function qaWebOpenPage(params: QaWebOpenPageParams) {
-  return openPage(params);
 }
 
 export function createQaWebPageOpener(owner: Set<string>, signal?: AbortSignal) {

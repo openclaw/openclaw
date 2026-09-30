@@ -436,7 +436,7 @@ export async function handleQaBusRequest(params: {
   }
 }
 
-export function createQaBusServer(state: QaBusState): Server {
+function createQaBusServer(state: QaBusState): Server {
   return createServer((req, res) => {
     dispatchQaHttpRequest(res, async () => {
       const handled = await handleQaBusRequest({ req, res, state });

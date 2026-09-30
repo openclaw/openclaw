@@ -76,11 +76,6 @@ struct QuickChatAgentDisplay: Equatable, Sendable, Identifiable {
     }
 }
 
-struct QuickChatRoutingTarget: Equatable, Hashable, Sendable {
-    let sessionKey: String
-    let agentID: String?
-}
-
 struct QuickChatSessionTargetOverride: Equatable, Hashable, Sendable {
     let key: String
     let displayName: String
@@ -102,7 +97,7 @@ enum QuickChatSendState: Equatable {
 
 private struct ControlPatchRequest: Equatable {
     let presentationID: UUID
-    let target: QuickChatRoutingTarget
+    let target: OpenClawChatSessionTarget
     let settings: OpenClawChatSessionSettingsPatch
 
     var selectionID: String? {
@@ -119,7 +114,7 @@ private struct ControlPatchSettlement {
 private struct AgentsResolution {
     let displays: [QuickChatAgentDisplay]
     let selectedID: String?
-    let target: QuickChatRoutingTarget?
+    let target: OpenClawChatSessionTarget?
 }
 
 private struct RetryIdentity {
@@ -151,10 +146,10 @@ final class QuickChatModel {
     typealias FrontmostAppNameProvider = @MainActor () -> String
     typealias TextContextCaptureProvider = @MainActor () async -> QuickChatTextContextCaptureOutcome
     typealias ModelControlsProvider = @MainActor (
-        QuickChatRoutingTarget) async throws -> QuickChatModelControlSnapshot
+        OpenClawChatSessionTarget) async throws -> QuickChatModelControlSnapshot
     typealias ModelCatalogEventsProvider = @MainActor () async -> AsyncStream<GatewayConnection.PushDelivery>
     typealias SettingsPatchProvider = @MainActor (
-        QuickChatRoutingTarget,
+        OpenClawChatSessionTarget,
         OpenClawChatSessionSettingsPatch) async throws -> OpenClawChatModelPatchResult?
 
     static let trackedPermissions: [Capability] = [.notifications, .accessibility, .screenRecording]
@@ -222,7 +217,7 @@ final class QuickChatModel {
     private(set) var modelControlStatusMessage: String?
     /// Route of the most recently accepted send; navigation reads this immutable value
     /// instead of sampling live routing state that an agent switch could move meanwhile.
-    private(set) var lastAcceptedRoute: QuickChatRoutingTarget?
+    private(set) var lastAcceptedRoute: OpenClawChatSessionTarget?
     private(set) var lastAcceptedIdempotencyKey: String?
 
     @ObservationIgnored private let sessionKeyProvider: SessionKeyProvider
@@ -239,11 +234,11 @@ final class QuickChatModel {
     @ObservationIgnored private let settingsPatchProvider: SettingsPatchProvider
     /// Invoked with the snapshotted route just before a send is dispatched, for every
     /// send path (text and capture); wires the reply consumer's pre-bind.
-    @ObservationIgnored var onSendDispatched: ((QuickChatRoutingTarget) -> Void)?
+    @ObservationIgnored var onSendDispatched: ((OpenClawChatSessionTarget) -> Void)?
     @ObservationIgnored private var presentationID = UUID()
     @ObservationIgnored private var agentsScope: String?
     @ObservationIgnored private var agentsMainKey: String?
-    @ObservationIgnored private var baseRoutingTarget: QuickChatRoutingTarget?
+    @ObservationIgnored private var baseRoutingTarget: OpenClawChatSessionTarget?
     @ObservationIgnored private var sendTask: Task<String, Error>?
     @ObservationIgnored private var permissionTask: Task<Void, Never>?
     @ObservationIgnored private var permissionPollTask: Task<Void, Never>?
@@ -255,9 +250,11 @@ final class QuickChatModel {
     @ObservationIgnored private var modelControlsTask: Task<Void, Never>?
     @ObservationIgnored private var modelCatalogEventsTask: Task<Void, Never>?
     @ObservationIgnored private var modelControlsRequestID = UUID()
-    @ObservationIgnored private var controlPatchSettlementsByTarget: [QuickChatRoutingTarget: ControlPatchSettlement] =
+    @ObservationIgnored private var controlPatchSettlementsByTarget: [
+        OpenClawChatSessionTarget: ControlPatchSettlement
+    ] =
         [:]
-    @ObservationIgnored private var appliedModelSelections: [QuickChatRoutingTarget: String] = [:]
+    @ObservationIgnored private var appliedModelSelections: [OpenClawChatSessionTarget: String] = [:]
 
     init(
         sessionKeyProvider: @escaping SessionKeyProvider = {
@@ -392,14 +389,6 @@ final class QuickChatModel {
             !self.isDictating &&
             !self.isUpdatingModel &&
             self.sendState != .sending
-    }
-
-    var canCaptureTextContext: Bool {
-        self.canCaptureWindow
-    }
-
-    var canSelectRecentSession: Bool {
-        self.canCaptureWindow
     }
 
     var canToggleDictation: Bool {
@@ -541,7 +530,7 @@ final class QuickChatModel {
     }
 
     func captureFocusedAppText() {
-        guard self.canCaptureTextContext, self.isPresentationActive else { return }
+        guard self.canCaptureWindow, self.isPresentationActive else { return }
         let captureID = UUID()
         let presentationID = self.presentationID
         self.textContextCaptureID = captureID
@@ -680,13 +669,13 @@ final class QuickChatModel {
     nonisolated static func routingTarget(
         scope: String?,
         selectedAgentID: String,
-        mainKey: String) -> QuickChatRoutingTarget
+        mainKey: String) -> OpenClawChatSessionTarget
     {
         if scope?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "global" {
-            return QuickChatRoutingTarget(sessionKey: "global", agentID: selectedAgentID)
+            return OpenClawChatSessionTarget(sessionKey: "global", agentID: selectedAgentID)
         }
         // Canonical agent keys already encode ownership; a redundant agentId is rejected.
-        return QuickChatRoutingTarget(
+        return OpenClawChatSessionTarget(
             sessionKey: "agent:\(selectedAgentID):\(mainKey)",
             agentID: nil)
     }
@@ -702,13 +691,13 @@ final class QuickChatModel {
 
     nonisolated static func routingTarget(
         override: QuickChatSessionTargetOverride?,
-        base: QuickChatRoutingTarget) -> QuickChatRoutingTarget
+        base: OpenClawChatSessionTarget) -> OpenClawChatSessionTarget
     {
         guard let override else { return base }
         // sessions.list preserves the bare global sentinel. It needs the same explicit
         // agent owner as the selected base route when session scope is global.
         let agentID = override.key.lowercased() == "global" ? base.agentID : nil
-        return QuickChatRoutingTarget(sessionKey: override.key, agentID: agentID)
+        return OpenClawChatSessionTarget(sessionKey: override.key, agentID: agentID)
     }
 
     nonisolated static func screenshotFileName(appName: String) -> String {
@@ -805,7 +794,7 @@ final class QuickChatModel {
     private func refreshFallbackIdentity(id: UUID) async {
         let resolvedSessionKey = await self.sessionKeyProvider()
         guard self.isCurrentPresentation(id), !Task.isCancelled else { return }
-        let target = QuickChatRoutingTarget(sessionKey: resolvedSessionKey, agentID: nil)
+        let target = OpenClawChatSessionTarget(sessionKey: resolvedSessionKey, agentID: nil)
         await self.awaitControlPatchSettlement(for: target)
         guard self.isCurrentPresentation(id), !Task.isCancelled else { return }
         self.baseRoutingTarget = target
@@ -853,7 +842,7 @@ final class QuickChatModel {
         self.refreshModelControls(for: target)
     }
 
-    private func setRoutingTarget(_ target: QuickChatRoutingTarget?) {
+    private func setRoutingTarget(_ target: OpenClawChatSessionTarget?) {
         self.sessionKey = target?.sessionKey ?? ""
         self.sendAgentID = target?.agentID
         self.isUpdatingModel = target.map { self.controlPatchSettlementsByTarget[$0] != nil } ?? false
@@ -880,7 +869,7 @@ final class QuickChatModel {
 
         let sessionKey = self.sessionKey
         let agentID = self.sendAgentID
-        let route = QuickChatRoutingTarget(sessionKey: sessionKey, agentID: agentID)
+        let route = OpenClawChatSessionTarget(sessionKey: sessionKey, agentID: agentID)
         let selectedModelSelectionID = self.selectedModelSelectionID
         guard await self.applySelectedModelIfNeeded(
             to: route,
@@ -1049,9 +1038,9 @@ extension QuickChatModel {
         return String(format: String(localized: "Message %@"), self.agentDisplay.name)
     }
 
-    var routingTarget: QuickChatRoutingTarget? {
+    var routingTarget: OpenClawChatSessionTarget? {
         guard !self.sessionKey.isEmpty else { return nil }
-        return QuickChatRoutingTarget(sessionKey: self.sessionKey, agentID: self.sendAgentID)
+        return OpenClawChatSessionTarget(sessionKey: self.sessionKey, agentID: self.sendAgentID)
     }
 
     var activePresentationID: UUID? {
@@ -1141,7 +1130,7 @@ extension QuickChatModel {
         self.modelChoices = []
     }
 
-    private func refreshModelControls(for target: QuickChatRoutingTarget, afterSettingsChange: Bool = false) {
+    private func refreshModelControls(for target: OpenClawChatSessionTarget, afterSettingsChange: Bool = false) {
         guard self.isPresentationActive else { return }
         let requestID = UUID()
         self.modelControlsRequestID = requestID
@@ -1186,7 +1175,7 @@ extension QuickChatModel {
     @discardableResult
     private func startControlPatch(
         settings: OpenClawChatSessionSettingsPatch,
-        target: QuickChatRoutingTarget) -> ControlPatchSettlement
+        target: OpenClawChatSessionTarget) -> ControlPatchSettlement
     {
         let previousSettlement = self.controlPatchSettlementsByTarget[target]
         if let previousSettlement, previousSettlement.request.settings == settings {
@@ -1211,7 +1200,7 @@ extension QuickChatModel {
     }
 
     private func applySelectedModelIfNeeded(
-        to target: QuickChatRoutingTarget,
+        to target: OpenClawChatSessionTarget,
         selectionID: String?) async -> Bool
     {
         if let settlement = self.controlPatchSettlementsByTarget[target] {
@@ -1281,7 +1270,7 @@ extension QuickChatModel {
         self.isUpdatingModel = self.routingTarget.map { self.controlPatchSettlementsByTarget[$0] != nil } ?? false
     }
 
-    private func awaitControlPatchSettlement(for target: QuickChatRoutingTarget?) async {
+    private func awaitControlPatchSettlement(for target: OpenClawChatSessionTarget?) async {
         guard let target,
               let settlement = self.controlPatchSettlementsByTarget[target]
         else { return }

@@ -32,7 +32,7 @@ import {
   resolveDreamingConfigPathSupport,
   type DreamingConfigPathSupport,
 } from "../agents/memory/dreaming.ts";
-import "./memory-dreaming-page.ts";
+import "../agents/memory/memory-panel.ts";
 import "./memory-memories.ts";
 import { dreamingConfigPath, resolveDreamingTimezoneDefault } from "./memory-defaults.ts";
 import { renderDreamingSettings, renderDreamingUnsupported } from "./memory-dreaming.ts";
@@ -40,7 +40,7 @@ import { renderMemoryOverview, type MemoryOverviewStatus } from "./memory-overvi
 import {
   canonicalMemoryRouteLocation,
   memoryTabForRoute,
-  memorySchemaKeysForTab,
+  memoryVisibleSchemaKeys,
   resolveMemoryEngineSelection,
   selectedEngineId,
   type MemoryEngineSelection,
@@ -682,9 +682,10 @@ class MemorySettingsPage extends OpenClawLightDomElement {
           .agentId=${agentId}
         ></openclaw-memory-memories>
       `,
-      dreams: html` <openclaw-memory-dreaming .agentId=${agentId}></openclaw-memory-dreaming> `,
-      editor:
-        activeTab === "settings" ? this.buildEditor(memorySchemaKeysForTab("settings")) : html``,
+      dreams: agentId
+        ? html`<openclaw-agent-memory-panel .agentId=${agentId}></openclaw-agent-memory-panel>`
+        : html``,
+      editor: activeTab === "settings" ? this.buildEditor(memoryVisibleSchemaKeys()) : html``,
       dreamingSettings: activeTab === "settings" ? this.renderDreamingControls() : html``,
     });
   }

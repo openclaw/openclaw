@@ -40,6 +40,10 @@ import {
 } from "../test-utils/gateway-scheduler-clock.js";
 import { registerGatewayCronContextTests } from "./server-cron.context.test-support.js";
 import {
+  registerGatewayCronMutationAuthorityTests,
+  registerGatewayCronStreamMutationTests,
+} from "./server-cron.mutation-lifecycle.test-support.js";
+import {
   registerGatewayCronHandoffTests,
   registerGatewayCronReceiptTests,
 } from "./server-cron.receipts.test-support.js";
@@ -839,61 +843,12 @@ describe("buildGatewayCronService", () => {
     }
   });
 
-  it.each(["update", "updateWithPrecondition"] as const)(
-    "forwards authority options through the %s lifecycle wrapper",
-    async (method) => {
-      const cfg = createCronConfig(`server-cron-update-authority-${method}`);
-      const state = loadCronService(cfg);
-      const owner = {
-        agentId: "main",
-        sessionKey: "agent:main:discord:group:ops",
-        accountId: "work",
-      };
-      const scheduledToolPolicy = {
-        version: 1 as const,
-        mode: "account" as const,
-        ownerSessionKey: owner.sessionKey,
-        ownerAccountId: owner.accountId,
-      };
-      let restarted: ReturnType<typeof buildGatewayCronService> | undefined;
-
-      try {
-        const job = await addCronJob(
-          state,
-          `authority ${method}`,
-          { kind: "systemEvent", text: "run" },
-          {
-            owner,
-            schedule: { kind: "every", everyMs: 60_000 },
-            sessionTarget: "main",
-            wakeMode: "now",
-          },
-        );
-        const commitGuard = vi.fn();
-        const patch = {
-          sessionTarget: "isolated" as const,
-          payload: { kind: "agentTurn" as const, message: "updated", toolsAllow: ["write"] },
-        };
-        const options = { scheduledToolPolicy, commitGuard };
-
-        if (method === "update") {
-          await state.cron.update(job.id, patch, options);
-        } else {
-          await state.cron.updateWithPrecondition(job.id, patch, () => undefined, options);
-        }
-
-        expect.soft(commitGuard).toHaveBeenCalledOnce();
-        state.cron.stop();
-        restarted = createCronService(cfg);
-        expect((await restarted.cron.readJob(job.id))?.scheduledToolPolicy).toEqual(
-          scheduledToolPolicy,
-        );
-      } finally {
-        state.cron.stop();
-        restarted?.cron.stop();
-      }
-    },
-  );
+  registerGatewayCronMutationAuthorityTests({
+    createCronConfig,
+    loadCronService,
+    createCronService,
+    addCronJob,
+  });
 
   it("keeps sole-agent ownerless jobs dynamic across a restart and roster rename", async () => {
     const tmpDir = path.join(os.tmpdir(), `server-cron-sole-owner-${Date.now()}`);
@@ -1740,36 +1695,12 @@ describe("buildGatewayCronService", () => {
     }
   });
 
-  it("reports a committed stream update as successful when source teardown fails", async () => {
-    vi.useFakeTimers();
-    const watched = createWatchedRun(true, { durationMs: 10_000 });
-    const { cancel } = watched;
-    cancel.mockImplementationOnce(() => {});
-    mockCronSupervisor(watched);
-    const cfg = createCronConfig("server-cron-stream-update-teardown-failure");
-    cfg.cron = { ...cfg.cron, triggers: { enabled: true } };
-    const state = loadCronService(cfg);
-
-    try {
-      const added = await addSystemEventJob(state, "stubborn update stream source", "event", {
-        schedule: { kind: "stream", command: ["source"] },
-        sessionTarget: "main",
-      });
-      const streamJob = "job" in added ? added.job : added;
-      // The durable disable commits before teardown settles; a stop timeout
-      // must not surface as a failed update after the mutation persisted.
-      const updatePromise = state.cron.update(streamJob.id, { enabled: false });
-      await vi.waitFor(() => expect(cancel).toHaveBeenCalledTimes(1), { interval: 0 });
-      await vi.advanceTimersByTimeAsync(30_000);
-      const updated = await updatePromise;
-      expect(updated.enabled).toBe(false);
-      expect(state.cron.getJob(streamJob.id)?.enabled).toBe(false);
-      expect(cancel).toHaveBeenCalled();
-    } finally {
-      await state.stopStreamWatchers?.();
-      state.cron.stop();
-      vi.useRealTimers();
-    }
+  registerGatewayCronStreamMutationTests({
+    createCronConfig,
+    loadCronService,
+    addSystemEventJob,
+    createWatchedRun,
+    mockCronSupervisor,
   });
 
   it("keeps a failed stream removal in an explicit terminal error state", async () => {

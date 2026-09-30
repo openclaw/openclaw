@@ -720,7 +720,7 @@ extension OpenClawChatViewModel {
             do {
                 let record = try await self.transport.getQuestion(id: model.id)
                 lookups.append((model, .record(record)))
-            } catch let error as GatewayResponseError where Self.questionIsNotFound(error) {
+            } catch let error as GatewayResponseError where error.detailsReason == "QUESTION_NOT_FOUND" {
                 lookups.append((model, .notFound))
             } catch {
                 lookups.append((model, .failed))
@@ -783,7 +783,8 @@ extension OpenClawChatViewModel {
         guard !self.isQuestionAuthorityRetired else { return false }
         guard generation == self.questionRefreshGeneration else { return false }
         guard stateRevision == self.questionStateRevision else {
-            self.restartQuestionRefreshAfterStateChange(generation: generation)
+            // Local mutations invalidate the whole lookup snapshot and restart its bounded retry budget.
+            self.scheduleQuestionRefreshRetry(generation: generation, retryIndex: 0)
             return false
         }
         return true
@@ -792,16 +793,6 @@ extension OpenClawChatViewModel {
     private nonisolated static func questionListIsUnavailable(_ error: GatewayResponseError) -> Bool {
         if error.missingScope == "operator.questions" { return true }
         return error.code == "INVALID_REQUEST" && error.message == "unknown method: question.list"
-    }
-
-    private nonisolated static func questionIsNotFound(_ error: GatewayResponseError) -> Bool {
-        error.detailsReason == "QUESTION_NOT_FOUND"
-    }
-
-    private func restartQuestionRefreshAfterStateChange(generation: UInt64) {
-        // Local question mutations invalidate the whole lookup snapshot, not one transport attempt.
-        // Restart the bounded budget so a late mutation cannot consume the last reconciliation slot.
-        self.scheduleQuestionRefreshRetry(generation: generation, retryIndex: 0)
     }
 
     private func scheduleQuestionRefreshRetry(generation: UInt64, retryIndex: Int) {

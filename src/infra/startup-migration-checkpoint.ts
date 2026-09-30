@@ -63,31 +63,25 @@ type StartupMigrationLeaseWaitParams = Omit<StartupMigrationLeaseParams, "nowMs"
 
 class StartupMigrationLeaseConflictError extends Error {}
 
-function withStartupMigrationCheckpointDatabase<T>(
-  env: NodeJS.ProcessEnv,
-  callback: (db: DatabaseSync) => T,
-  atomic = false,
-): T {
-  return withOpenClawStateStartupMigrationCheckpointDatabase(callback, { env, atomic });
-}
-
 function writeStartupMigrationCheckpointDatabase<T>(
   env: NodeJS.ProcessEnv,
   callback: (db: DatabaseSync) => T,
 ): T {
   const databasePath = resolveOpenClawStateSqlitePath(env);
-  return withStartupMigrationCheckpointDatabase(env, (db) =>
-    runSqliteImmediateTransactionSync(
-      db,
-      () => {
-        assertOpenClawStateWriteAllowed({ database: db, databasePath, env });
-        return callback(db);
-      },
-      {
-        databaseLabel: databasePath,
-        operationLabel: "state.startup-checkpoint.write",
-      },
-    ),
+  return withOpenClawStateStartupMigrationCheckpointDatabase(
+    (db) =>
+      runSqliteImmediateTransactionSync(
+        db,
+        () => {
+          assertOpenClawStateWriteAllowed({ database: db, databasePath, env });
+          return callback(db);
+        },
+        {
+          databaseLabel: databasePath,
+          operationLabel: "state.startup-checkpoint.write",
+        },
+      ),
+    { env, atomic: false },
   );
 }
 
@@ -162,12 +156,11 @@ function acquireStartupMigrationLease(
 ): StartupMigrationLease {
   const env = params.env ?? process.env;
   const owner = params.owner ?? randomUUID();
-  return withStartupMigrationCheckpointDatabase(
-    env,
+  return withOpenClawStateStartupMigrationCheckpointDatabase(
     (db) =>
       // Integrity verification may outlast a lease; start its lifetime at the actual claim.
       acquireStartupMigrationLeaseFromDatabase(db, { ...params, env, nowMs: now(), owner }),
-    true,
+    { env, atomic: true },
   );
 }
 

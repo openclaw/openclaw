@@ -20,18 +20,10 @@ const COMPACTION_NOTICE_TEXT: Record<CompactionNoticePhase, string> = {
 };
 
 export function formatCompactionModelRef(provider?: string, model?: string): string {
-  const normalizedProvider = normalizeOptionalString(provider);
-  const normalizedModel = normalizeOptionalString(model);
-  if (normalizedProvider && normalizedModel) {
-    return `${sanitizeForLog(normalizedProvider)}/${sanitizeForLog(normalizedModel)}`;
-  }
-  if (normalizedProvider) {
-    return sanitizeForLog(normalizedProvider);
-  }
-  if (normalizedModel) {
-    return sanitizeForLog(normalizedModel);
-  }
-  return "unknown model";
+  const parts = [provider, model]
+    .map((value) => normalizeOptionalString(value))
+    .filter((value): value is string => value !== undefined);
+  return parts.length > 0 ? parts.map((value) => sanitizeForLog(value)).join("/") : "unknown model";
 }
 
 export function shouldNotifyUserAboutCompaction(cfg?: OpenClawConfig): boolean {

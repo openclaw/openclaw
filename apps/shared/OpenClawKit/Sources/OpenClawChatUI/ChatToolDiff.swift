@@ -22,15 +22,8 @@ struct ChatToolDiffLine: Equatable, Sendable {
 }
 
 struct ChatToolDiffStat: Equatable, Hashable, Sendable {
-    let files: Int?
     let added: Int
     let removed: Int
-
-    init(files: Int? = nil, added: Int, removed: Int) {
-        self.files = files
-        self.added = added
-        self.removed = removed
-    }
 }
 
 enum ChatToolDiff {
@@ -608,41 +601,24 @@ enum ChatToolDiff {
     private static func readEditPairs(
         _ arguments: [String: AnyCodable]) -> (pairs: [EditPair], truncated: Bool)
     {
+        let edits = arguments["edits"]?.arrayValue
+        let records = edits?.prefix(self.maxLocalPairs).map(\.dictionaryValue) ?? [arguments]
         var pairs: [EditPair] = []
         var inputCharacters = 0
-        var truncated = false
+        var truncated = (edits?.count ?? 0) > self.maxLocalPairs
 
-        func appendPair(oldValue: AnyCodable?, newValue: AnyCodable?) {
-            guard let oldText = oldValue?.stringValue, let newText = newValue?.stringValue else { return }
+        for record in records {
+            guard let record,
+                  let oldText = self.string(in: record, keys: ["oldText", "old_string", "oldString", "old_str"]),
+                  let newText = self.string(in: record, keys: ["newText", "new_string", "newString", "new_str"])
+            else { continue }
             let pairCharacters = oldText.utf16.count + newText.utf16.count
             guard pairCharacters <= self.maxLocalInputCharacters - inputCharacters else {
                 truncated = true
-                return
+                break
             }
             inputCharacters += pairCharacters
             pairs.append(EditPair(oldText: oldText, newText: newText))
-        }
-
-        if let edits = arguments["edits"]?.arrayValue {
-            for (index, edit) in edits.enumerated() {
-                guard index < self.maxLocalPairs else {
-                    truncated = true
-                    break
-                }
-                guard let record = edit.dictionaryValue else { continue }
-                appendPair(
-                    oldValue: self.firstValue(in: record, keys: ["oldText", "old_string", "oldString", "old_str"]),
-                    newValue: self.firstValue(in: record, keys: ["newText", "new_string", "newString", "new_str"]))
-                if truncated { break }
-            }
-        } else {
-            appendPair(
-                oldValue: self.firstValue(
-                    in: arguments,
-                    keys: ["oldText", "old_string", "oldString", "old_str"]),
-                newValue: self.firstValue(
-                    in: arguments,
-                    keys: ["newText", "new_string", "newString", "new_str"]))
         }
         return (pairs, truncated)
     }

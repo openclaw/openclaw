@@ -43,7 +43,7 @@ export function readSessionCreationSnapshotInDatabase(
   return withSqlitePostCommitPublications(database.db, () =>
     runSqliteDeferredTransactionSync(database.db, () => {
       const normalizedKey = normalizeStoreSessionKey(sessionKey);
-      const keys = [normalizedKey, ...collectSessionEntryLookupKeys(database, sessionKey)];
+      const keys = [normalizedKey, ...collectSessionEntryLookupKeys(sessionKey)];
       const candidates = readSelectedSessionEntriesInDatabase(database, keys, {
         fullEntryKeys: keys,
         label,

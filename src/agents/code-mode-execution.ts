@@ -15,6 +15,7 @@ import {
   type CodeModeNamespaceRuntime,
 } from "./code-mode-namespaces.js";
 import {
+  CODE_MODE_RESUME_MARGIN_MS,
   CODE_MODE_WORKER_WATCHDOG_GRACE_MS,
   codeModeFailureCode,
   codeModeFailureMessage,
@@ -179,7 +180,10 @@ function usableResumeBudgetMs(deadlineMs: number, config: CodeModeConfig): numbe
   // VM restore costs tens of ms and counts against the guest interrupt budget;
   // resuming with less than this floor converts an otherwise successful run
   // into an immediate interrupt timeout, so callers park the snapshot instead.
-  const minimum = Math.min(250, Math.max(1, Math.floor(config.timeoutMs / 2)));
+  const minimum = Math.min(
+    CODE_MODE_RESUME_MARGIN_MS,
+    Math.max(1, Math.floor(config.timeoutMs / 2)),
+  );
   const remaining = deadlineMs - performance.now();
   return remaining >= minimum ? remaining : undefined;
 }

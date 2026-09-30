@@ -26,7 +26,7 @@ import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import {
   findActiveCronRunReceiptInDatabase,
-  finishCronRunReceipt,
+  finishCronRunReceiptAsync,
   prepareCronRunReceiptClaim,
 } from "../store/run-receipt-store.js";
 import { claimCronRunReceiptInDatabaseForTest } from "../store/run-receipt-store.test-support.js";
@@ -133,7 +133,7 @@ describe("ownerless reservation and manual completion", () => {
       expect(execute).not.toHaveBeenCalled();
     } finally {
       for (const reservation of reserved) {
-        finishCronRunReceipt({
+        await finishCronRunReceiptAsync({
           handle: reservation.runReceipt,
           status: "skipped",
           finishedAtMs: NOW,
@@ -375,7 +375,7 @@ describe("ownerless skip transaction guards", () => {
       expect(history(storePath, job.id)).toEqual([]);
       expect(execute).not.toHaveBeenCalled();
     } finally {
-      finishCronRunReceipt({ handle: receipt, status: "skipped", finishedAtMs: NOW });
+      await finishCronRunReceiptAsync({ handle: receipt, status: "skipped", finishedAtMs: NOW });
     }
   });
 
@@ -418,7 +418,7 @@ describe("ownerless skip transaction guards", () => {
     const before = await loadCronStore(storePath);
     const database = openOpenClawStateDatabase().db;
     database.exec(`
-      CREATE TEMP TRIGGER reject_ownerless_skip
+      CREATE TRIGGER reject_ownerless_skip
       BEFORE UPDATE OF state_json ON cron_jobs
       WHEN NEW.job_id = 'ownerless-rollback'
         AND json_extract(NEW.state_json, '$.lastRunStatus') = 'skipped'

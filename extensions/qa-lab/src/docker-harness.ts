@@ -177,7 +177,6 @@ function renderReadme(params: {
   gatewayPort: number;
   qaLabPort: number;
   usePrebuiltImage: boolean;
-  bindUiDist: boolean;
   includeQaLabUi: boolean;
 }) {
   return `# QA Docker Harness
@@ -297,7 +296,6 @@ export async function writeQaDockerHarnessFiles(params: {
         gatewayPort,
         qaLabPort,
         usePrebuiltImage,
-        bindUiDist,
         includeQaLabUi,
       }),
     ],

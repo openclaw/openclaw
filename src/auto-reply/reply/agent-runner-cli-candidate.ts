@@ -25,9 +25,7 @@ import { createAgentRunSupersededAbortError } from "../../agents/run-termination
 import { withLocalSessionPlacementTurnSettlement } from "../../agents/session-placement-admission.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
-import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
-import type { BlockReplyContext, ReplyPayload } from "../types.js";
 import { createAgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
 import { resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
 import {
@@ -38,6 +36,7 @@ import {
 } from "./agent-runner-cli-dispatch.js";
 import { buildCommandOutputFromToolResultEvent } from "./agent-runner-command-output.js";
 import type { AgentFallbackCandidateCommonParams } from "./agent-runner-fallback-cycle.types.js";
+import { deliverPreparedBlockReply } from "./agent-runner-presentation.js";
 import { resolveRunModelHasVision } from "./agent-runner-run-params.js";
 import { prepareCliReplyPayload } from "./cli-reply-payload.js";
 import { shouldBridgeCliPreambleEvents } from "./get-reply.types.js";
@@ -57,14 +56,10 @@ export async function runCliFallbackCandidate(
 }> {
   const turn = params.turn;
   const onPreparedBlockReply = turn.opts?.onPreparedBlockReply;
-  const onNativeBlockReply =
+  const onNativeBlockReply: NonNullable<typeof turn.opts>["onBlockReply"] =
     turn.opts?.onBlockReply ??
     (onPreparedBlockReply
-      ? async (payload: ReplyPayload, context?: BlockReplyContext) => {
-          for (const plan of createStructuredOutboundPayloadPlan([payload])) {
-            await onPreparedBlockReply(plan, context);
-          }
-        }
+      ? (payload, context) => deliverPreparedBlockReply({ onPreparedBlockReply }, payload, context)
       : undefined);
   const expectedLifecycleRevision = turn.getActiveSessionEntry()?.lifecycleRevision;
   const selectedModelEntry = findModelInCatalog(
@@ -120,9 +115,7 @@ export async function runCliFallbackCandidate(
     commandDetailsVisible,
     shouldEmitToolResult: turn.shouldEmitToolResult,
     shouldEmitToolOutput: turn.shouldEmitToolOutput,
-    deliver: async (payload) => {
-      await turn.opts?.onToolResult?.(payload);
-    },
+    deliver: (payload) => turn.opts?.onToolResult?.(payload),
   });
   // CLI backends report a tool's outcome on the result event and never repeat it,
   // so the terminal fact has to be projected here. The embedded path gets this
@@ -265,9 +258,7 @@ export async function runCliFallbackCandidate(
           },
           onReasoningText: createCliReasoningStreamBridge(turn.opts?.onReasoningStream),
           onPlanUpdate: turn.opts?.onPlanUpdate,
-          onReasoningProgress: async (payload) => {
-            await turn.opts?.onReasoningProgress?.(payload);
-          },
+          onReasoningProgress: (payload) => turn.opts?.onReasoningProgress?.(payload),
           onCompactionStart: turn.opts?.onCompactionStart,
           onCompactionEnd: turn.opts?.onCompactionEnd,
           onToolEvent: async (payload) => {
@@ -329,9 +320,7 @@ export async function runCliFallbackCandidate(
                   await Promise.all(deliveries);
                 }
               : undefined,
-          onFastModeAutoProgress: async (payload) => {
-            await turn.opts?.onToolResult?.(payload);
-          },
+          onFastModeAutoProgress: (payload) => turn.opts?.onToolResult?.(payload),
           transformResult:
             turn.followupRun.currentInboundEventKind === "room_event"
               ? (resultLocal) =>

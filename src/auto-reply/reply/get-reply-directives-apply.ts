@@ -22,7 +22,7 @@ import { isDirectiveOnly } from "./directive-handling.directive-only.js";
 import { resolveModelRuntimeDirective } from "./directive-handling.model-runtime.js";
 import { resolveModelSelectionFromDirective } from "./directive-handling.model-selection.js";
 import type { HandleDirectiveOnlyParams } from "./directive-handling.params.js";
-import type { InlineDirectives } from "./directive-handling.parse.js";
+import { hasSessionDirectives, type InlineDirectives } from "./directive-handling.parse.js";
 import { formatModelSelectionScopeAck } from "./directive-handling.shared.js";
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
 import { resolveContextTokens } from "./model-selection-context.js";
@@ -45,14 +45,7 @@ const directivePersistLoader = createLazyImportLoader(
 function hasOnlyModelDirective(directives: InlineDirectives): boolean {
   return (
     directives.hasModelDirective &&
-    !directives.hasThinkDirective &&
-    !directives.hasFastDirective &&
-    !directives.hasVerboseDirective &&
-    !directives.hasTraceDirective &&
-    !directives.hasReasoningDirective &&
-    !directives.hasElevatedDirective &&
-    !directives.hasExecDirective &&
-    !directives.hasQueueDirective &&
+    !hasSessionDirectives(directives, "model") &&
     !directives.hasStatusDirective
   );
 }
@@ -298,17 +291,7 @@ export async function applyInlineDirectiveOverrides(params: {
     }
   }
 
-  const hasAnyDirective =
-    directives.hasThinkDirective ||
-    directives.hasFastDirective ||
-    directives.hasVerboseDirective ||
-    directives.hasTraceDirective ||
-    directives.hasReasoningDirective ||
-    directives.hasElevatedDirective ||
-    directives.hasExecDirective ||
-    directives.hasModelDirective ||
-    directives.hasQueueDirective ||
-    directives.hasStatusDirective;
+  const hasAnyDirective = hasSessionDirectives(directives) || directives.hasStatusDirective;
 
   if (!hasAnyDirective && !modelState.resetModelOverride && !modelState.resetModelOverrideReason) {
     return {

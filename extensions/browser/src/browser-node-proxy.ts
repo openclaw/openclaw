@@ -70,20 +70,15 @@ function unwrapBrowserProxyPayload(
   }
 }
 
-async function callBrowserProxy(params: {
-  nodeId: string;
-  nodeLabel?: string;
-  declaredCommands: readonly string[];
-  pendingDeclaredCommands: readonly string[];
-  allowAutomaticHostFallback: boolean;
-  method: string;
-  path: string;
-  query?: Record<string, string | number | boolean | undefined>;
-  body?: unknown;
-  timeoutMs?: number;
-  profile?: string;
-  signal?: AbortSignal;
-}): Promise<BrowserProxyEnvelope> {
+async function callBrowserProxy(
+  params: Parameters<BrowserProxyRequest>[0] & {
+    nodeId: string;
+    nodeLabel?: string;
+    declaredCommands: readonly string[];
+    pendingDeclaredCommands: readonly string[];
+    allowAutomaticHostFallback: boolean;
+  },
+): Promise<BrowserProxyEnvelope> {
   const { proxyTimeoutMs, nodeInvokeTimeoutMs, gatewayTimeoutMs } = resolveBrowserProxyTimeouts(
     params.timeoutMs,
   );

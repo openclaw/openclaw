@@ -1,4 +1,3 @@
-/** In-process execution of non-mutating Doctor lint health checks. */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -47,7 +46,10 @@ import {
   resolvePluginInstallRoots,
   withPluginInstallRoots,
 } from "../plugins/install-root-context.js";
-import { pluginSourceCaptureStateDir } from "../plugins/plugin-source-capture-context.js";
+import {
+  getPluginSourceCaptureStorage,
+  withPluginSourceCaptureStorage,
+} from "../plugins/plugin-source-capture-context.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import {
@@ -533,6 +535,10 @@ async function withReadOnlyPluginStateSnapshot<T>(
   cleanupWarnings?: HealthFinding[],
 ): Promise<T> {
   const sourceDatabasePath = resolveOpenClawStateSqlitePath(sourceEnv);
+  const captureStorage = Object.freeze({
+    stateDir: getPluginSourceCaptureStorage()?.stateDir ?? resolveStateDir(sourceEnv),
+    placement: "temporary" as const,
+  });
   let cleanup: () => Promise<boolean>;
   let privateRoot: string;
   let prepared: ReturnType<typeof prepareSqliteReadOnlyLocationSync> | undefined;
@@ -583,15 +589,13 @@ async function withReadOnlyPluginStateSnapshot<T>(
       // Runtime schema checks defer OAuth probes: external rotation cannot be snapshotted.
       outcome = {
         ok: true,
-        value: await withDisposableOpenClawStateReads(privateDatabasePath, () =>
-          withPluginInstallRoots({ ...installRoots, stateDir: privateStateDir }, async () => {
-            runStarted = true;
-            // Nested inspections keep cache-owned native bytes outside every disposable snapshot.
-            return await pluginSourceCaptureStateDir.run(
-              pluginSourceCaptureStateDir.getStore() ?? resolveStateDir(sourceEnv),
-              () => run(privateEnv),
-            );
-          }),
+        value: await withPluginSourceCaptureStorage(captureStorage, () =>
+          withDisposableOpenClawStateReads(privateDatabasePath, () =>
+            withPluginInstallRoots({ ...installRoots, stateDir: privateStateDir }, async () => {
+              runStarted = true;
+              return await run(privateEnv);
+            }),
+          ),
         ),
       };
     } catch (error) {

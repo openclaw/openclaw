@@ -962,7 +962,7 @@ describe("run-oxlint", () => {
         join(cwd, ".oxlintrc.json"),
         JSON.stringify({
           categories: { correctness: "off" },
-          rules: { "no-var": "error" },
+          rules: { "no-var": "error", "max-lines": ["error", { max: 10 }] },
         }),
       );
       writeFileSync(join(cwd, "config/tsconfig/oxlint.core.json"), "{}");
