@@ -204,7 +204,8 @@ describe("original requester media handoff", () => {
           expect(enqueue).toHaveBeenCalledTimes(change.endsWith("at-enqueue") ? 1 : 0);
           expect(entries).toEqual([]);
         } else {
-          expect(result).toEqual({ status: "pending" });
+          // Successful admission is session_queued, so the handoff is queue-owned.
+          expect(result).toEqual({ status: "pending", queueOwned: true });
           expect(entries).toHaveLength(1);
           const entry = entries[0]!;
           expect(entry).toMatchObject({
