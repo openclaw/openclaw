@@ -20,6 +20,7 @@ import { withExistingOpenClawStateDatabaseCurrentReadOnly } from "../../state/op
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../../state/openclaw-state-schema.js";
 import { describeUnavailableCronAgent, type CronAgentAvailability } from "../agent-availability.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
+import type { CronAgentScope } from "../types-shared.js";
 import type { CronJob } from "../types.js";
 import { cronStoreKey } from "./key.js";
 import { loadedCronStoreFromRows, loadCronRows } from "./row-codec.js";
@@ -62,11 +63,11 @@ import type {
 
 export type CronRunReceiptSettlementDisposition = "owner-unavailable";
 
-type ResolveReceiptAgentId = (job: CronJob) => string;
+type ResolveReceiptAgentId<Job = CronJob> = (job: Job) => string;
 
-type CronReceiptCurrentPolicy = {
+type CronReceiptCurrentPolicy<Job = CronJob> = {
   handle: CronRunReceiptHandle;
-  resolveAgentId: ResolveReceiptAgentId;
+  resolveAgentId: ResolveReceiptAgentId<Job>;
   isAgentAvailable?: CronAgentAvailability;
   allowMissingJob?: boolean;
   env?: NodeJS.ProcessEnv;
@@ -222,13 +223,13 @@ function validateCurrentJob(params: {
   return validateCurrentReceiptJob(job, params);
 }
 
-function validateCurrentReceiptJob(
-  job: CronJob | undefined,
+function validateCurrentReceiptJob<Job>(
+  job: Job | undefined,
   params: {
     handle: Pick<CronRunReceiptHandle, "agentId" | "receiptId">;
-    resolveAgentId: ResolveReceiptAgentId;
+    resolveAgentId: ResolveReceiptAgentId<Job>;
   },
-): CronJob {
+): Job {
   if (!job) {
     throw new CronRunReceiptRevisionError(params.handle.receiptId, "cron job was removed");
   }
@@ -507,7 +508,7 @@ export function activateCronRunReceiptInDatabase(params: {
 }
 
 function assertReceiptAgentAvailable(
-  params: CronReceiptCurrentPolicy,
+  params: Pick<CronReceiptCurrentPolicy, "handle" | "isAgentAvailable" | "env">,
   database?: DatabaseSync,
   facts?: Parameters<CronAgentAvailability>[2],
 ) {
@@ -520,9 +521,11 @@ function assertReceiptAgentAvailable(
   }
 }
 
-export function readCronRunReceiptCurrentJobFromFacts(
-  params: CronReceiptCurrentPolicy & { facts: CronRunReceiptCurrentFacts | undefined },
-): CronJob | undefined {
+export function assertCronRunReceiptCurrentFacts(
+  params: CronReceiptCurrentPolicy<CronAgentScope> & {
+    facts: CronRunReceiptCurrentFacts | undefined;
+  },
+): void {
   if (!params.facts) {
     throw new CronRunReceiptRevisionError(
       params.handle.receiptId,
@@ -531,7 +534,9 @@ export function readCronRunReceiptCurrentJobFromFacts(
   }
   assertReceiptAgentAvailable(params, undefined, { deletionBlocked: params.facts.deletionBlocked });
   assertReceiptOwner(params.facts.receipt, params.handle);
-  return params.allowMissingJob ? undefined : validateCurrentReceiptJob(params.facts.job, params);
+  if (!params.allowMissingJob) {
+    validateCurrentReceiptJob(params.facts.job, params);
+  }
 }
 
 /** Reads the canonical definition under the same exact receipt check used by execution. */

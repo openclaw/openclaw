@@ -1,4 +1,4 @@
-import type { CronJob } from "../types.js";
+import type { CronAgentScope } from "../types-shared.js";
 
 export type CronRunReceiptStatus =
   | "running"
@@ -48,7 +48,7 @@ export type CronRunReceiptCurrentReadCommand = {
 
 export type CronRunReceiptCurrentFacts = {
   receipt: CronRunReceiptHandle | undefined;
-  job: CronJob | undefined;
+  job: CronAgentScope | undefined;
   deletionBlocked: boolean;
 };
 

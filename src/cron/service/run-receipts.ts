@@ -18,7 +18,7 @@ import {
   CronRunReceiptRevisionError,
   prepareCronRunReceiptAdjudication,
   readCronRunReceiptCurrentJob,
-  readCronRunReceiptCurrentJobFromFacts,
+  assertCronRunReceiptCurrentFacts,
   trackCronRunReceiptSettlement,
 } from "../store/run-receipt-store.js";
 import type {
@@ -28,6 +28,7 @@ import type {
   CronRunReceiptStatus,
   PreparedCronRunReceiptAdjudication,
 } from "../store/run-receipt.types.js";
+import type { CronAgentScope } from "../types-shared.js";
 import type { CronJob, CronRunStatus, CronStoredJob } from "../types.js";
 import { isJobEnabled } from "./jobs-scheduling.js";
 import {
@@ -37,7 +38,7 @@ import {
 import type { CronServiceState } from "./state.js";
 import { runsDetachedFromMainSession } from "./timer-execution-timeout.js";
 
-function resolveCronRunReceiptAgentId(state: CronServiceState, job: CronJob): string {
+function resolveCronRunReceiptAgentId(state: CronServiceState, job: CronAgentScope): string {
   return resolveCronJobEffectiveAgentId(
     job,
     state.deps.resolveDefaultAgentId
@@ -230,7 +231,7 @@ export async function assertServiceCronRunReceiptCurrent(
   if (result && (!result.ok || result.type !== command.type)) {
     throw new Error("Cron current receipt read did not return its admitted snapshot");
   }
-  readCronRunReceiptCurrentJobFromFacts({
+  assertCronRunReceiptCurrentFacts({
     handle,
     facts: result?.ok && result.type === command.type ? result.facts : undefined,
     resolveAgentId: (job) => resolveCronRunReceiptAgentId(state, job),

@@ -101,7 +101,11 @@ export function readCronRunReceiptCurrentFactsInDatabase(
         ? loadedCronStoreFromRows(loadCronRows(database, handle.storeKey, new Set([handle.jobId])))
             .store.jobs[0]
         : undefined;
-    return { receipt, job, deletionBlocked };
+    return {
+      receipt,
+      job: job ? { agentId: job.agentId, sessionKey: job.sessionKey } : undefined,
+      deletionBlocked,
+    };
   });
 }
 
