@@ -238,12 +238,13 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
                           ref: reclaimResultRef,
                           record: (ref) => {
                             assertCurrent();
-                            placements.recordStagedWorkspaceResult(
+                            return placements.recordStagedWorkspaceResult(
                               reclaimClaim,
                               ref,
                               workspace.kind === "repository"
                                 ? workspace.repository.workspaceId
                                 : undefined,
+                              assertCurrent,
                             );
                           },
                         },

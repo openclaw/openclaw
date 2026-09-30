@@ -26,6 +26,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import * as publicationSnapshot from "../github-repository-publication-snapshot.js";
 import { workerService } from "../server-methods/environments.test-support.js";
 import { resolveRepositoryWorkspaceAccess } from "../server-methods/session-repository-workspace-access.js";
@@ -875,6 +876,7 @@ describe("repository workspace result ownership", () => {
 
   it("binds a staged repository result to its exact immutable session owner", async () => {
     const f = await fixture("worker-turn");
+    const { workspaceId } = f.repository;
     const { turnClaim } = await f.beginTurn("source-binding");
     const foreign = await f.store.create({
       agentId: sessionTarget.agentId,
@@ -883,18 +885,29 @@ describe("repository workspace result ownership", () => {
       assertCurrent: () => {},
     });
     const ref = workerWorkspaceResultRef(turnClaim.claimId);
-    expect(() =>
+    await expect(
       placements.recordStagedWorkspaceResult(turnClaim, ref, foreign.workspaceId),
-    ).toThrow("repository owner changed");
+    ).rejects.toThrow("repository owner changed");
     expect(placements.listPendingWorkspaceResults()).toMatchObject([{ stagedResultRef: null }]);
-    placements.recordStagedWorkspaceResult(turnClaim, ref, f.repository.workspaceId);
-    expect(() => placements.recordStagedWorkspaceResult(turnClaim, ref)).toThrow(
+    const hostSql = observeMainThreadSql();
+    hostSql.calibrate();
+    try {
+      const submitted = { ...turnClaim, owner: { ...turnClaim.owner } };
+      const recording = placements.recordStagedWorkspaceResult(submitted, ref, workspaceId);
+      submitted.claimId = "changed-after-submission";
+      submitted.placementGeneration += 1;
+      await recording;
+      hostSql.expectIdle();
+    } finally {
+      hostSql.restore();
+    }
+    await expect(placements.recordStagedWorkspaceResult(turnClaim, ref)).rejects.toThrow(
       "result ref changed",
     );
     expect(placements.listPendingWorkspaceResults()).toMatchObject([
       {
         stagedResultRef: ref,
-        repositoryWorkspaceId: f.repository.workspaceId,
+        repositoryWorkspaceId: workspaceId,
       },
     ]);
   });
@@ -941,9 +954,7 @@ describe("repository workspace result ownership", () => {
       } else {
         const record = vi
           .spyOn(placements, "recordStagedWorkspaceResult")
-          .mockImplementationOnce(() => {
-            throw new Error("process exited before pending pointer");
-          });
+          .mockRejectedValueOnce(new Error("process exited before pending pointer"));
         await expect(f.finishTurn(owned)).rejects.toThrow("process exited before pending pointer");
         record.mockRestore();
       }
