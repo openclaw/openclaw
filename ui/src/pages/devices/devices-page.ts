@@ -184,10 +184,7 @@ class DevicesPage extends OpenClawLightDomElement {
     "visible",
   );
   private readonly subscriptions = new SubscriptionsController(this)
-    .watch(
-      () => this.context?.runtimeConfig,
-      (runtimeConfig, notify) => runtimeConfig.subscribe(notify),
-    )
+    .watchStore(() => this.context?.runtimeConfig)
     .effect(
       () => this.context?.gateway,
       (gateway) =>

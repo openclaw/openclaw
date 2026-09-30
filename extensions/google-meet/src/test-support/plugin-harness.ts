@@ -8,7 +8,7 @@ import type { AgentToolResult } from "openclaw/plugin-sdk/tool-results";
 import { vi } from "vitest";
 import type { GoogleMeetCalendarLookupResult } from "../calendar.js";
 import { listGoogleMeetCalendarEvents } from "../calendar.js";
-import type { GoogleMeetExportManifest } from "../cli-shared.js";
+import type { GoogleMeetExportManifest } from "../cli-export.js";
 import type {
   GoogleMeetArtifactsResult,
   GoogleMeetAttendanceResult,

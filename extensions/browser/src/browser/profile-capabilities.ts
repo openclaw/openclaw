@@ -42,11 +42,3 @@ export function shouldUsePlaywrightForScreenshot(params: {
 }): boolean {
   return !params.wsUrl || Boolean(params.ref) || Boolean(params.element);
 }
-
-/** Return true when ARIA snapshots should use Playwright for the profile. */
-export function shouldUsePlaywrightForAriaSnapshot(params: {
-  profile: ResolvedBrowserProfile;
-  wsUrl?: string;
-}): boolean {
-  return !params.wsUrl;
-}

@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -15,47 +14,10 @@ import {
   allocateWorkerOwnedSqliteSnapshotDirectory,
   captureSqliteSnapshotStagingOwner,
 } from "./sqlite-snapshot-staging-owner.js";
+import { holdAllocatedReply } from "./sqlite-snapshot-staging.test-support.js";
 import type { SqliteSnapshotStagingRequest } from "./sqlite-snapshot-staging.types.js";
 import { captureRetainedNativeWorkerSource } from "./worker-native-lifecycle.js";
 import type { RetainedNativeWorker } from "./worker-native-lifecycle.types.js";
-
-type NativeSubscription =
-  | [event: "message", listener: (message: unknown) => void]
-  | [event: "error" | "messageerror", listener: (error: Error) => void]
-  | [event: "started", listener: () => void]
-  | [event: "execution-exit" | "exit", listener: (code: number | undefined) => void];
-
-function holdAllocatedReply(
-  native: RetainedNativeWorker,
-  receive: (directory: string) => boolean,
-): void {
-  const on = native.on.bind(native);
-  function listen(event: "message", listener: (message: unknown) => void): unknown;
-  function listen(event: "error" | "messageerror", listener: (error: Error) => void): unknown;
-  function listen(event: "started", listener: () => void): unknown;
-  function listen(event: "execution-exit", listener: (code: number | undefined) => void): unknown;
-  function listen(event: "exit", listener: (code: number | undefined) => void): unknown;
-  function listen(...[event, listener]: NativeSubscription): unknown {
-    if (event !== "message") {
-      return Reflect.apply(on, native, [event, listener]);
-    }
-    return on("message", (message) => {
-      if (
-        isRecord(message) &&
-        message.status === "ok" &&
-        typeof message.taskId === "number" &&
-        isRecord(message.value) &&
-        message.value.type === "allocated" &&
-        typeof message.value.directory === "string" &&
-        receive(message.value.directory)
-      ) {
-        return;
-      }
-      listener(message);
-    });
-  }
-  native.on = listen;
-}
 
 const directories = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(async () => {

@@ -294,7 +294,7 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
                   authorizedInboundClaimEvent,
                   withClaimingHookAdmission(
                     { ...state.hookState.inboundClaimContext, pluginBinding: pluginOwnedBinding },
-                    assertCurrentBindingRoute,
+                    { prepare: assertCurrentBindingRoute },
                   ),
                 ),
             );

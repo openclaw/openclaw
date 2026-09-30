@@ -18,7 +18,7 @@ import {
 } from "../../utils/delivery-context.read.js";
 import type { ReplyPayload } from "../types.js";
 import { formatCommandExecResult, formatCommandExecText } from "./command-exec-result.js";
-import { rejectNonOwnerCommand } from "./command-gates.js";
+import { commandReply, rejectNonOwnerCommand } from "./command-gates.js";
 import { buildCurrentOpenClawCliExecRequest } from "./commands-openclaw-cli.js";
 import {
   buildPrivateCommandApprovalRequest,
@@ -43,10 +43,6 @@ const DIAGNOSTICS_PRIVATE_ROUTE_REPLIES = {
     "Diagnostics are sensitive. Private delivery of the diagnostics details was suppressed.",
   failed: DIAGNOSTICS_PRIVATE_ROUTE_UNAVAILABLE,
 };
-
-type GatewayDiagnosticsApprovalResult =
-  | { status: "pending" }
-  | { status: "reply"; reply: ReplyPayload };
 
 type CodexDiagnosticsApprovalIntegration = {
   approvalText?: string;
@@ -106,22 +102,16 @@ export const handleDiagnosticsCommand: CommandHandler = async (input, allowTextC
   if (commandParams.isGroup) {
     const privateTarget = (await resolvePrivateDiagnosticsTargetsForCommand(commandParams))[0];
     if (!privateTarget) {
-      return {
-        shouldContinue: false,
-        reply: { text: DIAGNOSTICS_PRIVATE_ROUTE_UNAVAILABLE },
-      };
+      return commandReply(DIAGNOSTICS_PRIVATE_ROUTE_UNAVAILABLE);
     }
     const privateReply = await buildDiagnosticsReply(commandParams, args, {
       diagnosticsPrivateRouted: true,
       privateApprovalTarget: privateTarget,
     });
     if (!privateReply) {
-      return {
-        shouldContinue: false,
-        reply: {
-          text: "Diagnostics are sensitive. Owner approval is pending on the private route.",
-        },
-      };
+      return commandReply(
+        "Diagnostics are sensitive. Owner approval is pending on the private route.",
+      );
     }
     return await deliverGroupDiagnosticsReplyPrivately(commandParams, privateReply, privateTarget);
   }
@@ -139,15 +129,7 @@ async function buildDiagnosticsReply(
   } = {},
 ): Promise<ReplyPayload | undefined> {
   const codexDiagnostics = await buildCodexDiagnosticsApprovalIntegration(params, args, options);
-  const gatewayApproval = await requestGatewayDiagnosticsExportApproval(
-    params,
-    options,
-    codexDiagnostics,
-  );
-  if (gatewayApproval.status === "pending") {
-    return undefined;
-  }
-  return gatewayApproval.reply;
+  return await requestGatewayDiagnosticsExportApproval(params, options, codexDiagnostics);
 }
 
 async function deliverGroupDiagnosticsReplyPrivately(
@@ -157,22 +139,14 @@ async function deliverGroupDiagnosticsReplyPrivately(
 ) {
   const target = privateTarget ?? (await resolvePrivateDiagnosticsTargetsForCommand(params))[0];
   if (!target) {
-    return {
-      shouldContinue: false,
-      reply: { text: DIAGNOSTICS_PRIVATE_ROUTE_UNAVAILABLE },
-    };
+    return commandReply(DIAGNOSTICS_PRIVATE_ROUTE_UNAVAILABLE);
   }
   const outcome = await deliverPrivateCommandReply({
     commandParams: params,
     targets: [target],
     reply,
   });
-  return {
-    shouldContinue: false,
-    reply: {
-      text: DIAGNOSTICS_PRIVATE_ROUTE_REPLIES[outcome],
-    },
-  };
+  return commandReply(DIAGNOSTICS_PRIVATE_ROUTE_REPLIES[outcome]);
 }
 
 function parseDiagnosticsArgs(commandBody: string): string | undefined {
@@ -234,7 +208,7 @@ async function requestGatewayDiagnosticsExportApproval(
   params: HandleCommandsParams,
   options: { privateApprovalTarget?: PrivateCommandRouteTarget } = {},
   codexDiagnostics: CodexDiagnosticsApprovalIntegration = {},
-): Promise<GatewayDiagnosticsApprovalResult> {
+): Promise<ReplyPayload | undefined> {
   const timeoutSec = params.cfg.tools?.exec?.timeoutSeconds;
   const agentId =
     params.agentId ??
@@ -277,7 +251,7 @@ async function requestGatewayDiagnosticsExportApproval(
       timeoutSeconds: timeoutSec,
     });
     if (result.details?.status === "approval-pending") {
-      return { status: "pending" };
+      return undefined;
     }
     const codexFollowupText =
       result.details?.status === "completed" || result.details?.status === "failed"
@@ -292,7 +266,7 @@ async function requestGatewayDiagnosticsExportApproval(
     if (codexFollowupText) {
       lines.push("", codexFollowupText);
     }
-    return { status: "reply", reply: { text: lines.join("\n") } };
+    return { text: lines.join("\n") };
   } catch (error) {
     const lines = buildDiagnosticsPreamble();
     lines.push(
@@ -300,7 +274,7 @@ async function requestGatewayDiagnosticsExportApproval(
       `Local Gateway bundle: could not request exec approval for \`${GATEWAY_DIAGNOSTICS_EXPORT_JSON_LABEL}\`.`,
       formatCommandExecText(formatErrorMessage(error)),
     );
-    return { status: "reply", reply: { text: lines.join("\n") } };
+    return { text: lines.join("\n") };
   }
 }
 
@@ -448,53 +422,37 @@ function buildCodexDiagnosticsSessions(
   }
   return Array.from(sessions.entries())
     .filter(([, entry]) => Boolean(entry.sessionId?.trim()))
-    .map(([sessionKey, entry]) => ({
-      sessionKey,
-      sessionId: entry.sessionId,
-      sessionFile: sessionKey,
-      agentHarnessId: entry.agentHarnessId,
-      channel: resolveDiagnosticsSessionChannel(entry, params, sessionKey),
-      channelId: resolveDiagnosticsSessionChannelId(entry, params, sessionKey),
-      accountId:
-        normalizeOptionalString(deliveryContextFromSession(entry)?.accountId) ??
-        normalizeOptionalString(sessionDeliveryOrigin(entry)?.accountId) ??
-        (sessionKey === params.sessionKey ? (params.ctx.AccountId ?? undefined) : undefined),
-      messageThreadId:
-        deliveryContextFromSession(entry)?.threadId ??
-        sessionDeliveryOrigin(entry)?.threadId ??
-        (sessionKey === params.sessionKey &&
-        (typeof params.ctx.MessageThreadId === "string" ||
-          typeof params.ctx.MessageThreadId === "number")
-          ? params.ctx.MessageThreadId
-          : undefined),
-      threadParentId:
-        sessionKey === params.sessionKey
-          ? normalizeOptionalString(params.ctx.ThreadParentId)
-          : undefined,
-    }));
-}
-
-function resolveDiagnosticsSessionChannel(
-  entry: SessionEntry,
-  params: HandleCommandsParams,
-  sessionKey: string,
-): string | undefined {
-  return (
-    normalizeOptionalString(deliveryContextFromSession(entry)?.channel) ??
-    normalizeOptionalString(sessionDeliveryOrigin(entry)?.provider) ??
-    (sessionKey === params.sessionKey ? params.command.channel : undefined)
-  );
-}
-
-function resolveDiagnosticsSessionChannelId(
-  entry: SessionEntry,
-  params: HandleCommandsParams,
-  sessionKey: string,
-) {
-  return (
-    normalizeOptionalString(sessionDeliveryOrigin(entry)?.nativeChannelId) ??
-    (sessionKey === params.sessionKey ? params.command.channelId : undefined)
-  );
+    .map(([sessionKey, entry]) => {
+      const delivery = deliveryContextFromSession(entry);
+      const origin = sessionDeliveryOrigin(entry);
+      const isCurrent = sessionKey === params.sessionKey;
+      return {
+        sessionKey,
+        sessionId: entry.sessionId,
+        sessionFile: sessionKey,
+        agentHarnessId: entry.agentHarnessId,
+        channel:
+          normalizeOptionalString(delivery?.channel) ??
+          normalizeOptionalString(origin?.provider) ??
+          (isCurrent ? params.command.channel : undefined),
+        channelId:
+          normalizeOptionalString(origin?.nativeChannelId) ??
+          (isCurrent ? params.command.channelId : undefined),
+        accountId:
+          normalizeOptionalString(delivery?.accountId) ??
+          normalizeOptionalString(origin?.accountId) ??
+          (isCurrent ? (params.ctx.AccountId ?? undefined) : undefined),
+        messageThreadId:
+          delivery?.threadId ??
+          origin?.threadId ??
+          (isCurrent &&
+          (typeof params.ctx.MessageThreadId === "string" ||
+            typeof params.ctx.MessageThreadId === "number")
+            ? params.ctx.MessageThreadId
+            : undefined),
+        threadParentId: isCurrent ? normalizeOptionalString(params.ctx.ThreadParentId) : undefined,
+      };
+    });
 }
 
 function rewriteCodexDiagnosticsResult(result: PluginCommandResult): PluginCommandResult {

@@ -475,7 +475,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "extensions/discord/src/monitor/monitor.threading-utils.test.ts",
   "extensions/discord/src/monitor/native-command.guild-guards.test.ts",
   "extensions/discord/src/monitor/native-command.options.test.ts",
-  "extensions/discord/src/monitor/native-command.reset.test.ts",
   "extensions/discord/src/monitor/native-command.think-autocomplete.test.ts",
   "extensions/discord/src/monitor/thread-session-close.test.ts",
   "extensions/discord/src/monitor/threading.auto-thread.test.ts",

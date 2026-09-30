@@ -153,6 +153,7 @@ it.each(["existing", "new"] as const)(
               sessionKeys: [],
             }),
             (selection) => selection.runIds,
+            { sessionKeys: [previous.childSessionKey], descendants: true },
           ).then(
             (value) => ({ value }),
             (error: unknown) => ({ error }),

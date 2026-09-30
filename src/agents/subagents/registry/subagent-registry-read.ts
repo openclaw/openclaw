@@ -108,6 +108,7 @@ export async function countPendingDescendantRuns(
       assertCurrent();
       return countPendingDescendantRunsFromRuns(new Map(runs), rootSessionKey);
     },
+    { sessionKeys: [rootSessionKey], descendants: true },
   );
   assertCurrent();
   return count;

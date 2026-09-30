@@ -1,4 +1,3 @@
-/** Tool streaming and execution-approval relay for ACP prompt runs. */
 import type { AgentSideConnection } from "@agentclientprotocol/sdk";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";

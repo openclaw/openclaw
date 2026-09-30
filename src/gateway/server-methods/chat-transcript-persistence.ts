@@ -2,6 +2,8 @@ import {
   asOptionalObjectRecord,
   asOptionalRecord as transcriptEventRecord,
 } from "@openclaw/normalization-core/record-coerce";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
+import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import {
   loadTranscriptEventRowsAfterSeqSync,
@@ -113,12 +115,7 @@ function buildAssistantDisplayRewrite(params: {
     : undefined;
   const previousMedia = transcriptEventRecord(params.message.openclawDelivery)?.mediaUrls;
   const managedMediaUrls = previousDisplay
-    ? [
-        ...(Array.isArray(previousMedia)
-          ? previousMedia.filter((value): value is string => typeof value === "string")
-          : []),
-        ...(params.managedMediaUrls ?? []),
-      ]
+    ? [...filterStringEntries(previousMedia), ...(params.managedMediaUrls ?? [])]
     : params.managedMediaUrls;
   const prepared = applyAssistantDeliveryDirectives(
     {
@@ -210,8 +207,7 @@ export function assistantTranscriptScope(
 }
 
 function transcriptEventId(event: TranscriptEvent): string | undefined {
-  const id = transcriptEventRecord(event)?.id;
-  return typeof id === "string" && id.trim().length > 0 ? id : undefined;
+  return readNonBlankString(transcriptEventRecord(event)?.id);
 }
 
 function transcriptEventMessage(event: TranscriptEvent): Record<string, unknown> | undefined {

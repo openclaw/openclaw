@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import type { HeapProfiler } from "node:inspector";
 import { Session as InspectorSession } from "node:inspector/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -27,14 +28,8 @@ type ReaderResult = {
   }>;
 };
 
-type HeapProfileNode = {
-  callFrame: { functionName: string; lineNumber: number; url: string };
-  children?: HeapProfileNode[];
-  selfSize: number;
-};
-
 function forceGc(): void {
-  const gc = (globalThis as typeof globalThis & { gc?: () => void }).gc;
+  const gc = globalThis.gc;
   if (!gc) {
     throw new Error("reader requires --expose-gc");
   }
@@ -51,11 +46,12 @@ function readArg(name: string): string {
   return value;
 }
 
-function summarizeHeapProfile(profile: {
-  head: HeapProfileNode;
-}): ReaderResult["topAllocationSites"] {
-  const samples: Array<{ node: HeapProfileNode; stack: HeapProfileNode[] }> = [];
-  const visit = (node: HeapProfileNode, stack: HeapProfileNode[]): void => {
+function summarizeHeapProfile(
+  profile: HeapProfiler.SamplingHeapProfile,
+): ReaderResult["topAllocationSites"] {
+  type ProfileNode = HeapProfiler.SamplingHeapProfileNode;
+  const samples: Array<{ node: ProfileNode; stack: ProfileNode[] }> = [];
+  const visit = (node: ProfileNode, stack: ProfileNode[]): void => {
     const nextStack = [...stack, node];
     if (node.selfSize > 0) {
       samples.push({ node, stack: nextStack });
@@ -64,9 +60,7 @@ function summarizeHeapProfile(profile: {
       visit(child, nextStack);
     }
   };
-  const formatFrame = (
-    node: HeapProfileNode,
-  ): { functionName: string; line: number; url: string } => {
+  const formatFrame = (node: ProfileNode): { functionName: string; line: number; url: string } => {
     const rawUrl = node.callFrame.url;
     const filePath = rawUrl.startsWith("file://") ? fileURLToPath(rawUrl) : rawUrl;
     const relativeUrl = path.isAbsolute(filePath)
@@ -98,7 +92,7 @@ function summarizeHeapProfile(profile: {
 }
 
 async function runReader(): Promise<void> {
-  const mode = readArg("--mode") as ReaderResult["mode"];
+  const mode = readArg("--mode");
   if (mode !== "full" && mode !== "bounded") {
     throw new Error("--mode must be full or bounded");
   }
@@ -119,9 +113,7 @@ async function runReader(): Promise<void> {
       : SessionManager.open(target);
   forceGc();
   const after = process.memoryUsage();
-  const { profile } = (await inspector.post("HeapProfiler.stopSampling")) as {
-    profile: { head: HeapProfileNode };
-  };
+  const { profile } = await inspector.post("HeapProfiler.stopSampling");
   inspector.disconnect();
   const result: ReaderResult = {
     mode,

@@ -1,9 +1,7 @@
-/** Emits ACP session updates and mirrors replayable updates into the event ledger. */
 import type { AgentSideConnection, PromptRequest, SessionUpdate } from "@agentclientprotocol/sdk";
 import { getAvailableCommands } from "./commands.js";
 import type { AcpEventLedger, AcpEventLedgerReplay } from "./event-ledger.js";
 
-/** Session identity used when emitting and recording ACP translator updates. */
 type AcpTranslatorSessionRef = {
   sessionId: string;
   sessionKey: string;
@@ -24,7 +22,6 @@ function resolveLedgerSessionId(session: { sessionId: string; ledgerSessionId?: 
   return session.ledgerSessionId ?? session.sessionId;
 }
 
-/** Helper that keeps ACP client updates and replay ledger writes in sync. */
 export class AcpTranslatorSessionUpdates {
   private stopped = false;
   // Queue each ledger session at emission time so a detached disconnect notice

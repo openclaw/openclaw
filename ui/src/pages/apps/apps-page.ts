@@ -19,9 +19,8 @@ class AppsPage extends OpenClawLightDomElement {
 
   // Re-render on gateway snapshots so the pairing affordance follows the
   // connection/admin state, mirroring the agent-menu canPairDevice gate.
-  private readonly subscriptions = new SubscriptionsController(this).watch(
+  private readonly subscriptions = new SubscriptionsController(this).watchStore(
     () => this.context?.gateway,
-    (gateway, notify) => gateway.subscribe(notify),
   );
 
   override disconnectedCallback() {

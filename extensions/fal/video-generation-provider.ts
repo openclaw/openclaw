@@ -278,14 +278,6 @@ function resolveFalReferenceUrl(
   return toDataUrl(asset.buffer, normalizeOptionalString(asset.mimeType) ?? defaultMimeType);
 }
 
-function resolveFalReferenceUrls(
-  assets: VideoGenerationRequest["inputImages"],
-  defaultMimeType: string,
-  label: string,
-): string[] {
-  return (assets ?? []).map((asset) => resolveFalReferenceUrl(asset, defaultMimeType, label));
-}
-
 function applyFalSeedanceControls(params: {
   req: VideoGenerationRequest;
   model: string;
@@ -326,7 +318,7 @@ function buildFalVideoRequestBody(params: {
       ["video_urls", params.req.inputVideos, "video/mp4", "reference video"],
       ["audio_urls", params.req.inputAudios, "audio/mpeg", "reference audio"],
     ] as const) {
-      const urls = resolveFalReferenceUrls(assets, mimeType, label);
+      const urls = (assets ?? []).map((asset) => resolveFalReferenceUrl(asset, mimeType, label));
       if (urls.length > 0) {
         requestBody[field] = urls;
       }

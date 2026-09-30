@@ -20,6 +20,7 @@ import type { GatewayPortalIngressConfig } from "../../config/types.gateway.js";
 import { resolveAdvertisedLanHostCore } from "../../infra/advertised-lan-host.js";
 import { sha256HexPrefixCore } from "../../infra/crypto-digest.js";
 import { claimTailscaleServePort, type TailscaleRouteClaim } from "../../infra/tailscale.js";
+import { enqueueKeyedTask } from "../../plugin-sdk/keyed-async-queue.js";
 import { listenGatewayHttpServer } from "../server/http-listen.js";
 import { getTailscalePublishedOrigin } from "../tailscale-published-origin.js";
 import {
@@ -230,22 +231,8 @@ export function createGatewayPortalService(params: {
     };
   };
 
-  const serialize = async <T>(id: string, operation: () => Promise<T>): Promise<T> => {
-    const previous = operations.get(id) ?? Promise.resolve();
-    const result = previous.then(operation, operation);
-    const completion = result.then(
-      () => undefined,
-      () => undefined,
-    );
-    operations.set(id, completion);
-    try {
-      return await result;
-    } finally {
-      if (operations.get(id) === completion) {
-        operations.delete(id);
-      }
-    }
-  };
+  const serialize = <T>(id: string, operation: () => Promise<T>): Promise<T> =>
+    enqueueKeyedTask({ tails: operations, key: id, task: operation });
 
   const closeEntry = async (id: string): Promise<void> => {
     const runtime = entries.get(id);
@@ -319,14 +306,10 @@ export function createGatewayPortalService(params: {
           }
           if (existing) {
             existing.portal.title = input.title?.trim() || existing.portal.title;
-            if (input.description !== undefined) {
-              existing.portal.description = input.description;
-            }
-            if (input.path !== undefined) {
-              existing.portal.path = input.path;
-            }
-            if (input.origin !== undefined) {
-              existing.portal.origin = input.origin;
+            for (const key of ["description", "path", "origin"] as const) {
+              if (input[key] !== undefined) {
+                existing.portal[key] = input[key];
+              }
             }
             return summarize(existing.portal);
           }

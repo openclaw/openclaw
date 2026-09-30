@@ -1,4 +1,3 @@
-// QA channel protocol helpers validate synthetic channel messages used by QA plugins.
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.js";
 
 /** Conversation shape supported by the synthetic QA channel bus. */

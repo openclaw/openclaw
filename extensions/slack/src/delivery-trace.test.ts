@@ -754,6 +754,14 @@ describe("slack delivery trace goldens", () => {
       emoji: "hourglass",
     },
     { name: "disabled reaction", streaming: undefined, typingReaction: "", emoji: undefined },
+    {
+      name: "empty card with hidden tool activity",
+      streaming: {
+        progress: { style: "card" as const, nativeTaskCards: false, toolProgress: false },
+      },
+      typingReaction: "",
+      emoji: undefined,
+    },
   ])(
     "leaves only the final answer on a top-level turn with $name",
     async ({ streaming, typingReaction, emoji }) => {
@@ -820,9 +828,9 @@ describe("slack delivery trace goldens", () => {
   );
 
   it.each([
-    { name: "success", isError: false, title: "✅ *Done*", label: undefined },
-    { name: "error", isError: true, title: "❌ *Failed*", label: undefined },
-    { name: "explicit title only", isError: false, title: "✅ *Review*", label: "Review" },
+    { name: "success", isError: false, title: undefined, label: undefined },
+    { name: "error", isError: true, title: "Failed", label: undefined },
+    { name: "explicit title only", isError: false, title: "Review", label: "Review" },
   ])(
     "keeps an explicit top-level card with the $name terminal title",
     async ({ isError, title, label }) => {
@@ -841,23 +849,21 @@ describe("slack delivery trace goldens", () => {
           setupSlackTrace(recorder, "progress-session-card", (prepared) => {
             prepared.replyToMode = "off";
             prepared.account.config = {
-              streaming: { progress: label ? { label } : { style: "card" } },
+              streaming: { progress: { style: "card", toolProgress: true, label } },
             };
           }),
       });
       const posts = events.filter((event) => event.kind === "chat.postMessage");
       expect(posts).toHaveLength(2);
       expect(posts[0]?.data).toMatchObject({
-        payload: { blocks: [{ type: "section", text: { text: `🔄 *${label ?? "Working"}*` } }] },
+        payload: {
+          text: `${label ? `${label}\n\n` : ""}Read — running\n\n1 tool · 2s`,
+        },
       });
       expect(posts[1]?.data).toMatchObject({ payload: { text: "The answer." } });
-      const terminal = events.findLast((event) => event.kind === "chat.update");
-      expect(terminal?.data).toMatchObject({
+      expect(events.findLast((event) => event.kind === "chat.update")?.data).toMatchObject({
         payload: {
-          text: `${title}\n\nOpen in OpenClaw`,
-          blocks: expect.arrayContaining([
-            { type: "section", text: { type: "mrkdwn", text: title } },
-          ]),
+          text: `${title ? `${title}\n\n` : ""}Read — running\n\nOpen in OpenClaw`,
         },
       });
       expect(
@@ -894,10 +900,9 @@ describe("slack delivery trace goldens", () => {
             prepared.replyToMode = "off";
             prepared.ctxPayload.SessionKey = sessionKey;
             prepared.ctx.cfg.session = { mainKey: "inbox" };
-            prepared.account.config =
-              surface === "native"
-                ? {}
-                : { streaming: { progress: { style: "card", nativeTaskCards: false } } };
+            if (surface === "native") {
+              prepared.account.config = {};
+            }
           }),
       });
       const out = events.filter((event) => event.dir === "out");
@@ -1063,7 +1068,7 @@ describe("slack delivery trace goldens", () => {
 
     const workingPosts = events.filter(
       (event) =>
-        event.kind === "chat.postMessage" && JSON.stringify(event.data).includes("🔄 *Working*"),
+        event.kind === "chat.postMessage" && JSON.stringify(event.data).includes('"blocks"'),
     );
     expect(workingPosts).toHaveLength(2);
     const firstCardId = (workingPosts[0]?.data as { result?: { ts?: string } } | undefined)?.result
@@ -1084,7 +1089,7 @@ describe("slack delivery trace goldens", () => {
         (event) =>
           event.kind === "chat.update" &&
           (event.data as { target?: string } | undefined)?.target === secondCardId &&
-          JSON.stringify(event.data).includes("✅ *Done*"),
+          JSON.stringify(event.data).includes("Open in OpenClaw"),
       ),
     ).toBe(true);
   });

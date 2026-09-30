@@ -6,6 +6,7 @@ import { emitSessionIdentityMutation } from "../sessions/session-lifecycle-event
 import type { SessionObserverDeps } from "./session-observer-model.js";
 import {
   createHarness as createBaseHarness,
+  createObserverTimerTracker,
   event,
   flushObserver,
   modelMessage,
@@ -973,20 +974,35 @@ describe("session observer terminal, persistence, synthesis, and races", () => {
 
   it("invalidates the persist-time guard after disposal", async () => {
     useFakeTime();
+    const { ownedTimers, setTimeoutFn, clearTimeoutFn } = createObserverTimerTracker();
+    const unrelated = vi.fn();
+    const unrelatedTimer = setTimeout(unrelated, 60_000);
     const persistDigest = vi.fn(async (_params: PersistDigestParams) => true);
-    const harness = createHarness({ persistDigest });
-    startAndAddToolNotes(harness.observer);
-    await advanceAndFlush(12_000);
-    const guard = persistGuard(harness);
-    expect(guard?.()).toBe(true);
-    harness.observer.handleEvent(
-      lifecycleEvent({ phase: "error", error: "retryable provider failure" }),
-    );
-    expect(vi.getTimerCount()).toBe(1);
-    harness.observer.dispose();
-    activeHarnesses.delete(harness);
-    expect(vi.getTimerCount()).toBe(0);
-    expect(guard?.()).toBe(false);
+    const harness = createHarness({ persistDigest, setTimeoutFn, clearTimeoutFn });
+    try {
+      startAndAddToolNotes(harness.observer);
+      await advanceAndFlush(12_000);
+      expect(persistDigest).toHaveBeenCalledOnce();
+      const guard = persistGuard(harness);
+      expect(guard?.()).toBe(true);
+      harness.observer.handleEvent(
+        lifecycleEvent({ phase: "error", error: "retryable provider failure" }),
+      );
+      expect(ownedTimers.size).toBe(1);
+      harness.observer.dispose();
+      activeHarnesses.delete(harness);
+      expect(ownedTimers.size).toBe(0);
+      expect(guard?.()).toBe(false);
+      expect(unrelated).not.toHaveBeenCalled();
+
+      await advanceAndFlush(48_000);
+      expect(unrelated).toHaveBeenCalledOnce();
+      expect(ownedTimers.size).toBe(0);
+      expect(persistDigest).toHaveBeenCalledOnce();
+      expect(harness.completeModel).toHaveBeenCalledOnce();
+    } finally {
+      clearTimeout(unrelatedTimer);
+    }
   });
 
   it("does not throttle the next digest after a rejected persist", async () => {

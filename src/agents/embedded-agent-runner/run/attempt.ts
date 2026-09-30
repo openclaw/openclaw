@@ -369,6 +369,7 @@ async function runEmbeddedAttemptOwned(
     const sessionLock = await prepare("attempt.transcript-lifecycle", () =>
       prepareEmbeddedAttemptTranscriptLifecycle({
         attempt: params,
+        runAbortController,
         externalAbortController,
       }),
     );

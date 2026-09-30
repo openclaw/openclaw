@@ -179,7 +179,7 @@ async function scenario(
             baseManifestRaw: raw,
             currentManifestRaw: raw,
           });
-          stagedResult.record(stagedResult.ref);
+          await stagedResult.record(stagedResult.ref);
           journal.commit(ref);
 
           return { ...result, manifestRef: ref, changed: false };

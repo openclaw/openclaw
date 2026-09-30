@@ -23,8 +23,15 @@ import {
 import { buildUpdateRestartSentinelPayload } from "../src/infra/update-restart-sentinel-payload.js";
 import type { UpdateRunResult } from "../src/infra/update-runner-types.js";
 import { buildPluginLoaderAliasMap } from "../src/plugins/sdk-alias.js";
+import { sessionActivityTimestamp } from "../src/shared/session-activity-timestamp.js";
 import { buildNewAgentWelcome } from "../src/system-agent/new-agent-welcome.js";
-import type { UpdateAvailable, UpdateScheduleState } from "../ui/src/api/types.ts";
+import type {
+  GatewaySessionRow,
+  UpdateAvailable,
+  UpdateScheduleState,
+} from "../ui/src/api/types.ts";
+import { activityPulseBoundaries } from "../ui/src/pages/activity/activity-pulse-window.ts";
+import type { ActivityTimeFilter } from "../ui/src/pages/activity/session-activity.ts";
 import {
   controlUiSessionPath,
   createControlUiMockBootstrapConfig,
@@ -1470,6 +1477,8 @@ async function createChatPickerScenario(
       path: "/mock/workspace/AGENTS.md",
       size: 2148,
       updatedAtMs: baseTime - 120_000,
+      content:
+        "# AGENTS.md\n\nMock workspace instructions for the composer rail.\n\n- Keep tool output compact.\n- Prefer right-rail context over modal previews.\n",
     },
     {
       missing: false,
@@ -1477,6 +1486,8 @@ async function createChatPickerScenario(
       path: "/mock/workspace/plan.md",
       size: 912,
       updatedAtMs: baseTime - 90_000,
+      content:
+        "# Composer polish plan\n\n1. Keep the composer controls calm.\n2. Move session selection into the sidebar.\n3. Keep model, reasoning, and speed choices discoverable without taking over the page.\n",
     },
     {
       missing: false,
@@ -1484,44 +1495,29 @@ async function createChatPickerScenario(
       path: "/mock/workspace/notes/context.md",
       size: 1620,
       updatedAtMs: baseTime - 30_000,
+      content:
+        "# Context notes\n\nThe right rail should feel like workspace context, not a modal pasted beside the chat.\n\n## Current focus\n\n- Markdown previews need readable dark-mode chrome.\n- Empty or unavailable content should show a quiet state instead of an empty card.\n- File previews should load from the same mock scenario as the file list.\n",
     },
   ];
   const workspaceListCases = ["main", "alpha", "openclaw-mock"].map((agentId) => ({
     match: { agentId },
     response: {
       agentId,
-      files: workspaceFiles,
+      files: workspaceFiles.map(({ content: _content, ...file }) => file),
       workspace: "/mock/workspace",
     },
   }));
-  const workspaceFileContentByName = new Map([
-    [
-      "AGENTS.md",
-      "# AGENTS.md\n\nMock workspace instructions for the composer rail.\n\n- Keep tool output compact.\n- Prefer right-rail context over modal previews.\n",
-    ],
-    [
-      "plan.md",
-      "# Composer polish plan\n\n1. Keep the composer controls calm.\n2. Move session selection into the sidebar.\n3. Keep model, reasoning, and speed choices discoverable without taking over the page.\n",
-    ],
-    [
-      "notes/context.md",
-      "# Context notes\n\nThe right rail should feel like workspace context, not a modal pasted beside the chat.\n\n## Current focus\n\n- Markdown previews need readable dark-mode chrome.\n- Empty or unavailable content should show a quiet state instead of an empty card.\n- File previews should load from the same mock scenario as the file list.\n",
-    ],
-  ]);
   const workspaceFileCases = ["main", "alpha", "openclaw-mock"].flatMap((agentId) =>
     workspaceFiles.map((file) => ({
       match: { agentId, name: file.name },
       response: {
         agentId,
-        file: {
-          ...file,
-          content: workspaceFileContentByName.get(file.name) ?? "",
-        },
+        file: { ...file },
         workspace: "/mock/workspace",
       },
     })),
   );
-  const sessionFiles = [
+  const sessionFileFixtures = [
     {
       kind: "modified",
       missing: false,
@@ -1529,6 +1525,8 @@ async function createChatPickerScenario(
       path: "ui/src/ui/views/chat.ts",
       size: 48320,
       updatedAtMs: baseTime - 20_000,
+      content:
+        'function renderSessionWorkspaceRail() {\n  return html`<aside class="chat-workspace-rail">...</aside>`;\n}\n',
     },
     {
       kind: "modified",
@@ -1537,6 +1535,8 @@ async function createChatPickerScenario(
       path: "ui/src/styles/chat/sidebar.css",
       size: 18840,
       updatedAtMs: baseTime - 18_000,
+      content:
+        ".chat-workspace-rail__section-title {\n  color: var(--muted);\n  text-transform: uppercase;\n}\n",
     },
     {
       kind: "read",
@@ -1545,6 +1545,8 @@ async function createChatPickerScenario(
       path: "src/gateway/server-methods/artifacts.ts",
       size: 21876,
       updatedAtMs: baseTime - 300_000,
+      content:
+        "// Artifact gateway methods collect generated artifacts from session transcripts.\n",
     },
     {
       kind: "read",
@@ -1553,8 +1555,11 @@ async function createChatPickerScenario(
       path: "packages/gateway-protocol/src/schema/sessions.ts",
       size: 16542,
       updatedAtMs: baseTime - 420_000,
+      content:
+        "export const SessionsFilesListParamsSchema = Type.Object({ sessionKey: NonEmptyString });\n",
     },
   ];
+  const sessionFiles = sessionFileFixtures.map(({ content: _content, ...file }) => file);
   const sessionWorkspaceRoot = "/mock/workspace";
   const sessionFileCase = <T extends { path: string }>(file: T) => ({
     match: { sessionKey: "agent:main:main", path: file.path },
@@ -1572,36 +1577,6 @@ async function createChatPickerScenario(
       sessionKey: "agent:main:main",
     },
   });
-  const sessionFileContentByPath = new Map([
-    [
-      "ui/src/ui/views/chat.ts",
-      'function renderSessionWorkspaceRail() {\n  return html`<aside class="chat-workspace-rail">...</aside>`;\n}\n',
-    ],
-    [
-      "ui/src/styles/chat/sidebar.css",
-      ".chat-workspace-rail__section-title {\n  color: var(--muted);\n  text-transform: uppercase;\n}\n",
-    ],
-    [
-      "src/gateway/server-methods/artifacts.ts",
-      "// Artifact gateway methods collect generated artifacts from session transcripts.\n",
-    ],
-    [
-      "packages/gateway-protocol/src/schema/sessions.ts",
-      "export const SessionsFilesListParamsSchema = Type.Object({ sessionKey: NonEmptyString });\n",
-    ],
-    [
-      "package.json",
-      '{\n  "name": "openclaw",\n  "scripts": { "dev:ui:mock": "tsx scripts/control-ui-mock-dev.ts" }\n}\n',
-    ],
-    [
-      "ui/vite.config.ts",
-      "export default function controlUiViteConfig() {\n  return { server: { strictPort: true } };\n}\n",
-    ],
-    [
-      "ui/src/e2e/chat-flow.e2e.test.ts",
-      "it('keeps the session workspace useful while browsing files', async () => {\n  await page.getByText('Project files').waitFor();\n});\n",
-    ],
-  ]);
   const sessionFileCases = [
     sessionFileListCase({
       entries: [
@@ -1637,12 +1612,11 @@ async function createChatPickerScenario(
       path: "",
     }),
   ];
-  const sessionFileGetCases = sessionFiles.map((file) =>
+  const sessionFileGetCases = sessionFileFixtures.map((file) =>
     sessionFileCase({
       ...file,
-      content: sessionFileContentByPath.get(file.path) ?? "",
       // Fake CAS token so the file panel offers edit mode against the mock.
-      hash: mockFileHash(sessionFileContentByPath.get(file.path) ?? ""),
+      hash: mockFileHash(file.content),
     }),
   );
   const sessionFileSetCases = sessionFiles.map((file) =>
@@ -1755,18 +1729,48 @@ async function createChatPickerScenario(
     fixture === "workboard-states",
   );
   const activityTime = Date.now();
-  const activityDate = new Date(activityTime);
-  const activitySince = new Date(
-    activityDate.getFullYear(),
-    activityDate.getMonth(),
-    activityDate.getDate(),
-  ).getTime();
-  const activityUntil = new Date(
-    activityDate.getFullYear(),
-    activityDate.getMonth(),
-    activityDate.getDate() + 1,
-  ).getTime();
-  const activitySessions = buildActivitySessionRows(activityTime);
+  const activitySessions: Array<
+    ReturnType<typeof sessionRow> & Pick<GatewaySessionRow, "createdAt" | "owner" | "participants">
+  > = buildActivitySessionRows(activityTime);
+  function activitySessionsListResponse(time: ActivityTimeFilter, minutes?: number) {
+    const cutoff = minutes === undefined ? undefined : activityTime - minutes * 60_000;
+    const rows = activitySessions.filter(
+      (row) => cutoff === undefined || sessionActivityTimestamp(row) >= cutoff,
+    );
+    const boundaries = activityPulseBoundaries(time, activityTime);
+    const people = new Set(
+      rows.flatMap((row) => {
+        const ownerId = row.owner?.actor.id;
+        return [
+          ...(ownerId ? [ownerId] : []),
+          ...(row.participants ?? []).map((participant) => participant.identity.id),
+        ];
+      }),
+    );
+    return {
+      ...pagedSessionsListResponse(rows, 0, MOCK_SESSION_OWNERS),
+      activityPulse: {
+        since: boundaries[0]!,
+        until: boundaries[boundaries.length - 1]!,
+        buckets: boundaries.slice(0, -1).map(
+          (start, index) =>
+            rows.filter((row) => {
+              const timestamp = sessionActivityTimestamp(row);
+              return timestamp >= start && timestamp < boundaries[index + 1]!;
+            }).length,
+        ),
+        sessions: rows.length,
+        ...(cutoff === undefined
+          ? {}
+          : {
+              started: rows.filter((row) => row.createdAt !== undefined && row.createdAt >= cutoff)
+                .length,
+            }),
+        people: people.size,
+        running: rows.filter((row) => row.hasActiveRun).length,
+      },
+    };
+  }
   const dashboardGallerySessions =
     fixture === "dashboards"
       ? (
@@ -3148,28 +3152,19 @@ async function createChatPickerScenario(
             ...searchPrefixes("claude-sonnet-4-6"),
             ...searchPrefixes("anthropic"),
           ]),
+          ...(
+            [
+              ["24h", 1440],
+              ["7d", 10080],
+              ["30d", 43200],
+            ] as const
+          ).map(([time, activeMinutes]) => ({
+            match: { includePeople: true, sortBy: "activity", activeMinutes },
+            response: activitySessionsListResponse(time, activeMinutes),
+          })),
           {
             match: { includePeople: true, sortBy: "activity" },
-            response: {
-              ...pagedSessionsListResponse(activitySessions, 0, MOCK_SESSION_OWNERS),
-              activityPulse: {
-                since: activitySince,
-                until: activityUntil,
-                hours: Array.from(
-                  { length: Math.ceil((activityUntil - activitySince) / 3_600_000) },
-                  (_, hour) =>
-                    hour === 10
-                      ? 12
-                      : hour === Math.floor((activityTime - activitySince) / 3_600_000)
-                        ? 4
-                        : 0,
-                ),
-                sessions: 38,
-                started: 12,
-                people: 6,
-                running: 3,
-              },
-            },
+            response: activitySessionsListResponse("all"),
           },
           ...buildSessionListCases(
             fixture === "sidebar-roster" ? sessions : [...sessions, ...archivedSessions],

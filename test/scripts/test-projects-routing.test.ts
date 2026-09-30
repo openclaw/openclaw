@@ -573,13 +573,17 @@ describe("test-projects args", () => {
     );
     expect(grep.status).toBe(0);
     using parser = createNativeTypeScriptParser();
-    const directImporterTests = grep.stdout
+    const candidates = grep.stdout
       .split("\n")
       .map((line) => line.trim())
-      .filter((file) => file.endsWith(".test.ts") && !file.endsWith(".live.test.ts"))
-      .filter((file) => {
-        const source = fs.readFileSync(file, "utf8");
-        return collectModuleReferencesFromSource(parser.parseSourceFile(file, source), {
+      .filter((file) => file.endsWith(".test.ts") && !file.endsWith(".live.test.ts"));
+    const directImporterTests = parser
+      .parseSourceFiles(
+        candidates.map((fileName) => ({ fileName, text: fs.readFileSync(fileName, "utf8") })),
+      )
+      .flatMap((sourceFile) => {
+        const file = path.relative(process.cwd(), sourceFile.fileName).replaceAll("\\", "/");
+        const references = collectModuleReferencesFromSource(sourceFile, {
           acceptSpecifier: (specifier) => {
             if (!specifier.startsWith(".")) {
               return false;
@@ -589,7 +593,8 @@ describe("test-projects args", () => {
             );
             return resolved.replace(/\.(?:js|ts)$/u, "") === "test/helpers/temp-dir";
           },
-        }).some(({ kind }) => kind === "import" || kind === "export");
+        });
+        return references.some(({ kind }) => kind === "import" || kind === "export") ? [file] : [];
       });
     expect(directImporterTests.length).toBeGreaterThan(0);
     expect(directImporterTests.filter((file) => !expandedFiles.includes(file))).toEqual([]);

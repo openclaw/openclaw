@@ -357,11 +357,10 @@ async function buildHealthAccountRecord(params: {
         timeoutMs: resolveHealthProbeTimeoutMs(params.deadlineAtMs),
         cfg: params.cfg,
       });
-      lastProbeAt = Date.now();
     } catch (error) {
       probe = { ok: false, error: formatErrorMessage(error) };
-      lastProbeAt = Date.now();
     }
+    lastProbeAt = Date.now();
   }
   if (Date.now() >= params.deadlineAtMs) {
     return timedOut();

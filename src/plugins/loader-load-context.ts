@@ -213,13 +213,12 @@ export function resolveRuntimeSubagentMode(
 }
 
 function resolveCoreGatewayMethodNames(options: PluginLoadOptions): string[] {
-  const names = new Set(options.coreGatewayMethodNames ?? []);
-  for (const name of Object.keys(options.coreGatewayHandlers ?? {})) {
-    names.add(name);
-  }
-  const methodNames = Array.from(names);
-  methodNames.sort();
-  return methodNames;
+  return [
+    ...new Set([
+      ...(options.coreGatewayMethodNames ?? []),
+      ...Object.keys(options.coreGatewayHandlers ?? {}),
+    ]),
+  ].toSorted();
 }
 
 function mergePluginTrustList(runtimeList: string[], sourceList: readonly string[]): string[] {

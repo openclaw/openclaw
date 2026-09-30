@@ -468,6 +468,7 @@ function runCheckShardFixture(options: {
     profile?: "blacksmith" | "github" | "hybrid";
     eventName?: "pull_request" | "push" | "workflow_dispatch" | "schedule";
     stripeSupport?: boolean;
+    rootStripeSupport?: boolean;
     hostedContract?: boolean;
     failStripe?: string;
     changedPathsJson?: string;
@@ -499,7 +500,9 @@ function runCheckShardFixture(options: {
     );
     writeFileSync(
       path.join(root, "scripts/run-tsgo-core-test-shards.mts"),
-      options.types?.stripeSupport === false ? "// legacy runner\n" : "// --stripe\n",
+      options.types?.stripeSupport === false
+        ? "// legacy runner\n"
+        : `// --stripe${options.types?.rootStripeSupport ? " --root-stripe" : ""}\n`,
     );
     writeFileSync(
       path.join(root, "scripts/run-tsgo-core-test-shards.mjs"),
@@ -2844,11 +2847,9 @@ describe("ci workflow guards", () => {
     });
 
     it.each([true, false])("bounds hosted rows with Android=%s", (androidSelected) => {
-      const planner = readCiWorkflow().jobs.preflight.steps.find(
-        (step: WorkflowStep) => step.name === "Build CI manifest",
-      );
-      expect(planner.run).toContain("const HYBRID_HOSTED_ROW_LIMIT = 45;");
-      expect(planner.run).toContain("const HYBRID_HOSTED_BASE_ROW_LIMIT = 40;");
+      const manifestSource = readFileSync("scripts/ci-build-manifest.mjs", "utf8");
+      expect(manifestSource).toContain("const HYBRID_HOSTED_ROW_LIMIT = 45;");
+      expect(manifestSource).toContain("const HYBRID_HOSTED_BASE_ROW_LIMIT = 40;");
       const scopeEnv = { OPENCLAW_CI_RUN_ANDROID: String(androidSelected) };
       const baseline = manifestWithHostedNodeRows(0, { scopeEnv });
       expect(baseline.status, baseline.output).toBe(0);
@@ -5342,7 +5343,9 @@ describe("ci workflow guards", () => {
     const buildArtifactsTestbox = readBuildArtifactsTestboxWorkflow();
     const source = readFileSync(".github/workflows/ci.yml", "utf8");
 
-    expect(source).toContain("createNodeTestShardBundles");
+    expect(readFileSync("scripts/ci-build-manifest.mjs", "utf8")).toContain(
+      "createNodeTestShardBundles",
+    );
     const artifactRunner = workflow.jobs["build-artifacts"]["runs-on"];
     for (const [frozenTarget, expected] of [
       ["false", "blacksmith-16vcpu-ubuntu-2404"],
@@ -5961,8 +5964,8 @@ describe("ci workflow guards", () => {
         label,
       ).toEqual(
         usesCompatibilityTooling
-          ? ["--import", "tsx", "--input-type=module"]
-          : ["--input-type=module"],
+          ? ["--import", "tsx", ".ci-harness/scripts/ci-build-manifest.mjs"]
+          : [".ci-harness/scripts/ci-build-manifest.mjs"],
       );
       expect(
         runPreflightNodeInvocation(
@@ -6528,6 +6531,39 @@ describe("ci workflow guards", () => {
       } else {
         expect(stripes).toEqual([]);
         expect(result.calls).toEqual(["check:test-types", "tsgo:scripts"]);
+      }
+    },
+  );
+
+  it.each(["pull_request", "schedule", "workflow_dispatch"] as const)(
+    "runs every root partition after its existing core stripe on %s",
+    (eventName) => {
+      const result = runCheckShardFixture({
+        task: "test-types",
+        scripts: ["tsgo:scripts", "tsgo:test:root"],
+        frozenTarget: false,
+        types: { compose: true, profile: "hybrid", eventName, rootStripeSupport: true },
+      });
+      expect(result.status, result.output).toBe(0);
+      expect(result.rows).toHaveLength(6);
+      expect(result.calls).toEqual(["tsgo:extensions:test", "tsgo:scripts"]);
+      for (let stripe = 1; stripe <= 5; stripe++) {
+        expect(result.typeCalls.filter((call) => call.row === `core-${stripe}`)).toEqual([
+          {
+            row: `core-${stripe}`,
+            command: `node --stripe ${stripe}/5 --concurrency 2`,
+            localCheck: null,
+          },
+          ...(stripe >= 2
+            ? [
+                {
+                  row: `core-${stripe}`,
+                  command: `node --root-stripe ${stripe - 1}/4`,
+                  localCheck: "0",
+                },
+              ]
+            : []),
+        ]);
       }
     },
   );
@@ -11315,6 +11351,7 @@ describe("ci workflow guards", () => {
           { FRV_WINDOWS_NODE_ADVISORY: "true", GITHUB_STEP_SUMMARY: summary },
         );
         expect(outcome.status, `${job}: ${outcome.stdout}\n${outcome.stderr}`).toBe(1);
+        expect(outcome.stdout.split("\n")).toContain(`${job}: failure (selected=true)`);
         expect(outcome.stdout).toContain(`${job} finished with failure (selected=true)`);
       }
     },
@@ -11462,9 +11499,7 @@ describe("ci workflow guards", () => {
 
   it("keeps workflow guards in fast CI-routing checks", () => {
     const workflow = readCiWorkflow();
-    const preflightStep = workflow.jobs.preflight.steps.find(
-      (step: WorkflowStep) => step.name === "Build CI manifest",
-    );
+    const manifestSource = readFileSync("scripts/ci-build-manifest.mjs", "utf8");
     const taxonomy = parse(readFileSync("taxonomy.yaml", "utf8")) as {
       surfaces: Array<{ id: string; categories: Array<{ id: string }> }>;
     };
@@ -11491,11 +11526,12 @@ describe("ci workflow guards", () => {
 
     const ciWorkflowText = readFileSync(".github/workflows/ci.yml", "utf8");
 
-    expect(preflightStep.run).not.toContain("qa-smoke-profile");
-    expect(preflightStep.run).not.toContain("qa_category");
+    expect(manifestSource).not.toContain("qa-smoke-profile");
+    expect(manifestSource).not.toContain("qa_category");
     expect(taxonomyCategoryIds.length).toBeGreaterThan(0);
     for (const categoryId of taxonomyCategoryIds) {
       expect(ciWorkflowText).not.toContain(`"${categoryId}"`);
+      expect(manifestSource).not.toContain(`"${categoryId}"`);
     }
     expect(runStep.run).toContain("bundled-protocol)");
     expect(runStep.run).not.toContain("qa-smoke-ci)");

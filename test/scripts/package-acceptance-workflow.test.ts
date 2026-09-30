@@ -3254,6 +3254,7 @@ function runReleaseChecksInputValidation(
   const workdir = tempDirs.make("release-checks-input-validation-");
   const fixture = frozenToolingFixture(workdir, [
     "scripts/full-release-validation-policy.mjs",
+    "scripts/full-release-flake-classification.mjs",
     ...PUBLICATION_CONTRACT_FILES,
     "scripts/lib/release-changelog.mjs",
     "scripts/full-release-candidate-contract.mjs",
@@ -5336,11 +5337,10 @@ describe("package acceptance workflow", () => {
     { state: "in_progress", blocked: true },
     { state: "completed", blocked: false },
     { state: "waiting", otherRef: true, blocked: false },
-    { state: "waiting", dryRun: true, blocked: false },
     { state: "unavailable", blocked: true },
   ])(
-    "prevents a ClawHub dispatch from queuing behind $state (otherRef=$otherRef, dryRun=$dryRun)",
-    ({ state, otherRef, dryRun, blocked }) => {
+    "prevents a ClawHub dispatch from queuing behind $state (otherRef=$otherRef)",
+    ({ state, otherRef, blocked }) => {
       const root = tempDirs.make("clawhub-dispatch-collision-");
       const dispatchPath = join(root, "dispatch.json");
       const workflowRef = "release-publish/aaaaaaaaaaaa-123";
@@ -5370,8 +5370,10 @@ if (args[0] === 'run' && args[1] === 'list') {
         "bash",
         [
           "-c",
+          // The publish parent checks the slot before its first dispatch.
           `source "$HELPER_SCRIPT"
-dispatch_workflow_at_ref "$WORKFLOW_REF" "$PARENT_WORKFLOW_SHA" plugin-clawhub-release.yml -f ref="$TARGET_SHA" -f dry_run="$DRY_RUN"
+require_clawhub_dispatch_available "$WORKFLOW_REF" plugin-clawhub-release.yml &&
+  dispatch_workflow_at_ref "$WORKFLOW_REF" "$PARENT_WORKFLOW_SHA" plugin-clawhub-release.yml -f ref="$TARGET_SHA"
 `,
         ],
         {
@@ -5385,7 +5387,6 @@ dispatch_workflow_at_ref "$WORKFLOW_REF" "$PARENT_WORKFLOW_SHA" plugin-clawhub-r
             WORKFLOW_REF: workflowRef,
             PARENT_WORKFLOW_SHA: workflowSha,
             TARGET_SHA: "b".repeat(40),
-            DRY_RUN: String(dryRun ?? false),
           },
         },
       );
@@ -14372,6 +14373,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     for (const source of [
       "scripts/release-ci-summary.mjs",
       "scripts/full-release-validation-policy.mjs",
+      "scripts/full-release-flake-classification.mjs",
       ...PUBLICATION_CONTRACT_FILES,
       "scripts/lib/release-changelog.mjs",
       "scripts/full-release-candidate-contract.mjs",

@@ -40,7 +40,6 @@ import {
   runCronJob,
 } from "../../lib/cron/index.ts";
 import type { CronState } from "../../lib/cron/types.ts";
-import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
 import {
   canCallGatewayMethod,
@@ -129,7 +128,6 @@ class AgentsPage
   readonly agentFileWriteRevisions = new Map<string, number>();
   private readonly retainedFileDrafts = new Map<string, RetainedAgentFileDrafts>();
   @state() agentIdentityLoading = false;
-  @state() agentIdentityError: string | null = null;
   @state() identityDraft: AgentIdentityDraft = { name: null, emoji: null, avatar: null };
   private readonly identityAvatarLoader = new IdentityAvatarController(this);
   @state() identitySaving = false;
@@ -192,10 +190,7 @@ class AgentsPage
     ensureInitialData: () => this.ensureInitialData(),
   });
   private readonly subscriptions = new SubscriptionsController(this)
-    .watch(
-      () => this.context?.config,
-      (config, notify) => config.subscribe(notify),
-    )
+    .watchStore(() => this.context?.config)
     .watch(() => this.client, subscribeModelCatalogCache)
     .effect(
       () => this.context?.settingsAgentSelection,
@@ -260,7 +255,6 @@ class AgentsPage
         this.agentIdentitySource = agentIdentity;
         if (resetForSourceBind) {
           this.invalidateTransientRequests();
-          this.agentIdentityError = null;
         }
         this.ensureAgentIdentities();
         this.ensureInitialData();
@@ -280,18 +274,9 @@ class AgentsPage
         };
       },
     )
-    .watch(
-      () => this.context?.channels,
-      (channels, notify) => channels.subscribe(notify),
-    )
-    .watch(
-      () => this.context?.navigation,
-      (navigation, notify) => navigation.subscribe(notify),
-    )
-    .watch(
-      () => this.context?.runtimeConfig,
-      (runtimeConfig, notify) => runtimeConfig.subscribe(notify),
-    )
+    .watchStore(() => this.context?.channels)
+    .watchStore(() => this.context?.navigation)
+    .watchStore(() => this.context?.runtimeConfig)
     .effect(
       () => this.context?.sessions,
       (sessions) => {
@@ -529,7 +514,7 @@ class AgentsPage
       void this.context.runtimeConfig.ensureLoaded();
     }
     if (!this.agentsList && !this.context.agents.state.agentsLoading) {
-      void this.loadAgentsAndCommit();
+      void this.refreshAgents(false);
       return;
     }
     this.ensureAgentIdentities();
@@ -563,14 +548,9 @@ class AgentsPage
     }
     const generation = this.requestGeneration;
     this.agentIdentityLoading = true;
-    this.agentIdentityError = null;
     void agentIdentity
       .ensure(ids)
-      .catch((err: unknown) => {
-        if (this.isCurrentRequest(client, generation, undefined, { agentIdentity })) {
-          this.agentIdentityError = formatUiError(err);
-        }
-      })
+      .catch(() => undefined)
       .finally(() => {
         if (this.isCurrentRequest(client, generation, undefined, { agentIdentity })) {
           this.agentIdentityLoading = false;
@@ -743,22 +723,6 @@ class AgentsPage
     this.chatModelCatalogPending = pending;
   }
 
-  private async loadAgentsAndCommit() {
-    const client = this.client;
-    const generation = this.requestGeneration;
-    const agents = this.context.agents;
-    if (!client) {
-      return;
-    }
-    await agents.ensureList();
-    if (!this.isCurrentRequest(client, generation, undefined, { agents })) {
-      return;
-    }
-    this.syncAgentState(agents);
-    this.ensureAgentIdentities();
-    this.loadActivePanelData();
-  }
-
   private async loadAgentFiles(agentId: string, force = false) {
     const client = this.client;
     const agents = this.context.agents;
@@ -854,7 +818,6 @@ class AgentsPage
     this.agentSkillsError = null;
     this.agentSkillsAgentId = null;
     this.agentIdentityLoading = false;
-    this.agentIdentityError = null;
     resetIdentityDraft(this);
     this.toolsCatalogResult = null;
     this.toolsCatalogError = null;
@@ -901,18 +864,21 @@ class AgentsPage
     void loadToolsEffective(this, { agentId, sessionKey: this.sessionKey });
   }
 
-  private async refreshAgents() {
+  private async refreshAgents(force = true) {
     const client = this.client;
     const generation = this.requestGeneration;
     const agents = this.context.agents;
     if (!client) {
       return;
     }
-    await agents.refreshList();
+    await (force ? agents.refreshList() : agents.ensureList());
     if (!this.isCurrentRequest(client, generation, undefined, { agents })) {
       return;
     }
     this.syncAgentState(agents);
+    if (!force) {
+      this.ensureAgentIdentities();
+    }
     this.loadActivePanelData();
   }
 
@@ -958,16 +924,16 @@ class AgentsPage
     await setDefaultAgent(runtimeConfig, agentId, () => agents.refreshList(), canDispatch);
   }
 
-  private saveSelectedAgentFile(
-    agentId: string,
-    name: string,
-    content: string,
-    write = saveAgentFile,
-  ) {
+  private saveSelectedAgentFile(agentId: string, name: string, write = saveAgentFile) {
     if (agentId !== this.agentsSelectedId || !this.canCall("agents.files.set", "operator.admin")) {
       return;
     }
-    void write(this, agentId, name, content);
+    void write(
+      this,
+      agentId,
+      name,
+      this.agentFileDrafts[name] ?? this.agentFileContents[name] ?? "",
+    );
   }
 
   private clearAgentSkills(agentId: string) {
@@ -1040,8 +1006,6 @@ class AgentsPage
             cron: this.cron,
             agentFiles: this,
             agentFilesListError: this.context.agents.files(selectedAgentId).error,
-            agentIdentityLoading: this.agentIdentityLoading,
-            agentIdentityError: this.agentIdentityError,
             agentIdentityById: Object.fromEntries(
               this.context.agentIdentity.entries().map((entry) => [entry.agentId, entry]),
             ),
@@ -1088,11 +1052,7 @@ class AgentsPage
             },
             onFileSave: (name) => {
               if (selectedAgentId) {
-                this.saveSelectedAgentFile(
-                  selectedAgentId,
-                  name,
-                  this.agentFileDrafts[name] ?? this.agentFileContents[name] ?? "",
-                );
+                this.saveSelectedAgentFile(selectedAgentId, name);
               }
             },
             onFileReload: (name) => {
@@ -1102,12 +1062,7 @@ class AgentsPage
             },
             onFileOverwrite: (name) => {
               if (selectedAgentId) {
-                this.saveSelectedAgentFile(
-                  selectedAgentId,
-                  name,
-                  this.agentFileDrafts[name] ?? this.agentFileContents[name] ?? "",
-                  overwriteAgentFile,
-                );
+                this.saveSelectedAgentFile(selectedAgentId, name, overwriteAgentFile);
               }
             },
             onToolsProfileChange: (agentId, profile, clearAllow) =>

@@ -49,6 +49,7 @@ import {
   type ExecAutoReviewDecision,
 } from "../infra/exec-auto-review.js";
 import { hasPosixShellStartupBeforeInlineCommand } from "../infra/exec-wrapper-resolution.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import {
   prepareSystemRunMutableFileBinding,
   revalidateSystemRunMutableFileBinding,
@@ -121,12 +122,7 @@ function recordAutoReviewDenial(sessionKey: string | undefined): number {
   );
   consecutiveAutoReviewDenials.delete(sessionKey);
   consecutiveAutoReviewDenials.set(sessionKey, count);
-  if (consecutiveAutoReviewDenials.size > MAX_AUTO_REVIEW_SESSIONS) {
-    const oldest = consecutiveAutoReviewDenials.keys().next().value;
-    if (oldest !== undefined) {
-      consecutiveAutoReviewDenials.delete(oldest);
-    }
-  }
+  pruneMapToMaxSize(consecutiveAutoReviewDenials, MAX_AUTO_REVIEW_SESSIONS);
   return count;
 }
 
@@ -1512,10 +1508,7 @@ export async function processGatewayAllowlist(
           return { status: "started" as const, run };
         }, "exec-host:approval");
       } catch (error) {
-        if (
-          error instanceof GatewayDrainingError ||
-          (error instanceof Error && error.message === "gateway is draining for restart")
-        ) {
+        if (error instanceof GatewayDrainingError) {
           await sendExecApprovalFollowupResult(
             followupTarget,
             `Exec denied (gateway id=${approvalId}, gateway-draining): ${params.command}`,

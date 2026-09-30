@@ -70,6 +70,8 @@ export type EmbeddedAgentQueueHandle = {
   supportsTranscriptCommitWait?: boolean;
   /** True only when queueMessage preserves images supplied in its options. */
   supportsQueueMessageImages?: boolean;
+  /** False keeps inbound steering with the turn owner's profile; omission permits other profiles. */
+  readonly supportsCrossProfileSteering?: boolean;
   cancel?: (reason?: "user_abort" | "restart" | "superseded") => void;
   abort: (reason?: "restart") => void;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;

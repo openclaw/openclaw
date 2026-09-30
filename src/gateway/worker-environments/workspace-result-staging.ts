@@ -404,7 +404,8 @@ async function prepareRequestedWorkerWorkspaceResult(params: {
       // Final fences precede publishing. Preserve the canonical ref on any
       // SQLite failure so restart recovery can discover the verified result.
       params.request.assertCurrent?.();
-      stagedResult.record(stagedResult.ref);
+      await stagedResult.record(stagedResult.ref);
+      params.request.assertCurrent?.();
     },
     discardPreparedStagedResult: async () => {
       await deleteStagedWorkerWorkspaceResult({

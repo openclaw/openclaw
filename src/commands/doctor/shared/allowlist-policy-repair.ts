@@ -6,11 +6,12 @@ import { normalizeChatChannelId } from "../../../channels/ids.js";
 import {
   resolveChannelDmAccess,
   setCanonicalDmAllowFrom,
+  type ChannelDmAllowFromMode,
 } from "../../../channels/plugins/dm-access.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { readChannelAllowFromStore } from "../../../pairing/pairing-store.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../routing/session-key.js";
-import { resolveAllowFromMode, type AllowFromMode } from "./allow-from-mode.js";
+import { getDoctorChannelCapabilities } from "../channel-capabilities.js";
 import { hasAllowFromEntries } from "./allowlist.js";
 
 /** Restore missing allowFrom entries for allowlist DM policies from persisted pairing stores. */
@@ -30,7 +31,7 @@ export async function maybeRepairAllowlistPolicyAllowFrom(cfg: OpenClawConfig): 
     channelName: string;
     // Resolved once per channel by the caller: the lookup can materialize a bundled
     // channel plugin, so recomputing it per account turns repair into plugin loading.
-    mode: AllowFromMode;
+    mode: ChannelDmAllowFromMode;
     account: Record<string, unknown>;
     parent?: Record<string, unknown>;
     accountId?: string;
@@ -83,7 +84,7 @@ export async function maybeRepairAllowlistPolicyAllowFrom(cfg: OpenClawConfig): 
     if (channelConfig.enabled === false) {
       continue;
     }
-    const mode = resolveAllowFromMode(channelName);
+    const mode = getDoctorChannelCapabilities(channelName).dmAllowFromMode;
     await recoverAllowFromForAccount({
       channelName,
       mode,

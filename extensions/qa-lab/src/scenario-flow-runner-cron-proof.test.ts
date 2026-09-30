@@ -160,7 +160,7 @@ async function runSchedulingFixture(
       if (restarted) {
         options.mutateRestartedJobs?.(visible);
       }
-      return { jobs: visible };
+      return { jobs: [...visible, job("background-maintenance", 99)] };
     }
     if (method === "cron.runs") {
       if (params.id === "job-0") {
@@ -279,7 +279,7 @@ describe("scheduling YAML canonical tool proof", () => {
   );
 
   it.each(["direct", "nested"] as const)(
-    "accepts one-shot/recurring evidence in %s history",
+    "accepts one-shot/recurring evidence alongside other owners in %s history",
     async (shape) => {
       const { result, restarted, removed } = await runSchedulingFixture("recurring", shape);
       expect(result.status).toBe("pass");
@@ -416,6 +416,16 @@ describe("scheduling YAML canonical tool proof", () => {
         },
       }),
     ).rejects.toThrow(/recurring job did not remain scheduled/);
+  });
+
+  it.each(["at", "every"])("rejects a replayed %s job with a new identity", async (schedule) => {
+    await expect(
+      runSchedulingFixture("recurring", "nested", {
+        mutateRestartedJobs: (jobs) => {
+          jobs.push(job(`qa-model-${schedule}-${suffix}`, 98));
+        },
+      }),
+    ).rejects.toThrow(/unexpected scenario cron jobs/);
   });
 
   it("rejects a recurring job whose next execution does not advance", async () => {

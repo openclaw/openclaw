@@ -51,6 +51,7 @@ import {
   openChatRewindConfirmation,
   type MessageReplyTarget,
 } from "./chat-message.ts";
+import type { ReplyMessageStatus } from "./chat-reply-preview.ts";
 import {
   handleChatSelectionPointerUp,
   isChatSelectionPopupFocused,
@@ -98,6 +99,8 @@ type ReplyMessageAccess = {
   revision: number;
   navigationId: string | null;
   read: (messageId: string) => unknown;
+  /** How the Gateway answered a lookup without a message. */
+  status?: (messageId: string) => ReplyMessageStatus | undefined;
   request: (messageId: string) => void;
   open: (messageId: string) => void;
 };
@@ -180,6 +183,7 @@ export type ChatThreadProps = ChatSendStatusActions & {
   onOpenSidebar?: (content: SidebarContent) => void;
   onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
   onOpenSessionLink?: (target: SessionLinkTarget) => void;
+  onNavigate?: (routeId: "cron", options: { search: string }) => void;
   onRequestOpenImage?: () => number;
   onOpenImage?: (item: ImageLightboxItem, requestVersion?: number) => void;
   onAssistantAttachmentLoaded?: () => void;
@@ -456,11 +460,29 @@ function toggleTouchMessageMeta(event: PointerEvent): void {
   if (selection && !selection.isCollapsed) {
     return;
   }
-  const reveal = !group.classList.contains("chat-group--meta-revealed");
+  // Resolve the message before clearing disclosure so a tap on a sibling moves
+  // the actions, while tapping the same message still toggles them off.
+  const bubble = group.classList.contains("chat-group--peer")
+    ? (target.closest(".chat-bubble") ??
+      // Tapping beside an image must reveal its actions without opening the image.
+      [...group.querySelectorAll(".chat-bubble")].find((candidate) => {
+        const bounds = candidate.getBoundingClientRect();
+        return event.clientY >= bounds.top && event.clientY <= bounds.bottom;
+      }))
+    : null;
+  const reveal = bubble
+    ? !bubble.classList.contains("chat-bubble--actions-revealed")
+    : !group.classList.contains("chat-group--meta-revealed");
   for (const revealed of transcript.querySelectorAll(".chat-group--meta-revealed")) {
     revealed.classList.remove("chat-group--meta-revealed");
   }
   group.classList.toggle("chat-group--meta-revealed", reveal);
+  for (const revealed of transcript.querySelectorAll(".chat-bubble--actions-revealed")) {
+    revealed.classList.remove("chat-bubble--actions-revealed");
+  }
+  if (reveal) {
+    bubble?.classList.add("chat-bubble--actions-revealed");
+  }
 }
 
 export function handleTranscriptPointerUp(event: PointerEvent, props: TranscriptInteractionProps) {

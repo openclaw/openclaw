@@ -94,6 +94,10 @@ export function threadProps(
   };
 }
 
+export function requireElement(container: ParentNode, selector: string): HTMLElement {
+  return expectDefined(container.querySelector<HTMLElement>(selector), selector);
+}
+
 export function transcriptRows(container: HTMLElement): HTMLElement[] {
   return [...container.querySelectorAll<HTMLElement>(".chat-virtual-row")];
 }

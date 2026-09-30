@@ -4,19 +4,6 @@ import type { Model } from "openclaw/plugin-sdk/llm";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { parseStrictIntegerOption } from "./lib/strict-integer-option.ts";
 
-type Usage = {
-  input?: number;
-  output?: number;
-  cacheRead?: number;
-  cacheWrite?: number;
-  totalTokens?: number;
-};
-
-type RunResult = {
-  durationMs: number;
-  usage?: Usage;
-};
-
 type CliOptions = {
   help: boolean;
   prompt: string;
@@ -110,13 +97,13 @@ async function runModel(opts: {
   apiKey: string;
   runs: number;
   prompt: string;
-}): Promise<RunResult[]> {
+}): Promise<number[]> {
   // Keep SDK initialization outside the measured model-call samples.
   const { completeSimple } = await import("openclaw/plugin-sdk/llm");
-  const results: RunResult[] = [];
+  const durations: number[] = [];
   for (let i = 0; i < opts.runs; i += 1) {
     const started = Date.now();
-    const res = await completeSimple(
+    await completeSimple(
       opts.model,
       {
         messages: [
@@ -130,10 +117,10 @@ async function runModel(opts: {
       { apiKey: opts.apiKey, maxTokens: 64 },
     );
     const durationMs = Date.now() - started;
-    results.push({ durationMs, usage: res.usage });
+    durations.push(durationMs);
     console.log(`${opts.label} run ${i + 1}/${opts.runs}: ${durationMs}ms`);
   }
-  return results;
+  return durations;
 }
 
 async function main(argv = process.argv.slice(2)): Promise<void> {
@@ -199,8 +186,7 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
     prompt: options.prompt,
   });
 
-  const summarize = (label: string, results: RunResult[]) => {
-    const durations = results.map((r) => r.durationMs);
+  const summarize = (label: string, durations: number[]) => {
     const med = median(durations);
     const min = Math.min(...durations);
     const max = Math.max(...durations);

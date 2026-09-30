@@ -4,6 +4,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { html, nothing } from "lit";
+import { formatAgentRuntimeLabel } from "../../../../src/shared/agent-runtime-display.js";
 import type {
   AgentIdentityResult,
   GatewaySessionRow,
@@ -22,7 +23,6 @@ import {
 import { t } from "../../i18n/index.ts";
 import "../../components/tooltip.ts";
 import "../../components/web-awesome.ts";
-import { formatAgentRuntimeLabel } from "../../lib/agents/display.ts";
 import {
   formatThinkingOverrideLabel,
   normalizeThinkingOptionValue,
@@ -1041,148 +1041,116 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
         </div>
       </td>
     </tr>`,
-    ...(isExpanded
-      ? [
-          renderSessionDetailsRow({
-            row,
-            props,
-            detailsId,
-            friendlyKeyLabel,
-            displayName,
-            showDisplayName,
-            kindClass,
-            updated,
+    ...(isExpanded ? [renderDetails()] : []),
+  ];
+
+  function renderDetails() {
+    const labelDisabledReason = props.labelDisabledReason?.(row);
+    const rawThinking = row.thinkingLevel ?? "";
+    const thinking = rawThinking ? normalizeThinkingOptionValue(rawThinking) : "";
+    const fastMode =
+      row.fastMode === "auto"
+        ? "auto"
+        : row.fastMode === true
+          ? "on"
+          : row.fastMode === false
+            ? "off"
+            : "";
+    const overrides: Array<
+      Omit<Parameters<typeof renderOverrideSelect>[0], "disabled" | "disabledReason">
+    > = [
+      {
+        label: t("sessionsView.thinking"),
+        current: thinking,
+        options: resolveThinkLevelOptions(row, props.result?.defaults),
+        onChange: (value) => props.onPatch(row.key, { thinkingLevel: value || null }),
+      },
+      {
+        label: t("sessionsView.fast"),
+        current: fastMode,
+        options: buildSessionLevelOptions(FAST_LEVEL_VALUES),
+        onChange: (value) =>
+          props.onPatch(row.key, {
+            fastMode: value === "" ? null : value === "auto" ? "auto" : value === "on",
           }),
-        ]
-      : []),
-  ];
-}
+      },
+      {
+        label: t("sessionsView.verbose"),
+        current: row.verboseLevel ?? "",
+        options: buildSessionLevelOptions(VERBOSE_LEVEL_VALUES, true),
+        onChange: (value) => props.onPatch(row.key, { verboseLevel: value || null }),
+      },
+      {
+        label: t("sessionsView.reasoning"),
+        current: row.reasoningLevel ?? "",
+        options: buildSessionLevelOptions(REASONING_LEVELS),
+        onChange: (value) => props.onPatch(row.key, { reasoningLevel: value || null }),
+      },
+    ];
 
-function renderSessionDetailsRow(params: {
-  row: GatewaySessionRow;
-  props: SessionsProps;
-  detailsId: string;
-  friendlyKeyLabel: string | null;
-  displayName: string | null;
-  showDisplayName: boolean;
-  kindClass: string;
-  updated: string;
-}) {
-  const {
-    row,
-    props,
-    detailsId,
-    friendlyKeyLabel,
-    displayName,
-    showDisplayName,
-    kindClass,
-    updated,
-  } = params;
-  const labelDisabledReason = props.labelDisabledReason?.(row);
-  const rawThinking = row.thinkingLevel ?? "";
-  const thinking = rawThinking ? normalizeThinkingOptionValue(rawThinking) : "";
-  const fastMode =
-    row.fastMode === "auto"
-      ? "auto"
-      : row.fastMode === true
-        ? "on"
-        : row.fastMode === false
-          ? "off"
-          : "";
-  const overrides: Array<
-    Omit<Parameters<typeof renderOverrideSelect>[0], "disabled" | "disabledReason">
-  > = [
-    {
-      label: t("sessionsView.thinking"),
-      current: thinking,
-      options: resolveThinkLevelOptions(row, props.result?.defaults),
-      onChange: (value) => props.onPatch(row.key, { thinkingLevel: value || null }),
-    },
-    {
-      label: t("sessionsView.fast"),
-      current: fastMode,
-      options: buildSessionLevelOptions(FAST_LEVEL_VALUES),
-      onChange: (value) =>
-        props.onPatch(row.key, {
-          fastMode: value === "" ? null : value === "auto" ? "auto" : value === "on",
-        }),
-    },
-    {
-      label: t("sessionsView.verbose"),
-      current: row.verboseLevel ?? "",
-      options: buildSessionLevelOptions(VERBOSE_LEVEL_VALUES, true),
-      onChange: (value) => props.onPatch(row.key, { verboseLevel: value || null }),
-    },
-    {
-      label: t("sessionsView.reasoning"),
-      current: row.reasoningLevel ?? "",
-      options: buildSessionLevelOptions(REASONING_LEVELS),
-      onChange: (value) => props.onPatch(row.key, { reasoningLevel: value || null }),
-    },
-  ];
-
-  return html`<tr id=${detailsId} class="session-details-row">
-    <td colspan=${sessionsTableColumnCount(props)}>
-      <div class="session-details-panel">
-        <div class="session-details-panel__hero">
-          <div>
-            <div class="session-details-panel__eyebrow">${t("sessionsView.sessionDetails")}</div>
-            <div class="session-details-panel__title">${friendlyKeyLabel ?? row.key}</div>
-            ${
-              showDisplayName
-                ? html`<div class="muted session-details-panel__subtitle">${displayName}</div>`
-                : nothing
-            }
+    return html`<tr id=${detailsId} class="session-details-row">
+      <td colspan=${sessionsTableColumnCount(props)}>
+        <div class="session-details-panel">
+          <div class="session-details-panel__hero">
+            <div>
+              <div class="session-details-panel__eyebrow">${t("sessionsView.sessionDetails")}</div>
+              <div class="session-details-panel__title">${friendlyKeyLabel ?? row.key}</div>
+              ${
+                showDisplayName
+                  ? html`<div class="muted session-details-panel__subtitle">${displayName}</div>`
+                  : nothing
+              }
+            </div>
+            <div class="session-details-panel__badges">
+              ${renderSessionStatusBadge(row)} ${renderSessionGoalStatus(row.goal)}
+              <span class=${kindClass}>${resolveSessionDisplayKind(row)}</span>
+            </div>
           </div>
-          <div class="session-details-panel__badges">
-            ${renderSessionStatusBadge(row)} ${renderSessionGoalStatus(row.goal)}
-            <span class=${kindClass}>${resolveSessionDisplayKind(row)}</span>
-          </div>
-        </div>
 
-        <div class="session-details-section">
-          <div class="session-details-panel__eyebrow">${t("sessionsView.overrides")}</div>
-          <div class="session-overrides-grid">
-            <label class="session-override-field">
-              <span class="session-override-field__label">${t("sessionsView.label")}</span>
-              <input
-                class="settings-input"
-                .value=${row.label ?? ""}
-                ?disabled=${props.loading || Boolean(labelDisabledReason)}
-                title=${labelDisabledReason ?? nothing}
-                placeholder=${t("sessionsView.optionalPlaceholder")}
-                @change=${(e: Event) => {
-                  const value =
-                    normalizeOptionalString((e.target as HTMLInputElement).value) ?? null;
-                  props.onPatch(row.key, { label: value }, { sessionScope: true });
-                }}
-              />
-            </label>
-            ${overrides.map((override) =>
-              renderOverrideSelect({
-                ...override,
-                options: withCurrentLabeledOption(override.options, override.current),
-                disabled: props.loading || Boolean(props.patchAdminDisabledReason),
-                disabledReason: props.patchAdminDisabledReason,
-              }),
+          <div class="session-details-section">
+            <div class="session-details-panel__eyebrow">${t("sessionsView.overrides")}</div>
+            <div class="session-overrides-grid">
+              <label class="session-override-field">
+                <span class="session-override-field__label">${t("sessionsView.label")}</span>
+                <input
+                  class="settings-input"
+                  .value=${row.label ?? ""}
+                  ?disabled=${props.loading || Boolean(labelDisabledReason)}
+                  title=${labelDisabledReason ?? nothing}
+                  placeholder=${t("sessionsView.optionalPlaceholder")}
+                  @change=${(e: Event) => {
+                    const value =
+                      normalizeOptionalString((e.target as HTMLInputElement).value) ?? null;
+                    props.onPatch(row.key, { label: value }, { sessionScope: true });
+                  }}
+                />
+              </label>
+              ${overrides.map((override) =>
+                renderOverrideSelect({
+                  ...override,
+                  options: withCurrentLabeledOption(override.options, override.current),
+                  disabled: props.loading || Boolean(props.patchAdminDisabledReason),
+                  disabledReason: props.patchAdminDisabledReason,
+                }),
+              )}
+            </div>
+          </div>
+
+          <div class="session-details-grid">
+            ${sessionDetailItems(row, updated).map(
+              (item) => html`
+                <div class="session-detail-stat">
+                  <div class="session-detail-stat__label">${item.label}</div>
+                  <openclaw-tooltip .content=${item.value}>
+                    <div class="session-detail-stat__value">${item.value}</div>
+                  </openclaw-tooltip>
+                </div>
+              `,
             )}
           </div>
         </div>
-
-        <div class="session-details-grid">
-          ${sessionDetailItems(row, updated).map(
-            (item) => html`
-              <div class="session-detail-stat">
-                <div class="session-detail-stat__label">${item.label}</div>
-                <openclaw-tooltip .content=${item.value}>
-                  <div class="session-detail-stat__value">${item.value}</div>
-                </openclaw-tooltip>
-              </div>
-            `,
-          )}
-        </div>
-      </div>
-    </td>
-  </tr>`;
+      </td>
+    </tr>`;
+  }
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

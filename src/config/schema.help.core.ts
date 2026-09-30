@@ -1,4 +1,3 @@
-// Defines user-facing config field help text for docs and UI surfaces.
 import { META_FIELD_HELP } from "./schema.meta.js";
 import { describeTalkSilenceTimeoutDefaults } from "./talk-defaults.js";
 import { CLOUD_WORKER_FIELD_HELP } from "./zod-schema.cloud-workers.js";

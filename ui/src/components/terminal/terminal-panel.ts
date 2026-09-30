@@ -60,9 +60,8 @@ export class OpenClawTerminalPanel extends OpenClawLitElement implements PanelHo
 
   constructor() {
     super();
-    new SubscriptionsController(this).watch(
+    new SubscriptionsController(this).watchStore(
       () => this.context?.config,
-      (config, notify) => config.subscribe(notify),
       () => this.terminalPanelUploadController.syncPolicy(),
     );
   }

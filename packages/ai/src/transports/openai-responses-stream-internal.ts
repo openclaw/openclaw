@@ -51,7 +51,7 @@ import type {
   ResponsesStreamOptions,
   ResponsesStreamOutputMessage,
 } from "./openai-responses-stream-types-internal.js";
-import { IncompleteToolCallError, transportAbortError } from "./transport-stream-shared.js";
+import { transportAbortError } from "./transport-stream-shared.js";
 
 export type { OpenAIResponsesStreamEvent } from "./openai-responses-stream-types-internal.js";
 
@@ -204,6 +204,7 @@ export async function processResponsesStream<TApi extends Api>(
     model,
     options,
     outputs,
+    toolCalls: streamingToolCalls,
     getLastTextBlock: () => lastTextBlock,
     setLastTextBlock: (block) => {
       lastTextBlock = block;
@@ -327,6 +328,7 @@ export async function processResponsesStream<TApi extends Api>(
         try {
           resolveCompletedResponsesToolCall(event.item);
         } catch (error) {
+          terminal.recordIncompleteToolCall(event, event.item);
           rejectedToolCall = { error };
         }
       }
@@ -674,14 +676,9 @@ export async function processResponsesStream<TApi extends Api>(
         }
       } else if (event.type === "response.completed" || event.type === "response.incomplete") {
         // Preserve reported accounting before rejecting unfinished tool calls.
-        terminal.finalizeResponse(event.response, event.type);
+        terminal.finalizeResponse(event.response, event.type, Boolean(rejectedToolCall));
         if (rejectedToolCall) {
           throw output.errorMessage ? new Error(output.errorMessage) : rejectedToolCall.error;
-        }
-        if (event.type === "response.incomplete" && streamingToolCalls.hasActive()) {
-          throw output.errorMessage
-            ? new Error(output.errorMessage)
-            : new IncompleteToolCallError("Responses stream completed with unresolved tool calls");
         }
         if (event.type === "response.completed" || output.stopReason === "length") {
           const items = event.response.output ?? [];

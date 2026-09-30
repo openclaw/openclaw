@@ -2,6 +2,7 @@
  * Ordered credential resolution for one provider request.
  */
 import { formatCliCommand } from "../cli/command-format.js";
+import { resolveMergedModelProviderConfig } from "../config/model-provider-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -63,7 +64,7 @@ function shouldDeferSyntheticProfileAuth(params: {
   resolvedApiKey: string | undefined;
   modelApi?: string;
 }): boolean {
-  const providerConfig = authConfig.resolveProviderConfig(params.cfg, params.provider);
+  const providerConfig = resolveMergedModelProviderConfig(params.cfg, params.provider);
   return (
     shouldDeferProviderSyntheticProfileAuthWithPlugin({
       provider: params.provider,
@@ -460,7 +461,7 @@ export async function resolveApiKeyForProviderCore(input: {
       };
     }
   }
-  const providerConfig = authConfig.resolveProviderConfig(cfg, provider);
+  const providerConfig = resolveMergedModelProviderConfig(cfg, provider);
   const configuredLocalKey = authConfig.resolveUsableCustomProviderApiKey({
     cfg,
     provider,

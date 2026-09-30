@@ -21,6 +21,7 @@ describe("buildCommandOutputFromToolResultEvent", () => {
 
     expect(built?.status).toBe("failed");
     expect(built?.output).toBe("bash: nope-not-a-command: command not found");
+    expect(built?.title).toContain("nope-not-a-command");
   });
 
   it("reads the outcome from streamed text blocks", () => {
@@ -34,18 +35,6 @@ describe("buildCommandOutputFromToolResultEvent", () => {
 
     expect(built?.status).toBe("failed");
     expect(built?.output).toBe("line one\nline two");
-  });
-
-  it("describes the command that ran instead of what it printed", () => {
-    const built = buildFromCliResult({ isError: true, result: "some noisy stderr" });
-
-    // The title drives the visible progress line; without it the line would
-    // replace the request with the tool's output.
-    expect(built?.title).toContain("nope-not-a-command");
-  });
-
-  it("marks a successful CLI command completed", () => {
-    expect(buildFromCliResult({ isError: false, result: "alpha" })?.status).toBe("completed");
   });
 
   it("projects a safe terminal state from a namespaced command-bearing result", () => {

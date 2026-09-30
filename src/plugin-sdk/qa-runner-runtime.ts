@@ -1,4 +1,3 @@
-// QA runner runtime helpers expose plugin QA scenarios through the CLI command surface.
 import type { Command } from "commander";
 import { loadBundledPluginManifestRegistry } from "../plugins/manifest-registry-build.js";
 import { loadPluginManifestRegistryCore } from "../plugins/manifest-registry.js";

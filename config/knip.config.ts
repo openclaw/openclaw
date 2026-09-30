@@ -24,6 +24,10 @@ const repositoryScriptEntries = [
   "apps/linux/scripts/test-native-control-auth.mjs!",
   "scripts/render-proof-video.mts!",
   "scripts/ci-shard-timings-refresh.mts!",
+  // CI preflight executes the manifest from its trusted harness checkout.
+  "scripts/ci-build-manifest.mjs!",
+  // CI security-fast runs this from its trusted harness checkout.
+  "scripts/ci-production-audit.mjs!",
   // tsdown builds this private macOS app worker protocol entry by path.
   "src/node-host/mac-worker-entry.ts!",
   // CI imports this selector from its trusted harness inside an inline Node script.
@@ -255,7 +259,7 @@ const repositoryScriptEntries = [
   "scripts/update-clawtributors.ts!",
   // The candidate binder invokes this trusted producer-identity verifier by path.
   "scripts/verify-full-release-producer-job.mjs!",
-  // Staging and signed-app packaging execute this verifier with each bundled Node.
+  // Staging and signed-app packaging execute this verifier with each bundled Bun.
   "scripts/verify-mac-runtime.mjs!",
   "scripts/verify-stable-main-closeout.mjs!",
   "scripts/write-package-dist-inventory.ts!",

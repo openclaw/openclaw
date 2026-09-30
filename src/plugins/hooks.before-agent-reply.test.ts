@@ -1,11 +1,41 @@
 // Covers plugin hooks that run before agent replies are emitted.
 import { describe, expect, it, vi } from "vitest";
+import { withClaimingHookAdmission } from "./hook-claim-admission.js";
 import { createHookRunner } from "./hooks.js";
 import { createMockPluginRegistry, TEST_PLUGIN_AGENT_CTX } from "./hooks.test-fixtures.js";
 
 const EVENT = { cleanedBody: "hello world" };
 
 describe("before_agent_reply hook runner (claiming pattern)", () => {
+  it.each([false, true])("rejects revoked handler authority after handled=%s", async (handled) => {
+    let current = true;
+    const first = vi.fn(async () => {
+      current = false;
+      return { handled, reply: { text: "stale result" } };
+    });
+    const nextEffect = vi.fn();
+    const runner = createHookRunner(
+      createMockPluginRegistry([
+        { hookName: "before_agent_reply", handler: first },
+        { hookName: "before_agent_reply", handler: nextEffect },
+      ]),
+    );
+    const context = withClaimingHookAdmission(
+      { ...TEST_PLUGIN_AGENT_CTX },
+      {
+        assertCurrent: () => {
+          if (!current) {
+            throw new Error("root reassigned");
+          }
+        },
+      },
+    );
+
+    await expect(runner.runBeforeAgentReply(EVENT, context)).rejects.toThrow("root reassigned");
+    expect(first).toHaveBeenCalledOnce();
+    expect(nextEffect).not.toHaveBeenCalled();
+  });
+
   it("returns undefined when no hooks are registered", async () => {
     const registry = createMockPluginRegistry([]);
     const runner = createHookRunner(registry);

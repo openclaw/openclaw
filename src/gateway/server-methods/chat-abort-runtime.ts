@@ -1,5 +1,6 @@
 import type { Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   ErrorCodes,
   errorShape,
@@ -256,12 +257,10 @@ export function abortQueuedCollectorSession(
               ok: true,
               value: {
                 aborted: aborted || selected?.result.aborted === true,
-                runIds: [
-                  ...new Set([
-                    ...(aborted ? [result.runId] : []),
-                    ...(selected?.result.runIds ?? []),
-                  ]),
-                ],
+                runIds: uniqueStrings([
+                  ...(aborted ? [result.runId] : []),
+                  ...(selected?.result.runIds ?? []),
+                ]),
               },
             };
           },

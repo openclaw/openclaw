@@ -91,25 +91,17 @@ function hasExplicitProbeAuth(auth: { token?: string; password?: string }): bool
   return Boolean(auth.token || auth.password);
 }
 
-function buildUnresolvedProbeAuthWarning(path: string): string {
-  return `${path} SecretRef is unresolved in this command path; probing without configured auth credentials.`;
-}
-
 function resolveGatewayProbeWarning(error: unknown): string | undefined {
   if (!isGatewaySecretRefUnavailableError(error)) {
     throw error;
   }
-  return buildUnresolvedProbeAuthWarning(error.path);
+  return `${error.path} SecretRef is unresolved in this command path; probing without configured auth credentials.`;
 }
 
 /** Resolves synchronous probe auth, throwing when configured secrets cannot be read. */
-export function resolveGatewayProbeAuth(params: {
-  cfg: OpenClawConfig;
-  mode: "local" | "remote";
-  env?: NodeJS.ProcessEnv;
-  urlOverride?: string;
-  urlOverrideSource?: "cli" | "env";
-}): { token?: string; password?: string } {
+export function resolveGatewayProbeAuth(
+  params: Omit<GatewayProbeCredentialParams, "explicitAuth" | "localPrecedence">,
+): { token?: string; password?: string } {
   const policy = buildGatewayProbeCredentialPolicy(params);
   return resolveGatewayProbeCredentialsFromConfig(policy);
 }
@@ -219,14 +211,9 @@ export async function resolveGatewayProbeAuthSafeWithSecretInputs(
 }
 
 /** Synchronous safe probe auth wrapper for config-only credential paths. */
-export function resolveGatewayProbeAuthSafe(params: {
-  cfg: OpenClawConfig;
-  mode: "local" | "remote";
-  env?: NodeJS.ProcessEnv;
-  explicitAuth?: ExplicitGatewayAuth;
-  urlOverride?: string;
-  urlOverrideSource?: "cli" | "env";
-}): {
+export function resolveGatewayProbeAuthSafe(
+  params: Omit<GatewayProbeCredentialParams, "localPrecedence">,
+): {
   auth: { token?: string; password?: string };
   warning?: string;
 } {

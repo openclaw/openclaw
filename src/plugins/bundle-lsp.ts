@@ -1,4 +1,3 @@
-// Bundles language-server metadata exposed by plugins.
 import path from "node:path";
 import { applyMergePatch } from "../config/merge-patch.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
