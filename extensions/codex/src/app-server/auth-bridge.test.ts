@@ -799,7 +799,7 @@ describe("Codex auth bridge", () => {
               : {
                   kind: "profile",
                   profileId: "openai:prepared",
-                  store: { version: 1, profiles: {} },
+                  store: { version: 1, profiles: { "openai:prepared": oauthProfile("prepared") } },
                 },
         });
         expect(bridged).toEqual({

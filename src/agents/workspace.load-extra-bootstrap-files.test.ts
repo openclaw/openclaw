@@ -16,7 +16,7 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
   }
 
   it("loads recognized bootstrap files from glob patterns", async () => {
-    const workspaceDir = await createWorkspaceDir("glob");
+    const workspaceDir = createWorkspaceDir("glob");
     const packageDir = path.join(workspaceDir, "packages", "core");
     await fs.mkdir(packageDir, { recursive: true });
     await fs.writeFile(path.join(packageDir, "SOUL.md"), "soul", "utf-8");
@@ -35,7 +35,7 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
   });
 
   it("loads literal bootstrap paths with square brackets", async () => {
-    const workspaceDir = await createWorkspaceDir("literal-brackets");
+    const workspaceDir = createWorkspaceDir("literal-brackets");
     const packageDir = path.join(workspaceDir, "pkg[1]");
     await fs.mkdir(packageDir, { recursive: true });
     await fs.writeFile(path.join(packageDir, "AGENTS.md"), "literal agents", "utf-8");
@@ -53,7 +53,7 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
   });
 
   it("keeps path-traversal attempts outside workspace excluded", async () => {
-    const rootDir = await createWorkspaceDir("root");
+    const rootDir = createWorkspaceDir("root");
     const workspaceDir = path.join(rootDir, "workspace");
     const outsideDir = path.join(rootDir, "outside");
     await fs.mkdir(workspaceDir, { recursive: true });
@@ -68,7 +68,7 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
   it.runIf(process.platform !== "win32")(
     "falls back to a shallow scan without entering unrelated unreadable branches",
     async () => {
-      const workspaceDir = await createWorkspaceDir("shallow-pattern");
+      const workspaceDir = createWorkspaceDir("shallow-pattern");
       const privateDir = path.join(workspaceDir, "packages", "blocked", "node_modules", "private");
       const readableDir = path.join(workspaceDir, "packages", "readable");
       await fs.mkdir(privateDir, { recursive: true });
