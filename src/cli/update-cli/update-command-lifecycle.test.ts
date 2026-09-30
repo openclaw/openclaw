@@ -157,12 +157,11 @@ vi.mock("./update-command-config.js", async (importOriginal) => ({
 }));
 
 vi.mock("./update-command-fresh-doctor.js", () => ({
-  completePostCorePluginUpdate: vi.fn(async () => {
+  completePostCorePluginUpdate: vi.fn<
+    typeof import("./update-command-fresh-doctor.js").completePostCorePluginUpdate
+  >(async ({ pluginUpdate }) => {
     record("complete");
-    return {
-      pluginUpdate: successfulPluginUpdate,
-      configSnapshot: validConfigSnapshot,
-    };
+    return { pluginUpdate, configSnapshot: validConfigSnapshot };
   }),
   runUpdateFinalizationDoctorInFreshProcess: vi.fn(
     async (params: { onWarnings?: (warnings: string[]) => void }) => {
@@ -561,14 +560,19 @@ describe("update plugin lifecycle lease boundaries", () => {
     async ({ installedVersion, previousInstallRoot, resumed }) => {
       const needsTargetRuntime =
         installedVersion !== VERSION || previousInstallRoot !== "/tmp/openclaw";
+      const needsLegacyCompletion = installedVersion !== VERSION && resumed;
+      const pluginUpdate = {
+        ...successfulPluginUpdate,
+        changed: false,
+        deferredMigrationsPending: installedVersion === VERSION ? false : undefined,
+      };
       vi.mocked(readPackageVersion).mockResolvedValue(installedVersion);
       if (!needsTargetRuntime) {
         vi.mocked(updatePluginsAfterCoreUpdate).mockImplementationOnce(async () => {
           record("plugin-update");
           return {
-            ...successfulPluginUpdate,
+            ...pluginUpdate,
             assessment: { kind: "no-payload-repair" as const },
-            changed: false,
           };
         });
       }
@@ -576,7 +580,7 @@ describe("update plugin lifecycle lease boundaries", () => {
         record("target-convergence");
         return {
           resumed,
-          ...(resumed ? { pluginUpdate: { ...successfulPluginUpdate, changed: false } } : {}),
+          ...(resumed ? { pluginUpdate } : {}),
         };
       });
 
@@ -607,7 +611,10 @@ describe("update plugin lifecycle lease boundaries", () => {
       });
 
       if (needsTargetRuntime) {
-        expect(mocks.events).toEqual(["target-convergence:false"]);
+        expect(mocks.events).toEqual([
+          "target-convergence:false",
+          ...(needsLegacyCompletion ? ["complete:false"] : []),
+        ]);
         expect(updatePluginsAfterCoreUpdate).not.toHaveBeenCalled();
       } else {
         expect(continuePostCoreUpdateInFreshProcess).not.toHaveBeenCalled();
@@ -618,7 +625,7 @@ describe("update plugin lifecycle lease boundaries", () => {
         ]);
         expect(mocks.events).toContain("plugin-update:true");
       }
-      expect(completePostCorePluginUpdate).not.toHaveBeenCalled();
+      expect(completePostCorePluginUpdate).toHaveBeenCalledTimes(needsLegacyCompletion ? 1 : 0);
       expect(result.resultWithPostUpdate).toMatchObject(
         resumed
           ? { status: "skipped", reason: "already-current" }
@@ -630,11 +637,12 @@ describe("update plugin lifecycle lease boundaries", () => {
   registerConvergenceCompletionTests({ mocks, validConfigSnapshot, successfulPluginUpdate });
 
   it("keeps the plugin and error class when convergence fails", async () => {
-    vi.mocked(updatePluginsAfterCoreUpdate).mockResolvedValueOnce({
+    const pluginUpdate = {
       ...successfulPluginUpdate,
       status: "error",
       assessment: { kind: "unsafe", reason: "convergence-failed" },
       changed: false,
+      deferredMigrationsPending: undefined,
       npm: {
         changed: false,
         outcomes: [
@@ -646,7 +654,8 @@ describe("update plugin lifecycle lease boundaries", () => {
           },
         ],
       },
-    });
+    } satisfies Awaited<ReturnType<typeof updatePluginsAfterCoreUpdate>>;
+    vi.mocked(updatePluginsAfterCoreUpdate).mockResolvedValueOnce(pluginUpdate);
     const { resultWithPostUpdate } = await convergeUpdatePlugins({
       coreAlreadyCurrent: true,
       result: {
@@ -668,6 +677,9 @@ describe("update plugin lifecycle lease boundaries", () => {
       startedAt: 1,
       updateStepTimeoutMs: 1000,
     });
+    expect(completePostCorePluginUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ pluginUpdate }),
+    );
     expect(resultWithPostUpdate.steps).toContainEqual(
       expect.objectContaining({
         exitCode: 1,

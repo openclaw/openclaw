@@ -35,6 +35,7 @@ export const validConfigSnapshot = {
 export const successfulPluginUpdate = {
   status: "ok" as const,
   changed: true,
+  deferredMigrationsPending: false,
   sync: {
     changed: false,
     switchedToBundled: [],

@@ -11,6 +11,7 @@ import {
   runtimeProcessEntrypoints,
   SQLITE_READONLY_CHILD_ARG,
 } from "./runtime-process-entrypoints.js";
+import { captureRuntimeWorkerSource } from "./runtime-worker-generation.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { retainSnapshotWork } from "./sqlite-readonly-location-cleanup.js";
 import {
@@ -196,14 +197,23 @@ export function resolveSqliteInspectionSignal(signal?: AbortSignal): AbortSignal
     : signal;
 }
 
-function sqliteReadOnlyWorkerArgv(pathname: string, options: SqliteReadOnlyWorkerOptions) {
-  const workerUrl = resolveRuntimeWorkerUrl(
-    options.mode === "content-version"
-      ? runtimeProcessEntrypoints.sqliteSourceRevision
-      : runtimeProcessEntrypoints.sqliteReadOnly,
+function captureSqliteReadOnlyWorkerSource(mode: SqliteReadOnlyWorkerOptions["mode"] = "sync") {
+  return captureRuntimeWorkerSource(
+    resolveRuntimeWorkerUrl(
+      mode === "content-version"
+        ? runtimeProcessEntrypoints.sqliteSourceRevision
+        : runtimeProcessEntrypoints.sqliteReadOnly,
+    ),
   );
+}
+
+function sqliteReadOnlyWorkerArgv(
+  moduleUrl: URL,
+  pathname: string,
+  options: SqliteReadOnlyWorkerOptions,
+) {
   return [
-    ...resolveRuntimeWorkerArgv(workerUrl),
+    ...resolveRuntimeWorkerArgv(moduleUrl),
     SQLITE_READONLY_CHILD_ARG,
     ...sqliteReadOnlyWorkerRequestArgs(pathname, options),
   ];
@@ -217,6 +227,7 @@ export function captureSqliteReadOnlyWorkerLaunch(
   // Snapshots require native process close before byte cleanup; only canonical Auth uses a broker.
   const broker = source === "canonical" ? getSpawnBroker() : undefined;
   return {
+    ...captureSqliteReadOnlyWorkerSource(),
     env: { ...resolveNodeCompileCacheEnv(env) },
     cwd: process.cwd(),
     transport: broker ? { kind: "broker", owner: broker } : { kind: "native" },
@@ -229,10 +240,9 @@ export function createScopedSqliteReadOnlyWorker(
     retainOnOperationError?: boolean;
   },
 ): ReturnType<typeof createSqliteReadOnlyWorkerSession> {
-  const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sqliteReadOnly);
   return createSqliteReadOnlyWorkerSession({
     ...launch,
-    argv: [...resolveRuntimeWorkerArgv(workerUrl), SQLITE_READONLY_CHILD_ARG, "session"],
+    argv: [...resolveRuntimeWorkerArgv(launch.moduleUrl), SQLITE_READONLY_CHILD_ARG, "session"],
     requestArgs: sqliteReadOnlyWorkerRequestArgs,
     readBudget: (pathname) => readSqliteInspectionBudget("read-only snapshot", pathname),
     // Detached staging ownership retains its own budget inside caller-owned inspection scopes.
@@ -417,9 +427,10 @@ export function runSqliteReadOnlyWorkerOnce(
     let stopped = false;
     let reclamationDeadline = false;
     const reclaim = options.mode === "reclaim";
+    const source = captureSqliteReadOnlyWorkerSource(options.mode);
     const child = execFile(
       process.execPath,
-      sqliteReadOnlyWorkerArgv(pathname, options),
+      sqliteReadOnlyWorkerArgv(source.moduleUrl, pathname, options),
       {
         encoding: "utf8",
         env: launch?.env ?? resolveNodeCompileCacheEnv(),
@@ -465,12 +476,11 @@ export function runSqliteReadOnlyWorkerOnce(
           abort();
         }, timeoutMs)
       : undefined;
-    void retainSnapshotWork(
-      new Promise<void>((resolveClosed) => {
-        child.once("close", () => resolveClosed());
-      }),
-      abort,
-    );
+    const closed = new Promise<void>((resolveClosed) => {
+      child.once("close", () => resolveClosed());
+    });
+    void retainSnapshotWork(closed, abort);
+    source.runtimeGeneration?.retain(child, () => closed);
     options.signal?.addEventListener("abort", abort, { once: true });
     if (options.signal?.aborted) {
       abort();
@@ -509,7 +519,10 @@ export function runSqliteReadOnlyWorkerSync(
   const started = log.isEnabled("trace") ? performance.now() : undefined;
   const result = spawnSync(
     process.execPath,
-    sqliteReadOnlyWorkerArgv(pathname, { mode, stagingRoot }),
+    sqliteReadOnlyWorkerArgv(captureSqliteReadOnlyWorkerSource(mode).moduleUrl, pathname, {
+      mode,
+      stagingRoot,
+    }),
     {
       encoding: "utf8",
       env: resolveNodeCompileCacheEnv(),

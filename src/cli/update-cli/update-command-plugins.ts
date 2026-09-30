@@ -17,6 +17,7 @@ import {
 import type { ConfigWriteOptions } from "../../config/io.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
+import { readDeferredPluginMigrationsAsync } from "../../infra/deferred-plugin-migrations.js";
 import { comparePackageUpdateVersions } from "../../infra/package-update-utils.js";
 import { resolveRegistryUpdateChannel, type UpdateChannel } from "../../infra/update-channels.js";
 import { getLogger } from "../../logging/logger.js";
@@ -551,10 +552,14 @@ async function updatePluginsAfterCoreUpdateWithLease(
     finalPluginOutcomes.some((outcome) => outcome.status === "error")
       ? "warning"
       : "ok";
+  // Carry target-owned state to completion; the waiting parent may retain replaced modules.
+  const deferredMigrationsPending = (await readDeferredPluginMigrationsAsync()).length > 0;
+  params.assertCurrent?.();
   const result: ProducedPluginUpdateResult = {
     status,
     assessment,
     changed: pluginsChanged,
+    deferredMigrationsPending,
     warnings,
     sync: {
       changed: cohort.sync.changed,

@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
+import * as deferredMigrations from "../../infra/deferred-plugin-migrations.js";
 import { DoctorMaintenanceRefusalError } from "../../infra/update-doctor-result.js";
 import { readGitRuntimeArtifactIdentity } from "../../infra/update-git-runtime.js";
 import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
@@ -73,6 +74,7 @@ const snapshot: ConfigFileSnapshot = {
 const pluginUpdate: PostCorePluginUpdateResult = {
   status: "ok",
   changed: true,
+  deferredMigrationsPending: false,
   sync: {
     changed: false,
     switchedToBundled: [],
@@ -211,12 +213,15 @@ await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.str
   );
 
   it.each([
-    { runtime: "npm", revoked: false },
-    { runtime: "git", revoked: true },
-    { runtime: "git-rebuilt", revoked: false },
+    { runtime: "npm", revoked: false, pending: false, coreAlreadyCurrent: false },
+    { runtime: "git", revoked: true, pending: false, coreAlreadyCurrent: false },
+    { runtime: "git-rebuilt", revoked: false, pending: false, coreAlreadyCurrent: false },
+    { runtime: "git", revoked: false, pending: true, coreAlreadyCurrent: false },
+    { runtime: "git", revoked: false, pending: undefined, coreAlreadyCurrent: false },
+    { runtime: "git", revoked: false, pending: undefined, coreAlreadyCurrent: true },
   ] as const)(
-    "lets the installed $runtime target own convergence before parent worker use (revoked=$revoked)",
-    async ({ runtime, revoked }) => {
+    "lets the installed $runtime target own convergence before parent worker use (revoked=$revoked, pending=$pending, current=$coreAlreadyCurrent)",
+    async ({ runtime, revoked, pending, coreAlreadyCurrent }) => {
       const rebuilt = runtime === "git-rebuilt";
       const version = rebuilt ? VERSION : "2026.9.4";
       vi.mocked(shared.readPackageVersion).mockResolvedValue(version);
@@ -225,6 +230,13 @@ await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.str
         .spyOn(pluginLifecycle, "withPluginLifecycleLease")
         .mockRejectedValue(incompatibleWorker);
       const parentRuntime = vi.spyOn(sourceRuntime, "completeSourceUpdateRuntime");
+      // Runtime replacement removes the old parent's cold state-worker chunk.
+      // Only the target can inspect pending migrations after this handoff.
+      vi.spyOn(deferredMigrations, "readDeferredPluginMigrationsAsync").mockRejectedValue(
+        Object.assign(new Error("The old runtime's state worker module was replaced"), {
+          code: "ERR_MODULE_NOT_FOUND",
+        }),
+      );
       let current = true;
       const authorityRefusal = new Error("Update requester revoked after target convergence");
       const delegate = vi
@@ -233,12 +245,20 @@ await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.str
           expect(root).toBe("/isolated");
           expect(channel).toBe("stable");
           current = !revoked;
-          return { resumed: true, pluginUpdate: { ...pluginUpdate, changed: false } };
+          return {
+            resumed: true,
+            pluginUpdate: {
+              ...pluginUpdate,
+              changed: false,
+              deferredMigrationsPending: pending,
+            },
+          };
         });
       const outcome = convergeUpdatePlugins(
         convergenceParams({
+          coreAlreadyCurrent,
           result: {
-            status: "ok",
+            status: coreAlreadyCurrent ? "skipped" : "ok",
             mode: runtime === "npm" ? "npm" : "git",
             root: "/isolated",
             before: { version: VERSION, sha: "old-checkout", buildId: "updater-build" },
@@ -264,12 +284,16 @@ await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.str
       } else {
         const result = await outcome;
         expect(result.resultWithPostUpdate).toMatchObject({
-          status: "ok",
+          status: coreAlreadyCurrent ? "skipped" : "ok",
           postUpdate: { plugins: { status: "ok" } },
         });
         expect(result.resultWithPostUpdate.steps).not.toEqual(
           expect.arrayContaining([expect.objectContaining({ name: "source runtime publication" })]),
         );
+        const doctorCalls = mocks.runExec.mock.calls.filter(([, args]) =>
+          args.includes("--repair"),
+        );
+        expect(doctorCalls).toHaveLength(pending !== false ? 1 : 0);
       }
       expect(delegate).toHaveBeenCalledOnce();
       expect(parentLease).not.toHaveBeenCalled();
@@ -366,7 +390,7 @@ await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.str
     },
   );
 
-  it.each(["runtime", "plugins"] as const)(
+  it.each(["runtime", "plugins", "migrations"] as const)(
     "parks before %s changes while converging in the candidate runtime",
     async (changed) => {
       vi.stubEnv("OPENCLAW_COMPATIBILITY_HOST_VERSION", "0.0.1");
@@ -396,7 +420,11 @@ await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.str
         params.assertCurrent();
         events.push("candidate-plugins");
         return {
-          pluginUpdate: { ...pluginUpdate, changed: changed === "plugins" },
+          pluginUpdate: {
+            ...pluginUpdate,
+            changed: changed === "plugins",
+            deferredMigrationsPending: changed === "migrations",
+          },
           configSnapshot: snapshot,
         };
       });
@@ -428,13 +456,15 @@ await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.str
             ? ["park", "publish", "candidate-plugins"]
             : ["candidate-plugins", "park"],
         );
-        expect(result.resultWithPostUpdate.status).toBe("ok");
+        expect(result.resultWithPostUpdate.status).toBe(
+          changed === "migrations" ? "skipped" : "ok",
+        );
         expect(result.resultWithPostUpdate.steps).toEqual(
           changed === "runtime"
             ? [expect.objectContaining({ name: "source runtime publication", exitCode: 0 })]
             : [],
         );
-        if (changed === "plugins") {
+        if (changed !== "runtime") {
           expect(mocks.runExec).toHaveBeenCalled();
           expect(mocks.runExec.mock.calls.every(([command]) => command === "/selected/node")).toBe(
             true,

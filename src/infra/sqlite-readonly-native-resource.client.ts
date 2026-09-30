@@ -16,7 +16,7 @@ import type {
   SqliteNativeSessionLaunch,
   SqliteNativeStagingOptions,
 } from "./sqlite-readonly-native-resource.types.js";
-import { isSameSqliteReadOnlyWorkerLaunch } from "./sqlite-readonly-worker-session.js";
+import { isSameSqliteReadOnlyWorkerContext } from "./sqlite-readonly-worker-session.js";
 import type { DatabaseFileIdentity } from "./sqlite-worker-identity.js";
 import type { NativeWorkerResourceConnection } from "./worker-native-lifecycle.types.js";
 
@@ -171,7 +171,7 @@ export function createSqliteReadOnlyNativeResourceClient(port: MessagePort) {
             !unavailable &&
             !closing &&
             !state.retired &&
-            isSameSqliteReadOnlyWorkerLaunch(captured, other)
+            isSameSqliteReadOnlyWorkerContext(captured, other)
           );
         },
         async run(pathname: string, options: SqliteNativeStagingOptions): Promise<string> {

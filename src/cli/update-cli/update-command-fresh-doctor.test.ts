@@ -92,6 +92,7 @@ const updateOptions = createChangedPostCoreUpdateOptions({
 });
 const pluginUpdate = updateOptions.pluginUpdate;
 pluginUpdate.npm = { changed: false, outcomes: [] };
+pluginUpdate.deferredMigrationsPending = false;
 
 const validConfigSnapshot = {
   exists: true,

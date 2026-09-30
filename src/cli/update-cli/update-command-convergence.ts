@@ -252,6 +252,7 @@ export async function convergeUpdatePlugins(params: {
         postCorePluginUpdate &&
         (!params.coreAlreadyCurrent ||
           postCorePluginUpdate.changed ||
+          postCorePluginUpdate.deferredMigrationsPending !== false ||
           hasDeferredUpdateModelRetirement())
       ) {
         // Release the plugin lease before fresh Doctor. The finalizer either

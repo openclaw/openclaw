@@ -857,6 +857,7 @@ describe("update-cli", () => {
           ? { kind: "unsafe", reason: "convergence-failed" }
           : { kind: "no-payload-repair" },
         changed: false,
+        deferredMigrationsPending: false,
         warnings: [reportedRepairWarning, ...(errored ? [reportedSmokeWarning] : []), notice],
         sync: {
           changed: false,

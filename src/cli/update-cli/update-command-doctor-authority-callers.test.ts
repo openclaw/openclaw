@@ -101,6 +101,7 @@ import { resumePostCoreUpdate } from "./update-command-resume.js";
 const pluginUpdate: PostCorePluginUpdateResult = {
   status: "ok",
   changed: false,
+  deferredMigrationsPending: false,
   sync: { changed: false, switchedToBundled: [], switchedToNpm: [], warnings: [], errors: [] },
   npm: { changed: false, outcomes: [] },
   integrityDrifts: [],

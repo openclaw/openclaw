@@ -3,7 +3,7 @@ import type {
   SqliteNativeSessionLaunch,
   SqliteNativeStagingSession,
 } from "./sqlite-readonly-native-resource.types.js";
-import { isSameSqliteReadOnlyWorkerLaunch } from "./sqlite-readonly-worker-session.js";
+import { isSameSqliteReadOnlyWorkerContext } from "./sqlite-readonly-worker-session.js";
 import type { SqliteSnapshotStagingLaunch } from "./sqlite-snapshot-staging.types.js";
 
 /** Private token connections share one process, never a copy/read worker permit. */
@@ -38,7 +38,7 @@ export function createSqliteSnapshotStagingRuntime(
     if (closing) {
       await closeSession(closing);
     }
-    if (activeLaunch && !isSameSqliteReadOnlyWorkerLaunch(activeLaunch, launch)) {
+    if (activeLaunch && !isSameSqliteReadOnlyWorkerContext(activeLaunch, launch)) {
       throw new Error(
         "SQLite snapshot staging owner launch context changed; retire its snapshots before retrying",
       );

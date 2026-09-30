@@ -44,6 +44,8 @@ export type UpdateRunResult = {
       status: "ok" | "warning" | "skipped" | "error";
       reason?: string;
       changed: boolean;
+      /** Captured before the convergence runtime releases; older targets may omit this fact. */
+      deferredMigrationsPending?: boolean;
       warnings?: Array<{
         pluginId?: string;
         source?: string;

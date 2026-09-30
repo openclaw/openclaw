@@ -91,7 +91,7 @@ describe("update completion ownership", () => {
             "Package convergence must wait until the updating parent releases its install records.",
         }),
       ]);
-      return { ...pluginResult, changed: false };
+      return { ...pluginResult, changed: false, deferredMigrationsPending: true };
     });
 
     await runRegisteredCli({

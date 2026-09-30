@@ -465,6 +465,7 @@ it.each([
                 pluginUpdate: {
                   status: "ok",
                   changed: false,
+                  deferredMigrationsPending: false,
                   sync: {
                     changed: false,
                     switchedToBundled: [],

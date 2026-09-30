@@ -15,6 +15,12 @@ import {
 } from "./package-update-activation-paths.js";
 import { captureRuntimeWorkerSource } from "./runtime-worker-generation.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import {
+  captureSqliteReadOnlyWorkerLaunch,
+  createScopedSqliteReadOnlyWorker,
+  runSqliteReadOnlyWorker,
+  runSqliteReadOnlyWorkerSync,
+} from "./sqlite-readonly-worker.js";
 import { openSqliteWorkerStore, type SqliteWorkerStore } from "./sqlite-worker-store.js";
 import { runUpdateStateInspectionWorker } from "./update-candidate-state.inspection.js";
 import type { ResolvedGlobalInstallTarget } from "./update-global.js";
@@ -27,15 +33,20 @@ vi.mock("./runtime-process-entrypoints.js", async (importOriginal) => {
     ...actual,
     runtimeProcessEntrypoints: {
       ...actual.runtimeProcessEntrypoints,
-      updateCandidateState: {
-        ...actual.runtimeProcessEntrypoints.updateCandidateState,
-        get currentModuleUrl() {
-          return (
-            inspectionFixture.moduleUrl ||
-            actual.runtimeProcessEntrypoints.updateCandidateState.currentModuleUrl
-          );
-        },
-      },
+      ...Object.fromEntries(
+        (["updateCandidateState", "sqliteReadOnly", "sqliteSourceRevision"] as const).map((key) => [
+          key,
+          {
+            ...actual.runtimeProcessEntrypoints[key],
+            get currentModuleUrl() {
+              return (
+                inspectionFixture.moduleUrl ||
+                actual.runtimeProcessEntrypoints[key].currentModuleUrl
+              );
+            },
+          },
+        ]),
+      ),
     },
   };
 });
@@ -319,6 +330,58 @@ process.stdout.write(JSON.stringify({ generation, mode: JSON.parse(input).mode }
     ]);
   });
 });
+
+it.each(["sync", "content-version", "one-shot", "session"] as const)(
+  "runs %s SQLite readers from the retained runtime after replacement",
+  async (mode) => {
+    const base = await fs.realpath(tempDirs.make("retained-sqlite-reader-"));
+    const root = await fixture(base, "npm");
+    await mkdir(path.join(root, "dist/infra"));
+    const transport = `
+import { generation } from "../shared-old-hash.mjs";
+const result = { ok: true, ${mode === "content-version" ? 'contentVersion: "a".repeat(64)' : "location: generation"} };
+if (process.send) {
+  process.on("message", message => {
+    if (message === "close") process.disconnect();
+    else process.send({ id: message.id, result });
+  });
+} else process.stdout.write(JSON.stringify(result));
+`;
+    for (const name of ["sqlite-readonly-location", "sqlite-source-revision"]) {
+      await writeFile(path.join(root, `dist/infra/${name}.worker.js`), transport);
+    }
+    inspectionFixture.moduleUrl = pathToFileURL(path.join(root, "dist/updater.mjs")).href;
+    let retained: URL | undefined;
+    let session: ReturnType<typeof createScopedSqliteReadOnlyWorker> | undefined;
+    try {
+      await withRetainedUpdateRuntime(inspectionFixture.moduleUrl, async (retain) => {
+        await retain({ mutationRoots: [root], timeoutMs: 30_000, assertCurrent() {} });
+        retained = captureRuntimeWorkerSource(new URL(inspectionFixture.moduleUrl)).moduleUrl;
+        await rm(root, { recursive: true });
+        const source = path.join(base, "source.sqlite");
+        if (mode === "session") {
+          // Generation settlement owns sessions even without a read scope, including replacements.
+          session = createScopedSqliteReadOnlyWorker(captureSqliteReadOnlyWorkerLaunch());
+          expect(await session.run(source, { mode: "sync" })).toBe("retained");
+          await session.close();
+          session = session.createNativeReplacement();
+          expect(await session.run(source, { mode: "sync" })).toBe("retained");
+        } else if (mode === "one-shot") {
+          expect(await runSqliteReadOnlyWorker(source, { mode: "sync" })).toBe("retained");
+        } else {
+          expect(runSqliteReadOnlyWorkerSync(source, undefined, mode)).toBe(
+            mode === "content-version" ? "a".repeat(64) : "retained",
+          );
+        }
+      });
+      expect(session?.isRetired() ?? true).toBe(true);
+      assert.ok(retained);
+      await expect(stat(retained)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await session?.close();
+    }
+  },
+);
 
 it.each([".git", "extensions/retired", "extensions/linked-residue"])(
   "refuses unrelated host files reached through a hoist link to %s",

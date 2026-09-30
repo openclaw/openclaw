@@ -61,6 +61,7 @@ const pluginResult: ProducedPluginUpdateResult = {
   assessment: { kind: "no-payload-repair" },
   status: "ok",
   changed: false,
+  deferredMigrationsPending: false,
   sync: { changed: false, switchedToBundled: [], switchedToNpm: [], warnings: [], errors: [] },
   npm: { changed: false, outcomes: [] },
   integrityDrifts: [],

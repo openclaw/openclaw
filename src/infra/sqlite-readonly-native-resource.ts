@@ -7,6 +7,7 @@ import {
   retainOpenClawStateWorkerErrorPayload,
 } from "../state/openclaw-state-worker-error.js";
 import { isPrivateDirectoryCreationRefused } from "./private-directory-creation.js";
+import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
 import { throwSqliteLifecycleErrors } from "./sqlite-lifecycle-errors.js";
 import { SqliteSnapshotCleanupError } from "./sqlite-readonly-location-cleanup.js";
 import type {
@@ -163,6 +164,8 @@ export function createNativeWorkerResource(
   if (!ownerPort) {
     throw new Error("SQLite native resource requires its host cleanup owner");
   }
+  // The retained broker loads this resource from its generation; host capabilities never cross IPC.
+  const moduleUrl = resolveRuntimeProcessEntrypointUrl("sqliteReadOnly");
   const sendOwnerMessage = ownerPort.postMessage.bind(ownerPort);
   const sessions = new Map<number, Session>();
   const directories = new Map<string, Directory>();
@@ -292,7 +295,7 @@ export function createNativeWorkerResource(
       if (sessions.has(request.session)) {
         throw new Error("SQLite native session already exists");
       }
-      const native = createScopedSqliteReadOnlyWorker(request.launch);
+      const native = createScopedSqliteReadOnlyWorker({ ...request.launch, moduleUrl });
       sessions.set(request.session, { native, launch: request.launch, running: false });
       void native.closed.then(
         () => send({ type: "session.closed", session: request.session }),

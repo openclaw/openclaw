@@ -4,6 +4,7 @@ import { BrokerChild } from "../process/spawn-broker/child.js";
 import type { SpawnBrokerHost } from "../process/spawn-broker/host.js";
 import { recordChildProcessSpawn } from "../process/spawn-diagnostics.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import type { captureRuntimeWorkerSource } from "./runtime-worker-generation.js";
 import { createSqliteAuthTransferReceiver } from "./sqlite-readonly-auth-transfer.js";
 import { retainSnapshotWork } from "./sqlite-readonly-location-cleanup.js";
 import {
@@ -18,15 +19,15 @@ import {
   type SqliteReadOnlyWorkerValue,
 } from "./sqlite-readonly-worker-protocol.js";
 
-export type SqliteReadOnlyWorkerLaunch = {
+export type SqliteReadOnlyWorkerLaunch = ReturnType<typeof captureRuntimeWorkerSource> & {
   env: NodeJS.ProcessEnv;
   cwd: string;
   transport: { kind: "native" } | { kind: "broker"; owner: SpawnBrokerHost };
 };
 
-export function isSameSqliteReadOnlyWorkerLaunch(
-  captured: SqliteReadOnlyWorkerLaunch,
-  requested: SqliteReadOnlyWorkerLaunch,
+export function isSameSqliteReadOnlyWorkerContext(
+  captured: Pick<SqliteReadOnlyWorkerLaunch, "env" | "cwd" | "transport">,
+  requested: Pick<SqliteReadOnlyWorkerLaunch, "env" | "cwd" | "transport">,
 ): boolean {
   const keys = Object.keys(requested.env);
   return (
@@ -37,6 +38,17 @@ export function isSameSqliteReadOnlyWorkerLaunch(
     requested.cwd === captured.cwd &&
     keys.length === Object.keys(captured.env).length &&
     keys.every((key) => requested.env[key] === captured.env[key])
+  );
+}
+
+export function isSameSqliteReadOnlyWorkerLaunch(
+  captured: SqliteReadOnlyWorkerLaunch,
+  requested: SqliteReadOnlyWorkerLaunch,
+): boolean {
+  return (
+    captured.moduleUrl.href === requested.moduleUrl.href &&
+    captured.runtimeGeneration === requested.runtimeGeneration &&
+    isSameSqliteReadOnlyWorkerContext(captured, requested)
   );
 }
 
@@ -71,7 +83,10 @@ export function createSqliteReadOnlyWorkerSession(
     host.transport.kind === "broker"
       ? { kind: "broker", owner: host.transport.owner }
       : { kind: "native" };
-  const capturedLaunch = { env, cwd, transport };
+  const { moduleUrl, runtimeGeneration } = host;
+  const capturedLaunch = { moduleUrl, runtimeGeneration, env, cwd, transport };
+  // Queued reads and native replacements cannot spawn after their retained runtime closes.
+  runtimeGeneration?.resolve(moduleUrl);
   const argv = [...host.argv];
   const spawnOptions: SpawnOptions = {
     env,
@@ -242,7 +257,7 @@ export function createSqliteReadOnlyWorkerSession(
       retire(error);
     }
   });
-  return {
+  const session: SqliteReadOnlyWorkerSession = {
     closed,
     isRetired() {
       return retired;
@@ -353,4 +368,6 @@ export function createSqliteReadOnlyWorkerSession(
       }
     },
   };
+  runtimeGeneration?.retain(session, () => session.close());
+  return session;
 }

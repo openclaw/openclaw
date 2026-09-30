@@ -12,7 +12,6 @@ import { readConfigFileSnapshot } from "../../config/config.js";
 import { resolveConfigPath, resolveStateDir } from "../../config/paths.js";
 import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
-import { readDeferredPluginMigrationsAsync } from "../../infra/deferred-plugin-migrations.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveAggregateSqliteInspectionTimeoutMs } from "../../infra/sqlite-readonly-worker.js";
 import { collectStateDatabasePaths } from "../../infra/update-candidate-state.js";
@@ -506,10 +505,12 @@ export async function completePostCorePluginUpdate(
       if (!entryPath) {
         throw new Error("Updated OpenClaw entrypoint not found for post-plugin doctor");
       }
+      // Older target processes can return parent-owned completion without this fact.
+      // Only explicit false proves no pending work; the fresh target owns unknown-state repair.
       const freshDoctorRequired =
         params.freshDoctorRequired ||
         hasDeferredUpdateModelRetirement() ||
-        (await readDeferredPluginMigrationsAsync()).length > 0;
+        params.pluginUpdate.deferredMigrationsPending !== false;
       assertCurrent();
       if (freshDoctorRequired) {
         await params.beforeDoctor?.();

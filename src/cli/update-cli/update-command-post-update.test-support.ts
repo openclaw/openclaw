@@ -201,6 +201,7 @@ export function taskRecovery(record: (phase: string) => void = () => {}) {
 export const successfulPluginUpdate: PostCorePluginUpdateResult = {
   status: "ok",
   changed: false,
+  deferredMigrationsPending: false,
   sync: {
     changed: false,
     switchedToBundled: [],

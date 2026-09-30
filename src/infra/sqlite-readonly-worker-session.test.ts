@@ -5,10 +5,12 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { emitChildProcessSpawnSample } from "../process/spawn-diagnostics.js";
 import { onDiagnosticEvent, setDiagnosticsEnabledForProcess } from "./diagnostic-events.js";
+import { withRuntimeWorkerGeneration } from "./runtime-worker-generation.js";
 import { encodeSqliteAuthTransferFrame } from "./sqlite-readonly-auth-transfer.js";
 import { captureSqliteReadOnlyWorkerScope } from "./sqlite-readonly-worker-context.js";
 import { createSqliteReadOnlyWorkerSession } from "./sqlite-readonly-worker-session.js";
 import {
+  captureSqliteReadOnlyWorkerLaunch,
   createSqliteReadOnlyWorkerScope,
   resolveSqliteInspectionSignal,
   createScopedSqliteReadOnlyWorker,
@@ -44,6 +46,7 @@ function createSession() {
   ]);
   const env = { OPENCLAW_STATE_DIR: "/fixture/state" };
   const session = createSqliteReadOnlyWorkerSession({
+    ...captureSqliteReadOnlyWorkerLaunch(),
     env,
     cwd: "/fixture/launch",
     transport: { kind: "native" },
@@ -254,6 +257,48 @@ describe("SQLite read-only session operation custody", () => {
   });
 });
 
+it("keeps retained reader sessions generation-bound until the child closes", async () => {
+  let owned: ReturnType<typeof createSession> | undefined;
+  let launch: ReturnType<typeof captureSqliteReadOnlyWorkerLaunch> | undefined;
+  const release = vi.fn(async () => {});
+  const relocate = (url: URL) => new URL(`${url.href}?retained`);
+  const generation = withRuntimeWorkerGeneration(async (bind) => {
+    bind(relocate);
+    launch = captureSqliteReadOnlyWorkerLaunch();
+    owned = createSession();
+    expect(owned.session.compatible({ ...launch, env: owned.env, cwd: "/fixture/launch" })).toBe(
+      true,
+    );
+    await withRuntimeWorkerGeneration(
+      async (bindOther) => {
+        bindOther(relocate);
+        expect(
+          owned!.session.compatible({
+            ...captureSqliteReadOnlyWorkerLaunch(),
+            env: owned!.env,
+            cwd: "/fixture/launch",
+          }),
+        ).toBe(false);
+      },
+      async () => {},
+    );
+  }, release);
+  void generation.catch(() => undefined);
+  try {
+    await nextTurn();
+    expect(owned?.child.send).toHaveBeenCalledWith("close", expect.any(Function));
+    expect(release).not.toHaveBeenCalled();
+    // A captured launch may outlive an auth/staging queue, but not its runtime owner.
+    expect(() => createScopedSqliteReadOnlyWorker(launch!)).toThrow("generation is closing");
+  } finally {
+    owned?.child.emit("close", 0, null);
+    await generation;
+  }
+  expect(release).toHaveBeenCalledOnce();
+  expect(() => owned?.session.createNativeReplacement()).toThrow("generation is closing");
+  expect(mock.spawn).toHaveBeenCalledOnce();
+});
+
 it("keeps a detached staging command budget inside a caller-owned deadline scope", async () => {
   const timer = vi.spyOn(globalThis, "setTimeout");
   try {
@@ -262,6 +307,7 @@ it("keeps a detached staging command budget inside a caller-owned deadline scope
         const child = new MockChild();
         mock.spawn.mockReturnValueOnce(child);
         const session = createScopedSqliteReadOnlyWorker({
+          ...captureSqliteReadOnlyWorkerLaunch(),
           env: {},
           cwd: "/fixture",
           transport: { kind: "native" },

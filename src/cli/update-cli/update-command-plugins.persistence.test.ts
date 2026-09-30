@@ -4,6 +4,7 @@ import { recoverInstalledPluginConfigIds } from "../../commands/doctor/shared/in
 import { seedRecoveryOwner } from "../../commands/doctor/shared/installed-plugin-id-recovery.test-support.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { recordDeferredPluginMigrations } from "../../infra/deferred-plugin-migrations.js";
 import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
 import { readPersistedInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
@@ -40,6 +41,44 @@ async function prepareUpdate(state: OpenClawTestState, config: OpenClawConfig) {
 }
 
 describe("updater plugin commit cancellation", () => {
+  it.each([false, true])(
+    "carries pending migrations from unchanged convergence to completion (pending=%s)",
+    async (pending) => {
+      await withOpenClawTestState({ label: "updater-convergence-facts" }, async (state) => {
+        const prepared = await prepareUpdate(state, { plugins: { enabled: false } });
+        mocks.convergence.mockImplementationOnce(async ({ cfg: candidate }) => {
+          if (pending) {
+            await recordDeferredPluginMigrations({
+              pending: [
+                {
+                  pluginId: "fixture",
+                  reason: "Convergence deferred",
+                  command: "openclaw doctor --fix",
+                },
+              ],
+            });
+          }
+          return {
+            config: candidate,
+            configChanges: [],
+            installedPluginIdRecovery: new Map(),
+            changes: [],
+            warnings: [],
+            errored: false,
+            smokeFailures: [],
+            installRecords: {},
+          };
+        });
+        const result = await updatePluginsAfterCoreUpdate({
+          ...prepared,
+          configChanged: false,
+          configWriteOptions: {},
+        });
+        expect(result).toMatchObject({ changed: false, deferredMigrationsPending: pending });
+      });
+    },
+  );
+
   it("rolls back the tentative index after a config failure under a live owner", async () => {
     await withOpenClawTestState({ label: "updater-plugin-config-failed" }, async (state) => {
       const prepared = await prepareUpdate(state, { plugins: { enabled: false } });

@@ -1,12 +1,15 @@
 import { execFile, spawn, spawnSync } from "node:child_process";
+import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { SQLITE_READONLY_CHILD_ARG } from "./runtime-process-entrypoints.js";
+import { withRuntimeWorkerGeneration } from "./runtime-worker-generation.js";
 import {
   captureSqliteReadOnlyWorkerLaunch,
   createScopedSqliteReadOnlyWorker,
@@ -233,6 +236,30 @@ describe("scoped SQLite read-only children", () => {
     expect(spawn).not.toHaveBeenCalled();
     expect(execFile).not.toHaveBeenCalled();
   });
+});
+
+it("retains a one-shot reader generation until process close after its result callback", async () => {
+  const child = new EventEmitter();
+  const release = vi.fn(async () => {});
+  let pending: Promise<string> | undefined;
+  vi.mocked(execFile).mockImplementationOnce((_file, _args, _options, callback) => {
+    callback?.(null, '{"ok":true,"location":"snapshot.sqlite"}', "");
+    return child as ReturnType<typeof execFile>;
+  });
+  const generation = withRuntimeWorkerGeneration(async (bind) => {
+    bind((url) => new URL(`${url.href}?retained`));
+    pending = runSqliteReadOnlyWorker("source.sqlite", { mode: "async" });
+  }, release);
+  void generation.catch(() => undefined);
+  try {
+    await nextTurn();
+    expect(release).not.toHaveBeenCalled();
+  } finally {
+    child.emit("close", 0, null);
+    await generation;
+  }
+  await expect(pending).resolves.toBe("snapshot.sqlite");
+  expect(release).toHaveBeenCalledOnce();
 });
 
 describe("resolveSqliteInspectionBudget", () => {

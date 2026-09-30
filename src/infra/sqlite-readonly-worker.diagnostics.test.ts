@@ -6,7 +6,10 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
-import { createScopedSqliteReadOnlyWorker } from "./sqlite-readonly-worker.js";
+import {
+  captureSqliteReadOnlyWorkerLaunch,
+  createScopedSqliteReadOnlyWorker,
+} from "./sqlite-readonly-worker.js";
 import { createSqliteSnapshotStagingDirectory } from "./sqlite-snapshot-staging.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -60,7 +63,7 @@ it.runIf(process.platform !== "win32")(
   },
 );
 
-it("distinguishes actual worker startup from serialized directory creation failures", async () => {
+it("reports serialized directory creation failures", async () => {
   const root = tempDirs.make("openclaw-sqlite-worker-diagnostics-");
   const notDirectory = path.join(root, "file");
   fs.writeFileSync(notDirectory, "preserved");
@@ -76,9 +79,13 @@ it("distinguishes actual worker startup from serialized directory creation failu
   expect((allocationError as Error).message).not.toContain("free disk space/quota");
   expect((allocationError as Error).message.match(/snapshot staging root/gu)).toHaveLength(1);
   expect(fs.readFileSync(notDirectory, "utf8")).toBe("preserved");
+});
 
+it("reports actual worker startup failures", async () => {
+  const root = tempDirs.make("openclaw-sqlite-worker-startup-diagnostics-");
   const cwd = path.join(root, "missing-cwd");
   const worker = createScopedSqliteReadOnlyWorker({
+    ...captureSqliteReadOnlyWorkerLaunch(),
     cwd,
     env: { ...process.env },
     transport: { kind: "native" },
