@@ -2,31 +2,21 @@ import { mergeAllowlist, summarizeMapping } from "openclaw/plugin-sdk/allow-from
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import {
   createChannelInboundEnvelopeBuilder,
-  createChannelPartialDeliveryError,
   implicitMentionKindWhen,
   isChannelPartialDeliveryError,
   logInboundDrop,
   resolveInboundMentionDecision,
 } from "openclaw/plugin-sdk/channel-inbound";
 import type { ChannelIngressContextBinding } from "openclaw/plugin-sdk/channel-ingress-runtime";
-import {
-  createMessageReceiptFromOutboundResults,
-  listMessageReceiptPlatformIds,
-} from "openclaw/plugin-sdk/channel-outbound";
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
 import { resolveChannelGroupsConfigPath } from "openclaw/plugin-sdk/channel-policy";
-import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { resolvePromptHistoryLimit } from "openclaw/plugin-sdk/number-runtime";
 import { type HistoryEntry, createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
-import {
-  deliverTextOrMediaReply,
-  resolveSendableOutboundReplyParts,
-  type OutboundReplyPayload,
-} from "openclaw/plugin-sdk/reply-payload";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import {
   resolveDefaultGroupPolicy,
@@ -46,6 +36,7 @@ import {
 } from "./group-policy.js";
 import { createZalouserIngressMonitor, type ZalouserIngressLifecycle } from "./ingress.js";
 import { formatZalouserMessageSidFull, resolveZalouserMessageSid } from "./message-sid.js";
+import { deliverZalouserReply } from "./reply-delivery.js";
 import { getZalouserRuntime } from "./runtime.js";
 import { sendMessageZalouser } from "./send.js";
 import { resolveZalouserDmSessionScope } from "./session-scope.js";
@@ -73,8 +64,6 @@ type ZalouserMonitorOptions = {
 type ZalouserMonitorResult = {
   stop: () => Promise<void>;
 };
-
-const ZALOUSER_TEXT_LIMIT = 2000;
 
 function resolveUserAllowlistEntries(
   entries: string[],
@@ -667,72 +656,6 @@ async function processMessage(
       limit: historyState.historyLimit,
     });
   }
-}
-
-async function deliverZalouserReply(params: {
-  mediaMaxBytes?: number;
-  payload: OutboundReplyPayload;
-  profile: string;
-  chatId: string;
-  isGroup: boolean;
-  runtime: RuntimeEnv;
-  core: ZalouserCoreRuntime;
-  config: OpenClawConfig;
-  accountId?: string;
-  tableMode?: MarkdownTableMode;
-}): Promise<{ visibleReplySent: boolean }> {
-  const { payload, profile, chatId, isGroup, runtime, core, config, accountId } = params;
-  const tableMode = params.tableMode ?? "code";
-  let visibleReplySent = false;
-  const reply = resolveSendableOutboundReplyParts(payload, {
-    text: core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode),
-  });
-  const chunkMode = core.channel.text.resolveChunkMode(config, "zalouser", accountId);
-  const textChunkLimit = core.channel.text.resolveTextChunkLimit(config, "zalouser", accountId, {
-    fallbackLimit: ZALOUSER_TEXT_LIMIT,
-  });
-  const accepted: Awaited<ReturnType<typeof sendMessageZalouser>>[] = [];
-  const sendReplyPart = async (text: string, mediaUrl?: string) => {
-    await sendMessageZalouser(chatId, text, {
-      profile,
-      mediaMaxBytes: params.mediaMaxBytes,
-      ...(mediaUrl ? { mediaUrl } : {}),
-      isGroup,
-      textMode: "markdown",
-      textChunkMode: chunkMode,
-      textChunkLimit,
-      onDeliveryResult: (result) => {
-        accepted.push(result);
-        visibleReplySent = true;
-      },
-    });
-    visibleReplySent = true;
-  };
-  try {
-    await deliverTextOrMediaReply({
-      payload,
-      text: reply.text,
-      sendText: sendReplyPart,
-      sendMedia: async ({ mediaUrl, caption }) => {
-        logVerbose(core, runtime, `Sending media to ${chatId}`);
-        await sendReplyPart(caption ?? "", mediaUrl);
-      },
-    });
-  } catch (error) {
-    if (!visibleReplySent) {
-      throw error;
-    }
-    const receipt = createMessageReceiptFromOutboundResults({
-      results: accepted.map((result) => ({ receipt: result.receipt })),
-      kind: reply.hasMedia ? "media" : "text",
-    });
-    throw createChannelPartialDeliveryError(error, {
-      messageIds: listMessageReceiptPlatformIds(receipt),
-      receipt,
-      visibleReplySent: true,
-    });
-  }
-  return { visibleReplySent };
 }
 
 export async function monitorZalouserProvider(

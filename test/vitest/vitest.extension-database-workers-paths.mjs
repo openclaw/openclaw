@@ -70,6 +70,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/zalo/src/webhook-spool.test.ts",
   "extensions/zalouser/src/ingress.test.ts",
   "extensions/zalouser/src/monitor.account-scope.test.ts",
+  "extensions/zalouser/src/monitor.delivery-sanitization.test.ts",
   "extensions/zalouser/src/monitor.group-gating.test.ts",
   "extensions/imessage/src/monitor.reaction-owner.test.ts",
   "extensions/telegram/src/monitor.test.ts",
