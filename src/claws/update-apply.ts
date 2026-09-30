@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { coerceErrorMessage, stableStringify } from "@openclaw/normalization-core";
 import { listAgentEntries } from "../agents/agent-scope.js";
 import { transformConfigFileWithRetry } from "../config/config.js";
@@ -14,6 +13,7 @@ import {
   type ClawCronUpdateExecution,
 } from "./cron-update.js";
 import type { ClawCronGateway } from "./cron.js";
+import { digestClawValue as digest } from "./digest.js";
 import { buildClawAddPlan, type ClawAddPlanContext } from "./lifecycle.js";
 import {
   applyClawMcpUpdate,
@@ -49,10 +49,6 @@ import {
 export const CLAW_UPDATE_RESULT_SCHEMA_VERSION = "openclaw.clawUpdateResult.v1" as const;
 
 type ConfigCommit = (transform: (config: OpenClawConfig) => OpenClawConfig) => Promise<void>;
-
-function digest(value: unknown): string {
-  return `sha256:${createHash("sha256").update(stableStringify(value)).digest("hex")}`;
-}
 
 export class ClawUpdateMutationError extends Error {
   constructor(
@@ -169,20 +165,6 @@ export async function applyClawUpdatePlan(
   }
 
   const actionable = fresh.actions.filter((action) => action.action !== "unchanged");
-  const unsupported = actionable.filter(
-    (action) =>
-      action.kind !== "agent" &&
-      action.kind !== "workspaceFile" &&
-      action.kind !== "mcpServer" &&
-      action.kind !== "cronJob" &&
-      action.kind !== "package",
-  );
-  if (unsupported.length > 0) {
-    throw new ClawUpdateMutationError(
-      "unsupported_update_actions",
-      `This update slice cannot yet apply: ${unsupported.map((action) => `${action.kind}:${action.id}`).join(", ")}.`,
-    );
-  }
   if (!fresh.currentClaw || !fresh.targetClaw) {
     throw new ClawUpdateMutationError("update_invalid", "The Claw update plan lacks identity.");
   }

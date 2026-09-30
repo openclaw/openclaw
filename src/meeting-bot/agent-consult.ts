@@ -156,6 +156,17 @@ async function handleMeetingRealtimeConsultToolCall(
   if (params.abortSignal?.aborted) {
     return;
   }
+  const submitError = async (message: string) => {
+    await params.session.submitToolResult(callId, { error: message });
+    if (!params.abortSignal?.aborted) {
+      params.onTalkEvent?.({
+        type: "tool.error",
+        callId,
+        payload: { name: params.event.name, error: message },
+        final: true,
+      });
+    }
+  };
   const unavailableToolError =
     params.strategy !== "bidi"
       ? `Tool "${params.event.name}" is only available in bidi realtime strategy`
@@ -163,16 +174,7 @@ async function handleMeetingRealtimeConsultToolCall(
         ? `Tool "${params.event.name}" not available`
         : undefined;
   if (unavailableToolError) {
-    await params.session.submitToolResult(callId, { error: unavailableToolError });
-    if (params.abortSignal?.aborted) {
-      return;
-    }
-    params.onTalkEvent?.({
-      type: "tool.error",
-      callId,
-      payload: { name: params.event.name, error: unavailableToolError },
-      final: true,
-    });
+    await submitError(unavailableToolError);
     return;
   }
   await submitMeetingConsultWorkingResponse({
@@ -196,17 +198,7 @@ async function handleMeetingRealtimeConsultToolCall(
     if (params.abortSignal?.aborted) {
       return;
     }
-    const message = formatErrorMessage(error);
-    await params.session.submitToolResult(callId, { error: message });
-    if (params.abortSignal?.aborted) {
-      return;
-    }
-    params.onTalkEvent?.({
-      type: "tool.error",
-      callId,
-      payload: { name: params.event.name, error: message },
-      final: true,
-    });
+    await submitError(formatErrorMessage(error));
     return;
   }
   if (params.abortSignal?.aborted) {

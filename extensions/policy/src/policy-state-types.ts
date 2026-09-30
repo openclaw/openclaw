@@ -247,9 +247,3 @@ export type SecretRefEvidence = {
 export type SecretRefDefaults = NonNullable<Parameters<typeof coerceSecretRef>[1]>;
 
 export const RESERVED_CHANNEL_CONFIG_KEYS = new Set(["defaults", "modelByChannel"]);
-
-export const NON_SLUG_CHARS = /[^a-z0-9-]+/g;
-
-export const COLLAPSE_HYPHENS = /-+/g;
-
-export const TRIM_HYPHENS = /^-+|-+$/g;

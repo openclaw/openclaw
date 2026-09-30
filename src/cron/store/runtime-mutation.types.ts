@@ -12,6 +12,17 @@ type CronScheduleOwnershipFacts = {
 };
 
 export type CronRuntimeMutationContracts = {
+  "cron.mutateExternalState": {
+    input: CronRuntimeMutationInputs["cron.mutateExternalState"];
+    facts: Pick<CronJob, "id" | "delivery" | "failureAlert">;
+    preparation: Pick<CronRunRecoveryPreparation, "nowMs" | "cronConfig" | "failureAlert">;
+    outcome: {
+      job?: CronJob;
+      nowMs: number;
+      notifications: DeferredCronNotifications;
+      logs: CronRunRecoveryOutcome["logs"];
+    };
+  };
   "cron.writeScratch": {
     input: CronRuntimeMutationInputs["cron.writeScratch"];
     facts: { configRevision?: string };

@@ -226,20 +226,12 @@ function hasProviderPluginAllow(params: {
   byProvider?: Record<string, { allow?: string[]; alsoAllow?: string[]; deny?: string[] }>;
   enabledPluginIds: Set<string>;
 }): boolean {
-  if (!params.byProvider) {
-    return false;
-  }
-  for (const policy of Object.values(params.byProvider)) {
-    if (
-      hasExplicitPluginAllow({
-        allowEntries: collectAllowEntries(policy),
-        enabledPluginIds: params.enabledPluginIds,
-      })
-    ) {
-      return true;
-    }
-  }
-  return false;
+  return Object.values(params.byProvider ?? {}).some((policy) =>
+    hasExplicitPluginAllow({
+      allowEntries: collectAllowEntries(policy),
+      enabledPluginIds: params.enabledPluginIds,
+    }),
+  );
 }
 
 function isPinnedRegistrySpec(spec: string): boolean {

@@ -230,11 +230,7 @@ export function appendChatCanvasBlocksToMessage(
   return { ...message, content: appendChatCanvasBlocks(content, previews) };
 }
 
-function messageContainsToolHistoryContent(message: unknown): boolean {
-  const entry = readObjectRecord(message);
-  if (!entry) {
-    return false;
-  }
+function messageContainsToolHistoryContent(entry: Record<string, unknown>): boolean {
   if (
     typeof entry.toolCallId === "string" ||
     typeof entry.tool_call_id === "string" ||

@@ -547,6 +547,7 @@ describe("gateway node pairing authorization", () => {
         type NodeRead = { nodeId: string; displayName?: string; connected?: boolean };
         const readNodes = async (): Promise<NodeRead[]> => {
           const listed = await rpcReq<{ nodes?: NodeRead[] }>(controlWs, "node.list", {});
+          expect(listed.ok, JSON.stringify(listed.error)).toBe(true);
           return listed.payload?.nodes ?? [];
         };
         const readConnectedNode = async (): Promise<NodeRead | undefined> => {

@@ -25,6 +25,10 @@ const KIMI_K2_MODEL_IDS = new Set(["kimi-k2.5", "kimi-k2.6", "kimi-k2.7-code"]);
 const FIXED_ANTHROPIC_REASONING_MODEL_IDS = new Set(["minimax-m2.5", "minimax-m2.7"]);
 const BINARY_REASONING_MODEL_IDS = new Set(["minimax-m3"]);
 
+export function isOpencodeGoKimiNoReasoningModelId(modelId: unknown): boolean {
+  return typeof modelId === "string" && KIMI_K2_MODEL_IDS.has(modelId.trim().toLowerCase());
+}
+
 export function isOpencodeGoFixedAnthropicReasoningModelId(modelId: unknown): boolean {
   return (
     typeof modelId === "string" &&
@@ -37,7 +41,7 @@ export function resolveOpencodeGoThinkingProfile(
   context?: Pick<ProviderDefaultThinkingPolicyContext, "api" | "reasoning" | "compat">,
 ): ProviderThinkingProfile | undefined {
   const normalized = modelId.trim().toLowerCase();
-  if (KIMI_K2_MODEL_IDS.has(normalized)) {
+  if (isOpencodeGoKimiNoReasoningModelId(normalized)) {
     return KIMI_K2_THINKING_PROFILE;
   }
   const effortProfile = resolveEffortThinkingProfile(context?.compat?.supportedReasoningEfforts);

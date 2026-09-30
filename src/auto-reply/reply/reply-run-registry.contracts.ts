@@ -19,11 +19,7 @@ import type {
 } from "../get-reply-options.types.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyFollowupAdmissionBarrierTimeoutPolicy } from "./reply-dispatcher.types.js";
-import * as replyRunSettle from "./reply-run-finalization-lease.js";
-
-type ReplyRunKey = string;
-
-type ReplyBackendKind = "embedded" | "cli";
+import type { ReplyOperationStaleReason } from "./reply-run-finalization-lease.js";
 
 export type ReplyBackendCancelReason = "user_abort" | "restart" | "superseded";
 
@@ -184,7 +180,7 @@ export type ReplyBackendMessageInjectionV2 = {
 };
 
 export type ReplyBackendHandle = {
-  readonly kind: ReplyBackendKind;
+  readonly kind: "embedded" | "cli";
   readonly runId?: string;
   /** Exact authority of this concrete backend attempt, after fallback selection. */
   readonly toolAuthorityFingerprint?: string;
@@ -321,7 +317,7 @@ type ReplyOperationResult =
 
 export type ReplyOperation = {
   readonly personalToolParticipants?: ReplyTurnParticipants;
-  readonly key: ReplyRunKey;
+  readonly key: string;
   readonly sessionId: string;
   /** Captured logical owner for session activity, including raw global keys. */
   readonly agentId?: string;
@@ -371,15 +367,12 @@ export type ReplyOperation = {
       | "memory_flushing"
       | "running",
   ): void;
-  /** Mark this operation as waiting on prior same-session maintenance. */
   markWaitingForDeferredMaintenance(): void;
   /** Return a maintenance-waiting operation to queued if the run has not started. */
   markDeferredMaintenanceWaitEnded(): void;
-  /** Mark this operation as waiting for process-global run capacity. */
   markWaitingForGlobalLane(): void;
   /** Return a global-lane-waiting operation to queued once capacity is granted. */
   markGlobalLaneWaitEnded(): void;
-  /** Mark this operation as an in-flight terminal-session recovery. */
   markTerminalRecovery(): void;
   markAcceptedSteeredInboundAudio(): void;
   /** Freeze the complete caller policy before a concrete backend attempt attaches. */
@@ -391,11 +384,8 @@ export type ReplyOperation = {
   bindToolAuthorityRoute(route: ReplyToolAuthorityRoute): string;
   updateSessionId(nextSessionId: string): void;
   /**
-   * Move this queued operation to another session key's run slot. Native command
-   * turns admit under the slash SOURCE key; when the command continues into a full
-   * agent turn it must own the TARGET session's slot so concurrent target inbounds
-   * queue/steer instead of double-admitting. Throws ReplyRunAlreadyActiveError when
-   * the target slot is owned. Capture the selected agent even when a raw key stays unchanged.
+   * Native commands transfer their queued source reservation to the target session.
+   * An occupied target throws ReplyRunAlreadyActiveError; unchanged keys still adopt agentId.
    */
   updateSessionKey(nextSessionKey: string, agentId?: string): void;
   attachBackend(handle: ReplyBackendHandle): void;
@@ -455,8 +445,6 @@ export const REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS = 15_000;
 // Terminal results must release the lane even if the owner never resumes.
 // Without this, abort/failure can leave the session wedged until process restart.
 export const REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS = 60_000;
-
-type ReplyOperationStaleReason = replyRunSettle.ReplyOperationStaleReason;
 
 export class ReplyRunAlreadyActiveError extends Error {
   constructor(sessionKey: string) {

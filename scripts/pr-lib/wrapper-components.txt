@@ -401,6 +401,7 @@ src/config/includes.ts
 src/config/io.audit.ts
 src/config/io.clobber-snapshot.ts
 src/config/io.context.ts
+src/config/io.effects.ts
 src/config/io.factory.ts
 src/config/io.health-state.kernel.ts
 src/config/io.health-state.ts
@@ -880,6 +881,7 @@ src/infra/windows-encoding.ts
 src/infra/windows-install-roots.ts
 src/infra/windows-port-pids.ts
 src/infra/windows-private-directory.ts
+src/infra/windows-process-census.ts
 src/infra/windows-process-start.ts
 src/infra/worker-cpu.ts
 src/infra/worker-diagnostic-script.ts

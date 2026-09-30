@@ -38,11 +38,11 @@ import { renderSessionActivityPulse } from "./session-activity-pulse.ts";
 import { renderSessionActivitySummary } from "./session-activity-summary.ts";
 import {
   ACTIVITY_TIME_FILTERS,
+  TIME_LABELS,
   projectSessionActivity,
   resolveViewingNow,
   sessionActivityOwner,
   sessionActivityTimestamp,
-  type ActivityTimeFilter,
   type SessionActivityFilters,
 } from "./session-activity.ts";
 
@@ -59,13 +59,6 @@ type SessionActivityViewProps = {
   onAutomationDayToggle: (dayKey: string) => void;
   onFiltersChange: (filters: SessionActivityFilters) => void;
   onSummaryRetry?: (row: GatewaySessionRow) => void;
-};
-
-const TIME_LABELS: Record<ActivityTimeFilter, string> = {
-  "24h": "activityFeed.time24h",
-  "7d": "activityFeed.time7d",
-  "30d": "activityFeed.time30d",
-  all: "activityFeed.timeAll",
 };
 
 type ActivityPerson = PresenceViewer & { count: number };
@@ -587,7 +580,7 @@ export function renderSessionActivityView(props: SessionActivityViewProps) {
         ${props.loading && !props.result ? renderActivityLoading() : nothing}
         ${
           props.result?.activityPulse
-            ? renderSessionActivityPulse(props.result.activityPulse, Date.now(), {
+            ? renderSessionActivityPulse(props.result.activityPulse, props.filters.time, {
                 peopleIncomplete: props.result.peopleIncomplete,
               })
             : nothing

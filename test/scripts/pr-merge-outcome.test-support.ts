@@ -6,6 +6,7 @@ import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-process-env.mts"
 import { requireNodeTool } from "../helpers/node-toolchain.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createMergeGitFixtureFactory } from "./pr-merge-fixture-git.test-support.js";
+import { createMergeGhFixturePrograms } from "./pr-merge-gh-process.test-support.js";
 import {
   createPriorCiFixtureState,
   priorCiSecurityFixtureSource,
@@ -291,16 +292,11 @@ export function createMergeOutcomeFixtureHarness() {
     };
     const state = (): typeof initial => JSON.parse(readFileSync(statePath, "utf8"));
     save(initial);
-    const gh = template.program(
-      "gh.mjs",
+    const ghPrograms = createMergeGhFixturePrograms(
       `
-import fs from "node:fs";
-import { createHash } from "node:crypto";
-import { execFileSync, spawnSync } from "node:child_process";
-const [route,...args]=process.argv.slice(2);
 const file=process.env.FIXTURE_STATE;
 const s=JSON.parse(fs.readFileSync(file,"utf8"));
-const git=(args,input)=>execFileSync("git",["-c","commit.gpgsign=false","-c","core.hooksPath=/dev/null",...args],{cwd:process.env.FIXTURE_REPO,input,encoding:"utf8"}).trim();
+const git=(args,input)=>execFileSync("git",["-c","commit.gpgsign=false","-c","core.hooksPath=/dev/null",...args],{cwd:process.env.FIXTURE_REPO,env:process.env,input,encoding:"utf8"}).trim();
 const save=()=>fs.writeFileSync(file,JSON.stringify(s));
 const out=(value)=>{
   const body=typeof value==="string"?value:JSON.stringify(value);
@@ -409,7 +405,7 @@ else if(args[0]==="api"&&args.some(arg=>new RegExp("^repos/[^/]+/[^/]+$").test(a
   if(!args.includes("--hostname")) fail("missing repository hostname");
   if(s.repoAuthorityUnavailable) fail("repository metadata unavailable");
   if(s.restDispatchChange) {
-    const retained=spawnSync("git",["show","refs/openclaw/pr-merge-outcomes/123:outcome.json"],{cwd:process.env.FIXTURE_REPO,encoding:"utf8"});
+    const retained=spawnSync("git",["show","refs/openclaw/pr-merge-outcomes/123:outcome.json"],{cwd:process.env.FIXTURE_REPO,env:process.env,encoding:"utf8"});
     if(retained.status===0) {
       const intent=JSON.parse(retained.stdout);
       if(intent.phase==="intent"&&intent.accepted===false) {
@@ -463,7 +459,7 @@ else if(args[0]==="api"&&args.includes("repos/fixture/repo/git/ref/heads/main"))
   if(s.restObservation?.main&&!s.restObservation.afterPolicyRead&&s.restMainReads===0&&s.observationReads>0) applyRestObservation();
   s.restMainReads++;
   if(s.restMainAdvance&&s.pr.state==="OPEN") {
-    const retained=spawnSync("git",["show","refs/openclaw/pr-merge-outcomes/123:outcome.json"],{cwd:process.env.FIXTURE_REPO,encoding:"utf8"});
+    const retained=spawnSync("git",["show","refs/openclaw/pr-merge-outcomes/123:outcome.json"],{cwd:process.env.FIXTURE_REPO,env:process.env,encoding:"utf8"});
     if(retained.status===0) {
       const intent=JSON.parse(retained.stdout);
       if(intent.phase==="intent"&&intent.accepted===false) {
@@ -693,6 +689,8 @@ else if(args[0]==="pr"&&args[1]==="view") {
 save();
 `,
     );
+    const gh = template.program("gh.cjs", ghPrograms.cli);
+    const ghPreload = template.program("gh-preload.cjs", ghPrograms.preload);
     const shell = template.program(
       "invoke.sh",
       `#!/usr/bin/env bash
@@ -787,12 +785,14 @@ fi
       TMPDIR: root,
       // Reuse compiled owner modules across native children, never mutable fixture state.
       NODE_COMPILE_CACHE: template.compileCache,
+      NODE_OPTIONS: `--require ${JSON.stringify(ghPreload)}`,
       FIXTURE_STATE: statePath,
       FIXTURE_ROOT: root,
       FIXTURE_REPO: repo,
       FIXTURE_REMOTE: remote,
       FIXTURE_SCRIPTS: scripts,
       FIXTURE_GH: gh,
+      FIXTURE_GH_BIN: join(bin, "gh"),
       FIXTURE_NODE: nodeExecutable,
       OPENCLAW_PR_MERGE_METHOD: "squash",
       OPENCLAW_PR_STRICT_DRIFT: "",
