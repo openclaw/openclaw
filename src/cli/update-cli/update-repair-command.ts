@@ -53,6 +53,8 @@ import { resolveServiceRefreshEnv } from "./update-command-service-env.js";
 
 /** Public repair can clear a stale ledger without entering post-core maintenance. */
 export async function updateRepairCommand(opts: UpdateFinalizeOptions): Promise<void> {
+  // Recovery refusal precedes discovery; later mutation checks still revalidate.
+  await assertUpdateRecoveryAdmission({ env: process.env });
   await refuseHostOwnedUpdate(await resolveUpdateRoot(), opts);
   const timeoutMs = parseUpdateTimeoutMs(opts.timeout);
   const env = resolveServiceRefreshEnv(process.env, tryProcessCwd());
