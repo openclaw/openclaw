@@ -144,6 +144,8 @@ describe("Discord Crabline real-plugin roundtrip", () => {
       const snapshotEvents = await readRecorderEvents(
         path.resolve(suite.result.outputDir, snapshotRecorderPath),
       );
+      expect(path.resolve(suite.result.outputDir, snapshotRecorderPath)).not.toBe(recorderPath);
+      expect(snapshotEvents.some((event) => event.accepted === true)).toBe(true);
       expect(
         snapshotEvents.some(
           (event) =>
@@ -153,7 +155,7 @@ describe("Discord Crabline real-plugin roundtrip", () => {
             (readStringValue(readObject(event.body)?.content) ?? "").includes(EXPECTED_MARKER) &&
             event.accepted === true,
         ),
-      ).toBe(true);
+      ).toBe(false);
 
       // The suite returns only after Gateway, WebSocket, HTTP, recorder, and temporary runtime
       // owners have all completed their ordered cleanup.
