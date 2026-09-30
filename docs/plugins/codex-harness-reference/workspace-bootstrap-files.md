@@ -97,7 +97,9 @@ or change their native account configuration.
 Previously embedded persona, conversation text, and explicit task handoffs are
 not removed from existing histories or full-history forks.
 
-### Workspace instructions without a managed relay
+<a id="skill-catalogs-without-a-managed-relay" />
+
+### Skills, persona, and memory without a managed relay
 
 On connections without a managed inference relay, eligible skills, persona
 (`SOUL.md`, `IDENTITY.md`, `USER.md`), and memory guidance share a refreshable
