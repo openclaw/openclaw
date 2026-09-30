@@ -642,7 +642,14 @@ export function createSessionReconciliation(host: Host) {
           eventResult: reduced,
           ...(!reduced.deletedKey &&
           (!reduced.admittedRow || !Array.isArray(asNullableRecord(snapshot)?.ancestorSessions))
-            ? { invalidateRevision: eventObservation.revision }
+            ? reduced.admittedRow && asNullableRecord(asNullableRecord(snapshot)?.session)
+              ? {
+                  certification: {
+                    revision: eventObservation.revision,
+                    reason: invalidationReason,
+                  },
+                }
+              : { invalidateRevision: eventObservation.revision }
             : {}),
         };
       },

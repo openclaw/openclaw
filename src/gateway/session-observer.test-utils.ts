@@ -83,6 +83,26 @@ export async function flushObserver(): Promise<void> {
   }
 }
 
+export function createObserverTimerTracker() {
+  // Gateway workers share a fake clock; disposal owns only this observer's handles.
+  const ownedTimers = new Set<ReturnType<typeof setTimeout>>();
+  const setTimeoutFn = Object.assign((callback: () => void, delay?: number) => {
+    const timer = setTimeout(() => {
+      ownedTimers.delete(timer);
+      callback();
+    }, delay);
+    ownedTimers.add(timer);
+    return timer;
+  }, setTimeout);
+  const clearTimeoutFn: typeof clearTimeout = (timer) => {
+    if (timer && typeof timer === "object") {
+      ownedTimers.delete(timer);
+    }
+    clearTimeout(timer);
+  };
+  return { ownedTimers, setTimeoutFn, clearTimeoutFn };
+}
+
 export function createHarness(options?: {
   setTimeoutFn?: SessionObserverDeps["setTimeoutFn"];
   clearTimeoutFn?: SessionObserverDeps["clearTimeoutFn"];

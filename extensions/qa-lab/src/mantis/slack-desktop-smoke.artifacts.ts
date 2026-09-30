@@ -7,7 +7,7 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 type ArtifactRoot = Awaited<ReturnType<typeof root>>;
 type ApprovalIdentity = { approvalId: string; channelId: string; messageTs: string };
 
-export type SlackDesktopRemoteMetadata = {
+type SlackDesktopRemoteMetadata = {
   gatewayAlive?: boolean;
   gatewayPid?: string;
   hydrateMode?: string;
@@ -71,14 +71,14 @@ function assertApprovalCheckpointBaseJson(params: {
   scenarioId: string;
   state: MantisApprovalCheckpointState;
 }) {
-  if (params.record.version !== 1) {
-    throw new Error(`${params.label} has unexpected version in ${params.filePath}`);
-  }
-  if (params.record.scenarioId !== params.scenarioId) {
-    throw new Error(`${params.label} has unexpected scenarioId in ${params.filePath}`);
-  }
-  if (params.record.state !== params.state) {
-    throw new Error(`${params.label} has unexpected state in ${params.filePath}`);
+  for (const [field, expected] of [
+    ["version", 1],
+    ["scenarioId", params.scenarioId],
+    ["state", params.state],
+  ] as const) {
+    if (params.record[field] !== expected) {
+      throw new Error(`${params.label} has unexpected ${field} in ${params.filePath}`);
+    }
   }
 }
 
@@ -118,11 +118,10 @@ function assertApprovalCheckpointJson(params: {
   if (params.record.decision !== (params.state === "pending" ? null : "allow-once")) {
     throw new Error(`${params.label} has an unexpected approval decision.`);
   }
-  const message = params.record.message;
-  if (!isRecord(message)) {
+  const candidate = params.record.message;
+  if (!isRecord(candidate)) {
     throw new Error(`${params.label} is missing Slack message evidence in ${params.filePath}`);
   }
-  const candidate = message;
   if (typeof candidate.text !== "string") {
     throw new Error(`${params.label} message evidence is missing text in ${params.filePath}`);
   }
@@ -253,11 +252,10 @@ async function readRemoteMetadata(
     return undefined;
   }
   try {
-    const parsed: unknown = JSON.parse(await owner.readText(metadataPath));
-    if (!isRecord(parsed)) {
+    const candidate: unknown = JSON.parse(await owner.readText(metadataPath));
+    if (!isRecord(candidate)) {
       return undefined;
     }
-    const candidate = parsed;
     return {
       gatewayAlive:
         typeof candidate.gatewayAlive === "boolean" ? candidate.gatewayAlive : undefined,

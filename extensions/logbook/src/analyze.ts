@@ -218,6 +218,12 @@ export function parseCardsJson(params: { raw: string; day: string }): CardParseR
       };
     }
     if (overlapMs > 0) {
+      if (current.endMs <= previous.endMs) {
+        return {
+          ok: false,
+          error: `Card ${normalized.length}: endTime must be after the previous card's endTime.`,
+        };
+      }
       // Trim sub-minute overlaps instead of round-tripping to the model again.
       normalized.push({ ...current, startMs: previous.endMs });
     } else {

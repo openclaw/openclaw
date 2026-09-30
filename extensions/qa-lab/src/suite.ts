@@ -293,20 +293,12 @@ export function shouldRunQaSuiteWithIsolatedScenarioWorkers(params: {
   lab?: QaLabServerHandle;
   startLab?: QaSuiteStartLabFn;
 }) {
-  if (
-    !shouldUseIsolatedQaSuiteScenarioWorkers({
+  return (
+    shouldUseIsolatedQaSuiteScenarioWorkers({
       scenarios: params.scenarios,
       concurrency: params.concurrency,
-    })
-  ) {
-    return false;
-  }
-
-  if (params.concurrency === 1 && params.lab && !params.startLab) {
-    return false;
-  }
-
-  return true;
+    }) && !(params.concurrency === 1 && params.lab && !params.startLab)
+  );
 }
 
 const QA_IMAGE_UNDERSTANDING_PNG_BASE64 =
@@ -459,7 +451,6 @@ export async function captureGatewayHeapSnapshotCheckpoint(params: {
 }
 
 export { buildQaSuiteSummaryJson } from "./suite-artifacts.js";
-export type { QaSuiteSummaryJsonParams } from "./suite-artifacts.js";
 export type { QaSuiteSummaryJson } from "./suite-summary.js";
 
 export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuiteResult> {

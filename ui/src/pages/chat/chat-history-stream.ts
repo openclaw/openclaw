@@ -97,32 +97,14 @@ function replayedCommentaryItemIds(
   return itemIds;
 }
 
-function onlyInFlightRunProjectionChanged(
-  previous: ReturnType<typeof getChatSessionProjection>["runs"],
-  current: ReturnType<typeof getChatSessionProjection>["runs"],
-  runId: string,
-): boolean {
-  for (const [previousRunId, run] of Object.entries(previous)) {
-    if (previousRunId !== runId && current[previousRunId] !== run) {
-      return false;
-    }
-  }
-  for (const [currentRunId, run] of Object.entries(current)) {
-    if (currentRunId !== runId && previous[currentRunId] !== run) {
-      return false;
-    }
-  }
-  return true;
-}
-
 function runProjectionsUnchanged(
   previous: ReturnType<typeof getChatSessionProjection>["runs"],
   current: ReturnType<typeof getChatSessionProjection>["runs"],
+  exceptRunId?: string,
 ): boolean {
-  const previousEntries = Object.entries(previous);
   return (
-    previousEntries.length === Object.keys(current).length &&
-    previousEntries.every(([runId, run]) => current[runId] === run)
+    Object.entries(previous).every(([id, run]) => id === exceptRunId || current[id] === run) &&
+    Object.entries(current).every(([id, run]) => id === exceptRunId || previous[id] === run)
   );
 }
 
@@ -271,7 +253,7 @@ export function applyHistoryRun(params: {
   const sameRunContinued =
     state.chatRunId === inFlightRunId &&
     projectedInFlightRun?.status === "streaming" &&
-    onlyInFlightRunProjectionChanged(previousRunProjections, currentRunProjections, inFlightRunId);
+    runProjectionsUnchanged(previousRunProjections, currentRunProjections, inFlightRunId);
   const retainsLiveStream =
     sameRunContinued ||
     (state.chatRunId === inFlightRunId &&

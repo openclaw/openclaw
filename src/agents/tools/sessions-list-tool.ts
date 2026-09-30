@@ -346,9 +346,8 @@ export function createSessionsListTool(opts?: {
               typeof (entry as { ownerSessionKey?: unknown }).ownerSessionKey === "string"
                 ? (entry as { ownerSessionKey?: string }).ownerSessionKey
                 : undefined,
-            spawnedBy: typeof entry.spawnedBy === "string" ? entry.spawnedBy : undefined,
-            parentSessionKey:
-              typeof entry.parentSessionKey === "string" ? entry.parentSessionKey : undefined,
+            spawnedBy: readStringValue(entry.spawnedBy),
+            parentSessionKey: readStringValue(entry.parentSessionKey),
           });
           const kind = classifySessionListKind(entry);
           if (
@@ -410,9 +409,8 @@ export function createSessionsListTool(opts?: {
         });
 
         const entryChannel = readStringValue(entry.channel);
-        const entryOrigin = entry.origin as Record<string, unknown> | undefined;
-        const originChannel =
-          typeof entryOrigin?.provider === "string" ? entryOrigin.provider : undefined;
+        const entryOrigin = entry.origin;
+        const originChannel = readStringValue(entryOrigin?.provider);
         const deliveryContext = entry.deliveryContext;
         const deliveryChannel = readStringValue(deliveryContext?.channel);
         const lastChannel = deliveryChannel ?? readStringValue(entry.lastChannel);
@@ -433,11 +431,7 @@ export function createSessionsListTool(opts?: {
         const derivedTitle = readStringValue(entry.derivedTitle);
         const lastMessagePreview = readStringValue(entry.lastMessagePreview);
         const parentSessionKeyRaw =
-          typeof entry.parentSessionKey === "string"
-            ? entry.parentSessionKey
-            : typeof entry.spawnedBy === "string"
-              ? entry.spawnedBy
-              : undefined;
+          readStringValue(entry.parentSessionKey) ?? readStringValue(entry.spawnedBy);
         const parentSessionKey = parentSessionKeyRaw
           ? visibleReference(parentSessionKeyRaw)
           : undefined;

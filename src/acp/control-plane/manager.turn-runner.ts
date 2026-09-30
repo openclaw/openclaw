@@ -1,4 +1,3 @@
-/** Runs ACP turns, failover, terminal delivery, and timeout cleanup. */
 import type { AcpRuntime, AcpRuntimeHandle } from "@openclaw/acp-core/runtime/types";
 import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -52,7 +51,6 @@ import {
 
 const ACP_TURN_TIMEOUT_GRACE_MS = 1_000;
 
-/** Executes one ACP prompt turn against the selected backend and records terminal state. */
 export async function runManagerTurn(params: {
   input: AcpRunTurnInput;
   acceptedTurn: AcceptedTurnState;

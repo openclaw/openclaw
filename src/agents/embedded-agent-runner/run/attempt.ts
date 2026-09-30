@@ -6,6 +6,7 @@ import { resolveContextEngineOwnerPluginId } from "../../../context-engine/regis
 import { runWithAsyncWorkResources } from "../../../shared/async-work-resources.js";
 import { getAsyncWorkSignal } from "../../../shared/async-work-scope.js";
 import { createStageTimingTracker } from "../../../shared/stage-timing.js";
+import { clearToolActivityRun } from "../../../shared/tool-activity-heartbeat.js";
 import {
   bindOperatorModelExecution,
   readRunOperatorAuthority,
@@ -54,7 +55,6 @@ import { prepareEmbeddedAttemptToolCatalog } from "./attempt-tool-catalog.js";
 import { prepareEmbeddedAttemptToolBase } from "./attempt-tool-prepare.js";
 import { prepareEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle-prepare.js";
 import { measureEmbeddedAgentPreparation } from "./preparation-timing.js";
-import { clearToolActivityRun } from "./tool-activity-heartbeat.js";
 import type {
   EmbeddedAttemptExecutionState,
   EmbeddedRunAttemptParams,
@@ -369,6 +369,7 @@ async function runEmbeddedAttemptOwned(
     const sessionLock = await prepare("attempt.transcript-lifecycle", () =>
       prepareEmbeddedAttemptTranscriptLifecycle({
         attempt: params,
+        runAbortController,
         externalAbortController,
       }),
     );

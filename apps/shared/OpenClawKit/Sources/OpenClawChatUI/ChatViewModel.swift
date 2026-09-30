@@ -152,16 +152,42 @@ public final class OpenClawChatViewModel {
 
     public private(set) var toolActivities: [OpenClawChatPendingToolCall] = []
     private(set) var timelineRevision: UInt64 = 0
-    public internal(set) var sessions: [OpenClawChatSessionEntry] = [] {
-        didSet {
-            syncContextUsageFraction()
-            syncActiveSessionRunIDsFromCurrentSession()
+    var legacySessions: [OpenClawChatSessionEntry] = []
+
+    public internal(set) var sidebarData: OpenClawChatSessionSidebarData?
+
+    var legacySwarmSessions: [OpenClawChatSessionEntry] = []
+    var swarmRowIDs: [String] = [] {
+        didSet { self.cachedSwarmRows = nil }
+    }
+
+    @ObservationIgnored var cachedSwarmRows: [OpenClawChatSessionEntry]?
+    @ObservationIgnored var swarmProjectionRevision = -1
+    public internal(set) var swarmSessions: [OpenClawChatSessionEntry] {
+        get {
+            guard let owner = self.sidebarData else { return self.legacySwarmSessions }
+            let revision = owner.projectionRevision
+            let ids = self.swarmRowIDs
+            let activity = self.swarmActivityState
+            if self.swarmProjectionRevision == revision, let rows = self.cachedSwarmRows { return rows }
+            owner.onProjectionComputed?(.swarm)
+            let rows = activity.decorate(owner.project(ids))
+            self.cachedSwarmRows = rows
+            self.swarmProjectionRevision = revision
+            return rows
+        }
+        set {
+            if let owner = self.sidebarData {
+                self.swarmRowIDs = owner.receive(newValue, read: owner.beginRead())
+            } else { self.legacySwarmSessions = newValue }
         }
     }
 
-    public internal(set) var swarmSessions: [OpenClawChatSessionEntry] = []
     var activeSwarmGroups: [OpenClawChatSwarmGroup] = []
-    var swarmActivityState = OpenClawChatSwarmActivityState()
+    var swarmActivityState = OpenClawChatSwarmActivityState() {
+        didSet { self.cachedSwarmRows = nil }
+    }
+
     @ObservationIgnored
     var swarmRefreshGeneration: UInt64 = 0
     @ObservationIgnored
@@ -592,9 +618,10 @@ public final class OpenClawChatViewModel {
         self.cancelHistoryInvalidationRefresh()
         self.retireQuestionAuthority()
         self.isTransportDetached = true
+        self.sidebarData?.invalidate(clear: true)
         let transport = self.transport
         Task { await transport.releaseActiveSessionSubscription() }
-        self.invalidateSourceContext()
+        self.sourcePreviewState.invalidate()
         self.endPendingToolActivities()
         self.eventTask?.cancel()
         self.bootstrapTask?.cancel()
@@ -660,12 +687,12 @@ public final class OpenClawChatViewModel {
         let agentChanged = self.activeAgentId != nextAgentId
         let contractChanged = self.sessionRoutingContract != nextContract
         guard agentChanged || contractChanged else {
-            if blocksAttachmentOwnerChange {
+            if isAttachmentOwnerPinned {
                 self.deferredDeliveryIdentity = nil
             }
             return
         }
-        if blocksAttachmentOwnerChange {
+        if isAttachmentOwnerPinned {
             self.deferredDeliveryIdentity = DeferredDeliveryIdentity(
                 activeAgentID: nextAgentId,
                 sessionRoutingContract: nextContract)
@@ -677,7 +704,7 @@ public final class OpenClawChatViewModel {
         let contractRoutingChanged = contractChanged &&
             (usesMutableContractRouting(for: sessionRoutingContract) ||
                 self.usesMutableContractRouting(for: nextContract))
-        if agentChanged {
+        if agentChanged, self.sidebarData == nil {
             self.sessions = ChatSessionSidebarModel.clearingForeignGlobalObserverDigest(
                 in: self.sessions,
                 activeAgentId: self.explicitSessionAgentID ??
@@ -752,6 +779,11 @@ extension OpenClawChatViewModel {
         if self.messages.count != previousCount {
             self.markTimelineChanged()
         }
+    }
+
+    func clearStreamingActivity() {
+        self.turnToolCallsById = [:]
+        self.updateStreamingAssistantText(nil)
     }
 
     func updateStreamingAssistantText(_ text: String?) {
@@ -872,8 +904,7 @@ extension OpenClawChatViewModel {
         self.invalidateOutboxBranchReconciliation()
         self.healthOK = false
         clearPendingRuns(reason: nil)
-        self.turnToolCallsById = [:]
-        self.updateStreamingAssistantText(nil)
+        self.clearStreamingActivity()
         self.updateActiveSessionRunWithoutChatSnapshot(false)
         self.sessionId = nil
         let historyRequest = self.beginHistoryRequest(captureLatestUserTurn: requestedSessionKey == nil)
@@ -977,8 +1008,7 @@ extension OpenClawChatViewModel {
             if refresh.sessionHasActiveRun,
                Self.hasUnansweredLatestUser(in: self.messages)
             {
-                self.turnToolCallsById = [:]
-                self.updateStreamingAssistantText(nil)
+                self.clearStreamingActivity()
                 // Keep a known run ID authoritative so its stream and terminal
                 // events still route here. Synthesize activity only after the
                 // client has no run identity to preserve.
@@ -988,8 +1018,7 @@ extension OpenClawChatViewModel {
                 clearPendingRuns(
                     reason: nil,
                     hapticEvent: assistantHapticEventAfterLatestUser())
-                self.turnToolCallsById = [:]
-                self.updateStreamingAssistantText(nil)
+                self.clearStreamingActivity()
             }
         }
         await pollHealthIfNeeded(force: true, sessionSnapshot: context.session)
@@ -1036,6 +1065,7 @@ extension OpenClawChatViewModel {
             let metadataGeneration = self.sessionMetadataGeneration
             let settingsPatchRevision = self.settingsPatchRevisionsByTarget[target, default: 0]
             let successfulSettingsPatchRequestID = self.lastSuccessfulSettingsPatchRequestIDsByTarget[target]
+            let sidebarRead = self.sidebarData?.beginRead()
             let res: OpenClawChatSessionsListResponse
             do {
                 res = try await self.transport.listSessions(
@@ -1071,6 +1101,7 @@ extension OpenClawChatViewModel {
                 }
                 continue
             }
+            if let sidebarData, sidebarRead?.scope != sidebarData.scopeRevision { continue }
             self.latestAppliedSessionsFetchRequestID = sessionsFetchRequestID
             let organized = OpenClawChatSessionListOrganizer.organize(res.sessions)
             for session in organized {
@@ -1081,7 +1112,11 @@ extension OpenClawChatViewModel {
                         agentID: session.agentId),
                     unread: session.unread)
             }
-            self.sessions = self.applyingLocalUnreadOverrides(to: organized)
+            if let sidebarData, let sidebarRead {
+                sidebarData.receive(organized, read: sidebarRead, replacingAgent: session.deliveryAgentID ?? "")
+            } else {
+                self.sessions = self.applyingLocalUnreadOverrides(to: organized)
+            }
             self.sessionDefaults = res.defaults
             self.restoreOverlappingSettingsPatch(
                 requestID: overlappingSuccessfulSettingsPatchRequestID,
@@ -1165,7 +1200,7 @@ extension OpenClawChatViewModel {
             self.errorText = "This connection cannot open that agent's conversation. Reconnect and try again."
             return
         }
-        if blocksAttachmentOwnerChange {
+        if isAttachmentOwnerPinned {
             switch intent {
             case .externalSync:
                 self.deferredExternalSessionKey = next
@@ -1180,7 +1215,7 @@ extension OpenClawChatViewModel {
         self.advanceSessionGeneration()
         self.clearSessionOwnedState()
         if self.currentSessionSnapshot().deliveryAgentID != (nextAgentID ?? encodedAgentID ?? self.activeAgentId) {
-            self.sessions = []
+            if self.sidebarData == nil { self.sessions = [] }
             self.hasAppliedLiveSessions = false
             self.swarmEnabled = false
             self.resetSwarmProgress()
@@ -1199,7 +1234,7 @@ extension OpenClawChatViewModel {
     }
 
     func applyDeferredExternalStateIfReady() {
-        guard !blocksAttachmentOwnerChange else { return }
+        guard !isAttachmentOwnerPinned else { return }
         if let identity = deferredDeliveryIdentity {
             self.deferredDeliveryIdentity = nil
             self.syncDeliveryIdentity(
@@ -1245,8 +1280,7 @@ extension OpenClawChatViewModel {
         self.provisionalFinalMessagesByID.removeAll()
         resetOutboxPresentationForSessionSwitch()
         self.sessionId = nil
-        self.turnToolCallsById = [:]
-        self.updateStreamingAssistantText(nil)
+        self.clearStreamingActivity()
         self.clearProgressCard()
         self.updateActiveSessionRunWithoutChatSnapshot(false)
         self.activeSessionRunIDs = []
@@ -1413,6 +1447,10 @@ extension OpenClawChatViewModel {
         target: ModelPatchTarget,
         operation: @escaping @MainActor (OpenClawChatSessionSettingsRouteLease?) async -> Void)
     {
+        let rosterOwner = self.sidebarData
+        let rosterScope = rosterOwner?.scopeRevision
+        let rosterTarget = rosterOwner?.row(
+            key: target.canonicalSessionKey, agentID: target.agentID ?? self.currentSessionSnapshot().deliveryAgentID)
         let previousPatchTail = self.settingsPatchTailsByTarget[target]
         let previousTail = previousPatchTail?.task
         let previousRouteLeaseTask = previousPatchTail?.routeLeaseTask
@@ -1427,6 +1465,7 @@ extension OpenClawChatViewModel {
             await previousTail?.value
             guard let self else { return }
             await operation(routeLease)
+            rosterOwner?.settleSettingsWrite(target: rosterTarget, scope: rosterScope)
             self.endSettingsPatch(for: target)
             self.finishSettingsPatchTail(requestID: requestID, target: target)
         }

@@ -92,6 +92,13 @@ export function summarizeSidebarSessionAttention(
   );
 }
 
+export type SidebarToolActivity = {
+  name: string;
+  itemId?: string;
+  toolCallId?: string;
+  text?: string;
+};
+
 export type SidebarRecentSession = {
   key: string;
   agentId?: string;

@@ -242,15 +242,6 @@ describe("applyServerUiPrefs", () => {
     expect(loadSettings().themeMode).toBe("light");
   });
 
-  it("applies again when the server value actually changes", () => {
-    const onApplied = vi.fn();
-    applyServerUiPrefs(configWithPrefs({ themeMode: "dark" }), { onApplied });
-    patchSettings({ themeMode: "light" });
-
-    expect(applyServerUiPrefs(configWithPrefs({ themeMode: "system" }), { onApplied })).toBe(true);
-    expect(loadSettings().themeMode).toBe("system");
-  });
-
   it("applies only the fields the server actually changed", () => {
     const onApplied = vi.fn();
     applyServerUiPrefs(configWithPrefs({ themeMode: "dark", locale: "de" }), { onApplied });

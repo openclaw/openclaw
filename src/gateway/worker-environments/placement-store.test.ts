@@ -764,10 +764,10 @@ describe("worker session placement store", () => {
 
     const manifestRef = `sha256:${"f".repeat(64)}`;
     const stagedResultRef = `refs/openclaw/worker-results/${claim.claimId}`;
-    expect(() =>
+    await expect(
       store.recordStagedWorkspaceResult(claim, "refs/openclaw/worker-results/unsafe.claim"),
-    ).toThrow("Worker workspace staged result reference is invalid");
-    store.recordStagedWorkspaceResult(claim, stagedResultRef);
+    ).rejects.toThrow("Worker workspace staged result reference is invalid");
+    await store.recordStagedWorkspaceResult(claim, stagedResultRef);
     store.recordWorkspaceResultConflict(claim, {
       paths: [" z.txt ", "a.txt", "a.txt"],
       stagedResultRef,

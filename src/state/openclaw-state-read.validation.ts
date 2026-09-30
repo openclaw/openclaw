@@ -70,6 +70,15 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
           typeof input.command.conversation.parentConversationId === "string")) ||
       (input.command.type === "cron.activeReceiptOwners" &&
         typeof input.command.agentId === "string") ||
+      (input.command.type === "cron.scratch" &&
+        typeof input.command.storeKey === "string" &&
+        isRecord(input.command.selector) &&
+        ((input.command.selector.kind === "job" &&
+          typeof input.command.selector.jobId === "string" &&
+          typeof input.command.selector.createdAtMsFallback === "number" &&
+          Number.isFinite(input.command.selector.createdAtMsFallback)) ||
+          (input.command.selector.kind === "heartbeat" &&
+            typeof input.command.selector.agentId === "string"))) ||
       (input.command.type === "cron.jobNames" &&
         (input.command.storePath === undefined || typeof input.command.storePath === "string") &&
         Array.isArray(input.command.jobIds) &&
@@ -195,6 +204,15 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
         typeof input.command.input.now === "number" &&
         (typeof input.command.input.runId === "string" ||
           typeof input.command.input.executionId === "string")) ||
+      (input.command.type === "githubPublication.sharedObservation" &&
+        isRecord(input.command.input) &&
+        (input.command.input.kind === "repository" || input.command.input.kind === "worktree") &&
+        isRecord(input.command.input.session) &&
+        typeof input.command.input.session.agentId === "string" &&
+        typeof input.command.input.session.sessionKey === "string" &&
+        typeof input.command.input.session.sessionId === "string" &&
+        isRecord(input.command.input.selector) &&
+        isRecord(input.command.input.entry)) ||
       (input.command.type === "sessionRepositoryWorkspaces.find" &&
         Array.isArray(input.command.owners) &&
         input.command.owners.every(

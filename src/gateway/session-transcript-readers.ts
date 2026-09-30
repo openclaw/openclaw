@@ -110,26 +110,10 @@ export const readSessionMessagesAroundIdWithStatsAsync = createHistoryPageReader
   (read, target, options) => read({ kind: "around-id", params: { target, options } }),
 );
 
-export function readSessionArtifacts(
+export function readSessionArtifacts<Query extends SessionArtifactReadQuery>(
   scope: SessionTranscriptReadScope,
-  query: Extract<SessionArtifactReadQuery, { kind: "list" }>,
-): Promise<Extract<SessionArtifactReadResult, { kind: "list" }>>;
-export function readSessionArtifacts(
-  scope: SessionTranscriptReadScope,
-  query: Extract<SessionArtifactReadQuery, { kind: "image-page" }>,
-): Promise<Extract<SessionArtifactReadResult, { kind: "image-page" }>>;
-export function readSessionArtifacts(
-  scope: SessionTranscriptReadScope,
-  query: Extract<SessionArtifactReadQuery, { kind: "image" }>,
-): Promise<Extract<SessionArtifactReadResult, { kind: "image" }>>;
-export function readSessionArtifacts(
-  scope: SessionTranscriptReadScope,
-  query: Extract<SessionArtifactReadQuery, { kind: "download-grant" }>,
-): Promise<Extract<SessionArtifactReadResult, { kind: "download-grant" }>>;
-export function readSessionArtifacts(
-  scope: SessionTranscriptReadScope,
-  query: Extract<SessionArtifactReadQuery, { kind: "download-response" }>,
-): Promise<Extract<SessionArtifactReadResult, { kind: "download-response" }>>;
+  query: Query,
+): Promise<Extract<SessionArtifactReadResult, { kind: Query["kind"] }>>;
 export async function readSessionArtifacts(
   scope: SessionTranscriptReadScope,
   inputQuery: SessionArtifactReadQuery,
@@ -205,4 +189,34 @@ export async function readSessionMessageCountAsync(
     await waitForSessionTranscriptProjection(target);
     return await readCount();
   }
+}
+
+export async function readSessionReactionsAsync(scope: SessionTranscriptReadScope) {
+  const target = captureHistoryReadScope(scope);
+  if (usesProcessHeldTranscript(target)) {
+    const { listSessionReactions } = await import("../config/sessions/session-reaction-store.js");
+    if (!target.sessionKey) {
+      throw new Error("Reaction reads require a session key");
+    }
+    return listSessionReactions(
+      { ...target, sessionKey: target.sessionKey },
+      { sessionId: target.sessionId },
+    );
+  }
+  const { readSessionHistoryPageInWorker } =
+    await import("../config/sessions/session-history-worker-runtime.js");
+  return readSessionHistoryPageInWorker({ kind: "reactions", params: { target } });
+}
+
+export async function readSessionConversationBindingAsync(
+  scope: SessionTranscriptReadScope,
+  conversationRef: string,
+) {
+  const target = captureHistoryReadScope(scope);
+  const { readSessionHistoryPageInWorker } =
+    await import("../config/sessions/session-history-worker-runtime.js");
+  return readSessionHistoryPageInWorker({
+    kind: "conversation-binding",
+    params: { target, conversationRef },
+  });
 }

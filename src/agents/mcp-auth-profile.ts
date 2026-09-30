@@ -7,8 +7,10 @@ import { filterStringRecord, isRecord } from "@openclaw/normalization-core/recor
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { BundleMcpConfig, BundleMcpServerConfig } from "../plugins/bundle-mcp.js";
 import { createLazyRuntimeMethod } from "../shared/lazy-runtime.js";
-import { buildMcpOAuthHttpFetch, withoutMcpAuthorizationHeader } from "./mcp-http-fetch.js";
-import type { McpOAuthConfig } from "./mcp-oauth.js";
+import {
+  buildMcpOAuthAuthorizationFetch,
+  withoutMcpAuthorizationHeader,
+} from "./mcp-http-fetch.js";
 import { resolveMcpTransportConfig } from "./mcp-transport-config.js";
 
 type McpAuthProfileOptions = {
@@ -67,20 +69,10 @@ async function resolveMcpBearerToken(params: {
     import("./mcp-oauth-identity.js"),
     import("./mcp-oauth.js"),
   ]);
-  const fetchFn = buildMcpOAuthHttpFetch({
-    sslVerify: resolved.sslVerify,
-    clientCert: resolved.clientCert,
-    clientKey: resolved.clientKey,
-    resourceUrl: resolved.url,
-    // External bearer projection performs only OAuth discovery/token work,
-    // so the configured deadline can own the full short-lived response.
-    timeoutMs: resolved.requestTimeoutMs,
-    headers: resolved.headers,
-  });
   return await resolveMcpOAuthAccessToken({
     identity: operatorMcpOAuthIdentity(params.serverName, resolved.url),
-    config: resolved.oauth as McpOAuthConfig | undefined,
-    fetchFn,
+    config: resolved.oauth,
+    fetchFn: buildMcpOAuthAuthorizationFetch(resolved),
   });
 }
 

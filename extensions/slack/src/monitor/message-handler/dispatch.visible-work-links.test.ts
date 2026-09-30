@@ -290,7 +290,14 @@ describe("Slack progress visible work session links", () => {
       expect(finalizeCard).toHaveBeenCalledOnce();
       const finalEdit = finalizeCard.mock.calls[0]?.[0];
       expect(finalEdit).toMatchObject({ channelId: "C123", messageId: "171234.567" });
-      expect(JSON.stringify(finalEdit?.blocks)).toContain("✅ *Shelling*");
+      expect(finalEdit?.blocks?.[0]).toEqual({
+        type: "section",
+        text: { type: "plain_text", text: "Shelling", emoji: false },
+      });
+      expect(finalEdit?.blocks).not.toContainEqual({
+        type: "section",
+        text: { type: "plain_text", text: "Failed", emoji: false },
+      });
       const actions = finalEdit?.blocks?.filter((block) => block.type === "actions");
       expect(actions).toHaveLength(1);
       const buttons = requireRecord(actions?.[0], "session actions").elements as Array<

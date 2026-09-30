@@ -748,7 +748,7 @@ export class ChatComposerPersistence {
       ) {
         this.retireDurableScope(snapshot.durable.scope, snapshot.draftRevision);
       } else {
-        this.durablePersistence.persist(snapshot.durable);
+        void this.durablePersistence.persist(snapshot.durable);
       }
     }
     if (status === "persisted" && this.pending === snapshot) {
@@ -869,7 +869,7 @@ export class ChatComposerPersistence {
       this.durableOwner = null;
       this.forceDurableOwnerRestore = false;
       this.durableRestoreProtected = false;
-      this.durablePersistence.retire(scope, revision);
+      void this.durablePersistence.retire(scope, revision);
     }
   }
 
@@ -957,7 +957,7 @@ export class ChatComposerPersistence {
                 state.chatReplyTarget ||
                 (state.chatAttachments?.length ?? 0) > 0)
             ) {
-              this.durablePersistence.persist({
+              void this.durablePersistence.persist({
                 ...baseline.durable,
                 expectedRevision: storedRevision,
               });
@@ -997,7 +997,7 @@ export class ChatComposerPersistence {
           draftRevision: adoptedRevision,
         });
         if (forceOwnerRestore && this.lastPersisted.durable) {
-          this.durablePersistence.persist({
+          void this.durablePersistence.persist({
             ...this.lastPersisted.durable,
             expectedRevision: draft.revision,
           });

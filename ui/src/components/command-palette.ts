@@ -178,9 +178,8 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
           }
         }),
     );
-    this.subscriptions.watch(
+    this.subscriptions.watchStore(
       () => this.context?.agentSelection,
-      (selection, notify) => selection.subscribe(notify),
       () => {
         this.clearSessionSearch();
         this.clearCatalogSearch();

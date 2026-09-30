@@ -8,7 +8,7 @@ import {
 } from "../state/openclaw-state-lease.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
-import { buildMcpOAuthHttpFetch } from "./mcp-http-fetch.js";
+import { buildMcpOAuthAuthorizationFetch, buildMcpOAuthHttpFetch } from "./mcp-http-fetch.js";
 import { requesterMcpOAuthStoreKeyPrefix, type McpOAuthIdentity } from "./mcp-oauth-identity.js";
 import {
   createMcpOAuthClientProvider,
@@ -34,15 +34,10 @@ import {
   writeMcpOAuthPendingAuthorization,
   type McpOAuthStore,
 } from "./mcp-oauth-store.js";
-import type { resolveMcpTransportConfig } from "./mcp-transport-config.js";
+import type { ResolvedHttpMcpTransportConfig } from "./mcp-transport-config.js";
 
 export type { McpOAuthPrincipalStatus } from "./mcp-oauth-status.js";
 export type { McpOAuthConfig } from "./mcp-oauth-provider.js";
-
-type ResolvedHttpMcpTransportConfig = Extract<
-  NonNullable<ReturnType<typeof resolveMcpTransportConfig>>,
-  { kind: "http" }
->;
 
 type McpOAuthAuthorizationStartResult =
   | { status: "authorized" }
@@ -319,21 +314,6 @@ export async function readMcpOAuthCredentialsStatus(
 ): Promise<McpOAuthPrincipalStatus> {
   const store = preparedStore ?? (await readMcpOAuthStoreReadOnly(identity.storeKey));
   return projectMcpOAuthCredentialsStatus(store);
-}
-
-function buildMcpOAuthAuthorizationFetch(
-  config: ResolvedHttpMcpTransportConfig,
-  beforeRequest?: () => void,
-): FetchLike {
-  return buildMcpOAuthHttpFetch({
-    sslVerify: config.sslVerify,
-    clientCert: config.clientCert,
-    clientKey: config.clientKey,
-    resourceUrl: config.url,
-    timeoutMs: config.requestTimeoutMs,
-    beforeRequest,
-    headers: config.headers,
-  });
 }
 
 async function runMcpOAuthAuthorizationAttempt(

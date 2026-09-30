@@ -16,7 +16,7 @@ private actor DashboardReconnectAuthGate {
     }
 }
 
-@Suite(.serialized)
+@Suite(.serialized, .timeLimit(.minutes(1)))
 @MainActor
 struct DashboardReconnectTests {
     @Test func `primary discovery failure preserves commands owned by a pending picker`() async throws {
@@ -100,8 +100,8 @@ struct DashboardReconnectTests {
             var events: [String] = []
             var samples = 0
             var observation = "not sampled"
-            let deadline = ContinuousClock.now + .seconds(5)
-            while true {
+            try await DashboardTestWait.document(replacement, "replacement document")
+            try await DashboardTestWait.state("replacement command delivery") {
                 samples += 1
                 do {
                     let received = try await replacement.webView.evaluateJavaScript("window.commandEvents") as? [String]
@@ -111,10 +111,7 @@ struct DashboardReconnectTests {
                     events = []
                     observation = "JavaScript error code \((error as NSError).code)"
                 }
-                if !replacement.webView.isLoading, events == expected { break }
-                // A delayed main-actor resumption must check fresh events before expiring.
-                if ContinuousClock.now >= deadline { break }
-                try await Task.sleep(for: .milliseconds(10))
+                return events == expected
             }
             #expect(manager._testAuxiliaryWindows().first?.target == target)
             #expect(replacement !== original)
@@ -236,11 +233,8 @@ struct DashboardReconnectTests {
             let first = try #require(manager._testController())
             let loginURL = server.url("/login")
             first.webView.load(URLRequest(url: loginURL))
-            let deadline = ContinuousClock.now + .seconds(10)
-            while !first.canDeliverNativeCommands || first.webView.isLoading || first.webView.url != loginURL,
-                  ContinuousClock.now < deadline
-            {
-                try await Task.sleep(for: .milliseconds(20))
+            try await DashboardTestWait.document(first, "personal sign-in document") {
+                first.webView.url == loginURL
             }
             #expect(first.webView.url == loginURL)
             #expect(!first.webView.isLoading)

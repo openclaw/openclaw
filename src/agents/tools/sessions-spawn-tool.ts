@@ -63,6 +63,10 @@ import {
   resolveSandboxedSessionToolContext,
 } from "./sessions-helpers.js";
 import {
+  PlacedSessionsSpawnSchema,
+  PLACED_SESSIONS_SPAWN_DESCRIPTION,
+} from "./sessions-placement-tool-contract.js";
+import {
   maybeSpawnVisibleSession,
   type SessionsSpawnToolOptions,
 } from "./sessions-spawn-visible.js";
@@ -84,10 +88,7 @@ const UNSUPPORTED_SESSIONS_SPAWN_PARAM_KEYS = [
 ] as const;
 const loadAcpSpawnModule = createLazyPromise(() => import("../subagents/spawn/acp-spawn.js"));
 
-function addRoleToFailureResult<T extends { status: string }>(
-  result: T,
-  role: string | undefined,
-): T | (T & { role: string }) {
+function addRoleToFailureResult<T extends { status: string }>(result: T, role: string | undefined) {
   if (!role || (result.status !== "error" && result.status !== "forbidden")) {
     return result;
   }
@@ -119,16 +120,11 @@ function recordAcceptedSessionSpawn(
   });
 }
 
-type SessionsSpawnThreadAvailability = {
-  subagent: boolean;
-  acp: boolean;
-};
-
 function resolveSessionsSpawnThreadAvailability(opts?: {
   config?: OpenClawConfig;
   agentChannel?: string;
   agentAccountId?: string;
-}): SessionsSpawnThreadAvailability {
+}) {
   const channel = opts?.agentChannel;
   const cfg = opts?.config;
   if (!channel || !cfg || !supportsThreadBindingSpawn(channel)) {
@@ -249,7 +245,9 @@ function createSessionsSpawnToolSchema(params: {
               description: "JSON Schema for the child's structured result; requires collect=true.",
             }),
           ),
-          fastMode: Type.Optional(Type.Union([Type.Boolean(), Type.Literal("auto")])),
+          fastMode: Type.Optional(
+            Type.Union([Type.Boolean(), Type.Literal("auto"), Type.Literal("ultrafast")]),
+          ),
           groupId: Type.Optional(
             Type.String({
               description: "Groups parallel collector children; requires collect=true.",
@@ -310,7 +308,9 @@ function resolveAcpUnavailableMessage(opts?: { sandboxed?: boolean; config?: Ope
   return 'runtime="acp" is unavailable in this session because no ACP runtime backend is loaded. Enable the acpx plugin or use runtime="subagent".';
 }
 
-export function createSessionsSpawnTool(opts?: SessionsSpawnToolOptions): AnyAgentTool {
+export function createSessionsSpawnTool(
+  opts?: SessionsSpawnToolOptions & { workerPlacement?: boolean },
+): AnyAgentTool {
   const effectiveConfig = opts?.config ?? getRuntimeConfig();
   const acpAvailable = isAcpRuntimeSpawnAvailable({
     config: effectiveConfig,
@@ -346,15 +346,17 @@ export function createSessionsSpawnTool(opts?: SessionsSpawnToolOptions): AnyAge
     displaySummary: acpAvailable
       ? SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY
       : SESSIONS_SPAWN_SUBAGENT_TOOL_DISPLAY_SUMMARY,
-    description: describeSessionsSpawnTool({
-      acpAvailable,
-      threadAvailable,
-      subagentThreadAvailable: threadAvailability.subagent,
-      swarmEnabled: swarmConfig.enabled,
-      sessionToolsVisibility,
-      spawnRestricted: restrictToSpawned,
-    }),
-    parameters,
+    description: opts?.workerPlacement
+      ? PLACED_SESSIONS_SPAWN_DESCRIPTION
+      : describeSessionsSpawnTool({
+          acpAvailable,
+          threadAvailable,
+          subagentThreadAvailable: threadAvailability.subagent,
+          swarmEnabled: swarmConfig.enabled,
+          sessionToolsVisibility,
+          spawnRestricted: restrictToSpawned,
+        }),
+    parameters: opts?.workerPlacement ? PlacedSessionsSpawnSchema : parameters,
     execute: wrapGatewayPersonalToolExecution(async (_toolCallId, args, signal) =>
       withToolEffectBoundary(async (onSpawnEffectsStart) => {
         const operatorSelection = resolveGatewayToolOperatorSelection();
@@ -445,11 +447,8 @@ export function createSessionsSpawnTool(opts?: SessionsSpawnToolOptions): AnyAge
         const thinkingOverrideRaw = readToolStringParam(params, "thinking");
         const cwd = readToolStringParam(params, "cwd");
         const mode = params.mode === "run" || params.mode === "session" ? params.mode : undefined;
-        const cleanup =
-          params.cleanup === "keep" || params.cleanup === "delete" ? params.cleanup : "keep";
-        const expectsCompletionMessage = collect
-          ? false
-          : params.expectsCompletionMessage !== false;
+        const cleanup = params.cleanup === "delete" ? "delete" : "keep";
+        const expectsCompletionMessage = !collect && params.expectsCompletionMessage !== false;
         const sandbox = params.sandbox === "require" ? "require" : "inherit";
         const context =
           params.context === "fork" || params.context === "isolated" ? params.context : undefined;
@@ -460,8 +459,8 @@ export function createSessionsSpawnTool(opts?: SessionsSpawnToolOptions): AnyAge
         if (opts?.expectedParentSessionId && !expectedParentSessionKey) {
           throw new Error("Exact parent session access requires a session key");
         }
-        const spawnVisible = async () =>
-          await maybeSpawnVisibleSession({
+        const spawnVisible = () =>
+          maybeSpawnVisibleSession({
             raw: params,
             task,
             taskName,
@@ -618,7 +617,10 @@ export function createSessionsSpawnTool(opts?: SessionsSpawnToolOptions): AnyAge
                 ? (params.outputSchema as Record<string, unknown>)
                 : undefined,
             fastMode:
-              params.fastMode === true || params.fastMode === false || params.fastMode === "auto"
+              params.fastMode === true ||
+              params.fastMode === false ||
+              params.fastMode === "auto" ||
+              params.fastMode === "ultrafast"
                 ? params.fastMode
                 : undefined,
             groupId: readToolStringParam(params, "groupId"),

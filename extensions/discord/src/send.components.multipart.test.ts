@@ -23,7 +23,7 @@ it.each<
   ["component declared", "report.pdf", undefined, true, "report.pdf"],
   ["component repeats", undefined, undefined, true, "source.pdf", ["Step A", "Step B", "Step A"]],
 ])(
-  "preserves %s in the multipart upload",
+  "preserves %s and the mention policy in the multipart upload",
   async (_label, declaredName, filename, componentsV2, expectedName, textBlocks) => {
     await withTempHome(async (home) => {
       const mediaRoot = await fs.realpath(home);
@@ -51,6 +51,7 @@ it.each<
             mediaUrl: mediaPath,
             mediaLocalRoots: [mediaRoot],
             filename,
+            allowedMentions: { parse: [] },
           },
         );
         expect(result.messageId).toBe("loopback-message");
@@ -72,6 +73,7 @@ it.each<
         }
         const payload: {
           attachments?: Array<{ id: number; filename: string }>;
+          allowed_mentions?: { parse: string[] };
           flags?: number;
           components?: Array<{ components?: Array<{ content?: string }> }>;
         } = JSON.parse(payloadJson);
@@ -79,6 +81,7 @@ it.each<
         expect(file.type).toBe("application/pdf");
         expect(file.name).toBe(expectedName);
         expect(payload.attachments).toEqual([{ id: 0, filename: expectedName }]);
+        expect(payload.allowed_mentions).toEqual({ parse: [] });
         expect(Boolean((payload.flags ?? 0) & MessageFlags.IsComponentsV2)).toBe(componentsV2);
         if (textBlocks) {
           expect(

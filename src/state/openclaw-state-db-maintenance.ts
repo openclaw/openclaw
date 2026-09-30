@@ -179,9 +179,7 @@ export function assertOpenClawStateDatabaseOwner(
   database: DatabaseSync,
   options: { pathname: string },
 ): { schema_version?: unknown } {
-  const hasMetadataTable = database
-    .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_meta' LIMIT 1")
-    .get();
+  const hasMetadataTable = tableExists(database, "schema_meta");
   let metadata;
   try {
     metadata = hasMetadataTable

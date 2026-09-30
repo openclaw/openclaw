@@ -820,7 +820,7 @@ it.each([false, true])(
     });
     await expect(
       readCodexMirroredSessionHistoryMessages(target, undefined, undefined, 128),
-    ).rejects.toThrow(/model-context limit/);
+    ).rejects.toThrow(/session's context limit/);
     expect(
       readCodexSessionContext(fixture.sessionTarget, (messages) => Array.from(messages)),
     ).toHaveLength(34);

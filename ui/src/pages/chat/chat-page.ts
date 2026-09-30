@@ -32,7 +32,7 @@ import {
   renderChatPageSplitLayout,
 } from "./chat-page-pane-render.ts";
 import { ChatPageRetainedSessions } from "./chat-page-retained-sessions.ts";
-import { closeStagedPane, resumeStagedPanes } from "./chat-pane-attachment-handoff.ts";
+import { resumeStagedPanes } from "./chat-pane-attachment-handoff.ts";
 import { bindChatPageSession } from "./chat-state-route.ts";
 import { ChatViewerPresenceController } from "./chat-viewer-presence.ts";
 import "../../styles/chat.ts";
@@ -134,9 +134,8 @@ export class ChatPage extends OpenClawLightDomElement implements SessionSplitHos
   constructor() {
     super();
     new SubscriptionsController(this)
-      .watch(
+      .watchStore(
         () => this.context?.sessions,
-        (sessions, notify) => sessions.subscribe(notify),
         undefined,
         () => this.performUpdate(),
       )
@@ -144,18 +143,9 @@ export class ChatPage extends OpenClawLightDomElement implements SessionSplitHos
         () => this.context?.chatSubmissions,
         (submissions, notify) => submissions.subscribeCreate(notify),
       )
-      .watch(
-        () => this.context?.placementStartup,
-        (startup, notify) => startup.subscribe(notify),
-      )
-      .watch(
-        () => this.context?.gateway,
-        (gateway, notify) => gateway.subscribe(notify),
-      )
-      .watch(
-        () => this.context?.nativeConversation,
-        (bridge, notify) => bridge.subscribe(notify),
-      );
+      .watchStore(() => this.context?.placementStartup)
+      .watchStore(() => this.context?.gateway)
+      .watchStore(() => this.context?.nativeConversation);
     this.addController(
       new SessionPrefetchController(
         this,
@@ -569,7 +559,7 @@ export class ChatPage extends OpenClawLightDomElement implements SessionSplitHos
       return;
     }
     const source = this.closeFocus.capture(paneId);
-    const survivingPane = closeStagedPane(this.context, this, layout, paneId);
+    const survivingPane = panesOf(layout).find((candidate) => candidate.id !== paneId);
     this.retainedSessions.discardPane(paneId);
     let next = closePane(layout, paneId, this.retainedSessions.unboundPaneIds);
     if (!next && survivingPane) {

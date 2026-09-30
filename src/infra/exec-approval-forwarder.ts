@@ -158,12 +158,7 @@ function buildSyntheticApprovalRequest(routeRequest: ApprovalRouteRequest): Exec
     id: SYNTHETIC_APPROVAL_REQUEST_ID,
     request: {
       command: "",
-      agentId: routeRequest.agentId ?? null,
-      sessionKey: routeRequest.sessionKey ?? null,
-      turnSourceChannel: routeRequest.turnSourceChannel ?? null,
-      turnSourceTo: routeRequest.turnSourceTo ?? null,
-      turnSourceAccountId: routeRequest.turnSourceAccountId ?? null,
-      turnSourceThreadId: routeRequest.turnSourceThreadId ?? null,
+      ...extractApprovalRouteRequest(routeRequest),
     },
     createdAtMs: 0,
     expiresAtMs: 0,

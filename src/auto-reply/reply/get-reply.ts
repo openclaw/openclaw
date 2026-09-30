@@ -30,6 +30,7 @@ import { type OpenClawConfig, getRuntimeConfig } from "../../config/config.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import { isSessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
 import { logVerbose } from "../../globals.js";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -64,14 +65,13 @@ import { resolveReplyDirectives } from "./get-reply-directives.js";
 import {
   initFastReplySessionState,
   resolveGetReplyConfig,
-  shouldUseReplyFastTestBootstrap,
+  shouldUseReplyFastTestRuntime,
 } from "./get-reply-fast-path.js";
 import { handleInlineActions } from "./get-reply-inline-actions.js";
 import { maybeResolveNativeSlashCommandFastReply } from "./get-reply-native-slash-fast-path.js";
 import {
   applyLinkUnderstandingIfNeeded,
   applyMediaUnderstandingIfNeeded,
-  assertReplyPreprocessingActive,
   hasExplicitAudioUnderstandingConfig,
   hasLinkCandidate,
   resolveReplyAgentScope,
@@ -100,6 +100,7 @@ import {
   recordReplyPreRunRejection,
   resolveReplyOperationRunState,
 } from "./reply-operation-run-state.js";
+import { assertReplyPreprocessingActive } from "./reply-preprocessing-abort.js";
 import { createReplyTimingTracker, isReplyProfilerEnabled } from "./reply-timing-tracker.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 import { prepareReplySessionDiffBaseline } from "./session-diff-baseline.js";
@@ -127,7 +128,6 @@ function canSelfServeLocalPaths(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;
   agentId: string;
-  agentDir?: string;
   sessionKey?: string;
   workspaceDir: string;
   provider: string;
@@ -164,20 +164,17 @@ function canSelfServeLocalPaths(params: {
     sessionKey: policySessionKey,
     runSessionKey: policySessionKey === params.sessionKey ? undefined : params.sessionKey,
     agentId: params.agentId,
-    agentDir: params.agentDir,
     agentAccountId: params.ctx.AccountId,
     messageProvider: resolveOriginMessageProvider({
       originatingChannel: params.ctx.OriginatingChannel,
       provider: params.ctx.Provider ?? params.ctx.Surface,
     }),
-    chatType: params.ctx.ChatType,
     conversationToolPolicy: params.ctx.ConversationToolPolicy,
     groupId: resolveGroupSessionKey(params.ctx)?.id,
     groupChannel:
       normalizeOptionalString(params.ctx.GroupChannel) ??
       normalizeOptionalString(params.ctx.GroupSubject),
     groupSpace: normalizeOptionalString(params.ctx.GroupSpace),
-    memberRoleIds: params.ctx.MemberRoleIds,
     spawnedBy: params.spawnedBy,
     senderId: normalizeOptionalString(params.ctx.SenderId),
     senderName: normalizeOptionalString(params.ctx.SenderName),
@@ -234,9 +231,9 @@ export async function getReplyFromConfig(
     enabled: profilerEnabled,
   });
   const useFastTestBootstrap = resolverTiming.measureSync("reply.resolve_fast_test_bootstrap", () =>
-    shouldUseReplyFastTestBootstrap({
+    shouldUseReplyFastTestRuntime({
       isFastTestEnv,
-      configOverride,
+      cfg: configOverride,
     }),
   );
   const inboundMediaWasAlreadyStaged = hasStagedMediaFacts(ctx.media);
@@ -670,9 +667,6 @@ export async function getReplyFromConfig(
       if (heartbeatPending.shouldClear) {
         Object.assign(sessionEntry, PENDING_FINAL_DELIVERY_CLEAR_PATCH);
         sessionEntryHandle.replaceCurrent(sessionEntry);
-        if (sessionKey && sessionStore) {
-          sessionStore[sessionKey] = sessionEntry;
-        }
         if (sessionKey && storePath) {
           const { updateSessionEntry } = await import("../../config/sessions/session-accessor.js");
           await updateSessionEntry(
@@ -928,10 +922,15 @@ export async function getReplyFromConfig(
     directives.hasStatusDirective ||
     command.commandBodyNormalized.trim() === "/status";
   const statusThinkingCatalog = shouldPrepareStatusThinkingCatalog
-    ? await traceGetReplyPhase("reply.prepare_status_thinking_catalog", () =>
-        modelState.resolveThinkingCatalog(),
-      )
+    ? await traceGetReplyPhase("reply.prepare_status_thinking_catalog", () => {
+        assertReplyPreprocessingActive(resolvedOpts?.abortSignal);
+        return racePromiseWithAbortSignal(
+          modelState.resolveThinkingCatalog(),
+          resolvedOpts?.abortSignal,
+        );
+      })
     : undefined;
+  assertReplyPreprocessingActive(resolvedOpts?.abortSignal);
 
   const inlineActionResult = await traceGetReplyPhase("reply.handle_inline_actions", () =>
     handleInlineActions({
@@ -1048,6 +1047,7 @@ export async function getReplyFromConfig(
     }
     resolveRunModelLevels = await createReplyProbeModelLevelResolver({
       modelState: runModelState,
+      abortSignal: resolvedOpts?.abortSignal,
       previous: resolveModelLevels,
       directives,
       sessionEntry,
@@ -1097,7 +1097,6 @@ export async function getReplyFromConfig(
       ctx: sessionCtx,
       cfg,
       agentId,
-      agentDir,
       sessionKey,
       workspaceDir,
       provider: runProvider,

@@ -1,4 +1,3 @@
-/** Doctor checks and repairs Control UI build identity and protocol freshness. */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
@@ -24,7 +23,6 @@ type UiProtocolFreshnessIssue = {
   | { readonly kind: "stale-assets"; readonly changesSinceBuild: readonly string[] }
 );
 
-/** Detects unusable installed UI assets and subsequent source protocol changes. */
 export async function detectUiProtocolFreshnessIssues(
   opts: {
     readonly root?: string;
@@ -107,7 +105,6 @@ async function collectProtocolSchemaChangesSince(
   return gitLog.stdout.trim().split("\n");
 }
 
-/** Converts a UI protocol freshness issue into a doctor lint health finding. */
 export function uiProtocolFreshnessIssueToHealthFinding(
   issue: UiProtocolFreshnessIssue,
 ): HealthFinding {
@@ -124,7 +121,6 @@ export function uiProtocolFreshnessIssueToHealthFinding(
   };
 }
 
-/** Converts a UI freshness issue into the process repair effect used by lint dry runs. */
 export function uiProtocolFreshnessIssueToRepairEffects(
   issue: UiProtocolFreshnessIssue,
 ): readonly HealthRepairEffect[] {
@@ -157,7 +153,6 @@ function formatUiProtocolFreshnessIssue(issue: UiProtocolFreshnessIssue): string
   ].join("\n");
 }
 
-/** Prompts to build or rebuild Control UI assets when doctor detects missing or stale output. */
 export async function maybeRepairUiProtocolFreshness(
   runtime: RuntimeEnv,
   prompter: DoctorPrompter,

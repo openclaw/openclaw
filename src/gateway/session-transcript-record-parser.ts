@@ -1,3 +1,4 @@
+import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
@@ -20,10 +21,6 @@ const OVERSIZED_TRANSCRIPT_METADATA_PREFIX_CHARS = 64 * 1024;
 const OVERSIZED_TRANSCRIPT_METADATA_SUFFIX_CHARS = 64 * 1024;
 const MAX_OVERSIZED_TRANSCRIPT_RECOVERY_CANDIDATES = 32;
 const TRANSCRIPT_OVERSIZED_MESSAGE_PLACEHOLDER = "[chat.history omitted: message too large]";
-
-export function isOversizedTranscriptLine(line: string): boolean {
-  return Buffer.byteLength(line, "utf8") > MAX_TRANSCRIPT_PARSE_LINE_BYTES;
-}
 
 function isJsonObjectFieldToken(source: string, tokenIndex: number): boolean {
   for (let index = tokenIndex - 1; index >= 0; index--) {
@@ -57,12 +54,7 @@ function extractJsonStringFieldWindow(
     if (!match) {
       continue;
     }
-    try {
-      const decoded = JSON.parse(`"${match[1]}"`) as unknown;
-      return readNonBlankString(decoded);
-    } catch {
-      return undefined;
-    }
+    return readNonBlankString(safeParseJson(`"${match[1]}"`));
   }
   return undefined;
 }

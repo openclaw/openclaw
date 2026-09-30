@@ -1,4 +1,3 @@
-// Post-core plugin finalization and fresh-process handoff.
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -344,19 +343,14 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
     }
   }
 
-  const argv = [entryPath, "update"];
-  if (params.opts.json) {
-    argv.push("--json");
-  }
-  if (params.opts.restart === false) {
-    argv.push("--no-restart");
-  }
-  if (params.opts.yes) {
-    argv.push("--yes");
-  }
-  if (params.opts.acceptCapabilities) {
-    argv.push("--accept-capabilities");
-  }
+  const argv = [
+    entryPath,
+    "update",
+    ...(params.opts.json ? ["--json"] : []),
+    ...(params.opts.restart === false ? ["--no-restart"] : []),
+    ...(params.opts.yes ? ["--yes"] : []),
+    ...(params.opts.acceptCapabilities ? ["--accept-capabilities"] : []),
+  ];
   // Older targets need the existing allowance. New targets recover operator intent
   // from the private handoff instead of treating this compatibility value as explicit.
   const handoff = {
@@ -396,7 +390,7 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
   };
 
   try {
-    if (pluginInstallRecords && pluginInstallRecords !== params.pluginInstallRecords) {
+    if (pluginInstallRecords !== params.pluginInstallRecords) {
       await withPluginLifecycleLease({ assertCurrent: authority.assertCurrent }, async (lease) => {
         tentativePluginIndex = await writePersistedInstalledPluginIndexInstallRecordsWithLease(
           pluginInstallRecords,
@@ -454,6 +448,7 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
           const input: UpdatePostCoreInput = {
             executor,
             runId,
+            originalRecoveryCapture: params.opts.run?.originalRecoveryCapture,
             root: params.root,
             requester: authority.requester?.requester,
             opts: {
@@ -697,9 +692,10 @@ export function shouldResumePostCoreUpdateInFreshProcess(params: {
   }
   // A package-to-git switch can retain the target SHA and version while moving
   // the package root; the old process's hashed chunks are still unsafe.
-  if (params.installKindChanged === true || isPackageManagerUpdateMode(result.mode)) {
-    return true;
-  }
   // Successful Git activation replaces dist even when local commits leave HEAD unchanged.
-  return result.mode === "git";
+  return (
+    params.installKindChanged === true ||
+    isPackageManagerUpdateMode(result.mode) ||
+    result.mode === "git"
+  );
 }

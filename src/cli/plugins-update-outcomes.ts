@@ -1,19 +1,10 @@
 // User-facing logging for plugin and hook-pack update outcomes.
 import { theme } from "../../packages/terminal-core/src/theme.js";
-import { isClawHubTrustSkippedOutcome } from "../plugins/update.js";
-
-type PluginUpdateCliOutcome = {
-  status: string;
-  message: string;
-  channelFallback?: {
-    message: string;
-  };
-  code?: string;
-};
+import { isClawHubTrustSkippedOutcome, type PluginUpdateOutcome } from "../plugins/update.js";
 
 /** Log update outcomes with severity styling and report whether any errors occurred. */
 export function logPluginUpdateOutcomes(params: {
-  outcomes: readonly PluginUpdateCliOutcome[];
+  outcomes: readonly Pick<PluginUpdateOutcome, "status" | "message" | "channelFallback" | "code">[];
   log: (message: string) => void;
   error: (message: string) => void;
 }): { hasErrors: boolean } {

@@ -190,7 +190,6 @@ function assertRepairPreservedEvents(params: {
   }
 }
 
-/** Reports or repairs canonical SQLite transcripts whose first header was never persisted. */
 export async function noteSessionTranscriptHeaderHealth(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;

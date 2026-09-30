@@ -86,7 +86,7 @@ suite.define(() => {
         const visibleChecks = page.locator(
           'openclaw-chat-pane[aria-hidden="false"] .chat-pr__checks',
         );
-        const summary = visibleChecks.locator("summary");
+        const summary = visibleChecks.locator(":scope > summary");
         await summary.focus();
         await summary.press("Enter");
         await expect.poll(() => visibleChecks.getAttribute("open")).toBe("");

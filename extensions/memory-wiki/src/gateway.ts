@@ -6,6 +6,7 @@ import type { OpenClawConfig, OpenClawPluginApi } from "../api.js";
 import { applyMemoryWikiMutation, normalizeMemoryWikiMutationInput } from "./apply.js";
 import { compileMemoryWikiVault } from "./compile.js";
 import {
+  loadMemoryWikiCompiledDashboards,
   MemoryWikiDashboardUnavailableError,
   setMemoryWikiDashboardState,
 } from "./compiled-cache.js";
@@ -15,7 +16,6 @@ import {
   WIKI_SEARCH_CORPORA,
   type ResolvedMemoryWikiConfig,
 } from "./config.js";
-import { listMemoryWikiImportInsights } from "./import-insights.js";
 import { listMemoryWikiImportRuns } from "./import-runs.js";
 import { ingestMemoryWikiSource } from "./ingest.js";
 import { lintMemoryWikiVault } from "./lint.js";
@@ -29,7 +29,6 @@ import { getMemoryWikiPage, searchMemoryWiki, WIKI_SEARCH_MODES } from "./query.
 import { syncMemoryWikiImportedSources } from "./source-sync.js";
 import { buildMemoryWikiDoctorReport, resolveMemoryWikiStatus } from "./status.js";
 import { initializeMemoryWikiVault } from "./vault.js";
-import { listMemoryWikiOverview } from "./wiki-overview.js";
 
 const READ_SCOPE = "operator.read" as const;
 const WRITE_SCOPE = "operator.write" as const;
@@ -194,13 +193,13 @@ export function registerMemoryWikiGatewayMethods(params: {
   registerResultMethod("wiki.importInsights", READ_SCOPE, async (requestParams) => {
     const { appConfig, config } = resolveRequestContext(requestParams);
     syncImportedSourcesInBackground(config, appConfig);
-    return await listMemoryWikiImportInsights(config);
+    return (await loadMemoryWikiCompiledDashboards(config)).importInsights;
   });
 
   registerResultMethod("wiki.overview", READ_SCOPE, async (requestParams) => {
     const { appConfig, config } = resolveRequestContext(requestParams);
     syncImportedSourcesInBackground(config, appConfig);
-    return await listMemoryWikiOverview(config);
+    return (await loadMemoryWikiCompiledDashboards(config)).overview;
   });
 
   registerResultMethod("wiki.init", WRITE_SCOPE, async (requestParams) => {

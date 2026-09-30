@@ -1,4 +1,3 @@
-// Node status/list/describe commands and paired-node display formatting.
 import { formatByteSize } from "@openclaw/normalization-core";
 import {
   normalizeOptionalLowercaseString,
@@ -64,43 +63,34 @@ function formatNodeHostStats(stats: unknown, connected: boolean, now: number): s
     : `${summary} (last known ${formatTimeAgo(Math.max(0, now - stats.updatedAtMs))})`;
 }
 
-function resolveNodeVersions(node: {
-  platform?: string;
-  version?: string;
-  coreVersion?: string;
-  uiVersion?: string;
-}) {
-  const core = normalizeOptionalString(node.coreVersion);
-  const ui = normalizeOptionalString(node.uiVersion);
-  if (core || ui) {
-    return { core, ui };
+function formatNodeVersions(
+  node: Pick<NodeListNode, "platform" | "version" | "coreVersion" | "uiVersion">,
+) {
+  let core = normalizeOptionalString(node.coreVersion);
+  let ui = normalizeOptionalString(node.uiVersion);
+  if (!core && !ui) {
+    const legacy = node.version?.trim();
+    if (!legacy) {
+      return null;
+    }
+    const platform = normalizeOptionalLowercaseString(node.platform);
+    // Legacy nodes reported one version field; headless hosts use it as core, mobile nodes as UI.
+    if (
+      platform === "darwin" ||
+      platform === "linux" ||
+      platform === "win32" ||
+      platform === "windows"
+    ) {
+      core = legacy;
+    } else {
+      ui = legacy;
+    }
   }
-  const legacy = node.version?.trim();
-  if (!legacy) {
-    return { core: undefined, ui: undefined };
-  }
-  const platform = normalizeOptionalLowercaseString(node.platform) ?? "";
-  // Legacy nodes reported one version field; headless hosts use it as core, mobile nodes as UI.
-  const headless =
-    platform === "darwin" || platform === "linux" || platform === "win32" || platform === "windows";
-  return headless ? { core: legacy, ui: undefined } : { core: undefined, ui: legacy };
-}
-
-function formatNodeVersions(node: {
-  platform?: string;
-  version?: string;
-  coreVersion?: string;
-  uiVersion?: string;
-}) {
-  const { core, ui } = resolveNodeVersions(node);
-  const parts: string[] = [];
-  if (core) {
-    parts.push(`core ${formatVersionLabel(core)}`);
-  }
-  if (ui) {
-    parts.push(`ui ${formatVersionLabel(ui)}`);
-  }
-  return parts.length > 0 ? parts.join(" · ") : null;
+  return (
+    [core && `core ${formatVersionLabel(core)}`, ui && `ui ${formatVersionLabel(ui)}`]
+      .filter(Boolean)
+      .join(" · ") || null
+  );
 }
 
 function isWindowsNodePlatform(platform?: string): boolean {
@@ -262,7 +252,6 @@ async function tryReadNodeList(opts: NodesRpcOpts): Promise<NodeListNode[] | nul
   }
 }
 
-/** Register node status, describe, and paired-node list commands. */
 export function registerNodesStatusCommands(nodes: Command) {
   nodesCallOpts(
     nodes
@@ -433,14 +422,7 @@ export function registerNodesStatusCommands(nodes: Command) {
           const client = formatClientLabel(obj as { clientId?: string; clientMode?: string });
           const ip = typeof obj.remoteIp === "string" ? obj.remoteIp : null;
           const pathEnv = typeof obj.pathEnv === "string" ? obj.pathEnv : null;
-          const versions = formatNodeVersions(
-            obj as {
-              platform?: string;
-              version?: string;
-              coreVersion?: string;
-              uiVersion?: string;
-            },
-          );
+          const versions = formatNodeVersions(obj as Parameters<typeof formatNodeVersions>[0]);
           const lastActive = formatNodeTimeAgo(Date.now(), obj.lastActiveAtMs);
           const stats = formatNodeHostStats(obj.hostStats, connected, Date.now());
 
@@ -535,7 +517,6 @@ export function registerNodesStatusCommands(nodes: Command) {
           const hasFilters = connectedOnly || sinceMs !== undefined;
           // Pending requests carry no connection state to filter on; hiding
           // them under --connected printed "Pending: 0" while requests waited.
-          const pendingRows = pending;
           const effectiveNodes = hasFilters
             ? parseNodeList(await callNodeDiagnosticsGatewayCli("node.list", opts, {}))
             : await tryReadNodeList(opts);
@@ -549,7 +530,7 @@ export function registerNodesStatusCommands(nodes: Command) {
               : "";
           if (opts.json) {
             defaultRuntime.writeJson({
-              pending: pendingRows,
+              pending,
               // Current gateways emit no token, but the permissive parser keeps
               // unknown fields; strip so an older gateway's legacy node token
               // never reaches JSON output.
@@ -562,12 +543,12 @@ export function registerNodesStatusCommands(nodes: Command) {
           }
 
           defaultRuntime.log(
-            `Pending: ${pendingRows.length} · Paired: ${filteredPaired.length}${filteredLabel}`,
+            `Pending: ${pending.length} · Paired: ${filteredPaired.length}${filteredLabel}`,
           );
 
-          if (pendingRows.length > 0) {
+          if (pending.length > 0) {
             const rendered = renderPendingPairingRequestsTable({
-              pending: pendingRows,
+              pending,
               now,
               tableWidth,
               theme: { heading, warn, muted },

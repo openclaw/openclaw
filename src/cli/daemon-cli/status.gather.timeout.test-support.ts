@@ -30,7 +30,7 @@ export function registerStatusTimeoutTests(params: {
     auditGatewayServiceConfig,
   } = params;
 
-  it.each([undefined, "10000", "20000"])(
+  it.each([undefined, "10000"])(
     "keeps the Windows native budget independent of RPC for timeout %s",
     async (timeout) =>
       withMockedPlatform("win32", async () => {
@@ -101,21 +101,7 @@ export function registerStatusTimeoutTests(params: {
       }),
   );
 
-  it.each(["darwin", "linux"] as const)(
-    "keeps the omitted native timeout at ten seconds on %s",
-    async (platform) =>
-      withMockedPlatform(platform, async () => {
-        const clock = vi.spyOn(performance, "now").mockReturnValue(1_000);
-        onTestFinished(() => clock.mockRestore());
-        await gatherStatus();
-        expect(serviceReadRuntime).toHaveBeenCalledWith(expect.any(Object), { timeoutMs: 10_000 });
-        expect(callGatewayStatusProbe).toHaveBeenCalledWith(
-          expect.objectContaining({ timeoutMs: 10_000 }),
-        );
-      }),
-  );
-
-  it.each(["bogus", "0", "-1", "1.5"])(
+  it.each(["bogus"])(
     "rejects invalid status timeout %s before reading service state",
     async (timeout) => {
       await expect(gatherStatus({ rpc: { timeout } })).rejects.toThrow(

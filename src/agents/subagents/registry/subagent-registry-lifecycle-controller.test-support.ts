@@ -77,7 +77,7 @@ export function createLifecycleControllerFixture(
       publication.onCommitted?.();
     },
     clearPendingLifecycleError: vi.fn(),
-    countPendingDescendantRuns: () => 0,
+    countPendingDescendantRuns: async () => 0,
     getLatestRunForChildSession: (key, matches) =>
       getLatestSubagentRunByChildSessionKeyFromRuns(runs, key, matches) ?? null,
     suppressAnnounceForSteerRestart: () => false,

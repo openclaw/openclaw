@@ -80,51 +80,25 @@ function findSafeSentenceBreakIndex(
   return sentenceIdx >= minChars ? sentenceIdx : -1;
 }
 
-function findSafeParagraphBreakIndex(params: {
+function findSafeLineBreakIndex(params: {
   text: string;
   unsafeSpans: readonly BreakSpan[];
   minChars: number;
   reverse: boolean;
+  separator: "\n" | "\n\n";
   offset?: number;
 }): number {
-  const { text, unsafeSpans, minChars, reverse, offset = 0 } = params;
-  let paragraphIdx = reverse ? text.lastIndexOf("\n\n") : text.indexOf("\n\n");
-  while (reverse ? paragraphIdx >= minChars : paragraphIdx !== -1) {
-    const candidates = [paragraphIdx, paragraphIdx + 1];
-    for (const candidate of candidates) {
-      if (candidate < minChars) {
-        continue;
-      }
-      if (candidate < 0 || candidate >= text.length) {
-        continue;
-      }
-      if (isSafeFenceBreak(unsafeSpans, offset + candidate)) {
+  const { text, unsafeSpans, minChars, reverse, separator, offset = 0 } = params;
+  let index = reverse ? text.lastIndexOf(separator) : text.indexOf(separator);
+  while (reverse ? index >= minChars : index !== -1) {
+    for (let candidate = index; candidate < index + separator.length; candidate++) {
+      if (candidate >= minChars && isSafeFenceBreak(unsafeSpans, offset + candidate)) {
         return candidate;
       }
     }
-    paragraphIdx = reverse
-      ? text.lastIndexOf("\n\n", paragraphIdx - 1)
-      : text.indexOf("\n\n", paragraphIdx + 2);
-  }
-  return -1;
-}
-
-function findSafeNewlineBreakIndex(params: {
-  text: string;
-  unsafeSpans: readonly BreakSpan[];
-  minChars: number;
-  reverse: boolean;
-  offset?: number;
-}): number {
-  const { text, unsafeSpans, minChars, reverse, offset = 0 } = params;
-  let newlineIdx = reverse ? text.lastIndexOf("\n") : text.indexOf("\n");
-  while (reverse ? newlineIdx >= minChars : newlineIdx !== -1) {
-    if (newlineIdx >= minChars && isSafeFenceBreak(unsafeSpans, offset + newlineIdx)) {
-      return newlineIdx;
-    }
-    newlineIdx = reverse
-      ? text.lastIndexOf("\n", newlineIdx - 1)
-      : text.indexOf("\n", newlineIdx + 1);
+    index = reverse
+      ? text.lastIndexOf(separator, index - 1)
+      : text.indexOf(separator, index + separator.length);
   }
   return -1;
 }
@@ -604,11 +578,12 @@ export class EmbeddedBlockChunker {
     const preference = chunking.breakPreference ?? "paragraph";
 
     if (preference === "paragraph") {
-      const paragraphIdx = findSafeParagraphBreakIndex({
+      const paragraphIdx = findSafeLineBreakIndex({
         text: buffer,
         unsafeSpans,
         minChars,
         reverse,
+        separator: "\n\n",
         offset,
       });
       if (paragraphIdx !== -1) {
@@ -617,11 +592,12 @@ export class EmbeddedBlockChunker {
     }
 
     if (preference === "paragraph" || preference === "newline") {
-      const newlineIdx = findSafeNewlineBreakIndex({
+      const newlineIdx = findSafeLineBreakIndex({
         text: buffer,
         unsafeSpans,
         minChars,
         reverse,
+        separator: "\n",
         offset,
       });
       if (newlineIdx !== -1) {

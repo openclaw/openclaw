@@ -1,6 +1,7 @@
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isPrivateDirectoryCreationRefused } from "./private-directory-creation.js";
 import { SQLITE_READONLY_CHILD_ARG } from "./runtime-process-entrypoints.js";
 import {
   formatSqliteErrorCodeSuffix,
@@ -22,6 +23,7 @@ import type { PreparedSqliteReadOnlyLocation } from "./sqlite-readonly-location.
 import {
   SQLITE_READONLY_WORKER_MAX_BUFFER,
   SQLITE_INSPECTION_CONTENTION_PREFIX,
+  SQLITE_SNAPSHOT_ALLOCATION_REFUSED_PREFIX,
   isSqliteSnapshotStagingMode,
   type SqliteReadOnlyWorkerResult,
 } from "./sqlite-readonly-worker-protocol.js";
@@ -149,9 +151,15 @@ async function inspect(args: string[]): Promise<SqliteReadOnlyWorkerResult> {
     return { ok: true, location: prepared.location };
   } catch (error) {
     const contention = error instanceof SqliteSourceChangedError || isSqliteLockError(error);
+    const allocationRefused =
+      (mode === "staging-create" || mode === "staging-create-legacy") &&
+      isPrivateDirectoryCreationRefused(error);
+    const prefix =
+      (contention ? SQLITE_INSPECTION_CONTENTION_PREFIX : "") +
+      (allocationRefused ? SQLITE_SNAPSHOT_ALLOCATION_REFUSED_PREFIX : "");
     return {
       ok: false,
-      message: `${contention ? SQLITE_INSPECTION_CONTENTION_PREFIX : ""}${formatSqliteReadOnlyInspectionFailure(error)}`,
+      message: `${prefix}${formatSqliteReadOnlyInspectionFailure(error)}`,
     };
   }
 }

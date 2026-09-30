@@ -8,7 +8,6 @@ import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.defaul
 import type { SessionDeliveryGeneration } from "../../config/sessions/session-delivery-generation.types.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/session-store-owner.js";
 import type { AgentRouteBinding } from "../../config/types.agents.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { shouldResumeParentSubagent } from "../../gateway/session-subagent-resume.js";
 import { resolveGatewaySessionStoreTargetWithStore } from "../../gateway/session-utils-store-lookup.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -28,7 +27,6 @@ import {
   normalizeAccountId,
   normalizeAgentId,
   normalizeAgentIdStrict,
-  toAgentStoreSessionKey,
 } from "../../routing/session-key.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { deriveSessionChatTypeFromKey } from "../../sessions/session-chat-type-shared.js";
@@ -41,7 +39,7 @@ import { recordSessionParticipantBestEffort } from "../../sessions/session-parti
 import { registerSessionStateWatch } from "../../sessions/session-state-events.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
-import { listAgentIds, resolveSessionAgentId } from "../agent-scope.js";
+import { resolveSessionAgentId } from "../agent-scope.js";
 import { bindRequesterYieldCronAuthority } from "../cron-creator-authority-context.js";
 import { resolveNestedAgentLaneForSession } from "../lanes.js";
 import { isTerminalAgentWaitTimeout, waitForAgentRunReply } from "../run-wait.js";
@@ -68,6 +66,10 @@ import {
   resolveVisibleSessionReference,
 } from "./sessions-helpers.js";
 import {
+  PlacedSessionsSendSchema,
+  PLACED_SESSIONS_SEND_DESCRIPTION,
+} from "./sessions-placement-tool-contract.js";
+import {
   prepareSessionsSendFollowup,
   startSessionsSendFollowup,
 } from "./sessions-send-followup.js";
@@ -77,7 +79,9 @@ import { captureSessionsSendResumeCaller, resumeSessionsSendTask } from "./sessi
 import { normalizeSessionsSendArguments } from "./sessions-send-tool.arguments.js";
 import {
   createConfiguredAgentMainSession,
+  isConfiguredAgentMainSessionKey,
   notifySessionsSendSession,
+  resolveConfiguredAgentMainSessionKey,
   trySessionsSendActiveRunDelivery,
 } from "./sessions-send-tool.delivery.js";
 import { SessionsSendToolSchema, SessionsSendOutputSchema } from "./sessions-send-tool.schema.js";
@@ -87,52 +91,18 @@ const log = createSubsystemLogger("agents/sessions-send");
 
 const NO_REPLY_MESSAGE = "No visible reply or pending announcement. Continue or retry if needed.";
 
-function sendFailure(status: "error" | "forbidden", error: string, sessionKey?: string) {
+function sendFailure(
+  status: "error" | "forbidden",
+  error: string,
+  sessionKey?: string,
+  runId: string = crypto.randomUUID(),
+) {
   return jsonResult({
-    runId: crypto.randomUUID(),
+    runId,
     status,
     error,
     ...(sessionKey !== undefined ? { sessionKey } : {}),
   });
-}
-
-function resolveConfiguredAgentMainSessionKey(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  mainKey: string;
-}): string | undefined {
-  const agentId = normalizeAgentId(params.agentId);
-  if (!listAgentIds(params.cfg).includes(agentId)) {
-    return undefined;
-  }
-  return toAgentStoreSessionKey({
-    agentId,
-    requestKey: "main",
-    mainKey: params.mainKey,
-  });
-}
-
-function isConfiguredAgentMainSessionKey(params: {
-  cfg: OpenClawConfig;
-  agentId?: string;
-  sessionKey: string;
-  mainKey: string;
-}): boolean {
-  if (isUnscopedSessionKeySentinel(params.sessionKey)) {
-    return false;
-  }
-  if (params.sessionKey === params.mainKey) {
-    return true;
-  }
-  const agentId = params.agentId ?? parseAgentSessionKey(params.sessionKey)?.agentId;
-  return agentId
-    ? params.sessionKey ===
-        resolveConfiguredAgentMainSessionKey({
-          cfg: params.cfg,
-          agentId,
-          mainKey: params.mainKey,
-        })
-    : false;
 }
 
 export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgentTool {
@@ -142,8 +112,10 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
     label: "Session Send",
     name: "sessions_send",
     displaySummary: SESSIONS_SEND_TOOL_DISPLAY_SUMMARY,
-    description: describeSessionsSendTool(),
-    parameters: SessionsSendToolSchema,
+    description: opts?.workerPlacement
+      ? PLACED_SESSIONS_SEND_DESCRIPTION
+      : describeSessionsSendTool(),
+    parameters: opts?.workerPlacement ? PlacedSessionsSendSchema : SessionsSendToolSchema,
     outputSchema: SessionsSendOutputSchema,
     prepareArguments: normalizeSessionsSendArguments,
     execute: wrapGatewayPersonalToolExecution(async (_toolCallId, args) => {
@@ -413,7 +385,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
       }
       const mayUseRequesterForLiteralSentinel =
         isLiteralUnscopedMainTarget && normalizeAgentId(targetAgentId) === requesterAgentId;
-      const rawRequesterSessionKey = opts?.agentSessionKey ? effectiveRequesterKey : undefined;
+      const requesterSessionKey = opts?.agentSessionKey ? effectiveRequesterKey : undefined;
       const requesterSession = resolveGatewaySessionStoreTargetWithStore({
         cfg,
         key: effectiveRequesterKey,
@@ -450,27 +422,26 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
           entry: requesterSessionEntry,
         }),
       );
-      const parsedRequesterSessionKey = parseAgentSessionKey(rawRequesterSessionKey);
-      const requesterSessionKey = rawRequesterSessionKey;
-      let replyRequesterSessionKey = rawRequesterSessionKey;
+      const parsedRequesterSessionKey = parseAgentSessionKey(requesterSessionKey);
+      let replyRequesterSessionKey = requesterSessionKey;
       // Preserve exact admitted incarnations. Legacy key-only callers still normalize
       // unthreaded DM reply addresses to their monitored main session.
       if (
         !opts?.agentSessionId &&
-        rawRequesterSessionKey &&
+        requesterSessionKey &&
         parsedRequesterSessionKey &&
-        rawRequesterSessionKey !== resolvedKey &&
+        requesterSessionKey !== resolvedKey &&
         !parsedRequesterSessionKey.rest.startsWith("cron:") &&
         !parsedRequesterSessionKey.rest.startsWith("hook:") &&
         !requesterIsSubagent &&
-        deriveSessionChatTypeFromKey(rawRequesterSessionKey) === "direct" &&
-        !resolveSessionThreadInfo(rawRequesterSessionKey).threadId
+        deriveSessionChatTypeFromKey(requesterSessionKey) === "direct" &&
+        !resolveSessionThreadInfo(requesterSessionKey).threadId
       ) {
         const requesterRouteBindings = cfg.bindings?.filter(
           (binding): binding is AgentRouteBinding => binding.type !== "acp",
         );
         const requesterDeliveryRoute = requesterRouteBindings?.length
-          ? parseSessionDeliveryRoute(rawRequesterSessionKey)
+          ? parseSessionDeliveryRoute(requesterSessionKey)
           : null;
         const bareRequesterPeerId = parsedRequesterSessionKey?.rest.startsWith("direct:")
           ? parsedRequesterSessionKey.rest.slice("direct:".length)
@@ -563,12 +534,12 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
       // Fire-and-forget self-send remains a channel-delivery path. A synchronous
       // self-send would wait behind its own active session lane until timeout.
       if (timeoutSeconds !== 0 && sameSession) {
-        return jsonResult({
+        return sendFailure(
+          "error",
+          "sessions_send cannot target the calling session; use your own reply instead",
+          unresolvedDisplayKey,
           runId,
-          status: "error",
-          error: "sessions_send cannot target the calling session; use your own reply instead",
-          sessionKey: unresolvedDisplayKey,
-        });
+        );
       }
       if (resolveSessionThreadInfo(resolvedKey).threadId) {
         return sendFailure(
@@ -607,17 +578,17 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
       }
       const expectedSessionId = opts?.expectedTargetSessionId ?? access.expectedSessionId;
       if (mode === "notify" && expectedSessionId) {
-        return jsonResult({
+        return sendFailure(
+          "forbidden",
+          "Notifications cannot outlive an exact-session access grant. Use steer or followup.",
+          displayKey,
           runId,
-          status: "forbidden",
-          sessionKey: displayKey,
-          error:
-            "Notifications cannot outlive an exact-session access grant. Use steer or followup.",
-        });
+        );
       }
 
       return await runWithScopedSessionAccess({
         cfg,
+        storePath: opts?.expectedTargetStorePath,
         agentId: targetAgentId,
         expectedSessionId,
         ...(opts?.signal ? { signal: opts.signal } : {}),
@@ -625,18 +596,16 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
         run: async () => {
           if (visibleSession.missing) {
             if (mode === "steer" || mode === "notify" || mode === "resume") {
-              return jsonResult({
+              return sendFailure(
+                "error",
+                "Cannot notify, steer, or resume a missing session. Use mode=followup to start a new turn.",
+                displayKey,
                 runId,
-                status: "error",
-                error:
-                  "Cannot notify, steer, or resume a missing session. Use mode=followup to start a new turn.",
-                sessionKey: displayKey,
-              });
+              );
             }
             const createdSession = await createConfiguredAgentMainSession({
-              cfg,
               callGateway: gatewayCall,
-              ...(targetAgentId ? { agentId: targetAgentId } : {}),
+              agentId: targetAgentId,
               sessionKey: resolvedKey,
               requesterSessionKey,
               useTrustedInProcessCreation: opts?.callGateway === undefined,
@@ -691,7 +660,6 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
               : buildAgentToAgentMessageContext({
                   requesterSessionKey: replyRequesterSessionKey,
                   requesterChannel,
-                  targetSessionKey: displayKey,
                 });
           const inputProvenance = {
             kind: "inter_session" as const,

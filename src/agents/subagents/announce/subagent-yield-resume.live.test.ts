@@ -471,7 +471,7 @@ describeLive("OpenAI subagent yield and operator resume stress", () => {
           record("external-wait", {
             sessionKey: parentKey,
             gate: resumeGate.snapshot(),
-            pending: countPendingDescendantRuns(parentKey),
+            pending: await countPendingDescendantRuns(parentKey, () => {}),
           });
           const originalTaskRunId = paused.taskRunId ?? paused.runId;
           const originalGeneration = paused.generation ?? 0;
@@ -752,8 +752,8 @@ describeLive("OpenAI subagent yield and operator resume stress", () => {
           expect(reply, "late cancelled stdout is not a delivered result").not.toContain(
             lateResult,
           );
-          await until("all child obligations settled", () =>
-            countPendingDescendantRuns(parentKey) === 0 ? true : undefined,
+          await until("all child obligations settled", async () =>
+            (await countPendingDescendantRuns(parentKey, () => {})) === 0 ? true : undefined,
           );
           const finalMessages = await history(parentKey);
           expect(finalReplies(finalMessages, marker)).toHaveLength(1);

@@ -257,6 +257,7 @@ serveOwnedWorkerTasks(
       if (request.kind === "session-store-target") {
         const { readSessionStoreTargetResult } =
           await import("./session-store-target-inventory.js");
+        request.request.env = cloneEnvWithPlatformSemantics(request.request.env);
         const read = readSessionStoreTargetResult(request.request);
         if (!read.ok) {
           const readError = encodeSessionTranscriptWorkerError(read.error);
@@ -270,6 +271,7 @@ serveOwnedWorkerTasks(
       if (request.kind === "session-exact-entries") {
         const { readExactSessionEntriesWithLifecycle } =
           await import("./session-entry-read.worker.js");
+        request.env = cloneEnvWithPlatformSemantics(request.env);
         return readExactSessionEntriesWithLifecycle(request);
       }
       if (request.kind === "session-row-facts") {
@@ -471,6 +473,14 @@ serveOwnedWorkerTasks(
       return await runWithSessionTranscriptReadFence(
         request.admission,
         async (): Promise<SessionTranscriptWorkerValues[keyof SessionTranscriptWorkerValues]> => {
+          if (request.kind === "session-activity-summary-source") {
+            const { readActivitySummaryBatch } =
+              await import("../../gateway/session-activity-summary-source.js");
+            return {
+              kind: "session-activity-summary-source" as const,
+              source: readActivitySummaryBatch(request),
+            };
+          }
           if (request.kind === "session-title-fields") {
             const { readSessionTitleFieldsFromTranscript } =
               await import("../../gateway/session-transcript-title-reader.js");

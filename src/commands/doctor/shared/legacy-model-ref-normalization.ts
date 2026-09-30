@@ -157,9 +157,6 @@ function upgradeOldClaudeToken(
     return sonnetTarget;
   }
   if (normalized.startsWith("anthropic.claude-opus-")) {
-    if (provider === "amazon-bedrock" || provider === "amazon-bedrock-mantle") {
-      return null;
-    }
     if (
       normalized.startsWith("anthropic.claude-opus-4-7") ||
       normalized.startsWith("anthropic.claude-opus-4-6")
@@ -172,9 +169,6 @@ function upgradeOldClaudeToken(
     normalized.startsWith("anthropic.claude-sonnet-") ||
     normalized.startsWith("anthropic.claude-haiku-")
   ) {
-    if (provider === "amazon-bedrock" || provider === "amazon-bedrock-mantle") {
-      return null;
-    }
     if (normalized.startsWith("anthropic.claude-sonnet-4-6")) {
       return null;
     }

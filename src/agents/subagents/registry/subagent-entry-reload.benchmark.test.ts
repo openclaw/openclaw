@@ -254,6 +254,7 @@ it.runIf(process.env.OPENCLAW_ENTRY_RELOAD_BENCH === "1")(
                 subagentRuns,
                 () => ({ runIds: [], sessionKeys: [controllerSessionKey] }),
                 (_selection, snapshot) => snapshot.size,
+                { sessionKeys: [controllerSessionKey], descendants: false },
               ),
             );
             const recovery = await measure("restart-recovery-session", iteration, () =>

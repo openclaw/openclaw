@@ -24,9 +24,5 @@ export function normalizeZaloReactionIcon(raw: string): string {
   if (!trimmed) {
     return Reactions.LIKE;
   }
-  return (
-    REACTION_ALIAS_MAP.get(normalizeLowercaseStringOrEmpty(trimmed)) ??
-    REACTION_ALIAS_MAP.get(trimmed) ??
-    trimmed
-  );
+  return REACTION_ALIAS_MAP.get(normalizeLowercaseStringOrEmpty(trimmed)) ?? trimmed;
 }

@@ -152,6 +152,7 @@ import { cliBackendLog } from "./log.js";
 import { buildCliMcpGrantContext, finalizeCliMcpGrant } from "./mcp-grant-context.js";
 import { resolveCliCatalogCapabilities } from "./model-capabilities.js";
 import { CLAUDE_CLI_CONTEXT_MODEL_ALIASES, detectNodeClaudePlacement } from "./prepare-claude.js";
+import { prepareCliMcpToolProjection } from "./prepare-mcp.js";
 import {
   buildCliTurnAppendContext,
   composeCliPromptContext,
@@ -1048,35 +1049,29 @@ async function prepareCliRunContextWithinReadFence(
         store: authStore ?? loadScopedAuthStore(),
       }
     : undefined;
-  const requestedLoopbackToolsAllow =
-    runtimeToolsAllowPolicy ??
-    (rootedExecution ? rootedToolsAllow : params.cliToolAvailability?.openClaw);
-  const resolveProjectedTools =
-    runtimeToolsAllowPolicy !== undefined || (rootedExecution && rootedToolsAllow === undefined)
-      ? prepareDeps.resolveMcpLoopbackPolicyTools
-      : prepareDeps.resolveMcpLoopbackScopedTools;
   params.assertCurrent?.();
-  const projectedToolsBeforePromptBuild =
+  const mcpProjection =
     (bundleMcpEnabled || shouldMaterializeRuntimePolicy || nodeWorkshopEnabled) && mcpContextBase
-      ? (
-          await resolveProjectedTools({
+      ? await prepareCliMcpToolProjection(params, {
+          agentId: workspaceResolution.agentId,
+          context: mcpContextBase,
+          runtimeToolsAllowPolicy,
+          rootedToolsAllow,
+          scope: {
             cfg: runConfig,
-            signal: params.abortSignal,
-            context:
-              requestedLoopbackToolsAllow !== undefined
-                ? { ...mcpContextBase, toolsAllow: [...requestedLoopbackToolsAllow] }
-                : mcpContextBase,
-            sessionControlAuthority: readRunOperatorAuthority(params),
             rootedExecution,
             ...(skillLibraryAuthoring ? { skillLibraryAuthoring } : {}),
             ...(mcpToolAuth ? { authProfileStore: mcpToolAuth.store } : {}),
             ...(mcpToolAuth?.agentDir ? { authProfileStoreAgentDir: mcpToolAuth.agentDir } : {}),
-          })
-        ).tools
-      : [];
+          },
+          resolvePolicyTools: prepareDeps.resolveMcpLoopbackPolicyTools,
+          resolveScopedTools: prepareDeps.resolveMcpLoopbackScopedTools,
+        })
+      : { params, tools: [] };
+  params = mcpProjection.params;
   params.assertCurrent?.();
   const hookFilteredProjectedTools = applyEmbeddedAttemptToolsAllow(
-    projectedToolsBeforePromptBuild,
+    mcpProjection.tools,
     promptBuildToolsAllow,
   );
   if (
@@ -1346,14 +1341,9 @@ async function prepareCliRunContextWithinReadFence(
       sessionId: params.sessionId,
       runId: params.runId,
       agentId: policyAgentId,
-      agentDir,
       agentAccountId: params.agentAccountId,
       messageProvider: params.messageProvider ?? params.messageChannel,
       messageChannel: params.messageChannel,
-      chatType: runtimeChatType,
-      currentChannelId: params.currentChannelId,
-      currentThreadTs: params.currentThreadTs,
-      currentMessageId: params.currentMessageId,
       groupId: params.groupId,
       groupChannel: params.groupChannel,
       groupSpace: params.groupSpace,
@@ -1365,10 +1355,8 @@ async function prepareCliRunContextWithinReadFence(
       senderIsOwner: params.senderIsOwner,
       modelProvider,
       modelId,
-      modelContextWindowTokens: contextWindowInfo.tokens,
       workspaceDir,
       cwd,
-      skillsSnapshot: params.skillsSnapshot,
       sandboxToolPolicy: sandboxStatus.sandboxed ? sandboxStatus.toolPolicy : undefined,
       runtimeToolAllowlist: runtimeToolsAllowPolicy,
       inheritRuntimeToolAllowlist: true,

@@ -32,7 +32,11 @@ import {
   withTempWorkspace,
 } from "openclaw/plugin-sdk/sandbox";
 import { canonicalPathFromExistingAncestor } from "openclaw/plugin-sdk/security-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalRecord,
+  normalizeLowercaseStringOrEmpty,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { safeParseJson } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { OpenShellFsBridgeContext, OpenShellSandboxBackend } from "./backend.types.js";
 import { createOpenShellSshSession, runOpenShellCli, type OpenShellExecContext } from "./cli.js";
 import { resolveOpenShellPluginConfig, type ResolvedOpenShellPluginConfig } from "./config.js";
@@ -1149,36 +1153,22 @@ function parseOpenShellSandboxPhasePage(
   stdout: string,
   sandboxName: string,
 ): { count: number; phase?: string } | undefined {
-  try {
-    const parsed: unknown = JSON.parse(stdout);
-    if (!Array.isArray(parsed)) {
-      return undefined;
-    }
-    for (const entry of parsed) {
-      if (!entry || typeof entry !== "object") {
-        continue;
-      }
-      const record = entry as Record<string, unknown>;
-      if (record.name === sandboxName && typeof record.phase === "string") {
-        return { count: parsed.length, phase: record.phase };
-      }
-    }
-    return { count: parsed.length };
-  } catch {
+  const parsed = safeParseJson<unknown>(stdout);
+  if (!Array.isArray(parsed)) {
     return undefined;
   }
+  for (const entry of parsed) {
+    const record = asOptionalRecord(entry);
+    if (record?.name === sandboxName && typeof record.phase === "string") {
+      return { count: parsed.length, phase: record.phase };
+    }
+  }
+  return { count: parsed.length };
 }
 
 function parseOpenShellSandboxPhase(stdout: string): string | undefined {
-  try {
-    const parsed: unknown = JSON.parse(stdout);
-    if (typeof parsed !== "object" || parsed === null || !("phase" in parsed)) {
-      return undefined;
-    }
-    return typeof parsed.phase === "string" ? parsed.phase : undefined;
-  } catch {
-    return undefined;
-  }
+  const parsed = asOptionalRecord(safeParseJson<unknown>(stdout));
+  return typeof parsed?.phase === "string" ? parsed.phase : undefined;
 }
 
 function resolveRemoteMaterializedSkillsWorkspaceDir(remoteWorkspaceDir: string): string {

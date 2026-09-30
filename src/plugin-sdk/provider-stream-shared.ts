@@ -1,4 +1,3 @@
-// Provider stream shared helpers implement reusable stream wrappers and payload policies.
 import { resolveOpenAIReasoningEffortForModel } from "@openclaw/ai/internal/openai";
 import {
   createEmptyTransportUsage,
@@ -711,10 +710,10 @@ export function createGoogleThinkingStreamWrapper(
 }
 
 export {
+  applyAnthropicEphemeralCacheControlMarkers,
   applyAnthropicPayloadPolicyToParams,
   resolveAnthropicPayloadPolicy,
 } from "@openclaw/ai/transports";
-export { applyAnthropicEphemeralCacheControlMarkers } from "../llm/providers/stream-wrappers/anthropic-cache-control-payload.js";
 export {
   createMoonshotThinkingWrapper,
   resolveMoonshotThinkingKeep,

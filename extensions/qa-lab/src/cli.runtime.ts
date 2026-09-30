@@ -59,6 +59,7 @@ import {
   QA_FRONTIER_PARITY_CANDIDATE_LABEL,
 } from "./providers/live-frontier/parity.js";
 import { startQaProviderServer } from "./providers/server-runtime.js";
+import { QA_CHANNEL_DEFAULT_SUITE_CONCURRENCY } from "./qa-channel-transport.js";
 import {
   addQaCredentialSet,
   diagnoseQaCredentialBroker,
@@ -69,7 +70,6 @@ import {
 } from "./qa-credentials-admin.runtime.js";
 import { normalizeQaThinkingLevel, type QaThinkingLevel } from "./qa-gateway-config.js";
 import {
-  defaultQaSuiteConcurrencyForTransport,
   normalizeQaTransportId,
   qaTransportSupportsModuleFlows,
   type QaTransportId,
@@ -624,20 +624,16 @@ function printQaCredentialListTable(credentials: QaCredentialRecord[]) {
     leased: formatQaCredentialLeaseState(credential),
     note: credential.note ?? "",
   }));
-  const idWidth = Math.max("credentialId".length, ...rows.map((row) => row.credentialId.length));
-  const fingerprintWidth = Math.max(
-    "fingerprint".length,
-    ...rows.map((row) => row.fingerprint.length),
-  );
-  const kindWidth = Math.max("kind".length, ...rows.map((row) => row.kind.length));
-  const statusWidth = Math.max("status".length, ...rows.map((row) => row.status.length));
-  const leaseWidth = Math.max("leased".length, ...rows.map((row) => row.leased.length));
-  process.stdout.write(
-    `${"credentialId".padEnd(idWidth)}  ${"fingerprint".padEnd(fingerprintWidth)}  ${"kind".padEnd(kindWidth)}  ${"status".padEnd(statusWidth)}  ${"leased".padEnd(leaseWidth)}  note\n`,
-  );
+  const columns = (
+    ["credentialId", "fingerprint", "kind", "status", "leased", "note"] as const
+  ).map((name) => ({
+    name,
+    width: name === "note" ? 0 : Math.max(name.length, ...rows.map((row) => row[name].length)),
+  }));
+  process.stdout.write(`${columns.map(({ name, width }) => name.padEnd(width)).join("  ")}\n`);
   for (const row of rows) {
     process.stdout.write(
-      `${row.credentialId.padEnd(idWidth)}  ${row.fingerprint.padEnd(fingerprintWidth)}  ${row.kind.padEnd(kindWidth)}  ${row.status.padEnd(statusWidth)}  ${row.leased.padEnd(leaseWidth)}  ${row.note}\n`,
+      `${columns.map(({ name, width }) => row[name].padEnd(width)).join("  ")}\n`,
     );
   }
 }
@@ -870,6 +866,24 @@ function resolveQaReportOnlyOptionalScenarioNames(params: {
   return resolveQaReportOnlyOptionalScenarioNamesFromCatalog(readQaScenarioPack().scenarios);
 }
 
+async function setQaSuiteCommandExitCode(
+  summaryPath: string,
+  scenarioIds: readonly string[],
+  opts: Pick<QaSuiteCommandOptions, "allowFailures" | "explicitScenarioSelection">,
+) {
+  const allowFailures = opts.allowFailures === true;
+  const blockingScenarioCount = await readQaSuiteFailedOrSkippedScenarioCountFromFile(summaryPath, {
+    optionalScenarioNames: resolveQaReportOnlyOptionalScenarioNames({
+      scenarioIds,
+      explicitScenarioSelection: opts.explicitScenarioSelection,
+    }),
+    requireExecutedScenario: allowFailures,
+  });
+  if (!allowFailures && blockingScenarioCount > 0) {
+    process.exitCode = 1;
+  }
+}
+
 export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
   const transportId = normalizeQaTransportId(opts.transportId);
@@ -1022,19 +1036,7 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
     process.stdout.write(`QA Multipass summary: ${result.summaryPath}\n`);
     process.stdout.write(`QA Multipass host log: ${result.hostLogPath}\n`);
     process.stdout.write(`QA Multipass bootstrap log: ${result.bootstrapLogPath}\n`);
-    const blockingScenarioCount = await readQaSuiteFailedOrSkippedScenarioCountFromFile(
-      result.summaryPath,
-      {
-        optionalScenarioNames: resolveQaReportOnlyOptionalScenarioNames({
-          scenarioIds,
-          explicitScenarioSelection: opts.explicitScenarioSelection,
-        }),
-        requireExecutedScenario: allowFailures,
-      },
-    );
-    if (!allowFailures && blockingScenarioCount > 0) {
-      process.exitCode = 1;
-    }
+    await setQaSuiteCommandExitCode(result.summaryPath, scenarioIds, opts);
     return result;
   }
   const sutOpenClawCommand =
@@ -1056,7 +1058,7 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
   // servers bounded even when a caller requests a larger suite concurrency.
   const liveConcurrencyLimit =
     liveAdapterFactory?.isolatesInstances === true
-      ? defaultQaSuiteConcurrencyForTransport(transportId)
+      ? QA_CHANNEL_DEFAULT_SUITE_CONCURRENCY
       : undefined;
   const runtimeResult = await runQaSuite({
     repoRoot,
@@ -1115,19 +1117,7 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
   process.stdout.write(`QA suite report: ${result.reportPath}\n`);
   process.stdout.write(`QA suite evidence: ${result.evidencePath}\n`);
   process.stdout.write(`QA suite summary: ${result.summaryPath}\n`);
-  const blockingScenarioCount = await readQaSuiteFailedOrSkippedScenarioCountFromFile(
-    result.summaryPath,
-    {
-      optionalScenarioNames: resolveQaReportOnlyOptionalScenarioNames({
-        scenarioIds,
-        explicitScenarioSelection: opts.explicitScenarioSelection,
-      }),
-      requireExecutedScenario: allowFailures,
-    },
-  );
-  if (!allowFailures && blockingScenarioCount > 0) {
-    process.exitCode = 1;
-  }
+  await setQaSuiteCommandExitCode(result.summaryPath, scenarioIds, opts);
   return {
     ...result,
     expectedCells: runtimeResult.expectedCells,

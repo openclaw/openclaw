@@ -59,22 +59,6 @@ function shouldResolveLocalGatewayPasswordSecret(
   return !envToken && !configTokenConfigured;
 }
 
-async function resolveLocalGatewayPasswordSecretIfNeeded(cfg: OpenClawConfig): Promise<void> {
-  const resolvedPassword = await resolveRequiredConfiguredSecretRefInputString({
-    config: cfg,
-    env: process.env,
-    value: cfg.gateway?.auth?.password,
-    path: "gateway.auth.password",
-  });
-  if (!resolvedPassword) {
-    return;
-  }
-  if (!cfg.gateway?.auth) {
-    return;
-  }
-  cfg.gateway.auth.password = resolvedPassword;
-}
-
 function emitQrSecretResolveDiagnostics(diagnostics: string[], opts: QrCliOptions): void {
   const toStderr = opts.json === true || opts.setupCodeOnly === true;
   for (const entry of diagnostics) {
@@ -172,7 +156,15 @@ export function registerQrCli(program: Command) {
           !token &&
           shouldResolveLocalGatewayPasswordSecret(cfg, process.env)
         ) {
-          await resolveLocalGatewayPasswordSecretIfNeeded(cfg);
+          const resolvedPassword = await resolveRequiredConfiguredSecretRefInputString({
+            config: cfg,
+            env: process.env,
+            value: cfg.gateway.auth.password,
+            path: "gateway.auth.password",
+          });
+          if (resolvedPassword) {
+            cfg.gateway.auth.password = resolvedPassword;
+          }
         }
 
         const explicitUrl = trimToUndefined(opts.url) ?? trimToUndefined(opts.publicUrl);

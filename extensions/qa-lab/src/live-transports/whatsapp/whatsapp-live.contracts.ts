@@ -66,7 +66,6 @@ export type WhatsAppQaMessageScenarioContext = {
   sutPhoneE164: string;
   target: string;
   targetKind: "dm" | "group";
-  waitForReady: () => Promise<void>;
 };
 
 type WhatsAppQaResolvedScenarioTarget =

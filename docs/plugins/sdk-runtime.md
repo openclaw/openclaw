@@ -128,6 +128,14 @@ its managed handles. Already admitted calls and streams have a bounded chance
 to finish before disposal; retaining an old function does not make it a current
 runtime handle.
 
+Ordinary stream results project their payload on the first `value` read. Nested managed
+readers share data inspection within that synchronous read, while each reader
+keeps its own instance admission. An unread terminal payload does not need data
+inspection. Plain payloads retain their native identity and remain mutable;
+they are not frozen or transferred. Nested readers recheck later reads for
+mutations that need executable views. This does not give a closed
+consumer permission to read a retained active-stream result or call its methods.
+
 Context engines selected by an admitted turn remain owned through that turn's
 commit and engine disposal. Replacing an enabled plugin waits for those consumers
 to close before registering its successor. Disabling or removing a plugin can

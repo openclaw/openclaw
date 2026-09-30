@@ -146,32 +146,27 @@ export async function discoverHermesSource(
       archivePaths.push({ id: `archive:${file}`, path: candidate, relativePath: file });
     }
   }
-  return {
+  const source: HermesSource = {
     root,
     archivePaths,
-    ...((await exists(path.join(root, "config.yaml")))
-      ? { configPath: path.join(root, "config.yaml") }
-      : {}),
-    ...((await exists(path.join(root, ".env"))) ? { envPath: path.join(root, ".env") } : {}),
-    ...((await exists(path.join(root, "auth.json")))
-      ? { authPath: path.join(root, "auth.json") }
-      : {}),
-    ...(globalAuthPath && (await exists(globalAuthPath)) ? { globalAuthPath } : {}),
     ...(opencodeAuthPath ? { opencodeAuthPath } : {}),
-    ...((await exists(path.join(root, "SOUL.md"))) ? { soulPath: path.join(root, "SOUL.md") } : {}),
-    ...((await exists(path.join(root, "AGENTS.md")))
-      ? { agentsPath: path.join(root, "AGENTS.md") }
-      : {}),
-    ...((await exists(path.join(root, "memories", "MEMORY.md")))
-      ? { memoryPath: path.join(root, "memories", "MEMORY.md") }
-      : {}),
-    ...((await exists(path.join(root, "memories", "USER.md")))
-      ? { userPath: path.join(root, "memories", "USER.md") }
-      : {}),
-    ...((await isDirectory(path.join(root, "skills")))
-      ? { skillsDir: path.join(root, "skills") }
-      : {}),
   };
+  for (const [key, candidate, probe] of [
+    ["configPath", path.join(root, "config.yaml"), exists],
+    ["envPath", path.join(root, ".env"), exists],
+    ["authPath", path.join(root, "auth.json"), exists],
+    ["globalAuthPath", globalAuthPath, exists],
+    ["soulPath", path.join(root, "SOUL.md"), exists],
+    ["agentsPath", path.join(root, "AGENTS.md"), exists],
+    ["memoryPath", path.join(root, "memories", "MEMORY.md"), exists],
+    ["userPath", path.join(root, "memories", "USER.md"), exists],
+    ["skillsDir", path.join(root, "skills"), isDirectory],
+  ] as const) {
+    if (candidate && (await probe(candidate))) {
+      source[key] = candidate;
+    }
+  }
+  return source;
 }
 
 async function resolveImplicitHermesRoot(

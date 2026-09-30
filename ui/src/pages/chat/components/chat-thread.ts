@@ -15,7 +15,10 @@ import {
 import { handleMarkdownTableInteraction } from "../../../components/markdown-tables.ts";
 import { renderPanelLoadingSkeleton } from "../../../components/panel-loading-skeleton.ts";
 import { t } from "../../../i18n/index.ts";
-import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
+import {
+  anchorFromNavigationEvent,
+  shouldHandleNavigationClick,
+} from "../../../lib/navigation-click.ts";
 import { hydrateLinkFavicons } from "../link-favicon-loader.ts";
 import {
   CHAT_HISTORY_BOUNDARY_HEIGHT_PX,
@@ -34,6 +37,16 @@ import type { ChatTranscriptSession } from "./chat-transcript-session.ts";
 import { renderWelcomeState, resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
 
 const EMPTY_ENTRY_KEYS: ReadonlyMap<string, string> = new Map();
+
+function navigateCronRunLink(event: Event, props: ChatThreadProps): boolean {
+  const anchor = anchorFromNavigationEvent(event);
+  if (!props.onNavigate || !anchor?.hasAttribute("data-cron-run-link")) {
+    return false;
+  }
+  event.preventDefault();
+  props.onNavigate("cron", { search: anchor.search });
+  return true;
+}
 
 export function renderChatThread(
   props: ChatThreadProps,
@@ -127,6 +140,14 @@ function renderTranscriptShell(
         @scroll=${props.onChatScroll}
         @wheel=${props.onHistoryIntent ? { handleEvent: props.onHistoryIntent, passive: true } : null}
         @keydown=${(event: KeyboardEvent) => {
+          if (
+            !event.defaultPrevented &&
+            !event.isComposing &&
+            (event.key === "Enter" || event.key === " ") &&
+            navigateCronRunLink(event, props)
+          ) {
+            return;
+          }
           const target = markdownFileLinkFromKeyboardEvent(event);
           if (target) {
             props.onOpenWorkspaceFile?.(target);
@@ -150,6 +171,9 @@ function renderTranscriptShell(
         @click=${(event: MouseEvent) => {
           handleMarkdownCodeBlockClick(event);
           handleMarkdownTableInteraction(event);
+          if (shouldHandleNavigationClick(event) && navigateCronRunLink(event, props)) {
+            return;
+          }
           const target = markdownFileLinkFromEvent(event);
           if (target) {
             props.onOpenWorkspaceFile?.(target);

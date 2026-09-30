@@ -113,6 +113,7 @@ export async function withGitTargetInspectionRoot<T>(
     timeoutMs: number;
     work?: { timeoutMs?: number };
     onWarning: (step: UpdateStepResult) => void;
+    retainCleanup?: (cleanup: () => Promise<boolean>) => boolean;
   },
   inspect: (root: string, runCommand: CommandRunner) => Promise<T>,
 ): Promise<T> {
@@ -274,12 +275,22 @@ export async function withGitTargetInspectionRoot<T>(
   } finally {
     // Only this invocation's private inspection repository, never the installed checkout.
     if (!cleanupUncertain) {
-      await cleanupUpdateTemporaryDirectory({
-        directory: temporaryRoot,
-        root: params.root,
-        name: "git-target-inspection-cleanup",
-        onWarning: params.onWarning,
-      });
+      const cleanup = async () => {
+        let removed = true;
+        await cleanupUpdateTemporaryDirectory({
+          directory: temporaryRoot,
+          root: params.root,
+          name: "git-target-inspection-cleanup",
+          onWarning: (warning) => {
+            removed = false;
+            return params.onWarning(warning);
+          },
+        });
+        return removed;
+      };
+      if (!params.retainCleanup?.(cleanup)) {
+        await cleanup();
+      }
     }
   }
 }

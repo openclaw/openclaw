@@ -44,7 +44,10 @@ import { createTempDirTracker, useAutoCleanupTempDirTracker } from "../helpers/t
 import { createPrebuiltUiE2eVitestConfig } from "../vitest/vitest.ui-e2e-prebuilt.config.ts";
 import { uiE2eRealGatewayTestFiles } from "../vitest/vitest.ui-paths.mjs";
 import { runCiGitStep } from "./ci-git-owner.test-support.js";
-import { runDependencyFreePreflight } from "./ci-preflight-dependencies.test-support.js";
+import {
+  exportPreflightHarness,
+  runDependencyFreePreflight,
+} from "./ci-preflight-dependencies.test-support.js";
 import { assertControlUiE2eOwnership } from "./ci-ui-e2e-ownership.test-support.js";
 import {
   CACHE_SAVE_V5,
@@ -72,6 +75,11 @@ import {
   writeExecutable,
 } from "./ci-workflow.test-support.js";
 import { runGeneratedPublisherScenario } from "./generated-publisher.test-support.js";
+
+const manifestSource = readFileSync(
+  new URL("../../scripts/ci-build-manifest.mjs", import.meta.url),
+  "utf8",
+);
 
 const parser = createNativeTypeScriptParser();
 afterAll(() => parser.close());
@@ -500,7 +508,9 @@ describe("release fast lane label", () => {
     expect(manifestStep.env.OPENCLAW_CI_HEAD_REPOSITORY).toBe(
       "${{ github.event.pull_request.head.repo.full_name }}",
     );
-    const admission = manifestStep.run.match(/const releaseFastLaneScope = [^;]*;/su)?.[0];
+    const admission = manifestSource
+      .replace(/\s+/gu, " ")
+      .match(/const releaseFastLaneScope = [^;]*;/su)?.[0];
     expect(admission).toContain(
       'eventName === "pull_request" && isCanonicalRepository && process.env.OPENCLAW_CI_HEAD_REPOSITORY === process.env.OPENCLAW_CI_REPOSITORY && runNodeFull',
     );
@@ -1644,7 +1654,7 @@ AFTER_CD
     const jobs = readCiWorkflow().jobs;
     const job = jobs["docker-seed-e2e"];
     expect(source).toContain("docker-seed-e2e-contract-v1");
-    expect(source).toContain('typeof dockerSeedPlan.resolveDockerSeedLanes === "function"');
+    expect(manifestSource).toContain('typeof dockerSeedPlan.resolveDockerSeedLanes === "function"');
     expect(jobs.preflight.outputs).toMatchObject({
       docker_seed_lanes: "${{ steps.manifest.outputs.docker_seed_lanes }}",
       run_docker_seed_e2e: "${{ steps.manifest.outputs.run_docker_seed_e2e }}",
@@ -2363,6 +2373,29 @@ require("node:fs").writeFileSync("scheduler-baseline", process.env.OPENCLAW_UPGR
           `${jobName}: ${JSON.stringify(overrides)}`,
         ).toBe(expected);
       }
+    }
+  });
+
+  it("keeps the full extension package boundary in its own job budget", () => {
+    const timeout = readCiWorkflow().jobs["check-additional-shard"]["timeout-minutes"];
+    for (const [group, expected] of [
+      ["extension-package-boundary", 30],
+      ["runtime-topology-architecture", 20],
+      ["plugin-sdk-api-diff", 20],
+      ["boundaries", 20],
+      [undefined, 20],
+    ] as const) {
+      expect(
+        typeof timeout === "number"
+          ? timeout
+          : evaluateWorkflowExpression(timeout, {
+              eventName: "pull_request",
+              repository: "openclaw/openclaw",
+              runAttempt: 2,
+              matrix: { group },
+            }),
+        group ?? "default additional check",
+      ).toBe(expected);
     }
   });
 
@@ -4396,11 +4429,12 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
 
   it.each([false, true])("loads the Node shard planner from its owner (frozen=%s)", (frozen) => {
     const workflow = readCiWorkflow();
-    const step = workflow.jobs.preflight.steps.find(
-      (entry: WorkflowStep) => entry.name === "Build CI manifest",
+    const targetResolver = expectDefined(
+      manifestSource.match(/const fromTarget = [^;]*;/u)?.[0],
+      "target import resolver",
     );
     const selection = expectDefined(
-      step.run.match(/const nodeTestPlanPath =[\s\S]*?(?=const importTargetPlan)/u)?.[0],
+      manifestSource.match(/const nodeTestPlanPath =[\s\S]*?(?=const importTargetPlan)/u)?.[0],
       "Node planner selection",
     );
     const root = tempDirs.make("ci-planner-owner-");
@@ -4418,13 +4452,20 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
            [${JSON.stringify(owner)}, readFileSync("candidate.txt", "utf8")];`,
       );
     }
-    const run = spawnSync(testNodeExecPath, ["--input-type=module"], {
-      cwd: root,
-      input: `import { existsSync } from "node:fs";
+    const entrypoint = path.join(root, ".ci-harness/scripts/ci-build-manifest.mjs");
+    writeFileSync(
+      entrypoint,
+      `import { existsSync } from "node:fs";
+        import path from "node:path";
+        import { pathToFileURL } from "node:url";
+        ${targetResolver}
         const frozenTarget = ${frozen};
         const compatibilityTarget = true;
         ${selection}
         console.log(JSON.stringify(createNodeTestPlan()));`,
+    );
+    const run = spawnSync(testNodeExecPath, [entrypoint], {
+      cwd: root,
       encoding: "utf8",
     });
     expect(run.status, run.stderr).toBe(0);
@@ -4459,46 +4500,60 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(run.status, run.stderr).toBe(0);
   });
 
-  it("keeps the preflight manifest import closure dependency-free", () => {
-    const manifestStep = readCiWorkflow().jobs.preflight.steps.find(
-      (step: WorkflowStep) => step.name === "Build CI manifest",
-    );
-    const manifestRun = expectDefined(manifestStep?.run, "Build CI manifest script");
-    const manifestSource = expectDefined(
-      manifestRun.match(/--input-type=module <<'([A-Z][A-Z0-9_]*)'\n([\s\S]*?)\n\1(?=\n|$)/u)?.[2],
-      "Build CI manifest Node source",
-    );
-    const { result, manifest } = runDependencyFreePreflight(
-      manifestSource,
-      tempDirs.make("ci-preflight-dependencies-"),
-      testNodeExecPath,
-    );
-    expect(
-      result.status,
-      `${result.error?.message ?? ""}\n${result.stdout}\n${result.stderr}`,
-    ).toBe(0);
-    expect(manifest).toContain("run_node=false\n");
-    expect(manifest).toContain("run_windows=true\n");
-    const outputs = Object.fromEntries(
-      manifest
-        .trim()
-        .split("\n")
-        .map((line) => {
-          const separator = line.indexOf("=");
-          return [line.slice(0, separator), line.slice(separator + 1)];
-        }),
-    );
-    expect(
-      JSON.parse(expectDefined(outputs.checks_node_core_nondist_matrix, "Node test matrix")),
-    ).toEqual({
-      include: [],
-    });
-    expect(
-      JSON.parse(expectDefined(outputs.checks_windows_matrix, "Windows test matrix")).include
-        .length,
-    ).toBeGreaterThan(0);
-    expect(outputs.ui_test_groups_gzip_base64).toBeTruthy();
-  });
+  it.skipIf(process.platform === "win32")(
+    "runs the dependency-free preflight manifest from the owner-exported harness",
+    () => {
+      const directory = tempDirs.make("ci-preflight-dependencies-");
+      const harness = exportPreflightHarness(directory);
+      const harnessPaths = new Set<string>();
+      const steps: WorkflowStep[] = readCiWorkflow().jobs.preflight.steps;
+      for (const step of steps) {
+        for (const source of [step.run, step.uses]) {
+          for (const match of (source ?? "").matchAll(/(?:\.\/)?\.ci-harness\/([\w./-]+)/gu)) {
+            harnessPaths.add(expectDefined(match[1], "preflight harness path"));
+          }
+        }
+      }
+      expect(harnessPaths.size).toBeGreaterThan(0);
+      expect(harnessPaths).toContain("scripts/ci-build-manifest.mjs");
+      const missingPaths = [...harnessPaths].filter(
+        (entry) => !existsSync(path.join(harness, entry)),
+      );
+      expect(missingPaths, `Missing preflight harness paths: ${missingPaths.join(", ")}`).toEqual(
+        [],
+      );
+      const { result, manifest } = runDependencyFreePreflight(
+        pathToFileURL(path.join(harness, "scripts/ci-build-manifest.mjs")),
+        directory,
+        testNodeExecPath,
+      );
+      expect(
+        result.status,
+        `${result.error?.message ?? ""}\n${result.stdout}\n${result.stderr}`,
+      ).toBe(0);
+      expect(manifest).toContain("run_node=false\n");
+      expect(manifest).toContain("run_windows=true\n");
+      const outputs = Object.fromEntries(
+        manifest
+          .trim()
+          .split("\n")
+          .map((line) => {
+            const separator = line.indexOf("=");
+            return [line.slice(0, separator), line.slice(separator + 1)];
+          }),
+      );
+      expect(
+        JSON.parse(expectDefined(outputs.checks_node_core_nondist_matrix, "Node test matrix")),
+      ).toEqual({
+        include: [],
+      });
+      expect(
+        JSON.parse(expectDefined(outputs.checks_windows_matrix, "Windows test matrix")).include
+          .length,
+      ).toBeGreaterThan(0);
+      expect(outputs.ui_test_groups_gzip_base64).toBeTruthy();
+    },
+  );
 
   it("keeps type-aware oxlint within hosted fork-runner resources", () => {
     const workflow = readCiWorkflow();
@@ -5316,7 +5371,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           .toSorted(),
       );
       if (releaseTier === false) {
-        expect(selectedFiles).toHaveLength(uiE2eRealGatewayTestFiles.length - 11);
+        expect(selectedFiles).toHaveLength(uiE2eRealGatewayTestFiles.length - 12);
         expect(selectedFiles).not.toContain(
           "ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts",
         );
@@ -5657,10 +5712,6 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
 
   it("fails and retries quiet Node test shard stalls quickly", () => {
     const workflow = readCiWorkflow();
-    const preflightJob = workflow.jobs.preflight;
-    const manifestStep = preflightJob.steps.find(
-      (step: WorkflowStep) => step.name === "Build CI manifest",
-    );
     const nodeTestJob = workflow.jobs["checks-node-core-test-nondist-shard"];
     const runStep = nodeTestJob.steps.find(
       (step: WorkflowStep) => step.name === "Run Node test shard",
@@ -5672,10 +5723,10 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       (step: WorkflowStep) => step.name === "Install ripgrep for native grep tests",
     );
 
-    expect(JSON.stringify(preflightJob.steps)).toContain("timeout_minutes: shard.timeoutMinutes");
-    expect(manifestStep.run).toContain("pretest_build_mode: shard.pretestBuildMode");
-    expect(manifestStep.run).toContain("requires_ripgrep:");
-    expect(manifestStep.run).toContain("src/agents/sessions/tools/index.test.ts");
+    expect(manifestSource).toContain("timeout_minutes: shard.timeoutMinutes");
+    expect(manifestSource).toContain("pretest_build_mode: shard.pretestBuildMode");
+    expect(manifestSource).toContain("requires_ripgrep:");
+    expect(manifestSource).toContain("src/agents/sessions/tools/index.test.ts");
     expect(nodeTestJob["timeout-minutes"]).toBe("${{ matrix.timeout_minutes || 60 }}");
     expect(runStep.env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS).toBe(
       "${{ needs.preflight.outputs.compatibility_target == 'true' && '660000' || '300000' }}",

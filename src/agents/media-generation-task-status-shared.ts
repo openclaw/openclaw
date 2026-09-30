@@ -449,9 +449,9 @@ function buildMediaGenerationTaskStatusText(params: {
     params.task.progressSummary ? `Progress: ${params.task.progressSummary}.` : null,
     params.duplicateGuard
       ? active
-        ? `Do not call ${params.toolName} again for this request. Wait for the completion event; the completion agent will send the finished ${params.completionLabel} here.`
+        ? `Do not call ${params.toolName} again for this request. Do not wait, poll, or yield for it: end this turn; the completion arrives as a later turn and sends the finished ${params.completionLabel} here.`
         : `Do not call ${params.toolName} again for the same request; this recent ${params.completionLabel} generation already completed.`
-      : `Wait for the completion event; the completion agent will send the finished ${params.completionLabel} here when it's ready.`,
+      : `Do not wait, poll, or yield for it: end this turn; the completion arrives as a later turn and sends the finished ${params.completionLabel} here.`,
   ].filter((entry): entry is string => Boolean(entry));
   return lines.join("\n");
 }
@@ -473,7 +473,7 @@ function buildMediaGenerationTaskStatusListText(params: {
       const progress = task.progressSummary ? ` Progress: ${task.progressSummary}.` : "";
       return `- Task ${task.taskId}${runId} is ${task.status}${provider ? ` with ${provider}` : ""}.${progress}`;
     }),
-    `Wait for the completion events; the completion agent will send the finished ${params.completionLabel} here when each is ready.`,
+    `Do not wait, poll, or yield for them: end this turn; each completion arrives as a later turn and sends the finished ${params.completionLabel} here.`,
     `Only start a new ${params.toolName} call if the user clearly asks for different/new ${params.completionLabel}.`,
   ];
   return lines.join("\n");

@@ -1,6 +1,7 @@
 import path from "node:path";
 import { toUSVString } from "node:util";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { markPrivateDirectoryCreationRefused } from "./private-directory-creation.js";
 import { readDatabaseFileIdentity, type DatabaseFileIdentity } from "./sqlite-worker-identity.js";
 
 // Keep the one-shot execFile output limit when inspections use IPC.
@@ -33,10 +34,13 @@ export type SqliteReadOnlyWorkerResult =
   | { ok: false; message: string };
 
 export class SqliteReadOnlyInspectionContentionError extends Error {}
+export class SqliteSnapshotAllocationRefusedError extends Error {}
 
 // Released updater parents require exactly { ok, message }. A negotiated worker
 // protocol can replace this owner-generated tag when those parents are retired.
 export const SQLITE_INSPECTION_CONTENTION_PREFIX = "Retryable SQLite inspection contention: ";
+export const SQLITE_SNAPSHOT_ALLOCATION_REFUSED_PREFIX =
+  "SQLite snapshot directory creation refused: ";
 
 export type SqliteAuthProfileRows = { store: unknown; state: unknown; cacheable: boolean };
 export type SqliteAuthProfileReadOptions = {
@@ -154,16 +158,26 @@ export function readSqliteReadOnlyWorkerValue(
   }
   if (params.failure || !result.ok) {
     const contention = !result.ok && result.message.startsWith(SQLITE_INSPECTION_CONTENTION_PREFIX);
+    const message = !result.ok
+      ? contention
+        ? result.message.slice(SQLITE_INSPECTION_CONTENTION_PREFIX.length)
+        : result.message
+      : (params.failure ?? "failed");
+    const allocationRefused =
+      params.failure === undefined &&
+      !result.ok &&
+      (mode === "staging-create" || mode === "staging-create-legacy") &&
+      message.startsWith(SQLITE_SNAPSHOT_ALLOCATION_REFUSED_PREFIX);
     const error = createSqliteReadOnlyWorkerError(
-      !result.ok
-        ? contention
-          ? result.message.slice(SQLITE_INSPECTION_CONTENTION_PREFIX.length)
-          : result.message
-        : (params.failure ?? "failed"),
+      allocationRefused ? message.slice(SQLITE_SNAPSHOT_ALLOCATION_REFUSED_PREFIX.length) : message,
       params.stderr,
     );
     if (contention) {
-      throw new SqliteReadOnlyInspectionContentionError(error.message);
+      const failure = new SqliteReadOnlyInspectionContentionError(error.message);
+      throw allocationRefused ? markPrivateDirectoryCreationRefused(failure) : failure;
+    }
+    if (allocationRefused) {
+      throw new SqliteSnapshotAllocationRefusedError(error.message);
     }
     throw error;
   }

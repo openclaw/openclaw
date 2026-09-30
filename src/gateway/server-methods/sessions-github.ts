@@ -203,8 +203,11 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
       if (action && personal) {
         personal = service!.revalidateStatus(action, personal);
       }
-      const latestShared = coordinator.latestShared(session, options.params.idempotencyKey);
+      const latestShared = await coordinator.latestShared(session, options.params.idempotencyKey);
       read.currentSession();
+      if (action && personal) {
+        personal = service!.revalidateStatus(action, personal);
+      }
       options.respond(true, { personal, shared, pendingPersonal, latestShared });
     },
   ),
@@ -227,7 +230,7 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
       }
       const prepared = await service.preparePersonalStatus(options.params.requestId);
       const session = read.currentSession();
-      const shared = service.sharedStatus(session, options.params.requestId);
+      const shared = await service.sharedStatus(session, options.params.requestId);
       if (shared) {
         read.currentSession();
         options.respond(true, shared);

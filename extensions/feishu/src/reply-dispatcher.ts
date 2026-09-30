@@ -370,20 +370,10 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   };
 
   const buildCombinedStreamText = (thinking: string, answer: string): string => {
-    const parts: string[] = [];
-    if (thinking) {
-      parts.push(formatReasoningPrefix(thinking));
-    }
-    if (thinking && answer) {
-      parts.push("\n\n---\n\n");
-    }
-    if (answer) {
-      parts.push(answer);
-    }
-    if (statusLine) {
-      parts.push(parts.length > 0 ? `\n\n${statusLine}` : statusLine);
-    }
-    return parts.join("");
+    const content = [thinking ? formatReasoningPrefix(thinking) : "", answer]
+      .filter(Boolean)
+      .join("\n\n---\n\n");
+    return [content, statusLine].filter(Boolean).join("\n\n");
   };
 
   const flushStreamingCardUpdate = (combined: string) => {

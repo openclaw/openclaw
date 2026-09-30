@@ -26,7 +26,6 @@ import { buildFullReleaseCandidateBinding } from "../../scripts/full-release-can
 import { FULL_RELEASE_WAIT_TIMEOUT_MINUTES } from "../../scripts/full-release-validation-at-sha.mts";
 import { resolveRunnerMatrix } from "../../scripts/lib/cross-os-release-checks/config.ts";
 import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
-import { listRecordedFirstHopSourceVersions } from "../../scripts/lib/update-first-hop-lanes.mjs";
 import { parseUpgradeSurvivorScenarios } from "../../scripts/lib/upgrade-survivor-policy.mjs";
 import { createReleaseWorkflowMatrixPlan } from "../../scripts/plan-release-workflow-matrix.mjs";
 import { createBoundedChildOutput } from "../helpers/bounded-child-output.js";
@@ -1104,9 +1103,7 @@ describe("frozen admission workflow barriers", () => {
         ],
       );
       const plan = f.selection();
-      // One targeted group per recorded first-hop source joins the fixed lanes.
-      const firstHopLanes = listRecordedFirstHopSourceVersions().length;
-      expect(plan.docker).toHaveLength(70 + firstHopLanes);
+      expect(plan.docker.length).toBeGreaterThan(0);
       const planned = Date.now();
       const result = f.run("Admit frozen source contracts", {}, "", { timeout: 360_000 });
       console.info(
@@ -1123,9 +1120,16 @@ describe("frozen admission workflow barriers", () => {
       const bytes = readFileSync(join(f.root, "frozen-admission.json"));
       expect(bytes.length).toBeLessThanOrEqual(262_144);
       const record = JSON.parse(bytes.toString("utf8"));
-      expect(record.evaluations).toHaveLength(71 + firstHopLanes);
+      expect(record.evaluations).toHaveLength(plan.docker.length + 1);
       const children = reconstructAdmissionEvaluations(record);
-      expect(children).toHaveLength(71 + firstHopLanes);
+      expect(children.map(({ selection }) => selection)).toMatchObject([
+        ...plan.docker.map((docker: unknown) => ({ docker })),
+        {
+          consumers: plan.explicitConsumers.toSorted(),
+          codexSuites: plan.codexSuites.toSorted(),
+          fsSafeNative: plan.fsSafeNative,
+        },
+      ]);
       const { digest, provenance: _provenance, ...content } = record;
       expect(digest).toBe(createHash("sha256").update(JSON.stringify(content)).digest("hex"));
       expect(record.status).toBe("UNRESOLVED");
@@ -3250,6 +3254,7 @@ function runReleaseChecksInputValidation(
   const workdir = tempDirs.make("release-checks-input-validation-");
   const fixture = frozenToolingFixture(workdir, [
     "scripts/full-release-validation-policy.mjs",
+    "scripts/full-release-flake-classification.mjs",
     ...PUBLICATION_CONTRACT_FILES,
     "scripts/lib/release-changelog.mjs",
     "scripts/full-release-candidate-contract.mjs",
@@ -5332,11 +5337,10 @@ describe("package acceptance workflow", () => {
     { state: "in_progress", blocked: true },
     { state: "completed", blocked: false },
     { state: "waiting", otherRef: true, blocked: false },
-    { state: "waiting", dryRun: true, blocked: false },
     { state: "unavailable", blocked: true },
   ])(
-    "prevents a ClawHub dispatch from queuing behind $state (otherRef=$otherRef, dryRun=$dryRun)",
-    ({ state, otherRef, dryRun, blocked }) => {
+    "prevents a ClawHub dispatch from queuing behind $state (otherRef=$otherRef)",
+    ({ state, otherRef, blocked }) => {
       const root = tempDirs.make("clawhub-dispatch-collision-");
       const dispatchPath = join(root, "dispatch.json");
       const workflowRef = "release-publish/aaaaaaaaaaaa-123";
@@ -5366,8 +5370,10 @@ if (args[0] === 'run' && args[1] === 'list') {
         "bash",
         [
           "-c",
+          // The publish parent checks the slot before its first dispatch.
           `source "$HELPER_SCRIPT"
-dispatch_workflow_at_ref "$WORKFLOW_REF" "$PARENT_WORKFLOW_SHA" plugin-clawhub-release.yml -f ref="$TARGET_SHA" -f dry_run="$DRY_RUN"
+require_clawhub_dispatch_available "$WORKFLOW_REF" plugin-clawhub-release.yml &&
+  dispatch_workflow_at_ref "$WORKFLOW_REF" "$PARENT_WORKFLOW_SHA" plugin-clawhub-release.yml -f ref="$TARGET_SHA"
 `,
         ],
         {
@@ -5381,7 +5387,6 @@ dispatch_workflow_at_ref "$WORKFLOW_REF" "$PARENT_WORKFLOW_SHA" plugin-clawhub-r
             WORKFLOW_REF: workflowRef,
             PARENT_WORKFLOW_SHA: workflowSha,
             TARGET_SHA: "b".repeat(40),
-            DRY_RUN: String(dryRun ?? false),
           },
         },
       );
@@ -14368,6 +14373,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     for (const source of [
       "scripts/release-ci-summary.mjs",
       "scripts/full-release-validation-policy.mjs",
+      "scripts/full-release-flake-classification.mjs",
       ...PUBLICATION_CONTRACT_FILES,
       "scripts/lib/release-changelog.mjs",
       "scripts/full-release-candidate-contract.mjs",
@@ -15060,7 +15066,7 @@ promote_windows_release_assets
       "approve_plugins_clawhub_release",
     ]);
     expect(clawHubPublish.uses).toBe(
-      "openclaw/clawhub/.github/workflows/package-publish.yml@d5a3688fb21a283460f362e57028601801961c85",
+      "openclaw/clawhub/.github/workflows/package-publish.yml@7e2aa3cec5d35c91bb6163aa6676541d795876c5",
     );
     expect(clawHubPublish.permissions).toMatchObject({
       actions: "read",

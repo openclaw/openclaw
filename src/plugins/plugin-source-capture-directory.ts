@@ -4,8 +4,13 @@ import fsPromises from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { hasErrnoCode } from "../infra/errno.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import type { GatewayScheduler, GatewayScheduledJob } from "../infra/gateway-scheduler.js";
 import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
+import {
+  createSqliteLifecycleAggregateError,
+  throwSqliteLifecycleErrors,
+} from "../infra/sqlite-lifecycle-errors.js";
 import {
   acquireSqliteStagingToken,
   SQLITE_STAGING_TOKEN_FILES,
@@ -164,6 +169,7 @@ async function reclaimInstance(
   // Reclaim refuses a missing token and never creates a replacement ownership database.
   const release = acquireSqliteStagingToken(directory, "reclaim");
   let released = false;
+  const errors: unknown[] = [];
   ownedRoots.add(directory);
   try {
     if (!unchanged()) {
@@ -209,14 +215,19 @@ async function reclaimInstance(
       nativeMaintenance?.assertCurrent();
       await fsPromises.rm(directory, { recursive: true, force: true });
     }
+  } catch (error) {
+    errors.push(error);
   } finally {
     try {
       if (!released) {
         release();
       }
+    } catch (error) {
+      errors.push(error);
     } finally {
       ownedRoots.delete(directory);
     }
+    throwSqliteLifecycleErrors(errors, "Plugin source reclamation and cleanup failed");
   }
 }
 
@@ -345,7 +356,7 @@ export async function prunePluginNativeCaptureDirectories(
   const removed: string[] = [];
   const warnings: string[] = [];
   assertCurrent();
-  const recordFailure = (error: unknown) => warnings.push(String(error));
+  const recordFailure = (error: unknown) => warnings.push(formatErrorMessage(error));
   const maintenance = { retainedPaths, assertCurrent, removed, ...options };
   await reclaimInstances(
     path.resolve(resolvePluginSourceCapturesDirectory(stateDir)),
@@ -426,7 +437,7 @@ function sweepPluginSourceCaptureDirectories(stateDir: string): Promise<void> {
         }
         warningBackoff.set(root, { next: now + delay, delay });
         warn(
-          `${failures} cleanup failure(s) in ${root}; will retry. First: ${String(firstFailure)}`,
+          `${failures} cleanup failure(s) in ${root}; will retry. First: ${formatErrorMessage(firstFailure)}`,
         );
       })
       .finally(() => sweeps.delete(root));
@@ -485,12 +496,10 @@ function createCaptureDirectory(instance: Instance, prefix: string, kind = "capt
         if (directory) {
           ownedRoots.add(directory);
         }
-        throw new AggregateError(
+        throw createSqliteLifecycleAggregateError(
           [error, releaseError],
           "Plugin source preparation cleanup failed",
-          {
-            cause: releaseError,
-          },
+          error,
         );
       }
       if (directory) {

@@ -6,6 +6,7 @@ import {
   hydrateOpenClawStateWorkerError,
   retainOpenClawStateWorkerErrorPayload,
 } from "../state/openclaw-state-worker-error.js";
+import { isPrivateDirectoryCreationRefused } from "./private-directory-creation.js";
 import { throwSqliteLifecycleErrors } from "./sqlite-lifecycle-errors.js";
 import { SqliteSnapshotCleanupError } from "./sqlite-readonly-location-cleanup.js";
 import type {
@@ -14,6 +15,7 @@ import type {
   SqliteNativeRequest,
   SqliteNativeSessionLaunch,
 } from "./sqlite-readonly-native-resource.types.js";
+import { SqliteSnapshotAllocationRefusedError } from "./sqlite-readonly-worker-protocol.js";
 import {
   createScopedSqliteReadOnlyWorker,
   runSqliteReadOnlyWorkerOnce,
@@ -347,7 +349,12 @@ export function createNativeWorkerResource(
         }
       } catch (error) {
         // Validation, missing sessions and factory refusal never enter this dispatched boundary.
-        if (allocating && !session.native.notStarted) {
+        if (
+          allocating &&
+          !session.native.notStarted &&
+          !(error instanceof SqliteSnapshotAllocationRefusedError) &&
+          !isPrivateDirectoryCreationRefused(error)
+        ) {
           uncertainAllocations.push(
             new SqliteSnapshotCleanupError(
               "SQLite snapshot allocation has no exact directory receipt; cleanup is unresolved",

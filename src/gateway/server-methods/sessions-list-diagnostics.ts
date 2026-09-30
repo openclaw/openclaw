@@ -79,9 +79,7 @@ function startSessionListDiagnostics(
     mark,
     startSyncCpu,
     finishSyncCpu,
-    get projection() {
-      return projection;
-    },
+    projection,
     respond: ((...args) => {
       mark("response");
       responseOutcome = args[0] ? "ok" : "error";

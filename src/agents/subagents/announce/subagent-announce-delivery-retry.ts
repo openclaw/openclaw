@@ -198,29 +198,20 @@ export function hasAnnounceSendEvidence(error: unknown): boolean {
 }
 
 export async function waitForAnnounceRetryDelay(ms: number, signal?: AbortSignal): Promise<void> {
-  if (ms <= 0) {
-    return;
-  }
-  if (!signal) {
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, ms);
-    });
-    return;
-  }
-  if (signal.aborted) {
+  if (ms <= 0 || signal?.aborted) {
     return;
   }
   await new Promise<void>((resolve) => {
     const timer = setTimeout(() => {
-      signal.removeEventListener("abort", onAbort);
+      signal?.removeEventListener("abort", onAbort);
       resolve();
     }, ms);
     const onAbort = () => {
       clearTimeout(timer);
-      signal.removeEventListener("abort", onAbort);
+      signal?.removeEventListener("abort", onAbort);
       resolve();
     };
-    signal.addEventListener("abort", onAbort, { once: true });
+    signal?.addEventListener("abort", onAbort, { once: true });
   });
 }
 

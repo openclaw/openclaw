@@ -1,4 +1,3 @@
-// Session and transcript event subscription handlers.
 import {
   ErrorCodes,
   errorShape,
@@ -145,7 +144,6 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
           requireMaterialized:
             readGatewayRequestMutationAuthority(options).sessionScope === "operator.sessions.read",
         });
-        read?.assertCurrent();
         options.sessionMutationCommitGuard?.();
         if (connId) {
           let approvalReplay;

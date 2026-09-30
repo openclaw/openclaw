@@ -48,16 +48,13 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
 
   private state?: SkillWorkshopState;
   private operationEpoch = 0;
-  private hasBoundContext = false;
   private contextSource?: SkillWorkshopPageContext;
   private gatewaySource?: SkillWorkshopPageContext["gateway"];
   private gatewayClient: SkillWorkshopPageContext["gateway"]["snapshot"]["client"] = null;
   private gatewayHello: SkillWorkshopPageContext["gateway"]["snapshot"]["hello"] = null;
   private gatewayConnected = false;
-  private hasBoundAgentSelection = false;
   private agentSelectionSource?: SkillWorkshopPageContext["agentSelection"];
   private selectedAgentId?: string | null;
-  private hasBoundSessions = false;
   private sessionsSource?: SkillWorkshopPageContext["sessions"];
   private selfLearningBusy = false;
   private selfLearningError: string | null = null;
@@ -72,15 +69,11 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
     this.requestPageUpdate,
   );
   private readonly subscriptions = new SubscriptionsController(this)
-    .watch(
-      () => this.context?.agents,
-      (agents, notify) => agents.subscribe(notify),
-    )
+    .watchStore(() => this.context?.agents)
     .effect(
       () => this.context,
       (context) => {
-        const sourceChanged = this.hasBoundContext && this.contextSource !== context;
-        this.hasBoundContext = true;
+        const sourceChanged = this.contextSource !== undefined && this.contextSource !== context;
         this.contextSource = context;
         if (sourceChanged) {
           const gateway = context.gateway;
@@ -126,16 +119,12 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
         return cleanup;
       },
     )
-    .watch(
-      () => this.context?.config,
-      (config, notify) => config.subscribe(notify),
-    )
+    .watchStore(() => this.context?.config)
     .effect(
       () => this.context?.agentSelection,
       (agentSelection) => {
         let resetForSourceBind =
-          this.hasBoundAgentSelection && this.agentSelectionSource !== agentSelection;
-        this.hasBoundAgentSelection = true;
+          this.agentSelectionSource !== undefined && this.agentSelectionSource !== agentSelection;
         this.agentSelectionSource = agentSelection;
         let initialNotification = true;
         const handleChange = () => {
@@ -163,8 +152,7 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
     .effect(
       () => this.context?.sessions,
       (sessions) => {
-        const sourceChanged = this.hasBoundSessions && this.sessionsSource !== sessions;
-        this.hasBoundSessions = true;
+        const sourceChanged = this.sessionsSource !== undefined && this.sessionsSource !== sessions;
         this.sessionsSource = sessions;
         if (sourceChanged) {
           this.resetSourceState();
@@ -172,17 +160,10 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
         }
       },
     )
-    .watch(
-      () => this.context?.agentIdentity,
-      (agentIdentity, notify) => agentIdentity.subscribe(notify),
-    )
-    .watch(
-      () => this.context?.runtimeConfig,
-      (runtimeConfig, notify) => runtimeConfig.subscribe(notify),
-    )
-    .watch(
-      () => (this.context ? skillWorkshopRevisionAdmissionsFor(this.context) : undefined),
-      (admissions, notify) => admissions.subscribe(notify),
+    .watchStore(() => this.context?.agentIdentity)
+    .watchStore(() => this.context?.runtimeConfig)
+    .watchStore(() =>
+      this.context ? skillWorkshopRevisionAdmissionsFor(this.context) : undefined,
     );
 
   private readonly handleRevisionRequest: SkillWorkshopRevisionRequest = async (

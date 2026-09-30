@@ -75,9 +75,8 @@ class DevicePage extends OpenClawLightDomElement {
     capability: NativeDeviceSettingsCapability;
     timer: ReturnType<typeof setTimeout>;
   } | null = null;
-  private readonly subscriptions = new SubscriptionsController(this).watch(
+  private readonly subscriptions = new SubscriptionsController(this).watchStore(
     () => this.context?.nativeDeviceSettings,
-    (capability, notify) => capability.subscribe(notify),
     (capability) => {
       if (this.targetProfileTimer && this.targetProfileTimer.capability !== capability) {
         this.flushTargetProfile();

@@ -199,6 +199,16 @@ export function ensureSessionKeyContractSchemaInTransaction(db: DatabaseSync): v
   ); // sqlite-allow-raw -- Idempotent additive lazy ensure.
 }
 
+export function ensureSessionReactionsSchemaInTransaction(db: DatabaseSync): void {
+  db.exec(
+    extractSqliteTableSchema(OPENCLAW_AGENT_SCHEMA_SQL, "session_reactions", {
+      endMarker: "CREATE TABLE IF NOT EXISTS board_tabs (",
+      includeEndMarker: false,
+      errorMessage: "OpenClaw agent session-reactions schema markers are missing.",
+    }),
+  ); // sqlite-allow-raw -- Canonical additive DDL at database admission.
+}
+
 export function repairAndAssertOpenClawAgentV14SchemaForMigration(
   database: DatabaseSync,
   options: { agentId: string; pathname: string },
@@ -329,6 +339,7 @@ function hasPendingSessionKeyContractSchemaMigration(db: DatabaseSync): boolean 
 
 export function hasPendingCurrentVersionAgentDatabaseMigration(database: DatabaseSync): boolean {
   return (
+    !tableExists(database, "session_reactions") ||
     hasPendingMemoryChunkMetadataMigration(database) ||
     hasPendingSessionKeyContractSchemaMigration(database) ||
     hasRetiredAgentStateLeaseSchema(database) ||

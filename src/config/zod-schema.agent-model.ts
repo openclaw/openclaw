@@ -1,4 +1,3 @@
-// Defines agent model selection schema fragments.
 import { parseProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { z } from "zod";
 

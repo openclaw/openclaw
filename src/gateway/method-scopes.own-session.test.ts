@@ -15,6 +15,7 @@ describe("session-scoped method admission", () => {
     ["progressCard.get", { sessionKey: "agent:main:own" }],
     ["projects.list", {}],
     ["session.suggestions.list", { sessionKey: "agent:main:own" }],
+    ["session.reactions.list", { sessionKey: "agent:main:own" }],
     ["sessions.groups.list", {}],
     ["sessions.list", {}],
     ["chat.history", { sessionKey: "agent:main:own" }],

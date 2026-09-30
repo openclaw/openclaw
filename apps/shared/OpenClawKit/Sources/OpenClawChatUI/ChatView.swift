@@ -374,9 +374,6 @@ extension OpenClawChatView {
             style: self.style,
             showsSessionSwitcher: self.showsSessionSwitcher,
             userAccent: self.userAccent,
-            assistantName: self.assistantName,
-            assistantAvatarText: self.assistantAvatarText,
-            assistantAvatarTint: self.assistantAvatarTint,
             composerChrome: self.composerChrome,
             isComposerEnabled: self.isComposerEnabled
                 && !self.viewModel.isSendingAttachmentDraft,
@@ -633,7 +630,8 @@ extension OpenClawChatView {
                 answerID: answerID)
                 .id(row.id)
         case let .tool(tool):
-            ChatPendingToolsBubble(toolCalls: [tool])
+            ChatToolActivityList(items: [ChatToolActivityItem(live: tool)])
+                .padding(4)
         }
     }
 
@@ -1275,11 +1273,6 @@ extension OpenClawChatView {
         #endif
     }
 
-    private func isToolResultMessage(_ message: OpenClawChatMessage) -> Bool {
-        let role = message.role.lowercased()
-        return role == "toolresult" || role == "tool_result"
-    }
-
     private func shouldDisplayMessage(_ message: OpenClawChatMessage) -> Bool {
         let primaryText = ChatMessageVisibleText.displayText(
             in: message,
@@ -1288,7 +1281,7 @@ extension OpenClawChatView {
             return true
         }
 
-        if self.isToolResultMessage(message) {
+        if message.isToolResult {
             return self.displayOptions.contains(.toolActivity)
         }
 

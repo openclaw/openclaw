@@ -2,6 +2,7 @@
 import { appendFileSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+import { validateReleaseManifestAdvisoryJobs } from "../full-release-validation-policy.mjs";
 import { isRecord } from "./record-shared.mjs";
 import { resolveReleasePublishInputs } from "./release-publish-inputs.mjs";
 import { parseReleaseVersion } from "./release-version.mjs";
@@ -133,12 +134,21 @@ export function evaluateReleasePublishGates(input: {
   const waived =
     field(field(manifest, "validationInputs"), "laneWaiver") ||
     field(field(manifest, "publishInputs"), "stableSoakWaiver");
-  const advisory = field(manifest, "advisoryJobs");
+  const knownFlakyJobs = field(field(manifest, "validationInputs"), "knownFlakyJobsJson");
+  let selectedLanesError =
+    waived || (knownFlakyJobs !== undefined && knownFlakyJobs !== "[]")
+      ? "Release waiver and known-flaky inputs are no longer accepted."
+      : "";
+  try {
+    validateReleaseManifestAdvisoryJobs(manifest);
+  } catch (error) {
+    selectedLanesError ||= error instanceof Error ? error.message : String(error);
+  }
   add(
     "selected-lanes",
-    !waived && (advisory === undefined || (Array.isArray(advisory) && advisory.length === 0)),
-    "Waived or advisory release evidence is no longer accepted.",
-    "Fix failed selected lanes and rerun Full Release Validation without waivers.",
+    selectedLanesError === "",
+    selectedLanesError,
+    "Use authenticated Full Release Validation evidence with policy-derived Windows Node CI advisories or exact-job recorded flakes and no waivers.",
   );
   if (consumer === "stable-closeout") {
     for (const gate of gates) {

@@ -23,7 +23,7 @@ import {
   sendQaBusMessage,
   type QaBusMessage,
 } from "./bus-client.js";
-import { sendQaChannelMediaBatch, sendQaChannelText } from "./outbound.js";
+import { collectQaMediaUrls, sendQaChannelMediaBatch, sendQaChannelText } from "./outbound.js";
 import { getQaChannelRuntime } from "./runtime.js";
 import type { CoreConfig, ResolvedQaChannelAccount } from "./types.js";
 
@@ -490,14 +490,7 @@ export async function handleQaInbound(params: {
     delivery: {
       deliver: async (payload, info) => {
         const text = payload.text ?? "";
-        const mediaUrls = Array.from(
-          new Set(
-            [payload.mediaUrl, ...(payload.mediaUrls ?? [])].filter(
-              (mediaUrl): mediaUrl is string =>
-                typeof mediaUrl === "string" && mediaUrl.trim().length > 0,
-            ),
-          ),
-        );
+        const mediaUrls = collectQaMediaUrls(payload.mediaUrl, ...(payload.mediaUrls ?? []));
         if (!text.trim() && mediaUrls.length === 0) {
           return;
         }

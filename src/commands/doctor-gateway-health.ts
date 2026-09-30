@@ -1,4 +1,3 @@
-/** Gateway health probes used by doctor before deeper daemon and memory diagnostics. */
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { GatewayProtocolRequestTimeoutError } from "../../packages/gateway-client/src/protocol-request.js";
 import { note } from "../../packages/terminal-core/src/note.js";

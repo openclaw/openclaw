@@ -260,11 +260,13 @@ checks. Existing configuration and node pairing remain unchanged on update;
 enabling the Desktop panel does not automatically enable CUA.
 
 If desktop teardown fails, the Gateway retains the session's cleanup owner and
-reports the failure in its logs. A new observation retries cleanup before
-starting a replacement. For SSH-backed worker desktops, temporary connection
-files remain until the transport has closed; a late process exit triggers
-another cleanup attempt. Check the reported process or filesystem error before
-retrying an observation that cannot finish cleanup.
+reports the failure in its logs. New observations return that failure without
+retrying cleanup or accumulating replacement owners. Lifecycle cleanup, such as
+turning Host Desktop off in Labs, retries the retained owner; a replacement can
+start only after cleanup succeeds. For SSH-backed worker desktops, temporary
+connection files remain until the transport has closed; a late process exit
+triggers another cleanup attempt. Check the reported process or filesystem error
+before retrying cleanup.
 
 Without managed mode, configure third-party servers to listen on loopback when
 they support it. On Linux, use loopback-only TigerVNC or `x11vnc`; GNOME Remote

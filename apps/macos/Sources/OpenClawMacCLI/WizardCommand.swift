@@ -378,11 +378,7 @@ private func dumpResult(_ response: ResponseFrame) {
         print("{\"error\":\"missing payload\"}")
         return
     }
-    let encoder = JSONEncoder()
-    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-    if let data = try? encoder.encode(payload), let text = String(data: data, encoding: .utf8) {
-        print(text)
-    }
+    printCLIJSON(payload)
 }
 
 private func printWizardStepHeader(_ step: WizardStep) {

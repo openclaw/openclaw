@@ -27,7 +27,6 @@ import {
 } from "./model.inline-provider.js";
 import type { ProviderRuntimeHooks } from "./model.provider-hooks.types.js";
 export type { ProviderRuntimeHooks } from "./model.provider-hooks.types.js";
-export { resolveProviderTransport } from "./model.provider-transport.js";
 
 let targetProviderRuntimeHooks: ProviderRuntimeHooks | undefined;
 let defaultProviderRuntimeHooks: ProviderRuntimeHooks | undefined;

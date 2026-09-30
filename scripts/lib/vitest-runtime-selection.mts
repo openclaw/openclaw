@@ -1,3 +1,4 @@
+import { agentVitestProjectOwners } from "../../test/vitest/vitest.agents-paths.mjs";
 import { databaseWorkerCoreTestFiles } from "../../test/vitest/vitest.database-worker-core-paths.mjs";
 import { matchesVitestCliSelection } from "../../test/vitest/vitest.pattern-file.ts";
 import { fullSuiteVitestShards } from "../../test/vitest/vitest.test-shards.mjs";
@@ -53,7 +54,20 @@ export function shouldPrepareVitestCoreWorkers(
       ? ["src/plugins/contracts/plugin-sdk-package-contract-guardrails.test.ts"]
       : []),
   ];
-  return workers.some((file) =>
-    matchesVitestCliSelection(file, [file], args, "", env, includePatterns),
+  const codeModeWorker = "src/agents/code-mode.import-boundary.test.ts";
+  return (
+    workers.some((file) =>
+      matchesVitestCliSelection(file, [file], args, "", env, includePatterns),
+    ) ||
+    ((includesProject(agentVitestProjectOwners.core.config) ||
+      includesProject(agentVitestProjectOwners.all.config)) &&
+      matchesVitestCliSelection(
+        codeModeWorker,
+        [codeModeWorker],
+        args,
+        agentVitestProjectOwners.core.dir,
+        env,
+        includePatterns,
+      ))
   );
 }

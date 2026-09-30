@@ -99,7 +99,6 @@ async function ensureSandboxWorkspaceLayout(
 ): Promise<{
   agentWorkspaceDir: string;
   scopeKey: string;
-  sandboxWorkspaceDir: string;
   skillsWorkspaceDir: string;
   skillsEligibility?: SkillEligibilityContext;
   skillUsagePaths?: SkillUsagePath[];
@@ -142,7 +141,6 @@ async function ensureSandboxWorkspaceLayout(
   return {
     agentWorkspaceDir,
     scopeKey,
-    sandboxWorkspaceDir,
     skillsWorkspaceDir,
     ...(syncedSkills.eligibility ? { skillsEligibility: syncedSkills.eligibility } : {}),
     ...(syncedSkills.skillUsagePaths ? { skillUsagePaths: syncedSkills.skillUsagePaths } : {}),

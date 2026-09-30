@@ -1,5 +1,4 @@
 // Gateway-owned GPT-Live bridge over released WebRTC and unlisted direct transport.
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 import type {
   RealtimeVoiceAudioOutputPort,
@@ -35,12 +34,11 @@ import {
   openAIQuicksilverConnectAbortError,
   waitForOpenAIQuicksilverConnectStep,
 } from "./realtime-quicksilver-sideband.js";
-import {
-  type OpenAIQuicksilverSocket,
-  type OpenAIQuicksilverSocketFactory,
-  QuicksilverSocketAudioQueue,
-  type QuicksilverMediaSocket,
-  type QuicksilverMediaSocketFactory,
+import type {
+  OpenAIQuicksilverSocket,
+  OpenAIQuicksilverSocketFactory,
+  QuicksilverMediaSocket,
+  QuicksilverMediaSocketFactory,
 } from "./realtime-quicksilver-socket.shared.js";
 import {
   buildOpenAIQuicksilverSession,
@@ -107,7 +105,7 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
   private peer: OpenAIQuicksilverAudioPeerContract | undefined;
   private audioOutput: RealtimeVoiceAudioOutputPort | undefined;
   private pendingAudio = new OpenAIQuicksilverPendingAudio();
-  private readonly pendingRawAudio: QuicksilverSocketAudioQueue;
+  private readonly pendingRawAudio: OpenAIQuicksilverPendingAudio;
   private directSocket: QuicksilverMediaSocket | undefined;
   private ready = false;
   private sideband: OpenAIQuicksilverSocket | undefined;
@@ -120,8 +118,9 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
     private readonly runtime: OpenAIRealtimeHost,
   ) {
     this.audio = new OpenAIQuicksilverAudioAdapter(config);
-    this.pendingRawAudio = new QuicksilverSocketAudioQueue(
+    this.pendingRawAudio = new OpenAIQuicksilverPendingAudio(
       config.audioFormat?.encoding === "g711_ulaw" ? 40_000 : 240_000,
+      1,
     );
   }
 
@@ -257,9 +256,12 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
     connectSignal: AbortSignal,
   ): Promise<void> {
     this.transport = "direct";
-    const ready = createDeferred<void>();
+    let resolveReady!: () => void;
+    const readyPromise = new Promise<void>((resolve) => {
+      resolveReady = resolve;
+    });
     this.delegations = this.createDelegationController({
-      onSessionStarted: ready.resolve,
+      onSessionStarted: resolveReady,
     });
     await this.connectSocket(
       auth,
@@ -278,7 +280,7 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
         voice: this.config.voice,
       }),
     );
-    await waitForOpenAIQuicksilverConnectStep(ready.promise, connectSignal);
+    await waitForOpenAIQuicksilverConnectStep(readyPromise, connectSignal);
   }
 
   private async connectWebRtc(

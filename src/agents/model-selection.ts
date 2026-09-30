@@ -76,21 +76,26 @@ export {
 // Cron imports this narrow owner directly; the public facade must not fork its policy.
 export { getModelRefStatus } from "./model-selection-resolve.js";
 
-/**
- * Runtime-first resolver for persisted model metadata.
- * Use this when callers intentionally want the last executed model identity.
- */
-export function resolvePersistedModelRef(
+/** Explicit session selections win over the last executed model on control/status surfaces. */
+export function resolvePersistedSelectedModelRef(
   params: {
     defaultProvider?: unknown;
     runtimeProvider?: unknown;
     runtimeModel?: unknown;
     overrideProvider?: unknown;
     overrideModel?: unknown;
+    overrideRouteResolution?: ModelFallbackRouteResolution;
     allowManifestNormalization?: boolean;
     allowPluginNormalization?: boolean;
   } & ModelManifestNormalizationContext,
 ): ModelRef | null {
+  const override = resolvePersistedOverrideModelRef({
+    ...params,
+    routeResolution: params.overrideRouteResolution,
+  });
+  if (override) {
+    return override;
+  }
   const defaultProvider = normalizeOptionalString(params.defaultProvider) ?? DEFAULT_PROVIDER;
   const runtimeProvider = normalizeOptionalString(params.runtimeProvider);
   const runtimeModel = normalizeOptionalString(params.runtimeModel);
@@ -105,41 +110,7 @@ export function resolvePersistedModelRef(
       }
     );
   }
-  return resolvePersistedOverrideModelRef({
-    defaultProvider,
-    overrideProvider: params.overrideProvider,
-    overrideModel: params.overrideModel,
-    allowManifestNormalization: params.allowManifestNormalization,
-    allowPluginNormalization: params.allowPluginNormalization,
-    manifestPlugins: params.manifestPlugins,
-  });
-}
-
-/**
- * Selected-model resolver for persisted model metadata.
- * Use this for control/status/UI surfaces that should honor explicit session
- * overrides before falling back to runtime identity.
- */
-export function resolvePersistedSelectedModelRef(
-  params: Parameters<typeof resolvePersistedModelRef>[0] & {
-    overrideRouteResolution?: ModelFallbackRouteResolution;
-  },
-): ModelRef | null {
-  const override = resolvePersistedOverrideModelRef({
-    ...params,
-    routeResolution: params.overrideRouteResolution,
-  });
-  if (override) {
-    return override;
-  }
-  return resolvePersistedModelRef({
-    defaultProvider: params.defaultProvider,
-    runtimeProvider: params.runtimeProvider,
-    runtimeModel: params.runtimeModel,
-    allowManifestNormalization: params.allowManifestNormalization,
-    allowPluginNormalization: params.allowPluginNormalization,
-    manifestPlugins: params.manifestPlugins,
-  });
+  return null;
 }
 
 export async function canonicalizeCaseOnlyCatalogModelRef(params: {

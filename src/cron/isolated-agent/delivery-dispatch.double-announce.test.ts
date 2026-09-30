@@ -91,6 +91,7 @@ vi.mock("../../config/sessions/main-session.js", () => ({
 }));
 
 vi.mock("../../agents/subagents/registry/subagent-registry-read.js", () => ({
+  countPendingDescendantRuns: async () => 0,
   getLatestLiveSubagentRunByChildSessionKey: () => null,
 }));
 
@@ -1900,7 +1901,6 @@ describe("dispatchCronDelivery", () => {
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
     expect(callGateway).not.toHaveBeenCalled();
     expect(state.delivered).toBe(false);
-    expect(state.deliveryAttempted).toBe(false);
     expect(state).toMatchObject({
       disposition: { kind: "error", errorKind: "delivery-target" },
       deliveryAttempted: false,

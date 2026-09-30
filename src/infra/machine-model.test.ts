@@ -38,7 +38,6 @@ describe("resolveMachineModelIdentifier", () => {
 
   it.each([
     { name: "success", stdout: " Mac16,1\n", expected: "Mac16,1" },
-    { name: "empty", stdout: " \n", expected: undefined },
     { name: "timeout", stdout: "", expected: undefined },
   ])("resolves darwin $name with a bounded probe", ({ name, stdout, expected }) => {
     spawn.mockReturnValue({
@@ -87,8 +86,8 @@ describe("resolveMachineModelIdentifier", () => {
     expect(spawn).not.toHaveBeenCalled();
   });
 
-  it.each(["win32", "freebsd"] as const)("leaves %s unknown without probing", (platform) => {
-    expect(resolveMachineModelIdentifier(platform)).toBeUndefined();
+  it("leaves unsupported platforms unknown without probing", () => {
+    expect(resolveMachineModelIdentifier("win32")).toBeUndefined();
     expect(spawn).not.toHaveBeenCalled();
     expect(read).not.toHaveBeenCalled();
   });

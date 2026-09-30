@@ -33,8 +33,8 @@ import {
   normalizeResolvedModel,
   type ProviderRuntimeHooks,
   resolveProviderRequestTimeoutMs,
-  resolveProviderTransport,
 } from "./model.provider-hooks.js";
+import { resolveProviderTransport } from "./model.provider-transport.js";
 import type { ManifestModelCatalogProviderAliasMetadata } from "./model.static-catalog.js";
 
 export function buildConfiguredFallbackModel(params: {

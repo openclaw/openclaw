@@ -1,24 +1,6 @@
 {
   "blockers": [
     {
-      "id": "package-preinstall-node-engine",
-      "origin": "found-by-lane",
-      "feature": "Package lifecycle",
-      "owner": "Unowned: needs an owner (scripts/preinstall-package-manager-warning.mjs)",
-      "callSite": "scripts/preinstall-package-manager-warning.mjs enforceSupportedNodeRuntime -> probePackageCliNodeRuntime",
-      "step": "install",
-      "evidence": [
-        "spawn",
-        "failure"
-      ],
-      "failure": "detected Node missing",
-      "match": {
-        "stack": [
-          "probePackageCliNodeRuntime"
-        ]
-      }
-    },
-    {
       "id": "terminal-pty",
       "origin": "known-blocker",
       "feature": "Terminals",

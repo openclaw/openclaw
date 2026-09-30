@@ -19,6 +19,7 @@ import {
 import { isActiveEmbeddedRunId } from "../agents/embedded-agent-runner/runs.js";
 import { isTimeoutError, resolveFailoverReasonFromError } from "../agents/failover-error.js";
 import type { FailoverReason } from "../agents/failover/signal.js";
+import { isMainSessionRecoveryLifecycleEvent } from "../agents/main-session-recovery/main-session-recovery-lifecycle.js";
 import { readToolValidationErrorSummary } from "../agents/tool-error-summary.js";
 import { normalizeVerboseLevel } from "../auto-reply/thinking.js";
 import { normalizeAgentPlanSteps } from "../channels/streaming.js";
@@ -84,10 +85,7 @@ import { roundedChatSendTimingMs } from "./server-methods/chat-server-timing.js"
 import { hasSessionChangeReceivers } from "./session-change-receivers.js";
 import { withPreparedSessionEventRow } from "./session-event-prepared-row.js";
 import { prepareSessionEventProjection } from "./session-event-projection.js";
-import {
-  isRestartRecoveryLifecycleEvent,
-  persistGatewaySessionLifecycleEvent,
-} from "./session-lifecycle-state.js";
+import { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
 import type { SessionRowReadView } from "./session-row-prepared-read.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
@@ -389,7 +387,7 @@ export function createAgentEventHandler({
         ...(agentId ? { agentId } : {}),
         clone: false,
       });
-      return { suppress: isRestartRecoveryLifecycleEvent({ entry, event }) };
+      return { suppress: isMainSessionRecoveryLifecycleEvent({ entry, event }) };
     } catch {
       return { suppress: false };
     }

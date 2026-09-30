@@ -27,12 +27,15 @@ packages/gateway-protocol/src/schema/since.ts
 packages/gateway-protocol/src/schema/user-profile-constants.ts
 packages/gateway-protocol/src/schema/worker-admission.ts
 packages/gateway-protocol/src/schema/worker-computer.ts
+packages/gateway-protocol/src/schema/worker-gateway-tool.ts
 packages/gateway-protocol/src/schema/worker-protocol-primitives.ts
+packages/gateway-protocol/src/schema/worker-session-tools.ts
 packages/gateway-protocol/src/secret-ref-contract.ts
 packages/gateway-protocol/src/svg-image.ts
 packages/gateway-protocol/src/theme-ids.ts
 packages/gateway-protocol/src/theme.ts
 packages/gateway-protocol/src/update-run-vocabulary.ts
+packages/gateway-protocol/src/validation-errors.ts
 packages/gateway-protocol/src/worker-capacity.ts
 packages/llm-core/package.json
 packages/llm-core/src/model-data.ts
@@ -139,6 +142,7 @@ scripts/lib/managed-windows-job-launcher.mts
 scripts/lib/managed-windows-job.mts
 scripts/lib/merge-head-diff-base.mjs
 scripts/lib/native-session-catalogs.json
+scripts/lib/npm-json-output.mts
 scripts/lib/numeric-options.mjs
 scripts/lib/official-external-channel-catalog.json
 scripts/lib/official-external-plugin-catalog.json
@@ -400,6 +404,7 @@ src/config/includes.ts
 src/config/io.audit.ts
 src/config/io.clobber-snapshot.ts
 src/config/io.context.ts
+src/config/io.effects.ts
 src/config/io.factory.ts
 src/config/io.health-state.kernel.ts
 src/config/io.health-state.ts
@@ -411,7 +416,6 @@ src/config/io.observe-recovery.ts
 src/config/io.observe-state.ts
 src/config/io.observe-suspicious.ts
 src/config/io.observe.ts
-src/config/io.owner-display-secret.ts
 src/config/io.plugin-metadata.ts
 src/config/io.read-helpers.ts
 src/config/io.recovery.ts
@@ -740,6 +744,7 @@ src/infra/path-guards.ts
 src/infra/plain-object.ts
 src/infra/ports-lsof.ts
 src/infra/ports-netstat.ts
+src/infra/private-directory-creation.ts
 src/infra/private-mode.ts
 src/infra/process-env.ts
 src/infra/prototype-keys.ts
@@ -879,6 +884,7 @@ src/infra/windows-encoding.ts
 src/infra/windows-install-roots.ts
 src/infra/windows-port-pids.ts
 src/infra/windows-private-directory.ts
+src/infra/windows-process-census.ts
 src/infra/windows-process-start.ts
 src/infra/worker-cpu.ts
 src/infra/worker-diagnostic-script.ts
@@ -1220,6 +1226,7 @@ src/proxy-capture/env.ts
 src/proxy-capture/header-redaction.ts
 src/proxy-capture/paths.ts
 src/proxy-capture/runtime-cleanup.ts
+src/proxy-capture/runtime-deferral.ts
 src/proxy-capture/runtime-fetch-patch.ts
 src/proxy-capture/runtime-owner.ts
 src/proxy-capture/runtime-response-body.ts

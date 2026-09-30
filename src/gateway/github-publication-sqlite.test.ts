@@ -5,14 +5,17 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { readSharedGitHubPublicationRequestInDatabase } from "./github-publication-shared-read.kernel.js";
 import {
   deferGitHubPublicationRequests,
   digestGitHubPublicationRequest,
 } from "./github-publication-store.js";
-import { installGitHubPublicationTestHarness } from "./github-publication.test-support.js";
+import {
+  githubPublicationTestMocks,
+  installGitHubPublicationTestHarness,
+} from "./github-publication.test-support.js";
 import {
   insertSharedWorktreeReceipt,
-  sharedPublicationCoordinator,
   sharedPublicationSession as session,
 } from "./github-shared-publication.test-support.js";
 
@@ -21,7 +24,6 @@ afterEach(() => vi.restoreAllMocks());
 
 describe("publication SQLite materialization", () => {
   it("discovers the latest current receipt without materializing its older history", () => {
-    const coordinator = sharedPublicationCoordinator();
     runOpenClawStateWriteTransaction(() => {
       for (let index = 0; index < 70; index += 1) {
         insertSharedWorktreeReceipt(`history-${index}`, {
@@ -43,10 +45,14 @@ describe("publication SQLite materialization", () => {
         : null,
     );
     try {
-      expect(coordinator.latestShared(session)).toMatchObject({
-        confirmation: null,
-        result: { requestId: "latest", status: "requested" },
-      });
+      expect(
+        readSharedGitHubPublicationRequestInDatabase(
+          db,
+          session,
+          {},
+          githubPublicationTestMocks().loadSession(session.sessionKey).entry,
+        ),
+      ).toMatchObject({ request_id: "latest", status: "requested" });
       expect(readRows()).toEqual(before);
       expect(observer).not.toHaveBeenCalled();
       expect(counter.counts.receipts).toBeGreaterThan(0);

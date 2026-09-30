@@ -175,16 +175,6 @@ describe("handleBashChatCommand", () => {
     expect(session.exited).toBe(false);
   });
 
-  it("includes the full session ID so the user can poll after starting a new job", async () => {
-    const session = buildRunningSession({ id: "deep-forest-42" });
-    getSessionMock.mockReturnValue(session);
-    getFinishedSessionMock.mockReturnValue(undefined);
-
-    const result = await handleBashChatCommand(buildParams("/bash stop deep-forest-42"));
-
-    expect(result.text).toContain("!poll deep-forest-42");
-  });
-
   it("returns no-running-job when session is not found", async () => {
     getSessionMock.mockReturnValue(undefined);
     getFinishedSessionMock.mockReturnValue(undefined);

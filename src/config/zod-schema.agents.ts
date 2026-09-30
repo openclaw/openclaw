@@ -1,4 +1,3 @@
-// Defines agent-related Zod schema fragments for config parsing.
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";

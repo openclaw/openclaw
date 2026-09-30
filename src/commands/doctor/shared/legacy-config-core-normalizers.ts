@@ -1,5 +1,6 @@
 // Core legacy config normalizers for shipped keys retired outside the rule table.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -872,7 +873,7 @@ export function normalizeLegacyNanoBananaSkill(
   }
 
   const rawEntries = skills.entries;
-  if (!isRecord(rawEntries)) {
+  if (!isRecord(rawEntries) || !isRecord(rawEntries[NANO_BANANA_SKILL_KEY])) {
     if (!skillsChanged) {
       return cfg;
     }
@@ -881,17 +882,7 @@ export function normalizeLegacyNanoBananaSkill(
       skills,
     };
   }
-
   const rawLegacyEntry = rawEntries[NANO_BANANA_SKILL_KEY];
-  if (!isRecord(rawLegacyEntry)) {
-    if (!skillsChanged) {
-      return cfg;
-    }
-    return {
-      ...cfg,
-      skills,
-    };
-  }
 
   const existingImageGenerationModel = next.agents?.defaults?.mediaModels?.image;
   if (existingImageGenerationModel === undefined) {
@@ -1196,14 +1187,8 @@ export function normalizeLegacyMistralModelDefaults(
 
       let nextModel = model;
       let modelChanged = false;
-      const contextWindow =
-        typeof model.contextWindow === "number" && Number.isFinite(model.contextWindow)
-          ? model.contextWindow
-          : null;
-      const maxTokens =
-        typeof model.maxTokens === "number" && Number.isFinite(model.maxTokens)
-          ? model.maxTokens
-          : null;
+      const contextWindow = asFiniteNumber(model.contextWindow) ?? null;
+      const maxTokens = asFiniteNumber(model.maxTokens) ?? null;
 
       if (contextWindow !== null && maxTokens !== null) {
         const normalizedMaxTokens = resolveNormalizedProviderModelMaxTokens({

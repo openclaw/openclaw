@@ -453,8 +453,8 @@ export async function runWithLiveSubagentGateway(
         );
         record("parent-final-observed", { sessionKey, expectedMarker: marker, reply: firstFinal });
         expect(firstFinal, `first parent completion for ${marker}`).toBe(expected);
-        await until("descendant settlement", () =>
-          countPendingDescendantRuns(sessionKey) === 0 ? true : undefined,
+        await until("descendant settlement", async () =>
+          (await countPendingDescendantRuns(sessionKey, () => {})) === 0 ? true : undefined,
         );
         const messages = await history(sessionKey);
         expect(

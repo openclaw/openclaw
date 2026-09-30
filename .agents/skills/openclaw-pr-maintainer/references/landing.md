@@ -234,7 +234,8 @@ steps. The unchanged tested workflow must retain the audited Node shard entrypoi
 and matrix owner without `continue-on-error`. Matrix membership remains an inspected
 attestation, not an inference from the job name. The retained `failedStep` proof
 includes its cancelled job conclusion and actual step; exclude that root from
-collateral `cancellation.jobIds`, but include it in every `causedBy` root list.
+collateral `cancellation.jobIds`, and include it in the aggregate's complete root
+list. Matrix cancellation names it only when it is an inspected causal member.
 Extra failed steps, absent or changed qualification, and mismatched sources refuse
 admission. This does not qualify the underlying test failure by itself.
 
@@ -247,11 +248,23 @@ no additional failed steps, and unchanged workflow source. It retains the cancel
 status and deadline evidence; it does not classify this root as fail-fast collateral.
 Manual cancellation and missing or contradictory deadline evidence remain refused.
 
+The inspected historical `check-additional-extension-package-boundary` row also
+qualifies its 20-minute deadline. It must retain the audited additional-check
+command, matrix wiring and budget in the unchanged tested/baseline workflow.
+A successful shard requires only the deadline annotation; a cancelled shard
+requires both deadline and operation-cancelled annotations. Both require complete,
+ordered terminal steps, the expected shard ordinal, bounded timestamps reaching
+the deadline, successful cleanup, and no other failed or cancelled step. Preserve
+any unfinished receipt or canary coverage in its independent failure attribution.
+
 For the existing Node matrix's native fail-fast (including fork PRs whose monitor
 is skipped), use `cancellation.kind: "matrix-fail-fast"` and
 `workflowJob: "checks-node-core-test-nondist-shard"` instead of monitor `jobId`/`step`.
-Add `members`, the exact `{ jobId, name }` bindings for every admitted failed root
-and cancelled row. Retain the tested workflow blob locally. The verifier requires
+Its `causedBy` must name a nonempty, unique subset of independently admitted
+failed roots that actually caused this matrix cancellation. Add `members`, the
+exact `{ jobId, name }` bindings for those causal roots and every cancelled row.
+Other independently attributed failures remain in the aggregate's exhaustive
+`causedBy` list, without being misclassified as Node matrix members. Retain the tested workflow blob locally. The verifier requires
 that workflow to match the baseline, use the existing preflight matrix/name wiring,
 enable PR fail-fast, and have no `continue-on-error`. GitHub's job API omits matrix
 ownership; membership and cancellation cause remain explicitly inspected operator
@@ -370,7 +383,7 @@ new scope or a different merge method still needs authorization.
 
 Ordinary replacement recovery requires completed gates, not `github_pending`.
 Use the completed-evidence preparation path above. A confirmed-cancelled auto
-squash may instead recover an explicitly selected different head through the
+squash may instead recover an explicitly selected reviewed head through the
 [prior-CI admin route](#explicit-prior-ci-admin-landing):
 
 ```bash
@@ -380,11 +393,14 @@ scripts/pr merge-recover <PR> <OUTCOME_OID> --confirmed-operator-recovery \
 
 This requires fresh review and exact-head `github_pending` preparation, followed
 by current admin, review, security, and CI-evidence verification for the
-replacement. The old head's CI attribution cannot qualify the new head. The
+selected head. The explicit `--replacement-head` may name the unchanged retained
+head; no synthetic source commit is needed. It is still required for this
+retired-auto transition. CI attribution must bind the selected head and current
+attempt; an old head's evidence cannot qualify a different head. The
 successor CAS retains the original intent, confirmed cancellation, and capture
 history; neither history is relabeled as a rejected or unsubmitted request.
-Unconfirmed cancellation, a renewed auto/queue request, same-head substitution,
-and changed recovery artifacts remain blocked. Queue cancellation is unsupported.
+Unconfirmed cancellation, a renewed auto/queue request, missing explicit head
+selection, and changed recovery artifacts remain blocked. Queue cancellation is unsupported.
 
 A failed operation can retain a lock. Verify no owned child tools remain, then
 recover only with the exact token and command the wrapper printed. Never remove
@@ -452,8 +468,13 @@ PR-owned local branches, and remote head branch absence. It never merges or dele
 resources. It may post a first completion comment from `merged`; uncertain
 comment attempts only look up the existing marker and never POST again.
 Missing or ambiguous markers remain pending. Re-read the OID after any state
-transition. A first admin-route comment requires its original landing audit
-and remains outside this delayed completion path.
+transition. A first admin-route comment is supported only with retained prior-CI
+admission evidence. Before requiring cleanup, it verifies the landed commit's
+historical parent and compares it with the retained admission main. The comment
+labels this audit as reconstructed after merge, claims no original at-landing
+audit, and preserves the historical CI qualification without claiming current-head
+CI success. Other admin receipts still require owner review of their original
+audit and completion record.
 
 Preserve the operator-facing narrative: what failed, the owning repair, important
 proof and limitations, human credit, and linked final state. Record material

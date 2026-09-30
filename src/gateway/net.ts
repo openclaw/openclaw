@@ -11,6 +11,7 @@ import {
   normalizeIpAddress,
 } from "@openclaw/net-policy/ip";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { parseHostForAddressChecks } from "../../packages/gateway-client/src/client-address-utils.js";
 import type { GatewayBindMode } from "../config/types.gateway.js";
 import { isContainerEnvironment } from "../infra/container-environment.js";
 import {
@@ -412,7 +413,7 @@ export function isValidIPv4(host: string): boolean {
  * Note: 0.0.0.0 and :: are NOT loopback - they bind to all interfaces.
  */
 export function isLoopbackHost(host: string): boolean {
-  const parsed = parseHostForAddressChecks(host);
+  const parsed = typeof host === "string" ? parseHostForAddressChecks(host) : null;
   if (!parsed) {
     return false;
   }
@@ -453,7 +454,7 @@ export function isLocalishHost(hostHeader?: string): boolean {
  * RFC 1918, link-local, CGNAT, and IPv6 ULA/link-local addresses.
  */
 export function isPrivateOrLoopbackHost(host: string): boolean {
-  const parsed = parseHostForAddressChecks(host);
+  const parsed = typeof host === "string" ? parseHostForAddressChecks(host) : null;
   if (!parsed) {
     return false;
   }
@@ -477,27 +478,6 @@ export function isPrivateOrLoopbackHost(host: string): boolean {
     }
   }
   return true;
-}
-
-function parseHostForAddressChecks(
-  host: string,
-): { isLocalhost: boolean; unbracketedHost: string } | null {
-  if (!host) {
-    return null;
-  }
-  const normalizedHost = normalizeLowercaseStringOrEmpty(host);
-  const canonicalHost = normalizedHost.replace(/\.+$/, "");
-  if (canonicalHost === "localhost") {
-    return { isLocalhost: true, unbracketedHost: canonicalHost };
-  }
-  return {
-    isLocalhost: false,
-    // Handle bracketed IPv6 addresses like [::1]
-    unbracketedHost:
-      normalizedHost.startsWith("[") && normalizedHost.endsWith("]")
-        ? normalizedHost.slice(1, -1)
-        : normalizedHost,
-  };
 }
 
 /**

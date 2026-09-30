@@ -1,6 +1,7 @@
 import { getEventStreamCompletion, onLlmRequestActivity } from "@openclaw/ai/internal/runtime";
 import { isCloudModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import {
+  asPositiveFiniteNumber,
   finiteSecondsToTimerSafeMilliseconds,
   clampTimerTimeoutMs,
   MAX_TIMER_TIMEOUT_MS,
@@ -11,13 +12,13 @@ import { toErrorObject } from "../../../infra/errors.js";
 import type { AssistantMessageEvent } from "../../../llm/types.js";
 import { markDiagnosticRunProgress } from "../../../logging/diagnostic-run-activity.js";
 import { captureAsyncWorkTracker } from "../../../shared/async-work-scope.js";
+import { getLastToolActivityMs, onToolActivity } from "../../../shared/tool-activity-heartbeat.js";
 import { recordAgentCleanupFailure } from "../../run-cleanup-timeout.js";
 import type { EmbeddedRunTrigger } from "../../run-trigger.js";
 import type { StreamFn } from "../../runtime/index.js";
 import type { MutableAssistantMessageEventStream } from "../../stream-compat.js";
 import { createStreamIteratorWrapper } from "../../stream-iterator-wrapper.js";
 import { abortable } from "./abortable.js";
-import { getLastToolActivityMs, onToolActivity } from "./tool-activity-heartbeat.js";
 
 const DEFAULT_LLM_IDLE_TIMEOUT_MS = 120_000;
 const SELF_HOSTED_LLM_IDLE_TIMEOUT_MS = 300_000;
@@ -169,25 +170,18 @@ function resolveRuntimeModelLocality(params?: LlmTimeoutParams) {
 }
 
 function resolveLlmTimeoutBounds(params?: LlmTimeoutParams) {
-  const runTimeoutMs = params?.runTimeoutMs;
+  const runTimeoutMs = asPositiveFiniteNumber(params?.runTimeoutMs);
   const agentTimeoutMs = finiteSecondsToTimerSafeMilliseconds(
     params?.cfg?.agents?.defaults?.timeoutSeconds,
   );
-  const hasExplicitRunTimeout =
-    typeof runTimeoutMs === "number" && Number.isFinite(runTimeoutMs) && runTimeoutMs > 0;
+  const hasExplicitRunTimeout = runTimeoutMs !== undefined;
   // Unlimited runs omit the sentinel but still retain provider liveness defaults.
   const boundedRunTimeoutMs =
     hasExplicitRunTimeout && runTimeoutMs < MAX_TIMER_TIMEOUT_MS ? runTimeoutMs : undefined;
   const timeoutBounds = [
     boundedRunTimeoutMs,
     hasExplicitRunTimeout ? undefined : agentTimeoutMs,
-  ].filter(
-    (value): value is number =>
-      typeof value === "number" &&
-      Number.isFinite(value) &&
-      value > 0 &&
-      value < MAX_TIMER_TIMEOUT_MS,
-  );
+  ].filter((value): value is number => value !== undefined && value < MAX_TIMER_TIMEOUT_MS);
   return { boundedRunTimeoutMs, agentTimeoutMs, timeoutBounds };
 }
 
@@ -222,12 +216,8 @@ export function resolveLlmIdleTimeoutMs(
   // over the NO_TIMEOUT_MS sentinel that runTimeoutMs may carry when the caller
   // declared "run is unlimited". The two are independent: an unlimited run does
   // not imply opting out of chunk-level hang detection.
-  const modelRequestTimeoutMs = params?.modelRequestTimeoutMs;
-  if (
-    typeof modelRequestTimeoutMs === "number" &&
-    Number.isFinite(modelRequestTimeoutMs) &&
-    modelRequestTimeoutMs > 0
-  ) {
+  const modelRequestTimeoutMs = asPositiveFiniteNumber(params?.modelRequestTimeoutMs);
+  if (modelRequestTimeoutMs !== undefined) {
     // Provider opt-ins may exceed the cloud ceiling; shorter run budgets still win.
     const boundedTimeoutMs = Math.min(modelRequestTimeoutMs, ...timeoutBounds);
     return clampTimeoutMs(boundedTimeoutMs);
@@ -261,12 +251,8 @@ export function resolveLlmFirstEventTimeoutMs(params?: LlmTimeoutParams): number
   const { timeoutBounds } = resolveLlmTimeoutBounds(params);
   const { isLocalRuntimeModel, isSelfHostedRuntimeModel } = resolveRuntimeModelLocality(params);
 
-  const modelRequestTimeoutMs = params?.modelRequestTimeoutMs;
-  if (
-    typeof modelRequestTimeoutMs === "number" &&
-    Number.isFinite(modelRequestTimeoutMs) &&
-    modelRequestTimeoutMs > 0
-  ) {
+  const modelRequestTimeoutMs = asPositiveFiniteNumber(params?.modelRequestTimeoutMs);
+  if (modelRequestTimeoutMs !== undefined) {
     return clampTimeoutMs(Math.min(modelRequestTimeoutMs, ...timeoutBounds));
   }
 

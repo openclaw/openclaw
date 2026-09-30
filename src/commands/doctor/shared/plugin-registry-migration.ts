@@ -104,6 +104,16 @@ function invalidPersistedInstallRecordMessage(filePath: string): string {
 const INVALID_CONFIG_INSTALL_RECORD_MESSAGE =
   "plugins.installs contains invalid records. Back up openclaw.json, correct or remove the invalid retired plugins.installs record, then rerun `openclaw doctor --fix`.";
 
+function readValidShippedPluginInstallConfigRecords(
+  config: unknown,
+): Record<string, PluginInstallRecord> | undefined {
+  const source = inspectShippedPluginInstallConfigRecords(config);
+  if (source.status === "invalid") {
+    throw new InvalidPluginInstallRecordStateError(INVALID_CONFIG_INSTALL_RECORD_MESSAGE);
+  }
+  return source.status === "valid" ? source.records : undefined;
+}
+
 function mergeShippedPluginInstallRecords(
   previous: Record<string, PluginInstallRecord>,
   persisted: Record<string, PluginInstallRecord> | null,
@@ -124,17 +134,14 @@ export function readShippedPluginInstallConfigImportRecords(
   snapshot: ConfigFileSnapshot,
   options: { env?: NodeJS.ProcessEnv } = {},
 ): Record<string, PluginInstallRecord> | undefined {
-  const source = inspectShippedPluginInstallConfigRecords(snapshot.sourceConfig);
-  if (source.status === "missing") {
+  const sourceRecords = readValidShippedPluginInstallConfigRecords(snapshot.sourceConfig);
+  if (!sourceRecords) {
     return undefined;
-  }
-  if (source.status === "invalid") {
-    throw new InvalidPluginInstallRecordStateError(INVALID_CONFIG_INSTALL_RECORD_MESSAGE);
   }
   return mergeShippedPluginInstallRecords(
     loadInstalledPluginIndexInstallRecordsSync(options),
     readPersistedInstalledPluginIndexInstallRecords(options),
-    source.records,
+    sourceRecords,
   );
 }
 
@@ -149,12 +156,8 @@ export function assertShippedPluginInstallConfigImportCurrent(
   snapshot: ConfigFileSnapshot,
   imported: ShippedPluginInstallConfigImport | undefined,
 ): void {
-  const source = inspectShippedPluginInstallConfigRecords(snapshot.sourceConfig);
-  if (source.status === "missing") {
+  if (!readValidShippedPluginInstallConfigRecords(snapshot.sourceConfig)) {
     return;
-  }
-  if (source.status === "invalid") {
-    throw new InvalidPluginInstallRecordStateError(INVALID_CONFIG_INSTALL_RECORD_MESSAGE);
   }
   if (
     !imported ||
@@ -176,12 +179,9 @@ export async function importShippedPluginInstallConfigForDoctor(
     validateRecords?: (records: Record<string, PluginInstallRecord>) => void;
   } = {},
 ): Promise<ShippedPluginInstallConfigImport | undefined> {
-  const source = inspectShippedPluginInstallConfigRecords(snapshot.sourceConfig);
-  if (source.status === "missing") {
+  const sourceRecords = readValidShippedPluginInstallConfigRecords(snapshot.sourceConfig);
+  if (!sourceRecords) {
     return undefined;
-  }
-  if (source.status === "invalid") {
-    throw new InvalidPluginInstallRecordStateError(INVALID_CONFIG_INSTALL_RECORD_MESSAGE);
   }
   const { readConfigFileSnapshotForWrite, withConfigMutationExclusive } =
     await import("../../../config/config.js");
@@ -195,7 +195,7 @@ export async function importShippedPluginInstallConfigForDoctor(
     databasePath,
     pluginInventoryChanged,
   });
-  if (Object.keys(source.records).length === 0) {
+  if (Object.keys(sourceRecords).length === 0) {
     return receipt(resolveInstalledPluginIndexStorePath(), false);
   }
   const { commitPluginInstallRecordsOnly } =
@@ -217,7 +217,7 @@ export async function importShippedPluginInstallConfigForDoctor(
       const nextInstallRecords = mergeShippedPluginInstallRecords(
         previousInstallRecords,
         persisted,
-        source.records,
+        sourceRecords,
       );
       options.validateRecords?.(nextInstallRecords);
       if (isDeepStrictEqual(nextInstallRecords, persisted)) {
@@ -268,12 +268,9 @@ export function preflightPluginRegistryDoctorMigration(
   if (persistedState.status === "invalid") {
     throw new InvalidPluginInstallRecordStateError(invalidPersistedInstallRecordMessage(filePath));
   }
-  const configInstallState = params.config
-    ? inspectShippedPluginInstallConfigRecords(params.config)
+  const configInstallRecords = params.config
+    ? readValidShippedPluginInstallConfigRecords(params.config)
     : undefined;
-  if (configInstallState?.status === "invalid") {
-    throw new InvalidPluginInstallRecordStateError(INVALID_CONFIG_INSTALL_RECORD_MESSAGE);
-  }
   const pathExists = params.existsSync ?? fs.existsSync;
   if (pathExists(filePath)) {
     const currentRegistry = readPersistedInstalledPluginIndexSync(params);
@@ -291,7 +288,7 @@ export function preflightPluginRegistryDoctorMigration(
     }
   }
   const hasConfigInstallRecords =
-    configInstallState?.status === "valid" && Object.keys(configInstallState.records).length > 0;
+    configInstallRecords !== undefined && Object.keys(configInstallRecords).length > 0;
   // Only a caller that supplied config can prove nothing is left to migrate. Without config, or with
   // retired plugins.installs records still present, stay on "migrate" so the warning is not lost.
   return {
@@ -346,9 +343,7 @@ async function migratePluginRegistryForDoctorWithLease(
     return { status: "skip-existing", migrated: false, preflight };
   }
   const rawConfig = await readMigrationConfig(params);
-  if (inspectShippedPluginInstallConfigRecords(rawConfig).status === "invalid") {
-    throw new InvalidPluginInstallRecordStateError(INVALID_CONFIG_INSTALL_RECORD_MESSAGE);
-  }
+  readValidShippedPluginInstallConfigRecords(rawConfig);
   const config = withoutPluginInstallRecords(rawConfig);
   const installRecords = migrateOfficialPluginInstallProvenance(
     params.installRecords ?? (await loadInstalledPluginIndexInstallRecords(params)),
