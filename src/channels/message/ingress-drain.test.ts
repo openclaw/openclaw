@@ -277,6 +277,31 @@ describe("channel ingress drain", () => {
     }
   });
 
+  it("releases a deferred lane when the handler defers before its first await", async () => {
+    await withTempState(async (stateDir) => {
+      const queue = createTestIngressQueue(stateDir);
+      await queue.enqueue("first", { text: "first" }, { laneKey: "shared" });
+      const drain = createChannelIngressDrain<Payload>({
+        queue,
+        deferredLaneOccupancy: "release",
+        dispatchClaimedEvent: async (_event, lifecycle) => {
+          // Ownership must already be registered when a handler defers
+          // synchronously, before its first await, or the release is undone by
+          // the post-dispatch registration and the lane stays blocked.
+          lifecycle.onDeferred();
+          return { kind: "deferred" };
+        },
+      });
+
+      expect(await drain.drainOnce()).toEqual({ started: 1 });
+      await vi.waitFor(() => expect(drain.activeLaneKeys()).toEqual(new Set()));
+
+      await queue.enqueue("second", { text: "second" }, { laneKey: "shared" });
+      expect(await drain.drainOnce()).toEqual({ started: 1 });
+      drain.dispose();
+    });
+  });
+
   it("keeps heartbeat and watchdog ownership after releasing a deferred lane", async () => {
     await withTempState(async (stateDir) => {
       let clock = 1_000;

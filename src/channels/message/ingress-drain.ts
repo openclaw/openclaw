@@ -441,6 +441,12 @@ export function createChannelIngressDrain<
       settleOnce: async () => {},
     } as ActiveHandlerState<TPayload, TMetadata>;
     state.settleOnce = createIngressSettleOwner(state, removeActive);
+    // Register ownership before dispatch starts. runOutsideAsyncWorkScope runs
+    // the task body synchronously up to its first await, so a handler that calls
+    // onDeferred() before awaiting would otherwise release a lane this state does
+    // not own yet, only for the post-dispatch registration to re-own it.
+    activeByClaim.set(activeClaimKey(claim), state);
+    laneOwnerByKey.set(laneKey, state);
     const lifecycle = createLifecycle(state);
     armStallWatchdog(state);
     armClaimRefresh(state);
@@ -527,8 +533,6 @@ export function createChannelIngressDrain<
       }
     });
 
-    activeByClaim.set(activeClaimKey(claim), state);
-    laneOwnerByKey.set(laneKey, state);
     return state;
   };
 
