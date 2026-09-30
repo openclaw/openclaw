@@ -118,7 +118,6 @@ extensions/memory-core/src/memory/index.test.ts
 extensions/memory-core/src/memory/manager-embedding-ops.ts
 extensions/memory-core/src/rem-evidence.ts
 extensions/memory-core/src/short-term-promotion.test.ts
-extensions/memory-core/src/tools.test.ts
 extensions/memory-lancedb/index.test.ts
 extensions/memory-wiki/src/chatgpt-import.ts
 extensions/memory-wiki/src/cli.ts
