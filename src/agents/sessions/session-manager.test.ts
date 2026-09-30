@@ -86,7 +86,13 @@ describe("SessionManager.open", () => {
           OpenClaw_State_Dir: OPENCLAW_STATE_DIR,
         }),
       );
-      expect(() => serialize(captured)).toThrow("could not be cloned");
+      expect(() => serialize(captured)).toThrow(
+        expect.objectContaining(
+          process.versions.bun
+            ? { name: "DataCloneError", code: 25 }
+            : { name: "Error", message: "#<Object> could not be cloned." },
+        ),
+      );
       return captured;
     });
     let ids: string[];

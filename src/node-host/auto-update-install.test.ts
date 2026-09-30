@@ -243,6 +243,14 @@ describe("Bun private node runtime installation", () => {
 afterEach(() => vi.unstubAllEnvs());
 
 describe("private node runtime installation", () => {
+  beforeEach(() => {
+    vi.stubGlobal("process", {
+      ...process,
+      versions: { ...process.versions, bun: undefined },
+    });
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
   it("installs a verified generation without changing the global runtime or live state", async () => {
     await withTestDir({ prefix: "openclaw-node-install-" }, async (directory) => {
       const globalPrefix = path.join(directory, "global");

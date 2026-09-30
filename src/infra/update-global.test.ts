@@ -651,7 +651,7 @@ describe("update global helpers", () => {
         }),
       ).resolves.toEqual({
         manager: "bun",
-        command: "bun",
+        command: process.versions.bun ? process.execPath : "bun",
         globalRoot: bunRoot,
         packageRoot: pkgRoot,
       });
@@ -789,28 +789,28 @@ describe("update global helpers", () => {
       "github:openclaw/openclaw#release/2026.5.12",
     ]);
     expect(globalInstallArgs("bun", "openclaw@latest")).toEqual([
-      "bun",
+      process.versions.bun ? process.execPath : "bun",
       "add",
       "-g",
       "--trust",
       "openclaw@latest",
     ]);
     expect(globalInstallArgs("bun", "/tmp/openclaw-current.tgz")).toEqual([
-      "bun",
+      process.versions.bun ? process.execPath : "bun",
       "add",
       "-g",
       "--trust",
       "openclaw@file:/tmp/openclaw-current.tgz",
     ]);
     expect(globalInstallArgs("bun", "https://example.test/openclaw.tgz")).toEqual([
-      "bun",
+      process.versions.bun ? process.execPath : "bun",
       "add",
       "-g",
       "--trust",
       "openclaw@https://example.test/openclaw.tgz",
     ]);
     expect(globalInstallArgs("bun", "github:openclaw/openclaw#main")).toEqual([
-      "bun",
+      process.versions.bun ? process.execPath : "bun",
       "add",
       "-g",
       "--trust",

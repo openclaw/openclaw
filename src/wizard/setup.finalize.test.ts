@@ -387,7 +387,15 @@ function requireMockArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex 
 describe("finalizeSetupWizard", () => {
   beforeEach(() => {
     readPin.mockReset().mockReturnValue({ revision: "empty", stored: false });
-    runExec.mockReset();
+    runExec.mockReset().mockResolvedValue({
+      stdout: JSON.stringify({
+        nodeVersion: "26.8.1",
+        bunVersion: "1.4.3",
+        sqliteVersion: "3.53.4",
+        sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
+      }),
+      stderr: "",
+    });
     runTui.mockClear();
     setupCleanupExitTimer.unref.mockClear();
     scheduleProcessExitAfterTuiReturn.mockReset().mockReturnValue(setupCleanupExitTimer);

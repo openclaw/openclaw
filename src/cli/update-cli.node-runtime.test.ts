@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resolveUpdateInstallRoot } from "../infra/update-install-root.js";
 import { createCommandResult as commandResult } from "../test-utils/npm-spec-install-test-helpers.js";
@@ -70,6 +70,8 @@ describe("update-cli", () => {
     setupServicePackageAtPrefix,
     tempDirs,
   } = createUpdateCliFixture();
+
+  beforeEach(() => runtimeRecovery.stubNodeRuntime());
 
   it("keeps the CLI and service reachable after nvm runtime recovery", async () => {
     resolveNodeRuntimeInfo.mockResolvedValue(runtimeRecovery.unsupportedServiceRuntimeFixture);

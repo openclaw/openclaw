@@ -1019,7 +1019,7 @@ describe("inspectPortUsage on Windows", () => {
     mkdirSync(path.dirname(script), { recursive: true });
     writeFileSync(script, "");
     writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
-    const commandLine = `"${process.execPath}" "${script}" gateway run`;
+    const commandLine = `"C:\\Program Files\\nodejs\\node.exe" "${script}" gateway run`;
     mockWindowsCommands({
       netstat: commandOutput("  TCP    127.0.0.1:18789    0.0.0.0:0    LISTENING    4242\r\n"),
       tasklist: commandOutput('"node.exe","4242","Console","1","10,000 K"\r\n'),

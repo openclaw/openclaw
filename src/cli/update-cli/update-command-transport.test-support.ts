@@ -54,6 +54,31 @@ export function createUpdateExecTransportFixture(params: {
 }): typeof runExec {
   return async (...args: Parameters<typeof runExec>) => {
     const options = args[2];
+    if (args[1][0] === "-e" && args[1][1]?.includes("sqliteSelectionError")) {
+      const result = await params.run(...args);
+      if (result.stdout.trim() || result.stderr.trim()) {
+        return result;
+      }
+      return {
+        stdout: JSON.stringify({
+          nodeVersion: process.versions.node,
+          bunVersion:
+            args[0] === process.execPath
+              ? (process.versions.bun ?? null)
+              : path.win32
+                    .basename(args[0])
+                    .toLowerCase()
+                    .replace(/\.exe$/u, "") === "bun"
+                ? "1.4.3"
+                : null,
+          sqliteVersion: "3.53.4",
+          sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
+          sqliteSelectionError: null,
+          nodeSharedSqlite: false,
+        }),
+        stderr: "",
+      };
+    }
     if (
       params.isPlistStdinConversion(args[0], args[1]) &&
       typeof options === "object" &&

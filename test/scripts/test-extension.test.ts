@@ -780,10 +780,18 @@ describe("scripts/test-extension.mts", () => {
         mkdtempSync(path.join(tmpdir(), "openclaw-test-extension-native-")),
       );
       const home = path.join(root, "home");
+      const bin = path.join(root, "bin");
+      const runtime = process.versions.bun ? "bun" : "node";
       const report = path.join(root, "report.json");
       const config = path.join(root, "vitest.config.mjs");
       const entry = path.join(root, "batch.mts");
       mkdirSync(home);
+      mkdirSync(bin);
+      symlinkSync(
+        process.execPath,
+        path.join(bin, process.platform === "win32" ? `${runtime}.exe` : runtime),
+        "file",
+      );
       symlinkSync(
         path.join(process.cwd(), "node_modules"),
         path.join(root, "node_modules"),
@@ -792,14 +800,14 @@ describe("scripts/test-extension.mts", () => {
       writeFileSync(
         config,
         `import assert from 'node:assert/strict';
-assert.equal(process.execArgv.includes('--no-maglev'), ${!enableMaglev}, 'batch Node defaults');
-assert.equal(process.execArgv.includes('--no-concurrent-sparkplug'), true, 'batch Sparkplug policy');
+assert.equal(process.execArgv.includes('--no-maglev'), ${runtime === "node" && !enableMaglev}, 'batch Node defaults');
+assert.equal(process.execArgv.includes('--no-concurrent-sparkplug'), ${runtime === "node"}, 'batch Sparkplug policy');
 export default {root:${JSON.stringify(root)},cacheDir:${JSON.stringify(path.join(root, "cache"))},test:{include:['*.test.mjs'],pool:${JSON.stringify(pool)},execArgv:['--no-warnings'],globalSetup:[${JSON.stringify(path.join(process.cwd(), "test/vitest/vitest.node-policy.global-setup.ts"))}],maxWorkers:1,fileParallelism:false,cache:false,fsModuleCache:false}};`,
       );
       const expectedHome = realHomeReplay ? JSON.stringify(home) : "path.join(tmpdir(), 'home')";
       writeFileSync(
         path.join(root, "selected.test.mjs"),
-        `import {homedir,tmpdir} from 'node:os';import path from 'node:path';import {test,expect} from 'vitest';let attempts=0;test('selected native case',()=>{expect(++attempts).toBe(2);expect(process.execArgv.includes('--no-concurrent-sparkplug')).toBe(${pool === "forks"});expect(process.execArgv).toContain('--no-warnings');expect(process.env.NODE_OPTIONS).toBe('--trace-warnings');expect(process.env.HOME).toBe(${expectedHome});expect(homedir()).toBe(${expectedHome});});`,
+        `import {homedir,tmpdir} from 'node:os';import path from 'node:path';import {test,expect} from 'vitest';let attempts=0;test('selected native case',()=>{expect(++attempts).toBe(2);expect(Boolean(process.versions.bun)).toBe(${runtime === "bun"});expect(process.execArgv.includes('--no-concurrent-sparkplug')).toBe(${runtime === "node" && pool === "forks"});expect(process.execArgv).toContain('--no-warnings');expect(process.env.NODE_OPTIONS).toBe('--trace-warnings');expect(process.env.HOME).toBe(${expectedHome});expect(homedir()).toBe(${expectedHome});});`,
       );
       for (const name of ["excluded", "unrelated"]) {
         writeFileSync(
@@ -833,7 +841,8 @@ export default {root:${JSON.stringify(root)},cacheDir:${JSON.stringify(path.join
             cwd: root,
             encoding: "utf8",
             env: {
-              PATH: "",
+              PATH: bin,
+              OPENCLAW_VITEST_RUNTIME: runtime,
               HOME: home,
               USERPROFILE: home,
               OPENCLAW_LIVE_TEST: realHomeReplay ? "1" : "0",

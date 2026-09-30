@@ -347,6 +347,7 @@ describe("update-cli", () => {
       });
     }
     if (failure === "package runtime") {
+      runtimeRecovery.stubNodeRuntime();
       nodeVersionSatisfiesEngine.mockReturnValue(false);
     }
 
@@ -478,6 +479,7 @@ describe("update-cli", () => {
   it.each([true, false])(
     "uses inspected package runtime requirements when a later lookup disagrees (compatible=%s)",
     async (compatible) => {
+      runtimeRecovery.stubNodeRuntime();
       // This case specifies a non-container system runtime, independent of the test host.
       runtimeRecovery.mockNonContainerSystemRuntime();
       const root = await mockPackageInstallAtCaseDir("openclaw-runtime-target");
@@ -968,7 +970,7 @@ describe("update-cli", () => {
     }
     const entrypoint = requireValue(entrypoints[0], "updated entrypoint");
     const install = gatewayCommandCall(entrypoint, "install");
-    expect(install?.[0][0]).toContain("node");
+    expect(install?.[0][0]).toBe(process.execPath);
     expect(install?.[0].slice(1)).toEqual([
       entrypoint,
       "gateway",

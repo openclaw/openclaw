@@ -7,6 +7,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import type { CommandOptions } from "../process/exec.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { captureEnv } from "../test-utils/env.js";
+import { expectedNpmCommand } from "../test-utils/npm-command.js";
 import {
   listMissingRequiredPlatformPackages,
   readManagedNpmRootInstalledDependency,
@@ -727,19 +728,20 @@ describe("managed npm root", () => {
       "npm peer plan command call",
     );
     const options = requireCommandOptions(rawOptions, "npm peer plan");
-    expect(args).toEqual([
-      "npm",
-      "install",
-      "--package-lock-only",
-      "--force",
-      "--omit=dev",
-      "--omit=peer",
-      "--loglevel=error",
-      "--ignore-scripts",
-      "--workspaces=false",
-      "--no-audit",
-      "--no-fund",
-    ]);
+    expect(args).toEqual(
+      expectedNpmCommand([
+        "install",
+        "--package-lock-only",
+        "--force",
+        "--omit=dev",
+        "--omit=peer",
+        "--loglevel=error",
+        "--ignore-scripts",
+        "--workspaces=false",
+        "--no-audit",
+        "--no-fund",
+      ]),
+    );
     expect(options?.cwd).not.toBe(npmRoot);
     expect(options.timeoutMs).toBe(testCase.expectedTimeoutMs);
     expect(options?.env?.npm_config_legacy_peer_deps).toBe("false");

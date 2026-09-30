@@ -908,7 +908,7 @@ describe("update-cli", () => {
 
     expectNoSideEffects(runDaemonRestart);
     const restartCall = gatewayCommandCall(updatedEntrypoint, "restart");
-    expect(restartCall?.[0][0]).toContain("node");
+    expect(restartCall?.[0][0]).toBe(process.execPath);
     expect(restartCall?.[0].slice(4)).toEqual([
       "--preserve-definition",
       "--json",

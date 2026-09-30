@@ -73,7 +73,7 @@ describe("update-cli", () => {
     await updateCommand({ channel: "dev", yes: true, restart: false });
 
     const call = spawnCall();
-    expect(call?.[0]).toMatch(/node/);
+    expect(call?.[0]).toBe(process.execPath);
     expect(call?.[1]).toEqual([
       entrypoints[0],
       "update",

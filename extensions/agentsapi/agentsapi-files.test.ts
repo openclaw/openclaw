@@ -406,9 +406,14 @@ describe("Agents API output attachment publication", () => {
         }
         return mime;
       });
-      await expect(collect(client, assertCurrent, controller.signal)).rejects.toThrow(
-        /no longer active|binding lease revoked|transfer aborted|This operation was aborted/,
-      );
+      const collecting = collect(client, assertCurrent, controller.signal);
+      if (revocation === "abort") {
+        await expect(collecting).rejects.toMatchObject({ name: "AbortError" });
+      } else {
+        await expect(collecting).rejects.toThrow(
+          revocation === "host" ? "no longer active" : "fixture binding lease revoked",
+        );
+      }
       expect(reachedSave).toBe(true);
       expect(await outboundFiles()).toEqual([]);
     },

@@ -7,6 +7,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import type { CommandOptions } from "../process/exec.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { captureEnv } from "../test-utils/env.js";
+import { expectedNpmCommand } from "../test-utils/npm-command.js";
 import { repairManagedNpmRootOpenClawPeer } from "./npm-managed-root.js";
 
 const fixtureRootTracker = createSuiteTempRootTracker({
@@ -165,16 +166,17 @@ describe("managed npm root peer repair", () => {
         "repair command call",
       );
       const repairOptions = requireCommandOptions(rawRepairOptions, "repair");
-      expect(repairArgs).toEqual([
-        "npm",
-        "uninstall",
-        "--loglevel=error",
-        "--legacy-peer-deps",
-        "--ignore-scripts",
-        "--no-audit",
-        "--no-fund",
-        "openclaw",
-      ]);
+      expect(repairArgs).toEqual(
+        expectedNpmCommand([
+          "uninstall",
+          "--loglevel=error",
+          "--legacy-peer-deps",
+          "--ignore-scripts",
+          "--no-audit",
+          "--no-fund",
+          "openclaw",
+        ]),
+      );
       expect(repairOptions?.cwd).toBe(npmRoot);
       expect(repairOptions?.timeoutMs).toBe(expectedTimeoutMs);
       expect(repairOptions?.env?.npm_config_legacy_peer_deps).toBe("true");

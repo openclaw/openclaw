@@ -895,8 +895,15 @@ describe("requestCodexAppServerJson sandbox guard", () => {
         expect(isNativeError(reason)).toBe(true);
         expect(reason).toMatchObject({
           message: "codex app-server model/list timed out",
-          stack: "CodexAppServerScopedRequestRejectedError: codex app-server model/list timed out",
         });
+        if (process.versions.bun) {
+          expect(reason).not.toHaveProperty("stack");
+        } else {
+          expect(reason).toHaveProperty(
+            "stack",
+            "CodexAppServerScopedRequestRejectedError: codex app-server model/list timed out",
+          );
+        }
       }
       expect(listenerStackLimits).toEqual([10, 10]);
       for (const error of listenerErrors) {

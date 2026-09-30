@@ -13,6 +13,7 @@ import {
 import { safePathSegmentHashed } from "../infra/install-safe-path.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { expectedNpmCommand, npmCommandArgs } from "../test-utils/npm-command.js";
 import { initializeGlobalHookRunner, resetGlobalHookRunner } from "./hook-runner-global.js";
 import { createMockPluginRegistry } from "./hooks.test-helpers.js";
 import {
@@ -250,8 +251,11 @@ async function runActualInstallPolicyCommandIfNeeded(
 }
 
 function countMockedCommands(executable: string): number {
-  return vi.mocked(runCommandWithTimeout).mock.calls.filter(([args]) => args[0] === executable)
-    .length;
+  return vi
+    .mocked(runCommandWithTimeout)
+    .mock.calls.filter(([args]) =>
+      executable === "npm" ? npmCommandArgs(args) !== undefined : args[0] === executable,
+    ).length;
 }
 
 function mockSuccessfulManagedNpmInstall(params: { packageName: string; version?: string }) {
@@ -260,7 +264,7 @@ function mockSuccessfulManagedNpmInstall(params: { packageName: string; version?
     if (policyResult) {
       return policyResult;
     }
-    if (args[0] !== "npm" || args[1] !== "install") {
+    if (npmCommandArgs(args)?.[0] !== "install") {
       throw new Error(`unexpected command: ${args.join(" ")}`);
     }
     if (!args.includes("--package-lock-only")) {
@@ -976,17 +980,18 @@ describe("installPluginFromNpmSpec", () => {
       expect(result.error).toContain("npm installs are disabled by policy");
     }
     expect(countMockedCommands("npm")).toBe(1);
-    expect(vi.mocked(runCommandWithTimeout).mock.calls[0]?.[0]).toEqual([
-      "npm",
-      "view",
-      `${packageName}@1.0.0`,
-      "name",
-      "version",
-      "dist.integrity",
-      "dist.shasum",
-      "openclaw",
-      "--json",
-    ]);
+    expect(vi.mocked(runCommandWithTimeout).mock.calls[0]?.[0]).toEqual(
+      expectedNpmCommand([
+        "view",
+        `${packageName}@1.0.0`,
+        "name",
+        "version",
+        "dist.integrity",
+        "dist.shasum",
+        "openclaw",
+        "--json",
+      ]),
+    );
     await expect(fsPromises.stat(npmDir)).rejects.toThrow();
     const requests = readCapturedInstallPolicyRequests(logPath);
     expect(requests).toHaveLength(1);

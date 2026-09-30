@@ -8,6 +8,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { SpawnResult } from "../process/exec.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { npmCommandArgs } from "../test-utils/npm-command.js";
 import { resolvePluginArtifactDeclaredSurface } from "./capability-artifact.js";
 import { computeDeclaredSurfaceHash } from "./capability-summary.js";
 import { resolvePluginInstallOwnerMigrations } from "./install-transaction.js";
@@ -509,7 +510,7 @@ function npmViewCall(): [unknown, Record<string, unknown>] | undefined {
   const calls = runCommandWithTimeoutMock.mock.calls as unknown as Array<
     [unknown, Record<string, unknown>]
   >;
-  return calls.find(([argv]) => Array.isArray(argv) && argv[0] === "npm" && argv[1] === "view");
+  return calls.find(([argv]) => Array.isArray(argv) && npmCommandArgs(argv)?.[0] === "view");
 }
 
 function expectRecordFields(

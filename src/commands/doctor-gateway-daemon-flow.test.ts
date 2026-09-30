@@ -714,7 +714,13 @@ describe("maybeRepairGatewayDaemon", () => {
     async ({ recorded, pinned, supported, choice }) => {
       const recordedPath = `/opt/recorded/bin/${recorded}`;
       if (!supported) {
-        runExec.mockRejectedValue(new Error("missing runtime"));
+        const probeRuntime = runExec.getMockImplementation()!;
+        runExec.mockImplementation((executable: string, ...args: unknown[]) => {
+          if (executable === recordedPath) {
+            return Promise.reject(new Error("missing runtime"));
+          }
+          return probeRuntime(executable, ...args);
+        });
       }
       const pin = pinned ? { runtime: "bun", path: "/opt/pinned/bun" } : undefined;
       const expected = { revision: "pin-version", stored: pinned, pin };

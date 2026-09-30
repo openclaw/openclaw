@@ -428,7 +428,7 @@ describe("update-cli", () => {
           ?.OPENCLAW_UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART,
       ).toBe("1");
       const postCoreCall = spawnCall();
-      expect(postCoreCall?.[0]).toMatch(/node/);
+      expect(postCoreCall?.[0]).toBe(process.execPath);
       expect(postCoreCall?.[1]).toEqual([
         entryPath,
         "update",
@@ -708,7 +708,7 @@ describe("update-cli", () => {
     });
 
     const doctorCall = doctorCommandCall();
-    expect(doctorCall?.[0][0]).toContain("node");
+    expect(doctorCall?.[0][0]).toBe(process.execPath);
     expect(doctorCall?.[0].slice(1)).toEqual([entryPath, "doctor", "--non-interactive"]);
     expect(
       (doctorCall?.[1].env as NodeJS.ProcessEnv | undefined)?.OPENCLAW_UPDATE_IN_PROGRESS,

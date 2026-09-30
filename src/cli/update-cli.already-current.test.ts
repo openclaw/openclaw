@@ -326,6 +326,7 @@ describe("update-cli", () => {
   it.each([true, false])(
     "converges a current Git core using its before-only version receipt (runtime compatible=%s)",
     async (compatible) => {
+      runtimeRecovery.stubNodeRuntime();
       // This case specifies system-runtime guidance, independent of the host Node manager.
       vi.spyOn(versionManagerPath, "resolveNodeVersionManager").mockReturnValue("system");
       const fixture = runtimeRecovery.currentGitCoreFixture(process.cwd(), VERSION);

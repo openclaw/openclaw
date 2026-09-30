@@ -325,7 +325,7 @@ export default { plugins: [{ name: "signal", buildStart() { process.kill(process
     const signaledBaseOutput = `${signaledBaseResult.stdout}${signaledBaseResult.stderr}`;
     expect(fs.readFileSync(signalMarker, "utf8")).toBe("loaded");
     expect(signaledBaseResult.status, signaledBaseOutput).toBe(1);
-    expect(signaledBaseOutput).toContain("node failed (SIGTERM)");
+    expect(signaledBaseOutput).toContain(`${path.basename(process.execPath)} failed (SIGTERM)`);
     expect(signaledBaseOutput).not.toContain(
       "Base Control UI source does not build with the candidate toolchain",
     );

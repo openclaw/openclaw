@@ -175,7 +175,7 @@ describe("update-cli", () => {
           env: handoffEnv,
         })?.trigger,
       ).toBe("cli");
-      expect(handoff?.[0]).toMatch(/node/);
+      expect(handoff?.[0]).toBe(process.execPath);
       expect(handoff?.[1]).toEqual([updatedEntrypoint, "update", "--yes", "--timeout", "1800"]);
       expect(handoff?.[2]?.stdio).toBe("inherit");
       expect(handoff?.[2]?.env).toMatchObject({
