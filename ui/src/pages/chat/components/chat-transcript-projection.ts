@@ -524,10 +524,8 @@ export function projectChatTranscript(
       : null;
   transcript.entryAnimations.project(chatItems);
   transcript.syncMessageRows(messageRowKeysById, transcriptMessageKeys);
-  let turnRecapOwnerKey: string | null = null;
   if (turnRecap !== null && tailStatusOwner?.runId === turnRecap.runId) {
     turnRecapByGroupKey.set(tailStatusOwner.key, turnRecap);
-    turnRecapOwnerKey = tailStatusOwner.key;
   }
   const transcriptRows: TranscriptRow<ChatRenderItem>[] = [];
   for (const row of rows) {
@@ -563,7 +561,7 @@ export function projectChatTranscript(
       content: realtimeConversation,
     });
   }
-  if (turnRecap !== null && turnRecapOwnerKey === null && !isEmpty && !showLoadingSkeleton) {
+  if (turnRecap !== null && turnRecapByGroupKey.size === 0 && !isEmpty && !showLoadingSkeleton) {
     transcriptRows.push({
       kind: "content",
       key: "turn-recap",
