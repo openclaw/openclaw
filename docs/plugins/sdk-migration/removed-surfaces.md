@@ -307,9 +307,10 @@ timeline for current status.
 
     | Migrating surface | Replacement |
     | ----------------- | ----------- |
-    | Deprecated `loadSessionStore(...)`, `updateSessionStore(...)`, and `resolveSessionStoreEntry(...)`, including package-root `loadSessionStore(...)` | `getSessionEntry(...)`, `listSessionEntries(...)`, and row-level session mutations. |
-    | Deprecated `resolveSessionFilePath(...)` | Session identity (`sessionKey`, `sessionId`, and SDK runtime target helpers) plus Gateway methods that operate on the current session. |
-    | Deprecated package-root `saveSessionStore(...)` and removed SDK file-store writes | Gateway-owned session runtime APIs; plugin code should request or mutate session state through documented runtime/context helpers instead of writing the active store file. |
+    | Removed `loadSessionStore(...)` and `resolveSessionStoreEntry(...)`, including package-root `loadSessionStore(...)` | `getSessionEntry(...)` for one scoped row or `listSessionEntries(...)` for scoped iteration from `openclaw/plugin-sdk/session-store-runtime`. |
+    | Removed `updateSessionStore(...)`, package-root `saveSessionStore(...)`, and SDK file-store writes | `patchSessionEntry(...)`, `upsertSessionEntry(...)`, and `deleteSessionEntry(...)` from `openclaw/plugin-sdk/session-store-runtime`; mutate only the intended rows instead of replacing a detached whole-store snapshot. |
+    | Removed `LoadSessionStoreOptions` and `UpdateSessionStoreOptions` | Parameters accepted by the scoped row APIs; the whole-store cache and callback options no longer apply. |
+    | Removed `resolveSessionFilePath(...)` | Session identity (`agentId`, `sessionKey`, and `sessionId`) with `openclaw/plugin-sdk/session-transcript-runtime`, or Gateway methods that operate on the current session. |
     | Removed `resolveSessionTranscriptPathInDir(...)` and `resolveAndPersistSessionFile(...)` | Session identity and Gateway methods that operate on the current session. |
     | `readLatestAssistantTextFromSessionTranscript(...)` | Identity-backed transcript readers exposed by the current runtime context, or Gateway history/session methods when the plugin is outside the transcript owner path. |
     | `SessionTranscriptUpdate.sessionFile` | `SessionTranscriptUpdate.target` with `agentId`, `sessionKey`, and `sessionId`. |
@@ -320,11 +321,19 @@ timeline for current status.
     support artifacts. They are no longer the steady-state runtime contract for
     active sessions.
 
-    Official plugins released with `v2026.7.1-beta.5` imported the four
-    deprecated helpers above. `openclaw/plugin-sdk/session-store-runtime` keeps
-    that exact bridge through 2026-10-12; new plugins must use the replacements.
-    `resolveStorePath(...)` remains a supported SDK helper and is not part of
-    this deprecation.
+    The official `@openclaw/codex` and `@openclaw/feishu` plugins released with
+    `v2026.7.1-beta.5` imported the retired bridge. SDK-owner approval on
+    September 30, 2026 closed its compatibility window early, replacing the
+    former October 12 deadline. The supported-plugin
+    cutoff excludes that release and any other package still importing the
+    bridge. Upgrade affected plugins to versions using the replacements before
+    upgrading OpenClaw. A newer version number alone is not evidence of migration.
+
+    `openclaw/plugin-sdk/session-store-runtime` and `resolveStorePath(...)`
+    remain supported. Pass the selected `agentId` explicitly to scoped row
+    operations; resolving a path no longer records an agent selection for a
+    later whole-store call. This removal does not change SQLite schemas or
+    legacy-state import and Doctor migrations.
 
     `openclaw plugins inspect --all --runtime` reports non-bundled plugins whose
     load errors or diagnostics still reference these removed file APIs. The

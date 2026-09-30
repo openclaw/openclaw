@@ -91,7 +91,6 @@ separately tracked so supported upgrade paths can still repair old config.
 The remaining dated compatibility areas are:
 
 - the renewed October 1 SDK subpath window listed in the migration guide
-- the beta.5 session-store bridge
 - the shipped agent-harness SDK aliases, whose removal is pending a new
   externally documented migration decision
 - the October 2026 SDK annotation families listed below
@@ -116,7 +115,6 @@ surface while its stated reader or migration condition remains unmet.
 | `memory-host-compatibility-aliases`           | Use canonical memory tables and prepared runtime config everywhere.                                     | 2026-10-01    |
 | `plugin-runtime-api-compat-aliases`           | Move flat plugin registration/runtime calls to their namespaced or focused replacements.                | 2026-10-01    |
 | `plugin-provider-manifest-compat-aliases`     | Move kind/setup/catalog ownership to manifests and model-catalog registration.                          | 2026-10-01    |
-| `deprecated-session-store-beta5-api`          | End the v2026.7.x whole-store upgrade window, including package-root aliases.                           | 2026-10-12    |
 | `plugin-sdk-session-agent-resolution-aliases` | Move published plugins to strict session-agent resolution with an explicit or prepared owner.           | 2026-11-29    |
 
 `pnpm plugins:boundary-report` reports `removal-pending` records separately
@@ -125,6 +123,21 @@ its reported migration condition is satisfied and its reader references are
 cleared; the existing `--fail-on-eligible-compat` gate continues to apply only
 to dated `deprecated` records. Reader references are surface-token matches for
 triage; use the published-artifact sweep before authorizing removal.
+
+### Session-store bridge retirement
+
+The SDK owner approved retiring `deprecated-session-store-beta5-api` on
+September 30, 2026, replacing its former October 12 compatibility deadline.
+The supported-plugin cutoff excludes `v2026.7.1-beta.5` and any other plugin
+release that imports the retired whole-store or transcript-path bridge.
+Upgrade those plugins to versions using scoped row operations and
+identity-backed transcript APIs before upgrading the host.
+
+`openclaw/plugin-sdk/session-store-runtime` and `resolveStorePath(...)` remain
+supported. The removed exports, option types, and package-root aliases are
+listed in the [session API migration guide](/plugins/sdk-migration/removed-surfaces#removed-session-and-transcript-file-apis).
+This retirement changes the supported SDK surface; canonical SQLite storage
+and legacy-state import and Doctor migrations remain unchanged.
 
 ### Synchronous plugin state
 
