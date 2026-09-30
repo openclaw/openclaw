@@ -206,6 +206,22 @@ function createSharedStateWorkerOwner() {
     };
     arm(SHARED_STATE_WORKER_IDLE_INSPECT_MS, true);
   };
+  const retireAfterFailure = async (
+    entry: Entry,
+    error: unknown,
+    stage: "admission" | "binding",
+  ): Promise<never> => {
+    try {
+      await retire(entry);
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        `Shared-state worker ${stage} and cleanup failed`,
+        { cause: cleanupError },
+      );
+    }
+    throw error;
+  };
   const retainOperation = (store: Store) => {
     const entry = [...stores].find((candidate) => candidate.store === store);
     if (!entry) {
@@ -593,16 +609,7 @@ function createSharedStateWorkerOwner() {
       try {
         admission.assertCurrent();
       } catch (error) {
-        try {
-          await retire(entry);
-        } catch (cleanupError) {
-          throw new AggregateError(
-            [error, cleanupError],
-            "Shared-state worker admission and cleanup failed",
-            { cause: cleanupError },
-          );
-        }
-        throw error;
+        return retireAfterFailure(entry, error, "admission");
       }
       assertCurrent?.();
       if (!store) {
@@ -632,16 +639,7 @@ function createSharedStateWorkerOwner() {
           entry.bound = true;
         }
       } catch (error) {
-        try {
-          await retire(entry);
-        } catch (cleanupError) {
-          throw new AggregateError(
-            [error, cleanupError],
-            "Shared-state worker binding and cleanup failed",
-            { cause: cleanupError },
-          );
-        }
-        throw error;
+        return retireAfterFailure(entry, error, "binding");
       }
       const retirement = retireInvalidEntry(entry);
       if (retirement) {

@@ -369,6 +369,7 @@ async function updateFinalizeCommandInternal(
               options: { repair: true, nonInteractive: true, json: opts.json },
               runtime: { ...defaultRuntime, log: defaultRuntime.error },
             });
+            lifecycle.serviceUpdateVerdict = maintenance?.serviceUpdateVerdict;
             // Fresh Doctor owns database fences; the parent retains service custody.
             await maintenance?.releaseState();
           },
@@ -377,8 +378,8 @@ async function updateFinalizeCommandInternal(
       return await lifecycle.run(
         "plugins",
         (phase) =>
-          withPluginLifecycleLease(phase, async () => {
-            return await withCommandProcessScope(async () => {
+          withPluginLifecycleLease(phase, () =>
+            withCommandProcessScope(async () => {
               const preparedConfig = await preparePostCorePluginConfig({
                 requestedChannel,
                 preUpdateConfig: preFinalizeConfig,
@@ -407,8 +408,8 @@ async function updateFinalizeCommandInternal(
                 assertCurrent: phase.assertCurrent,
                 runtime: createNonExitingRuntime(),
               });
-            });
-          }),
+            }),
+          ),
         pluginOutcome,
       );
     });

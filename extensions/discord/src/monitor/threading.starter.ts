@@ -225,8 +225,7 @@ export function sanitizeDiscordThreadName(rawName: string, fallbackId: string): 
     .replace(/\s+/g, " ")
     .trim();
   const baseSource = cleanedName || `Thread ${fallbackId}`;
-  const base = truncateUtf16Safe(baseSource, 80);
-  return base || `Thread ${fallbackId}`;
+  return truncateUtf16Safe(baseSource, 80);
 }
 
 export function resolveDiscordReplyDeliveryPlan(params: {

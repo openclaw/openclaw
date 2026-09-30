@@ -130,7 +130,7 @@ export async function consumeAnthropicStream(params: {
       const key = eventIndexKey(eventIndex);
       let contentIndex = indexes.get(key);
       let block = contentIndex === undefined ? undefined : blocks[contentIndex];
-      if (!block || block.type !== kind) {
+      if (contentIndex === undefined || !block || block.type !== kind) {
         block =
           kind === "thinking"
             ? { type: "thinking", thinking: "", thinkingSignature: "reasoning_content" }
@@ -139,9 +139,6 @@ export async function consumeAnthropicStream(params: {
         contentIndex = output.content.length - 1;
         indexes.set(key, contentIndex);
         eventSink.push({ type: `${kind}_start`, contentIndex, partial: output });
-      }
-      if (contentIndex === undefined) {
-        return false;
       }
       if (block.type === "thinking") {
         appendAssistantThinking(block, text);
@@ -268,72 +265,56 @@ export async function consumeAnthropicStream(params: {
           continue;
         }
         pendingThinkingSignatures.delete(index);
-        if (contentBlock?.type === "text") {
-          const text =
-            typeof contentBlock.text === "string"
-              ? sanitizeTransportPayloadText(contentBlock.text)
-              : "";
-          const block: AnthropicStreamBlock = { type: "text", text, index };
+        if (
+          contentBlock?.type === "text" ||
+          contentBlock?.type === "thinking" ||
+          contentBlock?.type === "redacted_thinking"
+        ) {
+          const block: AnthropicStreamBlock =
+            contentBlock.type === "text"
+              ? {
+                  type: "text",
+                  text:
+                    typeof contentBlock.text === "string"
+                      ? sanitizeTransportPayloadText(contentBlock.text)
+                      : "",
+                  index,
+                }
+              : contentBlock.type === "thinking"
+                ? {
+                    type: "thinking",
+                    thinking:
+                      typeof contentBlock.thinking === "string" ? contentBlock.thinking : "",
+                    thinkingSignature:
+                      typeof contentBlock.signature === "string" ? contentBlock.signature : "",
+                    index,
+                  }
+                : {
+                    type: "thinking",
+                    thinking: "[Reasoning redacted]",
+                    thinkingSignature:
+                      typeof contentBlock.data === "string" ? contentBlock.data : "",
+                    redacted: true,
+                    index,
+                  };
+          const kind = block.type;
+          const delta = block.type === "text" ? block.text : block.redacted ? "" : block.thinking;
           output.content.push(block);
           const contentIndex = output.content.length - 1;
           blockIndexes.set(index, contentIndex);
           eventSink.push({
-            type: "text_start",
+            type: `${kind}_start`,
             contentIndex,
             partial: output,
           });
-          if (text.length > 0) {
+          if (delta.length > 0) {
             eventSink.push({
-              type: "text_delta",
+              type: `${kind}_delta`,
               contentIndex,
-              delta: text,
+              delta,
               partial: output,
             });
           }
-          continue;
-        }
-        if (contentBlock?.type === "thinking") {
-          const thinking = typeof contentBlock.thinking === "string" ? contentBlock.thinking : "";
-          const block: AnthropicStreamBlock = {
-            type: "thinking",
-            thinking,
-            thinkingSignature:
-              typeof contentBlock.signature === "string" ? contentBlock.signature : "",
-            index,
-          };
-          output.content.push(block);
-          const contentIndex = output.content.length - 1;
-          blockIndexes.set(index, contentIndex);
-          eventSink.push({
-            type: "thinking_start",
-            contentIndex,
-            partial: output,
-          });
-          if (thinking.length > 0) {
-            eventSink.push({
-              type: "thinking_delta",
-              contentIndex,
-              delta: thinking,
-              partial: output,
-            });
-          }
-          continue;
-        }
-        if (contentBlock?.type === "redacted_thinking") {
-          const block: AnthropicStreamBlock = {
-            type: "thinking",
-            thinking: "[Reasoning redacted]",
-            thinkingSignature: typeof contentBlock.data === "string" ? contentBlock.data : "",
-            redacted: true,
-            index,
-          };
-          output.content.push(block);
-          blockIndexes.set(index, output.content.length - 1);
-          eventSink.push({
-            type: "thinking_start",
-            contentIndex: output.content.length - 1,
-            partial: output,
-          });
           continue;
         }
         if (contentBlock?.type === "tool_use") {

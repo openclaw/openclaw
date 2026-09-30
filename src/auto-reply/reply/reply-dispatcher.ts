@@ -314,6 +314,16 @@ export function createReplyDispatcher(
   });
 
   const unregister = registerDispatcher(() => pending);
+  const releasePending = () => {
+    pending -= 1;
+    if (pending === 1 && completeCalled) {
+      pending -= 1;
+    }
+    if (pending === 0) {
+      unregister();
+      notifyIdle();
+    }
+  };
 
   const reportObserverError = (err: unknown, info: ReplyDispatchRuntimeInfo) => {
     invokeReplyDispatcherObserver(() => options.onError?.(err, info));
@@ -611,14 +621,7 @@ export function createReplyDispatcher(
         } catch (err: unknown) {
           reportObserverError(err, dispatchInfo);
         }
-        pending -= 1;
-        if (pending === 1 && completeCalled) {
-          pending -= 1;
-        }
-        if (pending === 0) {
-          unregister();
-          notifyIdle();
-        }
+        releasePending();
       }
     });
     return true;
@@ -633,13 +636,8 @@ export function createReplyDispatcher(
     // schedule clearing the reservation after current microtasks complete.
     // This gives any in-flight enqueue() calls a chance to increment pending.
     void Promise.resolve().then(() => {
-      if (pending === 1 && completeCalled) {
-        // Still just the reservation, no replies were enqueued
-        pending -= 1;
-        if (pending === 0) {
-          unregister();
-          notifyIdle();
-        }
+      if (pending === 1) {
+        releasePending();
       }
     });
   };

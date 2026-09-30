@@ -1,6 +1,13 @@
 import { randomUUID } from "node:crypto";
-import type { AssistantMessageEvent, Model } from "@openclaw/llm-core";
+import type {
+  AssistantMessageEvent,
+  Model,
+  TextContent as TextBlock,
+  ThinkingContent as ThinkingBlock,
+  ToolCall,
+} from "@openclaw/llm-core";
 import { appendAssistantThinking } from "@openclaw/llm-core/event-stream";
+import { readNonEmptyStringPreservingWhitespace } from "@openclaw/normalization-core/string-coerce";
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import type { OpenAICompletionsOptions } from "../provider-options.js";
 import {
@@ -80,17 +87,13 @@ function extractToolCallThoughtSignature(toolCall: unknown): string | undefined 
   const extra = (tc.extra_content as Record<string, unknown> | undefined)?.google as
     | Record<string, unknown>
     | undefined;
-  const fromExtra = extra?.thought_signature;
-  if (typeof fromExtra === "string" && fromExtra.length > 0) {
-    return fromExtra;
-  }
-  const fromFunction = (tc.function as { thought_signature?: unknown } | undefined)
-    ?.thought_signature;
-  if (typeof fromFunction === "string" && fromFunction.length > 0) {
-    return fromFunction;
-  }
-  const fromToolCall = tc.thought_signature;
-  return typeof fromToolCall === "string" && fromToolCall.length > 0 ? fromToolCall : undefined;
+  return (
+    readNonEmptyStringPreservingWhitespace(extra?.thought_signature) ??
+    readNonEmptyStringPreservingWhitespace(
+      (tc.function as { thought_signature?: unknown } | undefined)?.thought_signature,
+    ) ??
+    readNonEmptyStringPreservingWhitespace(tc.thought_signature)
+  );
 }
 
 export async function processCompletionsStream(
@@ -112,16 +115,7 @@ export async function processCompletionsStream(
   if (options?.strictReasoningTags) {
     reasoningTagTextPartitioner.markStrict();
   }
-  type ToolCallBlock = {
-    type: "toolCall";
-    id: string;
-    name: string;
-    arguments: Record<string, unknown>;
-    partialArgs: string;
-    thoughtSignature?: string;
-  };
-  type TextBlock = { type: "text"; text: string; textSignature?: string };
-  type ThinkingBlock = { type: "thinking"; thinking: string; thinkingSignature?: string };
+  type ToolCallBlock = ToolCall & { partialArgs: string };
   let currentBlock: TextBlock | ThinkingBlock | ToolCallBlock | null = null;
   let directTextBlock: TextBlock | null = null;
   let directThinkingBlock: ThinkingBlock | null = null;

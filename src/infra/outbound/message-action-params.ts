@@ -59,10 +59,6 @@ type StructuredAttachmentSource = {
 
 type StructuredAttachmentMode = "selected" | "all";
 
-function readMediaParam(args: Record<string, unknown>, key: string): string | undefined {
-  return readToolStringParam(args, key, { trim: false });
-}
-
 function resolveMediaParamEntry(
   args: Record<string, unknown>,
   key: string,
@@ -71,7 +67,7 @@ function resolveMediaParamEntry(
   if (!resolvedKey) {
     return undefined;
   }
-  const value = readMediaParam(args, key);
+  const value = readToolStringParam(args, key, { trim: false });
   if (!value) {
     return undefined;
   }
@@ -225,18 +221,6 @@ export function collectActionMediaSourceHints(
     }
   }
   return sources;
-}
-
-function readAttachmentMediaHint(args: Record<string, unknown>): string | undefined {
-  return readMediaParam(args, "media") ?? readMediaParam(args, "mediaUrl");
-}
-
-function readAttachmentFileHint(args: Record<string, unknown>): string | undefined {
-  return (
-    readMediaParam(args, "path") ??
-    readMediaParam(args, "filePath") ??
-    readMediaParam(args, "fileUrl")
-  );
 }
 
 function resolveAttachmentMaxBytes(params: {
@@ -558,8 +542,13 @@ export async function hydrateAttachmentParamsForAction(params: {
   const optimizeImages = shouldHydrateUploadFile && forceDocument ? false : undefined;
   const allowMessageCaptionFallback = params.action === "sendAttachment" || shouldHydrateUploadFile;
   const attachmentSource = resolveStructuredAttachmentSource(params.args, params.extraParamKeys);
-  const mediaHint = readAttachmentMediaHint(params.args);
-  const fileHint = readAttachmentFileHint(params.args);
+  const mediaHint =
+    readToolStringParam(params.args, "media", { trim: false }) ??
+    readToolStringParam(params.args, "mediaUrl", { trim: false });
+  const fileHint =
+    readToolStringParam(params.args, "path", { trim: false }) ??
+    readToolStringParam(params.args, "filePath", { trim: false }) ??
+    readToolStringParam(params.args, "fileUrl", { trim: false });
   const contentTypeParam =
     readToolStringParam(params.args, "contentType") ??
     readToolStringParam(params.args, "mimeType") ??

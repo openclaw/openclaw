@@ -2159,6 +2159,9 @@ export const en: TranslationMap & {
       cancelFailed: "Could not confirm cancellation: {error}",
       sessionExpired:
         "The Gateway no longer has this setup session. It may already have finished. Close this dialog and choose Check again to review the current setup.",
+      gatewayNotResponding:
+        "The Gateway is not responding. Check that it is running, then try again.",
+      gatewayReconnecting: "The Gateway is not responding. Waiting for it to reconnect.",
       notComplete: "Sign-in finished, but model setup is not complete yet.",
     },
   },
@@ -3583,7 +3586,6 @@ export const en: TranslationMap & {
       sortUpdated: "Last updated",
       sessionMenu: "Actions for {session}",
       sessionMenuMany: "Actions for {count} sessions",
-      toolActivity: "Using {tool}",
       catalogDiscoveryHelp:
         "{error}. Configure automatic session discovery in Settings > Appearance > Session sources.",
       catalogPaginationFailed: "Session catalog returned a repeated page cursor",

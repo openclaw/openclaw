@@ -12,7 +12,6 @@ import {
 import type {
   NativeSubagentMonitorClient,
   NativeTurnEnd,
-  NativeTurnObservation,
   NativeTurnState,
   RecoveredCompletion,
   ThreadRecovery,
@@ -73,7 +72,6 @@ export class CodexNativeSubagentHistoryRecovery {
       predecessorNativeTurnId?: string;
       initialAssignment?: boolean;
       recordedCompletion?: RecoveredCompletion;
-      observedTurns?: readonly NativeTurnObservation[];
     },
   ): Promise<ThreadRecovery> {
     const { childThreadId } = assignment;
@@ -101,16 +99,6 @@ export class CodexNativeSubagentHistoryRecovery {
         return { resumable: false, threadState: "unavailable", observedPendingTurns: [] };
       }
     }
-    const firstObserved = options.observedTurns?.[0];
-    // Forked history can begin with copied parent turns. Only a native child
-    // end observed before successor starts can anchor an unlocated predecessor.
-    const observedPredecessor =
-      options.resumeInterrupted &&
-      firstObserved?.state &&
-      firstObserved.state !== "active" &&
-      !firstObserved.startObserved
-        ? firstObserved.turnId
-        : undefined;
     let initialTurnId: string | undefined;
     if (options.initialAssignment && !assignment.nativeTurnId && !recordedCompletion) {
       const forkedFromId = readString(thread, "forkedFromId");
@@ -142,11 +130,8 @@ export class CodexNativeSubagentHistoryRecovery {
         };
       }
     }
-    const turnId = assignment.nativeTurnId ?? initialTurnId ?? observedPredecessor;
-    const pendingTurnIds = new Set([
-      ...this.queries.getPendingTurnIds(childThreadId),
-      ...(options.observedTurns?.map((turn) => turn.turnId) ?? []),
-    ]);
+    const turnId = assignment.nativeTurnId ?? initialTurnId;
+    const pendingTurnIds = new Set(this.queries.getPendingTurnIds(childThreadId));
     const unresolvedAssignment = options.resumeInterrupted && !turnId && pendingTurnIds.size > 0;
     const observedPendingTurns: ThreadRecovery["observedPendingTurns"] = [];
     for (const turn of Array.isArray(thread.turns) ? thread.turns : []) {
@@ -275,7 +260,6 @@ export class CodexNativeSubagentHistoryRecovery {
     };
     return {
       ...lineage,
-      assignmentTurnId: turnId,
       nativeTurnId,
       nativeTurnState,
       observedPendingTurns,

@@ -4,7 +4,7 @@ import {
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
-import { isIncognitoSessionKey } from "../incognito-session.js";
+import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
 import type { CodexAppServerClient } from "./client.js";
 import {
   CODEX_SESSION_OVERRIDABLE_LAYER_TYPES,

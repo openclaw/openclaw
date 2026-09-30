@@ -89,7 +89,7 @@ describe("sessions_yield orchestration", () => {
           return pending;
         });
       registry.resetSubagentRegistryForTests({ persist: false });
-      registry.initSubagentRegistry();
+      await registry.initSubagentRegistry();
       const child = createSubagentRunRecord({
         runId: `cleanup-child-${owner}`,
         childSessionKey: `agent:main:subagent:cleanup-${owner}`,
@@ -134,7 +134,7 @@ describe("sessions_yield orchestration", () => {
           };
         });
       mockedRunEmbeddedAttempt.mockImplementationOnce(async () => {
-        registry.markRequesterTurnYielded({
+        await registry.markRequesterTurnYielded({
           requesterSessionKey: params.sessionKey,
           requesterAgentId: params.agentId,
           requesterTurnRunId: params.runId,
@@ -234,15 +234,18 @@ describe("sessions_yield orchestration", () => {
       const runs = new Map<string, SubagentRunRecord>();
       const persistOrThrow = vi.fn();
       const schedule = vi.fn();
+      const { createRequesterInitialTransferFixture } =
+        await import("../subagents/registry/subagent-registry-requester-yield.test-support.js");
+      const transfer = createRequesterInitialTransferFixture(runs, persistOrThrow);
       const markYield = vi
         .spyOn(registry, "markRequesterTurnYielded")
         .mockImplementation((claim) =>
-          markRequesterTurnYieldedInRuns({ ...claim, runs, persistOrThrow }),
+          markRequesterTurnYieldedInRuns({ ...claim, runs, transfer }),
         );
       const settle = vi
         .spyOn(registry, "settleRequesterAfterSessionSpawns")
         .mockImplementation((claim) =>
-          settleRequesterTurnAfterSessionSpawns({ ...claim, runs, persistOrThrow, schedule }),
+          settleRequesterTurnAfterSessionSpawns({ ...claim, runs, transfer, schedule }),
         );
       const acceptChild = (runId: string) => {
         const child = createSubagentRunRecord({
@@ -293,7 +296,7 @@ describe("sessions_yield orchestration", () => {
         })
         .mockImplementationOnce(async () => {
           const accepted = spawnOnRetry ? [acceptChild("child-after-retry")] : [];
-          markYield({
+          await markYield({
             requesterSessionKey: params.sessionKey,
             requesterAgentId: params.agentId,
             requesterTurnRunId: params.runId,

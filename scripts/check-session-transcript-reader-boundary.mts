@@ -112,13 +112,9 @@ function importedModuleName(node: ts.ImportDeclaration | ts.ExportDeclaration) {
 }
 
 function bindingName(node: ts.BindingElement) {
-  if (node.propertyName && ts.isIdentifier(node.propertyName)) {
-    return node.propertyName.text;
-  }
-  if (node.name && ts.isIdentifier(node.name)) {
-    return node.name.text;
-  }
-  return null;
+  const name =
+    node.propertyName && ts.isIdentifier(node.propertyName) ? node.propertyName : node.name;
+  return name && ts.isIdentifier(name) ? name.text : null;
 }
 
 function destructuresLegacyNamespace(node: ts.BindingElement, legacyNamespaces: Set<string>) {

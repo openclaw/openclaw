@@ -1,4 +1,3 @@
-/** Session initialization path for ACP runtime handles and persisted manager metadata. */
 import {
   createIdentityFromEnsure,
   mergeSessionIdentity,
@@ -8,10 +7,7 @@ import { logVerbose } from "../../globals.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { AcpRuntimeError, withAcpRuntimeErrorBoundary } from "../runtime/errors.js";
 import type { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
-import {
-  closeSupersededRuntimeHandle,
-  createSupersededActorError,
-} from "./manager.runtime-handle-ensure.js";
+import { closeSupersededRuntimeHandle } from "./manager.runtime-handle-ensure.js";
 import {
   assertAcpRuntimeOwnerSupport,
   persistedAcpRuntimeHandle,
@@ -23,13 +19,13 @@ import type {
   SessionEntry,
   WriteManagerSessionMeta,
 } from "./manager.types.js";
+import { assertCurrentAcpActor, createSupersededActorError } from "./manager.utils.js";
 import {
   normalizeRuntimeOptions,
   normalizeText,
   validateRuntimeOptionPatch,
 } from "./runtime-options.js";
 
-/** Initializes an ACP runtime session and persists its metadata before caching the handle. */
 export async function runManagerInitializeSession(params: {
   input: AcpInitializeSessionInput;
   sessionKey: string;
@@ -46,9 +42,7 @@ export async function runManagerInitializeSession(params: {
 }> {
   const { input, sessionKey, agentId } = params;
   const isCurrentActor = params.isCurrentActor ?? (() => true);
-  if (!isCurrentActor()) {
-    throw createSupersededActorError(sessionKey);
-  }
+  assertCurrentAcpActor(isCurrentActor(), sessionKey);
   const backend = params.deps.requireRuntimeBackend(input.backendId || input.cfg.acp?.backend);
   const runtime = backend.runtime;
   assertAcpRuntimeOwnerSupport(runtime, params);
@@ -61,9 +55,7 @@ export async function runManagerInitializeSession(params: {
   const requestedModel = initialRuntimeOptions.model;
   const requestedThinking = initialRuntimeOptions.thinking;
   const assertCurrent = () => {
-    if (!isCurrentActor()) {
-      throw createSupersededActorError(sessionKey);
-    }
+    assertCurrentAcpActor(isCurrentActor(), sessionKey);
     input.assertActive?.();
   };
   const previousMeta = (

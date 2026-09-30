@@ -110,7 +110,7 @@ async function fixture(runSetupScript = false, preparedNode = false) {
       throw new Error("placement authority closed");
     }
   };
-  const repository = store.create({
+  const repository = await store.create({
     ...session,
     url: "https://github.com/example/project.git",
     requestedRef: "refs/tags/v1.2.3",
@@ -223,7 +223,7 @@ it("accepts the initial SQLite and bare Git checkpoint before sync can finish or
     await prepared.publish();
   });
   f.resume.mockImplementationOnce(async () => {
-    expect(f.store.get(f.repository.workspaceId)?.checkpointRef).toBeTruthy();
+    expect((await f.store.get(f.repository.workspaceId))?.checkpointRef).toBeTruthy();
   });
   let finished = false;
   const pending = f.start({ runSetupScript: true }).then((result) => {
@@ -234,7 +234,7 @@ it("accepts the initial SQLite and bare Git checkpoint before sync can finish or
     await Promise.race([entered.promise, pending]);
     expect(finished).toBe(false);
     expect(f.resume).not.toHaveBeenCalled();
-    expect(f.store.get(f.repository.workspaceId)).toMatchObject({
+    expect(await f.store.get(f.repository.workspaceId)).toMatchObject({
       baseCommit: f.baseCommit,
       baseManifestHash: f.base.manifestRef,
       checkpointRef: null,
@@ -267,7 +267,7 @@ it("accepts the initial SQLite and bare Git checkpoint before sync can finish or
     },
   });
   await closeOpenClawStateDatabaseByPathAsync(f.store.path);
-  const accepted = f.store.get(f.repository.workspaceId);
+  const accepted = await f.store.get(f.repository.workspaceId);
   expect(accepted).toMatchObject({ manifestHash: result.manifestRef });
   expect(accepted?.checkpointRef).toMatch(/^refs\/openclaw\/worker-results\//u);
   await withSessionRepositoryCheckpoint(
@@ -297,7 +297,7 @@ it("does not run setup when the repository did not request it", async () => {
   await expect(fs.stat(path.join(f.remote, "setup.txt"))).rejects.toMatchObject({
     code: "ENOENT",
   });
-  expect(f.store.get(f.repository.workspaceId)?.checkpointRef).toBeTruthy();
+  expect((await f.store.get(f.repository.workspaceId))?.checkpointRef).toBeTruthy();
 });
 
 it("refuses requested setup without fresh authority instead of saving an incomplete initial state", async () => {
@@ -305,7 +305,7 @@ it("refuses requested setup without fresh authority instead of saving an incompl
   await expect(f.start({ runSetupScript: undefined })).rejects.toThrow("administrator");
   expect(prepareWorkerGitHubBinding).not.toHaveBeenCalled();
   expect(f.syncWorkspace).not.toHaveBeenCalled();
-  expect(f.store.get(f.repository.workspaceId)?.checkpointRef).toBeNull();
+  expect((await f.store.get(f.repository.workspaceId))?.checkpointRef).toBeNull();
 });
 
 it("refuses interrupted setup recovery before credentials or worker commands are requested", async () => {
@@ -313,7 +313,7 @@ it("refuses interrupted setup recovery before credentials or worker commands are
   await expect(f.start({ recovery: true, runSetupScript: true })).rejects.toThrow("administrator");
   expect(prepareWorkerGitHubBinding).not.toHaveBeenCalled();
   expect(f.syncWorkspace).not.toHaveBeenCalled();
-  expect(f.store.get(f.repository.workspaceId)).toEqual(f.repository);
+  expect(await f.store.get(f.repository.workspaceId)).toEqual(f.repository);
 });
 
 it("adopts completed setup, restores accepted repository edits, and retains the bound workspace on restart", async () => {
@@ -420,7 +420,7 @@ it("adopts completed setup, restores accepted repository edits, and retains the 
     expect(await requireWorkspaceResultGit(f.remote, ["config", "--local", "user.email"])).toBe(
       gitAuthor.email,
     );
-    const initialCheckpoint = f.store.get(f.repository.workspaceId)!;
+    const initialCheckpoint = (await f.store.get(f.repository.workspaceId))!;
     await fs.writeFile(path.join(f.remote, "tracked.txt"), "accepted session edit\n");
     const edited = await captureWorkspaceManifest({ root: f.remote, baseCommit: f.baseCommit });
     const checkpoint = await stageSessionRepositoryCheckpoint({
@@ -434,14 +434,14 @@ it("adopts completed setup, restores accepted repository edits, and retains the 
       currentManifestRef: edited.manifestRef,
     });
     await checkpoint.publish();
-    const accepted = f.store.get(f.repository.workspaceId)!;
+    const accepted = (await f.store.get(f.repository.workspaceId))!;
     await fs.writeFile(path.join(f.remote, "tracked.txt"), "unaccepted replacement bytes\n");
     const restored = await f.start({ repository: accepted, recovery: true, preparedRepository });
     expect(restored.manifestRef).toBe(edited.manifestRef);
     expect(await fs.readFile(path.join(f.remote, "tracked.txt"), "utf8")).toBe(
       "accepted session edit\n",
     );
-    expect(f.store.get(f.repository.workspaceId)).toEqual(accepted);
+    expect(await f.store.get(f.repository.workspaceId)).toEqual(accepted);
 
     await fs.writeFile(path.join(f.remote, "unsaved.txt"), "keep across restart\n");
     await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath(env));
@@ -483,11 +483,11 @@ it("adopts completed setup, restores accepted repository edits, and retains the 
   }
   expect(prepareWorkerGitHubBinding).not.toHaveBeenCalled();
   expect(await fs.readFile(path.join(f.remote, "setup.txt"), "utf8")).toBe("already prepared\n");
-  expect(f.store.get(f.repository.workspaceId)).toMatchObject({
+  expect(await f.store.get(f.repository.workspaceId)).toMatchObject({
     baseCommit: f.baseCommit,
     baseManifestHash: f.base.manifestRef,
   });
-  expect(f.store.get(f.repository.workspaceId)?.checkpointRef).toBeTruthy();
+  expect((await f.store.get(f.repository.workspaceId))?.checkpointRef).toBeTruthy();
 });
 
 it.each(["commit", "source manifest"] as const)(
@@ -499,7 +499,7 @@ it.each(["commit", "source manifest"] as const)(
     f.syncWorkspace.mockClear();
     await expect(
       f.start({
-        repository: f.store.get(f.repository.workspaceId)!,
+        repository: (await f.store.get(f.repository.workspaceId))!,
         preparedRepository: {
           baseCommit: change === "commit" ? "f".repeat(40) : f.baseCommit,
           workspaceDir: f.remote,
@@ -536,7 +536,7 @@ it.each(["baseCommit", "baseManifestRef", "remoteWorkspaceDir"] as const)(
         },
       }),
     ).rejects.toThrow("attested prepared workspace");
-    expect(f.store.get(f.repository.workspaceId)).toEqual(f.repository);
+    expect(await f.store.get(f.repository.workspaceId)).toEqual(f.repository);
     expect(f.reconcileWorkspace).not.toHaveBeenCalled();
   },
 );
@@ -563,7 +563,7 @@ it.each(["identity", "sync", "verification"] as const)(
       });
     }
     await expect(f.start()).rejects.toThrow("placement authority closed");
-    expect(f.store.get(f.repository.workspaceId)?.checkpointRef).toBeNull();
+    expect((await f.store.get(f.repository.workspaceId))?.checkpointRef).toBeNull();
     if (phase === "identity") {
       expect(f.syncWorkspace).not.toHaveBeenCalled();
     }
@@ -588,7 +588,7 @@ it.each(["quiescence", "verification", "publication"] as const)(
       f.publish.mockRejectedValueOnce(failure);
     }
     await expect(f.start()).rejects.toThrow(failure.message);
-    expect(f.store.get(f.repository.workspaceId)?.checkpointRef).toBeNull();
+    expect((await f.store.get(f.repository.workspaceId))?.checkpointRef).toBeNull();
     expect(
       await requireWorkspaceResultGit(f.store.artifactPath(f.repository.workspaceId), [
         "for-each-ref",
@@ -605,7 +605,7 @@ it.each(["unchanged", "source commit", "base manifest", "accepted manifest"] as 
   async (change) => {
     const f = await fixture(true);
     const initial = await f.start({ runSetupScript: true });
-    const accepted = f.store.get(f.repository.workspaceId)!;
+    const accepted = (await f.store.get(f.repository.workspaceId))!;
     f.quiesceWorkspace.mockClear();
     f.reconcileWorkspace.mockClear();
     const restored: WorkerWorkspaceSyncResult = {
@@ -638,7 +638,7 @@ it.each(["unchanged", "source commit", "base manifest", "accepted manifest"] as 
         change === "accepted manifest" ? "accepted checkpoint" : "pinned source baseline",
       );
     }
-    expect(f.store.get(accepted.workspaceId)).toEqual(accepted);
+    expect(await f.store.get(accepted.workspaceId)).toEqual(accepted);
     expect(f.quiesceWorkspace).not.toHaveBeenCalled();
     expect(f.reconcileWorkspace).not.toHaveBeenCalled();
   },

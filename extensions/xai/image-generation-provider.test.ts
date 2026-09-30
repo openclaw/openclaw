@@ -9,16 +9,13 @@ type GenerateImageParams = Parameters<
 const {
   resolveApiKeyForProviderMock,
   postJsonRequestMock,
-  postMultipartRequestMock,
   assertOkOrThrowHttpErrorMock,
   resolveProviderHttpRequestConfigMock,
   createProviderOperationDeadlineMock,
   resolveProviderOperationTimeoutMsMock,
-  sanitizeConfiguredModelProviderRequestMock,
 } = vi.hoisted(() => ({
   resolveApiKeyForProviderMock: vi.fn(async () => ({ apiKey: "xai-key" })),
   postJsonRequestMock: vi.fn(),
-  postMultipartRequestMock: vi.fn(),
   assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
   resolveProviderHttpRequestConfigMock: vi.fn((params: Record<string, unknown>) => {
     const headers = new Headers(params.defaultHeaders as HeadersInit | undefined);
@@ -36,7 +33,6 @@ const {
   resolveProviderOperationTimeoutMsMock: vi.fn(
     (params: Record<string, unknown>) => params.defaultTimeoutMs ?? 60000,
   ),
-  sanitizeConfiguredModelProviderRequestMock: vi.fn((request) => request),
 }));
 
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
@@ -51,11 +47,9 @@ vi.mock("openclaw/plugin-sdk/provider-http", async () => {
     assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
     createProviderOperationDeadline: createProviderOperationDeadlineMock,
     postJsonRequest: postJsonRequestMock,
-    postMultipartRequest: postMultipartRequestMock,
     readProviderJsonResponse: actual.readProviderJsonResponse,
     resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
     resolveProviderOperationTimeoutMs: resolveProviderOperationTimeoutMsMock,
-    sanitizeConfiguredModelProviderRequest: sanitizeConfiguredModelProviderRequestMock,
   };
 });
 
@@ -109,7 +103,6 @@ describe("xai image generation provider", () => {
     resolveProviderHttpRequestConfigMock.mockClear();
     createProviderOperationDeadlineMock.mockClear();
     resolveProviderOperationTimeoutMsMock.mockClear();
-    sanitizeConfiguredModelProviderRequestMock.mockClear();
   });
 
   it("builds provider with correct models, default, and capabilities", () => {

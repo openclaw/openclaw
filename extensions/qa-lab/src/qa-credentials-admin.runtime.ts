@@ -188,46 +188,25 @@ export async function diagnoseQaCredentialBroker(options: AdminBaseOptions = {})
   const checks: QaCredentialDoctorCheck[] = [];
   const siteUrl = options.siteUrl?.trim() || env.OPENCLAW_QA_CONVEX_SITE_URL?.trim();
   const endpointPrefix = options.endpointPrefix?.trim() || env.OPENCLAW_QA_CONVEX_ENDPOINT_PREFIX;
-  let normalizedSiteUrl: string | null = null;
-  let normalizedEndpointPrefix: string | null = null;
-
-  if (!siteUrl) {
-    checks.push({
-      name: "OPENCLAW_QA_CONVEX_SITE_URL",
-      status: "fail",
-      details: "missing Convex credential broker site URL",
-    });
-  } else {
+  const checkSetting = (name: string, resolve: () => string) => {
     try {
-      normalizedSiteUrl = normalizeConvexSiteUrl(siteUrl, env);
-      checks.push({
-        name: "OPENCLAW_QA_CONVEX_SITE_URL",
-        status: "pass",
-        details: normalizedSiteUrl,
-      });
+      const details = resolve();
+      checks.push({ name, status: "pass", details });
+      return details;
     } catch (error) {
-      checks.push({
-        name: "OPENCLAW_QA_CONVEX_SITE_URL",
-        status: "fail",
-        details: formatErrorMessage(error),
-      });
+      checks.push({ name, status: "fail", details: formatErrorMessage(error) });
+      return null;
     }
-  }
-
-  try {
-    normalizedEndpointPrefix = normalizeEndpointPrefix(endpointPrefix);
-    checks.push({
-      name: "OPENCLAW_QA_CONVEX_ENDPOINT_PREFIX",
-      status: "pass",
-      details: normalizedEndpointPrefix,
-    });
-  } catch (error) {
-    checks.push({
-      name: "OPENCLAW_QA_CONVEX_ENDPOINT_PREFIX",
-      status: "fail",
-      details: formatErrorMessage(error),
-    });
-  }
+  };
+  const normalizedSiteUrl = checkSetting("OPENCLAW_QA_CONVEX_SITE_URL", () => {
+    if (!siteUrl) {
+      throw new Error("missing Convex credential broker site URL");
+    }
+    return normalizeConvexSiteUrl(siteUrl, env);
+  });
+  const normalizedEndpointPrefix = checkSetting("OPENCLAW_QA_CONVEX_ENDPOINT_PREFIX", () =>
+    normalizeEndpointPrefix(endpointPrefix),
+  );
 
   for (const [name, requiredFor] of [
     ["OPENCLAW_QA_CONVEX_SECRET_CI", "live lane leasing"],
@@ -241,24 +220,14 @@ export async function diagnoseQaCredentialBroker(options: AdminBaseOptions = {})
     });
   }
 
-  try {
+  checkSetting("OPENCLAW_QA_CREDENTIAL_HTTP_TIMEOUT_MS", () => {
     const timeoutMs = parsePositiveIntegerEnv(
       env,
       "OPENCLAW_QA_CREDENTIAL_HTTP_TIMEOUT_MS",
       DEFAULT_HTTP_TIMEOUT_MS,
     );
-    checks.push({
-      name: "OPENCLAW_QA_CREDENTIAL_HTTP_TIMEOUT_MS",
-      status: "pass",
-      details: `${timeoutMs}ms`,
-    });
-  } catch (error) {
-    checks.push({
-      name: "OPENCLAW_QA_CREDENTIAL_HTTP_TIMEOUT_MS",
-      status: "fail",
-      details: formatErrorMessage(error),
-    });
-  }
+    return `${timeoutMs}ms`;
+  });
 
   if (normalizedSiteUrl && normalizedEndpointPrefix && env.OPENCLAW_QA_CONVEX_SECRET_MAINTAINER) {
     try {

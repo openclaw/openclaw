@@ -319,7 +319,7 @@ describe("PlaywrightDiffScreenshotter", () => {
     );
   });
 
-  it("preserves render errors after a browser page has opened", async () => {
+  it("limits hydration waits and preserves errors after a browser page has opened", async () => {
     const browser = createMockBrowser([]);
     const page = createMockPage();
     page.waitForFunction.mockRejectedValue(new Error("hydration timeout"));
@@ -333,6 +333,10 @@ describe("PlaywrightDiffScreenshotter", () => {
     await expect(screenshotter.screenshotHtml(screenshotParams())).rejects.toThrow(
       "hydration timeout",
     );
+    expect(page.waitForFunction).toHaveBeenCalledWith(expect.any(Function), undefined, {
+      timeout: 10_000,
+    });
+    expect(page.close).toHaveBeenCalledOnce();
   });
 });
 

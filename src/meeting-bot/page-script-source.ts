@@ -1,3 +1,5 @@
+import { MEETING_AUDIO_BRIDGE_SOURCE } from "./audio-bridge-source.js";
+
 type MeetingPageScriptGlobals = {
   audioOutputs: string;
   captionArchive: string;
@@ -108,6 +110,7 @@ export function createMeetingTranscriptSource(params: {
 function createMeetingOwnedAudioLeaveSource(params: { audioOutputsGlobal: string }): string {
   const audioOutputsGlobal = pageGlobalSource(params.audioOutputsGlobal);
   return `const retireOwnedAudioBridges = () => {
+    ${MEETING_AUDIO_BRIDGE_SOURCE}
     const entries = Array.isArray(${audioOutputsGlobal})
       ? ${audioOutputsGlobal}
       : [];
@@ -121,39 +124,7 @@ function createMeetingOwnedAudioLeaveSource(params: { audioOutputsGlobal: string
         retained.push(entry);
         continue;
       }
-      const mediaSourceUrl = (element) => String(element?.currentSrc || element?.src || "");
-      const sources = Array.isArray(entry?.sources)
-        ? entry.sources
-        : entry?.source
-          ? [{ element: entry.source, muted: Boolean(entry.sourceMuted), stream: entry.stream, url: entry.sourceUrl }]
-          : [];
-      for (const source of sources) {
-        const element = source?.element;
-        const sourceMatches = source?.stream || element?.srcObject
-          ? element?.srcObject === source?.stream
-          : Boolean(source?.url && mediaSourceUrl(element) === source.url);
-        const sourceIsEmpty = Boolean(element && !element.srcObject && !mediaSourceUrl(element));
-        if (!element) continue;
-        if (sourceIsEmpty) {
-          element.muted = true;
-          continue;
-        }
-        if (!sourceMatches) continue;
-        const detachedLiveSource = Boolean(
-          element.isConnected === false &&
-          element.srcObject?.getAudioTracks?.().some((track) => track.readyState === "live")
-        );
-        if (detachedLiveSource) {
-          element.muted = true;
-          element.pause?.();
-          element.srcObject = null;
-        } else {
-          element.muted = Boolean(source.muted);
-        }
-      }
-      entry?.bridge?.pause?.();
-      if (entry?.bridge) entry.bridge.srcObject = null;
-      entry?.bridge?.remove?.();
+      retireAudioBridge(entry);
     }
     if (retained.length > 0) ${audioOutputsGlobal} = retained;
     else delete ${audioOutputsGlobal};

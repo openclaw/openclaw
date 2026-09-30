@@ -594,7 +594,7 @@ public final class OpenClawChatViewModel {
         self.isTransportDetached = true
         let transport = self.transport
         Task { await transport.releaseActiveSessionSubscription() }
-        self.invalidateSourceContext()
+        self.sourcePreviewState.invalidate()
         self.endPendingToolActivities()
         self.eventTask?.cancel()
         self.bootstrapTask?.cancel()
@@ -660,12 +660,12 @@ public final class OpenClawChatViewModel {
         let agentChanged = self.activeAgentId != nextAgentId
         let contractChanged = self.sessionRoutingContract != nextContract
         guard agentChanged || contractChanged else {
-            if blocksAttachmentOwnerChange {
+            if isAttachmentOwnerPinned {
                 self.deferredDeliveryIdentity = nil
             }
             return
         }
-        if blocksAttachmentOwnerChange {
+        if isAttachmentOwnerPinned {
             self.deferredDeliveryIdentity = DeferredDeliveryIdentity(
                 activeAgentID: nextAgentId,
                 sessionRoutingContract: nextContract)
@@ -752,6 +752,11 @@ extension OpenClawChatViewModel {
         if self.messages.count != previousCount {
             self.markTimelineChanged()
         }
+    }
+
+    func clearStreamingActivity() {
+        self.turnToolCallsById = [:]
+        self.updateStreamingAssistantText(nil)
     }
 
     func updateStreamingAssistantText(_ text: String?) {
@@ -872,8 +877,7 @@ extension OpenClawChatViewModel {
         self.invalidateOutboxBranchReconciliation()
         self.healthOK = false
         clearPendingRuns(reason: nil)
-        self.turnToolCallsById = [:]
-        self.updateStreamingAssistantText(nil)
+        self.clearStreamingActivity()
         self.updateActiveSessionRunWithoutChatSnapshot(false)
         self.sessionId = nil
         let historyRequest = self.beginHistoryRequest(captureLatestUserTurn: requestedSessionKey == nil)
@@ -977,8 +981,7 @@ extension OpenClawChatViewModel {
             if refresh.sessionHasActiveRun,
                Self.hasUnansweredLatestUser(in: self.messages)
             {
-                self.turnToolCallsById = [:]
-                self.updateStreamingAssistantText(nil)
+                self.clearStreamingActivity()
                 // Keep a known run ID authoritative so its stream and terminal
                 // events still route here. Synthesize activity only after the
                 // client has no run identity to preserve.
@@ -988,8 +991,7 @@ extension OpenClawChatViewModel {
                 clearPendingRuns(
                     reason: nil,
                     hapticEvent: assistantHapticEventAfterLatestUser())
-                self.turnToolCallsById = [:]
-                self.updateStreamingAssistantText(nil)
+                self.clearStreamingActivity()
             }
         }
         await pollHealthIfNeeded(force: true, sessionSnapshot: context.session)
@@ -1165,7 +1167,7 @@ extension OpenClawChatViewModel {
             self.errorText = "This connection cannot open that agent's conversation. Reconnect and try again."
             return
         }
-        if blocksAttachmentOwnerChange {
+        if isAttachmentOwnerPinned {
             switch intent {
             case .externalSync:
                 self.deferredExternalSessionKey = next
@@ -1199,7 +1201,7 @@ extension OpenClawChatViewModel {
     }
 
     func applyDeferredExternalStateIfReady() {
-        guard !blocksAttachmentOwnerChange else { return }
+        guard !isAttachmentOwnerPinned else { return }
         if let identity = deferredDeliveryIdentity {
             self.deferredDeliveryIdentity = nil
             self.syncDeliveryIdentity(
@@ -1245,8 +1247,7 @@ extension OpenClawChatViewModel {
         self.provisionalFinalMessagesByID.removeAll()
         resetOutboxPresentationForSessionSwitch()
         self.sessionId = nil
-        self.turnToolCallsById = [:]
-        self.updateStreamingAssistantText(nil)
+        self.clearStreamingActivity()
         self.clearProgressCard()
         self.updateActiveSessionRunWithoutChatSnapshot(false)
         self.activeSessionRunIDs = []

@@ -9,6 +9,7 @@ import {
   buildFullReleaseCandidateBinding,
   buildFullReleaseCandidateRequest,
 } from "../../scripts/full-release-candidate-contract.mjs";
+import type { FlakeClassification } from "../../scripts/full-release-flake-classification.mjs";
 import {
   createPublicationAdmission,
   createPublicationObservations,
@@ -20,12 +21,14 @@ import {
 } from "../../scripts/full-release-publication-contract.mjs";
 import {
   composeReleaseAttemptJobs,
+  buildReleaseValidationManifest,
   isReleaseGhArtifactMissingError,
   MAX_RELEASE_ARTIFACT_BYTES,
   releaseExecutionPlanSha256,
   terminalPolicyPass,
   validateReleaseChildDispatchBinding,
   validateReleaseCoveragePolicyBinding,
+  validateReleaseManifestAdvisoryJobs,
 } from "../../scripts/full-release-validation-policy.mjs";
 import {
   affectedActiveRunIds,
@@ -382,7 +385,7 @@ describe("full release execution plan", () => {
       role: "normalCi",
       runId: "999",
       runAttempt: 2,
-      workflowSha: "c".repeat(40),
+      workflowSha: SHA,
       workflowRef: "main",
       displayTitle: "CI full-release-validation-88-1-ci",
       sourceParentRunId: "88",
@@ -398,7 +401,7 @@ describe("full release execution plan", () => {
       runId: "999",
       runAttempt: 1,
       source: "reused",
-      workflowSha: "c".repeat(40),
+      workflowSha: SHA,
     });
     expect(hydrated.slice(1)).toEqual(original.children.slice(1));
     const sealed = { ...original, childReuse, children: hydrated };
@@ -415,7 +418,10 @@ describe("full release execution plan", () => {
         childReuse: { normalCi: { ...selection, runAttempt: 3 } },
       }),
     ).toThrow("digest");
-    const mismatched = { ...sealed, childReuse: { normalCi: { ...selection, workflowSha: SHA } } };
+    const mismatched = {
+      ...sealed,
+      childReuse: { normalCi: { ...selection, workflowSha: "c".repeat(40) } },
+    };
     mismatched.sha256 = releaseExecutionPlanSha256(mismatched);
     expect(() => validateReleaseExecutionPlanArtifact(mismatched)).toThrow("immutable plan");
     const changedTarget = {
@@ -445,6 +451,22 @@ describe("full release execution plan", () => {
         expect.objectContaining({ key: "normalCi", runId: "999", source: "reused" }),
       ]),
       blockers: [expect.objectContaining({ kind: "reused_evidence_invalid" })],
+    });
+    const differentTooling = runPlanSubprocess(
+      {
+        childPhaseVersion: 3,
+        childReuse: { normalCi: { ...selection, workflowSha: "c".repeat(40) } },
+      },
+      { PATH: `${root}${process.platform === "win32" ? ";" : ":"}${process.env.PATH}` },
+    );
+    expect(differentTooling.result.status).toBe(2);
+    expect(JSON.parse(readFileSync(differentTooling.output, "utf8"))).toMatchObject({
+      blockers: [
+        expect.objectContaining({
+          kind: "reused_evidence_invalid",
+          message: expect.stringContaining("same tooling is required"),
+        }),
+      ],
     });
     writeFileSync(gh, "#!/bin/sh\nprintf '%s\\n' 'HTTP 503: Service unavailable' >&2\nexit 1\n");
     const unavailable = runPlanSubprocess(
@@ -1375,77 +1397,417 @@ describe("release child attempt composition", () => {
 });
 
 describe("release decision policy", () => {
-  const nativeCiJobs = [
-    "checks-windows-node-test-1",
-    "checks-windows-node-test-2",
-    "macos-swift (tests)",
-    "macos-swift (packages)",
-  ].map((name) => ({ name, conclusion: "failure", status: "completed" }));
+  const windowsJob = {
+    name: "checks-windows-node-test-2",
+    conclusion: "failure",
+    status: "completed",
+    url: "https://example.invalid/windows",
+  };
+  const ciGate = { name: "openclaw/ci-gate", conclusion: "success", status: "completed" };
 
   it.each(["beta", "stable", "full"])(
-    "blocks %s publication on Windows Node and macOS Swift failures despite a green CI aggregate",
+    "reports Windows Node failures as policy advisory for %s publication",
     (releaseProfile) => {
       const snapshot = child("normalCi", {
-        conclusion: "success",
-        jobs: [
-          ...nativeCiJobs,
-          { name: "macos-node", conclusion: "success", status: "completed" },
-          { name: "openclaw/ci-gate", conclusion: "success", status: "completed" },
-        ],
+        conclusion: "failure",
+        jobs: [windowsJob, ciGate],
         status: "completed",
       });
-      const result = classifyReleaseSnapshot({
-        children: [snapshot],
-        releaseProfile,
-        workflowRef: "main",
-      });
+      const result = classifyReleaseSnapshot({ children: [snapshot], releaseProfile });
       expect(result).toMatchObject({
-        blockers: nativeCiJobs.map(({ name }) => ({ job: name })),
-        blockerCount: nativeCiJobs.length,
+        blockers: [],
+        blockerCount: 0,
         errors: [],
-        state: "blocked_complete",
+        state: "passed",
+        advisoryJobs: [
+          {
+            class: "windows-node-ci",
+            child: "normalCi",
+            job: windowsJob.name,
+            conclusion: "failure",
+            runId: snapshot.runId,
+            url: windowsJob.url,
+          },
+        ],
       });
-      expect(terminalPolicyPass(snapshot)).toBe(false);
-      expect(
-        formatReleaseStateOutcome(
-          buildReleaseStateArtifact({
-            children: [snapshot],
-            decision: result,
-            executionPlan: { parentRunAttempt: 1, sha256: "x" },
-            expected: { parentRunAttempt: 1, parentRunId: "77", targetSha: TARGET_SHA },
-            mode: "decision",
-            releaseProfile,
-            rerunGroup: "all",
-          }),
-        ),
-      ).toContain("- Blocker: checks-windows-node-test-1 (failure)");
+      expect(terminalPolicyPass(snapshot)).toBe(true);
+      const artifact = buildReleaseStateArtifact({
+        children: [snapshot],
+        decision: result,
+        executionPlan: { parentRunAttempt: 1, sha256: "a".repeat(64) },
+        expected: { parentRunAttempt: 1, parentRunId: "77", targetSha: TARGET_SHA },
+        mode: "decision",
+        releaseProfile,
+        rerunGroup: "all",
+      });
+      expect(validateReleaseStateArtifact(artifact).advisoryJobs).toEqual(result.advisoryJobs);
+      expect(formatReleaseStateOutcome(artifact)).toContain(
+        "- Advisory [windows-node-ci]: checks-windows-node-test-2 (failure) https://example.invalid/windows",
+      );
+      expect(() => validateReleaseStateArtifact({ ...artifact, advisoryJobs: [] })).toThrow(
+        /advisory jobs differ/u,
+      );
+      const manifest = buildReleaseValidationManifest({
+        plan: executionPlan(),
+        drain: artifact,
+        context: { releaseProfile, rerunGroup: "all", validationInputs: {} },
+      });
+      expect(manifest.version).toBe(4);
+      expect(manifest.advisoryJobs).toEqual(result.advisoryJobs);
     },
   );
 
-  it.each(["checks-node-core-test-nondist-shard", "checks-fast-core"])(
-    "reports CI %s alongside every native failure",
-    (name) => {
-      const result = classifyReleaseSnapshot({
-        children: [
-          child("normalCi", {
-            conclusion: "failure",
-            jobs: [
-              ...nativeCiJobs,
-              { name, conclusion: "failure", status: "completed" },
-              { name: "openclaw/ci-gate", conclusion: "failure", status: "completed" },
-            ],
-            status: "completed",
-          }),
-        ],
-        releaseProfile: "stable",
-        workflowRef: "main",
+  function recordedFlakeChild() {
+    const job = {
+      name: "checks-node-compact-small-19-3",
+      conclusion: "failure",
+      status: "completed",
+      acceptedRunAttempt: 1,
+      url: "https://github.com/openclaw/openclaw/actions/runs/101/job/1001",
+    };
+    const gateJob = {
+      ...job,
+      ...ciGate,
+      conclusion: "failure",
+      url: "https://github.com/openclaw/openclaw/actions/runs/101/job/1003",
+    };
+    const receipt: FlakeClassification = {
+      schema: "openclaw.frv-flake-classification.v1",
+      parentRunId: "77",
+      parentRunAttempt: 1,
+      child: "normalCi",
+      childRunId: "101",
+      childRunAttempt: 1,
+      targetSha: TARGET_SHA,
+      jobId: "1001",
+      jobName: job.name,
+      jobUrl: job.url,
+      conclusion: "failure",
+      trackingUrl: "https://github.com/openclaw/openclaw/issues/42",
+      reason: "The shared fixture leaks state; repair is tracked on main.",
+      classifiedBy: "release-maintainer",
+      receiptRunId: "901",
+      receiptRunAttempt: 1,
+    };
+    const preflight = { name: "preflight", result: "success", selected: true };
+    const lastEntry = { name: "pr-fail-fast", result: "skipped", selected: false };
+    const snapshot = {
+      ...child("normalCi", { conclusion: "failure", status: "completed" }),
+      jobs: [job, gateJob],
+      flakeClassifications: [receipt],
+      gateEntries: [
+        preflight,
+        { name: "checks-node-core-test-nondist-shard", result: "failure", selected: true },
+        lastEntry,
+      ],
+    };
+    return { snapshot, job, gateJob, receipt, preflight, lastEntry };
+  }
+
+  it.each([
+    { status: "completed", loaderFails: false },
+    { status: "completed", loaderFails: true },
+    { status: "in_progress", loaderFails: false },
+  ])(
+    "hydrates receipts only after child completion: $status, loader error=$loaderFails",
+    async ({ status, loaderFails }) => {
+      const {
+        snapshot: { flakeClassifications, gateEntries, ...snapshot },
+      } = recordedFlakeChild();
+      let classificationReads = 0;
+      const observed = await readChild(snapshot, undefined, undefined, {
+        parentRunId: "77",
+        parentRunAttempt: 1,
+        targetSha: TARGET_SHA,
+        readRun: async () => ({
+          actor: { login: "github-actions[bot]" },
+          triggering_actor: { login: "github-actions[bot]" },
+          conclusion: status === "completed" ? "failure" : null,
+          display_title: snapshot.displayTitle,
+          event: "workflow_dispatch",
+          head_branch: snapshot.workflowRef,
+          head_sha: SHA,
+          html_url: snapshot.url,
+          id: 101,
+          path: ".github/workflows/ci.yml",
+          repository: { full_name: "openclaw/openclaw" },
+          run_attempt: 1,
+          status,
+        }),
+        readAttemptJobs: async () => snapshot.jobs,
+        loadFlakeClassifications: async (binding) => {
+          classificationReads += 1;
+          expect(binding).toMatchObject({
+            parentRunId: "77",
+            parentRunAttempt: 1,
+            targetSha: TARGET_SHA,
+          });
+          if (loaderFails) {
+            throw new Error("receipt artifact digest differs");
+          }
+          return { flakeClassifications, gateEntries };
+        },
       });
-      expect(result.blockers.map((blocker) => blocker.job)).toEqual([
-        ...nativeCiJobs.map((job) => job.name),
-        name,
-        "openclaw/ci-gate",
-      ]);
-      expect(result.state).toBe("blocked_complete");
+      if (status !== "completed") {
+        expect(observed).toMatchObject({ status, errors: [] });
+        expect(classificationReads).toBe(0);
+        return;
+      }
+      expect(classificationReads).toBe(1);
+      const decision = classifyReleaseSnapshot({ children: [observed] });
+      expect(decision.state).toBe(loaderFails ? "orchestration_error" : "passed");
+      if (loaderFails) {
+        expect(decision.errors).toEqual([
+          expect.objectContaining({
+            kind: "api_error",
+            message: expect.stringContaining("receipt artifact digest differs"),
+          }),
+        ]);
+      } else {
+        expect(decision.advisoryJobs).toEqual([
+          expect.objectContaining({ class: "recorded-flake", receiptRunId: "901" }),
+        ]);
+      }
+    },
+  );
+
+  it("retains recorded matrix flakes with different gate names through state and manifest validation", () => {
+    const { snapshot, job, receipt } = recordedFlakeChild();
+    const result = classifyReleaseSnapshot({ children: [snapshot] });
+    expect(result).toMatchObject({
+      state: "passed",
+      blockers: [],
+      advisoryJobs: [
+        {
+          class: "recorded-flake",
+          child: "normalCi",
+          job: job.name,
+          conclusion: "failure",
+          runId: "101",
+          url: job.url,
+          jobId: "1001",
+          trackingUrl: receipt.trackingUrl,
+          reason: receipt.reason,
+          receiptRunId: "901",
+        },
+      ],
+    });
+    const artifact = buildReleaseStateArtifact({
+      children: [snapshot],
+      decision: result,
+      executionPlan: { parentRunAttempt: 1, sha256: "a".repeat(64) },
+      expected: { parentRunAttempt: 2, parentRunId: "77", targetSha: TARGET_SHA },
+      mode: "decision",
+      releaseProfile: "stable",
+      rerunGroup: "all",
+    });
+    const validated = validateReleaseStateArtifact(artifact);
+    assert(validated.children.normalCi, "normalCi evidence must survive validation");
+    expect(releaseStateChildEvidence(validated.children.normalCi)).toMatchObject({
+      flakeClassifications: snapshot.flakeClassifications,
+      gateEntries: snapshot.gateEntries,
+    });
+    expect(formatReleaseStateOutcome(artifact)).toContain(
+      `normalCi/${job.name} (failure) ${job.url} — ${receipt.reason} ${receipt.trackingUrl}`,
+    );
+    const manifest = buildReleaseValidationManifest({
+      plan: executionPlan(),
+      drain: validated,
+      context: { runId: "77", runAttempt: 2, releaseProfile: "stable", validationInputs: {} },
+    });
+    expect(validateReleaseManifestAdvisoryJobs(manifest)).toEqual(result.advisoryJobs);
+  });
+
+  it.each(["new job ID", "new attempt", "new job name", "other child", "cancelled job"])(
+    "blocks a recorded flake after %s changes accepted evidence",
+    (scenario) => {
+      const { snapshot, job } = recordedFlakeChild();
+      if (scenario === "new job ID") {
+        job.url = "https://github.com/openclaw/openclaw/actions/runs/101/job/1002";
+      }
+      if (scenario === "new attempt") {
+        job.acceptedRunAttempt = 2;
+      }
+      if (scenario === "new job name") {
+        job.name = "checks-node-other";
+      }
+      if (scenario === "other child") {
+        snapshot.key = "releaseChecksCandidate";
+      }
+      if (scenario === "cancelled job") {
+        job.conclusion = "cancelled";
+      }
+      expect(terminalPolicyPass(snapshot)).toBe(false);
+      expect(classifyReleaseSnapshot({ children: [snapshot] })).toMatchObject({
+        state: "blocked_complete",
+        advisoryJobs: [],
+      });
+    },
+  );
+
+  it.each([
+    { name: "checks-node-core-test-nondist-shard", result: "skipped", selected: true },
+    { name: "checks-node-core-test-nondist-shard", result: "cancelled", selected: true },
+    { name: "checks-node-core-test-nondist-shard", result: "missing", selected: true },
+    { name: "checks-node-core-test-nondist-shard", result: "failure", selected: false },
+    { name: "checks-node-core-test-nondist-shard", result: "failure", selected: "missing" },
+    { name: "checks-node-core-test-nondist-shard", result: "neutral", selected: true },
+  ])("blocks uncovered gate entry $name:$result:$selected", (entry) => {
+    const { snapshot: base, preflight, lastEntry } = recordedFlakeChild();
+    const snapshot = { ...base, gateEntries: [preflight, entry, lastEntry] };
+    expect(terminalPolicyPass(snapshot)).toBe(false);
+    expect(classifyReleaseSnapshot({ children: [snapshot] }).state).toBe("blocked_complete");
+  });
+
+  it.each([
+    "no entries",
+    "passing entries only",
+    "duplicate entries",
+    "missing gate",
+    "unclassified failure",
+  ])("requires complete gate coverage with %s", (scenario) => {
+    const { snapshot, preflight, gateJob } = recordedFlakeChild();
+    if (scenario === "no entries") {
+      snapshot.gateEntries = [];
+    }
+    if (scenario === "passing entries only") {
+      snapshot.gateEntries = snapshot.gateEntries.slice(0, 1);
+    }
+    if (scenario === "duplicate entries") {
+      snapshot.gateEntries.push(preflight);
+    }
+    if (scenario === "missing gate") {
+      snapshot.jobs.pop();
+    }
+    if (scenario === "unclassified failure") {
+      snapshot.jobs.push({ ...gateJob, name: "macos-node", conclusion: "failure" });
+    }
+    expect(terminalPolicyPass(snapshot)).toBe(false);
+  });
+
+  it.each([
+    "parent",
+    "parent attempt",
+    "child run",
+    "target",
+    "job success",
+    "denied job",
+    "advisory reason",
+    "gate coverage",
+  ])("rejects forged manifest %s evidence", (scenario) => {
+    const { snapshot, job, receipt } = recordedFlakeChild();
+    const manifest = {
+      runId: "77",
+      sourceParentRunAttempt: 1,
+      targetSha: TARGET_SHA,
+      childRuns: { normalCi: "101" },
+      childEvidence: { normalCi: snapshot },
+      advisoryJobs: classifyReleaseSnapshot({ children: [snapshot] }).advisoryJobs,
+    };
+    if (scenario === "parent") {
+      manifest.runId = "78";
+    }
+    if (scenario === "parent attempt") {
+      manifest.sourceParentRunAttempt = 2;
+    }
+    if (scenario === "child run") {
+      receipt.childRunId = "102";
+    }
+    if (scenario === "target") {
+      manifest.targetSha = SHA;
+    }
+    if (scenario === "job success") {
+      job.conclusion = "success";
+    }
+    if (scenario === "denied job") {
+      receipt.jobName = "build-artifacts";
+      job.name = receipt.jobName;
+    }
+    if (scenario === "advisory reason") {
+      receipt.reason = "A forged replacement reason is not the recorded advisory.";
+    }
+    if (scenario === "gate coverage") {
+      snapshot.gateEntries = [];
+    }
+    expect(() => validateReleaseManifestAdvisoryJobs(manifest)).toThrow(
+      scenario === "denied job" ? /job cannot be classified/u : undefined,
+    );
+  });
+
+  it.each([
+    ["normalCi", "macos-node"],
+    ["normalCi", "macos-swift (tests)"],
+    ["normalCi", "checks-node-core-test-nondist-shard"],
+    ["normalCi", "checks-fast-core"],
+    ["normalCi", "openclaw/ci-gate"],
+    ["normalCi", "checks-windows-packaged-install"],
+    ["releaseChecksCandidate", "checks-windows-node-test-2"],
+    ["releaseChecksCandidate", "install-smoke (linux)"],
+    ["releaseChecksCandidate", "upgrade-survivor"],
+    ["releaseChecksCandidate", "update-first-hop-compat / published driver"],
+    ["releaseChecksCandidate", "npm-pack"],
+    ["releaseChecksCandidate", "Run package acceptance / Package integrity"],
+    ["releaseChecksCandidate", "cross_os_release_checks / Linux / packaged upgrade"],
+    ["releaseChecksCandidate", "cross_os_release_checks / Windows / packaged fresh"],
+    ["releaseChecksCandidate", "cross_os_release_checks / Windows / packaged upgrade"],
+  ])("keeps %s / %s blocking alongside a Windows Node advisory", (key, name) => {
+    const failure = { name, conclusion: "failure", status: "completed" };
+    const snapshots = [
+      child("normalCi", {
+        status: "completed",
+        conclusion: "failure",
+        jobs:
+          key === "normalCi"
+            ? [windowsJob, failure, ...(name === ciGate.name ? [] : [ciGate])]
+            : [windowsJob, ciGate],
+      }),
+    ];
+    if (key !== "normalCi") {
+      snapshots.push(child(key, { status: "completed", conclusion: "failure", jobs: [failure] }));
+    }
+    const result = classifyReleaseSnapshot({ children: snapshots });
+    expect(result).toMatchObject({
+      state: "blocked_complete",
+      blockers: [{ child: key, job: name }],
+      advisoryJobs: [{ job: windowsJob.name }],
+    });
+  });
+
+  it("keeps parent npm qualification blocking alongside Windows Node advisory", () => {
+    const result = classifyReleaseSnapshot({
+      children: [
+        child("normalCi", {
+          status: "completed",
+          conclusion: "failure",
+          jobs: [windowsJob, ciGate],
+        }),
+      ],
+      localFailures: releasePlanGateFailures([
+        { name: "Qualify release npm artifacts", required: true, result: "failure" },
+      ]),
+    });
+    expect(result).toMatchObject({
+      state: "blocked_complete",
+      blockers: [{ child: "<parent>", job: "Qualify release npm artifacts" }],
+      advisoryJobs: [{ job: windowsJob.name }],
+    });
+  });
+
+  it.each(["cancelled", "missing gate", "skipped gate", "cancelled shard"])(
+    "refuses advisory-only success with %s",
+    (scenario) => {
+      const snapshot = child("normalCi", {
+        status: "completed",
+        conclusion: scenario === "cancelled" ? "cancelled" : "failure",
+        jobs: [
+          { ...windowsJob, conclusion: scenario === "cancelled shard" ? "cancelled" : "failure" },
+          ...(scenario === "missing gate"
+            ? []
+            : [{ ...ciGate, conclusion: scenario === "skipped gate" ? "skipped" : "success" }]),
+        ],
+      });
+      expect(terminalPolicyPass(snapshot)).toBe(false);
+      expect(classifyReleaseSnapshot({ children: [snapshot] }).state).toBe("blocked_complete");
     },
   );
 

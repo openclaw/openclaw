@@ -1,4 +1,3 @@
-/** Doctor checks and repairs for Docker sandbox images, namespaces, and registry state. */
 import fs from "node:fs";
 import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
@@ -56,11 +55,11 @@ function resolveSandboxScript(scriptRel: string): SandboxScriptInfo | null {
   return null;
 }
 
-async function runSandboxScript(scriptRel: string, runtime: RuntimeEnv): Promise<boolean> {
+async function runSandboxScript(scriptRel: string, runtime: RuntimeEnv): Promise<void> {
   const script = resolveSandboxScript(scriptRel);
   if (!script) {
     note(`Unable to locate ${scriptRel}. Run it from the repo root.`, "Sandbox");
-    return false;
+    return;
   }
 
   runtime.log(`Running ${scriptRel}...`);
@@ -74,11 +73,10 @@ async function runSandboxScript(scriptRel: string, runtime: RuntimeEnv): Promise
         result.stderr.trim() || result.stdout.trim() || "unknown error"
       }`,
     );
-    return false;
+    return;
   }
 
   runtime.log(`Completed ${scriptRel}.`);
-  return true;
 }
 
 async function isContainerEngineAvailable(command: "docker" | "podman"): Promise<boolean> {
@@ -264,26 +262,18 @@ export async function maybeRepairSandboxImages(
 
   const engineAvailable = await isContainerEngineAvailable(containerEngine.command);
   if (!engineAvailable) {
-    const lines =
+    const name = containerEngine.displayName;
+    const lines = [
+      `Sandbox mode is enabled (mode: "${mode}") but ${name} is not available.`,
       containerEngine.id === "docker"
-        ? [
-            `Sandbox mode is enabled (mode: "${mode}") but Docker is not available.`,
-            "Docker is required for sandbox mode to function.",
-            "Isolated sessions (automations, sub-agents) will fail without Docker.",
-            "",
-            "Options:",
-            "- Install Docker and restart the gateway",
-            "- Disable sandbox mode: openclaw config set agents.defaults.sandbox.mode off",
-          ]
-        : [
-            `Sandbox mode is enabled (mode: "${mode}") but Podman is not available.`,
-            "Podman is required by the selected sandbox backend.",
-            "Isolated sessions (automations, sub-agents) will fail without Podman.",
-            "",
-            "Options:",
-            "- Install Podman and restart the gateway",
-            "- Disable sandbox mode: openclaw config set agents.defaults.sandbox.mode off",
-          ];
+        ? "Docker is required for sandbox mode to function."
+        : "Podman is required by the selected sandbox backend.",
+      `Isolated sessions (automations, sub-agents) will fail without ${name}.`,
+      "",
+      "Options:",
+      `- Install ${name} and restart the gateway`,
+      "- Disable sandbox mode: openclaw config set agents.defaults.sandbox.mode off",
+    ];
     note(lines.join("\n"), "Sandbox");
     return cfg;
   }
@@ -385,7 +375,6 @@ export function legacySandboxRegistryInspectionToRepairEffect(
   };
 }
 
-/** Migrates legacy sandbox registry files and directories. */
 export async function maybeRepairSandboxRegistryFiles(prompter: DoctorPrompter): Promise<void> {
   const legacyFiles = await detectLegacySandboxRegistryFileIssues();
   if (legacyFiles.length === 0) {
@@ -413,7 +402,6 @@ export async function maybeRepairSandboxRegistryFiles(prompter: DoctorPrompter):
   }
 }
 
-/** Warns when agent sandbox overrides are ignored because sandbox scope resolves to shared. */
 export function noteSandboxScopeWarnings(cfg: OpenClawConfig) {
   const globalSandbox = cfg.agents?.defaults?.sandbox;
   const warnings: string[] = [];

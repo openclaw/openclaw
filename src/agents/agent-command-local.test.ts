@@ -33,6 +33,7 @@ import {
   releaseSessionMcpRuntime,
 } from "./agent-bundle-mcp-manager-api.js";
 import { unopenedMcpConfig } from "./agent-bundle-mcp-manager.test-support.js";
+import { SESSION_MCP_RUNTIME_MANAGER_KEY } from "./agent-bundle-mcp-runtime-shared.js";
 import type { SessionMcpRuntimeLease } from "./agent-bundle-mcp-types.js";
 import { runLocalAgentCommand } from "./agent-command-local.js";
 import { buildPreparedCliRunContext } from "./cli-runner.test-helpers.js";
@@ -82,12 +83,16 @@ vi.mock("./mcp-transport.js", () => ({ resolveMcpTransport: mocks.resolveTranspo
 let state: OpenClawTestState;
 let clock: ReturnType<typeof createGatewaySchedulerClock>;
 beforeEach(async () => {
+  await disposeAllSessionMcpRuntimes();
+  // A drained manager still retains the previous file's transport loader.
+  Reflect.deleteProperty(globalThis, SESSION_MCP_RUNTIME_MANAGER_KEY);
   clock = createGatewaySchedulerClock();
   mocks.scheduler.clock = clock.clock;
   state = await createOpenClawTestState({ label: "local-command-authority" });
 });
 afterEach(async () => {
   await disposeAllSessionMcpRuntimes();
+  Reflect.deleteProperty(globalThis, SESSION_MCP_RUNTIME_MANAGER_KEY);
   mocks.resolveTransport.mockReset();
   await resetPreparedModelRuntimeSnapshotsForTest();
   await clearActivePluginRegistry();

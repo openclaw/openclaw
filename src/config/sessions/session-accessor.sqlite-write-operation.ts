@@ -37,6 +37,7 @@ export type SqliteSessionWriteOperation =
   | "session.parent.fork-transcript"
   | "session.pending-input.stage"
   | "session.reclamation.in-process"
+  | "session.reclamation.prepare"
   | "session.reclamation.retain"
   | "session.reclamation.worker-commit"
   | "session.restart.recover"

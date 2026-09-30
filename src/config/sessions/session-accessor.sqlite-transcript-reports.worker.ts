@@ -115,7 +115,7 @@ export function bindSqliteWorkerBackend(
       requestSessionEntryCurrentAdmission(
         target.sessionEntryCurrentSource,
         request,
-        database,
+        { database },
         dispatch,
       ),
     );

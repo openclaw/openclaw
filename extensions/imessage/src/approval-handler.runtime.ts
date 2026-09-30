@@ -37,6 +37,7 @@ import {
   type IMessageApprovalConversationKey,
 } from "./approval-reactions.js";
 import { extractMarkdownFormatRuns } from "./markdown-format.js";
+import { normalizeIMessageMessageId } from "./message-guid.js";
 import { normalizeIMessageMessagingTarget } from "./normalize.js";
 import { getCachedIMessagePrivateApiStatus } from "./probe.js";
 import { sendMessageIMessage } from "./send.js";
@@ -260,13 +261,9 @@ async function deliverIMessageApprovalPoll(params: {
       question: extractMarkdownFormatRuns(params.question).text,
       choices: options.map((option) => option.text),
       suppressComment: true,
-      options: { ...cliOptions, chatGuid },
+      options: cliOptions,
     });
-    const reportedGuid = sent.messageId.trim();
-    const pollGuid =
-      reportedGuid && reportedGuid !== "ok" && reportedGuid !== "unknown"
-        ? reportedGuid
-        : undefined;
+    const pollGuid = normalizeIMessageMessageId(sent.messageId);
     const optionDecisions = mapSentPollOptionsToDecisions({
       requested: options,
       sent: sent.pollOptions,

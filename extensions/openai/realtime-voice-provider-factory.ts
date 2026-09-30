@@ -1,14 +1,14 @@
 import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 import type {
   RealtimeVoiceBrowserSession,
-  RealtimeVoiceBrowserSessionCreateRequest,
-  RealtimeVoiceProviderCapabilities,
-  RealtimeVoiceProviderConfig,
-  RealtimeVoiceProviderConfiguredContext,
   RealtimeVoiceProviderPlugin,
   RealtimeVoiceProviderResolveConfigContext,
 } from "openclaw/plugin-sdk/realtime-voice";
-import { REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ } from "openclaw/plugin-sdk/realtime-voice-provider";
+import {
+  type InternalRealtimeVoiceBrowserSessionCreateRequest,
+  type InternalRealtimeVoiceProviderApi,
+  REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+} from "openclaw/plugin-sdk/realtime-voice-provider";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { projectRealtimeVoicePublicProjection } from "./provider-policy-api.js";
 import { resolveOpenAIChatGptSubscriptionAuth } from "./realtime-auth.js";
@@ -51,61 +51,6 @@ type OpenAIQuicksilverBrowserSessionBroker = ReturnType<
   typeof createOpenAIQuicksilverBrowserSessionBroker
 >["broker"];
 
-type OpenAIInternalRealtimeBrowserSessionCreateRequest =
-  RealtimeVoiceBrowserSessionCreateRequest & {
-    agentId: string;
-    ownerConnId?: string;
-    workspaceDir: string;
-    initialItems: Array<{
-      role: "user" | "assistant";
-      text: string;
-    }>;
-  };
-
-type OpenAIInternalRealtimeVoiceCapabilities = RealtimeVoiceProviderCapabilities & {
-  handlesAgentConsult?: boolean;
-  supportsGatewayControl?: boolean;
-  voices?: readonly string[];
-  voiceSelectionPolicy?: "allowlist-default";
-  voicesByModel?: Record<string, readonly string[]>;
-};
-
-type OpenAIInternalRealtimeVoiceProviderApi = {
-  isBrowserSessionConfigured: (ctx: RealtimeVoiceProviderConfiguredContext) => boolean;
-  resolveBrowserSessionCapabilities?: (
-    ctx: RealtimeVoiceProviderConfiguredContext & {
-      model?: string;
-      clientControl?: RealtimeVoiceBrowserSessionCreateRequest["clientControl"];
-    },
-  ) => OpenAIInternalRealtimeVoiceCapabilities;
-  isGatewayRelayConfigured?: (ctx: RealtimeVoiceProviderConfiguredContext) => boolean | undefined;
-  resolveGatewayRelayCapabilities?: (ctx: {
-    cfg?: RealtimeVoiceBrowserSessionCreateRequest["cfg"];
-    providerConfig: RealtimeVoiceProviderConfig;
-    model?: string;
-  }) => OpenAIInternalRealtimeVoiceCapabilities;
-  projectPublicProjection?: (ctx: {
-    providerConfig: RealtimeVoiceProviderConfig;
-    config: RealtimeVoiceProviderConfig;
-  }) => {
-    config: RealtimeVoiceProviderConfig;
-    clientHints?: {
-      modelSource?: "gateway";
-      gatewayRelaySupported: boolean;
-    };
-  };
-  validateGatewayRelayLaunch?: (ctx: {
-    cfg?: RealtimeVoiceBrowserSessionCreateRequest["cfg"];
-    providerConfig: RealtimeVoiceProviderConfig;
-    model?: string;
-    autoRespondToAudio?: boolean;
-  }) => string | undefined;
-  cancelBrowserSession?: (
-    request: OpenAIInternalRealtimeBrowserSessionCreateRequest,
-    session: RealtimeVoiceBrowserSession,
-  ) => Promise<void> | void;
-};
-
 const INTERNAL_REALTIME_VOICE_PROVIDER = Symbol.for("openclaw.internal.realtime-voice-provider.v1");
 
 function resolveOpenAIRealtimeVoiceConfig(
@@ -144,7 +89,7 @@ function resolveOpenAIRealtimeVoiceConfig(
 }
 
 function buildOpenAIRealtimeBrowserSessionConfig(
-  req: OpenAIInternalRealtimeBrowserSessionCreateRequest,
+  req: InternalRealtimeVoiceBrowserSessionCreateRequest,
   config: OpenAIRealtimeVoiceProviderConfig,
   model: string,
   warn: OpenAIRealtimeHost["warn"],
@@ -195,7 +140,7 @@ function buildOpenAIRealtimeBrowserSessionConfig(
 }
 
 async function createOpenAIRealtimeBrowserSession(
-  req: OpenAIInternalRealtimeBrowserSessionCreateRequest,
+  req: InternalRealtimeVoiceBrowserSessionCreateRequest,
   quicksilverBroker: OpenAIQuicksilverBrowserSessionBroker | undefined,
   logger: Pick<PluginLogger, "warn">,
   context: OpenAIRealtimeHost,
@@ -511,13 +456,13 @@ export function buildOpenAIRealtimeVoiceProvider(
     createBrowserSession: (req) =>
       createOpenAIRealtimeBrowserSession(
         // SAFETY: Talk client creation supplies the private agent/workspace context before this call.
-        req as OpenAIInternalRealtimeBrowserSessionCreateRequest,
+        req as InternalRealtimeVoiceBrowserSessionCreateRequest,
         options?.quicksilverBrowserSessionBroker,
         options?.logger ?? { warn: () => undefined },
         context,
       ),
   };
-  const internalApi: OpenAIInternalRealtimeVoiceProviderApi = {
+  const internalApi: InternalRealtimeVoiceProviderApi = {
     isBrowserSessionConfigured: ({ cfg, providerConfig, agentId }) => {
       const config = normalizeProviderConfig(providerConfig);
       if (config.azureEndpoint || config.azureDeployment) {

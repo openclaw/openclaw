@@ -147,9 +147,7 @@ const { subagentRegistryMock } = vi.hoisted(() => ({
   subagentRegistryMock: {
     isSubagentSessionRunActive: vi.fn(() => true),
     shouldIgnorePostCompletionAnnounceForSession: vi.fn((_sessionKey: string) => false),
-    countActiveDescendantRuns: vi.fn((_sessionKey: string) => 0),
     countPendingDescendantRuns: vi.fn((_sessionKey: string) => 0),
-    hasDescendantRunAwaitingSettle: vi.fn((_sessionKey: string, _excludeRunId?: string) => false),
     getLatestSubagentRunByChildSessionKey: vi.fn(
       (_childSessionKey: string): MockSubagentRun | undefined => undefined,
     ),
@@ -514,18 +512,7 @@ describe("subagent announce formatting", () => {
     subagentRegistryMock.shouldIgnorePostCompletionAnnounceForSession
       .mockClear()
       .mockReturnValue(false);
-    subagentRegistryMock.countActiveDescendantRuns.mockClear().mockReturnValue(0);
-    subagentRegistryMock.countPendingDescendantRuns
-      .mockClear()
-      .mockImplementation((sessionKey: string) =>
-        subagentRegistryMock.countActiveDescendantRuns(sessionKey),
-      );
-    subagentRegistryMock.hasDescendantRunAwaitingSettle
-      .mockClear()
-      .mockImplementation(
-        (sessionKey: string, _excludeRunId?: string) =>
-          subagentRegistryMock.countPendingDescendantRuns(sessionKey) > 0,
-      );
+    subagentRegistryMock.countPendingDescendantRuns.mockReset().mockReturnValue(0);
     subagentRegistryMock.getLatestSubagentRunByChildSessionKey
       .mockClear()
       .mockReturnValue(undefined);
@@ -1284,7 +1271,7 @@ describe("subagent announce formatting", () => {
     chatHistoryMock.mockResolvedValueOnce({
       messages: [{ role: "assistant", content: [{ type: "text", text: "final answer: 2" }] }],
     });
-    subagentRegistryMock.countActiveDescendantRuns.mockImplementation((sessionKey: string) =>
+    subagentRegistryMock.countPendingDescendantRuns.mockImplementation((sessionKey: string) =>
       sessionKey === "agent:main:main" ? 1 : 0,
     );
 
@@ -1321,7 +1308,7 @@ describe("subagent announce formatting", () => {
     chatHistoryMock.mockResolvedValueOnce({
       messages: [{ role: "assistant", content: [{ type: "text", text: "bound answer: 2" }] }],
     });
-    subagentRegistryMock.countActiveDescendantRuns.mockImplementation((sessionKey: string) =>
+    subagentRegistryMock.countPendingDescendantRuns.mockImplementation((sessionKey: string) =>
       sessionKey === "agent:main:main" ? 1 : 0,
     );
     registerBoundSubagent({
@@ -1405,7 +1392,7 @@ describe("subagent announce formatting", () => {
     };
 
     // Simulate active sibling runs so non-bound paths would normally coordinate via agent().
-    subagentRegistryMock.countActiveDescendantRuns.mockImplementation((sessionKey: string) =>
+    subagentRegistryMock.countPendingDescendantRuns.mockImplementation((sessionKey: string) =>
       sessionKey === "agent:main:main" ? 2 : 0,
     );
     registerSessionBindingAdapter({
@@ -1501,7 +1488,7 @@ describe("subagent announce formatting", () => {
     chatHistoryMock.mockResolvedValueOnce({
       messages: [{ role: "assistant", content: [{ type: "text", text: "matrix bound answer" }] }],
     });
-    subagentRegistryMock.countActiveDescendantRuns.mockImplementation((sessionKey: string) =>
+    subagentRegistryMock.countPendingDescendantRuns.mockImplementation((sessionKey: string) =>
       sessionKey === "agent:main:main" ? 1 : 0,
     );
     registerBoundSubagent({
@@ -2509,7 +2496,7 @@ describe("subagent announce formatting", () => {
   });
 
   it("does not include batching guidance when sibling subagents are still active", async () => {
-    subagentRegistryMock.countActiveDescendantRuns.mockImplementation((sessionKey: string) =>
+    subagentRegistryMock.countPendingDescendantRuns.mockImplementation((sessionKey: string) =>
       sessionKey === "agent:main:main" ? 2 : 0,
     );
 
@@ -2592,7 +2579,6 @@ describe("subagent announce formatting", () => {
 
   it("announces completion immediately when no descendants are pending", async () => {
     subagentRegistryMock.countPendingDescendantRuns.mockReturnValue(0);
-    subagentRegistryMock.countActiveDescendantRuns.mockReturnValue(0);
 
     const didAnnounce = await runSubagentAnnounceFlow({
       ...defaultOutcomeAnnounce,
@@ -3700,6 +3686,7 @@ describe("subagent announce formatting", () => {
       expect(second).toBe("delivered");
       expect(subagentRegistryMock.countPendingDescendantRuns).toHaveBeenCalledWith(
         "agent:main:subagent:parent-gated",
+        expect.any(Function),
       );
       expect(agentSpy).toHaveBeenCalledTimes(1);
     });

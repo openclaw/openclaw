@@ -12,12 +12,6 @@ import {
 // Gateway auth is resolved differently for passive probes and interactive
 // clients. This module owns the shared precedence so CLI, UI, and remote
 // surfaces do not silently choose different token/password sources.
-type ResolvedGatewayCredential = {
-  value?: string;
-  unresolvedRefReason?: string;
-  secretRefConfigured: boolean;
-};
-
 type GatewayCredentialDiagnostic = {
   message: string;
   code?: "SECRET_REF_REDACTED_VALUE";
@@ -28,7 +22,7 @@ function createGatewayCredentialResolver(params: {
   env: NodeJS.ProcessEnv;
   diagnostics: GatewayCredentialDiagnostic[];
 }) {
-  return async (path: SupportedGatewaySecretInputPath): Promise<ResolvedGatewayCredential> => {
+  return async (path: SupportedGatewaySecretInputPath) => {
     const resolved = await resolveConfiguredSecretInputWithFallback({
       config: params.config,
       env: params.env,

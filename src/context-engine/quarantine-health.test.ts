@@ -88,7 +88,7 @@ describe("context engine quarantine health", () => {
         failedAt: new Date(123),
       });
 
-      expect(listContextEngineQuarantines()).toEqual([
+      expect(await listContextEngineQuarantines()).toEqual([
         {
           engineId: "lossless-claw",
           owner: "plugin:lossless-claw",
@@ -124,7 +124,7 @@ describe("context engine quarantine health", () => {
 
           clearPersistedContextEngineQuarantineForProcess("lossless-claw", process.pid);
 
-          expect(listContextEngineQuarantines()).toEqual([
+          expect(await listContextEngineQuarantines()).toEqual([
             {
               engineId: "lossless-claw",
               owner: "plugin:lossless-claw",
@@ -167,7 +167,7 @@ describe("context engine quarantine health", () => {
 
           resetContextEngineRuntimeQuarantineForTests();
 
-          expect(listContextEngineQuarantines()).toEqual([
+          expect(await listContextEngineQuarantines()).toEqual([
             {
               engineId: "lossless-claw",
               owner: "plugin:lossless-claw",
@@ -193,7 +193,7 @@ describe("context engine quarantine health", () => {
         processToken: "stale-incarnation-token",
       });
 
-      expect(listContextEngineQuarantines()).toEqual([]);
+      expect(await listContextEngineQuarantines()).toEqual([]);
     });
   });
 
@@ -214,7 +214,7 @@ describe("context engine quarantine health", () => {
             processStartTime: siblingStartTime === null ? 1 : siblingStartTime + 1,
           });
 
-          expect(listContextEngineQuarantines()).toEqual([]);
+          expect(await listContextEngineQuarantines()).toEqual([]);
         });
       });
     },
@@ -236,7 +236,7 @@ describe("context engine quarantine health", () => {
           processStartTime: null,
         });
 
-        expect(listContextEngineQuarantines()).toEqual([]);
+        expect(await listContextEngineQuarantines()).toEqual([]);
       });
     });
   });

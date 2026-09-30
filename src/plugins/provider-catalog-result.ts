@@ -1,4 +1,3 @@
-// Defines normalized provider catalog results from plugin metadata.
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.js";
 import {
   copyArrayEntries,
@@ -15,7 +14,6 @@ const PROVIDER_CATALOG_OUTCOME_STATUSES = new Set<ProviderCatalogOutcome["status
 ]);
 
 const MODEL_PROVIDER_CONFIG_KEYS = [
-  "baseUrl",
   "apiKey",
   "auth",
   "api",
@@ -131,20 +129,6 @@ export function copyProviderCatalogResultEntries(params: {
   return projection.kind === "providers" ? projection.providers : [];
 }
 
-/** Copies model definitions from provider catalog provider config. */
-function copyProviderCatalogModels(
-  providerConfig: ModelProviderConfig,
-): ModelProviderConfig["models"] {
-  const models: ModelDefinitionConfig[] = [];
-  for (const entry of copyArrayEntries(readRecordValue(providerConfig, "models"))) {
-    const copied = copyProviderCatalogModel(entry);
-    if (copied) {
-      models.push(copied);
-    }
-  }
-  return models;
-}
-
 function copyProviderCatalogModel(model: unknown): ModelDefinitionConfig | undefined {
   if (!isRecordWithoutThrowing(model)) {
     return undefined;
@@ -183,12 +167,12 @@ function copyProviderCatalogProviderConfig(
 
   const copied: Partial<ModelProviderConfig> = {
     baseUrl,
-    models: copyProviderCatalogModels(providerConfig as ModelProviderConfig),
+    models: copyArrayEntries(readRecordValue(providerConfig, "models")).flatMap((entry) => {
+      const model = copyProviderCatalogModel(entry);
+      return model ? [model] : [];
+    }),
   };
   for (const key of MODEL_PROVIDER_CONFIG_KEYS) {
-    if (key === "baseUrl") {
-      continue;
-    }
     const value = readRecordValue(providerConfig, key);
     if (value !== undefined) {
       (copied as Record<string, unknown>)[key] = value;

@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -24,6 +25,7 @@ type CreateOpenClawToolsArg = {
   gatewayCallerAccountId?: string;
   gatewayCallerChannel?: string | null;
   sourceReplyOnly?: boolean;
+  senderIsOwner?: boolean;
 };
 
 type CreateOpenClawCodingToolsArg = {
@@ -223,6 +225,7 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
       cfg: {} as OpenClawConfig,
       sessionKey: "agent:main:direct:test",
       surface: "loopback",
+      senderIsOwner: true,
       excludeToolNames: ["read", "apply_patch"],
     });
 
@@ -410,7 +413,6 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
       "automations",
       "gateway",
       "plugins",
-      "sessions",
       "screen",
       "terminal",
       "portal",
@@ -421,12 +423,12 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
       "computer",
       "mobile_ui",
       "openclaw",
+      "sessions",
     ]);
     expect(args.inheritedToolDenylist).toEqual([
       "automations",
       "gateway",
       "plugins",
-      "sessions",
       "screen",
       "terminal",
       "portal",
@@ -437,8 +439,97 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
       "computer",
       "mobile_ui",
       "openclaw",
+      "sessions",
     ]);
   });
+
+  it.each([
+    {
+      surface: "loopback",
+      senderIsOwner: false,
+      authority: "missing",
+      denied: false,
+      available: false,
+    },
+    {
+      surface: "loopback",
+      senderIsOwner: undefined,
+      authority: "missing",
+      denied: false,
+      available: false,
+    },
+    {
+      surface: "loopback",
+      senderIsOwner: false,
+      authority: "live",
+      denied: false,
+      available: true,
+    },
+    {
+      surface: "loopback",
+      senderIsOwner: undefined,
+      authority: "live",
+      denied: false,
+      available: true,
+    },
+    {
+      surface: "loopback",
+      senderIsOwner: false,
+      authority: "retired",
+      denied: false,
+      available: false,
+    },
+    {
+      surface: "loopback",
+      senderIsOwner: false,
+      authority: "live",
+      denied: true,
+      available: false,
+    },
+    {
+      surface: "http",
+      senderIsOwner: false,
+      authority: "missing",
+      denied: false,
+      available: false,
+    },
+    {
+      surface: "http",
+      senderIsOwner: undefined,
+      authority: "missing",
+      denied: false,
+      available: false,
+    },
+    { surface: "http", senderIsOwner: false, authority: "live", denied: false, available: false },
+    { surface: "http", senderIsOwner: true, authority: "missing", denied: false, available: true },
+  ] as const)(
+    "keeps assignment scoped to $surface owner=$senderIsOwner authority=$authority deny=$denied",
+    async ({ surface, senderIsOwner, authority, denied, available }) => {
+      const admission = prepareSystemAgentRunAdmission({}, "assignment-scope", "main", "test");
+      try {
+        const admittedRunContext =
+          authority === "missing" ? undefined : await admission.admit("gateway");
+        if (authority === "retired") {
+          admission.close();
+        }
+        hoisted.createOpenClawToolsMock.mockReturnValueOnce([hoisted.makeTool("sessions")]);
+        const result = resolveGatewayScopedTools({
+          cfg: {
+            gateway: { tools: { allow: ["sessions"] } },
+            ...(denied ? { tools: { deny: ["sessions"] } } : {}),
+          },
+          sessionKey: "agent:main:main",
+          surface,
+          senderIsOwner,
+          admittedRunContext,
+        });
+        expect(result.tools.some((tool) => tool.name === "sessions")).toBe(available);
+        expect(readCreateToolsArgs().senderIsOwner).toBe(senderIsOwner);
+      } finally {
+        admission.close();
+      }
+    },
+  );
 
   it("keeps real gateway deny policy inheritable while excluding native dedup tools", () => {
     resolveGatewayScopedTools({
@@ -447,6 +538,7 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
       } as OpenClawConfig,
       sessionKey: "agent:main:direct:test",
       surface: "loopback",
+      senderIsOwner: true,
       excludeToolNames: ["read", "apply_patch"],
     });
 
@@ -889,6 +981,7 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
       } as OpenClawConfig,
       sessionKey: "agent:main:direct:test",
       surface: "loopback",
+      senderIsOwner: true,
     });
 
     expect(result.tools.map((tool) => tool.name)).toEqual(["read", "sessions_spawn"]);

@@ -1,7 +1,6 @@
 import { resolveOpenAIModelReasoningEfforts } from "@openclaw/ai/internal/openai";
 import { applyCompletionsAnthropicCacheControl } from "@openclaw/ai/transports";
 import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
-// Proxy stream wrapper applies provider-specific wrappers around base stream functions.
 import {
   normalizeOptionalLowercaseString,
   readStringValue,
@@ -76,7 +75,7 @@ function resolveOpenRouterResponseCacheTtlSeconds(value: unknown): string | unde
   return String(Math.max(1, Math.min(86400, Math.trunc(parsed))));
 }
 
-function shouldApplyOpenRouterResponseCacheHeaders(model: Parameters<StreamFn>[0]): boolean {
+function isOpenRouterEndpoint(model: Parameters<StreamFn>[0]): boolean {
   const provider = readStringValue(model.provider);
   const endpointClass = resolveModelEndpointClass(model);
   return (
@@ -89,7 +88,7 @@ function resolveOpenRouterResponseCacheHeaders(
   model: Parameters<StreamFn>[0],
   extraParams: Record<string, unknown> | undefined,
 ): Record<string, string> | undefined {
-  if (!shouldApplyOpenRouterResponseCacheHeaders(model)) {
+  if (!isOpenRouterEndpoint(model)) {
     return undefined;
   }
   const configuredCache = parseBooleanValue(
@@ -136,19 +135,10 @@ export function createOpenRouterSystemCacheWrapper(
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
-    const provider = readStringValue(model.provider);
     const modelId = readStringValue(model.id);
     // Keep OpenRouter-specific cache markers on verified OpenRouter routes
     // (or the provider's default route), but not on arbitrary OpenAI proxies.
-    const endpointClass = resolveModelEndpointClass(model);
-    if (
-      !modelId ||
-      !isAnthropicModelRef(modelId) ||
-      !(
-        endpointClass === "openrouter" ||
-        (endpointClass === "default" && normalizeOptionalLowercaseString(provider) === "openrouter")
-      )
-    ) {
+    if (!isOpenRouterEndpoint(model) || !modelId || !isAnthropicModelRef(modelId)) {
       return underlying(model, context, options);
     }
 

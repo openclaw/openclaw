@@ -1,3 +1,4 @@
+import { deepStrictEqual } from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { isMainThread } from "node:worker_threads";
@@ -200,7 +201,7 @@ it("preserves a cold artifact-protected source without creating sidecars", async
     expect(await readRegistryEntry(container.containerName)).toMatchObject(container);
     expect(await readBrowserRegistry()).toEqual({ entries: [browser] });
   });
-  expect(fs.readFileSync(databasePath)).toEqual(before);
+  deepStrictEqual(fs.readFileSync(databasePath), before);
   expect(artifacts()).toEqual(names);
 });
 

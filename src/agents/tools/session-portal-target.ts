@@ -3,7 +3,6 @@ import { captureSessionPortalTarget } from "../../gateway/worker-environments/se
 import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../../security/dangerous-tools.js";
 import { AUTOMATIONS_TOOL_NAME } from "./automations-tool-name.js";
 import { getInProcessGatewayToolContext } from "./in-process-gateway.js";
-import { hasSessionControlAuthority } from "./sessions-control-authority.js";
 
 export type SessionPortalToolTarget = {
   sessionKey: string;
@@ -24,14 +23,14 @@ export function prepareSessionPortalToolAccess(input: {
     input.senderIsOwner === false && !input.sandboxed
       ? prepareSessionPortalToolTarget(input)
       : undefined;
-  // Qualify only the scoped portal/archive surfaces and exact-run automation
-  // exception. Other control-plane tools still require owner authority.
+  // Sessions owns its assignment/control action gates; portal and automation
+  // remain scoped exceptions. Other control-plane tools require owner authority.
   const ownerOnlyCoreToolDenylist =
     input.senderIsOwner === false
       ? GATEWAY_OWNER_ONLY_CORE_TOOLS.filter(
           (name) =>
             (name !== "portal" || !sessionPortalTarget) &&
-            (name !== "sessions" || !hasSessionControlAuthority()) &&
+            name !== "sessions" &&
             (name !== AUTOMATIONS_TOOL_NAME || !input.hasAutomationGrant),
         )
       : [];

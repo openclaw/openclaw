@@ -26,11 +26,13 @@ import {
   writeGitHubOutput,
 } from "../../scripts/ci-changed-scope.mjs";
 import { resolveShardPlans } from "../../scripts/ci-run-node-test-shard.mts";
+import { WINDOWS_NODE_CI_ADVISORY } from "../../scripts/full-release-validation-policy.mjs";
 import {
   decodeNodeTestGroups,
   encodeNodeTestGroups,
 } from "../../scripts/lib/ci-node-test-groups-codec.mts";
 import { createNodeTestShardBundles } from "../../scripts/lib/ci-node-test-plan.mts";
+import { createWindowsTestShards } from "../../scripts/lib/ci-windows-test-plan.mts";
 import {
   BOUNDARY_CHECKS,
   selectChecksForShard,
@@ -2842,11 +2844,9 @@ describe("ci workflow guards", () => {
     });
 
     it.each([true, false])("bounds hosted rows with Android=%s", (androidSelected) => {
-      const planner = readCiWorkflow().jobs.preflight.steps.find(
-        (step: WorkflowStep) => step.name === "Build CI manifest",
-      );
-      expect(planner.run).toContain("const HYBRID_HOSTED_ROW_LIMIT = 45;");
-      expect(planner.run).toContain("const HYBRID_HOSTED_BASE_ROW_LIMIT = 40;");
+      const manifestSource = readFileSync("scripts/ci-build-manifest.mjs", "utf8");
+      expect(manifestSource).toContain("const HYBRID_HOSTED_ROW_LIMIT = 45;");
+      expect(manifestSource).toContain("const HYBRID_HOSTED_BASE_ROW_LIMIT = 40;");
       const scopeEnv = { OPENCLAW_CI_RUN_ANDROID: String(androidSelected) };
       const baseline = manifestWithHostedNodeRows(0, { scopeEnv });
       expect(baseline.status, baseline.output).toBe(0);
@@ -3767,6 +3767,33 @@ describe("ci workflow guards", () => {
       { check_name: "checks-windows-node-test-1", runtime: "node", task: "test-1" },
       { check_name: "checks-windows-node-test-2", runtime: "node", task: "test-2" },
     ]);
+    const plannedRows = createWindowsTestShards(
+      JSON.parse(readFileSync("package.json", "utf8")).scripts,
+      { includePrExemptRuntimeTests: true },
+    );
+    const manifestRows: Array<{ check_name: string; runtime: string }> = [
+      blacksmith,
+      github,
+      hybrid,
+      hybridDispatch,
+      frozen,
+    ].flatMap(
+      (manifest) =>
+        JSON.parse(expectDefined(manifest.outputs.checks_windows_matrix, "Windows matrix")).include,
+    );
+    expect(manifestRows.every((row) => row.runtime === "node")).toBe(true);
+    for (const matrix of [...plannedRows, ...manifestRows]) {
+      const jobName = evaluateWorkflowExpression(
+        workflow.jobs[WINDOWS_NODE_CI_ADVISORY.aggregateJob].name,
+        {
+          eventName: "workflow_dispatch",
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+          matrix,
+        },
+      );
+      expect(jobName).toMatch(WINDOWS_NODE_CI_ADVISORY.jobNamePattern);
+    }
     expect(runStep.run).toContain('scripts?.["test:windows:ci:1"]');
     expect(runStep.run).toContain('scripts?.["test:windows:ci:2"]');
     expect(runStep.run).toContain("pnpm test:windows:ci");
@@ -5313,7 +5340,9 @@ describe("ci workflow guards", () => {
     const buildArtifactsTestbox = readBuildArtifactsTestboxWorkflow();
     const source = readFileSync(".github/workflows/ci.yml", "utf8");
 
-    expect(source).toContain("createNodeTestShardBundles");
+    expect(readFileSync("scripts/ci-build-manifest.mjs", "utf8")).toContain(
+      "createNodeTestShardBundles",
+    );
     const artifactRunner = workflow.jobs["build-artifacts"]["runs-on"];
     for (const [frozenTarget, expected] of [
       ["false", "blacksmith-16vcpu-ubuntu-2404"],
@@ -5932,8 +5961,8 @@ describe("ci workflow guards", () => {
         label,
       ).toEqual(
         usesCompatibilityTooling
-          ? ["--import", "tsx", "--input-type=module"]
-          : ["--input-type=module"],
+          ? ["--import", "tsx", ".ci-harness/scripts/ci-build-manifest.mjs"]
+          : [".ci-harness/scripts/ci-build-manifest.mjs"],
       );
       expect(
         runPreflightNodeInvocation(
@@ -11231,6 +11260,107 @@ describe("ci workflow guards", () => {
   );
 
   it.skipIf(process.platform === "win32").each([
+    ["workflow_dispatch", "full-release-validation-123", 0],
+    ["workflow_dispatch", "", 1],
+    ["workflow_dispatch", "manual-full-release-validation-123", 1],
+    ["pull_request", "full-release-validation-123", 1],
+    ["push", "full-release-validation-123", 1],
+    ["schedule", "full-release-validation-123", 1],
+  ] as const)(
+    "ci-gate limits windows-node-ci advisory to FRV: %s %s",
+    (eventName, dispatchId, exit) => {
+      const gate = readCiWorkflow().jobs["ci-gate"];
+      const step = gate.steps.find(
+        (candidate: WorkflowStep) => candidate.name === "Verify selected CI lanes",
+      );
+      const context = {
+        eventName,
+        dispatchId,
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
+      };
+      const summary = path.join(tempDirs.make("ci-gate-advisory-"), "summary.md");
+      const outcome = runCiGateFixture(
+        `preflight=success|true\n${WINDOWS_NODE_CI_ADVISORY.aggregateJob}=failure|true`,
+        {
+          FRV_WINDOWS_NODE_ADVISORY: String(
+            evaluateWorkflowExpression(step.env.FRV_WINDOWS_NODE_ADVISORY, context),
+          ),
+          GITHUB_STEP_SUMMARY: summary,
+        },
+      );
+      expect(outcome.status, `${outcome.stdout}\n${outcome.stderr}`).toBe(exit);
+      if (exit === 0) {
+        expect(outcome.stdout).toContain(`::notice title=${WINDOWS_NODE_CI_ADVISORY.id} advisory`);
+        expect(readFileSync(summary, "utf8")).toContain(
+          `Advisory class \`${WINDOWS_NODE_CI_ADVISORY.id}\``,
+        );
+        expect(evaluateWorkflowExpression(gate.if, { ...context, cancelled: true })).toBe(false);
+      } else {
+        expect(outcome.stdout).toContain("::error title=CI job did not succeed");
+        expect(existsSync(summary)).toBe(false);
+      }
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "ci-gate keeps every other failed lane blocking alongside windows-node-ci advisory",
+    () => {
+      const gate = readCiWorkflow().jobs["ci-gate"];
+      const summary = path.join(tempDirs.make("ci-gate-advisory-"), "summary.md");
+      const jobs: string[] = gate.needs;
+      for (const job of jobs.filter((name) => name !== WINDOWS_NODE_CI_ADVISORY.aggregateJob)) {
+        const outcome = runCiGateFixture(
+          `${WINDOWS_NODE_CI_ADVISORY.aggregateJob}=failure|true\n${job}=failure|true`,
+          { FRV_WINDOWS_NODE_ADVISORY: "true", GITHUB_STEP_SUMMARY: summary },
+        );
+        expect(outcome.status, `${job}: ${outcome.stdout}\n${outcome.stderr}`).toBe(1);
+        expect(outcome.stdout.split("\n")).toContain(`${job}: failure (selected=true)`);
+        expect(outcome.stdout).toContain(`${job} finished with failure (selected=true)`);
+      }
+    },
+  );
+
+  it.skipIf(process.platform === "win32").each([
+    ["skipped", "true"],
+    ["cancelled", "true"],
+    ["failure", "false"],
+    ["failure", ""],
+    ["failure", "true|"],
+    ["failure=", "true"],
+  ])("ci-gate rejects non-advisory Windows results %s selected=%s", (result, selected) => {
+    const outcome = runCiGateFixture(
+      `${WINDOWS_NODE_CI_ADVISORY.aggregateJob}=${result}|${selected}`,
+      { FRV_WINDOWS_NODE_ADVISORY: "true" },
+    );
+    expect(outcome.status, `${outcome.stdout}\n${outcome.stderr}`).toBe(1);
+    expect(outcome.stdout).toContain("::error title=CI job did not succeed");
+    expect(outcome.stdout).not.toContain("::notice");
+  });
+
+  it.each([
+    ["", true],
+    ["manual-full-ci", true],
+    ["full-release-validation-123", false],
+  ] as const)("full-CI receipt excludes advisory FRV dispatch %s", (dispatchId, expected) => {
+    const receipt = readCiWorkflow().jobs["ci-gate"].steps.find(
+      (step: WorkflowStep) => step.name === "Confirm validated workflow revision",
+    );
+    const sha = "a".repeat(40);
+    expect(
+      evaluateWorkflowExpression(`\${{ ${receipt.if} }}`, {
+        eventName: "workflow_dispatch",
+        dispatchId,
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
+        sha,
+        includeAndroid: true,
+        preflightOutputs: { validation_tier: "full", checkout_revision: sha },
+      }),
+    ).toBe(expected);
+  });
+
+  it.skipIf(process.platform === "win32").each([
     [true, "success", 0],
     [true, "skipped", 1],
     [true, "failure", 1],
@@ -11333,9 +11463,7 @@ describe("ci workflow guards", () => {
 
   it("keeps workflow guards in fast CI-routing checks", () => {
     const workflow = readCiWorkflow();
-    const preflightStep = workflow.jobs.preflight.steps.find(
-      (step: WorkflowStep) => step.name === "Build CI manifest",
-    );
+    const manifestSource = readFileSync("scripts/ci-build-manifest.mjs", "utf8");
     const taxonomy = parse(readFileSync("taxonomy.yaml", "utf8")) as {
       surfaces: Array<{ id: string; categories: Array<{ id: string }> }>;
     };
@@ -11362,11 +11490,12 @@ describe("ci workflow guards", () => {
 
     const ciWorkflowText = readFileSync(".github/workflows/ci.yml", "utf8");
 
-    expect(preflightStep.run).not.toContain("qa-smoke-profile");
-    expect(preflightStep.run).not.toContain("qa_category");
+    expect(manifestSource).not.toContain("qa-smoke-profile");
+    expect(manifestSource).not.toContain("qa_category");
     expect(taxonomyCategoryIds.length).toBeGreaterThan(0);
     for (const categoryId of taxonomyCategoryIds) {
       expect(ciWorkflowText).not.toContain(`"${categoryId}"`);
+      expect(manifestSource).not.toContain(`"${categoryId}"`);
     }
     expect(runStep.run).toContain("bundled-protocol)");
     expect(runStep.run).not.toContain("qa-smoke-ci)");

@@ -9,12 +9,13 @@ import {
   UpdateRequesterRevokedError,
 } from "../../infra/update-requester-authority.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
+import { defaultRuntime } from "../../runtime.js";
 import {
   captureTargetDatabaseSchemaContext,
   isCandidateAdmissionContextCovered,
   type TargetDatabaseSchemaContextOptions,
 } from "./schema-preflight.js";
-import { UpdatePreMutationError, type UpdateCommandOptions } from "./shared.js";
+import type { UpdateCommandOptions } from "./shared.js";
 import type { UpdateCommandExecutor } from "./update-command-executor.js";
 import type { PreManagedServiceStop } from "./update-command-service-context-types.js";
 import {
@@ -79,9 +80,8 @@ export async function revalidateUpdateDatabaseContext(
     !isDeepStrictEqual(before.includeProvenance ?? [], after.includeProvenance ?? []) ||
     !isDeepStrictEqual(before.sourceConfig, after.sourceConfig)
   ) {
-    throw new UpdatePreMutationError(
-      "database-schema-preflight",
-      `Update refused: configuration changed during database admission at ${before.path}. Retry against the current configuration.`,
+    defaultRuntime.error(
+      `Warning: Configuration changed during database admission at ${before.path}; continuing with the current configuration.`,
     );
   }
   return current;
@@ -132,7 +132,11 @@ export async function readUpdateCandidateSource(
       ...options,
     });
     if (context.legacyConfigPlan) {
-      return { config: context.config, hash: hashConfigRaw(context.configSnapshot.raw) };
+      return {
+        config: context.config,
+        hash: hashConfigRaw(context.configSnapshot.raw),
+        source: candidateConfigSource(context.configSnapshot),
+      };
     }
   }
   const snapshot = await withOwnedManagedUpdateEnv(env, () =>
@@ -144,6 +148,20 @@ export async function readUpdateCandidateSource(
         ? snapshot.sourceConfig
         : snapshot.config,
     hash: hashConfigRaw(snapshot.raw),
+    source: candidateConfigSource(snapshot),
+  };
+}
+
+// Doctor's input hash stays root-only; activation also fences include bytes and targets.
+function candidateConfigSource(snapshot: ConfigFileSnapshot) {
+  return {
+    path: snapshot.path,
+    exists: snapshot.exists,
+    raw: snapshot.raw,
+    hash: snapshot.hash,
+    includedPaths: snapshot.includedPaths ?? [],
+    includeProvenance: snapshot.includeProvenance ?? [],
+    sourceConfig: snapshot.sourceConfig,
   };
 }
 

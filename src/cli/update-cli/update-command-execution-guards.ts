@@ -1,8 +1,12 @@
+import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import { UpdateRequesterRevokedError } from "../../infra/update-requester-authority.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
+import type { UpdateRunWriteOptions } from "../../infra/update-run-write.async.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { captureUpdateCommandExecutorAuthority } from "./update-command-executor.js";
+import { retainMutableUpdateSignalWrite } from "./update-command-mutable-signals.js";
 import { assertUpdateCommandRecoveryState } from "./update-command-recovery.js";
 
 /** Pin the invocation across parent work and the separately bound Doctor child. */
@@ -12,9 +16,9 @@ export function createUpdateCommandExecutionGuards(opts: UpdateCommandOptions, r
   let executor = run?.executorFence;
   const requester = run?.requesterAuthority;
   let stateHandedOff = false;
-  const assertInvocation = (phase?: "restore") => {
+  const assertInvocation = (phase?: "restore", readRecovery = true) => {
     const readStatePolicy = !stateHandedOff && phase !== "restore";
-    if (opts.recovery || readStatePolicy) {
+    if (opts.recovery || (readRecovery && readStatePolicy)) {
       assertUpdateCommandRecoveryState(opts);
     }
     if (
@@ -28,6 +32,40 @@ export function createUpdateCommandExecutionGuards(opts: UpdateCommandOptions, r
     }
   };
   return {
+    captureWriteOptions: () => {
+      const assertAccepting = () => {
+        if (run?.interrupted) {
+          throw new UpdateRequesterRevokedError();
+        }
+      };
+      assertAccepting();
+      const capturedExecutor = executor;
+      const capturedHandoff = stateHandedOff;
+      const env = run?.env;
+      const assertCurrent = () => {
+        if (
+          executor !== capturedExecutor ||
+          stateHandedOff !== capturedHandoff ||
+          run?.env !== env
+        ) {
+          throw new UpdateRequesterRevokedError();
+        }
+        assertInvocation(undefined, false);
+        capturedExecutor?.assertCurrent();
+      };
+      assertCurrent();
+      const capturedEnv = cloneEnvWithPlatformSemantics(env ?? process.env);
+      const context = captureOpenClawStateWorkerContext({ env: capturedEnv });
+      return {
+        env: capturedEnv,
+        context,
+        assertCurrent,
+        assertAccepting,
+        retainSettlement: (completion: Promise<void>) =>
+          retainMutableUpdateSignalWrite(run, completion),
+        ...(!capturedHandoff ? { requireNoRecovery: true as const } : {}),
+      } satisfies UpdateRunWriteOptions;
+    },
     onStateHandoff: () => {
       stateHandedOff = true;
     },
@@ -49,6 +87,9 @@ export function createUpdateCommandExecutionGuards(opts: UpdateCommandOptions, r
     // Forward admission already checked policy. Compensation retains native
     // custody in a separate lease database while the source family is excluded.
     assertCurrent: (phase?: "restore") => {
+      if (phase !== "restore" && run?.interrupted) {
+        throw new UpdateRequesterRevokedError();
+      }
       assertInvocation(phase);
       executor?.assertCurrent();
     },

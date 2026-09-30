@@ -48,7 +48,7 @@ export function createGatewayWorkerPlacementMoveBarrier(params: {
       identities: lifecycleIdentities,
       signal,
       prepare: async () => {
-        resolveWorkerPlacementSessionTarget({
+        const resolved = await resolveWorkerPlacementSessionTarget({
           sessionRuntime,
           config: getRuntimeConfig(),
           sessionId,
@@ -57,6 +57,7 @@ export function createGatewayWorkerPlacementMoveBarrier(params: {
           expectedTarget: target,
           errorMessage: `Session ${sessionKey} changed before placement move. Retry.`,
         });
+        resolved.assertCurrent(getRuntimeConfig());
         authorize?.();
         begun = await begin(async (runId) => {
           if (params.persistAbandonedPartial) {

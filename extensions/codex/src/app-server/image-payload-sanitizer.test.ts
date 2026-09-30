@@ -1,9 +1,9 @@
 // Codex tests cover image payload sanitizer plugin behavior.
+import { sanitizeInlineImageDataUrl } from "openclaw/plugin-sdk/inline-image-data-url-runtime";
 import { describe, expect, it } from "vitest";
 import {
   invalidInlineImageText,
   sanitizeCodexHistoryImagePayloads,
-  sanitizeInlineImageDataUrl,
 } from "./image-payload-sanitizer.js";
 
 const PNG_1X1 =

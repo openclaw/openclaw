@@ -277,13 +277,9 @@ export function validatePreparedConfigWithPlugins(
     return installedPluginRecordIds;
   };
 
-  const hasStalePluginEvidenceForUnknownChannel = (channelId: string): boolean => {
-    const normalizedChannelId = normalizePluginId(channelId);
-    return (
-      Boolean(normalizedChannelId) &&
-      !ensureKnownIds().has(normalizedChannelId) &&
-      hasPluginEvidence(channelId)
-    );
+  const hasStalePluginEvidence = (id: string): boolean => {
+    const normalizedId = normalizePluginId(id);
+    return Boolean(normalizedId) && !ensureKnownIds().has(normalizedId) && hasPluginEvidence(id);
   };
 
   const collectActiveWebSearchProviderIds = (): string[] => {
@@ -374,13 +370,7 @@ export function validatePreparedConfigWithPlugins(
       message: `unknown web_search provider: ${trimmed}`,
       allowedValues,
     };
-    const normalizedProviderId = normalizePluginId(trimmed);
-    const hasStaleEvidence = Boolean(
-      normalizedProviderId &&
-      !ensureKnownIds().has(normalizedProviderId) &&
-      hasPluginEvidence(trimmed),
-    );
-    if (hasStaleEvidence) {
+    if (hasStalePluginEvidence(trimmed)) {
       warnings.push({
         ...issue,
         message: `${issue.message} (stale web search plugin config ignored; run openclaw doctor --fix to remove stale config, or install the plugin)`,
@@ -480,7 +470,7 @@ export function validatePreparedConfigWithPlugins(
           continue;
         }
         const issue = { path: `channels.${trimmed}`, message: `unknown channel id: ${trimmed}` };
-        if (hasStalePluginEvidenceForUnknownChannel(trimmed)) {
+        if (hasStalePluginEvidence(trimmed)) {
           warnings.push({
             ...issue,
             message: `${issue.message} (stale channel plugin config ignored; run openclaw doctor --fix to remove stale config, or install the plugin)`,
@@ -538,9 +528,7 @@ export function validatePreparedConfigWithPlugins(
     }
   }
 
-  const heartbeatChannelIds = new Set(
-    bundledChannelIds.map((channelId) => normalizeLowercaseStringOrEmpty(channelId)),
-  );
+  const heartbeatChannelIds = new Set(bundledChannelIds);
   const validateHeartbeatTarget = (target: string | undefined, issuePath: string): void => {
     if (typeof target !== "string") {
       return;

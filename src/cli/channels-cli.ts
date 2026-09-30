@@ -65,10 +65,6 @@ const LEGACY_CHANNEL_SETUP_OPTIONS: readonly ChannelSetupCliOption[] = [
 
 const loadChannelsCommands = createLazyPromise(() => import("../commands/channels.js"));
 
-function runChannelsCommand(action: () => Promise<void>) {
-  return runCommandWithRuntime(defaultRuntime, action);
-}
-
 function runChannelsCommandWithDanger(action: () => Promise<void>, label: string) {
   return runCommandWithRuntime(defaultRuntime, action, (err) => {
     defaultRuntime.error(danger(`${label}: ${formatErrorMessage(err)}`));
@@ -76,17 +72,8 @@ function runChannelsCommandWithDanger(action: () => Promise<void>, label: string
   });
 }
 
-function getOptionNames(command: Command): string[] {
-  return command.options.map((option) => option.attributeName());
-}
-
 function resolveStringOption(command: Command, name: string): string | undefined {
-  const source = command.getOptionValueSource(name);
-  const localValue = command.getOptionValue(name);
-  const value =
-    source && source !== "default"
-      ? localValue
-      : (inheritOptionFromParent<string>(command, name) ?? localValue);
+  const value = inheritOptionFromParent<string>(command, name) ?? command.getOptionValue(name);
   return typeof value === "string" ? value : undefined;
 }
 
@@ -143,10 +130,7 @@ async function addChannelSetupOptions(
   for (const option of options) {
     addChannelSetupOption(command, option, seenFlags);
   }
-  if (
-    params.includeAll ||
-    (mode === "legacy" && (selectedChannel === undefined || selectedChannel.setup === undefined))
-  ) {
+  if (params.includeAll || (mode === "legacy" && selectedChannel?.setup === undefined)) {
     for (const option of LEGACY_CHANNEL_SETUP_OPTIONS) {
       addChannelSetupOption(command, option, seenFlags);
     }
@@ -192,7 +176,7 @@ export async function registerChannelsCli(
     .option("--all", "Include bundled and installable catalog channels", false)
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
-      await runChannelsCommand(async () => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
         const { channelsListCommand } = await import("../commands/channels/list.js");
         await channelsListCommand(opts, defaultRuntime);
       });
@@ -206,7 +190,7 @@ export async function registerChannelsCli(
     .option("--timeout <ms>", "Timeout in ms")
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
-      await runChannelsCommand(async () => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
         const { channelsStatusCommand } = await import("../commands/channels/status.js");
         await channelsStatusCommand(opts, defaultRuntime);
       });
@@ -222,7 +206,7 @@ export async function registerChannelsCli(
     .option("--timeout <ms>", "Timeout in ms", "10000")
     .option("--json", "Output JSON", false)
     .action(async (opts, command) => {
-      await runChannelsCommand(async () => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
         const { channelsCapabilitiesCommand } = await loadChannelsCommands();
         await channelsCapabilitiesCommand(
           { ...opts, agent: resolveStringOption(command, "agent") },
@@ -245,7 +229,7 @@ export async function registerChannelsCli(
     )
     .option("--json", "Output JSON", false)
     .action(async (entries, opts, command) => {
-      await runChannelsCommand(async () => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
         const { channelsResolveCommand } = await loadChannelsCommands();
         await channelsResolveCommand(
           {
@@ -268,7 +252,7 @@ export async function registerChannelsCli(
     .option("--lines <n>", "Number of lines (default: 200)", "200")
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
-      await runChannelsCommand(async () => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
         const { channelsLogsCommand } = await loadChannelsCommands();
         await channelsLogsCommand(opts, defaultRuntime);
       });
@@ -287,7 +271,7 @@ export async function registerChannelsCli(
     .option("--limit <n>", "Maximum entries", "100")
     .option("--json", "Output JSON", false)
     .action(async (opts, command) => {
-      await runChannelsCommand(async () => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
         const { channelsDeadLettersListCommand } =
           await import("../commands/channels/dead-letters.js");
         await channelsDeadLettersListCommand(
@@ -305,7 +289,7 @@ export async function registerChannelsCli(
     .option("--account <id>", "Account id", "default")
     .option("--json", "Output JSON", false)
     .action(async (eventId, opts, command) => {
-      await runChannelsCommand(async () => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
         const { channelsDeadLettersResubmitCommand } =
           await import("../commands/channels/dead-letters.js");
         await channelsDeadLettersResubmitCommand(
@@ -354,12 +338,14 @@ export async function registerChannelsCli(
     });
   }
 
-  addCommand.action(async (channelArg: string | undefined, opts, command) => {
-    await runChannelsCommand(async () => {
+  addCommand.action(async (channelArg: string | undefined, opts, command: Command) => {
+    await runCommandWithRuntime(defaultRuntime, async () => {
       const { channelsAddCommand } = await loadChannelsCommands();
       const hasFlags = hasExplicitOptions(
         command,
-        getOptionNames(command).filter((name) => !CHANNEL_ADD_SELECTION_OPTION_NAMES.has(name)),
+        command.options
+          .map((option) => option.attributeName())
+          .filter((name) => !CHANNEL_ADD_SELECTION_OPTION_NAMES.has(name)),
       );
       await channelsAddCommand(
         {
@@ -393,7 +379,7 @@ export async function registerChannelsCli(
     .option("--account <id>", "Account id (default when omitted)")
     .option("--delete", "Delete config entries (no prompt)", false)
     .action(async (opts, command) => {
-      await runChannelsCommand(async () => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
         const { channelsRemoveCommand } = await loadChannelsCommands();
         const hasFlags = hasExplicitOptions(command, optionNamesRemove);
         await channelsRemoveCommand(

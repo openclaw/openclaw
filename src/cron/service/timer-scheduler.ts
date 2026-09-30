@@ -290,12 +290,13 @@ async function onAdmittedTimer(state: CronServiceState) {
           candidates: admittedDue,
           reservedAtMs: now,
         });
-        const reservedDue = reservedJobs.map(({ job, runReceipt }, index) => ({
+        const reservedDue = reservedJobs.map(({ job, runReceipt, runReceiptContext }, index) => ({
           id: job.id,
           job,
           reservedAtMs: now,
           reservationIdentity: reserveQueuedCronRun(state, job.id, now, {
             runReceipt,
+            runReceiptContext,
             lifecycleGeneration: generation,
           }),
           releaseAdmission: admissionReleases[index]!,

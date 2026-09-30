@@ -311,15 +311,8 @@ export class CodexNativeProcessAuthority {
   }
 
   ownsCurrentCommand(client: CodexAppServerClient, receipt: NativeCommand): boolean {
-    return this.findCurrentCommand(client, receipt) !== undefined;
-  }
-
-  private findCurrentCommand(
-    client: CodexAppServerClient,
-    receipt: NativeCommand,
-  ): CommandAdmission | undefined {
     this.assertCurrent();
-    return [...this.commands].find(
+    return [...this.commands].some(
       (command) =>
         command.client === clients.get(client) &&
         command.threadId === receipt.threadId &&

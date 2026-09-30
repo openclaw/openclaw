@@ -11,6 +11,7 @@ import {
   GatewayDrainingError,
 } from "../../../process/gateway-work-admission.js";
 import { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
+import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import {
   backfillSubagentRequesterAgentIds,
   resolveSubagentRequesterAgentId,
@@ -23,8 +24,15 @@ import { bindSwarmRunReservation, enqueueSwarmRun } from "../swarm/swarm-schedul
 import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
 import { callSubagentRegistryGateway } from "./subagent-registry-deps.js";
 import { updateSubagentArchiveAtMs } from "./subagent-registry-helpers.js";
+import type { SubagentLifecycleOptions } from "./subagent-registry-lifecycle-context.js";
 import type { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
 import { waitForSubagentRetirementPublication } from "./subagent-registry-memory.js";
+import {
+  assertSubagentRegistryWriteSourceCurrent,
+  captureSubagentRunMutationSnapshot,
+  publishSubagentRunPostimages,
+  SubagentRegistryWriteError,
+} from "./subagent-registry-persistence.js";
 import { getLatestSubagentRunByChildSessionKeyFromRuns } from "./subagent-registry-queries.js";
 import { isRetiredSubagentSessionOwner } from "./subagent-registry-restart-recovery-helpers.js";
 import { restoreSubagentRunsFromDisk } from "./subagent-registry-state.js";
@@ -57,8 +65,8 @@ export function createSubagentRegistryRestorer(config: {
   runs: Map<string, SubagentRunRecord>;
   getGatewayContextResolver: () => GatewayContextResolver | undefined;
   bindGatewayOwners: () => boolean;
-  persist: (...runIds: string[]) => void;
   persistOrThrow: (...runIds: string[]) => void;
+  persistAsyncOrThrow: SubagentLifecycleOptions["persistAsyncOrThrow"];
   settleRequesterTurn: SubagentLifecycleController["settleRequesterTurnAfterSessionSpawns"];
   ensureListener: () => void;
   startSweeper: () => void;
@@ -93,7 +101,6 @@ export function createSubagentRegistryRestorer(config: {
     runs,
     getGatewayContextResolver,
     bindGatewayOwners,
-    persist,
     persistOrThrow,
     settleRequesterTurn,
     ensureListener,
@@ -111,6 +118,9 @@ export function createSubagentRegistryRestorer(config: {
   let restoreState: "idle" | "in-progress" | "succeeded" = "idle";
   let activationRequested = false;
   let activated = false;
+  let restoreInFlight: Promise<void> | undefined;
+  let activationInFlight: Promise<void> | undefined;
+  let generation = 0;
   // A dependency can merge rows before throwing. Keep their reconciliation
   // pending because mergeOnly correctly reports them as existing on retry.
   let restoredRowsPending = false;
@@ -132,22 +142,37 @@ export function createSubagentRegistryRestorer(config: {
         return;
       }
       restoreRetryTimer = undefined;
-      restoreSubagentRunsOnce(Math.min(delayMs * 2, RESTORE_RETRY_MAX_DELAY_MS));
+      void restoreSubagentRunsOnce(Math.min(delayMs * 2, RESTORE_RETRY_MAX_DELAY_MS));
     }, delayMs);
     restoreRetryTimer = timer;
     timer.unref?.();
   }
 
-  function completeRestore() {
+  async function completeRestore() {
     restoredRowsPending = false;
     restoreState = "succeeded";
     clearRestoreRetryTimer();
     if (activationRequested) {
-      activateRestoredRuns();
+      await activateRestoredRuns();
     }
   }
 
-  function activateRestoredRuns() {
+  function activateRestoredRuns(): Promise<void> {
+    if (activationInFlight) {
+      return activationInFlight;
+    }
+    const operation = activateRestoredRunsOnce();
+    activationInFlight = operation;
+    void operation.then(clearActivation, clearActivation);
+    function clearActivation() {
+      if (activationInFlight === operation) {
+        activationInFlight = undefined;
+      }
+    }
+    return operation;
+  }
+
+  async function activateRestoredRunsOnce() {
     activationRequested = true;
     // Hydration retries can finish after Gateway activation or closure. Bind before
     // resuming, including repeat activations, and leave closed-instance rows pending.
@@ -159,6 +184,21 @@ export function createSubagentRegistryRestorer(config: {
     if (activated) {
       return;
     }
+    const originalGeneration = generation;
+    const stateContext = captureOpenClawStateWorkerContext();
+    const resolver = getGatewayContextResolver();
+    const gateway = resolver?.();
+    const assertCurrent = () => {
+      assertSubagentRegistryWriteSourceCurrent(stateContext);
+      if (
+        generation !== originalGeneration ||
+        getGatewayContextResolver() !== resolver ||
+        !gateway ||
+        resolver?.() !== gateway
+      ) {
+        throw new Error("Restored requester transfer lost its Gateway owner");
+      }
+    };
     const cfg = getRuntimeConfig();
     const requesterTurns = new Map<string, Map<string, SubagentRunRecord[]>>();
     const resolveRequesterAgentId = (entry: SubagentRunRecord) =>
@@ -184,9 +224,12 @@ export function createSubagentRegistryRestorer(config: {
         if (!firstEntry) {
           continue;
         }
-        settleRequesterTurn(
+        assertCurrent();
+        await settleRequesterTurn(
           {
             requesterSessionKey: firstEntry.requesterSessionKey,
+            stateContext,
+            assertCurrent,
             requesterAgentId: resolveRequesterAgentId(firstEntry),
             requesterTurnRunId,
             requesterYielded: entries.every((entry) => entry.requesterTurnYielded === true),
@@ -197,6 +240,7 @@ export function createSubagentRegistryRestorer(config: {
           },
           "restore",
         );
+        assertCurrent();
       }
     }
     if (runs.size === 0) {
@@ -350,49 +394,91 @@ export function createSubagentRegistryRestorer(config: {
     activated = true;
   }
 
-  function restoreSubagentRunsOnce(retryDelayMs = RESTORE_RETRY_DELAY_MS, throwOnError = false) {
-    if (restoreState !== "idle") {
-      return;
+  function restoreSubagentRunsOnce(
+    retryDelayMs = RESTORE_RETRY_DELAY_MS,
+    throwOnError = false,
+    stateContext = captureOpenClawStateWorkerContext(),
+  ): Promise<void> {
+    if (restoreInFlight) {
+      return throwOnError ? restoreInFlight : restoreInFlight.catch(() => {});
+    }
+    if (restoreState === "succeeded") {
+      return Promise.resolve();
     }
     restoreState = "in-progress";
+    const originalGeneration = generation;
+    const assertCurrent = () => {
+      assertSubagentRegistryWriteSourceCurrent(stateContext);
+      if (generation !== originalGeneration) {
+        throw new Error("Subagent restore owner was retired");
+      }
+    };
     const runCountBeforeRestore = runs.size;
-    try {
-      const restoredCount = restoreSubagentRunsFromDisk({
-        runs,
-        mergeOnly: true,
-      });
-      restoredRowsPending ||= restoredCount > 0;
-      if (!restoredRowsPending) {
-        completeRestore();
-        return;
-      }
-      const cfg = getRuntimeConfig();
-      // Hydration retains unfinished owners. Gateway-bound resume/sweep must
-      // settle their canonical tasks before normal cleanup may retire them.
-      let restoredStateChanged = false;
-      if (backfillSubagentRequesterAgentIds(cfg, runs.values()) > 0) {
-        restoredStateChanged = true;
-      }
-      for (const entry of runs.values()) {
-        if (updateSubagentArchiveAtMs(entry, cfg)) {
-          restoredStateChanged = true;
+    const operation = Promise.resolve().then(async () => {
+      try {
+        const restoredCount = await restoreSubagentRunsFromDisk({
+          runs,
+          mergeOnly: true,
+          context: stateContext,
+          assertCurrent,
+        });
+        assertCurrent();
+        restoredRowsPending ||= restoredCount > 0;
+        if (!restoredRowsPending) {
+          await completeRestore();
+          return;
         }
-      }
-      if (restoredStateChanged) {
-        persist();
-      }
-      completeRestore();
-    } catch (err) {
-      restoredRowsPending ||= runs.size > runCountBeforeRestore;
-      restoreState = "idle";
-      warn(
-        `failed to restore subagent runs from disk: ${err instanceof Error ? err.message : String(err)}`,
-      );
-      scheduleRestoreRetry(retryDelayMs);
-      if (throwOnError) {
+        const cfg = getRuntimeConfig();
+        const previous = new Map(
+          [...runs.values()].map(
+            (entry) => [entry, captureSubagentRunMutationSnapshot(entry)] as const,
+          ),
+        );
+        // Hydration retains unfinished owners until their canonical reconciliation completes.
+        let restoredStateChanged = backfillSubagentRequesterAgentIds(cfg, runs.values()) > 0;
+        for (const entry of runs.values()) {
+          if (updateSubagentArchiveAtMs(entry, cfg)) {
+            restoredStateChanged = true;
+          }
+        }
+        if (restoredStateChanged) {
+          const publication = await publishSubagentRunPostimages({
+            runs,
+            previous,
+            persist: config.persistAsyncOrThrow,
+            context: stateContext,
+            assertCurrent,
+          });
+          if (publication.publication !== "published") {
+            throw new SubagentRegistryWriteError(
+              "committed",
+              new Error("Restored registry reconciliation was superseded"),
+              "superseded",
+            );
+          }
+        }
+        assertCurrent();
+        await completeRestore();
+      } catch (err) {
+        if (generation === originalGeneration) {
+          restoredRowsPending ||= runs.size > runCountBeforeRestore;
+          restoreState = "idle";
+          warn(
+            `failed to restore subagent runs from disk: ${err instanceof Error ? err.message : String(err)}`,
+          );
+          scheduleRestoreRetry(retryDelayMs);
+        }
         throw err;
       }
+    });
+    restoreInFlight = operation;
+    void operation.then(clearRestore, clearRestore);
+    function clearRestore() {
+      if (restoreInFlight === operation) {
+        restoreInFlight = undefined;
+      }
     }
+    return throwOnError ? operation : operation.catch(() => {});
   }
 
   async function failAndCleanupRestoredQueuedRun(
@@ -586,6 +672,7 @@ export function createSubagentRegistryRestorer(config: {
       !activationRequested ||
       (restoreState === "succeeded" && Boolean(getGatewayContextResolver()?.())),
     reset: () => {
+      generation += 1;
       clearRestoreRetryTimer();
       restoreState = "idle";
       restoredRowsPending = false;

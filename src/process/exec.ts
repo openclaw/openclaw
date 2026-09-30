@@ -1,4 +1,8 @@
-import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import {
+  asPositiveFiniteNumber,
+  resolveOptionalIntegerOption,
+  resolveTimerTimeoutMs,
+} from "@openclaw/normalization-core/number-coercion";
 import { decodeWindowsOutputBuffer } from "../infra/windows-encoding.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { hasChildProcessExited, releaseChildProcessOutputAfterExit } from "./child-process.js";
@@ -297,12 +301,10 @@ export async function runCommandBuffered(
 
   const chunks: Record<CommandOutputStream, Buffer[]> = { stdout: [], stderr: [] };
   const capturedBytes: Record<CommandOutputStream, number> = { stdout: 0, stderr: 0 };
-  const maxCombinedOutputBytes =
-    typeof options.maxCombinedOutputBytes === "number" &&
-    Number.isFinite(options.maxCombinedOutputBytes) &&
-    options.maxCombinedOutputBytes > 0
-      ? Math.max(1, Math.floor(options.maxCombinedOutputBytes))
-      : undefined;
+  const maxCombinedOutputBytes = resolveOptionalIntegerOption(
+    asPositiveFiniteNumber(options.maxCombinedOutputBytes),
+    { min: 1 },
+  );
   let outputLimitStream: CommandOutputStream | undefined;
   const appendChunk = (chunk: Buffer, stream: CommandOutputStream): boolean => {
     if (options.discardOutput?.[stream]) {

@@ -32,6 +32,7 @@ import {
   observedSystemdManagerUid,
   resolveUpdatedGatewayRestartPort,
 } from "./update-command-service-plan.js";
+import { assertManagedGatewayArtifactPublication } from "./update-command-service-revalidation.js";
 
 export async function isManagedGatewayServiceOffline(state: GatewayServiceState): Promise<boolean> {
   // Loaded LaunchAgents can respawn even while disabled. Windows needs the live
@@ -155,8 +156,6 @@ export async function withGatewayRuntimeArtifactPublication<T>(
         timeoutMs: params.timeoutMs,
       });
       assertCurrent();
-      const layout = await summarizeGatewayServiceLayout(state.command);
-      assertCurrent();
       const database = await outputIdentity(resolveOpenClawStateSqlitePath(state.env));
       assertCurrent();
       const serviceName =
@@ -171,20 +170,22 @@ export async function withGatewayRuntimeArtifactPublication<T>(
         profile: resolveGatewayProfileSuffix(state.env.OPENCLAW_PROFILE),
         managerUid: observedSystemdManagerUid(state),
       });
-      let serving: { root: PathIdentity; entrypoint: PathIdentity } | undefined;
-      let disjoint = false;
-      if (layout?.packageRootReal && layout.entrypointReal) {
+      const inspectServing = async (command: GatewayServiceState["command"]) => {
+        const layout = await summarizeGatewayServiceLayout(command);
+        assertCurrent();
+        if (!layout?.packageRootReal || !layout.entrypointReal) {
+          return undefined;
+        }
         const [installed, entrypoint] = await Promise.all([
           identity(layout.packageRootReal),
           outputIdentity(layout.entrypointReal),
         ]);
         assertCurrent();
-        serving = { root: installed, entrypoint };
         const servingOutputs = await Promise.all(
           outputPaths.map((output) => outputIdentity(path.join(installed.real, output))),
         );
         assertCurrent();
-        disjoint =
+        const disjoint =
           !same(target, installed) &&
           !destinations.some(
             (destination) =>
@@ -197,11 +198,17 @@ export async function withGatewayRuntimeArtifactPublication<T>(
                   isPathInside(output.real, destination.real),
               ),
           );
-      } else if (
-        state.command ||
-        state.installed ||
-        state.loadState.status !== "not-loaded" ||
-        !state.runtime?.missingUnit
+        return { serving: { root: installed, entrypoint }, disjoint };
+      };
+      const inspected = await inspectServing(state.command);
+      const serving = inspected?.serving;
+      const disjoint = inspected?.disjoint ?? false;
+      if (
+        !inspected &&
+        (state.command ||
+          state.installed ||
+          state.loadState.status !== "not-loaded" ||
+          !state.runtime?.missingUnit)
       ) {
         refuse();
       }
@@ -241,6 +248,18 @@ export async function withGatewayRuntimeArtifactPublication<T>(
           refuse();
         }
       }
+      await assertManagedGatewayArtifactPublication({
+        roots: [params.root],
+        env: params.env,
+        timeoutMs: params.timeoutMs,
+        assertCurrent,
+        updateInstallKind: "git",
+        shouldRestart: false,
+        inspectOverlap: async (_root, command) => {
+          const consumer = await inspectServing(command);
+          return consumer ? !consumer.disjoint : null;
+        },
+      });
       return { state, disjoint, parents, destinations, database, nativeIdentity, serving };
     };
     const inspect = async () => {

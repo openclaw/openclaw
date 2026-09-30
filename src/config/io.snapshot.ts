@@ -135,6 +135,26 @@ async function readConfigSnapshotWithPreparation(
   const includeProvenance: NonNullable<ConfigFileSnapshot["includeProvenance"]>[number][] = [];
   let agentRosterIncludeOwned = false;
   let bindingsIncludeOwned = false;
+  const invalidSourceSnapshot = (
+    issue: ConfigFileSnapshot["issues"][number],
+    runtimeConfig: OpenClawConfig = fallbackSourceConfig,
+    readError?: ConfigFileSnapshot["readError"],
+  ) =>
+    createConfigFileSnapshot({
+      path: configPath,
+      includedPaths: listResolvedIncludePaths(includeFilePathsForWatch),
+      exists: true,
+      raw: fallbackRaw,
+      parsed: fallbackParsed,
+      sourceConfig: fallbackSourceConfig,
+      valid: false,
+      runtimeConfig,
+      hash: fallbackHash,
+      ...(readError ? { readError } : {}),
+      issues: [issue],
+      warnings: [],
+      legacyIssues: [],
+    });
 
   try {
     const raw = await deps.measure(
@@ -179,26 +199,14 @@ async function readConfigSnapshotWithPreparation(
     );
     if (!parsedRes.ok) {
       return await finalizeReadConfigSnapshotInternalResult(deps, {
-        snapshot: createConfigFileSnapshot({
-          path: configPath,
-          includedPaths: listResolvedIncludePaths(includeFilePathsForWatch),
-          exists: true,
-          raw,
-          parsed: {},
-          sourceConfig: {},
-          valid: false,
-          runtimeConfig: {},
-          hash: rawHash,
-          issues: [
-            {
-              path: "",
-              errorCode: "CONFIG_SOURCE_INVALID",
-              message: `JSON5 parse failed: ${parsedRes.error}`,
-            },
-          ],
-          warnings: [],
-          legacyIssues: [],
-        }),
+        snapshot: invalidSourceSnapshot(
+          {
+            path: "",
+            errorCode: "CONFIG_SOURCE_INVALID",
+            message: `JSON5 parse failed: ${parsedRes.error}`,
+          },
+          {},
+        ),
       });
     }
     const effectiveParsed = parsedRes.parsed;
@@ -232,29 +240,17 @@ async function readConfigSnapshotWithPreparation(
           ? error.message
           : `Include resolution failed: ${String(error)}`;
       return await finalizeReadConfigSnapshotInternalResult(deps, {
-        snapshot: createConfigFileSnapshot({
-          path: configPath,
-          includedPaths: listResolvedIncludePaths(includeFilePathsForWatch),
-          exists: true,
-          raw,
-          parsed: effectiveParsed,
-          sourceConfig: coerceConfig(effectiveParsed),
-          valid: false,
-          runtimeConfig: coerceConfig(effectiveParsed),
-          hash: rawHash,
-          issues: [
-            {
-              path: "",
-              errorCode:
-                error instanceof ConfigIncludeReadError || !(error instanceof ConfigIncludeError)
-                  ? "CONFIG_READ_FAILED"
-                  : "CONFIG_SOURCE_INVALID",
-              message,
-            },
-          ],
-          warnings: [],
-          legacyIssues: [],
-        }),
+        snapshot: invalidSourceSnapshot(
+          {
+            path: "",
+            errorCode:
+              error instanceof ConfigIncludeReadError || !(error instanceof ConfigIncludeError)
+                ? "CONFIG_READ_FAILED"
+                : "CONFIG_SOURCE_INVALID",
+            message,
+          },
+          coerceConfig(effectiveParsed),
+        ),
         includeFileHashesForWrite,
         includeFileTargetsForWrite,
       });
@@ -483,22 +479,12 @@ async function readConfigSnapshotWithPreparation(
       message = `read failed: ${String(error)}`;
     }
     return await finalizeReadConfigSnapshotInternalResult(deps, {
-      snapshot: createConfigFileSnapshot({
-        path: configPath,
-        includedPaths: listResolvedIncludePaths(includeFilePathsForWatch),
-        exists: true,
-        raw: fallbackRaw,
-        parsed: fallbackParsed,
-        sourceConfig: fallbackSourceConfig,
-        valid: false,
-        runtimeConfig: fallbackSourceConfig,
-        hash: fallbackHash,
-        ...(fallbackRaw === null ? { readError: { code: nodeError?.code ?? null } } : {}),
+      snapshot: invalidSourceSnapshot(
+        { path: "", errorCode: "CONFIG_READ_FAILED", message },
+        fallbackSourceConfig,
         // Diagnostic classification must not broaden readError's unavailable-source write guard.
-        issues: [{ path: "", errorCode: "CONFIG_READ_FAILED", message }],
-        warnings: [],
-        legacyIssues: [],
-      }),
+        fallbackRaw === null ? { code: nodeError?.code ?? null } : undefined,
+      ),
       envSnapshotForRestore: fallbackEnvSnapshotForRestore,
       includeFileHashesForWrite,
       includeFileTargetsForWrite,

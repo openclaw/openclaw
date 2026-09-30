@@ -4,8 +4,8 @@ import {
   runAgentCleanupStep,
   type AgentHarnessRuntimeArtifactBinding,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
 import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { isIncognitoSessionKey } from "../incognito-session.js";
 import {
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
   closeCodexStartupClientBestEffort,
@@ -61,7 +61,7 @@ import { createCodexTrajectoryRecorder } from "./trajectory.js";
 import type { CodexAppServerTurnRouter, CodexThreadRouteReservation } from "./turn-router.js";
 
 export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
-  const { context, turnState, buildRenderedCodexDeveloperInstructions } = prompt;
+  const { context } = prompt;
   const { runtime, attemptTools } = context;
   const { connection, hookChannelId } = runtime;
   const {
@@ -75,7 +75,6 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     options,
     nativeHookRelayEvents,
   } = connection;
-  const { toolBridge } = attemptTools;
   const modelAdmissionSource = runtime.nativeToolSurfaceEnabled
     ? params.hostCapabilities.retainSourceAuthority?.()
     : undefined;
@@ -98,14 +97,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       nativeProcessAuthority?.release();
     }
   };
-  const trajectoryRecorder = createCodexTrajectoryRecorder({
-    attempt: params,
-    cwd: effectiveCwd,
-    developerInstructions: buildRenderedCodexDeveloperInstructions(),
-    prompt: turnState.codexTurnPromptText,
-    trajectory: params.hostCapabilities.trajectory,
-    tools: toolBridge.availableSpecs,
-  });
+  const trajectoryRecorder = createCodexTrajectoryRecorder(params.hostCapabilities.trajectory);
   const initialResourceState: {
     sandboxExecEnvironment: CodexSandboxExecEnvironment | undefined;
     executionDisconnectError: Error | undefined;

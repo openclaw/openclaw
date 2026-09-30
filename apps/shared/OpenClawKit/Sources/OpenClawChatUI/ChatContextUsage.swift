@@ -62,7 +62,7 @@ enum ChatContextUsageCalculator {
         return costs.reduce(0, +)
     }
 
-    private static func positive(_ value: Int?) -> Int? {
+    fileprivate static func positive(_ value: Int?) -> Int? {
         guard let value, value > 0 else { return nil }
         return value
     }
@@ -111,10 +111,10 @@ struct ChatMessageUsagePresentation: Equatable {
 
         var visualParts: [String] = []
         var accessibilityParts: [String] = []
-        let input = self.positive(usage.input)
-        let output = self.positive(usage.output)
-        let cacheRead = self.positive(usage.cacheRead)
-        let cacheWrite = self.positive(usage.cacheWrite)
+        let input = ChatContextUsageCalculator.positive(usage.input)
+        let output = ChatContextUsageCalculator.positive(usage.output)
+        let cacheRead = ChatContextUsageCalculator.positive(usage.cacheRead)
+        let cacheWrite = ChatContextUsageCalculator.positive(usage.cacheWrite)
 
         let tokenParts: [(Int?, String, String)] = [
             (input, "↑", String(localized: "Input tokens: %@")),
@@ -149,20 +149,15 @@ struct ChatMessageUsagePresentation: Equatable {
         if let contextPercent {
             let warningPrefix = pressure == .normal ? "" : "⚠︎ "
             visualParts.append("\(warningPrefix)\(contextPercent)% \(String(localized: "ctx"))")
-            switch pressure {
+            let format = switch pressure {
             case .normal:
-                accessibilityParts.append(String(
-                    format: String(localized: "%@ percent of context used"),
-                    contextPercent.formatted()))
+                String(localized: "%@ percent of context used")
             case .warning:
-                accessibilityParts.append(String(
-                    format: String(localized: "Warning: %@ percent of context used"),
-                    contextPercent.formatted()))
+                String(localized: "Warning: %@ percent of context used")
             case .danger:
-                accessibilityParts.append(String(
-                    format: String(localized: "Critical: %@ percent of context used"),
-                    contextPercent.formatted()))
+                String(localized: "Critical: %@ percent of context used")
             }
+            accessibilityParts.append(String(format: format, contextPercent.formatted()))
         }
 
         guard !visualParts.isEmpty else { return nil }
@@ -177,11 +172,6 @@ struct ChatMessageUsagePresentation: Equatable {
         if percent >= 90 { return .danger }
         if percent >= 75 { return .warning }
         return .normal
-    }
-
-    private static func positive(_ value: Int?) -> Int? {
-        guard let value, value > 0 else { return nil }
-        return value
     }
 }
 

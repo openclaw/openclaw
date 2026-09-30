@@ -67,7 +67,6 @@ extensions/discord/src/monitor/model-picker.view.ts
 extensions/discord/src/monitor/native-command.model-picker.test.ts
 extensions/discord/src/monitor/native-command.plugin-dispatch.test.ts
 extensions/discord/src/monitor/native-command.ts
-extensions/discord/src/monitor/provider.test.ts
 extensions/discord/src/outbound-adapter.test.ts
 extensions/discord/src/send.sends-basic-channel-messages.test.ts
 extensions/fal/image-generation-provider.ts
@@ -190,7 +189,6 @@ extensions/slack/src/monitor/provider.ts
 extensions/slack/src/monitor/replies.test.ts
 extensions/slack/src/monitor/slash.test.ts
 extensions/slack/src/monitor/slash.ts
-extensions/slack/src/send.blocks.test.ts
 extensions/slack/src/send.ts
 extensions/telegram/src/action-runtime.ts
 extensions/telegram/src/bot-message-context.session.ts
@@ -236,7 +234,6 @@ packages/gateway-protocol/src/schema/agents-models-skills.ts
 packages/markdown-core/src/ir.ts
 packages/memory-host-sdk/src/host/session-files.ts
 packages/tool-call-repair/src/stream-normalizer.ts
-src/acp/control-plane/manager.turn-results.test.ts
 src/agents/agent-bundle-mcp-runtime.test.ts
 src/agents/agent-bundle-mcp-runtime.ts
 src/agents/agent-command.live-model-switch.test.ts
@@ -275,7 +272,6 @@ src/agents/embedded-agent-runner-extraparams.test.ts
 src/agents/embedded-agent-runner.cache.live.test.ts
 src/agents/embedded-agent-runner.e2e.test.ts
 src/agents/embedded-agent-runner.run-embedded-agent.auth-profile-rotation.e2e.test.ts
-src/agents/embedded-agent-runner.sanitize-session-history.test.ts
 src/agents/embedded-agent-runner/compact.hooks.harness.ts
 src/agents/embedded-agent-runner/compact.hooks.test.ts
 src/agents/embedded-agent-runner/context-engine-maintenance.test.ts
@@ -298,14 +294,10 @@ src/agents/harness/native-hook-relay.test.ts
 src/agents/harness/selection.test.ts
 src/agents/main-session-recovery/main-session-restart-recovery.test.ts
 src/agents/model-auth-availability.ts
-src/agents/model-auth.profiles.test.ts
-src/agents/model-auth.test.ts
 src/agents/model-fallback.test.ts
 src/agents/model-selection-shared.ts
 src/agents/model-selection.test.ts
 src/agents/models.profiles.live.test.ts
-src/agents/openai-transport-stream.base.test.ts
-src/agents/openai-transport-stream.replay-and-tools.test.ts
 src/agents/openclaw-tools.session-status.test.ts
 src/agents/openclaw-tools.sessions.test.ts
 src/agents/provider-attribution.test.ts
@@ -325,7 +317,6 @@ src/agents/subagents/registry/subagent-registry-lifecycle.test.ts
 src/agents/subagents/registry/subagent-registry.test.ts
 src/agents/subagents/spawn/acp-spawn.test.ts
 src/agents/subagents/spawn/subagent-spawn.test.ts
-src/agents/system-prompt.test.ts
 src/agents/system-prompt.ts
 src/agents/tool-loop-detection.test.ts
 src/agents/tool-search.test.ts
@@ -389,7 +380,6 @@ src/cli/command-secret-gateway.ts
 src/cli/config-cli.test.ts
 src/cli/cron-cli.test.ts
 src/cli/daemon-cli/status.gather.test.ts
-src/cli/daemon-cli/status.print.test.ts
 src/cli/devices-cli.runtime.ts
 src/cli/devices-cli.test.ts
 src/cli/exec-approvals-cli.ts
@@ -407,7 +397,6 @@ src/cli/plugins-cli.runtime.ts
 src/cli/plugins-cli.update.test.ts
 src/cli/run-main.exit.test.ts
 src/cli/run-main.ts
-src/cli/skills-cli.commands.test.ts
 src/cli/skills-cli.ts
 src/commands/agent-via-gateway.test.ts
 src/commands/agent-via-gateway.ts
@@ -419,7 +408,6 @@ src/commands/daemon-install-helpers.test.ts
 src/commands/daemon-install-helpers.ts
 src/commands/doctor-auth-flat-profiles.test.ts
 src/commands/doctor-auth-flat-profiles.ts
-src/commands/doctor-config-flow.test.ts
 src/commands/doctor-gateway-services.test.ts
 src/commands/doctor-legacy-config.migrations.test.ts
 src/commands/doctor-memory-search.test.ts
@@ -456,7 +444,6 @@ src/config/plugin-auto-enable.core.test.ts
 src/config/redact-snapshot.test.ts
 src/config/schema.labels.ts
 src/config/schema.test.ts
-src/config/sessions/disk-budget.ts
 src/config/sessions/session-accessor.conformance.test.ts
 src/config/sessions/session-accessor.test.ts
 src/config/sessions/transcript.test.ts
@@ -607,7 +594,6 @@ src/node-host/invoke-system-run-plan.test.ts
 src/node-host/invoke-system-run.test.ts
 src/node-host/invoke-system-run.ts
 src/node-host/invoke.ts
-src/plugin-sdk/approval-native-helpers.ts
 src/plugin-sdk/core.ts
 src/plugin-sdk/provider-auth.test.ts
 src/plugin-sdk/provider-stream-shared.test.ts
@@ -685,7 +671,6 @@ src/tui/tui-pty-local.e2e.test.ts
 src/tui/tui-session-actions.test.ts
 src/tui/tui.ts
 src/web-search/runtime.test.ts
-src/wizard/clack-navigation-prompts.ts
 src/wizard/setup.finalize.test.ts
 src/wizard/setup.finalize.ts
 src/wizard/setup.test.ts

@@ -2,7 +2,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { Rolldown } from "vite";
 import { resolvedLocaleConfigHintsModulePrefix } from "./control-ui-locales.ts";
 
 const configDir = path.dirname(fileURLToPath(import.meta.url));
@@ -11,13 +10,19 @@ const repoRoot = path.resolve(configDir, "../..");
 // The generator disables these groups so stale entries cannot feed back into it.
 const controlUiBootModules = JSON.parse(
   fs.readFileSync(path.join(configDir, "control-ui-boot-modules.json"), "utf8"),
-) as Record<"shared" | "new" | "chat", string[]>;
+) as Record<"shared" | "new" | "chat", string[]> & {
+  entries: Record<"shared" | "new" | "chat", string[]>;
+};
 
-const measuredStyles = new Set(
-  Object.values(controlUiBootModules)
-    .flat()
-    .filter((id) => id.endsWith(".css")),
+const bootEntryRoutes = new Map(
+  (["shared", "new", "chat"] as const).flatMap((route) =>
+    controlUiBootModules.entries[route].map((id) => [id, route] as const),
+  ),
 );
+
+export function controlUiBootEntryRoute(id: string) {
+  return bootEntryRoutes.get(controlUiBootManifestKey(id));
+}
 
 function normalizeModuleId(id: string): string {
   return id.replace(/\\/g, "/");
@@ -162,27 +167,22 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
                 includeDependenciesRecursively: true,
                 // Shared and chat groups both contain dense UI modules; keep their
                 // generated chunks within the existing compressed-size budget.
-                // Let tiny split tails stay with their consumers through automatic chunking.
                 minSize: 16 * 1024,
                 maxSize: 1408 * 1024,
               };
             }),
-            {
-              name: (id: string, context: Rolldown.ChunkingContext) => {
-                const pages = new Set(
-                  (context.getModuleInfo(id)?.importers ?? []).flatMap((importer) => {
-                    const page = /^ui\/src\/pages\/([^/]+)\//u.exec(
-                      controlUiBootManifestKey(importer),
-                    )?.[1];
-                    return page ? [page] : [];
-                  }),
-                );
-                return pages.size ? "css-" + [...pages].toSorted().join("-") : null;
-              },
-              test: (id: string) => measuredStyles.has(controlUiBootManifestKey(id)),
-              // Protect measured page styles without splitting unrelated lazy CSS into JS facades.
-              priority: 9,
-            },
+            ...(["shared", "new", "chat"] as const).map((route) => {
+              const styles = new Set(
+                controlUiBootModules[route].filter((id) => id.endsWith(".css")),
+              );
+              return {
+                name: `control-ui-boot-${route}-styles`,
+                test: (id: string) => styles.has(controlUiBootManifestKey(id)),
+                // One stylesheet per measured route set, without per-page JS facades.
+                // Keep it separate from core CSS to preserve its existing size ceiling.
+                priority: 9,
+              };
+            }),
           ]),
     ],
   };

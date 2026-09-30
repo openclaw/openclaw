@@ -172,17 +172,15 @@ async function withRepairResources<T>(run: () => Promise<T>): Promise<T> {
 }
 
 export async function prepareUpdateRepairInference(signal: AbortSignal, timeoutMs: number) {
-  return withRepairResources(() => prepareRepairInference(signal, timeoutMs));
-}
-
-async function prepareRepairInference(signal: AbortSignal, timeoutMs: number) {
-  signal.throwIfAborted();
-  const { getRuntimeConfig } = await import("../config/io.js");
-  signal.throwIfAborted();
-  const config = getRuntimeConfig();
-  const { selectUpdateRepairInference } = await import("./update-repair-inference.js");
-  signal.throwIfAborted();
-  return await selectUpdateRepairInference({ config, runtime: repairRuntime, signal, timeoutMs });
+  return withRepairResources(async () => {
+    signal.throwIfAborted();
+    const { getRuntimeConfig } = await import("../config/io.js");
+    signal.throwIfAborted();
+    const config = getRuntimeConfig();
+    const { selectUpdateRepairInference } = await import("./update-repair-inference.js");
+    signal.throwIfAborted();
+    return await selectUpdateRepairInference({ config, runtime: repairRuntime, signal, timeoutMs });
+  });
 }
 
 // Operator-owned updates permit prompt-free exec, never past an explicit deny.

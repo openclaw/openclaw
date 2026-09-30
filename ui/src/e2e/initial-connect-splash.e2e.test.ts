@@ -40,6 +40,7 @@ const openContexts = new Set<BrowserContext>();
 
 async function createPage(): Promise<Page> {
   const context = await browser.newContext({
+    locale: "en-US",
     viewport,
     ...(artifactDir ? { recordVideo: { dir: artifactDir, size: viewport } } : {}),
   });
@@ -59,7 +60,7 @@ function decodeProofPng(png: Buffer) {
 }
 
 async function createPageWithoutRecording(): Promise<Page> {
-  const context = await browser.newContext();
+  const context = await browser.newContext({ locale: "en-US" });
   openContexts.add(context);
   return context.newPage();
 }
@@ -310,9 +311,23 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
 
       for (const size of [viewport, { width: 1440, height: 1440 }, { width: 390, height: 844 }]) {
         await page.setViewportSize(size);
-        const content = await page.locator(".content--chat").boundingBox();
-        const header = await skeleton.locator(".loading-skeleton__header").boundingBox();
-        const composer = await skeleton.locator(".loading-skeleton__composer").boundingBox();
+        // The shell viewport owner can commit a resize between separate browser calls.
+        const { content, header, composer } = await page
+          .locator(".content--chat")
+          .evaluate((root) => {
+            const bounds = (element: Element | null) => {
+              if (!element?.checkVisibility({ visibilityProperty: true })) {
+                return null;
+              }
+              const { x, y, width, height } = element.getBoundingClientRect();
+              return width > 0 && height > 0 ? { x, y, width, height } : null;
+            };
+            return {
+              content: bounds(root),
+              header: bounds(root.querySelector(".loading-skeleton__header")),
+              composer: bounds(root.querySelector(".loading-skeleton__composer")),
+            };
+          });
         expect(content).not.toBeNull();
         expect(header).not.toBeNull();
         expect(composer).not.toBeNull();

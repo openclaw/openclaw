@@ -459,7 +459,6 @@ export async function captureGatewayHeapSnapshotCheckpoint(params: {
 }
 
 export { buildQaSuiteSummaryJson } from "./suite-artifacts.js";
-export type { QaSuiteSummaryJsonParams } from "./suite-artifacts.js";
 export type { QaSuiteSummaryJson } from "./suite-summary.js";
 
 export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuiteResult> {

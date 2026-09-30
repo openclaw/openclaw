@@ -1,5 +1,4 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-// Chat gateway methods expose the stable registry while focused modules own large workflows.
 import {
   ErrorCodes,
   errorShape,
@@ -56,7 +55,6 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
     const p = params;
 
-    // Load session to find transcript file
     const rawSessionKey = p.sessionKey;
     const agentIdOverride = normalizeOptionalString(p.agentId);
     const cfg = context.getRuntimeConfig();
@@ -131,7 +129,6 @@ export const chatHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    // Broadcast to webchat for immediate UI update
     const message = projectChatDisplayMessage(appended.message, {
       maxChars: resolveEffectiveChatHistoryMaxChars(),
     });

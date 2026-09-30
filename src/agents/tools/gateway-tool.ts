@@ -1,4 +1,7 @@
-/** Gateway config reads and operator-authorized self-updates. */
+import {
+  asOptionalObjectRecord,
+  asOptionalRecord,
+} from "@openclaw/normalization-core/record-coerce";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import { formatCommandOwnerHint } from "../../commands/doctor-command-owner.js";
@@ -27,26 +30,23 @@ const MAX_GATEWAY_CONFIG_GET_TEXT_CHARS = 12_000;
 const CONFIG_SCHEMA_PATH_NOT_FOUND_MESSAGE = "config schema path not found";
 
 function getSnapshotConfig(snapshot: unknown): Record<string, unknown> {
-  if (!snapshot || typeof snapshot !== "object") {
+  const record = asOptionalObjectRecord(snapshot);
+  if (!record) {
     throw new Error("config.get response is not an object.");
   }
-  const config = (snapshot as { config?: unknown }).config;
-  if (!config || typeof config !== "object" || Array.isArray(config)) {
+  const config = asOptionalRecord(record.config);
+  if (!config) {
     throw new Error("config.get response is missing a config object.");
   }
-  return config as Record<string, unknown>;
+  return config;
 }
 
-function splitGatewayConfigGetPath(path: string): string[] {
-  return path
+function resolveGatewayConfigGetPath(config: Record<string, unknown>, path: string): unknown {
+  const parts = path
     .trim()
     .replace(/\[(\d+)\]/g, ".$1")
     .split(".")
     .filter(Boolean);
-}
-
-function resolveGatewayConfigGetPath(config: Record<string, unknown>, path: string): unknown {
-  const parts = splitGatewayConfigGetPath(path);
   if (parts.length === 0) {
     return undefined;
   }
@@ -208,7 +208,6 @@ export function createGatewayTool(options?: {
       if (action === "config.schema.lookup") {
         const path = readToolStringParam(params, "path", {
           required: true,
-          label: "path",
         });
         try {
           const result = await callConfigGateway("config.schema.lookup", { path });

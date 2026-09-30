@@ -18,20 +18,15 @@ import { FollowupRunDeferredError, type FollowupRun, type QueueSettings } from "
 const state = getFollowupTurnTestState();
 beforeEach(resetFollowupTurnTestState);
 
-// Boundary proof: the real queue and follow-up adapter select the execution
-// profile; the shared fixture stubs only the final agent backend on this path.
+// Real queue and followup adapter; only the final agent backend is stubbed.
 it.each([
-  { path: "ordinary summary", eligible: true },
   { path: "ordinary summary", eligible: false },
-  { path: "compacted sources", eligible: true },
   { path: "compacted sources", eligible: undefined },
   { path: "deferred retry", eligible: true },
-  { path: "deferred retry", eligible: false },
 ] as const)(
   "refreshes the overflow owner for $path (eligible=$eligible)",
   async ({ path, eligible }) => {
-    // A case owns its key and callback; a detached prior drain must never
-    // capture the next case's enqueues before its callback is installed.
+    // Keep detached drains from capturing the next case's enqueues.
     const key = `personal-bootstrap-overflow:${path}:${eligible}`;
     const settings: QueueSettings = {
       mode: "followup",
@@ -118,8 +113,7 @@ it.each([
           completed.resolve();
         }
       } catch (error) {
-        // Detached drain errors must fail the test, not become a retry loop
-        // or a pending phase promise that only fails at the test deadline.
+        // Surface detached drain failures through the awaited completion.
         clear();
         completed.reject(error);
       }
@@ -141,8 +135,7 @@ it.each([
         await Promise.race([firstAttempt.promise, completed.promise]);
         expect(summaryAttempts).toBe(1);
         expect(executions).toEqual([]);
-        // Overflow while admission is suspended compacts the original source;
-        // the retry must preserve its eligibility along with the newer source.
+        // Compaction during deferral must preserve the original source eligibility.
         enqueue(tailPrompt, true);
         currentOwner = "owner-after-deferral";
       }

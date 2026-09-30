@@ -22,6 +22,7 @@ import { ensureSessionTranscriptArchiveSchema } from "../state/openclaw-agent-se
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { migrateLegacyMediaPersistence } from "./state-migrations.media-persistence.js";
 import { cleanupMediaPersistenceFixtures } from "./state-migrations.media-persistence.test-support.js";
+import { migrateHistoricalTranscriptDirectives } from "./state-migrations.transcript-directives.js";
 
 type ArchiveEncoding = "identity" | "zstd";
 type ArchiveRow = {
@@ -244,7 +245,16 @@ describe("media migration of canonical SQLite transcript archives", () => {
     const result = await migrateLegacyMediaPersistence({ env: f.env }).finally(() =>
       observed.mockRestore(),
     );
-    expect(result.warnings).toEqual([]);
+    expect(result.warningDisposition).toBe("recoverable");
+    expect(result.warnings).toHaveLength(6);
+    expect(result.warnings[0]).toContain("Missing 121 canonical transcript archive file(s)");
+    expect(result.warnings[0]).toContain("showing 5 example(s), 116 omitted");
+    expect(result.warnings.slice(1)).toEqual(
+      ["000", "001", "002", "003", "004"].map(
+        (retained) =>
+          `Missing canonical transcript archive copy: ${path.join(f.archiveDirectory, `a-${retained}.jsonl`)}`,
+      ),
+    );
     expect(plans.length).toBeGreaterThan(0);
     // A page must seek both parts of the existing archive key, not rescan its visited prefix.
     expect(
@@ -272,7 +282,8 @@ describe("media migration of canonical SQLite transcript archives", () => {
     }
     expect(await migrateLegacyMediaPersistence({ env: f.env })).toEqual({
       changes: [],
-      warnings: [],
+      warnings: result.warnings,
+      warningDisposition: "recoverable",
     });
   });
 
@@ -306,10 +317,14 @@ describe("media migration of canonical SQLite transcript archives", () => {
     },
   );
 
-  it("normalizes an archive with an absent file and leaves publication pending", async () => {
+  it("warns about an absent archive copy while normalizing its blob and leaving publication pending", async () => {
     const f = fixture({ fileContent: null });
     const before = f.read();
-    expect((await migrateLegacyMediaPersistence({ env: f.env })).warnings).toEqual([]);
+    const result = await migrateLegacyMediaPersistence({ env: f.env });
+    expect(result.warningDisposition).toBe("recoverable");
+    expect(result.warnings).toHaveLength(2);
+    expect(result.warnings[0]).toContain("Missing 1 canonical transcript archive file(s)");
+    expect(result.warnings[1]).toBe(`Missing canonical transcript archive copy: ${f.archivePath}`);
     const after = f.read();
     expectCanonical(after);
     expectPreservedIdentity(before, after);
@@ -317,10 +332,28 @@ describe("media migration of canonical SQLite transcript archives", () => {
     expect(fs.existsSync(f.archivePath)).toBe(false);
     expect(await migrateLegacyMediaPersistence({ env: f.env })).toEqual({
       changes: [],
-      warnings: [],
+      warnings: result.warnings,
+      warningDisposition: "recoverable",
     });
     expect(f.read()).toEqual(after);
     expect(fs.existsSync(f.archivePath)).toBe(false);
+  });
+
+  it("reports missing copies before completing the historical directive cursor", async () => {
+    const f = fixture({ content: canonicalContent, fileContent: null });
+    const before = f.read();
+    const result = await migrateHistoricalTranscriptDirectives({ env: f.env });
+    expect(result).toMatchObject({ changes: [], warningDisposition: "recoverable" });
+    expect(result.warnings).toEqual([
+      expect.stringContaining("Missing 1 canonical transcript archive file(s)"),
+      `Missing canonical transcript archive copy: ${f.archivePath}`,
+    ]);
+    expect(f.read()).toEqual(before);
+    expect(fs.existsSync(f.archivePath)).toBe(false);
+    expect(await migrateHistoricalTranscriptDirectives({ env: f.env })).toEqual({
+      changes: [],
+      warnings: [],
+    });
   });
 
   it("repairs a legacy blob after an earlier migration changed only its file", async () => {

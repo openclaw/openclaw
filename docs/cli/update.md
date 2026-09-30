@@ -76,6 +76,11 @@ Public failure reports retain the rejected schema area, such as `gateway.*`,
 while hiding operator-defined keys and rejected values. Admission still runs
 when the selected package version matches the installed version; the no-op
 decision follows validation of the selected artifact and live installation.
+When switching channels, Doctor can prepare a read-only projection of supported
+legacy fields for database checks. Each projection stays bound to its original
+config bytes and include files. If the managed service uses another profile,
+caller and service projections remain separate; inspecting the caller does not
+rewrite its configuration.
 Guided recovery recognizes the saved config failure after a later successful
 update and still verifies the installed runtime and Gateway readiness.
 
@@ -117,6 +122,13 @@ status. JSON, non-interactive, `--yes`, and managed-service handoff invocations 
 not prompt after rollback.
 
 Update completion prints the terminal outcome and a local Markdown report path before exiting, including unexpected failures. Failed runs keep rollback-facing diagnostic JSON within the released 8 KiB limit. That file links a separate artifact containing every individually bounded Doctor finding; the Markdown report also retains the complete inventory. JSON output includes `reportPath`; a report-write failure prints a warning and preserves the update outcome.
+
+Exit always waits for accepted state operations, pending database opens, and live
+worker references to settle. After settlement, retained-worker native close and
+thread termination have a ten-second grace period. Expiry records a warning,
+keeps the retained runtime for later cleanup, and preserves the command's exit
+status. This protection belongs to the installed updater: installing a release
+with the fix enables it for the next update that release performs.
 
 When a Dashboard update fails while the Gateway handles the request, the Gateway
 logs a warning with the public reason and a safe error summary. Successful and

@@ -183,6 +183,29 @@ export function modelProviderErrorMessage(error: unknown): string {
   return formatUiError(error, t("modelProviders.requestFailed"));
 }
 
+export async function modelProviderMutationWarnings(
+  result: {
+    value: { warning?: string };
+    refresh: { ok: true } | { ok: false; error: string };
+  },
+  refreshProviders: () => Promise<string | null | undefined>,
+): Promise<string | null> {
+  const warnings = result.value.warning ? [result.value.warning] : [];
+  if (!result.refresh.ok) {
+    warnings.push(result.refresh.error);
+  } else {
+    try {
+      const warning = await refreshProviders();
+      if (warning) {
+        warnings.push(warning);
+      }
+    } catch (error) {
+      warnings.push(modelProviderErrorMessage(error));
+    }
+  }
+  return warnings.length ? warnings.join(" ") : null;
+}
+
 /**
  * The config owner adopts the committed snapshot and reconciles application.
  * Saving ends at its acknowledgement, not at a second read or provider discovery.
@@ -271,23 +294,10 @@ export async function runModelProviderApiKeyMutation(
       owner.setMessage({ kind: "error", text: result.error });
       return { ok: false };
     }
-    const warnings = result.value.warning ? [result.value.warning] : [];
-    if (!result.refresh.ok) {
-      warnings.push(result.refresh.error);
-    } else {
-      try {
-        const warning = await owner.refreshProviders();
-        if (warning) {
-          warnings.push(warning);
-        }
-      } catch (error) {
-        warnings.push(modelProviderErrorMessage(error));
-      }
-    }
+    const warning = await modelProviderMutationWarnings(result, () => owner.refreshProviders());
     if (!isCurrent()) {
       return { ok: false };
     }
-    const warning = warnings.length > 0 ? warnings.join(" ") : null;
     owner.setMessage({ kind: "success", text: params.success, ...(warning ? { warning } : {}) });
     return { ok: true, warning };
   } finally {

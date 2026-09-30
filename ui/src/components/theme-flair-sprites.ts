@@ -79,6 +79,16 @@ export function themeCritterBaseStyle(kind: ThemeCritterId, direction: 1 | -1): 
 // Avatar hats overlay the top of the circular avatar; the circle's own
 // overflow clip crops the crown, which reads as a hat worn, not held.
 // Tilted 12°, the angle of Red Hat Display's ascenders.
+function avatarLobsterHat(hat: keyof typeof LOBSTER_HAT_SPRITES, brimY: number) {
+  return svg`
+    <svg class="identity-avatar__hat-svg" viewBox="0 0 100 100" aria-hidden="true">
+      <g transform="translate(60 27) rotate(-12) scale(2.2) translate(-60 ${-brimY})">
+        ${LOBSTER_HAT_SPRITES[hat]}
+      </g>
+    </svg>
+  `;
+}
+
 export const AVATAR_HAT_SPRITES: Record<ThemeAvatarHatId, TemplateResult> = {
   fedora: svg`
     <svg class="identity-avatar__hat-svg" viewBox="0 0 100 100" aria-hidden="true">
@@ -90,32 +100,8 @@ export const AVATAR_HAT_SPRITES: Record<ThemeAvatarHatId, TemplateResult> = {
       </g>
     </svg>
   `,
-  crown: svg`
-    <svg class="identity-avatar__hat-svg" viewBox="0 0 100 100" aria-hidden="true">
-      <g transform="translate(60 27) rotate(-12) scale(2.2) translate(-60 -11)">
-        ${LOBSTER_HAT_SPRITES.crown}
-      </g>
-    </svg>
-  `,
-  santa: svg`
-    <svg class="identity-avatar__hat-svg" viewBox="0 0 100 100" aria-hidden="true">
-      <g transform="translate(60 27) rotate(-12) scale(2.2) translate(-60 -10.5)">
-        ${LOBSTER_HAT_SPRITES.santa}
-      </g>
-    </svg>
-  `,
-  party: svg`
-    <svg class="identity-avatar__hat-svg" viewBox="0 0 100 100" aria-hidden="true">
-      <g transform="translate(60 27) rotate(-12) scale(2.2) translate(-60 -11)">
-        ${LOBSTER_HAT_SPRITES.party}
-      </g>
-    </svg>
-  `,
-  pumpkin: svg`
-    <svg class="identity-avatar__hat-svg" viewBox="0 0 100 100" aria-hidden="true">
-      <g transform="translate(60 27) rotate(-12) scale(2.2) translate(-60 -12)">
-        ${LOBSTER_HAT_SPRITES.pumpkin}
-      </g>
-    </svg>
-  `,
+  crown: avatarLobsterHat("crown", 11),
+  santa: avatarLobsterHat("santa", 10.5),
+  party: avatarLobsterHat("party", 11),
+  pumpkin: avatarLobsterHat("pumpkin", 12),
 };

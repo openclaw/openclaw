@@ -8,12 +8,11 @@ import {
   normalizeChatFollowUpModeOverride,
   normalizeChatSendShortcut,
   UI_APPEARANCE_DEFAULTS,
-  type ChatFollowUpMode,
   type ChatSendShortcut,
   type UiSettings,
 } from "./settings.ts";
 import type { ThemeMode, ThemeName } from "./theme.ts";
-import { normalizeTypefaceOverride, type TypefaceId } from "./typography.ts";
+import { normalizeTypefaceOverride } from "./typography.ts";
 
 export function isAppearancePref(key: string): key is keyof typeof UI_APPEARANCE_PREFERENCE_KEYS {
   return Object.hasOwn(UI_APPEARANCE_PREFERENCE_KEYS, key);
@@ -31,11 +30,15 @@ type SyncedPrefSpec<T> = {
 
 const prefSpec = <T>(specification: SyncedPrefSpec<T>) => specification;
 
-const fontPrefSpec = (key: "fontUi" | "fontChat") =>
-  prefSpec<TypefaceId>({
-    configSync: false,
-    extract: normalizeTypefaceOverride,
-    local: (settings) => normalizeTypefaceOverride(settings[key]),
+const optionalPrefSpec = <K extends "accent" | "fontUi" | "fontChat" | "chatFollowUpMode">(
+  key: K,
+  normalize: (value: unknown) => UiSettings[K],
+  configSync = true,
+) =>
+  prefSpec<UiSettings[K]>({
+    configSync,
+    extract: normalize,
+    local: (settings) => normalize(settings[key]),
     write: (value) => ({ [key]: value }),
     clearable: true,
     reset: () => ({ [key]: undefined }),
@@ -63,15 +66,9 @@ export const SYNCED_PREFS = {
     clearable: true,
     reset: () => ({ themeMode: UI_APPEARANCE_DEFAULTS.themeMode }),
   }),
-  accent: prefSpec<string>({
-    extract: normalizeAccentColor,
-    local: (settings) => normalizeAccentColor(settings.accent),
-    write: (value) => ({ accent: value }),
-    clearable: true,
-    reset: () => ({ accent: undefined }),
-  }),
-  fontUi: fontPrefSpec("fontUi"),
-  fontChat: fontPrefSpec("fontChat"),
+  accent: optionalPrefSpec("accent", normalizeAccentColor),
+  fontUi: optionalPrefSpec("fontUi", normalizeTypefaceOverride, false),
+  fontChat: optionalPrefSpec("fontChat", normalizeTypefaceOverride, false),
   locale: prefSpec<string>({
     extract: (value) => (typeof value === "string" && isSupportedLocale(value) ? value : undefined),
     local: (settings) => settings.locale,
@@ -98,15 +95,8 @@ export const SYNCED_PREFS = {
     clearable: true,
     reset: () => ({ chatSendShortcut: undefined }),
   }),
-  chatFollowUpMode: prefSpec<ChatFollowUpMode>({
-    extract: normalizeChatFollowUpModeOverride,
-    local: (settings) => normalizeChatFollowUpModeOverride(settings.chatFollowUpMode),
-    write: (value) => ({ chatFollowUpMode: value }),
-    // Unset means "use the server-configured queue mode"; clearing must propagate,
-    // so the push serializes an explicit null removal.
-    clearable: true,
-    reset: () => ({ chatFollowUpMode: undefined }),
-  }),
+  // Unset uses the server-configured queue mode; clearing sends an explicit null removal.
+  chatFollowUpMode: optionalPrefSpec("chatFollowUpMode", normalizeChatFollowUpModeOverride),
   sidebarEntries: prefSpec<string[]>({
     extract: (value) => normalizeSidebarEntries(value) ?? undefined,
     local: (settings) => settings.sidebarEntries,

@@ -59,7 +59,7 @@ import {
   trimSummaryElisionsToCap,
 } from "./state.js";
 import { consumeQueueSummaryDelivery } from "./summary-consumption.js";
-import { isFollowupRunAborted, isFollowupRunDeferredError, type FollowupRun } from "./types.js";
+import { FollowupRunDeferredError, isFollowupRunAborted, type FollowupRun } from "./types.js";
 
 type InternalFollowupRun = FollowupRun & {
   /** Keep admission state out of the public plugin-facing FollowupRun contract. */
@@ -653,7 +653,7 @@ async function runQueueSummaryDelivery(
       await run({ abortSignal: cancellation.signal, onAdmitted });
     } catch (err) {
       if (!admitted) {
-        deferredBeforeAdmission = isFollowupRunDeferredError(err);
+        deferredBeforeAdmission = err instanceof FollowupRunDeferredError;
         if (!deferredBeforeAdmission) {
           releaseQueueSummaryDeliveryForRetry(queue, delivery);
         }
@@ -796,14 +796,10 @@ function resolveOverflowSummarySourceGroup(queue: {
     return [];
   }
   const contextKey = resolveFollowupDeliveryContextKey(source);
-  const sources: FollowupRun[] = [];
-  for (const candidate of queue.summarySources) {
-    if (resolveFollowupDeliveryContextKey(candidate) !== contextKey) {
-      break;
-    }
-    sources.push(candidate);
-  }
-  return sources;
+  const end = queue.summarySources.findIndex(
+    (candidate) => resolveFollowupDeliveryContextKey(candidate) !== contextKey,
+  );
+  return queue.summarySources.slice(0, end < 0 ? undefined : end);
 }
 
 async function drainProtectedPriorityFollowup(
@@ -1280,7 +1276,7 @@ export function scheduleFollowupDrain(
       }
     } catch (err) {
       queue.lastEnqueuedAt = Date.now();
-      if (!isFollowupRunDeferredError(err)) {
+      if (!(err instanceof FollowupRunDeferredError)) {
         if (isGatewayRestartDrainError(err)) {
           // A reversible signal fence may reopen. One-way abort synchronously
           // retires the queue above; rollback leaves it here for normal retry.

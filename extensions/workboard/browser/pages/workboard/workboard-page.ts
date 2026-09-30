@@ -1,7 +1,6 @@
 import { html, nothing, render } from "lit";
 import type { ControlUiView } from "openclaw/plugin-sdk/control-ui";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { createWorkboardClient } from "../../api/gateway.ts";
 import { renderAgentPicker } from "../../components/host-components.ts";
 import { icons } from "../../components/icons.ts";
 import { renderWorkboardBoardGlyph } from "../../components/workboard-board-glyph.ts";
@@ -69,7 +68,7 @@ export function createWorkboardPage(workboard: WorkboardCapability): ControlUiVi
     let metadataError: string | null = null;
     let observedScope: string | null | undefined;
     let redirectedBoard = "";
-    const client = createWorkboardClient(host);
+    const client = host;
     const state = workboard.state;
     const requestUpdate = () => {
       if (disposed || queued) {

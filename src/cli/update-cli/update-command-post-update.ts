@@ -13,12 +13,16 @@ import { defaultRuntime } from "../../runtime.js";
 import { classifyUpdateOutcome, isVerifiedUpdateRollback } from "../../shared/update-outcome.js";
 import { createUpdateCommandAuthority } from "./update-command-authority.js";
 import { convergeUpdatePlugins } from "./update-command-convergence.js";
-import { verifyUpdateFailureRecovery } from "./update-command-failure-recovery.js";
+import {
+  shouldWaitForRecovery,
+  verifyUpdateFailureRecovery,
+} from "./update-command-failure-recovery.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import { parkForegroundUpdateForActivation } from "./update-command-handoff.js";
 import { appendPluginUpdateWarnings } from "./update-command-plugins-internals.js";
 import {
   completePostUpdateMaintenance,
+  preparePostUpdateService,
   resumePostUpdateWindowsAutoStart,
 } from "./update-command-post-update-maintenance.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
@@ -29,7 +33,6 @@ import {
 import { prepareUpdateRestart } from "./update-command-restart-context.js";
 import {
   markControlPlaneUpdateRestartSentinelFailureBestEffort,
-  prepareUpdateServiceResult,
   recordServiceReconciliationWarning,
   UpdateCommandFailure,
   UpdateCommandPendingRecoveryFailure,
@@ -91,8 +94,8 @@ export async function finishUpdate(
   };
   assertCurrent();
   await assertUpdateCommandPackageFinalization(params);
+  const shouldRestart = await preparePostUpdateService(params, assertCurrent);
   assertCurrent();
-  const shouldRestart = prepareUpdateServiceResult(params);
   let gateway: TriageFailureContext["gateway"] = "preserve";
   let triageAllowed = true;
   const createFailure = (
@@ -369,15 +372,10 @@ export async function finishUpdate(
         env: currentServiceStop()?.serviceEnv ?? params.ownedManagedUpdateEnv,
         timeoutMs: params.updateStepTimeoutMs,
         serviceStopped: !rolledBack && currentServiceStop()?.stopped,
-        // An initial failure before activation cannot promise a new service startup.
-        // Keep waiting after an observed stop/rebind or any rollback handling.
-        waitForStartup:
-          params.result.status !== "error" ||
-          params.mutationStarted ||
-          params.preManagedServiceStop?.stopped === true ||
-          currentServiceStop()?.stopped === true ||
-          Boolean(params.originalManagedServiceRuntime?.definition.rebound) ||
-          rollbackAttempted,
+        serviceUpdateVerdict: gatewayStartAttempted
+          ? undefined
+          : params.preManagedServiceStop?.serviceUpdateVerdict,
+        waitForStartup: shouldWaitForRecovery(params, currentServiceStop(), rollbackAttempted),
         assertCurrent,
       });
       assertCurrent();

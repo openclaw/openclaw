@@ -72,7 +72,7 @@ enum QuickChatWindowPickerLogic {
     }
 }
 
-private enum QuickChatCapturePickerMode {
+enum QuickChatCapturePickerMode {
     case window
     case area
 }
@@ -137,15 +137,7 @@ final class QuickChatWindowPicker {
         self.permissionGrantProvider = permissionGrantProvider
     }
 
-    func beginWindow() async {
-        await self.begin(mode: .window)
-    }
-
-    func beginArea() async {
-        await self.begin(mode: .area)
-    }
-
-    private func begin(mode: QuickChatCapturePickerMode) async {
+    func begin(mode: QuickChatCapturePickerMode) async {
         guard !self.isInteractionActive, self.captureTask == nil, self.model.canCaptureWindow else { return }
         let operationID = UUID()
         self.operationID = operationID

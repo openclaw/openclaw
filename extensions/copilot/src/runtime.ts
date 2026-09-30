@@ -261,15 +261,10 @@ export function createCopilotClientPool(options: CopilotClientPoolOptions = {}):
       return;
     }
 
-    if (entry.state.kind === "ready") {
-      scheduleIdleStop(entry, entry.state.client);
-      return;
-    }
-
     if (entry.state.kind === "idle") {
       clearTimeout(entry.state.idleTimer);
-      scheduleIdleStop(entry, entry.state.client);
     }
+    scheduleIdleStop(entry, entry.state.client);
   };
 
   const dispose = async (): Promise<Error[]> => {

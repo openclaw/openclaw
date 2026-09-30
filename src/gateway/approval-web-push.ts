@@ -75,10 +75,6 @@ function approvalNotificationCopy(params: {
   };
 }
 
-type ApprovalWebPushDeliveryState = {
-  requestPushPromise: Promise<ApprovalRequestWebPushDelivery | null>;
-};
-
 function approvalWebPushTag(approvalId: string): string {
   return `openclaw-approval-${approvalId}`;
 }
@@ -239,12 +235,7 @@ async function deliverBoundApprovalWebPush<TPayload>(params: {
     subscriptionIds: definitelyRejectedSubscriptionIds,
     stateDir: params.stateDir,
   });
-  const possibleDeliverySubscriptionIds = new Set(
-    results
-      .filter((result) => result.ok || result.statusCode === undefined)
-      .map((result) => result.subscriptionId),
-  );
-  return possibleDeliverySubscriptionIds.size > 0
+  return results.some((result) => result.ok || result.statusCode === undefined)
     ? { record: params.record, sender: sendWebPushNotifications }
     : null;
 }
@@ -255,7 +246,7 @@ export function createApprovalWebPushDelivery(params: {
   log?: { warn?: (message: string) => void };
   stateDir?: string;
 }) {
-  const deliveriesByApprovalId = new Map<string, ApprovalWebPushDeliveryState>();
+  const deliveriesByApprovalId = new Map<string, Promise<ApprovalRequestWebPushDelivery | null>>();
   const terminalDeliveriesByApprovalId = new Map<string, Promise<void>>();
 
   const handleTerminal = (approval: { id: string }): Promise<void> => {
@@ -264,9 +255,9 @@ export function createApprovalWebPushDelivery(params: {
       return active;
     }
     const terminalDelivery = (async () => {
-      const deliveryState = deliveriesByApprovalId.get(approval.id);
+      const requestPush = deliveriesByApprovalId.get(approval.id);
       deliveriesByApprovalId.delete(approval.id);
-      const requestDelivery = deliveryState ? await deliveryState.requestPushPromise : null;
+      const requestDelivery = requestPush ? await requestPush : null;
       const sender =
         requestDelivery?.sender ?? (await prepareWebPushNotificationSender(params.stateDir));
       const durableLookup = requestDelivery
@@ -278,14 +269,13 @@ export function createApprovalWebPushDelivery(params: {
               : undefined,
           });
       const durableRecord = durableLookup?.outcome === "found" ? durableLookup.record : null;
-      const recordedSubscriptions = await listWebPushApprovalDeliveryTargets({
+      const subscriptions = await listWebPushApprovalDeliveryTargets({
         approvalId: approval.id,
         stateDir: params.stateDir,
       });
-      if (recordedSubscriptions.length === 0) {
+      if (subscriptions.length === 0) {
         return;
       }
-      const subscriptions = recordedSubscriptions;
       const suppressedSubscriptionIds: string[] = [];
       const source =
         requestDelivery && isRecord(requestDelivery.record.request)
@@ -399,23 +389,21 @@ export function createApprovalWebPushDelivery(params: {
   return {
     /** Sends a request notification only when at least one browser has a durable binding. */
     handleRequested<TPayload>(record: ExecApprovalRecord<TPayload>): Promise<boolean> {
-      const deliveryState: ApprovalWebPushDeliveryState = {
-        requestPushPromise: deliverBoundApprovalWebPush({
-          record,
-          getRuntimeConfig: params.getRuntimeConfig,
-          stateDir: params.stateDir,
-        }),
-      };
-      deliveriesByApprovalId.set(record.id, deliveryState);
-      return deliveryState.requestPushPromise.then(
+      const requestPush = deliverBoundApprovalWebPush({
+        record,
+        getRuntimeConfig: params.getRuntimeConfig,
+        stateDir: params.stateDir,
+      });
+      deliveriesByApprovalId.set(record.id, requestPush);
+      return requestPush.then(
         (delivery) => {
-          if (!delivery && deliveriesByApprovalId.get(record.id) === deliveryState) {
+          if (!delivery && deliveriesByApprovalId.get(record.id) === requestPush) {
             deliveriesByApprovalId.delete(record.id);
           }
           return Boolean(delivery);
         },
         (error: unknown) => {
-          if (deliveriesByApprovalId.get(record.id) === deliveryState) {
+          if (deliveriesByApprovalId.get(record.id) === requestPush) {
             deliveriesByApprovalId.delete(record.id);
           }
           throw error;

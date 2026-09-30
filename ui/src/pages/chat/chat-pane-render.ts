@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { resolveArtifactDownloadSource } from "../../api/artifact-download.ts";
 import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
@@ -41,7 +42,6 @@ import { resolveSidebarLayoutForBoard } from "./chat-pane-sidebar-layout.ts";
 import {
   dismissChatError,
   initialHistorySubmitState,
-  resolveChatArtifactDownload,
   resolveChatPaneFollowUpMode,
 } from "./chat-pane-state.ts";
 import { ChatProviderReviewController } from "./chat-provider-review-controller.ts";
@@ -184,8 +184,9 @@ export class ChatPane extends ChatPaneLayoutRender {
       isGatewayMethodAdvertised(gatewaySnapshot, "session.suggestions.list") === true;
     // Placement progress explains this gate; other gates need a reason or sessionDisabledBanner.
     const disabledReason =
-      sessionParticipationBlocked && !suggestionViewer
-        ? t("chat.sessionSharing.readOnlyNotice")
+      !catalogKey && !suggestionViewer
+        ? (selectedSession?.sendDisabledReason ??
+          (sessionParticipationBlocked ? t("chat.sessionSharing.readOnlyNotice") : null))
         : null;
     const modelRequiredReason = catalogKey || suggestionViewer ? undefined : requiredReason;
     const typingEnabled =
@@ -350,6 +351,7 @@ export class ChatPane extends ChatPaneLayoutRender {
         (state.connected && (placementStartup || initialHistoryUnavailable) ? null : pendingReason),
       disabledReasonTone:
         !composerAccess.canSend ||
+        disabledReason ||
         placementComposer.busyMessage ||
         (sessionParticipationBlocked && !suggestionViewer)
           ? ("info" as const)
@@ -685,7 +687,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       branding: this.context?.theme.branding,
       assistantAttachmentAuthToken: resolveControlUiAuthToken(state),
       resolveArtifactDownload: (params, signal) =>
-        resolveChatArtifactDownload(state, params, signal),
+        resolveArtifactDownloadSource(state, params, signal),
       basePath: state.basePath,
       sessionPublicOrigin: markdownSessionPublicOrigin(this.context),
       resourceBasePath: state.resourceBasePath,

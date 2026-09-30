@@ -20,9 +20,6 @@ export async function refreshPluginRegistry(
 ): Promise<PluginRegistrySnapshot> {
   return await withPluginLifecycleLease(
     resolveInstalledPluginIndexStateDatabaseOptions(params),
-    async () =>
-      refreshPersistedInstalledPluginIndex(
-        params.config ? resolveControlPlaneRegistryParams(params) : params,
-      ),
+    async () => refreshPersistedInstalledPluginIndex(resolveControlPlaneRegistryParams(params)),
   );
 }

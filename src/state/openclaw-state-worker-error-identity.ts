@@ -214,9 +214,6 @@ export function parseIdentity(node: Record<string, unknown>): ErrorIdentity | un
         ? { type: node.type, reason: node.reason, missingTables: [...node.missingTables] }
         : undefined;
     case "state-owner-contention":
-      return typeof node.databasePath === "string"
-        ? { type: node.type, databasePath: node.databasePath }
-        : undefined;
     case "ownership-metadata":
       return typeof node.databasePath === "string"
         ? { type: node.type, databasePath: node.databasePath }

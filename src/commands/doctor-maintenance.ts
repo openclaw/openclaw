@@ -1,4 +1,3 @@
-/** Coordinates explicit Doctor repair with the managed Gateway lifecycle. */
 import { formatCliCommand } from "../cli/command-format.js";
 import type { PreManagedServiceStop } from "../cli/update-cli/update-command-service-maintenance.js";
 import { isDefaultInstallIdentity } from "../config/paths.js";
@@ -73,6 +72,7 @@ export async function beginDoctorMaintenance(
   // Repair discovery can execute plugins and open writable state. Establish
   // ownership for every explicit repair before running those inspections.
   let stopped: PreManagedServiceStop | undefined;
+  let serviceUpdateVerdict: PreManagedServiceStop["serviceUpdateVerdict"];
   let stopDeadline: number | undefined;
   const warnings: string[] = [];
   const warn = (message: string) => {
@@ -417,6 +417,7 @@ export async function beginDoctorMaintenance(
           phase: "inspect",
         });
         assertDoctorMaintenanceInspection(inspection, env);
+        serviceUpdateVerdict = inspection.serviceUpdateVerdict;
         if (inspection.serviceUpdateVerdict?.kind !== "absent" && inspection.offline !== true) {
           assertAuthority(() => {
             const admitted = resolveDoctorUpdateAdmission(env);
@@ -569,7 +570,7 @@ export async function beginDoctorMaintenance(
       retainStoppedInstallation =
         stopped?.serviceUpdateVerdict?.kind === "owned" &&
         stopped.serviceUpdateVerdict.requiresInstallRootRefresh === true;
-      await state.relocateLegacyRoot();
+      await state.prepareRepair();
     });
   } catch (error) {
     try {
@@ -584,6 +585,7 @@ export async function beginDoctorMaintenance(
   let custody: "held" | "restoring" | "released" = "held";
   const maintenance = {
     signal: exit.signal,
+    serviceUpdateVerdict,
     warnings,
     failureFacts,
     get databaseWrites() {

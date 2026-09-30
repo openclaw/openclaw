@@ -1,6 +1,7 @@
 // Tests get-reply behavior while probing an auto-fallback primary model.
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolveModelRefFromString } from "../../agents/model-selection-shared.js";
 import type { ModelDefinitionConfig, OpenClawConfig } from "../../config/config.js";
@@ -234,6 +235,33 @@ describe("getReplyFromConfig auto-fallback primary probes", () => {
       abortedLastRun: false,
     }));
     vi.mocked(runPreparedReplyMock).mockResolvedValue({ text: "ok" });
+  });
+
+  it("does not start a primary probe after cancellation while its thinking catalog is pending", async () => {
+    const { sessionKey } = mockAutoFallbackSession();
+    mockFallbackDirectiveResult({ sessionKey, resolvedThinkLevel: "off" });
+    const catalog = createDeferred<never[]>();
+    const started = createDeferred();
+    const catalogRuntime = await import("../../agents/model-catalog.runtime.js");
+    vi.mocked(catalogRuntime.loadProviderScopedThinkingCatalog).mockImplementationOnce(() => {
+      started.resolve();
+      return catalog.promise;
+    });
+    const controller = new AbortController();
+    const cfg = makeReasoningModelConfig();
+    delete cfg.models;
+    const pending = getReplyFromConfig(buildGetReplyCtx(), { abortSignal: controller.signal }, cfg);
+    await Promise.race([
+      started.promise,
+      pending.then(() => {
+        throw new Error("reply finished without awaiting thinking catalog discovery");
+      }),
+    ]);
+    controller.abort(new Error("reply deadline"));
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    catalog.resolve([]);
+    await catalog.promise;
+    expect(runPreparedReplyMock).not.toHaveBeenCalled();
   });
 
   it("does not probe the primary model for a model-locked session", async () => {

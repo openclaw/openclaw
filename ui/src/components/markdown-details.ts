@@ -337,20 +337,11 @@ export function installMarkdownDetails(markdownParser: MarkdownIt): void {
         continue;
       }
 
-      let level = token.level;
-      const replacement: DetailsToken[] = [];
       const sink: DetailsTokenSink = {
         push(type, tag, nesting) {
           const next = new state.Token(type, tag, nesting);
           next.block = true;
-          if (nesting < 0) {
-            level -= 1;
-          }
-          next.level = level;
-          if (nesting > 0) {
-            level += 1;
-          }
-          replacement.push(next);
+          output.push(next);
           return next;
         },
       };
@@ -380,7 +371,6 @@ export function installMarkdownDetails(markdownParser: MarkdownIt): void {
         pushDisclosureLine(sink, line, lineNumber, stack, tags);
       }
       flushHtml();
-      output.push(...replacement);
     }
 
     // Streaming can end with open details; balance only our structured tokens at EOF.

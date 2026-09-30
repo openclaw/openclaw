@@ -135,7 +135,6 @@ export function assertControlUiE2eOwnership(
     "ui/src/e2e/session-management.delete.e2e.test.ts",
     "ui/src/e2e/session-roster-request-rate.real-gateway.e2e.test.ts",
     "ui/src/e2e/sidebar-account-footer.e2e.test.ts",
-    "ui/src/e2e/sidebar-cached-list-stability.e2e.test.ts",
   ]);
   expect(uiE2eRealGatewayTestFiles.every((file) => uiE2eSerialTestFiles.includes(file))).toBe(true);
   expect(uiE2eSerialTestFiles).toContain(uiE2eRuntimeBudgetTestFile);
