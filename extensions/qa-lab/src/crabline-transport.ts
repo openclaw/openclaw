@@ -16,7 +16,7 @@ import {
   readStringValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createQaBusState, type QaBusState } from "./bus-state.js";
-import { createCrablineDiscordReplyReader } from "./crabline-discord-replies.js";
+import { startCrablineDiscordReplies } from "./crabline-discord-replies.js";
 import {
   createCrablineProviderCorrelation,
   createCrablineProviderDelivery,
@@ -42,12 +42,12 @@ import type { QaBusInboundMessageInput, QaBusMessage } from "./runtime-api.js";
 
 type QaCrablineTransportState = QaTransportState & {
   slackIngress?: ReturnType<typeof createCrablineSlackIngress>;
+  discordReplies?: Awaited<ReturnType<typeof startCrablineDiscordReplies>>;
   cleanup: () => Promise<void>;
   getOutboundEvents: () => Promise<readonly QaTransportOutboundEvent[]>;
   observeEvent: (event: unknown) => void;
   rememberProviderTarget: (providerTargetKey: string, target: QaCrablineTarget) => void;
   resetTransport: () => void;
-  waitForCompletedReply: NonNullable<QaTransportAdapter["waitForCompletedReply"]>;
 };
 
 type QaCrablineTarget = Pick<QaBusInboundMessageInput, "conversation" | "threadId">;
@@ -206,10 +206,10 @@ async function postCrablineInbound(params: {
   return { providerMessageId, response: result };
 }
 
-function createCrablineState(params: {
+async function createCrablineState(params: {
   adapter: StartedOpenClawCrablineCorrelatedAdapter;
   state: QaBusState;
-}): QaCrablineTransportState {
+}): Promise<QaCrablineTransportState> {
   const baseState = params.state;
   const slackIngress =
     params.adapter.manifest.provider === "slack"
@@ -220,16 +220,19 @@ function createCrablineState(params: {
   const pendingTelegramMessagesByChat = new Map<string, QaBusMessage[]>();
   const outboundEvents: QaTransportOutboundEvent[] = [];
   const discordTargets = new Map<string, QaCrablineTarget>();
+  const discordReplies = await startCrablineDiscordReplies({ ...params, targets: discordTargets });
   const resetTransport = () => {
     targetByProviderTarget.clear();
     telegramMessageByProviderId.clear();
     pendingTelegramMessagesByChat.clear();
     outboundEvents.length = 0;
     discordTargets.clear();
+    discordReplies?.reset();
   };
 
   return {
     ...(slackIngress ? { slackIngress } : {}),
+    ...(discordReplies ? { discordReplies } : {}),
     reset() {
       resetTransport();
       baseState.reset();
@@ -239,11 +242,6 @@ function createCrablineState(params: {
     async getOutboundEvents() {
       return outboundEvents;
     },
-    waitForCompletedReply: createCrablineDiscordReplyReader({
-      adapter: params.adapter,
-      state: baseState,
-      targets: discordTargets,
-    }),
     observeEvent(event) {
       if (params.adapter.channel === "telegram") {
         const lifecycle = readTelegramLifecycleEvent({
@@ -367,6 +365,7 @@ function createCrablineState(params: {
     waitFor: baseState.waitFor.bind(baseState),
     async cleanup() {
       await slackIngress?.cleanup();
+      await discordReplies?.cleanup();
       await params.adapter.close();
     },
   };
@@ -394,8 +393,9 @@ function createQaCrablineTransport(params: {
     hooks.prepareFlow = params.state.slackIngress.prepareFlow;
     hooks.cleanup = params.state.slackIngress.cleanup;
   }
-  if (params.selection.channel === "discord" && params.adapter.manifest.provider === "discord") {
-    hooks.waitForCompletedReply = state.waitForCompletedReply;
+  if (state.discordReplies && params.adapter.manifest.provider === "discord") {
+    const { apiBaseUrl, waitForCompletedReply } = state.discordReplies;
+    hooks.waitForCompletedReply = waitForCompletedReply;
     const manifest = params.adapter.manifest;
     let prepared:
       | Promise<
@@ -408,7 +408,7 @@ function createQaCrablineTransport(params: {
       prepared ??= (async () => {
         const scenarioRuntime = await import("./live-transports/discord/discord-live.runtime.js");
         releaseDiscordQaApiBase = scenarioRuntime.registerDiscordQaApiBase({
-          apiBaseUrl: `${manifest.endpoints.apiRoot}/v10`,
+          apiBaseUrl,
           tokens: [manifest.botToken, manifest.driverBotToken],
         });
         const [sutIdentity, driverIdentity] = await Promise.all([
@@ -592,9 +592,9 @@ function createQaCrablineTransport(params: {
     },
 
     createRuntimeEnvPatch: () =>
-      adapter.manifest.provider === "discord"
+      state.discordReplies
         ? {
-            DISCORD_API_URL: `${adapter.manifest.endpoints.apiRoot}/v10`,
+            DISCORD_API_URL: state.discordReplies.apiBaseUrl,
           }
         : adapter.createProviderReadinessEnv({}),
 
@@ -668,12 +668,23 @@ export async function createQaCrablineTransportAdapter(params: {
     recorderPath,
   });
   // Readiness owns the startup probe; runtime transcripts may contain provider-specific API records.
-  let readiness: Awaited<ReturnType<typeof runOpenClawCrablineProviderReadiness>>;
   try {
-    readiness = await runOpenClawCrablineProviderReadiness({
+    const readiness = await runOpenClawCrablineProviderReadiness({
       adapter,
       outputDir: params.outputDir,
       selection: params.selection,
+    });
+    const state = await createCrablineState({
+      adapter,
+      state: params.state ?? createQaBusState(),
+    });
+    observeEvent = state.observeEvent;
+    return createQaCrablineTransport({
+      adapter,
+      readiness,
+      transportPolicy: params.transportPolicy,
+      selection: params.selection,
+      state,
     });
   } catch (error) {
     try {
@@ -685,18 +696,6 @@ export async function createQaCrablineTransportAdapter(params: {
     }
     throw error;
   }
-  const state = createCrablineState({
-    adapter,
-    state: params.state ?? createQaBusState(),
-  });
-  observeEvent = state.observeEvent;
-  return createQaCrablineTransport({
-    adapter,
-    readiness,
-    transportPolicy: params.transportPolicy,
-    selection: params.selection,
-    state,
-  });
 }
 
 export async function createQaCrablineTransportDefinition(

@@ -1,7 +1,10 @@
 import { createChannelRunQueue } from "openclaw/plugin-sdk/channel-outbound";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
+import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import { describe, expect, it } from "vitest";
+import WebSocket from "ws";
 import { createQaBusState } from "./bus-state.js";
 import { createQaCrablineTransportAdapter } from "./crabline-transport.js";
 import { runLoadedScenarioFlow } from "./scenario-flow-runner.test-support.js";
@@ -52,6 +55,39 @@ describe("Crabline Discord transport", () => {
             },
           },
         });
+
+        const gatewayResponse = await fetch(`${runtimeEnv.DISCORD_API_URL}/gateway/bot`, {
+          headers: { authorization: `Bot ${requireString(discord?.token, "Discord bot token")}` },
+        });
+        expect(gatewayResponse.ok).toBe(true);
+        const gateway: unknown = await gatewayResponse.json();
+        const gatewayUrl = requireString(
+          isRecord(gateway) ? gateway.url : undefined,
+          "Gateway URL",
+        );
+        expect(new URL(gatewayUrl).origin).toBe(
+          new URL(requireString(runtimeEnv.DISCORD_API_URL, "Discord API URL")).origin.replace(
+            /^http/u,
+            "ws",
+          ),
+        );
+        const socket = new WebSocket(gatewayUrl);
+        const ready = createDeferred<unknown>();
+        socket.on("error", ready.reject);
+        socket.on("message", (data) => {
+          const event: unknown = JSON.parse(rawDataToString(data));
+          if (isRecord(event) && event.t === "READY") {
+            ready.resolve(event.d);
+          }
+        });
+        socket.on("open", () => {
+          socket.send(JSON.stringify({ op: 2, d: { token: discord?.token, intents: 0 } }));
+        });
+        try {
+          await expect(ready.promise).resolves.toMatchObject({ resume_gateway_url: gatewayUrl });
+        } finally {
+          socket.terminate();
+        }
 
         const inbound = await transport.sendInbound({
           conversation: { id: "discord-crabline-primary", kind: "group" },
@@ -148,7 +184,14 @@ describe("Crabline Discord transport", () => {
         },
       });
       try {
-        for (const finalKind of ["top-level", "reply", "edited", "deleted"] as const) {
+        for (const finalKind of [
+          "top-level",
+          "reply",
+          "edited",
+          "deleted",
+          "deleted-final",
+          "edited-final",
+        ] as const) {
           const releaseFinal = createDeferred<void>();
           const waitingForDelivery = createDeferred<"waiting">();
           const deliveryDone = createDeferred<void>();
@@ -210,7 +253,21 @@ describe("Crabline Discord transport", () => {
                     },
                   );
                   expect(response.ok).toBe(true);
-                  await response.body?.cancel();
+                  if (finalKind === "deleted-final" || finalKind === "edited-final") {
+                    const final = (await response.json()) as { id: string };
+                    expect(final.id).not.toBe(preview.id);
+                    const mutation = await fetch(`${messagesUrl}/${final.id}`, {
+                      method: finalKind === "deleted-final" ? "DELETE" : "PATCH",
+                      headers,
+                      ...(finalKind === "edited-final"
+                        ? { body: JSON.stringify({ content: "wrong final" }) }
+                        : {}),
+                    });
+                    expect(mutation.ok).toBe(true);
+                    await mutation.body?.cancel();
+                  } else {
+                    await response.body?.cancel();
+                  }
                   deliveryDone.resolve();
                 } catch (error) {
                   deliveryDone.reject(error);
@@ -238,9 +295,11 @@ describe("Crabline Discord transport", () => {
             await expect(result).rejects.toThrow(
               finalKind === "reply"
                 ? "expected top-level reply"
-                : finalKind === "edited"
+                : finalKind === "edited" || finalKind === "edited-final"
                   ? "completed delivery did not contain"
-                  : "completed without a retained reply",
+                  : finalKind === "deleted-final"
+                    ? "final delivery"
+                    : "completed without a retained reply",
             );
           }
         }
