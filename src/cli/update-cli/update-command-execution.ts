@@ -241,7 +241,9 @@ export async function executeMutableUpdate(
           timeoutMs: updateStepTimeoutMs,
           phase,
           expectedService: admission?.services.get(mutationRoot),
-          updateRun: opts.run,
+          updateRun: originalRun,
+          recordPhase,
+          assertCurrent: assertExecutionCurrent,
           recovery: opts.recovery,
           onStopped: (state) => {
             preManagedServiceStop = { ...state, ...(serviceIdentity ? { serviceIdentity } : {}) };

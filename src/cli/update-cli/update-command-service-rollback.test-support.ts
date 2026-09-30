@@ -20,6 +20,7 @@ import type { ResolvedGlobalInstallTarget } from "../../infra/update-global.js";
 import { prepareNativePackageStage } from "../../infra/update-native-package-stage.js";
 import { getUpdateRun } from "../../infra/update-run-ledger.js";
 import { VERSION } from "../../version.js";
+import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
 import { rollbackFailedUpdate } from "./update-command-rollback.js";
 import type {
   PreManagedServiceStop,
@@ -63,6 +64,7 @@ export function registerPackageRootRollbackTests(
     const globalRoot = path.join(root, "pnpm", "global", "v11");
     const previousOwner = path.join(globalRoot, "previous");
     const previousRoot = path.join(previousOwner, "node_modules", "openclaw");
+    const { recordPhase } = createUpdateCommandExecutionGuards({ run }, previousRoot);
     const candidateRoot = path.join(globalRoot, "candidate", "node_modules", "openclaw");
     const binDir = path.join(root, "bin");
     const serviceRoot = installationDrift ? path.join(root, "service-install") : previousRoot;
@@ -173,6 +175,7 @@ export function registerPackageRootRollbackTests(
           shouldRestart: true,
           jsonMode: true,
           updateRun: run,
+          recordPhase,
         });
       },
       onTransaction: (retained) => {

@@ -112,12 +112,6 @@ function listPresentCliEnvKeys(
 function formatCliEnvKeyList(keys: readonly string[]): string {
   return keys.length > 0 ? keys.join(",") : "none";
 }
-function buildCliEnvMcpLog(childEnv: Record<string, string>): string {
-  return [
-    `token=${childEnv.OPENCLAW_MCP_TOKEN ? "set" : "missing"}`,
-    `capture=${childEnv.OPENCLAW_MCP_CLI_CAPTURE_KEY ? "set" : "missing"}`,
-  ].join(" ");
-}
 function fingerprintCliSessionId(sessionId?: string): string {
   const trimmed = sessionId?.trim();
   if (!trimmed) {
@@ -197,6 +191,8 @@ export function logCliInvocation(params: {
   params.log(`cli argv: ${params.command} ${logArgs.join(" ")}`);
   params.log(`cli env auth: ${buildCliEnvAuthLog(params.env)}`);
   if (params.env.OPENCLAW_MCP_TOKEN) {
-    params.log(`cli env mcp: ${buildCliEnvMcpLog(params.env)}`);
+    params.log(
+      `cli env mcp: token=set capture=${params.env.OPENCLAW_MCP_CLI_CAPTURE_KEY ? "set" : "missing"}`,
+    );
   }
 }

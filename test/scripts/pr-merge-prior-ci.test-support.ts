@@ -49,6 +49,8 @@ export function createPriorCiFixtureState(head: string) {
     membership: "admin",
     revokeAdminOnMainFetch: false,
     unsupportedNoLazy: false,
+    localOnlyFailureOid: "",
+    localOnlyFailureStderr: "",
     adminRevokedDuringMainFetch: false,
     evidencePath: "",
     mutateEvidence: false,

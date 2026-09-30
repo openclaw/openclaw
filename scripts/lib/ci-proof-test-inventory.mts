@@ -1344,7 +1344,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/agents/simple-completion-runtime.test.ts",
   "src/agents/subagents/announce/subagent-announce-delivery.runtime.test.ts",
   "src/agents/subagents/announce/subagent-announce-delivery.test.ts",
-  "src/agents/subagents/announce/subagent-announce-delivery.warnings.test.ts",
   "src/agents/subagents/announce/subagent-announce-direct-delivery.test.ts",
   "src/agents/subagents/announce/subagent-announce.requester-cron-authority.test.ts",
   "src/agents/subagents/announce/subagent-announce.requester-settle-cancel.test.ts",

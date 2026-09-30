@@ -1,3 +1,5 @@
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { expect, it } from "vitest";
 import { createMergeOutcomeFixtureHarness } from "./pr-merge-outcome.test-support.js";
 import { createPriorCiCandidateFactory } from "./pr-merge-prior-ci.test-support.js";
@@ -48,6 +50,7 @@ describePosix("prior-CI forward main admission", () => {
     expectNoDispatch(f);
     expect(result.status, result.output).not.toBe(0);
     expect(result.output).toContain("final prior-CI main cannot be verified with local-only Git");
+    expect(result.output).toContain(`role=reread-main oid=${main} git-exit=128`);
   });
 
   it("refuses final main movement when Git cannot guarantee local-only reads", () => {
@@ -60,6 +63,60 @@ describePosix("prior-CI forward main admission", () => {
     const result = f.adminPriorCi(f.path);
     expect(result.status, result.output).not.toBe(0);
     expect(result.output).toContain("final prior-CI main cannot be verified with local-only Git");
+    expect(result.output).toContain(`role=previous-main oid=${f.base} git-exit=129`);
+    expectNoDispatch(f);
+  });
+
+  it.each(["previous-main", "reread-main", "verified-main"] as const)(
+    "identifies a failed %s probe with a bounded redacted diagnostic",
+    (role) => {
+      const f = preExistingCandidate();
+      const previous = f.commit(f.tree("before\n", "first advance\n"), [f.base]);
+      const main = f.commit(f.tree("before\n", "second advance\n"), [previous]);
+      const failed = role === "previous-main" ? previous : role === "reread-main" ? main : f.base;
+      const secret = "fixture-sensitive-token-not-a-real-credential";
+      if (role === "previous-main") {
+        // Failure reporting must not load the PR checkout's configuration.
+        writeFileSync(join(f.worktree, "tsconfig.json"), "{ invalid caller tsconfig");
+      }
+      const state = f.state();
+      state.observations = [{}, {}, {}, { main: previous }, { main }];
+      state.priorCi.localOnlyFailureOid = failed;
+      state.priorCi.localOnlyFailureStderr =
+        `fatal: fixture-local object unavailable\nAuthorization: Bearer ${secret}\n` +
+        "diagnostic detail ".repeat(200);
+      state.priorCi.revokeAdminOnMainFetch = true;
+      f.save(state);
+
+      const result = f.adminPriorCi(f.path);
+
+      expect(result.status, result.output).not.toBe(0);
+      expect(result.output).toContain(`role=${role} oid=${failed} git-exit=128`);
+      expect(result.output).toContain("fatal: fixture-local object unavailable");
+      expect(result.output).not.toContain(secret);
+      const diagnostic = result.output.split("\n").find((line) => line.includes(`role=${role}`));
+      expect(diagnostic?.length).toBeLessThan(1_024);
+      expect(f.state().priorCi.adminRevokedDuringMainFetch).toBe(false);
+      expect(f.state().priorCi.membership).toBe("admin");
+      expectNoDispatch(f);
+    },
+  );
+
+  it("omits oversized Git stderr instead of clipping an unredacted credential", () => {
+    const f = preExistingCandidate();
+    const main = f.commit(f.tree("before\n", "advanced\n"), [f.base]);
+    const state = f.state();
+    state.observations = [{}, {}, {}, {}, { main }];
+    state.priorCi.localOnlyFailureOid = main;
+    state.priorCi.localOnlyFailureStderr = "Authorization: Bearer " + "sensitive".repeat(2_000);
+    f.save(state);
+
+    const result = f.adminPriorCi(f.path);
+
+    expect(result.status, result.output).not.toBe(0);
+    expect(result.output).toContain(`role=reread-main oid=${main} git-exit=128`);
+    expect(result.output).toContain("Git diagnostic exceeded 8192 bytes");
+    expect(result.output).not.toContain("sensitive");
     expectNoDispatch(f);
   });
 

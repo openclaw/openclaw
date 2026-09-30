@@ -30,10 +30,6 @@ const COMPLETION_REQUIRED_TASK_KINDS = new Set([
   "video_generation",
 ]);
 
-function resolveAsyncTaskPollIntervalMs(): number {
-  return isFastTestRuntimeEnv() ? 10 : DEFAULT_ASYNC_TASK_POLL_INTERVAL_MS;
-}
-
 function createAbortError(signal: AbortSignal): Error {
   return createNamedAbortError("aborted", {
     cause: signal.reason,
@@ -87,22 +83,20 @@ function collectAsyncTaskRunIds(
   sessionKey: string | undefined,
   alreadyWaited: ReadonlySet<string>,
 ): string[] {
-  const runIds: string[] = [];
-  const seen = new Set<string>();
+  const runIds = new Set<string>();
   const addRunId = (runIdRaw: string | undefined) => {
     const runId = runIdRaw?.trim();
-    if (!runId || alreadyWaited.has(runId) || seen.has(runId)) {
+    if (!runId || alreadyWaited.has(runId)) {
       return;
     }
-    seen.add(runId);
-    runIds.push(runId);
+    runIds.add(runId);
   };
   for (const meta of toolMetas) {
     addRunId(meta.asyncStarted === true ? meta.asyncTaskRunId : undefined);
   }
   const normalizedSessionKey = sessionKey?.trim();
   if (!normalizedSessionKey) {
-    return runIds;
+    return [...runIds];
   }
   // Registry lookup catches completion-required tasks started before their
   // tool metadata reached the current attempt result.
@@ -112,7 +106,7 @@ function collectAsyncTaskRunIds(
     }
     addRunId(task.runId);
   }
-  return runIds;
+  return [...runIds];
 }
 
 export function requiresCompletionRequiredAsyncTaskWait(params: {
@@ -162,7 +156,8 @@ export async function waitForCompletionRequiredAsyncTasks(params: {
 }): Promise<CompletionRequiredAsyncTaskWaitResult> {
   const now = params.now ?? Date.now;
   const sleepFn = params.sleep ?? sleep;
-  const pollIntervalMs = params.pollIntervalMs ?? resolveAsyncTaskPollIntervalMs();
+  const pollIntervalMs =
+    params.pollIntervalMs ?? (isFastTestRuntimeEnv() ? 10 : DEFAULT_ASYNC_TASK_POLL_INTERVAL_MS);
   const waitedRunIds = new Set<string>();
   const timedOutRunIds = new Set<string>();
   const terminalTasksByRunId = new Map<string, MediaGenerationOperation>();

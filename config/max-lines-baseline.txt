@@ -540,7 +540,6 @@ src/infra/exec-approvals-allowlist.ts
 src/infra/exec-authorization-plan.ts
 src/infra/host-env-security.test.ts
 src/infra/infra-runtime.test.ts
-src/infra/net/fetch-guard.ssrf.test.ts
 src/infra/npm-managed-root.test.ts
 src/infra/npm-managed-root.ts
 src/infra/outbound/deliver.test.ts
