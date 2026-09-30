@@ -18,7 +18,7 @@ const channelPluginMocks = vi.hoisted(() => ({
         }: {
           to: string;
           threadId?: string | number | null;
-        }) => (threadId == null ? to : `${to}#${threadId}`),
+        }) => (threadId == null ? "normalized:" + to : `${to}#${threadId}`),
       },
       outbound: {
         preferFinalAssistantVisibleText: true,
@@ -43,6 +43,19 @@ describe("cron channel output policy", () => {
     await expect(resolveCronChannelOutputPolicy("plainchat")).resolves.toEqual({
       preferFinalAssistantVisibleText: false,
     });
+  });
+
+  it("lets a channel normalize an unthreaded current target", async () => {
+    await expect(resolveCurrentChannelTarget({ channel: "topicchat", to: "room" })).resolves.toBe(
+      "normalized:room",
+    );
+    expect(channelPluginMocks.getChannelPlugin).toHaveBeenCalledWith("topicchat");
+  });
+
+  it("does not load a plugin when the route has no channel or target", async () => {
+    await expect(resolveCurrentChannelTarget({ channel: "topicchat" })).resolves.toBeUndefined();
+    await expect(resolveCurrentChannelTarget({ to: "room" })).resolves.toBe("room");
+    expect(channelPluginMocks.getChannelPlugin).not.toHaveBeenCalled();
   });
 
   it("prefers final visible text only for unresolved no-delivery runs", async () => {

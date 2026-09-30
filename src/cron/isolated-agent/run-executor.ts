@@ -1,5 +1,6 @@
 /** Executes isolated cron prompts with model fallbacks and interim-ack retries. */
 import { createHash } from "node:crypto";
+import { normalizeOptionalStringifiedId } from "@openclaw/normalization-core/string-coerce";
 import { resolveGroupToolPolicy } from "../../agents/agent-tools.policy.js";
 import { resolveCliBackendConfig } from "../../agents/cli-backends.js";
 import {
@@ -427,6 +428,13 @@ function createCronPromptExecutor(
           cliExecution ? executionProvider : undefined,
         );
         const bootstrapPromptWarningSignature = bootstrapPromptWarningSignaturesSeen.at(-1);
+        // CLI runs need the same channel-native target as embedded runs so a
+        // detached exec completion inherits the originating Telegram topic.
+        const currentChannelId = await resolveCurrentChannelTarget({
+          channel: messageChannel,
+          to: params.resolvedDelivery.to,
+          threadId: params.resolvedDelivery.threadId,
+        });
         // CLI providers can resume provider-native sessions; embedded providers
         // use OpenClaw's transcript/session file plus prompt-cache affinity.
         const fastModeState = resolveFastModeState({
@@ -462,6 +470,8 @@ function createCronPromptExecutor(
             skillsSnapshot: params.skillsSnapshot,
             messageChannel,
             agentAccountId: params.resolvedDelivery.accountId,
+            currentChannelId,
+            currentThreadTs: normalizeOptionalStringifiedId(params.resolvedDelivery.threadId),
             extraSystemPrompt: params.deliverySystemPrompt,
             sourceReplyDeliveryMode,
             requireExplicitMessageTarget: sourceDelivery.messageTool.requireExplicitTarget,
@@ -615,11 +625,6 @@ function createCronPromptExecutor(
           agentSessionKey: params.agentSessionKey,
           provider: providerOverride,
           model: modelOverride,
-        });
-        const currentChannelId = await resolveCurrentChannelTarget({
-          channel: messageChannel,
-          to: params.resolvedDelivery.to,
-          threadId: params.resolvedDelivery.threadId,
         });
         // Embedded runs receive both the explicit route and the current-channel
         // id so message-tool policy can target the same chat as fallback delivery.

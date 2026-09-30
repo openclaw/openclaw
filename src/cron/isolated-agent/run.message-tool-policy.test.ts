@@ -312,6 +312,57 @@ describe("runCronIsolatedAgentTurn delivery policy", () => {
       });
     });
 
+    it("carries a CLI cron Telegram topic and account into its loopback tool grant", async () => {
+      mockCliAnnounce();
+      const destination = { channel: "telegram", accountId: "ops", to: "-100123", threadId: 47 };
+      getChannelPluginMock.mockImplementation((channelId: string) =>
+        channelId === "telegram"
+          ? {
+              threading: {
+                resolveCurrentChannelId: ({
+                  to,
+                  threadId,
+                }: {
+                  to: string;
+                  threadId?: string | number | null;
+                }) => (threadId == null ? to : to + ":topic:" + threadId),
+              },
+            }
+          : undefined,
+      );
+      mockAnnounce(destination);
+      resolveDeliveryTargetMock.mockResolvedValue(resolvedTarget(destination));
+      await runCronIsolatedAgentTurn(makeParams(makeJob({ mode: "announce", ...destination })));
+
+      expect(runCliAgentMock).toHaveBeenCalledOnce();
+      const run = expectFields(
+        mockCall(runCliAgentMock)[0],
+        {
+          messageChannel: "telegram",
+          agentAccountId: "ops",
+          currentChannelId: "-100123:topic:47",
+          currentThreadTs: "47",
+        },
+        "CLI cron run",
+      );
+      const { buildCliMcpGrantContext } =
+        await import("../../agents/cli-runner/mcp-grant-context.js");
+      const grant = buildCliMcpGrantContext({
+        run: run as never,
+        config: {},
+        requireExplicitMessageTarget: false,
+        agentId: "main",
+        modelProvider: "openai",
+        modelId: "test-model",
+      });
+      expect(grant).toMatchObject({
+        messageProvider: "telegram",
+        accountId: "ops",
+        currentChannelId: "-100123:topic:47",
+        currentThreadTs: "47",
+      });
+    });
+
     it("binds the resolved delivery account to account-implicit CLI message sends", async () => {
       mockCliAnnounce();
       const destination = { channel: "telegram", accountId: "bot-a" };
