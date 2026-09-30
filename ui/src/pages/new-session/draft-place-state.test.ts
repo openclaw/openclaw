@@ -341,7 +341,8 @@ describe("DraftPlaceState repository selection", () => {
       state.restorePreferenceSelections();
       expect(state.remotePlacement).toBe(true);
       expect(state.freshWorkspace).toBe(false);
-      expect(state.placementPreferenceReady).toBe(false);
+      expect(state.worktree).toBe(true);
+      expect(state.worktreeAvailable()).toBe(false);
       expect(state.baseRef).toBe("release");
       expect(state.worktreeName).toBe("saved-task");
 
@@ -682,6 +683,37 @@ describe("DraftPlaceState repository selection", () => {
 
     expect(state.worktree).toBe(false);
     expect(state.checkoutVisible).toBe(false);
+    expect(state.preferenceSelection().worktree).toBe(false);
+    expect(
+      buildSelectedSessionCreateParams(state, { message: "notes", visibility: "normal" }),
+    ).not.toHaveProperty("worktree");
+  });
+
+  it.each([
+    { kind: "cloud", id: "aws" },
+    { kind: "device", id: "desktop" },
+    { kind: "auto-device" },
+  ] as const)("does not restore $kind isolation as a local checkout choice", async (where) => {
+    const { state, readPreference, requestUpdate } = createRepositoryFixture({
+      workspaceGit: true,
+      unavailable: true,
+    });
+    const discovered = createDeferred();
+    requestUpdate.mockImplementation(() => {
+      if (state.repository.kind === "unavailable") {
+        discovered.resolve();
+      }
+    });
+    readPreference.mockReturnValue({ where, worktree: true, worktreeName: "remote-task" });
+    state.adoptAgentDefaults();
+    await discovered.promise;
+    state.restorePreferenceSelections();
+    expect(state.worktree).toBe(true);
+    expect(state.preferenceSelection().worktree).toBe(true);
+
+    state.selectDevice("");
+
+    expect(state.worktree).toBe(false);
     expect(state.preferenceSelection().worktree).toBe(false);
     expect(
       buildSelectedSessionCreateParams(state, { message: "notes", visibility: "normal" }),
