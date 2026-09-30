@@ -53,6 +53,7 @@ import { renderAssistantAttachments } from "./components/chat-message-attachment
 import { getChatSessionProjection, reduceChatSessionProjection } from "./history-merge.ts";
 import { scheduleControlUiAfterPaint } from "./performance.ts";
 import { applySessionMessagePayload } from "./session-message-apply.ts";
+import { createRealtimeTalkConversationState } from "./talk/conversation.ts";
 import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
 import { createHost as createToolStreamHost } from "./tool-stream.test-helpers.ts";
 
@@ -3019,6 +3020,7 @@ describe("ChatStateController render lifecycle", () => {
       chatLoading: false,
       chatMessages: [],
       chatQueue: [],
+      realtimeTalkConversationState: createRealtimeTalkConversationState(),
       renderLifecycle,
       handleSendChat: vi.fn().mockResolvedValue(undefined),
       handleChatDraftChange: vi.fn(),
