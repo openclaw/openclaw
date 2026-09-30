@@ -76,7 +76,7 @@ const persistedSubagentSessionListRunsReadCache: SubagentRunsCache<SubagentRunRe
 const persistedSubagentMaintenanceRunsReadCache: SubagentRunsCache<SubagentRunMaintenanceRecord> = {
   state: {},
   captureAdmission: captureSubagentFactsAdmission,
-  load: loadSubagentMaintenanceRunsFromSqlite,
+  load: () => loadSubagentMaintenanceRunsFromSqlite(),
   copy: projectSubagentRunForMaintenance,
   // Maintenance consumes live rows synchronously into keys; only published facts need copies.
   project: (entry) => entry,
