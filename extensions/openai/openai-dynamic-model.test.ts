@@ -18,6 +18,7 @@ function modelRegistry(
 }
 
 const preferredModels = [
+  { id: "gpt-6.1-sol", cost: { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 } },
   { id: "gpt-5.6", cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 } },
   { id: "gpt-5.6-sol", cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 } },
   { id: "gpt-5.6-terra", cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 3.125 } },

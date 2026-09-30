@@ -15,6 +15,14 @@ function levelIds(params: {
 
 describe("OpenAI thinking route provenance", () => {
   it.each(["openclaw", "codex", "auto"])(
+    "offers GPT-6.1 Sol's supported efforts on the %s runtime",
+    (runtime) => {
+      expect(
+        resolveUnifiedOpenAIThinkingProfile("gpt-6.1-sol", runtime).levels.map((level) => level.id),
+      ).toEqual(["off", "low", "medium", "high", "xhigh", "max"]);
+    },
+  );
+  it.each(["openclaw", "codex", "auto"])(
     "offers Astra's supported efforts on the %s runtime",
     (runtime) => {
       expect(

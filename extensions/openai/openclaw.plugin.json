@@ -75,6 +75,32 @@
             }
           },
           {
+            "id": "gpt-6.1-sol",
+            "name": "GPT-6.1 Sol",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 1050000,
+            "contextTokens": 272000,
+            "maxTokens": 128000,
+            "cost": {
+              "input": 2,
+              "output": 10,
+              "cacheRead": 0.1,
+              "cacheWrite": 2.5,
+              "tieredPricing": [
+                { "range": [0, 272001], "input": 2, "output": 10, "cacheRead": 0.1, "cacheWrite": 2.5 },
+                { "range": [272001], "input": 4, "output": 15, "cacheRead": 0.2, "cacheWrite": 5 }
+              ]
+            },
+            "thinkingLevelMap": { "off": null, "minimal": "low", "xhigh": "xhigh", "max": "max" },
+            "compat": {
+              "supportsReasoningEffort": true,
+              "supportedReasoningEfforts": ["low", "medium", "high", "xhigh", "max"],
+              "supportsTemperature": false,
+              "codeMode": "preferred"
+            }
+          },
+          {
             "id": "gpt-5.6-sol",
             "name": "GPT-5.6 Sol",
             "reasoning": true,
