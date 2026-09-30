@@ -15,15 +15,33 @@ final class CloudflareAccessEmbedLogin {
         let host: String
     }
 
+    enum Failure: String {
+        case unsupportedOrigin = "unsupported application origin"
+        case notEmbedded = "application is not embedded by the dashboard"
+        case retryDelayed = "automatic sign-in is cooling down"
+        case noApplication = "Access application discovery failed"
+        case differentIssuer = "Access application belongs to a different issuer"
+        case signInFailed = "sign-in failed, expired or was cancelled"
+        case documentUnavailable = "trusted dashboard iframe inspection failed"
+        case cookieInstallationFailed = "cookie installation failed"
+        case cookieBlocked = "WebKit did not deliver the cookie; automatic sign-in disabled for 24 hours"
+    }
+
+    private struct Installation {
+        let installedAt: Date
+        let expiresAt: Date
+    }
+
     private let discover: Discover
     private let runSignIn: SignIn
     private let now: @MainActor () -> Date
-    private let logCookieBlocked: @MainActor (String) -> Void
+    private let log: @MainActor (String, Failure) -> Void
     private var flights: [ApplicationKey: Task<GatewayBrowserSession?, Error>] = [:]
     private var retryAfter: [ApplicationKey: Date] = [:]
     private var principal: String?
-    private var installedAt: [String: Date] = [:]
+    private var installations: [String: Installation] = [:]
     private var cookieBlockedUntil: [String: Date] = [:]
+    private var loggedFailures: [String: Set<Failure>] = [:]
 
     init(
         discover: @escaping Discover = { try await CloudflareAccessLogin.discover(gatewayURL: $0) },
@@ -31,36 +49,44 @@ final class CloudflareAccessEmbedLogin {
             try await CloudflareAccessLogin.signIn(application: application, isCurrent: { await isCurrent() })
         },
         now: @escaping @MainActor () -> Date = Date.init,
-        logCookieBlocked: @escaping @MainActor (String) -> Void = { host in
-            Logger(subsystem: "ai.openclaw", category: "gateway.browser-sign-in").warning(
+        log: @escaping @MainActor (String, Failure) -> Void = { host, failure in
+            Logger(subsystem: "ai.openclaw", category: "dashboard.embed-access").warning(
                 """
-                Embedded Access cookie was not delivered for \(host, privacy: .private); \
-                automatic sign-in disabled for 24 hours. Use the tab's sign-in link.
+                Embedded Access for \(host, privacy: .private): \(failure.rawValue, privacy: .public). \
+                Use the tab's sign-in link.
                 """)
         })
     {
         self.discover = discover
         self.runSignIn = signIn
         self.now = now
-        self.logCookieBlocked = logCookieBlocked
+        self.log = log
     }
 
     func signIn(
         appURL: URL,
         gateway: GatewayBrowserSession,
+        observedIframeHosts: [String],
         isCurrent: @escaping IsCurrent) async throws -> GatewayBrowserSession?
     {
         try Task.checkCancellation()
         guard isCurrent() else { throw CancellationError() }
         try gateway.validate(for: gateway.origin, now: self.now())
+        self.setPrincipal(gateway.browserDataPrincipal)
         guard appURL.scheme == "https", appURL.user == nil, appURL.password == nil,
               appURL.query == nil, appURL.fragment == nil, appURL.port == nil || appURL.port == 443,
               appURL.path.isEmpty || appURL.path == "/", let host = appURL.host?.lowercased(),
               Self.isDNSHostname(host), host != gateway.origin.host?.lowercased(),
               Self.sharesHostSuffix(host, gatewayHost: gateway.origin.host)
-        else { return nil }
+        else {
+            self.recordFailure(appURL: appURL, reason: .unsupportedOrigin)
+            return nil
+        }
+        guard observedIframeHosts.contains(where: { $0.lowercased() == host }) else {
+            self.recordFailure(appURL: appURL, reason: .notEmbedded)
+            return nil
+        }
         let key = ApplicationKey(principal: gateway.browserDataPrincipal, host: host)
-        self.setPrincipal(key.principal)
         if self.cookieDeliveryFailed(for: host) { return nil }
         if let flight = self.flights[key] {
             let result = try await flight.value
@@ -69,14 +95,21 @@ final class CloudflareAccessEmbedLogin {
             return result
         }
         if let retryAfter = self.retryAfter[key], retryAfter > self.now() {
+            self.recordFailure(appURL: appURL, reason: .retryDelayed)
             return nil
         }
         let task = Task { @MainActor in
             guard isCurrent() else { throw CancellationError() }
-            guard let application = try await self.discover(appURL) else { return nil as GatewayBrowserSession? }
+            guard let application = try await self.discover(appURL) else {
+                self.recordFailure(appURL: appURL, reason: .noApplication)
+                return nil as GatewayBrowserSession?
+            }
             try Task.checkCancellation()
             guard isCurrent() else { throw CancellationError() }
-            guard Self.sameIssuer(application.issuer, gateway.issuer) else { return nil }
+            guard Self.sameIssuer(application.issuer, gateway.issuer) else {
+                self.recordFailure(appURL: appURL, reason: .differentIssuer)
+                return nil
+            }
             let session = try await self.runSignIn(application, isCurrent)
             try Task.checkCancellation()
             guard isCurrent() else { throw CancellationError() }
@@ -92,10 +125,15 @@ final class CloudflareAccessEmbedLogin {
             self.flights[key] = nil
             self.retryAfter[key] = self.now().addingTimeInterval(120)
         }
-        return try await withTaskCancellationHandler {
-            try await task.value
-        } onCancel: {
-            task.cancel()
+        do {
+            return try await withTaskCancellationHandler {
+                try await task.value
+            } onCancel: {
+                task.cancel()
+            }
+        } catch {
+            self.recordFailure(appURL: appURL, reason: .signInFailed)
+            throw error
         }
     }
 
@@ -121,14 +159,21 @@ final class CloudflareAccessEmbedLogin {
     func setPrincipal(_ principal: String?) {
         guard self.principal != principal else { return }
         self.principal = principal
-        self.installedAt.removeAll()
+        self.installations.removeAll()
         self.cookieBlockedUntil.removeAll()
+        self.loggedFailures.removeAll()
     }
 
-    func recordCookieInstallation(appURL: URL, gateway: GatewayBrowserSession) {
-        guard self.principal == gateway.browserDataPrincipal, let host = appURL.host?.lowercased(),
+    func recordFailure(appURL: URL, reason: Failure) {
+        guard let host = appURL.host?.lowercased(),
+              self.loggedFailures[host, default: []].insert(reason).inserted else { return }
+        self.log(host, reason)
+    }
+
+    func recordCookieInstallation(_ embed: GatewayBrowserSession, gateway: GatewayBrowserSession) {
+        guard self.principal == gateway.browserDataPrincipal, let host = embed.origin.host?.lowercased(),
               self.cookieBlockedUntil[host] == nil else { return }
-        self.installedAt[host] = self.now()
+        self.installations[host] = Installation(installedAt: self.now(), expiresAt: embed.expiresAt)
     }
 
     private func cookieDeliveryFailed(for host: String) -> Bool {
@@ -137,11 +182,13 @@ final class CloudflareAccessEmbedLogin {
             if until > now { return true }
             self.cookieBlockedUntil[host] = nil
         }
-        guard let installed = self.installedAt.removeValue(forKey: host) else { return false }
-        let elapsed = now.timeIntervalSince(installed)
-        guard elapsed >= 0, elapsed <= 300 else { return false }
+        guard let installed = self.installations.removeValue(forKey: host) else { return false }
+        let elapsed = now.timeIntervalSince(installed.installedAt)
+        guard elapsed >= 0, elapsed <= 300, installed.expiresAt > now else { return false }
         self.cookieBlockedUntil[host] = now.addingTimeInterval(24 * 60 * 60)
-        self.logCookieBlocked(host)
+        if self.loggedFailures[host, default: []].insert(.cookieBlocked).inserted {
+            self.log(host, .cookieBlocked)
+        }
         return true
     }
 

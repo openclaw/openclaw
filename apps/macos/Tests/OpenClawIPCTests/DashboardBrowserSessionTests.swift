@@ -557,6 +557,7 @@ struct DashboardBrowserSessionTests {
     }
 }
 
+/// These tests compile the shared openclaw.gateway-cookie-origin identifier in WKContentRuleListStore.default().
 @Suite(.serialized)
 @MainActor
 struct DashboardEmbedCookieTests {

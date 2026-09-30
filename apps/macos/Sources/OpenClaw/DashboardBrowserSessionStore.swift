@@ -20,18 +20,29 @@ final class DashboardBrowserSessionStore {
             self.owner.revision == self.revision
         }
 
-        func signInEmbed(appURL: URL) async throws -> Bool {
+        func signInEmbed(appURL: URL, observedIframeHosts: [String]) async throws -> Bool {
             guard self.isCurrent, let gateway = self.session else { throw GatewayBrowserSessionError.superseded }
             try gateway.validate(for: gateway.origin)
-            let embed = try await self.owner.embedSignIn.signIn(appURL: appURL, gateway: gateway, isCurrent: {
-                guard self.isCurrent, let current = self.session,
-                      current.browserDataPrincipal == gateway.browserDataPrincipal
-                else { return false }
-                return (try? current.validate(for: current.origin)) != nil
-            })
+            let embed = try await self.owner.embedSignIn.signIn(
+                appURL: appURL, gateway: gateway, observedIframeHosts: observedIframeHosts, isCurrent: {
+                    guard self.isCurrent, let current = self.session,
+                          current.browserDataPrincipal == gateway.browserDataPrincipal
+                    else { return false }
+                    return (try? current.validate(for: current.origin)) != nil
+                })
             guard let embed else { return false }
-            try await self.installEmbedSession(embed)
+            do {
+                try await self.installEmbedSession(embed)
+            } catch {
+                self.recordEmbedFailure(appURL: appURL, reason: .cookieInstallationFailed)
+                throw error
+            }
             return true
+        }
+
+        func recordEmbedFailure(appURL: URL, reason: CloudflareAccessEmbedLogin.Failure) {
+            guard self.isCurrent else { return }
+            self.owner.embedSignIn.recordFailure(appURL: appURL, reason: reason)
         }
 
         func installEmbedSession(_ session: GatewayBrowserSession) async throws {
@@ -356,7 +367,7 @@ final class DashboardBrowserSessionStore {
             await self.dataStore.httpCookieStore.setCookie(cookie)
             guard self.revision == revision else { throw GatewayBrowserSessionError.superseded }
             try await self.refreshCookieRule(revision: revision)
-            self.embedSignIn.recordCookieInstallation(appURL: embed.origin, gateway: gateway)
+            self.embedSignIn.recordCookieInstallation(embed, gateway: gateway)
         }
         // Invalid embed credentials must not poison the Gateway's own lease.
         self.preparation = Task { @MainActor in _ = await preparation.result }

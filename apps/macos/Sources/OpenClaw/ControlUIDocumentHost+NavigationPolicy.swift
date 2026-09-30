@@ -275,8 +275,32 @@ extension ControlUIDocumentHost {
         guard let lease = self.browserSessionLease else { return }
         let generation = self.generation
         Task { @MainActor [weak self] in
-            guard await (try? lease.signInEmbed(appURL: applicationURL)) == true,
-                  let self, self.generation == generation, self.isAvailable(),
+            guard let self, self.generation == generation, self.isAvailable(),
+                  self.auth.usesBrowserIdentity, self.hasCurrentBrowserSession,
+                  Self.isTrustedLinkSource(self.webView.url, dashboardURL: self.currentURL)
+            else { return }
+            let observedHosts = try? await self.webView.callAsyncJavaScript(
+                """
+                return Array.from(document.querySelectorAll('iframe[src]'), frame => {
+                    try {
+                        const url = new URL(frame.src, document.baseURI);
+                        return new URL(url.origin).hostname;
+                    } catch { return null; }
+                }).filter(host => host !== null);
+                """,
+                arguments: [:],
+                in: nil,
+                contentWorld: .defaultClient)
+            guard self.generation == generation, self.isAvailable(),
+                  self.auth.usesBrowserIdentity, self.hasCurrentBrowserSession,
+                  Self.isTrustedLinkSource(self.webView.url, dashboardURL: self.currentURL)
+            else { return }
+            guard let observedHosts = observedHosts as? [String] else {
+                lease.recordEmbedFailure(appURL: applicationURL, reason: .documentUnavailable)
+                return
+            }
+            guard await (try? lease.signInEmbed(appURL: applicationURL, observedIframeHosts: observedHosts)) == true,
+                  self.generation == generation, self.isAvailable(),
                   self.auth.usesBrowserIdentity, self.hasCurrentBrowserSession,
                   Self.isTrustedLinkSource(self.webView.url, dashboardURL: self.currentURL)
             else { return }
