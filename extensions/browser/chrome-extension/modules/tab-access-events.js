@@ -12,6 +12,7 @@ export function registerTabAccessEvents({
   detachDebugger,
   pauseTab,
   removeTabFromOpenClawGroup,
+  replaceTabInSelectedScope = async () => false,
   runAccessMutation,
 }) {
   let groupEventRevision = 0;
@@ -73,6 +74,7 @@ export function registerTabAccessEvents({
       await accessReady;
       scheduleTabsSync();
       await policy.forgetTab(tabId).catch(() => undefined);
+      await removeTabFromOpenClawGroup(tabId).catch(() => undefined);
     })();
   });
 
@@ -82,16 +84,23 @@ export function registerTabAccessEvents({
     policy.retireTab(removedTabId);
     const detaching = [detachDebugger(removedTabId), detachDebugger(addedTabId)];
     scheduleTabsSync();
-    void (async () => {
+    void runAccessMutation(async () => {
       try {
         await accessReady;
-        await policy.replaceTab(addedTabId, removedTabId);
+        const replacements = await Promise.allSettled([
+          policy.replaceTab(addedTabId, removedTabId),
+          replaceTabInSelectedScope(addedTabId, removedTabId),
+        ]);
         await Promise.allSettled(detaching);
+        const failure = replacements.find((result) => result.status === "rejected");
+        if (failure?.status === "rejected") {
+          throw failure.reason;
+        }
       } finally {
         policy.endRevocation(revocation);
         scheduleTabsSync();
       }
-    })().catch(() => undefined);
+    }).catch(() => undefined);
   });
 
   chromeApi.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {

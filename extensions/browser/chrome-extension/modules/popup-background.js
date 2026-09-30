@@ -1,5 +1,5 @@
 import { ACCESS_MODE_ALL, ACCESS_MODE_SELECTED, parsePairingString } from "./relay-core.js";
-import { isTabSelected } from "./relay-tab-groups.js";
+import { isTabSelected as isTabInOpenClawGroup } from "./relay-tab-groups.js";
 import { isValidTabId } from "./tab-eligibility.js";
 
 /** Own manual/native pairing transactions and compact popup/options messages. */
@@ -32,6 +32,12 @@ export function createPopupMessageHandler({
   detachDebugger,
   removeTabFromOpenClawGroup,
   addTabToOpenClawGroup,
+  isTabSelected = isTabInOpenClawGroup,
+  isSelectedScopeExplicit = async () => false,
+  removeTabFromSelectedScope = removeTabFromOpenClawGroup,
+  addTabToSelectedScope = addTabToOpenClawGroup,
+  replaceSelectedScope = addTabToOpenClawGroup,
+  resetSelectedScope = async () => undefined,
   scheduleTabsSync,
   pauseTab,
 }) {
@@ -157,6 +163,7 @@ export function createPopupMessageHandler({
       await disabledPersisted;
       await pairingConfigStore.clear();
       await policy.clearDenied();
+      await resetSelectedScope();
       await detaching;
       await discardRetiredCopilotCustody();
       resetRelayState();
@@ -184,11 +191,13 @@ export function createPopupMessageHandler({
             const { relayUrl, accessMode } = await getConfig();
             await reconcilePairingInvalidation();
             const accessible = await policy.listAccessibleTabs();
+            const explicitSelectedTabs = await isSelectedScopeExplicit();
             const hint = getRelayStatusHint();
             sendResponse({
               paired: Boolean(relayUrl),
               state: getRelayState(),
               accessMode,
+              explicitSelectedTabs,
               accessibleTabCount: accessible.length,
               relayUrl: relayUrl ?? "",
               nativeBootstrap,
@@ -260,6 +269,7 @@ export function createPopupMessageHandler({
               return;
             }
             const revocation = policy.beginRevocation(tabId);
+            let selectedScopeTransition = false;
             try {
               await runAccessMutation(async () => {
                 if (policy.mode !== msg.accessMode) {
@@ -273,19 +283,38 @@ export function createPopupMessageHandler({
                   }
                 } else {
                   const selected = await isTabSelected(await chromeApi.tabs.get(tabId));
+                  const explicit = await isSelectedScopeExplicit();
                   if (!msg.grant && selected) {
                     policy.invalidateTab(tabId);
                     await detachDebugger(tabId);
-                    await removeTabFromOpenClawGroup(tabId);
+                    await removeTabFromSelectedScope(tabId);
                   } else if (msg.grant && !selected) {
-                    policy.invalidateTab(tabId);
-                    await addTabToOpenClawGroup(tabId);
+                    if (explicit) {
+                      policy.invalidateTab(tabId);
+                      await addTabToSelectedScope(tabId);
+                    } else {
+                      // Switching access backends affects every selected tab.
+                      // Revoke synchronously and publish only after the one-tab
+                      // session ledger has committed.
+                      policy.beginTransition();
+                      selectedScopeTransition = true;
+                      await replaceSelectedScope(tabId);
+                      policy.endTransition();
+                      selectedScopeTransition = false;
+                    }
                   }
                 }
                 scheduleTabsSync();
                 await syncTabsToRelay();
               });
             } finally {
+              if (selectedScopeTransition) {
+                policy.endTransition();
+                // A failed backend switch can leave the pairing deliberately
+                // fail-closed. Reconcile immediately so stale physical debugger
+                // attachments do not outlive the revoked policy generation.
+                scheduleTabsSync();
+              }
               policy.endRevocation(revocation);
             }
             const state = await policy.inspectTab(tabId);

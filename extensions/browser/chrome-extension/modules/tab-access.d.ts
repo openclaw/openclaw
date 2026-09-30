@@ -16,6 +16,11 @@ export type CreatedTabOperation = {
   handoff(result: { tabId: number; targetId: string }): void;
 };
 
+type CreatedTabSelection = {
+  tab: BrowserTabSnapshot;
+  assertCurrent(): void;
+};
+
 type TabGroupSnapshot = { id: number; title?: string };
 
 export type TabAccessEpoch = Readonly<{
@@ -118,5 +123,6 @@ export type TabAccessPolicy = {
 export function createTabAccessPolicy(options: {
   chromeApi?: TabAccessChromeApi;
   isSelectedTab(tab: BrowserTabSnapshot): boolean | Promise<boolean>;
+  addSelectedTab?(tabId: number, created?: CreatedTabSelection): void | Promise<void>;
   getGroupColor?(): Promise<string>;
 }): TabAccessPolicy;

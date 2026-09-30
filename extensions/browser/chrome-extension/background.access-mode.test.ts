@@ -140,6 +140,52 @@ describe("relay command authorization", () => {
     expect(harness.tabsGroup).not.toHaveBeenCalled();
   });
 
+  it("switches Selected mode to a session ledger without using tab groups", async () => {
+    const harness = await ready({
+      storedConfig: config("selected"),
+      initialTabs: [
+        { id: 47, url: "https://example.com/shared", groupId: -1 },
+        { id: 48, url: "https://example.com/private", groupId: -1 },
+      ],
+    });
+    harness.tabsGroup.mockRejectedValue(new Error("No group with specified id"));
+    harness.tabGroupsQuery.mockImplementation(
+      () => new Promise<Array<{ id: number; windowId: number }>>(() => {}),
+    );
+
+    await expect(
+      sendRuntimeMessage(harness, {
+        type: "toggleTabAccess",
+        tabId: 47,
+        accessMode: "selected",
+        grant: true,
+      }),
+    ).resolves.toEqual({ ok: true, accessible: true, denied: false });
+
+    expect(harness.tabsGroup).not.toHaveBeenCalled();
+    expect(harness.tabGroupsQuery).not.toHaveBeenCalled();
+    expect(harness.storageValues.explicitSelectedTabBackendV1).toBe(true);
+    expect(harness.sessionStorageValues.explicitSelectedTabIdsV1).toEqual([47]);
+    await expect(
+      sendRuntimeMessage(harness, { type: "getTabAccess", tabId: 47 }),
+    ).resolves.toMatchObject({ accessible: true });
+    await expect(
+      sendRuntimeMessage(harness, { type: "getTabAccess", tabId: 48 }),
+    ).resolves.toMatchObject({ accessible: false });
+
+    harness.updateTab(49, { url: "https://example.com/replacement", groupId: -1 }, false);
+    harness.tabsReplacedListener(49, 47);
+    await vi.waitFor(() => {
+      expect(harness.sessionStorageValues.explicitSelectedTabIdsV1).toEqual([49]);
+    });
+    await expect(
+      sendRuntimeMessage(harness, { type: "getTabAccess", tabId: 47 }),
+    ).resolves.toMatchObject({ accessible: false });
+    await expect(
+      sendRuntimeMessage(harness, { type: "getTabAccess", tabId: 49 }),
+    ).resolves.toMatchObject({ accessible: true });
+  });
+
   it.each([null, -1])(
     "rejects malformed getTabAccess tab id %s without querying Chrome",
     async (tabId) => {

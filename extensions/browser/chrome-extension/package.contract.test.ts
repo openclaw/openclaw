@@ -30,6 +30,7 @@ describe("simplified Chrome extension package", () => {
     expect(options).toContain("Disconnect and disable automatic setup");
     expect(options).toContain("Use local OpenClaw");
     expect(popup).toContain("Automation paused; open Settings");
+    expect(popup).toContain("Share only this tab");
     expect(options).not.toMatch(/copilotSessionRegistryV1|sessionId|sessionKey|deviceToken/u);
   });
 });

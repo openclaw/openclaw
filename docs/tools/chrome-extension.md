@@ -338,6 +338,16 @@ The daemon's stricter v2-only default is compatible with Gateway's default.
   boundary. Moving a tab into the group grants access. Moving it out revokes
   access.
 
+Some Chromium-family browsers expose the extension APIs but do not implement
+tab groups reliably. In Selected tabs mode, open the extension popup and choose
+**Share only this tab** to switch that pairing to compatibility sharing. The
+first action replaces the previous selected scope with the active tab; later
+**Share this tab** actions can add more. Compatibility grants use session
+storage, survive extension worker restarts and tab replacement, and clear when
+the browser exits. The extension stays fail-closed if that storage cannot be
+read or written. Disconnecting the pairing restores tab-group selection for a
+future pairing.
+
 Open the extension's Settings page to change the access mode. Switching to
 Selected tabs immediately detaches ungrouped tabs, including attaches already
 in flight. Agent-created tabs stay in the OpenClaw group in either mode.

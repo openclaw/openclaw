@@ -51,7 +51,16 @@ async function refresh() {
   }
   const access = await chrome.runtime.sendMessage({ type: "getTabAccess", tabId: tab.id });
   tabAction.classList.toggle("hidden", !access.eligible);
-  tabAction.textContent = access.accessible ? "Pause on this tab" : "Allow on this tab";
+  tabAction.textContent =
+    status.accessMode === "selected"
+      ? access.accessible
+        ? "Stop sharing this tab"
+        : status.explicitSelectedTabs
+          ? "Share this tab"
+          : "Share only this tab"
+      : access.accessible
+        ? "Pause on this tab"
+        : "Allow on this tab";
   tabAction.dataset.tabId = String(tab.id);
   tabAction.dataset.mode = status.accessMode;
   tabAction.dataset.grant = String(!access.accessible);
