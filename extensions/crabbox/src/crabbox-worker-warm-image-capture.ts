@@ -65,7 +65,7 @@ export function createCrabboxWarmImageCapture(dependencies: {
   const warnUnsupported = (message: string) =>
     warnOnce(
       "capture unsupported",
-      `${crabboxCaptureUnsupportedSentence(message)} Workers for this profile provision cold; each eligible worker retries capture, so Crabbox configuration changes apply to the next dispatch. Set settings.warmImage: false on the profile to stop capture attempts.`,
+      `${crabboxCaptureUnsupportedSentence(message)} Workers for this profile use an existing compatible snapshot when one is available and otherwise provision cold; each eligible worker retries capture, so Crabbox configuration changes apply to the next dispatch. Set settings.warmImage: false on the profile to stop capture attempts.`,
       false,
     );
 

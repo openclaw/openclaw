@@ -86,7 +86,7 @@ describe("Crabbox project snapshot provisioning", () => {
     });
     expect((await listCrabboxWarmImages(crabboxState))[0]?.capture).toBeUndefined();
     expect(warn).toHaveBeenCalledWith(
-      `Crabbox warm image capture unsupported: ${unsupportedCaptureReceipt("unused").message}. Workers for this profile provision cold; each eligible worker retries capture, so Crabbox configuration changes apply to the next dispatch. Set settings.warmImage: false on the profile to stop capture attempts.`,
+      `Crabbox warm image capture unsupported: ${unsupportedCaptureReceipt("unused").message}. Workers for this profile use an existing compatible snapshot when one is available and otherwise provision cold; each eligible worker retries capture, so Crabbox configuration changes apply to the next dispatch. Set settings.warmImage: false on the profile to stop capture attempts.`,
     );
     await provider.destroy({ ...source, profile });
     // The retained refusal must not suppress the next attempt once Crabbox can capture.

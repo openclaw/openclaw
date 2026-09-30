@@ -411,7 +411,7 @@ const enSettings = {
       noImage: "No image",
       coldOnly: "Cold only",
       captureUnsupportedHint:
-        "Workers provision cold. Each eligible worker retries capture, so Crabbox configuration changes apply to the next dispatch. Set settings.warmImage: false on this profile to stop capture attempts.",
+        "Workers use an existing compatible snapshot when one is available and otherwise provision cold. Each eligible worker retries capture, so Crabbox configuration changes apply to the next dispatch. Set settings.warmImage: false on this profile to stop capture attempts.",
       pending: "Pending",
       created: "Created {age}",
       lastUsed: "Last used {age}",

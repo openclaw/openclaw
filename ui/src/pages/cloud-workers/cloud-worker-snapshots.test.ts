@@ -143,7 +143,7 @@ describe("Cloud worker snapshots", () => {
       expect(unsupported.textContent).toContain(
         "Native checkpoints are not supported by this coordinator.",
       );
-      expect(unsupported.textContent).toContain("Workers provision cold");
+      expect(unsupported.textContent).toContain("otherwise provision cold");
       expect(unsupported.textContent).toContain("Each eligible worker retries capture");
       expect(unsupported.textContent).toContain(
         "Crabbox configuration changes apply to the next dispatch",
