@@ -35,10 +35,8 @@ export function beginTelegramPollRegistration(params: {
   complete: (entry: TelegramPollRegistryEntry | null) => void;
 } {
   const key = telegramPollRegistryKey(params.accountId, params.entry.pollId);
-  let completeRegistration: (entry: TelegramPollRegistryEntry | null) => void = () => {};
-  const completion = new Promise<TelegramPollRegistryEntry | null>((resolve) => {
-    completeRegistration = resolve;
-  });
+  const { promise: completion, resolve: completeRegistration } =
+    Promise.withResolvers<TelegramPollRegistryEntry | null>();
   const registration = { entry: params.entry, completion };
   pendingPollRegistrations.set(key, registration);
   return {
