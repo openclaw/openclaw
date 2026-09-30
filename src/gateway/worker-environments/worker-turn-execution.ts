@@ -134,6 +134,10 @@ export async function executeWorkerTurn(
     await recorder.waitForRuntimePersistence();
     assertContextCurrent();
   }
+  // Only an admission that predates this launch marks a fallback relaunch; the
+  // first launch persists its own admission below and must not pay for the
+  // durable relaunch inspection.
+  const admissionPersistedBeforeLaunch = recorder?.hasPersisted() === true;
   if (recorder && turn.suppressNextUserMessagePersistence !== true && !recorder.hasPersisted()) {
     const persisted = await recorder.persistApproved({
       cwd: params.workspace.kind === "local" ? params.workspace.path : placement.remoteWorkspaceDir,
@@ -174,10 +178,10 @@ export async function executeWorkerTurn(
       ? contextMessages.slice(0, -1)
       : contextMessages;
   let baseLeafId = admission?.entryId ?? manager.getLeafId();
-  // A shared recorder that already persisted the admission marks a fallback
+  // A recorder whose admission persisted before this launch marks a fallback
   // relaunch: the failed candidate may have committed past that admission, so
   // the launch base must follow the durable leaf instead of the fenced prefix.
-  if (recorder?.hasPersisted() && admission) {
+  if (admissionPersistedBeforeLaunch && admission) {
     const relaunch = await resolveWorkerRelaunchBase({
       transcriptTarget,
       admissionEntryId: admission.entryId,

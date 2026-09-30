@@ -74,12 +74,21 @@ export async function resolveWorkerRelaunchBase(params: {
   runId: string;
   signal?: AbortSignal;
 }): Promise<WorkerRelaunchSuffixClassification> {
-  const durable = await SessionManager.openAsync(
-    params.transcriptTarget,
-    undefined,
-    undefined,
-    params.signal,
-  );
+  let truncated = false;
+  const durable = await SessionManager.openBoundedAsync(params.transcriptTarget, {
+    maxBytes: 1024 * 1024,
+    maxEvents: 100,
+    onTruncated: () => {
+      truncated = true;
+    },
+    ...(params.signal ? { signal: params.signal } : {}),
+  });
+  // A bounded cut can hide the admission under an oversized tail, and an
+  // unattributable window must keep the strict refusal: anything not provably
+  // this run's own output stays fenced at the admission base.
+  if (truncated) {
+    return { kind: "foreign" };
+  }
   return classifyWorkerRelaunchSuffix({
     branch: durable.getBranch(),
     admissionEntryId: params.admissionEntryId,

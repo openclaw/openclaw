@@ -789,6 +789,42 @@ describe("worker detached model-context branch parity", () => {
     expect(result.outcome).toEqual({ kind: "rejected", error: result.deliberateStop });
   });
 
+  it("skips the durable relaunch inspection on the launch that persists its own admission", async () => {
+    seedPrevious();
+    const inputRecorder = recorder();
+    const originalOpenBounded = SessionManager.openBoundedAsync;
+    const boundedReads = vi.spyOn(SessionManager, "openBoundedAsync");
+    boundedReads.mockImplementation(((...args: unknown[]) =>
+      // SAFETY: test-only passthrough to the real bounded opener.
+      (originalOpenBounded as (...a: unknown[]) => Promise<unknown>).apply(
+        SessionManager,
+        args,
+      )) as typeof SessionManager.openBoundedAsync);
+    await launchProbe({
+      ...request("worker-fallback-first-launch"),
+      userTurnTranscriptRecorder: inputRecorder,
+    });
+    // The initial leg persisted the admission itself: the failed candidate
+    // cannot have committed past it, so only the placement redispatch after
+    // the failed leg pays for the durable read.
+    expect(boundedReads).toHaveBeenCalledTimes(1);
+    await reclaimActivePlacement();
+    const writer = SessionManager.open(sessionTarget);
+    writer.appendMessage(
+      attachSessionTranscriptRunId(
+        makeAgentAssistantMessage({ content: [], timestamp: 4, stopReason: "error" }),
+        "worker-fallback-first-launch",
+      ),
+    );
+    await launchProbe({
+      ...request("worker-fallback-first-launch"),
+      userTurnTranscriptRecorder: inputRecorder,
+    });
+    // The model-fallback relaunch reads the durable suffix again.
+    expect(boundedReads.mock.calls.length).toBeGreaterThan(0);
+    boundedReads.mockRestore();
+  });
+
   it("stops model fallback when the failed candidate already committed tool activity", async () => {
     seedPrevious();
     const inputRecorder = recorder();
