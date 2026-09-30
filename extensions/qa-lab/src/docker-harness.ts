@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { runExec } from "openclaw/plugin-sdk/process-runtime";
+import { toRepoRelativePath } from "./cli-paths.js";
 import { seedQaAgentWorkspace } from "./qa-agent-workspace.js";
 import {
   createQaChannelGatewayConfig,
@@ -15,10 +16,6 @@ const QA_LAB_UI_OVERLAY_DIR = "/opt/openclaw-qa-lab-ui";
 // not block startup on a network install before their health deadline.
 const QA_DOCKER_PLUGIN_SELECTION = "acpx qa-channel qa-lab";
 
-function toPosixRelative(fromDir: string, toPath: string): string {
-  return path.relative(fromDir, toPath).split(path.sep).join("/");
-}
-
 function renderImageBlock(params: {
   outputDir: string;
   repoRoot: string;
@@ -28,7 +25,7 @@ function renderImageBlock(params: {
   if (params.usePrebuiltImage) {
     return `    image: ${params.imageName}\n`;
   }
-  const context = toPosixRelative(params.outputDir, params.repoRoot) || ".";
+  const context = toRepoRelativePath(params.outputDir, params.repoRoot) || ".";
   return `    build:\n      context: ${JSON.stringify(context)}\n      dockerfile: Dockerfile\n      args:\n        OPENCLAW_EXTENSIONS: "${QA_DOCKER_PLUGIN_SELECTION}"\n`;
 }
 
@@ -57,12 +54,12 @@ function renderCompose(params: {
   includeQaLabUi: boolean;
 }) {
   const imageBlock = renderImageBlock(params);
-  const repoMount = toPosixRelative(params.outputDir, params.repoRoot) || ".";
-  const taxonomyMount = toPosixRelative(
+  const repoMount = toRepoRelativePath(params.outputDir, params.repoRoot) || ".";
+  const taxonomyMount = toRepoRelativePath(
     params.outputDir,
     path.join(params.repoRoot, "taxonomy.yaml"),
   );
-  const qaLabUiMount = toPosixRelative(
+  const qaLabUiMount = toRepoRelativePath(
     params.outputDir,
     path.join(params.repoRoot, "extensions", "qa-lab", "web", "dist"),
   );
@@ -320,9 +317,8 @@ export async function buildQaDockerHarnessImage(
   const imageName = params.imageName ?? "openclaw:qa-local-prebaked";
   const runCommand =
     deps?.runCommand ??
-    (async (command: string, args: string[], cwd: string) => {
-      return await runExec(command, args, { cwd, logOutput: false });
-    });
+    ((command: string, args: string[], cwd: string) =>
+      runExec(command, args, { cwd, logOutput: false }));
 
   await runCommand(
     "docker",

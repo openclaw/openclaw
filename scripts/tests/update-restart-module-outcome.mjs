@@ -262,6 +262,8 @@ async function fixture({
   const realNames = [
     "update-command-service",
     "update-command-post-update",
+    "update-command-mutable-signals",
+    "update-command-execution-guards",
     "update-command-result",
     "../../infra/update-run-step",
     "update-command-verification",

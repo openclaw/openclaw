@@ -235,19 +235,6 @@ export function readChatSessionSnapshot(
   return getSessionCacheValue(cache, resolveChatSnapshotKey(host, target))?.snapshot ?? null;
 }
 
-export function measureChatSnapshotWeight(snapshot: ChatSessionSnapshot): number | null {
-  const messageWeights = measureMessageWeights(snapshot.messages);
-  if (!messageWeights) {
-    return null;
-  }
-  return measuredSnapshotWeight(
-    snapshot,
-    snapshot.pagination,
-    messageWeights.reduce((sum, weight) => sum + weight, 0),
-    messageWeights.length,
-  );
-}
-
 function boundChatSessionSnapshot(snapshot: ChatSessionSnapshot): CachedChatSessionSnapshot | null {
   const messageWeights = measureMessageWeights(snapshot.messages);
   if (!messageWeights) {

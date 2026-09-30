@@ -91,6 +91,15 @@ the caller rechecks its original executor and requester before continuing schema
 inspection, native stop, or publication. Accepted writes retain the same signal
 settlement owner; other phase callers keep their current contracts until migrated.
 
+Service preparation awaits that bound phase operation before native stop and
+rechecks the original service and executor authority after the receipt. Current-core
+finalization retains its requester checks; package compensation retains its existing
+executor-only authority. The local mutable admission joins an accepted rollback
+operation before signal settlement and seals new rollback admission during shutdown.
+It does not retain an unbounded forward command. Fresh receiving processes keep
+their existing lifecycle owner. Stored records, schemas, and recovery policy are
+unchanged.
+
 Candidate Doctor records a predecessor Gateway stop through the same writer and
 joins the receipt before continuing maintenance, including when native stop
 verification fails afterward. Only a completed receipt in the original running
@@ -100,7 +109,7 @@ owner before inspecting and adopting the stopped service. Receipt encoding,
 restart policy, and older-driver behavior are unchanged.
 
 The installed updater still owns its first upgrade hop. Shipped synchronous
-ledger APIs, effect guards, general command progress, and finalization writes
+ledger APIs, effect guards, general command progress, and other finalization writes
 remain with their existing owners until their separate worker cutovers.
 
 Plugin requirement batches prepare their final installed index through the existing
@@ -234,9 +243,15 @@ and closes before replying, without creating, registering, or migrating a store.
 The existing pool transports the primary error message, not native error identity
 or nested cause metadata.
 Callers retain their captured paths and recheck write authority after awaited
-planning. Synchronous ingestion filters consume prepared tombstones. Forget's
-live lineage rechecks and supplied-connection mutation transactions retain their
-existing owner. Session policy metadata reads and cold bootstrap also remain separate.
+planning. Synchronous ingestion filters consume prepared tombstones. Forget retains
+its supplied database borrow while the connection-bound worker rereads live lineage,
+commits tombstones, and purges derived index rows in separate transactions under one
+writer turn. Optional schema preparation commits before those transactions. Origin
+rows are removed only after derived-state and filesystem cleanup succeeds. Failed
+or uncertain native results stop the remaining phases without replaying writes;
+an explicit retry still uses the durable tombstones and retained lineage. Initial
+index planning and vector inspection, session policy metadata reads, and cold
+bootstrap remain separate. Schemas, stored formats, and update behavior are unchanged.
 
 Generated embedding-cache publication uses the existing memory publication worker
 and the captured published database, including during a shadow rebuild. Its native

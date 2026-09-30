@@ -41,14 +41,6 @@ export abstract class ChatPaneReactions extends ChatPaneSharingActions {
     );
   }
 
-  /** Transcript props for reaction chips and pickers. */
-  protected reactionChatProps() {
-    return {
-      messageReactions: this.messageReactions,
-      onReact: this.canReactToCurrentSession() ? this.handleMessageReaction : undefined,
-    };
-  }
-
   protected syncSessionReactions(): void {
     const scope = this.captureConnectionScope();
     const state = scope?.state;

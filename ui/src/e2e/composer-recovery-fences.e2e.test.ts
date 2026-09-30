@@ -178,13 +178,14 @@ suite.define(() => {
               chatQueue: [],
             },
             identity: "storage-error",
+            id: "storage-error-recovery",
           });
           const stage = document.createElement("main");
           stage.style.cssText = "position:fixed;inset:0;z-index:100;background:var(--bg)";
           stage.append(component);
           document.body.append(stage);
         });
-        const notice = page.locator(".chat-outbox-recovery");
+        const notice = page.locator("#storage-error-recovery .chat-outbox-recovery");
         await notice.locator("summary").click();
         await notice.getByRole("alert").waitFor();
         if (process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim()) {

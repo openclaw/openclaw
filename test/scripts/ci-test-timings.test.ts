@@ -437,13 +437,15 @@ describe("native singleton invocation timings", () => {
 });
 
 describe("runtime placement observations", () => {
-  function selectRuntimeConsumers() {
-    const consumers = new Set([
+  function selectRuntimeConsumers(
+    files: readonly string[] = [
       "src/config/state-startup-corpus.test.ts",
       "src/infra/update-managed-service-handoff-lifecycle.test.ts",
       "src/plugin-state/plugin-state-store.authority.test.ts",
       "test/plugins/codex-model-catalog.gateway.test.ts",
-    ]);
+    ],
+  ) {
+    const consumers = new Set(files);
     const resolve = buildPrerequisites.resolveVitestPretestBuildMode;
     // Keep real inventories while making this donation's runtime prerequisites explicit.
     const spy = vi
@@ -460,8 +462,28 @@ describe("runtime placement observations", () => {
       );
     onTestFinished(() => spy.mockRestore());
   }
+  function mockRuntimePlacementCosts() {
+    // Keep spare capacity independent of growing production prices; observations supply overload.
+    const costs = new Proxy<Record<string, number>>(
+      { "agentic-gateway-server-isolated": 30, "agentic-agents-core-subagents": 20 },
+      {
+        get: (target, key) =>
+          typeof key === "string" ? (target[key] ?? 39) : Reflect.get(target, key),
+      },
+    );
+    return vi.spyOn(testTimings, "readCompactGroupTimings").mockReturnValue(costs);
+  }
   it("retains recorded runtime work when its current group gains a file", () => {
-    selectRuntimeConsumers();
+    const corpusFile = "src/config/state-startup-corpus.test.ts";
+    const handoffFile = "src/infra/update-managed-service-handoff-lifecycle.test.ts";
+    selectRuntimeConsumers([corpusFile, handoffFile]);
+    const compactSpy = mockRuntimePlacementCosts();
+    const readRuntimeTimings = testTimings.readRuntimePlacementTimings;
+    const runtimeSpy = vi.spyOn(testTimings, "readRuntimePlacementTimings").mockReturnValue([]);
+    onTestFinished(() => {
+      compactSpy.mockRestore();
+      runtimeSpy.mockRestore();
+    });
     const options = {
       compactMode: "push" as const,
       runnerBackend: "hybrid",
@@ -469,8 +491,6 @@ describe("runtime placement observations", () => {
     };
     const before = createNodeTestShardBundles(options);
     const groups = before.flatMap((job) => job.groups);
-    const corpusFile = "src/config/state-startup-corpus.test.ts";
-    const handoffFile = "src/infra/update-managed-service-handoff-lifecycle.test.ts";
     const corpus = groups.find((group) => group.includePatterns?.includes(corpusFile))!;
     const handoff = groups.find((group) => group.includePatterns?.includes(handoffFile))!;
     expect(corpus.includePatterns!.length).toBeGreaterThan(1);
@@ -479,6 +499,7 @@ describe("runtime placement observations", () => {
     expect(before.find((job) => job.groups.includes(corpus))).toBe(
       before.find((job) => job.groups.includes(handoff)),
     );
+    runtimeSpy.mockImplementation(readRuntimeTimings);
     const observations = [
       { ...corpus, includePatterns: [corpusFile], seconds: 200 },
       { ...handoff, seconds: 300 },
@@ -725,18 +746,7 @@ describe("runtime placement observations", () => {
         infrastructure,
         ...(gatewayRecipient ? [] : ["test/vitest/vitest.gateway-database-workers.config.ts"]),
       ]);
-      // Keep full inventories, but make spare placement capacity independent of
-      // growing production prices. Runtime observations below supply the overload.
-      const compactCosts = new Proxy<Record<string, number>>(
-        { "agentic-gateway-server-isolated": 30, "agentic-agents-core-subagents": 20 },
-        {
-          get: (target, key) =>
-            typeof key === "string" ? (target[key] ?? 39) : Reflect.get(target, key),
-        },
-      );
-      const compactSpy = vi
-        .spyOn(testTimings, "readCompactGroupTimings")
-        .mockReturnValue(compactCosts);
+      const compactSpy = mockRuntimePlacementCosts();
       const spy = vi.spyOn(testTimings, "readRuntimePlacementTimings").mockReturnValue([]);
       const options = {
         compactMode,

@@ -27,7 +27,7 @@ export {
   coalesceStreamRuns,
   collapseCompletedTurnWork,
 } from "./chat-thread-grouping.ts";
-export { agentRunFrameGroups, coalesceAgentRunFrames } from "./chat-agent-run-grouping.ts";
+export { coalesceAgentRunFrames } from "./chat-agent-run-grouping.ts";
 
 type CachedChatItems = {
   input: BuildChatItemsProps | null;

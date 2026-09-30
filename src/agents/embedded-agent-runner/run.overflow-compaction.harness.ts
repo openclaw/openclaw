@@ -340,7 +340,6 @@ const mockedIsAuthAssistantError = vi.fn(() => false);
 const mockedIsBillingAssistantError = vi.fn(() => false);
 export const mockedIsCompactionFailureError = vi.fn(() => false);
 export const mockedIsFailoverAssistantError = vi.fn<MockAssistantErrorProbe>(() => false);
-const mockedIsFailoverErrorMessage = vi.fn(() => false);
 function matchesCanonicalOverflowFixture(msg?: string): boolean {
   const raw = msg ?? "";
   return (
@@ -577,8 +576,6 @@ function resetRunOverflowCompactionHarnessMocks(): void {
   mockedIsCompactionFailureError.mockReturnValue(false);
   mockedIsFailoverAssistantError.mockReset();
   mockedIsFailoverAssistantError.mockReturnValue(false);
-  mockedIsFailoverErrorMessage.mockReset();
-  mockedIsFailoverErrorMessage.mockReturnValue(false);
   mockedIsLikelyContextOverflowError.mockReset();
   mockedIsLikelyContextOverflowError.mockImplementation(matchesCanonicalOverflowFixture);
   mockedParseImageSizeError.mockReset();
@@ -900,7 +897,6 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     isCompactionFailureError: mockedIsCompactionFailureError,
     isLikelyContextOverflowError: mockedIsLikelyContextOverflowError,
     isFailoverAssistantError: mockedIsFailoverAssistantError,
-    isFailoverErrorMessage: mockedIsFailoverErrorMessage,
     parseImageSizeError: mockedParseImageSizeError,
     parseImageDimensionError: mockedParseImageDimensionError,
     isRateLimitAssistantError: mockedIsRateLimitAssistantError,

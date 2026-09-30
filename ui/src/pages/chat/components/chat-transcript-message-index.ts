@@ -1,9 +1,8 @@
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
-import { agentRunFrameActiveStatusParts } from "../chat-agent-run-grouping.ts";
+import { agentRunFrameActiveStatusParts, chatItemGroups } from "../chat-agent-run-grouping.ts";
 import {
-  agentRunFrameGroups,
   assistantGroupCanOwnActiveRunStatus,
   type buildCachedChatItems,
   coalesceActivityRuns,
@@ -427,14 +426,7 @@ function projectTranscriptMessageIndex(
   const transcriptMessageKeys = new Map<string, string>();
   for (const item of transcriptItems) {
     const parts = item.kind === "agent-run-frame" ? item.parts : [item];
-    const groups =
-      item.kind === "agent-run-frame"
-        ? agentRunFrameGroups(item)
-        : item.kind === "group"
-          ? [item]
-          : item.kind === "work-group" || item.kind === "activity-run"
-            ? item.groups
-            : [];
+    const groups = chatItemGroups(item);
     const firstGroup = groups.find((group) => group.role === "assistant") ?? groups[0];
     // The anchor owner uses the first key, so keep stream and persisted keys
     // in their actual presentation order, including within a mixed run frame.
@@ -448,18 +440,8 @@ function projectTranscriptMessageIndex(
       } else if (part.kind === "stream") {
         transcriptMessageKeys.set(part.key, item.key);
       }
-      const partGroups =
-        part.kind === "group"
-          ? [part]
-          : part.kind === "work-group" || part.kind === "activity-run"
-            ? part.groups
-            : [];
-      for (const group of partGroups) {
-        const senderLabel = resolveMessageGroupSenderLabel(firstGroup ?? group, {
-          assistantName: props.assistantName,
-          userId: props.userId,
-          userName: props.userName,
-        });
+      for (const group of chatItemGroups(part)) {
+        const senderLabel = resolveMessageGroupSenderLabel(firstGroup ?? group, props);
         const rowKey =
           item.kind === "work-group" && expandedToolCards.get(item.key)
             ? item.key + ":" + group.key

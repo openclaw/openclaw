@@ -199,11 +199,6 @@ function buildReplyCacheEntry(
   };
 }
 
-function generateShortId(): string {
-  imessageShortIdCounter += 1;
-  return String(imessageShortIdCounter);
-}
-
 export async function rememberIMessageReplyCache(
   entry: Omit<IMessageReplyCacheEntry, "shortId">,
 ): Promise<IMessageReplyCacheEntry> {
@@ -216,7 +211,7 @@ export async function rememberIMessageReplyCache(
   let shortId = imessageReplyCacheByMessageId.get(messageId)?.shortId;
   const isNewMessage = !shortId;
   if (!shortId) {
-    shortId = generateShortId();
+    shortId = String(++imessageShortIdCounter);
     imessageShortIdToUuid.set(shortId, messageId);
   }
 

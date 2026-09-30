@@ -231,28 +231,29 @@ export function resolveModelDirectiveSelection(params: {
     }
 
     const scored = candidates
-      .map((candidate) => {
-        const details = scoreFuzzyMatch({
-          provider: candidate.provider,
-          model: candidate.model,
-          fragment,
-          aliasIndex,
-          defaultProvider,
-          defaultModel,
-        });
-        return Object.assign({ candidate }, details);
-      })
-      .toSorted((a, b) => {
-        // Tie-break deterministically so repeated prompts pick the same model.
-        return (
+      .map((candidate) =>
+        Object.assign(
+          { candidate },
+          scoreFuzzyMatch({
+            provider: candidate.provider,
+            model: candidate.model,
+            fragment,
+            aliasIndex,
+            defaultProvider,
+            defaultModel,
+          }),
+        ),
+      )
+      .toSorted(
+        (a, b) =>
+          // Tie-break deterministically so repeated prompts pick the same model.
           b.score - a.score ||
           Number(b.isDefault) - Number(a.isDefault) ||
           b.variantMatchCount - a.variantMatchCount ||
           a.variantCount - b.variantCount ||
           a.modelLength - b.modelLength ||
-          a.key.localeCompare(b.key)
-        );
-      });
+          a.key.localeCompare(b.key),
+      );
 
     const bestScored = scored[0];
     const minScore = providerFilter ? 90 : 120;

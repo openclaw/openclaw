@@ -468,14 +468,13 @@ describe("diagnostics-prometheus managed install runtime", () => {
     };
 
     await readCompletedWindow();
-    await expect.poll(async () => (await scrapeEventLoopMetrics()).count).toBeGreaterThan(0);
+    // Sampling readiness owns the wait; an HTTP scrape must not race a polling deadline.
     const firstWindow = await scrapeEventLoopMetrics();
+    expect(firstWindow.count).toBeGreaterThan(0);
     expect(firstWindow.observed).toBeGreaterThan(0);
     const nextWindow = await readCompletedWindow();
-    await expect
-      .poll(async () => (await scrapeEventLoopMetrics()).count)
-      .toBeGreaterThan(firstWindow.count);
     const retainedWindows = await scrapeEventLoopMetrics();
+    expect(retainedWindows.count).toBeGreaterThan(firstWindow.count);
     // Prometheus renders 12 significant digits; tolerate only serialization rounding.
     expect(retainedWindows.observed).toBeGreaterThanOrEqual(
       firstWindow.observed + nextWindow.intervalMs / 1_000 - 1e-9,

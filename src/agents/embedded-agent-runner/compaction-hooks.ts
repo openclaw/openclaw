@@ -97,7 +97,6 @@ function syncPostCompactionSessionMemory(
   return Promise.resolve();
 }
 
-/** Emits post-compaction transcript and memory-index side effects for a compacted session file. */
 export async function runPostCompactionSideEffects(params: PostCompactionSession): Promise<void> {
   params.assertActive?.();
   const sessionFile = params.sessionFile.trim();

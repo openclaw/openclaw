@@ -2456,6 +2456,11 @@ if [ "$SCENARIO" = "custom-plugin-siblings" ]; then
   phase update-sibling-candidate update_candidate
   phase canary-sibling-runtime node scripts/e2e/lib/upgrade-survivor/custom-plugin-siblings.mjs assert-canary
   phase candidate-sibling-runtime node scripts/e2e/lib/upgrade-survivor/custom-plugin-siblings.mjs candidate
+  phase sibling-activation-previous-gateway-stop stop_gateway
+  OPENCLAW_UPGRADE_SURVIVOR_CONTEXT_ACTIVATION=1 phase sibling-activation-gateway-start start_gateway
+  phase sibling-activation-gateway-probes check_gateway_probes
+  phase assert-sibling-activation node scripts/e2e/lib/upgrade-survivor/custom-plugin-siblings.mjs assert-activation
+  phase sibling-activation-gateway-stop stop_gateway
   run_completed="1"
   echo "Upgrade survivor Docker E2E passed baseline=${baseline_spec} scenario=${SCENARIO} candidate=${candidate_version}."
   exit 0

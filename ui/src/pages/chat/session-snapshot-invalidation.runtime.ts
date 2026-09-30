@@ -1,13 +1,7 @@
 import type { SessionDeleteTarget } from "../../lib/sessions/session-capability.ts";
-import { resetSessionSnapshotDatabase } from "./session-snapshot-database.ts";
-import { publishSnapshotInvalidation } from "./session-snapshot-invalidation-events.ts";
 import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
 
-export async function clearStoredChatSnapshots(): Promise<void> {
-  const invalidated = publishSnapshotInvalidation({});
-  await invalidated;
-  await resetSessionSnapshotDatabase();
-}
+export { clearStoredChatSnapshots } from "./session-snapshot-invalidation.ts";
 
 export function deleteStoredChatSessionSnapshots(
   host: Parameters<typeof resolveChatSnapshotKey>[0],
