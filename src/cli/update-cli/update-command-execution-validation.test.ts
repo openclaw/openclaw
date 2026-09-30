@@ -24,6 +24,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import * as utils from "../../utils.js";
 import * as restartProbe from "../daemon-cli/restart-health-probe.js";
+import { registerExecutionPhaseReceiptTests } from "./update-command-execution-phase.test-support.js";
 import { executeMutableUpdate } from "./update-command-execution.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import { admitSourceUpdateArtifacts } from "./update-command-git-admission.js";
@@ -36,7 +37,30 @@ import { withUpdateCommandTerminalResult } from "./update-command-terminal.js";
 const { executionParams, inspectOrStopService, mocks, schemaContext, successfulUpdate } =
   await import("./update-command-execution.test-support.js");
 
+const phaseAdmission = vi.hoisted(() => ({ active: false }));
+vi.mock("../../infra/sqlite-worker-operation-admission.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../infra/sqlite-worker-operation-admission.js")>();
+  return {
+    ...actual,
+    createSqliteWorkerOperationAdmission: (
+      ...args: Parameters<typeof actual.createSqliteWorkerOperationAdmission>
+    ) => {
+      const [admit, attachment] = args;
+      return actual.createSqliteWorkerOperationAdmission((request, grant) => {
+        phaseAdmission.active = true;
+        try {
+          admit(request, grant);
+        } finally {
+          phaseAdmission.active = false;
+        }
+      }, attachment);
+    },
+  };
+});
+
 describe("mutable update validation", () => {
+  registerExecutionPhaseReceiptTests({ executionParams, mocks, successfulUpdate, phaseAdmission });
   it.each([
     { owner: "dead", changed: false },
     { owner: "live", changed: false },

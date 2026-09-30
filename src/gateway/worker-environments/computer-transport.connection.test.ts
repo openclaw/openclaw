@@ -25,6 +25,7 @@ import {
 import { createWorkerComputerTool } from "../../worker/computer-runtime.js";
 import { parseNodeWorkerComputerInput } from "../../worker/node-computer-protocol.js";
 import { WorkerConnection } from "../../worker/worker-connection.js";
+import { createWorkerGatewayToolProxies } from "../../worker/worker-gateway-tools.js";
 import { GatewayConnectionWork } from "../server-connection-work.js";
 import {
   attachWorkerWsMessageHandler,
@@ -98,7 +99,6 @@ describe("worker computer connection lifetime", () => {
       const durableEntered = createDeferred();
       const durableResume = createDeferred();
       const durableDone = createDeferred();
-      let durableSignal: AbortSignal | undefined;
       let pendingComputer: ReturnType<typeof rpc> | undefined;
       let freshComputer: Promise<unknown> | undefined;
       let computerRequests = 0;
@@ -111,12 +111,38 @@ describe("worker computer connection lifetime", () => {
           computerRequests += 1;
           return (pendingComputer = rpc(who, request, signal));
         },
-        executeSessionTool: async (_who, _tool, _request, signal) => {
-          durableSignal = signal;
+        getToolSurface: async () => ({
+          ok: true,
+          result: {
+            generation: "surface",
+            tools: [
+              {
+                id: "send",
+                execution: "gateway",
+                replay: true,
+                timeout: { argument: "timeoutSeconds", defaultSeconds: 30, paddingMs: 60_000 },
+                definition: {
+                  name: "sessions_send",
+                  label: "Send",
+                  description: "Send a message to another session.",
+                  parameters: { type: "object" },
+                },
+              },
+            ],
+            policy: {
+              workspaceOnly: true,
+              readOnly: false,
+              applyPatchEnabled: false,
+              applyPatchWorkspaceOnly: true,
+              imageSanitization: {},
+            },
+          },
+        }),
+        invokeGatewayTool: async () => {
           durableEntered.resolve();
           await durableResume.promise;
           durableDone.resolve();
-          return { ok: true, result: { resultJson: "{}" } };
+          return { ok: true, result: { content: [] } };
         },
       };
       const connectionWork = new GatewayConnectionWork();
@@ -203,13 +229,13 @@ describe("worker computer connection lifetime", () => {
         registerRunCleanup: (close) => cleanups.push(close),
       });
       try {
-        await connection.start();
-        const durable = connection
-          .requestSessionsSend({
-            toolCallId: "durable-send",
-            sessionKey: "agent:main:child",
-            message: "continue",
-          })
+        const hello = await connection.start();
+        if (!hello.toolSurface) {
+          throw new Error("Expected the admitted Gateway tool surface");
+        }
+        const send = createWorkerGatewayToolProxies(hello.toolSurface, connection)[0]!;
+        const durable = send
+          .execute("durable-send", { sessionKey: "agent:main:child", message: "continue" })
           .catch((error: unknown) => error);
         await durableEntered.promise;
         if (boundary === "ordinary-close") {
@@ -265,8 +291,7 @@ describe("worker computer connection lifetime", () => {
           durableResume.resolve();
           await durableDone.promise;
           await draining;
-          expect(await durable).toMatchObject({ ok: true });
-          expect(durableSignal).toBeUndefined();
+          expect(await durable).toMatchObject({ content: [] });
           expect(workerSocket.readyState).toBe(WebSocket.OPEN);
           expect(h.options.placements.validateTurnClaim(h.claim)).toBe(true);
           expect(validateAgentRunDelegatedAuthority(h.authority)).toBe(true);
@@ -320,8 +345,7 @@ describe("worker computer connection lifetime", () => {
           .catch((error: unknown) => error);
         durableResume.resolve();
         await durableDone.promise;
-        expect(await durable).toMatchObject({ ok: true });
-        expect(durableSignal).toBeUndefined();
+        expect(await durable).toMatchObject({ content: [] });
         expect(retained).toBeInstanceOf(Error);
         if (boundary !== "completed") {
           await service.close();

@@ -1,4 +1,3 @@
-// Loads plugin marketplace entries for install and discovery flows.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -245,10 +244,9 @@ function marketplaceEntrySourceToInput(source: MarketplaceEntrySource): string {
     case "git":
     case "git-subdir":
       return `${source.url}${source.ref ? `#${source.ref}` : ""}`;
-    case "url":
+    default:
       return source.url;
   }
-  throw new Error("Unsupported marketplace entry source");
 }
 
 function marketplaceEntryGitRef(source: MarketplaceEntrySource): string | undefined {
@@ -259,14 +257,9 @@ function marketplaceEntryGitRef(source: MarketplaceEntrySource): string | undefi
       return source.ref;
     case "url":
       return resolveArchiveKind(source.url) ? undefined : normalizeGitCloneSource(source.url)?.ref;
-    case "path":
+    default:
       return undefined;
   }
-  throw new Error("Unsupported marketplace entry source");
-}
-
-function isMutableGitDerivedSource(ref: string | undefined): boolean {
-  return !isImmutableGitCommitRef(ref);
 }
 
 function marketplaceInstallPolicySource(params: {
@@ -275,8 +268,8 @@ function marketplaceInstallPolicySource(params: {
   resolvedPath: string;
   source: MarketplaceEntrySource;
 }): InstallPolicySource {
-  const marketplaceMutable = isMutableGitDerivedSource(params.marketplaceRef);
-  const entryMutable = isMutableGitDerivedSource(marketplaceEntryGitRef(params.source));
+  const marketplaceMutable = !isImmutableGitCommitRef(params.marketplaceRef);
+  const entryMutable = !isImmutableGitCommitRef(marketplaceEntryGitRef(params.source));
   if (resolveArchiveKind(params.resolvedPath)) {
     if (
       params.marketplaceOrigin === "remote" &&

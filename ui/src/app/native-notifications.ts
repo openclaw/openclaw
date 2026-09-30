@@ -45,13 +45,10 @@ function snapshotFrom(value: unknown): NativeNotificationsSnapshot | null {
   if (!isNativeNotificationsPermission(value.permission)) {
     return null;
   }
-  if (!("test" in value)) {
+  if (!("test" in value) || value.test === null) {
     return { permission: value.permission, test: null };
   }
   const test = value.test;
-  if (test === null) {
-    return { permission: value.permission, test: null };
-  }
   if (typeof test !== "object" || test === null || !("state" in test)) {
     return null;
   }

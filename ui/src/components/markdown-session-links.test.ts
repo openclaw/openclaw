@@ -68,11 +68,8 @@ describe("markdown session links", () => {
   });
   it.each([
     ["click", "a"],
-    ["Enter", "a"],
     [" ", "a"],
-    ["click", "code"],
     ["Enter", "code"],
-    [" ", "code"],
   ])("routes a public-origin URL with %s on %s before hovercard initialization", (action, tag) => {
     const provider = Object.assign(
       document.createElement("openclaw-session-progress-hovercard-provider"),

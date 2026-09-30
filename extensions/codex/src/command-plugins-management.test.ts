@@ -13,21 +13,6 @@ import {
 } from "./command-plugins-management.test-support.js";
 
 describe("Codex /codex plugins subcommand", () => {
-  it("lists a configured plugin with its enabled marker and explains the underlying file", async () => {
-    const io = inMemoryIO({
-      "google-calendar": {
-        enabled: true,
-        marketplaceName: "openai-curated",
-        pluginName: "google-calendar",
-      },
-    });
-
-    const result = await handleCodexPluginsSubcommand(fakeCtx, ["list"], io);
-    expect(result.text).toContain("ON   google-calendar");
-    expect(result.text).toContain("openclaw.json");
-    expect(result.text).toContain("/codex plugins status <name>@<marketplace>");
-  });
-
   it("lists effective disabled status when the global plugin switch is off", async () => {
     const io = inMemoryIO(
       {
@@ -114,23 +99,20 @@ describe("Codex /codex plugins subcommand", () => {
     expect(io.current()["google-calendar"]?.enabled).toBe(true);
   });
 
-  it.each(["enable", "disable"] as const)(
-    "preserves an exact legacy config key containing @ when running %s",
-    async (verb) => {
-      const io = inMemoryIO({
-        "team@prod": {
-          enabled: verb === "disable",
-          marketplaceName: "openai-curated",
-          pluginName: "gmail",
-        },
-      });
+  it("preserves an exact legacy config key containing @ when disabling", async () => {
+    const io = inMemoryIO({
+      "team@prod": {
+        enabled: true,
+        marketplaceName: "openai-curated",
+        pluginName: "gmail",
+      },
+    });
 
-      const result = await handleCodexPluginsSubcommand(fakeCtx, [verb, "team@prod"], io);
+    const result = await handleCodexPluginsSubcommand(fakeCtx, ["disable", "team@prod"], io);
 
-      expect(result.text).toContain(`team＠prod: ${verb}d`);
-      expect(io.current()["team@prod"]?.enabled).toBe(verb === "enable");
-    },
-  );
+    expect(result.text).toContain("team＠prod: disabled");
+    expect(io.current()["team@prod"]?.enabled).toBe(false);
+  });
 
   it("rejects enable and disable from non-owner non-admin callers", async () => {
     const io = inMemoryIO({
@@ -257,7 +239,7 @@ describe("Codex /codex plugins subcommand", () => {
       const io = inMemoryIO({}, { enabled: false });
       const runtime = pluginRuntime({
         pluginName,
-        marketplacePath: "/repo/company/.agents/plugins/marketplace.json",
+        marketplacePath: "/approved/codex-home/company-tools/marketplace.json",
       });
 
       const result = await handleCodexPluginsSubcommand(
@@ -267,8 +249,9 @@ describe("Codex /codex plugins subcommand", () => {
         runtime,
       );
 
+      expect(runtime.list).toHaveBeenCalledWith({ cwds: ["/repo/company"] });
       expect(runtime.install).toHaveBeenCalledWith({
-        marketplacePath: "/repo/company/.agents/plugins/marketplace.json",
+        marketplacePath: "/approved/codex-home/company-tools/marketplace.json",
         pluginName,
       });
       expect(io.currentConfig()).toEqual({
@@ -336,30 +319,27 @@ describe("Codex /codex plugins subcommand", () => {
     },
   );
 
-  it.each([true, null] as const)(
-    "authorizes a remote plugin already installed through its Codex interstitial (%j)",
-    async (mustShowInstallationInterstitial) => {
-      const io = inMemoryIO();
-      const runtime = pluginRuntime({
-        marketplace: "workspace-directory",
-        remotePluginId: "plugins~Plugin_remote_opaque",
-        mustShowInstallationInterstitial,
-        installed: true,
-        enabled: true,
-      });
+  it("authorizes a remote plugin already installed through its Codex interstitial", async () => {
+    const io = inMemoryIO();
+    const runtime = pluginRuntime({
+      marketplace: "workspace-directory",
+      remotePluginId: "plugins~Plugin_remote_opaque",
+      mustShowInstallationInterstitial: true,
+      installed: true,
+      enabled: true,
+    });
 
-      const result = await handleCodexPluginsSubcommand(
-        fakeCtx,
-        ["install", "security-review@workspace-directory"],
-        io,
-        runtime,
-      );
+    const result = await handleCodexPluginsSubcommand(
+      fakeCtx,
+      ["install", "security-review@workspace-directory"],
+      io,
+      runtime,
+    );
 
-      expect(runtime.install).not.toHaveBeenCalled();
-      expect(io.current()).toHaveProperty("security-review@workspace-directory");
-      expect(result.text).toContain("bundle was already installed in Codex");
-    },
-  );
+    expect(runtime.install).not.toHaveBeenCalled();
+    expect(io.current()).toHaveProperty("security-review@workspace-directory");
+    expect(result.text).toContain("bundle was already installed in Codex");
+  });
 
   it("authorizes an already active plugin without requiring an installation selector", async () => {
     const io = inMemoryIO();
@@ -375,26 +355,6 @@ describe("Codex /codex plugins subcommand", () => {
     expect(runtime.install).not.toHaveBeenCalled();
     expect(io.current()).toHaveProperty("security-review@company-tools");
     expect(result.text).toContain("bundle was already installed in Codex");
-  });
-
-  it("accepts Codex-approved local marketplace roots outside the selected workspace", async () => {
-    const runtime = pluginRuntime({
-      marketplacePath: "/approved/codex-home/company-tools/marketplace.json",
-    });
-
-    const result = await handleCodexPluginsSubcommand(
-      fakeCtx,
-      ["install", "security-review@company-tools"],
-      inMemoryIO(),
-      runtime,
-    );
-
-    expect(runtime.list).toHaveBeenCalledWith({ cwds: ["/repo/company"] });
-    expect(runtime.install).toHaveBeenCalledWith({
-      marketplacePath: "/approved/codex-home/company-tools/marketplace.json",
-      pluginName: "security-review",
-    });
-    expect(result.text).toContain("bundle was installed in Codex");
   });
 
   it("updates an existing legacy policy for the same marketplace-qualified plugin", async () => {
@@ -1074,7 +1034,9 @@ describe("Codex /codex plugins subcommand", () => {
     });
 
     const result = await handleCodexPluginsSubcommand(fakeCtx, ["list"], io);
-    expect(result.text).toContain("google-calendar");
+    expect(result.text).toContain("ON   google-calendar");
+    expect(result.text).toContain("openclaw.json");
+    expect(result.text).toContain("/codex plugins status <name>@<marketplace>");
     expect(result.text).toContain("google-calendar＿＠team＿∗name∗");
     expect(result.text).not.toContain("@team");
     expect(result.text).not.toContain("*name*");

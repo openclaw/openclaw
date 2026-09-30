@@ -2157,10 +2157,6 @@ importers:
         version: link:../..
 
   extensions/slack-huddles:
-    dependencies:
-      typebox:
-        specifier: 1.3.34
-        version: 1.3.34
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -2225,10 +2221,6 @@ importers:
         version: link:../..
 
   extensions/teams-meetings:
-    dependencies:
-      typebox:
-        specifier: 1.3.34
-        version: 1.3.34
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -2542,10 +2534,6 @@ importers:
         version: link:../..
 
   extensions/zoom-meetings:
-    dependencies:
-      typebox:
-        specifier: 1.3.34
-        version: 1.3.34
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*

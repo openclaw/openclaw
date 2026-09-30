@@ -1,4 +1,3 @@
-// Formats config validation issues for CLI and diagnostics.
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { formatConcreteConfigPath } from "../shared/dot-path.js";
 import type { ConfigValidationIssue } from "./types.js";

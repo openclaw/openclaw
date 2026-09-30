@@ -1,4 +1,3 @@
-// Status, health, and sessions command registration.
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import type { Command } from "commander";
 import { theme } from "../../../packages/terminal-core/src/theme.js";

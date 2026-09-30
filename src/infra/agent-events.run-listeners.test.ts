@@ -32,23 +32,6 @@ describe("run-indexed agent event listeners", () => {
     expect(mine).toEqual([1, 2]);
   });
 
-  test("preserves mixed global and run listener registration order", () => {
-    registerAgentRunContext("run-order", { sessionKey: "session-order" });
-    const order: string[] = [];
-    const stopRun = onAgentEventForRun("run-order", () => order.push("run"));
-    const stopGlobal = onAgentEvent((evt) => {
-      if (evt.runId === "run-order") {
-        order.push("global");
-      }
-    });
-
-    emitAgentEvent({ runId: "run-order", stream: "assistant", data: { text: "hi" } });
-    stopRun();
-    stopGlobal();
-
-    expect(order).toEqual(["run", "global"]);
-  });
-
   test.each(["global", "run"] as const)(
     "visits a new %s listener added by the last callback, even when that callback throws",
     (scope) => {

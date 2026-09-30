@@ -6,8 +6,15 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION } from "../types.js";
 import type { SkillSnapshot } from "../types.js";
+import { resolveReusableWorkspaceSkillSnapshot } from "./session-snapshot.js";
 
-const TEST_WORKSPACE_DIR = path.resolve("/tmp/workspace");
+// Start the suite cold so these hoisted mocks also apply after another file loaded the owner.
+vi.hoisted(() => {
+  vi.resetModules();
+});
+
+let workspaceSequence = 0;
+let workspaceDir: string;
 
 type SnapshotFixture = {
   prompt: string;
@@ -62,12 +69,11 @@ vi.mock("./refresh-state.js", () => ({
   shouldRefreshSnapshotForVersion: shouldRefreshSnapshotForVersionMock,
 }));
 
-let resolveReusableWorkspaceSkillSnapshot: typeof import("./session-snapshot.js").resolveReusableWorkspaceSkillSnapshot;
-
 describe("resolveReusableWorkspaceSkillSnapshot", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ resolveReusableWorkspaceSkillSnapshot } = await import("./session-snapshot.js"));
+  beforeEach(() => {
+    // Both owner caches key on workspaceDir; keep reuse within a case without sharing its state.
+    // Loading and watching are mocked, so this identity needs no real directory.
+    workspaceDir = path.resolve(`/tmp/session-snapshot-${++workspaceSequence}`);
     vi.clearAllMocks();
     buildWorkspaceSkillSnapshotMock.mockReturnValue({ prompt: "", skills: [], resolvedSkills: [] });
     ensureSkillsWatcherMock.mockImplementation(() => undefined);
@@ -81,14 +87,14 @@ describe("resolveReusableWorkspaceSkillSnapshot", () => {
     const pluginMetadataSnapshot = { policyHash: "prepared" } as PluginMetadataSnapshot;
 
     await resolveReusableWorkspaceSkillSnapshot({
-      workspaceDir: TEST_WORKSPACE_DIR,
+      workspaceDir,
       executionWorkspaceDir: "/tmp/execution",
       config: {},
       pluginMetadataSnapshot,
     });
 
     expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledWith(
-      TEST_WORKSPACE_DIR,
+      workspaceDir,
       expect.objectContaining({ pluginMetadataSnapshot }),
     );
     expect(ensureSkillsWatcherMock).toHaveBeenCalledWith(
@@ -102,7 +108,7 @@ describe("resolveReusableWorkspaceSkillSnapshot", () => {
       skills: [{ name: "cached-skill" }],
       resolvedSkills: [{ name: "cached-skill" }],
     });
-    const params = { workspaceDir: TEST_WORKSPACE_DIR, config: {} };
+    const params = { workspaceDir, config: {} };
 
     const first = await resolveReusableWorkspaceSkillSnapshot(params);
     const second = await resolveReusableWorkspaceSkillSnapshot(params);
@@ -122,14 +128,14 @@ describe("resolveReusableWorkspaceSkillSnapshot", () => {
     const snapshot = strippedSnapshot();
 
     await resolveReusableWorkspaceSkillSnapshot({
-      workspaceDir: TEST_WORKSPACE_DIR,
+      workspaceDir,
       config: {},
       existingSnapshot: snapshot,
     });
     expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(1);
 
     await resolveReusableWorkspaceSkillSnapshot({
-      workspaceDir: TEST_WORKSPACE_DIR,
+      workspaceDir,
       config: {},
       existingSnapshot: { ...snapshot },
     });
@@ -160,7 +166,7 @@ describe("resolveReusableWorkspaceSkillSnapshot", () => {
       skillFilter: cached,
     };
     const result = await resolveReusableWorkspaceSkillSnapshot({
-      workspaceDir: TEST_WORKSPACE_DIR,
+      workspaceDir,
       config: {},
       existingSnapshot: snapshot,
       skillFilter: next,
@@ -201,7 +207,7 @@ describe("resolveReusableWorkspaceSkillSnapshot", () => {
       }
       throw new Error("fixture expected preparation cancellation");
     });
-    const params = { workspaceDir: TEST_WORKSPACE_DIR, config: {}, watch: false };
+    const params = { workspaceDir, config: {}, watch: false };
     const first = resolveReusableWorkspaceSkillSnapshot({
       ...params,
       assertCurrent: () => controller.signal.throwIfAborted(),
@@ -228,7 +234,7 @@ describe("resolveReusableWorkspaceSkillSnapshot", () => {
     const build = createDeferred<SnapshotFixture>();
     const reason = new Error("skill source unavailable");
     buildWorkspaceSkillSnapshotMock.mockReturnValue(build.promise);
-    const params = { workspaceDir: TEST_WORKSPACE_DIR, config: {}, watch: false };
+    const params = { workspaceDir, config: {}, watch: false };
     const firstRejected = expect(resolveReusableWorkspaceSkillSnapshot(params)).rejects.toBe(
       reason,
     );
@@ -259,7 +265,7 @@ describe("resolveReusableWorkspaceSkillSnapshot", () => {
         version: options.snapshotVersion,
       };
     });
-    const params = { workspaceDir: TEST_WORKSPACE_DIR, config: {} };
+    const params = { workspaceDir, config: {} };
     const first = resolveReusableWorkspaceSkillSnapshot({ ...params, skillFilter: ["first"] });
     const second = resolveReusableWorkspaceSkillSnapshot({ ...params, skillFilter: ["second"] });
 
@@ -278,14 +284,14 @@ describe("resolveReusableWorkspaceSkillSnapshot", () => {
     const snapshot = strippedSnapshot();
 
     await resolveReusableWorkspaceSkillSnapshot({
-      workspaceDir: TEST_WORKSPACE_DIR,
+      workspaceDir,
       config: {},
       existingSnapshot: snapshot,
     });
     expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(1);
 
     await resolveReusableWorkspaceSkillSnapshot({
-      workspaceDir: TEST_WORKSPACE_DIR,
+      workspaceDir,
       config: {},
       skillFilter: ["new-filter"],
       existingSnapshot: {
@@ -298,7 +304,7 @@ describe("resolveReusableWorkspaceSkillSnapshot", () => {
 
   it("refreshes when effective node-skill eligibility changes", async () => {
     const result = await resolveReusableWorkspaceSkillSnapshot({
-      workspaceDir: TEST_WORKSPACE_DIR,
+      workspaceDir,
       config: {},
       eligibility: { nodeSkills: { canExec: false } },
       existingSnapshot: {
@@ -318,7 +324,7 @@ describe("resolveReusableWorkspaceSkillSnapshot", () => {
     });
 
     await resolveReusableWorkspaceSkillSnapshot({
-      workspaceDir: TEST_WORKSPACE_DIR,
+      workspaceDir,
       config: { skills: { load: { extraDirs: ["/tmp/shared-skills"] } } },
       existingSnapshot: strippedSnapshot("test", 1),
     });
@@ -326,14 +332,14 @@ describe("resolveReusableWorkspaceSkillSnapshot", () => {
     expect(shouldRefreshSnapshotForVersionMock).toHaveBeenCalledWith(1, 5);
     expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(1);
     expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledWith(
-      TEST_WORKSPACE_DIR,
+      workspaceDir,
       expect.objectContaining({ snapshotVersion: 5 }),
     );
   });
 
   it("refreshes persisted version-0 snapshots after process restart", async () => {
     const result = await resolveReusableWorkspaceSkillSnapshot({
-      workspaceDir: TEST_WORKSPACE_DIR,
+      workspaceDir,
       config: {},
       existingSnapshot: strippedSnapshot("test", 0),
     });
@@ -342,7 +348,7 @@ describe("resolveReusableWorkspaceSkillSnapshot", () => {
     expect(shouldRefreshSnapshotForVersionMock).toHaveBeenCalledWith(0, 1);
     expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(1);
     expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledWith(
-      TEST_WORKSPACE_DIR,
+      workspaceDir,
       expect.objectContaining({ snapshotVersion: 1 }),
     );
   });
@@ -351,7 +357,7 @@ describe("resolveReusableWorkspaceSkillSnapshot", () => {
     getSkillsSnapshotVersionMock.mockReturnValue(10_000);
 
     const result = await resolveReusableWorkspaceSkillSnapshot({
-      workspaceDir: TEST_WORKSPACE_DIR,
+      workspaceDir,
       config: {},
       existingSnapshot: strippedSnapshot("test", 9_999),
     });
@@ -360,7 +366,7 @@ describe("resolveReusableWorkspaceSkillSnapshot", () => {
     expect(shouldRefreshSnapshotForVersionMock).toHaveBeenCalledWith(9_999, 10_000);
     expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(1);
     expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledWith(
-      TEST_WORKSPACE_DIR,
+      workspaceDir,
       expect.objectContaining({ snapshotVersion: 10_000 }),
     );
   });
@@ -378,7 +384,7 @@ describe("resolveReusableWorkspaceSkillSnapshot", () => {
     const snapshot = strippedSnapshot("discord");
 
     const first = await resolveReusableWorkspaceSkillSnapshot({
-      workspaceDir: TEST_WORKSPACE_DIR,
+      workspaceDir,
       config: { channels: { discord: { token: "enabled" } } } as OpenClawConfig,
       existingSnapshot: snapshot,
     });
@@ -387,7 +393,7 @@ describe("resolveReusableWorkspaceSkillSnapshot", () => {
     expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(1);
 
     const second = await resolveReusableWorkspaceSkillSnapshot({
-      workspaceDir: TEST_WORKSPACE_DIR,
+      workspaceDir,
       config: { channels: { discord: {} } } as OpenClawConfig,
       existingSnapshot: { ...snapshot },
     });
@@ -406,13 +412,13 @@ describe("resolveReusableWorkspaceSkillSnapshot", () => {
     const snapshot = strippedSnapshot("discord");
 
     await resolveReusableWorkspaceSkillSnapshot({
-      workspaceDir: TEST_WORKSPACE_DIR,
+      workspaceDir,
       config: { channels: { discord: { token: "first-secret" } } } as OpenClawConfig,
       existingSnapshot: snapshot,
     });
 
     await resolveReusableWorkspaceSkillSnapshot({
-      workspaceDir: TEST_WORKSPACE_DIR,
+      workspaceDir,
       config: { channels: { discord: { token: "rotated-secret" } } } as OpenClawConfig,
       existingSnapshot: { ...snapshot },
     });
@@ -431,7 +437,7 @@ describe("resolveReusableWorkspaceSkillSnapshot", () => {
     };
 
     const result = await resolveReusableWorkspaceSkillSnapshot({
-      workspaceDir: TEST_WORKSPACE_DIR,
+      workspaceDir,
       config: {},
       existingSnapshot: oldSnapshot,
     });
@@ -440,7 +446,7 @@ describe("resolveReusableWorkspaceSkillSnapshot", () => {
     expect(shouldRefreshSnapshotForVersionMock).toHaveBeenCalledWith(5, 0);
     expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(1);
     expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledWith(
-      TEST_WORKSPACE_DIR,
+      workspaceDir,
       expect.objectContaining({ snapshotVersion: 0 }),
     );
   });
@@ -448,7 +454,7 @@ describe("resolveReusableWorkspaceSkillSnapshot", () => {
   it("refreshes snapshots from before config-key skill identities", async () => {
     shouldRefreshSnapshotForVersionMock.mockReturnValue(false);
     const result = await resolveReusableWorkspaceSkillSnapshot({
-      workspaceDir: TEST_WORKSPACE_DIR,
+      workspaceDir,
       config: {},
       existingSnapshot: {
         ...strippedSnapshot(),

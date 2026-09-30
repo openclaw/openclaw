@@ -7,21 +7,9 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { SESSION_ARCHIVE_REQUEST_OPTIONS } from "../../../../src/shared/session-archive-timeout.ts";
 import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../../src/shared/session-list-limits.ts";
-import type {
-  SessionBranch,
-  SessionsBranchesListResult,
-  SessionsBranchesSwitchResult,
-  SessionsForkResult,
-  SessionsListResult,
-  SessionsPatchResult,
-  SessionsRewindResult,
-  SessionWorkspaceGetResult,
-  SessionWorkspaceListResult,
-  SessionWorkspaceSetResult,
-} from "../../api/types.ts";
+import type { SessionsListResult, SessionsPatchResult } from "../../api/types.ts";
 import type { SessionPatch } from "./patch.ts";
 import type {
-  SessionCompactResult,
   SessionDeleteOptions,
   SessionListOptions,
   SessionRequestClient,
@@ -71,7 +59,7 @@ export function sessionProgressTargetQuery(agentId?: string | null): SessionList
  *  field, kept separate from the roster page so tuning one never moves the other. */
 export const SESSIONS_PAGE_DEFAULT_LIMIT = 50;
 
-function buildSessionRequestParams(
+export function buildSessionRequestParams(
   key: string,
   agentId?: string | null,
 ): { key: string; agentId?: string } {
@@ -81,14 +69,6 @@ function buildSessionRequestParams(
     key: normalizedKey,
     ...(normalizedAgentId ? { agentId: normalizedAgentId } : {}),
   };
-}
-
-function buildTranscriptMutationParams(
-  sessionKey: string,
-  agentId?: string | null,
-): { sessionKey: string; agentId?: string } {
-  const { key, ...owner } = buildSessionRequestParams(sessionKey, agentId);
-  return { sessionKey: key, ...owner };
 }
 
 export function buildSessionListParams(options: SessionListOptions = {}): SessionsListParams {
@@ -243,105 +223,4 @@ export function requestSessionReset(
   return client
     .request("sessions.reset", buildSessionRequestParams(key, options.agentId))
     .then(() => undefined);
-}
-
-export function requestSessionCompact(
-  client: SessionRequestClient,
-  key: string,
-  options: { agentId?: string | null } = {},
-): Promise<SessionCompactResult> {
-  return client.request<SessionCompactResult>(
-    "sessions.compact",
-    buildSessionRequestParams(key, options.agentId),
-  );
-}
-
-export function requestSessionFilesList(
-  client: SessionRequestClient,
-  key: string,
-  options: { agentId?: string | null; path?: string; search?: string } = {},
-): Promise<SessionWorkspaceListResult | null> {
-  return client.request<SessionWorkspaceListResult | null>("sessions.files.list", {
-    sessionKey: key,
-    path: options.path ?? "",
-    search: options.search ?? "",
-    ...(options.agentId?.trim() ? { agentId: options.agentId.trim() } : {}),
-  });
-}
-
-export function requestSessionFile(
-  client: SessionRequestClient,
-  key: string,
-  path: string,
-  options: { agentId?: string | null } = {},
-): Promise<SessionWorkspaceGetResult | null> {
-  return client.request<SessionWorkspaceGetResult | null>("sessions.files.get", {
-    sessionKey: key,
-    path,
-    ...(options.agentId?.trim() ? { agentId: options.agentId.trim() } : {}),
-  });
-}
-
-export function requestSessionFileSet(
-  client: SessionRequestClient,
-  key: string,
-  path: string,
-  content: string,
-  options: { agentId?: string | null; expectedHash: string },
-): Promise<SessionWorkspaceSetResult | null> {
-  return client.request<SessionWorkspaceSetResult | null>("sessions.files.set", {
-    sessionKey: key,
-    path,
-    content,
-    expectedHash: options.expectedHash,
-    ...(options.agentId?.trim() ? { agentId: options.agentId.trim() } : {}),
-  });
-}
-
-export function requestSessionRewind(
-  client: SessionRequestClient,
-  key: string,
-  entryId: string,
-  options: { agentId?: string | null } = {},
-): Promise<SessionsRewindResult> {
-  return client.request<SessionsRewindResult>("sessions.rewind", {
-    ...buildTranscriptMutationParams(key, options.agentId),
-    entryId,
-  });
-}
-
-export function requestSessionFork(
-  client: SessionRequestClient,
-  key: string,
-  entryId: string,
-  options: { agentId?: string | null } = {},
-): Promise<SessionsForkResult> {
-  return client.request<SessionsForkResult>("sessions.fork", {
-    ...buildTranscriptMutationParams(key, options.agentId),
-    entryId,
-  });
-}
-
-export async function requestSessionBranches(
-  client: SessionRequestClient,
-  key: string,
-  options: { agentId?: string | null } = {},
-): Promise<SessionBranch[]> {
-  const result = await client.request<SessionsBranchesListResult>(
-    "sessions.branches.list",
-    buildTranscriptMutationParams(key, options.agentId),
-  );
-  return result.branches;
-}
-
-export function requestSessionBranchSwitch(
-  client: SessionRequestClient,
-  key: string,
-  leafEntryId: string,
-  options: { agentId?: string | null } = {},
-): Promise<SessionsBranchesSwitchResult> {
-  return client.request<SessionsBranchesSwitchResult>("sessions.branches.switch", {
-    ...buildTranscriptMutationParams(key, options.agentId),
-    leafEntryId,
-  });
 }

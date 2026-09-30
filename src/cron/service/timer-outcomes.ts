@@ -235,6 +235,9 @@ export function applyJobResult(
     if (opts.replaySchedule && job.schedule.kind !== "at") {
       applyReplaySchedule();
     }
+    if (shouldDelete) {
+      job.state.nextRunAtMs = undefined;
+    }
     finalizeCronFailureNotifications(state, {
       job,
       alertConfig,

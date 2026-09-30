@@ -60,7 +60,8 @@ main.content:where(.content--logs-page) .content-header {
   border-bottom: none;
 }
 
-.log-time {
+.log-time,
+.log-subsystem {
   color: var(--muted);
   font-family: var(--mono);
 }
@@ -99,11 +100,6 @@ main.content:where(.content--logs-page) .content-header {
 .log-chip.fatal {
   color: var(--danger);
   border-color: var(--danger-subtle);
-}
-
-.log-subsystem {
-  color: var(--muted);
-  font-family: var(--mono);
 }
 
 .log-message {

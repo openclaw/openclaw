@@ -38,6 +38,7 @@ import {
 import type { GatewayCallOptions } from "./gateway.js";
 import { callNodesToolNodeInvoke, resolveNodesToolInvokeTimeouts } from "./nodes-tool-invoke.js";
 import { resolveAgentNode, type NodeListNode } from "./nodes-utils.js";
+import { textResult } from "./tool-results.js";
 
 const NODE_MEDIA_ACTIONS = {
   camera_snap: executeCameraSnap,
@@ -296,15 +297,12 @@ async function executeCameraClip({
     facing: target.artifactFacing,
     expectedHost: resolvedNode.remoteIp,
   });
-  return {
-    content: [{ type: "text", text: `FILE:${filePath}` }],
-    details: {
-      facing: target.artifactFacing,
-      path: filePath,
-      durationMs: payload.durationMs,
-      hasAudio: payload.hasAudio,
-    },
-  };
+  return textResult(`FILE:${filePath}`, {
+    facing: target.artifactFacing,
+    path: filePath,
+    durationMs: payload.durationMs,
+    hasAudio: payload.hasAudio,
+  });
 }
 
 async function executeScreenRecord({
@@ -349,16 +347,13 @@ async function executeScreenRecord({
   assertMediaOutPathFormat({ command: "screen.record", outPath, format: ext });
   const filePath = outPath ?? screenRecordTempPath({ ext });
   const written = await writeScreenRecordToFile(filePath, payload.base64);
-  return {
-    content: [{ type: "text", text: `FILE:${written.path}` }],
-    details: {
-      path: written.path,
-      durationMs: payload.durationMs,
-      fps: payload.fps,
-      screenIndex: payload.screenIndex,
-      hasAudio: payload.hasAudio,
-    },
-  };
+  return textResult(`FILE:${written.path}`, {
+    path: written.path,
+    durationMs: payload.durationMs,
+    fps: payload.fps,
+    screenIndex: payload.screenIndex,
+    hasAudio: payload.hasAudio,
+  });
 }
 
 async function executeScreenSnapshot({
@@ -383,20 +378,17 @@ async function executeScreenSnapshot({
   assertMediaOutPathFormat({ command: "screen.snapshot", outPath, format: ext });
   const filePath = outPath ?? screenSnapshotTempPath({ ext });
   const written = await writeScreenSnapshotToFile(filePath, payload.base64);
-  return {
-    content: [{ type: "text", text: `FILE:${written.path}` }],
-    details: {
-      path: written.path,
-      format: payload.format,
-      displayFrameId: payload.displayFrameId,
-      screenIndex: payload.screenIndex,
-      width: payload.width,
-      height: payload.height,
-      media: {
-        mediaUrl: written.path,
-      },
+  return textResult(`FILE:${written.path}`, {
+    path: written.path,
+    format: payload.format,
+    displayFrameId: payload.displayFrameId,
+    screenIndex: payload.screenIndex,
+    width: payload.width,
+    height: payload.height,
+    media: {
+      mediaUrl: written.path,
     },
-  };
+  });
 }
 
 /**

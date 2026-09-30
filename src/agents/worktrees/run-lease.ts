@@ -345,9 +345,7 @@ const testing = {
   setUnlockImplForTest(impl: typeof unlockWorktree | null): void {
     unlockWorktreeImpl = impl ?? unlockWorktree;
   },
-  async drainPendingCleanupsForTest(): Promise<void> {
-    await drainPendingLeaseCleanups();
-  },
+  drainPendingCleanupsForTest: drainPendingLeaseCleanups,
   resetForTest(): void {
     heldGitLocks.clear();
     gitLockTransitionTails.clear();

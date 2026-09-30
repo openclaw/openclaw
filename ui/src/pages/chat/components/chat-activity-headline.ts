@@ -1,11 +1,16 @@
-import { html } from "lit";
+import { html, nothing } from "lit";
 import { AsyncDirective, directive } from "lit/async-directive.js";
 import { keyed } from "lit/directives/keyed.js";
 import type { AgentActivityItem } from "../../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { ToolCallGroup } from "../../../../../src/chat/tool-call-grouping.js";
+import { icons } from "../../../components/icons.ts";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
+import { resolveToolDisplayIcon } from "../../../lib/chat/tool-display-icon.ts";
+import { resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
+import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
+import { renderToolIcon } from "./chat-tool-cards.ts";
 
-export type ActivityHeadline = {
+export type ActivityHeadline = Pick<AgentActivityItem, "name" | "commandBearing"> & {
   key: string;
   title: string;
   status: AgentActivityItem["status"];
@@ -43,7 +48,15 @@ export function selectActivityHeadline(
   return operation.title.trim()
     ? {
         key: operation.toolCallId ?? operation.itemId,
-        title: operation.title,
+        // Prepared metadata owns the purpose; never strip a localized tool prefix.
+        title:
+          (!operation.status ? operation.summary : undefined) ??
+          operation.meta ??
+          (operation.title === resolveToolDisplay({ name: operation.name }).label
+            ? ""
+            : operation.title),
+        name: operation.name,
+        commandBearing: operation.commandBearing,
         status: urgent ? status : operation.status,
       }
     : undefined;
@@ -52,6 +65,7 @@ export function selectActivityHeadline(
 /** One disclosure owns its readable cadence; fast calls replace pending copy, not a queue. */
 class ActivityHeadlineDirective extends AsyncDirective {
   private scope = "";
+  private pluginToolIcons?: PluginToolIcons;
   private shown: ActivityHeadline | undefined;
   private pending: ActivityHeadline | undefined;
   private shownAt = 0;
@@ -62,7 +76,9 @@ class ActivityHeadlineDirective extends AsyncDirective {
     activity: ActivityHeadline | undefined,
     summary: string,
     currentActivity?: readonly AgentActivityItem[],
+    pluginToolIcons?: PluginToolIcons,
   ) {
+    this.pluginToolIcons = pluginToolIcons;
     const reset = this.scope !== scope;
     this.scope = scope;
     if (reset) {
@@ -72,7 +88,7 @@ class ActivityHeadlineDirective extends AsyncDirective {
     this.pending = undefined;
     if (!activity) {
       this.shown = undefined;
-      return html`<span class="chat-activity-group__label">${summary}</span>`;
+      return this.content(undefined, summary);
     }
     const urgent = activity.status === "failed" || activity.status === "blocked";
     const remaining = HEADLINE_HOLD_MS - (Date.now() - this.shownAt);
@@ -109,14 +125,22 @@ class ActivityHeadlineDirective extends AsyncDirective {
     this.shown = activity;
   }
 
-  private content() {
-    const activity = this.shown!;
-    return keyed(
-      activity.title,
-      html`<span class="chat-activity-group__label chat-activity-group__label--live"
-        >${activity.title}${activity.status === "running" ? "…" : ""}</span
-      >`,
-    );
+  private content(activity = this.shown, summary = "") {
+    const name = activity?.name;
+    // Icon and purpose share the same dwell, including asynchronous tool switches.
+    return html`
+      <span
+        class="chat-activity-group__icon"
+        role=${name ? "img" : nothing}
+        aria-label=${name ?? nothing}
+        aria-hidden=${name ? nothing : "true"}
+        title=${name ?? nothing}
+        >${name ? renderToolIcon(activity?.commandBearing ? "squareTerminal" : resolveToolDisplayIcon(name), { toolName: name, pluginToolIcons: this.pluginToolIcons }) : icons.listTree}</span
+      >
+      <span class="chat-tool-disclosure__content">
+        ${activity ? keyed(activity.title, html`<span class="chat-activity-group__label chat-activity-group__label--live">${activity.title}${activity.status === "running" ? "…" : ""}</span>`) : html`<span class="chat-activity-group__label">${summary}</span>`}
+      </span>
+    `;
   }
 
   private clearTimer() {

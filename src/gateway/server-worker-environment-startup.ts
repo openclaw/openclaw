@@ -42,9 +42,9 @@ import {
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import type { WorkerPlacementDispatchContract } from "./worker-environments/service-contract.js";
 import type { WorkerEnvironmentService } from "./worker-environments/service.js";
+import type { WorkerEnvironmentServiceOptions } from "./worker-environments/service.types.js";
 import type { WorkerTunnelManager } from "./worker-environments/tunnel.js";
 import { listRetainedWorkerBundleHashes } from "./worker-environments/worker-bundle-retention.js";
-import type { WorkerSessionToolExecutor } from "./worker-environments/worker-session-tool-result.js";
 
 type WorkerEnvironmentStore = Awaited<
   ReturnType<typeof import("./worker-environments/store.js").createWorkerEnvironmentStore>
@@ -172,7 +172,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
   // The Gateway state-directory lock proves that executors from the previous
   // process are gone. Resolve their ambiguous effects before placement
   // reconciliation attempts to release the owning worker claims.
-  params.startup.placementStore.recoverWorkerSessionToolOperationsAfterRestart();
+  await params.startup.placementStore.recoverWorkerSessionToolOperationsAfterRestart();
   // A crashed gateway can leak local turn claims; drop them before workers re-admit turns.
   params.startup.placementStore.clearLocalTurnClaimsAfterRestart();
   const placementGate = createWorkerSessionPlacementGate(params.startup.placementStore, {
@@ -377,7 +377,9 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     prepareArtifact: async (record, signal) =>
       (await prepareNodeArtifact(record.profileSnapshot, signal)).artifact,
   });
-  let executeSessionTool: WorkerSessionToolExecutor = async () => {
+  let createGatewayTools: NonNullable<
+    WorkerEnvironmentServiceOptions["createGatewayTools"]
+  > = async () => {
     throw new Error("Worker session tools are unavailable");
   };
   let dispatchChild: WorkerPlacementDispatchContract["dispatch"] = async () => {
@@ -467,6 +469,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     },
     ...preparedWorkspaces,
     prepareNodeEnrollment: nodeEnrollment.begin,
+    admitsNodeSetupCompletion: nodeEnrollment.admitsNodeSetupCompletion,
     prepareNodeRuntime: nodeEnrollment.prepareRuntime,
     closeNodeRuntime: nodeEnrollment.closeRuntime,
     closeNodeEnrollment: nodeEnrollment.close,
@@ -505,7 +508,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
       return await workerInferenceRuntime.executeWorkerInference(inferenceParams);
     },
     placementStore: placementGate,
-    executeSessionTool: (request) => executeSessionTool(request),
+    createGatewayTools: (request) => createGatewayTools(request),
     liveEvents: workerLiveEvents,
     resolveSshIdentity: async ({ provider, leaseId, profile, keyRef, assertAuthorized }) => {
       assertAuthorized();
@@ -597,23 +600,20 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     );
     return environmentIds;
   });
-  let workerSessionToolExecutor: Promise<WorkerSessionToolExecutor> | undefined;
-  executeSessionTool = async (request) => {
-    const executor = await (workerSessionToolExecutor ??=
-      loadWorkerSessionToolExecutorModule().then(({ createWorkerSessionToolExecutor }) =>
-        createWorkerSessionToolExecutor({
-          resolveGatewayContext: params.resolveGatewayContext,
-          placements: params.startup.placementStore,
-          environments: workerEnvironmentService,
-          dispatchChild: (...args) => dispatchChild(...args),
-          portals: {
-            getService: () => params.getPortalRuntime()?.portalService,
-            carrier: workerNodePortalCarrier,
-            onChanged: notifyPortalChange,
-          },
-        }),
-      ));
-    return await executor(request);
+  createGatewayTools = async (request) => {
+    const { createWorkerGatewayTools } = await loadWorkerSessionToolExecutorModule();
+    return createWorkerGatewayTools({
+      ...request,
+      resolveGatewayContext: params.resolveGatewayContext,
+      placements: params.startup.placementStore,
+      environments: workerEnvironmentService,
+      dispatchChild: (...args) => dispatchChild(...args),
+      portals: {
+        getService: () => params.getPortalRuntime()?.portalService,
+        carrier: workerNodePortalCarrier,
+        onChanged: notifyPortalChange,
+      },
+    });
   };
   const bindWorkerNodeDesktopControl =
     workerNodeDesktopCarrier && workerNodeDesktopStreamBroker

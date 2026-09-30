@@ -7,6 +7,7 @@ import { extensionForMime, normalizeMimeType } from "@openclaw/media-core/mime";
 import type { Command } from "commander";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createEnumOptionParser } from "../../shared/enum-option.js";
 import type { VideoGenerationResolution } from "../../video-generation/types.js";
 import type { CapabilityEnvelope } from "./metadata.js";
 import { formatEnvelopeForText } from "./output.js";
@@ -14,23 +15,8 @@ import { registerLocalProvidersCommand, runCapabilityCommand } from "./providers
 
 const GENERATED_VIDEO_DOWNLOAD_TIMEOUT_MS = 120_000;
 
-function normalizeVideoResolution(raw: string | undefined): VideoGenerationResolution | undefined {
-  const normalized = raw?.trim().toUpperCase();
-  if (!normalized) {
-    return undefined;
-  }
-  if (
-    normalized === "360P" ||
-    normalized === "480P" ||
-    normalized === "540P" ||
-    normalized === "720P" ||
-    normalized === "768P" ||
-    normalized === "1080P"
-  ) {
-    return normalized;
-  }
-  throw new Error("video resolution must be one of 360P, 480P, 540P, 720P, 768P, or 1080P");
-}
+const parseVideoOption = createEnumOptionParser();
+const VIDEO_RESOLUTIONS = ["360P", "480P", "540P", "720P", "768P", "1080P"] as const;
 
 async function fetchGeneratedVideoDownload(params: {
   cfg: OpenClawConfig;
@@ -270,7 +256,7 @@ export function registerVideoCapabilityCommands(capability: Command): void {
           output: opts.output as string | undefined,
           size: opts.size as string | undefined,
           aspectRatio: opts.aspectRatio as string | undefined,
-          resolution: normalizeVideoResolution(opts.resolution as string | undefined),
+          resolution: parseVideoOption(opts.resolution, VIDEO_RESOLUTIONS, "video resolution"),
           durationSeconds: parseOptionalFiniteNumber(opts.duration, "--duration"),
           audio: opts.audio === true ? true : undefined,
           watermark: opts.watermark === true ? true : undefined,

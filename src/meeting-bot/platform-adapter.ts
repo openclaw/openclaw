@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { formatErrorMessage } from "../infra/errors.js";
 import { ensureMeetingAudioBackend, resolveMeetingAudioRuntimeForFormat } from "./audio-backend.js";
+import { defineBrowserMeetingPlugin } from "./browser-plugin.js";
 import {
   createMeetingChromeTransport,
   createMeetingChromeTransportWithExternalAudio,
@@ -436,17 +437,26 @@ function createMeetingPlatformAdapter<
 
 export const MeetingPlatformAdapter = {
   create: createMeetingPlatformAdapter,
+  defineBrowserMeetingPlugin,
   createChromeTransport: createMeetingChromeTransport,
   createChromeTransportWithExternalAudio: createMeetingChromeTransportWithExternalAudio,
   createChromeRuntimeBindings: createMeetingChromeRuntimeBindings,
+  /** @deprecated Use defineBrowserMeetingPlugin for browser meeting plugins. */
   createPluginChromeTransport: createMeetingPluginChromeTransport,
+  /** @deprecated Use defineBrowserMeetingPlugin for browser meeting plugins. */
   createPluginConfigSchema: createMeetingPluginConfigSchema,
+  /** @deprecated Use defineBrowserMeetingPlugin for browser meeting plugins. */
   createPluginNodeHostHandler: createMeetingPluginNodeHostHandler,
+  /** @deprecated Use defineBrowserMeetingPlugin for browser meeting plugins. */
   createPluginNodeInvokePolicy: createMeetingPluginNodeInvokePolicy,
+  /** @deprecated Use defineBrowserMeetingPlugin for browser meeting plugins. */
   createPluginShellEntry: createMeetingPluginShellEntry,
+  /** @deprecated Use defineBrowserMeetingPlugin for browser meeting plugins. */
   createRuntimeFacade: createMeetingRuntimeFacade,
+  /** @deprecated Use defineBrowserMeetingPlugin for browser meeting plugins. */
   createRuntimeSetup: createMeetingRuntimeSetup,
   pluginTypes: createMeetingPluginTypes,
+  /** @deprecated Use defineBrowserMeetingPlugin for browser meeting plugins. */
   registerPluginCli: registerMeetingPluginCli,
   resolveProbeTimeoutMs: resolveMeetingProbeTimeoutMs,
   createRuntimeProbes: createMeetingRuntimeProbes,

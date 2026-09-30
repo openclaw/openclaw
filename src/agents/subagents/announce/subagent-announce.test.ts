@@ -363,38 +363,47 @@ describe("subagent announce seam flow", () => {
     },
   );
 
-  it("suppresses ANNOUNCE_SKIP delivery while still deleting the child session", async () => {
-    loadSessionStoreMock.mockReturnValue({
-      "agent:main:subagent:test": {
-        sessionId: "child-session-id",
-        lifecycleRevision: "child-lifecycle-revision",
-      },
-    });
-    const didAnnounce = await runAnnounceFlow({
-      startedAt: 10,
-      endedAt: 20,
-      childRunId: "run-direct-skip-whitespace",
-      cleanup: "delete",
-      roundOneReply: "  ANNOUNCE_SKIP  ",
-    });
+  it.each([false, true])(
+    "suppresses ANNOUNCE_SKIP delivery while deleting the child: terminal=%s",
+    async (terminal) => {
+      loadSessionStoreMock.mockReturnValue({
+        "agent:main:subagent:test": {
+          sessionId: "child-session-id",
+          lifecycleRevision: "child-lifecycle-revision",
+        },
+      });
+      const didAnnounce = await runAnnounceFlow({
+        startedAt: 10,
+        endedAt: 20,
+        childRunId: "run-direct-skip-whitespace",
+        cleanup: "delete",
+        roundOneReply: "  ANNOUNCE_SKIP  ",
+        ...(terminal
+          ? {
+              terminalReply: { disposition: "visible" as const, text: "ANNOUNCE_SKIP" },
+              fallbackReply: "stale result",
+            }
+          : {}),
+      });
 
-    expect(didAnnounce).toBe("delivered");
-    expect(agentSpy).not.toHaveBeenCalled();
-    expect(sessionsDeleteSpy).toHaveBeenCalledTimes(1);
-    expect(sessionsDeleteSpy).toHaveBeenCalledWith({
-      method: "sessions.delete",
-      params: {
-        key: "agent:main:subagent:test",
-        deleteTranscript: true,
-        emitLifecycleHooks: false,
-        expectedSessionId: "child-session-id",
-        expectedLifecycleRevision: "child-lifecycle-revision",
-      },
-      timeoutMs: 10_000,
-      prepareDispatchCurrent: expect.any(Function),
-      assertDispatchCurrent: expect.any(Function),
-    });
-  });
+      expect(didAnnounce).toBe("delivered");
+      expect(agentSpy).not.toHaveBeenCalled();
+      expect(sessionsDeleteSpy).toHaveBeenCalledTimes(1);
+      expect(sessionsDeleteSpy).toHaveBeenCalledWith({
+        method: "sessions.delete",
+        params: {
+          key: "agent:main:subagent:test",
+          deleteTranscript: true,
+          emitLifecycleHooks: false,
+          expectedSessionId: "child-session-id",
+          expectedLifecycleRevision: "child-lifecycle-revision",
+        },
+        timeoutMs: 10_000,
+        prepareDispatchCurrent: expect.any(Function),
+        assertDispatchCurrent: expect.any(Function),
+      });
+    },
+  );
 
   it("skips delete cleanup when the lifecycle owner invalidates the attempt", async () => {
     const didAnnounce = await runAnnounceFlow({

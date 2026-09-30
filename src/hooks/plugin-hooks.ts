@@ -1,4 +1,3 @@
-// Plugin hook helpers discover hooks contributed by installed plugins.
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";

@@ -1,13 +1,11 @@
+import { requestSessionEntryCurrentAdmission } from "../../config/sessions/session-entry-current-admission.worker.js";
 import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
-import {
-  deferSqliteWorkerCommitReceipt,
-  requestSqliteWorkerOperationAdmission,
-} from "../../infra/sqlite-worker-operation-admission.js";
+import { deferSqliteWorkerCommitReceipt } from "../../infra/sqlite-worker-operation-admission.js";
 import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import { getRequired } from "./placement-row-codec.js";
+import { find, getRequired } from "./placement-row-codec.js";
 import type { PlacementStoreRuntime } from "./placement-runtime.js";
 import { createPlacementTurnClaimOps } from "./placement-turn-claims.js";
 import type {
@@ -25,7 +23,16 @@ export function executePlacementTurnClaimCommand(
 ): PlacementTurnClaimReceipt {
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
-      requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+      const guardedWorkspaceWrite =
+        command.type === "placementTurns.updateWorkspaceBaseManifest" ||
+        command.type === "placementTurns.recordStagedResult";
+      const source = guardedWorkspaceWrite ? command.input.sessionEntryCurrentSource : undefined;
+      const admit = (stage: "transaction" | "commit", facts: unknown) =>
+        requestSessionEntryCurrentAdmission(source, { stage, facts }, { lookup: "logical" });
+      admit(
+        "transaction",
+        guardedWorkspaceWrite ? { placement: find(db, command.input.claim.sessionId) } : undefined,
+      );
       const runtime: PlacementStoreRuntime = {
         path: database.path,
         instanceId:
@@ -42,6 +49,8 @@ export function executePlacementTurnClaimCommand(
       if (command.type === "placementTurns.claim") {
         const claim = claims.claimTurn(command.input.claim);
         receipt = { claim, placement: getRequired(db, claim.sessionId) };
+      } else if (command.type === "placementTurns.updateWorkspaceBaseManifest") {
+        receipt = { placement: claims.updateWorkspaceBaseManifest(command.input) };
       } else if (command.type === "placementTurns.recordStagedResult") {
         recordStagedWorkerWorkspaceResult(
           db,
@@ -76,7 +85,7 @@ export function executePlacementTurnClaimCommand(
       } else {
         receipt = { placement: claims.releaseTurn(command.input.claim) };
       }
-      requestSqliteWorkerOperationAdmission({ stage: "commit", facts: receipt });
+      admit("commit", receipt);
       deferSqliteWorkerCommitReceipt(db, receipt);
       return receipt;
     },

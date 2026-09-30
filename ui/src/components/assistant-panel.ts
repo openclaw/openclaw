@@ -93,22 +93,10 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
         () => this.context,
         (context, notify) => subscribePluginHelp(context, notify),
       )
-      .watch(
-        () => this.store,
-        (store, notify) => store.subscribe(notify),
-      )
-      .watch(
-        () => this.context?.agentSelection,
-        (selection, notify) => selection.subscribe(notify),
-      )
-      .watch(
-        () => this.context?.agents,
-        (agents, notify) => agents.subscribe(notify),
-      )
-      .watch(
-        () => this.context?.gateway,
-        (gateway, notify) => gateway.subscribe(notify),
-      );
+      .watchStore(() => this.store)
+      .watchStore(() => this.context?.agentSelection)
+      .watchStore(() => this.context?.agents)
+      .watchStore(() => this.context?.gateway);
   }
 
   override connectedCallback(): void {

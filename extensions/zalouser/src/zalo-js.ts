@@ -81,7 +81,6 @@ type CredentialPersistenceOptions = { credentialPersistence?: CredentialPersiste
 
 type ActiveZaloQrLogin = {
   id: string;
-  profile: string;
   startedAt: number;
   beforeCredentialPersistence?: () => Promise<void>;
   assertCredentialPersistenceCurrent?: () => void;
@@ -95,7 +94,6 @@ type ActiveZaloQrLogin = {
 const activeQrLogins = new Map<string, ActiveZaloQrLogin>();
 
 type ActiveZaloListener = {
-  profile: string;
   accountId: string;
   stop: () => void;
 };
@@ -136,7 +134,7 @@ function normalizeAccountInfoUser(info: AccountInfoResponse): User | null {
   return info;
 }
 
-function toInteger(value: unknown, fallback = 0): number {
+function toInteger(value: unknown): number {
   if (typeof value === "number" && Number.isFinite(value)) {
     return Math.trunc(value);
   }
@@ -144,10 +142,7 @@ function toInteger(value: unknown, fallback = 0): number {
     typeof value === "string" ? value : typeof value === "number" ? String(value) : "",
     10,
   );
-  if (!Number.isFinite(parsed)) {
-    return fallback;
-  }
-  return Math.trunc(parsed);
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 function normalizeMessageContent(content: unknown): string {
@@ -226,10 +221,7 @@ function toNonNegativeInteger(value: unknown): number | null {
     return normalized >= 0 ? normalized : null;
   }
   if (typeof value === "string" && value.trim().length > 0) {
-    const parsed = parseStrictNonNegativeInteger(value);
-    if (parsed !== undefined) {
-      return parsed >= 0 ? parsed : null;
-    }
+    return parseStrictNonNegativeInteger(value) ?? null;
   }
   return null;
 }
@@ -346,9 +338,9 @@ function buildEventMessage(data: Record<string, unknown>): ZaloEventMessage | un
     uidFrom,
     idTo,
     msgType: toStringValue(data.msgType) || "webchat",
-    st: toInteger(data.st, 0),
-    at: toInteger(data.at, 0),
-    cmd: toInteger(data.cmd, 0),
+    st: toInteger(data.st),
+    at: toInteger(data.at),
+    cmd: toInteger(data.cmd),
     ts: toStringValue(data.ts) || Date.now(),
   };
 }
@@ -516,12 +508,8 @@ async function fetchGroupsByIds(api: API, ids: string[]): Promise<Map<string, Gr
   return result;
 }
 
-function makeGroupContextCacheKey(profile: string, groupId: string): string {
-  return `${profile}:${groupId}`;
-}
-
 function readCachedGroupContext(profile: string, groupId: string): ZaloGroupContext | null {
-  const key = makeGroupContextCacheKey(profile, groupId);
+  const key = `${profile}:${groupId}`;
   const cached = groupContextCache.get(key);
   if (!cached) {
     return null;
@@ -554,7 +542,7 @@ function trimGroupContextCache(now: number): void {
 
 function writeCachedGroupContext(profile: string, context: ZaloGroupContext): void {
   const now = Date.now();
-  const key = makeGroupContextCacheKey(profile, context.groupId);
+  const key = `${profile}:${context.groupId}`;
   if (groupContextCache.has(key)) {
     groupContextCache.delete(key);
   }
@@ -614,18 +602,13 @@ export function normalizeZaloInboundMessage(
   const content = normalizeMessageContent(data.content);
   const normalizedOwnUserId = toNumberId(ownUserId);
   const mentionIds = extractMentionIds(data.mentions);
-  const quoteOwnerId =
+  const quote =
     data.quote && typeof data.quote === "object"
-      ? toNumberId((data.quote as { ownerId?: unknown }).ownerId)
-      : "";
-  const quotedGlobalMsgId =
-    data.quote && typeof data.quote === "object"
-      ? toStringValue((data.quote as { globalMsgId?: unknown }).globalMsgId)
-      : "";
-  const quotedBody =
-    data.quote && typeof data.quote === "object"
-      ? toStringValue((data.quote as { msg?: unknown }).msg)
-      : "";
+      ? (data.quote as Record<string, unknown>)
+      : undefined;
+  const quoteOwnerId = toNumberId(quote?.ownerId);
+  const quotedGlobalMsgId = toStringValue(quote?.globalMsgId);
+  const quotedBody = toStringValue(quote?.msg);
   const hasAnyMention = mentionIds.length > 0;
   const canResolveExplicitMention = Boolean(normalizedOwnUserId);
   const wasExplicitlyMentioned = Boolean(
@@ -1114,7 +1097,6 @@ export async function startZaloQrLogin(params: {
   if (!activeQrLogins.has(profile)) {
     const login: ActiveZaloQrLogin = {
       id: randomUUID(),
-      profile,
       startedAt: Date.now(),
       ...(params.beforeCredentialPersistence
         ? { beforeCredentialPersistence: params.beforeCredentialPersistence }
@@ -1430,7 +1412,7 @@ export async function startZaloListener(params: {
   api.listener.on("closed", onClosed);
   api.listener.on("connected", onConnected);
   params.abortSignal.addEventListener("abort", cleanup, { once: true });
-  activeListeners.set(profile, { profile, accountId: params.accountId, stop: cleanup });
+  activeListeners.set(profile, { accountId: params.accountId, stop: cleanup });
   try {
     api.listener.start({ retryOnClose: false });
   } catch (error) {

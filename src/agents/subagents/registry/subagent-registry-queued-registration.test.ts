@@ -284,6 +284,7 @@ it.each([false, true])(
         return () => {};
       },
       persist: f.options.persistOrThrow,
+      resumeRequesterSettleWake: vi.fn(),
       refreshFrozenResultFromSession: async () => {},
       completeSubagentRunWithRecovery: async () => {},
       warn: vi.fn(),

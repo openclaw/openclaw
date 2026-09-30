@@ -1,4 +1,3 @@
-// Main CLI entry orchestration: fast paths, env setup, plugin aliases, and Commander dispatch.
 import { existsSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
@@ -16,7 +15,7 @@ import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.opencla
 import { isLoopbackHost, isSecureWebSocketUrl } from "../gateway/net.js";
 import { normalizeWebSocketProtocol } from "../gateway/websocket-protocol.js";
 import { FLAG_TERMINATOR, isValueToken } from "../infra/cli-root-options.js";
-import { isTruthyEnvValue, normalizeEnv } from "../infra/env.js";
+import { normalizeEnv } from "../infra/env.js";
 import type { ProxyHandle } from "../infra/net/proxy/proxy-lifecycle.js";
 import { tryProcessCwd } from "../infra/safe-cwd.js";
 import type { PluginCliLoadSession } from "../plugins/cli-registry-loader.js";
@@ -60,11 +59,13 @@ import { getSubCliEntriesCore } from "./program/subcli-descriptors.js";
 import { withCliPluginInvocation } from "./run-main-plugin-cache.js";
 import {
   isAgentExecInvocation,
+  isDebugProxyCaptureEnvEnabled,
   isGatewayRunFastPathArgv,
   isRemoteAgentDispatchInvocation,
   resolveMissingPluginCommandMessage,
   rewriteUpdateFlagArgv,
   shouldHandleBareRoot,
+  shouldBootstrapCliProxyBeforeFastPath,
   shouldEnsureCliPath,
   shouldStartProxyForCli,
   shouldUseRootHelpFastPath,
@@ -89,14 +90,6 @@ import {
 } from "./startup-trace.js";
 import { normalizeWindowsArgv } from "./windows-argv.js";
 
-const CLI_PROXY_ENV_KEYS = [
-  "HTTP_PROXY",
-  "HTTPS_PROXY",
-  "ALL_PROXY",
-  "http_proxy",
-  "https_proxy",
-  "all_proxy",
-] as const;
 const UNKNOWN_COMMAND_DISPLAY_LIMIT = 128;
 
 async function tryRunGatewayRunFastPath(
@@ -578,23 +571,6 @@ async function ensureCliEnvProxyDispatcher(): Promise<void> {
   }
 }
 
-function isDebugProxyCaptureEnvEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-  return (
-    isTruthyEnvValue(env.OPENCLAW_DEBUG_PROXY_ENABLED) ||
-    isTruthyEnvValue(env.OPENCLAW_DEBUG_PROXY_REQUIRE)
-  );
-}
-
-function shouldBootstrapCliProxyBeforeFastPath(env: NodeJS.ProcessEnv = process.env): boolean {
-  if (isDebugProxyCaptureEnvEnabled(env)) {
-    return true;
-  }
-  return CLI_PROXY_ENV_KEYS.some((key) => {
-    const value = env[key];
-    return typeof value === "string" && value.trim().length > 0;
-  });
-}
-
 function isKnownBuiltInCommandRoot(primary: string): boolean {
   return (
     getCoreCliCommandNamesCore().includes(primary) ||
@@ -973,6 +949,19 @@ async function runCliWithPreparedOutputMode(
 
   if (await tryRunGatewayServiceUpdateCapabilityProbe(normalizedArgv)) {
     return;
+  }
+
+  if (
+    !isHelpOrVersionInvocation &&
+    (isGatewayRunInvocation ||
+      normalizedInvocation.primary === "worker" ||
+      (normalizedInvocation.primary === "node" &&
+        (normalizedInvocation.commandPath[1] === "run" ||
+          normalizedInvocation.commandPath[1] === "worker")))
+  ) {
+    // Gateway config selection and CLI bootstrap can create SQLite workers before the action.
+    const { initializeSqliteRuntimeCapabilities } = await import("../infra/bun-sqlite-library.js");
+    await initializeSqliteRuntimeCapabilities();
   }
 
   if (

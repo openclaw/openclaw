@@ -51,9 +51,10 @@ export function createWorkerPlacementIdleSweep(options: {
       if (!profiles || !Object.values(profiles).some((profile) => profile.suspendAfter)) {
         return;
       }
+      const journalOwners = await options.placements.listWorkspaceReconciliationOwners();
       const pendingSessions = new Set([
         ...options.placements.listPendingWorkspaceResults().map((result) => result.sessionId),
-        ...options.placements.listWorkspaceReconciliationOwners().map((owner) => owner.sessionId),
+        ...journalOwners.map((owner) => owner.sessionId),
       ]);
 
       for (const placement of options.placements.listForReconcile()) {

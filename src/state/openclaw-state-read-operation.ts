@@ -241,22 +241,7 @@ export function startOpenClawStateReadOperation(
       // Native backup cleanup is genuinely awaited; only its query/transport tail is serviceable.
       const pending = prepared.cleanupAsync();
       cleanupStep = undefined;
-      void pending.then(
-        (success) =>
-          resume(() => {
-            try {
-              acceptCleanup(success);
-            } catch (error) {
-              finishCleanup({ error });
-            }
-            service();
-          }),
-        (error: unknown) =>
-          resume(() => {
-            finishCleanup({ error });
-            service();
-          }),
-      );
+      waitAwaited(pending, acceptCleanup, finishCleanup);
     }
   }
 
@@ -373,6 +358,29 @@ export function startOpenClawStateReadOperation(
     void operation.result.then(service, service);
   }
 
+  function waitAwaited<T>(
+    pending: Promise<T>,
+    accept: (value: T) => void,
+    fail: (failure: { error: unknown }) => void,
+  ) {
+    void pending.then(
+      (next) =>
+        resume(() => {
+          try {
+            accept(next);
+          } catch (error) {
+            fail({ error });
+          }
+          service();
+        }),
+      (error: unknown) =>
+        resume(() => {
+          fail({ error });
+          service();
+        }),
+    );
+  }
+
   function query() {
     if (!snapshot && !prepared) {
       expectedIdentity = context.admission.identity.key;
@@ -477,27 +485,18 @@ export function startOpenClawStateReadOperation(
       finishProducer();
     } else if (native && !independentWarmSource) {
       awaitedOnly = true;
-      void prepareSqliteReadOnlyLocationFromOwnedDatabase(
-        native.database.db,
-        authority.assertCurrent,
-        authority.signal,
-        "async",
-      ).then(
-        (location) =>
-          resume(() => {
-            try {
-              prepared = location;
-              query();
-            } catch (error) {
-              finishProducer({ error });
-            }
-            service();
-          }),
-        (error: unknown) =>
-          resume(() => {
-            finishProducer({ error });
-            service();
-          }),
+      waitAwaited(
+        prepareSqliteReadOnlyLocationFromOwnedDatabase(
+          native.database.db,
+          authority.assertCurrent,
+          authority.signal,
+          "async",
+        ),
+        (location) => {
+          prepared = location;
+          query();
+        },
+        finishProducer,
       );
     } else if (!snapshot && preserveArtifacts && !independentWarmSource) {
       expectedSourceIdentity = { key: context.admission.identity.key };

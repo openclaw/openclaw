@@ -1,4 +1,3 @@
-// Shares plugin auto-enable detection across config and runtime code.
 import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -110,9 +109,6 @@ function hasPluginOwnedToolConfig(cfg: OpenClawConfig, plugin: PluginManifestRec
   const entry = cfg.plugins?.entries?.[plugin.id];
   const pluginConfig = entry?.config;
   if (isNativeSessionCatalogOptOutOnly(plugin.id, entry) || !isRecord(pluginConfig)) {
-    return false;
-  }
-  if ((plugin.contracts?.tools?.length ?? 0) === 0) {
     return false;
   }
   const properties = isRecord(plugin.configSchema) ? plugin.configSchema.properties : undefined;

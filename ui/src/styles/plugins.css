@@ -77,7 +77,9 @@
   background: var(--bg);
 }
 
-.installed-plugins-card__art img {
+.installed-plugins-card__art img,
+.plugins-tile img,
+.plugin-catalog-detail__icon img {
   width: 100%;
   height: 100%;
   object-fit: contain;
@@ -383,10 +385,7 @@
 }
 
 .plugin-catalog-card__install,
-.plugin-catalog-card__status {
-  flex: 0 0 auto;
-}
-
+.plugin-catalog-card__status,
 .plugins-settings-row__status {
   flex: 0 0 auto;
 }
@@ -681,12 +680,6 @@ h3.settings-row__title {
   overflow: hidden;
   border-radius: 10px;
   background: var(--bg-elevated);
-}
-
-.plugins-tile img {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
 }
 
 .plugins-tile--white {
@@ -1045,11 +1038,6 @@ openclaw-plugins-page
   height: 100%;
   border-radius: inherit;
   font-size: 36px;
-}
-.plugin-catalog-detail__icon img {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
 }
 .plugin-catalog-detail__icon svg {
   width: 48px;

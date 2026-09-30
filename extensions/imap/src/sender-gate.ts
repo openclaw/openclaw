@@ -6,6 +6,7 @@ import {
   type IdentifierAuthentication,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
+import { filterStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ImapAccountConfig } from "./config.js";
 
 const AUTH_FRESHNESS_MS = 48 * 60 * 60 * 1_000;
@@ -60,11 +61,7 @@ function recipientAddresses(mail: ParsedMail): string[] {
   const to = mail.to ? (Array.isArray(mail.to) ? mail.to : [mail.to]) : [];
   const delivered = mail.headers.get("delivered-to");
   const deliveredValues =
-    typeof delivered === "string"
-      ? [delivered]
-      : Array.isArray(delivered)
-        ? delivered.filter((entry): entry is string => typeof entry === "string")
-        : [];
+    typeof delivered === "string" ? [delivered] : filterStringEntries(delivered);
   return [
     ...to.flatMap((address: AddressObject) => address.value.map((entry) => entry.address ?? "")),
     ...deliveredValues,

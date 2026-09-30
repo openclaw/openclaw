@@ -353,9 +353,6 @@ function mapEditedOffset(
     if (offset < edit.end) {
       return edit.start + delta + (preferEnd ? edit.text.length : 0);
     }
-    if (offset === edit.end) {
-      return edit.start + delta + edit.text.length;
-    }
   }
   return offset + delta;
 }

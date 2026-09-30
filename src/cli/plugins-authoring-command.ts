@@ -2,7 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { replaceFileAtomic } from "@openclaw/fs-safe/atomic";
 import { jsonSchemaValuesEqual } from "@openclaw/normalization-core/json-schema";
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import {
+  filterStringEntries,
+  uniqueStrings,
+} from "@openclaw/normalization-core/string-normalization";
 import { formatCwdRelativePathOrAbsolute as formatOutputPath } from "../infra/safe-cwd.js";
 import { getToolPluginMetadata, type ToolPluginMetadata } from "../plugin-sdk/tool-plugin.js";
 import {
@@ -208,9 +211,7 @@ export function buildToolPluginPackageManifest(params: {
   entry: string;
 }): JsonObject {
   const openclaw = isRecord(params.packageManifest.openclaw) ? params.packageManifest.openclaw : {};
-  const existingExtensions = Array.isArray(openclaw.extensions)
-    ? openclaw.extensions.filter((entry): entry is string => typeof entry === "string")
-    : [];
+  const existingExtensions = filterStringEntries(openclaw.extensions);
   const extensions = uniqueStrings([...existingExtensions, params.entry]);
   return {
     ...params.packageManifest,
@@ -245,9 +246,7 @@ export function validateToolPluginProject(params: {
     errors.push("openclaw.plugin.json must include object configSchema");
   }
   const manifestContracts = params.manifest.contracts as { tools?: unknown } | undefined;
-  const manifestTools = Array.isArray(manifestContracts?.tools)
-    ? manifestContracts.tools.filter((tool): tool is string => typeof tool === "string")
-    : [];
+  const manifestTools = filterStringEntries(manifestContracts?.tools);
   const metadataTools = params.metadata.tools.map((tool) => tool.name);
   const missing = metadataTools.filter((tool) => !manifestTools.includes(tool));
   const extra = manifestTools.filter((tool) => !metadataTools.includes(tool));

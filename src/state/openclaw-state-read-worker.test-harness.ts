@@ -29,9 +29,12 @@ const mock = vi.hoisted(() => ({
   rotate: vi.fn<() => Promise<void>>(),
   selectSqlite:
     vi.fn<typeof import("../infra/bun-sqlite-library.js").ensureSqliteLibrarySelected>(),
+  capabilities:
+    vi.fn<typeof import("../infra/bun-sqlite-library.js").getSqliteRuntimeCapabilities>(),
 }));
 vi.mock("../infra/bun-sqlite-library.js", () => ({
   ensureSqliteLibrarySelected: mock.selectSqlite,
+  getSqliteRuntimeCapabilities: mock.capabilities,
 }));
 vi.mock("../infra/worker-task-pool.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/worker-task-pool.js")>()),
@@ -61,6 +64,11 @@ export const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 );
 beforeEach(() => {
   mock.selectSqlite.mockReset().mockReturnValue({ source: "runtime" });
+  mock.capabilities.mockReset().mockReturnValue({
+    explicitSqliteCloseReleasesNativeResources: true,
+    decided: true,
+    reason: "test policy",
+  });
   mock.runTask.mockReset();
   mock.closePool.mockReset().mockResolvedValue();
   mock.closeResources.mockReset().mockResolvedValue();

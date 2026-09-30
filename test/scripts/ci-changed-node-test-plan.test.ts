@@ -640,7 +640,12 @@ describe("CI changed Node test plan", () => {
         "src/plugins/manifest-registry.test.ts",
         "src/infra/retry.test.ts",
       ];
-      const selected = createSelectedNodeTestShardBundles(targets, { runnerBackend });
+      const selected = createSelectedNodeTestShardBundles(targets, {
+        runnerBackend,
+        preparedTestPlans: new Map(
+          targets.map((target) => [target, buildVitestRunPlans([target])]),
+        ),
+      });
       expect(selected).not.toBeNull();
       const groups = selected?.flatMap((row) => row.groups) ?? [];
       expect(groups.flatMap((group) => group.includePatterns ?? []).toSorted()).toEqual(
@@ -667,6 +672,33 @@ describe("CI changed Node test plan", () => {
       ).toBe(false);
     },
   );
+
+  it("routes each selected test once while retaining its canonical plugin coverage", () => {
+    const targets = [
+      "src/plugins/activation-planner.test.ts",
+      "src/plugins/manifest-registry.test.ts",
+      "src/infra/retry.test.ts",
+    ];
+    const routing = vi.spyOn(testProjects, "buildVitestRunPlans");
+    try {
+      const shards = createChangedNodeTestShardsWithSmoke(targets, {
+        selectedTestTargets: targets,
+        runnerBackend: "hybrid",
+        includeReleaseOnlyRuntimeTests: true,
+        includePrExemptRuntimeTests: true,
+      });
+      expect(shards).not.toBeNull();
+      expect(selectedFiles(shards).toSorted()).toEqual(targets.toSorted());
+      for (const target of targets) {
+        expect(
+          routing.mock.calls.filter(([args]) => args.length === 1 && args[0] === target),
+          target,
+        ).toHaveLength(1);
+      }
+    } finally {
+      routing.mockRestore();
+    }
+  });
 
   it("retains selected compact coverage when time splitting exceeds the non-dist matrix cap", async () => {
     const targets = [
@@ -1215,6 +1247,14 @@ describe("CI changed Node test plan", () => {
     ].map((targets) => ({ targets })),
   )("refuses incomplete or unsupported canonical selection $targets", ({ targets }) => {
     expect(createSelectedNodeTestShardBundles(targets)).toBeNull();
+  });
+
+  it("refuses prepared plans belonging to another selected file", () => {
+    const target = "src/plugins/activation-planner.test.ts";
+    const preparedTestPlans = new Map([
+      [target, buildVitestRunPlans(["src/plugins/manifest-registry.test.ts"])],
+    ]);
+    expect(createSelectedNodeTestShardBundles([target], { preparedTestPlans })).toBeNull();
   });
 
   it("does not borrow canonical embedded ownership for another checkout", () => {

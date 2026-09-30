@@ -1,6 +1,8 @@
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { withGuardedFetchRequestAuthority } from "../../../infra/net/fetch-request-authority.js";
+import { readClaimingHookAdmission } from "../../../plugins/hook-claim-admission.js";
 import type { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type { ProviderRuntimeModel } from "../../../plugins/provider-runtime-model.types.js";
 import type {
@@ -99,14 +101,20 @@ export async function resolveHookModelSelection(params: {
   // Run before_model_resolve hooks early so plugins can override the
   // provider/model before resolveModel().
   if (hookRunner?.hasHooks("before_model_resolve")) {
+    const assertCurrent = readClaimingHookAdmission(params.hookContext)?.assertCurrent;
+    assertCurrent?.();
     try {
       const event: PluginHookBeforeModelResolveEvent = params.attachments
         ? { prompt: params.prompt, attachments: params.attachments }
         : { prompt: params.prompt };
-      modelResolveOverride = await hookRunner.runBeforeModelResolve(event, params.hookContext);
+      const run = () => hookRunner.runBeforeModelResolve(event, params.hookContext);
+      modelResolveOverride = assertCurrent
+        ? await withGuardedFetchRequestAuthority(assertCurrent, run)
+        : await run();
     } catch (hookErr) {
       log.warn(`before_model_resolve hook failed: ${String(hookErr)}`);
     }
+    assertCurrent?.();
   }
 
   if (modelResolveOverride?.providerOverride) {

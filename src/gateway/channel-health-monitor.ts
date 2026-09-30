@@ -2,7 +2,7 @@ import {
   isFutureDateTimestampMs,
   resolveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
-import type { GatewayScheduler, GatewayScheduledJob } from "../infra/gateway-scheduler.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { settlesWithin } from "../shared/settle-within.js";
 import {
@@ -79,7 +79,7 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
   } = deps;
   const checkIntervalMs = resolveTimerTimeoutMs(deps.checkIntervalMs, DEFAULT_CHECK_INTERVAL_MS);
   const timing = resolveTimingPolicy(deps);
-  const { scheduler } = deps;
+  const scheduler = deps.scheduler.scope();
 
   const cooldownMs = cooldownCycles * checkIntervalMs;
   const restartRecords = new Map<string, RestartRecord>();
@@ -87,7 +87,6 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
   let stopped = false;
   let abandonInFlightRestart = false;
   let activeCheck: Promise<void> | null = null;
-  let scheduledCheck: GatewayScheduledJob | undefined;
   const suppressedAccounts = new Set<string>();
 
   const rKey = (channelId: string, accountId: string) => `${channelId}:${accountId}`;
@@ -257,9 +256,6 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
   }
 
   function runCheck(): Promise<void> {
-    if (stopped) {
-      return Promise.resolve();
-    }
     activeCheck = runCheckWork().finally(() => {
       activeCheck = null;
       if (stopped) {
@@ -272,7 +268,7 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
   function retire(abandonRestart: boolean) {
     stopped = true;
     abandonInFlightRestart ||= abandonRestart;
-    scheduledCheck?.cancel();
+    scheduler.beginClose();
     if (!activeCheck) {
       abortSignal?.removeEventListener("abort", shutdown);
     }
@@ -300,7 +296,7 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
     abandonInFlightRestart = true;
   } else {
     abortSignal?.addEventListener("abort", shutdown, { once: true });
-    scheduledCheck = scheduler.schedule({
+    scheduler.schedule({
       id: "channel-health-monitor",
       atMs: startedAt + resolveTimerTimeoutMs(timing.monitorStartupGraceMs, 0, 0),
       everyMs: checkIntervalMs,

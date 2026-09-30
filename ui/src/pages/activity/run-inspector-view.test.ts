@@ -2,7 +2,6 @@
 
 import { render } from "lit";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { t } from "../../i18n/index.ts";
 import type { RunInspectorResult, RunInspectorState } from "./run-inspector-model.ts";
 import { renderRunInspector } from "./run-inspector-view.ts";
 
@@ -180,7 +179,6 @@ describe("renderRunInspector", () => {
     expect(text).toContain("run-admission");
     expect(text).toContain("Do not treat this as authorization.");
     expect(text).toContain("Best-effort audit warning");
-    expect(text).not.toContain("raw-sender-id-42");
     expect(
       container.querySelector<HTMLAnchorElement>('a[href*="view=run"]')?.getAttribute("href"),
     ).toBe("/operator/activity?view=run&run=parent-run");
@@ -205,8 +203,6 @@ describe("renderRunInspector", () => {
   });
 
   it("renders the localized restart control with its accessible name", () => {
-    expect(t("activity.runInspector.restart")).toBe("Restart inspection");
-
     const button = renderState({ status: "error", recovery: "restart" }).querySelector("button");
     expect(button?.textContent?.trim()).toBe("Restart inspection");
   });

@@ -279,27 +279,31 @@ describe("usage metrics date labels", () => {
 describe("usage cost windows", () => {
   const daily = [
     costDay("2026-06-01", 1, 100),
+    costDay("2026-06-02", 2, 200),
+    costDay("2026-06-24", 3, 300),
     costDay("2026-06-25", 4, 400),
     costDay("2026-07-01", 5, 500),
+    costDay("2026-07-02", 6, 600),
   ];
 
   it("uses calendar windows instead of the last non-empty rows", () => {
-    const windows = buildUsageCostWindows(daily, "2026-06-01", "2026-07-01", [30, 7, 31, 7]);
+    const windows = buildUsageCostWindows(daily, "2026-06-01", "2026-07-01");
 
-    expect(windows.map(({ days, startDate, endDate }) => ({ days, startDate, endDate }))).toEqual([
-      { days: 7, startDate: "2026-06-25", endDate: "2026-07-01" },
-      { days: 30, startDate: "2026-06-02", endDate: "2026-07-01" },
+    expect(windows.map(({ days, endDate }) => ({ days, endDate }))).toEqual([
+      { days: 1, endDate: "2026-07-01" },
+      { days: 7, endDate: "2026-07-01" },
+      { days: 30, endDate: "2026-07-01" },
     ]);
-    expect(windows.map((window) => window.totals.totalCost)).toEqual([9, 9]);
-    expect(windows.map((window) => window.totals.totalTokens)).toEqual([900, 900]);
+    expect(windows.map((window) => window.totals.totalCost)).toEqual([5, 9, 14]);
+    expect(windows.map((window) => window.totals.totalTokens)).toEqual([500, 900, 1_400]);
   });
 
   it("keeps the selected-range total separate from shorter comparisons", () => {
     const range = buildUsageCostWindowSummary(daily, "2026-06-01", "2026-07-01");
 
     expect(range?.days).toBe(31);
-    expect(range?.totals.totalCost).toBe(10);
-    expect(range?.totals.totalTokens).toBe(1_000);
+    expect(range?.totals.totalCost).toBe(15);
+    expect(range?.totals.totalTokens).toBe(1_500);
   });
 
   it("rejects malformed and reversed ranges", () => {

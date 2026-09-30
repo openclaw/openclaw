@@ -1,6 +1,7 @@
 import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { html as staticHtml, literal } from "lit/static-html.js";
+import { sessionActivityTimestamp } from "../../../../src/shared/session-activity-timestamp.js";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { renderAgentRowChip } from "../../components/agent-row-chip.ts";
@@ -42,7 +43,6 @@ import {
   projectSessionActivity,
   resolveViewingNow,
   sessionActivityOwner,
-  sessionActivityTimestamp,
   type SessionActivityFilters,
 } from "./session-activity.ts";
 

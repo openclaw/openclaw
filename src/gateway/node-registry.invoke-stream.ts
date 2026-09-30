@@ -342,13 +342,9 @@ export class NodeInvokeStreamController {
       pending.idleTimer?.refresh() ??
       setTimeout(() => {
         runWithDiagnosticTraceContext(pending.idleTraceContext, () => {
-          if (!this.takePending(requestId, pending)) {
-            return;
-          }
-          this.options.sendCancel(requestId, pending);
-          pending.resolve({
-            ok: false,
-            error: { code: "IDLE_TIMEOUT", message: "node invoke produced no progress" },
+          this.settleTimeout(requestId, pending, {
+            code: "IDLE_TIMEOUT",
+            message: "node invoke produced no progress",
           });
         });
       }, pending.idleTimeoutMs);
@@ -362,15 +358,16 @@ export class NodeInvokeStreamController {
     return true;
   }
 
-  private settleTimeout(requestId: string, pending: PendingInvoke): void {
+  private settleTimeout(
+    requestId: string,
+    pending: PendingInvoke,
+    error = { code: "TIMEOUT", message: "node invoke timed out" },
+  ): void {
     if (!this.takePending(requestId, pending)) {
       return;
     }
     this.options.sendCancel(requestId, pending);
-    pending.resolve({
-      ok: false,
-      error: { code: "TIMEOUT", message: "node invoke timed out" },
-    });
+    pending.resolve({ ok: false, error });
   }
 
   private settleIfPolicyChanged(requestId: string, pending: PendingInvoke): boolean {

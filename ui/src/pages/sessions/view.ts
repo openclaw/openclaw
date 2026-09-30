@@ -1,9 +1,12 @@
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import {
+  normalizeFastMode,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { html, nothing } from "lit";
+import { formatAgentRuntimeLabel } from "../../../../src/shared/agent-runtime-display.js";
+import { formatFastModeValue } from "../../../../src/shared/fast-mode.js";
 import type {
   AgentIdentityResult,
   GatewaySessionRow,
@@ -22,7 +25,6 @@ import {
 import { t } from "../../i18n/index.ts";
 import "../../components/tooltip.ts";
 import "../../components/web-awesome.ts";
-import { formatAgentRuntimeLabel } from "../../lib/agents/display.ts";
 import {
   formatThinkingOverrideLabel,
   normalizeThinkingOptionValue,
@@ -1048,14 +1050,7 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
     const labelDisabledReason = props.labelDisabledReason?.(row);
     const rawThinking = row.thinkingLevel ?? "";
     const thinking = rawThinking ? normalizeThinkingOptionValue(rawThinking) : "";
-    const fastMode =
-      row.fastMode === "auto"
-        ? "auto"
-        : row.fastMode === true
-          ? "on"
-          : row.fastMode === false
-            ? "off"
-            : "";
+    const fastMode = row.fastMode === undefined ? "" : formatFastModeValue(row.fastMode);
     const overrides: Array<
       Omit<Parameters<typeof renderOverrideSelect>[0], "disabled" | "disabledReason">
     > = [
@@ -1071,7 +1066,7 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
         options: buildSessionLevelOptions(FAST_LEVEL_VALUES),
         onChange: (value) =>
           props.onPatch(row.key, {
-            fastMode: value === "" ? null : value === "auto" ? "auto" : value === "on",
+            fastMode: normalizeFastMode(value) ?? null,
           }),
       },
       {

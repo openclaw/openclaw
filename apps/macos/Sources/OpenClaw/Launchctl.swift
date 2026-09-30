@@ -47,14 +47,12 @@ enum LaunchAgentPlist {
             fileURL: generatedEnvironmentFileURL,
             wrapperURL: generatedEnvironmentWrapperURL)
         let env = inlineEnvironment.merging(generatedEnvironment) { _, generated in generated }
-        let stdoutPath = (root["StandardOutPath"] as? String)?
-            .trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
-        let stderrPath = (root["StandardErrorPath"] as? String)?
-            .trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
+        let stdoutPath = (root["StandardOutPath"] as? String)?.nonEmpty
+        let stderrPath = (root["StandardErrorPath"] as? String)?.nonEmpty
         let port = Self.extractFlagString(programArguments, flag: "--port").flatMap(Int.init)
         let bind = Self.extractFlagString(programArguments, flag: "--bind")?.lowercased()
-        let token = env["OPENCLAW_GATEWAY_TOKEN"]?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
-        let password = env["OPENCLAW_GATEWAY_PASSWORD"]?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
+        let token = env["OPENCLAW_GATEWAY_TOKEN"]?.nonEmpty
+        let password = env["OPENCLAW_GATEWAY_PASSWORD"]?.nonEmpty
         return LaunchAgentPlistSnapshot(
             programArguments: programArguments,
             environment: env,
@@ -110,7 +108,6 @@ enum LaunchAgentPlist {
         guard let idx = args.firstIndex(of: flag) else { return nil }
         let valueIdx = args.index(after: idx)
         guard valueIdx < args.endIndex else { return nil }
-        let token = args[valueIdx].trimmingCharacters(in: .whitespacesAndNewlines)
-        return token.isEmpty ? nil : token
+        return args[valueIdx].nonEmpty
     }
 }

@@ -192,9 +192,7 @@ export async function readActualWorkspaceManifestImpl(params: {
     params.signal?.throwIfAborted();
     throw error;
   }
-  const rawEntries: Array<
-    WorkerWorkspaceManifestEntry | { path: string; type: "directory"; mode: number }
-  > = [];
+  const rawEntries: Array<WorkerWorkspaceManifestEntry | { path: string; type: "directory" }> = [];
   let totalBytes = 0;
   let manifestPathBytes = 0;
   let traversedEntries = 0;
@@ -302,7 +300,7 @@ export async function readActualWorkspaceManifestImpl(params: {
     }
     if (stats.isDirectory() && !stats.isSymbolicLink()) {
       if (params.preserveDirectories?.has(relative)) {
-        addEntry({ path: relative, type: "directory", mode: stats.mode & 0o777 });
+        addEntry({ path: relative, type: "directory" });
         return "included";
       }
       let hasDerivedEntry = false;
@@ -320,7 +318,7 @@ export async function readActualWorkspaceManifestImpl(params: {
         }
       }
       if (hasIncludedEntry || !hasDerivedEntry) {
-        addEntry({ path: relative, type: "directory", mode: stats.mode & 0o777 });
+        addEntry({ path: relative, type: "directory" });
         return "included";
       }
       return "derived-only";
@@ -364,7 +362,7 @@ export async function readActualWorkspaceManifestImpl(params: {
       if (stats.isDirectory() && !stats.isSymbolicLink()) {
         const child = await walk(relative);
         if (child.included || params.preserveDirectories?.has(relative)) {
-          addEntry({ path: relative, type: "directory", mode: stats.mode & 0o777 });
+          addEntry({ path: relative, type: "directory" });
           hasNonDerivedEntry = true;
         } else {
           hasDerivedEntry ||= child.hasDerivedEntry;

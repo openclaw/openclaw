@@ -182,7 +182,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       respond(false, undefined, explicitlyRequestedAgent.error);
       return;
     }
-    const catalogRequestedKey = normalizeOptionalString(p.key) ?? "global";
+    const catalogRequestedKey = explicitlyRequestedKey ?? "global";
     const catalogAgentId = catalogId
       ? normalizeAgentId(
           parseAgentSessionKey(catalogRequestedKey)?.agentId ?? explicitlyRequestedAgent.agentId,

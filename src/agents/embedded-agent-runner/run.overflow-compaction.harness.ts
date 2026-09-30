@@ -8,6 +8,7 @@ import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { ContextEngine, ContextEngineSessionTarget } from "../../context-engine/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { makeEmptyPluginMetadataOwners } from "../../plugins/current-plugin-metadata.test-support.js";
+import type { ClaimingHookAdmission } from "../../plugins/hook-claim-admission.js";
 import type {
   PluginHookBeforeAgentFinalizeEvent,
   PluginHookBeforeAgentFinalizeResult,
@@ -129,7 +130,7 @@ export const mockedGlobalHookRunner = {
   runBeforeAgentReply: vi.fn(
     async (
       _eventValue: { cleanedBody: string },
-      _ctx: PluginHookAgentContext,
+      _ctx: PluginHookAgentContext & ClaimingHookAdmission,
     ): Promise<PluginHookBeforeAgentReplyResult | undefined> => undefined,
   ),
   runBeforeAgentFinalize: vi.fn(

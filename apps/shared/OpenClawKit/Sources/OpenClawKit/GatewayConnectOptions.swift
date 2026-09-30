@@ -4,6 +4,7 @@ public enum OpenClawGatewayClientCapability {
     public static let agentKind = "agent-kind"
     public static let inlineWidgets = "inline-widgets"
     public static let modelSelectionPolicy = "model-selection-policy"
+    public static let ultrafast = "ultrafast"
     public static let usageRefreshing = "usage-refreshing"
 }
 

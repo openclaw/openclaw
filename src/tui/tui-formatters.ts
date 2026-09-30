@@ -47,7 +47,11 @@ export function formatTuiFooter(params: {
 }): string {
   const { sessionInfo } = params;
   const fastLabel =
-    sessionInfo.fastMode === "auto" ? "fast:auto" : sessionInfo.fastMode === true ? "fast" : null;
+    sessionInfo.fastMode === "auto" || sessionInfo.fastMode === "ultrafast"
+      ? `fast:${sessionInfo.fastMode}`
+      : sessionInfo.fastMode === true
+        ? "fast"
+        : null;
   const verbose = sessionInfo.verboseLevel ?? "off";
   const trace = sessionInfo.traceLevel ?? "off";
   const reasoning = sessionInfo.reasoningLevel ?? "off";

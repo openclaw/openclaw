@@ -22,6 +22,8 @@ const nodeSqliteBoundaryRoots = [
 ];
 
 const nodeSqliteConstructorOwnerPaths = new Set([
+  // Native conformance must observe raw driver close on disposable probe databases.
+  "src/infra/bun-sqlite-close-probe.worker.ts",
   "src/infra/node-sqlite.ts",
   "src/infra/sqlite-runtime-version.ts",
 ]);
@@ -31,6 +33,9 @@ const kyselyRawAllowPaths = new Set(["src/infra/kysely-sync.ts"]);
 const compiledRawAllowPaths = new Set(["src/infra/kysely-node-sqlite.ts"]);
 
 const rawSqliteAllowPathGroups = {
+  "native close conformance on disposable probe databases": [
+    "src/infra/bun-sqlite-close-probe.worker.ts",
+  ],
   "native Kysely adapter and sync execution": [
     "src/infra/kysely-node-sqlite.ts",
     "src/infra/kysely-sync-cache-state.ts",

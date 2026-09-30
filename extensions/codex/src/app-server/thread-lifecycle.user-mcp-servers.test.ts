@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
@@ -25,11 +26,9 @@ import {
   writePolicyProbeServer,
 } from "./thread-lifecycle.user-mcp-servers.test-support.js";
 
-function createRequest(
-  startThreadId: string,
-  options: { readRequirements?: boolean; resumeThreadId?: string } = {},
-) {
-  return vi.fn(async (method: string, _params: unknown) => {
+function createRequest(startThreadId: string, options: { readRequirements?: boolean } = {}) {
+  let startCount = 0;
+  return vi.fn(async (method: string, params: unknown) => {
     if (method === "config/read") {
       return { config: {}, origins: {}, layers: [] };
     }
@@ -37,10 +36,17 @@ function createRequest(
       return { requirements: null };
     }
     if (method === "thread/start") {
-      return threadStartResult(startThreadId);
+      startCount += 1;
+      return threadStartResult(startCount === 1 ? startThreadId : `${startThreadId}-${startCount}`);
     }
-    if (method === "thread/resume" && options.resumeThreadId) {
-      return threadResumeResult(options.resumeThreadId);
+    if (method === "thread/resume") {
+      assert(
+        params !== null &&
+          typeof params === "object" &&
+          "threadId" in params &&
+          typeof params.threadId === "string",
+      );
+      return threadResumeResult(params.threadId);
     }
     throw new Error(`unexpected method: ${method}`);
   });
@@ -80,7 +86,7 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
         },
       },
     };
-    const request = createRequest("thread-policy", { resumeThreadId: "thread-policy" });
+    const request = createRequest("thread-policy");
     let wire = await createLeasedCodexLifecycleHarness({
       agentDir: path.join(tempDir, "agent"),
       respond: request,
@@ -236,7 +242,7 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
           },
         },
       } as unknown as EmbeddedRunAttemptParams["config"];
-      const request = createRequest("thread-beta5", { resumeThreadId: "thread-beta5" });
+      const request = createRequest("thread-beta5");
       let wire = await createLeasedCodexLifecycleHarness({
         agentDir: path.join(tempDir, "agent"),
         respond: request,
@@ -250,6 +256,7 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
       await run();
       const currentBinding = await readCodexAppServerBinding(sessionFile);
       expect(currentBinding).toBeDefined();
+      expect(currentBinding?.threadId).toBe("thread-beta5");
 
       const legacyFingerprint = JSON.stringify({
         mcp_servers: {
@@ -278,6 +285,8 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
         "thread/start",
       ]);
       const convergedBinding = await readCodexAppServerBinding(sessionFile);
+      expect(convergedBinding?.threadId).toBe("thread-beta5-2");
+      expect(convergedBinding?.threadId).not.toBe(currentBinding?.threadId);
       expect(convergedBinding?.userMcpServersFingerprint).toMatch(/^sha256:[a-f0-9]{64}$/);
       expect(convergedBinding?.userMcpServersFingerprint).not.toContain("beta5-access-token");
       expect(convergedBinding?.userMcpServersFingerprint).not.toBe(legacyFingerprint);
@@ -289,7 +298,7 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
       wire = await createLeasedCodexLifecycleHarness({
         agentDir: path.join(tempDir, "agent"),
         respond: request,
-        persistedThreads: ["thread-beta5"],
+        persistedThreads: ["thread-beta5-2"],
       });
       request.mockClear();
       await run();
@@ -305,6 +314,13 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
         "thread/resume",
         "thread/inject_items",
       ]);
+      expect(request).toHaveBeenCalledWith(
+        "thread/resume",
+        expect.objectContaining({ threadId: convergedBinding?.threadId }),
+      );
+      expect((await readCodexAppServerBinding(sessionFile))?.threadId).toBe(
+        convergedBinding?.threadId,
+      );
     },
   );
 
@@ -371,15 +387,14 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
           },
         },
       }) as unknown as EmbeddedRunAttemptParams["config"];
-    const request = createRequest("thread-with-current-bearer", {
-      resumeThreadId: "thread-with-stale-bearer",
-    });
+    const request = createRequest("thread-with-current-bearer");
 
     await startOrResumeThread({
       client: { request } as never,
       ...lifecycleOptions(sessionFile, workspaceDir, createConfig("Bearer access-token-one")),
     });
     const firstBinding = await readCodexAppServerBinding(sessionFile);
+    expect(firstBinding?.threadId).toBe("thread-with-current-bearer");
     expect(firstBinding?.userMcpServersFingerprint).toMatch(/^sha256:[a-f0-9]{64}$/);
     expect(firstBinding?.userMcpServersFingerprint).not.toContain("access-token-one");
 
@@ -402,6 +417,8 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
       "Bearer access-token-two",
     );
     const secondBinding = await readCodexAppServerBinding(sessionFile);
+    expect(secondBinding?.threadId).toBe("thread-with-current-bearer-2");
+    expect(secondBinding?.threadId).not.toBe(firstBinding?.threadId);
     expect(secondBinding?.userMcpServersFingerprint).toMatch(/^sha256:[a-f0-9]{64}$/);
     expect(secondBinding?.userMcpServersFingerprint).not.toContain("access-token-two");
     expect(secondBinding?.userMcpServersFingerprint).not.toBe(

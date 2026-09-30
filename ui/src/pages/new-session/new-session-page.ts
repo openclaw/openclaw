@@ -189,31 +189,15 @@ export class NewSessionPage extends OpenClawLightDomElement {
     });
     this.subscriptions = new SubscriptionsController(this)
       .effect(() => this.ownerDocument, installChatComposerPickerDismissal)
-      .watch(
-        () => this.context?.theme,
-        (theme, notify) => theme.subscribe(notify),
-      )
-      .watch(
-        () => this.context?.agents,
-        (agents, notify) => agents.subscribe(notify),
-      )
-      .watch(
-        () => this.context?.agentIdentity,
-        (agentIdentity, notify) => agentIdentity.subscribe(notify),
-      )
-      .watch(
+      .watchStore(() => this.context?.theme)
+      .watchStore(() => this.context?.agents)
+      .watchStore(() => this.context?.agentIdentity)
+      .watchStore(
         () => this.context?.sessions,
-        (sessions, notify) => sessions.subscribe(notify),
         (sessions) => this.groupRouteRevalidation.synchronize(sessions),
       )
-      .watch(
-        () => this.context?.placementStartup,
-        (startup, notify) => startup.subscribe(notify),
-      )
-      .watch(
-        () => this.context?.runtimeConfig,
-        (runtimeConfig, notify) => runtimeConfig.subscribe(notify),
-      )
+      .watchStore(() => this.context?.placementStartup)
+      .watchStore(() => this.context?.runtimeConfig)
       .watch(
         () => this.context?.config,
         (config, notify) => config.subscribe(() => notify()),

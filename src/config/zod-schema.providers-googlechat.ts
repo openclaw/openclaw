@@ -1,4 +1,3 @@
-// Defines Google Chat provider schema fragments.
 import { z } from "zod";
 import { refineChannelDmPolicy } from "../channels/plugins/config-schema.js";
 import {

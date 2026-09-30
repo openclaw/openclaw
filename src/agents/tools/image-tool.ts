@@ -65,6 +65,7 @@ import {
   resolveDefaultModelRef,
   resolveOpenAiImageMediaCandidate,
 } from "./model-config.helpers.js";
+import { textResult } from "./tool-results.js";
 
 const DEFAULT_PROMPT = "Describe the image.";
 const DEFAULT_MAX_IMAGES = 20;
@@ -445,15 +446,10 @@ export function createImageTool(options?: {
 
         const maxImages = readPositiveIntegerParam(record, "maxImages") ?? DEFAULT_MAX_IMAGES;
         if (pathInputs.length > maxImages) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: `Too many images: ${pathInputs.length} provided, maximum is ${maxImages}. Please reduce the number of images.`,
-              },
-            ],
-            details: { error: "too_many_images", count: pathInputs.length, max: maxImages },
-          };
+          return textResult(
+            `Too many images: ${pathInputs.length} provided, maximum is ${maxImages}. Please reduce the number of images.`,
+            { error: "too_many_images", count: pathInputs.length, max: maxImages },
+          );
         }
 
         const { prompt: promptRaw, modelOverride } = resolvePromptAndModelOverride(
@@ -533,18 +529,13 @@ export function createImageTool(options?: {
           const refInfo = classifyMediaReferenceSource(normalizedRef);
           const { isDataUrl, isHttpUrl } = refInfo;
           if (refInfo.hasUnsupportedScheme) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `Unsupported image reference: ${pathRawInput}. Use a file path, a file:// URL, a data: URL, or an http(s) URL.`,
-                },
-              ],
-              details: {
+            return textResult(
+              `Unsupported image reference: ${pathRawInput}. Use a file path, a file:// URL, a data: URL, or an http(s) URL.`,
+              {
                 error: "unsupported_image_reference",
                 path: pathRawInput,
               },
-            };
+            );
           }
 
           if (sandboxConfig && isHttpUrl) {

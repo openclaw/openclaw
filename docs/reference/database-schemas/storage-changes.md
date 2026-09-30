@@ -254,8 +254,9 @@ complete input in the waiting queue. Admission timeout
 or host drain rejects waiting requests before dispatch; caller cancellation
 releases a waiting request, while dispatched writes retain their native outcome.
 Maintenance scopes continue to drain accepted work. A rate-limited warning reports
-admission queue depth and wait time. Node uses two to eight worker threads based
-on available CPUs; Bun retains one worker per store actor.
+admission queue depth and wait time. Node and Bun brokers created with the admitted
+native-close capability use two to eight worker threads based on available CPUs;
+Bun brokers created without it retain one worker per store actor for their lifetime.
 
 Legacy native host writers service the same job's admission port
 between short native `BEGIN IMMEDIATE` attempts, including path aliases. This lets the
@@ -332,6 +333,13 @@ owner. Prepared personal account status rechecks its current generation and
 account without repeating network verification. Empty repository results retain
 the non-repository workspace owner's fallback. Database-open behavior, publication
 writes, schemas, and retention are unchanged.
+
+Shared GitHub publication options and status read committed receipts through the
+independent read worker when the admitted native database still matches its
+physical path. They retain the source owner and recheck session and workspace
+authority after waiting, without copying the live database for each observation.
+Cold sources and unavailable or replaced native paths retain artifact-preserving
+snapshot preparation. Schema, permissions, and update behavior are unchanged.
 
 Default project recents reuse the Gateway's resident session-row projection after
 readiness, including archived metadata. The combined-store loader retains physical
@@ -1025,16 +1033,21 @@ Fleet registry reads use a separate read-only worker and remain noncreating;
 listing cells does not join Gateway writable lifecycle admission. The existing
 read owner retains inherited snapshot and disposable-source scopes until the
 task acknowledges native reader cleanup. Fixed reads share two execution workers
-with the existing pending-task and captured-input byte limits. On Node, each worker
-retains independent live read-only connections for 30 minutes without use, checking
+with the existing pending-task and captured-input byte limits. Successful reads
+reuse their worker and native reader on Node and Bun, checking
 physical file identity and schema admission on each read. Results are never cached.
 Path-specific retirement joins acknowledged reader cleanup in every worker before
 releasing file custody. Private snapshot readers still close before task completion.
 A completed reply retains its worker slot until acceptance.
-On Bun, every successful task also retires its worker because closing a reader
-can retain native statements; the same task and worker bounds still apply.
-The parent selects SQLite through the existing library owner before starting workers,
-so replacement workers inherit the completed process-wide selection.
+Node and Bun with the native-close capability close individual readers after
+30 minutes without use and can keep workers after targeted cleanup. Bun without
+that capability delegates the same idle interval to worker retirement and joins
+worker exit when a reader closes or is replaced, including private snapshots and
+host-requested cleanup. A healthy read alone does not retire its worker.
+Long-lived pool hosts select SQLite and await the native-close decision through
+the existing library owner before creating pools. Workers inherit the current
+decision at creation; an early worker remains conservative for its lifetime,
+while replacement workers inherit the completed decision.
 Failed replies and cancelled tasks retire their exact worker without stopping
 unrelated reads. Whole-cache close drains accepted resources, including any remaining
 avatar settlement reads, before retiring the shared pool. A failed resource drain
@@ -2036,6 +2049,54 @@ conversation. A full transcript replacement retires that read path by creating a
 new canonical generation.
 
 ### Keep engine-specific capabilities owned
+
+The native-close lifecycle design was accepted by the maintainer on 2026-09-29.
+The existing SQLite runtime/library-selection owner publishes one internal fact,
+`explicitSqliteCloseReleasesNativeResources`. Node supplies `true` without a probe.
+After library selection, long-lived Gateway, node, and worker hosts that own SQLite
+pools on macOS and Linux explicitly await one process-wide promise for a builtins-only
+probe worker before creating pools. Short CLI paths do not run the probe.
+Retained live statements exercise ordinary,
+non-reentrant close and disposal against private WAL databases, checking native
+resource release while an unrelated connection remains usable. The result and its
+diagnostic reason propagate through the existing worker environment-data handoff.
+Before initialization settles, per-operation consumers receive a conservative
+undecided result without sealing the global decision. Later reads and close paths
+can use the completed fact. Gateway startup diagnostics distinguish `decided: true` and
+the probe's reason from this undecided fallback. Errors, timeouts, and unsupported
+WAL settle conservatively. Conservative decisions do not await probe cleanup;
+background cleanup leaves the worker and its five-second deadline unreferenced.
+A passing probe awaits the same bounded worker join before accepting success.
+Only a confirmed exit permits deletion of the probe's private directory. An
+unconfirmed exit retains that directory, unreferences the worker, and emits one
+`SQLITE_CLOSE_PROBE_CLEANUP` warning naming the retained path.
+Windows Bun does not run the probe and stays conservative
+until a Windows conformance run qualifies it. Workers inherit the decision at
+creation and keep it for their lifetime, including conservative workers created
+before the decision; later workers inherit the completed result.
+
+Each writer broker snapshots placement, native-stop acknowledgement, and retirement
+policy together from this fact at construction. An early conservative broker keeps
+its original topology and lifecycle even when initialization later succeeds; a
+one-time `SQLITE_EARLY_TOPOLOGY` warning records that case. Brokers created with the capability use the
+existing two-to-eight-worker pool, release confirmed
+closed actors without stopping unrelated actors, and reuse workers after successful
+targeted reader or transcript-discovery cleanup. Conservative runtimes retain
+dedicated writers and native-exit cleanup. Both policies preserve queue and client
+limits, alias custody, generation fencing, failed or active-operation rotation,
+and settlement of writes with unknown outcomes. A capability result cannot turn a
+real cleanup failure into success. Library selection, TypeScript loaders, native
+worker-exit joins, and unrelated Bun compatibility rules retain their own owners.
+
+This changes no schema, on-disk format, retention, or persistent configuration.
+There is no saved capability flag or migration to reverse. The installed updater
+runs unchanged; each new long-lived pool host selects its library and capability
+again after upgrade, downgrade, or rollback. Short CLI paths remain conservative
+without probing. An inconclusive optimization check preserves the
+supported runtime's conservative behavior without blocking startup or relaxing
+runtime and SQLite safety floors. The implementing PR records runtime conformance,
+both lifecycle policies, and same-head performance comparisons; this decision alone
+makes no performance claim.
 
 The WAL checkpoint owner executes checkpoints for runtime maintenance, idle-reader
 inspection, Doctor compaction, and duplicate-agent recovery. Runtime maintenance

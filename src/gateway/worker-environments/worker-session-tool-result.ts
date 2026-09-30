@@ -1,16 +1,21 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import type {
-  WorkerPortalParams,
-  WorkerPresenceParams,
-  WorkerSessionsSendParams,
-  WorkerSessionsSpawnParams,
-  WorkerSessionToolResult,
-} from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import type { Static } from "typebox";
+import { Value } from "typebox/value";
+import type { PresenceQueryParamsSchema } from "../../../packages/gateway-protocol/src/schema/presence.js";
 import {
-  WORKER_PROTOCOL_MAX_FRAME_ID_LENGTH,
-  WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
-} from "../../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
-import type { WorkerSkillWorkshopParams } from "../../../packages/gateway-protocol/src/schema/worker-skill-workshop.js";
+  isWorkerGatewayToolFrameWithinBudget,
+  WorkerGatewayToolResultSchema,
+  type WorkerGatewayToolResult,
+} from "../../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
+import { WORKER_PROTOCOL_MAX_FRAME_ID_LENGTH } from "../../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
+import type { SkillLibraryWorkshopSchema } from "../../../packages/gateway-protocol/src/schema/worker-skill-workshop.js";
+import type { AgentToolResult } from "../../agents/runtime/index.js";
+import type { AnyAgentTool } from "../../agents/tools/common.js";
+import type { SessionPortalToolSchema } from "../../agents/tools/portal-tool-contract.js";
+import type {
+  PlacedSessionsSpawnArguments,
+  PlacedSessionsSendArguments,
+} from "../../agents/tools/sessions-placement-tool-contract.js";
 import { jsonResult } from "../../agents/tools/tool-results.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
@@ -18,22 +23,44 @@ import type { WorkerConnectionIdentity } from "./connection-identity.js";
 export type WorkerSessionToolRequest = {
   identity: WorkerConnectionIdentity;
   signal?: AbortSignal;
+  onUpdate?: Parameters<AnyAgentTool["execute"]>[3];
 } & (
-  | { toolName: "sessions_spawn"; request: WorkerSessionsSpawnParams }
-  | { toolName: "sessions_send"; request: WorkerSessionsSendParams }
-  | { toolName: "portal"; request: WorkerPortalParams }
-  | { toolName: "presence"; request: WorkerPresenceParams }
-  | { toolName: "skill_workshop"; request: WorkerSkillWorkshopParams }
+  | { toolName: "sessions_spawn"; request: PlacedSessionsSpawnArguments & { toolCallId: string } }
+  | { toolName: "sessions_send"; request: PlacedSessionsSendArguments & { toolCallId: string } }
+  | {
+      toolName: "skill_workshop";
+      request: { toolCallId: string; arguments: Static<typeof SkillLibraryWorkshopSchema> };
+    }
+  | {
+      toolName: "presence";
+      request: Static<typeof PresenceQueryParamsSchema> & { toolCallId: string };
+    }
+  | { toolName: "portal"; request: Static<typeof SessionPortalToolSchema> & { toolCallId: string } }
 );
 
 export type WorkerSessionToolExecutor = (
   request: WorkerSessionToolRequest,
-) => Promise<WorkerSessionToolResult>;
+) => Promise<AgentToolResult<unknown>>;
 
 export class WorkerSessionToolOutcomeUnknownError extends Error {
   constructor(cause: unknown) {
     super("Worker session operation outcome is unknown; it was not replayed", { cause });
     this.name = "WorkerSessionToolOutcomeUnknownError";
+  }
+}
+
+/** Retry only the same idempotent operation; callers revalidate authority on each attempt. */
+export async function executeWorkerSessionToolWithReplay<T>(
+  execute: (replay: boolean) => Promise<T>,
+): Promise<T> {
+  try {
+    return await execute(false);
+  } catch {
+    try {
+      return await execute(true);
+    } catch (error) {
+      throw new WorkerSessionToolOutcomeUnknownError(error);
+    }
   }
 }
 
@@ -52,21 +79,34 @@ export function serializeWorkerSessionToolError(error: unknown): string {
   return serializeWorkerSessionToolResult(workerSessionToolErrorResult(error));
 }
 
-export function serializeWorkerSessionToolResult(result: unknown): string {
-  const resultJson = JSON.stringify(result);
-  const frameBytes = Buffer.byteLength(
-    JSON.stringify({
-      type: "res",
-      id: "x".repeat(WORKER_PROTOCOL_MAX_FRAME_ID_LENGTH),
-      ok: true,
-      payload: { resultJson },
-    }),
-    "utf8",
-  );
-  if (frameBytes > WORKER_PROTOCOL_MAX_PAYLOAD_BYTES) {
-    return JSON.stringify(
-      workerSessionToolErrorResult(new Error("Worker session tool result exceeded the limit")),
-    );
+export function boundWorkerToolResult(result: unknown): WorkerGatewayToolResult {
+  if (
+    Value.Check(WorkerGatewayToolResultSchema, result) &&
+    isWorkerGatewayToolFrameWithinBudget(
+      {
+        type: "res",
+        id: "x".repeat(WORKER_PROTOCOL_MAX_FRAME_ID_LENGTH),
+        ok: true,
+        payload: result,
+      },
+      result,
+    )
+  ) {
+    return result;
   }
-  return resultJson;
+  return workerSessionToolErrorResult(
+    new Error("Worker tool result exceeded the transport contract"),
+  );
+}
+
+export function serializeWorkerSessionToolResult(result: unknown): string {
+  return JSON.stringify(boundWorkerToolResult(result));
+}
+
+export function parseWorkerSessionToolResult(resultJson: string): AgentToolResult<unknown> {
+  const result: unknown = JSON.parse(resultJson);
+  if (!Value.Check(WorkerGatewayToolResultSchema, result)) {
+    throw new Error("Stored worker session tool result is invalid");
+  }
+  return { ...result, details: result.details };
 }

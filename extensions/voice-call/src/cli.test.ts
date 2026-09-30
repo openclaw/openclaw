@@ -112,7 +112,6 @@ describe("voice-call CLI status fallback", () => {
       config: config as never,
       coreConfig: {},
       ensureRuntime,
-      logger: { info() {}, warn() {}, error() {}, debug() {} } as never,
     });
     return program;
   }
@@ -127,7 +126,6 @@ describe("voice-call CLI status fallback", () => {
         agents: { ownership: "explicit", entries: { operator: {}, support: {} } },
       },
       ensureRuntime,
-      logger: { info() {}, warn() {}, error() {} },
     });
     const capturer = captureStdout();
     try {
@@ -167,7 +165,6 @@ describe("voice-call CLI status fallback", () => {
       coreConfig: {},
       ensureRuntime,
       stateRuntime: {} as never,
-      logger: { info() {}, warn() {}, error() {}, debug() {} } as never,
     });
     const capturer = captureStdout();
     try {

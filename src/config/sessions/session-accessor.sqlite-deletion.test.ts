@@ -2,7 +2,11 @@ import { statSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type {
@@ -785,9 +789,9 @@ describe("session deletion and native owner state", () => {
     expect(bindings.get(baseKey)).toBe(`thread:${baseKey}`);
   });
 
-  it.each(["prepare", "finalize"] as const)(
+  it.for(["prepare", "finalize"] as const)(
     "lets unrelated session writers progress during native %s",
-    async (phase) => {
+    async (phase, { signal }) => {
       await seed();
       await seed(baseKey);
       const entered = createDeferred();
@@ -799,15 +803,22 @@ describe("session deletion and native owner state", () => {
       const owner = nativeOwner(phase === "prepare" ? { prepare: wait } : { finalize: wait });
       const deletion = owner.run(() => remove());
       try {
-        await withTestTimeout(entered.promise, 5_000, "native deletion did not start");
-        await withTestTimeout(
+        // Native cleanup stays held; bind waits to the test so a stall still releases it below.
+        await withinTest(
+          awaitGateBeforeSettlement(
+            entered.promise,
+            deletion,
+            "native deletion settled before preparation or finalization",
+          ),
+          signal,
+        );
+        await withinTest(
           owner.run(() =>
             patchSessionEntryCore({ sessionKey: baseKey, storePath }, () => ({
               label: "writer progressed",
             })),
           ),
-          5_000,
-          "native cleanup blocked another session writer",
+          signal,
         );
         expect(read(baseKey)?.label).toBe("writer progressed");
       } finally {

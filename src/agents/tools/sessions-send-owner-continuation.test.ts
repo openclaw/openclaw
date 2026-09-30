@@ -21,7 +21,7 @@ import {
   revokeRequesterCronAuthority,
 } from "../subagents/requester-cron-authority.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
-import { prepareSessionsSendFollowup } from "./sessions-send-followup.js";
+import { prepareSessionsSendFollowup } from "./sessions-send-followup-custody.js";
 import { startSessionsSendReplyFlow } from "./sessions-send-reply-flow.js";
 
 const fixture = vi.hoisted(() => ({

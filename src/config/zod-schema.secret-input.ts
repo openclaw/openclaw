@@ -14,59 +14,43 @@ const SecretRefProviderSchema = z
     'Secret reference provider must match /^[a-z][a-z0-9_-]{0,63}$/ (example: "default").',
   );
 
-const EnvSecretRefSchema = z
-  .object({
-    source: z.literal("env"),
-    provider: SecretRefProviderSchema,
-    id: z
+function createSecretRefSchema<const TSource extends string>(source: TSource, id: z.ZodString) {
+  return z.object({ source: z.literal(source), provider: SecretRefProviderSchema, id }).strict();
+}
+
+/** Config-level secret reference schema shared by model/provider/plugin credential fields. */
+export const SecretRefSchema = z.discriminatedUnion("source", [
+  createSecretRefSchema(
+    "env",
+    z
       .string()
       .regex(
         ENV_SECRET_REF_ID_RE,
         'Env secret reference id must match /^[A-Z][A-Z0-9_]{0,127}$/ (example: "OPENAI_API_KEY").',
       ),
-  })
-  .strict();
-
-const FileSecretRefSchema = z
-  .object({
-    source: z.literal("file"),
-    provider: SecretRefProviderSchema,
-    id: z
+  ),
+  createSecretRefSchema(
+    "file",
+    z
       .string()
       .refine(
         isValidFileSecretRefId,
         'File secret reference id must be an absolute JSON pointer (example: "/providers/openai/apiKey"), or "value" for singleValue mode.',
       ),
-  })
-  .strict();
-
-const ExecSecretRefSchema = z
-  .object({
-    source: z.literal("exec"),
-    provider: SecretRefProviderSchema,
-    id: z.string().refine(isValidExecSecretRefId, formatExecSecretRefIdValidationMessage()),
-  })
-  .strict();
-
-const StoreSecretRefSchema = z
-  .object({
-    source: z.literal("store"),
-    provider: SecretRefProviderSchema,
-    id: z
+  ),
+  createSecretRefSchema(
+    "exec",
+    z.string().refine(isValidExecSecretRefId, formatExecSecretRefIdValidationMessage()),
+  ),
+  createSecretRefSchema(
+    "store",
+    z
       .string()
       .regex(
         ENV_SECRET_REF_ID_RE,
         'Store secret reference id must match /^[A-Z][A-Z0-9_]{0,127}$/ (example: "OPENAI_API_KEY").',
       ),
-  })
-  .strict();
-
-/** Config-level secret reference schema shared by model/provider/plugin credential fields. */
-export const SecretRefSchema = z.discriminatedUnion("source", [
-  EnvSecretRefSchema,
-  FileSecretRefSchema,
-  ExecSecretRefSchema,
-  StoreSecretRefSchema,
+  ),
 ]);
 
 /** Accepts either legacy inline secret strings or structured secret references. */

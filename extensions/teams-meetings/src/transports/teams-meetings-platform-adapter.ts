@@ -3,7 +3,6 @@ import {
   type MeetingBrowserJoinSession,
   type MeetingManualActionCategory,
 } from "openclaw/plugin-sdk/meeting-runtime";
-import type { TeamsMeetingsMode } from "../config.js";
 import {
   teamsMeetingAudioCaptureScript,
   teamsMeetingLeaveScript,
@@ -16,7 +15,11 @@ import {
   normalizeTeamsMeetingUrl,
   normalizeTeamsMeetingUrlForReuse,
 } from "./teams-meetings-urls.js";
-import type { TeamsMeetingsChromeHealth, TeamsMeetingsTranscriptSnapshot } from "./types.js";
+import type {
+  TeamsMeetingsChromeHealth,
+  TeamsMeetingsMode,
+  TeamsMeetingsTranscriptSnapshot,
+} from "./types.js";
 
 function teamsMeetingOrigin(meetingUrl: string): string | undefined {
   try {
@@ -29,24 +32,14 @@ function teamsMeetingOrigin(meetingUrl: string): string | undefined {
   }
 }
 
-function classifyManualActionReason(reason: string): MeetingManualActionCategory {
-  switch (reason) {
-    case "teams-login-required":
-      return "login-required";
-    case "teams-admission-required":
-      return "admission-required";
-    case "teams-permission-required":
-      return "permission-required";
-    case "teams-audio-choice-required":
-      return "audio-choice-required";
-    case "teams-session-conflict":
-      return "session-conflict";
-    case "browser-control-unavailable":
-      return "browser-control-unavailable";
-    default:
-      return "custom";
-  }
-}
+const manualActionCategories = new Map<string, MeetingManualActionCategory>([
+  ["teams-login-required", "login-required"],
+  ["teams-admission-required", "admission-required"],
+  ["teams-permission-required", "permission-required"],
+  ["teams-audio-choice-required", "audio-choice-required"],
+  ["teams-session-conflict", "session-conflict"],
+  ["browser-control-unavailable", "browser-control-unavailable"],
+]);
 
 export const TEAMS_MEETINGS_PLATFORM_ADAPTER = MeetingPlatformAdapter.create<
   MeetingBrowserJoinSession<TeamsMeetingsMode>,
@@ -146,7 +139,7 @@ export const TEAMS_MEETINGS_PLATFORM_ADAPTER = MeetingPlatformAdapter.create<
     },
   },
   parsing: {
-    classifyManualActionReason,
+    classifyManualActionReason: (reason) => manualActionCategories.get(reason) ?? "custom",
     displayName: "Teams",
     invalidTranscriptMessage: "Microsoft Teams transcript payload is invalid.",
     malformedStatusMessage: "Microsoft Teams browser status JSON is malformed.",

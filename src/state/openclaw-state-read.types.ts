@@ -49,6 +49,10 @@ import type {
 } from "../gateway/worker-environments/placement-read-projection.types.js";
 import type { WorkerSessionPlacementChangeSnapshot } from "../gateway/worker-environments/placement-record.js";
 import type {
+  WorkspaceJournalReadCommand,
+  WorkspaceJournalReadResult,
+} from "../gateway/worker-environments/placement-workspace-journal.worker-contract.js";
+import type {
   WorkerEnvironmentFacts,
   WorkerEnvironmentPrunePage,
   WorkerEnvironmentPruneReadInput,
@@ -233,6 +237,7 @@ export type OpenClawStateReadCommand =
   | { type: "sandboxRegistry.get"; containerName: string }
   | { type: "sandboxRegistry.runtimeIds"; backendId: string; scopeKey: string }
   | { type: "sandboxRegistry.browsers" }
+  | WorkspaceJournalReadCommand
   | { type: "workers.placementRecoveryCandidates" }
   | {
       type: "workers.placementProjection";
@@ -495,6 +500,7 @@ export type OpenClawStateReadResult =
       type: "sandboxRegistry.browsers";
       entries: SandboxBrowserRegistryEntry[];
     }
+  | WorkspaceJournalReadResult
   | { type: "workers.placementRecoveryCandidates"; candidates: WorkerPlacementRecoveryCandidate[] }
   | {
       type: "workers.placementProjection";

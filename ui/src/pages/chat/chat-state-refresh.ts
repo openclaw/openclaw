@@ -200,11 +200,7 @@ function bindChatMetadata(host: ChatPageHost): ChatMetadataBinding | undefined {
         }
         if (update.type !== "loading") {
           if (update.type === "result") {
-            applyRemoteSlashCommandsResult({
-              client,
-              agentId: scope.agentId,
-              result: update.result,
-            });
+            applyRemoteSlashCommandsResult(update.result);
             if (update.catalogChanged) {
               binding.sessionFactsInvalidated = true;
               void refreshChatMetadata(host, { automatic: true });
@@ -224,7 +220,7 @@ function bindChatMetadata(host: ChatPageHost): ChatMetadataBinding | undefined {
   host.chatModelCatalogInitialized = hasUnrestrictedModelCatalogSnapshot(client);
   const cached = peekChatMetadata(client, scope);
   if (cached) {
-    applyRemoteSlashCommandsResult({ client, agentId: scope.agentId, result: cached });
+    applyRemoteSlashCommandsResult(cached);
   }
   return binding;
 }

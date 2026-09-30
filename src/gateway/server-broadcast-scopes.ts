@@ -88,6 +88,7 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "session.sharing": [READ_SCOPE],
   "session.sharing.evidence": [READ_SCOPE],
   "session.suggestion": [SESSION_READ_SCOPE],
+  "session.reaction": [SESSION_READ_SCOPE],
   "session.typing": [SESSION_READ_SCOPE],
   "session.tool": [SESSION_READ_SCOPE],
   // Operator terminal byte/exit streams. Admin-gated to match the terminal.*

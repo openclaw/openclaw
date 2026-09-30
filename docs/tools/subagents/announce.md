@@ -69,6 +69,9 @@ removed parent does not transfer the result to another session. When a settled
 batch contains a private result, its combined review stays private; ordinary
 siblings retain their individual completion delivery.
 
+Inspecting a completed child's status before yielding does not consume or invalidate
+its private result.
+
 Waiting for the spawning parent turn does not consume a private result's delivery
 retry window. A normal parent finish starts that window when it releases the
 result. After `sessions_yield`, the yielded batch owns delivery; individual child

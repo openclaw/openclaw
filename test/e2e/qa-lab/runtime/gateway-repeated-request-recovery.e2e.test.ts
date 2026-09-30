@@ -53,6 +53,7 @@ type ClassifiedMockRequest = {
   model: unknown;
   continuation: boolean;
   prompt: "recovery" | "queued" | "other" | "missing";
+  stallGuidance: boolean;
   outcome: unknown;
   errorCode: unknown;
 };
@@ -63,6 +64,7 @@ const QUEUED_PROMPT =
   "Repeated request queued reply Gateway QA check. Reply with the fixture marker.";
 const QUEUED_REPLY_MARKER = "GATEWAY_REPEATED_REQUEST_QUEUED_OK";
 const RECOVERY_REASON = "repeated_model_requests_without_progress";
+const STALL_GUIDANCE_NEEDLE = "previous turn stopped making progress";
 // The opt-in product proof owns the full 360-second production-floor assertion.
 // This always-on state-machine proof uses the same heartbeat path with QA timings.
 const QA_RECOVERY_BOUND_MS = 30_000;
@@ -254,6 +256,8 @@ async function readClassifiedMockRequests(mockBaseUrl: string): Promise<Classifi
                 ? "recovery"
                 : "other"
             : "missing",
+        stallGuidance:
+          typeof allInputText === "string" && allInputText.includes(STALL_GUIDANCE_NEEDLE),
         outcome,
         errorCode,
       })),
@@ -490,8 +494,10 @@ describe("Gateway repeated-request recovery", () => {
           errorCode: "response_failed_no_details",
         }),
       ]);
+      // The stalled turn never replied, so the queued request answers with the
+      // interruption guidance instead of a retry notice or an extra recovery turn.
       expect(requests.filter((request) => request.prompt === "queued")).toEqual([
-        expect.objectContaining({ outcome: "success" }),
+        expect.objectContaining({ outcome: "success", stallGuidance: true }),
       ]);
 
       const finalEvents = (await readStability(gateway, baselineSeq)).events ?? [];

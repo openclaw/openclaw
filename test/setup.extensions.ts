@@ -9,8 +9,12 @@ beforeEach(async (context) => {
   vi.useRealTimers();
   const testPath = expect.getState().testPath?.replaceAll("\\", "/");
   if (/\/extensions\/codex\/src\/app-server\/.*\.test\.ts$/.test(testPath ?? "")) {
+    const { getTrackedWorkerPoolSnapshot } = await vi.importActual<
+      typeof import("../src/infra/worker-cpu.js")
+    >("../src/infra/worker-cpu.js");
     let stop: (() => Promise<void>) | undefined;
     context.codexAttemptRuntime = {
+      readWorkerPools: getTrackedWorkerPoolSnapshot,
       start: async () => {
         const [mcp, clocks] = await Promise.all([
           vi.importActual<typeof import("../src/agents/agent-bundle-mcp-manager-api.js")>(
@@ -75,6 +79,10 @@ afterAll(async () => {
   >("../src/state/openclaw-agent-db-resources.js");
   // File-owned homes must survive until retained Worker leases have been released.
   await drainAgentDatabaseResources({}, async () => {
+    const { drainGlobalSingletonLifecycleState } = await vi.importActual<
+      typeof import("../src/shared/global-singleton.js")
+    >("../src/shared/global-singleton.js");
+    await drainGlobalSingletonLifecycleState();
     testEnv.cleanup();
   });
 });

@@ -431,7 +431,6 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     canInject?: () => boolean,
     currentInboundContext?: CurrentInboundPromptContext,
   ): Promise<void> {
-    // Check for extension commands (cannot be queued)
     if (text.startsWith("/")) {
       this.throwIfExtensionCommand(text);
     }
@@ -466,7 +465,6 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
    * @throws Error if text is an extension command
    */
   async followUp(text: string, images?: ImageContent[]): Promise<void> {
-    // Check for extension commands (cannot be queued)
     if (text.startsWith("/")) {
       this.throwIfExtensionCommand(text);
     }
@@ -474,9 +472,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     await this.queueFollowUp(this.expandPrompt(text), images);
   }
 
-  /**
-   * Internal: Queue a steering message (already expanded, no extension command check).
-   */
+  /** Queue pre-expanded steering input without an extension-command check. */
   private async queueSteer(
     text: string,
     images?: ImageContent[],
@@ -501,18 +497,13 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     );
   }
 
-  /**
-   * Internal: Queue a follow-up message (already expanded, no extension command check).
-   */
+  /** Queue pre-expanded follow-up input without an extension-command check. */
   private async queueFollowUp(text: string, images?: ImageContent[]): Promise<void> {
     const message = this.createUserMessage(text, images);
     this.trackQueuedUserMessage(message, "followUp", text);
     this.agent.followUp(message);
   }
 
-  /**
-   * Throw an error if the text is an extension command.
-   */
   private throwIfExtensionCommand(text: string): void {
     const spaceIndex = text.indexOf(" ");
     const commandName = spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex);
@@ -606,7 +597,6 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
       }
     }
 
-    // Use prompt() with expandPromptTemplates: false to skip command handling and template expansion
     await this.prompt(text, {
       expandPromptTemplates: false,
       streamingBehavior: options?.deliverAs,

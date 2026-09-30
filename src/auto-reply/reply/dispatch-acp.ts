@@ -7,6 +7,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { AcpTurnAttachment } from "../../acp/control-plane/manager.types.js";
 import { resolveAcpAgentPolicyError, resolveAcpDispatchPolicyError } from "../../acp/policy.js";
 import {
@@ -293,13 +294,7 @@ export async function tryDispatchAcpReplyCore(
       logVerbose(`dispatch-acp: participant persistence failed: ${formatErrorMessage(error)}`),
   };
   const progressSessionKeys = isDiagnosticsEnabled(params.cfg)
-    ? Array.from(
-        new Set(
-          [params.ctx.SessionKey, sessionKey, canonicalSessionKey]
-            .map((key) => normalizeOptionalString(key))
-            .filter((key): key is string => Boolean(key)),
-        ),
-      )
+    ? normalizeUniqueTrimmedStringList([params.ctx.SessionKey, sessionKey, canonicalSessionKey])
     : [];
   const markAcpProgress =
     progressSessionKeys.length > 0

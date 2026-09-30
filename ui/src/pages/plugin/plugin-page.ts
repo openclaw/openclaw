@@ -117,15 +117,11 @@ export class PluginPage extends OpenClawLightDomContentsElement {
   private pluginThemeFrame: HTMLIFrameElement | null = null;
   private releasePluginTheme: (() => void) | null = null;
   private readonly subscriptions = new SubscriptionsController(this)
-    .watch(
+    .watchStore(
       () => this.context?.gateway,
-      (gateway, notify) => gateway.subscribe(notify),
       (gateway) => this.updateGatewaySource(gateway),
     )
-    .watch(
-      () => this.context?.plugins,
-      (plugins, notify) => plugins.subscribe(notify),
-    );
+    .watchStore(() => this.context?.plugins);
 
   private readonly handleVisibilityChange = () => {
     if (document.visibilityState !== "visible" || !this.externalAuthTargetKey) {

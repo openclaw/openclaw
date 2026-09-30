@@ -97,11 +97,8 @@ function parseBashRequest(raw: string): BashRequest | null {
   const token = normalizeOptionalString(tokenMatch?.[1]) ?? "";
   const remainder = normalizeOptionalString(tokenMatch?.[2]) ?? "";
   const lowered = normalizeLowercaseStringOrEmpty(token);
-  if (lowered === "poll") {
-    return { action: "poll", sessionId: remainder || undefined };
-  }
-  if (lowered === "stop") {
-    return { action: "stop", sessionId: remainder || undefined };
+  if (lowered === "poll" || lowered === "stop") {
+    return { action: lowered, sessionId: remainder || undefined };
   }
   if (lowered === "help") {
     return { action: "help" };

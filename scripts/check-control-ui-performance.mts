@@ -623,6 +623,7 @@ export function runControlUiPerformanceCheck(
 function main(argv: string[] = process.argv.slice(2)): void {
   let json = false;
   let reportOnly = false;
+  let distDir: string | undefined;
   let baseDistDir: string | undefined;
   let updateBaseline = false;
   let reason: string | undefined;
@@ -633,12 +634,16 @@ function main(argv: string[] = process.argv.slice(2)): void {
       json = true;
     } else if (arg === "--report-only") {
       reportOnly = true;
-    } else if (arg === "--base-dist") {
+    } else if (arg === "--base-dist" || arg === "--dist") {
       const value = argv[++index];
       if (!value || value.startsWith("--")) {
-        throw new Error("--base-dist requires a directory");
+        throw new Error(`${arg} requires a directory`);
       }
-      baseDistDir = path.resolve(value);
+      if (arg === "--dist") {
+        distDir = path.resolve(value);
+      } else {
+        baseDistDir = path.resolve(value);
+      }
     } else if (arg === "--update-baseline") {
       updateBaseline = true;
     } else if (arg === "--reason") {
@@ -670,10 +675,12 @@ function main(argv: string[] = process.argv.slice(2)): void {
   if (json && updateBaseline) {
     throw new Error("--json cannot be combined with --update-baseline");
   }
-  if (updateBaseline && (reportOnly || baseDistDir)) {
-    throw new Error("--report-only and --base-dist cannot be combined with --update-baseline");
+  if (updateBaseline && (reportOnly || baseDistDir || distDir)) {
+    throw new Error(
+      "--report-only, --base-dist and --dist cannot be combined with --update-baseline",
+    );
   }
-  const distDir = path.resolve(SCRIPT_DIR, "../dist/control-ui");
+  distDir ??= path.resolve(SCRIPT_DIR, "../dist/control-ui");
   if (updateBaseline) {
     if (startupJsBytes !== undefined) {
       const currentBaseline = readControlUiStartupBudgetBaseline(

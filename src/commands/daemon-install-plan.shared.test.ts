@@ -5,7 +5,6 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   resolveDaemonInstallRuntimeInputs,
-  resolveDaemonRuntimeBinDir,
   resolveDaemonServicePathDirs,
 } from "./daemon-install-plan.shared.js";
 
@@ -77,16 +76,6 @@ describe("resolveDaemonInstallRuntimeInputs", () => {
       runtime: "node",
       runtimePath: "/custom/node",
     });
-  });
-});
-
-describe("resolveDaemonRuntimeBinDir", () => {
-  it("returns the absolute runtime bin directory", () => {
-    expect(resolveDaemonRuntimeBinDir("/custom/runtime/bin/bun")).toEqual(["/custom/runtime/bin"]);
-  });
-
-  it("ignores bare executable names", () => {
-    expect(resolveDaemonRuntimeBinDir("bun")).toBeUndefined();
   });
 });
 

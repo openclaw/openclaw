@@ -1,4 +1,5 @@
 import { expect, it, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { ensureExecutionOwnerLifecycleBindingSchema } from "../audit/execution-owner-lifecycle-binding-store.js";
 import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
@@ -112,11 +113,20 @@ it("retains history across worker reads, isolates stores, and recovers only an e
           }).finalized,
         ).toBeUndefined();
         // A late result cannot replace the first durable outcome for this exact run.
-        recordCronRunInDatabase(db, {
-          ...outcome(storeKey, "first"),
-          status: "failed",
-          endedAt: 40,
-        });
+        const reads = trackSqliteStatementExecutions(db, ["history"], (sql) =>
+          /^select\b/i.test(sql) && sql.includes('from "task_runs"') ? "history" : null,
+        );
+        try {
+          recordCronRunInDatabase(db, {
+            ...outcome(storeKey, "first"),
+            status: "failed",
+            endedAt: 40,
+          });
+          // Both stores can retain this run ID; unrelated runs must stay in SQLite.
+          expect(reads.rowCounts.history).toBe(2);
+        } finally {
+          reads.restore();
+        }
         expect(
           readCronRunRecordsInDatabase(db, "job").find((row) => row.runId === "cron:job:10:first")
             ?.endedAt,

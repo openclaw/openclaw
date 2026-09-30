@@ -1,4 +1,3 @@
-// Normalizes channel config compatibility fields during config loading.
 import { asNullableRecord as asObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLegacyDmAliases,
@@ -236,7 +235,6 @@ export function normalizeLegacyStreamingAliases(
     params.changes.push(
       `Set ${params.pathPrefix}.streaming.mode (${params.aliasOnlyMode}) to keep the previous default while migrating flat streaming keys.`,
     );
-    changed = true;
   }
 
   if (Object.keys(preview).length > 0) {

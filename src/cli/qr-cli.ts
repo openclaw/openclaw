@@ -1,4 +1,3 @@
-// QR/setup-code CLI for mobile/device pairing with local or remote Gateway credentials.
 import type { Command } from "commander";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { getRuntimeConfig } from "../config/config.js";
@@ -57,22 +56,6 @@ function shouldResolveLocalGatewayPasswordSecret(
     cfg.secrets?.defaults,
   );
   return !envToken && !configTokenConfigured;
-}
-
-async function resolveLocalGatewayPasswordSecretIfNeeded(cfg: OpenClawConfig): Promise<void> {
-  const resolvedPassword = await resolveRequiredConfiguredSecretRefInputString({
-    config: cfg,
-    env: process.env,
-    value: cfg.gateway?.auth?.password,
-    path: "gateway.auth.password",
-  });
-  if (!resolvedPassword) {
-    return;
-  }
-  if (!cfg.gateway?.auth) {
-    return;
-  }
-  cfg.gateway.auth.password = resolvedPassword;
 }
 
 function emitQrSecretResolveDiagnostics(diagnostics: string[], opts: QrCliOptions): void {
@@ -172,7 +155,15 @@ export function registerQrCli(program: Command) {
           !token &&
           shouldResolveLocalGatewayPasswordSecret(cfg, process.env)
         ) {
-          await resolveLocalGatewayPasswordSecretIfNeeded(cfg);
+          const resolvedPassword = await resolveRequiredConfiguredSecretRefInputString({
+            config: cfg,
+            env: process.env,
+            value: cfg.gateway.auth.password,
+            path: "gateway.auth.password",
+          });
+          if (resolvedPassword) {
+            cfg.gateway.auth.password = resolvedPassword;
+          }
         }
 
         const explicitUrl = trimToUndefined(opts.url) ?? trimToUndefined(opts.publicUrl);

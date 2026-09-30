@@ -1,4 +1,3 @@
-// Defines process supervisor marker labels for gateway diagnostics.
 import { GATEWAY_LAUNCH_AGENT_LABEL, resolveGatewayLaunchAgentLabel } from "../daemon/constants.js";
 import type { GatewayOwnerSupervisor } from "./gateway-owner-lease.js";
 import { isGatewayExternallySupervised } from "./gateway-supervision.js";
