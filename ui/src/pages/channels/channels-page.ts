@@ -152,7 +152,12 @@ class ChannelsPage extends OpenClawLightDomElement {
       },
     )
     // Republished theme settings keep channel forms in sync with the global advanced toggle.
-    .watchStore(() => this.context?.theme);
+    .watchStore(
+      () => this.context?.theme,
+      () => {
+        this.pluginPresentation.ensure(this.context.gateway.snapshot.client);
+      },
+    );
 
   private handleGatewaySnapshot(change: GatewayPageChange) {
     const snapshot = change.snapshot;

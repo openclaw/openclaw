@@ -99,6 +99,10 @@ const INVALID_ICON_ROUTES = [
   { label: "invalid plugin id", pathname: "/__openclaw__/plugin-icon/%20" },
   { label: "malformed plugin id", pathname: "/__openclaw__/plugin-icon/%zz" },
   { label: "nested plugin id", pathname: "/__openclaw__/plugin-icon/one/two" },
+  ...["theme=", "theme=auto", "theme=../icon", "theme=dark&theme=light"].map((query) => ({
+    label: `invalid plugin theme ${query}`,
+    pathname: `/__openclaw__/plugin-icon/firecrawl?${query}`,
+  })),
   ...["", "%20", "%zz", "one/two"].map((value) => ({
     label: `invalid activity plugin ${value}`,
     pathname: `/__openclaw__/plugin-activity-icon/${value}`,
@@ -524,6 +528,90 @@ describe("Control UI plugin and catalog icon routes", () => {
         enlarge: false,
       },
     });
+  });
+
+  it("serves and caches each selected theme independently from the portable fallback", async () => {
+    const rootPath = tempDirs.make("openclaw-themed-icon-");
+    const darkPath = path.join(rootPath, "icon-dark.png");
+    writeFileSync(darkPath, APNG_BYTES);
+    mocks.resolveIconSource.mockImplementation(({ theme }) => [
+      ...(theme === "dark" ? [{ kind: "file", path: darkPath, rootPath }] : []),
+      { kind: "file", path: localIconPath, rootPath: iconFixtureDir },
+    ]);
+    mocks.encodeImage.mockImplementation(async (body: Buffer) => ({ data: body }));
+
+    for (const theme of ["dark", "light", "", "dark"]) {
+      const response = await request(
+        `/__openclaw__/plugin-icon/demo${theme ? `?theme=${theme}` : ""}`,
+      );
+      expect(response.status).toBe(200);
+      expect(Buffer.from(await response.arrayBuffer())).toEqual(
+        theme === "dark" ? APNG_BYTES : PNG_BYTES,
+      );
+    }
+    expect(mocks.encodeImage).toHaveBeenCalledTimes(2);
+    expect(mocks.resolveIconSource).toHaveBeenCalledWith({
+      config: testConfig,
+      pluginId: "demo",
+      theme: "dark",
+    });
+    expect(mocks.readRemoteMediaBuffer).not.toHaveBeenCalled();
+  });
+
+  it.each(["missing", "empty", "invalid", "oversized", "decode-failure"])(
+    "serves the fallback when selected theme artwork is %s",
+    async (failure) => {
+      const rootPath = tempDirs.make("openclaw-themed-icon-fallback-");
+      const fallbackPath = path.join(rootPath, "icon.png");
+      const themePath = path.join(rootPath, "icon-dark.png");
+      writeFileSync(fallbackPath, PNG_BYTES);
+      if (failure !== "missing") {
+        writeFileSync(
+          themePath,
+          failure === "empty"
+            ? ""
+            : failure === "invalid"
+              ? "not a png"
+              : failure === "oversized"
+                ? Buffer.alloc(256 * 1024 + 1)
+                : APNG_BYTES,
+        );
+      }
+      if (failure === "decode-failure") {
+        mocks.encodeImage.mockRejectedValueOnce(new Error("invalid image"));
+      }
+      mocks.resolveIconSource.mockResolvedValue([
+        { kind: "file", path: themePath, rootPath },
+        { kind: "file", path: fallbackPath, rootPath },
+        { kind: "clawhub", baseUrl: "https://clawhub.ai", packageName: "@acme/demo" },
+      ]);
+
+      const response = await request("/__openclaw__/plugin-icon/demo?theme=dark");
+
+      expect(response.status).toBe(200);
+      expect(Buffer.from(await response.arrayBuffer())).toEqual(NORMALIZED_PNG_BYTES);
+      expect(mocks.readRemoteMediaBuffer).not.toHaveBeenCalled();
+      expect(mocks.fetchPluginIconUrls).not.toHaveBeenCalled();
+    },
+  );
+
+  it("uses publisher artwork after both the themed and default package images fail", async () => {
+    const themePath = path.join(iconFixtureDir, "icon-dark.png");
+    writeFileSync(themePath, "invalid themed image");
+    writeFileSync(localIconPath, "invalid default image");
+    mocks.resolveIconSource.mockResolvedValue([
+      { kind: "file", path: themePath, rootPath: iconFixtureDir },
+      { kind: "file", path: localIconPath, rootPath: iconFixtureDir },
+      { kind: "clawhub", baseUrl: "https://clawhub.ai", packageName: "@acme/demo" },
+    ]);
+    const publisherUrl = "https://cdn.example.test/publisher.png";
+    mocks.fetchPluginIconUrls.mockResolvedValue([publisherUrl]);
+    const response = await request("/__openclaw__/plugin-icon/demo?theme=dark");
+    expect(response.status).toBe(200);
+    expect(Buffer.from(await response.arrayBuffer())).toEqual(NORMALIZED_PNG_BYTES);
+    expect(mocks.readRemoteMediaBuffer).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ url: publisherUrl }),
+    );
   });
 
   it("closes the descriptor when rejecting an empty package icon", async () => {

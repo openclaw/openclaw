@@ -27,6 +27,7 @@ export function metadataSnapshot(params: {
   packageBuild?: { bundledDist?: boolean };
   packageDependencies?: Record<string, string>;
   iconPath?: string;
+  themeIconPaths?: PluginManifestRecord["themeIconPaths"];
   activityIconPath?: string;
   toolActivityIconPaths?: Record<string, string>;
   categories?: PluginCategorySlug[];
@@ -49,6 +50,7 @@ export function metadataSnapshot(params: {
     ...(params.contracts ? { contracts: params.contracts } : {}),
     ...(params.packageDependencies ? { packageDependencies: params.packageDependencies } : {}),
     ...(params.iconPath ? { iconPath: params.iconPath } : {}),
+    ...(params.themeIconPaths ? { themeIconPaths: params.themeIconPaths } : {}),
     ...(params.activityIconPath ? { activityIconPath: params.activityIconPath } : {}),
     ...(params.toolActivityIconPaths
       ? { toolActivityIconPaths: params.toolActivityIconPaths }

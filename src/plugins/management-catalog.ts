@@ -36,6 +36,7 @@ import {
   withPluginCache,
 } from "./plugin-cache.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
+import type { PluginIconTheme } from "./portable-icon-paths.js";
 
 export type ManagedPluginCatalogEntry = PluginCatalogEntry;
 
@@ -82,6 +83,7 @@ export function resolvePluginIconSource(params: {
 export async function resolvePluginIconSources(params: {
   metadata: PluginMetadataSnapshot;
   pluginId: string;
+  theme?: PluginIconTheme;
   env: NodeJS.ProcessEnv;
 }): Promise<Array<ManagedPluginIconSource | ManagedPluginClawHubIconSource>> {
   const { metadata, env } = params;
@@ -90,6 +92,12 @@ export async function resolvePluginIconSources(params: {
   const sources: Array<ManagedPluginIconSource | ManagedPluginClawHubIconSource> = file
     ? [file]
     : [];
+  const themeIconPath = params.theme
+    ? metadata.byPluginId.get(pluginId)?.themeIconPaths?.[params.theme]
+    : undefined;
+  if (file && themeIconPath && themeIconPath !== file.path) {
+    sources.unshift({ kind: "file", path: themeIconPath, rootPath: file.rootPath });
+  }
   const record = metadata.index.plugins.find(
     (candidate) => metadata.normalizePluginId(candidate.pluginId) === pluginId,
   );

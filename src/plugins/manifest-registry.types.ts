@@ -15,6 +15,7 @@ import type {
 } from "./package-manifest.types.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import type { PluginTrust } from "./plugin-trust.js";
+import type { PluginIconTheme } from "./portable-icon-paths.js";
 import type { PluginDependencySpecMap } from "./status-dependencies.types.js";
 
 export type PluginManifestContractListKey =
@@ -68,6 +69,7 @@ export type PluginManifestRecord = PluginManifestRecordStatic & {
   /** Process-local source selection, never persisted in the installed index. */
   sourcePreferred?: true;
   iconPath?: string;
+  themeIconPaths?: Partial<Record<PluginIconTheme, string>>;
   activityIconPath?: string;
   toolActivityIconPaths?: Record<string, string>;
   packageName?: string;

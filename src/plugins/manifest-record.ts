@@ -42,6 +42,7 @@ import {
   PLUGIN_ACTIVITY_ICON_PATH,
   PLUGIN_TOOL_ACTIVITY_ICON_DIR,
   PORTABLE_PLUGIN_ICON_PATH,
+  PORTABLE_PLUGIN_THEME_ICON_PATHS,
 } from "./portable-icon-paths.js";
 
 function resolvePluginSourcePath(sourcePath: string): string {
@@ -143,7 +144,10 @@ function resolveManifestPluginSourcePath(params: {
 function resolvePortablePluginIcons(params: {
   rootDir: string;
   rejectHardlinks: boolean;
-}): Pick<PluginManifestRecord, "iconPath" | "activityIconPath" | "toolActivityIconPaths"> {
+}): Pick<
+  PluginManifestRecord,
+  "iconPath" | "themeIconPaths" | "activityIconPath" | "toolActivityIconPaths"
+> {
   let root: { path: string; realPath: string } | undefined;
   const resolveIcon = (relativePath: string): string | undefined => {
     const iconPath = path.resolve(params.rootDir, relativePath);
@@ -166,7 +170,21 @@ function resolvePortablePluginIcons(params: {
       : undefined;
   };
   const iconPath = resolveIcon(PORTABLE_PLUGIN_ICON_PATH);
+  const themeIconPaths: NonNullable<PluginManifestRecord["themeIconPaths"]> = {};
+  if (iconPath) {
+    for (const theme of ["light", "dark"] as const) {
+      const themePath = resolveIcon(PORTABLE_PLUGIN_THEME_ICON_PATHS[theme]);
+      if (themePath) {
+        themeIconPaths[theme] = themePath;
+      }
+    }
+  }
   const activityIconPath = resolveIcon(PLUGIN_ACTIVITY_ICON_PATH);
+  const icons = {
+    iconPath,
+    ...(Object.keys(themeIconPaths).length > 0 ? { themeIconPaths } : {}),
+    activityIconPath,
+  };
   const directory = path.resolve(params.rootDir, PLUGIN_TOOL_ACTIVITY_ICON_DIR);
   if (
     !isPluginRootPath({
@@ -180,17 +198,17 @@ function resolvePortablePluginIcons(params: {
       targetMustExist: true,
     })
   ) {
-    return { iconPath, activityIconPath };
+    return icons;
   }
   let entries: ReturnType<typeof readPluginCacheDirectory>;
   try {
     entries = readPluginCacheDirectory(directory);
   } catch {
-    return { iconPath, activityIconPath };
+    return icons;
   }
   // Ignore an overflowing directory as a whole; filesystem order never picks winners.
   if (entries.length > MAX_PLUGIN_ACTIVITY_TOOL_ICONS) {
-    return { iconPath, activityIconPath };
+    return icons;
   }
   const paths: Array<[string, string]> = [];
   for (const name of entries.map((entry) => entry.name).toSorted()) {
@@ -204,8 +222,7 @@ function resolvePortablePluginIcons(params: {
     }
   }
   return {
-    iconPath,
-    activityIconPath,
+    ...icons,
     ...(paths.length ? { toolActivityIconPaths: Object.fromEntries(paths) } : {}),
   };
 }

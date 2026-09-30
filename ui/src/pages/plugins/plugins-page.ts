@@ -160,22 +160,27 @@ class PluginsPage extends OpenClawLightDomElement {
     },
   });
 
-  private readonly subscriptions = new SubscriptionsController(this).effect(
-    () => this.context?.runtimeConfig,
-    (runtimeConfig) => {
-      this.configAutoSaveStatus = runtimeConfig.state.configAutoSaveStatus;
-      return runtimeConfig.subscribe(() => {
-        const nextStatus = runtimeConfig.state.configAutoSaveStatus;
-        const completedSave = this.configAutoSaveStatus === "saving" && nextStatus === "saved";
-        this.configAutoSaveStatus = nextStatus;
-        this.requestUpdate();
-        if (completedSave && this.pluginConfigEditPending) {
-          this.pluginConfigEditPending = false;
-          void this.refreshCatalog();
-        }
-      });
-    },
-  );
+  private readonly subscriptions = new SubscriptionsController(this)
+    .watch(
+      () => this.context?.theme,
+      (theme, notify) => theme.subscribe(notify),
+    )
+    .effect(
+      () => this.context?.runtimeConfig,
+      (runtimeConfig) => {
+        this.configAutoSaveStatus = runtimeConfig.state.configAutoSaveStatus;
+        return runtimeConfig.subscribe(() => {
+          const nextStatus = runtimeConfig.state.configAutoSaveStatus;
+          const completedSave = this.configAutoSaveStatus === "saving" && nextStatus === "saved";
+          this.configAutoSaveStatus = nextStatus;
+          this.requestUpdate();
+          if (completedSave && this.pluginConfigEditPending) {
+            this.pluginConfigEditPending = false;
+            void this.refreshCatalog();
+          }
+        });
+      },
+    );
 
   override willUpdate(changed: PropertyValues<this>) {
     if (changed.has("routeData")) {

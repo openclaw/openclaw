@@ -79,6 +79,7 @@ import {
   resolvePluginMetadataSnapshot,
   type PluginMetadataSnapshot,
 } from "./plugin-metadata-snapshot.js";
+import type { PluginIconTheme } from "./portable-icon-paths.js";
 import { resolveManifestProviderAuthChoices } from "./provider-auth-choices.js";
 import { listRecommendedToolInstalls } from "./recommended-tool-installs.js";
 import { projectPluginInstallHealth } from "./status-snapshot.js";
@@ -174,10 +175,20 @@ export function refreshManagedPluginMetadata(params: {
 
 /** Resolve ordered branding sources from package bytes and exact installed provenance. */
 export const resolveManagedPluginIconSources = withManagedPluginCache(
-  async (params: { config: OpenClawConfig; pluginId: string; env?: NodeJS.ProcessEnv }) => {
+  async (params: {
+    config: OpenClawConfig;
+    pluginId: string;
+    theme?: PluginIconTheme;
+    env?: NodeJS.ProcessEnv;
+  }) => {
     const env = params.env ?? process.env;
     const metadata = resolveManagedPluginMetadata(params.config, env);
-    return resolvePluginIconSources({ metadata, pluginId: params.pluginId, env });
+    return resolvePluginIconSources({
+      metadata,
+      pluginId: params.pluginId,
+      theme: params.theme,
+      env,
+    });
   },
 );
 

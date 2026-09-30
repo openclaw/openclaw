@@ -7,6 +7,8 @@ import {
   type ApplicationGatewaySnapshot,
 } from "../app/context.ts";
 import type { MentionsCapability } from "../app/mentions.ts";
+import { loadSettings } from "../app/settings.ts";
+import type { ThemeMode } from "../app/theme.ts";
 
 export const hiddenScopeUpgradeCapability = {
   state: { phase: "hidden" as const },
@@ -97,6 +99,47 @@ export function createApplicationGateway(
       for (const listener of listeners) {
         listener(snapshot);
       }
+    },
+  };
+}
+
+export function createTestApplicationTheme(initialMode: ThemeMode = "dark") {
+  let mode = initialMode;
+  let systemMode: "light" | "dark" = "dark";
+  const listeners = new Set<() => void>();
+  const notify = () => {
+    for (const listener of listeners) {
+      listener();
+    }
+  };
+  const theme: ApplicationContext["theme"] = {
+    branding: { mascot: "claw", critters: [] },
+    get settings() {
+      return { ...loadSettings(), themeMode: mode };
+    },
+    get mode() {
+      return mode;
+    },
+    get resolvedMode() {
+      return mode === "system" ? systemMode : mode;
+    },
+    serverSelection: null,
+    recordServerSelection: () => undefined,
+    setMode(nextMode) {
+      mode = nextMode;
+      notify();
+    },
+    refresh: notify,
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  };
+  return {
+    theme,
+    setSystemMode(nextMode: "light" | "dark") {
+      systemMode = nextMode;
+      notify();
     },
   };
 }

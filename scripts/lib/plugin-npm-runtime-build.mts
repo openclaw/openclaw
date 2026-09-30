@@ -7,7 +7,7 @@ import { isTypeScriptPackageEntry } from "../../src/plugins/package-entrypoints.
 import {
   PLUGIN_ACTIVITY_ICON_PATH,
   PLUGIN_TOOL_ACTIVITY_ICON_DIR,
-  PORTABLE_PLUGIN_ICON_PATH,
+  PORTABLE_PLUGIN_ICON_PATHS,
 } from "../../src/plugins/portable-icon-paths.ts";
 import {
   collectPluginSourceEntries,
@@ -386,7 +386,7 @@ function resolvePluginNpmRuntimePackageFiles(plan: {
     "openclaw.plugin.json",
     "README.md",
     "SKILL.md",
-    PORTABLE_PLUGIN_ICON_PATH,
+    ...PORTABLE_PLUGIN_ICON_PATHS,
     PLUGIN_ACTIVITY_ICON_PATH,
   ]) {
     if (packageRelativePathExists(plan.packageDir, file)) {

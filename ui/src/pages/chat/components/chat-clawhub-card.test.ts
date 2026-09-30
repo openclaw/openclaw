@@ -269,6 +269,31 @@ describe("ClawHub chat recommendations", () => {
     },
   );
 
+  it("refreshes package artwork on theme changes without refetching catalog images", async () => {
+    const oldIcon = deferred<string | null>();
+    iconFetch.plugin
+      .mockReturnValueOnce(oldIcon.promise)
+      .mockResolvedValueOnce("blob:light-package");
+    iconFetch.catalog.mockResolvedValue("blob:catalog");
+    const revoke = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
+    const result = detail(true);
+    Object.assign(result.plugin.catalog, { imageUrl: "https://example.test/catalog.png" });
+    Object.assign(result.plugin.local, { pluginId: "whatsapp" });
+    const { card, context } = mount(async () => result);
+    await vi.waitFor(() => expect(iconFetch.plugin).toHaveBeenCalledOnce());
+    expect(iconFetch.plugin.mock.calls[0]?.[0]).toMatchObject({ theme: "dark" });
+    context.theme.setMode("light");
+    await vi.waitFor(() =>
+      expect(card.querySelector("img")?.getAttribute("src")).toBe("blob:light-package"),
+    );
+    expect(iconFetch.plugin.mock.calls[1]?.[0]).toMatchObject({ theme: "light" });
+    expect(iconFetch.plugin.mock.calls[0]?.[0].signal.aborted).toBe(true);
+    expect(iconFetch.catalog).toHaveBeenCalledOnce();
+    oldIcon.resolve("blob:dark-package");
+    await vi.waitFor(() => expect(revoke).toHaveBeenCalledWith("blob:dark-package"));
+    expect(card.querySelector("img")?.getAttribute("src")).toBe("blob:light-package");
+  });
+
   it("uses a generic placeholder before installation without a package image", async () => {
     const result = detail(false);
     Object.assign(result.plugin.catalog, { packageName: "@openclaw/whatsapp" });

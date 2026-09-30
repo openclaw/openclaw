@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import { i18n } from "../../i18n/index.ts";
 import type { PluginDiscoveryEntry, PluginListResult } from "../../lib/plugins/index.ts";
+import { createTestApplicationTheme } from "../../test-helpers/application-context.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { ModelSetupIconLoader } from "../model-setup/model-setup-icon-loader.ts";
 import type { ModelSetupPageState } from "../model-setup/state.ts";
@@ -171,7 +172,7 @@ describe("PluginsPage icon routing", () => {
       catalog.resolve(detail);
       await waitForFast(() =>
         expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
-          "/__openclaw__/plugin-icon/workboard",
+          "/__openclaw__/plugin-icon/workboard?theme=dark",
           `/__openclaw__/catalog-icon/${encodeURIComponent(authorUrl)}`,
         ]),
       );
@@ -255,7 +256,7 @@ describe("PluginsPage icon routing", () => {
       },
     );
     const fetchMock = vi.fn().mockImplementation((url: string) => {
-      if (url.endsWith("%40openclaw%2Fdiscord")) {
+      if (url.includes("%40openclaw%2Fdiscord")) {
         return Promise.resolve(new Response(null, { status: 404 }));
       }
       return Promise.resolve(
@@ -365,8 +366,8 @@ describe("PluginsPage icon routing", () => {
 
     await waitForFast(() => expect(fetchMock).toHaveBeenCalledTimes(2));
     expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
-      "/__openclaw__/plugin-icon/%40openclaw%2Fbrave-plugin",
-      "/__openclaw__/plugin-icon/%40openclaw%2Fdiscord",
+      "/__openclaw__/plugin-icon/%40openclaw%2Fbrave-plugin?theme=dark",
+      "/__openclaw__/plugin-icon/%40openclaw%2Fdiscord?theme=dark",
     ]);
     await waitForFast(() =>
       expect(
@@ -422,9 +423,106 @@ describe("PluginsPage icon routing", () => {
 
     await waitForFast(() => expect(fetchMock).toHaveBeenCalledTimes(12));
     expect(fetchMock.mock.calls.map(([url]) => url)).toEqual(
-      plugins.map((plugin) => `/__openclaw__/plugin-icon/${plugin.id}`),
+      plugins.map((plugin) => `/__openclaw__/plugin-icon/${plugin.id}?theme=dark`),
     );
     expect(page.querySelectorAll(".plugins-settings-row")).toHaveLength(12);
+  });
+
+  it("refreshes installed artwork only when the host resolved mode changes", async () => {
+    let sequence = 0;
+    const revoke = vi.fn();
+    vi.stubGlobal(
+      "URL",
+      class extends URL {
+        static override createObjectURL = vi.fn(() => `blob:theme-${++sequence}`);
+        static override revokeObjectURL = revoke;
+      },
+    );
+    const fetchMock = vi.fn<typeof fetch>(
+      async () =>
+        new Response(new Uint8Array([137, 80, 78, 71]), {
+          headers: { "content-type": "image/png" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const { client } = createClient(requestResult);
+    const harness = createGateway(client);
+    harness.gateway.connection.gatewayUrl = window.location.origin.replace(/^http/u, "ws");
+    const hostTheme = createTestApplicationTheme("light");
+    const context = { ...createContext(harness.gateway), theme: hostTheme.theme };
+    const { page } = await mountPage(
+      context,
+      createPluginsRouteData(
+        harness.gateway,
+        createResult(createPlugin({ id: "theme-fixture", hasIcon: true })),
+      ),
+    );
+    const icon = () => page.querySelector("img.plugins-icon")?.getAttribute("src");
+    await waitForFast(() => expect(icon()).toBe("blob:theme-1"));
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "/__openclaw__/plugin-icon/theme-fixture?theme=light",
+    );
+
+    hostTheme.setSystemMode("dark");
+    await page.updateComplete;
+    expect(fetchMock).toHaveBeenCalledOnce();
+    context.theme.setMode("system");
+    await waitForFast(() => expect(icon()).toBe("blob:theme-2"));
+    expect(fetchMock.mock.calls[1]?.[0]).toBe("/__openclaw__/plugin-icon/theme-fixture?theme=dark");
+    expect(revoke).toHaveBeenCalledWith("blob:theme-1");
+    hostTheme.setSystemMode("light");
+    await waitForFast(() => expect(icon()).toBe("blob:theme-3"));
+    expect(fetchMock.mock.calls[2]?.[0]).toBe(
+      "/__openclaw__/plugin-icon/theme-fixture?theme=light",
+    );
+    context.theme.setMode("light");
+    await page.updateComplete;
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("retires a previous theme response that resolves after the new artwork", async () => {
+    let sequence = 0;
+    const revoke = vi.fn();
+    vi.stubGlobal(
+      "URL",
+      class extends URL {
+        static override createObjectURL = vi.fn(() => `blob:theme-race-${++sequence}`);
+        static override revokeObjectURL = revoke;
+      },
+    );
+    const oldResponse = deferred<Response>();
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockReturnValueOnce(oldResponse.promise)
+      .mockResolvedValueOnce(
+        new Response(new Uint8Array([137, 80, 78, 71]), {
+          headers: { "content-type": "image/png" },
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const { client } = createClient(requestResult);
+    const harness = createGateway(client);
+    harness.gateway.connection.gatewayUrl = window.location.origin.replace(/^http/u, "ws");
+    const context = createContext(harness.gateway);
+    const { page } = await mountPage(
+      context,
+      createPluginsRouteData(
+        harness.gateway,
+        createResult(createPlugin({ id: "theme-race", hasIcon: true })),
+      ),
+    );
+    await waitForFast(() => expect(fetchMock).toHaveBeenCalledOnce());
+    context.theme.setMode("light");
+    const icon = () => page.querySelector("img.plugins-icon")?.getAttribute("src");
+    await waitForFast(() => expect(icon()).toBe("blob:theme-race-1"));
+    expect(fetchMock.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+    oldResponse.resolve(
+      new Response(new Uint8Array([137, 80, 78, 71]), {
+        headers: { "content-type": "image/png" },
+      }),
+    );
+    await waitForFast(() => expect(revoke).toHaveBeenCalledWith("blob:theme-race-2"));
+    expect(icon()).toBe("blob:theme-race-1");
   });
 
   it("keeps the monogram fallback when a proxied SVG exceeds the safe icon subset", async () => {

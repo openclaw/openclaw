@@ -12,6 +12,7 @@ import type { ClawHubSkillDetail } from "../../../lib/skills/index.ts";
 import { loadSkillStatusReport } from "../../../lib/skills/status-report.ts";
 import { GatewayPageController } from "../../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
+import { SubscriptionsController } from "../../../lit/subscriptions-controller.ts";
 import { renderPluginOfficialBadge } from "../../plugins/plugin-card.ts";
 import { PluginIconController } from "../../plugins/plugin-icon-controller.ts";
 import { resolvePluginCatalogIconUrl } from "../../plugins/presentation.ts";
@@ -64,13 +65,26 @@ class ChatClawHubCard extends OpenClawLightDomElement {
   });
 
   private readonly pluginIcons = new PluginIconController({
-    getFetchContext: () => this.iconFetchContext,
+    getFetchContext: () => ({
+      ...this.iconFetchContext,
+      theme: this.context.theme.resolvedMode,
+    }),
     isConnected: () => this.isConnected && this.gateway.connected,
     onUrlsChange: (urls) => {
       this.pluginIconUrls = urls;
     },
     onLoadingChange: () => this.requestUpdate(),
   });
+
+  private readonly subscriptions = new SubscriptionsController(this).watch(
+    () => this.context?.theme,
+    (theme, notify) => theme.subscribe(notify),
+    () => {
+      if (this.iconPluginId) {
+        this.pluginIcons.load(this.iconPluginId);
+      }
+    },
+  );
 
   private resetIcons(): void {
     this.catalogIcons.reset();
@@ -151,6 +165,7 @@ class ChatClawHubCard extends OpenClawLightDomElement {
   });
 
   override disconnectedCallback(): void {
+    this.subscriptions.clear();
     this.resetIcons();
     super.disconnectedCallback();
   }

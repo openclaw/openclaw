@@ -105,18 +105,21 @@ describeControlUiE2e("Control UI installed plugin catalog", () => {
       },
     });
     let iconAuthorization = "";
-    await page.route("**/__openclaw__/plugin-icon/remote-icon", async (route) => {
-      iconAuthorization = route.request().headers().authorization ?? "";
-      await route.fulfill({
-        body: '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><path fill="#f97316" d="M4 3h16v18H4z"/></svg>',
-        contentType: "image/svg+xml",
-        headers: {
-          "content-disposition": 'attachment; filename="plugin-icon.svg"',
-          "content-security-policy": "default-src 'none'; sandbox",
-        },
-        status: 200,
-      });
-    });
+    await page.route(
+      (url) => url.pathname === "/__openclaw__/plugin-icon/remote-icon",
+      async (route) => {
+        iconAuthorization = route.request().headers().authorization ?? "";
+        await route.fulfill({
+          body: '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><path fill="#f97316" d="M4 3h16v18H4z"/></svg>',
+          contentType: "image/svg+xml",
+          headers: {
+            "content-disposition": 'attachment; filename="plugin-icon.svg"',
+            "content-security-policy": "default-src 'none'; sandbox",
+          },
+          status: 200,
+        });
+      },
+    );
     try {
       await page.goto(`${server.baseUrl}settings/plugins`);
       const icon = page.locator('[data-plugin-icon-id="remote-icon"] img');

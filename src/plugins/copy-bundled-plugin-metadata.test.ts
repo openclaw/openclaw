@@ -114,6 +114,8 @@ describe("copyBundledPluginMetadata", () => {
     );
     fs.mkdirSync(path.join(pluginDir, "assets"), { recursive: true });
     fs.writeFileSync(path.join(pluginDir, "assets", "icon.png"), Buffer.from("package icon"));
+    fs.writeFileSync(path.join(pluginDir, "assets", "icon-light.png"), "light icon");
+    fs.writeFileSync(path.join(pluginDir, "assets", "icon-dark.png"), "dark icon");
     const activityIcon = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"/>';
     fs.writeFileSync(path.join(pluginDir, "assets", "activity.svg"), activityIcon);
     fs.mkdirSync(path.join(pluginDir, "themes"));
@@ -148,6 +150,11 @@ describe("copyBundledPluginMetadata", () => {
     expect(
       fs.readFileSync(path.join(repoRoot, "dist", "extensions", "acpx", "assets", "icon.png")),
     ).toEqual(Buffer.from("package icon"));
+    for (const theme of ["light", "dark"]) {
+      expect(fs.readFileSync(path.join(distAssetsDir, `icon-${theme}.png`), "utf8")).toBe(
+        `${theme} icon`,
+      );
+    }
     expect(fs.readFileSync(path.join(distAssetsDir, "activity.svg"), "utf8")).toBe(activityIcon);
     expect(fs.readFileSync(path.join(distAssetsDir, "theme-art/beret.svg"), "utf8")).toBe(
       activityIcon,
@@ -179,7 +186,13 @@ describe("copyBundledPluginMetadata", () => {
       packageName: "@openclaw/acpx",
       packageOpenClaw: { extensions: ["./index.ts"] },
     });
-    const iconPaths = ["assets/icon.png", "assets/activity.svg", "README.md"];
+    const iconPaths = [
+      "assets/icon.png",
+      "assets/icon-light.png",
+      "assets/icon-dark.png",
+      "assets/activity.svg",
+      "README.md",
+    ];
     const staleIconPaths = [...iconPaths, "assets/activity/retired.svg"].map((relativePath) =>
       path.join(bundledPluginDir(repoRoot, "acpx"), relativePath),
     );

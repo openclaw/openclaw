@@ -4,6 +4,7 @@ import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gatewa
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { createChannelCapability } from "../../lib/channels/index.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
+import { createTestApplicationTheme } from "../../test-helpers/application-context.ts";
 import "./channels-page.ts";
 
 const NOSTR_PROFILE_REQUEST_TIMEOUT_MS = 30_000;
@@ -121,6 +122,7 @@ function createContext(gateway: ApplicationContext["gateway"]) {
     gateway,
     channels,
     runtimeConfig,
+    theme: createTestApplicationTheme().theme,
     navigate: vi.fn(),
     preload: vi.fn(async () => undefined),
   } as unknown as ApplicationContext;
@@ -386,11 +388,87 @@ describe("ChannelsPage lifecycle", () => {
             typeof input === "string" ? input : input instanceof URL ? input.href : input.url,
           )
           .filter((url) => url.includes("/__openclaw__/plugin-icon/")),
-      ).toEqual(["/__openclaw__/plugin-icon/slack"]);
+      ).toEqual(["/__openclaw__/plugin-icon/slack?theme=dark"]);
       source.runtimeConfig.dispose();
       source.channels.dispose();
     },
   );
+
+  it("refreshes channel package artwork and rejects late results from the old theme", async () => {
+    const gateway = createGateway();
+    const source = createContext(gateway);
+    source.channels.state.channelsSnapshot = {
+      ts: 0,
+      channelOrder: ["slack"],
+      channelLabels: { slack: "Slack" },
+      channels: { slack: { configured: false } },
+      channelAccounts: {},
+      channelDefaultAccountId: {},
+    };
+    const request = vi.spyOn(gateway.snapshot.client!, "request");
+    const baseRequest = request.getMockImplementation();
+    request.mockImplementation(async (method: string, params?: unknown) => {
+      if (method === "plugins.list") {
+        return {
+          plugins: [
+            {
+              id: "slack",
+              name: "Slack",
+              origin: "bundled",
+              installed: true,
+              enabled: true,
+              state: "enabled",
+              hasIcon: true,
+            },
+          ],
+          diagnostics: [],
+          mutationAllowed: true,
+        };
+      }
+      return await baseRequest?.(method, params);
+    });
+    const oldResponse = createDeferred<Response>();
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockReturnValueOnce(oldResponse.promise)
+      .mockResolvedValueOnce(
+        new Response(new Uint8Array([137, 80, 78, 71]), {
+          headers: { "content-type": "image/png" },
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(URL, "createObjectURL")
+      .mockReturnValueOnce("blob:light-channel")
+      .mockReturnValueOnce("blob:dark-channel");
+    const revoke = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
+    const page = document.createElement("openclaw-channels-page") as ChannelsPageTestElement;
+    page.context = source.context;
+    document.body.append(page);
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    source.context.theme.setMode("light");
+    await vi.waitFor(() =>
+      expect(page.querySelector(".channels-item img")?.getAttribute("src")).toBe(
+        "blob:light-channel",
+      ),
+    );
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      "/__openclaw__/plugin-icon/slack?theme=dark",
+      "/__openclaw__/plugin-icon/slack?theme=light",
+    ]);
+    expect(fetchMock.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+    oldResponse.resolve(
+      new Response(new Uint8Array([137, 80, 78, 71]), {
+        headers: { "content-type": "image/png" },
+      }),
+    );
+    await vi.waitFor(() => expect(revoke).toHaveBeenCalledWith("blob:dark-channel"));
+    expect(page.querySelector(".channels-item img")?.getAttribute("src")).toBe(
+      "blob:light-channel",
+    );
+    expect(request.mock.calls.filter(([method]) => method === "plugins.list")).toHaveLength(1);
+    source.runtimeConfig.dispose();
+    source.channels.dispose();
+  });
 
   it("loads an icon when channel status arrives after plugin metadata", async () => {
     const gateway = createGateway();
@@ -559,7 +637,7 @@ describe("ChannelsPage lifecycle", () => {
           typeof input === "string" ? input : input instanceof URL ? input.href : input.url,
         )
         .filter((url) => url.includes("/__openclaw__/plugin-icon/")),
-    ).toEqual(["/__openclaw__/plugin-icon/agent-system"]);
+    ).toEqual(["/__openclaw__/plugin-icon/agent-system?theme=dark"]);
     includeSecondChannel = true;
     await source.channels.refresh(false);
     await vi.waitFor(() => {

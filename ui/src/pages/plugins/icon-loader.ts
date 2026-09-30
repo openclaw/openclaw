@@ -17,7 +17,9 @@ type FetchProxiedIconParams = {
   signal: AbortSignal;
 };
 
-export type PluginIconFetchContext = Omit<FetchProxiedIconParams, "signal">;
+export type PluginIconFetchContext = Omit<FetchProxiedIconParams, "signal"> & {
+  theme?: "light" | "dark";
+};
 
 function cancelUnreadResponseBody(response: Response): void {
   if (!response.bodyUsed) {
@@ -78,13 +80,10 @@ export async function fetchProxiedIconBlobUrl(
 }
 
 export function fetchPluginIconBlobUrl(
-  params: FetchProxiedIconParams & { pluginId: string },
+  params: FetchProxiedIconParams & { pluginId: string; theme?: "light" | "dark" },
 ): Promise<string | null> {
-  const routeUrl = buildControlUiResourcePath(
-    "pluginIcon",
-    params.resourceBasePath,
-    params.pluginId,
-  );
+  const path = buildControlUiResourcePath("pluginIcon", params.resourceBasePath, params.pluginId);
+  const routeUrl = params.theme ? `${path}?theme=${params.theme}` : path;
   return fetchProxiedIconBlobUrl(params, routeUrl);
 }
 

@@ -39,6 +39,7 @@ export class PluginIconController {
     { controller: AbortController; timeout: ReturnType<typeof setTimeout> | undefined }
   >();
   private urls: Record<string, string> = {};
+  private theme: PluginIconFetchContext["theme"];
 
   constructor(private readonly host: PluginIconControllerHost) {}
 
@@ -138,6 +139,14 @@ export class PluginIconController {
   }
 
   load(pluginId: string): void {
+    // Only package artwork varies by theme. Catalog URLs and custom loaders keep their own scope.
+    if (this.host.kind !== "catalog" && !this.host.fetchIcon) {
+      const theme = this.host.getFetchContext().theme;
+      if (theme !== this.theme) {
+        this.theme = theme;
+        this.reset();
+      }
+    }
     if (!this.urls[pluginId] && !this.misses.has(pluginId) && !this.requests.has(pluginId)) {
       this.fetch(pluginId);
     }
@@ -193,9 +202,14 @@ export class PluginIconController {
       : this.host.kind === "catalog"
         ? fetchCatalogIconBlobUrl({ iconUrl: pluginId, ...context, signal: controller.signal })
         : fetchPluginIconBlobUrl({ pluginId, ...context, signal: controller.signal });
+    const isCurrent = () =>
+      this.requests.get(pluginId) === request &&
+      (this.host.kind === "catalog" ||
+        this.host.fetchIcon !== undefined ||
+        context.theme === this.host.getFetchContext().theme);
     void pending
       .then((url) => {
-        if (this.requests.get(pluginId) !== request || !this.host.isConnected(pluginId)) {
+        if (!isCurrent() || !this.host.isConnected(pluginId)) {
           if (url) {
             URL.revokeObjectURL(url);
           }
@@ -208,10 +222,7 @@ export class PluginIconController {
         }
       })
       .catch(() => {
-        if (
-          this.requests.get(pluginId) === request &&
-          (this.host.kind !== "catalog" || !controller.signal.aborted)
-        ) {
+        if (isCurrent() && (this.host.kind !== "catalog" || !controller.signal.aborted)) {
           this.misses.add(pluginId);
         }
       })

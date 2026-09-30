@@ -18,6 +18,22 @@ Place the portable plugin icon at `assets/icon.png`, relative to the plugin root
 field is required. Use a square PNG that remains recognizable at 16 px; 512×512 is recommended.
 Missing, unreadable, or invalid icons are ignored and do not invalidate the plugin.
 
+To adapt artwork to the Control UI's light and dark modes, optionally add
+`assets/icon-light.png` and `assets/icon-dark.png`. Keep `assets/icon.png` as the
+portable fallback. The Control UI selects the variant for its current theme mode,
+including an explicit theme choice that differs from the system preference, and
+refreshes the artwork when that mode changes. A missing, unreadable, or invalid
+variant falls back to `assets/icon.png`; consumers that do not request a theme
+continue to use the fallback. Variant files use the same PNG requirements and
+256 KiB size limit as the fallback. Transparent artwork is supported; OpenClaw
+does not recolor it.
+
+Include each artwork file in the published package's `files` list. OpenClaw's
+bundled metadata copier and plugin runtime package builder include these paths
+automatically. Restart the Gateway after changing its artwork.
+The optional theme filenames are an OpenClaw convention, not part of Agent Plugins
+1.0.0.
+
 This is the plugin's identity artwork for catalogs, settings, channel setup, and
 installation cards. Compact tool calls use separate
 [inline activity icons](#inline-activity-icons), so improving a chat glyph does
