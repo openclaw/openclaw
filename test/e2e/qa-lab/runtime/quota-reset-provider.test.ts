@@ -41,9 +41,11 @@ it("trusts only the fixture certificate for auxiliary HTTPS requests", async (co
     cert: readFileSync(cert),
   });
   context.onTestFinished(() => provider.stop());
-  await expect(fetch(`${provider.baseUrl}/v1/responses`)).rejects.toMatchObject({
-    cause: { code: "DEPTH_ZERO_SELF_SIGNED_CERT" },
-  });
+  await expect(fetch(`${provider.baseUrl}/v1/responses`)).rejects.toMatchObject(
+    process.versions.bun
+      ? { code: "DEPTH_ZERO_SELF_SIGNED_CERT" }
+      : { cause: { code: "DEPTH_ZERO_SELF_SIGNED_CERT" } },
+  );
   const response = await provider.fetch("/v1/responses", {
     method: "POST",
     headers: { "content-type": "application/json" },
