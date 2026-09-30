@@ -12,8 +12,6 @@ import {
 import { readAvatarGatewayContext } from "../../lib/identity-avatar-context.ts";
 import type { PresenceViewer } from "../../lib/presence-users.ts";
 
-export { sessionActivityTimestamp } from "../../../../src/shared/session-activity-timestamp.js";
-
 export const ACTIVITY_TIME_FILTERS = ["24h", "7d", "30d", "all"] as const;
 export type ActivityTimeFilter = (typeof ACTIVITY_TIME_FILTERS)[number];
 
@@ -41,10 +39,6 @@ type SessionActivityProjection = {
 
 const DEFAULT_ACTIVITY_TIME_FILTER: ActivityTimeFilter = "7d";
 
-function isActivityTimeFilter(value: string | null): value is ActivityTimeFilter {
-  return value === "24h" || value === "7d" || value === "30d" || value === "all";
-}
-
 export function parseSessionActivityFilters(
   search: string,
   pathPersonId?: string | null,
@@ -54,7 +48,7 @@ export function parseSessionActivityFilters(
   return {
     personId: pathPersonId ?? normalizeOptionalString(params.get(ACTIVITY_PERSON_PARAM)) ?? null,
     query: params.get("q")?.trim() ?? "",
-    time: isActivityTimeFilter(rawTime) ? rawTime : DEFAULT_ACTIVITY_TIME_FILTER,
+    time: ACTIVITY_TIME_FILTERS.find((time) => time === rawTime) ?? DEFAULT_ACTIVITY_TIME_FILTER,
   };
 }
 
