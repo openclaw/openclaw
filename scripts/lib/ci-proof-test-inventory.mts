@@ -5020,7 +5020,6 @@ const PR_EXEMPT_RUNTIME_TEST_FILES = [
   "src/gateway/server-methods/cron.runs.test.ts",
   "src/gateway/server-methods/cron.validation.test.ts",
   "src/gateway/server-methods/native-hook-relay.test.ts",
-  "src/gateway/server-methods/question.host-consent.test.ts",
   "src/gateway/server-methods/question.own-run.test.ts",
   "src/gateway/server-methods/requester-cron-authority.integration.test.ts",
   "src/gateway/server-methods/send.scheduled-reads.integration.test.ts",
