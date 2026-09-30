@@ -47,4 +47,29 @@ describe("model catalog metadata projection", () => {
     expect(entry).not.toHaveProperty("authHeader");
     expect(entry).not.toHaveProperty("requestTimeoutMs");
   });
+
+  it("carries catalog-derived reasoning effort provenance onto entries", () => {
+    const entry = modelCatalogRowToEntry({
+      id: "acme/effort-model",
+      name: "Effort Model",
+      provider: "openrouter",
+      reasoning: true,
+      input: ["text"],
+      compat: { supportedReasoningEfforts: ["high", "low"] },
+      thinkingLevelMap: { off: null },
+      catalogReasoningEfforts: true,
+    });
+
+    expect(entry.catalogReasoningEfforts).toBe(true);
+
+    const declared = modelCatalogRowToEntry({
+      id: "acme/declared-model",
+      name: "Declared Model",
+      provider: "openrouter",
+      reasoning: true,
+      input: ["text"],
+      compat: { supportedReasoningEfforts: ["high", "low"] },
+    });
+    expect(declared.catalogReasoningEfforts).toBeUndefined();
+  });
 });

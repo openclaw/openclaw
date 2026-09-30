@@ -41,6 +41,14 @@ export type ProviderDefaultThinkingPolicyContext = ProviderThinkingPolicyContext
   reasoning?: boolean;
   /** Thinking-to-wire mapping from the selected model route. */
   thinkingLevelMap?: ThinkingLevelMap;
+  /**
+   * True when the row's effort metadata (compat effort fields and
+   * thinkingLevelMap) was copied from the provider's live model catalog rather
+   * than authored in operator config. A provider owning a runtime capability
+   * cache may replace those fields with currently loaded capabilities; explicit
+   * declarations never carry this flag.
+   */
+  catalogReasoningEfforts?: boolean;
   params?: Record<string, unknown>;
   compat?: ProviderThinkingModelCompat | null;
 };

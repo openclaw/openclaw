@@ -41,6 +41,12 @@ export type ThinkingCatalogEntry = {
   /** Concrete runtime owner of thinking policy; internal and never project to clients. */
   thinkingPolicyProvider?: string;
   thinkingLevelMap?: ThinkingLevelMap;
+  /**
+   * Effort metadata came from the provider's live model catalog, not operator
+   * config; internal provenance, never projected to clients. Providers owning a
+   * runtime capability cache may replace these fields with loaded capabilities.
+   */
+  catalogReasoningEfforts?: boolean;
   input?: readonly ("text" | "image" | "audio" | "video" | "document")[];
   params?: Record<string, unknown>;
   compat?: {

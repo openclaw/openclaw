@@ -691,6 +691,13 @@ export interface Model<TApi extends Api = Api> {
    * Missing keys use provider defaults. null marks a level as unsupported.
    */
   thinkingLevelMap?: ThinkingLevelMap;
+  /**
+   * Internal provenance: reasoning effort metadata (compat effort fields and
+   * thinkingLevelMap) was copied from the provider's live model catalog rather
+   * than authored in operator config. Providers that own a runtime capability
+   * cache may replace those fields with currently loaded capabilities.
+   */
+  catalogReasoningEfforts?: boolean;
   input: ("text" | "image")[];
   cost: RawModelCostConfig;
   contextWindow?: number;

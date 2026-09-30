@@ -28,6 +28,7 @@ export function modelCatalogRowToEntry(
     ...(row.contextTokens !== undefined ? { contextTokens: row.contextTokens } : {}),
     reasoning: row.reasoning,
     ...(row.thinkingLevelMap ? { thinkingLevelMap: { ...row.thinkingLevelMap } } : {}),
+    ...(row.catalogReasoningEfforts ? { catalogReasoningEfforts: true } : {}),
     ...(row.input ? { input: [...row.input] } : {}),
     ...(row.params ? { params: { ...row.params } } : {}),
     ...(row.compat ? { compat: row.compat } : {}),

@@ -158,7 +158,10 @@ function readOpenRouterModalities(
   return (direction === "input" ? input : output).split("+").filter(Boolean);
 }
 
-function buildOpenRouterLiveModel(row: unknown): ModelDefinitionConfig | undefined {
+function buildOpenRouterLiveModel(
+  row: unknown,
+  options?: { catalogOwnsReasoningEfforts?: boolean },
+): ModelDefinitionConfig | undefined {
   const record = asOptionalRecord(row);
   const id = normalizeOptionalString(record?.id);
   const architecture = asOptionalRecord(record?.architecture);
@@ -181,6 +184,10 @@ function buildOpenRouterLiveModel(row: unknown): ModelDefinitionConfig | undefin
     ...(Array.isArray(record?.supported_parameters)
       ? { compat: { ...reasoning?.compat, supportsTools: supportedParameters.includes("tools") } }
       : {}),
+    // On the canonical route the in-process capability cache owns effort
+    // metadata and follows refreshes; mark the copied fields so the thinking
+    // hook can replace them without touching operator declarations (#160758).
+    ...(options?.catalogOwnsReasoningEfforts && reasoning ? { catalogReasoningEfforts: true } : {}),
     cost: normalizeOpenRouterModelPricing(record?.pricing) ?? { ...OPENROUTER_DEFAULT_COST },
     contextWindow:
       asPositiveSafeInteger(topProvider?.context_length) ??
@@ -254,7 +261,11 @@ export async function buildOpenrouterLiveProvider(params: {
       resolveRequest(discoveryApiKey ?? apiKey).headers,
     projectRows: (rows, fallbackProvider) => {
       const liveModels = rows.flatMap((row) => {
-        const model = buildOpenRouterLiveModel(row);
+        const model = buildOpenRouterLiveModel(row, {
+          // Effort capabilities on the canonical route follow the provider's
+          // capability cache; proxy catalogs keep owning their discovered rows.
+          catalogOwnsReasoningEfforts: requestConfig.baseUrl === OPENROUTER_BASE_URL,
+        });
         return model ? [model] : [];
       });
       if (liveModels.length === 0) {

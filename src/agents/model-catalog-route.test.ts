@@ -286,6 +286,51 @@ describe("projectModelCatalogEntryForRoute", () => {
     });
   });
 
+  it("clears catalog-derived effort provenance when overrides author a thinking map", () => {
+    const cfg = {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: platformRoute.baseUrl,
+            models: [
+              {
+                id: "gpt-5.5",
+                thinkingLevelMap: { off: "none", high: "high", xhigh: null },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const overrides = createConfiguredModelCatalogOverridesResolver({ cfg })(platformEntry);
+    // The physical donor matches the selected chatgpt route and carries the
+    // OpenRouter-style catalog provenance marker.
+    const catalogDonor: ModelCatalogEntry = {
+      ...chatGPTEntry,
+      catalogReasoningEfforts: true,
+    };
+
+    const projected = projectModelCatalogEntryForRoute({
+      entry: platformEntry,
+      projection: { kind: "selected", route: chatGPTRoute, policy: routePolicy },
+      catalog: [catalogDonor],
+      ...(overrides ? { overrides } : {}),
+    }).entry;
+
+    // The authored map stays authoritative; the catalog provenance marker is
+    // cleared so a runtime capability refresh cannot replace it (#160758).
+    expect(projected.thinkingLevelMap).toEqual({ off: "none", high: "high", xhigh: null });
+    expect(projected.catalogReasoningEfforts).toBeUndefined();
+
+    // Without authored effort metadata the marker survives projection.
+    const markerOnly = projectModelCatalogEntryForRoute({
+      entry: catalogDonor,
+      projection: { kind: "selected", route: chatGPTRoute, policy: routePolicy },
+      catalog: [catalogDonor],
+    }).entry;
+    expect(markerOnly.catalogReasoningEfforts).toBe(true);
+  });
+
   it.each([
     ["gpt-5.5", false],
     ["CaseModel", true],

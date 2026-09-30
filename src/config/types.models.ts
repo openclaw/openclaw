@@ -59,6 +59,14 @@ export type ModelDefinitionConfig = Omit<
   compat?: ModelCompatConfig;
   /** Media input limits used by routing and preflight compression. */
   mediaInput?: ModelMediaInputConfig;
+  /**
+   * Internal provenance: reasoning effort metadata (compat effort fields and
+   * thinkingLevelMap) was copied from the provider's live model catalog rather
+   * than authored in operator config. Runtime-refreshed provider capabilities
+   * may replace those fields. Never parsed from user config; never projected
+   * to clients.
+   */
+  catalogReasoningEfforts?: boolean;
 };
 
 export type ModelProviderConfig = Omit<

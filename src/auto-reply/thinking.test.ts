@@ -151,6 +151,43 @@ describe("listThinkingLevelLabels", () => {
     expect(listThinkingLevelLabels("openai", "gpt-4.1-mini")).toContain("low");
     expect(listThinkingLevelLabels("openai", "gpt-4.1-mini")).not.toContain("on");
   });
+
+  it("forwards catalog-derived effort provenance to provider hooks", () => {
+    const contexts: Array<Record<string, unknown>> = [];
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockImplementation((params) => {
+      contexts.push(params.context);
+      return undefined;
+    });
+
+    resolveThinkingProfile({
+      provider: "demo",
+      model: "demo/Mixed",
+      catalog: [
+        {
+          provider: "demo",
+          id: "demo/Mixed",
+          reasoning: true,
+          thinkingLevelMap: { off: null },
+          catalogReasoningEfforts: true,
+        },
+      ],
+    });
+    resolveThinkingProfile({
+      provider: "demo",
+      model: "demo/Mixed",
+      catalog: [
+        {
+          provider: "demo",
+          id: "demo/Mixed",
+          reasoning: true,
+          thinkingLevelMap: { off: null },
+        },
+      ],
+    });
+
+    expect(contexts[0]?.catalogReasoningEfforts).toBe(true);
+    expect(contexts[1]?.catalogReasoningEfforts).toBeUndefined();
+  });
 });
 
 describe("resolveThinkingDefaultForModel", () => {

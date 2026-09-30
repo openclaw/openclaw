@@ -699,6 +699,7 @@ export class ModelRegistry {
           params: modelDef.params,
           headers: undefined,
           compat: modelDef.compat,
+          ...(modelDef.catalogReasoningEfforts ? { catalogReasoningEfforts: true } : {}),
         } as Model);
       }
     }
@@ -1024,6 +1025,7 @@ export class ModelRegistry {
           params: modelDef.params,
           headers: undefined,
           compat: modelDef.compat,
+          ...(modelDef.catalogReasoningEfforts ? { catalogReasoningEfforts: true } : {}),
         } as Model);
       }
 
@@ -1050,6 +1052,8 @@ export interface ProviderConfigInput extends ProviderConfigBase {
       contextWindows?: ModelCatalogContextWindowOption[];
       contextWindowDefault?: string;
       params?: Record<string, unknown>;
+      /** Internal: effort metadata was copied from the provider's live catalog. */
+      catalogReasoningEfforts?: boolean;
     }
   >;
 }

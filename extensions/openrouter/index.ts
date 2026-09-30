@@ -74,12 +74,7 @@ function isOpenRouterCatalogRoute(route: {
 function withOpenRouterCatalogThinking(
   ctx: ProviderDefaultThinkingPolicyContext,
 ): ProviderDefaultThinkingPolicyContext {
-  if (
-    ctx.thinkingLevelMap ||
-    ctx.compat?.supportsReasoningEffort !== undefined ||
-    ctx.compat?.supportedReasoningEfforts !== undefined ||
-    !isOpenRouterCatalogRoute(ctx)
-  ) {
+  if (!isOpenRouterCatalogRoute(ctx)) {
     return ctx;
   }
   // Thinking profiles run on synchronous session reads, so they only consume
@@ -88,6 +83,31 @@ function withOpenRouterCatalogThinking(
     normalizeOpenRouterApiModelId(ctx.modelId) ?? ctx.modelId,
   );
   if (!capabilities?.compat && !capabilities?.thinkingLevelMap) {
+    return ctx;
+  }
+  if (ctx.catalogReasoningEfforts) {
+    // The row's effort metadata was copied from this catalog at preparation
+    // time; the loaded capabilities are the same catalog's current generation,
+    // so replace the derived fields while keeping operator-authored compat
+    // facts. Declared rows never carry the marker (#160758).
+    const {
+      supportedReasoningEfforts: _rowEfforts,
+      supportsReasoningEffort: _rowSupportsEffort,
+      ...declaredCompat
+    } = ctx.compat ?? {};
+    return {
+      ...ctx,
+      compat: { ...capabilities.compat, ...declaredCompat },
+      ...(capabilities.thinkingLevelMap
+        ? { thinkingLevelMap: capabilities.thinkingLevelMap }
+        : { thinkingLevelMap: undefined }),
+    };
+  }
+  if (
+    ctx.thinkingLevelMap ||
+    ctx.compat?.supportsReasoningEffort !== undefined ||
+    ctx.compat?.supportedReasoningEfforts !== undefined
+  ) {
     return ctx;
   }
   return {

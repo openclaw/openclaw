@@ -30,6 +30,8 @@ export type PreparedModelThinkingCapability = Readonly<{
   agentRuntime: string;
   /** Present only when the capability came from a physical provider route. */
   route?: Readonly<{ api: string; baseUrl: string }>;
+  /** True when effort metadata came from the provider's live catalog, not config. */
+  catalogReasoningEfforts?: boolean;
   compat: ModelThinkingCompat;
 }>;
 
@@ -78,6 +80,7 @@ function prepareModelThinkingCapability(params: {
     modelId,
     agentRuntime,
     ...(api && baseUrl ? { route: { api, baseUrl } } : {}),
+    ...(params.entry?.catalogReasoningEfforts ? { catalogReasoningEfforts: true } : {}),
     compat,
   };
 }
@@ -111,6 +114,14 @@ export function resolvePreparedModelThinkingCompat(params: {
   // "none" disables reasoning; it is not an enabled effort tier. Harness-wide
   // tiers may cross auth routes, but only the selected route can allow "none".
   const routeEfforts = projectModelThinkingCompat(params.model.compat)?.supportedReasoningEfforts;
+  // Catalog-derived efforts follow the runtime model's refreshed capabilities;
+  // a cold runtime keeps the prepared row's snapshot.
+  if (capability.catalogReasoningEfforts && routeEfforts !== undefined) {
+    return {
+      ...compat,
+      supportedReasoningEfforts: routeEfforts === null ? undefined : routeEfforts.slice(),
+    };
+  }
   const enabledEfforts = efforts?.filter((effort) => effort !== "none");
   return {
     ...compat,

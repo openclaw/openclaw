@@ -41,6 +41,7 @@ function clearRouteBoundCatalogMetadata(
     thinkingPolicyProvider: _thinkingPolicyProvider,
     [PREPARED_THINKING_POLICY]: _thinkingPolicy,
     thinkingLevelMap: _thinkingLevelMap,
+    catalogReasoningEfforts: _catalogReasoningEfforts,
     input: _input,
     params: _params,
     compat: _compat,
@@ -78,8 +79,15 @@ export function overlayCatalogMetadata(
   const {
     contextWindows: _baseContextWindows,
     contextWindowDefault: _baseContextWindowDefault,
+    catalogReasoningEfforts: baseCatalogReasoningEfforts,
     ...selectionNeutralBase
   } = routeBase;
+  // An overlay that declares effort metadata makes those fields operator-owned;
+  // only catalog-derived effort metadata stays replaceable.
+  const overlayDeclaresEfforts =
+    overlay.thinkingLevelMap !== undefined ||
+    overlay.compat?.supportedReasoningEfforts !== undefined ||
+    overlay.compat?.supportsReasoningEffort !== undefined;
   const contextWindowSelection =
     overlay.contextWindows !== undefined
       ? {
@@ -113,6 +121,9 @@ export function overlayCatalogMetadata(
       ? { configuredReasoning: overlay.configuredReasoning }
       : {}),
     ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
+    ...(baseCatalogReasoningEfforts && !overlayDeclaresEfforts
+      ? { catalogReasoningEfforts: true }
+      : {}),
     ...(overlay.input !== undefined ? { input: overlay.input } : {}),
     ...(params ? { params } : {}),
     ...(overlay.mediaInput !== undefined ? { mediaInput: overlay.mediaInput } : {}),

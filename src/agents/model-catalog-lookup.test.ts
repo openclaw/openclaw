@@ -161,4 +161,56 @@ describe("prepared thinking disablement ownership", () => {
       prepared === undefined ? selected : expected,
     );
   });
+
+  it("prefers the runtime model's refreshed efforts for catalog-derived capabilities", () => {
+    const route = { api: "openai-completions", baseUrl: "https://openrouter.ai/api/v1" } as const;
+    const model = {
+      provider: "openrouter",
+      id: "acme/effort-model",
+      ...route,
+      compat: { supportedReasoningEfforts: ["none", "low", "medium", "high"] },
+    };
+    const result = resolvePreparedModelThinkingCompat({
+      model,
+      agentRuntime: "native-harness",
+      capability: {
+        provider: model.provider,
+        modelId: model.id,
+        agentRuntime: "native-harness",
+        route,
+        catalogReasoningEfforts: true,
+        compat: { supportedReasoningEfforts: ["xhigh", "high", "medium", "low"] },
+      },
+    });
+
+    expect(result).toEqual({
+      supportedReasoningEfforts: ["none", "low", "medium", "high"],
+    });
+  });
+
+  it("keeps a cold runtime model's frozen efforts for catalog-derived capabilities", () => {
+    const route = { api: "openai-completions", baseUrl: "https://openrouter.ai/api/v1" } as const;
+    const model = {
+      provider: "openrouter",
+      id: "acme/effort-model",
+      ...route,
+      compat: {},
+    };
+    const result = resolvePreparedModelThinkingCompat({
+      model,
+      agentRuntime: "native-harness",
+      capability: {
+        provider: model.provider,
+        modelId: model.id,
+        agentRuntime: "native-harness",
+        route,
+        catalogReasoningEfforts: true,
+        compat: { supportedReasoningEfforts: ["xhigh", "high", "medium", "low"] },
+      },
+    });
+
+    expect(result).toEqual({
+      supportedReasoningEfforts: ["xhigh", "high", "medium", "low"],
+    });
+  });
 });

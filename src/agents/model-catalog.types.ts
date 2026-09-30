@@ -38,6 +38,13 @@ export type ModelCatalogEntry = {
   thinkingPolicyProvider?: string;
   /** Provider-owned effort support for this exact physical model route. */
   thinkingLevelMap?: ThinkingLevelMap;
+  /**
+   * Reasoning effort metadata came from the provider's live model catalog, not
+   * operator config; internal provenance, never projected to clients. Providers
+   * that own a runtime capability cache may replace those fields with currently
+   * loaded capabilities.
+   */
+  catalogReasoningEfforts?: boolean;
   input?: ModelInputType[];
   params?: Record<string, unknown>;
   compat?: ModelCompatConfig;
