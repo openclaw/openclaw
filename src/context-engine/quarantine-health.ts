@@ -79,8 +79,8 @@ export async function clearPersistedContextEngineQuarantineForProcess(
   engineId: string | undefined,
   processId: number,
   assertCurrent?: () => void,
-): Promise<void> {
-  await quarantineStore.clearForProcess(
+): Promise<boolean> {
+  return await quarantineStore.clearForProcess(
     processId,
     { kind: "context-engine", engineId },
     assertCurrent,
@@ -88,7 +88,7 @@ export async function clearPersistedContextEngineQuarantineForProcess(
 }
 
 /** Activation keeps its existing synchronous publication and rollback frame. */
-export function clearPersistedContextEngineQuarantineForActivation(engineId: string): void {
+export function clearPersistedContextEngineQuarantineForActivation(engineId: string): boolean {
   try {
     const store = createCorePluginStateSyncKeyedStore<ContextEngineQuarantineRecord>(storeOptions);
     for (const key of selectRuntimeHealthClearKeys(store.entries(), process.pid, {
@@ -97,7 +97,9 @@ export function clearPersistedContextEngineQuarantineForActivation(engineId: str
     })) {
       store.delete(key);
     }
+    return true;
   } catch {
     // Activation already cleared its authoritative in-memory quarantine.
+    return false;
   }
 }

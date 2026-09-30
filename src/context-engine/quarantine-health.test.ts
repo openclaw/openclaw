@@ -28,6 +28,7 @@ import {
   listPersistedContextEngineQuarantines,
   recordPersistedContextEngineQuarantine,
 } from "./quarantine-health.js";
+import { recordContextEngineQuarantine } from "./registry-quarantine.js";
 import { listContextEngineQuarantines, registerContextEngineForOwner } from "./registry.js";
 import { resetContextEngineRuntimeQuarantineForTests } from "./registry.test-support.js";
 
@@ -162,13 +163,13 @@ describe("context engine quarantine health", () => {
         }
         const publication = captureActivePluginRegistrySnapshot();
         const engineId = `health-registration-${superseded}`;
-        const quarantine = {
+        const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+        const quarantine = await recordContextEngineQuarantine({
           engineId,
           operation: "resolve",
-          reason: "not registered",
-          failedAt: new Date(123),
-        };
-        await recordPersistedContextEngineQuarantine(quarantine);
+          error: new Error("not registered"),
+          defaultEngineId: "legacy",
+        });
         const reached = createDeferredCore();
         const release = createDeferredCore();
         const clear = pluginStateWorker.clearRuntimeHealthInWorker;
@@ -204,10 +205,22 @@ describe("context engine quarantine health", () => {
           expect(await listPersistedContextEngineQuarantines()).toEqual(
             superseded ? [quarantine] : [],
           );
+          if (superseded) {
+            // The in-memory quarantine is gone, so only the owner's record of
+            // what it persisted lets the next registration retry the clear.
+            await registerContextEngineForOwner(
+              engineId,
+              () => new MockContextEngine(),
+              "test:health-registration",
+            );
+            expect(await listPersistedContextEngineQuarantines()).toEqual([]);
+          }
         } finally {
           release.resolve();
           await observed;
           observer.mockRestore();
+          consoleError.mockRestore();
+          await resetContextEngineRuntimeQuarantineForTests();
           registry.contextEngines.delete(engineId);
           restoreActivePluginRegistrySnapshot(previous);
         }

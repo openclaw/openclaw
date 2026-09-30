@@ -16,6 +16,10 @@ type ContextEngineRuntimeQuarantine = Awaited<
 
 type ContextEngineRegistryState = {
   quarantinedEngines: Map<string, ContextEngineRuntimeQuarantine>;
+  // Engines whose persisted mirror may still hold this process's record. Kept
+  // apart from quarantinedEngines because a cleared quarantine can still own a
+  // row when its persisted clear failed or was superseded; later clears retry it.
+  persistedQuarantineEngineIds: Set<string>;
 };
 
 // Keep authoritative process quarantine shared across duplicated dist chunks.
@@ -23,6 +27,7 @@ const contextEngineRegistryState = resolveGlobalSingleton<ContextEngineRegistryS
   CONTEXT_ENGINE_REGISTRY_STATE,
   () => ({
     quarantinedEngines: new Map(),
+    persistedQuarantineEngineIds: new Set(),
   }),
 );
 
@@ -47,12 +52,16 @@ export async function recordContextEngineQuarantine(params: {
     ...(params.owner ? { owner: params.owner } : {}),
   };
   contextEngineRegistryState.quarantinedEngines.set(params.engineId, quarantine);
+  contextEngineRegistryState.persistedQuarantineEngineIds.add(params.engineId);
   try {
     await recordPersistedContextEngineQuarantine(quarantine, () => {
       if (contextEngineRegistryState.quarantinedEngines.get(quarantine.engineId) !== quarantine) {
         throw new Error("Context engine quarantine was cleared");
       }
     });
+    // A synchronous activation clear can run after admission but before this
+    // write lands and forget the id, so track the landed row again.
+    contextEngineRegistryState.persistedQuarantineEngineIds.add(params.engineId);
   } catch {
     // Quarantine behavior must not depend on the best-effort health mirror.
   }
@@ -85,15 +94,38 @@ export async function clearContextEngineRuntimeQuarantine(
   assertCurrent: () => void,
 ): Promise<void> {
   contextEngineRegistryState.quarantinedEngines.delete(engineId);
-  await clearPersistedContextEngineQuarantineForProcess(engineId, process.pid, () => {
-    assertCurrent();
-    if (contextEngineRegistryState.quarantinedEngines.has(engineId)) {
-      throw new Error("Context engine quarantine changed during recovery");
-    }
-  });
+  // Every logical turn re-registers the never-quarantined default engine, so
+  // skip the worker round trip when this process has no record to clear.
+  if (!contextEngineRegistryState.persistedQuarantineEngineIds.has(engineId)) {
+    return;
+  }
+  const cleared = await clearPersistedContextEngineQuarantineForProcess(
+    engineId,
+    process.pid,
+    () => {
+      assertCurrent();
+      if (contextEngineRegistryState.quarantinedEngines.has(engineId)) {
+        throw new Error("Context engine quarantine changed during recovery");
+      }
+    },
+  );
+  forgetClearedPersistedQuarantine(engineId, cleared);
 }
 
 export function clearContextEngineQuarantineForActivation(engineId: string): void {
   contextEngineRegistryState.quarantinedEngines.delete(engineId);
-  clearPersistedContextEngineQuarantineForActivation(engineId);
+  if (!contextEngineRegistryState.persistedQuarantineEngineIds.has(engineId)) {
+    return;
+  }
+  forgetClearedPersistedQuarantine(
+    engineId,
+    clearPersistedContextEngineQuarantineForActivation(engineId),
+  );
+}
+
+function forgetClearedPersistedQuarantine(engineId: string, cleared: boolean): void {
+  // A quarantine recorded while the clear was in flight owns a new row.
+  if (cleared && !contextEngineRegistryState.quarantinedEngines.has(engineId)) {
+    contextEngineRegistryState.persistedQuarantineEngineIds.delete(engineId);
+  }
 }

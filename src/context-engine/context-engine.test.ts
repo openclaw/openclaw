@@ -9,6 +9,7 @@ import {
 import { createAgentCleanupScope } from "../agents/run-cleanup-timeout.js";
 import { SessionTranscriptReadFenceError } from "../config/sessions/session-transcript-read-fence.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as pluginStateWorker from "../plugin-state/plugin-state-worker-client.js";
 import {
   clearMemoryPluginState,
   registerMemoryPromptPreparation,
@@ -1658,6 +1659,16 @@ describe("Invalid engine fallback", () => {
     setActivePluginRegistry(builder);
     activateContextEngineRegistrations(builder);
     expect(await listContextEngineQuarantines()).toEqual([]);
+  });
+
+  it("does not clear persisted health when re-registering an unquarantined engine", async () => {
+    const clear = vi.spyOn(pluginStateWorker, "clearRuntimeHealthInWorker");
+
+    // Logical turns re-register the default engine on every run.
+    await registerLegacyContextEngine();
+    await registerLegacyContextEngine();
+
+    expect(clear).not.toHaveBeenCalled();
   });
 
   it("does not quarantine causal abort rejections from lifecycle methods", async () => {

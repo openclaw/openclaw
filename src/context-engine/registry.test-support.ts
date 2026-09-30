@@ -15,6 +15,7 @@ type ContextEngineRuntimeQuarantineForTests = {
 
 type ContextEngineRegistryStateForTests = {
   quarantinedEngines: Map<string, ContextEngineRuntimeQuarantineForTests>;
+  persistedQuarantineEngineIds: Set<string>;
 };
 
 const CONTEXT_ENGINE_REGISTRY_STATE = Symbol.for("openclaw.contextEngineRegistryState");
@@ -22,7 +23,7 @@ const CONTEXT_ENGINE_REGISTRY_STATE = Symbol.for("openclaw.contextEngineRegistry
 function getContextEngineRegistryStateForTests(): ContextEngineRegistryStateForTests {
   return resolveGlobalSingleton<ContextEngineRegistryStateForTests>(
     CONTEXT_ENGINE_REGISTRY_STATE,
-    () => ({ quarantinedEngines: new Map() }),
+    () => ({ quarantinedEngines: new Map(), persistedQuarantineEngineIds: new Set() }),
   );
 }
 
@@ -39,9 +40,11 @@ export function captureContextEngineRegistryStateForTests(): () => Promise<void>
     }
 
     state.quarantinedEngines.clear();
+    state.persistedQuarantineEngineIds.clear();
     await clearPersistedContextEngineQuarantineForProcess(undefined, process.pid);
     for (const [engineId, quarantine] of quarantinedEngines) {
       state.quarantinedEngines.set(engineId, quarantine);
+      state.persistedQuarantineEngineIds.add(engineId);
       await recordPersistedContextEngineQuarantine(quarantine);
     }
   };
@@ -50,5 +53,6 @@ export function captureContextEngineRegistryStateForTests(): () => Promise<void>
 export async function resetContextEngineRuntimeQuarantineForTests(): Promise<void> {
   const state = getContextEngineRegistryStateForTests();
   state.quarantinedEngines.clear();
+  state.persistedQuarantineEngineIds.clear();
   await clearPersistedContextEngineQuarantineForProcess(undefined, process.pid);
 }
