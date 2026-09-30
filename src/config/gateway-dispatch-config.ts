@@ -1,4 +1,3 @@
-// Loads gateway dispatch config from runtime state and files.
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";

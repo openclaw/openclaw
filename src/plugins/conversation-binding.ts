@@ -1,4 +1,3 @@
-// Binds plugin conversations to stable channel and agent identifiers.
 import crypto from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";

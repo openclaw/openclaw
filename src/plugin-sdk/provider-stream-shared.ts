@@ -1,4 +1,3 @@
-// Provider stream shared helpers implement reusable stream wrappers and payload policies.
 import { resolveOpenAIReasoningEffortForModel } from "@openclaw/ai/internal/openai";
 import {
   createEmptyTransportUsage,

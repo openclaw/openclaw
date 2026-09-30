@@ -1,4 +1,3 @@
-// Extracts web provider public artifacts from plugin entrypoints.
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { readBundledDiscoveryModeMemoized } from "./bundled-discovery-state.js";
 import { resolveEnabledBundledManifestContractPlugins } from "./bundled-manifest-contract-plugins.js";
