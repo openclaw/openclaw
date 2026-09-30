@@ -132,7 +132,17 @@ export function createRuntimeChannel(options?: {
     dispatch: dispatchInbound,
     dispatchReply: dispatchAssembledChannelTurn,
   } satisfies PluginRuntime["channel"]["inbound"];
-  return {
+  const sessionRuntime = {
+    resolveStorePath: resolveSessionStorePathCore,
+    readSessionUpdatedAt: readSessionUpdatedAtCore,
+    // Plugin runtime property names are a shipped contract; the implementations
+    // route through the session accessor boundary.
+    recordSessionMetaFromInbound: recordInboundSessionMeta,
+    recordInboundSession,
+    updateLastRoute: updateSessionLastRoute,
+    resolveEntryResetFreshness: resolveSessionEntryResetFreshness,
+  };
+  const channelRuntime = {
     text: {
       chunkByNewline,
       chunkMarkdownText,
@@ -187,16 +197,7 @@ export function createRuntimeChannel(options?: {
       record: recordChannelActivity,
       get: getChannelActivity,
     },
-    session: {
-      resolveStorePath: resolveSessionStorePathCore,
-      readSessionUpdatedAt: readSessionUpdatedAtCore,
-      // Plugin runtime property names are a shipped contract; the implementations
-      // route through the session accessor boundary.
-      recordSessionMetaFromInbound: recordInboundSessionMeta,
-      recordInboundSession,
-      updateLastRoute: updateSessionLastRoute,
-      resolveEntryResetFreshness: resolveSessionEntryResetFreshness,
-    },
+    session: sessionRuntime,
     mentions: {
       buildMentionRegexes,
       matchesMentionPatterns,
@@ -236,5 +237,7 @@ export function createRuntimeChannel(options?: {
       setMaxAgeBySessionKey: setChannelConversationBindingMaxAgeBySessionKey,
     },
     runtimeContexts: createChannelRuntimeContextRegistry(),
-  };
+  } satisfies PluginRuntime["channel"];
+
+  return channelRuntime;
 }

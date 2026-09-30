@@ -219,17 +219,24 @@ function normalizeAgentListForWrite(value: unknown): unknown {
     }
 
     let nextAgent = agent;
-    for (const [key, normalize] of [
-      ["model", normalizeAgentModelConfigForWrite],
-      ["models", normalizeAgentModelMapForWrite],
-      ["modelPolicy", normalizeAgentModelPolicyForWrite],
-    ] as const) {
-      if (!Object.hasOwn(agent, key)) {
-        continue;
+    if (Object.hasOwn(agent, "model")) {
+      const normalizedModel = normalizeAgentModelConfigForWrite(agent.model);
+      if (normalizedModel !== agent.model) {
+        nextAgent = { ...nextAgent, model: normalizedModel };
+        mutated = true;
       }
-      const normalized = normalize(agent[key]);
-      if (normalized !== agent[key]) {
-        nextAgent = { ...nextAgent, [key]: normalized };
+    }
+    if (Object.hasOwn(agent, "models")) {
+      const normalizedModels = normalizeAgentModelMapForWrite(agent.models);
+      if (normalizedModels !== agent.models) {
+        nextAgent = { ...nextAgent, models: normalizedModels };
+        mutated = true;
+      }
+    }
+    if (Object.hasOwn(agent, "modelPolicy")) {
+      const normalizedModelPolicy = normalizeAgentModelPolicyForWrite(agent.modelPolicy);
+      if (normalizedModelPolicy !== agent.modelPolicy) {
+        nextAgent = { ...nextAgent, modelPolicy: normalizedModelPolicy };
         mutated = true;
       }
     }
