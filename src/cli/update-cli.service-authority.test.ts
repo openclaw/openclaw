@@ -9,6 +9,7 @@ import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../daemon/constants.js";
 import * as serviceMembership from "../daemon/service-process-membership.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { createCommandResult as commandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import {
   expectNoSideEffects,
@@ -64,6 +65,7 @@ import { writeOpenClawPackageFixture } from "./update-cli/update-cli-package.tes
 await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
 
 describe("update-cli", () => {
+  const nodeExecutable = resolveTestNodeExecPath();
   const {
     createCaseDir,
     mockFileBackedPathExists,
@@ -109,7 +111,7 @@ describe("update-cli", () => {
         ? gatewayFixturePid + 1
         : gatewayFixturePid;
       const root = await mockPackageInstallAtCaseDir();
-      primeServiceCommand(["node", path.join(root, "dist", "index.js"), "gateway", "run"], {
+      primeServiceCommand([nodeExecutable, path.join(root, "dist", "index.js"), "gateway", "run"], {
         OPENCLAW_SERVICE_MARKER: "openclaw",
         OPENCLAW_SERVICE_KIND: "gateway",
       });
@@ -153,7 +155,12 @@ describe("update-cli", () => {
   it("runs an owned managed update when native membership is absent", async () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("linux");
     const root = await mockPackageInstallAtCaseDir();
-    mockRunningManagedGateway(["node", path.join(root, "dist", "index.js"), "gateway", "run"]);
+    mockRunningManagedGateway([
+      nodeExecutable,
+      path.join(root, "dist", "index.js"),
+      "gateway",
+      "run",
+    ]);
     mockGatewayHealth("1.0.0", "before-update");
     vi.spyOn(serviceMembership, "inspectServiceProcessMembershipSync").mockReturnValue("absent");
     mockGetSelfAndAncestorPidsSync.mockReturnValue(new Set([process.pid, 1]));
@@ -312,7 +319,7 @@ describe("update-cli", () => {
       [path.join(root, "package.json"), path.join(root, "dist", "index.js")].includes(candidate),
     );
     vi.mocked(runCommandWithTimeout).mockResolvedValue(commandResult({ stdout: sha }));
-    mockRunningManagedGateway(["node", path.join(root, "dist", "index.js"), "gateway"]);
+    mockRunningManagedGateway([nodeExecutable, path.join(root, "dist", "index.js"), "gateway"]);
     const mutationAdmitted = mockGitUpdateAfterMutation(makeOkUpdateResult({ mode: "git", root }));
     mockGetSelfAndAncestorPidsSync.mockReturnValue(new Set<number>([process.pid, 1]));
     const runningRuntime = { status: "running", pid: gatewayFixturePid, state: "running" };
@@ -375,7 +382,7 @@ describe("update-cli", () => {
     "checks inherited Gateway liveness with incomplete ancestry and %s service inspection",
     async (scenario) => {
       const root = await mockPackageInstallAtCaseDir();
-      primeServiceCommand(["node", path.join(root, "dist", "index.js"), "gateway", "run"]);
+      primeServiceCommand([nodeExecutable, path.join(root, "dist", "index.js"), "gateway", "run"]);
       serviceLoaded.mockResolvedValue(true);
       serviceReadRuntime.mockResolvedValue({
         status: scenario === "stopped" ? "stopped" : "running",
@@ -453,7 +460,11 @@ describe("update-cli", () => {
   });
 
   it("refuses to stop a service whose effective launcher changed during inspection", async () => {
-    mockRunningManagedGateway(["node", path.join(process.cwd(), "dist", "index.js"), "gateway"]);
+    mockRunningManagedGateway([
+      nodeExecutable,
+      path.join(process.cwd(), "dist", "index.js"),
+      "gateway",
+    ]);
     const original = await serviceReadCommand(process.env);
     serviceReadCommand.mockResolvedValueOnce(original).mockResolvedValue({
       ...original,
@@ -473,7 +484,7 @@ describe("update-cli", () => {
   });
 
   it("pins the admitted writable service configuration before native preparation", async () => {
-    const argv = ["node", path.join(process.cwd(), "dist", "index.js"), "gateway"];
+    const argv = [nodeExecutable, path.join(process.cwd(), "dist", "index.js"), "gateway"];
     mockRunningManagedGateway(argv);
     const { maybeStopManagedServiceBeforeMutableUpdate } =
       await import("./update-cli/update-command-service.js");
@@ -591,7 +602,7 @@ describe("update-cli", () => {
       }
       vi.mocked(resolveGatewayInstallEntrypoint).mockReset().mockResolvedValue(entrypoint);
       // No managed mode, token, or env-key metadata: this must not become an install-plan veto.
-      mockRunningManagedGateway(["node", entrypoint, "gateway", "--port", "18789"]);
+      mockRunningManagedGateway([nodeExecutable, entrypoint, "gateway", "--port", "18789"]);
       serviceDefinitionMutationCapability.mockResolvedValue({
         kind: capability,
         detail: "definition-owner-secret-canary",
@@ -624,7 +635,11 @@ describe("update-cli", () => {
   ] as const)(
     "retains activation but not refresh when authority changes %s -> %s",
     async (beforeKind, afterKind) => {
-      mockRunningManagedGateway(["node", path.join(process.cwd(), "dist", "index.js"), "gateway"]);
+      mockRunningManagedGateway([
+        nodeExecutable,
+        path.join(process.cwd(), "dist", "index.js"),
+        "gateway",
+      ]);
       serviceDefinitionMutationCapability.mockResolvedValue({ kind: beforeKind, detail: "owner" });
       const {
         maybeStopManagedServiceBeforeMutableUpdate,

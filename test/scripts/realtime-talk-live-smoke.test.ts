@@ -150,8 +150,8 @@ it("reports malformed Google Live frames from the serialized browser callback", 
 
   expect(output).toHaveBeenCalledWith("google-live-browser-ws: failed", {
     error: process.versions.bun
-      ? 'JSON Parse error: Unexpected identifier "not"'
-      : "Unexpected token 'o', \"not-json\" is not valid JSON",
+      ? 'SyntaxError: JSON Parse error: Unexpected identifier "not"'
+      : "SyntaxError: Unexpected token 'o', \"not-json\" is not valid JSON",
   });
   expect(vi.getTimerCount()).toBe(0);
   expect(process.exitCode).toBe(1);

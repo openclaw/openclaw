@@ -114,19 +114,11 @@ function stageJobSources(workspace: string, name: "resolve" | "review", recovere
 }
 
 function runSelectedEntry(workspace: string, entry: string) {
-  const entryUrl = pathToFileURL(join(workspace, "scripts/github", entry)).href;
-  return spawnSync(
-    process.execPath,
-    [
-      "--input-type=module",
-      "--eval",
-      `await import(${JSON.stringify(entryUrl)}).catch(error => {
-        console.error(JSON.stringify({ code: error.code, message: error.message }));
-        process.exitCode = 1;
-      });`,
-    ],
-    { cwd: workspace, env: {}, encoding: "utf8" },
-  );
+  return spawnSync(process.execPath, [join(workspace, "scripts/github", entry)], {
+    cwd: workspace,
+    env: {},
+    encoding: "utf8",
+  });
 }
 
 describe("security review workflow trust boundaries", () => {
@@ -602,7 +594,19 @@ describe("security review workflow trust boundaries", () => {
     );
 
     rmSync(join(workspace, "scripts/lib/bounded-response.mjs"));
-    const missingModule = runSelectedEntry(workspace, entry);
+    const entryUrl = pathToFileURL(join(workspace, "scripts/github", entry)).href;
+    const missingModule = spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "--eval",
+        `await import(${JSON.stringify(entryUrl)}).catch(error => {
+          console.error(JSON.stringify({ code: error.code, message: error.message }));
+          process.exitCode = 1;
+        });`,
+      ],
+      { cwd: workspace, env: {}, encoding: "utf8" },
+    );
     expect(missingModule.status).toBe(1);
     expect(JSON.parse(missingModule.stderr)).toMatchObject({
       code: "ERR_MODULE_NOT_FOUND",

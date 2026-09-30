@@ -14,6 +14,7 @@ import { cleanupStaleManagedServiceUpdateHandoffs } from "../infra/update-manage
 import { renderUpdateRunReport } from "../infra/update-run-report.js";
 import type { UpdateRunResult } from "../infra/update-runner-types.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { createCommandResult as commandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import { VERSION } from "../version.js";
 import {
@@ -68,6 +69,7 @@ import {
 await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
 
 describe("update-cli", () => {
+  const nodeExecutable = resolveTestNodeExecPath();
   const {
     createCaseDir,
     mockCurrentProcessFreshDoctor,
@@ -526,7 +528,12 @@ describe("update-cli", () => {
       resumeScheduledTaskAutoStartAfterUpdate.mockRejectedValue(new Error("task restore denied"));
       const root = await mockPackageInstallAtCaseDir("openclaw-update-autostart-restore-failure");
       mockCurrentProcessFreshDoctor({ packageRoot: root });
-      mockRunningManagedGateway(["node", path.join(root, "dist", "index.js"), "gateway", "run"]);
+      mockRunningManagedGateway([
+        nodeExecutable,
+        path.join(root, "dist", "index.js"),
+        "gateway",
+        "run",
+      ]);
       mockFileBackedPathExists();
       setTty(true);
       setStdoutTty(true);
@@ -688,7 +695,7 @@ describe("update-cli", () => {
     });
     await fs.mkdir(path.join(foreignRoot, "src"));
     await fs.mkdir(path.join(foreignRoot, "extensions"));
-    primeServiceCommand(["node", foreignEntry, "gateway", "run"]);
+    primeServiceCommand([nodeExecutable, foreignEntry, "gateway", "run"]);
     serviceLoaded.mockResolvedValue(true);
     serviceReadRuntime.mockResolvedValue({ status: "stopped", state: "stopped" });
     readPackageVersion.mockImplementation(
@@ -708,7 +715,7 @@ describe("update-cli", () => {
     });
 
     const doctorCall = doctorCommandCall();
-    expect(doctorCall?.[0][0]).toBe(process.execPath);
+    expect(doctorCall?.[0][0]).toBe(nodeExecutable);
     expect(doctorCall?.[0].slice(1)).toEqual([entryPath, "doctor", "--non-interactive"]);
     expect(
       (doctorCall?.[1].env as NodeJS.ProcessEnv | undefined)?.OPENCLAW_UPDATE_IN_PROGRESS,

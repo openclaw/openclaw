@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { runCommandWithTimeout } from "../process/exec.js";
-import { expectedNpmCommand, npmCommandArgs } from "../test-utils/npm-command.js";
+import { npmCommandArgs } from "../test-utils/npm-command.js";
 import { toRepoRelativePath } from "../test-utils/repo-files.js";
 import {
   resolvePluginNpmGenerationProjectDir,
@@ -315,17 +315,15 @@ function expectNpmUninstallCommand(params: { packageName: string; npmRoot: strin
   if (!command) {
     throw new Error("Expected npm uninstall command");
   }
-  expect(command[0]).toEqual(
-    expectedNpmCommand([
-      "uninstall",
-      "--loglevel=error",
-      "--legacy-peer-deps",
-      "--ignore-scripts",
-      "--no-audit",
-      "--no-fund",
-      params.packageName,
-    ]),
-  );
+  expect(npmCommandArgs(command[0])).toEqual([
+    "uninstall",
+    "--loglevel=error",
+    "--legacy-peer-deps",
+    "--ignore-scripts",
+    "--no-audit",
+    "--no-fund",
+    params.packageName,
+  ]);
   const options = command[1] as {
     cwd?: string;
     timeoutMs?: number;

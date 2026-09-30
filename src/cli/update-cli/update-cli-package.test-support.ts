@@ -142,6 +142,10 @@ type PackageFixtureDependencies = {
   mockPackageInstallStatus: (root: string) => void;
 };
 
+export function newerAgentSchemaFixture(databasePath: string) {
+  return { kind: "agent" as const, path: databasePath, foundVersion: 999, supportedVersion: 11 };
+}
+
 /** Package bytes, command transport and service lifecycle used by the CLI scenarios. */
 export function createUpdateCliPackageFixtures({
   runCommandWithTimeout,

@@ -507,9 +507,7 @@ function gitInstallCall(index = 0): Record<string, unknown> | undefined {
 }
 
 function npmViewCall(): [unknown, Record<string, unknown>] | undefined {
-  const calls = runCommandWithTimeoutMock.mock.calls as unknown as Array<
-    [unknown, Record<string, unknown>]
-  >;
+  const calls = runCommandWithTimeoutMock.mock.calls as [unknown, Record<string, unknown>][];
   return calls.find(([argv]) => Array.isArray(argv) && npmCommandArgs(argv)?.[0] === "view");
 }
 
