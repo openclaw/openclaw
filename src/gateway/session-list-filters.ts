@@ -210,28 +210,17 @@ export function* filterSessionCandidateEntries(
   return candidateEntries;
 }
 
-const ACTIVITY_PULSE_MAX_WINDOW_MS = 25 * 3_600_000;
-
 function createActivityPulse(opts: SessionsListParams): SessionActivityPulse | undefined {
-  const since = opts.activityPulseSince;
-  if (since === undefined || !Number.isFinite(since) || since < 0) {
+  const boundaries = opts.activityPulseBoundaries;
+  if (!boundaries) {
     return undefined;
   }
-  // The window sizes the bucket array, so a caller-supplied end is only honored within the
-  // longest civil day (25 hours on a DST fall-back day); anything else falls back to 24 hours.
-  const until =
-    opts.activityPulseUntil !== undefined &&
-    Number.isFinite(opts.activityPulseUntil) &&
-    opts.activityPulseUntil > since &&
-    opts.activityPulseUntil - since <= ACTIVITY_PULSE_MAX_WINDOW_MS
-      ? opts.activityPulseUntil
-      : since + 24 * 3_600_000;
   return {
-    since,
-    until,
-    hours: Array.from({ length: Math.max(1, Math.ceil((until - since) / 3_600_000)) }, () => 0),
+    since: boundaries[0]!,
+    until: boundaries[boundaries.length - 1]!,
+    buckets: Array.from({ length: boundaries.length - 1 }, () => 0),
     sessions: 0,
-    started: 0,
+    ...(opts.activeMinutes === undefined ? {} : { started: 0 }),
     running: 0,
   };
 }
@@ -423,11 +412,6 @@ export function* filterSessionEntries(
     if (involvingActorId && !matchesInvolvement(entry, effectiveOwner, involvingActorId, true)) {
       continue;
     }
-    const activityTs = activityPulse ? sessionActivityTimestamp(entry) : 0;
-    const inPulse =
-      activityPulse !== undefined &&
-      activityTs >= activityPulse.since &&
-      activityTs < activityPulse.until;
     if (opts.includePeople || opts.involvingProfileId) {
       const associated = projectPeople(entry, identities, effectiveOwner);
       peopleSessionCount += 1;
@@ -451,7 +435,7 @@ export function* filterSessionEntries(
           continue;
         }
       }
-      if (inPulse && pulsePeople) {
+      if (pulsePeople) {
         for (const person of associated) {
           pulsePeople.add(person.identity.id);
         }
@@ -471,20 +455,23 @@ export function* filterSessionEntries(
       ownerSessionCounts.set(profileId, counts);
     }
     if (activityPulse) {
-      // "Running now" is present tense: a run that started before midnight still counts.
       const agentId = expectDefined(params.getTarget(key), "pulse row owner").agentId;
+      activityPulse.sessions += 1;
       activityPulse.running += Number(
         params.projectActiveRun?.(key, entry, agentId)?.active === true,
       );
-    }
-    if (inPulse) {
-      const hour = Math.min(
-        activityPulse.hours.length - 1,
-        Math.floor((activityTs - activityPulse.since) / 3_600_000),
-      );
-      activityPulse.hours[hour] = (activityPulse.hours[hour] ?? 0) + 1;
-      activityPulse.sessions += 1;
-      activityPulse.started += Number((entry.createdAt ?? -1) >= activityPulse.since);
+      if (activityPulse.started !== undefined && activeCutoff !== undefined) {
+        activityPulse.started += Number(
+          entry.createdAt !== undefined && entry.createdAt >= activeCutoff,
+        );
+      }
+      const activityTs = sessionActivityTimestamp(entry);
+      if (activityTs >= activityPulse.since && activityTs < activityPulse.until) {
+        const bucket = opts.activityPulseBoundaries!.findLastIndex(
+          (boundary) => boundary <= activityTs,
+        );
+        activityPulse.buckets[bucket] = (activityPulse.buckets[bucket] ?? 0) + 1;
+      }
     }
     if (
       effectiveOwner?.identity?.type === "profile" &&

@@ -66,11 +66,6 @@ export function resolveAttachmentKind(attachment: MediaAttachment): Exclude<Medi
   return kind === "sticker" ? "image" : kind === "document" ? "unknown" : (kind ?? "unknown");
 }
 
-/** Returns true when the attachment is classified as video media. */
-export function isVideoAttachment(attachment: MediaAttachment): boolean {
-  return resolveAttachmentKind(attachment) === "video";
-}
-
 /** Returns true when the attachment is classified as audio media. */
 export function isAudioAttachment(attachment: MediaAttachment): boolean {
   return resolveAttachmentKind(attachment) === "audio";

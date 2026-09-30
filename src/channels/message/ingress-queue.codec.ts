@@ -58,7 +58,7 @@ export function baseRecord<TPayload, TMetadata>(
   };
 }
 
-type ChannelIngressClaimColumns = { token: string; ownerId: string; claimedAt: number };
+type ChannelIngressClaimColumns = ChannelIngressQueueClaim<unknown>["claim"];
 
 // A claimant writes token/owner/claimed_at in one UPDATE, and complete/release/
 // refresh all match on claim_token. A claimed row missing any of the three has

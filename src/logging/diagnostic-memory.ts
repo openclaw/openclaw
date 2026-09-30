@@ -88,7 +88,6 @@ const state: DiagnosticMemoryState = {
   lastPressureAtByKey: new Map(),
 };
 
-// Convert Node's runtime shape into the diagnostic event contract.
 function normalizeMemoryUsage(memory: NodeJS.MemoryUsage): DiagnosticMemoryUsage {
   return {
     rssBytes: memory.rss,
@@ -434,7 +433,6 @@ export function emitDiagnosticMemorySample(options?: {
   return memory;
 }
 
-/** Clears process-local memory diagnostic state for isolated tests. */
 export function resetDiagnosticMemoryForTest(): void {
   state.growth = null;
   state.lastPressureAtByKey.clear();

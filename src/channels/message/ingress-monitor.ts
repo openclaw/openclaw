@@ -8,6 +8,7 @@ import {
   onGatewaySuspendAdmissionChange,
   waitForGatewayRestartFenceSettlement,
 } from "../../process/gateway-work-admission.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { sleep } from "../../utils/sleep.js";
 import { createChannelIngressDrain, type ChannelIngressDrain } from "./ingress-drain.js";
 import { createAdmissionClaimLock, waitForPending } from "./ingress-monitor-tasks.js";
@@ -227,12 +228,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
             // A slot just freed; wake the pump so a waiting lane can use it.
             requestDrain();
           };
-          let resolveDeferredClaim = () => {};
-          const deferredClaim = options.deferredClaims
-            ? new Promise<void>((resolve) => {
-                resolveDeferredClaim = resolve;
-              })
-            : undefined;
+          const deferredClaim = options.deferredClaims ? createDeferredCore() : undefined;
           let deferredClaimSettled = false;
           const settleDeferredClaim = () => {
             if (!deferredClaim || deferredClaimSettled) {
@@ -240,8 +236,8 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
             }
             deferredClaimSettled = true;
             lifecycle.abortSignal.removeEventListener("abort", settleDeferredClaim);
-            deferredClaims.delete(deferredClaim);
-            resolveDeferredClaim();
+            deferredClaims.delete(deferredClaim.promise);
+            deferredClaim.resolve();
           };
           if (options.deferredClaims === "settle-on-abort") {
             lifecycle.abortSignal.addEventListener("abort", settleDeferredClaim, { once: true });
@@ -251,7 +247,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
           }
           const trackDeferredClaim = () => {
             if (deferredClaim && !deferredClaimSettled) {
-              deferredClaims.add(deferredClaim);
+              deferredClaims.add(deferredClaim.promise);
             }
           };
           const settleDeferredLifecycle = async (settle: () => void | Promise<void>) => {
@@ -470,16 +466,16 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
     if (restartFenceWake) {
       return;
     }
-    const localWake = new Promise<void>((resolve) => {
-      releaseRestartFenceWake = resolve;
+    const localWake = createDeferredCore();
+    releaseRestartFenceWake = localWake.resolve;
+    restartFenceWake = Promise.race([
+      waitForGatewayRestartFenceSettlement(),
+      localWake.promise,
+    ]).then(() => {
+      restartFenceWake = undefined;
+      releaseRestartFenceWake = () => {};
+      requestDrain();
     });
-    restartFenceWake = Promise.race([waitForGatewayRestartFenceSettlement(), localWake]).then(
-      () => {
-        restartFenceWake = undefined;
-        releaseRestartFenceWake = () => {};
-        requestDrain();
-      },
-    );
   };
   drainAbortSignal.addEventListener(
     "abort",
