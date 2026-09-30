@@ -1,8 +1,6 @@
-import { execFile, execFileSync, spawn, spawnSync } from "node:child_process";
+import { execFile, execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { once } from "node:events";
 import {
-  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -20,8 +18,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import * as packageArtifact from "../../scripts/e2e/parallels/package-artifact.ts";
 import { packAndServeSmokeArtifact } from "../../scripts/e2e/parallels/smoke-common.ts";
 import {
+  bindCrossOsCandidateRootPackage,
+  omitCrossOsCandidateRootPackage,
   resolveCrossOsPackageSet,
   resolveCrossOsRegistryDistTags,
+  startCrossOsPackageRegistry,
 } from "../../scripts/lib/cross-os-release-checks/companions.ts";
 import {
   findLaneByName,
@@ -34,6 +35,7 @@ import {
   validatePrepublishPluginRegistryArtifact,
 } from "../../scripts/prepublish-plugin-registry-artifact.mjs";
 import { resolveExtendedStablePackage } from "../../src/infra/update-check.ts";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const SOURCE_SHA = "a".repeat(40);
 const VERSION = "2026.8.1-beta.1";
@@ -41,6 +43,7 @@ const PACKAGE_NAME = "@openclaw/discord";
 const TARBALL = "openclaw-discord-2026.8.1-beta.1.tgz";
 const SCRIPT = path.resolve("scripts/prepublish-plugin-registry-artifact.mjs");
 const tempDirs: string[] = [];
+const registryTempDirs = useAutoCleanupTempDirTracker(afterEach);
 const packageTarballs = new Map<string, Buffer>();
 const fixtureCommitArgs = [
   "-c",
@@ -459,13 +462,18 @@ describe("prepublish plugin registry artifact", () => {
         { name: "openclaw", version: "2026.9.1", tarballPath: "/tmp/openclaw.tgz" },
       ]),
     ).toBeUndefined();
+    expect(
+      omitCrossOsCandidateRootPackage([
+        { name: "@openclaw/codex", version: "2026.9.1", tarballPath: "/tmp/codex.tgz" },
+        { name: "openclaw", version: "2026.9.1", tarballPath: "/tmp/openclaw.tgz" },
+      ]),
+    ).toEqual([{ name: "@openclaw/codex", version: "2026.9.1", tarballPath: "/tmp/codex.tgz" }]);
   });
 
   it("keeps the shipped updater and npm install on the local extended-stable candidate", async () => {
     const candidateVersion = "2026.8.34";
     const publishedVersion = "2026.8.33";
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-cross-os-registry-"));
-    tempDirs.push(root);
+    const root = registryTempDirs.make("openclaw-cross-os-registry-");
     const tarballPath = path.join(root, `openclaw-${candidateVersion}.tgz`);
     writeFixtureTarball(path.join(root, "archive"), tarballPath, "openclaw", candidateVersion);
 
@@ -497,39 +505,18 @@ describe("prepublish plugin registry artifact", () => {
       upstream.listen(0, "127.0.0.1", resolveListen);
     });
     const upstreamUrl = `http://127.0.0.1:${(upstream.address() as { port: number }).port}`;
-    const portFile = path.join(root, "registry-port");
-    const registryProcess = spawn(
-      process.execPath,
-      [
-        path.resolve("scripts/e2e/lib/plugins/npm-registry-server.mjs"),
-        portFile,
-        "openclaw",
-        candidateVersion,
-        tarballPath,
-      ],
-      {
-        env: {
-          ...process.env,
-          OPENCLAW_NPM_REGISTRY_BIND_HOST: "127.0.0.1",
-          OPENCLAW_NPM_REGISTRY_DIST_TAGS: resolveCrossOsRegistryDistTags([
-            { name: "openclaw", version: candidateVersion, tarballPath },
-          ]),
-          OPENCLAW_NPM_REGISTRY_MERGE_UPSTREAM: "1",
-          OPENCLAW_NPM_REGISTRY_PORT: "0",
-          OPENCLAW_NPM_REGISTRY_UPSTREAM: upstreamUrl,
-        },
-        stdio: "ignore",
-      },
-    );
-    const registryClosed = once(registryProcess, "close");
+    let registry: Awaited<ReturnType<typeof startCrossOsPackageRegistry>>;
     try {
-      for (let attempt = 0; attempt < 100 && !existsSync(portFile); attempt++) {
-        await new Promise<void>((resolveDelay) => {
-          setTimeout(resolveDelay, 10);
-        });
-      }
-      expect(existsSync(portFile)).toBe(true);
-      const registryUrl = `http://127.0.0.1:${readFileSync(portFile, "utf8")}`;
+      const packages = bindCrossOsCandidateRootPackage([], {
+        version: candidateVersion,
+        tarballPath,
+      });
+      expect(resolveCrossOsRegistryDistTags(packages)).toBe(`extended-stable=${candidateVersion}`);
+      registry = await startCrossOsPackageRegistry(packages, root, {
+        upstreamRegistry: upstreamUrl,
+      });
+      expect(registry).toBeDefined();
+      const registryUrl = registry!.url;
       const env = {
         ...process.env,
         NPM_CONFIG_AUDIT: "false",
@@ -548,6 +535,9 @@ describe("prepublish plugin registry artifact", () => {
           windowsVerbatimArguments: runner.windowsVerbatimArguments,
         });
       };
+      await expect(
+        fetch(`${registryUrl}/openclaw/latest`).then(async (response) => await response.json()),
+      ).resolves.toMatchObject({ name: "openclaw", version: publishedVersion });
       await expect(
         resolveExtendedStablePackage({ installKind: "package", env, timeoutMs: 5_000 }),
       ).resolves.toMatchObject({
@@ -579,9 +569,8 @@ describe("prepublish plugin registry artifact", () => {
       expect(upstreamRequests).not.toContain("/openclaw/extended-stable");
       expect(upstreamRequests).not.toContain(`/openclaw/${candidateVersion}`);
     } finally {
-      registryProcess.kill("SIGTERM");
       try {
-        await registryClosed;
+        await registry?.close();
       } finally {
         await new Promise<void>((resolveClose, rejectClose) => {
           upstream.close((error) => (error ? rejectClose(error) : resolveClose()));

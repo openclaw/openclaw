@@ -395,7 +395,7 @@ async function handleRequest(request, response) {
 
   const packageTarget = findPackageTargetForPath(url.pathname);
   if (packageTarget) {
-    const metadata = metadataFor(packageTarget.entry, baseUrl);
+    const metadata = await metadataWithPublishedVersions(packageTarget.entry, baseUrl);
     const version = metadata["dist-tags"]?.[packageTarget.target] ?? packageTarget.target;
     const manifest = metadata.versions?.[version];
     if (manifest) {

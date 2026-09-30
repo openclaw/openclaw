@@ -3,12 +3,21 @@ import { closeSync, existsSync, mkdtempSync, openSync, readFileSync, rmSync } fr
 import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import { validatePrepublishPluginRegistryArtifact } from "../../prepublish-plugin-registry-artifact.mjs";
+import {
+  inspectNpmPackageTarball,
+  validatePrepublishPluginRegistryArtifact,
+} from "../../prepublish-plugin-registry-artifact.mjs";
 import { classifyReleaseTrain, parseReleaseVersion } from "../release-version.mjs";
 import { hasChildExited, registerActiveChildProcessTree } from "./process.ts";
 
 type CrossOsCompanionPackage = {
   name: string;
+  tarballPath: string;
+};
+
+type CrossOsRegistryPackage = {
+  name: string;
+  version: string;
   tarballPath: string;
 };
 
@@ -57,9 +66,43 @@ export function resolveCrossOsRegistryDistTags(
   return `extended-stable=${rootVersion}`;
 }
 
+export function bindCrossOsCandidateRootPackage(
+  packages: CrossOsRegistryPackage[],
+  candidate: { version: string; tarballPath: string },
+): CrossOsRegistryPackage[] {
+  const inspectedCandidate = inspectNpmPackageTarball(candidate.tarballPath);
+  if (
+    inspectedCandidate.packageJson.name !== "openclaw" ||
+    inspectedCandidate.packageJson.version !== candidate.version
+  ) {
+    throw new Error("Candidate root tarball identity differs from the selected release candidate.");
+  }
+  const artifactRoot = packages.find((entry) => entry.name === "openclaw");
+  if (artifactRoot) {
+    const inspectedArtifactRoot = inspectNpmPackageTarball(artifactRoot.tarballPath);
+    if (
+      artifactRoot.version !== candidate.version ||
+      inspectedArtifactRoot.sha256 !== inspectedCandidate.sha256
+    ) {
+      throw new Error("Candidate root registry bytes differ from the selected package artifact.");
+    }
+  }
+  return [
+    ...packages.filter((entry) => entry.name !== "openclaw"),
+    { name: "openclaw", version: candidate.version, tarballPath: candidate.tarballPath },
+  ].toSorted((a, b) => a.name.localeCompare(b.name));
+}
+
+export function omitCrossOsCandidateRootPackage(
+  packages: CrossOsRegistryPackage[],
+): CrossOsRegistryPackage[] {
+  return packages.filter((entry) => entry.name !== "openclaw");
+}
+
 export async function startCrossOsPackageRegistry(
   packages: ReturnType<typeof resolveCrossOsPackageSet>["packages"],
   logsDir: string,
+  options: { upstreamRegistry?: string } = {},
 ) {
   if (packages.length === 0) {
     return undefined;
@@ -81,7 +124,7 @@ export async function startCrossOsPackageRegistry(
         OPENCLAW_NPM_REGISTRY_DIST_TAGS: resolveCrossOsRegistryDistTags(packages),
         OPENCLAW_NPM_REGISTRY_PORT: "0",
         OPENCLAW_NPM_REGISTRY_MERGE_UPSTREAM: "1",
-        OPENCLAW_NPM_REGISTRY_UPSTREAM: "https://registry.npmjs.org",
+        OPENCLAW_NPM_REGISTRY_UPSTREAM: options.upstreamRegistry ?? "https://registry.npmjs.org",
       },
       stdio: ["ignore", log, log],
       detached: process.platform !== "win32",
