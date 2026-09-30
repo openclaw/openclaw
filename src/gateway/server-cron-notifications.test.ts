@@ -1,10 +1,10 @@
 // Cron notification tests protect completion-delivery warning behavior,
 // including URL redaction for invalid webhook destinations.
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as createVoidDeferred } from "../../test/helpers/promise.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import type { CronJob } from "../cron/types.js";
+import type { GuardedFetchOptions } from "../infra/net/fetch-guard.js";
 import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
@@ -14,7 +14,7 @@ import {
 import { setActiveDegradedSecretOwners } from "../secrets/runtime-degraded-state.js";
 
 const mocks = vi.hoisted(() => ({
-  fetchWithSsrFGuard: vi.fn(async (_request: unknown) => ({
+  fetchWithSsrFGuard: vi.fn(async (_request: GuardedFetchOptions) => ({
     response: new Response(null, { status: 204 }),
     finalUrl: "https://example.invalid/cron",
     release: vi.fn(async () => {}),
@@ -59,19 +59,12 @@ function waitForFast(assertion: () => void | Promise<void>) {
   return vi.waitFor(assertion, { interval: 1 });
 }
 
-const requireRecord = createRequireRecord("object", "expected-label");
-
 function webhookRequestBody() {
-  const call = (mocks.fetchWithSsrFGuard.mock.calls as unknown[][])[0];
-  if (!call) {
-    throw new Error("expected webhook request call");
-  }
-  const request = requireRecord(call[0], "webhook request");
-  const init = requireRecord(request.init, "webhook request init");
-  if (typeof init.body !== "string") {
+  const body = mocks.fetchWithSsrFGuard.mock.calls[0]?.[0].init?.body;
+  if (typeof body !== "string") {
     throw new Error("expected webhook request body");
   }
-  return JSON.parse(init.body);
+  return JSON.parse(body);
 }
 
 function createWebhookJob(delivery: NonNullable<CronJob["delivery"]>): CronJob {
@@ -462,22 +455,67 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
     expect(mocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
   });
 
-  it("rejects failure-alert webhook network errors", async () => {
-    mocks.fetchWithSsrFGuard.mockRejectedValueOnce(new Error("network unavailable"));
+  it.each([
+    { phase: "preflight", failure: "network", status: "not-delivered" },
+    { phase: "dispatch", failure: "timeout", status: "unknown" },
+    { phase: "dispatch", failure: "dns", status: "not-delivered" },
+    { phase: "redirect", failure: "dns", status: "unknown" },
+    { phase: "response", failure: "http", status: "not-delivered" },
+  ] as const)(
+    "settles a failure-alert webhook $failure error after $phase as $status",
+    async ({ phase, failure, status }) => {
+      const error =
+        failure === "dns"
+          ? Object.assign(new Error("getaddrinfo ENOTFOUND"), {
+              code: "ENOTFOUND",
+              syscall: "getaddrinfo",
+            })
+          : failure === "timeout"
+            ? Object.assign(new Error("webhook response timed out"), { name: "TimeoutError" })
+            : new Error("network unavailable");
+      const errorMessage =
+        failure === "http" ? "Webhook request failed with HTTP 500" : error.message;
+      const onDeliverySettled = vi.fn(async () => {});
+      mocks.fetchWithSsrFGuard.mockImplementationOnce(async (request) => {
+        if (phase !== "preflight") {
+          request.beforeRequest?.();
+        }
+        if (phase === "redirect") {
+          request.onResponse?.(302);
+        }
+        if (phase === "response") {
+          request.onResponse?.(500);
+          return {
+            response: new Response(null, { status: 500 }),
+            finalUrl: "https://example.invalid/failure",
+            release: vi.fn(async () => {}),
+          };
+        }
+        throw error;
+      });
 
-    await expect(
-      sendGatewayCronFailureAlert({
-        deps: {} as CliDeps,
-        logger: { warn: vi.fn() },
-        resolveCronAgent: () => ({ agentId: "main", cfg: {} }),
-        job: createCompletionWebhookJob(),
-        payload: { text: "cron failed" },
-        channel: "last",
-        mode: "webhook",
-        to: "https://example.invalid/failure",
-      }),
-    ).rejects.toThrow("network unavailable");
-  });
+      await expect(
+        sendGatewayCronFailureAlertBase({
+          deps: {} as CliDeps,
+          logger: { warn: vi.fn() },
+          resolveCronAgent: () => ({ agentId: "main", cfg: {} }),
+          job: createCompletionWebhookJob(),
+          payload: { text: "cron failed" },
+          channel: "last",
+          mode: "webhook",
+          to: "https://example.invalid/failure",
+          onDeliverySettled,
+        }),
+      ).rejects.toThrow(errorMessage);
+      expect(onDeliverySettled).toHaveBeenCalledExactlyOnceWith({
+        delivered: status === "unknown" ? undefined : false,
+        status,
+        error: errorMessage,
+      });
+      expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledOnce();
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+    },
+  );
 
   it("rejects unavailable failure-alert agents and channels", async () => {
     const job = createWebhookJob({ mode: "announce", channel: "telegram", to: "123" });
