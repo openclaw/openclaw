@@ -90,16 +90,18 @@ function authorizeAvatar(
   });
 }
 
-it("rejects placeholder tokens at startup and the request boundary", async () => {
-  const token = "  undefined  ";
-  const auth = { mode: "token" as const, token, allowTailscale: false };
-  expect(() => assertGatewayAuthConfigured(auth)).toThrow(
-    /must not be blank|no token was configured/,
-  );
-  await expect(
-    authorizeHttpGatewayConnect({ auth, connectAuth: { token } }),
-  ).resolves.toMatchObject({ ok: false });
-});
+it.each(["null", "  undefined  ", "  "])(
+  "rejects placeholder token %j at startup and the request boundary",
+  async (token) => {
+    const auth = { mode: "token" as const, token, allowTailscale: false };
+    expect(() => assertGatewayAuthConfigured(auth)).toThrow(
+      /must not be blank|no token was configured/,
+    );
+    await expect(
+      authorizeHttpGatewayConnect({ auth, connectAuth: { token } }),
+    ).resolves.toMatchObject({ ok: false });
+  },
+);
 
 describe("HTTP shared-secret fields", () => {
   const authorize = authorizeHttpGatewayConnect;
@@ -667,6 +669,15 @@ describe("trusted-proxy auth", () => {
       ...options,
     });
   }
+
+  it("rejects trusted-proxy identity from a peer outside the proxy allowlist", async () => {
+    await expect(
+      authorizeTrustedProxy({
+        remoteAddress: "192.168.1.100",
+        trustedProxies: ["10.0.0.1"],
+      }),
+    ).resolves.toEqual({ ok: false, reason: "proxy_attribution_required" });
+  });
 
   it("rejects trusted-proxy headers from the host non-loopback interface address", async () => {
     mockLocalInterfaces("10.0.0.1");

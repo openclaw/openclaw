@@ -49,6 +49,11 @@ import {
   writeUpdateCompatibilityBuildFixture,
 } from "./update-compat-chunks.test-support.js";
 
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return { ...actual, spawnSync: vi.fn(actual.spawnSync) };
+});
+
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
   return { ...actual, openSync: vi.fn(actual.openSync) };
@@ -626,14 +631,38 @@ describe("openclaw live updater", () => {
     });
   });
 
-  test("routes managed Gateway health through the injected port", async () => {
-    const { root, mirror } = makeFixture();
-    writeBuild(mirror);
-    const entrypoint = path.join(mirror, "dist/index.js");
-    const callsPath = path.join(root, "managed-probe-calls.jsonl");
-    writeFileSync(
-      entrypoint,
-      `import { appendFileSync } from "node:fs";
+  test.each([
+    {
+      name: "distinct endpoint payloads",
+      health: { ok: true, status: "live" },
+      ready: { ready: true },
+      healthReady: true,
+      readyReady: true,
+    },
+    {
+      name: "liveness-shaped readiness",
+      health: { ok: true, status: "live" },
+      ready: { ok: true, status: "ready" },
+      healthReady: true,
+      readyReady: false,
+    },
+    {
+      name: "readiness-shaped liveness",
+      health: { ready: true },
+      ready: { ready: true },
+      healthReady: false,
+      readyReady: false,
+    },
+  ])(
+    "routes managed probes through the injected port with $name",
+    async ({ health, ready, healthReady, readyReady }) => {
+      const { root, mirror } = makeFixture();
+      writeBuild(mirror);
+      const entrypoint = path.join(mirror, "dist/index.js");
+      const callsPath = path.join(root, "managed-probe-calls.jsonl");
+      writeFileSync(
+        entrypoint,
+        `import { appendFileSync } from "node:fs";
 const args = process.argv.slice(2);
 appendFileSync(${JSON.stringify(callsPath)}, JSON.stringify({
   args,
@@ -642,31 +671,56 @@ appendFileSync(${JSON.stringify(callsPath)}, JSON.stringify({
 if (args.includes("--port")) process.exit(2);
 console.log(JSON.stringify({ ok: true, channels: {} }));
 `,
-    );
+      );
 
-    await verifyGatewayReadiness(
-      () => {
-        throw new Error("managed probes must use the exact built Gateway CLI");
-      },
-      mirror,
-      git(mirror, "rev-parse", "HEAD"),
-      () => {},
-      gatewayCliDeployment(root, mirror),
-    );
+      const actual =
+        await vi.importActual<typeof import("node:child_process")>("node:child_process");
+      const probe = vi.mocked(spawnSync).mockImplementation((command, args, options) => {
+        if (command !== "/usr/sbin/lsof" && command !== "/usr/bin/curl") {
+          return actual.spawnSync(command, args, options);
+        }
+        const stdout =
+          command === "/usr/sbin/lsof"
+            ? "123\n"
+            : JSON.stringify(args?.at(-1)?.endsWith("/healthz") ? health : ready);
+        return { pid: 123, output: [], status: 0, signal: null, stdout, stderr: "" };
+      });
+      const observedAt = "2026-07-31T18:00:00.000Z";
+      try {
+        const timing = await verifyGatewayReadiness(
+          () => {
+            throw new Error("managed probes must use the exact built Gateway CLI");
+          },
+          mirror,
+          git(mirror, "rev-parse", "HEAD"),
+          () => {},
+          gatewayCliDeployment(root, mirror),
+          { now: () => Date.parse(observedAt) },
+        );
+        expect(timing).toMatchObject({
+          listenerReadyAt: observedAt,
+          healthzReadyAt: healthReady ? observedAt : null,
+          readyzReadyAt: readyReady ? observedAt : null,
+          deepRpcReadyAt: observedAt,
+        });
+      } finally {
+        probe.mockReset();
+      }
 
-    expect(
-      readFileSync(callsPath, "utf8")
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line)),
-    ).toEqual([
-      {
-        args: ["gateway", "status", "--deep", "--require-rpc", "--json"],
-        port: "18789",
-      },
-      { args: ["health", "--verbose", "--json"], port: "18789" },
-    ]);
-  });
+      expect(
+        readFileSync(callsPath, "utf8")
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line)),
+      ).toEqual([
+        {
+          args: ["gateway", "status", "--deep", "--require-rpc", "--json"],
+          port: "18789",
+        },
+        { args: ["health", "--verbose", "--json"], port: "18789" },
+      ]);
+    },
+  );
 
   test("bounds built Gateway CLI probes and cleans their config overlay", () => {
     const { root, mirror } = makeFixture();
@@ -1829,6 +1883,67 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     expect(statusCalls).toBe(8);
     expect(auditCalls).toBe(1);
   });
+
+  test.each(["Gateway maintenance", "exact-bundle verification"])(
+    "retries pending Mac work after failed %s on the next unchanged heartbeat",
+    async (failureStage) => {
+      const { root, mirror, seed } = makeFixture({ includeSeed: true });
+      mkdirSync(path.join(mirror, "node_modules"));
+      pushFixtureChange(seed, "apps/macos/Sources/OpenClaw/App.swift");
+      const statePath = path.join(root, "maintenance-state.json");
+      const options = {
+        checkout: mirror,
+        remote: "origin",
+        lockPath: path.join(root, "maintenance.lock"),
+        statePath,
+      };
+      const commands = fakeCommands(mirror);
+      const failure = `${failureStage} failed`;
+      const failsBeforeMac = failureStage === "Gateway maintenance";
+
+      await expect(
+        maintainFixture(options, {
+          sleep() {},
+          runCommand(command: string, args: string[]) {
+            commands.runCommand(command, args);
+            if (
+              failsBeforeMac &&
+              command === "pnpm" &&
+              args.slice(0, 3).join(" ") === "openclaw gateway status"
+            ) {
+              throw new Error(failure);
+            }
+          },
+          verifyMacTarget() {
+            throw new Error(failure);
+          },
+        }),
+      ).rejects.toThrow(failure);
+      expect(JSON.parse(readFileSync(statePath, "utf8"))).toMatchObject({
+        macPending: true,
+        attempts: failsBeforeMac ? 0 : 1,
+        ...(failsBeforeMac ? {} : { lastFailure: failure }),
+      });
+
+      const retryCommands = fakeCommands(mirror);
+      const verifyMacTarget = vi.fn(() => ({ executable: "exact", pid: 456 }));
+      const retry = await maintainFixture(options, {
+        runCommand: retryCommands.runCommand,
+        verifyMacTarget,
+      });
+      expect(retry).toMatchObject({
+        updated: false,
+        actions: { gatewayBuild: false, macAppRebuild: true },
+      });
+      expect(retryCommands.calls.slice(0, 3)).toEqual([
+        "pnpm openclaw gateway status --deep --require-rpc --json",
+        "pnpm openclaw health --verbose --json",
+        "env SKIP_TSC=1 SKIP_UI_BUILD=1 bash scripts/restart-mac.sh --sign --wait --target-only",
+      ]);
+      expect(verifyMacTarget).toHaveBeenCalledOnce();
+      expect(existsSync(statePath)).toBe(false);
+    },
+  );
 
   test("refuses a symlinked maintenance state file without touching its target", async () => {
     const { root, mirror } = makeFixture();

@@ -224,6 +224,51 @@ describe("Telegram physical send acceptance over HTTP", () => {
     }
   });
 
+  it("fences delivery pin retries after the actual Telegram retry_after wait", async () => {
+    const token = "123456:telegram-pin-retry";
+    const retryResponse = createDeferred<void>();
+    getOrCreateAccountThrottler(token, () => {
+      const throttle = apiThrottler({ global: { maxConcurrent: 1 }, out: { maxConcurrent: 1 } });
+      return async (prev, method, payload, signal) => {
+        const response = await throttle(prev, method, payload, signal);
+        if (method === "pinChatMessage" && !response.ok && response.error_code === 429) {
+          retryResponse.resolve();
+        }
+        return response;
+      };
+    });
+    rejections.push({
+      error_code: 429,
+      description: "Too Many Requests: retry after 1",
+      parameters: { retry_after: 1 },
+    });
+    const revoked = new Error("Pin authority revoked during retry delay");
+    let authorityActive = true;
+    const outcome = pinThroughAdapter(token, 201, () => {
+      if (!authorityActive) {
+        throw revoked;
+      }
+    }).then(
+      () => ({ ok: true }),
+      (error: unknown) => ({ error }),
+    );
+    try {
+      await retryResponse.promise;
+      // Let grammY consume the response and enter the existing real retry sleep.
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(requests.map(({ fields }) => fields.message_id)).toEqual([201]);
+      authorityActive = false;
+      await expect(outcome).resolves.toEqual({ error: revoked });
+      expect(requests.map(({ method, fields }) => [method, fields.message_id])).toEqual([
+        ["pinChatMessage", 201],
+      ]);
+    } finally {
+      await outcome;
+    }
+  });
+
   it("settles an accepted delivery pin after its authority is revoked", async () => {
     const token = "123456:telegram-pin-accepted";
     const held = { arrived: createDeferred<void>(), release: createDeferred<void>() };

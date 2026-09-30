@@ -998,6 +998,18 @@ describe("agents.delete", () => {
     expect(mocks.movePathToTrash).not.toHaveBeenCalled();
   });
 
+  it("keeps a recovered deletion journal fenced when retry cleanup fails", async () => {
+    mocks.readAgentDeletionJournal.mockReturnValue(deletionJournal());
+    mocks.withAgentExecApprovalsRemoved.mockRejectedValueOnce(new Error("approvals busy"));
+
+    const { promise } = makeCall("agents.delete", { agentId: "test-agent" });
+
+    await expect(promise).rejects.toThrow("approvals busy");
+    expect(mocks.beginAgentDeletionRollback).not.toHaveBeenCalled();
+    expect(mocks.beginAgentDeletionFinish).not.toHaveBeenCalled();
+    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+  });
+
   it("keeps a new deletion fenced when authority rollback fails", async () => {
     mocks.withAgentExecApprovalsRemoved.mockRejectedValueOnce(
       new AgentDeletionAuthorityRollbackError(

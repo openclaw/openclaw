@@ -178,8 +178,10 @@ async function resetMocks() {
 async function runLocalPathSelfServeCase(params: {
   ctx: Partial<MsgContext>;
   cfg: OpenClawConfig;
+  opts?: Parameters<typeof getReplyFromConfig>[1];
   provider?: string;
   model?: string;
+  senderIsOwner?: boolean;
 }) {
   const ctx = buildCtx(params.ctx);
   const enableLocalPathSelfServe = vi.fn();
@@ -202,14 +204,14 @@ async function runLocalPathSelfServeCase(params: {
       to: ctx.To ?? "webchat:local",
       senderId: ctx.SenderId ?? "operator",
       commandSource: "message",
-      senderIsOwner: false,
+      senderIsOwner: params.senderIsOwner ?? false,
       resetHookTriggered: false,
       provider: params.provider,
       model: params.model,
     }),
   );
 
-  await getReplyFromConfig(ctx, undefined, withFastReplyConfig(params.cfg));
+  await getReplyFromConfig(ctx, params.opts, withFastReplyConfig(params.cfg));
   return enableLocalPathSelfServe;
 }
 
@@ -342,6 +344,15 @@ describe("getReplyFromConfig message hooks", () => {
     expect(enable).toHaveBeenCalledWith(expect.any(Array), new Map([[0, stagedPath]]));
   });
 
+  it("withholds local document self-service when the turn cannot read files", async () => {
+    const enable = await runLocalPathSelfServeCase({
+      ctx: hostDocumentCtx,
+      cfg: {},
+      opts: { toolsAllow: ["message"] },
+    });
+    expect(enable).not.toHaveBeenCalled();
+  });
+
   it("withholds local document self-service from workspace-only file tools", async () => {
     const enable = await runLocalPathSelfServeCase({
       ctx: hostDocumentCtx,
@@ -368,6 +379,20 @@ describe("getReplyFromConfig message hooks", () => {
       model: "gpt-5",
     });
     expect(unrelated).toHaveBeenCalledOnce();
+  });
+
+  it("applies wildcard sender policy only to non-owner turns", async () => {
+    const cfg = { tools: { toolsBySender: { "*": { deny: ["read"] } } } };
+    const nonOwner = await runLocalPathSelfServeCase({ ctx: hostDocumentCtx, cfg });
+    expect(nonOwner).not.toHaveBeenCalled();
+
+    await resetMocks();
+    const owner = await runLocalPathSelfServeCase({
+      ctx: hostDocumentCtx,
+      cfg,
+      senderIsOwner: true,
+    });
+    expect(owner).toHaveBeenCalledOnce();
   });
 
   it("skips utility link understanding for a model-locked harness session", async () => {
