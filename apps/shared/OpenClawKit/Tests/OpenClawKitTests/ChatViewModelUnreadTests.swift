@@ -362,7 +362,7 @@ struct ChatViewModelUnreadTests {
 
     @Test func `macOS roster consumers observe one canonical mutation without a stale copy`() async throws {
         let roster = Data(#"""
-        {"sessions":[{"key":"agent:main:thread","agentId":"main","sessionId":"thread","label":"Before","updatedAt":10}]}
+        {"sessions":[{"key":"agent:main:thread","agentId":"main","sessionId":"thread","label":"Before","updatedAt":10,"swarmGroupId":"group"}]}
         """#.utf8)
         let gate = UnreadPatchGate()
         let transport = SidebarUnreadReceiptTransport(roster: roster, acknowledgement: nil, patchGate: gate)
@@ -397,6 +397,23 @@ struct ChatViewModelUnreadTests {
             { vm.currentSessionEntry().map { [$0] } ?? [] },
             { owner.row(key: vm.sessionKey, agentID: "main").map { [$0] } ?? [] },
         ]
+        var projectionCounts: [OpenClawChatSessionSidebarData.Projection: Int] = [:]
+        owner.onProjectionComputed = { projectionCounts[$0, default: 0] += 1 }
+        vm.swarmRowIDs = manager
+        for _ in 0..<20 {
+            for read in readers {
+                _ = read()
+            }
+        }
+        #expect(projectionCounts[.swarm] == 1)
+        #expect(projectionCounts.values.allSatisfy { $0 == 1 })
+        let observed = vm.swarmActivityState.observe(OpenClawChatSessionsChangedEvent(
+            sessionKey: vm.sessionKey, reason: "swarm-note", swarmGroupId: "group", kind: "log", text: "Working"))
+        #expect(observed)
+        for _ in 0..<20 {
+            #expect(vm.swarmSessions.first?.swarmLog == "Working")
+        }
+        #expect(projectionCounts[.swarm] == 2)
         let changes = Mutex(Array(repeating: 0, count: readers.count))
         for (index, read) in readers.enumerated() {
             withObservationTracking { _ = read() } onChange: { changes.withLock { $0[index] += 1 } }

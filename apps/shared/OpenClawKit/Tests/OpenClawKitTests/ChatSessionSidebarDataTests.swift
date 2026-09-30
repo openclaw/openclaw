@@ -31,6 +31,32 @@ struct ChatSessionSidebarDataTests {
         """#.utf8))
     }
 
+    @Test func `unchanged roster projections compute once per scope and refresh after mutations`() throws {
+        let owner = OpenClawChatSessionSidebarData()
+        let ids = try owner.receive(self.rows(self.original), read: owner.beginRead(), replacingAgent: "main")
+        var counts: [OpenClawChatSessionSidebarData.Projection: Int] = [:]
+        owner.onProjectionComputed = { counts[$0, default: 0] += 1 }
+        for _ in 0..<20 {
+            #expect(owner.conversationRows(agentID: "main").first?.label == "Original")
+            #expect(owner.conversationRows(agentID: "other").isEmpty)
+            #expect(owner.project(ids).first?.label == "Original")
+        }
+        #expect(counts[.conversation("main")] == 1)
+        #expect(counts[.conversation("other")] == 1)
+        #expect(counts[.members(ids)] == 1)
+        let target = try #require(owner.project(ids).first)
+        let token = owner.beginMutation(target: target, field: .label) { $0.label = "Pending" }
+        for _ in 0..<20 {
+            #expect(owner.conversationRows(agentID: "main").first?.label == "Pending")
+            #expect(owner.project(ids).first?.label == "Pending")
+        }
+        #expect(counts[.conversation("main")] == 2)
+        #expect(counts[.members(ids)] == 2)
+        owner.finishMutation(token, receipt: nil)
+        #expect(owner.conversationRows(agentID: "main").first?.label == "Original")
+        #expect(counts[.conversation("main")] == 3)
+    }
+
     @Test func `authoritative refresh replaces membership without invalidating transient references`() throws {
         let owner = OpenClawChatSessionSidebarData()
         let initial = try self.rows(self.original + #",{"key":"agent:main:removed","sessionId":"removed"}"#)

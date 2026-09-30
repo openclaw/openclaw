@@ -172,11 +172,24 @@ public final class OpenClawChatViewModel {
     public internal(set) var sidebarData: OpenClawChatSessionSidebarData?
 
     var legacySwarmSessions: [OpenClawChatSessionEntry] = []
-    var swarmRowIDs: [String] = []
+    var swarmRowIDs: [String] = [] {
+        didSet { self.cachedSwarmRows = nil }
+    }
+
+    @ObservationIgnored var cachedSwarmRows: [OpenClawChatSessionEntry]?
+    @ObservationIgnored var swarmProjectionRevision = -1
     public internal(set) var swarmSessions: [OpenClawChatSessionEntry] {
         get {
-            self.sidebarData.map { self.swarmActivityState.decorate($0.project(self.swarmRowIDs)) } ?? self
-                .legacySwarmSessions
+            guard let owner = self.sidebarData else { return self.legacySwarmSessions }
+            let revision = owner.projectionRevision
+            let ids = self.swarmRowIDs
+            let activity = self.swarmActivityState
+            if self.swarmProjectionRevision == revision, let rows = self.cachedSwarmRows { return rows }
+            owner.onProjectionComputed?(.swarm)
+            let rows = activity.decorate(owner.project(ids))
+            self.cachedSwarmRows = rows
+            self.swarmProjectionRevision = revision
+            return rows
         }
         set {
             if let owner = self.sidebarData {
@@ -186,7 +199,10 @@ public final class OpenClawChatViewModel {
     }
 
     var activeSwarmGroups: [OpenClawChatSwarmGroup] = []
-    var swarmActivityState = OpenClawChatSwarmActivityState()
+    var swarmActivityState = OpenClawChatSwarmActivityState() {
+        didSet { self.cachedSwarmRows = nil }
+    }
+
     @ObservationIgnored
     var swarmRefreshGeneration: UInt64 = 0
     @ObservationIgnored

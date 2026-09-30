@@ -17,17 +17,22 @@ public final class OpenClawChatSessionSidebarData {
         let update: (inout OpenClawChatSessionEntry) -> Void
     }
 
-    private var entries: [String: OpenClawChatSessionEntry] = [:]
-    private var rosters: [String: [String]] = [:]
+    @ObservationIgnored private var entries: [String: OpenClawChatSessionEntry] = [:]
+    @ObservationIgnored private var rosters: [String: [String]] = [:]
     private var rosterRevisions: [String: Int] = [:]
     private var revisions: [String: Int] = [:]
     private var fieldDates: [String: [Field: Double]] = [:]
     private var receipts: [String: [Field: (ack: OpenClawChatSessionPatchReceipt, cutoff: Int, order: Int)]] = [:]
-    private var pending: [Int: Pending] = [:]
-    private var latest: [String: Int] = [:]
+    @ObservationIgnored private var pending: [Int: Pending] = [:]
+    @ObservationIgnored private var latest: [String: Int] = [:]
     private var revision = 0
     private(set) var scopeRevision = 0
     var onChange: (() -> Void)?
+
+    enum Projection: Hashable { case conversation(String), members([String]), swarm }
+    private(set) var projectionRevision = 0
+    @ObservationIgnored private var projections: [Projection: [OpenClawChatSessionEntry]] = [:]
+    @ObservationIgnored var onProjectionComputed: ((Projection) -> Void)?
 
     public init() {}
 
@@ -37,11 +42,13 @@ public final class OpenClawChatSessionSidebarData {
 
     func row(key: String, agentID: String?) -> OpenClawChatSessionEntry? {
         let id = "\(OpenClawChatSessionKey.agentID(from: key) ?? agentID ?? "")\u{0}\(key)"
-        return self.entries[id].map(self.project)
+        return self.project([id]).first
     }
 
     func project(_ ids: [String]) -> [OpenClawChatSessionEntry] {
-        ids.compactMap { self.entries[$0].map(self.project) }
+        self.cachedProjection(.members(ids)) {
+            ids.compactMap { self.entries[$0].map(self.project) }
+        }
     }
 
     private func project(_ entry: OpenClawChatSessionEntry) -> OpenClawChatSessionEntry {
@@ -58,8 +65,28 @@ public final class OpenClawChatSessionSidebarData {
     }
 
     func conversationRows(agentID: String?) -> [OpenClawChatSessionEntry] {
-        OpenClawChatSessionListOrganizer
-            .organize(self.project(self.rosters[agentID ?? ""] ?? []).filter { !$0.isArchived })
+        self.cachedProjection(.conversation(agentID ?? "")) {
+            OpenClawChatSessionListOrganizer
+                .organize(self.project(self.rosters[agentID ?? ""] ?? []).filter { !$0.isArchived })
+        }
+    }
+
+    private func cachedProjection(
+        _ key: Projection, build: () -> [OpenClawChatSessionEntry]) -> [OpenClawChatSessionEntry]
+    {
+        // Cache hits must still subscribe to the owner boundary, including empty rosters.
+        _ = self.projectionRevision
+        if let rows = self.projections[key] { return rows }
+        self.onProjectionComputed?(key)
+        let rows = build()
+        self.projections[key] = rows
+        return rows
+    }
+
+    private func didChange() {
+        self.projections.removeAll(keepingCapacity: true)
+        self.projectionRevision += 1
+        self.onChange?()
     }
 
     func beginRead() -> Read {
@@ -112,7 +139,7 @@ public final class OpenClawChatSessionSidebarData {
             self.rosterRevisions[agentID] = read.revision
         }
         self.entries = entries
-        self.onChange?()
+        self.didChange()
         return ids
     }
 
@@ -156,7 +183,7 @@ public final class OpenClawChatSessionSidebarData {
             self.rosterRevisions[agentID ?? ""] = read.revision
         }
         self.rosters[agentID ?? ""] = nextIDs
-        self.onChange?()
+        self.didChange()
     }
 
     func settleSettingsWrite(target: OpenClawChatSessionEntry?, scope: Int?) {
@@ -177,14 +204,14 @@ public final class OpenClawChatSessionSidebarData {
         self.revision += 1
         self.pending[self.revision] = Pending(target: target, field: field, update: update)
         self.latest[Self.identity(target) + "\u{0}" + field.rawValue] = self.revision
-        self.onChange?()
+        self.didChange()
         return self.revision
     }
 
     func finishMutation(_ token: Int?, receipt: OpenClawChatSessionPatchReceipt?) {
         guard let token, let intent = self.pending.removeValue(forKey: token) else { return }
         if let receipt { self.confirmFields(receipt, target: intent.target, field: intent.field, order: token) }
-        else { self.onChange?() }
+        else { self.didChange() }
     }
 
     func confirmFields(
@@ -193,7 +220,7 @@ public final class OpenClawChatSessionSidebarData {
         field: Field,
         order: Int? = nil)
     {
-        defer { self.onChange?() }
+        defer { self.didChange() }
         let id = Self.identity(target)
         guard receipt.matches(target), let current = self.entries[id], receipt.matches(current),
               (self.receipts[id]?[field]?.order ?? 0) <= (order ?? self.revision),
@@ -211,7 +238,7 @@ public final class OpenClawChatSessionSidebarData {
         self.revision += 1
         self.revisions[id] = self.revision
         self.entries.removeValue(forKey: id)
-        self.onChange?()
+        self.didChange()
     }
 
     func invalidate(clear: Bool = false) {
@@ -223,7 +250,7 @@ public final class OpenClawChatSessionSidebarData {
             self.entries = [:]
             self.rosters = [:]
         }
-        self.onChange?()
+        self.didChange()
     }
 
     func applyObserver(_ digest: SessionObserverDigest) {
@@ -232,7 +259,7 @@ public final class OpenClawChatSessionSidebarData {
             return ChatSessionSidebarModel.applying(observerDigest: digest, to: [row], activeAgentId: row.agentId)
                 .first ?? row
         }
-        self.onChange?()
+        self.didChange()
     }
 
     private func recordFieldChanges(
