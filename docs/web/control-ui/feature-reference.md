@@ -45,6 +45,7 @@ Control UI capabilities grouped by area, each with the Gateway RPC methods behin
     - Onboarding memory offer: when the Control UI opens in [onboarding mode](/web/urls#other-special-documents-and-startup-modes), a one-page dialog offers to import detected memories with the same plan/apply flow; skipping leaves the settings page as the later entry point.
 
   </Accordion>
+  <a id="cron-tasks-plugins-skills-devices-exec-approvals" />
   <Accordion title="Cron, plugins, skills, devices, exec approvals">
     - Automations (cron jobs): stat cards (automation count, failing count, scheduler state, next wake) above an Automations/Run history tab switch; the Automations tab lists jobs in a filterable table (All/Active/Paused, search, schedule and last-run filters, per-row action menu) with starter suggestions below, and the Run history tab shows recent runs across all automations (`cron.*`).
     - Plugins: browse the installed inventory and curated store, search ClawHub, install and remove plugin code, and enable or disable installed plugins (`plugins.*`). **Install** starts immediately and accepts the staged plugin’s declared capabilities without changing your hook and model permissions. Configured install-policy warnings still require an explicit acknowledgment. Catalog categories remain available while you search. MCP server rows edit `mcp.servers` through the config methods.

@@ -68,32 +68,17 @@ export async function reactivateCompletedSubagentSession(params: {
     return !params.gatewayContextResolver || Boolean(params.gatewayContextResolver());
   };
   const runtime = await import("../agents/subagents/registry/subagent-registry-runtime.js");
-  if (!isOriginalOwnerCurrent()) {
-    return false;
-  }
-  const endedHookStamp = source.endedHookEmittedAt;
-  const pending = waitForPendingSubagentRegistryWrites([source.runId], stateContext.admission);
-  if (pending) {
-    // Hook delivery records its emitted fact before its asynchronous stamp commits.
-    // Join that finite write before comparing the replacement's exact durable source.
-    await pending;
+  for (;;) {
     if (!isOriginalOwnerCurrent()) {
       return false;
     }
-    if (source.endedHookEmittedAt !== endedHookStamp) {
-      // A hook stamp can enter after the first snapshot. Join it once; the
-      // exact replacement comparison still rejects other concurrent changes.
-      const stampWrite = waitForPendingSubagentRegistryWrites(
-        [source.runId],
-        stateContext.admission,
-      );
-      if (stampWrite) {
-        await stampWrite;
-        if (!isOriginalOwnerCurrent()) {
-          return false;
-        }
-      }
+    const pending = waitForPendingSubagentRegistryWrites([source.runId], stateContext.admission);
+    if (!pending) {
+      break;
     }
+    // Completion cleanup can admit another write while the previous one settles.
+    // Join its publication before comparing the replacement's exact durable source.
+    await pending;
   }
   const task = params.task;
   const hasTask = typeof task === "string" && task.trim().length > 0;

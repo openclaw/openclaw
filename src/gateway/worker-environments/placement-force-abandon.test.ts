@@ -112,7 +112,7 @@ describe("forced worker environment abandonment", () => {
       runId: "reclaim-forced-missing-workspace",
       owner: { kind: "worker", environmentId, ownerEpoch: 2 },
     });
-    store.recordStagedWorkspaceResult(
+    await store.recordStagedWorkspaceResult(
       claim,
       "refs/openclaw/worker-results/reclaim-forced-missing-workspace",
     );
