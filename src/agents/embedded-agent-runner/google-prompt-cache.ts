@@ -390,24 +390,21 @@ async function ensureGooglePromptCache(
   if (now === undefined) {
     return null;
   }
-  const systemPromptDigest = sha256Hex(params.systemPrompt);
-  const matchKey = stableStringify({
+  const cacheIdentity = {
     provider: params.provider,
     modelId: params.model.id,
     modelApi: params.model.api,
     baseUrl,
-    systemPromptDigest,
+    systemPromptDigest: sha256Hex(params.systemPrompt),
     cacheConfigDigest: params.cacheConfigDigest,
-  });
-  const latestEntry = readLatestGooglePromptCacheEntry(params.sessionManager, matchKey);
+  };
+  const latestEntry = readLatestGooglePromptCacheEntry(
+    params.sessionManager,
+    stableStringify(cacheIdentity),
+  );
   const entryMetadata = {
     timestamp: now,
-    provider: params.provider,
-    modelId: params.model.id,
-    modelApi: params.model.api,
-    baseUrl,
-    systemPromptDigest,
-    cacheConfigDigest: params.cacheConfigDigest,
+    ...cacheIdentity,
     cacheRetention: params.cacheRetention,
   };
 
@@ -488,13 +485,11 @@ export async function prepareGooglePromptCacheStreamFn(
   params: PrepareGooglePromptCacheStreamFnParams,
   deps: GooglePromptCacheDeps = {},
 ): Promise<StreamFn | undefined> {
-  if (!params.streamFn) {
-    return undefined;
-  }
-  if (resolveExplicitCachedContent(params.extraParams)) {
-    return undefined;
-  }
-  if (!isGooglePromptCacheEligible({ modelApi: params.model.api, modelId: params.modelId })) {
+  if (
+    !params.streamFn ||
+    resolveExplicitCachedContent(params.extraParams) ||
+    !isGooglePromptCacheEligible({ modelApi: params.model.api, modelId: params.modelId })
+  ) {
     return undefined;
   }
   const resolvedRetention = resolveCacheRetention(
@@ -524,15 +519,13 @@ export async function prepareGooglePromptCacheStreamFn(
     const cachedContent = await ensureGooglePromptCache(
       {
         apiKey,
-        cacheConfigDigest: cacheConfig.cacheConfigDigest,
+        ...cacheConfig,
         cacheRetention: resolvedRetention,
         model: params.model,
         provider: params.provider,
         sessionManager: params.sessionManager,
         signal: params.signal,
         systemPrompt,
-        tools: cacheConfig.tools,
-        toolConfig: cacheConfig.toolConfig,
       },
       deps,
     );

@@ -149,13 +149,9 @@ function estimateTranscriptBoundaryTokenPressure(params: {
   };
 }
 
-export function estimateLlmBoundaryTokenPressure(params: {
-  messages: AgentMessage[];
-  systemPrompt?: string;
-  prompt: string;
-  replay?: CompactionReplayPressureContext;
-  toolSchemaTokens?: number;
-}): number {
+export function estimateLlmBoundaryTokenPressure(
+  params: Parameters<typeof estimateTranscriptBoundaryTokenPressure>[0],
+): number {
   return estimateTranscriptBoundaryTokenPressure(params).estimatedPromptTokens;
 }
 

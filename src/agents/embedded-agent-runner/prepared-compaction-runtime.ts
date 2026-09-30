@@ -122,15 +122,12 @@ export async function buildPreparedCompactionRuntime(
       return;
     }
     toolRuntimesDisposed = true;
-    try {
-      await bundleMcpRuntime?.dispose();
-    } catch {
-      /* best-effort */
-    }
-    try {
-      await bundleLspRuntime?.dispose();
-    } catch {
-      /* best-effort */
+    for (const runtime of [bundleMcpRuntime, bundleLspRuntime]) {
+      try {
+        await runtime?.dispose();
+      } catch {
+        /* best-effort */
+      }
     }
   };
   const restoreSkillEnvironment = () => {
@@ -339,14 +336,17 @@ export async function buildPreparedCompactionRuntime(
       modelApi: effectiveModel.api,
       model: effectiveModel,
     };
-    const normalizableToolProjection = filterProviderNormalizableTools(toolsRaw);
-    await logRuntimeToolSchemaQuarantine({
-      diagnostics: normalizableToolProjection.diagnostics,
-      tools: toolsRaw,
+    const toolDiagnosticContext = {
       runId,
       agentId: sessionAgentId,
       sessionKey: params.sessionKey,
       sessionId: params.sessionId,
+    };
+    const normalizableToolProjection = filterProviderNormalizableTools(toolsRaw);
+    await logRuntimeToolSchemaQuarantine({
+      ...toolDiagnosticContext,
+      diagnostics: normalizableToolProjection.diagnostics,
+      tools: toolsRaw,
     });
     const tools = runtimePlan.tools.normalize(
       [...normalizableToolProjection.tools],
@@ -380,12 +380,9 @@ export async function buildPreparedCompactionRuntime(
     const normalizableBundledToolProjection = filterProviderNormalizableTools(filteredBundledTools);
     if (normalizableBundledToolProjection.diagnostics.length > 0) {
       await logRuntimeToolSchemaQuarantine({
+        ...toolDiagnosticContext,
         diagnostics: normalizableBundledToolProjection.diagnostics,
         tools: filteredBundledTools,
-        runId,
-        agentId: sessionAgentId,
-        sessionKey: params.sessionKey,
-        sessionId: params.sessionId,
       });
     }
     const normalizedBundledTools =
@@ -398,12 +395,9 @@ export async function buildPreparedCompactionRuntime(
     const projectedEffectiveTools = [...tools, ...normalizedBundledTools];
     const toolSchemaProjection = filterRuntimeCompatibleTools(projectedEffectiveTools);
     await logRuntimeToolSchemaQuarantine({
+      ...toolDiagnosticContext,
       diagnostics: toolSchemaProjection.diagnostics,
       tools: projectedEffectiveTools,
-      runId,
-      agentId: sessionAgentId,
-      sessionKey: params.sessionKey,
-      sessionId: params.sessionId,
     });
     const effectiveTools = [...toolSchemaProjection.tools];
     const allowedToolNames = collectAllowedToolNames({ tools: effectiveTools });

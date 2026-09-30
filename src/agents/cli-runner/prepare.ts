@@ -36,7 +36,6 @@ import { claimHeartbeatContextForUserRun } from "../../infra/heartbeat-outcome-s
 import { buildSystemAgentToolsMcpServerConfig } from "../../mcp/openclaw-tools-serve-config.js";
 import { CliBackendAuthProfilePreparationError } from "../../plugins/cli-backend-errors.js";
 import type {
-  CliBackendAuthEpochMode,
   CliBackendPreparedExecution,
   CliBackendPromptContext,
 } from "../../plugins/cli-backend.types.js";
@@ -234,20 +233,6 @@ function setCliRunnerPrepareTestDeps(overrides: Partial<typeof prepareDeps>): vo
 
 function resetCliRunnerPrepareTestDeps(): void {
   Object.assign(prepareDeps, defaultPrepareDeps);
-}
-
-function shouldSkipLocalCliCredentialEpoch(params: {
-  authEpochMode?: CliBackendAuthEpochMode;
-  authProfileId?: string;
-  authCredential?: AuthProfileCredential;
-  preparedExecution?: CliBackendPreparedExecution | null;
-}): boolean {
-  return Boolean(
-    params.authEpochMode === "profile-only" &&
-    params.authProfileId &&
-    params.authCredential &&
-    params.preparedExecution,
-  );
 }
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
@@ -1490,12 +1475,12 @@ async function prepareCliRunContextWithinReadFence(
         `CLI backend ${backendResolved.id} did not enforce exact per-run tool availability during execution preparation`,
       );
     }
-    const skipLocalCredentialEpoch = shouldSkipLocalCliCredentialEpoch({
-      authEpochMode: backendResolved.authEpochMode,
-      authProfileId: effectiveAuthProfileId,
-      authCredential,
+    const skipLocalCredentialEpoch = Boolean(
+      backendResolved.authEpochMode === "profile-only" &&
+      effectiveAuthProfileId &&
+      authCredential &&
       preparedExecution,
-    });
+    );
     const authEpoch = await resolveCliAuthEpoch({
       provider: params.provider,
       agentDir,
