@@ -5,6 +5,9 @@ import type {
 } from "./openclaw-state-read.types.js";
 
 export function captureCommand(command: OpenClawStateReadCommand): OpenClawStateReadCommand {
+  if (command.type === "workerPlacements.changeSnapshot" && command.profileIds) {
+    return { ...command, profileIds: [...command.profileIds] };
+  }
   if (command.type === "cron.scratch") {
     return { ...command, selector: { ...command.selector } };
   }
@@ -181,6 +184,15 @@ export function captureCommand(command: OpenClawStateReadCommand): OpenClawState
 
 function commandBytes(command: OpenClawStateReadRequest["command"]): number {
   let bytes = Buffer.byteLength(command.type, "utf8");
+  if (command.type === "cron.activeReceiptOwners") {
+    return bytes + Buffer.byteLength(command.agentId, "utf8");
+  }
+  if (command.type === "workerPlacements.changeSnapshot") {
+    return (command.profileIds ?? []).reduce(
+      (total, profileId) => total + Buffer.byteLength(profileId, "utf8"),
+      bytes,
+    );
+  }
   if (command.type === "tui.lastSession.read") {
     return bytes + Buffer.byteLength(command.stateKey, "utf8");
   }

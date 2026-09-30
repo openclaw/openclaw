@@ -276,7 +276,6 @@ export function submitTalkRealtimeRelayToolResult(params: {
 
   if (forcedConsult) {
     return submitForcedTalkRealtimeRelayToolResult(session, forcedConsult, {
-      callId: params.callId,
       result: params.result,
       options: params.options,
     });

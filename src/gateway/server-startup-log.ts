@@ -6,7 +6,6 @@ import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { tryResolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { formatFastModeValue, resolveFastModeState } from "../agents/fast-mode.js";
-import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import {
   buildConfiguredModelCatalog,
   resolveConfiguredModelRef,
@@ -28,12 +27,8 @@ export async function logGatewayStartup(params: {
   activationSourceConfig?: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   manifestRecords: readonly PluginManifestRecord[];
-  bindHost: string;
-  bindHosts?: string[];
-  port: number;
   loadedPluginIds: readonly string[];
   startupStartedAt?: number;
-  tlsEnabled?: boolean;
   log: { info: (msg: string, meta?: Record<string, unknown>) => void; warn: (msg: string) => void };
   isNixMode: boolean;
   ambientEnvTriggers?: AmbientEnvTriggerPolicy;
@@ -128,18 +123,6 @@ export function formatAgentModelStartupLogLine(params: {
   };
 }
 
-/** True when a configured catalog entry disables reasoning for the startup model. */
-function isConfiguredReasoningDisabled(params: {
-  catalog: readonly ModelCatalogEntry[];
-  provider: string;
-  model: string;
-}): boolean {
-  return params.catalog.some(
-    (entry) =>
-      entry.provider === params.provider && entry.id === params.model && entry.reasoning === false,
-  );
-}
-
 /** Format model thinking and fast-mode details for the Gateway startup banner. */
 export function formatAgentModelStartupDetails(params: {
   cfg: OpenClawConfig;
@@ -153,11 +136,12 @@ export function formatAgentModelStartupDetails(params: {
     // Catalog reasoning=false is authoritative; avoid loading provider policy artifacts
     // only to discard their default below.
     if (
-      isConfiguredReasoningDisabled({
-        catalog: configuredCatalog,
-        provider: params.provider,
-        model: params.model,
-      })
+      configuredCatalog.some(
+        (entry) =>
+          entry.provider === params.provider &&
+          entry.id === params.model &&
+          entry.reasoning === false,
+      )
     ) {
       thinking = "off";
     } else {

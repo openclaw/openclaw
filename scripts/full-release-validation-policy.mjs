@@ -744,8 +744,12 @@ export function validateReleaseTelegramWaiverBinding(plan, validationInputs = {}
   }
 }
 
+export function releaseChildSpecs() {
+  return [...CHILD_SPECS, ...LEGACY_CHILD_SPECS];
+}
+
 export function releaseChildSpec(key) {
-  const spec = [...CHILD_SPECS, ...LEGACY_CHILD_SPECS].find((entry) => entry.key === key);
+  const spec = releaseChildSpecs().find((entry) => entry.key === key);
   if (!spec) {
     throw new Error(`release child key is invalid: `);
   }
@@ -1610,6 +1614,40 @@ export function terminalPolicyPass(child) {
     (!advisoryOnly ||
       (gates.length === 1 && gates[0].status === "completed" && gates[0].conclusion === "success"))
   );
+}
+
+// These consumers bind their producer's artifact to the current run attempt, so a
+// failed-jobs rerun that leaves the green producer behind stays red (#161317).
+const ATTEMPT_BOUND_RELEASE_PRODUCERS = Object.freeze([
+  Object.freeze({
+    producer: "install_smoke_release_checks / installer_smoke_candidate_payload",
+    consumers: Object.freeze([
+      "install_smoke_release_checks / installer_smoke_nonroot_image",
+      "install_smoke_release_checks / installer_smoke_nonroot",
+    ]),
+  }),
+]);
+
+/** Choose the single GitHub rerun request that can repair a terminal child's blocking jobs. */
+export function planReleaseChildRerun({ childKey, jobs }) {
+  const failed = jobs
+    .filter((job) => isFailedJob(job) && !isAdvisoryJob({ key: childKey }, job))
+    .map((job) => job.name)
+    .toSorted();
+  if (failed.length === 0) {
+    throw new Error(`${childKey} has no blocking failed job to rerun`);
+  }
+  for (const { producer, consumers } of ATTEMPT_BOUND_RELEASE_PRODUCERS) {
+    const producerJob = jobs.find((job) => job.name === producer);
+    if (
+      producerJob?.status === "completed" &&
+      producerJob.conclusion === "success" &&
+      consumers.some((name) => failed.includes(name))
+    ) {
+      return { failed, mode: "producer", producer };
+    }
+  }
+  return { failed, mode: "failed-jobs" };
 }
 
 function dispatchBlockers(children) {

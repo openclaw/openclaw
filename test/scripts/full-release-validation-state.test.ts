@@ -383,7 +383,7 @@ describe("full release execution plan", () => {
       role: "normalCi",
       runId: "999",
       runAttempt: 2,
-      workflowSha: "c".repeat(40),
+      workflowSha: SHA,
       workflowRef: "main",
       displayTitle: "CI full-release-validation-88-1-ci",
       sourceParentRunId: "88",
@@ -399,7 +399,7 @@ describe("full release execution plan", () => {
       runId: "999",
       runAttempt: 1,
       source: "reused",
-      workflowSha: "c".repeat(40),
+      workflowSha: SHA,
     });
     expect(hydrated.slice(1)).toEqual(original.children.slice(1));
     const sealed = { ...original, childReuse, children: hydrated };
@@ -416,7 +416,10 @@ describe("full release execution plan", () => {
         childReuse: { normalCi: { ...selection, runAttempt: 3 } },
       }),
     ).toThrow("digest");
-    const mismatched = { ...sealed, childReuse: { normalCi: { ...selection, workflowSha: SHA } } };
+    const mismatched = {
+      ...sealed,
+      childReuse: { normalCi: { ...selection, workflowSha: "c".repeat(40) } },
+    };
     mismatched.sha256 = releaseExecutionPlanSha256(mismatched);
     expect(() => validateReleaseExecutionPlanArtifact(mismatched)).toThrow("immutable plan");
     const changedTarget = {
@@ -446,6 +449,22 @@ describe("full release execution plan", () => {
         expect.objectContaining({ key: "normalCi", runId: "999", source: "reused" }),
       ]),
       blockers: [expect.objectContaining({ kind: "reused_evidence_invalid" })],
+    });
+    const differentTooling = runPlanSubprocess(
+      {
+        childPhaseVersion: 3,
+        childReuse: { normalCi: { ...selection, workflowSha: "c".repeat(40) } },
+      },
+      { PATH: `${root}${process.platform === "win32" ? ";" : ":"}${process.env.PATH}` },
+    );
+    expect(differentTooling.result.status).toBe(2);
+    expect(JSON.parse(readFileSync(differentTooling.output, "utf8"))).toMatchObject({
+      blockers: [
+        expect.objectContaining({
+          kind: "reused_evidence_invalid",
+          message: expect.stringContaining("same tooling is required"),
+        }),
+      ],
     });
     writeFileSync(gh, "#!/bin/sh\nprintf '%s\\n' 'HTTP 503: Service unavailable' >&2\nexit 1\n");
     const unavailable = runPlanSubprocess(

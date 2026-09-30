@@ -57,6 +57,11 @@ latest drift/unavailable lookups are advisory: retain the tested Codex pin and
 record warnings. Malformed runtime metadata, package/install failures and
 required validation failures still block.
 
+Dependency advisory findings in release dependency evidence and
+release-dispatched CI audits are warnings at every severity; only known malware
+blocks. Record them in the handoff and queue the bump on `main` after
+publication; never re-cut, change tooling, or rerun validation for them.
+
 Install smoke also checks pack budget and direct npm global fresh/update paths;
 keep those enabled. `OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT=1` is the existing
 non-root-skip mode, not permission to skip install proof. Published correction
@@ -148,9 +153,12 @@ diagnosis but cannot substitute for required stable evidence.
 Preserve the validation parent and successful children when continuation is
 eligible; parents that produced sealed candidate artifacts need a new parent
 with verified evidence reuse. Diagnose failures and retry only the affected
-surface within the controller's budget. Selected test failures block publication; an untouched test or passing replay
-alone proves neither a flake nor a fix. Change Code SHA for a confirmed
-product defect and validate the repaired source. Aim to seal within approximately 20 minutes
+surface within the controller's budget. Classify every selected test failure as
+a real blocker or a flake under the
+[shared release boundaries](../SKILL.md#shared-release-boundaries): flakes get
+bounded recorded reruns on the same Release SHA and a fix-in-parallel issue or
+PR on `main`. Change Code SHA only for a real blocker and validate the repaired
+source. Aim to seal within approximately 20 minutes
 and publish within an hour; report observed blockers and timing rather than
 claiming those objectives as measured guarantees.
 

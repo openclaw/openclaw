@@ -183,7 +183,6 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
   const requestOrigin = headerValue(upgradeReq.headers.origin);
   const requestUserAgent = headerValue(upgradeReq.headers["user-agent"]);
   const forwardedFor = headerValue(upgradeReq.headers["x-forwarded-for"]);
-  const realIp = headerValue(upgradeReq.headers["x-real-ip"]);
   const openedDuringStartup = isStartupPending?.() === true;
 
   logWs("in", "open", { connId, remoteAddr, remotePort, localAddr, localPort, endpoint });
@@ -634,7 +633,6 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
     localPort,
     endpoint,
     forwardedFor,
-    realIp,
     requestHost,
     requestOrigin,
     requestUserAgent,

@@ -302,13 +302,20 @@ export class NodeInvokeStreamController {
     ) {
       return undefined;
     }
-    // Recheck at settlement as handler loading may await after router admission.
-    // Some lifecycle owners assert by throwing; either form must fail closed.
+    // Recheck retained callbacks and completion frames without leaving a closed
+    // owner's invoke waiting for its deadline or delivering the node's payload.
     try {
-      return pending.isCompletionAuthorized?.() === false ? undefined : pending;
+      if (pending.isCompletionAuthorized?.() !== false) {
+        return pending;
+      }
     } catch {
-      return undefined;
+      // Lifecycle owners may assert by throwing; unreadable authority also fails closed.
     }
+    this.cancelPending(id, pending, {
+      code: "APPROVAL_AUTHORITY_CLOSED",
+      message: "node invoke authority closed before settlement",
+    });
+    return undefined;
   }
 
   clearTimers(pending: PendingInvoke): void {

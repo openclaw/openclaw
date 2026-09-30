@@ -4,7 +4,7 @@ import Testing
 import WebKit
 @testable import OpenClaw
 
-@Suite(.serialized)
+@Suite(.serialized, .timeLimit(.minutes(1)))
 @MainActor
 struct DashboardGatewayHealthTests {
     @Test func `current document health updates every window snapshot and survives catalog refresh`() async throws {
@@ -12,15 +12,19 @@ struct DashboardGatewayHealthTests {
             let first = try await self.open(.profile("first"), in: manager)
             #expect(first.auth.usesBrowserIdentity)
             #expect(first.auth.gatewayUrl == server.websocketURL("/control/").absoluteString)
-            try await self.waitUntil { self.health(.profile("first"), in: manager) == .ok }
+            try await DashboardTestWait.state("first Gateway healthy") {
+                self.health(.profile("first"), in: manager) == .ok
+            }
             #expect(self.health(.profile("second"), in: manager) == .unknown)
             let second = try await self.open(.profile("second"), in: manager)
             try await self.report(.error, from: second)
-            try await self.waitUntil { self.health(.profile("second"), in: manager) == .error }
+            try await DashboardTestWait.state("second Gateway error") {
+                self.health(.profile("second"), in: manager) == .error
+            }
             await manager.refreshGatewaySnapshots()
 
             for (target, controller) in manager.dashboardControllers() {
-                try await self.waitUntil {
+                try await DashboardTestWait.state("\(target.bridgeID) health snapshot") {
                     let snapshot = try await self.snapshot(in: controller)
                     return snapshot?.currentId == target.bridgeID &&
                         snapshot?.gateways.first { $0.id == "profile:first" }?.health == .ok &&
@@ -83,7 +87,7 @@ struct DashboardGatewayHealthTests {
         let controller = try #require(manager.dashboardControllers().first {
             $0.target == target && !previous.contains(ObjectIdentifier($0.controller))
         }?.controller)
-        try await self.waitUntil { controller.canDeliverNativeCommands && !controller.webView.isLoading }
+        try await DashboardTestWait.document(controller, "Gateway health document")
         return controller
     }
 
@@ -104,13 +108,5 @@ struct DashboardGatewayHealthTests {
         guard let json = try await controller.webView.evaluateJavaScript(
             "JSON.stringify(window.__OPENCLAW_NATIVE_GATEWAYS__)") as? String else { return nil }
         return try JSONDecoder().decode(DashboardGatewaySnapshot.self, from: Data(json.utf8))
-    }
-
-    func waitUntil(_ condition: () async throws -> Bool) async throws {
-        let deadline = ContinuousClock.now + .seconds(5)
-        while try await !condition() {
-            guard ContinuousClock.now < deadline else { throw URLError(.timedOut) }
-            try await Task.sleep(for: .milliseconds(10))
-        }
     }
 }

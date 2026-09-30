@@ -70,7 +70,6 @@ export type OpenClawAgentDatabaseExecution = {
 type ExecutionOwner = {
   readonly agentId: string;
   readonly sharedDatabaseKey: string;
-  assertCurrent(): void;
   borrow(
     pathname: string,
     expectedIdentity?: AgentDatabaseExecutionFileIdentity,
@@ -385,7 +384,6 @@ function createAgentDatabaseExecution(
     get sharedDatabaseKey() {
       return context.admission.identity.key;
     },
-    assertCurrent,
     borrow(borrowedPath, expected, creating) {
       const expectedIdentity = expected ? Object.freeze({ ...expected }) : undefined;
       const creatingTarget = creating ? Object.freeze({ ...creating }) : undefined;

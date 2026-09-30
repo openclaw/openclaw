@@ -1,9 +1,7 @@
-// Builds provider catalog entries from plugin manifest metadata.
 import { normalizeModelCatalog } from "@openclaw/model-catalog-core/model-catalog-normalize";
 import { buildModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type {
   ModelCatalogCost,
-  ModelCatalogMediaInputConfig,
   ModelCatalogModel,
   ModelCatalogTieredCost,
   NormalizedModelCatalogRow,
@@ -175,17 +173,6 @@ function buildManifestCatalogModelInput(
   return model.input?.filter((item): item is "text" | "image" => item !== "document") ?? ["text"];
 }
 
-function cloneManifestCatalogMediaInput(
-  mediaInput?: ModelCatalogMediaInputConfig,
-): ModelDefinitionConfig["mediaInput"] | undefined {
-  if (!mediaInput?.image) {
-    return undefined;
-  }
-  return {
-    image: { ...mediaInput.image },
-  };
-}
-
 function buildManifestCatalogModel(
   model: ModelCatalogModel,
   options: { providerId?: string; filterDocument?: boolean } = {},
@@ -217,7 +204,11 @@ function buildManifestCatalogModel(
     ...(model.thinkingLevelMap ? { thinkingLevelMap: { ...model.thinkingLevelMap } } : {}),
     ...(model.headers ? { headers: { ...model.headers } } : {}),
     ...(model.compat ? { compat: { ...model.compat } } : {}),
-    ...(model.mediaInput ? { mediaInput: cloneManifestCatalogMediaInput(model.mediaInput) } : {}),
+    ...(model.mediaInput
+      ? {
+          mediaInput: model.mediaInput.image ? { image: { ...model.mediaInput.image } } : undefined,
+        }
+      : {}),
   };
 }
 

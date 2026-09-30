@@ -13,7 +13,7 @@ import {
   readProviderJsonResponse,
   readProviderResponseErrorText,
 } from "openclaw/plugin-sdk/provider-http";
-import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
+import { findNormalizedProviderKey } from "openclaw/plugin-sdk/provider-model-metadata";
 import {
   coerceSecretRef,
   hasConfiguredSecretInput,
@@ -123,19 +123,12 @@ function resolveConfiguredProvider(options: OllamaEmbeddingOptions) {
   if (!providers) {
     return undefined;
   }
-  const providerId = options.provider?.trim() || "ollama";
-  const direct = providers[providerId];
-  if (direct) {
-    return { providerId, config: direct };
-  }
-  const normalized = normalizeProviderId(providerId);
-  for (const [candidateId, candidate] of Object.entries(providers)) {
-    if (normalizeProviderId(candidateId) === normalized) {
-      return { providerId: candidateId, config: candidate };
-    }
-  }
-  const fallback = providers.ollama;
-  return fallback ? { providerId: "ollama", config: fallback } : undefined;
+  const requestedId = options.provider?.trim() || "ollama";
+  const providerId = providers[requestedId]
+    ? requestedId
+    : (findNormalizedProviderKey(providers, requestedId) ?? "ollama");
+  const config = providers[providerId];
+  return config ? { providerId, config } : undefined;
 }
 
 type OllamaEmbeddingBaseUrlOrigin = "remote-config" | "provider-config" | "default";
@@ -255,10 +248,6 @@ function areOllamaHostsEquivalent(a: string, b: string): boolean {
   return aKey !== undefined && bKey !== undefined && aKey === bKey;
 }
 
-function isOllamaCloudBaseUrl(baseUrl: string): boolean {
-  return areOllamaHostsEquivalent(baseUrl, OLLAMA_CLOUD_BASE_URL);
-}
-
 function selectOllamaEmbeddingApiKey(params: {
   resolved: OllamaEmbeddingResolvedKeys;
   baseUrl: string;
@@ -272,7 +261,7 @@ function selectOllamaEmbeddingApiKey(params: {
       ? params.resolved.provider.apiKey
       : undefined;
   }
-  if (params.resolved.env && isOllamaCloudBaseUrl(params.baseUrl)) {
+  if (params.resolved.env && areOllamaHostsEquivalent(params.baseUrl, OLLAMA_CLOUD_BASE_URL)) {
     return params.resolved.env;
   }
   return undefined;

@@ -146,10 +146,7 @@ export function normalizeAllowFromEntries(
 ): string[] {
   const normalized = normalizeStringEntries(entries)
     .map((entry) => {
-      if (entry === "*") {
-        return "*";
-      }
-      if (!normalizeEntry) {
+      if (entry === "*" || !normalizeEntry) {
         return entry;
       }
       return normalizeOptionalString(normalizeEntry(entry)) ?? "";

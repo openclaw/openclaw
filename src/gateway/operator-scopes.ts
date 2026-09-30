@@ -41,11 +41,5 @@ export function normalizeOperatorScopeList(
   if (!Array.isArray(scopes)) {
     return undefined;
   }
-  const normalized: OperatorScope[] = [];
-  for (const scope of scopes) {
-    if (isOperatorScope(scope) && !normalized.includes(scope)) {
-      normalized.push(scope);
-    }
-  }
-  return normalized;
+  return [...new Set(scopes.filter(isOperatorScope))];
 }

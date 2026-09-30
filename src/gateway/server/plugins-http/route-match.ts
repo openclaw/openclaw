@@ -39,11 +39,3 @@ export function findRegisteredPluginHttpRoute(
   const pathContext = resolvePluginRoutePathContext(pathname);
   return findMatchingPluginHttpRoutes(registry, pathContext)[0];
 }
-
-/** Convenience predicate for checking whether a raw path is a plugin HTTP route. */
-export function isRegisteredPluginHttpRoutePath(
-  registry: PluginRegistry,
-  pathname: string,
-): boolean {
-  return findRegisteredPluginHttpRoute(registry, pathname) !== undefined;
-}
