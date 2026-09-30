@@ -190,7 +190,7 @@ function buildCronToolDescription(params: { triggersEnabled: boolean }): string 
     : `TRIGGERS DISABLED (cron.triggers.enabled=false): condition triggers, script payloads, and stream schedules are unavailable here. Omit trigger; use plain time-based schedules. If the user asks for a conditional watcher, say it is unsupported — never model-poll instead, and never silently create an unconditional job in its place.`;
   const silentWatcherCue = params.triggersEnabled ? ' Silent watcher=>mode:"none".' : "";
   const scriptCue = params.triggersEnabled
-    ? " When a script can decide there is nothing to do, use a trigger or script payload so quiet fires skip the model; scripts reach MCP only for servers named in toolsAllow (<server>__tool or <server>__*). When a run fails, throw from the script so the run records the failure (returning {error} still succeeds); failure alerts already wait for consecutive failures, so a one-off failure stays quiet."
+    ? " Use a script payload for fully mechanical jobs, or a trigger to skip the model when a reliable check establishes there's nothing to assess. Otherwise pass prepared data to the model. Scripts reach MCP only for servers named in toolsAllow (<server>__tool or <server>__*). When a run fails, throw from the script so the run records the failure (returning {error} still succeeds); failure alerts already wait for consecutive failures, so a one-off failure stays quiet."
     : "";
   return `Gateway scheduler: reminders, delayed self-wakeups, loops, recurring work${params.triggersEnabled ? ", event watchers" : ""}. Never exec sleep/poll as timer.
 
@@ -215,7 +215,7 @@ TARGET+PAYLOAD:
 
 PACED LOOP: recurring job + pacing{min?,max?} durations ("15m","4h"; at least one). Inside its run, job calls next_check in:"<dur>" to set the next delay (clamped to bounds, measured from run end; failed runs keep normal backoff). Adaptive polling: tighten when active, back off when quiet.
 
-AUTHORING (recurring): every fire re-runs the same instructions; keep the model for judgment only. Put repeatable logic (listing/diffing, dedupe, checkpoints/watermarks) in a workspace script the payload runs in one exec; keep detailed instructions in a workspace file beside it that the message references ("Follow scripts/<job>.md"), so fixes need only file edits. Message names exact tool ids + argument shapes; cap toolsAllow to what the run needs.${scriptCue}
+AUTHORING (recurring): Reuse known tools, arguments, and saved state; cap toolsAllow to what the run needs. Script mechanical work; keep interpretation and judgment with the model — don't invent heuristics just to avoid a model call.${scriptCue}
 
 ${triggerSection}
 

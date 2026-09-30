@@ -232,20 +232,24 @@ Gateway restart. The completed run still retains its history.
 ## Authoring recurring jobs
 
 A recurring job re-runs the same instructions on every fire, so anything the model
-works out from scratch costs the same time and tokens each run. Keep the model for
-judgment and move the repeatable parts into code:
+works out from scratch costs the same time and tokens each run. Reuse known tools,
+arguments, and saved state. Script mechanical work; keep interpretation and
+judgment with the model. Do not invent heuristics just to avoid a model call.
 
-- Put listing and diffing, dedupe, and checkpoints or watermarks in a workspace
-  script that the payload runs in a single `exec` call.
+- Move mechanically specified work, such as listing, exact-ID deduplication, and
+  checkpoint bookkeeping, into reusable code when useful. A workspace script can
+  consolidate this work into a single `exec` call.
 - Keep detailed instructions in a workspace file next to the script and have the
   message reference it (for example, "Follow `scripts/<job>.md`"), so most fixes
   need only workspace file edits, not a job update.
 - Have the message name the exact tool ids and argument shapes the run should use,
   instead of asking the model to discover them.
 - Cap `toolsAllow` to the tools the run actually needs.
-- When a script can decide there is nothing to do, use a condition trigger, a
-  [command payload](#command-payloads), or a [script payload](#script-payloads) so
-  quiet fires skip the model. Scripts can call a configured MCP server only when
+- Use a [script payload](#script-payloads), or an operator-authored
+  [command payload](#command-payloads), for fully mechanical jobs. Use a condition
+  trigger to skip the model only when a reliable check establishes there is
+  nothing to assess. Otherwise pass prepared data to the model; a recurring job
+  may need judgment on every run. Scripts can call a configured MCP server only when
   `toolsAllow` names it (`<server>__<tool>` or `<server>__*`). Triggers and script
   payloads are unavailable when `cron.triggers.enabled` is `false`.
 - When a run fails, make it fail instead of posting the error yourself: throw from
