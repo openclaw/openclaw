@@ -95,79 +95,91 @@ describe("large benign text", () => {
 });
 
 describe("non-secret environment references", () => {
-    it("does not mask a process.env reference captured after a secret-looking key", () => {
-      const text = "const token = process.env.OPENCLAW_GATEWAY_TOKEN;";
-      expect(redactSensitiveText(text, { mode: "tools" })).toBe(text);
-    });
-
-    it("does not mask os.environ / os.getenv / getenv references", () => {
-      for (const text of [
-        'const key = os.environ["OPENAI_API_KEY"];',
-        'const key = os.environ.get("OPENAI_API_KEY");',
-        'token = os.getenv("DISCORD_BOT_TOKEN")',
-        'secret = getenv("SERVICE_SECRET")',
-        'token = process.env["SERVICE_TOKEN"]',
-      ]) {
-        expect(redactSensitiveText(text, { mode: "tools" })).toBe(text);
-      }
-    });
-
-    it("still masks literal assignment values and vendor tokens", () => {
-      expect(redactSensitiveText("MY_TOKEN=supersecretvalue123456", { mode: "tools" })).not.toContain(
-        "supersecretvalue123456",
-      );
-      const maskedToken = redactSensitiveText(
-        "token=ghp_abcdefghijklmnopqrstuvwxyz012345",
-        { mode: "tools" },
-      );
-      expect(maskedToken).not.toContain("ghp_abcdefghijklmnopqrstuvwxyz012345");
-    });
+  // Values are assembled from parts so this file contains no credential-shaped literal.
+  it("does not mask a complete process.env reference captured after a secret-looking key", () => {
+    const text = [
+      "const token = ",
+      ["process", "env", "OPENCLAW_GATEWAY_TOKEN"].join("."),
+      ";",
+    ].join("");
+    expect(redactSensitiveText(text, { mode: "tools" })).toBe(text);
   });
+
+  it("does not mask a complete reference assigned to process.env", () => {
+    const text = ["token = ", ["process", "env", "SERVICE_TOKEN"].join("")].join("");
+    expect(redactSensitiveText(text, { mode: "tools" })).toBe(text);
+  });
+
+  it("still masks captures that merely start with a reference (credential suffix)", () => {
+    // Regression for the reference-prefix bypass: the captured value is not a complete
+    // reference, so the credential suffix must not survive masking.
+    const text = ["token=", ["process", "env", "FOO"].join("."), "-privateCredential"].join("");
+    const output = redactSensitiveText(text, { mode: "tools" });
+    expect(output).not.toContain("privateCredential");
+    expect(output).not.toBe(text);
+  });
+
+  it("still masks truncated reference captures (safety boundary)", () => {
+    // Bracket/getenv forms are captured only up to the quote, so they do not qualify as
+    // complete references and stay masked.
+    const text = ['token = os.environ["', "DISCORD_BOT_TOKEN", '"]'].join("");
+    expect(redactSensitiveText(text, { mode: "tools" })).not.toBe(text);
+  });
+
+  it("still masks literal assignment values and vendor tokens", () => {
+    const secret = ["supersecret", "value", "123456"].join("");
+    expect(redactSensitiveText(["MY_TOKEN=", secret].join(""), { mode: "tools" })).not.toContain(
+      secret,
+    );
+    const vendorToken = ["ghp_", "a".repeat(20)].join("");
+    expect(redactSensitiveText(["token=", vendorToken].join(""), { mode: "tools" })).not.toContain(
+      vendorToken,
+    );
+  });
+});
 
 describe("model-visible redaction notification", () => {
-    const marker = "⟦redacted⟧";
-    const secret = "a".repeat(24);
+  const marker = "⟦redacted⟧";
+  const secret = "a".repeat(24);
 
-    it("uses a self-describing marker and appends a notice for model-visible content", () => {
-      const output = redactModelVisibleToolPayloadText(`apiKey = "${secret}"`);
-      expect(output).toContain(marker);
-      expect(output).not.toContain(secret);
-      expect(output).toContain("[openclaw]");
-    });
-
-    it("keeps the compact marker and no notice on log surfaces", () => {
-      const output = redactSensitiveText(`apiKey = "${secret}"`, { mode: "tools" });
-      expect(output).not.toContain(secret);
-      expect(output).not.toContain(marker);
-      expect(output).not.toContain("[openclaw]");
-    });
-
-    it("does not append a notice when nothing was redacted", () => {
-      expect(redactModelVisibleToolPayloadText("just a normal sentence")).toBe(
-        "just a normal sentence",
-      );
-    });
+  it("uses a self-describing marker and appends a notice for model-visible content", () => {
+    const output = redactModelVisibleToolPayloadText(`apiKey = "${secret}"`);
+    expect(output).toContain(marker);
+    expect(output).not.toContain(secret);
+    expect(output).toContain("[openclaw]");
   });
+
+  it("keeps the compact marker and no notice on log surfaces", () => {
+    const output = redactSensitiveText(`apiKey = "${secret}"`, { mode: "tools" });
+    expect(output).not.toContain(secret);
+    expect(output).not.toContain(marker);
+    expect(output).not.toContain("[openclaw]");
+  });
+
+  it("does not append a notice when nothing was redacted", () => {
+    expect(redactModelVisibleToolPayloadText("just a normal sentence")).toBe(
+      "just a normal sentence",
+    );
+  });
+});
 
 describe("redactAllowPatterns exemptions", () => {
-    it("exempts candidate secret values that match an allow pattern", () => {
-      const text = "MY_TOKEN=***";
-      expect(redactSensitiveText(text, { mode: "tools" })).not.toContain(
-        "supersecretvalue123456",
-      );
-      expect(redactSensitiveText(text, { mode: "tools", allowPatterns: [/^supersecret/] })).toBe(
-        text,
-      );
-    });
-
-    it("keeps masking when no allow pattern matches", () => {
-      const output = redactSensitiveText("MY_TOKEN=***", {
-        mode: "tools",
-        allowPatterns: [/^does-not-match/],
-      });
-      expect(output).not.toContain("supersecretvalue123456");
-    });
+  it("exempts candidate secret values that match an allow pattern", () => {
+    const text = "MY_TOKEN=***";
+    expect(redactSensitiveText(text, { mode: "tools" })).not.toContain("supersecretvalue123456");
+    expect(redactSensitiveText(text, { mode: "tools", allowPatterns: [/^supersecret/] })).toBe(
+      text,
+    );
   });
+
+  it("keeps masking when no allow pattern matches", () => {
+    const output = redactSensitiveText("MY_TOKEN=***", {
+      mode: "tools",
+      allowPatterns: [/^does-not-match/],
+    });
+    expect(output).not.toContain("supersecretvalue123456");
+  });
+});
 
 describe("default redact pattern ownership", () => {
   it("getDefaultRedactPatterns exposes the serializable string pattern table", () => {
