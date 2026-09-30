@@ -1,7 +1,9 @@
 import type { AgentHarnessCompletionCustody } from "openclaw/plugin-sdk/agent-harness-completion";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
+  closeAgentNotification,
+  registerDetachedChild,
   CodexNativeSubagentMonitor,
   createClient,
   createRuntime,
@@ -60,12 +62,10 @@ describe("native assignment completion custody", () => {
   it.each([
     "ready",
     "dispose",
-    "retire",
     "replace",
     "revoked",
     "caller-revoked",
     "reject",
-    "overlap-reject",
     "pending-reject",
   ] as const)(
     "keeps pending capture outside native admission and settles on %s",
@@ -104,8 +104,7 @@ describe("native assignment completion custody", () => {
       };
       const pending = monitor.registerParent(registration);
       const failure = new Error("capture failed");
-      const captureFailed =
-        ending === "reject" || ending === "overlap-reject" || ending === "pending-reject";
+      const captureFailed = ending === "reject" || ending === "pending-reject";
       const rejected =
         ending === "ready"
           ? undefined
@@ -134,19 +133,15 @@ describe("native assignment completion custody", () => {
         registration.requesterSessionKey = "agent:main:mutated";
         registration.completionScope = createCompletionScope("agent:main:mutated");
         let successor: Awaited<ReturnType<typeof registerParent>> | undefined;
-        if (ending === "overlap-reject") {
-          successor = await registerParent(monitor, "parent-thread", "agent:main:original");
-        } else if (ending === "pending-reject") {
+        if (ending === "pending-reject") {
           pendingSuccessor = registerParent(monitor, "parent-thread", "agent:main:original");
         } else if (ending === "caller-revoked") {
           current = false;
         } else if (ending === "dispose") {
           await monitor.dispose();
-        } else if (ending === "retire" || ending === "replace") {
+        } else if (ending === "replace") {
           await monitor.retireParent("parent-thread");
-          if (ending === "replace") {
-            successor = await registerParent(monitor, "parent-thread", "agent:main:replacement");
-          }
+          successor = await registerParent(monitor, "parent-thread", "agent:main:replacement");
         }
         if (captureFailed) {
           source.root.release();
@@ -223,7 +218,7 @@ describe("native assignment completion custody", () => {
     },
   );
 
-  it.each(["delivered", "retry", "closed", "exhausted"] as const)(
+  it.each(["closed", "exhausted"] as const)(
     "retains the exact overlapping owner through parent yield and releases on %s",
     async (ending) => {
       vi.useFakeTimers();
@@ -234,12 +229,7 @@ describe("native assignment completion custody", () => {
       runtime.captureAgentHarnessCompletionCustody
         .mockResolvedValueOnce(first.root)
         .mockResolvedValueOnce(second.root);
-      if (ending !== "delivered") {
-        runtime.deliverAgentHarnessCompletion.mockResolvedValue({
-          delivered: false,
-          path: "none",
-        });
-      }
+      runtime.deliverAgentHarnessCompletion.mockResolvedValue({ delivered: false, path: "none" });
       const monitor = new CodexNativeSubagentMonitor(client as never, runtime, {
         recoveryPollDelaysMs: [],
         completionDeliveryRetryDelaysMs: [1],
@@ -277,13 +267,7 @@ describe("native assignment completion custody", () => {
             path: "direct",
           });
           await vi.advanceTimersByTimeAsync(1);
-        } else if (ending === "retry") {
-          runtime.deliverAgentHarnessCompletion.mockResolvedValue({
-            delivered: true,
-            path: "direct",
-          });
-          await vi.advanceTimersByTimeAsync(1);
-        } else if (ending === "exhausted") {
+        } else {
           await vi.advanceTimersByTimeAsync(1);
           expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledTimes(2);
         }
@@ -375,4 +359,138 @@ describe("native assignment completion custody", () => {
     await monitor.dispose();
     expect(source.live()).toHaveLength(0);
   });
+});
+
+describe("native completion custody and host recovery", () => {
+  it("releases blocked completion ownership without polling", async () => {
+    vi.useFakeTimers();
+    const client = createClient();
+    const successorClient = createClient();
+    let monitor: InstanceType<typeof CodexNativeSubagentMonitor> | undefined;
+    let successor: InstanceType<typeof CodexNativeSubagentMonitor> | undefined;
+    try {
+      const runtime = createRuntime();
+      runtime.deliverAgentHarnessCompletion.mockResolvedValue({
+        delivered: false,
+        path: "none",
+        recoveryBlocked: true,
+      });
+      monitor = new CodexNativeSubagentMonitor(client as never, runtime, {
+        completionDeliveryRetryDelaysMs: [10],
+        completionDeliveryMaxRetries: 1,
+      });
+      await registerDetachedChild(client, monitor);
+      await client.notify(nativeCompletionNotification());
+      await vi.advanceTimersByTimeAsync(100);
+      expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledTimes(1);
+      const successorRuntime = createRuntime();
+      successor = new CodexNativeSubagentMonitor(successorClient as never, successorRuntime);
+      await registerDetachedChild(successorClient, successor);
+      await successorClient.notify(nativeCompletionNotification());
+      expect(successorRuntime.deliverAgentHarnessCompletion).toHaveBeenCalledTimes(1);
+    } finally {
+      await monitor?.dispose();
+      await successor?.dispose();
+      client.close();
+      successorClient.close();
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not exhaust delivery retries while the host recovery owns completion", async () => {
+    vi.useFakeTimers();
+    const client = createClient();
+    let monitor: InstanceType<typeof CodexNativeSubagentMonitor> | undefined;
+    try {
+      const runtime = createRuntime();
+      runtime.deliverAgentHarnessCompletion.mockResolvedValue({
+        delivered: false,
+        path: "none",
+        recoveryPending: true,
+      });
+      monitor = new CodexNativeSubagentMonitor(client as never, runtime, {
+        completionDeliveryRetryDelaysMs: [10],
+        completionDeliveryMaxRetries: 1,
+      });
+      await registerDetachedChild(client, monitor);
+      await client.notify(nativeCompletionNotification());
+      await vi.advanceTimersByTimeAsync(50);
+      expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledTimes(6);
+      runtime.deliverAgentHarnessCompletion.mockResolvedValue({
+        delivered: true,
+        path: "direct",
+      });
+      await vi.advanceTimersByTimeAsync(10);
+      await vi.advanceTimersByTimeAsync(50);
+      expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledTimes(7);
+    } finally {
+      await monitor?.dispose();
+      client.close();
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("Codex native parent retirement", () => {
+  it.each([false, true])(
+    "retires the parent during capture without stale close effects (completed=%s)",
+    async (completed) => {
+      const client = createClient();
+      client.setLoadedThreads([]);
+      const runtime = createRuntime();
+      const forget = vi.fn();
+      const capture = createDeferred<() => void>();
+      const captureChildThreadForget = vi.fn(() => capture.promise);
+      const claimChildThread = vi.fn(async () => {});
+      const releaseChildThread = vi.fn(async () => {});
+      onTestFinished(() => capture.resolve(forget));
+      const monitor = new CodexNativeSubagentMonitor(client.client, runtime, {
+        recoveryPollDelaysMs: [],
+        captureChildThreadForget,
+        claimChildThread,
+        releaseChildThread,
+      });
+      const parent = await registerParent(monitor);
+      parent.bindTurn("parent-turn");
+      await notifyChildStarted(client);
+      expect(claimChildThread).toHaveBeenCalledExactlyOnceWith("child-thread");
+
+      let confirmation: Promise<void> | undefined;
+      let retirement: Promise<void> | undefined;
+      let confirmationSettled = false;
+      try {
+        await client.notify(closeAgentNotification({ method: "item/started" }));
+        expect(captureChildThreadForget).toHaveBeenCalledOnce();
+        if (completed) {
+          confirmation = client
+            .notify(closeAgentNotification({ method: "item/completed" }))
+            .then(() => {
+              confirmationSettled = true;
+            });
+          expect(confirmationSettled).toBe(false);
+        }
+        retirement = monitor.retireParent("parent-thread");
+        await retirement;
+        expect(releaseChildThread).toHaveBeenCalledExactlyOnceWith("child-thread");
+        expect(runtime.deliverAgentHarnessCompletion).not.toHaveBeenCalled();
+        expect(confirmationSettled).toBe(false);
+        capture.resolve(forget);
+        if (confirmation) {
+          await confirmation;
+        } else {
+          await client.notify(closeAgentNotification({ method: "item/completed" }));
+        }
+        expect(claimChildThread).toHaveBeenCalledOnce();
+        expect(releaseChildThread).toHaveBeenCalledOnce();
+        expect(runtime.deliverAgentHarnessCompletion).not.toHaveBeenCalled();
+        expect(forget).not.toHaveBeenCalled();
+        expect(client.request).not.toHaveBeenCalled();
+      } finally {
+        capture.resolve(forget);
+        await Promise.allSettled([confirmation, retirement]);
+        await parent.unregister();
+        await monitor.dispose();
+      }
+    },
+  );
 });

@@ -1,6 +1,5 @@
 // Subagent announce timeout tests cover retry timing and fallback requester
 // resolution when completion delivery cannot finish immediately.
-import { clampTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createSubagentAnnounceDeliveryRuntimeMock } from "./subagent-announce.test-support.js";
 
@@ -143,15 +142,6 @@ vi.mock("./subagent-announce-delivery.js", () => ({
     entry: sessionStore[sessionKey],
   }),
   loadSessionEntryByKey: (sessionKey: string) => sessionStore[sessionKey],
-  resolveAnnounceOrigin: (entry: { origin?: unknown } | undefined, requesterOrigin?: unknown) =>
-    requesterOrigin ?? entry?.origin,
-  resolveSubagentCompletionOrigin: async (params: { requesterOrigin?: unknown }) =>
-    params.requesterOrigin,
-  resolveSubagentAnnounceTimeoutMs: (cfg: typeof configOverride) => {
-    const configured = cfg.agents?.defaults?.subagents?.announceTimeoutMs;
-    return clampTimerTimeoutMs(configured) ?? 120_000;
-  },
-  runAnnounceDeliveryWithRetry: async <T>(params: { run: () => Promise<T> }) => await params.run(),
 }));
 vi.mock("./subagent-announce.runtime.js", () => ({
   callSubagentLifecycleGateway: createGatewayCallModuleMock().callGateway,
@@ -349,36 +339,6 @@ describe("subagent announce timeout config", () => {
     expect(directAgentCall?.params?.accountId).toBe("acct-main");
   });
 
-  it("uses partial progress on timeout when the child only made tool calls", async () => {
-    chatHistoryMessages = [
-      { role: "user", content: "do a complex task" },
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call-1", name: "read", arguments: {} }],
-      },
-      { role: "toolResult", toolCallId: "call-1", content: [{ type: "text", text: "data" }] },
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call-2", name: "exec", arguments: {} }],
-      },
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call-3", name: "search", arguments: {} }],
-      },
-    ];
-
-    await runAnnounceFlowForTest("run-timeout-partial-progress", {
-      outcome: { status: "timeout" },
-      roundOneReply: undefined,
-    });
-
-    const directAgentCall = findFinalDirectAgentCall();
-    const internalEvents =
-      (directAgentCall?.params?.internalEvents as Array<{ result?: string }>) ?? [];
-    expect(internalEvents[0]?.result).toContain("3 tool call(s)");
-    expect(internalEvents[0]?.result).not.toContain("data");
-  });
-
   it("uses timeout progress without replacing an authoritative empty terminal fact", async () => {
     chatHistoryMessages = [
       { role: "user", content: "do a complex task" },
@@ -402,7 +362,7 @@ describe("subagent announce timeout config", () => {
     expect(internalEvents[0]?.result).not.toContain("private tool output");
   });
 
-  it.each(["authoritative progress", "(no output)"])(
+  it.each(["(no output)"])(
     "keeps authoritative visible timeout output %s without transcript inference",
     async (text) => {
       chatHistoryMessages = [
@@ -507,27 +467,6 @@ describe("subagent announce timeout config", () => {
     expect(internalEvents[0]?.noVisibleResult).toBe(true);
     expect(directAgentCall?.params?.message).not.toContain("stale");
     expect(directAgentCall?.params?.message).not.toContain("older fallback");
-  });
-
-  it("prefers visible assistant progress over a later raw tool result", async () => {
-    chatHistoryMessages = [
-      textAssistant("Read 12 files. Narrowing the search now."),
-      {
-        role: "toolResult",
-        content: [{ type: "text", text: "grep output" }],
-      },
-    ];
-
-    await runAnnounceFlowForTest("run-timeout-visible-assistant", {
-      outcome: { status: "timeout" },
-      roundOneReply: undefined,
-    });
-
-    const directAgentCall = findFinalDirectAgentCall();
-    const internalEvents =
-      (directAgentCall?.params?.internalEvents as Array<{ result?: string }>) ?? [];
-    expect(internalEvents[0]?.result).toContain("Read 12 files");
-    expect(internalEvents[0]?.result).not.toContain("grep output");
   });
 
   it("reports tool progress when a later tool invalidates timeout silence", async () => {

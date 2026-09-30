@@ -24,9 +24,12 @@ const { registryRuntimeMock, findTranscriptEventMock, readDescendantFacts } = vi
     typeof import("../../../config/sessions/session-accessor.js").findTranscriptEvent
   >(async () => undefined),
   registryRuntimeMock: {
-    getLatestLiveSubagentRunByChildSessionKey: vi.fn<() => SubagentRunRecord | undefined>(
-      () => undefined,
-    ),
+    getLatestLiveSubagentRunByChildSessionKey: vi.fn<
+      (
+        sessionKey: string,
+        matches?: (entry: SubagentRunRecord) => boolean,
+      ) => SubagentRunRecord | undefined
+    >(() => undefined),
     countPendingDescendantRuns: vi.fn((_rootSessionKey: string) => 0),
     isSubagentSessionRunActive: vi.fn((_childSessionKey: string) => true),
     shouldIgnorePostCompletionAnnounceForSession: vi.fn((_childSessionKey: string) => false),

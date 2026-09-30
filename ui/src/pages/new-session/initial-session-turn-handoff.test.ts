@@ -41,7 +41,6 @@ describe.each(["started", "rejected"] as const)("%s first-turn publication", (st
             agentId: "main",
             requestedAgentId: "main",
             catalogId: "",
-            model: "",
             catalogLabel: "",
             startTerminal: false,
           },

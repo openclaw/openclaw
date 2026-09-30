@@ -1,4 +1,3 @@
-// Resolves ACP reset targets from sessions and command directives.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,

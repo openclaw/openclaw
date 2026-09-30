@@ -275,12 +275,9 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
         },
       } as const;
     }
-    const fallbackThinkLevel = thinkingSelection.level;
-    if (fallbackThinkLevel !== resolvedThinkLevel) {
-      // Execution fallbacks are turn-local; directive/model persistence owns
-      // durable thinking remaps so explicit session overrides survive replies.
-      resolvedThinkLevel = fallbackThinkLevel;
-    }
+    // Execution fallbacks are turn-local; directive/model persistence owns
+    // durable thinking remaps so explicit session overrides survive replies.
+    resolvedThinkLevel = thinkingSelection.level;
   }
 
   const providedReplyOperation = opts?.replyOperation;
@@ -467,12 +464,6 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
   preparedSessionState = resolvePreparedSessionState();
   const currentRouteThreadId = resolveRoutedDeliveryThreadId({ ctx, sessionKey });
   const applySlackRouteThreadSteeringGuard = isSlackDirectRoutedThreadTurn(ctx);
-  const resolveActiveRunAcceptsCurrentThread = (busy: { isActive: boolean }) => {
-    if (!busy.isActive || !sessionKey || !applySlackRouteThreadSteeringGuard) {
-      return true;
-    }
-    return routeThreadIdsMatch(resolveActiveReplyRunThreadId(sessionKey), currentRouteThreadId);
-  };
   const resolveActiveReplyOperationSessionId = () =>
     sessionKey ? resolveActiveReplyRunSessionId(sessionKey) : undefined;
   const resolveActiveQueueSessionId = () =>
@@ -551,7 +542,11 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       ? replyRunRegistry.resolveCurrentInterruptTarget(sessionKey)
       : undefined;
   const hasQueuedFollowups = hasPendingFollowupQueueWork([queueKey]);
-  const activeRunAcceptsCurrentThread = resolveActiveRunAcceptsCurrentThread({ isActive });
+  const activeRunAcceptsCurrentThread =
+    !isActive ||
+    !sessionKey ||
+    !applySlackRouteThreadSteeringGuard ||
+    routeThreadIdsMatch(resolveActiveReplyRunThreadId(sessionKey), currentRouteThreadId);
   const shouldSteer =
     !isRoomEvent &&
     activeRunAcceptsCurrentThread &&
@@ -649,7 +644,6 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     currentInboundContext,
     isRoomEvent,
     providedReplyOperation,
-    sessionIdFinal,
     preparedSessionState,
     resolvedQueue,
     embeddedAgentRuntime,

@@ -256,14 +256,13 @@ export class WorkerConnectionFrameDispatcher {
     if (!completed) {
       return false;
     }
-    const response = frame as WorkerResponseFrame;
     try {
-      completed.value.beforeResolve?.(response);
+      completed.value.beforeResolve?.(frame);
     } catch (error) {
       completed.reject(toStructuredErrorObject(error));
       return true;
     }
-    completed.resolve(response);
+    completed.resolve(frame);
     return true;
   }
 

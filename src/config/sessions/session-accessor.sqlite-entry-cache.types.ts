@@ -25,6 +25,7 @@ export type SessionSharingEntry = Pick<
   | "activeWriterRunId"
   | "subagentRecovery"
   | "archivedAt"
+  | "repositoryWorkspaceId"
   | "visibility"
   | "incognito"
   | "createdActor"
@@ -52,6 +53,9 @@ export function projectSessionSharingEntry(entry: InternalSessionEntry): Session
         }
       : {}),
     archivedAt: entry.archivedAt,
+    ...(entry.repositoryWorkspaceId === undefined
+      ? {}
+      : { repositoryWorkspaceId: entry.repositoryWorkspaceId }),
     visibility: entry.visibility,
     incognito: entry.incognito,
     createdActor: entry.createdActor ? { ...entry.createdActor } : undefined,

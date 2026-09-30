@@ -160,13 +160,13 @@ it("fences retained authority before release commit and closes observers after s
   }
 });
 
-it.each(["claim", "staged result"] as const)(
+it.each(["claim", "staged result", "workspace manifest"] as const)(
   "returns committed %s custody after its real worker reply is corrupted",
   async (operation) => {
     const requested = input(`lost-reply-${operation.replaceAll(" ", "-")}`);
     const ref = `refs/openclaw/worker-results/${requested.claimId}`;
     let stagedClaim: Awaited<ReturnType<typeof placements.claimTurn>> | undefined;
-    if (operation === "staged result") {
+    if (operation !== "claim") {
       const active = await advancePlacementFixtureToActive(
         placements,
         database,
@@ -176,7 +176,7 @@ it.each(["claim", "staged result"] as const)(
           sessionKey: requested.sessionKey,
           executionMode: "remote-exec",
         },
-        { environmentId: "lost-staged-reply-environment" },
+        { environmentId: `lost-reply-environment-${operation.replaceAll(" ", "-")}` },
       );
       stagedClaim = await placements.claimTurn({
         ...requested,
@@ -206,11 +206,21 @@ it.each(["claim", "staged result"] as const)(
       return receive(slot, reply, owner);
     });
     if (stagedClaim) {
-      await placements.recordStagedWorkspaceResult(stagedClaim, ref);
+      if (operation === "workspace manifest") {
+        const manifestRef = `sha256:${"a".repeat(64)}`;
+        const accepted = await placements.updateWorkspaceBaseManifest({
+          claim: stagedClaim,
+          manifestRef,
+        });
+        expect(accepted.workspaceBaseManifestRef).toBe(manifestRef);
+        expect(placements.get(requested.sessionId)?.workspaceBaseManifestRef).toBe(manifestRef);
+      } else {
+        await placements.recordStagedWorkspaceResult(stagedClaim, ref);
+        expect(placements.listPendingWorkspaceResults(requested.sessionId)).toMatchObject([
+          { claimId: stagedClaim.claimId, stagedResultRef: ref },
+        ]);
+      }
       expect(corrupted).toBe(1);
-      expect(placements.listPendingWorkspaceResults(requested.sessionId)).toMatchObject([
-        { claimId: stagedClaim.claimId, stagedResultRef: ref },
-      ]);
       placements.acceptWorkspaceResult(stagedClaim);
       placements.completeWorkspaceResultAndReleaseTurn(stagedClaim);
     } else {

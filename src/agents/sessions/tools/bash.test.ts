@@ -5,7 +5,7 @@ import { setTimeout as delay } from "node:timers/promises";
 // timer-safe millisecond values.
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
-import { withTestTimeout } from "../../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../../../test/helpers/promise.js";
 import { runWithSpawnBroker } from "../../../process/spawn-broker/context.js";
 import { createSpawnBrokerHost } from "../../../process/spawn-broker/host.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
@@ -61,9 +61,9 @@ describe("bash tool timeout helpers", () => {
 });
 
 describe("bash tool startup cancellation", () => {
-  it.runIf(process.platform !== "win32").each(["abort", "timeout"] as const)(
+  it.runIf(process.platform !== "win32").for(["abort", "timeout"] as const)(
     "settles %s while broker readiness is stalled and cancels the late command",
-    async (reason) => {
+    async (reason, { signal }) => {
       const host = createSpawnBrokerHost();
       const controller = new AbortController();
       const admitted = createDeferredCore<ReturnType<typeof host.spawnExeca>>();
@@ -91,7 +91,14 @@ describe("bash tool startup cancellation", () => {
           () => ({ status: "success" as const }),
           (error: unknown) => ({ status: "error" as const, error }),
         );
-        remote = await withTestTimeout(admitted.promise, 1000, "Bash did not request a process");
+        remote = await withinTest(
+          awaitGateBeforeSettlement(
+            admitted.promise,
+            execution,
+            "Bash settled before requesting a process",
+          ),
+          signal,
+        );
         if (reason === "abort") {
           controller.abort();
         }
@@ -109,7 +116,7 @@ describe("bash tool startup cancellation", () => {
         );
         process.kill(host.pid!, "SIGCONT");
         paused = false;
-        await withTestTimeout(remote.result, 2000, "Late Bash command did not settle");
+        await withinTest(remote.result, signal);
         if (remote.child.pid) {
           expect(isPidDefinitelyDead(remote.child.pid)).toBe(true);
         }
@@ -119,7 +126,7 @@ describe("bash tool startup cancellation", () => {
         }
         try {
           if (remote) {
-            await withTestTimeout(remote.result, 2000, "Bash cleanup did not settle");
+            await withinTest(remote.result, signal);
           }
         } finally {
           await host.close();

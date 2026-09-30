@@ -21,7 +21,7 @@ export async function runReleaseAgentTurn(
   return result;
 }
 
-export function buildCrossOsReleaseAgentSessionId(label: string) {
+function buildCrossOsReleaseAgentSessionId(label: string) {
   return `cross-os-release-check-${label}-${randomUUID()}`;
 }
 

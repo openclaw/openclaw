@@ -43,6 +43,7 @@ import type { WorkerInferenceStoreOperations } from "../gateway/worker-environme
 import type { WorkerPlacementDispatchStoreOperations } from "../gateway/worker-environments/placement-record.js";
 import type { PlacementSessionToolWorkerOperations } from "../gateway/worker-environments/placement-session-tool-operations.worker-contract.js";
 import type { PlacementTurnClaimWorkerOperations } from "../gateway/worker-environments/placement-turn-claims.worker-contract.js";
+import type { WorkspaceJournalWorkerOperations } from "../gateway/worker-environments/placement-workspace-journal.worker-contract.js";
 import type { WorkerEnvironmentWorkerOperations } from "../gateway/worker-environments/store-worker-contract.js";
 import type {
   DeferredPluginMigration,
@@ -153,6 +154,7 @@ export type OpenClawStateWorkerOperations = UpdateRunReconciliationOperations &
   WorkerEnvironmentWorkerOperations &
   WorkerInferenceStoreOperations &
   PlacementTurnClaimWorkerOperations &
+  WorkspaceJournalWorkerOperations &
   PlacementSessionToolWorkerOperations &
   WorkerPlacementDispatchStoreOperations &
   SessionDeliveryWorkerOperations &

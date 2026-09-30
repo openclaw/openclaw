@@ -1,3 +1,4 @@
+import { parseAccessGroupAllowFromEntry } from "openclaw/plugin-sdk/access-groups";
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-contract";
 import type { StableChannelIngressIdentityParams } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
@@ -32,19 +33,9 @@ type NostrOutboundAdapter = Pick<
   sanitizeText: NonNullable<ChannelOutboundAdapter["sanitizeText"]>;
 };
 const activeBuses = new Map<string, NostrBusHandle>();
-const ACCESS_GROUP_PREFIX = "accessGroup:";
 
 function normalizeRelayLifecycleKey(relay: string): string {
   return new URL(relay).toString();
-}
-
-function parseNostrAccessGroupAllowFromEntry(entry: string): string | null {
-  const trimmed = entry.trim();
-  if (!trimmed.startsWith(ACCESS_GROUP_PREFIX)) {
-    return null;
-  }
-  const name = trimmed.slice(ACCESS_GROUP_PREFIX.length).trim();
-  return name || null;
 }
 
 function normalizeNostrAllowEntry(entry: string): string | null {
@@ -55,7 +46,7 @@ function normalizeNostrAllowEntry(entry: string): string | null {
   if (trimmed === "*") {
     return "*";
   }
-  const accessGroup = parseNostrAccessGroupAllowFromEntry(trimmed);
+  const accessGroup = parseAccessGroupAllowFromEntry(trimmed);
   if (accessGroup) {
     return `accessGroup:${accessGroup}`;
   }

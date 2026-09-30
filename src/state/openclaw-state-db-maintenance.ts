@@ -1,4 +1,3 @@
-import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { OpenClawStateOwnershipError } from "../infra/sqlite-lifecycle-errors.js";
@@ -19,7 +18,6 @@ import {
   LAZY_ADDITIVE_STATE_TABLES,
   DOCTOR_OWNED_STATE_TABLES,
   OPENCLAW_STATE_SCHEMA_VERSION,
-  type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db-contract.js";
 import {
   hasDanglingSkillWorkshopCollectionReviewIndex,
@@ -39,7 +37,6 @@ import {
   readStateSchemaMigrationVersion,
 } from "./openclaw-state-db-schema-version.js";
 import type { DB } from "./openclaw-state-db.generated.js";
-import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowed } from "./openclaw-state-ownership.js";
 import {
   getOpenClawStateRuntimeSchema,
@@ -313,10 +310,6 @@ export function markCurrentStateSchemaVersion(
       "UPDATE schema_meta SET schema_version = ?, updated_at = ? WHERE meta_key = 'primary'",
     ).run(version, now);
   }
-}
-
-export function resolveDatabasePath(options: OpenClawStateDatabaseOptions = {}): string {
-  return path.resolve(options.path ?? resolveOpenClawStateSqlitePath(options.env ?? process.env));
 }
 
 /** Historical jobs lost the creator's origin; preserve attribution without guessing authority. */

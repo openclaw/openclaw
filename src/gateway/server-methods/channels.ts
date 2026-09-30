@@ -261,10 +261,9 @@ export const channelsHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateChannelsStatusParams, "channels.status", respond)) {
       return;
     }
-    const probe = (params as { probe?: boolean }).probe === true;
-    const timeoutMsRaw = (params as { timeoutMs?: unknown }).timeoutMs;
-    const timeoutMs = resolveChannelsStatusTimeoutMs({ probe, timeoutMsRaw });
-    const rawChannel = (params as { channel?: unknown }).channel;
+    const probe = params.probe === true;
+    const timeoutMs = resolveChannelsStatusTimeoutMs({ probe, timeoutMsRaw: params.timeoutMs });
+    const rawChannel = params.channel;
     const cfg = context.getRuntimeConfig();
     const plugins = listReadOnlyChannelPluginsForConfig(cfg);
     const requestedChannel =
@@ -471,6 +470,9 @@ export const channelsHandlers: GatewayRequestHandlers = {
     };
 
     const uiCatalog = buildChannelUiCatalog(selectedPlugins);
+    const channelsMap: Record<string, unknown> = {};
+    const accountsMap: Record<string, ChannelAccountSnapshot[]> = {};
+    const defaultAccountIdMap: Record<string, string> = {};
     const payload: Record<string, unknown> = {
       ts: Date.now(),
       channelOrder: uiCatalog.order,
@@ -479,13 +481,10 @@ export const channelsHandlers: GatewayRequestHandlers = {
       channelSystemImages: uiCatalog.systemImages,
       channelMeta: uiCatalog.entries,
       ...(context.getEventLoopHealth ? { eventLoop: context.getEventLoopHealth() } : {}),
-      channels: {} as Record<string, unknown>,
-      channelAccounts: {} as Record<string, unknown>,
-      channelDefaultAccountId: {} as Record<string, unknown>,
+      channels: channelsMap,
+      channelAccounts: accountsMap,
+      channelDefaultAccountId: defaultAccountIdMap,
     };
-    const channelsMap = payload.channels as Record<string, unknown>;
-    const accountsMap = payload.channelAccounts as Record<string, unknown>;
-    const defaultAccountIdMap = payload.channelDefaultAccountId as Record<string, unknown>;
     const { results: channelResults } = await runTasksWithConcurrency({
       tasks: statusPlugins.map((plugin) => async () => {
         const { accounts, defaultAccountId, defaultAccount, resolvedAccounts } =
@@ -509,11 +508,7 @@ export const channelsHandlers: GatewayRequestHandlers = {
                 account: resolvedAccounts[defaultAccountId],
                 cfg,
                 defaultAccountId,
-                snapshot:
-                  defaultAccount ??
-                  ({
-                    accountId: defaultAccountId,
-                  } as ChannelAccountSnapshot),
+                snapshot: defaultAccount ?? { accountId: defaultAccountId },
               }),
           });
           summary = summaryResult.ok

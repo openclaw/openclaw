@@ -1,4 +1,3 @@
-// Checks install policy constraints for package and plugin operations.
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig, SecurityConfig } from "../config/types.openclaw.js";

@@ -1,9 +1,8 @@
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { describe, expect, it, vi } from "vitest";
-import { zoomMeetingsConfig } from "./config.js";
-import { getZoomMeetingsSetupStatus } from "./runtime-setup.js";
+import { zoomMeetingsPlugin } from "../index.js";
 
-const resolveZoomMeetingsConfig = zoomMeetingsConfig.resolveConfig;
+const resolveZoomMeetingsConfig = zoomMeetingsPlugin.config.resolveConfig;
 
 function runtimeWithNode(invoke: (params: Record<string, unknown>) => Promise<unknown>) {
   return {
@@ -26,7 +25,7 @@ function runtimeWithNode(invoke: (params: Record<string, unknown>) => Promise<un
 
 describe("Zoom meetings runtime setup", () => {
   it("accepts fresh-tab launch when existing-tab reuse is disabled", async () => {
-    const status = await getZoomMeetingsSetupStatus({
+    const status = await zoomMeetingsPlugin.setupStatus({
       config: resolveZoomMeetingsConfig({
         defaultMode: "transcribe",
         chrome: { launch: true, reuseExistingTab: false },
@@ -49,7 +48,7 @@ describe("Zoom meetings runtime setup", () => {
     const config = resolveZoomMeetingsConfig({
       chromeNode: { node: "zoom-node" },
     });
-    const status = await getZoomMeetingsSetupStatus({
+    const status = await zoomMeetingsPlugin.setupStatus({
       config,
       fullConfig: {},
       runtime,

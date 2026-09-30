@@ -112,19 +112,23 @@ export async function recoverWorkspaceBeforeTurn(params: {
     return;
   }
   const localWorkspaceDir = params.workspace.path;
-  const journal = createWorkspaceResultJournal(params).adapter;
+  const assertCurrent = () => {
+    if (!params.placements.validateTurnClaim(params.turnClaim)) {
+      throw new Error("Cloud worker workspace recovery lost its turn claim");
+    }
+  };
+  const journal = createWorkspaceResultJournal({ ...params, assertCurrent }).adapter;
   try {
     await params.workspaceOperations.run(params.placement.environmentId, async () => {
-      if (!params.placements.validateTurnClaim(params.turnClaim)) {
-        throw new Error("Cloud worker workspace recovery lost its turn claim");
-      }
-      const pending = journal.load();
+      assertCurrent();
+      const pending = await journal.load();
       if (pending) {
         await recoverWorkerWorkspaceReconciliation({
           root: localWorkspaceDir,
           journal: pending,
+          assertCurrent,
         });
-        journal.abort();
+        await journal.abort();
       }
     });
   } catch (error) {
@@ -183,16 +187,17 @@ export async function reconcileWorkspaceAfterTurn(params: {
   if (!pendingWorkspaceResult()) {
     throw new Error("Cloud worker completed without a durable workspace-result fence");
   }
-  const journal = createWorkspaceResultJournal({
-    placement: currentPlacement,
-    placements: params.placements,
-    turnClaim: params.turnClaim,
-  });
   const assertWorkspaceResultCurrent = () => {
     if (!params.placements.validateWorkspaceResultClaim(params.turnClaim)) {
       throw new Error("Cloud worker workspace result lost its placement owner");
     }
   };
+  const journal = createWorkspaceResultJournal({
+    placement: currentPlacement,
+    placements: params.placements,
+    turnClaim: params.turnClaim,
+    assertCurrent: assertWorkspaceResultCurrent,
+  });
   let workspaceConflict: WorkspaceConflictReport | undefined;
   try {
     await params.workspaceOperations.run(currentPlacement.environmentId, async () => {

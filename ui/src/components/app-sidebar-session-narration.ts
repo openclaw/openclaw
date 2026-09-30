@@ -56,11 +56,9 @@ function createNarrationRetry(): NarrationRetry {
   return { retryWindowMs: SIDEBAR_NARRATION_RETRY_INITIAL_MS, retryAt: 0, timer: null };
 }
 
-type NarrationActivity = { text: string };
-
 type ThrottledLine = {
   lastPublishedAt: number;
-  pending: NarrationActivity | null;
+  pending: string | null;
   timer: ReturnType<typeof globalThis.setTimeout> | null;
 };
 
@@ -482,7 +480,7 @@ export class SidebarSessionNarrationController {
       });
     } else if (immediate) {
       const pending = this.throttles.get(key)?.pending;
-      if (pending) {
+      if (pending != null) {
         this.publishImmediate(key, pending);
       }
     }
@@ -503,7 +501,7 @@ export class SidebarSessionNarrationController {
     // The Gateway bounds already-sanitized text and owns digest pacing. Retire
     // any full-owner stream and pending tool line before publishing its snapshot.
     this.streams.delete(key);
-    this.publishImmediate(key, { text: payload.text });
+    this.publishImmediate(key, payload.text);
   }
 
   private publishText(
@@ -549,11 +547,10 @@ export class SidebarSessionNarrationController {
       nextVisibleText.length > SIDEBAR_NARRATION_BUFFER_CHARS
         ? sliceUtf16Safe(nextVisibleText, -SIDEBAR_NARRATION_BUFFER_CHARS)
         : nextVisibleText;
-    const activity: NarrationActivity = { text: stream.visibleText };
     if (update.immediate) {
-      this.publishImmediate(key, activity);
+      this.publishImmediate(key, stream.visibleText);
     } else {
-      this.publishThrottled(key, activity);
+      this.publishThrottled(key, stream.visibleText);
     }
   }
 
@@ -636,14 +633,14 @@ export class SidebarSessionNarrationController {
     this.runIds.set(key, runId);
   }
 
-  private publishThrottled(key: string, activity: NarrationActivity): void {
+  private publishThrottled(key: string, text: string): void {
     const now = Date.now();
     const throttle = this.throttles.get(key);
     if (!throttle || now - throttle.lastPublishedAt >= SIDEBAR_NARRATION_THROTTLE_MS) {
-      this.publishImmediate(key, activity);
+      this.publishImmediate(key, text);
       return;
     }
-    throttle.pending = activity;
+    throttle.pending = text;
     if (throttle.timer) {
       return;
     }
@@ -652,7 +649,7 @@ export class SidebarSessionNarrationController {
         throttle.timer = null;
         const pending = throttle.pending;
         throttle.pending = null;
-        if (!pending || !this.desiredKeys.has(key)) {
+        if (pending === null || !this.desiredKeys.has(key)) {
           return;
         }
         throttle.lastPublishedAt = Date.now();
@@ -662,17 +659,17 @@ export class SidebarSessionNarrationController {
     );
   }
 
-  private publishImmediate(key: string, activity: NarrationActivity): void {
+  private publishImmediate(key: string, text: string): void {
     const timer = this.throttles.get(key)?.timer;
     if (timer) {
       globalThis.clearTimeout(timer);
     }
     this.throttles.set(key, { lastPublishedAt: Date.now(), pending: null, timer: null });
-    this.publishActivity(key, activity);
+    this.publishActivity(key, text);
   }
 
-  private publishActivity(key: string, activity: NarrationActivity): void {
-    const line = deriveSidebarNarrationLine(activity.text);
+  private publishActivity(key: string, text: string): void {
+    const line = deriveSidebarNarrationLine(text);
     if (line) {
       if (this.lines.get(key) !== line) {
         this.lines.set(key, line);

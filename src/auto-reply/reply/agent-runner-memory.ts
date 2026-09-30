@@ -625,7 +625,7 @@ export async function runSessionCompactionIfNeeded(params: {
 
   let entry = params.sessionEntry ?? params.sessionStore?.[params.sessionKey];
   if (!entry?.sessionId) {
-    return entry ?? params.sessionEntry;
+    return entry;
   }
 
   const runtimeParams = {
@@ -640,7 +640,7 @@ export async function runSessionCompactionIfNeeded(params: {
   const isCli = followupUsesCliRuntime(runtimeParams, runtimeId);
   const ownsNativeCompaction = followupOwnsNativeCompaction(runtimeParams, runtimeId);
   if (isCli || ownsNativeCompaction) {
-    return entry ?? params.sessionEntry;
+    return entry;
   }
   const isCodexRuntime = normalizeLowercaseStringOrEmpty(runtimeId) === "codex";
 
@@ -770,7 +770,7 @@ export async function runSessionCompactionIfNeeded(params: {
         `activeTranscriptBytes=${activeTranscriptBytes ?? "undefined"} ` +
         `maxActiveTranscriptBytes=${maxActiveTranscriptBytes ?? "undefined"}`,
     );
-    return entry ?? params.sessionEntry;
+    return entry;
   }
   const transcriptPromptTokens = transcriptUsageTokens?.promptTokens;
   const transcriptOutputTokens = transcriptUsageTokens?.outputTokens;
@@ -827,7 +827,7 @@ export async function runSessionCompactionIfNeeded(params: {
     });
   const shouldCompact = shouldCompactByTokens || shouldCompactByTranscriptBytes;
   if (!shouldCompact) {
-    return entry ?? params.sessionEntry;
+    return entry;
   }
 
   if (params.beforeCompaction) {
@@ -1041,7 +1041,7 @@ export async function runSessionCompactionIfNeeded(params: {
       if (result && isBenignCompactionSkipResult(result)) {
         await notifyTerminalCompaction("skipped");
         logVerbose(`preflightCompaction skipped: sessionKey=${params.sessionKey} reason=${reason}`);
-        return entry ?? params.sessionEntry;
+        return entry;
       }
       await notifyTerminalCompaction("incomplete");
       logVerbose(`preflightCompaction failed: sessionKey=${params.sessionKey} reason=${reason}`);
@@ -1082,22 +1082,20 @@ export async function runSessionCompactionIfNeeded(params: {
     await notifyTerminalCompaction("end", serverNotice);
     assertActive();
     entry = compactionStore[compactionSessionKey] ?? entry;
-    if (entry) {
-      const previousSessionId = params.followupRun.run.sessionId;
-      params.followupRun.run.sessionId = entry.sessionId;
-      params.onSessionIdChanged?.(entry.sessionId);
-      const queueKey = params.followupRun.run.sessionKey ?? params.sessionKey;
-      if (queueKey) {
-        params.followupRun.run.sessionFile = queueKey;
-        refreshQueuedFollowupSession({
-          key: queueKey,
-          previousSessionId,
-          nextSessionId: entry.sessionId,
-          nextSessionFile: queueKey,
-        });
-      }
+    const previousSessionId = params.followupRun.run.sessionId;
+    params.followupRun.run.sessionId = entry.sessionId;
+    params.onSessionIdChanged?.(entry.sessionId);
+    const queueKey = params.followupRun.run.sessionKey ?? params.sessionKey;
+    if (queueKey) {
+      params.followupRun.run.sessionFile = queueKey;
+      refreshQueuedFollowupSession({
+        key: queueKey,
+        previousSessionId,
+        nextSessionId: entry.sessionId,
+        nextSessionFile: queueKey,
+      });
     }
-    return entry ?? params.sessionEntry;
+    return entry;
   } catch (err) {
     if (!terminalCompactionNoticeSent && !params.abortSignal?.aborted) {
       await notifyCompaction("incomplete");
@@ -1175,12 +1173,12 @@ export async function runMemoryFlushIfNeeded(params: {
     followupOwnsNativeCompaction(runtimeParams, runtimeId);
   const canAttemptFlush = memoryFlushWritable && !params.isHeartbeat && !isCli;
   if (!canAttemptFlush) {
-    return { sessionEntry: entry ?? params.sessionEntry, outcome: "skipped" };
+    return { sessionEntry: entry, outcome: "skipped" };
   }
 
   const flushRunId = crypto.randomUUID();
   let flushRunRegistered = false;
-  let activeSessionEntry = entry ?? params.sessionEntry;
+  let activeSessionEntry = entry;
   const recordFailure = (error: unknown) =>
     recordMemoryFlushFailure(error, params, activeSessionEntry);
   const contextWindowTokens = resolveFollowupContextTokens(params, runtimeId);
@@ -1334,14 +1332,14 @@ export async function runMemoryFlushIfNeeded(params: {
       !hasAlreadyFlushedForCurrentCompaction(entry));
 
   if (!shouldFlushMemory) {
-    return { sessionEntry: entry ?? params.sessionEntry, outcome: "skipped" };
+    return { sessionEntry: entry, outcome: "skipped" };
   }
 
   logVerbose(
     `memoryFlush triggered: sessionKey=${params.sessionKey} tokenCount=${tokenCountForFlush ?? "undefined"} threshold=${flushThreshold}`,
   );
 
-  activeSessionEntry = entry ?? params.sessionEntry;
+  activeSessionEntry = entry;
   params.replyOperation?.setPhase("memory_flushing");
   let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
     activeSessionEntry?.systemPromptReport ??

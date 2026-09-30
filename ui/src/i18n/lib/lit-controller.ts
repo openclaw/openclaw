@@ -10,9 +10,7 @@ export class I18nController implements ReactiveController {
 
   hostConnected() {
     this.unsubscribe?.();
-    this.unsubscribe = i18n.subscribe(() => {
-      this.host.requestUpdate();
-    });
+    this.unsubscribe = i18n.subscribe(() => this.host.requestUpdate());
     // The locale may have changed while the host was disconnected.
     this.host.requestUpdate();
   }

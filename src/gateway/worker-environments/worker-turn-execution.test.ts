@@ -356,7 +356,7 @@ describe("worker turn execution", () => {
       quiesceWorkspace: async () => ({ assertActive: async () => {}, resume: async () => {} }),
       reconcileWorkspace: async (request) => {
         assert(request.source.kind === "local", "expected local workspace");
-        request.source.journal.commit(MANIFEST_REF);
+        await request.source.journal.commit(MANIFEST_REF);
         return {
           manifestRef: MANIFEST_REF,
           changed: false,

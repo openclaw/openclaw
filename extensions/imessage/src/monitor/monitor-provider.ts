@@ -47,6 +47,7 @@ import {
   danger,
   logVerbose,
   shouldLogVerbose,
+  sleepWithAbort,
   warn,
 } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -302,27 +303,6 @@ function describeIMessageWatchSubscribeStartupFailure(params: {
       params.error,
     )}`
   );
-}
-
-async function waitForWatchSubscribeRetryDelay(params: {
-  ms: number;
-  abortSignal?: AbortSignal;
-}): Promise<void> {
-  if (params.ms <= 0) {
-    return;
-  }
-  await new Promise<void>((resolve) => {
-    const timer = setTimeout(() => {
-      params.abortSignal?.removeEventListener("abort", onAbort);
-      resolve();
-    }, params.ms);
-    const onAbort = () => {
-      clearTimeout(timer);
-      params.abortSignal?.removeEventListener("abort", onAbort);
-      resolve();
-    };
-    params.abortSignal?.addEventListener("abort", onAbort, { once: true });
-  });
 }
 
 export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): Promise<void> {
@@ -1550,9 +1530,10 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       attemptDetachAbortHandler = () => {};
       await attemptClient?.stop();
       attemptClient = undefined;
-      await waitForWatchSubscribeRetryDelay({
-        ms: WATCH_SUBSCRIBE_RETRY_DELAY_MS,
-        abortSignal: abort,
+      await sleepWithAbort(WATCH_SUBSCRIBE_RETRY_DELAY_MS, abort).catch((error: unknown) => {
+        if (!abort?.aborted) {
+          throw error;
+        }
       });
       if (abort?.aborted) {
         return;

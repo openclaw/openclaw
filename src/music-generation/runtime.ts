@@ -1,4 +1,3 @@
-// Runs music generation requests through provider runtimes and fallbacks.
 import { resolveAgentModelTimeoutMsValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";

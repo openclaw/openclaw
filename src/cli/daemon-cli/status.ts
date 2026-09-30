@@ -1,4 +1,3 @@
-// Gateway service status command entrypoint: gathers status, prints it, and handles probe failures.
 import { colorize, isRich, theme } from "../../../packages/terminal-core/src/theme.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolvePluginVersionDriftTargets } from "../../plugins/plugin-version-drift.js";

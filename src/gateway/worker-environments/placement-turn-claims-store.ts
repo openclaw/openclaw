@@ -1,4 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { assertSessionEntryCurrentAdmission } from "../../config/sessions/session-entry-current-admission.js";
+import type { SessionEntryCurrentFacts } from "../../config/sessions/session-entry-current.types.js";
 import { isSqliteLockError } from "../../infra/sqlite-error-diagnostics.js";
 import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -13,10 +15,12 @@ import {
 import { prepareWorkerTurnClaimClosed } from "./placement-turn-claim-events.js";
 import { ActiveTurnClaimError, type createPlacementTurnClaimOps } from "./placement-turn-claims.js";
 import type {
+  PlacementTurnClaimCurrentCheck,
   PlacementTurnClaimReceipt,
   PlacementTurnClaimWorkerOperations,
 } from "./placement-turn-claims.worker-contract.js";
 import { createPlacementWorkerMutation } from "./placement-worker-mutation.js";
+import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
 
 const log = createSubsystemLogger("gateway/placement");
 
@@ -44,7 +48,16 @@ export function createPlacementTurnClaimWorkerOps(runtime: {
   async function execute(
     input: SqliteWorkerCommand<PlacementTurnClaimWorkerOperations>,
     assertCurrent?: () => void,
+    current?: PlacementTurnClaimCurrentCheck,
   ): Promise<PlacementTurnClaimReceipt> {
+    const entryCheck = current?.sessionEntry;
+    const capturedEntryCheck = entryCheck
+      ? {
+          source: { ...entryCheck.source },
+          assertCurrent: (facts: SessionEntryCurrentFacts | undefined) =>
+            entryCheck.assertCurrent(facts),
+        }
+      : undefined;
     const command = { ...input };
     const { sessionId, claimId, runId, owner: requestedOwner } = input.input.claim;
     const { kind, environmentId, ownerEpoch } = requestedOwner;
@@ -59,6 +72,12 @@ export function createPlacementTurnClaimWorkerOps(runtime: {
       const { placementGeneration } = command.input.claim;
       command.input = { ...command.input, claim: { ...claim, placementGeneration } };
     }
+    if (
+      command.type === "placementTurns.recordStagedResult" ||
+      command.type === "placementTurns.updateWorkspaceBaseManifest"
+    ) {
+      command.input = { ...command.input, sessionEntryCurrentSource: capturedEntryCheck?.source };
+    }
     const close =
       command.type === "placementTurns.release" || command.type === "placementTurns.releaseIfOwned"
         ? prepareWorkerTurnClaimClosed(runtime.path, command.input.claim)
@@ -72,13 +91,29 @@ export function createPlacementTurnClaimWorkerOps(runtime: {
         label: "Placement claim",
         nativeLocation: runtime.path,
         assertCurrent,
+        admissionFacts(request) {
+          if (request.stage !== "transaction" && request.stage !== "commit") {
+            return request.facts;
+          }
+          const admitted = assertSessionEntryCurrentAdmission(request, capturedEntryCheck);
+          if (current) {
+            if (!isReceipt(admitted.facts)) {
+              throw new Error("Placement admission has no current placement facts");
+            }
+            current.assertPlacementCurrent(admitted.facts.placement);
+          }
+          return admitted.facts;
+        },
         readReceipt: (facts) => (isReceipt(facts) ? facts : undefined),
         stageCommit(facts) {
           if (!isReceipt(facts)) {
             throw new Error("Placement claim commit has no receipt");
           }
           prepared = facts;
-          if (command.type === "placementTurns.recordStagedResult") {
+          if (
+            command.type === "placementTurns.recordStagedResult" ||
+            command.type === "placementTurns.updateWorkspaceBaseManifest"
+          ) {
             if (facts.placement?.sessionId !== command.input.claim.sessionId) {
               throw new Error("Staged workspace result receipt has a different owner");
             }
@@ -107,10 +142,19 @@ export function createPlacementTurnClaimWorkerOps(runtime: {
         async recoverUnknown(error, publication) {
           if (
             command.type === "placementTurns.handoffRuntimeRefreshResult" ||
-            command.type === "placementTurns.recordStagedResult"
+            command.type === "placementTurns.recordStagedResult" ||
+            command.type === "placementTurns.updateWorkspaceBaseManifest"
           ) {
             // An uncertain result write requires fresh recovery authority; never replay it.
             publication?.invalidate();
+            if (command.type === "placementTurns.updateWorkspaceBaseManifest") {
+              // An unobserved commit cannot authorize an inverse filesystem apply.
+              throw new AcceptedWorkspacePublicationIndeterminateError(
+                "commit",
+                error,
+                new Error("Workspace journal commit settlement is unavailable"),
+              );
+            }
             return undefined;
           }
           if (command.type === "placementTurns.recoverWorkspace") {
@@ -207,11 +251,30 @@ export function createPlacementTurnClaimWorkerOps(runtime: {
     }
   }
   return {
+    async updateWorkspaceBaseManifest(
+      input: Parameters<Claims["updateWorkspaceBaseManifest"]>[0],
+      assertCurrent?: () => void,
+      current?: PlacementTurnClaimCurrentCheck,
+    ) {
+      const receipt = await execute(
+        {
+          type: "placementTurns.updateWorkspaceBaseManifest",
+          input: { ...input, nowMs: runtime.now?.() },
+        },
+        assertCurrent,
+        current,
+      );
+      if (!receipt.placement) {
+        throw new Error("Workspace journal commit receipt is missing its placement");
+      }
+      return receipt.placement;
+    },
     async recordStagedWorkspaceResult(
       claim: WorkerSessionTurnClaim,
       stagedResultRef: string,
       repositoryWorkspaceId?: string,
       assertCurrent?: () => void,
+      current?: PlacementTurnClaimCurrentCheck,
     ): Promise<void> {
       await execute(
         {
@@ -219,6 +282,7 @@ export function createPlacementTurnClaimWorkerOps(runtime: {
           input: { claim, stagedResultRef, repositoryWorkspaceId },
         },
         assertCurrent,
+        current,
       );
     },
     async retainInterruptedTurnWorkspace(

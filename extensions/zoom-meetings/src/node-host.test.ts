@@ -2,9 +2,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 const childProcessMocks = vi.hoisted(() => ({ spawnSync: vi.fn() }));
 
-vi.mock("node:child_process", () => ({ spawnSync: childProcessMocks.spawnSync }));
+vi.mock("node:child_process", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:child_process")>()),
+  spawnSync: childProcessMocks.spawnSync,
+}));
 
-import { handleZoomMeetingsNodeHostCommand } from "./node-host.js";
+import { zoomMeetingsPlugin } from "../index.js";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -27,7 +30,7 @@ describe("Zoom meetings node setup", () => {
       return { status: 0, stderr: "", stdout: "" };
     });
 
-    await handleZoomMeetingsNodeHostCommand(
+    await zoomMeetingsPlugin.nodeHandler(
       JSON.stringify({
         action: "setup",
         audioInputCommand: ["sox"],
@@ -54,7 +57,7 @@ describe("Zoom meetings node setup", () => {
       .mockReturnValueOnce({ status: null, stderr: "", stdout: "", error: timeoutError });
 
     await expect(
-      handleZoomMeetingsNodeHostCommand(
+      zoomMeetingsPlugin.nodeHandler(
         JSON.stringify({
           action: "setup",
           audioInputCommand: ["sox"],

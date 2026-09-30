@@ -79,7 +79,7 @@ describe("worker placement terminal persistence", () => {
     expect(() => store.completeWorkspaceResultAndReleaseTurn(claim)).toThrow(
       "workspace result was not accepted",
     );
-    store.updateWorkspaceBaseManifest({ claim, manifestRef: `sha256:${"e".repeat(64)}` });
+    await store.updateWorkspaceBaseManifest({ claim, manifestRef: `sha256:${"e".repeat(64)}` });
     store.acceptWorkspaceResult(claim);
 
     expect(
@@ -222,7 +222,7 @@ describe("worker placement terminal persistence", () => {
         );
       } else if (resultState === "journaled") {
         const basePack = Buffer.from("pending remote workspace snapshot");
-        store.beginWorkspaceReconciliation(
+        await store.beginWorkspaceReconciliation(
           {
             sessionId: active.sessionId,
             environmentId: active.environmentId,

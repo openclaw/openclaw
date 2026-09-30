@@ -1,4 +1,3 @@
-// Normalizes runtime status values for CLI and gateway reporting.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 type RuntimeStatusFormatInput = {

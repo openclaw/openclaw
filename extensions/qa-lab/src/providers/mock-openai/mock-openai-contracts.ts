@@ -234,6 +234,9 @@ export const QA_REPEATED_REQUEST_RECOVERY_PROMPT_RE = /repeated request recovery
 export const QA_REPEATED_REQUEST_QUEUED_REPLY_PROMPT_RE =
   /repeated request queued reply gateway qa check/i;
 export const QA_REPEATED_REQUEST_QUEUED_REPLY_MARKER = "GATEWAY_REPEATED_REQUEST_QUEUED_OK";
+export const QA_STALLED_TURN_RECOVERY_PROMPT_RE = /stalled turn recovery qa check/i;
+export const QA_STALLED_TURN_RECOVERY_NEEDLE = "previous turn stopped making progress";
+export const QA_STALLED_TURN_RECOVERY_MARKER = "STALLED-TURN-RECOVERED-OK";
 export const QA_STREAMING_PROMPT_RE = /(?:partial|quiet) streaming qa check/i;
 export const QA_FINAL_ONLY_MARKER_STREAMING_PROMPT_RE = /final-only marker streaming qa check/i;
 export const QA_BLOCK_STREAMING_PROMPT_RE = /block streaming qa check/i;
@@ -387,6 +390,7 @@ export type MockScenarioState = {
   subagentFanoutPhase: number;
   subagentHandoffSpawned: boolean;
   repeatedRequestRecoveryAttempts: number;
+  stalledTurnRecoveryAttempts: number;
   toolLoopReadAttempts: number;
 };
 

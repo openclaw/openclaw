@@ -668,6 +668,9 @@ const config = {
     // Declaration companions describe executable JavaScript modules; they are not standalone roots.
     "scripts/**/*.d.{mts,ts}",
     "**/live-*.ts",
+    // This worker-thread proof entry is loaded from its test with new URL(),
+    // which Knip cannot discover as a static import.
+    "src/worker/repro-worker-connection-closing-window.ts",
     "src/shared/text/assistant-visible-text.ts",
     bundledPluginFile("telegram", "src/draft-chunking.ts"),
   ],

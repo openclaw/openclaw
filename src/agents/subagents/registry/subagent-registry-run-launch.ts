@@ -18,7 +18,11 @@ import {
 import { bindSwarmRunReservation } from "../swarm/swarm-scheduler.js";
 import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import { waitForPendingSubagentKillClaim } from "./subagent-registry-persistence.js";
+import {
+  SubagentRegistryWriteError,
+  publishSubagentRunPostimages,
+  waitForPendingSubagentKillClaim,
+} from "./subagent-registry-persistence.js";
 import { registerRequiredQueuedSubagent } from "./subagent-registry-queued-registration.js";
 import {
   createSubagentRegistrationRecord,
@@ -75,6 +79,24 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
     const previous = this.options.runs.get(runId);
     const previousGeneration = previous?.generation;
     const previousCreatedAt = previous?.createdAt;
+    if (options.persistence === "worker" && previous) {
+      options.assertCurrent?.();
+      if (
+        previous.childSessionKey !== childSessionKey ||
+        previous.requesterSessionKey !== requesterSessionKey ||
+        previous.requesterAgentId !== requesterAgentId ||
+        previous.requesterTurnRunId !== (registerParams.requesterTurnRunId?.trim() || undefined) ||
+        previous.expectsCompletionMessage !== registerParams.expectsCompletionMessage ||
+        Boolean(previous.collect) !== Boolean(registerParams.collect)
+      ) {
+        throw new Error(
+          "Accepted run already has another completion owner; inspect it before retrying.",
+        );
+      }
+      // Admission replay retains the original result, generation, custody, and sole waiter.
+      subagentRuns.runWithCompletionAuthority(previous, () => options.assertCurrent?.());
+      return;
+    }
     const requesterStorePath = previous
       ? previous.requesterStorePath
       : resolvePhysicalSessionStorePath(
@@ -92,7 +114,10 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
         );
     const queued = registerParams.queued === true;
     const queuedContext = queued ? captureOpenClawStateWorkerContext() : undefined;
+    const workerContext =
+      !queued && options.persistence === "worker" ? captureOpenClawStateWorkerContext() : undefined;
     const registrationOwnership = subagentRuns.captureRegistrationOwnership(childSessionKey);
+    let workerOwnsRegistration = false;
     const register = (
       completionAuthority?: Awaited<
         ReturnType<typeof captureOperatorToolGatewayContinuationContext>
@@ -184,6 +209,60 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
             ...options,
           });
         }
+        if (workerContext) {
+          const preimages = new Map<SubagentRunRecord, SubagentRunRecord | undefined>([
+            [entry, undefined],
+          ]);
+          for (const [row, killReconciliation] of killReconciliationSnapshots) {
+            preimages.set(row, { ...row, killReconciliation });
+          }
+          const assertPublicationCurrent = () => {
+            options.assertPublicationCurrent?.();
+            if (custodyTransferred) {
+              completionAuthority?.assertCurrent();
+            }
+            registrationOwnership.assertCurrent();
+            if (!isAgentEventLifecycleGenerationCurrent(lifecycleGeneration)) {
+              throw new Error("Subagent registration changed before worker publication");
+            }
+          };
+          const assertRegistrationCurrent = () => {
+            options.assertCurrent?.();
+            assertPublicationCurrent();
+          };
+          workerOwnsRegistration = true;
+          return (async () => {
+            try {
+              const result = await publishSubagentRunPostimages({
+                runs: this.options.runs,
+                previous: preimages,
+                persist: this.options.persistAsyncOrThrow,
+                context: workerContext,
+                assertCurrent: assertRegistrationCurrent,
+                assertPublicationCurrent,
+                onPublished: activateRegistrationLifecycle,
+              });
+              if (result.publication !== "published") {
+                throw new SubagentRegistryWriteError(
+                  "committed",
+                  new Error("Subagent registration changed before worker publication"),
+                  result.publication,
+                );
+              }
+            } catch (error) {
+              // Ambiguous commits retain private custody and the persistence owner's write fence.
+              if (
+                error instanceof SubagentRegistryWriteError &&
+                error.outcome === "not-committed"
+              ) {
+                subagentRuns.releaseCompletionAuthority(entry);
+              }
+              throw error;
+            } finally {
+              registrationOwnership.release();
+            }
+          })();
+        }
         try {
           this.options.persistOrThrow(...registeredRunIds);
         } catch (error) {
@@ -199,7 +278,9 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
         }
         throw error;
       } finally {
-        registrationOwnership.release();
+        if (!workerOwnsRegistration) {
+          registrationOwnership.release();
+        }
       }
     };
     try {

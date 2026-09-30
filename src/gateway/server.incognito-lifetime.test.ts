@@ -135,7 +135,8 @@ it("expires Incognito at creation plus 24 hours, cancels work, and deletes witho
     const active = replyRunRegistry.begin({ ...scope, resetTriggered: false });
     try {
       await time.advanceBy(1);
-      await expect(deleted.promise).resolves.toMatchObject({
+      const result = await deleted.promise;
+      expect(result, JSON.stringify(result)).toMatchObject({
         ok: true,
         result: { deleted: true, archived: [] },
       });

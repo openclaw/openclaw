@@ -389,7 +389,7 @@ describe("worker placement dispatch", () => {
       },
     });
     placementStore.markWorkspaceResultPending(claim);
-    placementStore.updateWorkspaceBaseManifest({
+    await placementStore.updateWorkspaceBaseManifest({
       claim,
       manifestRef: harness.reconciledManifestRef,
     });
@@ -741,7 +741,7 @@ describe("worker placement dispatch", () => {
     if (active?.state !== "active") {
       return;
     }
-    placementStore.beginWorkspaceReconciliation(
+    await placementStore.beginWorkspaceReconciliation(
       {
         sessionId: active.sessionId,
         environmentId: active.environmentId,

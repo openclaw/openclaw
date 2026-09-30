@@ -317,6 +317,7 @@ export function resolveSettledToolTerminalContinuationInstruction(params: {
     terminal.phase === "prompt" &&
     terminal.source === "idle" &&
     attempt.currentAttemptReplayMetadata?.hadPotentialSideEffects === true;
+  const assistantState = classifyAssistantTurn(params);
   const emptyStopAfterSettledTools = Boolean(
     params.allowEmptyStopContinuation &&
     attempt.currentAttemptAssistant?.stopReason === "stop" &&
@@ -326,10 +327,14 @@ export function resolveSettledToolTerminalContinuationInstruction(params: {
     attempt.itemLifecycle.completedCount === attempt.itemLifecycle.startedCount &&
     attempt.itemLifecycle.activeCount === 0 &&
     !hasAcceptedSessionSpawn(attempt.acceptedSessionSpawns) &&
-    classifyAssistantTurn(params).emptyResponse,
+    assistantState.emptyResponse,
   );
   if (
     params.payloadCount !== 0 ||
+    // Optional authored silence skips generation without clearing tool failure evidence.
+    (!params.allowEmptyStopContinuation &&
+      assistantState.silent &&
+      assistantState.nonVisibleEligibleForSilentReply) ||
     params.hasTerminalToolPresentation ||
     params.aborted ||
     ((params.timedOut || terminal.kind === "timeout") && !idlePromptTimeout) ||

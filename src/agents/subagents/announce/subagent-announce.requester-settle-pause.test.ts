@@ -34,7 +34,8 @@ describe("requester pause notices", () => {
           childSessionKey: requesterKey,
         });
         registryRuntimeMock.getLatestLiveSubagentRunByChildSessionKey.mockImplementation(
-          () => requester,
+          (sessionKey, matches) =>
+            sessionKey === requesterKey && (!matches || matches(requester)) ? requester : undefined,
         );
         setSessionStore({ [requesterKey]: { sessionId: "requester-session" } });
         const child = makeSettledChild({

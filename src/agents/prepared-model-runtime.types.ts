@@ -258,6 +258,8 @@ export type PreparedModelRuntimeOwner = {
   /** Source-bound attempt status, including failure before any inventory was published. */
   catalogAttempt?: PreparedModelCatalogAttempt;
   refreshError?: Error;
+  /** The configured publication owner recovers when an idle Gateway lender retires. */
+  onPluginGenerationRetired?: () => void;
   snapshot?: PreparedModelRuntimeSnapshot;
   pluginGeneration?: PreparedModelRuntimePluginGeneration;
   /** Explicit generation admitted for the current publication, when known. */

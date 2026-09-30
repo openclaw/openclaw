@@ -60,6 +60,10 @@ function createCurrentEntryRead(
       entry = current
         ? {
             sessionId: current.sessionId,
+            ...(current.archivedAt === undefined ? {} : { archivedAt: current.archivedAt }),
+            ...(current.repositoryWorkspaceId === undefined
+              ? {}
+              : { repositoryWorkspaceId: current.repositoryWorkspaceId }),
             lifecycleRevision: current.lifecycleRevision,
             lifecycleRunId: current.lifecycleRunId,
             activeWriterRunId: current.activeWriterRunId,

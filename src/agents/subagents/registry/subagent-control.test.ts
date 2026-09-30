@@ -168,7 +168,7 @@ beforeEach(() => {
   setSubagentControlDepsForTest();
   resetRegistryLeafMocks();
   vi.mocked(cleanupBrowserSessionsForLifecycleEnd).mockResolvedValue(undefined);
-  vi.mocked(ensureContextEnginesInitialized).mockImplementation(() => {});
+  vi.mocked(ensureContextEnginesInitialized).mockResolvedValue(undefined);
   vi.mocked(registryState.persistSubagentRunsToDisk).mockImplementation(() => {});
   vi.mocked(registryState.persistSubagentRunsToDiskOrThrow).mockImplementation(() => {});
   vi.mocked(registryState.restoreSubagentRunsFromDisk).mockResolvedValue(0);

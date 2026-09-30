@@ -111,9 +111,6 @@ function hasPluginOwnedToolConfig(cfg: OpenClawConfig, plugin: PluginManifestRec
   if (isNativeSessionCatalogOptOutOnly(plugin.id, entry) || !isRecord(pluginConfig)) {
     return false;
   }
-  if ((plugin.contracts?.tools?.length ?? 0) === 0) {
-    return false;
-  }
   const properties = isRecord(plugin.configSchema) ? plugin.configSchema.properties : undefined;
   return (
     isRecord(properties) &&

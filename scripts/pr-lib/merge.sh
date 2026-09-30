@@ -1025,12 +1025,14 @@ merge_run() {
     # Materialize forward main before the last live authority verification.
     merge_outcome_stable "$pr" || return 1
     verify_prior_ci_admin "$pr" "$PREP_HEAD_SHA" || return 1
-    # A later main may reuse local objects, never start another lazy/explicit fetch.
-    MERGE_PRIOR_CI_RECALCULATED=false
-    GIT_NO_LAZY_FETCH=1 merge_outcome_stable "$pr" true || return 1
-    if [ "$MERGE_PRIOR_CI_REST_OBSERVATION" = true ] || [ "$MERGE_PRIOR_CI_RECALCULATED" = true ]; then
-      # Complete REST reads and delayed recalculation need fresh authority before dispatch.
-      verify_prior_ci_admin "$pr" "$PREP_HEAD_SHA" || return 1
+    if [ "$MERGE_PRIOR_CI_REST_OBSERVATION" != true ]; then
+      # GraphQL retains its post-authority stability check without fetching.
+      # REST already brackets policy and main before the final authority check.
+      MERGE_PRIOR_CI_RECALCULATED=false
+      GIT_NO_LAZY_FETCH=1 merge_outcome_stable "$pr" true || return 1
+      if [ "$MERGE_PRIOR_CI_REST_OBSERVATION" = true ] || [ "$MERGE_PRIOR_CI_RECALCULATED" = true ]; then
+        verify_prior_ci_admin "$pr" "$PREP_HEAD_SHA" || return 1
+      fi
     fi
     # No awaited operation may replace the operator's bytes after validation.
     node "$script_parent_dir/pr-lib/merge-prior-ci.mjs" unchanged \

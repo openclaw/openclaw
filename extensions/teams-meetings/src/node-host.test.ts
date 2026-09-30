@@ -7,8 +7,7 @@ vi.mock("node:child_process", async (importOriginal) => {
   return { ...actual, spawnSync: spawnSyncMock };
 });
 
-let teamsMeetingsConfig: (typeof import("./config.js"))["teamsMeetingsConfig"];
-let handleTeamsMeetingsNodeHostCommand: (typeof import("./node-host.js"))["handleTeamsMeetingsNodeHostCommand"];
+let teamsMeetingsPlugin: (typeof import("../index.js"))["teamsMeetingsPlugin"];
 
 const successfulProbe = {
   pid: 123,
@@ -33,8 +32,7 @@ describe("Teams meeting node-host prerequisite deadline", () => {
     vi.resetModules();
     const platform = vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
     try {
-      ({ teamsMeetingsConfig } = await import("./config.js"));
-      ({ handleTeamsMeetingsNodeHostCommand } = await import("./node-host.js"));
+      ({ teamsMeetingsPlugin } = await import("../index.js"));
     } finally {
       platform.mockRestore();
     }
@@ -60,7 +58,7 @@ describe("Teams meeting node-host prerequisite deadline", () => {
       now.mockReturnValueOnce(value);
     }
 
-    await expect(handleTeamsMeetingsNodeHostCommand(setupParams())).resolves.toBe(
+    await expect(teamsMeetingsPlugin.nodeHandler(setupParams())).resolves.toBe(
       JSON.stringify({
         ok: true,
         audioBackend: "blackhole-2ch",
@@ -75,11 +73,11 @@ describe("Teams meeting node-host prerequisite deadline", () => {
 
   it("probes the default sox executable only once", async () => {
     await expect(
-      handleTeamsMeetingsNodeHostCommand(
+      teamsMeetingsPlugin.nodeHandler(
         JSON.stringify({
           action: "setup",
-          audioInputCommand: teamsMeetingsConfig.defaultAudioInputCommand,
-          audioOutputCommand: teamsMeetingsConfig.defaultAudioOutputCommand,
+          audioInputCommand: teamsMeetingsPlugin.config.defaultAudioInputCommand,
+          audioOutputCommand: teamsMeetingsPlugin.config.defaultAudioOutputCommand,
         }),
       ),
     ).resolves.toBe(
@@ -105,7 +103,7 @@ describe("Teams meeting node-host prerequisite deadline", () => {
       now.mockReturnValueOnce(value);
     }
 
-    await expect(handleTeamsMeetingsNodeHostCommand(setupParams())).rejects.toThrow(
+    await expect(teamsMeetingsPlugin.nodeHandler(setupParams())).rejects.toThrow(
       "Microsoft Teams meeting audio prerequisite check timed out on the node.",
     );
     expect(spawnSyncMock).toHaveBeenCalledTimes(1);
@@ -122,7 +120,7 @@ describe("Teams meeting node-host prerequisite deadline", () => {
       error: timeoutError,
     });
 
-    await expect(handleTeamsMeetingsNodeHostCommand(setupParams())).rejects.toThrow(
+    await expect(teamsMeetingsPlugin.nodeHandler(setupParams())).rejects.toThrow(
       "Microsoft Teams meeting audio prerequisite check timed out on the node.",
     );
     expect(spawnSyncMock).toHaveBeenCalledTimes(1);

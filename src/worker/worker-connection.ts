@@ -1,5 +1,5 @@
 import { toStructuredErrorObject } from "@openclaw/normalization-core/error-coercion";
-import type { WebSocket } from "ws";
+import { WebSocket } from "ws";
 import { DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS } from "../../packages/gateway-client/src/timeouts.js";
 import type {
   WorkerHeartbeatParams,
@@ -141,7 +141,7 @@ export class WorkerConnection {
   }
 
   waitForReady(): Promise<WorkerHelloOk> {
-    if (this.stateValue.kind === "ready") {
+    if (this.stateValue.kind === "ready" && this.socket?.readyState === WebSocket.OPEN) {
       return Promise.resolve(this.stateValue.hello);
     }
     if (this.isTerminal()) {
