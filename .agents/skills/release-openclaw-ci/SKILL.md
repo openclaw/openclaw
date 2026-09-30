@@ -413,12 +413,18 @@ trusted workflow tooling. The receipt retains normalized dispatch inputs,
 including candidate descriptors, and composes predecessor jobs across attempts.
 Its `workloadConclusion` excludes the running publisher. Collection failure
 loses reuse metadata without changing workload qualification. With
-`reuse_evidence=true`, dispatch checks at most 30 recent runs and five receipts
-per role within two minutes. It can adopt green children from failed, cancelled,
-or active parents for the exact target, inputs/defaults, and candidate descriptor
-bytes; unmatched roles dispatch fresh work. The current-parent adoption witness
+`reuse_evidence=true`, dispatch scans at most 100 recent runs, probes at most 40
+target receipt inventories, and fully validates at most five matching receipts
+per role within two minutes. Other-target and other-tooling runs do not spend
+the full-validation budget. Empty-string inputs equal absent inputs because GitHub omits them from
+`github.event.inputs`; non-empty defaults and candidate descriptor bytes must
+match exactly. It can adopt green children from failed, cancelled, or active
+parents only at the same Tooling SHA as the current parent, still requiring main
+ancestry. Missing or different parent tooling fails closed; no paths are exempt.
+Dispatch logs identify reused children, explain each evaluated rejection, and
+summarize skipped runs and fresh dispatches. The current-parent adoption witness
 and immutable execution plan bind each selection. Collectors and final verification
-recheck the live child attempt and conclusion, main ancestry, exact inputs,
+recheck the live child attempt and conclusion, same tooling, main ancestry, inputs,
 artifact identity/digest/expiry, and successful trusted seal/upload steps. A newer
 attempt invalidates reuse; do not rerun an adopted child to repair a collector.
 Current-parent source/publication admission and the separate successful-parent
