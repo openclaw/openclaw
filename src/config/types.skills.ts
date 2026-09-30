@@ -24,7 +24,7 @@ export type SkillsInstallConfig = NonNullable<SkillsSchemaInput["install"]>;
 /** Limits that bound skill discovery and model-facing prompt expansion. */
 export type SkillsLimitsConfig = NonNullable<SkillsSchemaInput["limits"]>;
 
-/** Autonomous and approval settings for generated skill proposals. */
+/** Skill Workshop autonomous learning settings. */
 export type SkillsWorkshopConfig = NonNullable<SkillsSchemaInput["workshop"]>;
 
 export type SkillsWorkshopAutonomousMode = NonNullable<

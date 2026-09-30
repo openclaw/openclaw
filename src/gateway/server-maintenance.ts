@@ -38,7 +38,7 @@ import {
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
-import { registerSkillUsageTracking } from "../skills/workshop/curator.js";
+import { registerSkillUsageTracking } from "../skills/workshop/skill-usage.js";
 import {
   abortChatRunById,
   type ChatAbortControllerEntry,

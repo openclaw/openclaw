@@ -365,8 +365,8 @@ The runner records the applied content version in the existing
 deferred, new code uses that content version, and both `PRAGMA user_version` and
 `schema_meta.schema_version` retain the previous published version. Content and
 its marker commit together. Reopening skips migration steps already covered by
-the marker, including the schema-16 Skill Workshop rebuild; it does not infer
-completion from table shape or repeat the rebuild. This requires no new table,
+the marker; it does not infer completion from table shape or repeat a
+completed rebuild. This requires no new table,
 configuration option, or environment override.
 
 Current content is ready for readers even while its version is unpublished.

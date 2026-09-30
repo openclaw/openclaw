@@ -7,7 +7,6 @@ import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_MCP } from "./legacy-config-migrations
 import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_MODELS } from "./legacy-config-migrations.runtime.models.js";
 import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED } from "./legacy-config-migrations.runtime.retired.js";
 import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_SESSION } from "./legacy-config-migrations.runtime.session.js";
-import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_SKILLS } from "./legacy-config-migrations.runtime.skills.js";
 
 const runtimeMigrations = [
   ...LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY,
@@ -507,23 +506,6 @@ describe("retired runtime config migrations", () => {
     expect(result.raw).toHaveProperty("messages.responsePrefix", "[bot]");
     expect(applyAll(result.raw).changes).toEqual([]);
   });
-});
-
-it.each([
-  { enabled: true, mode: "propose" },
-  { enabled: false, mode: "off" },
-])("migrates Skill Workshop enabled=$enabled to $mode", ({ enabled, mode }) => {
-  const result = applyMigrations(LEGACY_CONFIG_MIGRATIONS_RUNTIME_SKILLS, {
-    skills: { workshop: { autonomous: { enabled } } },
-  });
-  expect(result.raw).toEqual({ skills: { workshop: { autonomous: { mode } } } });
-});
-
-it("retires Skill Workshop symlink write permission", () => {
-  const result = applyMigrations(LEGACY_CONFIG_MIGRATIONS_RUNTIME_SKILLS, {
-    skills: { workshop: { allowSymlinkTargetWrites: true, autonomous: { mode: "auto" } } },
-  });
-  expect(result.raw).toEqual({ skills: { workshop: { autonomous: { mode: "auto" } } } });
 });
 
 it.each([

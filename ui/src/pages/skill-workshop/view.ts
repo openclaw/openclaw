@@ -1,416 +1,383 @@
+import type {
+  SkillsWorkshopListResult,
+  SkillsWorkshopReadResult,
+  SkillWorkshopChange,
+  SkillWorkshopSkillSummary,
+} from "@openclaw/gateway-protocol";
 import { html, nothing } from "lit";
-import { keyed } from "lit/directives/keyed.js";
-import { ref } from "lit/directives/ref.js";
-import { styleMap } from "lit/directives/style-map.js";
+import type { ApplicationContext } from "../../app/context.ts";
+import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
 import { icons } from "../../components/icons.ts";
-import "../../components/file-preview-modal-registration.ts";
-import "../../components/modal-dialog.ts";
-import "../../components/resizable-divider.ts";
-import "../../components/tooltip.ts";
+import { renderSettingsSegmented } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { registerSkillWorkshopEnglish } from "../../i18n/locales/en-skill-workshop.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
-import "../../styles/plugins.css";
+import type { SessionMethodAccess } from "../../lib/session-method-access.ts";
 import "../../styles/skill-workshop.css";
-import "../../styles/sidebar-markdown.css";
-import {
-  filterSkillWorkshopProposals,
-  type SkillWorkshopActionNotice,
-  type SkillWorkshopProposal,
-  type SkillWorkshopProposalDecision,
-} from "../../lib/skill-workshop/index.ts";
-import { renderSkillDocument, renderSkillWorkshopCollection } from "./collection-view.ts";
-import { renderSkillWorkshopEmptyDetail, renderWorkshopEmptyState } from "./empty-states.ts";
-import { renderSkillWorkshopEvaluation } from "./evaluation-view.ts";
-import { renderSkillWorkshopProposalList } from "./proposal-list.ts";
-import { renderSelfLearningError } from "./self-learning.ts";
-import type { SkillWorkshopProps } from "./view-types.ts";
+import { renderPluginsHubHeader } from "../plugins/plugins-hub-header.ts";
+import { PLUGINS_HUB_PANEL_ID } from "../plugins/plugins-hub.ts";
+import type { SkillWorkshopAccess } from "./access.ts";
+import { undoMutationFor, type WorkshopMutation, type WorkshopSnapshot } from "./api.ts";
+import type { SkillWorkshopMode } from "./mode.ts";
 
 registerSkillWorkshopEnglish();
 
-const GROUP_LABEL: Record<SkillWorkshopProposal["recencyGroup"], string> = {
-  today: "skillWorkshop.recency.today",
-  yesterday: "skillWorkshop.recency.yesterday",
-  earlier: "skillWorkshop.recency.earlier",
+export type WorkshopViewerTarget = { name: string; filePath: string; versionId?: string };
+
+export type WorkshopViewer =
+  | { target: WorkshopViewerTarget; status: "loading" }
+  | { target: WorkshopViewerTarget; status: "ready"; result: SkillsWorkshopReadResult }
+  | { target: WorkshopViewerTarget; status: "error"; error: string };
+
+type SkillWorkshopViewProps = {
+  context: ApplicationContext;
+  agentId: string | null;
+  access: SkillWorkshopAccess;
+  snapshot: WorkshopSnapshot | null;
+  loading: boolean;
+  error: string | null;
+  viewer: WorkshopViewer | null;
+  pendingAction: string | null;
+  actionError: string | null;
+  mode: SkillWorkshopMode | null;
+  modeBusy: boolean;
+  modeError: string | null;
+  learningAccess: SessionMethodAccess;
+  learningBusy: boolean;
+  learningError: string | null;
+  onRetry: () => void;
+  onSelectSkill: (name: string) => void;
+  onOpen: (target: WorkshopViewerTarget) => void;
+  onMutate: (mutation: WorkshopMutation, key: string) => void;
+  onModeChange: (mode: SkillWorkshopMode) => void;
+  onLearn: () => void;
 };
 
-type SkillWorkshopSection = {
-  groups: Array<{ label: string; items: SkillWorkshopProposal[] }>;
-  selected: SkillWorkshopProposal | undefined;
-};
+const MODES: readonly SkillWorkshopMode[] = ["off", "auto"];
 
-export function renderSkillWorkshop(props: SkillWorkshopProps) {
-  const filtered = filterSkillWorkshopProposals(props.proposals, props.query);
-  const section = {
-    groups: groupByRecency(filtered),
-    selected: filtered.find((proposal) => proposal.key === props.selectedKey) ?? filtered[0],
-  };
-  const selected = section.selected;
-  const preview =
-    selected && props.filePreviewKey
-      ? selected.supportFiles.find((f) => f.path === props.filePreviewKey)
-      : null;
-  const revisionProposal = props.revisionKey
-    ? props.proposals.find((p) => p.key === props.revisionKey)
-    : null;
-
-  const body =
-    props.mode === "skills"
-      ? renderSkillWorkshopCollection(props)
-      : renderSuggestions(props, section);
-
+export function renderSkillWorkshop(props: SkillWorkshopViewProps) {
+  const { context, mode } = props;
   return html`
-    <section class="skill-workshop sw-mode-${props.mode}">
-      ${
-        props.error
-          ? html`<div class="sw-error" role="status">
-              <span>${props.error}</span>
-              <button type="button" class="btn btn--sm" @click=${props.onRetry}>
-                ${t("pluginsPage.tryAgain")}
-              </button>
-            </div>`
-          : nothing
-      }
-      ${renderSelfLearningError(props.selfLearning)}
-      <div class="sw-view" data-mode=${props.mode}>
-        ${keyed(props.mode, html`<div class="sw-view__pane">${body}</div>`)}
-      </div>
-      ${props.actionNotice ? renderActionNotice(props.actionNotice) : nothing}
+    <section class="content--skill-workshop">
+      ${renderPluginsHubHeader({
+        active: "skill-workshop",
+        onSelect: (tab) => context.navigate(tab),
+      })}
+      <wa-tab-panel
+        id=${PLUGINS_HUB_PANEL_ID}
+        class="sw-hub-panel"
+        name="skill-workshop"
+        active
+        aria-labelledby="plugins-tab-skill-workshop"
+      >
+        <div class="sw-toolbar">
+          ${renderAgentScopeControl({
+            agents: context.agents.state.agentsList?.agents ?? [],
+            selection: context.agentSelection,
+            selectedId: props.agentId,
+            allowAll: false,
+          })}
+          ${
+            mode
+              ? html`<div class="sw-mode">
+                  <span class="sw-mode__label">${t("skillWorkshop.mode.label")}</span>
+                  ${renderSettingsSegmented<SkillWorkshopMode>({
+                    mode: "buttons",
+                    ariaLabel: t("skillWorkshop.mode.aria"),
+                    value: mode,
+                    disabled: props.modeBusy || !props.access.canSetMode,
+                    options: MODES.map((value) => ({
+                      value,
+                      label: t(`skillWorkshop.mode.${value}`),
+                      title: t(`skillWorkshop.mode.${value}Title`),
+                    })),
+                    onChange: props.onModeChange,
+                  })}
+                </div>`
+              : nothing
+          }
+          <button
+            type="button"
+            class="btn sw-learn"
+            ?disabled=${props.learningBusy || !props.learningAccess.allowed}
+            title=${
+              props.learningAccess.allowed
+                ? t("skillWorkshop.learning.description")
+                : props.learningAccess.reason
+            }
+            @click=${props.onLearn}
+          >
+            <span aria-hidden="true">${icons.wandSparkles}</span>
+            ${props.learningBusy ? t("skillWorkshop.learning.starting") : t("skillWorkshop.learning.start")}
+          </button>
+        </div>
+        ${[props.learningError, props.modeError, props.actionError].map((message) =>
+          message ? html`<div class="sw-error" role="alert">${message}</div>` : nothing,
+        )}
+        ${
+          props.error
+            ? html`<div class="sw-error" role="alert">
+                ${t("skillWorkshop.loadError")} ${props.error}
+                <button type="button" class="btn btn--sm" @click=${props.onRetry}>
+                  ${t("skillWorkshop.retry")}
+                </button>
+              </div>`
+            : nothing
+        }
+        <div class="sw-layout">
+          <div class="sw-column">${renderSkills(props)} ${renderChanges(props)}</div>
+          ${renderViewer(props)}
+        </div>
+      </wa-tab-panel>
     </section>
+  `;
+}
+
+function renderSkillRow(skill: SkillWorkshopSkillSummary, props: SkillWorkshopViewProps) {
+  const uses = skill.useCount
+    ? skill.useCount === 1
+      ? t("skillWorkshop.skills.usesOne")
+      : t("skillWorkshop.skills.uses", { count: String(skill.useCount) })
+    : null;
+  return html`<li>
+    <button
+      type="button"
+      class="sw-skill"
+      aria-current=${props.viewer?.target.name === skill.name ? "true" : nothing}
+      @click=${() => props.onSelectSkill(skill.name)}
+    >
+      <span class="sw-skill__name">${skill.name}</span>
+      <span class="sw-skill__desc">${skill.description}</span>
+      <span class="sw-meta">
+        ${t("skillWorkshop.skills.updated", { time: formatRelativeTimestamp(skill.updatedAtMs) })}
+        ${uses ? html` · ${uses}` : nothing}
+      </span>
+    </button>
+  </li>`;
+}
+
+function renderSkills(props: SkillWorkshopViewProps) {
+  const list = props.snapshot?.list;
+  const archived = list?.archived.filter((skill) => !skill.live) ?? [];
+  return html`<section class="sw-panel" aria-labelledby="sw-skills-title">
+    <h2 id="sw-skills-title" class="sw-panel__title">
+      ${t("skillWorkshop.skills.title")}
+      ${list ? html`<span class="settings-count">${list.skills.length}</span>` : nothing}
+    </h2>
     ${
-      preview && selected
-        ? html`
-            <openclaw-file-preview-modal
-              .files=${selected.supportFiles}
-              .activePath=${preview.path}
-              .query=${props.filePreviewQuery}
-              .contextLabel=${t("skillWorkshop.previewContext", { slug: selected.slug })}
-              @file-preview-query-change=${(event: CustomEvent<string>) =>
-                props.onFilePreviewQueryChange(event.detail)}
-              @file-preview-select=${(event: CustomEvent<string>) =>
-                props.onPreviewFile(selected.key, event.detail)}
-              @file-preview-close=${props.onClosePreview}
-            ></openclaw-file-preview-modal>
-          `
+      !list
+        ? props.loading
+          ? html`<p class="sw-muted">${t("skillWorkshop.viewer.loading")}</p>`
+          : nothing
+        : list.skills.length === 0
+          ? html`<p class="sw-muted">${t("skillWorkshop.skills.empty")}</p>`
+          : html`<ul class="sw-list">
+              ${list.skills.map((skill) => renderSkillRow(skill, props))}
+            </ul>`
+    }
+    ${
+      archived.length > 0
+        ? html`<details class="sw-archived">
+            <summary>
+              ${t("skillWorkshop.skills.archived")}
+              <span class="settings-count">${archived.length}</span>
+            </summary>
+            <ul class="sw-list">
+              ${archived.map(
+                (skill) => html`<li class="sw-archived__row">
+                  <button
+                    type="button"
+                    class="sw-skill"
+                    aria-current=${props.viewer?.target.name === skill.name ? "true" : nothing}
+                    @click=${() => props.onSelectSkill(skill.name)}
+                  >
+                    <span class="sw-skill__name">${skill.name}</span>
+                    ${
+                      skill.versions[0]
+                        ? html`<span class="sw-meta"
+                            >${formatRelativeTimestamp(skill.versions[0].createdAtMs)}</span
+                          >`
+                        : nothing
+                    }
+                  </button>
+                  ${renderMutationButton(props, {
+                    label: t("skillWorkshop.viewer.restore"),
+                    mutation: { method: "skills.workshop.restore", name: skill.name },
+                    key: `restore:${skill.name}`,
+                  })}
+                </li>`,
+              )}
+            </ul>
+          </details>`
         : nothing
     }
-    ${revisionProposal ? renderRevisionDialog(props, revisionProposal) : nothing}
-  `;
+  </section>`;
 }
 
-function renderRevisionDialog(props: SkillWorkshopProps, proposal: SkillWorkshopProposal) {
-  const busy = props.actionBusy?.key === proposal.key && props.actionBusy.action === "revise";
-  const cancelDisabled = Boolean(props.actionBusy) || props.revisionRecoveryActive;
-  const canSubmit =
-    props.access.canRevise && props.revisionDraft.trim().length > 0 && !props.actionBusy;
-  const verb = t("skillWorkshop.actions.revise");
-
-  return html`
-    <openclaw-modal-dialog
-      .label=${`${t("skillWorkshop.revision.title", { verb })}: ${proposal.slug}`}
-      .description=${t("skillWorkshop.revision.description")}
-      style="--openclaw-modal-width: 560px"
-      @modal-cancel=${(event: Event) => {
-        if (cancelDisabled) {
-          event.preventDefault();
-          return;
-        }
-        props.onRevisionCancel();
-      }}
-    >
-      <section class="sw-revision-dialog ${busy ? "sw-revision-dialog--sending" : ""}">
-        <div class="sw-revision-dialog__head">
-          <div>
-            <div class="sw-revision-dialog__eyebrow">
-              ${t("skillWorkshop.revision.title", { verb })}
-            </div>
-            <h2 id="sw-revision-title">${proposal.slug}</h2>
-          </div>
-          <openclaw-tooltip content=${t("skillWorkshop.actions.close")}>
-            <button
-              type="button"
-              class="sw-revision-dialog__close"
-              aria-label=${t("skillWorkshop.actions.close")}
-              ?disabled=${cancelDisabled}
-              @click=${props.onRevisionCancel}
-            >
-              ${icons.x}
-            </button>
-          </openclaw-tooltip>
-        </div>
-        <p id="sw-revision-description" class="sw-revision-dialog__copy">
-          ${t("skillWorkshop.revision.description")}
-        </p>
-        <textarea
-          class="sw-revision-dialog__input"
-          autofocus
-          aria-label=${t("skillWorkshop.revision.title", { verb })}
-          aria-describedby="sw-revision-description"
-          placeholder=${t("skillWorkshop.revision.placeholder")}
-          .value=${props.revisionDraft}
-          ?disabled=${
-            !props.access.canRevise || Boolean(props.actionBusy) || props.revisionRecoveryActive
-          }
-          @input=${(event: Event) =>
-            props.onRevisionDraftChange((event.target as HTMLTextAreaElement).value)}
-        ></textarea>
-        ${
-          busy
-            ? html`
-                <div class="sw-revision-dialog__status" role="status">
-                  <span class="sw-revision-dialog__status-dot" aria-hidden="true"></span>
-                  <span>${t("skillWorkshop.revision.preparing")}</span>
-                </div>
-              `
-            : nothing
-        }
-        <div class="sw-revision-dialog__actions">
-          <button
-            type="button"
-            class="sw-btn sw-btn--ghost"
-            ?disabled=${cancelDisabled}
-            @click=${props.onRevisionCancel}
-          >
-            ${t("skillWorkshop.actions.cancel")}
-          </button>
-          <button
-            type="button"
-            class="sw-btn sw-btn--primary ${busy ? "is-busy" : ""}"
-            ?disabled=${!canSubmit}
-            @click=${() => props.onRevisionSubmit(proposal.key)}
-          >
-            ${busy ? t("skillWorkshop.actions.sending") : t("skillWorkshop.revision.send")}
-          </button>
-        </div>
-      </section>
-    </openclaw-modal-dialog>
-  `;
+function renderChangeRow(
+  change: SkillWorkshopChange,
+  list: SkillsWorkshopListResult,
+  props: SkillWorkshopViewProps,
+) {
+  const undo = undoMutationFor(change, list);
+  return html`<li class="sw-change">
+    <div class="sw-change__line">
+      <span class="sw-change__actor">${t(`skillWorkshop.changes.actors.${change.actor}`)}</span>
+      ${t(`skillWorkshop.changes.actions.${change.action}`)}
+      <button type="button" class="sw-link" @click=${() => props.onSelectSkill(change.skillName)}>
+        ${change.skillName}
+      </button>
+      <span class="sw-meta">${formatRelativeTimestamp(change.createdAtMs)}</span>
+    </div>
+    ${change.summary ? html`<div class="sw-change__summary">${change.summary}</div>` : nothing}
+    ${
+      undo
+        ? renderMutationButton(props, {
+            label: t("skillWorkshop.changes.undo"),
+            title: t("skillWorkshop.changes.undoTitle", { name: change.skillName }),
+            mutation: undo,
+            key: `undo:${change.id}`,
+          })
+        : nothing
+    }
+  </li>`;
 }
 
-function renderSuggestions(props: SkillWorkshopProps, section: SkillWorkshopSection) {
-  if (props.proposals.length === 0 && !props.loading && !props.error) {
-    return renderWorkshopEmptyState({
-      agentName: resolveSkillWorkshopAgentName(props, t("skillWorkshop.empty.defaultAgent")),
-      selfLearning: props.selfLearning,
-      onSelfLearningToggle: props.onSelfLearningToggle,
-    });
+function renderChanges(props: SkillWorkshopViewProps) {
+  const changes = props.snapshot?.changes;
+  const list = props.snapshot?.list;
+  return html`<section class="sw-panel" aria-labelledby="sw-changes-title">
+    <h2 id="sw-changes-title" class="sw-panel__title">${t("skillWorkshop.changes.title")}</h2>
+    ${
+      !changes || !list
+        ? nothing
+        : changes.length === 0
+          ? html`<p class="sw-muted">${t("skillWorkshop.changes.empty")}</p>`
+          : html`<ol class="sw-list sw-changes">
+              ${changes.map((change) => renderChangeRow(change, list, props))}
+            </ol>`
+    }
+  </section>`;
+}
+
+function renderMutationButton(
+  props: SkillWorkshopViewProps,
+  params: { label: string; title?: string; mutation: WorkshopMutation; key: string },
+) {
+  const allowed =
+    params.mutation.method === "skills.workshop.archive"
+      ? props.access.canArchive
+      : props.access.canRestore;
+  if (!allowed) {
+    return nothing;
   }
-  return html`
-    <div
-      class="sw-triage sw-triage--standalone"
-      style=${styleMap({ "--sw-queue-width": `${props.queueWidth}px` })}
-    >
-      ${renderSkillWorkshopProposalList({
-        props,
-        groups: section.groups,
-        selected: section.selected,
-        emptyText: queueEmptyText(props),
-        searchLabel: t("skillWorkshop.queue.suggestionsLabel"),
-        searchPlaceholder: t("skillWorkshop.queue.searchSuggestions"),
-      })}
-      ${renderQueueResizer(props)}
+  return html`<button
+    type="button"
+    class="btn btn--sm"
+    title=${params.title ?? nothing}
+    ?disabled=${props.pendingAction !== null}
+    @click=${() => props.onMutate(params.mutation, params.key)}
+  >
+    ${props.pendingAction === params.key ? t("skillWorkshop.viewer.loading") : params.label}
+  </button>`;
+}
+
+function renderViewer(props: SkillWorkshopViewProps) {
+  const viewer = props.viewer;
+  if (!viewer) {
+    return html`<section class="sw-panel sw-viewer">
+      <p class="sw-muted">${t("skillWorkshop.viewer.pick")}</p>
+    </section>`;
+  }
+  const { target } = viewer;
+  const list = props.snapshot?.list;
+  const live = list?.skills.some((skill) => skill.name === target.name) ?? false;
+  const versions = list?.archived.find((skill) => skill.name === target.name)?.versions ?? [];
+  const files = viewer.status === "ready" ? viewer.result.files : [target.filePath];
+  return html`<section class="sw-panel sw-viewer" aria-labelledby="sw-viewer-title">
+    <div class="sw-viewer__header">
+      <h2 id="sw-viewer-title" class="sw-panel__title">${target.name}</h2>
       ${
-        section.selected
-          ? renderDetail(props, section.selected)
-          : renderSkillWorkshopEmptyDetail({
-              query: props.query,
+        live && !target.versionId
+          ? renderMutationButton(props, {
+              label: t("skillWorkshop.viewer.archive"),
+              mutation: { method: "skills.workshop.archive", name: target.name },
+              key: `archive:${target.name}`,
             })
+          : target.versionId
+            ? renderMutationButton(props, {
+                label: t(
+                  live ? "skillWorkshop.viewer.restoreVersion" : "skillWorkshop.viewer.restore",
+                ),
+                mutation: {
+                  method: "skills.workshop.restore",
+                  name: target.name,
+                  versionId: target.versionId,
+                },
+                key: `restore:${target.name}:${target.versionId}`,
+              })
+            : nothing
       }
     </div>
-  `;
-}
-
-function renderQueueResizer(props: SkillWorkshopProps) {
-  let divider: HTMLElement | undefined;
-  const measureSize = () => {
-    const queue = divider?.previousElementSibling?.getBoundingClientRect().width ?? 0;
-    const detail = divider?.nextElementSibling?.getBoundingClientRect().width ?? 0;
-    return queue + detail;
-  };
-  return html`<resizable-divider
-    ${ref((element) => (divider = element instanceof HTMLElement ? element : undefined))}
-    class="sw-queue-resizer"
-    .label=${t("skillWorkshop.queue.resize")}
-    .splitRatio=${0.5}
-    .minRatio=${0.2}
-    .maxRatio=${0.8}
-    .measureRatio=${() => props.queueWidth / measureSize()}
-    .measureSize=${measureSize}
-    @resize=${(event: CustomEvent<{ splitRatio: number }>) =>
-      props.onQueueWidthChange(event.detail.splitRatio * measureSize())}
-  ></resizable-divider>`;
-}
-
-function renderDetail(props: SkillWorkshopProps, proposal: SkillWorkshopProposal) {
-  const editedAt =
-    proposal.updatedAt && proposal.updatedAt > proposal.createdAt ? proposal.updatedAt : null;
-  const createdLabel = editedAt
-    ? t("skillWorkshop.detail.edited", {
-        time: formatRelativeTimestamp(editedAt, { dateFallback: true }),
-      })
-    : t("skillWorkshop.detail.created", {
-        time: formatRelativeTimestamp(proposal.createdAt, { dateFallback: true }),
-      });
-  const detailLoading = props.inspectingKey === proposal.key && !proposal.bodyLoaded;
-  const firstSupportFile = proposal.supportFiles[0];
-  return html`
-    <div class="sw-detail">
-      <div class="sw-detail__head">
-        <div class="sw-detail__head-left">
-          <h1 class="sw-detail__title">${proposal.name}</h1>
-          <div class="sw-detail__one-line">${proposal.oneLine}</div>
-          <div class="sw-detail__meta">
-            <span>${createdLabel}</span>
-            <span>·</span>
-            <span>v${proposal.version}</span>
-            <span>·</span>
-            ${
-              firstSupportFile
-                ? html`<button
-                    class="sw-detail__meta-link"
-                    @click=${() => props.onPreviewFile(proposal.key, firstSupportFile.path)}
-                  >
-                    ${t("skillWorkshop.detail.supportFiles", {
-                      count: String(proposal.supportFiles.length),
-                    })}
-                  </button>`
-                : html`<span>${t("skillWorkshop.detail.noSupportFiles")}</span>`
+    ${live ? nothing : html`<p class="sw-muted">${t("skillWorkshop.viewer.archivedNotice")}</p>`}
+    <div class="sw-viewer__controls">
+      <label class="field">
+        <span>${t("skillWorkshop.viewer.file")}</span>
+        <select
+          class="settings-select"
+          @change=${(event: Event) => {
+            if (event.currentTarget instanceof HTMLSelectElement) {
+              props.onOpen({ ...target, filePath: event.currentTarget.value });
             }
-          </div>
-        </div>
-        <div class="sw-detail__nav">
-          <openclaw-tooltip content=${t("skillWorkshop.actions.previous")}>
-            <button aria-label=${t("skillWorkshop.actions.previous")} @click=${props.onPrev}>
-              ↑
-            </button>
-          </openclaw-tooltip>
-          <openclaw-tooltip content=${t("skillWorkshop.actions.next")}>
-            <button aria-label=${t("skillWorkshop.actions.next")} @click=${props.onNext}>↓</button>
-          </openclaw-tooltip>
-        </div>
-      </div>
-
-      <div class="sw-detail__body">
-        <div class="sw-body-card">
-          <div class="sw-body-card__head">
-            <h1>${proposal.slug}</h1>
-          </div>
-          ${
-            proposal.degradedState
-              ? html`<p class="sw-muted" role="status">
-                  ${t("skillWorkshop.detail.draftMissing")}
-                </p>`
-              : detailLoading
-                ? html`<p class="sw-muted" role="status">${t("skillWorkshop.detail.loading")}</p>`
-                : renderSkillDocument(proposal.body)
-          }
-        </div>
-
-        ${
-          proposal.supportFiles.length > 0
-            ? html`
-                <div class="sw-section" style="margin-top: 18px;">
-                  <h3 class="sw-section__label">${t("skillWorkshop.detail.supportFilesTitle")}</h3>
-                  <div class="sw-files">
-                    ${proposal.supportFiles.map(
-                      (file) => html`
-                        <button
-                          class="sw-file"
-                          @click=${() => props.onPreviewFile(proposal.key, file.path)}
-                        >
-                          <span>📄</span>
-                          <span class="sw-file__name">${file.path}</span>
-                          <span class="sw-file__size"
-                            >${file.size}
-                            <span class="sw-file__hint"
-                              >${t("skillWorkshop.detail.clickToPreview")}</span
-                            ></span
-                          >
-                        </button>
-                      `,
-                    )}
-                  </div>
-                </div>
-              `
-            : nothing
-        }
-        ${proposal.evaluation ? renderSkillWorkshopEvaluation(proposal.evaluation) : nothing}
-      </div>
-
-      ${renderPendingActions(props, proposal)}
+          }}
+        >
+          ${files.map(
+            (file) =>
+              html`<option value=${file} ?selected=${file === target.filePath}>${file}</option>`,
+          )}
+        </select>
+      </label>
+      ${
+        versions.length > 0
+          ? html`<label class="field">
+              <span>${t("skillWorkshop.viewer.version")}</span>
+              <select
+                class="settings-select"
+                @change=${(event: Event) => {
+                  if (event.currentTarget instanceof HTMLSelectElement) {
+                    props.onOpen({
+                      name: target.name,
+                      filePath: "SKILL.md",
+                      versionId: event.currentTarget.value || undefined,
+                    });
+                  }
+                }}
+              >
+                ${
+                  live
+                    ? html`<option value="" ?selected=${!target.versionId}>
+                        ${t("skillWorkshop.viewer.current")}
+                      </option>`
+                    : nothing
+                }
+                ${versions.map(
+                  (version) =>
+                    html`<option value=${version.id} ?selected=${version.id === target.versionId}>
+                      ${formatRelativeTimestamp(version.createdAtMs)} ·
+                      ${t(`skillWorkshop.changes.actions.${version.action}`)}
+                    </option>`,
+                )}
+              </select>
+            </label>`
+          : nothing
+      }
     </div>
-  `;
-}
-
-function renderActionNotice(notice: SkillWorkshopActionNotice) {
-  return html`
-    <div class="sw-action-toast" role="status" aria-live="polite">
-      <span>${notice.label}</span>
-      <strong>${notice.slug}</strong>
-      <span>·</span>
-    </div>
-  `;
-}
-
-function proposalDecision(proposal: SkillWorkshopProposal): SkillWorkshopProposalDecision {
-  return {
-    proposalId: proposal.key,
-    expectedRevisionHash: proposal.revisionHash,
-  };
-}
-
-function renderPendingActions(props: SkillWorkshopProps, proposal: SkillWorkshopProposal) {
-  const busy = props.actionBusy?.key === proposal.key ? props.actionBusy.action : null;
-  const disabled = Boolean(props.actionBusy);
-  const draftUnavailable = disabled || Boolean(proposal.degradedState);
-  const action = (
-    kind: "evaluate" | "apply" | "revise" | "reject",
-    pendingLabel: string,
-    unavailable: boolean,
-    onClick: () => void,
-    className = "sw-btn",
-  ) => html`<button
-    class="${className} ${busy === kind ? "is-busy" : ""}"
-    ?disabled=${unavailable}
-    @click=${onClick}
-  >
-    ${t(`skillWorkshop.actions.${busy === kind ? pendingLabel : kind}`)}
-  </button>`;
-  return html`
-    <div class="sw-action-bar" aria-busy=${busy ? "true" : "false"}>
-      ${action("evaluate", "evaluating", draftUnavailable || !props.access.canEvaluate, () => props.onEvaluate(proposal.key))}
-      ${action("apply", "applying", draftUnavailable || !props.access.canApply, () => props.onApply(proposalDecision(proposal)), "sw-btn sw-btn--primary")}
-      ${action("revise", "opening", draftUnavailable || !props.access.canRevise, () => props.onRevise(proposal.key))}
-      ${action("reject", "rejecting", disabled || !props.access.canReject, () => props.onReject(proposalDecision(proposal)), "sw-btn sw-btn--ghost sw-btn--danger")}
-    </div>
-  `;
-}
-
-function resolveSkillWorkshopAgentName(props: SkillWorkshopProps, fallback: string): string {
-  return props.workshopAgentName.trim() || props.assistantName.trim() || fallback;
-}
-
-function groupByRecency(
-  proposals: SkillWorkshopProposal[],
-): Array<{ label: string; items: SkillWorkshopProposal[] }> {
-  const order: Array<SkillWorkshopProposal["recencyGroup"]> = ["today", "yesterday", "earlier"];
-  return order
-    .map((key) => ({
-      label: GROUP_LABEL[key],
-      items: proposals.filter((proposal) => proposal.recencyGroup === key),
-    }))
-    .filter((group) => group.items.length > 0);
-}
-
-function queueEmptyText(props: SkillWorkshopProps): string {
-  if (props.error) {
-    return t("skillWorkshop.queue.loadError");
-  }
-  if (props.loading) {
-    return t("skillWorkshop.queue.loading");
-  }
-  if (props.query.trim()) {
-    return t("skillWorkshop.queue.noMatch");
-  }
-  return t("skillWorkshop.queue.noSuggestions");
+    ${
+      viewer.status === "loading"
+        ? html`<p class="sw-muted">${t("skillWorkshop.viewer.loading")}</p>`
+        : viewer.status === "error"
+          ? html`<div class="sw-error" role="alert">${viewer.error}</div>`
+          : html`<pre class="sw-file">${viewer.result.content}</pre>`
+    }
+  </section>`;
 }

@@ -19212,75 +19212,107 @@ public struct ShutdownEvent: Codable, Sendable {
     }
 }
 
-public struct SkillCuratorLiveEntry: Codable, Sendable {
-    public let skillfile: String
-    public let skillkey: String
-    public let skillname: String
-    public let state: AnyCodable
-    public let pinned: Bool
-    public let createdatms: AnyCodable
-    public let statechangedatms: AnyCodable
-    public let lastusedatms: AnyCodable
-    public let usecount: Double
-    public let archivedreason: AnyCodable
+public struct SkillWorkshopArchivedSkill: Codable, Sendable {
+    public let name: String
+    public let live: Bool
+    public let versions: [[String: AnyCodable]]
 
     public init(
-        skillfile: String,
-        skillkey: String,
-        skillname: String,
-        state: AnyCodable,
-        pinned: Bool,
-        createdatms: AnyCodable,
-        statechangedatms: AnyCodable,
-        lastusedatms: AnyCodable,
-        usecount: Double,
-        archivedreason: AnyCodable)
+        name: String,
+        live: Bool,
+        versions: [[String: AnyCodable]])
     {
-        self.skillfile = skillfile
-        self.skillkey = skillkey
-        self.skillname = skillname
-        self.state = state
-        self.pinned = pinned
-        self.createdatms = createdatms
-        self.statechangedatms = statechangedatms
-        self.lastusedatms = lastusedatms
-        self.usecount = usecount
-        self.archivedreason = archivedreason
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case skillfile = "skillFile"
-        case skillkey = "skillKey"
-        case skillname = "skillName"
-        case state
-        case pinned
-        case createdatms = "createdAtMs"
-        case statechangedatms = "stateChangedAtMs"
-        case lastusedatms = "lastUsedAtMs"
-        case usecount = "useCount"
-        case archivedreason = "archivedReason"
+        self.name = name
+        self.live = live
+        self.versions = versions
     }
 }
 
-public struct SkillProposalRevisionChangedErrorDetails: Codable, Sendable {
-    public let code: String
-    public let expectedrevisionhash: String
-    public let currentrevisionhash: String
+public struct SkillWorkshopChange: Codable, Sendable {
+    public let id: String
+    public let agentid: String
+    public let skillname: String
+    public let action: AnyCodable
+    public let actor: AnyCodable
+    public let summary: String
+    public let versionid: String?
+    public let sessionkey: String?
+    public let runid: String?
+    public let createdatms: Double
 
     public init(
-        code: String,
-        expectedrevisionhash: String,
-        currentrevisionhash: String)
+        id: String,
+        agentid: String,
+        skillname: String,
+        action: AnyCodable,
+        actor: AnyCodable,
+        summary: String,
+        versionid: String? = nil,
+        sessionkey: String? = nil,
+        runid: String? = nil,
+        createdatms: Double)
     {
-        self.code = code
-        self.expectedrevisionhash = expectedrevisionhash
-        self.currentrevisionhash = currentrevisionhash
+        self.id = id
+        self.agentid = agentid
+        self.skillname = skillname
+        self.action = action
+        self.actor = actor
+        self.summary = summary
+        self.versionid = versionid
+        self.sessionkey = sessionkey
+        self.runid = runid
+        self.createdatms = createdatms
     }
 
     private enum CodingKeys: String, CodingKey {
-        case code
-        case expectedrevisionhash = "expectedRevisionHash"
-        case currentrevisionhash = "currentRevisionHash"
+        case id
+        case agentid = "agentId"
+        case skillname = "skillName"
+        case action
+        case actor
+        case summary
+        case versionid = "versionId"
+        case sessionkey = "sessionKey"
+        case runid = "runId"
+        case createdatms = "createdAtMs"
+    }
+}
+
+public struct SkillWorkshopSkillSummary: Codable, Sendable {
+    public let name: String
+    public let description: String
+    public let updatedatms: Double
+    public let sizebytes: Int
+    public let files: [String]
+    public let usecount: Int?
+    public let lastusedatms: Double?
+
+    public init(
+        name: String,
+        description: String,
+        updatedatms: Double,
+        sizebytes: Int,
+        files: [String],
+        usecount: Int? = nil,
+        lastusedatms: Double? = nil)
+    {
+        self.name = name
+        self.description = description
+        self.updatedatms = updatedatms
+        self.sizebytes = sizebytes
+        self.files = files
+        self.usecount = usecount
+        self.lastusedatms = lastusedatms
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name
+        case description
+        case updatedatms = "updatedAtMs"
+        case sizebytes = "sizeBytes"
+        case files
+        case usecount = "useCount"
+        case lastusedatms = "lastUsedAtMs"
     }
 }
 
@@ -19293,156 +19325,6 @@ public struct SkillsBinsResult: Codable, Sendable {
         bins: [String])
     {
         self.bins = bins
-    }
-}
-
-public struct SkillsCuratorActionParams: Codable, Sendable {
-    public let skill: String
-
-    public init(
-        skill: String)
-    {
-        self.skill = skill
-    }
-}
-
-public struct SkillsCuratorActionResult: Codable, Sendable {
-    public let skillfile: String
-    public let skillkey: String
-    public let skillname: String
-    public let state: AnyCodable
-    public let pinned: Bool
-    public let createdatms: Double
-    public let statechangedatms: Double
-    public let lastusedatms: AnyCodable
-    public let usecount: Double
-    public let archivedreason: AnyCodable
-
-    public init(
-        skillfile: String,
-        skillkey: String,
-        skillname: String,
-        state: AnyCodable,
-        pinned: Bool,
-        createdatms: Double,
-        statechangedatms: Double,
-        lastusedatms: AnyCodable,
-        usecount: Double,
-        archivedreason: AnyCodable)
-    {
-        self.skillfile = skillfile
-        self.skillkey = skillkey
-        self.skillname = skillname
-        self.state = state
-        self.pinned = pinned
-        self.createdatms = createdatms
-        self.statechangedatms = statechangedatms
-        self.lastusedatms = lastusedatms
-        self.usecount = usecount
-        self.archivedreason = archivedreason
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case skillfile = "skillFile"
-        case skillkey = "skillKey"
-        case skillname = "skillName"
-        case state
-        case pinned
-        case createdatms = "createdAtMs"
-        case statechangedatms = "stateChangedAtMs"
-        case lastusedatms = "lastUsedAtMs"
-        case usecount = "useCount"
-        case archivedreason = "archivedReason"
-    }
-}
-
-public struct SkillsCuratorLiveStatusResult: Codable, Sendable {
-    public let lastattemptatms: AnyCodable
-    public let lastsuccessatms: AnyCodable
-    public let lasterror: AnyCodable
-    public let collectionreview: [String: AnyCodable]?
-    public let experiencereview: [String: AnyCodable]?
-    public let counts: [String: AnyCodable]
-    public let skills: [SkillCuratorLiveEntry]
-    public let overlaps: [[String: AnyCodable]]
-    public let inventory: String
-
-    public init(
-        lastattemptatms: AnyCodable,
-        lastsuccessatms: AnyCodable,
-        lasterror: AnyCodable,
-        collectionreview: [String: AnyCodable]? = nil,
-        experiencereview: [String: AnyCodable]? = nil,
-        counts: [String: AnyCodable],
-        skills: [SkillCuratorLiveEntry],
-        overlaps: [[String: AnyCodable]],
-        inventory: String)
-    {
-        self.lastattemptatms = lastattemptatms
-        self.lastsuccessatms = lastsuccessatms
-        self.lasterror = lasterror
-        self.collectionreview = collectionreview
-        self.experiencereview = experiencereview
-        self.counts = counts
-        self.skills = skills
-        self.overlaps = overlaps
-        self.inventory = inventory
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case lastattemptatms = "lastAttemptAtMs"
-        case lastsuccessatms = "lastSuccessAtMs"
-        case lasterror = "lastError"
-        case collectionreview = "collectionReview"
-        case experiencereview = "experienceReview"
-        case counts
-        case skills
-        case overlaps
-        case inventory
-    }
-}
-
-public struct SkillsCuratorStatusParams: Codable, Sendable {}
-
-public struct SkillsCuratorStatusResult: Codable, Sendable {
-    public let lastattemptatms: AnyCodable
-    public let lastsuccessatms: AnyCodable
-    public let lasterror: AnyCodable
-    public let collectionreview: [String: AnyCodable]?
-    public let experiencereview: [String: AnyCodable]?
-    public let counts: [String: AnyCodable]
-    public let skills: [SkillsCuratorActionResult]
-    public let overlaps: [[String: AnyCodable]]
-
-    public init(
-        lastattemptatms: AnyCodable,
-        lastsuccessatms: AnyCodable,
-        lasterror: AnyCodable,
-        collectionreview: [String: AnyCodable]? = nil,
-        experiencereview: [String: AnyCodable]? = nil,
-        counts: [String: AnyCodable],
-        skills: [SkillsCuratorActionResult],
-        overlaps: [[String: AnyCodable]])
-    {
-        self.lastattemptatms = lastattemptatms
-        self.lastsuccessatms = lastsuccessatms
-        self.lasterror = lasterror
-        self.collectionreview = collectionreview
-        self.experiencereview = experiencereview
-        self.counts = counts
-        self.skills = skills
-        self.overlaps = overlaps
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case lastattemptatms = "lastAttemptAtMs"
-        case lastsuccessatms = "lastSuccessAtMs"
-        case lasterror = "lastError"
-        case collectionreview = "collectionReview"
-        case experiencereview = "experienceReview"
-        case counts
-        case skills
-        case overlaps
     }
 }
 
@@ -19618,621 +19500,6 @@ public struct SkillsLibrarySaveParams: Codable, Sendable {
         case content
         case files
         case retainfiles = "retainFiles"
-    }
-}
-
-public struct SkillsProposalActionParams: Codable, Sendable {
-    public let agentid: String?
-    public let proposalid: String
-    public let expectedrevisionhash: String?
-    public let correlationid: String?
-    public let reason: String?
-
-    public init(
-        agentid: String? = nil,
-        proposalid: String,
-        expectedrevisionhash: String? = nil,
-        correlationid: String? = nil,
-        reason: String? = nil)
-    {
-        self.agentid = agentid
-        self.proposalid = proposalid
-        self.expectedrevisionhash = expectedrevisionhash
-        self.correlationid = correlationid
-        self.reason = reason
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case agentid = "agentId"
-        case proposalid = "proposalId"
-        case expectedrevisionhash = "expectedRevisionHash"
-        case correlationid = "correlationId"
-        case reason
-    }
-}
-
-public struct SkillsProposalApplyResult: Codable, Sendable {
-    public let record: SkillsProposalRecordResult
-    public let targetskillfile: String
-
-    public init(
-        record: SkillsProposalRecordResult,
-        targetskillfile: String)
-    {
-        self.record = record
-        self.targetskillfile = targetskillfile
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case record
-        case targetskillfile = "targetSkillFile"
-    }
-}
-
-public struct SkillsProposalCreateParams: Codable, Sendable {
-    public let agentid: String?
-    public let name: String
-    public let description: String
-    public let content: String
-    public let supportfiles: [[String: AnyCodable]]?
-    public let goal: String?
-    public let evidence: String?
-
-    public init(
-        agentid: String? = nil,
-        name: String,
-        description: String,
-        content: String,
-        supportfiles: [[String: AnyCodable]]? = nil,
-        goal: String? = nil,
-        evidence: String? = nil)
-    {
-        self.agentid = agentid
-        self.name = name
-        self.description = description
-        self.content = content
-        self.supportfiles = supportfiles
-        self.goal = goal
-        self.evidence = evidence
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case agentid = "agentId"
-        case name
-        case description
-        case content
-        case supportfiles = "supportFiles"
-        case goal
-        case evidence
-    }
-}
-
-public struct SkillsProposalDecisionParams: Codable, Sendable {
-    public let agentid: String?
-    public let proposalid: String
-    public let expectedrevisionhash: String
-    public let correlationid: String?
-    public let reason: String?
-
-    public init(
-        agentid: String? = nil,
-        proposalid: String,
-        expectedrevisionhash: String,
-        correlationid: String? = nil,
-        reason: String? = nil)
-    {
-        self.agentid = agentid
-        self.proposalid = proposalid
-        self.expectedrevisionhash = expectedrevisionhash
-        self.correlationid = correlationid
-        self.reason = reason
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case agentid = "agentId"
-        case proposalid = "proposalId"
-        case expectedrevisionhash = "expectedRevisionHash"
-        case correlationid = "correlationId"
-        case reason
-    }
-}
-
-public struct SkillsProposalEvaluateParams: Codable, Sendable {
-    public let agentid: String?
-    public let proposalid: String
-    public let expectedrevisionhash: String?
-    public let correlationid: String?
-
-    public init(
-        agentid: String? = nil,
-        proposalid: String,
-        expectedrevisionhash: String? = nil,
-        correlationid: String? = nil)
-    {
-        self.agentid = agentid
-        self.proposalid = proposalid
-        self.expectedrevisionhash = expectedrevisionhash
-        self.correlationid = correlationid
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case agentid = "agentId"
-        case proposalid = "proposalId"
-        case expectedrevisionhash = "expectedRevisionHash"
-        case correlationid = "correlationId"
-    }
-}
-
-public struct SkillsProposalEvaluateResult: Codable, Sendable {
-    public let record: SkillsProposalRecordResult
-    public let evaluation: [String: AnyCodable]
-
-    public init(
-        record: SkillsProposalRecordResult,
-        evaluation: [String: AnyCodable])
-    {
-        self.record = record
-        self.evaluation = evaluation
-    }
-}
-
-public struct SkillsProposalEventsListParams: Codable, Sendable {
-    public let agentid: String?
-    public let proposalid: String?
-    public let aftersequence: Int?
-    public let limit: Int?
-
-    public init(
-        agentid: String? = nil,
-        proposalid: String? = nil,
-        aftersequence: Int? = nil,
-        limit: Int? = nil)
-    {
-        self.agentid = agentid
-        self.proposalid = proposalid
-        self.aftersequence = aftersequence
-        self.limit = limit
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case agentid = "agentId"
-        case proposalid = "proposalId"
-        case aftersequence = "afterSequence"
-        case limit
-    }
-}
-
-public struct SkillsProposalEventsListResult: Codable, Sendable {
-    public let events: [[String: AnyCodable]]
-    public let nextsequence: Int?
-
-    public init(
-        events: [[String: AnyCodable]],
-        nextsequence: Int? = nil)
-    {
-        self.events = events
-        self.nextsequence = nextsequence
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case events
-        case nextsequence = "nextSequence"
-    }
-}
-
-public struct SkillsProposalHistoryScanParams: Codable, Sendable {
-    public let agentid: String?
-    public let direction: AnyCodable?
-
-    public init(
-        agentid: String? = nil,
-        direction: AnyCodable? = nil)
-    {
-        self.agentid = agentid
-        self.direction = direction
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case agentid = "agentId"
-        case direction
-    }
-}
-
-public struct SkillsProposalHistoryScanResult: Codable, Sendable {
-    public let schema: String
-    public let hasscanned: Bool
-    public let reviewedsessions: Int
-    public let ideasfound: Int
-    public let hasmore: Bool
-    public let lastscanreviewed: Int
-    public let lastscanideas: Int
-    public let lastscanat: String?
-    public let oldestreviewedat: String?
-    public let newestreviewedat: String?
-
-    public init(
-        schema: String,
-        hasscanned: Bool,
-        reviewedsessions: Int,
-        ideasfound: Int,
-        hasmore: Bool,
-        lastscanreviewed: Int,
-        lastscanideas: Int,
-        lastscanat: String? = nil,
-        oldestreviewedat: String? = nil,
-        newestreviewedat: String? = nil)
-    {
-        self.schema = schema
-        self.hasscanned = hasscanned
-        self.reviewedsessions = reviewedsessions
-        self.ideasfound = ideasfound
-        self.hasmore = hasmore
-        self.lastscanreviewed = lastscanreviewed
-        self.lastscanideas = lastscanideas
-        self.lastscanat = lastscanat
-        self.oldestreviewedat = oldestreviewedat
-        self.newestreviewedat = newestreviewedat
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case schema
-        case hasscanned = "hasScanned"
-        case reviewedsessions = "reviewedSessions"
-        case ideasfound = "ideasFound"
-        case hasmore = "hasMore"
-        case lastscanreviewed = "lastScanReviewed"
-        case lastscanideas = "lastScanIdeas"
-        case lastscanat = "lastScanAt"
-        case oldestreviewedat = "oldestReviewedAt"
-        case newestreviewedat = "newestReviewedAt"
-    }
-}
-
-public struct SkillsProposalHistoryStatusParams: Codable, Sendable {
-    public let agentid: String?
-
-    public init(
-        agentid: String? = nil)
-    {
-        self.agentid = agentid
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case agentid = "agentId"
-    }
-}
-
-public struct SkillsProposalInspectParams: Codable, Sendable {
-    public let agentid: String?
-    public let proposalid: String
-
-    public init(
-        agentid: String? = nil,
-        proposalid: String)
-    {
-        self.agentid = agentid
-        self.proposalid = proposalid
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case agentid = "agentId"
-        case proposalid = "proposalId"
-    }
-}
-
-public struct SkillsProposalInspectResult: Codable, Sendable {
-    public let record: SkillsProposalRecordResult
-    public let revisionhash: String?
-    public let content: String
-    public let supportfiles: [[String: AnyCodable]]?
-
-    public init(
-        record: SkillsProposalRecordResult,
-        revisionhash: String? = nil,
-        content: String,
-        supportfiles: [[String: AnyCodable]]? = nil)
-    {
-        self.record = record
-        self.revisionhash = revisionhash
-        self.content = content
-        self.supportfiles = supportfiles
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case record
-        case revisionhash = "revisionHash"
-        case content
-        case supportfiles = "supportFiles"
-    }
-}
-
-public struct SkillsProposalRecordResult: Codable, Sendable {
-    public let schema: String
-    public let id: String
-    public let kind: AnyCodable
-    public let status: AnyCodable
-    public let title: String
-    public let description: String
-    public let createdat: String
-    public let updatedat: String
-    public let createdby: AnyCodable
-    public let origin: [String: AnyCodable]?
-    public let proposedversion: String
-    public let draftfile: String
-    public let drafthash: String
-    public let supportfiles: [[String: AnyCodable]]?
-    public let target: [String: AnyCodable]
-    public let scan: [String: AnyCodable]
-    public let goal: String?
-    public let evidence: String?
-    public let appliedat: String?
-    public let rejectedat: String?
-    public let quarantinedat: String?
-    public let staleat: String?
-    public let statusreason: String?
-    public let evaluation: [String: AnyCodable]?
-
-    public init(
-        schema: String,
-        id: String,
-        kind: AnyCodable,
-        status: AnyCodable,
-        title: String,
-        description: String,
-        createdat: String,
-        updatedat: String,
-        createdby: AnyCodable,
-        origin: [String: AnyCodable]? = nil,
-        proposedversion: String,
-        draftfile: String,
-        drafthash: String,
-        supportfiles: [[String: AnyCodable]]? = nil,
-        target: [String: AnyCodable],
-        scan: [String: AnyCodable],
-        goal: String? = nil,
-        evidence: String? = nil,
-        appliedat: String? = nil,
-        rejectedat: String? = nil,
-        quarantinedat: String? = nil,
-        staleat: String? = nil,
-        statusreason: String? = nil,
-        evaluation: [String: AnyCodable]? = nil)
-    {
-        self.schema = schema
-        self.id = id
-        self.kind = kind
-        self.status = status
-        self.title = title
-        self.description = description
-        self.createdat = createdat
-        self.updatedat = updatedat
-        self.createdby = createdby
-        self.origin = origin
-        self.proposedversion = proposedversion
-        self.draftfile = draftfile
-        self.drafthash = drafthash
-        self.supportfiles = supportfiles
-        self.target = target
-        self.scan = scan
-        self.goal = goal
-        self.evidence = evidence
-        self.appliedat = appliedat
-        self.rejectedat = rejectedat
-        self.quarantinedat = quarantinedat
-        self.staleat = staleat
-        self.statusreason = statusreason
-        self.evaluation = evaluation
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case schema
-        case id
-        case kind
-        case status
-        case title
-        case description
-        case createdat = "createdAt"
-        case updatedat = "updatedAt"
-        case createdby = "createdBy"
-        case origin
-        case proposedversion = "proposedVersion"
-        case draftfile = "draftFile"
-        case drafthash = "draftHash"
-        case supportfiles = "supportFiles"
-        case target
-        case scan
-        case goal
-        case evidence
-        case appliedat = "appliedAt"
-        case rejectedat = "rejectedAt"
-        case quarantinedat = "quarantinedAt"
-        case staleat = "staleAt"
-        case statusreason = "statusReason"
-        case evaluation
-    }
-}
-
-public struct SkillsProposalRequestRevisionParams: Codable, Sendable {
-    public let agentid: String?
-    public let targetagentid: String?
-    public let proposalid: String
-    public let expectedrevisionhash: String
-    public let instructions: String
-    public let sessionkey: String
-    public let sessionid: String?
-    public let idempotencykey: String
-
-    public init(
-        agentid: String? = nil,
-        targetagentid: String? = nil,
-        proposalid: String,
-        expectedrevisionhash: String,
-        instructions: String,
-        sessionkey: String,
-        sessionid: String? = nil,
-        idempotencykey: String)
-    {
-        self.agentid = agentid
-        self.targetagentid = targetagentid
-        self.proposalid = proposalid
-        self.expectedrevisionhash = expectedrevisionhash
-        self.instructions = instructions
-        self.sessionkey = sessionkey
-        self.sessionid = sessionid
-        self.idempotencykey = idempotencykey
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case agentid = "agentId"
-        case targetagentid = "targetAgentId"
-        case proposalid = "proposalId"
-        case expectedrevisionhash = "expectedRevisionHash"
-        case instructions
-        case sessionkey = "sessionKey"
-        case sessionid = "sessionId"
-        case idempotencykey = "idempotencyKey"
-    }
-}
-
-public struct SkillsProposalRequestRevisionResult: Codable, Sendable {
-    public let runid: String
-    public let status: AnyCodable
-
-    public init(
-        runid: String,
-        status: AnyCodable)
-    {
-        self.runid = runid
-        self.status = status
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case runid = "runId"
-        case status
-    }
-}
-
-public struct SkillsProposalReviseParams: Codable, Sendable {
-    public let agentid: String?
-    public let proposalid: String
-    public let expectedrevisionhash: String?
-    public let correlationid: String?
-    public let content: String?
-    public let supportfiles: [[String: AnyCodable]]?
-    public let description: String?
-    public let goal: String?
-    public let evidence: String?
-
-    public init(
-        agentid: String? = nil,
-        proposalid: String,
-        expectedrevisionhash: String? = nil,
-        correlationid: String? = nil,
-        content: String? = nil,
-        supportfiles: [[String: AnyCodable]]? = nil,
-        description: String? = nil,
-        goal: String? = nil,
-        evidence: String? = nil)
-    {
-        self.agentid = agentid
-        self.proposalid = proposalid
-        self.expectedrevisionhash = expectedrevisionhash
-        self.correlationid = correlationid
-        self.content = content
-        self.supportfiles = supportfiles
-        self.description = description
-        self.goal = goal
-        self.evidence = evidence
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case agentid = "agentId"
-        case proposalid = "proposalId"
-        case expectedrevisionhash = "expectedRevisionHash"
-        case correlationid = "correlationId"
-        case content
-        case supportfiles = "supportFiles"
-        case description
-        case goal
-        case evidence
-    }
-}
-
-public struct SkillsProposalUpdateParams: Codable, Sendable {
-    public let agentid: String?
-    public let skillname: String
-    public let description: String?
-    public let content: String
-    public let supportfiles: [[String: AnyCodable]]?
-    public let goal: String?
-    public let evidence: String?
-
-    public init(
-        agentid: String? = nil,
-        skillname: String,
-        description: String? = nil,
-        content: String,
-        supportfiles: [[String: AnyCodable]]? = nil,
-        goal: String? = nil,
-        evidence: String? = nil)
-    {
-        self.agentid = agentid
-        self.skillname = skillname
-        self.description = description
-        self.content = content
-        self.supportfiles = supportfiles
-        self.goal = goal
-        self.evidence = evidence
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case agentid = "agentId"
-        case skillname = "skillName"
-        case description
-        case content
-        case supportfiles = "supportFiles"
-        case goal
-        case evidence
-    }
-}
-
-public struct SkillsProposalsListParams: Codable, Sendable {
-    public let agentid: String?
-
-    public init(
-        agentid: String? = nil)
-    {
-        self.agentid = agentid
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case agentid = "agentId"
-    }
-}
-
-public struct SkillsProposalsListResult: Codable, Sendable {
-    public let schema: String
-    public let updatedat: String
-    public let proposals: [[String: AnyCodable]]
-    public let installedskills: [[String: AnyCodable]]
-
-    public init(
-        schema: String,
-        updatedat: String,
-        proposals: [[String: AnyCodable]],
-        installedskills: [[String: AnyCodable]])
-    {
-        self.schema = schema
-        self.updatedat = updatedat
-        self.proposals = proposals
-        self.installedskills = installedskills
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case schema
-        case updatedat = "updatedAt"
-        case proposals
-        case installedskills = "installedSkills"
     }
 }
 
@@ -20426,47 +19693,185 @@ public struct SkillsUploadCommitParams: Codable, Sendable {
     }
 }
 
-public struct SkillsWorkshopReadParams: Codable, Sendable {
+public struct SkillsWorkshopArchiveParams: Codable, Sendable {
     public let agentid: String?
     public let name: String
+    public let reason: String?
 
     public init(
         agentid: String? = nil,
-        name: String)
+        name: String,
+        reason: String? = nil)
     {
         self.agentid = agentid
         self.name = name
+        self.reason = reason
     }
 
     private enum CodingKeys: String, CodingKey {
         case agentid = "agentId"
         case name
+        case reason
+    }
+}
+
+public struct SkillsWorkshopChangeResult: Codable, Sendable {
+    public let change: SkillWorkshopChange
+
+    public init(
+        change: SkillWorkshopChange)
+    {
+        self.change = change
+    }
+}
+
+public struct SkillsWorkshopChangesParams: Codable, Sendable {
+    public let agentid: String?
+    public let limit: Int?
+    public let beforems: Double?
+
+    public init(
+        agentid: String? = nil,
+        limit: Int? = nil,
+        beforems: Double? = nil)
+    {
+        self.agentid = agentid
+        self.limit = limit
+        self.beforems = beforems
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case limit
+        case beforems = "beforeMs"
+    }
+}
+
+public struct SkillsWorkshopChangesResult: Codable, Sendable {
+    public let changes: [SkillWorkshopChange]
+
+    public init(
+        changes: [SkillWorkshopChange])
+    {
+        self.changes = changes
+    }
+}
+
+public struct SkillsWorkshopListParams: Codable, Sendable {
+    public let agentid: String?
+
+    public init(
+        agentid: String? = nil)
+    {
+        self.agentid = agentid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+    }
+}
+
+public struct SkillsWorkshopListResult: Codable, Sendable {
+    public let agentid: String
+    public let mode: AnyCodable
+    public let root: String
+    public let skills: [SkillWorkshopSkillSummary]
+    public let archived: [SkillWorkshopArchivedSkill]
+
+    public init(
+        agentid: String,
+        mode: AnyCodable,
+        root: String,
+        skills: [SkillWorkshopSkillSummary],
+        archived: [SkillWorkshopArchivedSkill])
+    {
+        self.agentid = agentid
+        self.mode = mode
+        self.root = root
+        self.skills = skills
+        self.archived = archived
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case mode
+        case root
+        case skills
+        case archived
+    }
+}
+
+public struct SkillsWorkshopReadParams: Codable, Sendable {
+    public let agentid: String?
+    public let name: String
+    public let filepath: String?
+    public let versionid: String?
+
+    public init(
+        agentid: String? = nil,
+        name: String,
+        filepath: String? = nil,
+        versionid: String? = nil)
+    {
+        self.agentid = agentid
+        self.name = name
+        self.filepath = filepath
+        self.versionid = versionid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case name
+        case filepath = "filePath"
+        case versionid = "versionId"
     }
 }
 
 public struct SkillsWorkshopReadResult: Codable, Sendable {
     public let name: String
-    public let skillkey: String
-    public let description: String
+    public let filepath: String
     public let content: String
+    public let files: [String]
 
     public init(
         name: String,
-        skillkey: String,
-        description: String,
-        content: String)
+        filepath: String,
+        content: String,
+        files: [String])
     {
         self.name = name
-        self.skillkey = skillkey
-        self.description = description
+        self.filepath = filepath
         self.content = content
+        self.files = files
     }
 
     private enum CodingKeys: String, CodingKey {
         case name
-        case skillkey = "skillKey"
-        case description
+        case filepath = "filePath"
         case content
+        case files
+    }
+}
+
+public struct SkillsWorkshopRestoreParams: Codable, Sendable {
+    public let agentid: String?
+    public let name: String
+    public let versionid: String?
+
+    public init(
+        agentid: String? = nil,
+        name: String,
+        versionid: String? = nil)
+    {
+        self.agentid = agentid
+        self.name = name
+        self.versionid = versionid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case name
+        case versionid = "versionId"
     }
 }
 
@@ -28243,7 +27648,6 @@ public enum GatewayErrorDetails: Codable, Sendable {
     case mcpAppViewExpired(McpAppViewExpiredErrorDetails)
     case outboundDeliveryQueued(OutboundDeliveryQueuedErrorDetails)
     case userPrefsLimitExceeded(UserPrefsLimitExceededErrorDetails)
-    case skillProposalRevisionChanged(SkillProposalRevisionChangedErrorDetails)
     case projectCloneFailed(ProjectCloneErrorDetails)
     case unknownAgentId(UnknownAgentIdErrorDetails)
     case wizardNotFound(WizardNotFoundErrorDetails)
@@ -28270,7 +27674,6 @@ public enum GatewayErrorDetails: Codable, Sendable {
         case .mcpAppViewExpired(let value): value.code
         case .outboundDeliveryQueued(let value): value.code
         case .userPrefsLimitExceeded(let value): value.code
-        case .skillProposalRevisionChanged(let value): value.code
         case .projectCloneFailed(let value): value.code
         case .unknownAgentId(let value): value.code
         case .wizardNotFound(let value): value.code
@@ -28305,7 +27708,6 @@ public enum GatewayErrorDetails: Codable, Sendable {
         case "MCP_APP_VIEW_EXPIRED": self = try .mcpAppViewExpired(McpAppViewExpiredErrorDetails(from: decoder))
         case "OUTBOUND_DELIVERY_QUEUED": self = try .outboundDeliveryQueued(OutboundDeliveryQueuedErrorDetails(from: decoder))
         case "USER_PREFS_LIMIT_EXCEEDED": self = try .userPrefsLimitExceeded(UserPrefsLimitExceededErrorDetails(from: decoder))
-        case "SKILL_PROPOSAL_REVISION_CHANGED": self = try .skillProposalRevisionChanged(SkillProposalRevisionChangedErrorDetails(from: decoder))
         case "PROJECT_CLONE_FAILED": self = try .projectCloneFailed(ProjectCloneErrorDetails(from: decoder))
         case "UNKNOWN_AGENT_ID": self = try .unknownAgentId(UnknownAgentIdErrorDetails(from: decoder))
         case "WIZARD_NOT_FOUND": self = try .wizardNotFound(WizardNotFoundErrorDetails(from: decoder))
@@ -28330,7 +27732,6 @@ public enum GatewayErrorDetails: Codable, Sendable {
         case .mcpAppViewExpired(let value): try value.encode(to: encoder)
         case .outboundDeliveryQueued(let value): try value.encode(to: encoder)
         case .userPrefsLimitExceeded(let value): try value.encode(to: encoder)
-        case .skillProposalRevisionChanged(let value): try value.encode(to: encoder)
         case .projectCloneFailed(let value): try value.encode(to: encoder)
         case .unknownAgentId(let value): try value.encode(to: encoder)
         case .wizardNotFound(let value): try value.encode(to: encoder)

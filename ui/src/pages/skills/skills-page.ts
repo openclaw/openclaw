@@ -130,8 +130,6 @@ class SkillsPage extends OpenClawLightDomElement {
   private readonly library = new SkillLibraryController(
     this,
     this.gateway,
-    () => this.skillsAgentId,
-    () => this.refreshPage(),
     () => this.context?.config,
   );
   private readonly clawhubSearchTask = new Task(this, {

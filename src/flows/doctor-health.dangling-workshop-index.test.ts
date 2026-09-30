@@ -39,6 +39,7 @@ async function seedState(state: OpenClawTestState) {
   });
   const database = openOpenClawStateDatabase({ env: state.env });
   database.db.exec(`
+    CREATE TABLE IF NOT EXISTS skill_workshop_collection_reviews (review_id TEXT NOT NULL PRIMARY KEY, owner_agent_id TEXT NOT NULL, backup_id TEXT NOT NULL, create_time INTEGER NOT NULL, kept_names_json TEXT NOT NULL, written_names_json TEXT NOT NULL, dropped_json TEXT NOT NULL) STRICT;
     INSERT INTO skill_workshop_collection_reviews (
       review_id, owner_agent_id, backup_id, create_time, kept_names_json, written_names_json, dropped_json
     ) VALUES ('review-preserved', 'main', 'backup-preserved', 1, '[]', '[]', '[]');
@@ -51,7 +52,7 @@ function damageWorkshopIndex(databasePath: string): void {
   const database = new DatabaseSync(databasePath);
   try {
     database.exec(
-      "CREATE INDEX idx_skill_workshop_collection_reviews_workspace_time ON skill_workshop_collection_reviews(review_id, create_time DESC);",
+      "CREATE TABLE IF NOT EXISTS skill_workshop_collection_reviews (review_id TEXT NOT NULL PRIMARY KEY, owner_agent_id TEXT NOT NULL, backup_id TEXT NOT NULL, create_time INTEGER NOT NULL, kept_names_json TEXT NOT NULL, written_names_json TEXT NOT NULL, dropped_json TEXT NOT NULL) STRICT; CREATE INDEX idx_skill_workshop_collection_reviews_workspace_time ON skill_workshop_collection_reviews(review_id, create_time DESC);",
     );
     database.enableDefensive?.(false);
     database.exec("PRAGMA writable_schema = ON;");
@@ -180,11 +181,14 @@ describe("Doctor state readability recovery", () => {
       );
       const repaired = new DatabaseSync(database.path, { readOnly: true });
       try {
+        // Doctor removes the dangling index first, then retires the proposal tables.
         expect(
           repaired
-            .prepare("SELECT review_id, backup_id FROM skill_workshop_collection_reviews")
-            .all(),
-        ).toEqual([{ review_id: "review-preserved", backup_id: "backup-preserved" }]);
+            .prepare(
+              "SELECT name FROM sqlite_schema WHERE name = 'skill_workshop_collection_reviews'",
+            )
+            .get(),
+        ).toBeUndefined();
         expect(
           repaired
             .prepare(

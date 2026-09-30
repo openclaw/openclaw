@@ -50,7 +50,6 @@ export * from "./schema/sessions-sharing.js";
 export * from "./schema/sessions-suggestions.js";
 export * from "./schema/sessions-reactions.js";
 export * from "./schema/sessions-catalog.js";
-export * from "./schema/skill-history.js";
 export * from "./schema/snapshot.js";
 export * from "./schema/system-info.js";
 export * from "./schema/system-event.js";

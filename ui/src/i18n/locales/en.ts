@@ -1391,6 +1391,7 @@ export const en: TranslationMap & {
       empty: "No skills found.",
       missing: "Missing: {items}",
       reason: "Reason: {items}",
+      learnedAlwaysOn: "Learned skill — archive in Workshop to hide",
       updateError: "Could not update the agent skill allowlist.",
     },
     channels: {
@@ -1757,6 +1758,7 @@ export const en: TranslationMap & {
   agentTools: {},
   skillGroups: {
     workspace: "Workspace Skills",
+    learned: "Learned Skills",
     builtIn: "Built-in Skills",
     installed: "Installed Skills",
     extra: "Extra Skills",
@@ -1982,8 +1984,7 @@ export const en: TranslationMap & {
     cron: "Scheduled tasks and recurring agent runs.",
     skills: "Manage your agent skills",
     plugins: "Extend your Claw with tools",
-    skillWorkshop:
-      "The skills your agent uses now, suggestions waiting for review, and past decisions.",
+    skillWorkshop: "Skills your agent learned, recent changes, and undo.",
     devices: "Paired devices, pairing approvals, and exec bindings.",
     cloudWorkers: "Profiles and machine sizes for cloud sessions.",
     chat: "Gateway chat for quick interventions.",

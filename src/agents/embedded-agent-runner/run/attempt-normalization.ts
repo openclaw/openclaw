@@ -125,7 +125,10 @@ export async function normalizeEmbeddedRunAttempt(input: {
       aborted: terminalAborted,
     });
   };
-  applyEmbeddedAttemptSessionIdentity({ sessionPromptState, sessionFileUsed, sessionIdUsed });
+  // Detached runs may fork a foreground transcript whose id they must never adopt.
+  if (params.sessionPersistence !== "detached") {
+    applyEmbeddedAttemptSessionIdentity({ sessionPromptState, sessionFileUsed, sessionIdUsed });
+  }
   const bootstrapPromptWarningSignaturesSeen =
     attempt.bootstrapPromptWarningSignaturesSeen ??
     (attempt.bootstrapPromptWarningSignature

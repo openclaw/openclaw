@@ -667,25 +667,15 @@ function assertRuntime(artifacts, gatewayLog) {
     readJson(path.join(artifacts, "dreaming-cron-runtime-converged.json")),
     "Settled plugin reload rewrote an already-converged dreaming job",
   );
-  // Gateway retains a disabled Workshop monitor even when autonomous work is off.
-  const workshop = current.rows.filter(
-    (row) =>
-      row.store_key === runtime.storeKey && row.declaration_key === "skill-collection-review:main",
+  // The weekly Workshop curator is retired; the Gateway must not recreate its rows.
+  assert.equal(
+    current.rows.filter((row) => row.declaration_key?.startsWith("skill-collection-review:"))
+      .length,
+    0,
+    "Runtime recreated a retired Workshop curator row",
   );
-  assert.equal(workshop.length, 1);
-  assert.equal(workshop[0].enabled, 0);
-  const workshopJob = JSON.parse(workshop[0].job_json);
-  assert.equal(workshopJob.name, "skill-collection-review-main");
-  assert.equal(workshopJob.agentId, "main");
-  assert.equal(workshopJob.enabled, false);
-  assert.equal(workshopJob.payload.kind, "agentTurn");
-  assert.equal(workshopJob.sessionTarget, "isolated");
-  assert.equal(workshopJob.delivery.mode, "none");
-  const workshopState = JSON.parse(workshop[0].state_json);
-  assert.equal(workshopState.nextRunAtMs, undefined);
-  assert.equal(workshopState.lastRunAtMs, undefined);
   assert.deepEqual(
-    current.rows.filter((row) => row !== workshop[0]).map((row) => [row.store_key, row.job_id]),
+    current.rows.map((row) => [row.store_key, row.job_id]),
     runtime.before.rows.map((row) => [row.store_key, row.job_id]),
     "Runtime changed cron row membership or order",
   );

@@ -35,8 +35,6 @@ export function describeStateSchemaMigration(
       return "historical cron creators → unknown source attribution";
     case "conversation-binding-targets-v15":
       return "conversation bindings → exact target keys without agent/session projections";
-    case "skill-workshop-directory-ownership-v16":
-      return "Skill Workshop ownership → per-agent directory containment";
     case "prepared-worker-ownership-v17":
       return "prepared workers → one-use capacity and fixed workspace ownership";
     case "github-publication-requester-authority-v18":

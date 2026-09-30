@@ -50,7 +50,6 @@ import { createGatewayRestartCoordinator } from "./server-reload-restart.js";
 import {
   assertIrreversibleReloadPlanHasRecoveryOwner,
   disposeMcpRuntimesWithTimeout,
-  revokeActiveSkillReviewsBeforeConfigPublication,
 } from "./server-reload-utils.js";
 import { startGatewayCronWithLogging } from "./server-runtime-services.js";
 import { resolveHookClientIpConfig } from "./server/hook-client-ip-config.js";
@@ -282,7 +281,6 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         if (plan.restartHeartbeat) {
           nextState.heartbeatRunner.updateConfig(nextConfig);
         }
-        revokeActiveSkillReviewsBeforeConfigPublication(nextConfig);
         if (refreshModelRuntime) {
           // Retire model/auth inputs together so requests cannot mix generations.
           preparedModelRuntimeReplacementGateId = markPreparedModelRuntimeSnapshotsStale(

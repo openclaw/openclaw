@@ -1,11 +1,10 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import {
   cpSync,
   existsSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
-  renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -22,7 +21,6 @@ import {
   seedWorkshopIndex,
 } from "../../scripts/e2e/lib/upgrade-survivor/workshop-doctor-recovery.mjs";
 import {
-  assertWorkshopLegacyImported,
   captureWorkshopLegacyState,
   seedWorkshopLegacyProposals,
 } from "../../scripts/e2e/lib/upgrade-survivor/workshop-legacy-proposals.mjs";
@@ -177,8 +175,47 @@ describe.skipIf(process.platform === "win32")("survivor first-hop observation", 
 
 const workshopIndex = "idx_skill_workshop_collection_reviews_workspace_time";
 
-function workshopFixture() {
-  // Keep the complete actionable warning inside Doctor's existing 500-character IPC bound.
+// Published 2026.9.4 proposal storage that the candidate Doctor retires.
+const publishedWorkshopSchema = `
+  CREATE TABLE skill_workshop_collection_reviews (
+    review_id TEXT PRIMARY KEY, owner_agent_id TEXT, backup_id TEXT, create_time INTEGER,
+    kept_names_json TEXT, written_names_json TEXT, dropped_json TEXT
+  );
+  CREATE TABLE skill_workshop_proposals (
+    proposal_id TEXT PRIMARY KEY, record_json TEXT, owner_agent_id TEXT, kind TEXT, status TEXT,
+    created_at TEXT, updated_at TEXT, draft_hash TEXT, origin_agent_id TEXT, origin_session_key TEXT,
+    origin_run_id TEXT, origin_message_id TEXT, applied_at TEXT, rejected_at TEXT,
+    quarantined_at TEXT, stale_at TEXT, status_reason TEXT
+  );
+  CREATE TABLE skill_workshop_proposal_rollbacks (
+    proposal_id TEXT PRIMARY KEY, written_at TEXT, target_skill_file TEXT, action TEXT,
+    previous_content_hash TEXT, previous_content TEXT, support_files_json TEXT
+  );
+  CREATE TABLE skill_workshop_proposal_events (
+    sequence INTEGER PRIMARY KEY AUTOINCREMENT, event_id TEXT, proposal_id TEXT,
+    proposed_version TEXT, revision_hash TEXT, event_type TEXT, occurred_at TEXT,
+    actor_json TEXT, correlation_id TEXT, payload_json TEXT
+  );
+`;
+const retiredTables = [
+  "skill_workshop_proposal_events",
+  "skill_workshop_proposal_rollbacks",
+  "skill_workshop_collection_reviews",
+  "skill_workshop_proposals",
+];
+
+type WorkshopIdentity = { version: string; buildInfoSha256: string };
+type WorkshopFixture = {
+  state: string;
+  artifacts: string;
+  packageRoot: string;
+  candidateRoot: string;
+  baseline: WorkshopIdentity;
+  candidate: WorkshopIdentity;
+  filename: string;
+};
+
+function workshopFixture(): WorkshopFixture {
   const root = tempDirs.make("ws-");
   const state = join(root, "state");
   const artifacts = join(root, "artifacts");
@@ -208,10 +245,8 @@ function workshopFixture() {
   const candidate = captureWorkshopCandidate(tarball, artifacts, "2026.9.4");
   const filename = join(state, "state", "openclaw.sqlite");
   const initial = new DatabaseSync(filename);
-  initial.exec(`CREATE TABLE skill_workshop_collection_reviews (
-    review_id TEXT PRIMARY KEY, owner_agent_id TEXT, backup_id TEXT, create_time INTEGER,
-    kept_names_json TEXT, written_names_json TEXT, dropped_json TEXT
-  ); CREATE TABLE unrelated_records (value TEXT); INSERT INTO unrelated_records VALUES ('preserved');`);
+  initial.exec(`${publishedWorkshopSchema}
+    CREATE TABLE unrelated_records (value TEXT); INSERT INTO unrelated_records VALUES ('preserved');`);
   initial.close();
   const seeded = seedWorkshopIndex(state, artifacts, "baseline");
   writeFileSync(
@@ -227,7 +262,17 @@ function workshopFixture() {
   return { state, artifacts, packageRoot, candidateRoot, baseline, candidate, filename };
 }
 
-type WorkshopIdentity = { version: string; buildInfoSha256: string };
+type WorkshopState = {
+  files: Record<string, string | null>;
+  exports: string[] | null;
+  proposalsDir: boolean;
+  tables: Record<string, number>;
+};
+type LegacySeed = {
+  paths: string[];
+  before: WorkshopState;
+  after: WorkshopState & { exports: string[] };
+};
 function recordProcess(
   observations: string,
   pid: number,
@@ -237,8 +282,8 @@ function recordProcess(
   updateInProgress: boolean,
   exitCode: number,
   nativeReceipt = true,
-  legacyAtStart?: ReturnType<typeof captureWorkshopLegacyState>,
-  duringProcess?: () => ReturnType<typeof captureWorkshopLegacyState>,
+  legacyAtStart?: WorkshopState,
+  duringProcess?: () => WorkshopState,
   doctorWarnings?: string[],
 ) {
   mkdirSync(join(observations, "diagnostics"), { recursive: true });
@@ -294,108 +339,37 @@ function simulateWorkshopRepair(filename: string) {
   database.close();
 }
 
-function simulateWorkshopLegacyImport(
-  fixture: ReturnType<typeof workshopFixture>,
-  seeded: ReturnType<typeof seedWorkshopLegacyProposals>,
-) {
-  const recovered = seeded.bundles.find((bundle) => bundle.recover)!;
-  const appliedAt = "2026-09-22T00:00:00.000Z";
-  const record = {
-    ...recovered.record,
-    status: "applied",
-    updatedAt: appliedAt,
-    appliedAt,
-    target: {
-      ...recovered.record.target,
-      skillDir: join(fixture.state, recovered.destination),
-      skillFile: join(fixture.state, recovered.destination, "SKILL.md"),
-      source: "openclaw-workshop",
-    },
-  };
-  mkdirSync(dirname(record.target.skillDir), { recursive: true });
-  renameSync(recovered.record.target.skillDir, record.target.skillDir);
-  for (const name of ["proposal.json", "rollback.json"]) {
-    rmSync(join(fixture.state, recovered.directory, name));
-  }
-  rmSync(join(fixture.state, "skill-workshop", "proposals.json"));
-  const database = new DatabaseSync(fixture.filename);
-  database.exec(`
-    CREATE TABLE skill_workshop_proposals (
-      proposal_id TEXT PRIMARY KEY, record_json TEXT, owner_agent_id TEXT, kind TEXT, status TEXT,
-      created_at TEXT, updated_at TEXT, draft_hash TEXT, origin_agent_id TEXT, origin_session_key TEXT,
-      origin_run_id TEXT, origin_message_id TEXT, applied_at TEXT, rejected_at TEXT,
-      quarantined_at TEXT, stale_at TEXT, status_reason TEXT
-    );
-    CREATE TABLE skill_workshop_proposal_rollbacks (
-      proposal_id TEXT PRIMARY KEY, written_at TEXT, target_skill_file TEXT, action TEXT,
-      previous_content_hash TEXT, previous_content TEXT, support_files_json TEXT
-    );
-    CREATE TABLE skill_workshop_proposal_events (
-      sequence INTEGER PRIMARY KEY, event_id TEXT, proposal_id TEXT, event_type TEXT,
-      proposed_version TEXT, occurred_at TEXT, actor_json TEXT, payload_json TEXT, revision_hash TEXT
-    );
-  `);
-  database
-    .prepare(
-      "INSERT INTO skill_workshop_proposals VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-    )
-    .run(
-      record.id,
-      JSON.stringify(record),
-      "main",
-      record.kind,
-      "applied",
-      record.createdAt,
-      appliedAt,
-      record.draftHash,
-      record.origin.agentId,
-      null,
-      record.origin.runId,
-      null,
-      appliedAt,
-      null,
-      null,
-      null,
-      null,
-    );
-  database
-    .prepare("INSERT INTO skill_workshop_proposal_rollbacks VALUES (?, ?, ?, ?, ?, ?, ?)")
-    .run(
-      record.id,
-      recovered.rollback!.writtenAt,
-      recovered.rollback!.targetSkillFile,
-      "create",
-      null,
-      null,
-      JSON.stringify(recovered.rollback!.supportFiles),
-    );
-  const revisionHash = createHash("sha256")
-    .update(
-      JSON.stringify({
-        proposedVersion: record.proposedVersion,
-        contentSha256: record.draftHash,
-        supportFiles: record.supportFiles.map((file) => ({
-          path: file.path,
-          sha256: file.hash,
-          sizeBytes: file.sizeBytes,
-        })),
-      }),
-    )
-    .digest("hex");
-  database
-    .prepare("INSERT INTO skill_workshop_proposal_events VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
-    .run(
-      1,
-      "recovered-event",
-      record.id,
-      "applied",
-      "v1",
-      appliedAt,
-      JSON.stringify({ type: "system" }),
-      JSON.stringify([1, { recovered: true }, null]),
-      revisionHash,
-    );
+function dropRetiredTables(filename: string) {
+  const database = new DatabaseSync(filename);
+  database.exec(retiredTables.map((table) => `DROP TABLE IF EXISTS ${table};`).join(" "));
   database.close();
+}
+
+/** Simulates the candidate Doctor: export pending/quarantined drafts, drop tables, remove files. */
+function simulateWorkshopRetirement(
+  fixture: WorkshopFixture,
+  seeded: LegacySeed,
+  exportedIds: readonly string[] = seeded.after.exports,
+) {
+  const proposals = join(fixture.state, "skill-workshop", "proposals");
+  const exportRoot = join(
+    fixture.state,
+    "agents/main/agent/workshop-skills/.archive/.retired-proposals",
+  );
+  for (const id of exportedIds) {
+    const draft = readdirSync(join(proposals, id), { recursive: true, encoding: "utf8" }).find(
+      (entry) => entry.endsWith("PROPOSAL.md"),
+    )!;
+    const bundle = dirname(join(proposals, id, draft));
+    mkdirSync(join(exportRoot, id), { recursive: true });
+    cpSync(join(bundle, "PROPOSAL.md"), join(exportRoot, id, "SKILL.md"));
+    if (existsSync(join(bundle, "references"))) {
+      cpSync(join(bundle, "references"), join(exportRoot, id, "references"), { recursive: true });
+    }
+  }
+  rmSync(proposals, { recursive: true });
+  rmSync(join(fixture.state, "skill-workshop", "proposals.json"));
+  dropRetiredTables(fixture.filename);
 }
 
 describe("Workshop Doctor recovery evidence", () => {
@@ -456,7 +430,7 @@ describe("Workshop Doctor recovery evidence", () => {
     "missing-receipt",
     "same-version-wrong-build",
     "update-marker",
-  ])("requires explicit candidate Doctor evidence: %s", (outcome) => {
+  ])("requires explicit baseline Doctor evidence: %s", (outcome) => {
     const fixture = workshopFixture();
     simulateWorkshopRepair(fixture.filename);
     if (outcome === "review-changed") {
@@ -464,19 +438,19 @@ describe("Workshop Doctor recovery evidence", () => {
       database.exec("UPDATE skill_workshop_collection_reviews SET backup_id = 'wrong-backup';");
       database.close();
     }
-    const observations = join(fixture.artifacts, "candidate-doctor");
+    const observations = join(fixture.artifacts, "baseline-doctor");
     recordProcess(
       observations,
       102,
       "doctor",
-      outcome === "same-version-wrong-build" ? fixture.baseline : fixture.candidate,
+      outcome === "same-version-wrong-build" ? fixture.candidate : fixture.baseline,
       outcome !== "already-repaired",
       outcome === "update-marker",
       0,
       outcome !== "missing-receipt",
     );
     const verify = () =>
-      assertWorkshopDoctorRepair(fixture.state, fixture.artifacts, observations, "candidate");
+      assertWorkshopDoctorRepair(fixture.state, fixture.artifacts, observations, "baseline");
     if (outcome === "intact") {
       expect(verify()).toMatchObject({ status: "explicit-doctor-repaired" });
     } else {
@@ -489,25 +463,16 @@ describe("Workshop Doctor recovery evidence", () => {
   it.each([
     "intact",
     "baseline-consumed",
-    "missing-import",
-    "late-parent-import",
-    "retained-bytes-changed",
-    "rollback-changed",
-    "duplicate-event",
-    "event-envelope-version",
-    "event-recovery-payload",
-    "event-evaluation",
-    "second-doctor-changed",
-    "row-kind",
-    "row-created_at",
-    "row-origin_agent_id",
-    "row-origin_session_key",
-    "row-origin_run_id",
-    "row-origin_message_id",
-    "missing-warning",
-    "truncated-warning",
-    "missing-repeat-warning",
-  ])("keeps published refusal, candidate import, and repeat recovery distinct: %s", (outcome) => {
+    "missing-export",
+    "exported-applied",
+    "live-skill-changed",
+    "tables-kept",
+    "files-kept",
+    "retirement-warning",
+    "candidate-table-kept",
+    "candidate-reexported",
+    "candidate-not-retired",
+  ])("keeps published refusal, candidate retirement, and repair distinct: %s", (outcome) => {
     const fixture = workshopFixture();
     const first = join(fixture.artifacts, "first-update");
     recordProcess(first, 101, "update", fixture.baseline, true, false, 1);
@@ -516,12 +481,17 @@ describe("Workshop Doctor recovery evidence", () => {
     const baselineDoctor = join(fixture.artifacts, "baseline-doctor");
     recordProcess(baselineDoctor, 102, "doctor", fixture.baseline, true, false, 0);
     assertWorkshopDoctorRepair(fixture.state, fixture.artifacts, baselineDoctor, "baseline");
-    const seeded = seedWorkshopLegacyProposals(fixture.state, fixture.artifacts);
+    const seeded: LegacySeed = seedWorkshopLegacyProposals(fixture.state, fixture.artifacts);
+    expect(seeded.after.exports).toEqual([
+      "survivor-legacy-json-20260729",
+      "survivor-pending-20260729",
+      "survivor-quarantined-20260729",
+    ]);
     cpSync(fixture.candidateRoot, fixture.packageRoot, { recursive: true });
     const upgraded = join(fixture.artifacts, "recovered-upgrade");
     recordProcess(upgraded, 103, "update", fixture.baseline, false, false, 0, true, seeded.before);
     if (outcome === "baseline-consumed") {
-      simulateWorkshopLegacyImport(fixture, seeded);
+      simulateWorkshopRetirement(fixture, seeded);
     }
     recordProcess(
       upgraded,
@@ -534,59 +504,36 @@ describe("Workshop Doctor recovery evidence", () => {
       true,
       captureWorkshopLegacyState(fixture.state, seeded),
       () => {
-        if (!["baseline-consumed", "missing-import", "late-parent-import"].includes(outcome)) {
-          simulateWorkshopLegacyImport(fixture, seeded);
+        if (outcome === "baseline-consumed") {
+          return captureWorkshopLegacyState(fixture.state, seeded);
         }
-        if (outcome === "retained-bytes-changed") {
-          const retained = seeded.bundles.find((bundle) => !bundle.recover)!;
-          writeFileSync(join(fixture.state, retained.directory, "PROPOSAL.md"), "changed");
-        }
-        if (outcome === "rollback-changed" || outcome === "duplicate-event") {
+        const exported =
+          outcome === "missing-export"
+            ? seeded.after.exports.slice(1)
+            : outcome === "exported-applied"
+              ? [...seeded.after.exports, "survivor-applied-20260729"]
+              : seeded.after.exports;
+        simulateWorkshopRetirement(fixture, seeded, exported);
+        if (outcome === "tables-kept") {
           const database = new DatabaseSync(fixture.filename);
-          database.exec(
-            outcome === "rollback-changed"
-              ? "UPDATE skill_workshop_proposal_rollbacks SET support_files_json = '[]'"
-              : "INSERT INTO skill_workshop_proposal_events SELECT 2, 'duplicate', proposal_id, event_type, proposed_version, occurred_at, actor_json, payload_json, revision_hash FROM skill_workshop_proposal_events",
+          database.exec("CREATE TABLE skill_workshop_proposals (proposal_id TEXT)");
+          database.close();
+        }
+        if (outcome === "files-kept") {
+          mkdirSync(join(fixture.state, "skill-workshop", "proposals"));
+        }
+        if (outcome === "live-skill-changed") {
+          writeFileSync(
+            join(fixture.state, "agents/main/agent/workshop-skills/survivor-applied/SKILL.md"),
+            "changed",
           );
-          database.close();
-        }
-        if (outcome.startsWith("event-")) {
-          const stored = [
-            outcome === "event-envelope-version" ? 2 : 1,
-            { recovered: outcome !== "event-recovery-payload" },
-            outcome === "event-evaluation" ? {} : null,
-          ];
-          const database = new DatabaseSync(fixture.filename);
-          database
-            .prepare("UPDATE skill_workshop_proposal_events SET payload_json = ?")
-            .run(JSON.stringify(stored));
-          database.close();
-        }
-        if (outcome.startsWith("row-")) {
-          const database = new DatabaseSync(fixture.filename);
-          database.exec(`UPDATE skill_workshop_proposals SET ${outcome.slice(4)} = 'changed'`);
-          database.close();
         }
         return captureWorkshopLegacyState(fixture.state, seeded);
       },
-      outcome === "missing-warning"
-        ? []
-        : [
-            outcome === "truncated-warning"
-              ? seeded.retainedWarning.slice(0, -40)
-              : seeded.retainedWarning,
-          ],
+      outcome === "retirement-warning"
+        ? ["Could not export Skill Workshop proposal survivor-pending-20260729: denied"]
+        : [],
     );
-    if (outcome === "late-parent-import") {
-      simulateWorkshopLegacyImport(fixture, seeded);
-      expect(() =>
-        assertWorkshopLegacyImported(
-          fixture.state,
-          seeded,
-          captureWorkshopLegacyState(fixture.state, seeded),
-        ),
-      ).not.toThrow();
-    }
     const verifyUpgrade = () =>
       assertWorkshopRecoveredUpgrade(
         fixture.state,
@@ -594,21 +541,17 @@ describe("Workshop Doctor recovery evidence", () => {
         upgraded,
         fixture.packageRoot,
       );
-    if (!["intact", "second-doctor-changed", "missing-repeat-warning"].includes(outcome)) {
+    if (!outcome.startsWith("candidate-") && outcome !== "intact") {
       expect(verifyUpgrade).toThrow(
-        outcome === "baseline-consumed"
-          ? /Candidate Doctor did not receive original/
-          : outcome === "rollback-changed"
-            ? /Imported rollback payload changed/
-            : outcome === "duplicate-event"
-              ? /exactly one applied event/
-              : outcome.startsWith("event-")
-                ? /Recovered Workshop event payload changed/
-                : outcome.startsWith("row-")
-                  ? /Authoritative Workshop proposal columns/
-                  : ["missing-warning", "truncated-warning"].includes(outcome)
-                    ? /Missing complete recoverable Workshop manual-review warning/
-                    : /artifact bytes/,
+        {
+          "baseline-consumed": /did not receive the original/,
+          "missing-export": /export exactly the pending and quarantined/,
+          "exported-applied": /export exactly the pending and quarantined/,
+          "live-skill-changed": /live Workshop skill bytes/,
+          "tables-kept": /retired Workshop tables/,
+          "files-kept": /retired proposal files/,
+          "retirement-warning": /retirement warning/,
+        }[outcome],
       );
       return;
     }
@@ -627,31 +570,33 @@ describe("Workshop Doctor recovery evidence", () => {
       undefined,
       () => {
         simulateWorkshopRepair(fixture.filename);
-        if (outcome === "second-doctor-changed") {
-          const database = new DatabaseSync(fixture.filename);
-          database.exec("UPDATE skill_workshop_proposal_events SET event_id = 'rewritten'");
-          database.close();
+        if (outcome !== "candidate-table-kept") {
+          dropRetiredTables(fixture.filename);
         }
         writeFileSync(
           join(fixture.artifacts, "doctor.log"),
-          outcome === "missing-repeat-warning"
+          outcome === "candidate-not-retired"
             ? "Doctor complete.\n"
-            : `\u001b[32m│  ${seeded.retainedWarning.split(" ").join("\n│  ")}\n│\u001b[0m\n`,
+            : `\u001b[32m│  Retired the Skill Workshop\n│  proposal tables.\n│\u001b[0m\n${
+                outcome === "candidate-reexported" ? "Exported 1 pending draft.\n" : ""
+              }`,
         );
         return captureWorkshopLegacyState(fixture.state, seeded);
       },
     );
-    if (outcome === "second-doctor-changed" || outcome === "missing-repeat-warning") {
-      expect(() =>
-        assertWorkshopDoctorRepair(fixture.state, fixture.artifacts, candidateDoctor, "candidate"),
-      ).toThrow(
-        outcome === "second-doctor-changed"
-          ? /Second candidate Doctor changed/
-          : /Missing complete recoverable Workshop manual-review warning/,
+    const verifyCandidate = () =>
+      assertWorkshopDoctorRepair(fixture.state, fixture.artifacts, candidateDoctor, "candidate");
+    if (outcome !== "intact") {
+      expect(verifyCandidate).toThrow(
+        outcome === "candidate-table-kept"
+          ? /retired Workshop tables/
+          : outcome === "candidate-reexported"
+            ? /re-exported/
+            : /did not retire the restored/,
       );
       return;
     }
-    assertWorkshopDoctorRepair(fixture.state, fixture.artifacts, candidateDoctor, "candidate");
+    verifyCandidate();
     expect(completeWorkshopRecovery(fixture.state, fixture.artifacts)).toMatchObject({
       firstAttempt: { status: "refused-before-candidate", automaticRepair: false },
       baselineDoctor: { status: "explicit-doctor-repaired" },

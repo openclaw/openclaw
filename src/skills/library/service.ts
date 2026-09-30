@@ -19,9 +19,9 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { hasMultipleSessionSharingIdentities } from "../../state/user-profile-list.js";
 import {
-  assertProposalContainsNoLiteralSecrets,
-  scanProposalBundle,
-} from "../workshop/proposal-scan.js";
+  assertSkillBundleHasNoLiteralSecrets,
+  scanSkillBundle,
+} from "../security/skill-bundle-scan.js";
 import {
   decodeSkillLibraryFile,
   prepareSkillLibraryBundle,
@@ -242,18 +242,13 @@ export async function saveSkillLibrary(
     ...(params.files ?? []),
   ]);
   const skillId = params.skillId ?? uploadId ?? randomUUID();
-  const scan = scanProposalBundle(
+  const scan = scanSkillBundle(
     params.content,
     bundle.files
       .filter((file) => file.path !== "SKILL.md")
-      .map((file) => ({
-        path: file.path,
-        content: file.bytes.toString("utf8"),
-        sizeBytes: file.sizeBytes,
-        hash: file.sha256,
-      })),
+      .map((file) => ({ path: file.path, content: file.bytes.toString("utf8") })),
   );
-  assertProposalContainsNoLiteralSecrets(scan);
+  assertSkillBundleHasNoLiteralSecrets(scan);
   if (scan.critical > 0) {
     throw new SkillLibraryError(
       "POLICY_BLOCKED",

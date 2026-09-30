@@ -16,7 +16,7 @@ import {
 import { classifySqliteTableReadError } from "./openclaw-state-db-schema-helpers.js";
 import {
   assertSupportedStateSchemaVersion,
-  readStateSchemaMigrationVersion,
+  readStateSchemaContentVersion,
 } from "./openclaw-state-db-schema-version.js";
 import type { DB } from "./openclaw-state-db.generated.js";
 import {
@@ -33,7 +33,7 @@ export function assertExistingOpenClawStateRuntimeSchema(
 ): void {
   const schemaCookie = runSqliteDeferredTransactionSync(database, () => {
     const version = assertSupportedStateSchemaVersion(database, pathname);
-    if (readStateSchemaMigrationVersion(database) !== OPENCLAW_STATE_SCHEMA_VERSION) {
+    if (readStateSchemaContentVersion(database) !== OPENCLAW_STATE_SCHEMA_VERSION) {
       throw new Error(
         `Existing shared-state database ${pathname} requires schema migration by its owning installation before this node can use it.`,
       );

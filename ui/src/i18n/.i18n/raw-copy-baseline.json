@@ -579,13 +579,6 @@
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/skill-workshop/view.ts",
-      "text": "v"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
       "path": "ui/src/pages/skills/library-detail.ts",
       "text": "SKILL.md"
     },

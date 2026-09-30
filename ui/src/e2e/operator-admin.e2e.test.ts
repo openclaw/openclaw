@@ -171,6 +171,11 @@ suite.define(() => {
         "skills.install",
         "skills.status",
         "skills.update",
+        "skills.workshop.archive",
+        "skills.workshop.changes",
+        "skills.workshop.list",
+        "skills.workshop.read",
+        "skills.workshop.restore",
       ],
       methodResponses: {
         "agents.list": {
@@ -304,18 +309,7 @@ suite.define(() => {
   it("keeps read-only administration pages visible without dispatching mutations", async () => {
     const context = await createContext();
     const page = await context.newPage();
-    const proposal = {
-      id: "proposal-read-only",
-      kind: "create",
-      status: "pending",
-      title: "Read Only Proposal",
-      description: "Review without mutation access.",
-      skillName: "Read Only Proposal",
-      skillKey: "read-only-proposal",
-      createdAt: "2026-08-04T08:00:00.000Z",
-      updatedAt: "2026-08-04T08:00:00.000Z",
-      scanState: "clean",
-    };
+    const learnedAtMs = Date.parse("2026-08-04T08:00:00.000Z");
     const readOnlyConfig = {
       ...operatorConfig,
       skills: { workshop: { autonomous: { mode: "auto" } } },
@@ -333,15 +327,14 @@ suite.define(() => {
         "config.patch",
         "config.set",
         "skills.install",
-        "skills.proposals.apply",
-        "skills.proposals.evaluate",
         "sessions.create",
-        "skills.proposals.inspect",
-        "skills.proposals.list",
-        "skills.proposals.reject",
-        "skills.proposals.requestRevision",
         "skills.status",
         "skills.update",
+        "skills.workshop.archive",
+        "skills.workshop.changes",
+        "skills.workshop.list",
+        "skills.workshop.read",
+        "skills.workshop.restore",
       ],
       operatorScopes: ["operator.read"],
       methodResponses: {
@@ -373,20 +366,42 @@ suite.define(() => {
           workspace: "/tmp/openclaw-e2e/workspace",
         },
         "config.get": configResponse(readOnlyConfig),
-        "skills.proposals.inspect": {
-          content: "Review the proposed skill.",
-          record: {
-            ...proposal,
-            proposedVersion: "v1",
-            target: { skillKey: proposal.skillKey, skillName: proposal.skillName },
-          },
-          supportFiles: [],
+        "skills.workshop.list": {
+          agentId: "main",
+          mode: "auto",
+          root: "/tmp/openclaw-e2e/agents/main/workshop-skills",
+          skills: [
+            {
+              name: "read-only-skill",
+              description: "Review without mutation access.",
+              updatedAtMs: learnedAtMs,
+              sizeBytes: 120,
+              files: ["SKILL.md"],
+            },
+          ],
+          archived: [
+            {
+              name: "read-only-skill",
+              live: true,
+              versions: [
+                { id: "20260804T080000000Z-patch", action: "patch", createdAtMs: learnedAtMs },
+              ],
+            },
+          ],
         },
-        "skills.proposals.list": {
-          proposals: [proposal],
-          schema: "openclaw.skill-workshop.proposals-manifest.v1",
-          installedSkills: [],
-          updatedAt: proposal.updatedAt,
+        "skills.workshop.changes": {
+          changes: [
+            {
+              id: "change-read-only",
+              agentId: "main",
+              skillName: "read-only-skill",
+              action: "patch",
+              actor: "review",
+              summary: "tightened the review step",
+              versionId: "20260804T080000000Z-patch",
+              createdAtMs: learnedAtMs,
+            },
+          ],
         },
         "skills.status": skillStatus(false),
       },
@@ -477,31 +492,18 @@ suite.define(() => {
       await screenshot(page, "06-read-only-skills.png", install, skillDialog.locator("dialog"));
 
       await page.goto(`${suite.server.baseUrl}skills/workshop`);
-      await gateway.waitForRequest("skills.proposals.list");
-      await page.locator("#skill-workshop-mode-tab-suggestions").click();
-      const actionButtons = page.locator(".sw-action-bar button");
-      const evaluate = actionButtons.nth(0);
-      const apply = actionButtons.nth(1);
-      const revise = actionButtons.nth(2);
-      const reject = actionButtons.nth(3);
-      await expect.poll(() => apply.isDisabled()).toBe(true);
-      await expect.poll(() => evaluate.isDisabled()).toBe(true);
-      await expect.poll(() => revise.isDisabled()).toBe(true);
-      await expect.poll(() => reject.isDisabled()).toBe(true);
-      await apply.click({ force: true });
-      await evaluate.click({ force: true });
-      await revise.click({ force: true });
-      await reject.click({ force: true });
-      expect(await gateway.getRequests("skills.proposals.apply")).toHaveLength(0);
-      expect(await gateway.getRequests("skills.proposals.evaluate")).toHaveLength(0);
-      expect(await gateway.getRequests("skills.proposals.requestRevision")).toHaveLength(0);
-      expect(await gateway.getRequests("skills.proposals.reject")).toHaveLength(0);
-      const selfLearning = page.getByRole("checkbox", {
-        name: "Toggle autonomous self-learning",
-      });
-      await expect.poll(() => selfLearning.isDisabled()).toBe(true);
-      await selfLearning.click({ force: true });
+      await gateway.waitForRequest("skills.workshop.list");
+      await page.getByText("tightened the review step").waitFor();
+      expect(await page.getByRole("button", { name: "Undo", exact: true }).count()).toBe(0);
+      await page.getByRole("button", { name: "read-only-skill" }).first().click();
+      await gateway.waitForRequest("skills.workshop.read");
+      expect(await page.getByRole("button", { name: "Archive", exact: true }).count()).toBe(0);
+      const learningOff = page.getByRole("button", { name: "Off", exact: true });
+      await expect.poll(() => learningOff.isDisabled()).toBe(true);
+      await learningOff.click({ force: true });
       expect(await gateway.getRequests("config.patch")).toHaveLength(0);
+      expect(await gateway.getRequests("skills.workshop.restore")).toHaveLength(0);
+      expect(await gateway.getRequests("skills.workshop.archive")).toHaveLength(0);
       const learn = page.getByRole("button", { name: "Learn from past conversations" });
       await expect.poll(() => learn.isDisabled()).toBe(true);
       const creates = (await gateway.getRequests("sessions.create")).length;

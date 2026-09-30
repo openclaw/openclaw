@@ -10,6 +10,7 @@ import {
 
 vi.mock("../../skills/workshop/experience-review-default.js", () => ({
   scheduleSkillExperienceReview: vi.fn(),
+  scheduleUnusedWorkshopSkillArchive: vi.fn(),
 }));
 
 vi.mock("./lifecycle-hook-helpers.js", () => ({
@@ -72,7 +73,7 @@ describe("agent end side effects", () => {
           skills: {
             workshop: {
               autonomous: {
-                mode: "propose",
+                mode: "auto",
               },
             },
           },

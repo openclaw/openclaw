@@ -451,7 +451,7 @@ describe("TUI PTY harness", { concurrent: false }, () => {
   );
 
   it(
-    "presents and resolves workspace skill approval in the TUI",
+    "presents and resolves plugin approval in the TUI",
     async () => {
       await approveWorkspaceSkill(fixture, "skill approval proof");
     },
@@ -459,7 +459,7 @@ describe("TUI PTY harness", { concurrent: false }, () => {
   );
 
   it.each(COMPACT_TERMINAL_SIZES)(
-    "presents and resolves workspace skill approval in a %i×%i terminal",
+    "presents and resolves plugin approval in a %i×%i terminal",
     async (cols, rows) => {
       const compactFixture = await startTuiFixture({
         env: {
@@ -562,14 +562,14 @@ describe("TUI PTY harness", { concurrent: false }, () => {
   );
 
   it(
-    "refreshes pending workspace skill approvals after an event gap",
+    "refreshes pending plugin approvals after an event gap",
     async () => {
       await fixture.run.write("skill approval gap proof\r");
       await fixture.waitForLogEntry(
         (entry) =>
           entry.method === "listPluginApprovals" && objectFieldEquals(entry, "pending", true),
       );
-      await fixture.run.waitForOutput("workspace skill approval: Apply workspace skill proposal");
+      await fixture.run.waitForOutput("plugin approval: Apply workspace skill proposal");
 
       await fixture.run.write("\x1b[A", { delay: false });
       await fixture.run.write("\r");

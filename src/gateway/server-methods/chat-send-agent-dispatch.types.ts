@@ -1,6 +1,5 @@
 import type { ReplyMessageInjectionAttempt } from "../../auto-reply/reply/reply-run-registry.js";
 import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
-import type { SkillWorkshopProposalRevisionConstraint } from "../../skills/workshop/types.js";
 import type { ChatRunTiming } from "../server-chat-state.js";
 import type { RestartSafeChatTerminalState } from "./chat-restart-recovery.js";
 import type { AdmittedChatSend } from "./chat-send-admission.js";
@@ -21,7 +20,6 @@ export type StartChatDispatchParams = {
   context: GatewayRequestHandlerOptions["context"];
   toolsAllow?: string[];
   prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
-  skillWorkshopProposalRevision?: SkillWorkshopProposalRevisionConstraint;
   skillLibraryAuthoring?: import("../../skills/library/authoring.js").SkillLibraryAuthoringCapability;
   cronCreatorAuthority: ReturnType<ChatSendExternalAuthorityAdmission["resolve"]>;
   assertDashboardReadCurrent?: () => void;

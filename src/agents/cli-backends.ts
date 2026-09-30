@@ -47,7 +47,6 @@ export type ResolvedCliBackend = Pick<
   | "parseJsonlEvent"
   | "parseJsonlLifecycleEvent"
   | "toolAvailabilityEnforcement"
-  | "isolatesInstructionsWithExactTools"
   | "projectNativeToolAuthority"
   | "nativeToolMode"
   | "sideQuestionToolMode"
@@ -311,7 +310,6 @@ export function resolveCliBackendConfig(
     parseJsonlEvent: backend.parseJsonlEvent,
     parseJsonlLifecycleEvent: backend.parseJsonlLifecycleEvent,
     toolAvailabilityEnforcement: backend.toolAvailabilityEnforcement,
-    isolatesInstructionsWithExactTools: backend.isolatesInstructionsWithExactTools,
     projectNativeToolAuthority: backend.projectNativeToolAuthority,
     nativeToolMode: backend.nativeToolMode,
     sideQuestionToolMode: backend.sideQuestionToolMode,

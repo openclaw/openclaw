@@ -406,12 +406,10 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
     }) || !resolvedConfig
       ? null
       : createConfiguredSkillWorkshopTool({
-          ...options,
-          workspaceDir,
           config: resolvedConfig,
           agentId: sessionAgentId,
           sessionKey: options?.runSessionKey ?? options?.agentSessionKey,
-          messageId: options?.currentMessageId,
+          runId: options?.runId,
           run: options?.skillWorkshop,
         }),
     progressCardTool,

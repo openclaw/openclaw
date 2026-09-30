@@ -363,6 +363,40 @@ function migrateRetiredSkillCuratorTablesV11(db: DatabaseSync, previousVersion: 
   return true;
 }
 
+// Same-version retirement in state schema 19. Doctor drops these only after
+// exporting pending proposal drafts, so the ordinary open path never runs this.
+const RETIRED_SKILL_WORKSHOP_PROPOSAL_TABLES = [
+  "skill_workshop_proposal_events",
+  "skill_workshop_proposal_rollbacks",
+  "skill_workshop_collection_reviews",
+  "skill_workshop_proposals",
+] as const;
+
+/** Drops the retired proposal tables, children first, inside the caller's write transaction. */
+export function dropRetiredSkillWorkshopProposalTables(db: DatabaseSync): boolean {
+  const present = RETIRED_SKILL_WORKSHOP_PROPOSAL_TABLES.filter((table) => tableExists(db, table));
+  if (present.length === 0) {
+    return false;
+  }
+  // Legacy builds left indexes naming retired columns; drop dependents before their tables.
+  const dependents = db
+    .prepare(
+      `SELECT type, name FROM sqlite_schema
+        WHERE type IN ('index', 'trigger') AND sql IS NOT NULL
+          AND tbl_name IN (${present.map(() => "?").join(", ")})`,
+    )
+    .all(...present);
+  for (const { type, name } of dependents) {
+    if ((type === "index" || type === "trigger") && typeof name === "string") {
+      db.exec(`DROP ${type.toUpperCase()} IF EXISTS ${quoteSqliteIdentifier(name)};`);
+    }
+  }
+  for (const table of present) {
+    db.exec(`DROP TABLE ${table};`);
+  }
+  return true;
+}
+
 /**
  * Runs every retired-table migration in schema order and names what it changed.
  * Both the repair path and the ordinary open path go through here so the order

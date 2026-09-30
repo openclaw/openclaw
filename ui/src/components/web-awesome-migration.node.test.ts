@@ -66,7 +66,6 @@ describe("Web Awesome control ownership", () => {
       "components/dock-layout-controller.ts",
       "pages/chat/chat-page-pane-render.ts",
       "pages/chat/components/chat-resizable-divider.ts",
-      "pages/skill-workshop/view.ts",
     ]);
   });
 });

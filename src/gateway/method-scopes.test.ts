@@ -1003,12 +1003,11 @@ describe("core gateway method classification", () => {
     expect(unclassified).toStrictEqual([]);
   });
 
-  it("exposes skill proposal methods through the core gateway registry", () => {
+  it("exposes Skill Workshop methods through the core gateway registry", () => {
     for (const method of [
-      "skills.proposals.list",
-      "skills.proposals.events.list",
-      "skills.proposals.inspect",
-      "skills.proposals.historyStatus",
+      "skills.workshop.list",
+      "skills.workshop.changes",
+      "skills.workshop.read",
     ]) {
       expect(listGatewayMethods()).toContain(method);
       expect(coreGatewayHandlers).toHaveProperty(method);
@@ -1018,16 +1017,7 @@ describe("core gateway method classification", () => {
       });
     }
 
-    for (const method of [
-      "skills.proposals.create",
-      "skills.proposals.update",
-      "skills.proposals.revise",
-      "skills.proposals.evaluate",
-      "skills.proposals.historyScan",
-      "skills.proposals.apply",
-      "skills.proposals.reject",
-      "skills.proposals.quarantine",
-    ]) {
+    for (const method of ["skills.workshop.archive", "skills.workshop.restore"]) {
       expect(listGatewayMethods()).toContain(method);
       expect(coreGatewayHandlers).toHaveProperty(method);
       expect(resolveLeastPrivilegeOperatorScopesForMethod(method)).toEqual(["operator.admin"]);

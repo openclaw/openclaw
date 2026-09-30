@@ -16,7 +16,6 @@ import {
 } from "../agents/core-tool-factory-descriptors.js";
 import { applyEmbeddedAttemptToolsAllow } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { loadNodeExecAvailability } from "../agents/node-exec-availability.js";
-import type { PreparedRootedExecutionCapability } from "../agents/rooted-run-params.js";
 import { normalizeToolPolicyName } from "../agents/tool-policy.js";
 import { hasSessionControlAuthority } from "../agents/tools/sessions-control-authority.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -61,7 +60,6 @@ type McpLoopbackScopeParams = {
   authProfileStore?: AuthProfileStore;
   authProfileStoreAgentDir?: string;
   skillLibraryAuthoring?: SkillLibraryAuthoringCapability;
-  rootedExecution?: PreparedRootedExecutionCapability;
   messageActionTurnCapability?: string;
   grantToken?: string;
   /**
@@ -110,7 +108,6 @@ async function resolveNodeExecScope(
   mode: LoopbackToolsAllowMode,
 ): Promise<McpLoopbackScopeParams> {
   const shouldResolveExec =
-    !params.rootedExecution &&
     params.context.nodeExecAllowed === true &&
     resolveMediatedNativeTools(params.context.toolsAllow, mode).size === 0;
   if (!shouldResolveExec) {
@@ -150,9 +147,7 @@ async function resolvePairedComputerNodeScope(
   mode: LoopbackToolsAllowMode,
 ): Promise<ResolvedNodeScope> {
   const canReachOrdinaryComputerSurface =
-    isComputerAllowedByMcpScope(params, mode) &&
-    params.context.modelHasVision !== false &&
-    !params.rootedExecution;
+    isComputerAllowedByMcpScope(params, mode) && params.context.modelHasVision !== false;
   if (!canReachOrdinaryComputerSurface) {
     return { params };
   }
@@ -166,7 +161,6 @@ async function resolvePairedComputerNodeScope(
   const pairedComputerUseAvailability = await loadPairedComputerUseAvailabilityForSurface({
     computerAllowed,
     modelHasVision: params.context.modelHasVision,
-    computerTransport: params.rootedExecution ? null : undefined,
     signal: params.signal,
   });
   if (!pairedComputerUseAvailability) {
@@ -196,9 +190,7 @@ function resolveMcpLoopbackTools(
   }
   // Restricted CLI grants use OpenClaw's implementations for coding tools;
   // native CLI tools bypass path, approval, sandbox, and exec policy.
-  const mediatedNativeTools = params.rootedExecution
-    ? new Set(NATIVE_TOOL_EXCLUDE)
-    : resolveMediatedNativeTools(toolsAllow, mode);
+  const mediatedNativeTools = resolveMediatedNativeTools(toolsAllow, mode);
   for (const toolName of mediatedNativeTools) {
     excludeToolNames.delete(toolName);
   }
@@ -206,13 +198,11 @@ function resolveMcpLoopbackTools(
   if (includeNodeExecTool) {
     excludeToolNames.delete("exec");
   }
-  const skillWorkshop =
-    context.skillWorkshop || params.skillLibraryAuthoring
-      ? { ...context.skillWorkshop, libraryAuthoring: params.skillLibraryAuthoring }
-      : undefined;
+  const skillWorkshop = params.skillLibraryAuthoring
+    ? { libraryAuthoring: params.skillLibraryAuthoring }
+    : undefined;
   const scoped = resolveGatewayScopedTools({
     ...context,
-    rootedExecution: params.rootedExecution,
     messageActionTurnCapability: params.messageActionTurnCapability,
     cfg: params.cfg,
     authProfileStore: params.authProfileStore,

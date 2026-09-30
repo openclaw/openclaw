@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
+import { RETIRED_SKILL_COLLECTION_REVIEW_DECLARATION_PREFIX } from "../system-owned-declaration.js";
 import {
   deleteCronJobRowInDatabase,
   fingerprintCronJobRows,
@@ -20,10 +21,15 @@ type CronLoadWriter = {
   committed(): void;
 };
 
+/** The weekly Workshop curator and its older `skillCollectionReview` payload are retired. */
 function isRetiredCollectionReview(row: CronJobReadRow): boolean {
+  const job = tryParseJsonObject(row.job_json);
+  const declarationKey = row.declaration_key ?? job?.declarationKey;
   return (
     row.payload_kind === "skillCollectionReview" ||
-    asRecord(tryParseJsonObject(row.job_json)?.payload).kind === "skillCollectionReview"
+    asRecord(job?.payload).kind === "skillCollectionReview" ||
+    (typeof declarationKey === "string" &&
+      declarationKey.startsWith(RETIRED_SKILL_COLLECTION_REVIEW_DECLARATION_PREFIX))
   );
 }
 
@@ -39,7 +45,7 @@ export function loadCronStoreFromDatabase(
     rows = rows.filter((row) => !retiredIds.has(row.job_id));
   } else if (retiredIds.size > 0) {
     // Retire generated jobs before runtime validation, including databases already
-    // on v16. Gateway convergence recreates them with the isolated agent-turn target.
+    // on the current schema version. No replacement job is created.
     const removed = writer.write((db) => {
       const current = loadCronRows(db, storeKey, retiredIds).filter(isRetiredCollectionReview);
       for (const row of current) {

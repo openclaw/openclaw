@@ -567,11 +567,6 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       skipProviderRuntimeHints: useFastReplyRuntime,
       terminalReplyExpectation,
       suppressTranscriptOnlyAssistantPersistence: isRoomEvent,
-      ...(opts?.skillWorkshopProposalRevision
-        ? {
-            skillWorkshopProposalRevision: { ...opts.skillWorkshopProposalRevision },
-          }
-        : {}),
       ...(opts?.skillLibraryAuthoring ? { skillLibraryAuthoring: opts.skillLibraryAuthoring } : {}),
       ...(!useFastReplyRuntime &&
       isReasoningTagProvider(provider, { config: cfg, workspaceDir, modelId: model })

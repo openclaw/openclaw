@@ -127,7 +127,7 @@ describe("TUI plugin approvals", () => {
     expect(harness.openOverlay).not.toHaveBeenCalled();
   });
 
-  it("shows workspace skill approvals for the active session and resolves the selection", async () => {
+  it("shows plugin approvals for the active session and resolves the selection", async () => {
     const harness = createHarness();
 
     harness.controller.handleEvent("plugin.approval.requested", approvalPayload());
@@ -137,7 +137,7 @@ describe("TUI plugin approvals", () => {
     const renderedPrompt = stripAnsi(
       expectDefined(prompt, "prompt test invariant").render(80).join("\n"),
     );
-    expect(renderedPrompt).toContain("workspace skill approval: Apply workspace skill proposal");
+    expect(renderedPrompt).toContain("plugin approval: Apply workspace skill proposal");
     expect(renderedPrompt).toContain("Severity: Warning");
     expect(renderedPrompt).toContain("Tool: skill_workshop");
     expect(renderedPrompt).toContain("Plugin: workspace-skills");
@@ -155,7 +155,7 @@ describe("TUI plugin approvals", () => {
       expect(harness.resolvePluginApproval).toHaveBeenCalledWith("plugin:skill-1", "allow-once");
     });
     expect(harness.closeOverlay).toHaveBeenCalledTimes(1);
-    expect(harness.addSystem).toHaveBeenLastCalledWith("workspace skill approval: allowed once");
+    expect(harness.addSystem).toHaveBeenLastCalledWith("plugin approval: allowed once");
   });
 
   it("ignores other sessions and restores matching pending approvals after connect", async () => {
@@ -398,7 +398,7 @@ describe("TUI plugin approvals", () => {
     expect(harness.closeOverlay).toHaveBeenCalledTimes(1);
     expect(harness.resolvePluginApproval).not.toHaveBeenCalled();
     expect(harness.addSystem).toHaveBeenCalledWith(
-      "workspace skill approval: dismissed; request remains pending",
+      "plugin approval: dismissed; request remains pending",
     );
 
     harness.controller.sessionChanged();
@@ -445,7 +445,7 @@ describe("TUI plugin approvals", () => {
       expect(harness.openOverlay).toHaveBeenCalledTimes(2);
     });
     expect(harness.addSystem).toHaveBeenLastCalledWith(
-      "workspace skill approval failed: gateway unavailable",
+      "plugin approval failed: gateway unavailable",
     );
 
     harness.selectors[1]?.onSelectionChange?.({ value: "allow-once", label: "Allow once" });
@@ -453,7 +453,7 @@ describe("TUI plugin approvals", () => {
     await vi.waitFor(() => {
       expect(harness.resolvePluginApproval).toHaveBeenCalledTimes(2);
     });
-    expect(harness.addSystem).toHaveBeenLastCalledWith("workspace skill approval: allowed once");
+    expect(harness.addSystem).toHaveBeenLastCalledWith("plugin approval: allowed once");
   });
 
   it("does not reopen an approval while its decision is in flight", async () => {
@@ -475,7 +475,7 @@ describe("TUI plugin approvals", () => {
 
     pendingResolution.resolve({ ok: true });
     await vi.waitFor(() => {
-      expect(harness.addSystem).toHaveBeenLastCalledWith("workspace skill approval: allowed once");
+      expect(harness.addSystem).toHaveBeenLastCalledWith("plugin approval: allowed once");
     });
   });
 
@@ -495,9 +495,7 @@ describe("TUI plugin approvals", () => {
       expect(harness.listPluginApprovals).toHaveBeenCalledTimes(1);
     });
     expect(harness.openOverlay).toHaveBeenCalledTimes(1);
-    expect(harness.addSystem).toHaveBeenLastCalledWith(
-      "workspace skill approval: no longer pending",
-    );
+    expect(harness.addSystem).toHaveBeenLastCalledWith("plugin approval: no longer pending");
   });
 
   it("flattens and sanitizes untrusted approval text", () => {
@@ -520,7 +518,7 @@ describe("TUI plugin approvals", () => {
     expect(renderedPrompt).not.toContain("\u0000");
     expect(renderedPrompt).not.toContain("\u202E");
     expect(renderedPrompt).not.toContain("\u2066");
-    expect(stripAnsi(renderedPrompt)).toContain("workspace skill approval: Apply Allow once skill");
+    expect(stripAnsi(renderedPrompt)).toContain("plugin approval: Apply Allow once skill");
     expect(stripAnsi(renderedPrompt)).toContain("Request: Review Press Enter again this change");
   });
 

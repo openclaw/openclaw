@@ -43,7 +43,6 @@ export async function prepareCronSessionWorkspace(params: {
     sessionKey: params.sessionKey,
     entry: params.cronSession.initialSessionEntry,
     defaultWorkspaceDir: params.defaultWorkspaceDir,
-    executionRoot: params.input.executionRoot,
     assertCurrent,
   });
   try {
@@ -82,7 +81,6 @@ async function resolveCronSessionWorkspace(params: {
   sessionKey: string;
   entry?: SessionEntry;
   defaultWorkspaceDir: string;
-  executionRoot?: string;
   assertCurrent: () => void;
 }): Promise<{ workspaceDir: string; cwd?: string; lease?: CronWorkspaceLease }> {
   const target = resolveCronSessionTargetSessionKey(params.sessionTarget);
@@ -138,18 +136,6 @@ async function resolveCronSessionWorkspace(params: {
     : params.defaultWorkspaceDir;
   const cwd = requestedCwd ? await fs.realpath(resolveUserPath(requestedCwd)) : undefined;
   params.assertCurrent();
-  // A configured fallback is not a saved binding: host-rooted custom sessions
-  // must keep the same root on their first and subsequent runs.
-  if (
-    params.executionRoot &&
-    (override || requestedCwd || entry.worktree) &&
-    path.resolve(params.executionRoot) !== path.resolve(workspaceDir)
-  ) {
-    throw new CronSessionLifecycleClaimError(
-      params.sessionKey,
-      "Bound automation workspace conflicts with its execution root.",
-    );
-  }
   const binding = entry.worktree;
   if (!binding) {
     return { workspaceDir, cwd };

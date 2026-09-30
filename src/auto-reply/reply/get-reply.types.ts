@@ -12,7 +12,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { DashboardMessageReadAdmission } from "../../gateway/message-action-turn-capability.js";
 import type { ExtractedFileImage } from "../../media-understanding/extracted-file-images.js";
 import type { PluginCommandReplyOptions } from "../../plugins/plugin-command-dispatch-contract.js";
-import type { SkillWorkshopProposalRevisionConstraint } from "../../skills/workshop/types.js";
 import { getCommandOwnerAuthority } from "../command-owner-authority.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
 import type { ReplyPayload } from "../reply-payload.js";
@@ -91,8 +90,6 @@ type InternalReplySessionOptions = {
   /** Dispatch-owned operation used to defer hooks until durable run admission. */
   replyOperation?: ReplyOperation;
   skillOverrides?: SessionToolOverrides["skills"];
-  /** Gateway-private optimistic-concurrency constraint for an operator-requested proposal revision. */
-  skillWorkshopProposalRevision?: SkillWorkshopProposalRevisionConstraint;
   skillLibraryAuthoring?: import("../../skills/library/authoring.js").SkillLibraryAuthoringCapability;
 };
 

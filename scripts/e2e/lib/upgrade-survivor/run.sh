@@ -2442,7 +2442,7 @@ if [ "$SCENARIO" = "workshop-doctor-recovery" ]; then
   phase assert-workshop-candidate-repair node scripts/e2e/lib/upgrade-survivor/workshop-doctor-recovery.mjs doctor "$workshop_doctor_observation_root" candidate
   phase assert-workshop-recovery node scripts/e2e/lib/upgrade-survivor/workshop-doctor-recovery.mjs complete
   run_completed="1"
-  echo "Workshop Doctor recovery passed: published updater refused unchanged malformed state; explicit baseline Doctor, recovered upgrade, and explicit candidate Doctor succeeded."
+  echo "Workshop Doctor recovery passed: published updater refused unchanged malformed state; explicit baseline Doctor repaired it; the recovered upgrade exported pending proposal drafts and retired proposal storage; explicit candidate Doctor repaired and retired restored legacy state."
   exit 0
 fi
 if [ "$SCENARIO" = "custom-plugin-siblings" ]; then

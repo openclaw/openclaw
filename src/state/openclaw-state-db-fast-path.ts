@@ -17,7 +17,7 @@ import {
 } from "./openclaw-state-db-schema-repair.js";
 import {
   assertSupportedStateSchemaVersion,
-  readStateSchemaMigrationVersion,
+  readStateSchemaContentVersion,
 } from "./openclaw-state-db-schema-version.js";
 import {
   getOpenClawStateRuntimeSchema,
@@ -34,7 +34,7 @@ export function needsOpenClawStateDatabaseSchemaRepair(
     database = openNodeSqliteDatabase(pathname, { readOnly: true });
     assertSupportedStateSchemaVersion(database, pathname);
     const needsRepair =
-      readStateSchemaMigrationVersion(database) !== OPENCLAW_STATE_SCHEMA_VERSION ||
+      readStateSchemaContentVersion(database) !== OPENCLAW_STATE_SCHEMA_VERSION ||
       hasLegacyCronRunLogs(database) ||
       detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(database, pathname).length > 0;
     if (!needsRepair) {
@@ -74,7 +74,7 @@ export function isOpenClawStateSchemaFastPathEligible(
 ): boolean {
   return runSqliteDeferredTransactionSync(database, () => {
     assertSupportedStateSchemaVersion(database, pathname);
-    if (readStateSchemaMigrationVersion(database) !== OPENCLAW_STATE_SCHEMA_VERSION) {
+    if (readStateSchemaContentVersion(database) !== OPENCLAW_STATE_SCHEMA_VERSION) {
       return false;
     }
     assertSqliteIntegrity(database, pathname);

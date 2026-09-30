@@ -58,20 +58,17 @@ describe("embedded run session permissions", () => {
     await state?.cleanup();
   });
 
-  it.each(["requireWorkspaceOnly", "requireWritableSandbox"] as const)(
-    "preserves the host's %s requirement at attempt dispatch",
-    async (requirement) => {
-      mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ assistantTexts: ["OK"] }));
-      await runEmbeddedAgent({
-        ...createPluginHarnessRunParams(state),
-        [requirement]: true,
-        runId: "run-workspace-requirement",
-      });
-      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledWith(
-        expect.objectContaining({ [requirement]: true }),
-      );
-    },
-  );
+  it("preserves the host's requireWorkspaceOnly requirement at attempt dispatch", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ assistantTexts: ["OK"] }));
+    await runEmbeddedAgent({
+      ...createPluginHarnessRunParams(state),
+      requireWorkspaceOnly: true,
+      runId: "run-workspace-requirement",
+    });
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({ requireWorkspaceOnly: true }),
+    );
+  });
 
   it("shares the final plugin-clamped exec mode with the outer run", async () => {
     const execOverrides = {};

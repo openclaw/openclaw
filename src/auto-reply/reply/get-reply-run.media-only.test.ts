@@ -5009,22 +5009,6 @@ describe("runPreparedReply media-only handling", () => {
     expect(call.followupRun.run.fastMode).toBe("auto");
   });
 
-  it("keeps an operator-reviewed proposal revision isolated on the queued run", async () => {
-    const proposalRevision = {
-      agentId: "main",
-      workspaceDir: "/tmp/workspace",
-      proposalId: "proposal-h1",
-      expectedRevisionHash: "revision-h1",
-    };
-    await runPrepared({
-      opts: { skillWorkshopProposalRevision: proposalRevision } as never,
-    });
-
-    const call = requireRunReplyAgentCall();
-    expect(call.followupRun.run.skillWorkshopProposalRevision).toEqual(proposalRevision);
-    expect(call.followupRun.run.skillWorkshopProposalRevision).not.toBe(proposalRevision);
-  });
-
   it("admits only system events visible to the prepared agent", async () => {
     const actualSystemEvents = await vi.importActual<typeof import("./session-system-events.js")>(
       "./session-system-events.js",

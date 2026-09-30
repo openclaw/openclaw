@@ -42,13 +42,7 @@ import type {
   PluginHookMessageSendingResult,
   PluginHookMessageSentEvent,
 } from "./hook-message.types.js";
-import type {
-  PluginHookSkillChangedEvent,
-  PluginHookSkillContext,
-  PluginHookSkillProposalChangedEvent,
-  PluginHookSkillProposalEvaluateEvent,
-  PluginHookSkillProposalEvaluateResult,
-} from "./hook-skill.types.js";
+import type { PluginHookSkillChangedEvent, PluginHookSkillContext } from "./hook-skill.types.js";
 import type { PluginJsonValue } from "./host-hook-json.js";
 import type {
   PluginAgentTurnPrepareEvent,
@@ -92,16 +86,8 @@ export {
 } from "./hook-before-tool-call-result.js";
 export type {
   PluginHookSkillArtifact,
-  PluginHookSkillBundleFile,
-  PluginHookSkillBundleSnapshot,
   PluginHookSkillChangedEvent,
   PluginHookSkillContext,
-  PluginHookSkillEvaluationFinding,
-  PluginHookSkillProposalChangedEvent,
-  PluginHookSkillProposalEvaluateEvent,
-  PluginHookSkillProposalEvaluateResult,
-  PluginHookSkillProposalEvaluationOutcome,
-  PluginHookSkillProposalKind,
 } from "./hook-skill.types.js";
 
 const PLUGIN_HOOK_NAMES = [
@@ -139,8 +125,6 @@ const PLUGIN_HOOK_NAMES = [
   "heartbeat_prompt_contribution",
   "cron_reconciled",
   "cron_changed",
-  "skill_proposal_evaluate",
-  "skill_proposal_changed",
   "skill_changed",
   "before_dispatch",
   "reply_dispatch",
@@ -1062,15 +1046,6 @@ export type PluginHookHandlerMap = {
   >;
   cron_reconciled: AsyncPluginHook<PluginHookCronReconciledEvent, PluginHookCronReconciledContext>;
   cron_changed: AsyncPluginHook<PluginHookCronChangedEvent, PluginHookGatewayContext>;
-  skill_proposal_evaluate: AsyncPluginHook<
-    PluginHookSkillProposalEvaluateEvent,
-    PluginHookSkillContext,
-    PluginHookSkillProposalEvaluateResult
-  >;
-  skill_proposal_changed: AsyncPluginHook<
-    PluginHookSkillProposalChangedEvent,
-    PluginHookSkillContext
-  >;
   skill_changed: AsyncPluginHook<PluginHookSkillChangedEvent, PluginHookSkillContext>;
   before_install: AsyncPluginHook<
     PluginHookBeforeInstallEvent,

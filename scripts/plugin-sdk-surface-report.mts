@@ -197,7 +197,7 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
     // without its ratchet update; these pin exactly that growth.
     publicExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS",
-      4594,
+      4586,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(

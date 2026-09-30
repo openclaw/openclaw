@@ -170,7 +170,6 @@ async function runStateLeaseOwnerInScope<T>(
     workerOperations = createOpenClawStateLeaseWorkerOwner({
       identity: { scope: identity.scope, key: identity.key, owner: identity.owner },
       databasePath: workerStorage.path,
-      sourceContext: invocation.kind === "worker" ? invocation.context : undefined,
       expiryObservation: expiryObservation?.buffer,
       assertCurrent(purpose) {
         if (disposed) {

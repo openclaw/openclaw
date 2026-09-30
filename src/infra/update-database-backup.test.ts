@@ -213,16 +213,13 @@ async function originalCaptureFixture(externalAgents = false) {
       { path: plugin, kind: "directory" },
       { path: missingFile, kind: "file" },
       { path: missingDatabase, kind: "sqlite" },
+      { path: workshop, kind: "directory" },
+      { path: missingDirectory, kind: "directory" },
     ],
     deferredPluginIds: new Set(),
     notices: [],
     assertCurrent: () => {},
   });
-  const workshopOwner = await import("../commands/doctor-update-rehearsal-workshop.js");
-  vi.spyOn(workshopOwner, "collectDoctorSkillWorkshopBackupResources").mockResolvedValue([
-    { path: workshop, kind: "directory" },
-    { path: missingDirectory, kind: "directory" },
-  ]);
   const { captureUpdateRecoveryBaseline } = await import("./update-recovery-baseline-capture.js");
   const env = {
     ...process.env,

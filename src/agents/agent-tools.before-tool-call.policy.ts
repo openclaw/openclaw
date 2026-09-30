@@ -6,7 +6,6 @@
  * remain in this sequence.
  */
 import type { ToolLoopWarning } from "@openclaw/agent-core";
-import { getRuntimeConfig } from "../config/config.js";
 import { freezeDiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
 import { getGlobalHookRunnerRegistry } from "../plugins/hook-runner-global-state.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
@@ -21,7 +20,6 @@ import type {
   PluginHookToolInputKind,
   PluginHookToolKind,
 } from "../plugins/types.js";
-import { resolveSkillWorkshopToolApproval } from "../skills/workshop/policy.js";
 import {
   checkClientVoiceToolConfirmationPolicy,
   consumeClientVoiceToolConfirmationPolicy,
@@ -34,7 +32,6 @@ import { isPlainObject } from "../utils.js";
 import {
   mergeParamsWithApprovalOverrides,
   resolveBeforeToolCallApprovalOutcome,
-  resolveSkillWorkshopApprovalForFinalParams,
 } from "./agent-tools.before-tool-call.approval.js";
 import {
   beforeToolCallLog as log,
@@ -178,16 +175,6 @@ export async function runBeforeToolCallHook(args: {
     const policyRegistry = getGlobalHookRunnerRegistry() ?? undefined;
     const shouldRunTrustedPolicies = hasTrustedToolPolicies(policyRegistry);
     const normalizedParams = isPlainObject(params) ? params : {};
-    const initialCorePolicyResult =
-      toolName === "skill_workshop"
-        ? await resolveSkillWorkshopToolApproval({
-            toolName,
-            toolParams: normalizedParams,
-            config: args.ctx?.config ?? getRuntimeConfig(),
-            ...(args.ctx?.workspaceDir ? { workspaceDir: args.ctx.workspaceDir } : {}),
-            ...(args.ctx?.agentId ? { agentId: args.ctx.agentId } : {}),
-          })
-        : undefined;
     const voiceRun = resolveClientVoiceRunBinding(args.ctx?.runId);
     // Nested catalog calls are gated individually; the script wrapper is not itself an action.
     const voiceConfirmation = isCodeModeExecToolKind(args.toolKind)
@@ -210,7 +197,7 @@ export async function runBeforeToolCallHook(args: {
         params,
       };
     }
-    if (!initialCorePolicyResult && !shouldRunTrustedPolicies && !hasBeforeToolCallHooks) {
+    if (!shouldRunTrustedPolicies && !hasBeforeToolCallHooks) {
       return withLoopWarning({ blocked: false, params });
     }
     const deriveOptions =
@@ -405,17 +392,6 @@ export async function runBeforeToolCallHook(args: {
           adjustedParams: mergeParamsWithApprovalOverrides(finalParams, hookResult.params),
         });
       }
-    }
-    const finalApprovalOutcome = await resolveSkillWorkshopApprovalForFinalParams({
-      toolName,
-      params: finalParams,
-      approvalMode: args.approvalMode,
-      ...(args.toolCallId ? { toolCallId: args.toolCallId } : {}),
-      ...(args.ctx ? { ctx: args.ctx } : {}),
-      signal: args.signal,
-    });
-    if (finalApprovalOutcome) {
-      return withLoopWarning(finalApprovalOutcome);
     }
     const allowed: HookOutcome = {
       blocked: false as const,

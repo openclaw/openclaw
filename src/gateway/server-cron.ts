@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import { retireSessionMcpRuntime } from "../agents/agent-bundle-mcp-tools.js";
 import { isAgentDeletionBlocked } from "../agents/agent-lifecycle-registry.js";
@@ -53,7 +52,6 @@ import {
   resolveCronDeliverySessionKey,
   resolveCronSessionTargetSessionKey,
 } from "../cron/session-target.js";
-import { skillCollectionReviewMonitorAgentId } from "../cron/skill-collection-review-monitor.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { cronStreamScheduleKey } from "../cron/stream-schedule.js";
 import { createCronScriptRuntime } from "../cron/trigger-script.js";
@@ -101,9 +99,6 @@ import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { runInDetachedAsyncContext } from "../shared/async-work-scope.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { truncateUtf16WithEllipsis } from "../shared/text-truncate.js";
-import { bumpSkillsSnapshotVersion } from "../skills/runtime/refresh-state.js";
-import { resolveSkillWorkshopConfig } from "../skills/workshop/config.js";
-import { resolveWorkshopSkillsDir } from "../skills/workshop/skills-root.js";
 import {
   assertAgentDatabaseAdmitted,
   readAgentDatabaseAdmissionRefusal,
@@ -131,7 +126,6 @@ import {
   sendGatewayCronFailureAlert,
 } from "./server-cron-notifications.js";
 import { toPluginCronJob } from "./server-cron-plugin-job.js";
-import { reconcileSkillCollectionReviewJobs } from "./server-cron-skill-review-jobs.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import {
   invalidateSessionAutomationIndex,
@@ -817,34 +811,14 @@ export function buildGatewayCronService(params: {
       const { job } = request;
       const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
       const sessionKey = resolveCronSessionTargetSessionKey(job.sessionTarget) ?? `cron:${job.id}`;
-      const reviewAgentId = skillCollectionReviewMonitorAgentId(job);
-      if (reviewAgentId && resolveSkillWorkshopConfig(runtimeConfig).autonomous.mode !== "auto") {
-        return { status: "skipped", summary: "Skill collection review disabled." };
-      }
-      const executionRoot = reviewAgentId
-        ? resolveWorkshopSkillsDir(runtimeConfig, agentId)
-        : undefined;
-      if (executionRoot) {
-        await fs.mkdir(executionRoot, { recursive: true });
-      }
-      try {
-        return await runCronIsolatedAgentTurn({
-          ...request,
-          cfg: runtimeConfig,
-          deps: params.deps,
-          agentId,
-          sessionKey,
-          lane: "cron",
-          executionRoot,
-          skillsSnapshot: executionRoot ? { prompt: "", skills: [] } : undefined,
-        });
-      } finally {
-        // Normal file tools can finish edits before cancellation. Refresh future
-        // sessions without rewriting files or invalidating the running session.
-        if (executionRoot) {
-          bumpSkillsSnapshotVersion({ reason: "workshop" });
-        }
-      }
+      return await runCronIsolatedAgentTurn({
+        ...request,
+        cfg: runtimeConfig,
+        deps: params.deps,
+        agentId,
+        sessionKey,
+        lane: "cron",
+      });
     },
     runCommandJob: async ({ job, abortSignal }) => {
       const result = await runCronCommandJob({
@@ -1466,20 +1440,13 @@ export function buildGatewayCronService(params: {
       };
       try {
         assertCurrent();
-        let converged = true;
-        for (const reconcile of [
-          reconcileHeartbeatMonitorJobs,
-          reconcileSkillCollectionReviewJobs,
-        ]) {
-          const { ok } = await reconcile({
-            cron,
-            cfg,
-            logger: cronServiceLogger,
-            commitGuard: assertCurrent,
-          });
-          assertCurrent();
-          converged &&= ok;
-        }
+        const { ok: converged } = await reconcileHeartbeatMonitorJobs({
+          cron,
+          cfg,
+          logger: cronServiceLogger,
+          commitGuard: assertCurrent,
+        });
+        assertCurrent();
         if (!converged) {
           systemJobRetryTimer = params.scheduler.schedule({
             id: `cron:${storePath}:system-jobs`,

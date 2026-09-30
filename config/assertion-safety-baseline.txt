@@ -1633,7 +1633,6 @@ src/agents/tools/sessions-search-tool.ts	1
 src/agents/tools/sessions-spawn-tool.ts	5
 src/agents/tools/sessions-tool.ts	1
 src/agents/tools/sessions-yield-tool.ts	1
-src/agents/tools/skill-workshop-tool-helpers.ts	1
 src/agents/tools/structured-output-tool.ts	2
 src/agents/tools/subagents-tool.ts	1
 src/agents/tools/system-agent-tool.ts	1
@@ -2824,9 +2823,6 @@ src/skills/loading/frontmatter.ts	1
 src/skills/loading/workspace-skill-sync.runtime.ts	1
 src/skills/runtime/remote-probe-utils.ts	2
 src/skills/runtime/remote-skills.ts	1
-src/skills/workshop/policy.ts	1
-src/skills/workshop/store-record.ts	3
-src/skills/workshop/store-sqlite-event.ts	1
 src/skills/workshop/tool-policy-diagnostic.ts	1
 src/snapshot/git-backup-codec.ts	7
 src/snapshot/git-backup.ts	2
@@ -3137,8 +3133,6 @@ ui/src/pages/portals/portal-reachability.ts	1
 ui/src/pages/profile/identity-section.ts	2
 ui/src/pages/secrets/view.ts	5
 ui/src/pages/sessions/view.ts	7
-ui/src/pages/skill-workshop/self-learning.ts	1
-ui/src/pages/skill-workshop/view.ts	1
 ui/src/pages/skills/view.ts	2
 ui/src/pages/usage/view-details.ts	5
 ui/src/pages/usage/view-overview.ts	2

@@ -93,10 +93,8 @@ import type { SessionStateWorkerOperations } from "../sessions/session-state-eve
 import type { SessionUpstreamLink } from "../sessions/session-upstream-links.kernel.js";
 import type { DeviceAuthEntry } from "../shared/device-auth.js";
 import type { SkillUploadWorkerOperations } from "../skills/lifecycle/upload-store.worker.js";
-import type * as curator from "../skills/workshop/curator.kernel.js";
-import type { listStoredSkillProposalEventsInDatabase } from "../skills/workshop/store-sqlite-event.js";
-import type { SkillWorkshopExecutionOperations } from "../skills/workshop/store.worker-contract.js";
-import type { SkillProposalEvent, SkillProposalRecord } from "../skills/workshop/types.js";
+import type { WorkshopChangesWorkerOperations } from "../skills/workshop/changes.worker-contract.js";
+import type { PreparedSkillUsage, SkillUsageRow } from "../skills/workshop/skill-usage.kernel.js";
 import type {
   TranscriptReadOperations,
   TranscriptWriteOperations,
@@ -129,7 +127,7 @@ export type OpenClawStateWorkerOperations = UpdateRunReconciliationOperations &
   WorktreeRegistryReadOperations &
   SessionStateWorkerOperations &
   McpOAuthReadOperations &
-  SkillWorkshopExecutionOperations &
+  WorkshopChangesWorkerOperations &
   CurrentConversationBindingWorkerOperations &
   McpOAuthWriteOperations &
   LegacyMcpOAuthWorkerOperations &
@@ -266,24 +264,8 @@ export type OpenClawStateWorkerOperations = UpdateRunReconciliationOperations &
       input: SessionGroupCatalogMutation;
       output: SessionGroupCatalogMutationResult;
     };
-    "skills.curator.read": {
-      input: { skillFiles: readonly string[] };
-      output: ReturnType<typeof curator.readSkillCuratorStateInDatabase>;
-    };
-    "skills.usage.record": { input: curator.PreparedSkillUsage; output: void };
-    "workshop.events.list": {
-      input: Parameters<typeof listStoredSkillProposalEventsInDatabase>[1];
-      output: ReturnType<typeof listStoredSkillProposalEventsInDatabase>;
-    };
-    "doctor.workshopMigrationRecords.read": {
-      input: { includeEvents: boolean };
-      output:
-        | {
-            records: Array<{ record: SkillProposalRecord; ownerAgentId: string | null }>;
-            appliedEvents: SkillProposalEvent[];
-          }
-        | undefined;
-    };
+    "skills.usage.read": { input: { skillFiles: readonly string[] }; output: SkillUsageRow[] };
+    "skills.usage.record": { input: PreparedSkillUsage; output: void };
     "modelCatalog.remote.read": {
       input: { artifactPreservingReadOnly: boolean };
       output: ReturnType<typeof readRemoteModelCatalog>;

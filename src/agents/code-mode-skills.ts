@@ -5,7 +5,8 @@ export type CodeModeSkill = {
   name: string;
   description: string;
   location: string;
-  source: Pick<Skill, "filePath" | "readContent">;
+  /** Loaded skill identity; `source`/`sourceInfo` classify skill.used telemetry. */
+  source: Pick<Skill, "filePath" | "readContent"> & Partial<Pick<Skill, "source" | "sourceInfo">>;
   reader?: CodeModeSkillReader;
 };
 
@@ -48,7 +49,12 @@ export function resolveCodeModeSkills(params: {
       name,
       description: [source.description, source.locationNote].filter(Boolean).join("\n"),
       location,
-      source: { filePath: source.filePath, readContent: source.readContent },
+      source: {
+        filePath: source.filePath,
+        readContent: source.readContent,
+        source: source.source,
+        sourceInfo: source.sourceInfo,
+      },
       reader: params.reader,
     });
   }

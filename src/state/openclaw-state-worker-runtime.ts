@@ -30,7 +30,6 @@ import {
 } from "../channels/message/ingress-queue.worker.js";
 import { readClawInstallSchemaVersionRows } from "../claws/provenance-runtime-read.kernel.js";
 import { readSqliteDatabaseBloat } from "../commands/doctor-db-bloat.read.js";
-import { readWorkshopMigrationRecordsInDatabase } from "../commands/doctor-skill-workshop-read.kernel.js";
 import { upsertConfigSnapshotAuditRecordInDatabase } from "../config/config-journal-snapshot.kernel.js";
 import {
   patchConfigHealthEntryInDatabase,
@@ -126,7 +125,11 @@ import {
   isSkillUploadCommand,
   executeSkillUploadCommand,
 } from "../skills/lifecycle/upload-store.worker.js";
-import * as skillWorkshop from "../skills/workshop/store.worker.js";
+import * as workshopChanges from "../skills/workshop/changes.worker.js";
+import {
+  readSkillUsageInDatabase,
+  recordSkillUsageInDatabase,
+} from "../skills/workshop/skill-usage.kernel.js";
 import { executeTranscriptRead } from "../transcripts/store-worker-read.js";
 import {
   executeTranscriptWrite,
@@ -312,12 +315,6 @@ export function executeSharedStateCommand(
       stateOptions(),
     );
   }
-  if (command.type === "doctor.workshopMigrationRecords.read") {
-    return withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
-      ({ db }) => readWorkshopMigrationRecordsInDatabase(db, command.input.includeEvents),
-      stateOptions(),
-    );
-  }
   if (command.type === "modelCatalog.remote.read") {
     const read = () => readRemoteModelCatalog(stateOptions());
     return command.input.artifactPreservingReadOnly
@@ -441,8 +438,17 @@ export function executeSharedStateCommand(
   if (command.type === "githubRepository.personalPending") {
     return readPendingRepositoryGitHubPublicationInDatabase(database.db, command.input);
   }
-  if (skillWorkshop.isSkillWorkshopCommand(command)) {
-    return skillWorkshop.executeSkillWorkshopCommand(command, database, context.databasePath);
+  if (workshopChanges.isWorkshopChangesCommand(command)) {
+    return workshopChanges.executeWorkshopChangesCommand(command, database, context.databasePath);
+  }
+  if (command.type === "skills.usage.read") {
+    return readSkillUsageInDatabase(database, command.input.skillFiles);
+  }
+  if (command.type === "skills.usage.record") {
+    return runOpenClawStateWriteTransaction(
+      (current) => recordSkillUsageInDatabase(current, command.input),
+      { database, path: context.databasePath, env: getSqliteWorkerStateContext().environment },
+    );
   }
   if (command.type === "deviceAuth.list") {
     return deviceAuth.readDeviceAuthTokensFromDatabase(database.db, command.input);

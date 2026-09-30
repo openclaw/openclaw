@@ -28,7 +28,6 @@ import type {
 } from "../plugins/doctor-contract-module.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
-import { proposeCreateSkill } from "../skills/workshop/service.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import { listOpenClawRegisteredAgentDatabases } from "../state/openclaw-agent-db-registry.js";
@@ -963,43 +962,35 @@ describe("state migrations", () => {
     ).rejects.toBeInstanceOf(AgentSelectionRequiredError);
   });
 
-  it.each(["present", "absent", "present with a retained bundle"] as const)(
-    "keeps automatic migration read-only with a current schema and Workshop tables %s",
-    async (workshopTables) => {
+  it.each(["absent", "present"] as const)(
+    "keeps automatic migration read-only with retired Workshop proposals %s",
+    async (proposals) => {
       const { root, stateDir, env } = createMigrationContext(await createTempDir());
       const cfg = createConfig();
       cfg.agents = { list: [{ id: "main" }] };
       const databasePath = openOpenClawStateDatabase({ env }).path;
-      let bundle: { path: string; content: string } | undefined;
-      if (workshopTables === "present with a retained bundle") {
-        const proposal = await proposeCreateSkill({
-          workspaceDir: path.join(root, "workspace"),
-          config: cfg,
-          agentId: "main",
-          env,
-          name: "retained-procedure",
-          description: "Keep a current proposal through no-op migration",
-          content: "# Retained procedure\n\nKeep this modern draft intact.\n",
-        });
-        const proposalDir = path.join(stateDir, "skill-workshop", "proposals", proposal.record.id);
-        bundle = {
-          path: path.join(proposalDir, proposal.record.draftFile),
-          content: proposal.content,
-        };
-        await expect(fs.access(path.join(proposalDir, "proposal.json"))).rejects.toMatchObject({
-          code: "ENOENT",
-        });
-      }
       await closeStateDatabaseForTest();
-
+      const draft = path.join(
+        stateDir,
+        "skill-workshop",
+        "proposals",
+        "retained-procedure-1234",
+        "PROPOSAL.md",
+      );
       const writer = new DatabaseSync(databasePath);
-      if (workshopTables === "absent") {
+      if (proposals === "present") {
         writer.exec(`
-        DROP TABLE skill_workshop_proposal_events;
-        DROP TABLE skill_workshop_proposal_rollbacks;
-        DROP TABLE skill_workshop_collection_reviews;
-        DROP TABLE skill_workshop_proposals;
+        CREATE TABLE skill_workshop_proposals (
+          proposal_id TEXT NOT NULL PRIMARY KEY,
+          record_json TEXT NOT NULL,
+          owner_agent_id TEXT,
+          status TEXT NOT NULL
+        ) STRICT;
+        INSERT INTO skill_workshop_proposals
+          VALUES ('retained-procedure-1234', '{}', 'main', 'pending');
       `);
+        await fs.mkdir(path.dirname(draft), { recursive: true });
+        await fs.writeFile(draft, "# Retained procedure\n");
       }
       writer.exec("PRAGMA journal_mode = WAL; BEGIN IMMEDIATE;");
       try {
@@ -1007,8 +998,8 @@ describe("state migrations", () => {
         expect(result).toMatchObject({ changes: [], warnings: [] });
         const ids = result.stepReceipts.map((receipt) => receipt.id);
         expect(ids).not.toContain("skill-workshop");
-        if (bundle) {
-          await expect(fs.readFile(bundle.path, "utf8")).resolves.toBe(bundle.content);
+        if (proposals === "present") {
+          await expect(fs.readFile(draft, "utf8")).resolves.toBe("# Retained procedure\n");
         }
       } finally {
         writer.exec("ROLLBACK;");
@@ -1025,9 +1016,10 @@ describe("state migrations", () => {
       const databasePath = openOpenClawStateDatabase({ env }).path;
       closeOpenClawStateDatabaseForTest();
       const workshopRoot = path.join(stateDir, "skill-workshop");
-      const indexPath = path.join(workshopRoot, "proposals.json");
-      await fs.mkdir(workshopRoot, { recursive: true });
-      await fs.writeFile(indexPath, "{}\n");
+      const proposalsDir = path.join(workshopRoot, "proposals");
+      const recordPath = path.join(proposalsDir, "rejected-procedure-1234", "proposal.json");
+      await fs.mkdir(path.dirname(recordPath), { recursive: true });
+      await fs.writeFile(recordPath, '{"status":"rejected"}\n');
       if (mode === "doctor-refusal") {
         await fs.mkdir(path.join(stateDir, "tui"), { recursive: true });
         await fs.writeFile(path.join(stateDir, "tui", "last-session.json"), "{broken");
@@ -1040,7 +1032,7 @@ describe("state migrations", () => {
         doctorOnlyStateMigrations: mode !== "automatic",
         onStepReceipt: (receipt) => {
           if (receipt.id === "skill-workshop") {
-            callbackSamples.push(fsSync.existsSync(indexPath));
+            callbackSamples.push(fsSync.existsSync(proposalsDir));
           }
         },
       });
@@ -1049,7 +1041,7 @@ describe("state migrations", () => {
         expect(result.warnings).toEqual([]);
         expect(workshop).toBeUndefined();
         expect(callbackSamples).toEqual([]);
-        await expect(fs.readFile(indexPath, "utf8")).resolves.toBe("{}\n");
+        await expect(fs.readFile(recordPath, "utf8")).resolves.toBe('{"status":"rejected"}\n');
         return;
       }
       expect(workshop).toMatchObject({
@@ -1073,15 +1065,15 @@ describe("state migrations", () => {
           changes: [],
         });
         expect(callbackSamples).toEqual([true]);
-        await expect(fs.readFile(indexPath, "utf8")).resolves.toBe("{}\n");
+        await expect(fs.readFile(recordPath, "utf8")).resolves.toBe('{"status":"rejected"}\n');
       } else {
         expect(result.warnings).toEqual([]);
         expect(workshop).toMatchObject({
           outcome: "completed",
-          changes: ["Removed the empty legacy Skill Workshop proposal index."],
+          changes: [`Removed retired Skill Workshop proposal files from ${proposalsDir}.`],
         });
         expect(callbackSamples).toEqual([false]);
-        await expect(fs.access(indexPath)).rejects.toMatchObject({ code: "ENOENT" });
+        await expect(fs.access(proposalsDir)).rejects.toMatchObject({ code: "ENOENT" });
       }
     },
   );

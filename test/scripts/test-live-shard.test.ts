@@ -102,7 +102,6 @@ describe("scripts/test-live-shard", () => {
       "native-live-src-agents": [
         "src/agents/zai.live.test.ts",
         "src/llm/providers/stream-wrappers/anthropic-family-tool-payload-compat.live.test.ts",
-        "src/skills/workshop/experience-review.live.test.ts",
       ],
       "native-live-src-agents-zai-coding": ["src/agents/zai.live.test.ts"],
       "native-live-src-gateway-backends": [
@@ -418,7 +417,6 @@ describe("scripts/test-live-shard", () => {
     ["src/gateway/gateway-cli-backend.live.test.ts", "OPENCLAW_LIVE_CLI_BACKEND"],
     ["src/gateway/gateway-acp-spawn-defaults.live.test.ts", "OPENCLAW_LIVE_ACP_SPAWN_DEFAULTS"],
     ["src/gateway/gateway-openai-long-context.live.test.ts", "OPENCLAW_LIVE_OPENAI_LONG_CONTEXT"],
-    ["src/skills/workshop/experience-review.live.test.ts", "OPENCLAW_LIVE_SKILL_EXPERIENCE_REVIEW"],
     ["src/agents/subagent-announce.live.test.ts", "OPENCLAW_LIVE_SUBAGENT_E2E"],
     ["src/agents/subagents/announce/subagent-announce.live.test.ts", "OPENCLAW_LIVE_SUBAGENT_E2E"],
     [

@@ -261,27 +261,10 @@ describe("prepareEmbeddedAttemptSetup", () => {
       config: { agents: { defaults: { sandbox: { mode: "all", workspaceAccess: "rw" } } } },
       sessionId: "session-collection-review-rw",
       sessionKey: "agent:main:skill-collection-review",
-      requireWritableSandbox: true,
       workspaceDir,
     });
 
     expect(setup.effectiveWorkspace).toBe(workspaceDir);
-  });
-
-  it("fails closed before collection review enters a read-only sandbox workspace", async () => {
-    const workspaceDir = tempDirs.make("openclaw-attempt-setup-collection-review-ro-");
-    resolveSandboxContext.mockResolvedValueOnce(sandboxContext("ro"));
-
-    await expect(
-      resolveAttemptWorkspaceSandbox({
-        agentId: "main",
-        config: { agents: { defaults: { sandbox: { mode: "all", workspaceAccess: "ro" } } } },
-        sessionId: "session-collection-review-ro",
-        sessionKey: "agent:main:skill-collection-review",
-        requireWritableSandbox: true,
-        workspaceDir,
-      }),
-    ).rejects.toThrow("sandbox workspace is not read-write; collection review skipped");
   });
 
   it("reuses lifecycle metadata and the provider handle from the runtime plan", async () => {

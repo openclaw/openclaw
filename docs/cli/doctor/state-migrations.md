@@ -69,7 +69,7 @@ Its bounded summary lists observed refusals before derivative blocked steps;
 the full receipt list retains the complete chain.
 
 Doctor imports recognized legacy workspace setup files during preflight, before
-Workshop migration accesses workspace state. An existing canonical SQLite setup record wins,
+other migrations access workspace state. An existing canonical SQLite setup record wins,
 including milestones that are absent in SQLite. Doctor does not replay stale
 milestones over it. Before removing a validated setup file or interrupted claim,
 Doctor preserves its exact bytes beside the original as
@@ -81,11 +81,15 @@ run has no workspace setup migration to repeat. Invalid files and workspace
 identity/version conflicts remain blocked for inspection.
 
 Update rehearsals write only inside their copied state directory. Workspace
-files are not copied by the rehearsal, so absolute paths retained in proposal,
-rollback, and backup records remain read-only inventory. Doctor reports how many
-legacy workspace files it left untouched; it does not retire their files or
-proposal history. After the candidate is installed, the real Doctor runs the
-normal import, archival, and relocation against the operator's state.
+files are not copied by the rehearsal, so absolute paths retained in legacy
+records remain read-only inventory. After the candidate is installed, the real
+Doctor runs the normal import and archival against the operator's state.
+
+Skill Workshop proposals were removed. Doctor exports each pending or
+quarantined proposal draft, with its support files, to
+`<state-dir>/agents/<agentId>/agent/workshop-skills/.archive/.retired-proposals/<proposal-id>/`,
+then drops the proposal tables. Exported drafts are not live skills; copy one
+into a skill directory yourself if you still want it.
 
 Plugin migrations with declared files outside the copied state are deferred as
 one plugin operation. Doctor leaves their files and pending markers intact and

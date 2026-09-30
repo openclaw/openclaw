@@ -190,7 +190,6 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
       workspaceDir: "/tmp/workspace",
       cwd: "/tmp/task-repo",
       requireWorkspaceOnly: true,
-      requireWritableSandbox: true,
       agentDir: "/tmp/agent",
       config: {} as unknown as OpenClawConfig,
       senderIsOwner: true,

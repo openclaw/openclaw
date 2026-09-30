@@ -74,10 +74,7 @@ import {
 } from "./control-ui-mock-plugins.ts";
 import { createControlUiPreviewInitScript } from "./control-ui-mock-preview.ts";
 import { skillLibraryMockInitScript } from "./control-ui-mock-skill-library.ts";
-import {
-  buildSkillWorkshopMocks,
-  skillWorkshopMockInitScript,
-} from "./control-ui-mock-skill-workshop.js";
+import { skillWorkshopMockInitScript } from "./control-ui-mock-skill-workshop.js";
 import { buildProfileUsageMocks } from "./control-ui-mock-usage.ts";
 
 const FIXTURES = [
@@ -2068,7 +2065,6 @@ async function createChatPickerScenario(
   // heatmap stay filled no matter when the mock harness runs.
   const profileUsage = buildProfileUsageMocks(Date.now());
   const modelProviders = buildModelProviderMocks(Date.now());
-  const skillWorkshop = buildSkillWorkshopMocks(Date.now());
   const richAttention = fixture === "approval";
   const cronMocks = buildCronMocks(Date.now(), {
     richAttention,
@@ -2293,15 +2289,11 @@ async function createChatPickerScenario(
       "sessions.search",
       "session.reactions.list",
       "session.reactions.set",
+      "skills.workshop.archive",
+      "skills.workshop.changes",
+      "skills.workshop.list",
       "skills.workshop.read",
-      "skills.proposals.apply",
-      "skills.proposals.evaluate",
-      "skills.proposals.historyScan",
-      "skills.proposals.historyStatus",
-      "skills.proposals.inspect",
-      "skills.proposals.list",
-      "skills.proposals.reject",
-      "skills.proposals.requestRevision",
+      "skills.workshop.restore",
       "skills.library.activate",
       "skills.library.import",
       "skills.library.list",
@@ -2755,7 +2747,6 @@ async function createChatPickerScenario(
       "wizard.start": channelWizard.start,
       "wizard.next": channelWizard.next,
       "wizard.cancel": { status: "cancelled" },
-      "skills.proposals.requestRevision": skillWorkshop.requestRevision,
       "usage.cost": profileUsage.cost,
       "sessions.usage": profileUsage.sessions,
       "models.authStatus": modelAuthStatus,

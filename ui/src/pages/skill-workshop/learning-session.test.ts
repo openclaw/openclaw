@@ -3,7 +3,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../../../src/shared/deferred.js";
 import type { SessionCreateOutcome } from "../../lib/sessions/create.ts";
-import { createSkillWorkshopState } from "./proposals.ts";
 import {
   createContext,
   type SkillWorkshopPageTestElement,
@@ -13,14 +12,13 @@ import "./skill-workshop-page.ts";
 afterEach(() => document.body.replaceChildren());
 
 async function mountLearningPage() {
-  const state = createSkillWorkshopState();
-  state.skillWorkshopAgentId = "research";
-  state.skillWorkshopLoaded = true;
-  const context = createContext(vi.fn(), { methods: ["sessions.create"] });
+  const context = createContext(
+    vi.fn(() => new Promise<never>(() => {})),
+    { methods: ["sessions.create"] },
+  );
   const page = document.createElement(
     "openclaw-skill-workshop-page",
   ) as SkillWorkshopPageTestElement;
-  page.state = state;
   page.context = context;
   document.body.append(page);
   await page.updateComplete;

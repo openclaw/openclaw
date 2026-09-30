@@ -10,7 +10,6 @@ import type {
 } from "./openclaw-state-lease-store.js";
 import {
   withOpenClawStateLeaseWorkerAdmission,
-  withOpenClawStateLeasesWorkerAdmission,
   type createOpenClawStateLeaseWorkerOwner,
   type OpenClawStateLeaseWorkerAuthority,
   type WorkerLeaseScope,
@@ -233,35 +232,6 @@ export function runWithOpenClawStateLeaseWorker<T>(
     lease,
     context.admission.databasePath,
     admittedWorkerOperation(context, operation),
-    authority,
-  );
-}
-
-/** Share one actor operation while every original lease retains its native settlement. */
-export function runWithOpenClawStateLeasesWorker<T>(
-  leases: readonly OpenClawStateWorkerLeaseContext[],
-  context: OpenClawStateWorkerContext,
-  operation: (
-    scope: Pick<SqliteWorkerStore<OpenClawStateWorkerOperations>, "execute">,
-    identities: readonly OpenClawStateLeaseIdentity[],
-  ) => Promise<T>,
-  authority?: OpenClawStateLeaseWorkerAuthority,
-): Promise<T> {
-  return withOpenClawStateLeasesWorkerAdmission(
-    leases,
-    context,
-    async (admission) => {
-      const { runOpenClawStateWorkerOperation } = await import("./openclaw-state-worker-store.js");
-      admission.assertCurrent();
-      return runOpenClawStateWorkerOperation(
-        context,
-        (scope) => operation(scope, admission.identities),
-        {
-          assertCurrent: admission.assertCurrent,
-          createAdmission: admission.createAdmission,
-        },
-      );
-    },
     authority,
   );
 }

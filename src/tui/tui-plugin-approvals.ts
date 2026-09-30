@@ -198,12 +198,6 @@ function decisionLabel(decision: TuiApprovalDecision): string {
   return "denied";
 }
 
-function approvalSurfaceLabel(approval: TuiPluginApproval): string {
-  return approval.request.toolName === "skill_workshop"
-    ? "workspace skill approval"
-    : "plugin approval";
-}
-
 export function createTuiPluginApprovalController(deps: TuiPluginApprovalControllerDeps) {
   const createSelector =
     deps.createSelector ??
@@ -289,7 +283,7 @@ export function createTuiPluginApprovalController(deps: TuiPluginApprovalControl
       return;
     }
     activeId = approval.id;
-    const surfaceLabel = approvalSurfaceLabel(approval);
+    const surfaceLabel = "plugin approval";
 
     const decisions = approval.request.allowedDecisions ?? DEFAULT_DECISIONS;
     const selector = createSelector(decisions.map((decision) => DECISION_ITEMS[decision]));

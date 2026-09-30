@@ -319,7 +319,7 @@ describe("outbound message progress companion", () => {
          ORDER BY type = 'table' DESC, name`,
       );
       for (const table of ["current_conversation_bindings", "skill_workshop_proposals"]) {
-        projectedDatabase.exec(`DROP TABLE ${table};`);
+        projectedDatabase.exec(`DROP TABLE IF EXISTS ${table};`);
         for (const { sql } of pinnedStatements.all(table) as Array<{ sql: string }>) {
           projectedDatabase.exec(sql);
         }

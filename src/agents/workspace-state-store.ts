@@ -296,30 +296,6 @@ function deleteWorkspaceRows(
   deferSqlitePostCommitPublication(database.db, () => retireWorkspaceFileCache(workspacePath));
 }
 
-/** The migration owner has verified the same workspace and every relocated byte before this commit. */
-export function retireWorkspaceRelocationAttestation(params: {
-  database: WorkspaceStateDatabaseHandle;
-  identity: WorkspaceStateIdentity;
-  attestedAtMs: number;
-}): boolean {
-  const snapshot = readWorkspaceStateSnapshotFromDatabase(params);
-  if (
-    snapshot.setupExists ||
-    snapshot.attestation?.attestedAtMs !== params.attestedAtMs ||
-    snapshot.attestation.generatedHashes.size > 0
-  ) {
-    return false;
-  }
-  executeSqliteQuerySync(
-    params.database.db,
-    getNodeSqliteKysely<WorkspaceStateDatabase>(params.database.db)
-      .updateTable("workspace_setup_state")
-      .set({ attested_at_ms: null, attestation_updated_at_ms: null })
-      .where("workspace_key", "=", params.identity.workspaceKey),
-  );
-  return true;
-}
-
 /** Clear expired state only when no concurrent writer refreshed the vanished workspace. */
 export async function clearExpiredWorkspaceStateForVanishedWorkspace(
   workspaceDir: string,

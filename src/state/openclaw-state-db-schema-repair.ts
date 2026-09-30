@@ -20,7 +20,7 @@ import {
 } from "./openclaw-state-db-schema-helpers.js";
 import { OpenClawStateDatabaseSchemaMigrationRequiredError } from "./openclaw-state-db-schema-migration-required.js";
 import { FOLDED_SINGLETON_STATE_TABLES_V12 } from "./openclaw-state-db-schema-v12-foldin.js";
-import { readStateSchemaMigrationVersion } from "./openclaw-state-db-schema-version.js";
+import { readStateSchemaContentVersion } from "./openclaw-state-db-schema-version.js";
 import * as sessionWatchMigration from "./openclaw-state-db-session-watch-migration.js";
 import {
   hasRecognizedRetiredCommitmentsSchema,
@@ -355,7 +355,7 @@ export function detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(
   pathname: string,
 ): OpenClawStateDatabaseSchemaMigration[] {
   const migrations: OpenClawStateDatabaseSchemaMigration[] = [];
-  const userVersion = readStateSchemaMigrationVersion(db);
+  const userVersion = readStateSchemaContentVersion(db);
   if (
     userVersion < RETIRED_COMMITMENTS_SCHEMA_VERSION &&
     tableExists(db, "commitments") &&
@@ -406,14 +406,6 @@ export function detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(
       tableHasColumn(db, "current_conversation_bindings", "target_session_id"))
   ) {
     migrations.push({ kind: "conversation-binding-targets-v15", path: pathname });
-  }
-  if (
-    userVersion < 16 &&
-    (tableHasColumn(db, "skill_workshop_proposals", "workspace_dir") ||
-      tableHasColumn(db, "skill_workshop_proposals", "claim_released_time") ||
-      tableHasColumn(db, "skill_workshop_collection_reviews", "workspace_dir"))
-  ) {
-    migrations.push({ kind: "skill-workshop-directory-ownership-v16", path: pathname });
   }
   if (
     userVersion < 17 &&

@@ -542,7 +542,7 @@ export async function approveWorkspaceSkill(
   message: string,
 ) {
   await fixture.run.write(`${message}\r`);
-  await fixture.run.waitForOutput("workspace skill approval: Apply workspace skill proposal");
+  await fixture.run.waitForOutput("plugin approval: Apply workspace skill proposal");
   await fixture.run.waitForOutput("Plugin: workspace-skills");
   // A compact PTY wraps the request; exact fragments avoid matching across terminal redraws.
   await fixture.run.waitForOutput("Apply a pending workspace skill proposal");

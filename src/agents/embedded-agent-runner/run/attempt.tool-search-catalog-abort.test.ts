@@ -15,7 +15,7 @@ import { Agent, type AgentEvent, type AgentTool } from "../../runtime/index.js";
 import { getInternalToolExecutionPreparer } from "../../runtime/internal-hooks.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
-import { TOOL_EXECUTION_GATED_MESSAGE } from "../../tool-policy-shared.js";
+import { formatToolExecutionGatedMessage } from "../../tool-policy-shared.js";
 import { isToolResultError } from "../../tool-result-error.js";
 import type { ToolSearchCatalogRef } from "../../tool-search.js";
 import { createAgentsWaitTool } from "../../tools/agents-wait-tool.js";
@@ -189,41 +189,28 @@ describe("runEmbeddedAttempt tool boundaries", () => {
         },
       });
       const outcome = outcomes.find((event) => event.toolName === (code ? "exec" : toolName));
-      expect(outcome).toMatchObject({ isError: true });
-      const expectedError =
-        failurePhase === "guest" ? "agents is not defined" : TOOL_EXECUTION_GATED_MESSAGE;
-      expect(outcome?.result).toMatchObject({
-        content: [expect.objectContaining({ text: expect.stringContaining(expectedError) })],
-      });
-      if (code) {
-        expect(outcome?.result).toMatchObject({
-          details: {
-            status: "failed",
-            failurePhase,
-            bridgeDispatchStarted: failurePhase === "bridge",
-            error: expect.stringContaining(expectedError),
-          },
-        });
-      }
+      const denial = formatToolExecutionGatedMessage(toolName, ["read"]);
       const activities = sessionManager.getEntries().flatMap((entry) => {
         const activity = entry.type === "message" && readNestedToolActivity(entry.message);
         return activity ? [activity.details] : [];
       });
-      expect(activities).toEqual(
-        failurePhase === "bridge"
-          ? [
-              expect.objectContaining({
-                toolName,
-                isError: true,
-                result: expect.objectContaining({
-                  content: [
-                    expect.objectContaining({ text: expect.stringContaining(expectedError) }),
-                  ],
-                }),
-              }),
-            ]
-          : [],
-      );
+      if (failurePhase === "guest") {
+        // Swarm globals are absent from the guest, so the script itself fails.
+        expect(outcome).toMatchObject({ isError: true });
+        expect(outcome?.result).toMatchObject({
+          details: { status: "failed", failurePhase, bridgeDispatchStarted: false },
+        });
+        expect(activities).toEqual([]);
+      } else if (code) {
+        // Code Mode dispatched the call, which reached only the gated stand-in.
+        expect(activities).toEqual([expect.objectContaining({ toolName })]);
+      } else {
+        expect(outcome).toMatchObject({
+          isError: false,
+          result: { content: [expect.objectContaining({ text: denial })] },
+        });
+        expect(activities).toEqual([]);
+      }
       expect(prepare).not.toHaveBeenCalled();
       expect(execute).not.toHaveBeenCalled();
     },

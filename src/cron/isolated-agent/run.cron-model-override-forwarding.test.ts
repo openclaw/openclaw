@@ -410,21 +410,6 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
     },
   );
 
-  it("preserves containment with an execution root", async () => {
-    const executionRoot = "/tmp/workshop-skills";
-    mockRunCronFallbackPassthrough();
-    const result = await runCronIsolatedAgentTurn(
-      makeParams({ executionRoot, cfg: { tools: { fs: { workspaceOnly: true } } } }),
-    );
-    expect(result.status).toBe("ok");
-    expect(firstMockArg(runEmbeddedAgentMock)).toMatchObject({
-      cwd: executionRoot,
-      sessionRoot: executionRoot,
-      requireWritableSandbox: true,
-      requireWorkspaceOnly: true,
-    });
-  });
-
   it("restores the requested thinking level when a later fallback supports it", async () => {
     resolveAllowedModelRefMock.mockImplementation(({ raw }: { raw: string }) => {
       const [provider, model] = raw.split("/");

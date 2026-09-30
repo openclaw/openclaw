@@ -9,8 +9,13 @@ import { parseNodeList } from "../shared/node-list-parse.js";
 import type { NodeListNode } from "../shared/node-list-types.js";
 import { resolveEligibleNodeFromList } from "../shared/node-resolve.js";
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
+import {
+  recordSkillUsed,
+  resolvedSkillUsageMatch,
+} from "./agent-tools.before-tool-call.diagnostics.js";
 import { getBeforeToolCallFailureDisposition } from "./agent-tools.before-tool-call.js";
 import { redactCodeModeCatalogIds, type CodeModeCatalogProjection } from "./code-mode-catalog.js";
+import { CODE_MODE_EXEC_TOOL_NAME } from "./code-mode-control-tools.js";
 import type { CodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
 import type { CodeModeReplyLease } from "./code-mode-program-data.js";
 import type { CodeModeResultsAccess } from "./code-mode-results.js";
@@ -23,7 +28,7 @@ import { isCollectorSpawnTool } from "./subagents/swarm/swarm-collector-capabili
 import { resolveSwarmConfig } from "./subagents/swarm/swarm-config.js";
 import { getToolContractFailureCode } from "./tool-contract-error.js";
 import { isTrustedToolInputError } from "./tool-input-error.js";
-import { isToolExecutionAllowed, TOOL_EXECUTION_GATED_MESSAGE } from "./tool-policy-shared.js";
+import { formatToolExecutionGatedMessage, isToolExecutionAllowed } from "./tool-policy-shared.js";
 import type { ToolSearchRuntime } from "./tool-search-runtime.js";
 import type { ToolSearchCatalogEntry, ToolSearchToolContext } from "./tool-search-types.js";
 import { ToolInputError } from "./tools/common.js";
@@ -203,7 +208,9 @@ function requireCodeModeSwarmEnabled(ctx: ToolSearchToolContext): void {
   // events and agents.run launches collectors. A run that executes only an allowlist
   // (detached skill review) gets the same refusal as the tool, never the foreground session.
   if (ctx.toolExecutionAllow && !isToolExecutionAllowed(ctx.toolExecutionAllow, "sessions_spawn")) {
-    throw new ToolInputError(TOOL_EXECUTION_GATED_MESSAGE);
+    throw new ToolInputError(
+      formatToolExecutionGatedMessage("sessions_spawn", ctx.toolExecutionAllow),
+    );
   }
 }
 
@@ -424,6 +431,15 @@ export async function runBridgeRequest(params: {
           );
         }
         value = await readCodeModeSkill(skill, params.signal);
+        recordSkillUsed({
+          ctx: params.ctx,
+          match: resolvedSkillUsageMatch({
+            activation: "read",
+            skill: { name: skill.name, ...skill.source },
+          }),
+          toolName: CODE_MODE_EXEC_TOOL_NAME,
+          toolCallId: params.parentToolCallId,
+        });
         break;
       }
       case "sleep": {

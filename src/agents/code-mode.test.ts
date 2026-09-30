@@ -1,8 +1,13 @@
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  onTrustedInternalDiagnosticEvent,
+  type DiagnosticEventPayload,
+} from "../infra/diagnostic-events.js";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import { resolveSkillsPrompt } from "../skills/loading/workspace-skill-prompt.js";
+import { consumeRunSkillUsage } from "../skills/runtime/run-usage.js";
 import { createFixtureSkillEntry } from "../skills/test-support/test-helpers.js";
 import { createOpenClawReadTool } from "./agent-tools.read.js";
 import { resolveCodeModeSkills } from "./code-mode-skills.js";
@@ -33,6 +38,7 @@ import { jsonResult, type AnyAgentTool } from "./tools/common.js";
 
 afterEach(async () => {
   vi.useRealTimers();
+  consumeRunSkillUsage("run-code-mode");
   await resetCodeModeTestState();
 });
 
@@ -318,6 +324,55 @@ it("lists and reads only prompt-eligible skills through the worker bridge", asyn
     location: "/skills/demo/SKILL.md",
     signal: expect.any(AbortSignal),
   });
+});
+
+it("records Code Mode skills.read of a workshop skill as run usage and skill.used", async () => {
+  const learned = createFixtureSkillEntry("learned", { source: "openclaw-workshop" });
+  const codeModeSkills = resolveCodeModeSkills({
+    skillsPrompt: await resolveSkillsPrompt({ entries: [learned], workspaceDir: "/workspace" }),
+    candidates: [learned.skill],
+    reader: async () => "# Learned instructions\n",
+  });
+  const used: Array<{ event: DiagnosticEventPayload; skillFile?: string }> = [];
+  const stop = onTrustedInternalDiagnosticEvent(
+    (event, _metadata, privateData) => {
+      used.push({ event, skillFile: privateData.skillUsage?.skillFile });
+    },
+    { include: ["skill.used"] },
+  );
+  try {
+    const h = createCodeModeHarness({ agentId: "main", codeModeSkills });
+    applyCodeModeCatalog({ ...h.ctx, tools: h.tools });
+    const result = await runUntilCompleted({
+      execTool: h.tools[0]!,
+      waitTool: h.tools[1]!,
+      code: 'return await skills.read("learned");',
+    });
+    expect(result).toMatchObject({ status: "completed", value: "# Learned instructions\n" });
+    expect(consumeRunSkillUsage("run-code-mode")).toEqual([
+      {
+        name: "learned",
+        source: "workspace",
+        activation: "read",
+        skillFile: "/skills/learned/SKILL.md",
+      },
+    ]);
+    await vi.waitFor(() => expect(used).toHaveLength(1));
+    expect(used[0]).toEqual({
+      event: expect.objectContaining({
+        type: "skill.used",
+        runId: "run-code-mode",
+        sessionKey: "agent:main:main",
+        agentId: "main",
+        skillName: "learned",
+        skillSource: "workspace",
+        activation: "read",
+      }),
+      skillFile: "/skills/learned/SKILL.md",
+    });
+  } finally {
+    stop();
+  }
 });
 
 it("returns missing implicitly optional daily memory through Code Mode", async () => {

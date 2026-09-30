@@ -135,7 +135,6 @@ export function bindCronSelfRemovalCommitGuard(
 export type CronActiveJobMarker = {
   jobId: string;
   agentId?: string;
-  declarationKey?: string;
   generation: number;
   token: number;
   cancellation?:
@@ -227,7 +226,6 @@ export function markCronJobActive(
   jobId: string,
   opts?: {
     agentId?: string;
-    declarationKey?: string;
     preserveAcrossGenerationAdvance?: boolean;
     isMessageActionAuthorityCurrent?: () => boolean;
     isMessageSourceAuthorityCurrent?: () => boolean;
@@ -242,7 +240,6 @@ export function markCronJobActive(
   const marker: CronActiveJobMarker = {
     jobId,
     ...(opts?.agentId ? { agentId: opts.agentId } : {}),
-    ...(opts?.declarationKey ? { declarationKey: opts.declarationKey } : {}),
     ...(opts?.isMessageActionAuthorityCurrent
       ? { isMessageActionAuthorityCurrent: opts.isMessageActionAuthorityCurrent }
       : {}),
@@ -366,23 +363,6 @@ function requestCronActiveJobMarkerCancellation(marker: CronActiveJobMarker, rea
 export function requestActiveCronJobCancellation(jobId: string, reason: string): void {
   const marker = getCurrentCronActiveJobMarker(jobId);
   if (marker) {
-    requestCronActiveJobMarkerCancellation(marker, reason);
-  }
-}
-
-/** Revokes every active run admitted from a declaration-key namespace. */
-export function requestActiveCronJobCancellationByDeclarationKeyPrefix(
-  declarationKeyPrefix: string,
-  reason: string,
-): void {
-  const state = getCronActiveJobState();
-  for (const marker of state.activeJobs.values()) {
-    if (
-      !marker.declarationKey?.startsWith(declarationKeyPrefix) ||
-      !isMarkerActiveInGeneration(marker, state.generation)
-    ) {
-      continue;
-    }
     requestCronActiveJobMarkerCancellation(marker, reason);
   }
 }

@@ -2,6 +2,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SkillStatusReport } from "../../api/types.ts";
 import type { RuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { isWorkshopSkill } from "../../lib/skills-shared.ts";
 import { loadSkillStatusReport } from "../../lib/skills/status-report.ts";
 
 export type AgentSkillsState = {
@@ -42,6 +43,32 @@ export async function loadAgentSkills(state: AgentSkillsState, agentId: string) 
       state.agentSkillsLoading = false;
     }
   }
+}
+
+/**
+ * Allowlist after toggling one skill. Without an existing filter, the first toggle snapshots
+ * the reported skills, leaving out learned Workshop skills: they bypass allowlists.
+ */
+export function nextAgentSkillAllowlist(params: {
+  configured: string[] | undefined;
+  report: SkillStatusReport | null;
+  skillName: string;
+  enabled: boolean;
+}): string[] {
+  const next = new Set(
+    params.configured ??
+      params.report?.agentSkillFilter ??
+      params.report?.skills
+        .filter((skill) => skill.name && !isWorkshopSkill(skill))
+        .map((skill) => skill.name) ??
+      [],
+  );
+  if (params.enabled) {
+    next.add(params.skillName);
+  } else {
+    next.delete(params.skillName);
+  }
+  return [...next];
 }
 
 export async function clearAgentSkillFilter(

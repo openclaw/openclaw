@@ -24,28 +24,25 @@ const LEARN_COMMAND_PREFIX = "/learn";
 const SKILL_WORKSHOP_TOOL_NAME = "skill_workshop";
 const SKILL_WORKSHOP_UNAVAILABLE_REPLY =
   "Skill workshop is not available on this agent. Use a non-sandboxed agent where the skill_workshop tool is available, or use the openclaw skills workshop CLI.";
-const PERSONAL_WORKSHOP_LEARN_REPLY =
-  "This turn cannot stage a pending workspace proposal, so /learn made no change. Ordinary explicit personal skill creation publishes a revision. Ask for that directly if intended, or use the existing administrator UI or openclaw skills workshop CLI for workspace proposal review.";
 
 function parseLearnRequest(raw: string): string | null {
   const request = matchSlashCommandToken(raw, LEARN_COMMAND_PREFIX);
   return request === null ? null : request || DEFAULT_LEARN_REQUEST;
 }
 
-function resolveWorkshopSurface(
-  params: HandleCommandsParams,
-): "workspace" | "personal" | undefined {
+/** /learn needs a harness that exposes OpenClaw tools and a policy that allows skill_workshop. */
+function isWorkshopAvailable(params: HandleCommandsParams): boolean {
   if (params.opts?.disableTools) {
-    return undefined;
+    return false;
   }
   if (params.opts?.toolsAllow?.length === 0) {
-    return undefined;
+    return false;
   }
   if (
     params.opts?.toolsAllow !== undefined &&
     !isToolAllowedByPolicyName(SKILL_WORKSHOP_TOOL_NAME, { allow: params.opts.toolsAllow })
   ) {
-    return undefined;
+    return false;
   }
 
   const policySessionKey = resolveRuntimePolicySessionKey({
@@ -60,7 +57,10 @@ function resolveWorkshopSurface(
     sessionKey: params.sessionKey,
     classificationSessionKey: policySessionKey,
   });
-  let personalOnly = params.opts?.skillLibraryAuthoring?.defaultTarget === "personal";
+  // Workshop skills live on the host under the agent dir, outside a sandboxed workspace.
+  if (sandboxRuntime.sandboxed) {
+    return false;
+  }
 
   try {
     const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
@@ -83,7 +83,7 @@ function resolveWorkshopSurface(
         agentId: params.agentId,
       });
       if (!cliBackend?.bundleMcp) {
-        return undefined;
+        return false;
       }
       if (
         detectNodeClaudePlacement({
@@ -92,10 +92,7 @@ function resolveWorkshopSurface(
           execNode: targetSessionEntry?.execNode,
         })
       ) {
-        if (!params.opts?.skillLibraryAuthoring) {
-          return undefined;
-        }
-        personalOnly = true;
+        return false;
       }
     } else {
       const harness = selectAgentHarness({
@@ -106,7 +103,7 @@ function resolveWorkshopSurface(
         sessionKey: params.sessionKey,
       });
       if (!agentHarnessExposesOpenClawTools(harness.id)) {
-        return undefined;
+        return false;
       }
     }
     const modelCompat = resolveConfiguredModelCompat({
@@ -115,7 +112,7 @@ function resolveWorkshopSurface(
       modelId: params.model,
     });
     if (modelCompat && !supportsModelTools({ compat: modelCompat })) {
-      return undefined;
+      return false;
     }
     const capabilityProfile = resolveConversationCapabilityProfile({
       config: params.cfg,
@@ -137,30 +134,21 @@ function resolveWorkshopSurface(
       groupChannel: params.sessionEntry?.groupChannel ?? params.ctx.GroupChannel,
       groupSpace: params.sessionEntry?.space ?? params.ctx.GroupSpace,
     });
-    const available = resolveSkillWorkshopToolPolicyAvailability({
+    return resolveSkillWorkshopToolPolicyAvailability({
       config: params.cfg,
       conversationCapabilityProfile: capabilityProfile,
     }).available;
-    return available && (personalOnly || !sandboxRuntime.sandboxed)
-      ? personalOnly
-        ? "personal"
-        : "workspace"
-      : undefined;
   } catch {
-    return undefined;
+    return false;
   }
 }
 
-/** Command handler for /learn skill-draft requests. */
+/** Command handler for /learn: a foreground turn that writes Workshop skills directly. */
 export const handleLearnCommand: CommandHandler = defineAuthorizedTextCommand(
   { label: LEARN_COMMAND_PREFIX, match: parseLearnRequest },
   (params, request) => {
-    const surface = resolveWorkshopSurface(params);
-    if (!surface) {
+    if (!isWorkshopAvailable(params)) {
       return commandReply(SKILL_WORKSHOP_UNAVAILABLE_REPLY);
-    }
-    if (surface === "personal") {
-      return commandReply(PERSONAL_WORKSHOP_LEARN_REPLY);
     }
 
     applyCommandTextToParams(params, buildLearnPrompt(request));

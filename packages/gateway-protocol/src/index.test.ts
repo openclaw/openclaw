@@ -43,7 +43,6 @@ import {
   type TalkEvent,
 } from "./index.js";
 import type * as Schema from "./schema.js";
-import { ProtocolSchemas } from "./schema/protocol-schemas.js";
 import * as validatorRegistry from "./validator-registry.js";
 
 /**
@@ -86,8 +85,6 @@ const sessionPatch = (overrides: Record<string, unknown>) => ({
   key: "agent:main:main",
   ...overrides,
 });
-const proposalId = "support-file-sampler-20260531-68207b7b7f";
-const proposalRequest = (overrides: Record<string, unknown>) => ({ proposalId, ...overrides });
 const talkConfig = (talk: Record<string, unknown>) => ({ config: { talk } });
 const secretRef = (id: string) => ({ source: "env", provider: "default", id });
 const talkClient = (overrides: Record<string, unknown>) => ({
@@ -112,21 +109,6 @@ describe("protocol export registries", () => {
     expectTypeOf<SessionsCatalogListParams>().toEqualTypeOf<Schema.SessionsCatalogListParams>();
     expectTypeOf<SessionsCatalogStartTerminalParams>().toEqualTypeOf<Schema.SessionsCatalogStartTerminalParams>();
     expectTypeOf<TalkEvent>().toEqualTypeOf<Schema.TalkEvent>();
-  });
-
-  it("registers Skill Workshop evaluation and lifecycle replay schemas", () => {
-    expect(ProtocolSchemas.SkillsProposalEvaluateParams).toBe(
-      protocol.SkillsProposalEvaluateParamsSchema,
-    );
-    expect(ProtocolSchemas.SkillsProposalEvaluateResult).toBe(
-      protocol.SkillsProposalEvaluateResultSchema,
-    );
-    expect(ProtocolSchemas.SkillsProposalEventsListParams).toBe(
-      protocol.SkillsProposalEventsListParamsSchema,
-    );
-    expect(ProtocolSchemas.SkillsProposalEventsListResult).toBe(
-      protocol.SkillsProposalEventsListResultSchema,
-    );
   });
 });
 
@@ -534,59 +516,27 @@ describe("lazy protocol validators", () => {
     ]);
   });
 
-  it("validates Skill Workshop revision request params", () => {
-    expectAccepted(protocol.validateSkillsProposalRequestRevisionParams, [
-      proposalRequest({
-        expectedRevisionHash: "a".repeat(64),
-        targetAgentId: "writer",
-        instructions: "Make the support files 5",
-        sessionKey: "agent:main:session:skill-workshop",
-        idempotencyKey: "revision-run-1",
-      }),
+  it("validates Skill Workshop request params", () => {
+    expectAccepted(protocol.validateSkillsWorkshopChangesParams, [
+      {},
+      { agentId: "main", limit: 500, beforeMs: 1_700_000_000_000 },
     ]);
-    expectRejected(protocol.validateSkillsProposalRequestRevisionParams, [
-      proposalRequest({
-        instructions: "",
-        sessionKey: "agent:main:session:skill-workshop",
-        idempotencyKey: "revision-run-1",
-      }),
-      proposalRequest({
-        expectedRevisionHash: "a".repeat(64),
-        instructions: "Make the support files 5",
-        sessionKey: "agent:main:session:skill-workshop",
-        idempotencyKey: "revision-run-1",
-        hiddenPrompt: "do not accept caller-provided hidden prompts",
-      }),
+    expectRejected(protocol.validateSkillsWorkshopChangesParams, [{ limit: 0 }, { limit: 501 }]);
+    expectAccepted(protocol.validateSkillsWorkshopReadParams, [
+      { name: "deploy-notes", filePath: "references/api.md", versionId: "v1" },
     ]);
-  });
-
-  it("accepts support-file-only Skill Workshop revisions", () => {
-    expectAccepted(protocol.validateSkillsProposalReviseParams, [
-      proposalRequest({
-        expectedRevisionHash: "a".repeat(64),
-        supportFiles: [{ path: "references/example.md", content: "Updated example.\n" }],
-      }),
+    expectRejected(protocol.validateSkillsWorkshopReadParams, [{}, { name: "" }]);
+    expectAccepted(protocol.validateSkillsWorkshopArchiveParams, [
+      { name: "deploy-notes", reason: "superseded" },
     ]);
-  });
-
-  it("validates Skill Workshop evaluation and event replay params", () => {
-    expectAccepted(protocol.validateSkillsProposalEvaluateParams, [
-      proposalRequest({
-        expectedRevisionHash: "b".repeat(64),
-        correlationId: "evaluation-1",
-      }),
+    expectRejected(protocol.validateSkillsWorkshopArchiveParams, [
+      { name: "deploy-notes", reason: "" },
+      { name: "deploy-notes", absorbedInto: "other" },
     ]);
-    expectRejected(protocol.validateSkillsProposalEvaluateParams, [
-      proposalRequest({ expectedRevisionHash: "stale" }),
-      proposalRequest({ correlationId: "x".repeat(257) }),
+    expectAccepted(protocol.validateSkillsWorkshopRestoreParams, [{ name: "deploy-notes" }]);
+    expectRejected(protocol.validateSkillsWorkshopRestoreParams, [
+      { name: "deploy-notes", expectedRevisionHash: "a".repeat(64) },
     ]);
-    expectAccepted(protocol.validateSkillsProposalEvaluateParams, [
-      proposalRequest({ correlationId: "😀".repeat(200) }),
-    ]);
-    expectAccepted(protocol.validateSkillsProposalEventsListParams, [
-      proposalRequest({ afterSequence: 41, limit: 200 }),
-    ]);
-    expectRejected(protocol.validateSkillsProposalEventsListParams, [{ limit: 201 }]);
   });
 
   it("can still compile every exported protocol validator", () => {

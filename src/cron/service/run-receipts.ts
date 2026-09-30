@@ -89,7 +89,6 @@ export function markServiceCronJobActive(
 ): CronActiveJobMarker | undefined {
   return markCronJobActive(job.id, {
     agentId: runReceipt.agentId,
-    declarationKey: job.declarationKey,
     preserveAcrossGenerationAdvance: !runsDetachedFromMainSession(job),
     isMessageActionAuthorityCurrent: createServiceCronRunMessageAuthorityChecker({
       state,

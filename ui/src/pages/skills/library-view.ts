@@ -130,8 +130,7 @@ function renderLibraryEditor(library: SkillLibraryController) {
   if (!draft) {
     return nothing;
   }
-  const pending = draft.proposal !== null;
-  const disabled = !library.canEdit || library.busy || library.loading || pending;
+  const disabled = !library.canEdit || library.busy || library.loading;
   const uploadBlocked = draft.importedFiles && !library.uploadsEnabled;
   const support = draft.files.find((file) => file.path === draft.selectedFile);
   const text =
@@ -189,14 +188,12 @@ function renderLibraryEditor(library: SkillLibraryController) {
       >
         <p class="muted">
           ${
-            draft.target === "workspace"
-              ? t("skillLibrary.workspaceTarget", { agent: draft.agentId ?? "" })
-              : draft.entry
-                ? t("skillLibrary.ownerRevision", {
-                    owner: draft.entry.ownerLabel,
-                    revision: draft.entry.revision.slice(0, 8),
-                  })
-                : t("skillLibrary.personalTarget")
+            draft.entry
+              ? t("skillLibrary.ownerRevision", {
+                  owner: draft.entry.ownerLabel,
+                  revision: draft.entry.revision.slice(0, 8),
+                })
+              : t("skillLibrary.personalTarget")
           }
         </p>
         ${draft.entry ? renderLibraryIdentity(draft.entry) : nothing}
@@ -218,24 +215,6 @@ function renderLibraryEditor(library: SkillLibraryController) {
               library.changed();
             }}
         /></label>
-        ${
-          draft.target === "workspace"
-            ? html`<label class="field"
-                ><span>${t("skillLibrary.description")}</span
-                ><input
-                  class="settings-input"
-                  name="library-description"
-                  required
-                  ?disabled=${disabled}
-                  .value=${draft.description}
-                  @input=${(event: Event) => {
-                    draft.description = libraryEventControl(event, HTMLInputElement).value;
-                    draft.dirty = true;
-                    library.changed();
-                  }}
-              /></label>`
-            : nothing
-        }
         <div class="plugins-toolbar">
           <label class="field" style="min-width: 0; flex: 1;"
             ><span>${t("skillLibrary.file")}</span
@@ -361,28 +340,13 @@ function renderLibraryEditor(library: SkillLibraryController) {
           ${
             !library.canEdit
               ? nothing
-              : pending
-                ? html`<button
-                    type="button"
-                    class="btn primary"
-                    ?disabled=${library.busy}
-                    @click=${() => void library.applyWorkspace()}
-                  >
-                    ${t("skillLibrary.apply")}
-                  </button>`
-                : html`<button
-                    type="submit"
-                    class="btn primary"
-                    ?disabled=${disabled || uploadBlocked || !draft.dirty || !draft.content.trim()}
-                  >
-                    ${
-                      library.busy
-                        ? t("common.loading")
-                        : draft.target === "workspace"
-                          ? t("skillLibrary.propose")
-                          : t("skillLibrary.save")
-                    }
-                  </button>`
+              : html`<button
+                  type="submit"
+                  class="btn primary"
+                  ?disabled=${disabled || uploadBlocked || !draft.dirty || !draft.content.trim()}
+                >
+                  ${library.busy ? t("common.loading") : t("skillLibrary.save")}
+                </button>`
           }
           ${
             library.canEdit && draft.entry
@@ -497,9 +461,7 @@ function renderLibraryImport(library: SkillLibraryController) {
           ${
             library.importSource
               ? t("skillLibrary.importClawHub", { source: library.importSource.slug })
-              : library.createTarget === "workspace"
-                ? t("skillLibrary.importWorkspace")
-                : t("skillLibrary.importHelp")
+              : t("skillLibrary.importHelp")
           }
         </p>
         <label class="field"
@@ -522,11 +484,7 @@ function renderLibraryImport(library: SkillLibraryController) {
             ? html`<div class="field" role="group" aria-labelledby="library-import-files-label">
                 <span id="library-import-files-label">${t("skillLibrary.files")}</span>
                 <small id="library-import-files-help" class="settings-row__desc">
-                  ${t(
-                    library.createTarget === "workspace"
-                      ? "skillLibrary.workspaceFilesHelp"
-                      : "skillLibrary.filesHelp",
-                  )}
+                  ${t("skillLibrary.filesHelp")}
                 </small>
                 <div class="plugins-toolbar skill-library-import__pickers">
                   ${[false, true].map(

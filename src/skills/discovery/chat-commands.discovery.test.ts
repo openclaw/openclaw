@@ -132,7 +132,7 @@ describe("skill command discovery through workspace loading", () => {
   });
 
   it.each(["workspace", "workshop"] as const)(
-    "reports allowlist-hidden %s skills without loading another agent's skills",
+    "applies the allowlist to %s skills without loading another agent's skills",
     async (source) => {
       const root = tempDirs.make("openclaw-skill-command-discovery-");
       const workspaceDir = path.join(root, "workspace");
@@ -182,7 +182,9 @@ describe("skill command discovery through workspace loading", () => {
             ...params,
             includeAllowlistHidden: true,
           });
-          expect(skillCommands.map((command) => command.skillName)).toEqual(["allowed"]);
+          // Learned (Workshop) skills belong to their agent and bypass its allowlist.
+          const visible = source === "workshop" ? ["allowed", "hidden"] : ["allowed"];
+          expect(skillCommands.map((command) => command.skillName)).toEqual(visible);
           expect(await prepareSkillCommandsForAgents({ cfg: config, agentIds: ["alpha"] })).toEqual(
             skillCommands,
           );
@@ -190,11 +192,9 @@ describe("skill command discovery through workspace loading", () => {
             "allowed",
             "hidden",
           ]);
-          for (const text of [
-            "Use $hidden for this task.",
-            "/hidden run it",
-            "/skill hidden run it",
-          ]) {
+          for (const text of source === "workshop"
+            ? []
+            : ["Use $hidden for this task.", "/hidden run it", "/skill hidden run it"]) {
             expect(
               expandExplicitSkillReferences({ text, skillCommands, allSkillCommands }),
             ).toEqual({

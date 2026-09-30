@@ -126,8 +126,6 @@ function describeVoiceCallSchemaMigration(migration: OpenClawStateDatabaseSchema
       return "cron creators -> explicit principal namespaces";
     case "conversation-binding-targets-v15":
       return "conversation bindings -> exact target keys without agent/session projections";
-    case "skill-workshop-directory-ownership-v16":
-      return "Skill Workshop proposals -> per-agent Workshop directory ownership";
     case "prepared-worker-ownership-v17":
       return "prepared workers -> one-use capacity and fixed workspace ownership";
     case "github-publication-requester-authority-v18":

@@ -19,7 +19,7 @@ binary presence.
     Build and test a custom skill from scratch.
   </Card>
   <Card title="Skill Workshop" href="/tools/skill-workshop" icon="flask">
-    Review and approve agent-drafted skill proposals.
+    Skills your agent learns on its own, with change history and undo.
   </Card>
   <Card title="Skills config" href="/tools/skills-config" icon="gear">
     Full `skills.*` config schema and agent allowlists.
@@ -303,22 +303,22 @@ skill from model-initiated selection.
 
 ## Skill Workshop
 
-[Skill Workshop](/tools/skill-workshop) is a proposal queue between the agent
-and its `<state-dir>/agents/<agentId>/agent/workshop-skills` directory. When the agent spots
-reusable work, it drafts a proposal instead of writing directly to `SKILL.md`.
-The scheduled weekly collection review is the scoped exception: its normal
-isolated turn may edit `SKILL.md` files directly inside the Workshop directory.
-Operators edit skills outside that directory through their owning tools or files.
+[Skill Workshop](/tools/skill-workshop) lets an agent save and update its own
+skills in `<state-dir>/agents/<agentId>/agent/workshop-skills`. Every change
+applies immediately, is announced, and saves the previous version so it can be
+undone. Learned skills are always visible to their agent; archive one to hide
+it. Operators edit skills outside that directory through their owning tools or
+files.
 
 ```bash
 openclaw skills workshop list
-openclaw skills workshop inspect <proposal-id>
-openclaw skills workshop evaluate <proposal-id>
-openclaw skills workshop apply <proposal-id>
+openclaw skills workshop changes
+openclaw skills workshop archive <name>
+openclaw skills workshop restore <name>
 ```
 
-See [Skill Workshop](/tools/skill-workshop) for the full lifecycle, CLI
-reference, and configuration.
+See [Skill Workshop](/tools/skill-workshop) for how agents learn skills and
+[`openclaw skills workshop`](/cli/skills#skill-workshop) for the CLI reference.
 
 ## Installing from ClawHub
 
@@ -842,7 +842,7 @@ read every admitted skill. Native harnesses retain their own prompt policy.
     Step-by-step guide to authoring a custom skill.
   </Card>
   <Card title="Skill Workshop" href="/tools/skill-workshop" icon="flask">
-    Proposal queue for agent-drafted skills.
+    Skills your agent saves and updates on its own, with undo.
   </Card>
   <Card title="Skills config" href="/tools/skills-config" icon="gear">
     Full `skills.*` config schema and agent allowlists.

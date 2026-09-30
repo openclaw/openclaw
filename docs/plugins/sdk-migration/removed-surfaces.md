@@ -47,6 +47,25 @@ api.on("gateway_stop", async (event, ctx) => {
 });
 ```
 
+### Skill Workshop proposal hooks
+
+The `skill_proposal_evaluate` and `skill_proposal_changed` hooks were removed
+together with Skill Workshop proposals. Workshop now applies each change
+immediately and keeps a restorable version, so there is no pending draft to
+evaluate and no proposal lifecycle to observe. The hook runner methods
+`runSkillProposalEvaluate` and `runSkillProposalChanged` were removed, and
+`openclaw/plugin-sdk/plugin-entry` no longer exports
+`PluginHookSkillProposalEvaluateEvent`, `PluginHookSkillProposalEvaluateResult`,
+`PluginHookSkillProposalEvaluationOutcome`, `PluginHookSkillProposalChangedEvent`,
+`PluginHookSkillProposalKind`, `PluginHookSkillEvaluationFinding`,
+`PluginHookSkillBundleFile`, or `PluginHookSkillBundleSnapshot`. The optional
+`proposal` field on `PluginHookSkillChangedEvent` was removed too.
+
+To observe committed Workshop skill writes, register `skill_changed` and filter
+on `source: "workshop"`. There is no replacement for pre-apply evaluation.
+Registering a removed hook name logs an `unknown typed hook` warning and the
+handler never runs.
+
 ### Private testing barrel
 
 `openclaw/plugin-sdk/testing` was repo-local and excluded from shipped package

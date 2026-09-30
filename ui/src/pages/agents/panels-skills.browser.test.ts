@@ -139,6 +139,51 @@ describe("agents skills panel (browser)", () => {
     expect(buttons[1]?.disabled).toBe(true);
   });
 
+  it("keeps learned Workshop skills on under an allowlist", async () => {
+    const container = document.createElement("div");
+    render(
+      renderAgentSkills({
+        agentId: "main",
+        canPatchConfig: true,
+        canUpdateConfig: true,
+        report: {
+          workspaceDir: "/tmp/workspace",
+          managedSkillsDir: "/tmp/skills",
+          agentId: "main",
+          skills: [createSkill("github"), createSkill("budget", { source: "openclaw-workshop" })],
+        },
+        loading: false,
+        error: null,
+        activeAgentId: "main",
+        configForm: { agents: { entries: { main: { default: true, skills: ["github"] } } } },
+        configLoading: false,
+        configSaving: false,
+        configDirty: false,
+        filter: "",
+        onFilterChange: () => undefined,
+        onRefresh: () => undefined,
+        onToggle: () => undefined,
+        onClear: () => undefined,
+        onDisableAll: () => undefined,
+        onConfigReload: () => undefined,
+        onConfigSave: () => undefined,
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const learnedRow = Array.from(container.querySelectorAll(".agent-skill-row")).find((row) =>
+      row.textContent?.includes("budget"),
+    );
+    const toggle = learnedRow?.querySelector("wa-switch") as
+      | (HTMLElement & { checked: boolean; disabled: boolean })
+      | null;
+    expect(toggle?.checked).toBe(true);
+    expect(toggle?.disabled).toBe(true);
+    expect(learnedRow?.textContent).toContain("archive in Workshop to hide");
+    expect(container.textContent).toContain("2/2");
+  });
+
   it("gates allowlist clearing separately from staged config edits", async () => {
     const container = document.createElement("div");
     render(

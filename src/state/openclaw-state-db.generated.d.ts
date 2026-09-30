@@ -1366,57 +1366,17 @@ export interface SkillUsage {
   use_count: number;
 }
 
-export interface SkillWorkshopCollectionReviews {
-  backup_id: string;
-  create_time: number;
-  dropped_json: string;
-  kept_names_json: string;
-  owner_agent_id: string;
-  review_id: string;
-  written_names_json: string;
-}
-
-export interface SkillWorkshopProposalEvents {
-  actor_json: string;
-  correlation_id: string | null;
-  event_id: string;
-  event_type: string;
-  occurred_at: string;
-  payload_json: string | null;
-  proposal_id: string;
-  proposed_version: string;
-  revision_hash: string;
-  sequence: Generated<number>;
-}
-
-export interface SkillWorkshopProposalRollbacks {
+export interface SkillWorkshopChanges {
   action: string;
-  previous_content: string | null;
-  previous_content_hash: string | null;
-  proposal_id: string;
-  support_files_json: string | null;
-  target_skill_file: string;
-  written_at: string;
-}
-
-export interface SkillWorkshopProposals {
-  applied_at: string | null;
-  created_at: string;
-  draft_hash: string;
-  kind: string;
-  origin_agent_id: string | null;
-  origin_message_id: string | null;
-  origin_run_id: string | null;
-  origin_session_key: string | null;
-  owner_agent_id: string | null;
-  proposal_id: string;
-  quarantined_at: string | null;
-  record_json: string;
-  rejected_at: string | null;
-  stale_at: string | null;
-  status: string;
-  status_reason: string | null;
-  updated_at: string;
+  actor: string;
+  agent_id: string;
+  change_id: string;
+  created_at_ms: number;
+  run_id: string | null;
+  session_key: string | null;
+  skill_name: string;
+  summary: string;
+  version_id: string | null;
 }
 
 export interface StateLeases {
@@ -1892,10 +1852,7 @@ export interface DB {
   skill_upload_chunks: SkillUploadChunks;
   skill_uploads: SkillUploads;
   skill_usage: SkillUsage;
-  skill_workshop_collection_reviews: SkillWorkshopCollectionReviews;
-  skill_workshop_proposal_events: SkillWorkshopProposalEvents;
-  skill_workshop_proposal_rollbacks: SkillWorkshopProposalRollbacks;
-  skill_workshop_proposals: SkillWorkshopProposals;
+  skill_workshop_changes: SkillWorkshopChanges;
   state_leases: StateLeases;
   subagent_runs: SubagentRuns;
   task_delivery_state: TaskDeliveryState;

@@ -3,7 +3,10 @@ import { readActiveTranscriptEntryAnchor } from "../../config/sessions/session-a
 import type { TranscriptEntryAnchor } from "../../config/sessions/transcript-entry-anchor.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { consumeRunSkillUsage } from "../../skills/runtime/run-usage.js";
-import { scheduleSkillExperienceReview } from "../../skills/workshop/experience-review-default.js";
+import {
+  scheduleSkillExperienceReview,
+  scheduleUnusedWorkshopSkillArchive,
+} from "../../skills/workshop/experience-review-default.js";
 import type { EmbeddedForegroundPromptContext } from "../embedded-agent-runner/run/params.js";
 import {
   awaitAgentHarnessAgentEndHook,
@@ -31,19 +34,21 @@ type AgentEndSideEffectsParams = Omit<BaseAgentEndSideEffectsParams, "ctx"> & {
 
 function runCoreAgentEndSideEffects(params: AgentEndSideEffectsParams): void {
   const usedSkills = consumeRunSkillUsage(params.ctx.runId);
-  // CLI hook contexts omit skillWorkshopAvailable, so isEligibleContext rejects them.
-  const source = params.skillExperienceReviewSource;
-  if (!params.ctx.foregroundPromptContext || !source) {
+  const foregroundPromptContext = params.ctx.foregroundPromptContext;
+  if (!foregroundPromptContext) {
     return;
   }
   // Hook contexts do not always carry the config; the runtime config is the owner at this boundary.
   const config = params.ctx.config ?? getRuntimeConfig();
-  const ctx = { ...params.ctx, foregroundPromptContext: params.ctx.foregroundPromptContext };
   try {
-    const anchor = readActiveTranscriptEntryAnchor(source);
+    scheduleUnusedWorkshopSkillArchive(config, foregroundPromptContext.agentId);
+    // CLI hook contexts omit skillWorkshopAvailable, so isEligibleContext rejects them.
+    const source = params.skillExperienceReviewSource;
+    const anchor = source ? readActiveTranscriptEntryAnchor(source) : undefined;
     if (!anchor) {
       return;
     }
+    const ctx = { ...params.ctx, foregroundPromptContext };
     scheduleSkillExperienceReview({
       event: params.event,
       ctx,

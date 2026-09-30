@@ -128,7 +128,6 @@ internal enum class SidebarDestination(
   Agents(stableId = "agents", settingsRoute = SettingsRoute.Agents),
   Automations(stableId = "automations", settingsRoute = SettingsRoute.CronJobs),
   Usage(stableId = "usage", settingsRoute = SettingsRoute.Usage),
-  SkillWorkshop(stableId = "skill-workshop", settingsRoute = SettingsRoute.SkillWorkshop),
   Dreaming(stableId = "dreaming", settingsRoute = SettingsRoute.Dreaming),
   Terminal(stableId = "terminal", settingsRoute = SettingsRoute.Terminal),
   Desktop(stableId = "desktop", settingsRoute = SettingsRoute.Desktop),

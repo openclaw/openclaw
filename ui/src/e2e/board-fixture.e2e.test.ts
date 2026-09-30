@@ -12,7 +12,6 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import { stopChildProcess } from "../../../test/helpers/stop-child-process.ts";
 import type { ApplicationRuntime } from "../app/bootstrap.ts";
-import type { SkillWorkshopDiffResponse } from "../lib/skill-workshop/diff.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   canRunPlaywrightChromium,
@@ -484,31 +483,31 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
           });
         });
         await page.goto(fixtureServer.url, { waitUntil: "networkidle" });
-        const localDiff = await page.evaluate(async () => {
+        const localWorkerOutput = await page.evaluate(async () => {
+          const canvas = new OffscreenCanvas(1, 1);
+          canvas.getContext("2d")?.fillRect(0, 0, 1, 1);
+          const image = new File([await canvas.convertToBlob({ type: "image/png" })], "dot.png", {
+            type: "image/png",
+          });
           const worker = new Worker(
-            "/src/lib/skill-workshop/diff.worker.ts?worker_file&type=module",
-            {
-              type: "module",
-            },
+            "/src/pages/chat/components/chat-attachment-image.worker.ts?worker_file&type=module",
+            { type: "module" },
           );
           try {
-            return await new Promise<SkillWorkshopDiffResponse["diff"]["stat"]>(
-              (resolve, reject) => {
-                worker.addEventListener(
-                  "message",
-                  ({ data }: MessageEvent<SkillWorkshopDiffResponse>) => resolve(data.diff.stat),
-                );
-                worker.addEventListener("error", () =>
-                  reject(new Error("The local Workshop worker could not run.")),
-                );
-                worker.postMessage({ id: 1, previous: "Before\n", current: "After\n" }, []);
-              },
-            );
+            return await new Promise<string | null>((resolve, reject) => {
+              worker.addEventListener("message", ({ data }: MessageEvent<File | null>) =>
+                resolve(data?.type ?? null),
+              );
+              worker.addEventListener("error", () =>
+                reject(new Error("The local image worker could not run.")),
+              );
+              worker.postMessage({ file: image, maxBytes: 1024 * 1024 }, []);
+            });
           } finally {
             worker.terminate();
           }
         });
-        expect(localDiff).toEqual({ added: 1, removed: 1 });
+        expect(localWorkerOutput).toBe("image/png");
         await expect.poll(() => hmr.length).toBeGreaterThan(0);
         expect(hmr.every((url) => new URL(url).host === new URL(origin).host)).toBe(true);
         outcomes.hmr = hmr;
