@@ -7,7 +7,7 @@ import {
   compactCodexAppServerProtocolJsonSchemas,
   expandCodexAppServerProtocolJsonSchema,
   generateExperimentalCodexAppServerProtocolSource,
-  normalizeCodexAppServerProtocolJsonText,
+  normalizeCodexAppServerProtocolJsonText as normalizeJsonSchema,
   selectedCodexAppServerJsonSchemas,
 } from "./lib/codex-app-server-protocol-source.js";
 
@@ -16,256 +16,144 @@ const generatedRoot = path.resolve(
   "extensions/codex/src/app-server/protocol-generated",
 );
 
-const checks: Array<{ file: string; snippets: string[] }> = [
-  {
-    file: "ServerRequest.ts",
-    snippets: [
-      '"item/commandExecution/requestApproval"',
-      '"item/fileChange/requestApproval"',
-      '"item/permissions/requestApproval"',
-      '"item/tool/call"',
-    ],
-  },
-  {
-    file: "v2/ThreadItem.ts",
-    snippets: [
-      "delivery: AgentMessageDelivery | null",
-      'type: "contextCompaction"',
-      'type: "dynamicToolCall"',
-      'type: "commandExecution"',
-      'type: "mcpToolCall"',
-    ],
-  },
-  {
-    file: "v2/DynamicToolSpec.ts",
-    snippets: [
-      '"function"',
-      "& DynamicToolFunctionSpec",
-      '"namespace"',
-      "& DynamicToolNamespaceSpec",
-    ],
-  },
-  {
-    file: "v2/DynamicToolFunctionSpec.ts",
-    snippets: ["name: string", "description: string", "inputSchema: JsonValue"],
-  },
-  {
-    file: "v2/DynamicToolNamespaceSpec.ts",
-    snippets: ["name: string", "description: string", "tools: Array<DynamicToolNamespaceTool>"],
-  },
-  {
-    file: "v2/CommandExecutionApprovalDecision.ts",
-    snippets: ['"accept"', '"acceptForSession"', '"decline"', '"cancel"'],
-  },
-  {
-    file: "v2/Account.ts",
-    snippets: ['type: "apiKey"', 'type: "chatgpt"', 'type: "amazonBedrock"'],
-  },
-  {
-    file: "v2/AppSummary.ts",
-    snippets: [
-      "description: string | null",
-      "installUrl: string | null",
-      "category: string | null",
-    ],
-  },
-  {
-    file: "v2/AppsInstalledParams.ts",
-    snippets: ["threadId?: string | null", "forceRefresh?: boolean"],
-  },
-  {
-    file: "v2/AppsInstalledResponse.ts",
-    snippets: ["apps: Array<InstalledApp>"],
-  },
-  {
-    file: "v2/AppsReadParams.ts",
-    snippets: ["appIds: Array<string>", "threadId?: string | null", "includeTools?: boolean"],
-  },
-  {
-    file: "v2/AppsReadResponse.ts",
-    snippets: ["apps: Array<ConnectorMetadata>", "missingAppIds: Array<string>"],
-  },
-  {
-    file: "v2/CommandExecParams.ts",
-    snippets: [
-      "command: Array<string>",
-      "outputBytesCap?: number | null",
-      "timeoutMs?: number | null",
-      "env?: { [key in string]?: string | null } | null",
-    ],
-  },
-  {
-    file: "v2/CommandExecResponse.ts",
-    snippets: ["exitCode: number", "stdout: string", "stderr: string"],
-  },
-  {
-    file: "v2/ConfigBatchWriteParams.ts",
-    snippets: [
-      "edits: Array<ConfigEdit>",
-      "filePath?: string | null",
-      "expectedVersion?: string | null",
-      "reloadUserConfig?: boolean",
-    ],
-  },
-  {
-    file: "v2/ConfigEdit.ts",
-    snippets: ["keyPath: string", "value: JsonValue", "mergeStrategy: MergeStrategy"],
-  },
-  {
-    file: "v2/ConfigValueWriteParams.ts",
-    snippets: [
-      "keyPath: string",
-      "value: JsonValue",
-      "mergeStrategy: MergeStrategy",
-      "filePath?: string | null",
-      "expectedVersion?: string | null",
-    ],
-  },
-  {
-    file: "v2/ConfigWriteResponse.ts",
-    snippets: [
-      "status: WriteStatus",
-      "version: string",
-      "filePath: AbsolutePathBuf",
-      "overriddenMetadata: OverriddenMetadata | null",
-    ],
-  },
-  {
-    file: "v2/ConfigLayerSource.ts",
-    snippets: ['type: "packagedDefaults"', "file: AbsolutePathBuf"],
-  },
-  {
-    file: "v2/ConfigReadParams.ts",
-    snippets: ["includeLayers?: boolean", "cwd?: string | null"],
-  },
-  {
-    file: "v2/InstalledApp.ts",
-    snippets: ["runtimeName: string | null", "enabled: boolean", "callable: boolean"],
-  },
-  {
-    file: "v2/MarketplaceLoadErrorInfo.ts",
-    snippets: ["marketplacePath: AbsolutePathBuf", "message: string"],
-  },
-  {
-    file: "v2/MergeStrategy.ts",
-    snippets: ['"replace"', '"upsert"'],
-  },
-  {
-    file: "v2/OverriddenMetadata.ts",
-    snippets: [
-      "message: string",
-      "overridingLayer: ConfigLayerMetadata",
-      "effectiveValue: JsonValue",
-    ],
-  },
-  {
-    file: "v2/PluginSummary.ts",
-    snippets: ["remotePluginId: string | null"],
-  },
-  {
-    file: "v2/PluginListParams.ts",
-    snippets: ["forceRefetch?: boolean"],
-  },
-  {
-    file: "v2/PluginInstalledParams.ts",
-    snippets: [
-      "cwds?: Array<AbsolutePathBuf> | null",
-      "installSuggestionPluginNames?: Array<string> | null",
-    ],
-  },
-  {
-    file: "v2/PluginInstalledResponse.ts",
-    snippets: [
-      "marketplaces: Array<PluginMarketplaceEntry>",
-      "marketplaceLoadErrors: Array<MarketplaceLoadErrorInfo>",
-    ],
-  },
-  {
-    file: "v2/PluginListResponse.ts",
-    snippets: [
-      "marketplaces: Array<PluginMarketplaceEntry>",
-      "marketplaceLoadErrors: Array<MarketplaceLoadErrorInfo>",
-      "featuredPluginIds: Array<string>",
-    ],
-  },
-  {
-    file: "v2/PluginReadParams.ts",
-    snippets: ["pluginName: string"],
-  },
-  {
-    file: "v2/PluginReadResponse.ts",
-    snippets: ["plugin: PluginDetail"],
-  },
-  {
-    file: "v2/PluginInstallParams.ts",
-    snippets: ["pluginName: string"],
-  },
-  {
-    file: "v2/PluginInstallResponse.ts",
-    snippets: ["appsNeedingAuth: Array<AppSummary>"],
-  },
-  {
-    file: "v2/ThreadStartParams.ts",
-    snippets: [
-      "projectId?: string | null",
-      "permissions?: string | null",
-      "dynamicTools?: Array<DynamicToolSpec> | null",
-      "experimentalRawEvents",
-    ],
-  },
-  {
-    file: "v2/Thread.ts",
-    snippets: ["projectId: string | null"],
-  },
-  {
-    file: "v2/Model.ts",
-    snippets: ["multiAgentVersion: MultiAgentVersion | null"],
-  },
-  {
-    file: "v2/CodexErrorInfo.ts",
-    snippets: ['"misalignmentPolicyViolation"'],
-  },
-  {
-    file: "v2/McpResourceReadParams.ts",
-    snippets: [
-      "threadId?: string | null",
-      "originCallId?: string | null",
-      "connectorId?: string | null",
-    ],
-  },
-  {
-    file: "v2/McpResourceReadResponse.ts",
-    snippets: ["originCallId: string | null"],
-  },
-  {
-    file: "v2/StrictReviewRequiredNotification.ts",
-    snippets: ["threadId: string", "turnId: string", "startedAtMs: number"],
-  },
-  {
-    file: "v2/AgentMessageDelivery.ts",
-    snippets: ['"async"'],
-  },
-  {
-    file: "v2/TurnStartParams.ts",
-    snippets: ["permissions?: string | null", "serviceTier?: string | null"],
-  },
-  {
-    file: "v2/WriteStatus.ts",
-    snippets: ['"ok"', '"okOverridden"'],
-  },
-  {
-    file: "ReviewDecision.ts",
-    snippets: ['"approved"', '"approved_for_session"', "denied: { rejection: string }", '"abort"'],
-  },
-  {
-    file: "v2/PlanDeltaNotification.ts",
-    snippets: ["itemId: string", "delta: string"],
-  },
-  {
-    file: "v2/TurnPlanUpdatedNotification.ts",
-    snippets: ["explanation: string | null", "plan: Array<TurnPlanStep>"],
-  },
-];
+const checks: Record<string, string[]> = {
+  "ServerRequest.ts": [
+    '"item/commandExecution/requestApproval"',
+    '"item/fileChange/requestApproval"',
+    '"item/permissions/requestApproval"',
+    '"item/tool/call"',
+  ],
+  "v2/ThreadItem.ts": [
+    "delivery: AgentMessageDelivery | null",
+    'type: "contextCompaction"',
+    'type: "dynamicToolCall"',
+    'type: "commandExecution"',
+    'type: "mcpToolCall"',
+  ],
+  "v2/DynamicToolSpec.ts": [
+    '"function"',
+    "& DynamicToolFunctionSpec",
+    '"namespace"',
+    "& DynamicToolNamespaceSpec",
+  ],
+  "v2/DynamicToolFunctionSpec.ts": [
+    "name: string",
+    "description: string",
+    "inputSchema: JsonValue",
+  ],
+  "v2/DynamicToolNamespaceSpec.ts": [
+    "name: string",
+    "description: string",
+    "tools: Array<DynamicToolNamespaceTool>",
+  ],
+  "v2/CommandExecutionApprovalDecision.ts": [
+    '"accept"',
+    '"acceptForSession"',
+    '"decline"',
+    '"cancel"',
+  ],
+  "v2/Account.ts": ['type: "apiKey"', 'type: "chatgpt"', 'type: "amazonBedrock"'],
+  "v2/AppSummary.ts": [
+    "description: string | null",
+    "installUrl: string | null",
+    "category: string | null",
+  ],
+  "v2/AppsInstalledParams.ts": ["threadId?: string | null", "forceRefresh?: boolean"],
+  "v2/AppsInstalledResponse.ts": ["apps: Array<InstalledApp>"],
+  "v2/AppsReadParams.ts": [
+    "appIds: Array<string>",
+    "threadId?: string | null",
+    "includeTools?: boolean",
+  ],
+  "v2/AppsReadResponse.ts": ["apps: Array<ConnectorMetadata>", "missingAppIds: Array<string>"],
+  "v2/CommandExecParams.ts": [
+    "command: Array<string>",
+    "outputBytesCap?: number | null",
+    "timeoutMs?: number | null",
+    "env?: { [key in string]?: string | null } | null",
+  ],
+  "v2/CommandExecResponse.ts": ["exitCode: number", "stdout: string", "stderr: string"],
+  "v2/ConfigBatchWriteParams.ts": [
+    "edits: Array<ConfigEdit>",
+    "filePath?: string | null",
+    "expectedVersion?: string | null",
+    "reloadUserConfig?: boolean",
+  ],
+  "v2/ConfigEdit.ts": ["keyPath: string", "value: JsonValue", "mergeStrategy: MergeStrategy"],
+  "v2/ConfigValueWriteParams.ts": [
+    "keyPath: string",
+    "value: JsonValue",
+    "mergeStrategy: MergeStrategy",
+    "filePath?: string | null",
+    "expectedVersion?: string | null",
+  ],
+  "v2/ConfigWriteResponse.ts": [
+    "status: WriteStatus",
+    "version: string",
+    "filePath: AbsolutePathBuf",
+    "overriddenMetadata: OverriddenMetadata | null",
+  ],
+  "v2/ConfigLayerSource.ts": ['type: "packagedDefaults"', "file: AbsolutePathBuf"],
+  "v2/ConfigReadParams.ts": ["includeLayers?: boolean", "cwd?: string | null"],
+  "v2/InstalledApp.ts": ["runtimeName: string | null", "enabled: boolean", "callable: boolean"],
+  "v2/MarketplaceLoadErrorInfo.ts": ["marketplacePath: AbsolutePathBuf", "message: string"],
+  "v2/MergeStrategy.ts": ['"replace"', '"upsert"'],
+  "v2/OverriddenMetadata.ts": [
+    "message: string",
+    "overridingLayer: ConfigLayerMetadata",
+    "effectiveValue: JsonValue",
+  ],
+  "v2/PluginSummary.ts": ["remotePluginId: string | null"],
+  "v2/PluginListParams.ts": ["forceRefetch?: boolean"],
+  "v2/PluginInstalledParams.ts": [
+    "cwds?: Array<AbsolutePathBuf> | null",
+    "installSuggestionPluginNames?: Array<string> | null",
+  ],
+  "v2/PluginInstalledResponse.ts": [
+    "marketplaces: Array<PluginMarketplaceEntry>",
+    "marketplaceLoadErrors: Array<MarketplaceLoadErrorInfo>",
+  ],
+  "v2/PluginListResponse.ts": [
+    "marketplaces: Array<PluginMarketplaceEntry>",
+    "marketplaceLoadErrors: Array<MarketplaceLoadErrorInfo>",
+    "featuredPluginIds: Array<string>",
+  ],
+  "v2/PluginReadParams.ts": ["pluginName: string"],
+  "v2/PluginReadResponse.ts": ["plugin: PluginDetail"],
+  "v2/PluginInstallParams.ts": ["pluginName: string"],
+  "v2/PluginInstallResponse.ts": ["appsNeedingAuth: Array<AppSummary>"],
+  "v2/ThreadStartParams.ts": [
+    "projectId?: string | null",
+    "permissions?: string | null",
+    "dynamicTools?: Array<DynamicToolSpec> | null",
+    "experimentalRawEvents",
+  ],
+  "v2/Thread.ts": ["projectId: string | null"],
+  "v2/Model.ts": ["multiAgentVersion: MultiAgentVersion | null"],
+  "v2/CodexErrorInfo.ts": ['"misalignmentPolicyViolation"'],
+  "v2/McpResourceReadParams.ts": [
+    "threadId?: string | null",
+    "originCallId?: string | null",
+    "connectorId?: string | null",
+  ],
+  "v2/McpResourceReadResponse.ts": ["originCallId: string | null"],
+  "v2/StrictReviewRequiredNotification.ts": [
+    "threadId: string",
+    "turnId: string",
+    "startedAtMs: number",
+  ],
+  "v2/AgentMessageDelivery.ts": ['"async"'],
+  "v2/TurnStartParams.ts": ["permissions?: string | null", "serviceTier?: string | null"],
+  "v2/WriteStatus.ts": ['"ok"', '"okOverridden"'],
+  "ReviewDecision.ts": [
+    '"approved"',
+    '"approved_for_session"',
+    "denied: { rejection: string }",
+    '"abort"',
+  ],
+  "v2/PlanDeltaNotification.ts": ["itemId: string", "delta: string"],
+  "v2/TurnPlanUpdatedNotification.ts": ["explanation: string | null", "plan: Array<TurnPlanStep>"],
+};
 
 const failures: string[] = [];
 await main().catch((error: unknown) => {
@@ -280,18 +168,18 @@ async function main(): Promise<void> {
     await compareGeneratedProtocolMirror(source.jsonRoot);
     await checkMaintainedProtocolTypes(source.typescriptRoot);
 
-    for (const check of checks) {
-      const filePath = path.join(source.typescriptRoot, check.file);
+    for (const [file, snippets] of Object.entries(checks)) {
+      const filePath = path.join(source.typescriptRoot, file);
       let text: string;
       try {
         text = await fs.readFile(filePath, "utf8");
       } catch (error) {
-        failures.push(`${check.file}: missing (${String(error)})`);
+        failures.push(`${file}: missing (${String(error)})`);
         continue;
       }
-      for (const snippet of check.snippets) {
+      for (const snippet of snippets) {
         if (!text.includes(snippet)) {
-          failures.push(`${check.file}: missing ${snippet}`);
+          failures.push(`${file}: missing ${snippet}`);
         }
       }
     }
@@ -619,8 +507,4 @@ async function compareGeneratedProtocolMirror(sourceJsonRoot: string): Promise<v
       failures.push(`protocol-generated/json/${schema}: cannot expand (${String(error)})`);
     }
   }
-}
-
-function normalizeJsonSchema(sourceLocal: string): string {
-  return normalizeCodexAppServerProtocolJsonText(sourceLocal);
 }
