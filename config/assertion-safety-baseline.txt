@@ -88,7 +88,6 @@ extensions/browser/src/cli/browser-cli-state.ts	1
 extensions/browser/src/gateway/browser-request.ts	3
 extensions/browser/src/node-host/invoke-browser.ts	5
 extensions/browser/test-fetch.ts	2
-extensions/buzz/src/directory-state.ts	1
 extensions/buzz/src/gateway.ts	1
 extensions/buzz/src/message-event.ts	2
 extensions/buzz/src/qa/adapter.runtime.ts	2
@@ -116,10 +115,9 @@ extensions/clickclack/src/doctor-contract.ts	2
 extensions/clickclack/src/gateway.ts	2
 extensions/clickclack/src/http-client.ts	1
 extensions/clickclack/src/inbound.ts	4
-extensions/clickclack/src/mention-facts.ts	1
 extensions/clickclack/src/outbound.ts	1
 extensions/clickclack/src/setup-claim.ts	1
-extensions/clickclack/src/setup-core.ts	8
+extensions/clickclack/src/setup-core.ts	5
 extensions/clickclack/src/setup-surface.ts	8
 extensions/clickclack/src/setup-verify.ts	4
 extensions/cloudflare-ai-gateway/onboard.ts	1
@@ -217,7 +215,7 @@ extensions/device-pair/index.ts	6
 extensions/device-pair/notify-state.ts	1
 extensions/device-pair/notify.ts	1
 extensions/diagnostics-otel/src/service-content-normalization.ts	1
-extensions/diagnostics-otel/src/service-exporter.ts	2
+extensions/diagnostics-otel/src/service-exporter.ts	1
 extensions/diagnostics-otel/src/service-logs.ts	10
 extensions/diagnostics-otel/src/service-propagation.ts	2
 extensions/diagnostics-otel/src/service-trace-context.ts	1
@@ -388,7 +386,7 @@ extensions/file-transfer/src/node-host/dir-list.ts	1
 extensions/file-transfer/src/node-host/file-fetch.ts	1
 extensions/file-transfer/src/node-host/file-write.ts	2
 extensions/file-transfer/src/shared/node-invoke-policy.ts	2
-extensions/file-transfer/src/shared/policy.ts	7
+extensions/file-transfer/src/shared/policy.ts	6
 extensions/file-transfer/src/tools/dir-fetch-tool.ts	1
 extensions/file-transfer/src/tools/dir-list-tool.ts	2
 extensions/file-transfer/src/tools/file-fetch-tool.ts	2
@@ -700,10 +698,10 @@ extensions/nostr/src/nostr-profile-import.ts	1
 extensions/nostr/src/setup-surface.ts	2
 extensions/nostr/src/types.ts	3
 extensions/nvidia/provider-catalog.ts	1
-extensions/oc-path/src/oc-path/find.ts	12
+extensions/oc-path/src/oc-path/find.ts	9
 extensions/oc-path/src/oc-path/universal.ts	4
 extensions/oc-path/src/oc-path/yaml/edit.ts	2
-extensions/oc-path/src/oc-path/yaml/resolve.ts	6
+extensions/oc-path/src/oc-path/yaml/resolve.ts	4
 extensions/ollama/index.ts	7
 extensions/ollama/provider-discovery.ts	1
 extensions/ollama/src/config-compat.ts	1
@@ -1053,8 +1051,8 @@ extensions/voice-call/doctor-contract-api.ts	1
 extensions/voice-call/index.ts	2
 extensions/voice-call/setup-api.ts	1
 extensions/voice-call/src/config.ts	2
-extensions/voice-call/src/manager.ts	2
-extensions/voice-call/src/manager/outbound.ts	3
+extensions/voice-call/src/manager.ts	1
+extensions/voice-call/src/manager/outbound.ts	2
 extensions/voice-call/src/manager/store.ts	2
 extensions/voice-call/src/media-stream.ts	1
 extensions/voice-call/src/providers/shared/guarded-json-api.ts	2

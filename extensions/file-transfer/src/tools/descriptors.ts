@@ -11,8 +11,6 @@ export type FileTransferToolDescriptor = Pick<
 // can attach them and follow-up file_write calls can reuse the media id.
 export const FILE_TRANSFER_SUBDIR = "tool-file-transfer";
 
-export const FILE_FETCH_DEFAULT_MAX_BYTES = 8 * 1024 * 1024;
-export const FILE_FETCH_HARD_MAX_BYTES = 16 * 1024 * 1024;
 export const DIR_LIST_DEFAULT_MAX_ENTRIES = 200;
 export const DIR_LIST_HARD_MAX_ENTRIES = 5000;
 export const FILE_WRITE_HARD_MAX_BYTES = 16 * 1024 * 1024;

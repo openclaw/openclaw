@@ -135,11 +135,6 @@ describe("setOcPath — item kv field", () => {
 });
 
 describe("setOcPath — sentinel guard (defense-in-depth)", () => {
-  // The JSONC + JSONL paths reject sentinel-bearing values at the
-  // substrate boundary; the md path was deferring entirely to round-trip
-  // echo through emitMd, which acceptPreExistingSentinel:true skips.
-  // Closing the gap keeps F9 (formatter sentinel guard) symmetric across
-  // all three kinds.
   it("rejects bare sentinel on frontmatter value", () => {
     const { ast } = parseMd("---\nname: x\n---\n");
     expect(() =>
