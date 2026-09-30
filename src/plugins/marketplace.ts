@@ -176,7 +176,7 @@ function normalizeEntrySource(
     return { ok: true, source: { kind: "path", path: sourcePath } };
   }
 
-  if (kind === "github" || kind === "git" || kind === "git-subdir") {
+  if (kind === "github" || kind === "git") {
     const identifier =
       kind === "github"
         ? (normalizeOptionalString(rec.repo) ?? normalizeOptionalString(rec.url))
@@ -184,27 +184,43 @@ function normalizeEntrySource(
     if (!identifier) {
       return {
         ok: false,
-        error: `${kind} source missing "${kind === "github" ? "repo" : "url"}"`,
+        error: kind === "github" ? 'github source missing "repo"' : 'git source missing "url"',
       };
     }
-    const sourcePath =
-      normalizeOptionalString(rec.path) ??
-      (kind === "git-subdir" ? normalizeOptionalString(rec.subdir) : undefined);
-    const ref =
-      normalizeOptionalString(rec.ref) ??
-      normalizeOptionalString(rec.branch) ??
-      normalizeOptionalString(rec.tag);
-    if (kind === "git-subdir") {
-      return sourcePath
-        ? { ok: true, source: { kind, url: identifier, path: sourcePath, ref } }
-        : { ok: false, error: 'git-subdir source missing "path"' };
+    const source: MarketplaceEntrySource =
+      kind === "github" ? { kind, repo: identifier } : { kind, url: identifier };
+    return {
+      ok: true,
+      source: {
+        ...source,
+        path: normalizeOptionalString(rec.path),
+        ref:
+          normalizeOptionalString(rec.ref) ??
+          normalizeOptionalString(rec.branch) ??
+          normalizeOptionalString(rec.tag),
+      },
+    };
+  }
+
+  if (kind === "git-subdir") {
+    const url = normalizeOptionalString(rec.url) ?? normalizeOptionalString(rec.repo);
+    const sourcePath = normalizeOptionalString(rec.path) ?? normalizeOptionalString(rec.subdir);
+    if (!url) {
+      return { ok: false, error: 'git-subdir source missing "url"' };
+    }
+    if (!sourcePath) {
+      return { ok: false, error: 'git-subdir source missing "path"' };
     }
     return {
       ok: true,
       source: {
-        ...(kind === "github" ? { kind, repo: identifier } : { kind, url: identifier }),
+        kind: "git-subdir",
+        url,
         path: sourcePath,
-        ref,
+        ref:
+          normalizeOptionalString(rec.ref) ??
+          normalizeOptionalString(rec.branch) ??
+          normalizeOptionalString(rec.tag),
       },
     };
   }
@@ -249,40 +265,62 @@ function marketplaceEntryGitRef(source: MarketplaceEntrySource): string | undefi
   throw new Error("Unsupported marketplace entry source");
 }
 
+function isMutableGitDerivedSource(ref: string | undefined): boolean {
+  return !isImmutableGitCommitRef(ref);
+}
+
 function marketplaceInstallPolicySource(params: {
   marketplaceOrigin: MarketplaceManifestOrigin;
   marketplaceRef?: string;
   resolvedPath: string;
   source: MarketplaceEntrySource;
 }): InstallPolicySource {
-  const archive = resolveArchiveKind(params.resolvedPath);
-  if (params.source.kind === "path" && !hasHttpUrlPrefix(params.source.path)) {
-    if (params.marketplaceOrigin === "local") {
+  const marketplaceMutable = isMutableGitDerivedSource(params.marketplaceRef);
+  const entryMutable = isMutableGitDerivedSource(marketplaceEntryGitRef(params.source));
+  if (resolveArchiveKind(params.resolvedPath)) {
+    if (
+      params.marketplaceOrigin === "remote" &&
+      params.source.kind === "path" &&
+      !hasHttpUrlPrefix(params.source.path)
+    ) {
       return {
-        kind: archive ? "archive" : "local-path",
-        authority: "user",
-        mutable: true,
-        network: false,
+        kind: "archive",
+        authority: "third-party",
+        mutable: marketplaceMutable,
+        network: true,
       };
     }
+    if (params.source.kind === "path" && !hasHttpUrlPrefix(params.source.path)) {
+      return { kind: "archive", authority: "user", mutable: true, network: false };
+    }
+    return { kind: "archive", authority: "third-party", mutable: entryMutable, network: true };
+  }
+
+  if (
+    params.marketplaceOrigin === "remote" &&
+    params.source.kind === "path" &&
+    !hasHttpUrlPrefix(params.source.path)
+  ) {
+    return { kind: "git", authority: "third-party", mutable: marketplaceMutable, network: true };
+  }
+
+  if (params.source.kind === "path") {
+    if (hasHttpUrlPrefix(params.source.path)) {
+      return { kind: "archive", authority: "third-party", mutable: true, network: true };
+    }
+    return { kind: "local-path", authority: "user", mutable: true, network: false };
+  }
+
+  if (params.source.kind === "url") {
     return {
-      kind: archive ? "archive" : "git",
+      kind: resolveArchiveKind(params.source.url) ? "archive" : "git",
       authority: "third-party",
-      mutable: !isImmutableGitCommitRef(params.marketplaceRef),
+      mutable: entryMutable,
       network: true,
     };
   }
-  return {
-    kind:
-      archive ||
-      params.source.kind === "path" ||
-      (params.source.kind === "url" && resolveArchiveKind(params.source.url))
-        ? "archive"
-        : "git",
-    authority: "third-party",
-    mutable: !isImmutableGitCommitRef(marketplaceEntryGitRef(params.source)),
-    network: true,
-  };
+
+  return { kind: "git", authority: "third-party", mutable: entryMutable, network: true };
 }
 
 function marketplaceInstallPolicyRequestKind(params: {
