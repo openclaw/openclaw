@@ -9,7 +9,7 @@ export function findRetiredConfigUpgradeRequirement(
   config: unknown,
 ): { message: string; nextAction: string } | undefined {
   if (!isRecord(config)) {
-    return;
+    return undefined;
   }
   const retired: string[] = [];
   const checkKeys = (scope: unknown, configPath: string, keys: string[]) => {
@@ -51,7 +51,7 @@ export function findRetiredConfigUpgradeRequirement(
     checkKeys(scope.sandbox, `${configPath}.sandbox`, ["perSession"]);
   });
   if (retired.length === 0) {
-    return;
+    return undefined;
   }
   return {
     message: `Config contains retired pre-June keys: ${retired.join(", ")}. Doctor cannot remove these settings safely.`,
