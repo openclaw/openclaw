@@ -854,6 +854,7 @@ src/infra/update-channels.ts
 src/infra/update-doctor-config-schema.ts
 src/infra/update-doctor-result.ts
 src/infra/update-failure-facts.ts
+src/infra/update-failure-public-codes.ts
 src/infra/update-failure-public-identifiers.ts
 src/infra/update-managed-service-handoff-boot.ts
 src/infra/update-managed-service-handoff-cancellation.ts
