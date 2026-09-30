@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 import { createTranscriptsAutoStartService } from "../../transcripts/auto-start.js";
-import { activeSessions } from "../../transcripts/capture.js";
+import { activeSessions } from "../../transcripts/capture-startup.js";
 import type {
   TranscriptSourceProvider,
   TranscriptStartRequest,

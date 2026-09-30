@@ -176,6 +176,15 @@ stops before spawning and records `candidate-config-read-recursion`.
 Both runtimes use the same result channel for synchronous and asynchronous reads;
 config diagnostics stay separate from the result.
 
+The running Gateway retains its shutdown code before an in-place update can
+replace the package's bundled files. Transcript shutdown drains captures and
+persists deterministic notes without starting optional model inference. This
+protection applies to updates **from** a release containing the shutdown fix.
+Older running Gateways, including 2026.9.6, can still fail their first shutdown
+with `ERR_MODULE_NOT_FOUND` after package replacement; installing a fixed
+candidate cannot change code already running in that process. Start the updated
+Gateway with its installation owner if the old process exits without restarting.
+
 When a writable managed Node Gateway service points at another global installation,
 the update keeps the active CLI's installation as its target and refreshes the
 service through `gateway install --force` before verifying the restarted Gateway.

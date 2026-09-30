@@ -23,8 +23,8 @@ it("keeps admitted session ownership when transformed plugins import the native 
     export { admitReplyTurn } from ${source("src/auto-reply/reply/reply-turn-admission.ts")};
     export { replyRunRegistry } from ${source("src/auto-reply/reply/reply-run-registry.ts")};
     export { replaceSessionEntrySync } from ${source("src/config/sessions/session-accessor.sqlite-entry.ts")};
-    export { closeOpenClawAgentDatabases } from ${source("src/state/openclaw-agent-db.ts")};
-    export { closeOpenClawStateDatabase } from ${source("src/state/openclaw-state-db.ts")};
+    export { closeOpenClawAgentDatabasesAsync } from ${source("src/state/openclaw-agent-db.ts")};
+    export { closeOpenClawStateDatabaseAsync } from ${source("src/state/openclaw-state-db.ts")};
   `;
   try {
     fs.mkdirSync(dist);
@@ -211,10 +211,10 @@ it("keeps admitted session ownership when transformed plugins import the native 
           ]);
         } finally {
           for (const operation of operations) operation.complete();
-          transformed?.closeOpenClawAgentDatabases();
-          host?.closeOpenClawAgentDatabases();
-          transformed?.closeOpenClawStateDatabase();
-          host?.closeOpenClawStateDatabase();
+          await transformed?.closeOpenClawAgentDatabasesAsync();
+          await host?.closeOpenClawAgentDatabasesAsync();
+          await transformed?.closeOpenClawStateDatabaseAsync();
+          await host?.closeOpenClawStateDatabaseAsync();
           hooks.deregister();
         }
         assert.deepEqual(unexpectedImports, [], "all exercised runtime must stay in the fixture graph");

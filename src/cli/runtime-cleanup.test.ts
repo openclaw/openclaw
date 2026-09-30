@@ -21,7 +21,7 @@ vi.mock("../agents/harness/registry.js", () => ({
 }));
 vi.mock("../plugins/registry-lifecycle.js", () => ({ markPluginRegistryRetired() {} }));
 vi.mock("../agents/provider-runtime-lifecycle.js", () => ({
-  hasManagedProviderLocalServices: () => false,
+  stopActiveManagedProviderLocalServices: async () => {},
   hasProviderTransportDispatcherPool: () => false,
 }));
 vi.mock("../gateway/mcp-http.loopback-runtime.js", () => ({
