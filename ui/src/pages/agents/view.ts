@@ -182,18 +182,18 @@ export function renderAgents(props: AgentsProps) {
     cron: cronJobCount || null,
   };
 
-  const renderSelectedPanel = (selectedAgent: AgentsListResult["agents"][number]) => {
+  const renderSelectedPanel = (agent: AgentsListResult["agents"][number]) => {
     switch (props.activePanel) {
       case "overview":
         return keyed(
-          selectedAgent.id,
+          agent.id,
           renderAgentOverview({
             applicationConfig: props.applicationConfig,
-            agent: selectedAgent,
+            agent,
             defaultId,
             configForm: config,
             agentFilesList: props.agentFiles.agentFilesList,
-            agentIdentity: props.agentIdentityById[selectedAgent.id] ?? null,
+            agentIdentity: props.agentIdentityById[agent.id] ?? null,
             identityDraft: props.identityDraft,
             identityAvatarLoader: props.identityAvatarLoader,
             identitySaving: props.identitySaving,
@@ -222,7 +222,7 @@ export function renderAgents(props: AgentsProps) {
         );
       case "files":
         return renderAgentFiles({
-          agentId: selectedAgent.id,
+          agentId: agent.id,
           agentFilesList: props.agentFiles.agentFilesList,
           agentFilesLoading: props.agentFiles.agentFilesLoading,
           agentFilesError: props.agentFiles.agentFilesError ?? props.agentFilesListError,
@@ -242,7 +242,7 @@ export function renderAgents(props: AgentsProps) {
         });
       case "tools":
         return renderAgentTools({
-          agentId: selectedAgent.id,
+          agentId: agent.id,
           configForm: config,
           configLoading: props.config.configLoading,
           configSaving: props.config.configSaving,
@@ -265,7 +265,7 @@ export function renderAgents(props: AgentsProps) {
         });
       case "skills":
         return renderAgentSkills({
-          agentId: selectedAgent.id,
+          agentId: agent.id,
           report: props.agentSkills.agentSkillsReport,
           loading: props.agentSkills.agentSkillsLoading,
           error: props.agentSkills.agentSkillsError,
@@ -288,11 +288,11 @@ export function renderAgents(props: AgentsProps) {
       case "channels":
         return renderAgentChannels({
           context: buildAgentContext(
-            selectedAgent,
+            agent,
             config,
             props.agentFiles.agentFilesList,
             defaultId,
-            props.agentIdentityById[selectedAgent.id] ?? null,
+            props.agentIdentityById[agent.id] ?? null,
           ),
           configForm: config,
           snapshot: props.channels.channelsSnapshot,
@@ -306,11 +306,11 @@ export function renderAgents(props: AgentsProps) {
         return renderAgentCron({
           basePath: props.basePath,
           context: buildAgentContext(
-            selectedAgent,
+            agent,
             config,
             props.agentFiles.agentFilesList,
             defaultId,
-            props.agentIdentityById[selectedAgent.id] ?? null,
+            props.agentIdentityById[agent.id] ?? null,
           ),
           jobs: props.cron.cronJobs,
           jobsTotal: props.cron.cronJobsTotal,
@@ -341,9 +341,10 @@ export function renderAgents(props: AgentsProps) {
               onClick: () => props.onOpenMemoryImport?.(),
             })}
           </div>
-          <openclaw-agent-memory-panel .agentId=${selectedAgent.id}></openclaw-agent-memory-panel>
+          <openclaw-agent-memory-panel .agentId=${agent.id}></openclaw-agent-memory-panel>
         `;
     }
+    return nothing;
   };
 
   return html`
