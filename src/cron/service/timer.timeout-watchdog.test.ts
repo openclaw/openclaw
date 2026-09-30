@@ -59,7 +59,7 @@ async function fixture(
   });
   return {
     state,
-    async advance(ms: number) {
+    advance: async (ms: number) => {
       await vi.advanceTimersByTimeAsync(ms);
       now += ms;
     },
