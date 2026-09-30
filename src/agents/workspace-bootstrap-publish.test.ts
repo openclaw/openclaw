@@ -3,12 +3,13 @@
 import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { FsSafeError } from "../infra/fs-safe.js";
+import { describe, expect, it, vi } from "vitest";
+import * as fsSafe from "../infra/fs-safe.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
-import { captureEnv, setTestEnvValue, withEnvAsync } from "../test-utils/env.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { nodeFilePath } from "../test-utils/node-file-path.js";
 import { publishBootstrapFile } from "./workspace-bootstrap-publish.js";
+import { mergeWorkspaceSetupState, readWorkspaceStateSnapshot } from "./workspace-state-store.js";
 import * as workspace from "./workspace.js";
 
 const {
@@ -16,6 +17,7 @@ const {
   DEFAULT_BOOTSTRAP_FILENAME,
   ensureAgentWorkspace,
   seedWorkspaceBootstrap,
+  WorkspaceBootstrapSeedConflictError,
 } = workspace;
 
 async function expectPathMissing(filePath: string): Promise<void> {
@@ -60,19 +62,264 @@ async function injectPartialPublicationFailure(dir: string, fileName: string) {
 
 async function listTempSiblings(dir: string): Promise<string[]> {
   const names = await fs.readdir(dir);
-  return names.filter((name) => name.startsWith(".fs-safe-")).toSorted();
+  return names
+    .filter((name) => name.startsWith(".fs-safe-") || name.startsWith("openclaw-bootstrap-"))
+    .toSorted();
 }
 
 describe("bootstrap publication atomicity", () => {
-  let nativeModeEnv: ReturnType<typeof captureEnv>;
-  beforeEach(() => {
-    nativeModeEnv = captureEnv(["FS_SAFE_NATIVE_MODE"]);
-    // Inject actual write/publication failures through the supported JavaScript backend.
-    setTestEnvValue("FS_SAFE_NATIVE_MODE", "off");
+  it("checkpoints the pinned published object after link metadata changes", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-bootstrap-checkpoint-");
+    const target = path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME);
+    const calls: string[] = [];
+    let birthtimeNs = 101n;
+    const realFstat = syncFs.fstatSync.bind(syncFs);
+    const realUnlink = syncFs.unlinkSync.bind(syncFs);
+    // Emulate libuv's creation-time fallback without changing any identity or content fields.
+    const statSpy = vi.spyOn(syncFs, "fstatSync").mockImplementation((fd, options) => {
+      if (options?.bigint) {
+        const observed = realFstat(fd, { bigint: true });
+        if (observed.isFile()) {
+          observed.birthtimeNs = birthtimeNs;
+        }
+        return observed;
+      }
+      return realFstat(fd, options);
+    });
+    const unlinkSpy = vi.spyOn(syncFs, "unlinkSync").mockImplementation((filePath) => {
+      realUnlink(filePath);
+      if (syncFs.existsSync(target) && String(filePath) !== target) {
+        birthtimeNs = 202n;
+        calls.push("published");
+      }
+    });
+    try {
+      await expect(
+        workspace.publishBootstrapFile(
+          target,
+          "complete\n",
+          undefined,
+          (identity) => {
+            expect(syncFs.existsSync(target)).toBe(false);
+            expect(identity.birthtimeNs).toBe("101");
+            calls.push("before");
+          },
+          undefined,
+          (identity) => {
+            expect(syncFs.readFileSync(target, "utf8")).toBe("complete\n");
+            expect(syncFs.lstatSync(target).nlink).toBe(1);
+            expect(identity.birthtimeNs).toBe("202");
+            calls.push("after");
+          },
+        ),
+      ).resolves.toBe(true);
+      expect(calls).toEqual(["before", "published", "after"]);
+      expect(await listTempSiblings(tempDir)).toEqual([]);
+    } finally {
+      unlinkSpy.mockRestore();
+      statSpy.mockRestore();
+    }
   });
-  afterEach(() => {
-    vi.restoreAllMocks();
-    nativeModeEnv.restore();
+
+  it.runIf(process.platform !== "win32")(
+    "checkpoints fallback birthtime after native no-replace rename",
+    async () => {
+      const tempDir = await makeTempWorkspace("openclaw-bootstrap-rename-checkpoint-");
+      const target = path.join(syncFs.realpathSync(tempDir), DEFAULT_BOOTSTRAP_FILENAME);
+      let birthtimeNs = 101n;
+      let renamed = false;
+      const realFstat = syncFs.fstatSync.bind(syncFs);
+      const statSpy = vi.spyOn(syncFs, "fstatSync").mockImplementation((fd, options) => {
+        if (options?.bigint) {
+          const observed = realFstat(fd, { bigint: true });
+          if (observed.isFile()) {
+            observed.birthtimeNs = birthtimeNs;
+          }
+          return observed;
+        }
+        return realFstat(fd, options);
+      });
+      const realLink = syncFs.linkSync.bind(syncFs);
+      const linkSpy = vi.spyOn(syncFs, "linkSync").mockImplementation((source, destination) => {
+        if (String(destination) === target) {
+          throw Object.assign(new Error("hardlinks unavailable"), { code: "ENOTSUP" });
+        }
+        return realLink(source, destination);
+      });
+      const realRoot = fsSafe.root;
+      const restoreMoves: (() => void)[] = [];
+      const rootSpy = vi.spyOn(fsSafe, "root").mockImplementation(async (...args) => {
+        const opened = await realRoot(...args);
+        const move = opened.move.bind(opened);
+        const moveSpy = vi.spyOn(opened, "move").mockImplementation(async (...moveArgs) => {
+          const result = await move(...moveArgs);
+          if (path.join(opened.rootReal, moveArgs[1]) === target) {
+            renamed = true;
+            birthtimeNs = 202n;
+          }
+          return result;
+        });
+        restoreMoves.push(() => moveSpy.mockRestore());
+        return opened;
+      });
+      const afterPublish = vi.fn((identity: workspace.BootstrapPublicationIdentity) => {
+        expect(renamed).toBe(true);
+        expect(identity.birthtimeNs).toBe("202");
+        expect(syncFs.readFileSync(target, "utf8")).toBe("complete\n");
+      });
+      const beforePublish = vi.fn((identity: workspace.BootstrapPublicationIdentity) => {
+        expect(identity.birthtimeNs).toBe("101");
+        expect(syncFs.existsSync(target)).toBe(false);
+      });
+      try {
+        await expect(
+          workspace.publishBootstrapFile(
+            target,
+            "complete\n",
+            undefined,
+            beforePublish,
+            undefined,
+            afterPublish,
+          ),
+        ).resolves.toBe(true);
+        expect(beforePublish).toHaveBeenCalledTimes(1);
+        expect(afterPublish).toHaveBeenCalledTimes(1);
+        expect(await listTempSiblings(tempDir)).toEqual([]);
+      } finally {
+        rootSpy.mockRestore();
+        for (const restore of restoreMoves) {
+          restore();
+        }
+        linkSpy.mockRestore();
+        statSpy.mockRestore();
+      }
+    },
+  );
+
+  it("rejects an in-place same-size staging mutation even when metadata appears unchanged", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-bootstrap-content-change-");
+    const target = path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME);
+    const realFstat = syncFs.fstatSync.bind(syncFs);
+    const realLstat = syncFs.lstatSync.bind(syncFs);
+    let frozenMtimeNs: bigint | undefined;
+    const preserveMtime = <T extends syncFs.Stats | syncFs.BigIntStats>(observed: T): T => {
+      if (observed.isFile() && "mtimeNs" in observed) {
+        frozenMtimeNs ??= observed.mtimeNs;
+        observed.mtimeNs = frozenMtimeNs;
+      }
+      return observed;
+    };
+    const fstatSpy = vi
+      .spyOn(syncFs, "fstatSync")
+      .mockImplementation((fd, options) => preserveMtime(realFstat(fd, options) as never));
+    const lstatSpy = vi
+      .spyOn(syncFs, "lstatSync")
+      .mockImplementation((filePath, options) =>
+        preserveMtime(realLstat(filePath, options) as never),
+      );
+    const afterPublish = vi.fn();
+    try {
+      await expect(
+        workspace.publishBootstrapFile(
+          target,
+          "COMPLETE\n",
+          undefined,
+          () => {
+            const stagingDir = syncFs
+              .readdirSync(tempDir)
+              .find((name) => name.startsWith("openclaw-bootstrap-"));
+            if (!stagingDir) {
+              throw new Error("staging directory was not created");
+            }
+            syncFs.writeFileSync(
+              path.join(tempDir, stagingDir, DEFAULT_BOOTSTRAP_FILENAME),
+              "CORRUPT!\n",
+            );
+          },
+          undefined,
+          afterPublish,
+        ),
+      ).rejects.toThrow("content changed during publication");
+      expect(afterPublish).not.toHaveBeenCalled();
+      await expectPathMissing(target);
+      expect(await listTempSiblings(tempDir)).toEqual([]);
+    } finally {
+      lstatSpy.mockRestore();
+      fstatSpy.mockRestore();
+    }
+  });
+
+  it.each(["existing", "racing", "failed"] as const)(
+    "does not checkpoint a %s publication",
+    async (boundary) => {
+      const tempDir = await makeTempWorkspace("openclaw-bootstrap-no-checkpoint-");
+      const target = path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME);
+      const afterPublish = vi.fn();
+      if (boundary === "existing") {
+        await fs.writeFile(target, "winner\n");
+      }
+      const beforePublish = vi.fn(() => {
+        if (boundary === "racing") {
+          syncFs.writeFileSync(target, "winner\n");
+        } else if (boundary === "failed") {
+          throw new Error("write-ahead unavailable");
+        }
+      });
+      const publication = workspace.publishBootstrapFile(
+        target,
+        "complete\n",
+        undefined,
+        beforePublish,
+        undefined,
+        afterPublish,
+      );
+      if (boundary === "failed") {
+        await expect(publication).rejects.toThrow("write-ahead unavailable");
+        await expectPathMissing(target);
+      } else {
+        await expect(publication).resolves.toBe(false);
+        expect(await fs.readFile(target, "utf8")).toBe("winner\n");
+      }
+      expect(beforePublish).toHaveBeenCalledTimes(boundary === "existing" ? 0 : 1);
+      expect(afterPublish).not.toHaveBeenCalled();
+      expect(await listTempSiblings(tempDir)).toEqual([]);
+    },
+  );
+
+  it("rejects a byte-identical replacement before completion without checkpointing it", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-bootstrap-replaced-");
+    const target = path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME);
+    const original = path.join(tempDir, "original.md");
+    const afterPublish = vi.fn();
+    const realUnlink = syncFs.unlinkSync.bind(syncFs);
+    let replaced = false;
+    const unlinkSpy = vi.spyOn(syncFs, "unlinkSync").mockImplementation((filePath) => {
+      realUnlink(filePath);
+      if (!replaced && syncFs.existsSync(target)) {
+        replaced = true;
+        syncFs.renameSync(target, original);
+        syncFs.writeFileSync(target, "complete\n");
+      }
+    });
+    try {
+      await expect(
+        workspace.publishBootstrapFile(
+          target,
+          "complete\n",
+          undefined,
+          undefined,
+          undefined,
+          afterPublish,
+        ),
+      ).rejects.toThrow("identity changed during publication");
+      expect(replaced).toBe(true);
+      expect(afterPublish).not.toHaveBeenCalled();
+      expect(await fs.readFile(target, "utf8")).toBe("complete\n");
+      expect((await fs.stat(target)).ino).not.toBe((await fs.stat(original)).ino);
+      expect(await listTempSiblings(tempDir)).toEqual([]);
+    } finally {
+      unlinkSpy.mockRestore();
+    }
   });
 
   it("does not publish a partial AGENTS.md when the first write fails", async () => {
@@ -82,7 +329,9 @@ describe("bootstrap publication atomicity", () => {
 
     try {
       await expect(
-        ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true }),
+        withEnvAsync({ FS_SAFE_NATIVE_MODE: "off" }, () =>
+          ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true }),
+        ),
       ).rejects.toMatchObject({ cause: { code: "ENOSPC" } });
       await expectPathMissing(agentsPath);
       expect(await listTempSiblings(tempDir)).toEqual([]);
@@ -140,7 +389,9 @@ describe("bootstrap publication atomicity", () => {
       await fs.chmod(tempDir, 0o555);
 
       try {
-        await expect(publishBootstrapFile(agentsPath, "replacement\n")).resolves.toBe(false);
+        await expect(workspace.publishBootstrapFile(agentsPath, "replacement\n")).resolves.toBe(
+          false,
+        );
         expect(await fs.readlink(agentsPath)).toBe("missing.md");
         expect(await fs.readdir(tempDir)).toEqual([DEFAULT_AGENTS_FILENAME]);
       } finally {
@@ -189,7 +440,9 @@ describe("bootstrap publication atomicity", () => {
     });
 
     try {
-      await publishBootstrapFile(agentsPath, "COMPLETE\n");
+      await withEnvAsync({ FS_SAFE_NATIVE_MODE: "off" }, () =>
+        publishBootstrapFile(agentsPath, "COMPLETE\n"),
+      );
       if (!concurrentRead) {
         throw new Error("concurrent reader was not started");
       }
@@ -215,10 +468,10 @@ describe("bootstrap publication atomicity", () => {
     });
 
     try {
-      const error = await publishBootstrapFile(agentsPath, "complete\n").catch(
-        (caught: unknown) => caught,
+      const error = await withEnvAsync({ FS_SAFE_NATIVE_MODE: "off" }, () =>
+        publishBootstrapFile(agentsPath, "complete\n").catch((caught: unknown) => caught),
       );
-      if (!(error instanceof FsSafeError) || !(error.cause instanceof AggregateError)) {
+      if (!(error instanceof fsSafe.FsSafeError) || !(error.cause instanceof AggregateError)) {
         throw new Error("Expected publication and cleanup failure evidence", { cause: error });
       }
       expect(error.cause.errors).toMatchObject([{ code: "ENOSPC" }, { code: "EACCES" }]);
@@ -244,13 +497,37 @@ describe("bootstrap publication atomicity", () => {
     });
 
     try {
-      await expect(publishBootstrapFile(agentsPath, "complete\n")).rejects.toThrow(
-        /filesystem does not support atomic bootstrap publication/u,
-      );
+      await expect(
+        withEnvAsync({ FS_SAFE_NATIVE_MODE: "off" }, () =>
+          publishBootstrapFile(agentsPath, "complete\n"),
+        ),
+      ).rejects.toThrow(/filesystem does not support atomic bootstrap publication/u);
       await expectPathMissing(agentsPath);
     } finally {
       linkSpy.mockRestore();
     }
+  });
+
+  it("rejects a nested publication parent redirected outside its boundary", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-boundary-");
+    const outsideDir = await makeTempWorkspace("openclaw-workspace-outside-");
+    const nestedDir = path.join(tempDir, "nested");
+    await fs.mkdir(nestedDir);
+    await fs.rm(nestedDir, { recursive: true });
+    await fs.symlink(outsideDir, nestedDir, process.platform === "win32" ? "junction" : "dir");
+
+    await expect(
+      workspace.publishBootstrapFile(
+        path.join(nestedDir, DEFAULT_BOOTSTRAP_FILENAME),
+        "complete\n",
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        tempDir,
+      ),
+    ).rejects.toThrow("escaped its publication boundary");
+    await expectPathMissing(path.join(outsideDir, DEFAULT_BOOTSTRAP_FILENAME));
   });
 
   it("preserves the raw bootstrap bytes including a UTF-8 BOM", async () => {
@@ -269,5 +546,58 @@ describe("bootstrap publication atomicity", () => {
       const stat = await fs.stat(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME));
       expect(stat.mode & 0o777).toBe(0o600);
     }
+  });
+
+  it("refuses a pre-existing BOOTSTRAP.md in conflict mode without stamping the seed state", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    const stateOptions = {
+      env: { OPENCLAW_STATE_DIR: await makeTempWorkspace("openclaw-state-") },
+    };
+    const content = Buffer.from("# BOOTSTRAP\n");
+    await fs.writeFile(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME), content);
+
+    // A caller that never wrote the file must not adopt it as its seed, and the identical bytes
+    // must not turn into a bootstrapSeededAt stamp that a later seed would read as consumed.
+    await expect(
+      seedWorkspaceBootstrap({
+        dir: tempDir,
+        content,
+        existingFile: "conflict",
+        stateOptions,
+      }),
+    ).rejects.toBeInstanceOf(WorkspaceBootstrapSeedConflictError);
+    expect(
+      // readWorkspaceStateSnapshot is synchronous on this base and awaited on newer ones; resolve both.
+      (await Promise.resolve(readWorkspaceStateSnapshot(tempDir, stateOptions))).setup
+        .bootstrapSeededAt,
+    ).toBeUndefined();
+
+    await expect(seedWorkspaceBootstrap({ dir: tempDir, content, stateOptions })).resolves.toBe(
+      "already-seeded",
+    );
+  });
+
+  it("refuses a BOOTSTRAP.md that appears after preview for a completed workspace", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    const stateOptions = {
+      env: { OPENCLAW_STATE_DIR: await makeTempWorkspace("openclaw-state-") },
+    };
+    const content = Buffer.from("# BOOTSTRAP\n");
+    await mergeWorkspaceSetupState(
+      tempDir,
+      { setupCompletedAt: "2026-09-24T00:00:00.000Z" },
+      1,
+      stateOptions,
+    );
+    await fs.writeFile(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME), content);
+
+    await expect(
+      seedWorkspaceBootstrap({
+        dir: tempDir,
+        content,
+        existingFile: "conflict",
+        stateOptions,
+      }),
+    ).rejects.toBeInstanceOf(WorkspaceBootstrapSeedConflictError);
   });
 });

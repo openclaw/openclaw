@@ -176,6 +176,15 @@ describe("ensureSandboxWorkspace", () => {
         ),
       ).rejects.toThrow(/filesystem does not support atomic bootstrap publication/u);
       await expect(fs.readFile(agentsPath, "utf8")).rejects.toThrow("no such file");
+      // fs-safe preserves staging when a dispatched publication has an indeterminate outcome.
+      const entries = await fs.readdir(sandbox);
+      expect(entries).toEqual([expect.stringMatching(/^\.fs-safe-.*\.tmp$/u)]);
+      const stagedPath = path.join(sandbox, entries[0]!);
+      const staged = await fs.lstat(stagedPath);
+      expect(staged.isFile()).toBe(true);
+      expect(staged.isSymbolicLink()).toBe(false);
+      expect(staged.nlink).toBe(1);
+      await expect(fs.readFile(stagedPath, "utf8")).resolves.toBe("seeded-agents");
     } finally {
       linkSpy.mockRestore();
     }

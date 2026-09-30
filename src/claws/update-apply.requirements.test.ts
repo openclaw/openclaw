@@ -4,13 +4,21 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { commitPluginInstallRecordsWithConfig } from "../plugins/install-record-commit.js";
 import { hasPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { applyClawUpdatePlan } from "./update-apply.js";
 import { addPlan, consent, install, manifest, plan, source } from "./update-apply.test-helpers.js";
 
-const dirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(closeOpenClawStateDatabaseForTest);
+const dirs = useAutoCleanupTempDirTracker((cleanup) => {
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    cleanup();
+  });
+});
 
 it.each(["complete", "partial", "rejected"] as const)(
   "settles unchanged requirements before later update phases: %s",

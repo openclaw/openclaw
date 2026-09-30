@@ -7,7 +7,10 @@ import { commitPluginInstallRecordsWithConfig } from "../plugins/install-record-
 import type { installManagedPlugin } from "../plugins/management-mutations.js";
 import { preflightPluginInstall } from "../plugins/plugin-install-preflight.js";
 import { hasPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { digestClawPackageRef } from "./package-update-provenance.js";
 import { applyClawPackageUpdate } from "./package-update.js";
@@ -21,8 +24,13 @@ import {
   type ResolvedClawPackage,
 } from "./types.js";
 
-const dirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(closeOpenClawStateDatabaseForTest);
+const dirs = useAutoCleanupTempDirTracker((cleanup) => {
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    cleanup();
+  });
+});
 
 function ref(kind: "skill" | "plugin", name: string, version: string): PersistedClawPackageRef {
   return {

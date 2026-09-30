@@ -12,10 +12,14 @@ import {
 } from "../state/agent-deletion-journal.js";
 import { markClawMcpServerIndependentlyOwned } from "../state/claw-mcp-adoption.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import { setTestEnvValue } from "../test-utils/env.js";
 import { applyClawAddPlan } from "./add.js";
 import {
@@ -25,10 +29,14 @@ import {
 import { applyClawRemovePlan, buildClawRemovePlan } from "./lifecycle-state.js";
 import { installClawMcpServers, readClawMcpServerRefsByName } from "./mcp.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => {
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
+  afterEach(async () => {
+    await closeOpenClawAgentDatabasesAsync();
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+    cleanup();
+  });
 });
 
 const sourceServer = {
@@ -76,6 +84,13 @@ async function recordManagedMcp(current: Awaited<ReturnType<typeof addMcpFixture
   });
 }
 
+async function withMcpTempHomeConfig<T>(
+  config: OpenClawConfig,
+  fn: (params: { home: string; configPath: string }) => Promise<T>,
+): Promise<T> {
+  return withTempHomeConfig(config, fn);
+}
+
 describe("Claw MCP removal", () => {
   it.each(["config publication", "unset settlement"] as const)(
     "preserves MCP state after deletion takeover during %s",
@@ -88,7 +103,7 @@ describe("Claw MCP removal", () => {
         delete entry.default;
       }
       config.mcp = { servers: { docs: sourceServer } };
-      await withTempHomeConfig(config, async ({ configPath }) => {
+      await withMcpTempHomeConfig(config, async ({ configPath }) => {
         const snapshot = await readSourceConfigSnapshot();
         expect(snapshot.valid, JSON.stringify(snapshot.issues)).toBe(true);
         const refs = readClawMcpServerRefsByName("docs", { env: current.env });
@@ -215,12 +230,12 @@ describe("Claw MCP removal", () => {
       ...current.getConfig(),
       mcp: { servers: { docs: sourceServer } },
     };
-    const plan = await buildClawRemovePlan("worker", { env: current.env, config });
     const unsetMcpServer = vi.fn();
 
-    const result = await withTempHomeConfig(config, async ({ configPath }) => {
+    const result = await withMcpTempHomeConfig(config, async ({ configPath }) => {
       setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
       setTestEnvValue("OPENCLAW_STATE_DIR", current.env.OPENCLAW_STATE_DIR);
+      const plan = await buildClawRemovePlan("worker", { env: current.env, config });
       const removed = await applyClawRemovePlan(plan, {
         monitorGateway: quiescentClawMonitorGateway,
         consentPlanIntegrity: plan.planIntegrity,
@@ -258,18 +273,18 @@ describe("Claw MCP removal", () => {
         },
       },
     };
-    const plan = await buildClawRemovePlan("worker", {
-      env: current.env,
-      config,
-      sourceMcpServers: { docs: sourceServer },
-    });
     const unsetMcpServer = vi
       .fn()
       .mockResolvedValue({ ok: true, path: "config", config: {}, mcpServers: {}, removed: true });
 
-    const result = await withTempHomeConfig(config, async ({ configPath }) => {
+    const result = await withMcpTempHomeConfig(config, async ({ configPath }) => {
       setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
       setTestEnvValue("OPENCLAW_STATE_DIR", current.env.OPENCLAW_STATE_DIR);
+      const plan = await buildClawRemovePlan("worker", {
+        env: current.env,
+        config,
+        sourceMcpServers: { docs: sourceServer },
+      });
       return applyClawRemovePlan(plan, {
         monitorGateway: quiescentClawMonitorGateway,
         consentPlanIntegrity: plan.planIntegrity,
@@ -298,15 +313,15 @@ describe("Claw MCP removal", () => {
     const current = await addMcpFixture();
     await recordManagedMcp(current);
     const config = current.getConfig();
-    const plan = await buildClawRemovePlan("worker", {
-      env: current.env,
-      config,
-      sourceMcpServers: {},
-    });
 
-    const result = await withTempHomeConfig(config, async ({ configPath }) => {
+    const result = await withMcpTempHomeConfig(config, async ({ configPath }) => {
       setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
       setTestEnvValue("OPENCLAW_STATE_DIR", current.env.OPENCLAW_STATE_DIR);
+      const plan = await buildClawRemovePlan("worker", {
+        env: current.env,
+        config,
+        sourceMcpServers: {},
+      });
       return applyClawRemovePlan(plan, {
         monitorGateway: quiescentClawMonitorGateway,
         consentPlanIntegrity: plan.planIntegrity,
@@ -337,7 +352,7 @@ describe("Claw MCP removal", () => {
     const unsetMcpServer = vi.fn();
 
     await expect(
-      withTempHomeConfig(config, async ({ configPath }) => {
+      withMcpTempHomeConfig(config, async ({ configPath }) => {
         setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
         setTestEnvValue("OPENCLAW_STATE_DIR", current.env.OPENCLAW_STATE_DIR);
         return applyClawRemovePlan(plan, {
@@ -358,7 +373,7 @@ describe("Claw MCP removal", () => {
     const current = await addMcpFixture();
     await recordManagedMcp(current);
 
-    await withTempHomeConfig(current.getConfig(), async ({ configPath }) => {
+    await withMcpTempHomeConfig(current.getConfig(), async ({ configPath }) => {
       setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
       setTestEnvValue("OPENCLAW_STATE_DIR", current.env.OPENCLAW_STATE_DIR);
       const missing = listedMcpServers(current.getConfig(), {});
@@ -407,7 +422,7 @@ describe("Claw MCP removal", () => {
     const replacementServer = { command: "node", args: ["replacement-mcp"] };
     await recordManagedMcp(current);
 
-    await withTempHomeConfig(current.getConfig(), async ({ configPath }) => {
+    await withMcpTempHomeConfig(current.getConfig(), async ({ configPath }) => {
       setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
       setTestEnvValue("OPENCLAW_STATE_DIR", current.env.OPENCLAW_STATE_DIR);
       const missing = listedMcpServers(current.getConfig(), {});

@@ -420,8 +420,15 @@ describe("collectClawStateHealthFindings", () => {
   it("reports unsafe workspace targets and MCP config drift", async () => {
     const current = await installFixture({ withFile: true, withMcp: true });
     const target = join(current.plan.agent.workspace, "SOUL.md");
-    await rm(target);
-    await symlink(join(current.root, "SOUL.md"), target);
+    if (process.platform === "win32") {
+      const unsafeTarget = join(current.root, "unsafe-soul");
+      await mkdir(unsafeTarget);
+      await rm(target);
+      await symlink(unsafeTarget, target, "junction");
+    } else {
+      await rm(target);
+      await symlink(join(current.root, "SOUL.md"), target);
+    }
     current.getConfig().mcp!.servers!.docs = { command: "node", args: ["other.mjs"] };
 
     const findings = await collectClawStateHealthFindings({

@@ -527,7 +527,33 @@ export function removeAgentDeletionJournal(
   operationId: string,
   options: OpenClawStateDatabaseOptions = {},
 ): boolean {
-  return deleteAgentDeletionJournal(agentId, operationId, false, options);
+  let removed = false;
+  runOpenClawStateWriteTransaction((database) => {
+    removed = removeAgentDeletionJournalInDatabase(database, agentId, operationId);
+    if (removed) {
+      sessionChanges.emit({ all: true, scope: "stores" }, database.db);
+    }
+  }, options);
+  return removed;
+}
+
+/** Release an unfinished deletion fence inside a caller-owned shared-state transaction. */
+export function removeAgentDeletionJournalInDatabase(
+  database: OpenClawStateDatabase,
+  agentId: string,
+  operationId: string,
+): boolean {
+  const id = normalizeAgentId(agentId);
+  assertAgentDeletionJournalAvailable(database.db);
+  const db = getNodeSqliteKysely<AgentDeletionDatabase>(database.db);
+  const result = executeSqliteQuerySync(
+    database.db,
+    db
+      .deleteFrom("agent_deletion_journal")
+      .where("agent_id", "=", id)
+      .where("operation_id", "=", operationId),
+  );
+  return Number(result.numAffectedRows ?? 0) > 0;
 }
 
 export function claimCompletedAgentDeletionJournal(

@@ -7,6 +7,7 @@ export type ClawInstallSchemaVersionRow = {
   agentId: string;
   schemaVersion: string;
   agentConfigDigest: string;
+  agentOwnershipPayloadJson: string;
 };
 
 export function readClawInstallSchemaVersionRows(db: DatabaseSync): ClawInstallSchemaVersionRow[] {
@@ -21,6 +22,7 @@ export function readClawInstallSchemaVersionRows(db: DatabaseSync): ClawInstallS
         "agent_id as agentId",
         "schema_version as schemaVersion",
         "agent_config_digest as agentConfigDigest",
+        "agent_owned_paths_json as agentOwnershipPayloadJson",
       ]),
   ).rows;
 }

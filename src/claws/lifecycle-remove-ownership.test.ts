@@ -9,10 +9,14 @@ import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
 import { listOpenClawRegisteredAgentDatabases } from "../state/openclaw-agent-db-registry.js";
 import {
   closeOpenClawAgentDatabases,
+  closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
-import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { applyClawAddPlan } from "./add.js";
 import { workspaceContainsUntrackedEntries } from "./lifecycle-delete-support.js";
@@ -28,13 +32,19 @@ import { readClawWorkspaceFiles, upsertClawWorkspaceFile } from "./workspace.js"
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
+  await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
+  closeOpenClawAgentDatabases();
   for (const cleanup of cleanups.splice(0).toReversed()) {
     await cleanup();
   }
 });
 
 async function fixture(withFile = false) {
-  const state = await createOpenClawTestState({ prefix: "claw-removal-owner-" });
+  const state = await createOpenClawTestState({
+    prefix: "claw-removal-owner-",
+    layout: "state-only",
+  });
   cleanups.push(() => state.cleanup());
   await state.writeConfig({});
   const install = async (name: string) => {

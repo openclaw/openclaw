@@ -38,10 +38,16 @@ const row = {
   agentId: "worker",
   schemaVersion: CLAW_INSTALL_RECORD_SCHEMA_VERSION,
   agentConfigDigest: "original",
+  agentOwnershipPayloadJson: "[]",
 };
 
 function schemaVersions(agentConfigDigest: string) {
-  return new Map([["worker", { kind: "ok", schemaVersion: row.schemaVersion, agentConfigDigest }]]);
+  return new Map([
+    [
+      "worker",
+      { kind: "ok", schemaVersion: row.schemaVersion, agentConfigDigest, agentClaimed: true },
+    ],
+  ]);
 }
 
 beforeEach(() => {
@@ -54,7 +60,7 @@ describe("asynchronous Claw consent preparation", () => {
   it("hands off one task's facts without replacing newer host facts or retaining the scope", async () => {
     (await prepareClawInstallSchemaVersions(options)).publish();
     const facts = structuredClone(captureClawInstallSchemaVersionFacts(options));
-    cacheClawInstallSchemaVersion("worker", row.schemaVersion, "newer", options);
+    cacheClawInstallSchemaVersion("worker", row.schemaVersion, "newer", true, options);
     const current = readCachedClawInstallSchemaVersions(options);
     worker.read.mockClear();
     let readAfterScope = () => readCachedClawInstallSchemaVersions(options);
@@ -140,7 +146,7 @@ describe("asynchronous Claw consent preparation", () => {
       }
       const stale = await prepareClawInstallSchemaVersions(options);
       if (mutation === "update") {
-        cacheClawInstallSchemaVersion("worker", row.schemaVersion, "newer", options);
+        cacheClawInstallSchemaVersion("worker", row.schemaVersion, "newer", true, options);
       } else {
         deleteCachedClawInstallSchemaVersion("worker", options);
       }
@@ -172,5 +178,18 @@ describe("asynchronous Claw consent preparation", () => {
       knownAgentIds: new Set(["worker"]),
       ownershipUnknown: true,
     });
+  });
+
+  it("does not let an obsolete failed read poison a newer consent snapshot", async () => {
+    (await prepareClawInstallSchemaVersions(options)).publish();
+    worker.read.mockRejectedValueOnce(new Error("Read failed"));
+    const failed = await prepareClawInstallSchemaVersions(options);
+    cacheClawInstallSchemaVersion("worker", row.schemaVersion, "newer", true, options);
+    const current = readCachedClawInstallSchemaVersions(options);
+
+    failed.publish();
+
+    expect(readCachedClawInstallSchemaVersions(options)).toBe(current);
+    expect(current.kind).toBe("ready");
   });
 });

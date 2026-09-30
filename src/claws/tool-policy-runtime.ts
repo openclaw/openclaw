@@ -10,7 +10,10 @@ import {
   readCachedClawInstallSchemaVersions,
   registerClawInstallSchemaVersionSnapshotListener,
 } from "./provenance-runtime-read.js";
-import { CLAW_INSTALL_RECORD_SCHEMA_VERSION } from "./provenance-schema-version.js";
+import {
+  CLAW_ADOPTED_INSTALL_RECORD_SCHEMA_VERSION,
+  CLAW_INSTALL_RECORD_SCHEMA_VERSION,
+} from "./provenance-schema-version.js";
 import {
   collectClawToolPolicyCandidates,
   type ClawToolPolicyCandidate,
@@ -74,10 +77,17 @@ function applyPreparedClawToolPolicyConsent(
       });
       continue;
     }
+    const currentSchema =
+      schemaVersionRead.schemaVersion === CLAW_INSTALL_RECORD_SCHEMA_VERSION ||
+      schemaVersionRead.schemaVersion === CLAW_ADOPTED_INSTALL_RECORD_SCHEMA_VERSION;
     if (
-      schemaVersionRead.schemaVersion === CLAW_INSTALL_RECORD_SCHEMA_VERSION &&
-      schemaVersionRead.agentConfigDigest !== candidate.agentConfigDigest
+      schemaVersionRead.schemaVersion === CLAW_ADOPTED_INSTALL_RECORD_SCHEMA_VERSION &&
+      !schemaVersionRead.agentClaimed
     ) {
+      preparedClawToolPolicies.delete(candidate.tools);
+      continue;
+    }
+    if (currentSchema && schemaVersionRead.agentConfigDigest !== candidate.agentConfigDigest) {
       preparedClawToolPolicies.set(candidate.tools, {
         kind: "state-error",
         error: new Error("Claw agent configuration does not match its consent provenance."),
@@ -85,10 +95,7 @@ function applyPreparedClawToolPolicyConsent(
       continue;
     }
     preparedClawToolPolicies.set(candidate.tools, {
-      kind:
-        schemaVersionRead.schemaVersion === CLAW_INSTALL_RECORD_SCHEMA_VERSION
-          ? "current"
-          : "legacy",
+      kind: currentSchema ? "current" : "legacy",
     });
   }
 }

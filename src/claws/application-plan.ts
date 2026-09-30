@@ -29,6 +29,7 @@ export function clawAddCapabilityChange(
 export function clawAgentCapabilityChange(
   agentId: string,
   settings: ClawOpenClawProfile["agent"],
+  adoptExistingAgent = false,
 ): ClawAddCapabilityChange | undefined {
   const effect = {
     ...(settings.model ? { model: settings.model } : {}),
@@ -37,6 +38,7 @@ export function clawAgentCapabilityChange(
     ...(settings.tools ? { tools: settings.tools } : {}),
     ...(settings.memory ? { memory: settings.memory } : {}),
     ...(settings.heartbeat ? { heartbeat: settings.heartbeat } : {}),
+    ...(adoptExistingAgent ? { adoptExistingAgent: true } : {}),
   };
   if (Object.keys(effect).length === 0) {
     return undefined;
@@ -45,9 +47,10 @@ export function clawAgentCapabilityChange(
     kind: "agent",
     id: agentId,
     path: "agent",
-    action: "create",
-    reason:
-      settings.model || settings.subagents
+    action: adoptExistingAgent ? "configure" : "create",
+    reason: adoptExistingAgent
+      ? "The Claw adopts ownership of an exact existing agent configuration without rewriting it."
+      : settings.model || settings.subagents
         ? "The new agent declares model, delegation, sandbox, tool, memory-search, or recurring heartbeat configuration."
         : "The new agent declares sandbox, tool, memory-search, or recurring heartbeat capabilities.",
     effect,

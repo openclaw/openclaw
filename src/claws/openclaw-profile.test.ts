@@ -267,18 +267,31 @@ describe("OpenClaw profile reader", () => {
       diagnostics: [expect.objectContaining({ code: "openclaw_profile_unsafe" })],
     });
   });
-  it("rejects a symlinked profile at the read boundary", async () => {
-    const { root, path } = await profileFixture();
-    await writeFile(join(root, "source.yml"), "schemaVersion: 1\nagent: {}\n", "utf8");
-    await symlink("../source.yml", join(root, "profiles", "openclaw.yml"));
+  it.skipIf(process.platform === "win32")(
+    "rejects a symlinked profile at the read boundary",
+    async () => {
+      const root = tempDirs.make("openclaw-claw-profile-symlink-");
+      await mkdir(join(root, "profiles"));
+      const path = join(root, "openclaw.claw.json");
+      await writeFile(
+        path,
+        JSON.stringify({
+          schemaVersion: 1,
+          agent: { id: "triage" },
+        }),
+        "utf8",
+      );
+      await writeFile(join(root, "source.yml"), "schemaVersion: 1\nagent: {}\n", "utf8");
+      await symlink("../source.yml", join(root, "profiles", "openclaw.yml"));
 
-    const result = await readClawManifestFile(path);
+      const result = await readClawManifestFile(path);
 
-    expect(result).toMatchObject({
-      ok: false,
-      diagnostics: [expect.objectContaining({ code: "openclaw_profile_unsafe" })],
-    });
-  });
+      expect(result).toMatchObject({
+        ok: false,
+        diagnostics: [expect.objectContaining({ code: "openclaw_profile_unsafe" })],
+      });
+    },
+  );
 
   it("fails closed for an escaping metadata profile pointer", async () => {
     const root = tempDirs.make("openclaw-claw-profile-pointer-");

@@ -18,6 +18,12 @@ import type { ClawUpdatePlan } from "./update-plan.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(closeOpenClawStateDatabaseForTest);
 
+function agentDigest(config: ClawAddPlan["agent"]["config"]): string {
+  return `sha256:${createHash("sha256").update(stableStringify(config)).digest("hex")}`;
+}
+
+const targetAgentDigest = agentDigest(addPlan.agent.config);
+
 describe("applyClawUpdatePlan", () => {
   it("rejects consent that does not match the preview before rebuilding", async () => {
     const updatePlan = plan([]);
@@ -116,7 +122,7 @@ describe("applyClawUpdatePlan", () => {
         blocked: false,
         reason: "target changed",
         currentDigest,
-        desiredDigest: "sha256:target-agent",
+        desiredDigest: targetAgentDigest,
       },
     ]);
     let config: OpenClawConfig = { agents: { entries: { worker: { name: "Worker" } } } };
@@ -170,6 +176,7 @@ describe("applyClawUpdatePlan", () => {
         target: 'agents.entries["worker"]',
         blocked: false,
         reason: "restore agent",
+        desiredDigest: targetAgentDigest,
       },
       {
         kind: "cronJob",
@@ -356,6 +363,7 @@ describe("applyClawUpdatePlan", () => {
           target: 'agents.entries["worker"]',
           blocked: false,
           reason: "restore agent",
+          desiredDigest: targetAgentDigest,
         },
         {
           kind: "cronJob",
@@ -807,6 +815,7 @@ describe("applyClawUpdatePlan", () => {
             target: 'agents.entries["worker"]',
             blocked: false,
             reason: "target changed",
+            desiredDigest: targetAgentDigest,
           },
         );
       }
@@ -899,6 +908,7 @@ describe("applyClawUpdatePlan", () => {
         blocked: false,
         reason: "target changed",
         currentDigest,
+        desiredDigest: targetAgentDigest,
       },
     ]);
     let config: OpenClawConfig = { agents: { entries: { worker: { name: "Worker" } } } };
@@ -940,6 +950,7 @@ describe("applyClawUpdatePlan", () => {
         blocked: false,
         reason: "target changed",
         currentDigest,
+        desiredDigest: targetAgentDigest,
       },
     ]);
     let config: OpenClawConfig = { agents: { entries: {} } };

@@ -14,6 +14,7 @@ import {
   readAgentDeletionJournal,
   readAgentDeletionJournalInDatabase,
   removeAgentDeletionJournal,
+  removeAgentDeletionJournalInDatabase,
   updateAgentDeletionJournalDatabasePaths,
   updateAgentDeletionJournalCleanupPaths,
   type AgentDeletionJournalCleanupPath,
@@ -28,6 +29,7 @@ import type {
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withOpenClawStateLease } from "../state/openclaw-state-lease.js";
+import { AGENT_LIFECYCLE_MUTATION_LEASE_SCOPE } from "./agent-lifecycle-lease.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
 
 export class AgentDeletionAuthorityRollbackError extends AggregateError {}
@@ -65,6 +67,7 @@ export type AgentDeletionOperation = {
   fenceCleanupPaths: (paths: readonly AgentDeletionJournalCleanupPath[]) => void;
   finish: () => void;
   completeInTransaction: (database: OpenClawStateDatabase) => void;
+  releaseInTransaction: (database: OpenClawStateDatabase) => void;
   rollback: () => void;
 };
 
@@ -83,7 +86,7 @@ export function withAgentDeletion<T>(
   const stateOptions = { ...options, path: statePath, env: { ...(options.env ?? process.env) } };
   return withOpenClawStateLease(
     {
-      scope: "core:agent-deletion",
+      scope: AGENT_LIFECYCLE_MUTATION_LEASE_SCOPE,
       key: id,
       database: { scope: "shared", options: stateOptions },
       leaseMs: 60_000,
@@ -157,6 +160,13 @@ export function withAgentDeletion<T>(
             }
             closed = true;
           };
+          const releaseInTransaction = (database: OpenClawStateDatabase) => {
+            assertCurrent(database);
+            if (!removeAgentDeletionJournalInDatabase(database, id, operationId)) {
+              throw new Error(`Failed to release deletion journal for agent ${id}.`);
+            }
+            closed = true;
+          };
           return {
             entry: journal,
             assertCurrent,
@@ -209,6 +219,7 @@ export function withAgentDeletion<T>(
                 journal.cleanupPaths = [...paths];
               }),
             completeInTransaction,
+            releaseInTransaction,
             finish: () => runOpenClawStateWriteTransaction(completeInTransaction, stateOptions),
             rollback: () =>
               mutateJournal(() => {

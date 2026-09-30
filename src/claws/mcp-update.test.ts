@@ -2,7 +2,10 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import { applyClawMcpUpdate as applyClawMcpUpdateRaw } from "./mcp-update.js";
 import {
   CLAW_MCP_REF_SCHEMA_VERSION,
@@ -23,13 +26,18 @@ const remote: ClawMcpServer = {
   auth: "oauth",
 };
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    cleanup();
+  });
+});
 let leaseEnv: NodeJS.ProcessEnv;
 
 beforeEach(() => {
   leaseEnv = { OPENCLAW_STATE_DIR: join(tempDirs.make("openclaw-mcp-update-"), "state") };
 });
-afterEach(() => closeOpenClawStateDatabaseForTest());
 
 function applyClawMcpUpdate(...args: Parameters<typeof applyClawMcpUpdateRaw>) {
   const [updatePlan, targetManifest, options] = args;
