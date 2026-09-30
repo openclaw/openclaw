@@ -76,10 +76,9 @@ export function createControlUiPluginHost(
       search: search.size ? `?${search}` : "",
     };
   };
-  const dock = current().assistantDock;
-  if (dock) {
-    retain(() => dock.close(owner.abort));
-  }
+  const dock = getContext().assistantDock;
+  // Only an activation that actually docked a conversation owns a close-on-dispose.
+  let dockCloseRetained = false;
   return {
     apiVersion: 1,
     pluginId: owner.descriptor.pluginId,
@@ -246,6 +245,10 @@ export function createControlUiPluginHost(
       ? {
           openSession(params) {
             current().assistantDock.openSession(params, owner.abort);
+            if (!dockCloseRetained) {
+              dockCloseRetained = true;
+              retain(() => dock.close(owner.abort));
+            }
           },
           close() {
             current().assistantDock.close();
