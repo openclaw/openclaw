@@ -545,10 +545,33 @@ function isExtendedStableBaselineVersion(baselineVersion: string | undefined) {
   return parsed !== null && classifyReleaseTrain(parsed) === "extended-stable";
 }
 
-function buildPackagedUpgradeUpdateEnv(env: NodeJS.ProcessEnv, baselineVersion?: string) {
+function isExtendedStableCandidateVersion(candidateVersion: string | undefined) {
+  const parsed = candidateVersion ? parseReleaseVersion(candidateVersion) : null;
+  return parsed !== null && classifyReleaseTrain(parsed) === "extended-stable";
+}
+
+function usesExtendedStableRegistryRoute(
+  baselineVersion: string | undefined,
+  candidateVersion: string | undefined,
+) {
+  return (
+    isExtendedStableBaselineVersion(baselineVersion) &&
+    isExtendedStableCandidateVersion(candidateVersion)
+  );
+}
+
+function buildPackagedUpgradeUpdateEnv(
+  env: NodeJS.ProcessEnv,
+  baselineVersion?: string,
+  candidateVersion?: string,
+) {
   const updateEnv = buildRealUpdateEnv(env);
-  if (isExtendedStableBaselineVersion(baselineVersion)) {
+  if (usesExtendedStableRegistryRoute(baselineVersion, candidateVersion)) {
     updateEnv.OPENCLAW_UPDATE_PACKAGE_SPEC = "openclaw";
+    // The shipped updater requires the bare package name to admit the loopback
+    // registry. Select its candidate tag only for the update process so a
+    // baseline specified as openclaw@latest still installs the published tag.
+    updateEnv.NPM_CONFIG_TAG = "extended-stable";
   }
   return updateEnv;
 }
@@ -641,10 +664,13 @@ export function buildPackagedUpgradeUpdateArgs(
   candidateUrl: string,
   timeoutSeconds = resolvePackagedUpgradeTimeouts(0).stepTimeoutSeconds,
   baselineVersion?: string,
+  candidateVersion?: string,
 ) {
   return [
     "update",
-    ...(isExtendedStableBaselineVersion(baselineVersion) ? [] : ["--tag", candidateUrl]),
+    ...(usesExtendedStableRegistryRoute(baselineVersion, candidateVersion)
+      ? []
+      : ["--tag", candidateUrl]),
     "--yes",
     "--json",
     "--no-restart",
@@ -656,15 +682,17 @@ export function buildPackagedUpgradeUpdateArgs(
 export function buildPackagedUpgradeUpdateCommand(params: {
   env: NodeJS.ProcessEnv;
   candidateUrl: string;
+  candidateVersion: string;
   timeoutSeconds?: number;
   baselineVersion: string;
 }) {
   return {
-    env: buildPackagedUpgradeUpdateEnv(params.env, params.baselineVersion),
+    env: buildPackagedUpgradeUpdateEnv(params.env, params.baselineVersion, params.candidateVersion),
     args: buildPackagedUpgradeUpdateArgs(
       params.candidateUrl,
       params.timeoutSeconds,
       params.baselineVersion,
+      params.candidateVersion,
     ),
   };
 }

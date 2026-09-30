@@ -237,6 +237,32 @@ function findPackageForPath(pathname) {
   return packageName === undefined ? undefined : packages.get(packageName);
 }
 
+function findPackageTargetForPath(pathname) {
+  for (const entry of packages.values()) {
+    const prefixes = [
+      `/${entry.encodedPackageName}/`,
+      `/${encodeURIComponent(entry.packageName)}/`,
+      `/${entry.packageName}/`,
+    ];
+    const prefix = prefixes.find((candidate) =>
+      pathname.toLowerCase().startsWith(candidate.toLowerCase()),
+    );
+    if (!prefix) {
+      continue;
+    }
+    const encodedTarget = pathname.slice(prefix.length);
+    if (!encodedTarget || encodedTarget.includes("/")) {
+      continue;
+    }
+    try {
+      return { entry, target: decodeURIComponent(encodedTarget) };
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
 function findTarballForPath(pathname) {
   for (const entry of packages.values()) {
     const prefixes = [`/${entry.encodedPackageName}/-/`, `/${entry.packageName}/-/`];
@@ -365,6 +391,18 @@ async function handleRequest(request, response) {
     response.writeHead(200, { "content-type": "application/json" });
     response.end(`${JSON.stringify(metadata)}\n`);
     return;
+  }
+
+  const packageTarget = findPackageTargetForPath(url.pathname);
+  if (packageTarget) {
+    const metadata = metadataFor(packageTarget.entry, baseUrl);
+    const version = metadata["dist-tags"]?.[packageTarget.target] ?? packageTarget.target;
+    const manifest = metadata.versions?.[version];
+    if (manifest) {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(`${JSON.stringify(manifest)}\n`);
+      return;
+    }
   }
 
   const tarballEntry = findTarballForPath(url.pathname);

@@ -51,9 +51,10 @@ export function resolveCrossOsRegistryDistTags(
 ): string | undefined {
   const rootVersion = packages.find((entry) => entry.name === "openclaw")?.version;
   const parsed = rootVersion ? parseReleaseVersion(rootVersion) : null;
-  return parsed && classifyReleaseTrain(parsed) === "extended-stable"
-    ? `extended-stable=${rootVersion}`
-    : undefined;
+  if (!parsed || classifyReleaseTrain(parsed) !== "extended-stable") {
+    return undefined;
+  }
+  return `extended-stable=${rootVersion}`;
 }
 
 export async function startCrossOsPackageRegistry(

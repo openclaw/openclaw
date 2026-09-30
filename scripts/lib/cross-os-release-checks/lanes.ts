@@ -301,6 +301,7 @@ export async function runUpgradeLane(
     const updateCommand = buildPackagedUpgradeUpdateCommand({
       env,
       candidateUrl: params.candidateUrl,
+      candidateVersion: params.build.candidateVersion,
       timeoutSeconds: updateTimeouts.stepTimeoutSeconds,
       baselineVersion: baseline.version,
     });

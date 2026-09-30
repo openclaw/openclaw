@@ -1171,6 +1171,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     {
       label: "stable predecessor",
       baselineVersion: "2026.8.32",
+      candidateVersion: "2026.8.34",
       expectedArgs: [
         "update",
         "--tag",
@@ -1182,23 +1183,45 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
         "1200",
       ],
       expectedPackageSpec: undefined,
+      expectedNpmTag: undefined,
     },
     {
-      label: "extended-stable predecessor",
+      label: "extended-stable predecessor and candidate",
       baselineVersion: "2026.8.33",
+      candidateVersion: "2026.8.34",
       expectedArgs: ["update", "--yes", "--json", "--no-restart", "--timeout", "1200"],
       expectedPackageSpec: "openclaw",
+      expectedNpmTag: "extended-stable",
+    },
+    {
+      label: "extended-stable predecessor and regular candidate",
+      baselineVersion: "2026.8.33",
+      candidateVersion: "2026.9.1",
+      expectedArgs: [
+        "update",
+        "--tag",
+        "http://127.0.0.1:49152/openclaw-current.tgz",
+        "--yes",
+        "--json",
+        "--no-restart",
+        "--timeout",
+        "1200",
+      ],
+      expectedPackageSpec: undefined,
+      expectedNpmTag: undefined,
     },
   ])("routes packaged upgrades from the $label channel", (testCase) => {
     const candidateUrl = "http://127.0.0.1:49152/openclaw-current.tgz";
     const updateCommand = buildPackagedUpgradeUpdateCommand({
       env: { NPM_CONFIG_REGISTRY: "http://127.0.0.1:49152" },
       candidateUrl,
+      candidateVersion: testCase.candidateVersion,
       timeoutSeconds: 1200,
       baselineVersion: testCase.baselineVersion,
     });
     expect(updateCommand.args).toEqual(testCase.expectedArgs);
     expect(updateCommand.env.OPENCLAW_UPDATE_PACKAGE_SPEC).toBe(testCase.expectedPackageSpec);
+    expect(updateCommand.env.NPM_CONFIG_TAG).toBe(testCase.expectedNpmTag);
   });
 
   it("uses forced shutdown only when the installed gateway supports it", () => {
