@@ -76,20 +76,12 @@ function resolveAnthropicVertexDefaultAdcPath(env: NodeJS.ProcessEnv = process.e
       );
 }
 
-function resolveAnthropicVertexAdcCredentialsPathCandidate(
-  env: NodeJS.ProcessEnv = process.env,
-): string | undefined {
-  const explicit = normalizeOptionalSecretInput(env.GOOGLE_APPLICATION_CREDENTIALS);
-  if (explicit) {
-    return explicit;
-  }
-  return resolveAnthropicVertexDefaultAdcPath(env);
-}
-
 export function resolveAnthropicVertexAdcCredentials(
   env: NodeJS.ProcessEnv = process.env,
 ): AnthropicVertexAdcCredentials | undefined {
-  const credentialsPath = resolveAnthropicVertexAdcCredentialsPathCandidate(env);
+  const credentialsPath =
+    normalizeOptionalSecretInput(env.GOOGLE_APPLICATION_CREDENTIALS) ??
+    resolveAnthropicVertexDefaultAdcPath(env);
   const text = tryReadSecretFileSync(credentialsPath, "Anthropic Vertex ADC credentials", {
     maxBytes: ANTHROPIC_VERTEX_ADC_FILE_MAX_BYTES,
     rejectHardlinks: false,

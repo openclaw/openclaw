@@ -405,16 +405,20 @@ export function captureCronJobMutationSource(state: CronServiceState) {
       ? state.deps.resolveDefaultAgentId()
       : state.deps.defaultAgentId;
   const defaultAgentId = resolveDefaultAgentId();
+  const effectiveDefaultAgentId = defaultAgentId ?? state.deps.defaultAgentId;
   return {
     context,
     storeKey,
+    defaultAgentId: effectiveDefaultAgentId,
     assertCurrent() {
       context.admission.assertCurrent();
+      const currentDefaultAgentId = resolveDefaultAgentId();
       if (
         state.lifecycleGeneration !== generation ||
         cronStoreKey(state.deps.storePath) !== storeKey ||
         resolveOpenClawStateSqlitePath() !== context.admission.databasePath ||
-        resolveDefaultAgentId() !== defaultAgentId
+        currentDefaultAgentId !== defaultAgentId ||
+        (currentDefaultAgentId ?? state.deps.defaultAgentId) !== effectiveDefaultAgentId
       ) {
         throw new Error("Cron mutation source or service changed before commit");
       }

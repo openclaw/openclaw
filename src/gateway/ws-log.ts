@@ -46,46 +46,6 @@ function collectWsRestMeta(meta?: Record<string, unknown>): string[] {
   return restMeta;
 }
 
-function buildWsHeadline(params: {
-  kind: string;
-  method?: string;
-  event?: string;
-}): string | undefined {
-  if ((params.kind === "req" || params.kind === "res") && params.method) {
-    return chalk.bold(params.method);
-  }
-  if (params.kind === "event" && params.event) {
-    return chalk.bold(params.event);
-  }
-  return undefined;
-}
-
-function buildWsStatusToken(kind: string, ok?: boolean): string | undefined {
-  if (kind !== "res" || ok === undefined) {
-    return undefined;
-  }
-  return ok ? chalk.greenBright("✓") : chalk.redBright("✗");
-}
-
-function logWsInfoLine(params: {
-  prefix: string;
-  statusToken?: string;
-  headline?: string;
-  durationToken?: string;
-  restMeta: string[];
-  trailing: string[];
-}): void {
-  const tokens = [
-    params.prefix,
-    params.statusToken,
-    params.headline,
-    params.durationToken,
-    ...params.restMeta,
-    ...params.trailing,
-  ].filter((t): t is string => Boolean(t));
-  wsLog.info(tokens.join(" "));
-}
-
 /** Returns true when a frame can produce console output or required timing state. */
 function shouldLogWs(direction: "in" | "out", kind: string): boolean {
   if (isVerbose()) {
@@ -352,11 +312,9 @@ export function logWs(
     : direction === "in"
       ? chalk.greenBright
       : chalk.cyanBright;
-  const headline = buildWsHeadline({
-    kind,
-    method: typeof meta?.method === "string" ? meta.method : undefined,
-    event: typeof meta?.event === "string" ? meta.event : undefined,
-  });
+  const headline = readStringValue(
+    kind === "req" || kind === "res" ? meta?.method : kind === "event" ? meta?.event : undefined,
+  );
   const restMeta = collectWsRestMeta(meta);
   const trailing: string[] = [];
   if (connId && (!compact || connId !== wsLastCompactConnId)) {
@@ -369,12 +327,20 @@ export function logWs(
     trailing.push(`${chalk.dim("id")}=${chalk.gray(shortId(id))}`);
   }
 
-  logWsInfoLine({
-    prefix: `${arrowColor(arrow)} ${chalk.bold(kind)}`,
-    statusToken: buildWsStatusToken(kind, ok),
-    headline,
-    durationToken: typeof durationMs === "number" ? chalk.dim(`${durationMs}ms`) : undefined,
-    restMeta,
-    trailing,
-  });
+  wsLog.info(
+    [
+      `${arrowColor(arrow)} ${chalk.bold(kind)}`,
+      kind === "res" && ok !== undefined
+        ? ok
+          ? chalk.greenBright("✓")
+          : chalk.redBright("✗")
+        : undefined,
+      headline ? chalk.bold(headline) : undefined,
+      typeof durationMs === "number" ? chalk.dim(`${durationMs}ms`) : undefined,
+      ...restMeta,
+      ...trailing,
+    ]
+      .filter(Boolean)
+      .join(" "),
+  );
 }

@@ -147,6 +147,16 @@ const SessionsToolSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const SessionOwnerToolSchema = Type.Object(
+  {
+    ...Type.Required(Type.Pick(SessionsToolSchema, ["ownerType", "ownerId"])).properties,
+    user: SessionsToolSchema.properties.user,
+    action: stringEnum(["assign_owner"]),
+    sessionKey: SessionsToolSchema.properties.sessionKey,
+  },
+  { additionalProperties: false },
+);
+
 export const SessionControlToolSchema = Type.Object(
   {
     user: SessionsToolSchema.properties.user,
@@ -166,7 +176,17 @@ export const SessionControlToolSchema = Type.Object(
 
 /** Restrict only the newly exposed Stop action; preserve pre-existing collector controls. */
 export function resolveSessionsToolSchema(controlOnly: boolean, stopAllowed: boolean) {
-  const schema = controlOnly ? SessionControlToolSchema : SessionsToolSchema;
+  const schema = controlOnly
+    ? Type.Object(
+        {
+          ...SessionControlToolSchema.properties,
+          action: stringEnum(["patch", "stop", "assign_owner"]),
+          ownerType: SessionsToolSchema.properties.ownerType,
+          ownerId: SessionsToolSchema.properties.ownerId,
+        },
+        { additionalProperties: false },
+      )
+    : SessionsToolSchema;
   if (stopAllowed) {
     return schema;
   }
@@ -174,7 +194,9 @@ export function resolveSessionsToolSchema(controlOnly: boolean, stopAllowed: boo
   return Type.Object(
     {
       ...properties,
-      action: stringEnum(controlOnly ? ["patch"] : ACTIONS.filter((action) => action !== "stop")),
+      action: stringEnum(
+        controlOnly ? ["patch", "assign_owner"] : ACTIONS.filter((action) => action !== "stop"),
+      ),
     },
     { additionalProperties: false },
   );

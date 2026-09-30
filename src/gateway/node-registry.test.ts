@@ -770,6 +770,90 @@ describe("gateway/node-registry", () => {
     expect(onDispatchReady).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { operation: "result", authority: "false" },
+    { operation: "result", authority: "throws" },
+    { operation: "progress", authority: "false" },
+    { operation: "input", authority: "false" },
+    { operation: "continuation", authority: "false" },
+    { operation: "current", authority: "false" },
+  ] as const)(
+    "settles closed completion authority through $operation ($authority)",
+    async ({ operation, authority }) => {
+      vi.useFakeTimers();
+      const registry = createNodeRegistry();
+      const frames = registerNode(registry, { clientId: GATEWAY_CLIENT_IDS.NODE_HOST });
+      const onProgress = vi.fn();
+      const continuation = vi.fn(async () => true);
+      let authorityActive = true;
+      const invoke = registry.invokeLifecycle({
+        nodeId: "node-1",
+        command: "agent.cli.claude.run.v1",
+        timeoutMs: 1_000,
+        onProgress,
+        isDispatchAuthorized: () => {
+          if (!authorityActive && authority === "throws") {
+            throw new Error("completion owner is unavailable");
+          }
+          return authorityActive;
+        },
+      });
+      const invokeId = readRequest(frames).id;
+      let result: Awaited<typeof invoke> | undefined;
+      void invoke.then((value) => {
+        result = value;
+      });
+      try {
+        authorityActive = false;
+        const identity = { invokeId, nodeId: "node-1", connId: "conn-1" };
+        if (operation === "result") {
+          expect(
+            registry.handleInvokeResult({
+              id: invokeId,
+              nodeId: identity.nodeId,
+              connId: identity.connId,
+              ok: true,
+              payload: { answer: "must not reach a closed owner" },
+            }),
+          ).toBe(false);
+        } else if (operation === "progress") {
+          expect(registry.handleInvokeProgress({ ...identity, seq: 0, chunk: "withheld" })).toBe(
+            false,
+          );
+        } else if (operation === "input") {
+          expect(() => registry.sendInvokeInput(invokeId, { input: "withheld" })).toThrow(
+            "node invoke is not pending",
+          );
+        } else if (operation === "continuation") {
+          expect(
+            registry.runPendingInvokeContinuation({ ...identity, run: continuation }),
+          ).toBeNull();
+        } else {
+          expect(registry.isInvokeCurrent(invokeId, identity.nodeId, identity.connId)).toBe(false);
+        }
+        await vi.advanceTimersByTimeAsync(0);
+        expect(result).toEqual({
+          ok: false,
+          error: {
+            code: "APPROVAL_AUTHORITY_CLOSED",
+            message: "node invoke authority closed before settlement",
+          },
+        });
+        expectCancellation(frames, invokeId);
+        expect(frames).toHaveLength(2);
+        expect(onProgress).not.toHaveBeenCalled();
+        expect(continuation).not.toHaveBeenCalled();
+        expect(vi.getTimerCount()).toBe(0);
+        authorityActive = true;
+        expect(registry.isInvokeCurrent(invokeId, identity.nodeId, identity.connId)).toBe(false);
+      } finally {
+        registry.unregister("conn-1");
+        await invoke;
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it("fails closed without dispatching when the pairing store is unavailable during invoke", async () => {
     const frames: string[] = [];
     const registry = createNodeRegistry({

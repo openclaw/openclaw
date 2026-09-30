@@ -95,21 +95,15 @@ function parseInstallSpec(input: unknown): SkillInstallSpec | undefined {
   if (osList.length > 0) {
     spec.os = osList;
   }
-  const formula = normalizeSafeBrewFormula(raw.formula);
+  const formula = normalizeSafeBrewFormula(raw.formula) ?? normalizeSafeBrewFormula(raw.cask);
   if (formula) {
     spec.formula = formula;
   }
-  const cask = normalizeSafeBrewFormula(raw.cask);
-  if (!spec.formula && cask) {
-    spec.formula = cask;
-  }
-  if (spec.kind === "node") {
-    const pkg = normalizeSafeNpmSpec(raw.package);
-    if (pkg) {
-      spec.package = pkg;
-    }
-  } else if (spec.kind === "uv") {
-    const pkg = normalizeSafePackageSpec(raw.package, UV_PACKAGE_PATTERN);
+  if (spec.kind === "node" || spec.kind === "uv") {
+    const pkg =
+      spec.kind === "node"
+        ? normalizeSafeNpmSpec(raw.package)
+        : normalizeSafePackageSpec(raw.package, UV_PACKAGE_PATTERN);
     if (pkg) {
       spec.package = pkg;
     }

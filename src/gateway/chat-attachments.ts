@@ -1,5 +1,3 @@
-// Gateway chat attachment parser.
-// Normalizes image attachments, offloads large media, and reports unsupported payloads.
 import { MAX_IMAGE_BYTES, type MediaKind } from "@openclaw/media-core/constants";
 import { extensionForMime, kindFromMime, normalizeMimeType } from "@openclaw/media-core/mime";
 import { formatErrorMessage, formatUncaughtError } from "../infra/errors.js";
@@ -283,12 +281,12 @@ function assertSavedMedia(
     value === null ||
     typeof value !== "object" ||
     !("id" in value) ||
-    typeof (value as Record<string, unknown>).id !== "string"
+    typeof value.id !== "string"
   ) {
     throw new Error(`attachment ${label}: saveMediaBuffer returned an unexpected shape`);
   }
-  const id = (value as Record<string, unknown>).id as string;
-  const path = (value as Record<string, unknown>).path;
+  const id = value.id;
+  const path = "path" in value ? value.path : undefined;
   if (typeof path !== "string" || path.length === 0) {
     throw new Error(`attachment ${label}: saveMediaBuffer returned no on-disk path`);
   }
@@ -413,11 +411,7 @@ export async function parseMessageWithAttachments(
         );
       }
 
-      if (
-        shouldForceImageOffload &&
-        isImage &&
-        textOnlyImageOffloadCount >= TEXT_ONLY_OFFLOAD_LIMIT
-      ) {
+      if (shouldForceImageOffload && textOnlyImageOffloadCount >= TEXT_ONLY_OFFLOAD_LIMIT) {
         log?.warn(
           `attachment ${label}: dropping image because text-only offload limit ` +
             `${TEXT_ONLY_OFFLOAD_LIMIT} was reached`,
@@ -478,7 +472,7 @@ export async function parseMessageWithAttachments(
       const mediaRef = savedMedia.mediaRef;
       updatedMessage += `\n[media attached: ${mediaRef}]`;
       log?.info?.(
-        shouldForceImageOffload && isImage
+        shouldForceImageOffload
           ? `[Gateway] Offloaded image for text-only model. Saved: ${mediaRef}`
           : `[Gateway] Offloaded attachment (${finalMime}). Saved: ${mediaRef}`,
       );

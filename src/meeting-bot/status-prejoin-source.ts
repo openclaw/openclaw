@@ -149,47 +149,21 @@ export function createMeetingStatusPreludeSource(
     if (retained.length > 0) window[${audioOutputsGlobal}] = retained;
     else delete window[${audioOutputsGlobal}];
   };
-  const adoptAudioBridgeSourcesForSession = () => {
-    const entries = Array.isArray(window[${audioOutputsGlobal}])
-      ? window[${audioOutputsGlobal}]
-      : [];
-    const suspendedBySource = new Map();
-    for (const entry of entries) {
-      for (const source of bridgeSources(entry)) {
-        if (!source?.element || suspendedBySource.has(source.element)) continue;
-        if (!bridgeSourceMatches(source.element, source)) {
-          restoreAudioBridgeSource(source);
-          continue;
-        }
-        suspendedBySource.set(source.element, {
-          sessionId,
-          source: source.element,
-          sourceMuted: Boolean(source.muted),
-          sourceUrl: mediaSourceUrl(source.element) || source.url,
-          stream: source.element.srcObject,
-          suspended: true,
-        });
-      }
-      retireAudioBridge(entry, false);
-    }
-    const suspended = [...suspendedBySource.values()];
-    if (suspended.length > 0) window[${audioOutputsGlobal}] = suspended;
-    else delete window[${audioOutputsGlobal}];
-  };
-  const suspendOwnedAudioBridges = () => {
+  const suspendOwnedAudioBridges = (adopt = false) => {
     const entries = Array.isArray(window[${audioOutputsGlobal}])
       ? window[${audioOutputsGlobal}]
       : [];
     const retained = [];
     const suspendedBySource = new Map();
     for (const entry of entries) {
-      if (!bridgeOwnedBySession(entry)) {
+      if (!adopt && !bridgeOwnedBySession(entry)) {
         retained.push(entry);
         continue;
       }
       // This pending entry owns the muted element until a later serialized
       // status poll sees and routes the attached playback source.
       if (
+        !adopt &&
         entry?.pending &&
         bridgeSources(entry).some((source) => bridgeSourceMatches(source?.element, source))
       ) {
@@ -203,10 +177,10 @@ export function createMeetingStatusPreludeSource(
           continue;
         }
         suspendedBySource.set(source.element, {
-          sessionId: entry.sessionId || sessionId,
+          sessionId: adopt ? sessionId : entry.sessionId || sessionId,
           source: source.element,
           sourceMuted: Boolean(source.muted),
-          sourceUrl: source.url,
+          sourceUrl: adopt ? mediaSourceUrl(source.element) || source.url : source.url,
           stream: source.element.srcObject,
           suspended: true,
         });
@@ -217,6 +191,7 @@ export function createMeetingStatusPreludeSource(
     if (next.length > 0) window[${audioOutputsGlobal}] = next;
     else delete window[${audioOutputsGlobal}];
   };
+  const adoptAudioBridgeSourcesForSession = () => suspendOwnedAudioBridges(true);
   const retireOwnedCaptions = () => {
     const active = window[${captionsGlobal}];
     const owned = Boolean(

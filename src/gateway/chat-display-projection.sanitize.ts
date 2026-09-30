@@ -1,6 +1,9 @@
 import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
-import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  asOptionalObjectRecord as readObjectRecord,
+  asOptionalRecord as readRecord,
+} from "@openclaw/normalization-core/record-coerce";
 import { parseInboundMediaUri, buildInboundMediaUriFromPath } from "../media/media-reference.js";
 import { STATE_CONTENTION_DIAGNOSTIC } from "../sessions/session-run-error-presentation.js";
 import {
@@ -247,24 +250,21 @@ function sanitizeAssistantPhasedContentBlocks(content: unknown[]): {
   changed: boolean;
 } {
   const hasExplicitPhasedText = content.some((block) => {
-    if (!block || typeof block !== "object") {
-      return false;
-    }
-    const entry = block as { type?: unknown; textSignature?: unknown };
-    return isAssistantTextContentType(entry.type) && parseAssistantTextSignature(entry)?.phase;
+    const entry = readObjectRecord(block);
+    return (
+      entry && isAssistantTextContentType(entry.type) && parseAssistantTextSignature(entry)?.phase
+    );
   });
   if (!hasExplicitPhasedText) {
     return { content, changed: false };
   }
   const filtered = content.filter((block) => {
-    if (!block || typeof block !== "object") {
-      return true;
-    }
-    const entry = block as { type?: unknown; textSignature?: unknown };
-    if (!isAssistantTextContentType(entry.type)) {
-      return true;
-    }
-    return parseAssistantTextSignature(entry)?.phase === "final_answer";
+    const entry = readObjectRecord(block);
+    return (
+      !entry ||
+      !isAssistantTextContentType(entry.type) ||
+      parseAssistantTextSignature(entry)?.phase === "final_answer"
+    );
   });
   return {
     content: filtered,
@@ -276,12 +276,9 @@ function projectAssistantMixedToolContent(
   content: unknown[],
   maxChars: number,
 ): { content: unknown[]; changed: boolean } | null {
-  const hasToolHistoryBlock = content.some((block) => {
-    if (!block || typeof block !== "object") {
-      return false;
-    }
-    return isToolHistoryBlockType((block as { type?: unknown }).type);
-  });
+  const hasToolHistoryBlock = content.some((block) =>
+    isToolHistoryBlockType(readObjectRecord(block)?.type),
+  );
   if (!hasToolHistoryBlock) {
     return null;
   }
@@ -289,10 +286,10 @@ function projectAssistantMixedToolContent(
   let hasVisibleText = false;
   const projectedContent: unknown[] = [];
   for (const block of content) {
-    if (!block || typeof block !== "object") {
+    const entry = readObjectRecord(block);
+    if (!entry) {
       continue;
     }
-    const entry = block as { type?: unknown; text?: unknown; textSignature?: unknown };
     if (!isAssistantTextContentType(entry.type)) {
       projectedContent.push(block);
       continue;
@@ -340,10 +337,10 @@ function sanitizeNumericMetadata(
   raw: unknown,
   fields: readonly string[],
 ): Record<string, unknown> | undefined {
-  if (!raw || typeof raw !== "object") {
+  const record = readObjectRecord(raw);
+  if (!record) {
     return undefined;
   }
-  const record = raw as Record<string, unknown>;
   const projected: Record<string, unknown> = {};
   for (const key of fields) {
     const value = asFiniteNumber(record[key]);
@@ -591,20 +588,17 @@ export function sanitizeChatHistoryMessage(
 }
 
 function hasAssistantMixedToolVisibleText(message: unknown): boolean {
-  if (!message || typeof message !== "object") {
-    return false;
-  }
-  const content = (message as { content?: unknown }).content;
+  const content = readObjectRecord(message)?.content;
   if (!Array.isArray(content)) {
     return false;
   }
   let hasToolHistoryBlock = false;
   let hasText = false;
   for (const block of content) {
-    if (!block || typeof block !== "object") {
+    const entry = readObjectRecord(block);
+    if (!entry) {
       continue;
     }
-    const entry = block as { type?: unknown; text?: unknown };
     if (isToolHistoryBlockType(entry.type)) {
       hasToolHistoryBlock = true;
     }
@@ -620,11 +614,8 @@ function hasAssistantMixedToolVisibleText(message: unknown): boolean {
 }
 
 export function shouldDropAssistantHistoryMessage(message: unknown): boolean {
-  if (!message || typeof message !== "object") {
-    return false;
-  }
-  const entry = message as Record<string, unknown> & { role?: unknown };
-  if (entry.role !== "assistant") {
+  const entry = readObjectRecord(message);
+  if (entry?.role !== "assistant") {
     return false;
   }
   if (isProjectedForwardedMessage(entry)) {

@@ -1,10 +1,12 @@
-import { describe, expect, it, vi } from "vitest";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   continueFailed,
   createClient,
   inspectContinuation,
   loadPlan,
   preflightContinuation,
+  watchRelease,
 } from "../../scripts/frv.mjs";
 import {
   releaseChildSpec,
@@ -13,6 +15,7 @@ import {
   validateReleaseExecutionPlanArtifact,
 } from "../../scripts/full-release-validation-policy.mjs";
 import { createReleaseEvidenceClient } from "../../scripts/release-ci-summary.mjs";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
   SHA,
   TARGET_SHA,
@@ -27,6 +30,8 @@ import {
   runFor,
   rootRun,
 } from "./frv.test-support.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function preflightMethods(
   children: ReturnType<typeof child>[],
@@ -1562,6 +1567,237 @@ describe("FRV manual retry admission", () => {
     });
     expect(client.rerunFailed).not.toHaveBeenCalled();
     expect(client.rerunParent).not.toHaveBeenCalled();
+  });
+});
+
+describe("FRV child rerun", () => {
+  const producer = "install_smoke_release_checks / installer_smoke_candidate_payload";
+  const consumer = "install_smoke_release_checks / installer_smoke_nonroot";
+
+  it("sends one failed-jobs rerun, verifies the new attempt, and records an audit line", async () => {
+    const scenario = rerunScenario({});
+    const audit = vi.fn();
+    await expect(
+      continueFailed(plan([scenario.selected]), "77", scenario.client, {
+        audit,
+        child: "101",
+        log: vi.fn(),
+      }),
+    ).resolves.toMatchObject({
+      action: "reran-child",
+      reruns: [{ child: "normalCi", failedJobs: ["test"], mode: "failed-jobs", runAttempt: 2 }],
+    });
+    expect(scenario.counters.posts).toEqual({ child: 1, parent: 0 });
+    expect(audit).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        maxAttempts: 2,
+        parentRunId: "77",
+        runId: "101",
+        sourceRunAttempt: 1,
+      }),
+    );
+  });
+
+  it("refuses a rerun beyond the attempt budget before any POST", async () => {
+    const scenario = rerunScenario({ childSource: [2, "failure"], childAfter: [[3, "success"]] });
+    await expect(
+      continueFailed(plan([scenario.selected]), "77", scenario.client, { child: "normalCi" }),
+    ).rejects.toThrow("normalCi already used 2 of 2 attempts");
+    expect(scenario.counters.posts.child).toBe(0);
+    await expect(
+      continueFailed(plan([scenario.selected]), "77", scenario.client, {
+        child: "normalCi",
+        log: vi.fn(),
+        maxAttempts: 3,
+      }),
+    ).resolves.toMatchObject({ action: "reran-child", reruns: [{ runAttempt: 3 }] });
+  });
+
+  it("reruns the green producer when a failed consumer binds its run attempt", async () => {
+    const scenario = rerunScenario({});
+    const log = vi.fn();
+    const client = {
+      ...scenario.client,
+      getAttemptJobs: async (_runId: string, attempt: number) => [
+        { ...job(producer), id: 21, labels: ["blacksmith-8vcpu-ubuntu-2404"] },
+        {
+          ...job(consumer, attempt === 1 ? "failure" : "success"),
+          id: 22,
+          labels: ["ubuntu-24.04"],
+        },
+      ],
+      getVariable: async () => "github",
+      rerunFailed: vi.fn(),
+      rerunJob: vi.fn(async () => scenario.client.rerunFailed()),
+    };
+    await expect(
+      continueFailed(plan([scenario.selected]), "77", client, { child: "normalCi", log }),
+    ).resolves.toMatchObject({
+      reruns: [{ jobId: 21, jobName: producer, mode: "producer", runnerBackend: "github" }],
+    });
+    expect(client.rerunJob).toHaveBeenCalledExactlyOnceWith(21);
+    expect(client.rerunFailed).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith(`[frv]   failed: ${consumer} [ubuntu-24.04]`);
+  });
+
+  it.each([
+    ["keeps duplicate queued jobs", 2, "attempt 2 holds duplicate jobs: test"],
+    ["exposes no jobs", 0, "attempt 2 exposed no jobs"],
+  ])("fails after one POST when the new attempt %s", async (_case, copies, message) => {
+    const scenario = rerunScenario({});
+    const queued = { ...job("test"), conclusion: null, status: "queued" };
+    const client = {
+      ...scenario.client,
+      getAttemptJobs: async (_runId: string, attempt: number) =>
+        attempt === 1 ? [job("test", "failure")] : Array.from({ length: copies }, () => queued),
+    };
+    await withFastPolling(
+      () =>
+        expect(
+          continueFailed(plan([scenario.selected]), "77", client, { child: "101", log: vi.fn() }),
+        ).rejects.toThrow(message),
+      "5",
+    );
+    expect(scenario.counters.posts.child).toBe(1);
+  });
+
+  it("refuses unknown selectors and advisory-only children without mutation", async () => {
+    const scenario = rerunScenario({});
+    await expect(
+      continueFailed(plan([scenario.selected]), "77", scenario.client, { child: "artifact:npm" }),
+    ).rejects.toThrow("artifact producers recover through pnpm frv continue --failed");
+    const passed = rerunScenario({ childSource: [1, "success"] });
+    await expect(
+      continueFailed(plan([passed.selected]), "77", passed.client, { child: "normalCi" }),
+    ).rejects.toThrow("child normalCi is passed; nothing to rerun");
+    expect(scenario.counters.posts.child + passed.counters.posts.child).toBe(0);
+  });
+});
+
+describe("FRV watch", () => {
+  it("resolves children from dispatch logs and reports each transition once across restarts", async () => {
+    const statePath = path.join(tempDirs.make("frv-watch-"), "state.json");
+    const ci = child("normalCi", "101");
+    let parentConclusion: string | null = null;
+    let childReads = 0;
+    const getJobLog = vi.fn(
+      async () =>
+        `2026-09-29T22:00:00.1Z Dispatched ci.yml: https://github.com/${REPOSITORY}/actions/runs/101 (attempt 1)\n`,
+    );
+    const client = {
+      repository: REPOSITORY,
+      getRun: async (runId: string) => {
+        if (runId === "77") {
+          return rootRun(1, parentConclusion);
+        }
+        if (++childReads === 1) {
+          throw Object.assign(new Error("gh api failed"), { stderr: "HTTP 502: Server Error" });
+        }
+        return runFor(ci, 1, "failure");
+      },
+      getParentJobs: async () => [
+        {
+          conclusion: "success",
+          id: 5,
+          name: "Run normal full CI",
+          run_attempt: 1,
+          status: "completed",
+        },
+        {
+          conclusion: "skipped",
+          id: 6,
+          name: "Run package Telegram E2E",
+          run_attempt: 1,
+          status: "completed",
+        },
+      ],
+      getJobLog,
+      getAttemptJobs: async () => [
+        {
+          ...job("checks-node-extensions-shard-1", "timed_out"),
+          id: 900,
+          labels: ["ubuntu-24.04"],
+          runner_name: "GitHub Actions 1",
+        },
+      ],
+    };
+    const messages: string[] = [];
+    const poll = () =>
+      watchRelease("77", client, {
+        emit: (event: { message: string }) => messages.push(event.message),
+        once: true,
+        statePath,
+      });
+
+    await expect(poll()).resolves.toMatchObject({ complete: false });
+    expect(messages.splice(0)).toEqual([
+      "parent 77 attempt 1 in_progress",
+      "normalCi dispatched ci.yml run 101 (attempt 1)",
+      "GitHub reads failed (normalCi run); retrying next poll",
+    ]);
+    await poll();
+    expect(messages.splice(0)).toEqual([
+      "normalCi run 101 attempt 1 completed failure",
+      'normalCi job "checks-node-extensions-shard-1" timed_out (attempt 1; runner ubuntu-24.04 / GitHub Actions 1)',
+    ]);
+    await poll();
+    expect(messages.splice(0)).toEqual([]);
+    parentConclusion = "failure";
+    await expect(poll()).resolves.toMatchObject({ complete: true });
+    expect(messages).toEqual([
+      "parent 77 attempt 1 completed failure",
+      "parent 77 and every dispatched child are terminal",
+    ]);
+    expect(getJobLog).toHaveBeenCalledExactlyOnceWith(5, expect.anything());
+  });
+});
+
+describe("FRV watch completion", () => {
+  it("waits for lagging dispatch and job snapshots before declaring the release terminal", async () => {
+    const statePath = path.join(tempDirs.make("frv-watch-"), "state.json");
+    const ci = child("normalCi", "101");
+    let snapshot: "in_progress" | "completed" = "in_progress";
+    const client = {
+      repository: REPOSITORY,
+      getRun: async (runId: string) =>
+        runId === "77" ? rootRun(1, "failure") : runFor(ci, 1, "failure"),
+      getParentJobs: async (): Promise<Record<string, unknown>[]> => [
+        { conclusion: null, id: 5, name: "Run normal full CI", run_attempt: 1, status: snapshot },
+      ],
+      getJobLog: async () =>
+        `Dispatched ci.yml: https://github.com/${REPOSITORY}/actions/runs/101 (attempt 1)`,
+      getAttemptJobs: async (): Promise<Record<string, unknown>[]> => [
+        { ...job("late"), conclusion: null, id: 7, status: "queued" },
+      ],
+    };
+    const poll = () => watchRelease("77", client, { emit: () => undefined, once: true, statePath });
+    const parentJobs = client.getParentJobs;
+    client.getParentJobs = async () => [];
+    await expect(poll()).resolves.toMatchObject({ complete: false });
+    // A newer parent attempt needs its own jobs in the snapshot.
+    const getRun = client.getRun;
+    client.getRun = async (runId: string) =>
+      runId === "77" ? rootRun(2, "failure") : getRun(runId);
+    client.getParentJobs = async () => [
+      {
+        conclusion: "success",
+        id: 4,
+        name: "Resolve target ref",
+        run_attempt: 1,
+        status: "completed",
+      },
+    ];
+    await expect(poll()).resolves.toMatchObject({ complete: false });
+    client.getRun = getRun;
+    client.getParentJobs = parentJobs;
+
+    await expect(poll()).resolves.toMatchObject({ complete: false });
+    snapshot = "completed";
+    await expect(poll()).resolves.toMatchObject({ complete: false });
+    client.getAttemptJobs = async () => [];
+    await expect(poll()).resolves.toMatchObject({ complete: false });
+    client.getAttemptJobs = async () => [{ ...job("late", "failure"), id: 7 }];
+    await expect(poll()).resolves.toMatchObject({ complete: true });
   });
 });
 

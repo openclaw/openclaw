@@ -2,11 +2,8 @@ import type { Selectable } from "kysely";
 import type { ChannelIngressEvents } from "../../state/openclaw-state-db.generated.js";
 
 /** Pending or retryable inbound channel event stored in the durable ingress queue. */
-export type ChannelIngressQueueRecord<TPayload, TMetadata = unknown> = {
+export type ChannelIngressQueueRecord<TPayload, TMetadata = unknown> = ChannelIngressScope & {
   id: string;
-  channelId: string;
-  accountId: string;
-  queueName: string;
   payload: TPayload;
   metadata?: TMetadata;
   receivedAt: number;
@@ -38,29 +35,20 @@ export type ChannelIngressQueueClaimRef = {
 };
 
 /** Claim identity available when a stale row's payload cannot be decoded. */
-export type ChannelIngressQueueCorruptClaim = {
+export type ChannelIngressQueueCorruptClaim = ChannelIngressScope & {
   id: string;
-  channelId: string;
-  accountId: string;
-  queueName: string;
   laneKey?: string;
   reason: "corrupt_payload";
-  claim: {
-    token: string;
-    ownerId: string;
-    claimedAt: number;
-  };
+  claim: ChannelIngressQueueClaim<unknown>["claim"];
 };
 
 /** Completed ingress event tombstone retained for duplicate detection. */
-export type ChannelIngressQueueCompletedRecord<TCompletedMetadata = unknown> = {
-  id: string;
-  channelId: string;
-  accountId: string;
-  queueName: string;
-  completedAt: number;
-  metadata?: TCompletedMetadata;
-};
+export type ChannelIngressQueueCompletedRecord<TCompletedMetadata = unknown> =
+  ChannelIngressScope & {
+    id: string;
+    completedAt: number;
+    metadata?: TCompletedMetadata;
+  };
 
 /** Retention options for pending, completed, and failed ingress queue rows. */
 export type ChannelIngressQueuePruneOptions = {
@@ -75,11 +63,8 @@ export type ChannelIngressQueuePruneOptions = {
 };
 
 /** Failed ingress event tombstone retained for duplicate detection. */
-type ChannelIngressQueueFailedRecord = {
+type ChannelIngressQueueFailedRecord = ChannelIngressScope & {
   id: string;
-  channelId: string;
-  accountId: string;
-  queueName: string;
   failedAt: number;
   reason: string;
   message?: string;
