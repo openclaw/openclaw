@@ -38,29 +38,35 @@ export type SessionMenuData = {
   categoryClearReturnsToGroups: boolean;
 };
 
+const SIMPLE_SESSION_ACTIONS = [
+  "copy-session-id",
+  "copy-session-link",
+  "copy-session-preview-link",
+  "copy-markdown",
+  "open-new-tab",
+  "open-new-window",
+  "split-right",
+  "split-below",
+  "reset-appearance",
+  "toggle-pin",
+  "toggle-unread",
+  "toggle-involving-me",
+  "rename",
+  "fork",
+  "new-group",
+  "toggle-archived",
+  "delete",
+] as const;
+
 export type SessionManagementAction =
+  | {
+      [Kind in (typeof SIMPLE_SESSION_ACTIONS)[number]]: { kind: Kind };
+    }[(typeof SIMPLE_SESSION_ACTIONS)[number]]
   | { kind: "open-in"; editor: EditorId; path: string }
-  | { kind: "copy-session-id" }
-  | { kind: "copy-session-link" }
-  | { kind: "copy-session-preview-link" }
-  | { kind: "copy-markdown" }
-  | { kind: "open-new-tab" }
-  | { kind: "open-new-window" }
-  | { kind: "split-right" }
-  | { kind: "split-below" }
-  | { kind: "reset-appearance" }
-  | { kind: "toggle-pin" }
-  | { kind: "toggle-unread" }
-  | { kind: "toggle-involving-me" }
-  | { kind: "rename" }
   | { kind: "set-icon"; icon: string | null }
   | { kind: "set-color"; color: string | null }
   | { kind: "assign-owner"; owner: Pick<SessionOwnerOption, "type" | "id"> }
-  | { kind: "fork" }
-  | { kind: "move-to-group"; category: string | null }
-  | { kind: "new-group" }
-  | { kind: "toggle-archived" }
-  | { kind: "delete" };
+  | { kind: "move-to-group"; category: string | null };
 
 export type SessionManagementActionKind = SessionManagementAction["kind"];
 
@@ -206,26 +212,9 @@ export class SessionMenuActions {
       this.ownerMenu.load();
       return true;
     }
-    if (
-      value === "copy-session-id" ||
-      value === "copy-session-link" ||
-      value === "copy-session-preview-link" ||
-      value === "copy-markdown" ||
-      value === "open-new-tab" ||
-      value === "open-new-window" ||
-      value === "split-right" ||
-      value === "split-below" ||
-      value === "reset-appearance" ||
-      value === "toggle-pin" ||
-      value === "toggle-unread" ||
-      value === "toggle-involving-me" ||
-      value === "rename" ||
-      value === "fork" ||
-      value === "new-group" ||
-      value === "toggle-archived" ||
-      value === "delete"
-    ) {
-      this.runAction({ kind: value });
+    const kind = SIMPLE_SESSION_ACTIONS.find((candidate) => candidate === value);
+    if (kind) {
+      this.runAction({ kind });
       return true;
     }
     if (value.startsWith("open-in:")) {

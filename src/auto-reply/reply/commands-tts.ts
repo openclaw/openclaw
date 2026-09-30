@@ -88,10 +88,9 @@ function formatAttemptDetails(attempts: TtsAttemptDetail[] | undefined): string 
     .join(", ");
 }
 
-function ttsUsage(): ReplyPayload {
-  return {
-    text:
-      `🔊 **TTS (Text-to-Speech) Help**\n\n` +
+function ttsUsage(): CommandHandlerResult {
+  return stopWithText(
+    `🔊 **TTS (Text-to-Speech) Help**\n\n` +
       `**Commands:**\n` +
       `• /tts on — Enable automatic TTS for replies\n` +
       `• /tts off — Disable TTS\n` +
@@ -115,11 +114,7 @@ function ttsUsage(): ReplyPayload {
       `/tts limit 2000\n` +
       `/tts latest\n` +
       `/tts audio Hello, this is a test!`,
-  };
-}
-
-function hashTtsReadLatestText(text: string): string {
-  return crypto.createHash("sha256").update(text).digest("hex");
+  );
 }
 
 async function buildTtsAudioReply(params: {
@@ -186,7 +181,7 @@ async function handleTtsChatAction(
     delete params.sessionEntry.ttsAuto;
     replyText = "🔊 TTS chat override cleared.";
   } else {
-    return { shouldContinue: false, reply: ttsUsage() };
+    return ttsUsage();
   }
 
   if (!(await persistCommandSession({ ...params, touchedFields: ["ttsAuto"] }))) {
@@ -221,7 +216,7 @@ async function handleTtsLatestAction(
   if (!latestText || isSilentReplyPayloadText(latestText)) {
     return stopWithText("🎤 No readable assistant reply was found in this chat yet.");
   }
-  const hash = hashTtsReadLatestText(latestText);
+  const hash = crypto.createHash("sha256").update(latestText).digest("hex");
   if (params.sessionEntry.lastTtsReadLatestHash === hash) {
     return stopWithText("🔊 Latest assistant reply was already sent as audio.");
   }
@@ -318,7 +313,7 @@ export const handleTtsCommands: CommandHandler = defineAuthorizedTextCommand(
     const args = parsed.args;
 
     if (action === "help") {
-      return { shouldContinue: false, reply: ttsUsage() };
+      return ttsUsage();
     }
 
     if (action === "on" || action === "off") {
@@ -390,7 +385,7 @@ export const handleTtsCommands: CommandHandler = defineAuthorizedTextCommand(
       const requested = args.toLowerCase();
       const resolvedProvider = getSpeechProvider(requested, params.cfg);
       if (!resolvedProvider) {
-        return { shouldContinue: false, reply: ttsUsage() };
+        return ttsUsage();
       }
 
       const nextProvider =
@@ -469,7 +464,7 @@ export const handleTtsCommands: CommandHandler = defineAuthorizedTextCommand(
       }
       const requested = args.toLowerCase();
       if (requested !== "on" && requested !== "off") {
-        return { shouldContinue: false, reply: ttsUsage() };
+        return ttsUsage();
       }
       setSummarizationEnabled(prefsPath, requested === "on");
       return stopWithText(
@@ -481,6 +476,6 @@ export const handleTtsCommands: CommandHandler = defineAuthorizedTextCommand(
       return handleTtsStatusAction(params, config, prefsPath);
     }
 
-    return { shouldContinue: false, reply: ttsUsage() };
+    return ttsUsage();
   },
 );

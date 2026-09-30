@@ -1,5 +1,6 @@
 import { buildAnnounceIdempotencyKey } from "../../announce-idempotency.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { compareSubagentRunGeneration } from "./subagent-run-generation.js";
 
 export function buildRequesterSettleWakeIdentity(params: {
   requesterSessionKey: string;
@@ -91,4 +92,50 @@ export function captureRequesterSettleRunIdentity(entry: SubagentRunRecord) {
     completionRequesterSessionId: entry.completionRequesterSessionId,
     completionRequesterLifecycleRevision: entry.completionRequesterLifecycleRevision,
   };
+}
+
+/** Completion custody can outlive a requester that finished without explicitly yielding. */
+export function hasRequesterCompletionCohort(entry: SubagentRunRecord): boolean {
+  const wake = entry.requesterSettleWake;
+  return (
+    wake?.requesterYieldBatch === true ||
+    (wake?.rearmGeneration !== undefined && wake.batchRunIds?.includes(entry.runId) === true)
+  );
+}
+
+/** A frozen completion cohort can own distinct tasks that share one child session. */
+export function isRequesterCompletionCohortCurrent(
+  entry: SubagentRunRecord,
+  cohort: readonly SubagentRunRecord[],
+  latestForSession: (
+    sessionKey: string,
+    matches?: (candidate: SubagentRunRecord) => boolean,
+  ) => SubagentRunRecord | null,
+): boolean {
+  const taskRunId = entry.taskRunId ?? entry.runId;
+  const task = latestForSession(
+    entry.childSessionKey,
+    (candidate) => (candidate.taskRunId ?? candidate.runId) === taskRunId,
+  );
+  if (
+    entry.killReconciliation?.supersededAt !== undefined ||
+    (task && compareSubagentRunGeneration(task, entry) > 0)
+  ) {
+    return false;
+  }
+  const latest = latestForSession(entry.childSessionKey);
+  return (
+    !latest ||
+    compareSubagentRunGeneration(latest, entry) <= 0 ||
+    cohort.some(
+      (candidate) =>
+        candidate.runId === latest.runId &&
+        candidate.generation === latest.generation &&
+        candidate.requesterSessionKey === entry.requesterSessionKey &&
+        candidate.requesterAgentId === entry.requesterAgentId &&
+        candidate.requesterStorePath === entry.requesterStorePath &&
+        candidate.requesterTurnRunId === entry.requesterTurnRunId &&
+        (candidate.taskRunId ?? candidate.runId) !== taskRunId,
+    )
+  );
 }

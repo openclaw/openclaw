@@ -1,4 +1,3 @@
-// Resolves OpenClaw update channels from config, tags, and versions.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { parse as parseSemver, type SemVer } from "semver";
 import { compareOpenClawReleaseVersions } from "./npm-registry-spec.js";

@@ -31,6 +31,20 @@ export function assistantGroupIsForwardedBoundary(group: MessageGroup): boolean 
   return group.messages.some(({ message }) => messageIsForwardedBoundary(message));
 }
 
+export function isInterSessionMessage(message: unknown): boolean {
+  const provenance = asRecord(asRecord(message)?.provenance);
+  return provenance?.kind === "inter_session";
+}
+
+export function isInterSessionGroup(group: MessageGroup): boolean {
+  return (
+    group.role === "assistant" &&
+    !group.isStreaming &&
+    group.messages.length > 0 &&
+    group.messages.every(({ message }) => isInterSessionMessage(message))
+  );
+}
+
 // Display attribution also accepts projected source metadata; turn ownership
 // above requires the original forwarded-input provenance.
 export function hasForwardedSource(group: MessageGroup): boolean {

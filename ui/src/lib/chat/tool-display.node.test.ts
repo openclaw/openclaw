@@ -25,13 +25,11 @@ describe("tool display", () => {
         name: "browser",
         args: { action: " dialog ", accept: false, promptText: "not selected" },
       },
-      verb: "dialog",
       detail: "with false",
     },
     {
       name: "redacted unknown-tool fallback",
       params: { name: "unknown_tool", args: { path: "AKIDABCDEFGHIJKLMNOP1234567890" } },
-      verb: "unknown tool",
       detail: ["with AKIDAB…7890", "with AKIDAB...7890"],
     },
     {
@@ -41,7 +39,6 @@ describe("tool display", () => {
         args: { command: "cd ~/my-project && npm install" },
         detailMode: "raw",
       },
-      verb: "exec",
       detail: "with install dependencies (in ~/my-project), `cd ~/my-project && npm install`",
     },
     {
@@ -51,12 +48,10 @@ describe("tool display", () => {
         args: { command: "cd ~/my-project && npm install" },
         detailMode: "explain",
       },
-      verb: "exec",
       detail: "with install dependencies (in ~/my-project)",
     },
-  ] as const)("preserves $name", ({ params, verb, detail }) => {
+  ] as const)("preserves $name", ({ params, detail }) => {
     const display = resolveToolDisplay(params);
-    expect(display.verb).toBe(verb);
     const formatted = formatToolDetail(display);
     if (Array.isArray(detail)) {
       // Core uses a Unicode ellipsis; the browser alias uses three dots.

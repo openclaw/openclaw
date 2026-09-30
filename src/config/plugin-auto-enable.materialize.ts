@@ -124,29 +124,20 @@ function resolveAutoEnableChannelId(params: {
   const plugin = params.manifestRegistry.plugins.find(
     (record) => record.id === params.entry.pluginId,
   );
-  if (plugin && plugin.origin !== "bundled") {
-    if (params.entry.kind !== "channel-configured") {
-      return null;
-    }
-    const channelId = normalizeChatChannelId(params.entry.channelId) ?? params.entry.channelId;
-    if ((plugin.channels ?? []).some((id) => (normalizeChatChannelId(id) ?? id) === channelId)) {
-      return null;
-    }
-  }
-  const builtInChannelId = normalizeChatChannelId(params.entry.pluginId);
-  if (builtInChannelId) {
-    return builtInChannelId;
-  }
-  if (params.entry.kind !== "channel-configured") {
+  const channelId =
+    params.entry.kind === "channel-configured"
+      ? (normalizeChatChannelId(params.entry.channelId) ?? params.entry.channelId)
+      : null;
+  const claimsChannel =
+    channelId !== null &&
+    (plugin?.channels ?? []).some((id) => (normalizeChatChannelId(id) ?? id) === channelId);
+  if (plugin && plugin.origin !== "bundled" && (channelId === null || claimsChannel)) {
     return null;
   }
-  if (plugin?.origin !== "bundled") {
-    return null;
-  }
-  const channelId = normalizeChatChannelId(params.entry.channelId) ?? params.entry.channelId;
-  return (plugin.channels ?? []).some((id) => (normalizeChatChannelId(id) ?? id) === channelId)
-    ? channelId
-    : null;
+  return (
+    normalizeChatChannelId(params.entry.pluginId) ??
+    (plugin?.origin === "bundled" && claimsChannel ? channelId : null)
+  );
 }
 
 function registerPluginEntry(
@@ -241,25 +232,17 @@ function materializeConfiguredPluginEntryAllowlist(params: {
   return next;
 }
 
-function resolveChannelAutoEnableDisplayLabel(
-  entry: Extract<PluginAutoEnableCandidate, { kind: "channel-configured" }>,
-  manifestRegistry: PluginManifestRegistry,
-): string | undefined {
-  const builtInChannelId = normalizeChatChannelId(entry.channelId);
-  const plugin = manifestRegistry.plugins.find((record) => record.id === entry.pluginId);
-  return (
-    (builtInChannelId ? findChatChannelMeta(builtInChannelId)?.label : undefined) ??
-    plugin?.channelConfigs?.[entry.channelId]?.label ??
-    plugin?.channelCatalogMeta?.label
-  );
-}
-
 function formatAutoEnableChange(
   entry: PluginAutoEnableCandidate,
   manifestRegistry: PluginManifestRegistry,
 ): string {
   if (entry.kind === "channel-configured") {
-    const label = resolveChannelAutoEnableDisplayLabel(entry, manifestRegistry);
+    const builtInChannelId = normalizeChatChannelId(entry.channelId);
+    const plugin = manifestRegistry.plugins.find((record) => record.id === entry.pluginId);
+    const label =
+      (builtInChannelId ? findChatChannelMeta(builtInChannelId)?.label : undefined) ??
+      plugin?.channelConfigs?.[entry.channelId]?.label ??
+      plugin?.channelCatalogMeta?.label;
     if (label) {
       return `${label} configured, enabled automatically.`;
     }

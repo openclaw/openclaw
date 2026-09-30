@@ -22,7 +22,6 @@ const persistAbortTargetEntryMock = vi.hoisted(() =>
 const resolveCommandSessionEntryForKeyMock = vi.hoisted(() =>
   vi.fn(() => ({ entry: undefined, key: undefined })),
 );
-const resolveSessionIdMock = vi.hoisted(() => vi.fn(() => undefined));
 const stopSubagentsForRequesterMock = vi.hoisted(() =>
   vi.fn<typeof import("./abort-operation.js").stopSubagentsForRequester>(async (params) => {
     await params.beforeKill?.();
@@ -73,9 +72,7 @@ vi.mock("./commands-session-store.js", () => ({
 }));
 
 vi.mock("./reply-run-registry.js", () => ({
-  replyRunRegistry: {
-    resolveSessionId: resolveSessionIdMock,
-  },
+  resolveReplyOperationsForSession: vi.fn(() => []),
 }));
 
 const formatAllowFrom = ({ allowFrom }: { allowFrom: Array<string | number> }) => {
@@ -176,6 +173,7 @@ describe("handleStopCommand target fallback", () => {
       reply: { text: "⚙️ Agent was aborted." },
     });
     expect(abortSessionRunTargetWithOutcomeMock).toHaveBeenCalledWith({
+      agentId: "target",
       key: "agent:target:telegram:direct:123",
       sessionId: undefined,
     });

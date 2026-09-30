@@ -178,6 +178,8 @@ export * from "../infra/exec-approval-command-display.ts";
 export * from "../infra/exec-approval-channel-runtime.ts";
 export * from "../infra/exec-approval-reply.ts";
 export * from "../infra/exec-approval-session-target.ts";
+export { commandRequiresSecurityAuditSuppressionApproval } from "../infra/exec-approvals-policy.js";
+
 // Keep this deprecated barrel pinned to its shipped approval surface. Internal
 // store/locking exports must not become plugin contracts accidentally.
 export {
@@ -186,7 +188,6 @@ export {
   analyzeArgvCommand,
   analyzeWindowsShellCommand,
   buildEnforcedShellCommand,
-  commandRequiresSecurityAuditSuppressionApproval,
   DEFAULT_EXEC_APPROVAL_ASK_FALLBACK,
   DEFAULT_EXEC_APPROVAL_DECISIONS,
   DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,

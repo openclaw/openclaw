@@ -128,6 +128,33 @@ export function createNativeTypeScriptProject(options: ProjectOptions) {
   return { api, snapshot, project, close, [Symbol.dispose]: close };
 }
 
+/** The async transport keeps its child referenced while close ends the server's input. */
+export async function createNativeTypeScriptProjectAsync(options: ProjectOptions) {
+  const { API: AsyncAPI } = await import("typescript/unstable/async");
+  const cwd = path.resolve(options.cwd);
+  const configFileName = compilerFileName(cwd, options.configFileName);
+  const api = new AsyncAPI({
+    cwd,
+    fs: options.files ? overlayFileSystem(cwd, options.files, options.fs) : options.fs,
+  });
+  try {
+    const snapshot = await api.createSnapshot({
+      openProjects: [configFileName],
+      ensurePrograms: true,
+    });
+    const project = snapshot.getConfiguredProject(configFileName);
+    if (!project) {
+      throw new Error(`Native TypeScript did not open ${configFileName}`);
+    }
+    let closePromise: Promise<void> | undefined;
+    const close = () => (closePromise ??= api.close());
+    return { api, snapshot, project, close, [Symbol.asyncDispose]: close };
+  } catch (error) {
+    await api.close();
+    throw error;
+  }
+}
+
 /** Batch syntax scans share one explicit process; source trees remain local after disposal. */
 export function createNativeTypeScriptParser({
   cwd = process.cwd(),

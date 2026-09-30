@@ -23,6 +23,7 @@ import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lif
 import { resolveCurrentUserProfileDisplay } from "../current-user-profile-display.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
+import { prepareSessionFastModePresentation } from "../session-fast-mode-presentation.js";
 import {
   projectAssignableSessionOwner,
   projectSessionActor,
@@ -151,20 +152,19 @@ function createSessionPatchHandler(
         return;
       }
       if (request.many) {
-        const outcomes: SessionsPatchManyResult["outcomes"] = [];
         diagnostics?.scope("response");
-        for (const [index, outcome] of executed.outcomes.entries()) {
-          const target = targets[index]!;
-          const identity = {
-            key: target.key,
-            ...(target.agentId ? { agentId: target.agentId } : {}),
-          };
-          outcomes.push(
-            outcome.ok
+        const outcomes: SessionsPatchManyResult["outcomes"] = executed.outcomes.map(
+          (outcome, index) => {
+            const target = targets[index]!;
+            const identity = {
+              key: target.key,
+              ...(target.agentId ? { agentId: target.agentId } : {}),
+            };
+            return outcome.ok
               ? { ok: true, ...identity }
-              : { ok: false, ...identity, error: outcome.error },
-          );
-        }
+              : { ok: false, ...identity, error: outcome.error };
+          },
+        );
         respond(true, { outcomes }, undefined);
         return;
       }
@@ -181,7 +181,10 @@ function createSessionPatchHandler(
         projectSessionPatchResult({
           ...prepared,
           cfg: executed.cfg,
-          entry: outcome.entry,
+          entry: {
+            ...outcome.entry,
+            fastMode: prepareSessionFastModePresentation(client)(outcome.entry.fastMode),
+          },
           modelCatalog: catalog?.entries,
           modelCatalogRouteVariants: catalog?.routeVariants,
         }),
@@ -584,7 +587,15 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
     }
     respond(
       true,
-      { ok: true, key: result.key, entry: result.entry, resolved: result.resolved },
+      {
+        ok: true,
+        key: result.key,
+        entry: {
+          ...result.entry,
+          fastMode: prepareSessionFastModePresentation(client)(result.entry.fastMode),
+        },
+        resolved: result.resolved,
+      },
       undefined,
     );
     emitSessionsChanged(context, {

@@ -70,6 +70,15 @@ export async function readSessionHistoryRequest(
       ),
     };
   }
+  if (request.kind === "reactions") {
+    return { kind: "reactions", result: options.readers.readReactions() };
+  }
+  if (request.kind === "conversation-binding") {
+    return {
+      kind: "conversation-binding",
+      result: options.readers.readConversationBinding(request.params.conversationRef),
+    };
+  }
   if (request.kind === "transcript-binding") {
     return {
       kind: "transcript-binding",

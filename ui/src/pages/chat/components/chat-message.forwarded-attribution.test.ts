@@ -256,11 +256,11 @@ describe("forwarded message attribution", () => {
   });
 
   it.each([
-    { senderSession: { agentId: "main" }, label: "Forwarded from main" },
-    { senderSession: undefined, label: "Forwarded message" },
+    { senderSession: { agentId: "main" }, label: "1 update · Forwarded from main" },
+    { senderSession: undefined, label: "1 update · Forwarded message" },
     // Non-agent-prefixed keys are not navigable (titler, hovercard, and click
     // handlers all reject them), so they stay readable plain text.
-    { senderSession: { sessionKey: "legacy-session" }, label: "From legacy-session" },
+    { senderSession: { sessionKey: "legacy-session" }, label: "1 update from legacy-session" },
   ])(
     "keeps legacy forwarded attribution visible without a session link: $label",
     ({ senderSession, label }) => {
@@ -273,8 +273,8 @@ describe("forwarded message attribution", () => {
       );
       render(renderTestMessageGroup(group), container);
 
-      expect(container.querySelector(".chat-group--forwarded")).not.toBeNull();
-      const attribution = container.querySelector(".chat-group--forwarded .chat-reply-attribution");
+      expect(container.querySelector(".chat-session-activity")).not.toBeNull();
+      const attribution = container.querySelector(".chat-session-activity .chat-reply-attribution");
       expect(attribution?.textContent?.replace(/\s+/g, " ").trim()).toBe(label);
       expect(attribution?.querySelector("a")).toBeNull();
       expect(attribution?.querySelector("[tabindex]")).toBeNull();

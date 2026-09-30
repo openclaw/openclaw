@@ -121,6 +121,7 @@ final class ManagedProcess: @unchecked Sendable {
             of: WakeReason.self,
             bufferingPolicy: .bufferingNewest(1))
         let task = Task.detached(priority: .userInitiated) { () -> TerminationStatus? in
+            defer { state.finish() }
             do {
                 let result = try await Subprocess.run(
                     configuration,
@@ -178,13 +179,11 @@ final class ManagedProcess: @unchecked Sendable {
                     _ = await self.waitForExit(pid, timeout: .milliseconds(250))
                     await killGroup()
                 }
-                state.finish()
                 return result.terminationStatus
             } catch {
                 state.closeChildHandles()
                 let message = (error as? SubprocessError)?.description ?? error.localizedDescription
                 state.publishStart(.failure(StartFailure(message: message)))
-                state.finish()
                 return nil
             }
         }

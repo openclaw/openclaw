@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { UPDATE_RUN_PHASES } from "../../packages/gateway-protocol/src/update-run-vocabulary.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { runExistingOpenClawStateWriteTransaction } from "../state/openclaw-state-db-existing-write.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
@@ -7,10 +8,12 @@ import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { extractSqliteTableSchema } from "./sqlite-schema-sql.js";
 import { createUpdateErrorFact } from "./update-failure-facts.js";
 import { encodeRun, isRetainedStep, type UpdateRunLedgerOptions } from "./update-run-codec.js";
+import type { UpdateRunPhasePatch } from "./update-run-mutation.types.js";
 import { decodeRun, readUpdateRunRecord } from "./update-run-read.kernel.js";
 import {
   finishUpdateRunRecord,
   type FinishUpdateRunResult,
+  type UpdateRunPhase,
   type UpdateRunRecord,
   type UpdateRunStep,
 } from "./update-run-record.js";
@@ -42,6 +45,54 @@ export function upsertStep(record: UpdateRunRecord, input: UpdateRunStep): void 
       throw new Error("Update run retained steps exceed the step limit");
     }
     record.steps.splice(disposable, 1);
+  }
+}
+
+export function applyUpdateRunPhase(
+  record: UpdateRunRecord,
+  phase: UpdateRunPhase,
+  patch: UpdateRunPhasePatch,
+): void {
+  if (record.status !== "running") {
+    return;
+  }
+  if (patch.origin) {
+    record.origin = { ...record.origin, ...patch.origin };
+  }
+  if (patch.target) {
+    record.target = { ...record.target, ...patch.target };
+  }
+  if (patch.before) {
+    record.before = { ...record.before, ...patch.before };
+  }
+  if (patch.after) {
+    record.after = { ...record.after, ...patch.after };
+  }
+  if (patch.trigger) {
+    record.trigger = patch.trigger;
+  }
+  const repairsVerification = phase === "repairing" && record.phase === "verifying";
+  const advances = UPDATE_RUN_PHASES.indexOf(phase) > UPDATE_RUN_PHASES.indexOf(record.phase);
+  // Post-activation repair may only return to verification; stale staging
+  // writers must not reopen activation while the live candidate is repaired.
+  const resumesVerification =
+    record.phase === "repairing" && record.steps.some((step) => step.step === "verifying");
+  if (
+    phase !== "finished" &&
+    (repairsVerification || (advances && (!resumesVerification || phase === "verifying")))
+  ) {
+    const now = Date.now();
+    upsertStep(record, { step: record.phase, status: "completed", endedAtMs: now });
+    record.phase = phase;
+    upsertStep(record, {
+      step: phase,
+      status: "in_progress",
+      startedAtMs: now,
+      endedAtMs: undefined,
+    });
+  }
+  if (patch.step) {
+    upsertStep(record, patch.step);
   }
 }
 

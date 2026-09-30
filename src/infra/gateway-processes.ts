@@ -1,4 +1,3 @@
-// Inspects local gateway processes for status and diagnostics.
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { readGatewayLockProcessCmdline } from "./gateway-lock-process.js";
 import { readGatewayOwnerLease } from "./gateway-owner-lease.js";

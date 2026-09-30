@@ -119,8 +119,8 @@ function renderHelpTitle(params: {
   `;
 }
 
-function fastModeOptionValue(value: "auto" | "on" | "off"): FastMode {
-  return value === "auto" ? "auto" : value === "on";
+function fastModeOptionValue(value: ReturnType<typeof formatFastModeValue>): FastMode {
+  return value === "auto" || value === "ultrafast" ? value : value === "on";
 }
 
 // Discovery progress does not change the saved selection or disable known models.
@@ -327,7 +327,7 @@ export function renderDefaultModels(props: DefaultModelsViewProps) {
           `,
         }),
         control: html`
-          ${renderSettingsSegmented<"" | "auto" | "on" | "off">({
+          ${renderSettingsSegmented<"" | ReturnType<typeof formatFastModeValue>>({
             value: fastMode,
             ariaLabel: t("quickSettings.model.fastMode"),
             options: [

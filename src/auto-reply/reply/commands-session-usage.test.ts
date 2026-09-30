@@ -438,6 +438,7 @@ describe("handleFastCommand", () => {
     { mode: "on", value: true, text: "⚙️ Fast mode enabled." },
     { mode: "off", value: false, text: "⚙️ Fast mode disabled." },
     { mode: "auto", value: "auto", text: "⚙️ Fast mode set to auto." },
+    { mode: "ultrafast", value: "ultrafast", text: "⚙️ Ultrafast mode enabled." },
   ] as const)("persists /fast $mode on the canonical target", async ({ mode, value, text }) => {
     await withTempDir("openclaw-fast-command-", async (dir) => {
       const params = buildUsageParams();
@@ -472,6 +473,7 @@ describe("handleFastCommand", () => {
     ["on", "⚙️ Fast mode enabled."],
     ["off", "⚙️ Fast mode disabled."],
     ["auto", "⚙️ Fast mode set to auto."],
+    ["ultrafast", "⚙️ Ultrafast mode enabled."],
     ["default", "⚙️ Fast mode reset to default."],
   ])("keeps the /fast %s reply without a target entry", async (mode, text) => {
     const params = buildUsageParams();
@@ -495,7 +497,7 @@ describe("handleFastCommand", () => {
 
     expect(await handleFastCommand(params, true)).toEqual({
       shouldContinue: false,
-      reply: { text: "⚙️ Usage: /fast status|auto|on|off|default" },
+      reply: { text: "⚙️ Usage: /fast status|auto|on|off|ultrafast|default" },
     });
     expect(target).toEqual({ sessionId: "target-session", updatedAt: 1, fastMode: true });
     expect(resolveFastModeStateMock).not.toHaveBeenCalled();

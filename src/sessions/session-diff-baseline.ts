@@ -95,8 +95,7 @@ async function persistCaptureResult(params: {
 }): Promise<InternalSessionEntry> {
   const persisted = await patchSessionEntryCore(
     { agentId: params.agentId, sessionKey: params.sessionKey, storePath: params.storePath },
-    (currentEntry) => {
-      const current = currentEntry;
+    (current) => {
       const currentCapture = matchingCapture(current);
       if (
         current.sessionId !== params.sessionId ||
@@ -216,8 +215,7 @@ export async function ensureSessionDiffBaseline(params: {
     const pending = createSessionDiffBaselineCaptureClaim();
     const armed = await patchSessionEntryCore(
       { agentId: params.agentId, sessionKey: params.sessionKey, storePath: params.storePath },
-      (currentEntry) => {
-        const current = currentEntry;
+      (current) => {
         if (
           current.sessionId !== expectedSessionId ||
           current.lifecycleRevision !== expectedLifecycleRevision ||

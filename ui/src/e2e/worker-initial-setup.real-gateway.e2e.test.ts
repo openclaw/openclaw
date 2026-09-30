@@ -2,7 +2,6 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { SKILL_RESOURCE_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/skill-resources.js";
-import { WORKER_SKILL_WORKSHOP_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-skill-workshop.js";
 import { installSessionPlacementAdmissionProvider } from "../../../src/agents/session-placement-admission.js";
 import { SessionManager } from "../../../src/agents/sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../../../src/agents/test-helpers/agent-message-fixtures.js";
@@ -226,7 +225,6 @@ suite.define(() => {
                   protocolFeatures: [
                     ...environment.bootstrapReceipt!.protocolFeatures,
                     SKILL_RESOURCE_PROTOCOL_FEATURE,
-                    WORKER_SKILL_WORKSHOP_FEATURE,
                   ],
                 },
               };

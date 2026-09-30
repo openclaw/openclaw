@@ -92,7 +92,7 @@ export function recordWorkerLiveTrajectoryEvent(
       const interrupted = event.payload.aborted === true;
       recorder.recordEvent("model.completed", {
         ...data,
-        ...(failed ? { promptError: event.payload.error } : {}),
+        ...(event.payload.phase === "error" ? { promptError: event.payload.error } : {}),
       });
       recorder.recordEvent("session.ended", {
         ...data,

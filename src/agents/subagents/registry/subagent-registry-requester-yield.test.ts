@@ -1,15 +1,22 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
+import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../../../test-utils/openclaw-test-state.js";
 import {
   consumeRequesterFinalAttachment,
   registerRequesterFinalAttachment,
 } from "../requester-final-attachment.js";
 import {
+  adoptSubagentRunForRequesterTurnInRuns,
   listUnsettledRequesterChildrenInRuns,
   markRequesterTurnYieldedInRuns,
   settleRequesterTurnAfterSessionSpawns,
 } from "./subagent-registry-requester-yield.js";
 import { createRequesterInitialTransferFixture } from "./subagent-registry-requester-yield.test-support.js";
+import { persistSubagentRunsToDiskAsyncOrThrow } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const REQUESTER = "agent:main:main";
@@ -59,6 +66,223 @@ function settleRuns(
     ...options,
   });
 }
+
+describe("adoptSubagentRunForRequesterTurnInRuns", () => {
+  let state: OpenClawTestState;
+  beforeAll(async () => {
+    state = await createOpenClawTestState({ scenario: "minimal" });
+  });
+  afterAll(async () => {
+    await state.cleanup();
+  });
+
+  function pendingChild(): SubagentRunRecord {
+    return {
+      ...makeRun("steered-child", false),
+      taskRunId: "original-task",
+      requesterAgentId: "main",
+      requesterTurnRunId: undefined,
+      execution: { status: "running", startedAt: 1_000 },
+      completion: { required: true },
+      delivery: { status: "pending" },
+      requesterSettleWake: {
+        status: "pending",
+        attemptCount: 0,
+        batchRunIds: ["steered-child"],
+        requesterYieldBatch: true,
+        rearmGeneration: 1,
+      },
+    };
+  }
+
+  function adoption(entry: SubagentRunRecord) {
+    const runs = new Map([[entry.runId, entry]]);
+    const persist: Parameters<typeof adoptSubagentRunForRequesterTurnInRuns>[0]["persist"] = (
+      context,
+      callbacks,
+      ...runIds
+    ) => persistSubagentRunsToDiskAsyncOrThrow(runs, runIds, { ...callbacks, context });
+    return {
+      expected: entry,
+      requesterSessionKey: REQUESTER,
+      requesterAgentId: "main",
+      requesterTurnRunId: REQUESTER_TURN,
+      assertCurrent: () => {},
+      runs,
+      persist,
+    };
+  }
+
+  it("retains the pending wake counter and logical task while claiming the current turn", async () => {
+    const child = pendingChild();
+    const before = structuredClone(child);
+    const params = adoption(child);
+    const receipt = await adoptSubagentRunForRequesterTurnInRuns(params);
+    expect(receipt).toEqual({
+      runId: "original-task",
+      childSessionKey: child.childSessionKey,
+      expectsCompletionMessage: true,
+    });
+    expect(child).toEqual({
+      ...before,
+      requesterTurnRunId: REQUESTER_TURN,
+      requesterTurnYielded: undefined,
+      requesterSettleWake: { status: "pending", attemptCount: 0, rearmGeneration: 1 },
+    });
+    expect(
+      await markRequesterTurnYieldedInRuns({
+        requesterSessionKey: REQUESTER,
+        requesterAgentId: "main",
+        requesterTurnRunId: REQUESTER_TURN,
+        runs: params.runs,
+        transfer: createRequesterInitialTransferFixture(params.runs),
+      }),
+    ).toBe(1);
+  });
+
+  it.each(["before", "after"] as const)(
+    "rearms an adopted wake with another child claimed %s adoption",
+    async (order) => {
+      const child = pendingChild();
+      child.runId = `adopted-${order}`;
+      child.childSessionKey = `agent:main:subagent:${child.runId}`;
+      child.taskRunId = `original-task-${order}`;
+      child.requesterSettleWake = {
+        status: "pending",
+        attemptCount: 0,
+        batchRunIds: [child.runId],
+        requesterYieldBatch: true,
+        rearmGeneration: 1,
+      };
+      const sibling: SubagentRunRecord = {
+        ...makeRun(`sibling-${order}`, false),
+        requesterAgentId: "main",
+        execution: { status: "running", startedAt: 1_000 },
+        completion: { required: true },
+        delivery: { status: "pending" },
+      };
+      const params = adoption(child);
+      const context = captureOpenClawStateWorkerContext();
+      if (order === "before") {
+        params.runs.set(sibling.runId, sibling);
+      }
+      await persistSubagentRunsToDiskAsyncOrThrow(params.runs, [...params.runs.keys()], {
+        context,
+      });
+      const receipt = await adoptSubagentRunForRequesterTurnInRuns(params);
+      if (!receipt) {
+        throw new Error("Expected the watched steer to claim its child");
+      }
+      if (order === "after") {
+        params.runs.set(sibling.runId, sibling);
+        await persistSubagentRunsToDiskAsyncOrThrow(params.runs, [sibling.runId], { context });
+      }
+      const requester = {
+        requesterSessionKey: REQUESTER,
+        requesterAgentId: "main",
+        requesterTurnRunId: REQUESTER_TURN,
+        runs: params.runs,
+        transfer: createRequesterInitialTransferFixture(params.runs),
+      };
+      expect(await markRequesterTurnYieldedInRuns(requester)).toBe(2);
+      await expect(
+        settleRequesterTurnAfterSessionSpawns({
+          ...requester,
+          requesterYielded: true,
+          acceptedSessionSpawns: [receipt, accepted(sibling)],
+          schedule: vi.fn(),
+        }),
+      ).resolves.toBe(true);
+      for (const entry of [child, sibling]) {
+        expect(entry.requesterTurnRunId).toBeUndefined();
+        expect(entry.requesterSettleWake).toMatchObject({
+          requesterYieldBatch: true,
+          batchRunIds: [child.runId, sibling.runId],
+          rearmGeneration: 2,
+        });
+      }
+    },
+  );
+
+  it.each([
+    "stale",
+    "cancelled",
+    "dispatching",
+    "different-turn",
+    "different-cohort",
+    "ordinary-cohort",
+    "missing-cohort",
+    "retrying-cohort",
+  ] as const)("does not take a %s child completion", async (reason) => {
+    const child = pendingChild();
+    const params = adoption(child);
+    if (reason === "stale") {
+      params.runs.set(child.runId, structuredClone(child));
+    } else if (reason === "cancelled") {
+      child.killIntent = { requestedAt: 2_000, reason: "operator stop" };
+    } else if (reason === "dispatching") {
+      child.requesterSettleWake = { status: "dispatching", attemptCount: 1 };
+    } else if (reason === "different-cohort" || reason === "ordinary-cohort") {
+      child.requesterSettleWake = {
+        status: "pending",
+        attemptCount: 0,
+        batchRunIds: [child.runId, "another-child"],
+        ...(reason === "different-cohort" ? { requesterYieldBatch: true, rearmGeneration: 1 } : {}),
+      };
+    } else if (reason === "retrying-cohort") {
+      child.requesterSettleWake = {
+        status: "pending",
+        attemptCount: 1,
+        batchRunIds: [child.runId],
+        requesterYieldBatch: true,
+        rearmGeneration: 1,
+      };
+    } else if (reason === "missing-cohort") {
+      child.requesterSettleWake = {
+        status: "pending",
+        attemptCount: 0,
+        requesterYieldBatch: true,
+        rearmGeneration: 1,
+      };
+    } else {
+      child.requesterTurnRunId = "another-live-requester-turn";
+    }
+    const before = structuredClone(child);
+    const persist = vi.fn(async () => {});
+    expect(await adoptSubagentRunForRequesterTurnInRuns({ ...params, persist })).toBeUndefined();
+    expect(persist).not.toHaveBeenCalled();
+    expect(child).toEqual(before);
+  });
+
+  it.each(["persistence failure", "revoked caller"] as const)(
+    "retains the previous requester claim after an asynchronous %s",
+    async (failure) => {
+      const child = pendingChild();
+      const before = structuredClone(child);
+      const params = adoption(child);
+      let current = true;
+      await expect(
+        adoptSubagentRunForRequesterTurnInRuns({
+          ...params,
+          assertCurrent: () => {
+            if (!current) {
+              throw new Error("caller retired");
+            }
+          },
+          persist: async (_context, callbacks) => {
+            await Promise.resolve();
+            if (failure === "revoked caller") {
+              current = false;
+              callbacks.assertCurrent();
+            }
+            throw new Error("storage unavailable");
+          },
+        }),
+      ).rejects.toThrow(failure === "revoked caller" ? "caller retired" : "storage unavailable");
+      expect(child).toEqual(before);
+    },
+  );
+});
 
 describe("settleRequesterTurnAfterSessionSpawns", () => {
   it.each([false, true])(

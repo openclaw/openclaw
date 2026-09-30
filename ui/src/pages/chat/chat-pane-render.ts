@@ -44,8 +44,8 @@ import {
   resolveSidebarLayoutForBoard,
 } from "./chat-pane-sidebar-layout.ts";
 import {
+  chatSubmitState,
   dismissChatError,
-  initialHistorySubmitState,
   resolveChatPaneFollowUpMode,
 } from "./chat-pane-state.ts";
 import { ChatProviderReviewController } from "./chat-provider-review-controller.ts";
@@ -338,7 +338,7 @@ export class ChatPane extends ChatPaneLayoutRender {
     const composerAvailability = {
       canCompose: composerAccess.canCompose && composerAvailable,
       canSend: composerAccess.canSend && composerAvailable,
-      ...initialHistorySubmitState(state, initialHistoryUnavailable),
+      ...chatSubmitState(state, initialHistoryUnavailable, !catalog && !suggestionViewer),
       modelRequiredReason,
       disabledReason:
         catalogDisabledReason ??
@@ -557,7 +557,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       },
       composerControls: composerControls?.composerControls ?? nothing,
       permissionPicker: composerControls?.permissionPicker,
-      ...this.suggestionChatProps(state.connected, selectedSessionArchived, multiIdentity),
+      ...this.collaborationChatProps(state.connected, selectedSessionArchived, multiIdentity),
       ...this.sessionPullRequestChatProps(selectedSession?.sessionId),
       // Until catalog success, a lowercase name may be a hidden/ambiguous alias.
       // Do not mint a checkout link that can prefetch the wrong repository.
@@ -576,7 +576,6 @@ export class ChatPane extends ChatPaneLayoutRender {
       // so an active follow lock stays pinned to the latest message.
       onAssistantAttachmentLoaded: () => scheduleChatScroll(state),
       getDraft: () => state.chatMessage,
-      onDraftChange: state.handleChatDraftChange,
       onRequestUpdate: state.requestUpdate,
       onHistoryKeydown: state.handleChatInputHistoryKey,
       onSlashIntent: () => refreshChatCommands(state),

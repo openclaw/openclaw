@@ -1,4 +1,3 @@
-// Converts eligible portable question buttons into numbered reaction choices.
 import { readAskUserQuestionId, type ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { MessagePresentation } from "../interactive/payload.js";
 import { renderMessagePresentationFallbackText } from "../interactive/payload.js";
