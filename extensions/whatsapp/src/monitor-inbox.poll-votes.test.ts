@@ -335,15 +335,7 @@ describe("web monitor inbox poll vote hook", () => {
     const creationKey = { remoteJid: CHAT_JID, id: pollMessageId, fromMe: true };
 
     const normalMessageId = "NORMAL-AFTER-THROWING-POLL-HOOK";
-    let markNormalMessageDelivered!: () => void;
-    const normalMessageDelivered = new Promise<void>((resolve) => {
-      markNormalMessageDelivered = resolve;
-    });
-    const onMessage = vi.fn(async (msg) => {
-      if (msg.key?.id === normalMessageId) {
-        markNormalMessageDelivered();
-      }
-    });
+    const onMessage = vi.fn(async () => {});
     const { sock } = await startInboxMonitor(onMessage, {
       recentMessageKeys: baileysCache.recentMessageKeys,
       baileysGroupMetaCache: baileysCache.baileysGroupMetaCache,
@@ -393,7 +385,7 @@ describe("web monitor inbox poll vote hook", () => {
       ],
     });
 
-    await normalMessageDelivered;
+    await waitForMessageCalls(onMessage, 1);
     await waitForInboundWorkDrained();
 
     expect(maybeEmitWhatsAppPollVoteReceivedHookMock).toHaveBeenCalledWith(
@@ -401,7 +393,7 @@ describe("web monitor inbox poll vote hook", () => {
     );
     expect(onMessage).toHaveBeenCalledTimes(1);
     expect(onMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ key: expect.objectContaining({ id: normalMessageId }) }),
+      expect.objectContaining({ event: expect.objectContaining({ id: normalMessageId }) }),
     );
   });
 
