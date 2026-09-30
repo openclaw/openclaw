@@ -105,8 +105,9 @@ export async function resolveMSTeamsThreadContext(params: {
   const { route, deadline } = params.routing;
   const teamAadGroupId = await params.routing.resolveTeamAadGroupId();
   let quoteBodyFull: string | undefined;
-  let quoteSenderId: string | undefined;
-  let quoteSenderName: string | undefined;
+  const hasEntityQuoteIdentity = params.quoteInfo?.fromQuotedReplyEntity === true;
+  let quoteSenderId = hasEntityQuoteIdentity ? params.quoteInfo?.senderId : undefined;
+  let quoteSenderName = hasEntityQuoteIdentity ? params.quoteInfo?.sender : undefined;
   const quoteMessageId = params.quoteInfo?.id;
   if (quoteMessageId && params.isDirectMessage && params.conversationId.startsWith("19:")) {
     try {
@@ -208,11 +209,13 @@ export async function resolveMSTeamsThreadContext(params: {
         markParentContextInjected(route.sessionKey, threadParentId);
       }
       const allMessages = parentMsg ? [parentMsg, ...replies] : replies;
-      quoteSenderId = parentMsg?.from?.user?.id ?? parentMsg?.from?.application?.id ?? undefined;
-      quoteSenderName =
-        parentMsg?.from?.user?.displayName ??
-        parentMsg?.from?.application?.displayName ??
-        params.quoteInfo?.sender;
+      if (!hasEntityQuoteIdentity) {
+        quoteSenderId = parentMsg?.from?.user?.id ?? parentMsg?.from?.application?.id ?? undefined;
+        quoteSenderName =
+          parentMsg?.from?.user?.displayName ??
+          parentMsg?.from?.application?.displayName ??
+          params.quoteInfo?.sender;
+      }
       const { items: threadMessages } = filterSupplementalContextItems({
         items: allMessages,
         mode: params.contextVisibilityMode,

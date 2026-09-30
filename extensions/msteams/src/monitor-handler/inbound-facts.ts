@@ -8,12 +8,15 @@ import { extractHtmlFromAttachment } from "../attachments/shared.js";
 import { tryNormalizeBotFrameworkServiceUrl } from "../bot-framework-service-url.js";
 import type { StoredConversationReference } from "../conversation-store.js";
 import {
+  buildMSTeamsNormalizedText,
   extractMSTeamsConversationMessageId,
   extractMSTeamsQuoteInfo,
   htmlToPlainText,
   normalizeMSTeamsConversationId,
   stripMSTeamsMentionTags,
   wasMSTeamsBotMentioned,
+  type MSTeamsEntityLike,
+  type MSTeamsQuoteInfo,
 } from "../inbound.js";
 import type { MSTeamsIngressLifecycle } from "../msteams-ingress.js";
 import type { MSTeamsTurnContext } from "../sdk-types.js";
@@ -44,8 +47,29 @@ export type MSTeamsDebounceEntry = {
   attachments: MSTeamsAttachmentLike[];
   wasMentioned: boolean;
   implicitMentionKinds: Array<"reply_to_bot">;
+  quoteInfo?: MSTeamsQuoteInfo;
   turnAdoptionLifecycle?: MSTeamsIngressLifecycle;
 };
+
+export function mergeMSTeamsQuoteInfo(
+  entries: readonly Pick<MSTeamsDebounceEntry, "quoteInfo">[],
+): MSTeamsQuoteInfo | undefined {
+  const quoteInfos = entries.flatMap((entry) => (entry.quoteInfo ? [entry.quoteInfo] : []));
+  const first = quoteInfos[0];
+  if (!first) {
+    return undefined;
+  }
+  return quoteInfos.every(
+    (candidate) =>
+      candidate.id === first.id &&
+      candidate.senderId === first.senderId &&
+      candidate.sender === first.sender &&
+      candidate.body === first.body &&
+      candidate.fromQuotedReplyEntity === first.fromQuotedReplyEntity,
+  )
+    ? first
+    : undefined;
+}
 
 export async function prepareMSTeamsDebounceEntry(params: {
   context: MSTeamsTurnContext;
@@ -57,8 +81,16 @@ export async function prepareMSTeamsDebounceEntry(params: {
     : [];
   const rawText = activity.text?.trim() ?? "";
   // HTML mentions are stripped before decoding so literally typed <at> tags survive.
+  // SAFETY: SDK entities are generic records; inbound parsers validate nested values before use.
+  const entities = (activity.entities ?? []) as MSTeamsEntityLike[];
   const text = rawText
-    ? stripMSTeamsMentionTags(rawText)
+    ? buildMSTeamsNormalizedText({
+        text: rawText,
+        entities,
+        attachments,
+        botId: activity.recipient?.id,
+        botName: activity.recipient?.name,
+      })
     : extractTextFromHtmlAttachments(attachments) ||
       stripMSTeamsMentionTags(serializeMSTeamsAdaptiveCardActionValue(activity.value) || "");
   const conversationId = normalizeMSTeamsConversationId(activity.conversation?.id ?? "");
@@ -77,6 +109,7 @@ export async function prepareMSTeamsDebounceEntry(params: {
     attachments,
     wasMentioned: wasMSTeamsBotMentioned(activity),
     implicitMentionKinds,
+    quoteInfo: extractMSTeamsQuoteInfo(attachments, entities),
     turnAdoptionLifecycle: params.turnAdoptionLifecycle,
   };
 }
@@ -140,7 +173,7 @@ export function assembleMSTeamsInboundFacts(entry: MSTeamsDebounceEntry) {
     conversation,
     rawBody: entry.text,
     advertisedMedia,
-    quoteInfo: extractMSTeamsQuoteInfo(entry.attachments),
+    quoteInfo: entry.quoteInfo,
     attachmentTypes: entry.attachments
       .map((attachment) =>
         typeof attachment.contentType === "string" ? attachment.contentType : undefined,
