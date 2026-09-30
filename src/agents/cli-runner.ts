@@ -1,7 +1,6 @@
 /**
  * Top-level CLI-backed agent runner orchestration.
  */
-import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { runWithCliHistoryWriter } from "../config/sessions/cli-history-boundary.js";
 import { prepareCronRootSessionGeneration } from "../config/sessions/session-delivery-generation.js";
 import { buildGenericCliContextEngineHostSupport } from "../context-engine/host-compat.js";
@@ -15,17 +14,13 @@ import { areDiagnosticsEnabledForProcess } from "../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
-  buildHandledBeforeAgentReplyPayloads,
-  runBeforeAgentReplyForTurn,
-} from "../plugins/before-agent-reply.js";
-import {
   buildAgentHookContextChannelFields,
   buildAgentHookContextIdentityFields,
 } from "../plugins/hook-agent-context.js";
 import { resolveBlockMessage } from "../plugins/hook-decision-types.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { bindOperatorModelExecution, readRunOperatorAuthority } from "./admitted-run-context.js";
-import { resolveCliBackendConfig } from "./cli-backends.js";
+import { runCliBeforeAgentReply } from "./cli-runner/before-agent-reply.js";
 import { runCliCleanup } from "./cli-runner/cleanup.js";
 import { acceptsCliLiveSession } from "./cli-runner/cli-live-session-registry.js";
 import {
@@ -61,7 +56,7 @@ import {
   getCliMessagingDeliveryEvidence,
 } from "./cli-runner/delivery-evidence.js";
 import { createCliFailoverError } from "./cli-runner/exit-error.js";
-import { cliBackendLog, formatCliBackendOutputDigest } from "./cli-runner/log.js";
+import { cliBackendLog } from "./cli-runner/log.js";
 import {
   runClaudeCliAgentTurnWithDiagnostics,
   type ClaudeCliRunDiagnosticLifecycle,
@@ -155,74 +150,7 @@ async function runCliAgentInternal(
   assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration!);
   params.abortSignal?.throwIfAborted();
   params.assertCurrent?.();
-  const hookStartedAt = Date.now();
-  // Prompt-only inference cannot enter agent hooks: they may replace the turn
-  // or add side effects before the exact zero-tool process even starts.
-  const hookResult =
-    params.isolatedCompletion || params.controlOperation
-      ? undefined
-      : await runBeforeAgentReplyForTurn({
-          runId: params.runId,
-          trigger: params.trigger,
-          event: { cleanedBody: params.prompt },
-          context: {
-            runId: params.runId,
-            jobId: params.jobId,
-            agentId: params.agentId,
-            sessionKey: params.sessionKey,
-            sessionId: params.sessionId,
-            workspaceDir: params.workspaceDir,
-            trigger: params.trigger,
-            ...buildAgentHookContextChannelFields(params),
-            ...buildAgentHookContextIdentityFields({
-              trigger: params.trigger,
-              senderId: params.senderId,
-              chatId: params.chatId,
-              channelContext: params.channelContext,
-            }),
-          },
-          onDispatch: () =>
-            params.onExecutionPhase?.({
-              phase: "before_agent_reply",
-              provider: params.provider,
-              model: params.model ?? "",
-            }),
-          onDeclined: () =>
-            params.onExecutionPhase?.({
-              phase: "runtime_plugins",
-              provider: params.provider,
-              model: params.model ?? "",
-            }),
-        });
-  if (hookResult?.handled) {
-    const finalText = hookResult.reply?.text ?? SILENT_REPLY_TOKEN;
-    const syntheticBackend = resolveCliBackendConfig(params.provider, params.config, {
-      agentId: params.agentId,
-    });
-    const sessionBindingDisabled = syntheticBackend?.config.sessionMode === "none";
-    cliBackendLog.info(
-      `cli synthetic turn: provider=${params.provider} model=<synthetic> requestedModel=${params.model ?? ""} durationMs=${Date.now() - hookStartedAt} ${formatCliBackendOutputDigest(finalText)}`,
-    );
-    return {
-      payloads: buildHandledBeforeAgentReplyPayloads(hookResult.reply),
-      meta: {
-        durationMs: Date.now() - hookStartedAt,
-        agentMeta: {
-          sessionId: "",
-          provider: params.modelProvider ?? params.provider,
-          model: params.model ?? "",
-          ...(sessionBindingDisabled ? { clearCliSessionBinding: true } : {}),
-        },
-        finalAssistantVisibleText: finalText,
-        finalAssistantRawText: finalText,
-      },
-    };
-  }
-  const modelExecution = bindOperatorModelExecution(
-    readRunOperatorAuthority(params),
-    params.requesterModel,
-    params.mapOperatorAuthorizationError,
-  );
+  let modelExecution: ReturnType<typeof bindOperatorModelExecution>;
   const assertCallerCurrent = params.assertCurrent;
   const generationAbortController = new AbortController();
   let generation: Awaited<ReturnType<typeof prepareCronRootSessionGeneration>>;
@@ -241,6 +169,15 @@ async function runCliAgentInternal(
             (reason) => generationAbortController.abort(reason),
           )
         : undefined;
+    const hookResult = await runCliBeforeAgentReply(params, generation?.assertCurrent);
+    if (hookResult) {
+      return hookResult;
+    }
+    modelExecution = bindOperatorModelExecution(
+      readRunOperatorAuthority(params),
+      params.requesterModel,
+      params.mapOperatorAuthorizationError,
+    );
     const abortSignals = [
       params.abortSignal,
       modelExecution?.signal,
