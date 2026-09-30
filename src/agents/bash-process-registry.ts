@@ -344,6 +344,9 @@ export function recordNotifyOnExitRemoval(
   remove: NotifyOnExitRemoval,
 ): void {
   if (session.terminalPollObserved) {
+    // The precise receipt consumes exactly this occurrence by its durable id,
+    // and the shared settlement observer retires the matching steering copy, so
+    // no process-wide invalidation is needed here.
     remove();
     return;
   }
@@ -352,10 +355,16 @@ export function recordNotifyOnExitRemoval(
 
 /** Acknowledges one completion event without touching unrelated queue entries. */
 export function acknowledgeNotifyOnExit(record: {
+  id?: string;
   notifyOnExitRemoval?: NotifyOnExitRemoval;
   terminalPollObserved?: boolean;
 }): void {
   record.terminalPollObserved = true;
+  // A terminal poll or heartbeat consumes exactly this completion's durable
+  // event, and the shared settlement observer retires the steering copy that
+  // carries the same id. Delivered exactly once across steering, heartbeat, and
+  // poll. Settling by `exec:<id>` here would instead also match a later process
+  // that reused the slug, deleting an unrelated session's steering item.
   const remove = record.notifyOnExitRemoval;
   if (!remove) {
     return;

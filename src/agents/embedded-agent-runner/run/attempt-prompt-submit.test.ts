@@ -97,6 +97,7 @@ function createBaseInput() {
     modelPrompt: "model prompt",
     onFinalPromptText: vi.fn(),
     onSteeringAcknowledged: vi.fn(),
+    onExecSteeringAcknowledged: vi.fn(),
     persistToolResultProjections: vi.fn(async () => {}),
     prependContext: "prepend context",
     runtimeOnly: false,
@@ -711,6 +712,7 @@ describe("submitEmbeddedAttemptPrompt", () => {
           applyPromptBuildToolsAllow: () => [],
           setActiveSessionSystemPrompt: vi.fn(),
           setLeasedSteering: vi.fn(),
+          setLeasedExecSteering: vi.fn(),
         });
         await submitEmbeddedAttemptPrompt({
           ...input,

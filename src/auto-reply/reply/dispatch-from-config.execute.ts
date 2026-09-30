@@ -2,6 +2,7 @@ import {
   hasOutboundReplyContent,
   isFastModeAutoProgressPayload,
 } from "openclaw/plugin-sdk/reply-payload";
+import type { ExecSteeringDeliverySettlement } from "../../agents/exec-steering-queue.js";
 import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../../agents/failover/user-copy.js";
 import { isAskUserPromptPending } from "../../agents/tools/ask-user-tool.js";
 import { settleProgressVisibilityCallbackResult } from "../../channels/progress-visibility.js";
@@ -80,6 +81,16 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     pendingContinuationSettlement = undefined;
     await settlement?.settle(false);
   };
+  // Every attempt that dispatched a steered exec completion hands its exact
+  // receipt here; finalization settles them against final delivery.
+  let pendingExecSteeringSettlements: ExecSteeringDeliverySettlement[] = [];
+  const releasePendingExecSteering = () => {
+    const settlements = pendingExecSteeringSettlements;
+    pendingExecSteeringSettlements = [];
+    for (const settlement of settlements) {
+      settlement.settle(false);
+    }
+  };
   let didDeliverVisiblePartialReply = false;
   const {
     onBlockReply,
@@ -141,6 +152,9 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
               onPendingContinuation: (settlement) => {
                 pendingContinuation = true;
                 pendingContinuationSettlement ??= settlement;
+              },
+              onPendingExecSteering: (settlement) => {
+                pendingExecSteeringSettlements.push(settlement);
               },
               onSessionMetadataChanges: notifySessionMetadataChanges,
               onSessionPrepared: state.notePreparedSession,
@@ -442,6 +456,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
       await flushBlockTtsText();
     }
   }).catch(async (error: unknown) => {
+    releasePendingExecSteering();
     await releasePendingContinuation();
     await flushDeferredFinalText();
     const failedAgentRun = getAgentRunTerminalOutcome() === "failed";
@@ -502,12 +517,15 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     const nextState = Object.assign(state, {
       pendingContinuation,
       pendingContinuationSettlement,
+      pendingExecSteeringSettlements,
       replyResult,
     });
-    // Finalization now owns the exact settlement; earlier returns and throws release it here.
+    // Finalization now owns the exact settlements; earlier returns and throws release them here.
     pendingContinuationSettlement = undefined;
+    pendingExecSteeringSettlements = [];
     return { status: "ready" as const, state: nextState };
   } finally {
+    releasePendingExecSteering();
     await releasePendingContinuation();
   }
 }

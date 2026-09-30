@@ -102,6 +102,7 @@ describe("sessions_yield transcript handoff", () => {
             handleMidTurnPrecheckRequest: vi.fn(),
             markYieldAborted: vi.fn(),
             releaseLeasedSteering: vi.fn(),
+            releaseLeasedExecSteering: vi.fn(),
             withOwnedTranscriptWrite: async (operation) => await operation(),
             yieldAbortSettled: null,
             yieldDetected: true,

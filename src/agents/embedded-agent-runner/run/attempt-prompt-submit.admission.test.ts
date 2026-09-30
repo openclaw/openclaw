@@ -77,6 +77,7 @@ describe("embedded provider dispatch admission", () => {
           modelPrompt: message.content,
           onFinalPromptText: vi.fn(),
           onSteeringAcknowledged: vi.fn(),
+          onExecSteeringAcknowledged: vi.fn(),
           persistToolResultProjections: async () => {},
           runtimeOnly: false,
           sessionPromptState: getEmbeddedSessionPromptState(sessionId),
