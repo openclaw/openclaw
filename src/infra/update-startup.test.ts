@@ -1763,7 +1763,7 @@ describe("update-startup", () => {
     const log = { info: vi.fn() };
 
     await runGatewayUpdateCheck({
-      cfg: createBetaAutoUpdateConfig({ checkOnStart: false }),
+      cfg: { update: { ...createBetaAutoUpdateConfig().update, checkOnStart: false } },
       runAutoUpdate,
       log,
     });
