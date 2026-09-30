@@ -792,7 +792,7 @@ describe("worker detached model-context branch parity", () => {
   it("skips the durable relaunch inspection on the launch that persists its own admission", async () => {
     seedPrevious();
     const inputRecorder = recorder();
-    const originalOpenBounded = SessionManager.openBoundedAsync;
+    const originalOpenBounded = SessionManager.openBoundedAsync.bind(SessionManager);
     const boundedReads = vi.spyOn(SessionManager, "openBoundedAsync");
     boundedReads.mockImplementation(((...args: unknown[]) =>
       // SAFETY: test-only passthrough to the real bounded opener.
