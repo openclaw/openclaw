@@ -170,9 +170,8 @@ vi.mock("../config/config.js", async (importOriginal) => ({
   CONFIG_PATH: "/tmp/openclaw.json",
 }));
 
-vi.mock("../infra/update-doctor-result.js", () => ({
-  UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE: 86,
-  UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV: "OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH",
+vi.mock("../infra/update-doctor-result.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/update-doctor-result.js")>()),
   writeUpdatePostInstallDoctorResult: mocks.writeUpdatePostInstallDoctorResult,
 }));
 
