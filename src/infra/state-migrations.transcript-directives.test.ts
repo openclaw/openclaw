@@ -7,6 +7,10 @@ import { readSessionArchiveContentSync } from "../config/sessions/archive-compre
 import { resolveSqliteTranscriptArchiveDirectory } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { reconcileSessionTranscriptIndexInTransaction } from "../config/sessions/session-transcript-index.js";
 import {
+  beginAgentDeletionJournal,
+  completeAgentDeletionJournal,
+} from "../state/agent-deletion-journal.js";
+import {
   AGENT_DATABASE_MAINTENANCE_LEASE,
   assertAgentDatabaseMaintenanceAuthority,
   claimOpenClawAgentDatabaseLease,
@@ -918,6 +922,61 @@ describe("historical transcript directive migration", () => {
       sessionId: "",
     });
     releaseOpenClawAgentDatabaseLease(competingLeaseId as string, { env });
+  });
+
+  it("stops resumed transcript writes when the agent is deleted between batches", async () => {
+    const stateDir = makeTempDir(tempDirs, "transcript-directive-retained-resume-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const agentId = "main";
+    const opened = openOpenClawAgentDatabase({ agentId, env });
+    for (let index = 0; index <= 32; index += 1) {
+      insertSession(opened.db, {
+        events: [
+          messageEvent({
+            content: [{ type: "text", text: "[[reply_to_current]] Migrating" }],
+            id: `assistant-retained-${index}`,
+            role: "assistant",
+            timestamp: index + 1,
+          }),
+        ],
+        generation: "before",
+        sessionId: `session-${String(index).padStart(2, "0")}`,
+      });
+    }
+    const finalSessionId = "session-32";
+    const finalEventJson = readEventJson(opened.path, finalSessionId, 0);
+    closeOpenClawAgentDatabasesForTest();
+
+    const operationId = "retained-during-transcript-resume";
+    vi.spyOn(globalThis, "setImmediate").mockImplementationOnce((callback) => {
+      beginAgentDeletionJournal(
+        {
+          agentId,
+          operationId,
+          agentDir: path.dirname(opened.path),
+          workspaceDir: path.join(stateDir, "workspace-main"),
+          sessionsDir: path.join(stateDir, "agents", agentId, "sessions"),
+          databasePaths: [opened.path],
+          deleteFiles: false,
+        },
+        { env },
+      );
+      expect(completeAgentDeletionJournal(agentId, operationId, { env })).toBe(true);
+      callback();
+      return 0 as unknown as NodeJS.Immediate;
+    });
+
+    const result = await migrateHistoricalTranscriptDirectives({ env });
+
+    expect(result.warnings).toEqual([]);
+    expect(result.notices).toEqual([
+      expect.stringContaining(`Held retained database ${opened.path} for deleted agent ${agentId}`),
+    ]);
+    expect(readEventJson(opened.path, finalSessionId, 0)).toBe(finalEventJson);
+    expect(readMigrationCursor(opened.path)).toEqual({
+      phase: "transcripts",
+      sessionId: "session-31",
+    });
   });
 
   it("renews maintenance beyond its original lifetime and fences writers through final mutation", async () => {

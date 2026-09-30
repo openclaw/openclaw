@@ -236,6 +236,7 @@ function rewriteArchiveRow(database: DatabaseSync, planned: ArchiveRowPlan): boo
 
 function repairPublishedArchiveFile(params: {
   archiveDirectory: string;
+  assertWritable: () => void;
   planned: ArchiveRowPlan;
 }): boolean {
   const archiveDirectory = path.resolve(params.archiveDirectory);
@@ -256,6 +257,7 @@ function repairPublishedArchiveFile(params: {
     return true;
   }
   assertAgentDatabaseMaintenanceAuthority();
+  params.assertWritable();
   replaceFileAtomicSync({
     beforeRename: ({ tempPath }) => {
       const stagedHash = createHash("sha256").update(fs.readFileSync(tempPath)).digest("hex");
@@ -265,6 +267,7 @@ function repairPublishedArchiveFile(params: {
       // Staging and fsync can outlive the timer-driven lease heartbeat. Recheck
       // at the atomic publication boundary so an expired owner cannot rename.
       assertAgentDatabaseMaintenanceAuthority();
+      params.assertWritable();
     },
     content: params.planned.nextBytes,
     filePath: archivePath,
@@ -326,6 +329,7 @@ function finalizeArchiveCursor(params: {
 
 export async function migrateTranscriptDirectiveArchives(params: {
   agentId: string;
+  assertWritable: () => void;
   database: DatabaseSync;
   pathname: string;
   start: ArchiveCursor;
@@ -342,6 +346,7 @@ export async function migrateTranscriptDirectiveArchives(params: {
     if (batch.length === 0) {
       runSqliteImmediateTransactionSync(params.database, () => {
         assertAgentDatabaseMaintenanceAuthority();
+        params.assertWritable();
         params.writeCursor({ phase: "complete" });
         assertAgentDatabaseMaintenanceAuthority();
       });
@@ -352,6 +357,7 @@ export async function migrateTranscriptDirectiveArchives(params: {
         params.database,
         () => {
           assertAgentDatabaseMaintenanceAuthority();
+          params.assertWritable();
           const currentRowPresent = rewriteArchiveRow(params.database, planned);
           assertAgentDatabaseMaintenanceAuthority();
           return currentRowPresent;
@@ -363,12 +369,17 @@ export async function migrateTranscriptDirectiveArchives(params: {
         },
       );
       const fileCurrent = rowPresent
-        ? repairPublishedArchiveFile({ archiveDirectory, planned })
+        ? repairPublishedArchiveFile({
+            archiveDirectory,
+            assertWritable: params.assertWritable,
+            planned,
+          })
         : false;
       runSqliteImmediateTransactionSync(
         params.database,
         () => {
           assertAgentDatabaseMaintenanceAuthority();
+          params.assertWritable();
           finalizeArchiveCursor({
             database: params.database,
             fileCurrent,

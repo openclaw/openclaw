@@ -26,7 +26,11 @@ import {
 } from "./kysely-sync.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
-import { resolveAgentDatabaseMigrationTargets } from "./state-migrations.media-persistence-targets.js";
+import {
+  assertRetainedAgentDatabaseWritable,
+  resolveAgentDatabaseMigrationTargets,
+  RetainedAgentDatabaseHoldError,
+} from "./state-migrations.media-persistence-targets.js";
 import {
   migrateTranscriptDirectiveArchives,
   TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE,
@@ -265,6 +269,7 @@ async function yieldToMaintenanceHeartbeat(): Promise<void> {
 
 async function migrateTranscriptSessions(params: {
   agentId: string;
+  assertWritable: () => void;
   database: DatabaseSync;
   owner: OpenClawAgentDatabase;
   pathname: string;
@@ -277,6 +282,7 @@ async function migrateTranscriptSessions(params: {
     if (sessionIds.length === 0) {
       runSqliteImmediateTransactionSync(params.database, () => {
         assertAgentDatabaseMaintenanceAuthority();
+        params.assertWritable();
         writeMigrationCursor(params.database, params.agentId, {
           generation: "",
           phase: "archives",
@@ -293,6 +299,7 @@ async function migrateTranscriptSessions(params: {
         params.database,
         () => {
           assertAgentDatabaseMaintenanceAuthority();
+          params.assertWritable();
           assertTranscriptSessionSourceUnchanged(params.database, sessionId, planned);
           updateSqliteTranscriptEventJsonInTransaction(
             params.owner,
@@ -325,8 +332,10 @@ async function migrateTranscriptSessions(params: {
 
 async function migrateAgentDatabase(params: {
   agentId: string;
+  assertWritable: () => void;
   pathname: string;
 }): Promise<DatabaseMigrationResult> {
+  params.assertWritable();
   migrateOpenClawAgentDatabaseForMaintenance(params);
   const database = openNodeSqliteDatabase(params.pathname);
   try {
@@ -341,6 +350,7 @@ async function migrateAgentDatabase(params: {
       cursor.phase === "transcripts"
         ? await migrateTranscriptSessions({
             agentId: params.agentId,
+            assertWritable: params.assertWritable,
             database,
             owner,
             pathname: params.pathname,
@@ -352,6 +362,7 @@ async function migrateAgentDatabase(params: {
       archiveCursor.phase === "archives"
         ? await migrateTranscriptDirectiveArchives({
             agentId: params.agentId,
+            assertWritable: params.assertWritable,
             database,
             pathname: params.pathname,
             start: archiveCursor,
@@ -466,6 +477,13 @@ export async function migrateHistoricalTranscriptDirectives(
         try {
           const result = await migrateAgentDatabase({
             agentId: target.agentId,
+            assertWritable: () =>
+              assertRetainedAgentDatabaseWritable({
+                candidate: target,
+                configuredAgentDatabaseTargets: params.configuredAgentDatabaseTargets ?? [],
+                env,
+                warnings,
+              }),
             pathname: target.path,
           });
           if (result.transcriptSessions > 0 || result.archivedTranscripts > 0) {
@@ -474,6 +492,10 @@ export async function migrateHistoricalTranscriptDirectives(
             );
           }
         } catch (error) {
+          if (error instanceof RetainedAgentDatabaseHoldError) {
+            error.record(notices, warnings);
+            continue;
+          }
           warnings.push(
             `Skipped historical transcript directive migration for ${target.path}: ${String(error)}`,
           );
