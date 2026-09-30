@@ -304,7 +304,7 @@ export function resolveNewSessionSubmitBlock(
           ? t("newSession.checkingGit")
           : place.remotePlacement
             ? t("newSession.remoteSourceUnavailable")
-            : t("newSession.worktreeUnavailable"),
+            : t("newSession.gitCheckUnavailable"),
     };
   }
   if (place.worktree && !place.freshWorkspace && !isWorktreeNameValid(place.worktreeName)) {
