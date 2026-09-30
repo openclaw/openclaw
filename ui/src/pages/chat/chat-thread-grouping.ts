@@ -6,7 +6,11 @@ import type { ChatItem, MessageGroup } from "../../lib/chat/chat-types.ts";
 import { resolveMessageDisplayMarkdown } from "../../lib/chat/message-display.ts";
 import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
 import { resolveMessageVisibleContent } from "../../lib/chat/message-visibility.ts";
-import { senderIdentityKey } from "../../lib/chat/sender-label.ts";
+import {
+  senderIdentityKey,
+  sessionParticipantIdentityKey,
+  type SenderIdentity,
+} from "../../lib/chat/sender-label.ts";
 import { extractToolCardsCached, isToolCardError } from "../../lib/chat/tool-cards.ts";
 import {
   assistantMessageIsInterrupted,
@@ -17,6 +21,7 @@ import { userTurnRunId } from "./chat-thread-items.ts";
 import { transcriptRunId } from "./chat-thread-run-identity.ts";
 import {
   assistantGroupIsForwardedBoundary,
+  chatItemStartsDisplayTurn,
   chatItemStartsUserTurn,
   hasForwardedSource,
 } from "./chat-turn-boundary.ts";
@@ -26,49 +31,195 @@ function assistantMessageKind(message: unknown, visibleContent: MessageGroup["vi
   return resolveAssistantReplyPhase(message) ?? (visibleContent === "none" ? "activity" : "reply");
 }
 
+/**
+ * Keys a sender without a typed identity by its id alone; names change, ids do
+ * not. The Gateway stores a profile user's id as `senderId` (typed identities
+ * persist only when their id equals it), so an untyped id that matches a
+ * counted profile is that person. Any other untyped id is its own person.
+ */
+function untypedSenderPersonKey(
+  sender: SenderIdentity,
+  people: ReadonlySet<string>,
+  localPerson: string | undefined,
+): string {
+  if (!sender.id) {
+    return JSON.stringify(["sender-label", sender.username ?? sender.name ?? ""]);
+  }
+  const profile = sessionParticipantIdentityKey({ type: "profile", id: sender.id });
+  return people.has(profile) || profile === localPerson
+    ? profile
+    : JSON.stringify(["sender", sender.id]);
+}
+
+type ReplyState = {
+  sender?: MessageGroup["sender"];
+  message?: MessageGroup["replyToMessage"];
+  turnSource?: MessageGroup["replyTurnSource"];
+};
+
+/**
+ * Reply context comes from the full transcript, not the rendered rows: search
+ * renders a subset that can drop the other speaker or the prompt a reply answers.
+ */
 function stampReplyAttribution(
   items: Array<ChatItem | MessageGroup>,
+  context: Array<ChatItem | MessageGroup>,
+  { people: sessionPeople, localPerson }: ReplyAttributionContext,
 ): Array<ChatItem | MessageGroup> {
-  const userSenderKeys = new Set<string>();
-  for (const item of items) {
-    if (item.kind !== "group" || item.role !== "user" || !item.sender) {
+  const people = new Set(sessionPeople);
+  const untypedSenders: SenderIdentity[] = [];
+  // reply_to_current names the prompt that started the run. Only the persisted
+  // user-turn run identity resolves it; an ambiguous owner stays unresolved.
+  const runPrompts = new Map<string, MessageGroup["messages"][number] | null>();
+  const stateBefore = new Map<string, ReplyState>();
+  let state: ReplyState = {};
+  for (const item of context) {
+    // System notices and projected/forwarded inputs own turns too. Clear the
+    // previous prompt before recording reply state for their output.
+    if (chatItemStartsUserTurn(item) && !(item.kind === "group" && item.role === "user")) {
+      state = {};
+    }
+    if (item.kind === "stream") {
+      stateBefore.set(item.key, state);
+    }
+    if (item.kind !== "group") {
       continue;
     }
-    const senderKey = senderIdentityKey(item.sender);
-    if (senderKey) {
-      userSenderKeys.add(senderKey);
+    for (const source of item.messages) {
+      stateBefore.set(source.key, state);
+    }
+    if (item.role === "user") {
+      for (const source of item.messages) {
+        const runId = userTurnRunId(source.message);
+        if (runId) {
+          runPrompts.set(runId, runPrompts.has(runId) ? null : source);
+        }
+      }
+      // A local message carries no sender metadata: its author is the signed-in
+      // viewer, one person for counting, never a name for this message.
+      if (item.sender?.identity) {
+        people.add(sessionParticipantIdentityKey(item.sender.identity));
+      } else if (item.sender) {
+        untypedSenders.push(item.sender);
+      } else if (!item.senderSession && localPerson) {
+        people.add(localPerson);
+      }
+      // A sender-less user group clears attribution: no chip is safer than
+      // mislabeling the reply as addressed to the previous participant.
+      const last = item.messages.at(-1);
+      state = { sender: item.sender, message: item.sender ? last : undefined, turnSource: last };
+    } else if (item.role === "assistant" && hasForwardedSource(item)) {
+      // Forwarded input starts a turn without a local human reply recipient.
+      state = {};
     }
   }
-  if (userSenderKeys.size < 2) {
-    return items;
+  // Untyped senders resolve after every typed person is known, so order never splits one.
+  for (const sender of untypedSenders) {
+    people.add(untypedSenderPersonKey(sender, people, localPerson));
   }
+  // Automatic attribution is only useful when several people share the thread.
+  const shared = people.size >= 2;
 
-  let latestUserSender: MessageGroup["sender"];
-  for (const item of items) {
+  // Rows outside the context (live output) take the state of the next row that
+  // has one, or the transcript end.
+  const states: ReplyState[] = [];
+  let next = state;
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index]!;
+    const known =
+      item.kind === "group"
+        ? item.messages.map((source) => stateBefore.get(source.key)).find(Boolean)
+        : item.kind === "stream"
+          ? stateBefore.get(item.key)
+          : undefined;
+    states[index] = known ?? next;
+    if (known) {
+      next = known;
+    }
+  }
+  for (const [index, item] of items.entries()) {
+    const { sender, message, turnSource } = states[index]!;
     if (item.kind === "stream") {
-      item.replyToSender = latestUserSender;
+      if (shared) {
+        item.replyToSender = sender;
+        item.replyToMessage = message;
+      }
       continue;
     }
     if (item.kind !== "group") {
       continue;
     }
-    if (item.role === "user") {
-      // A sender-less user group clears attribution: no chip is safer than
-      // mislabeling the reply as addressed to the previous participant.
-      latestUserSender = item.sender;
-    } else if (item.role === "assistant" && hasForwardedSource(item)) {
-      // Forwarded input starts a turn without a local human reply recipient.
-      latestUserSender = undefined;
-    } else if (item.role === "assistant" && latestUserSender) {
-      item.replyToSender = latestUserSender;
+    // Every strip follows the thread: an unattributed source is "You" only in 1:1.
+    if (shared) {
+      item.replyShared = true;
+    }
+    if (item.role !== "assistant" || hasForwardedSource(item)) {
+      continue;
+    }
+    const currentSource =
+      item.runId && item.messages.some((source) => source.replyTarget?.kind === "current")
+        ? runPrompts.get(item.runId)
+        : undefined;
+    if (turnSource) {
+      item.replyTurnSource = turnSource;
+    }
+    if (currentSource) {
+      item.replyCurrentSource = currentSource;
+    }
+    if (shared && sender) {
+      item.replyToSender = sender;
+      item.replyToMessage = message;
     }
   }
   return items;
 }
-export function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
+
+/** Transcript facts that outlive the rendered subset of rows. */
+export type ReplyAttributionContext = {
+  /** Every transcript row, including those a search hides from `items`. */
+  items?: ChatItem[];
+  /** People the session row lists, keyed by `sessionParticipantIdentityKey`. */
+  people?: readonly string[];
+  /** Key of the signed-in viewer, who authors local user messages without a sender. */
+  localPerson?: string;
+};
+
+export function groupMessages(
+  items: ChatItem[],
+  replyContext: ReplyAttributionContext = {},
+): Array<ChatItem | MessageGroup> {
+  const result = groupChatItems(
+    items,
+    replyContext.items && rowsAfterHiddenTurns(items, replyContext.items),
+  );
+  const context = replyContext.items ? groupChatItems(replyContext.items) : result;
+  return stampReplyAttribution(result, context, replyContext);
+}
+
+/** Search hides rows, not turns: a row after a hidden turn start never joins the group before it. */
+function rowsAfterHiddenTurns(items: ChatItem[], context: ChatItem[]): Set<string> {
+  const visible = new Set(items.map((item) => item.key));
+  const rows = new Set<string>();
+  let hiddenTurn = false;
+  for (const item of context) {
+    if (!visible.has(item.key)) {
+      hiddenTurn ||= chatItemStartsDisplayTurn(item);
+    } else if (hiddenTurn) {
+      rows.add(item.key);
+      hiddenTurn = false;
+    }
+  }
+  return rows;
+}
+
+function groupChatItems(
+  items: ChatItem[],
+  rowsAfterHiddenTurn?: ReadonlySet<string>,
+): Array<ChatItem | MessageGroup> {
   const result: Array<ChatItem | MessageGroup> = [];
   let currentGroup: MessageGroup | null = null;
   let currentUserTurnIdentity: string | null = null;
+  let currentReplyTargetKey: string | null = null;
 
   for (const prepared of prepareMessagesForGrouping(items)) {
     if (prepared.kind !== "message") {
@@ -89,6 +240,7 @@ export function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup>
       message: item.message,
       key: item.key,
       duplicateCount: item.duplicateCount,
+      ...(normalized.replyTarget ? { replyTarget: normalized.replyTarget } : {}),
       hasVisibleContent:
         visibleContent === "non-text" ||
         Boolean(resolveMessageDisplayMarkdown(item.message, normalized).trim()),
@@ -104,9 +256,12 @@ export function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup>
     // user runIds onto groups: reply-less activity pooling uses that field.
     const steerTarget = role === "user" ? persistedSteerTargetRunId(item.message) : null;
     const userTurnIdentity = role === "user" ? (steerTarget ?? userTurnRunId(item.message)) : null;
+    const replyTargetKey =
+      role === "assistant" ? JSON.stringify(normalized.replyTarget ?? null) : null;
     const shouldSplitBySender = role === "user" || role === "assistant";
     const startsProjectedTurn =
       item.startsTurn === true ||
+      rowsAfterHiddenTurn?.has(item.key) === true ||
       asRecord(asRecord(item.message)?.["__openclaw"])?.turnBoundary === true;
     const splitsAssistantKind =
       role === "assistant" &&
@@ -120,6 +275,7 @@ export function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup>
       currentGroup.role !== role ||
       currentGroup.runId !== runId ||
       currentUserTurnIdentity !== userTurnIdentity ||
+      (role === "assistant" && currentReplyTargetKey !== replyTargetKey) ||
       splitsAssistantKind ||
       messageClientSourcesKey(currentGroup.sourceClients ?? []) !==
         messageClientSourcesKey(normalized.sourceClients ?? []) ||
@@ -133,6 +289,7 @@ export function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup>
         result.push(currentGroup);
       }
       currentUserTurnIdentity = userTurnIdentity;
+      currentReplyTargetKey = replyTargetKey;
       currentGroup = {
         kind: "group",
         key: `group:${role}:${item.key}`,
@@ -158,7 +315,7 @@ export function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup>
   if (currentGroup) {
     result.push(currentGroup);
   }
-  return stampReplyAttribution(result);
+  return result;
 }
 
 type RenderChatItem = ChatItem | MessageGroup;
@@ -168,6 +325,7 @@ export type StreamRunRenderItem = {
   runId?: string;
   boundaryId?: string;
   replyToSender?: MessageGroup["replyToSender"];
+  replyToMessage?: MessageGroup["replyToMessage"];
   parts: Array<Extract<ChatItem, { kind: "stream" | "reading-indicator" }>>;
 };
 export function coalesceStreamRuns(
@@ -184,6 +342,7 @@ export function coalesceStreamRuns(
         key: `stream-run:${first.key}`,
         parts: run,
         replyToSender: run.find((part) => part.kind === "stream")?.replyToSender,
+        replyToMessage: run.find((part) => part.kind === "stream")?.replyToMessage,
         ...(runId ? { runId } : {}),
         ...(boundaryId ? { boundaryId } : {}),
       });

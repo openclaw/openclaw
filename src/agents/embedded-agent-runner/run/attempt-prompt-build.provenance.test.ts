@@ -309,6 +309,7 @@ it("injects complete lifecycle results into requester prompts and acknowledges o
     runs,
     persist,
     persistOrThrow: persist,
+    persistAsyncOrThrow: controller.options.persistAsyncOrThrow,
     restoreOnce: vi.fn(async () => {}),
     startAnnounceCleanup: vi.fn(() => false),
     settleRequesterTurn: controller.settleRequesterTurnAfterSessionSpawns,

@@ -179,7 +179,7 @@ export async function buildBrowserGatewayConnectPlan({
       connectNonce,
       connectChallengeTs,
     }));
-  const plan: ConnectPlan = {
+  return {
     generation,
     params: {
       minProtocol: MIN_CLIENT_PROTOCOL_VERSION,
@@ -216,5 +216,4 @@ export async function buildBrowserGatewayConnectPlan({
     selectedAuth,
     deviceIdentity,
   };
-  return plan;
 }

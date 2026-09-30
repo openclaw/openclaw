@@ -473,9 +473,6 @@ async function maybeFinalizeApprovalRouteNotice(
   const missingSelectedRuntime = Array.from(selection.verdicts).some(
     ([runtimeId, verdict]) => verdict.kind === "selected" && !entry.reports.has(runtimeId),
   );
-  if (!options?.force && missingSelectedRuntime) {
-    return;
-  }
 
   const reports = Array.from(entry.reports.values());
   const notice = resolveApprovalRouteNotice({

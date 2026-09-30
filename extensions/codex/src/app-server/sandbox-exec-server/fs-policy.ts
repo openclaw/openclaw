@@ -164,9 +164,6 @@ export function assertResolvedFsSandboxAccess(
 }
 
 function resolveFsAccess(policy: ResolvedFsSandboxPolicy, rawPath: string): FsAccessMode {
-  if (policy.unrestricted) {
-    return "write";
-  }
   const target = normalizeSandboxAbsolutePath(rawPath, "fs path");
   let selected: { specificity: number; rank: number; access: FsAccessMode } | undefined;
   for (const entry of policy.entries) {

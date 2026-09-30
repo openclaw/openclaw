@@ -62,7 +62,6 @@ import {
   isDmAllowedWithIngress,
   isGroupInviteAllowed,
   isSummarizationRequest,
-  resolveAuthorizedMessageText,
   resolveTlonCommandAuthorizationWithIngress,
   resolveTlonMessageIngress,
   stripBotMention,
@@ -824,12 +823,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
         return;
       }
 
-      const messageText = await resolveAuthorizedMessageText({
-        rawText,
-        content: contentBody,
-        authorizedForCites: true,
-        resolveAllCites,
-      });
+      const messageText = (await resolveAllCites(contentBody)) + rawText;
 
       await processMessage({
         messageId,
@@ -1009,12 +1003,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
         return;
       }
 
-      const resolvedMessageText = await resolveAuthorizedMessageText({
-        rawText,
-        content: essay.content,
-        authorizedForCites: true,
-        resolveAllCites,
-      });
+      const resolvedMessageText = (await resolveAllCites(essay.content)) + rawText;
       if (ownerDm) {
         runtime.log?.(`[tlon] Processing DM from owner ${senderShip}`);
       }
@@ -1209,7 +1198,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
     // Subscribe to foreigns for auto-accepting group invites
     // Always subscribe so we can hot-reload the setting via settings store
     {
-      const processedGroupInvites = createActiveSnapshotTracker();
+      const processedGroupInvites = new Set<string>();
 
       const processPendingInvites = async (foreigns: Foreigns, propagateWriteFailures = false) => {
         if (!foreigns || typeof foreigns !== "object") {
@@ -1218,15 +1207,14 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
 
         let firstWriteError: Error | undefined;
         for (const [groupFlag, foreign] of Object.entries(foreigns)) {
+          const validInvite = foreign.invites?.find((invite) => invite.valid);
+          // Foreigns facts are per-group deltas. Retire only this group's terminal
+          // invite so a later invitation can be admitted without replaying other groups.
+          if (foreign.progress === "done" || !validInvite) {
+            processedGroupInvites.delete(groupFlag);
+            continue;
+          }
           if (processedGroupInvites.has(groupFlag)) {
-            continue;
-          }
-          if (!foreign.invites || foreign.invites.length === 0) {
-            continue;
-          }
-
-          const validInvite = foreign.invites.find((inv) => inv.valid);
-          if (!validInvite) {
             continue;
           }
 
@@ -1271,7 +1259,9 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
               requestingShip: inviterShip,
               groupFlag,
             });
-            processedGroupInvites.addIfAccepted(groupFlag, await queueApprovalRequest(approval));
+            if (await queueApprovalRequest(approval)) {
+              processedGroupInvites.add(groupFlag);
+            }
             continue;
           }
 

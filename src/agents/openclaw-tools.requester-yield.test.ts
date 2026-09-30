@@ -48,6 +48,30 @@ function seedRequiredChild(
 
 const GENERIC_NO_CLAIM_ERROR = expect.stringContaining("return its result normally");
 
+it.each([
+  {
+    acknowledgment: "  PAUSE-MARKER\nneeds direction  ",
+    expected: "PAUSE-MARKER\nneeds direction",
+  },
+  { acknowledgment: undefined, expected: "Paused awaiting continuation." },
+  { acknowledgment: "x".repeat(12_001), expected: "x".repeat(12_000) },
+])(
+  "retains the announcing child's bounded message-wait notice (case %#)",
+  async ({ acknowledgment, expected }) => {
+    const child = seedRequiredChild("agent:main:main", { requesterTurnRunId: undefined });
+    const tool = createYieldToolForTurn({
+      requesterSessionKey: child.childSessionKey,
+      requesterTurnRunId: child.runId,
+    });
+    const result = await tool.execute("yield-pause", { waitFor: "message", acknowledgment });
+    expect(result.details).toMatchObject({ status: "yielded" });
+    expect(getSubagentRunByRunId(child.runId)?.requesterSettleWake?.pauseNotice).toEqual({
+      acknowledgment: expected,
+    });
+    expect(getSubagentRunByRunId(child.runId)?.execution.status).toBe("running");
+  },
+);
+
 function createYieldToolForTurn({
   onYield = vi.fn(),
   ...claim

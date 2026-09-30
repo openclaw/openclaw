@@ -292,7 +292,8 @@ function resumeFinalizedSubagentRun(
   if (
     entry.requesterSettleWake &&
     typeof entry.execution.endedAt === "number" &&
-    !yieldedWakeWaitingForDelivery
+    (!yieldedWakeWaitingForDelivery ||
+      (entry.pauseReason === "sessions_yield" && entry.requesterSettleWake.pauseNotice))
   ) {
     resumeRequesterSettleWake(runId, entry, source);
     return;
@@ -332,19 +333,14 @@ function resumeFinalizedSubagentRun(
   }
 
   if (typeof entry.execution.endedAt === "number" && entry.execution.endedAt > 0) {
-    if (entry.killReconciliation) {
-      // Without a pending requester wake, the sweeper owns provisional cancellation cleanup.
+    // Without a pending requester wake, the sweeper owns provisional cancellation cleanup.
+    if (
+      entry.killReconciliation ||
+      contextCleanup.suppressAnnounceForSteerRestart(entry) ||
+      startSubagentAnnounceCleanupFlow(runId, entry)
+    ) {
       resumedRuns.add(runId);
-      return;
     }
-    if (contextCleanup.suppressAnnounceForSteerRestart(entry)) {
-      resumedRuns.add(runId);
-      return;
-    }
-    if (!startSubagentAnnounceCleanupFlow(runId, entry)) {
-      return;
-    }
-    resumedRuns.add(runId);
     return;
   }
 
@@ -466,6 +462,7 @@ const subagentListener = createSubagentRegistryListener({
   pendingLifecycle,
   onAgentEvent,
   persist: persistSubagentRuns,
+  resumeRequesterSettleWake,
   refreshFrozenResultFromSession,
   completeSubagentRunWithRecovery: completionRuntime.completeSubagentRunWithRecovery,
   warn: (message, meta) => log.warn(message, meta),
@@ -635,6 +632,7 @@ const publicApi = createSubagentRegistryPublicApi({
   runs: subagentRuns,
   persist: persistSubagentRuns,
   persistOrThrow: persistSubagentRunsOrThrow,
+  persistAsyncOrThrow: persistSubagentRunsAsyncOrThrow,
   restoreOnce: (context) => subagentRestorer.restoreOnce(undefined, true, context),
   startAnnounceCleanup: startSubagentAnnounceCleanupFlow,
   settleRequesterTurn: settleRequesterTurnAfterSessionSpawns,
@@ -667,6 +665,7 @@ export function activateSubagentRegistry(resolveGatewayContext: GatewayContextRe
 }
 export const settleRequesterAfterSessionSpawns = publicApi.settleRequesterAfterSessionSpawns;
 export const markRequesterTurnYielded = publicApi.markRequesterTurnYielded;
+export const markSubagentMessageWait = publicApi.markSubagentMessageWait;
 export const listUnsettledRequesterChildren = publicApi.listUnsettledRequesterChildren;
 export type { UnsettledRequesterChild } from "./subagent-registry-requester-yield.js";
 

@@ -220,11 +220,13 @@ function addBundledEntryCandidates(
 function resolveBundledEntryModuleCandidates(
   importMetaUrl: string,
   specifier: string,
-): BundledEntryModuleCandidate[] {
+): [BundledEntryModuleCandidate, ...BundledEntryModuleCandidate[]] {
   const { importerPath, importerDir, boundaryRoot, packageRoot } =
     resolveBundledEntryBoundaryInfo(importMetaUrl);
-  const candidates: BundledEntryModuleCandidate[] = [];
   const primaryResolved = path.resolve(importerDir, specifier);
+  const candidates: [BundledEntryModuleCandidate, ...BundledEntryModuleCandidate[]] = [
+    { path: primaryResolved, boundaryRoot },
+  ];
   addBundledEntryCandidates(candidates, primaryResolved, boundaryRoot);
 
   const sourceRelativeSpecifier = specifier.replace(/^\.\/src\//u, "./");
@@ -325,17 +327,13 @@ function resolveBundledEntryModulePath(importMetaUrl: string, specifier: string)
     return cached.path;
   }
   const candidates = resolveBundledEntryModuleCandidates(importMetaUrl, specifier);
-  const fallbackCandidate = candidates[0] ?? {
-    path: path.resolve(path.dirname(fileURLToPath(importMetaUrl)), specifier),
-    boundaryRoot: resolveEntryBoundaryRoot(importMetaUrl),
-  };
-
   let firstFailure: {
     candidate: BundledEntryModuleCandidate;
     failure: Extract<ReturnType<typeof openRootFileSync>, { ok: false }>;
   } | null = null;
-
-  for (const candidate of candidates) {
+  let candidateIndex = 0;
+  let candidate: BundledEntryModuleCandidate | undefined = candidates[0];
+  do {
     const opened = openRootFileSync({
       absolutePath: candidate.path,
       rootPath: candidate.boundaryRoot,
@@ -349,25 +347,10 @@ function resolveBundledEntryModulePath(importMetaUrl: string, specifier: string)
       return opened.path;
     }
     firstFailure ??= { candidate, failure: opened };
-  }
+    candidate = candidates[++candidateIndex];
+  } while (candidate);
 
   const failure = firstFailure;
-  if (!failure) {
-    throw new Error(
-      formatBundledEntryModuleOpenFailure({
-        importMetaUrl,
-        specifier,
-        resolvedPath: fallbackCandidate.path,
-        boundaryRoot: fallbackCandidate.boundaryRoot,
-        failure: {
-          ok: false,
-          reason: "path",
-          error: new Error(`ENOENT: no such file or directory, lstat '${fallbackCandidate.path}'`),
-        },
-      }),
-    );
-  }
-
   const error = new Error(
     formatBundledEntryModuleOpenFailure({
       importMetaUrl,

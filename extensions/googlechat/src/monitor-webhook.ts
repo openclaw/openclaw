@@ -159,8 +159,7 @@ export function createGoogleChatWebhookRequestHandler(params: {
       inFlightLimiter: params.webhookInFlightLimiter,
       handle: async ({ targets }) => {
         const headerBearer = extractBearerToken(req.headers.authorization);
-        let selectedTarget: WebhookTarget | null;
-        let parsedInbound: ParsedGoogleChatInboundSuccess;
+        let selectedTarget: WebhookTarget | null = null;
         const readAndParseEvent = async (
           profile: "pre-auth" | "post-auth",
         ): Promise<ParsedGoogleChatInboundSuccess | null> => {
@@ -193,20 +192,13 @@ export function createGoogleChatWebhookRequestHandler(params: {
           if (!selectedTarget) {
             return true;
           }
-
-          const parsed = await readAndParseEvent("post-auth");
-          if (!parsed) {
-            return true;
-          }
-          parsedInbound = parsed;
-        } else {
-          const parsed = await readAndParseEvent("pre-auth");
-          if (!parsed) {
-            return true;
-          }
-          parsedInbound = parsed;
-
-          if (!parsed.addOnBearerToken) {
+        }
+        const parsedInbound = await readAndParseEvent(headerBearer ? "post-auth" : "pre-auth");
+        if (!parsedInbound) {
+          return true;
+        }
+        if (!headerBearer) {
+          if (!parsedInbound.addOnBearerToken) {
             logGoogleChatWebhookAuthRejections(
               targets.map((target) => ({ target, reason: "missing token" })),
             );
@@ -218,11 +210,11 @@ export function createGoogleChatWebhookRequestHandler(params: {
           selectedTarget = await resolveGoogleChatWebhookTargetWithAuthOrReject({
             targets,
             res,
-            bearer: parsed.addOnBearerToken,
+            bearer: parsedInbound.addOnBearerToken,
           });
-          if (!selectedTarget) {
-            return true;
-          }
+        }
+        if (!selectedTarget) {
+          return true;
         }
 
         const dispatchTarget = selectedTarget;

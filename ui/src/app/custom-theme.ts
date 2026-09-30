@@ -129,10 +129,6 @@ export function requireSafeFontFamilyValue(value: unknown, label: string) {
   return normalized;
 }
 
-export function makeTokenMap(entries: Array<[ModeTokenName, string]>): ThemeTokenMap {
-  return Object.fromEntries(entries) as ThemeTokenMap;
-}
-
 function normalizeStoredTokenMap(value: Record<string, unknown> | undefined): ThemeTokenMap | null {
   if (!value) {
     return null;
@@ -145,7 +141,8 @@ function normalizeStoredTokenMap(value: Record<string, unknown> | undefined): Th
         : requireSafeCssValue(value[key], key);
     entries.push([key, normalized]);
   }
-  return makeTokenMap(entries);
+  // The ordered token list visits every required key above.
+  return Object.fromEntries(entries) as ThemeTokenMap;
 }
 
 export function describeThemeLabel(value: string | undefined) {

@@ -34,7 +34,7 @@ export function createUpdateFailureReportController(params: {
 
   return {
     invalidate,
-    async report(attemptId: string): Promise<void> {
+    report: async (attemptId: string): Promise<void> => {
       const client = params.getClient();
       if (!client || activeGeneration !== null || !params.isCurrent(attemptId, client)) {
         return;

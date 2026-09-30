@@ -27,20 +27,11 @@ type SystemStat = {
   title?: string;
 };
 
-// Meter tones reuse the status palette: calm until 75%, warn to 92%, critical beyond.
-function systemMeterTone(fraction: number): "ok" | "warn" | "critical" {
-  if (fraction >= 0.92) {
-    return "critical";
-  }
-  if (fraction >= 0.75) {
-    return "warn";
-  }
-  return "ok";
-}
-
 function renderSystemMeter(label: string, fraction: number) {
   const clamped = Math.min(Math.max(fraction, 0), 1);
   const percent = Math.round(clamped * 100);
+  // Meter tones reuse the status palette: calm until 75%, warn to 92%, critical beyond.
+  const tone = clamped >= 0.92 ? "critical" : clamped >= 0.75 ? "warn" : "ok";
   return html`
     <div
       class="config-host__meter"
@@ -51,7 +42,7 @@ function renderSystemMeter(label: string, fraction: number) {
       aria-valuenow=${percent}
     >
       <div
-        class="config-host__meter-fill config-host__meter-fill--${systemMeterTone(clamped)}"
+        class="config-host__meter-fill config-host__meter-fill--${tone}"
         style="--config-host-meter-fill: ${percent}%"
       ></div>
     </div>
@@ -172,8 +163,7 @@ export function renderSystemSection(props: SystemSectionProps) {
     : undefined;
   const stats = info ? buildSystemStats(info) : buildSystemStatsPlaceholder(placeholder);
 
-  // Escape hatch: host identity + metered stats are a genuine two-column grid,
-  // kept as custom markup inside the single group with row-matched paddings.
+  // Host identity and metered stats use a custom two-column grid with aligned row padding.
   const sectionProps: SettingsSectionProps = {
     title: t("quickSettings.system.gatewayHost"),
     actions: info

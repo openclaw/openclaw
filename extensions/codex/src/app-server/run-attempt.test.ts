@@ -3259,18 +3259,17 @@ describe("runCodexAppServerAttempt", () => {
         async (method) => {
           if (method === "turn/start" && compactDuringAcceptance) {
             compactDuringAcceptance = false;
-            await harness.notify({
-              method: "item/completed",
-              params: {
-                threadId: "thread-1",
-                turnId: "turn-1",
-                item: { type: "contextCompaction", id: "compact-during-start" },
-              },
-            });
+            await harness.notify(
+              itemNotification("item/completed", {
+                type: "contextCompaction",
+                id: "compact-during-start",
+              }),
+            );
           }
           if (method === "turn/start") {
             turnRequested.resolve();
           }
+          return method === "thread/resume" ? threadStartResult("thread-1") : undefined;
         },
         { persistedThreads: [] },
       );

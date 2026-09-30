@@ -20,12 +20,7 @@ type MattermostDraftPublishedPart = {
 
 type MattermostFinalTextResolution =
   | {
-      kind: "full";
-      text: string;
-      publishedParts: readonly MattermostDraftPublishedPart[];
-    }
-  | {
-      kind: "remaining";
+      kind: "full" | "remaining";
       text: string;
       publishedParts: readonly MattermostDraftPublishedPart[];
     }
@@ -76,25 +71,17 @@ function consumeMattermostPublishedChunk(params: {
   return params.source.startsWith(chunk, offset) ? offset + chunk.length : undefined;
 }
 
-type MattermostDraftPreviewBoundaryController = {
-  noteUpdate: () => void;
-  noteBoundary: () => Promise<void>;
-};
-
 export function createMattermostDraftPreviewBoundaryController(params: {
   enabled: boolean;
   forceNewMessage: () => void | Promise<void>;
-}): MattermostDraftPreviewBoundaryController {
+}) {
   let hasStreamedContent = false;
   return {
     noteUpdate() {
       hasStreamedContent = true;
     },
     async noteBoundary() {
-      if (!params.enabled) {
-        return;
-      }
-      if (!hasStreamedContent) {
+      if (!params.enabled || !hasStreamedContent) {
         return;
       }
       hasStreamedContent = false;
