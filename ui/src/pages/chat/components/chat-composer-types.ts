@@ -195,12 +195,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   onGatewayQuestionSkip?: (id: string) => void | Promise<void>;
 };
 
-type PendingClearedSubmittedDraft = {
-  key: string;
-  value: string;
-};
-
-type ComposingDraft = {
+type ScopedComposerDraft = {
   key: string;
   value: string;
 };
@@ -212,9 +207,9 @@ export type ChatComposerState = SkillMenuState &
     mentionMenu: HumanMentionMenu;
     emojiMenu: ComposerEmojiMenu;
     mentionInput?: HumanMentionInput;
-    composingDraft: ComposingDraft | null;
+    composingDraft: ScopedComposerDraft | null;
     composerInputIntentKey: string | null;
-    pendingClearedSubmittedDraft: PendingClearedSubmittedDraft | null;
+    pendingClearedSubmittedDraft: ScopedComposerDraft | null;
     goalExpandedId: string | null;
     goalComposer: (ChatGoalDraftMode & { key: string; pending: boolean }) | null;
     activeQuestionKey: string | null;

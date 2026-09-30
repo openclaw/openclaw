@@ -44,6 +44,7 @@ import { runIMessageCliJsonCommand } from "./cli-output.js";
 import { resolveIMessageChatDbLookupPath } from "./cli-path.js";
 import { createIMessageRpcClient, type IMessageRpcClient } from "./client.js";
 import { DEFAULT_IMESSAGE_SEND_TIMEOUT_MS } from "./constants.js";
+import { normalizeIMessageMessageId } from "./message-guid.js";
 import { resolveAuthorizedIMessageReplyReference } from "./message-resource.js";
 import { rememberIMessageReplyCache } from "./monitor-reply-cache.js";
 import {
@@ -198,7 +199,7 @@ function normalizeResolvedMessageGuid(value: unknown): string | null {
   }
   const trimmed = value.trim();
   // Status placeholders and numeric ROWIDs cannot match inbound tapback GUIDs.
-  return isConcreteIMessageMessageId(trimmed) && !isNumericMessageRowId(trimmed) ? trimmed : null;
+  return normalizeIMessageMessageId(trimmed) && !isNumericMessageRowId(trimmed) ? trimmed : null;
 }
 
 async function resolveMessageGuidFromChatDb(params: {
@@ -334,7 +335,7 @@ function createIMessageSendReceipt(params: {
   replyToId?: string;
 }): MessageReceipt {
   const messageId = params.messageId.trim();
-  const results: MessageReceiptSourceResult[] = isConcreteIMessageMessageId(messageId)
+  const results: MessageReceiptSourceResult[] = normalizeIMessageMessageId(messageId)
     ? [
         {
           channel: "imessage",
@@ -362,11 +363,6 @@ function createIMessageSendReceipt(params: {
     receiptParams.replyToId = params.replyToId;
   }
   return createMessageReceiptFromOutboundResults(receiptParams);
-}
-
-function isConcreteIMessageMessageId(messageId: string | undefined): boolean {
-  const trimmed = messageId?.trim();
-  return Boolean(trimmed && trimmed !== "unknown" && trimmed !== "ok");
 }
 
 async function withOriginalIMessageAttachmentPath<T>(
@@ -618,16 +614,11 @@ async function trySendAttachmentForTarget(params: {
         params.sendTransport === "bridge" ? "dylib" : params.sendTransport,
       ]);
     });
-  } catch (error) {
-    await forgetPersistedIMessageEchoKey(pendingEchoKey);
-    if (!params.audioAsVoice && isAttachmentCommandFallbackError(error)) {
-      return null;
+    const failure = resolveIMessageSendFailure(result);
+    if (failure) {
+      throw new Error(failure);
     }
-    throw error;
-  }
-  const failure = resolveIMessageSendFailure(result);
-  if (failure) {
-    const error = new Error(failure);
+  } catch (error) {
     await forgetPersistedIMessageEchoKey(pendingEchoKey);
     if (!params.audioAsVoice && isAttachmentCommandFallbackError(error)) {
       return null;
@@ -649,7 +640,7 @@ async function trySendAttachmentForTarget(params: {
     media: params.echoMedia,
     messageId: resolvedId ?? undefined,
   });
-  if (resolvedId && isConcreteIMessageMessageId(resolvedId)) {
+  if (resolvedId && normalizeIMessageMessageId(resolvedId)) {
     await rememberIMessageReplyCache({
       accountId: params.accountId,
       messageId: resolvedId,
@@ -883,7 +874,7 @@ export async function sendMessageIMessage(
           visibleReplySent: true,
         });
       }
-      const messageId = isConcreteIMessageMessageId(attachmentResult.messageId)
+      const messageId = normalizeIMessageMessageId(attachmentResult.messageId)
         ? attachmentResult.messageId
         : captionResult.messageId;
       return {
@@ -1056,7 +1047,7 @@ export async function sendMessageIMessage(
       resultService(result.service) ?? service,
       providerChatGuid,
     );
-    if (resolvedId && isConcreteIMessageMessageId(resolvedId)) {
+    if (resolvedId && normalizeIMessageMessageId(resolvedId)) {
       const chatContext = chatContextFromIMessageTarget(target, confirmedService ?? service);
       await rememberIMessageReplyCache({
         accountId: account.accountId,

@@ -3,8 +3,8 @@ import { z } from "zod";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { prepareAgentDeleteDatabases } from "../../agents/agent-delete-databases.js";
 import { listAgentEntries } from "../../agents/agent-scope.js";
-import { digestClawAgentConfig } from "../../claws/agent-config-digest.js";
 import { clawCronGatewayJobMatchesRef, readClawCronRefs } from "../../claws/cron.js";
+import { digestClawValue } from "../../claws/digest.js";
 import { readAttachedCronJobs } from "../../claws/lifecycle-delete-support.js";
 import { resolveClawMonitorCleanupBinding } from "../../claws/monitor-cleanup-binding.js";
 import {
@@ -122,7 +122,7 @@ function assertDeletionFence(agentId: string, operationId: string, config: OpenC
   }
   // Orphaned ownership can outlive its install row, but must never remove a configured replacement.
   const agent = listAgentEntries(config).find((entry) => entry.id === agentId);
-  if (agent && digestClawAgentConfig(agent) !== install?.agentConfigDigest) {
+  if (agent && digestClawValue(agent) !== install?.agentConfigDigest) {
     throw new Error("The serving Gateway's Claw agent configuration changed after planning.");
   }
   return journal;

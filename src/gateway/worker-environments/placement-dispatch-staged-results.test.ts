@@ -175,7 +175,7 @@ describe("worker placement result recovery", () => {
       currentManifestRaw: current.raw,
     });
     if (params.record !== false) {
-      params.store.recordStagedWorkspaceResult(params.claim, stagedResultRef);
+      await params.store.recordStagedWorkspaceResult(params.claim, stagedResultRef);
     }
     await fs.rm(payload, { recursive: true, force: true });
     return { baseManifestRef: base.ref, currentManifestRef: current.ref, stagedResultRef };
@@ -296,6 +296,8 @@ describe("worker placement result recovery", () => {
           return {
             ...applied,
             verifyStable: async () => {},
+            publishStagedResult: async () => {},
+            discardPreparedStagedResult: async () => {},
             getAppliedWorkspaceResult: () => applied,
           };
         },

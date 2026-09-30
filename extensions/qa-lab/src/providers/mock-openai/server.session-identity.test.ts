@@ -159,11 +159,8 @@ describe("QA transport session identity", () => {
     }
   });
 
-  it.each([
-    "You are a JSON-only function. Return only a valid JSON value.",
-    "You are keeping a dream diary. Write a single entry in first person.",
-    "Choose how to incorporate each supplied candidate into MEMORY.md.",
-  ])("accepts standalone tool-free completion: %s", async (instructions) => {
+  it("accepts standalone tool-free completion", async () => {
+    const instructions = "Choose how to incorporate each supplied candidate into MEMORY.md.";
     const server = await startMockServer();
     await observeSession(server, "observed-agent-session");
     for (const body of [
@@ -209,34 +206,23 @@ describe("QA transport session identity", () => {
   });
 
   it.each([
-    { type: "function_call_output", output: "tool result", beforeUser: false },
-    { type: "custom_tool_call_output", output: "", beforeUser: false },
-    { type: "function_call_output", output: "earlier result", beforeUser: true },
-  ])(
-    "requires affinity for utility requests carrying $type (earlier=$beforeUser)",
-    async ({ type, output, beforeUser }) => {
-      const user = makeUserInput("Reply exactly: {}");
-      const result = { type, call_id: "utility-continuation", output };
-      await expectUtilityAffinity({
-        instructions: "You are a JSON-only function. Return only a valid JSON value.",
-        tools: [],
-        input: beforeUser ? [result, user] : [user, result],
-      });
-    },
-  );
-
-  it.each([
-    { label: "assistant history", item: { role: "assistant", content: "Earlier answer" } },
-    {
-      label: "function call",
-      item: { type: "function_call", call_id: "prior", name: "read", arguments: "{}" },
-    },
-    { label: "earlier user turn", item: makeUserInput("Earlier request") },
-  ])("requires affinity for utility requests with $label", async ({ item }) => {
+    { type: "function_call_output", output: "tool result" },
+    { type: "custom_tool_call_output", output: "" },
+  ])("requires affinity for utility requests carrying $type", async ({ type, output }) => {
+    const user = makeUserInput("Reply exactly: {}");
+    const result = { type, call_id: "utility-continuation", output };
     await expectUtilityAffinity({
       instructions: "You are a JSON-only function. Return only a valid JSON value.",
       tools: [],
-      input: [item, makeUserInput("Reply exactly: {}")],
+      input: [user, result],
+    });
+  });
+
+  it("requires affinity for utility requests with assistant history", async () => {
+    await expectUtilityAffinity({
+      instructions: "You are a JSON-only function. Return only a valid JSON value.",
+      tools: [],
+      input: [{ role: "assistant", content: "Earlier answer" }, makeUserInput("Reply exactly: {}")],
     });
   });
 
@@ -251,14 +237,14 @@ describe("QA transport session identity", () => {
     });
   });
 
-  it.each([
-    { role: "assistant", content: [{ type: "thinking", thinking: "Earlier reasoning" }] },
-    { role: "user", content: [] },
-  ])("requires affinity for Anthropic history discarded by normalization: %j", async (history) => {
+  it("requires affinity for Anthropic history discarded by normalization", async () => {
     await expectUtilityAffinity(
       {
         system: "You are a JSON-only function.",
-        messages: [history, { role: "user", content: "Reply exactly: {}" }],
+        messages: [
+          { role: "assistant", content: [{ type: "thinking", thinking: "Earlier reasoning" }] },
+          { role: "user", content: "Reply exactly: {}" },
+        ],
         tools: [],
       },
       "/v1/messages",

@@ -24,6 +24,7 @@ import { IMESSAGE_ACTION_NAMES, IMESSAGE_ACTIONS } from "./actions-contract.js";
 import { chatContextFromIMessageTarget } from "./chat-context.js";
 import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "./constants.js";
 import { resolveAuthorizedIMessageActionReference } from "./message-action-reference.js";
+import { normalizeIMessageMessageId } from "./message-guid.js";
 import { describeIMessageMessageTool } from "./message-tool-api.js";
 import {
   findLatestIMessageEntryForChat,
@@ -146,31 +147,26 @@ function createIMessageTargetAliases(resourceAliases: string[] = []) {
   };
 }
 
-async function rememberOutboundBridgeMessage(params: {
+async function completeOutboundBridgeMessage(params: {
   accountId: string;
-  messageId?: string;
+  messageId: string;
   chatGuid: string;
-}): Promise<void> {
-  const messageId = params.messageId?.trim();
-  if (!messageId || messageId === "ok" || messageId === "unknown") {
-    return;
+  details?: Record<string, unknown>;
+}) {
+  const messageId = normalizeIMessageMessageId(params.messageId);
+  if (messageId) {
+    await rememberIMessageReplyCache({
+      accountId: params.accountId,
+      messageId,
+      chatGuid: params.chatGuid,
+      timestamp: Date.now(),
+      isFromMe: true,
+    });
   }
-  await rememberIMessageReplyCache({
-    accountId: params.accountId,
-    messageId,
-    chatGuid: params.chatGuid,
-    timestamp: Date.now(),
-    isFromMe: true,
-  });
+  return jsonResult({ ok: true, messageId: params.messageId, ...params.details });
 }
 
-/**
- * Read messageId from the action params, falling back to the most recent
- * inbound in the same chat when the caller omitted it. The natural intent
- * for "react with 👍" or "tapback the last message" is the message that
- * just arrived in the current conversation; making the agent re-quote a
- * message id every time is friction the cache already has the answer for.
- */
+/** An omitted action reference targets the most recent inbound in the same chat. */
 function readMessageIdWithChatFallback(
   params: Record<string, unknown>,
   chatContext: IMessageChatContext & { accountId: string },
@@ -183,9 +179,6 @@ function readMessageIdWithChatFallback(
   if (latest?.messageId) {
     return latest.messageId;
   }
-  // Surface the same error the strict readMessageId would have, so the
-  // agent gets a clear "you must supply messageId" signal when there is
-  // also no cached message to fall back to.
   return readStringParam(params, "messageId", { required: true });
 }
 
@@ -205,56 +198,45 @@ async function resolveChatGuid(params: {
   };
 }): Promise<string> {
   const target = resolveIMessageActionTarget(params);
-  if (target) {
-    if (target.kind === "chat_guid") {
-      return target.chatGuid;
-    }
-    if (target.kind === "chat_id" || target.kind === "chat_identifier") {
-      const resolved = await params.runtime.resolveChatGuidForTarget({
-        target,
-        options: params.options,
-        conversationReadOrigin: params.conversationReadOrigin,
-      });
-      if (resolved) {
-        return resolved;
-      }
-      throw new Error(
-        `iMessage ${params.action} failed: chatGuid not found for ${formatUnresolvedTarget(target)}.`,
-      );
-    }
-    if (target.kind === "handle") {
-      // A bare phone/email is a valid chat scope for direct messages —
-      // Messages addresses DMs as `iMessage;-;<handle>` / `SMS;-;<handle>`.
-      // Promote it to chat_identifier so resolveChatGuidForTarget (which
-      // only accepts chat_id / chat_identifier kinds) can look it up.
-      const synthesizedIdentifier = `${target.service === "sms" ? "SMS" : "iMessage"};-;${target.to}`;
-      const resolved = await params.runtime.resolveChatGuidForTarget({
-        target: { kind: "chat_identifier", chatIdentifier: synthesizedIdentifier },
-        options: params.options,
-        conversationReadOrigin: params.conversationReadOrigin,
-      });
-      if (resolved) {
-        return resolved;
-      }
-      // Per-action fallback policy:
-      //  - send / reply / sendWithEffect / sendAttachment: fine to send to
-      //    a synthesized DM identifier; Messages will register the chat.
-      //  - react / edit / unsend: these mutate an existing message that
-      //    must already exist in the chat. If we have no registered chat
-      //    we have no message to act on, and synthesizing the identifier
-      //    just produces a confusing CLI failure.
-      if (params.action === "react" || params.action === "edit" || params.action === "unsend") {
-        throw new Error(
-          `iMessage ${params.action} requires a known chat. ` +
-            `No registered chat for the supplied target; send a message first or pass an explicit chatGuid.`,
-        );
-      }
-      return synthesizedIdentifier;
-    }
+  if (!target) {
+    throw new Error(
+      `iMessage ${params.action} requires chatGuid, chatId, chatIdentifier, or a chat target.`,
+    );
   }
-  throw new Error(
-    `iMessage ${params.action} requires chatGuid, chatId, chatIdentifier, or a chat target.`,
-  );
+  if (target.kind === "chat_guid") {
+    return target.chatGuid;
+  }
+  // Messages identifies direct chats by service and handle; resolve all other
+  // target shapes through the same account-scoped chat lookup.
+  const synthesizedIdentifier =
+    target.kind === "handle"
+      ? `${target.service === "sms" ? "SMS" : "iMessage"};-;${target.to}`
+      : "";
+  const lookupTarget =
+    target.kind === "handle"
+      ? { kind: "chat_identifier" as const, chatIdentifier: synthesizedIdentifier }
+      : target;
+  const resolved = await params.runtime.resolveChatGuidForTarget({
+    target: lookupTarget,
+    options: params.options,
+    conversationReadOrigin: params.conversationReadOrigin,
+  });
+  if (resolved) {
+    return resolved;
+  }
+  if (target.kind !== "handle") {
+    throw new Error(
+      `iMessage ${params.action} failed: chatGuid not found for ${formatUnresolvedTarget(target)}.`,
+    );
+  }
+  // Sends may create a DM; mutations require a registered chat and message.
+  if (params.action === "react" || params.action === "edit" || params.action === "unsend") {
+    throw new Error(
+      `iMessage ${params.action} requires a known chat. ` +
+        `No registered chat for the supplied target; send a message first or pass an explicit chatGuid.`,
+    );
+  }
+  return synthesizedIdentifier;
 }
 
 function formatUnresolvedTarget(
@@ -507,7 +489,6 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
       dbPath: account.config.dbPath?.trim() || undefined,
       remoteHost,
       timeoutMs: account.config.probeTimeoutMs,
-      chatGuid: "",
     };
     const attestedConversationReadOrigin = conversationReadOrigin ?? "delegated";
     const chatGuid = async () =>
@@ -580,7 +561,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
           reaction: kind,
           remove: remove || undefined,
           partIndex,
-          options: { ...opts, chatGuid: reference.chatGuid },
+          options: opts,
         });
       }
       return jsonResult({ ok: true, ...(remove ? { removed: true } : { added: reaction }) });
@@ -603,7 +584,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
         text,
         backwardsCompatMessage,
         partIndex,
-        options: { ...opts, chatGuid: reference.chatGuid },
+        options: opts,
       });
       return jsonResult({ ok: true, edited: reference.messageId });
     }
@@ -615,7 +596,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
         chatGuid: reference.chatGuid,
         messageId: reference.messageId,
         partIndex,
-        options: { ...opts, chatGuid: reference.chatGuid },
+        options: opts,
       });
       return jsonResult({ ok: true, unsent: reference.messageId });
     }
@@ -658,14 +639,14 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
         replyToMessageId: reference.messageId,
         partIndex,
         attachment: attachment?.spec ?? undefined,
-        options: { ...opts, chatGuid: reference.chatGuid },
+        options: opts,
       });
-      await rememberOutboundBridgeMessage({
+      return await completeOutboundBridgeMessage({
         accountId: account.accountId,
         messageId: result.messageId,
         chatGuid: reference.chatGuid,
+        details: { repliedTo: reference.messageId },
       });
-      return jsonResult({ ok: true, messageId: result.messageId, repliedTo: reference.messageId });
     }
 
     if (action === "sendWithEffect") {
@@ -681,14 +662,14 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
         chatGuid: resolvedChatGuid,
         text,
         effectId,
-        options: { ...opts, chatGuid: resolvedChatGuid },
+        options: opts,
       });
-      await rememberOutboundBridgeMessage({
+      return await completeOutboundBridgeMessage({
         accountId: account.accountId,
         messageId: result.messageId,
         chatGuid: resolvedChatGuid,
+        details: { effect: effectId },
       });
-      return jsonResult({ ok: true, messageId: result.messageId, effect: effectId });
     }
 
     if (action === "renameGroup") {
@@ -700,7 +681,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
       await runtime.renameGroup({
         chatGuid: resolvedChatGuid,
         displayName,
-        options: { ...opts, chatGuid: resolvedChatGuid },
+        options: opts,
       });
       return jsonResult({ ok: true, renamed: resolvedChatGuid, displayName });
     }
@@ -713,7 +694,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
         chatGuid: resolvedChatGuid,
         buffer: decodeBase64Buffer(params, action),
         filename,
-        options: { ...opts, chatGuid: resolvedChatGuid },
+        options: opts,
       });
       return jsonResult({ ok: true, chatGuid: resolvedChatGuid, iconSet: true });
     }
@@ -727,7 +708,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
       await runtime[action]({
         chatGuid: resolvedChatGuid,
         address,
-        options: { ...opts, chatGuid: resolvedChatGuid },
+        options: opts,
       });
       return jsonResult({
         ok: true,
@@ -740,7 +721,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
       const resolvedChatGuid = await chatGuid();
       await runtime.leaveGroup({
         chatGuid: resolvedChatGuid,
-        options: { ...opts, chatGuid: resolvedChatGuid },
+        options: opts,
       });
       return jsonResult({ ok: true, left: resolvedChatGuid });
     }
@@ -754,14 +735,13 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
         buffer: decodeBase64Buffer(params, action),
         filename,
         asVoice: asVoice ?? undefined,
-        options: { ...opts, chatGuid: resolvedChatGuid },
+        options: opts,
       });
-      await rememberOutboundBridgeMessage({
+      return await completeOutboundBridgeMessage({
         accountId: account.accountId,
         messageId: result.messageId,
         chatGuid: resolvedChatGuid,
       });
-      return jsonResult({ ok: true, messageId: result.messageId });
     }
 
     if (action === "poll") {
@@ -784,14 +764,13 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
         chatGuid: resolvedChatGuid,
         question: poll.question,
         choices: poll.options,
-        options: { ...opts, chatGuid: resolvedChatGuid },
+        options: opts,
       });
-      await rememberOutboundBridgeMessage({
+      return await completeOutboundBridgeMessage({
         accountId: account.accountId,
         messageId: result.messageId,
         chatGuid: resolvedChatGuid,
       });
-      return jsonResult({ ok: true, messageId: result.messageId });
     }
 
     if (action === "poll-vote") {
@@ -858,17 +837,13 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
         optionIndex,
         optionId: optionId ?? undefined,
         optionText: optionText ?? undefined,
-        options: { ...opts, chatGuid: pollReference.chatGuid },
+        options: opts,
       });
-      await rememberOutboundBridgeMessage({
+      return await completeOutboundBridgeMessage({
         accountId: account.accountId,
         messageId: result.messageId,
         chatGuid: pollReference.chatGuid,
-      });
-      return jsonResult({
-        ok: true,
-        messageId: result.messageId,
-        ...(result.optionText ? { pollVotedOption: result.optionText } : {}),
+        details: result.optionText ? { pollVotedOption: result.optionText } : undefined,
       });
     }
 

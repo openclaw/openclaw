@@ -13,6 +13,25 @@ type PolicyTestWatch = {
 // this inventory covers the remaining tests that changed targeting cannot
 // discover from imports alone.
 const policyTestWatches = [
+  {
+    testFile: "test/vitest-pr-exempt-retention.test.ts",
+    watchGlobs: [
+      ".github/workflows/ci.yml",
+      ".github/workflows/full-release-validation.yml",
+      ".github/workflows/plugin-prerelease.yml",
+      "scripts/ci-*.{mjs,mts}",
+      "scripts/lib/ci-*.{mjs,mts}",
+      "scripts/lib/extension-test-plan.mts",
+      "scripts/lib/list-test-files.mts",
+      "scripts/lib/test-selector-source-facts.mts",
+      "scripts/lib/test-source-term-matcher.mts",
+      "scripts/test-projects.test-support.mts",
+      "test/scripts/ci-changed-node-test-plan*.test.ts",
+      "test/vitest/**",
+      "ui/vitest.config.ts",
+      "vitest.config.ts",
+    ],
+  },
   // These owner contracts enter production through fixture adapters or a facade.
   {
     testFile: "src/agents/agent-bundle-mcp-reload.test.ts",
@@ -360,7 +379,6 @@ const policyTestWatches = [
   ...[
     "src/agents/worktrees/empty-source.test.ts",
     "src/agents/worktrees/service.remove-lease.test.ts",
-    "src/agents/worktrees/service.run-end-cleanup.test.ts",
     "src/agents/worktrees/service.snapshot-index.test.ts",
     "src/agents/worktrees/service.test.ts",
   ].map((testFile): PolicyTestWatch => ({
@@ -1383,6 +1401,13 @@ const policyTestWatches = [
       "scripts/run-vitest.mts",
       "scripts/test-extension-batch.mts",
       "scripts/test-projects-run.mts",
+    ],
+  },
+  {
+    testFile: "src/commands/doctor-lint.native-capture.test.ts",
+    watchGlobs: [
+      "src/commands/doctor-lint.native-capture.test-support.ts",
+      "src/cli/run-main-plugin-cache.ts",
     ],
   },
   {

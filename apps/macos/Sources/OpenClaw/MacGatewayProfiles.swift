@@ -725,7 +725,7 @@ actor MacGatewayConnectionFleet {
         }
         let chatStoreID = MacChatTranscriptCache.gatewayID(
             mode: .local,
-            localStateDir: OpenClawConfigFile.stateDirURL(),
+            localStateDir: OpenClawPaths.stateDirURL,
             remoteTransport: .ssh,
             directURL: nil,
             sshTarget: "",

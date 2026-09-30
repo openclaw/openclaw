@@ -234,7 +234,7 @@ export function classifyToolUseResultPairing(
       const toolCalls: ToolCallLike[] = [];
       const occurrences: ToolCallOccurrence[] = [];
       const pending = createToolCallOccurrenceQueue<ToolCallOccurrence>();
-      const syntheticById = new Map<string, ToolCallOccurrence[]>();
+      const syntheticById = createToolCallOccurrenceQueue<ToolCallOccurrence>();
       for (const [contentIndex, block] of assistant.content.entries()) {
         const toolCall = readToolCall(block);
         if (!toolCall) {
@@ -265,12 +265,7 @@ export function classifyToolUseResultPairing(
           occurrence.sourceResult = message;
           occurrence.sourceResultIndex = index;
           if (isSyntheticMissingToolResult(occurrence.result)) {
-            const synthetic = syntheticById.get(occurrence.id);
-            if (synthetic) {
-              synthetic.push(occurrence);
-            } else {
-              syntheticById.set(occurrence.id, [occurrence]);
-            }
+            syntheticById.add(occurrence.id, occurrence);
           }
           continue;
         }
@@ -288,7 +283,7 @@ export function classifyToolUseResultPairing(
         }
         droppedDuplicateCount += 1;
         if (!isSyntheticMissingToolResult(normalized)) {
-          const replaceable = syntheticById.get(id)?.shift();
+          const replaceable = syntheticById.claim(id);
           if (replaceable) {
             const discardedSource = replaceable.sourceResult;
             if (discardedSource) {

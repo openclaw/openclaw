@@ -42,20 +42,7 @@ export async function runDoctorHealthRepairs(
   const result = createRepairRunResult(ctx.cfg, checks.length);
 
   for (const check of checks) {
-    const runResult = await runHealthCheck(check, { ...ctx, cfg: result.config }, opts);
-    result.config = runResult.config;
-    result.findings.push(...runResult.findings);
-    // Only a completed validation can replace this check's original findings;
-    // skipped, failed, and unvalidated siblings must remain visible in mixed batches.
-    result.remainingFindings.push(
-      ...(runResult.checksValidated > 0 ? runResult.remainingFindings : runResult.findings),
-    );
-    result.changes.push(...runResult.changes);
-    result.warnings.push(...runResult.warnings);
-    result.diffs.push(...runResult.diffs);
-    result.effects.push(...runResult.effects);
-    result.checksRepaired += runResult.checksRepaired;
-    result.checksValidated += runResult.checksValidated;
+    await runHealthCheck(check, { ...ctx, cfg: result.config }, opts, result);
   }
 
   return result;
@@ -65,21 +52,22 @@ async function runHealthCheck(
   check: DoctorHealthCheck,
   ctx: HealthRepairContext,
   opts: DoctorRepairRunOptions,
-): Promise<DoctorRepairRunResult> {
-  const outcome = createRepairRunResult(ctx.cfg, 1);
-
+  outcome: ReturnType<typeof createRepairRunResult>,
+): Promise<void> {
   let checkFindings: readonly HealthFinding[];
   try {
     checkFindings = await check.detect(ctx);
   } catch (err) {
     outcome.warnings.push(`${check.id} detect failed: ${scrubDoctorErrorMessage(err)}`);
-    return outcome;
+    return;
   }
   outcome.findings.push(...checkFindings);
   if (checkFindings.length === 0 || check.repair === undefined) {
-    return outcome;
+    outcome.remainingFindings.push(...checkFindings);
+    return;
   }
 
+  let remainingFindings: readonly HealthFinding[] = [...checkFindings];
   // Split checks expose detect/repair separately, so repair output must be validated by detect().
   try {
     const result = await check.repair(
@@ -95,21 +83,21 @@ async function runHealthCheck(
       outcome.warnings.push(
         `${check.id} repair ${status}${result.reason ? `: ${result.reason}` : ""}`,
       );
-      return outcome;
+      return;
     }
     if (result.config !== undefined && opts.dryRun !== true) {
       outcome.config = result.config;
     }
     outcome.checksRepaired++;
     if (opts.dryRun === true) {
-      return outcome;
+      return;
     }
     try {
       const validationFindings = await check.detect(
         { ...ctx, cfg: outcome.config },
-        createValidationScope(outcome.findings),
+        createValidationScope(remainingFindings),
       );
-      outcome.remainingFindings.push(...validationFindings);
+      remainingFindings = validationFindings;
       outcome.checksValidated++;
       if (validationFindings.length > 0) {
         outcome.warnings.push(`${check.id} repair left ${validationFindings.length} finding(s)`);
@@ -119,9 +107,10 @@ async function runHealthCheck(
     }
   } catch (err) {
     outcome.warnings.push(`${check.id} repair failed: ${scrubDoctorErrorMessage(err)}`);
+  } finally {
+    // Only completed validation replaces the original findings for this check.
+    outcome.remainingFindings.push(...remainingFindings);
   }
-
-  return outcome;
 }
 
 function createRepairRunResult(config: OpenClawConfig, checksRun: number) {

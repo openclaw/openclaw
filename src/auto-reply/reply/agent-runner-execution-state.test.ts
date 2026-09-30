@@ -36,7 +36,7 @@ describe("executeAgentTurn: session state", () => {
     });
     const settle = vi
       .spyOn(subagentRegistry, "settleRequesterAfterSessionSpawns")
-      .mockReturnValue(true);
+      .mockResolvedValue(true);
     onTestFinished(() => settle.mockRestore());
     state.runEmbeddedAgentEntryMock.mockImplementation(async (params, delegate) => {
       await params.preparedRunAdmission.admit("embedded");
@@ -67,6 +67,7 @@ describe("executeAgentTurn: session state", () => {
       requesterTurnRunId: expect.any(String),
       requesterYielded: false,
       acceptedSessionSpawns,
+      assertCurrent: expect.any(Function),
     });
     expect(state.runEmbeddedAgentEntryMock.mock.calls[0]?.[0].harness.sessionKey).toBe(policyKey);
   });

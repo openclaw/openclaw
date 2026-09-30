@@ -36,7 +36,6 @@ function publicationPragmas(db: DatabaseSync): MemoryPublicationConnection["prag
     busy_timeout: read("busy_timeout"),
     synchronous: read("synchronous"),
     foreign_keys: read("foreign_keys"),
-    wal_autocheckpoint: read("wal_autocheckpoint"),
     journal_size_limit: read("journal_size_limit"),
     checkpoint_fullfsync: read("checkpoint_fullfsync"),
   };

@@ -442,7 +442,7 @@ export function createDependentCredentialStatusIssueCollector(options: {
   const isDependencyConfigured =
     options.isDependencyConfigured ??
     ((value: unknown) => {
-      const normalized = typeof value === "string" ? normalizeOptionalString(value) : undefined;
+      const normalized = normalizeOptionalString(value);
       return Boolean(normalized && normalized !== "none");
     });
 
@@ -470,7 +470,7 @@ export function collectStatusIssuesFromLastError(
   accounts: Array<{ accountId: string; lastError?: unknown }>,
 ): ChannelStatusIssue[] {
   return accounts.flatMap((account) => {
-    const lastError = typeof account.lastError === "string" ? account.lastError.trim() : "";
+    const lastError = normalizeOptionalString(account.lastError);
     if (!lastError) {
       return [];
     }

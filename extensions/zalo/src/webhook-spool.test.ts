@@ -133,35 +133,6 @@ describe("Zalo durable webhook ingress", () => {
     });
   });
 
-  it("keeps a completion tombstone and rejects a post-completion duplicate", async () => {
-    await withZaloWebhookTestQueue(async (queue) => {
-      const enqueue = vi.spyOn(queue, "enqueue");
-      const deliver = vi.fn(async (_update, lifecycle) => {
-        await lifecycle.onAdopted();
-      });
-      const ingress = createZaloWebhookIngress({
-        accountId: "default",
-        runtime: runtime(),
-        queue,
-        deliver,
-      });
-      const raw = rawEvent({ messageId: "duplicate" });
-      ingress.start();
-      try {
-        await ingress.accept(raw);
-        await waitForZaloWebhookVerdict(queue, "duplicate", "completed");
-        await ingress.accept(raw);
-        await expect(enqueue.mock.results.at(-1)?.value).resolves.toMatchObject({
-          kind: "completed",
-          duplicate: true,
-        });
-        expect(deliver).toHaveBeenCalledTimes(1);
-      } finally {
-        await ingress.stop();
-      }
-    });
-  });
-
   it("preserves old replay-guard parity for the same message id with changed payload bytes", async () => {
     await withZaloWebhookTestQueue(async (queue) => {
       const enqueue = vi.spyOn(queue, "enqueue");

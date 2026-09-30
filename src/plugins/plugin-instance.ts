@@ -604,11 +604,7 @@ export class PluginInstance {
     }
     if (!this.disposal) {
       this.quiesce();
-      const terminalFailures = (this.disposalFailures = new DisposalFailures(() => {
-        const current = invocation.getStore();
-        // Async failure observers retain their originating token after its call has returned.
-        return current?.instance === this && PluginCallToken.isHostCleanup(current.token);
-      }));
+      const terminalFailures = (this.disposalFailures = new DisposalFailures(this));
       const work = new AsyncWorkScope(terminalFailures);
       // Shared state owners still join real cleanup, independently of code-file custody.
       const cleanup = trackAsyncWork(() =>

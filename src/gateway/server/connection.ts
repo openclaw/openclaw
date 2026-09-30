@@ -7,7 +7,7 @@ import { GATEWAY_STARTUP_PENDING_CLOSE_CAUSE } from "../../../packages/gateway-p
 import { getRuntimeConfig } from "../../config/io.js";
 import { recordPairedNodeDisconnection } from "../../infra/device-pairing-node.js";
 import { formatErrorMessage as formatError } from "../../infra/errors.js";
-import { upsertPresence } from "../../infra/system-presence.js";
+import { commitPresence, upsertPresence } from "../../infra/system-presence.js";
 import { logRejectedLargePayload } from "../../logging/diagnostic-payload.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import { removeRemoteNodeInfo } from "../../skills/runtime/remote.js";
@@ -180,7 +180,6 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
   const requestOrigin = headerValue(upgradeReq.headers.origin);
   const requestUserAgent = headerValue(upgradeReq.headers["user-agent"]);
   const forwardedFor = headerValue(upgradeReq.headers["x-forwarded-for"]);
-  const realIp = headerValue(upgradeReq.headers["x-real-ip"]);
   const openedDuringStartup = isStartupPending?.() === true;
 
   logWs("in", "open", { connId, remoteAddr, remotePort, localAddr, localPort, endpoint });
@@ -487,6 +486,7 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
           reason: "disconnect",
           watchedSessions: undefined,
         });
+        commitPresence(client.presenceKey, connId);
         buildRequestContext().publishPresence();
       }
       if (currentDisconnectedNodeId) {
@@ -630,7 +630,6 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
     localPort,
     endpoint,
     forwardedFor,
-    realIp,
     requestHost,
     requestOrigin,
     requestUserAgent,

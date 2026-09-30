@@ -889,7 +889,9 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
     runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(matrix.runner))) || (matrix.runner) }}
-    timeout-minutes: 60
+    # Windows upgrade can spend 45m installing the baseline, 42m updating, and
+    # 45m on fallback installation. Leave room for setup and candidate runtime proof.
+    timeout-minutes: ${{ matrix.os_id == 'windows' && matrix.suite == 'packaged-upgrade' && 180 || 60 }}
     steps:
       - name: Checkout workflow repo
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

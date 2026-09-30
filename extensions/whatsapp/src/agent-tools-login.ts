@@ -4,15 +4,11 @@ import {
 } from "openclaw/plugin-sdk/channel-actions";
 import type { ChannelAgentTool } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawPluginApi, OpenClawPluginToolContext } from "openclaw/plugin-sdk/core";
-import { hasNonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { readNonBlankString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { Type } from "typebox";
 import { startWebLoginWithQr, waitForWebLogin } from "../login-qr-api.js";
 
 const QR_DATA_URL_MAX_LENGTH = 16_384;
-
-function readLoginStringPreservingWhitespace(value: unknown): string | undefined {
-  return hasNonEmptyString(value) ? value : undefined;
-}
 
 export function createWhatsAppLoginTool(
   context: OpenClawPluginToolContext,
@@ -67,15 +63,13 @@ export function createWhatsAppLoginTool(
       };
 
       const action = (args as { action?: string })?.action ?? "start";
-      const accountId = readLoginStringPreservingWhitespace(
-        (args as { accountId?: unknown }).accountId,
-      );
+      const accountId = readNonBlankString((args as { accountId?: unknown }).accountId);
       const timeoutMs = readPositiveIntegerParam(args as Record<string, unknown>, "timeoutMs");
       if (action === "wait") {
         const result = await waitForWebLogin({
           accountId,
           timeoutMs,
-          currentQrDataUrl: readLoginStringPreservingWhitespace(
+          currentQrDataUrl: readNonBlankString(
             (args as { currentQrDataUrl?: unknown }).currentQrDataUrl,
           ),
         });

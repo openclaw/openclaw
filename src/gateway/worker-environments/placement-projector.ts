@@ -4,6 +4,7 @@ import type {
   SessionPlacementMove,
   SessionPlacementMachine,
   SessionPlacementRunner,
+  SessionPlacementWorkerRuntimeInstall,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
 import type { WorkerPlacementMoveIntent } from "./placement-move-intent.js";
@@ -20,7 +21,6 @@ export type WorkerSessionPlacementReader = {
   registerTurnClaimClosedHandler?: (
     handler: (claim: import("./placement-record.js").WorkerSessionTurnClaim) => void,
   ) => () => void;
-  getPlacementMoves?(sessionIds: readonly string[]): ReadonlyMap<string, WorkerPlacementMoveIntent>;
 };
 
 export type WorkerPlacementDiskSpaceReader = {
@@ -38,6 +38,60 @@ export type WorkerPlacementRunnerAvailabilityReader = {
   ): SessionPlacementRunner | undefined;
   version(): number;
 };
+
+export type WorkerPlacementRuntimeInstallReader = {
+  read(
+    record: WorkerSessionPlacementRecord,
+    environment?: Pick<WorkerEnvironmentPlacementFacts, "nodeDeviceId"> | null,
+  ): SessionPlacementWorkerRuntimeInstall | undefined;
+  version(): number;
+};
+
+// Structural so the projector does not import the installer module (import cycle).
+type WorkerRuntimeInstallObservation = SessionPlacementWorkerRuntimeInstall & {
+  bundleHash: string;
+};
+
+export function createWorkerPlacementRuntimeInstallReader(params: {
+  environments: Pick<WorkerEnvironmentServiceContract, "get">;
+  installer: {
+    readInstall(nodeId: string): WorkerRuntimeInstallObservation | undefined;
+    readInstallForEnvironment(environmentId: string): WorkerRuntimeInstallObservation | undefined;
+    version(): number;
+  };
+}): WorkerPlacementRuntimeInstallReader {
+  return {
+    read(record, preparedEnvironment) {
+      if (record.state !== "provisioning" && record.state !== "active") {
+        return undefined;
+      }
+      const environment =
+        preparedEnvironment === undefined
+          ? record.environmentId
+            ? params.environments.get(record.environmentId)
+            : undefined
+          : preparedEnvironment;
+      const observation =
+        record.state === "provisioning"
+          ? record.environmentId
+            ? params.installer.readInstallForEnvironment(record.environmentId)
+            : undefined
+          : environment?.nodeDeviceId
+            ? params.installer.readInstall(environment.nodeDeviceId)
+            : undefined;
+      if (
+        !observation ||
+        observation.transferredBytes <= 0 ||
+        (record.state === "active" && observation.bundleHash === record.workerBundleHash)
+      ) {
+        return undefined;
+      }
+      const { phase, transferredBytes, totalBytes, startedAtMs, updatedAtMs } = observation;
+      return { phase, transferredBytes, totalBytes, startedAtMs, updatedAtMs };
+    },
+    version: () => params.installer.version(),
+  };
+}
 
 type WorkerPlacementIdentity = {
   providerId: string;
@@ -139,6 +193,7 @@ export function projectWorkerSessionPlacement(
   failedRecoveryAction?: "restart" | "stop-first",
   workspaceResultReconciling = false,
   retryOnSend = false,
+  options: { workerRuntimeInstall?: SessionPlacementWorkerRuntimeInstall } = {},
 ): SessionPlacement {
   const timing = {
     generation: record.generation,
@@ -163,6 +218,9 @@ export function projectWorkerSessionPlacement(
         ...timing,
         ...identity,
         ...(record.environmentId ? { environmentId: record.environmentId } : {}),
+        ...(options.workerRuntimeInstall
+          ? { workerRuntimeInstall: options.workerRuntimeInstall }
+          : {}),
       };
     case "syncing":
       return {
@@ -202,6 +260,9 @@ export function projectWorkerSessionPlacement(
           : {}),
         ...(record.state === "active" && diskSpace ? { diskSpace } : {}),
         ...(record.state === "active" && runner ? { runner } : {}),
+        ...(record.state === "active" && options.workerRuntimeInstall
+          ? { workerRuntimeInstall: options.workerRuntimeInstall }
+          : {}),
         ...(workspaceResultReconciling && record.state !== "reconciling"
           ? { workspaceResultReconciling: true as const }
           : {}),
@@ -239,6 +300,5 @@ export function projectWorkerSessionPlacement(
         : { state: "reclaimed", ...retained, ...terminal };
     }
   }
-  // Exhaustive over placement states; the return satisfies consistent-return.
   return record satisfies never;
 }

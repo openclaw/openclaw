@@ -104,10 +104,6 @@ export function registerNodeWorkspaces(api: OpenClawPluginApi): void {
                       signal: controller.signal,
                       openDuplex: ctx.openNodeDuplex,
                     }),
-                  }
-                : {}),
-              ...(ctx.openNodeDuplex
-                ? {
                     prepareTurnAttachments: createWorkspaceAttachmentPreparer({
                       remoteRoot: entry.remoteRoot,
                       createBridge: (assertCurrent, signal) =>

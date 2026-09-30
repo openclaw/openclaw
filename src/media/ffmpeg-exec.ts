@@ -74,14 +74,6 @@ export async function runFfmpeg(args: string[], options?: MediaExecOptions): Pro
   return stdout;
 }
 
-/** Splits ffprobe CSV-ish output into normalized lowercase fields. */
-function parseFfprobeCsvFields(stdout: string, maxFields: number): string[] {
-  return stdout
-    .trim()
-    .split(/[,\r\n]+/, maxFields)
-    .map((field) => normalizeLowercaseStringOrEmpty(field));
-}
-
 function parseFfprobeSampleRateHz(value: string | undefined): number | null {
   if (!value || !/^\d+$/.test(value)) {
     return null;
@@ -95,10 +87,12 @@ export function parseFfprobeCodecAndSampleRate(stdout: string): {
   codec: string | null;
   sampleRateHz: number | null;
 } {
-  const [codecRaw, sampleRateRaw] = parseFfprobeCsvFields(stdout, 2);
-  const codec = codecRaw ? codecRaw : null;
+  const [codec, sampleRate] = stdout
+    .trim()
+    .split(/[,\r\n]+/, 2)
+    .map((field) => normalizeLowercaseStringOrEmpty(field));
   return {
-    codec,
-    sampleRateHz: parseFfprobeSampleRateHz(sampleRateRaw),
+    codec: codec || null,
+    sampleRateHz: parseFfprobeSampleRateHz(sampleRate),
   };
 }

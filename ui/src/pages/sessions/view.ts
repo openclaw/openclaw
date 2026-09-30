@@ -324,11 +324,10 @@ function renderSessionGoalStatus(goal: GatewaySessionRow["goal"]) {
   `;
 }
 
-function sessionDetailItems(params: {
-  row: GatewaySessionRow;
-  updated: string;
-}): Array<{ label: string; value: string }> {
-  const { row, updated } = params;
+function sessionDetailItems(
+  row: GatewaySessionRow,
+  updated: string,
+): Array<{ label: string; value: string }> {
   const details: Array<{ label: string; value: string }> = [
     { label: t("sessionsView.key"), value: row.key },
     { label: t("sessionsView.kind"), value: resolveSessionDisplayKind(row) },
@@ -514,68 +513,8 @@ function renderOverrideSelect(params: {
 
 export function renderSessions(props: SessionsProps) {
   const rawRows = props.result?.sessions ?? [];
-  const direction = props.sortDir === "asc" ? 1 : -1;
-  const sorted = rawRows.toSorted((a, b) => {
-    const pinnedDiff = (b.pinnedAt ?? 0) - (a.pinnedAt ?? 0);
-    if (pinnedDiff !== 0) {
-      return pinnedDiff;
-    }
-    const diff =
-      props.sortColumn === "kind"
-        ? resolveSessionDisplayKind(a).localeCompare(resolveSessionDisplayKind(b))
-        : props.sortColumn === "key"
-          ? a.key.localeCompare(b.key)
-          : props.sortColumn === "updated"
-            ? (a.updatedAt ?? 0) - (b.updatedAt ?? 0)
-            : (a.totalTokens ?? a.inputTokens ?? a.outputTokens ?? 0) -
-              (b.totalTokens ?? b.inputTokens ?? b.outputTokens ?? 0);
-    return diff * direction;
-  });
-  const totalRows = sorted.length;
-  const totalPages = Math.max(1, Math.ceil(totalRows / props.pageSize));
-  const page = Math.min(props.page, totalPages - 1);
-  const groups =
-    props.groupBy !== "none"
-      ? groupSessionRows({
-          rows: sorted,
-          mode: props.groupBy,
-          knownCategories: props.knownCategories,
-        })
-      : null;
-  const displayRows = groups ? groups.flatMap((group) => group.rows) : sorted;
-  const paginated = displayRows.slice(page * props.pageSize, (page + 1) * props.pageSize);
-  const emptyBecauseFiltered = rawRows.length === 0 && hasActiveFilters(props);
-  const liveCount = rawRows.filter((row) => isSessionRunActive(row)).length;
+  const liveCount = rawRows.filter(isSessionRunActive).length;
   const archivedCount = rawRows.filter((row) => row.archived === true).length;
-  const emptyMessage =
-    props.statusFilter === "archived"
-      ? t("sessionsView.noArchivedSessions")
-      : props.statusFilter === "active"
-        ? t("sessionsView.noActiveSessions")
-        : t("sessionsView.noSessions");
-
-  const sortHeader = (
-    col: "key" | "kind" | "updated" | "tokens",
-    label: string,
-    extraClass = "",
-  ) => {
-    const isActive = props.sortColumn === col;
-    const nextDir = isActive && props.sortDir === "asc" ? ("desc" as const) : ("asc" as const);
-    return html`
-      <th
-        class=${extraClass}
-        data-sortable
-        data-sort-dir=${isActive ? props.sortDir : ""}
-        aria-sort=${isActive ? (props.sortDir === "asc" ? "ascending" : "descending") : nothing}
-        @click=${() => props.onSortChange(col, isActive ? nextDir : "desc")}
-      >
-        <button class="data-table-sort-button" type="button">
-          ${label}
-          <span class="data-table-sort-icon" aria-hidden="true">${icons.arrowUpDown}</span>
-        </button>
-      </th>
-    `;
-  };
 
   const sessionsTitle = html`
     ${t("sessionsView.title")}
@@ -626,40 +565,75 @@ export function renderSessions(props: SessionsProps) {
         title: sessionsTitle,
         actions: refreshAction,
       },
-      renderSessionsTable(props, {
-        paginated,
-        groups,
-        emptyBecauseFiltered,
-        emptyMessage,
-        totalRows,
-        totalPages,
-        page,
-        sortHeader,
-      }),
+      renderSessionsTable(props),
     ),
   ];
   return renderSettingsPage(children, { wide: true });
 }
 
-type SessionsTableContext = {
-  paginated: GatewaySessionRow[];
-  groups: SessionRowGroup[] | null;
-  emptyBecauseFiltered: boolean;
-  emptyMessage: string;
-  totalRows: number;
-  totalPages: number;
-  page: number;
-  sortHeader: (
+function renderSessionsTable(props: SessionsProps) {
+  const rawRows = props.result?.sessions ?? [];
+  const direction = props.sortDir === "asc" ? 1 : -1;
+  const sorted = rawRows.toSorted((a, b) => {
+    const pinnedDiff = (b.pinnedAt ?? 0) - (a.pinnedAt ?? 0);
+    if (pinnedDiff !== 0) {
+      return pinnedDiff;
+    }
+    const diff =
+      props.sortColumn === "kind"
+        ? resolveSessionDisplayKind(a).localeCompare(resolveSessionDisplayKind(b))
+        : props.sortColumn === "key"
+          ? a.key.localeCompare(b.key)
+          : props.sortColumn === "updated"
+            ? (a.updatedAt ?? 0) - (b.updatedAt ?? 0)
+            : (a.totalTokens ?? a.inputTokens ?? a.outputTokens ?? 0) -
+              (b.totalTokens ?? b.inputTokens ?? b.outputTokens ?? 0);
+    return diff * direction;
+  });
+  const totalRows = sorted.length;
+  const totalPages = Math.max(1, Math.ceil(totalRows / props.pageSize));
+  const page = Math.min(props.page, totalPages - 1);
+  const groups =
+    props.groupBy !== "none"
+      ? groupSessionRows({
+          rows: sorted,
+          mode: props.groupBy,
+          knownCategories: props.knownCategories,
+        })
+      : null;
+  const displayRows = groups ? groups.flatMap((group) => group.rows) : sorted;
+  const paginated = displayRows.slice(page * props.pageSize, (page + 1) * props.pageSize);
+  const emptyBecauseFiltered = rawRows.length === 0 && hasActiveFilters(props);
+  const emptyMessage =
+    props.statusFilter === "archived"
+      ? t("sessionsView.noArchivedSessions")
+      : props.statusFilter === "active"
+        ? t("sessionsView.noActiveSessions")
+        : t("sessionsView.noSessions");
+
+  const sortHeader = (
     col: "key" | "kind" | "updated" | "tokens",
     label: string,
-    extraClass?: string,
-  ) => unknown;
-};
+    extraClass = "",
+  ) => {
+    const isActive = props.sortColumn === col;
+    const nextDir = isActive && props.sortDir === "asc" ? ("desc" as const) : ("asc" as const);
+    return html`
+      <th
+        class=${extraClass}
+        data-sortable
+        data-sort-dir=${isActive ? props.sortDir : ""}
+        aria-sort=${isActive ? (props.sortDir === "asc" ? "ascending" : "descending") : nothing}
+        @click=${() => props.onSortChange(col, isActive ? nextDir : "desc")}
+      >
+        <button class="data-table-sort-button" type="button">
+          ${label}
+          <span class="data-table-sort-icon" aria-hidden="true">${icons.arrowUpDown}</span>
+        </button>
+      </th>
+    `;
+  };
 
-function renderSessionsTable(props: SessionsProps, ctx: SessionsTableContext) {
-  const { paginated, groups, emptyBecauseFiltered, emptyMessage, totalRows, totalPages, page } =
-    ctx;
-  const sortHeader = ctx.sortHeader;
   const emptyStateMessage = emptyBecauseFiltered
     ? t("sessionsView.noSessionsMatchFilters")
     : emptyMessage;
@@ -1067,152 +1041,116 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
         </div>
       </td>
     </tr>`,
-    ...(isExpanded
-      ? [
-          renderSessionDetailsRow({
-            row,
-            props,
-            detailsId,
-            friendlyKeyLabel,
-            displayName,
-            showDisplayName,
-            kindClass,
-            updated,
+    ...(isExpanded ? [renderDetails()] : []),
+  ];
+
+  function renderDetails() {
+    const labelDisabledReason = props.labelDisabledReason?.(row);
+    const rawThinking = row.thinkingLevel ?? "";
+    const thinking = rawThinking ? normalizeThinkingOptionValue(rawThinking) : "";
+    const fastMode =
+      row.fastMode === "auto"
+        ? "auto"
+        : row.fastMode === true
+          ? "on"
+          : row.fastMode === false
+            ? "off"
+            : "";
+    const overrides: Array<
+      Omit<Parameters<typeof renderOverrideSelect>[0], "disabled" | "disabledReason">
+    > = [
+      {
+        label: t("sessionsView.thinking"),
+        current: thinking,
+        options: resolveThinkLevelOptions(row, props.result?.defaults),
+        onChange: (value) => props.onPatch(row.key, { thinkingLevel: value || null }),
+      },
+      {
+        label: t("sessionsView.fast"),
+        current: fastMode,
+        options: buildSessionLevelOptions(FAST_LEVEL_VALUES),
+        onChange: (value) =>
+          props.onPatch(row.key, {
+            fastMode: value === "" ? null : value === "auto" ? "auto" : value === "on",
           }),
-        ]
-      : []),
-  ];
-}
+      },
+      {
+        label: t("sessionsView.verbose"),
+        current: row.verboseLevel ?? "",
+        options: buildSessionLevelOptions(VERBOSE_LEVEL_VALUES, true),
+        onChange: (value) => props.onPatch(row.key, { verboseLevel: value || null }),
+      },
+      {
+        label: t("sessionsView.reasoning"),
+        current: row.reasoningLevel ?? "",
+        options: buildSessionLevelOptions(REASONING_LEVELS),
+        onChange: (value) => props.onPatch(row.key, { reasoningLevel: value || null }),
+      },
+    ];
 
-function renderSessionDetailsRow(params: {
-  row: GatewaySessionRow;
-  props: SessionsProps;
-  detailsId: string;
-  friendlyKeyLabel: string | null;
-  displayName: string | null;
-  showDisplayName: boolean;
-  kindClass: string;
-  updated: string;
-}) {
-  const {
-    row,
-    props,
-    detailsId,
-    friendlyKeyLabel,
-    displayName,
-    showDisplayName,
-    kindClass,
-    updated,
-  } = params;
-  const labelDisabledReason = props.labelDisabledReason?.(row);
-  const rawThinking = row.thinkingLevel ?? "";
-  const thinking = rawThinking ? normalizeThinkingOptionValue(rawThinking) : "";
-  const fastMode =
-    row.fastMode === "auto"
-      ? "auto"
-      : row.fastMode === true
-        ? "on"
-        : row.fastMode === false
-          ? "off"
-          : "";
-  const overrides: Array<
-    Omit<Parameters<typeof renderOverrideSelect>[0], "disabled" | "disabledReason">
-  > = [
-    {
-      label: t("sessionsView.thinking"),
-      current: thinking,
-      options: resolveThinkLevelOptions(row, props.result?.defaults),
-      onChange: (value) => props.onPatch(row.key, { thinkingLevel: value || null }),
-    },
-    {
-      label: t("sessionsView.fast"),
-      current: fastMode,
-      options: buildSessionLevelOptions(FAST_LEVEL_VALUES),
-      onChange: (value) =>
-        props.onPatch(row.key, {
-          fastMode: value === "" ? null : value === "auto" ? "auto" : value === "on",
-        }),
-    },
-    {
-      label: t("sessionsView.verbose"),
-      current: row.verboseLevel ?? "",
-      options: buildSessionLevelOptions(VERBOSE_LEVEL_VALUES, true),
-      onChange: (value) => props.onPatch(row.key, { verboseLevel: value || null }),
-    },
-    {
-      label: t("sessionsView.reasoning"),
-      current: row.reasoningLevel ?? "",
-      options: buildSessionLevelOptions(REASONING_LEVELS),
-      onChange: (value) => props.onPatch(row.key, { reasoningLevel: value || null }),
-    },
-  ];
-  const sessionDetails = sessionDetailItems({
-    row,
-    updated,
-  });
-
-  return html`<tr id=${detailsId} class="session-details-row">
-    <td colspan=${sessionsTableColumnCount(props)}>
-      <div class="session-details-panel">
-        <div class="session-details-panel__hero">
-          <div>
-            <div class="session-details-panel__eyebrow">${t("sessionsView.sessionDetails")}</div>
-            <div class="session-details-panel__title">${friendlyKeyLabel ?? row.key}</div>
-            ${
-              showDisplayName
-                ? html`<div class="muted session-details-panel__subtitle">${displayName}</div>`
-                : nothing
-            }
+    return html`<tr id=${detailsId} class="session-details-row">
+      <td colspan=${sessionsTableColumnCount(props)}>
+        <div class="session-details-panel">
+          <div class="session-details-panel__hero">
+            <div>
+              <div class="session-details-panel__eyebrow">${t("sessionsView.sessionDetails")}</div>
+              <div class="session-details-panel__title">${friendlyKeyLabel ?? row.key}</div>
+              ${
+                showDisplayName
+                  ? html`<div class="muted session-details-panel__subtitle">${displayName}</div>`
+                  : nothing
+              }
+            </div>
+            <div class="session-details-panel__badges">
+              ${renderSessionStatusBadge(row)} ${renderSessionGoalStatus(row.goal)}
+              <span class=${kindClass}>${resolveSessionDisplayKind(row)}</span>
+            </div>
           </div>
-          <div class="session-details-panel__badges">
-            ${renderSessionStatusBadge(row)} ${renderSessionGoalStatus(row.goal)}
-            <span class=${kindClass}>${resolveSessionDisplayKind(row)}</span>
-          </div>
-        </div>
 
-        <div class="session-details-section">
-          <div class="session-details-panel__eyebrow">${t("sessionsView.overrides")}</div>
-          <div class="session-overrides-grid">
-            <label class="session-override-field">
-              <span class="session-override-field__label">${t("sessionsView.label")}</span>
-              <input
-                class="settings-input"
-                .value=${row.label ?? ""}
-                ?disabled=${props.loading || Boolean(labelDisabledReason)}
-                title=${labelDisabledReason ?? nothing}
-                placeholder=${t("sessionsView.optionalPlaceholder")}
-                @change=${(e: Event) => {
-                  const value =
-                    normalizeOptionalString((e.target as HTMLInputElement).value) ?? null;
-                  props.onPatch(row.key, { label: value }, { sessionScope: true });
-                }}
-              />
-            </label>
-            ${overrides.map((override) =>
-              renderOverrideSelect({
-                ...override,
-                options: withCurrentLabeledOption(override.options, override.current),
-                disabled: props.loading || Boolean(props.patchAdminDisabledReason),
-                disabledReason: props.patchAdminDisabledReason,
-              }),
+          <div class="session-details-section">
+            <div class="session-details-panel__eyebrow">${t("sessionsView.overrides")}</div>
+            <div class="session-overrides-grid">
+              <label class="session-override-field">
+                <span class="session-override-field__label">${t("sessionsView.label")}</span>
+                <input
+                  class="settings-input"
+                  .value=${row.label ?? ""}
+                  ?disabled=${props.loading || Boolean(labelDisabledReason)}
+                  title=${labelDisabledReason ?? nothing}
+                  placeholder=${t("sessionsView.optionalPlaceholder")}
+                  @change=${(e: Event) => {
+                    const value =
+                      normalizeOptionalString((e.target as HTMLInputElement).value) ?? null;
+                    props.onPatch(row.key, { label: value }, { sessionScope: true });
+                  }}
+                />
+              </label>
+              ${overrides.map((override) =>
+                renderOverrideSelect({
+                  ...override,
+                  options: withCurrentLabeledOption(override.options, override.current),
+                  disabled: props.loading || Boolean(props.patchAdminDisabledReason),
+                  disabledReason: props.patchAdminDisabledReason,
+                }),
+              )}
+            </div>
+          </div>
+
+          <div class="session-details-grid">
+            ${sessionDetailItems(row, updated).map(
+              (item) => html`
+                <div class="session-detail-stat">
+                  <div class="session-detail-stat__label">${item.label}</div>
+                  <openclaw-tooltip .content=${item.value}>
+                    <div class="session-detail-stat__value">${item.value}</div>
+                  </openclaw-tooltip>
+                </div>
+              `,
             )}
           </div>
         </div>
-
-        <div class="session-details-grid">
-          ${sessionDetails.map(
-            (item) => html`
-              <div class="session-detail-stat">
-                <div class="session-detail-stat__label">${item.label}</div>
-                <openclaw-tooltip .content=${item.value}>
-                  <div class="session-detail-stat__value">${item.value}</div>
-                </openclaw-tooltip>
-              </div>
-            `,
-          )}
-        </div>
-      </div>
-    </td>
-  </tr>`;
+      </td>
+    </tr>`;
+  }
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

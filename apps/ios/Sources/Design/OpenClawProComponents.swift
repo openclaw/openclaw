@@ -67,34 +67,6 @@ struct ProCard<Content: View>: View {
     }
 }
 
-private struct ProPanelBackground: View {
-    @Environment(\.colorScheme) private var colorScheme
-    let radius: CGFloat
-    let tint: Color?
-    let isProminent: Bool
-
-    var body: some View {
-        let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
-        shape
-            .fill(self.fill)
-            .overlay {
-                shape.strokeBorder(self.borderStyle, lineWidth: 1)
-            }
-    }
-
-    private var fill: Color {
-        let color = self.isProminent ? UIColor.systemBackground : UIColor.secondarySystemGroupedBackground
-        return Color(uiColor: color)
-    }
-
-    private var borderStyle: Color {
-        if let tint {
-            return tint.opacity(self.isProminent ? 0.18 : 0.10)
-        }
-        return Color(uiColor: .separator).opacity(self.colorScheme == .dark ? 0.22 : 0.12)
-    }
-}
-
 private struct OpenClawGlassButtonModifier: ViewModifier {
     let prominent: Bool
     let tint: Color?
@@ -170,10 +142,12 @@ private struct ProPanelSurfaceModifier: ViewModifier {
     func body(content: Content) -> some View {
         content
             .background {
-                ProPanelBackground(
-                    radius: self.radius,
-                    tint: self.tint,
-                    isProminent: self.isProminent)
+                let shape = RoundedRectangle(cornerRadius: self.radius, style: .continuous)
+                shape
+                    .fill(Color(uiColor: self.isProminent ? .systemBackground : .secondarySystemGroupedBackground))
+                    .overlay {
+                        shape.strokeBorder(self.borderStyle, lineWidth: 1)
+                    }
             }
             .shadow(
                 color: self.isProminent
@@ -181,6 +155,13 @@ private struct ProPanelSurfaceModifier: ViewModifier {
                     : .clear,
                 radius: self.isProminent ? 5 : 0,
                 y: self.isProminent ? 2 : 0)
+    }
+
+    private var borderStyle: Color {
+        if let tint {
+            return tint.opacity(self.isProminent ? 0.18 : 0.10)
+        }
+        return Color(uiColor: .separator).opacity(self.colorScheme == .dark ? 0.22 : 0.12)
     }
 }
 
@@ -203,20 +184,8 @@ struct ProIconBadge: View {
 struct OpenClawSidebarHeaderAction {
     let systemName: String
     let accessibilityLabel: OpenClawTextValue
-    let accessibilityIdentifier: String?
+    var accessibilityIdentifier: String?
     let action: () -> Void
-
-    init(
-        systemName: String,
-        accessibilityLabel: OpenClawTextValue,
-        accessibilityIdentifier: String? = nil,
-        action: @escaping () -> Void)
-    {
-        self.systemName = systemName
-        self.accessibilityLabel = accessibilityLabel
-        self.accessibilityIdentifier = accessibilityIdentifier
-        self.action = action
-    }
 }
 
 struct OpenClawSidebarControlButton: View {
@@ -394,24 +363,6 @@ struct OpenClawAdaptiveHeaderRow<Leading: View, Accessory: View>: View {
     @ViewBuilder let leading: Leading
     @ViewBuilder let accessory: Accessory
 
-    init(
-        title: OpenClawTextValue,
-        subtitle: OpenClawTextValue? = nil,
-        titleFont: Font = OpenClawType.title3SemiBold,
-        subtitleFont: Font = OpenClawType.subhead,
-        subtitleLineLimit: Int? = 2,
-        @ViewBuilder leading: () -> Leading,
-        @ViewBuilder accessory: () -> Accessory)
-    {
-        self.title = title
-        self.subtitle = subtitle
-        self.titleFont = titleFont
-        self.subtitleFont = subtitleFont
-        self.subtitleLineLimit = subtitleLineLimit
-        self.leading = leading()
-        self.accessory = accessory()
-    }
-
     var body: some View {
         ViewThatFits(in: .horizontal) {
             self.horizontalLayout
@@ -535,9 +486,10 @@ struct OpenClawProMark: View {
     var shadowRadius: CGFloat = 10
     /// Opt-in tap Easter eggs; leave off when the mark sits inside a control.
     var interactive = false
+    var paused = false
 
     var body: some View {
-        OpenClawMascotView(interactive: self.interactive)
+        OpenClawMascotView(interactive: self.interactive, paused: self.paused)
             .frame(width: self.size, height: self.size)
             .shadow(color: OpenClawBrand.accent.opacity(0.18), radius: self.shadowRadius, y: self.shadowRadius / 3)
             .accessibilityLabel("OpenClaw")

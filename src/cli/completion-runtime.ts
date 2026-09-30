@@ -283,20 +283,14 @@ function isPortableCompletionSourceLine(
     return false;
   }
   const trimmed = line.replace(/^[ \t]+|[ \t]+$/gu, "");
-  let guardOperand: string | undefined;
-  let sourceOperand: string | undefined;
-  if (shell === "fish") {
-    const hook = /^test[ \t]+-f[ \t]+(.+?)[ \t]*;[ \t]*and[ \t]+source[ \t]+(.+)$/u.exec(trimmed);
-    guardOperand = hook?.[1];
-    sourceOperand = hook?.[2];
-  } else {
-    // Shell token separators are spaces and tabs, not JavaScript's Unicode whitespace.
-    const hook =
-      /^\[[ \t]+-f[ \t]+(.+?)[ \t]+\][ \t]*&&[ \t]+source[ \t]+(.+)$/u.exec(trimmed) ??
-      /^\[\[[ \t]+-f[ \t]+(.+?)[ \t]+\]\][ \t]*&&[ \t]+source[ \t]+(.+)$/u.exec(trimmed);
-    guardOperand = hook?.[1];
-    sourceOperand = hook?.[2];
-  }
+  // Shell token separators are spaces and tabs, not JavaScript's Unicode whitespace.
+  const hook =
+    shell === "fish"
+      ? /^test[ \t]+-f[ \t]+(.+?)[ \t]*;[ \t]*and[ \t]+source[ \t]+(.+)$/u.exec(trimmed)
+      : (/^\[[ \t]+-f[ \t]+(.+?)[ \t]+\][ \t]*&&[ \t]+source[ \t]+(.+)$/u.exec(trimmed) ??
+        /^\[\[[ \t]+-f[ \t]+(.+?)[ \t]+\]\][ \t]*&&[ \t]+source[ \t]+(.+)$/u.exec(trimmed));
+  const guardOperand = hook?.[1];
+  const sourceOperand = hook?.[2];
   return (
     guardOperand !== undefined &&
     sourceOperand !== undefined &&
@@ -402,8 +396,6 @@ function updateCompletionProfile(
       // A portable hook for the current cache counts as configured and stays untouched.
       hadExisting = true;
       portableCoversCurrent = true;
-      filtered.push(line);
-      continue;
     }
     filtered.push(line);
   }

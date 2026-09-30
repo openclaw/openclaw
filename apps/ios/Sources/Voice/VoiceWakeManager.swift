@@ -4,36 +4,33 @@ import Observation
 import Speech
 import SwabbleKit
 
-private func makeAudioTapEnqueueCallback(queue: AudioBufferQueue) -> @Sendable (AVAudioPCMBuffer, AVAudioTime) -> Void {
+private func makeAudioTapEnqueueCallback(queue: VoiceWakeAudioBufferQueue)
+-> @Sendable (AVAudioPCMBuffer, AVAudioTime) -> Void {
     { buffer, _ in
         // This callback is invoked on a realtime audio thread/queue. Keep it tiny and nonisolated.
         queue.enqueueCopy(of: buffer)
     }
 }
 
-private final class AudioBufferQueue: @unchecked Sendable {
+final class VoiceWakeAudioBufferQueue: @unchecked Sendable {
     private let lock = NSLock()
     private var buffers: [AVAudioPCMBuffer] = []
 
     func enqueueCopy(of buffer: AVAudioPCMBuffer) {
-        guard let copy = buffer.deepCopy() else { return }
-        self.lock.lock()
-        self.buffers.append(copy)
-        self.lock.unlock()
+        guard let copy = buffer.copy() as? AVAudioPCMBuffer else { return }
+        self.lock.withLock { self.buffers.append(copy) }
     }
 
     func drain() -> [AVAudioPCMBuffer] {
-        self.lock.lock()
-        let drained = self.buffers
-        self.buffers.removeAll(keepingCapacity: true)
-        self.lock.unlock()
-        return drained
+        self.lock.withLock {
+            let drained = self.buffers
+            self.buffers.removeAll(keepingCapacity: true)
+            return drained
+        }
     }
 
     func clear() {
-        self.lock.lock()
-        self.buffers.removeAll(keepingCapacity: false)
-        self.lock.unlock()
+        self.lock.withLock { self.buffers.removeAll(keepingCapacity: false) }
     }
 }
 
@@ -56,46 +53,6 @@ private enum VoiceWakeSuppressionReason: Hashable {
     case voiceNote
 }
 
-extension AVAudioPCMBuffer {
-    fileprivate func deepCopy() -> AVAudioPCMBuffer? {
-        let format = self.format
-        let frameLength = self.frameLength
-        guard let copy = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameLength) else {
-            return nil
-        }
-        copy.frameLength = frameLength
-
-        if let src = self.floatChannelData, let dst = copy.floatChannelData {
-            let channels = Int(format.channelCount)
-            let frames = Int(frameLength)
-            for ch in 0..<channels {
-                dst[ch].update(from: src[ch], count: frames)
-            }
-            return copy
-        }
-
-        if let src = self.int16ChannelData, let dst = copy.int16ChannelData {
-            let channels = Int(format.channelCount)
-            let frames = Int(frameLength)
-            for ch in 0..<channels {
-                dst[ch].update(from: src[ch], count: frames)
-            }
-            return copy
-        }
-
-        if let src = self.int32ChannelData, let dst = copy.int32ChannelData {
-            let channels = Int(format.channelCount)
-            let frames = Int(frameLength)
-            for ch in 0..<channels {
-                dst[ch].update(from: src[ch], count: frames)
-            }
-            return copy
-        }
-
-        return nil
-    }
-}
-
 @MainActor
 @Observable
 final class VoiceWakeManager: NSObject {
@@ -110,7 +67,7 @@ final class VoiceWakeManager: NSObject {
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
     private var recognitionGeneration: UInt64 = 0
-    private var tapQueue: AudioBufferQueue?
+    private var tapQueue: VoiceWakeAudioBufferQueue?
     private var tapDrainTask: Task<Void, Never>?
     private var scheduledStartTask: Task<Void, Never>?
     private var commandTask: Task<Void, Never>?
@@ -137,7 +94,6 @@ final class VoiceWakeManager: NSObject {
         self.recognitionErrorRestartDelayNs = recognitionErrorRestartDelayNs
         self.audioSessionDeactivationAction = audioSessionDeactivationAction
         super.init()
-        self.triggerWords = VoiceWakePreferences.loadTriggerWords()
         self.userDefaultsObserver = NotificationCenter.default.addObserver(
             forName: UserDefaults.didChangeNotification,
             object: UserDefaults.standard,
@@ -197,10 +153,6 @@ final class VoiceWakeManager: NSObject {
 
     func setSuppressedByVoiceNote(_ suppressed: Bool) {
         self.setSuppressed(suppressed, reason: .voiceNote)
-    }
-
-    func invalidatePendingCommand() {
-        self.invalidateCommandTask()
     }
 
     private func setSuppressed(_ suppressed: Bool, reason: VoiceWakeSuppressionReason) {
@@ -335,7 +287,7 @@ final class VoiceWakeManager: NSObject {
     private func startRecognition() throws {
         guard self.isEnabled, self.suppressionReasons.isEmpty else { return }
 
-        self.invalidateCommandTask()
+        self.invalidatePendingCommand()
         self.recognitionGeneration &+= 1
         let recognitionGeneration = self.recognitionGeneration
         self.recognitionTask?.cancel()
@@ -357,7 +309,7 @@ final class VoiceWakeManager: NSObject {
             throw VoiceWakeAudioError.invalidInputFormat
         }
 
-        let queue = AudioBufferQueue()
+        let queue = VoiceWakeAudioBufferQueue()
         self.tapQueue = queue
         let tapBlock: @Sendable (AVAudioPCMBuffer, AVAudioTime) -> Void = makeAudioTapEnqueueCallback(queue: queue)
         inputNode.installTap(
@@ -389,7 +341,7 @@ final class VoiceWakeManager: NSObject {
         // Speech can deliver buffered results after cancellation. Retire the
         // callback owner before any task or audio teardown begins.
         self.recognitionGeneration &+= 1
-        self.invalidateCommandTask()
+        self.invalidatePendingCommand()
         let hadRecognitionPipeline = self.recognitionRequest != nil
 
         self.tapDrainTask?.cancel()
@@ -503,7 +455,7 @@ final class VoiceWakeManager: NSObject {
             self.suppressionReasons.isEmpty
     }
 
-    private func invalidateCommandTask() {
+    func invalidatePendingCommand() {
         self.commandGeneration &+= 1
         self.commandTask?.cancel()
         self.commandTask = nil

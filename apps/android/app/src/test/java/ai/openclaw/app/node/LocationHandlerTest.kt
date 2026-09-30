@@ -99,25 +99,6 @@ class LocationHandlerTest : NodeHandlerRobolectricTest() {
     }
 
   @Test
-  fun hasFineLocationPermission_reflectsDataSource() {
-    val denied =
-      LocationHandler(
-        appContext = appContext(),
-        dataSource = FakeLocationDataSource(fineGranted = false, coarseGranted = true),
-      )
-    assertFalse(denied.hasFineLocationPermission())
-    assertTrue(denied.hasCoarseLocationPermission())
-
-    val granted =
-      LocationHandler(
-        appContext = appContext(),
-        dataSource = FakeLocationDataSource(fineGranted = true, coarseGranted = false),
-      )
-    assertTrue(granted.hasFineLocationPermission())
-    assertFalse(granted.hasCoarseLocationPermission())
-  }
-
-  @Test
   fun handleLocationGet_usesPreciseGpsFirstWhenFinePermissionAndPreciseEnabled() =
     runTest {
       val source =

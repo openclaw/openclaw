@@ -160,10 +160,6 @@ export function claimExecApprovalFollowupRuntimeHandoff(params: {
   if (!entry) {
     return undefined;
   }
-  if (!isFutureDateTimestampMs(entry.expiresAtMs, { nowMs })) {
-    execApprovalFollowupRuntimeHandoffs.delete(handoffId);
-    return undefined;
-  }
   const sessionKey = normalizeOptionalString(params.sessionKey);
   if (
     entry.approvalId !== approvalId ||

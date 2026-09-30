@@ -263,9 +263,6 @@ function preserveTelegramHtmlTag(
   if (closing) {
     return popLastTagName(openTags, tagName) ? rawTag : escapeTag(rawTag);
   }
-  if (rawTag.trimEnd().endsWith("/>")) {
-    return rawTag;
-  }
   openTags.push(tagName);
   return rawTag;
 }

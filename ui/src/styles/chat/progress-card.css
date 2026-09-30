@@ -123,10 +123,6 @@
   line-height: inherit;
 }
 
-.session-progress-card__current-marker {
-  color: var(--session-progress-neutral);
-}
-
 .session-progress-card__current-marker > .session-run-spinner,
 .session-progress-card__step-marker > .session-run-spinner {
   width: var(--session-progress-marker-size);
@@ -305,10 +301,8 @@
   font-weight: 500;
 }
 
-.session-progress-card__step--in_progress .session-progress-card__step-marker {
-  color: var(--session-progress-neutral);
-}
-
+.session-progress-card__current-marker,
+.session-progress-card__step--in_progress .session-progress-card__step-marker,
 .session-progress-card__step--pending .session-progress-card__step-marker,
 .session-progress-card__step--paused .session-progress-card__step-marker {
   color: var(--session-progress-neutral);

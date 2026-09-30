@@ -17,7 +17,6 @@ const FORBIDDEN_CSS_VALUE_PARTS = [
   "@import",
   "expression(",
 ] as const;
-const SAFE_FONT_FAMILY_PUNCTUATION = new Set([",", "'", '"', ".", "_", "-"]);
 
 const MODE_TOKEN_ORDER = [
   "bg",
@@ -122,27 +121,12 @@ export function requireSafeCssValue(value: unknown, label: string) {
   return normalized;
 }
 
-function isSafeFontFamilyCharacter(char: string) {
-  const code = char.charCodeAt(0);
-  return (
-    (code >= 0x30 && code <= 0x39) ||
-    (code >= 0x41 && code <= 0x5a) ||
-    (code >= 0x61 && code <= 0x7a) ||
-    char === " " ||
-    SAFE_FONT_FAMILY_PUNCTUATION.has(char)
-  );
-}
-
 export function requireSafeFontFamilyValue(value: unknown, label: string) {
   const normalized = requireSafeCssValue(value, label);
-  if (!Array.from(normalized).every(isSafeFontFamilyCharacter)) {
+  if (/[^A-Za-z0-9 ,'"._-]/.test(normalized)) {
     throw new Error(`Unsupported tweakcn token: ${label}`);
   }
   return normalized;
-}
-
-export function makeTokenMap(entries: Array<[ModeTokenName, string]>): ThemeTokenMap {
-  return Object.fromEntries(entries) as ThemeTokenMap;
 }
 
 function normalizeStoredTokenMap(value: Record<string, unknown> | undefined): ThemeTokenMap | null {
@@ -157,7 +141,8 @@ function normalizeStoredTokenMap(value: Record<string, unknown> | undefined): Th
         : requireSafeCssValue(value[key], key);
     entries.push([key, normalized]);
   }
-  return makeTokenMap(entries);
+  // The ordered token list visits every required key above.
+  return Object.fromEntries(entries) as ThemeTokenMap;
 }
 
 export function describeThemeLabel(value: string | undefined) {

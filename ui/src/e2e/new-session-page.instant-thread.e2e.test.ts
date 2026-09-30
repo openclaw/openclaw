@@ -386,6 +386,8 @@ suite.define(() => {
       );
       await navigateInApp(page, "new-session", "?agent=main");
       const composer = page.locator(".new-session-page__message");
+      // Acceptance is held, so settle the retained draft before fill selects and replaces it.
+      await expect.poll(() => composer.inputValue()).toBe("old admission");
       await composer.fill("newer during pending readiness");
       const newerUrl = page.url();
       await page.evaluate(() =>

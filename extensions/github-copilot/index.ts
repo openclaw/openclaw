@@ -14,6 +14,7 @@ import {
   resolveDefaultSecretProviderAlias,
   upsertAuthProfileWithLock,
 } from "openclaw/plugin-sdk/provider-auth";
+import { resolveAgentModelPrimaryValue } from "openclaw/plugin-sdk/provider-onboard";
 import { resolveFirstGithubToken } from "./auth.js";
 import {
   normalizeGithubCopilotDomain,
@@ -47,18 +48,8 @@ async function loadGithubCopilotRuntime() {
   return await import("./register.runtime.js");
 }
 
-function resolveCopilotConfiguredPrimary(cfg: OpenClawConfig): string {
-  const defaults = cfg.agents?.defaults;
-  const existingModel = defaults?.model;
-  return typeof existingModel === "string"
-    ? existingModel.trim()
-    : typeof existingModel === "object" && typeof existingModel?.primary === "string"
-      ? existingModel.primary.trim()
-      : "";
-}
-
 function applyCopilotDefaultModel(cfg: OpenClawConfig, modelRef: string): OpenClawConfig {
-  if (resolveCopilotConfiguredPrimary(cfg)) {
+  if (resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model)) {
     return cfg;
   }
   const defaults = cfg.agents?.defaults;
@@ -153,29 +144,16 @@ async function resolveInteractiveCopilotStarterModel(params: {
   }
 }
 
-// Persists the chosen enterprise Copilot host under the provider's free-form
-// params bag. The completions base URL is derived at runtime (token proxy hint
-// or tenant fallback), so only the host is stored here. Mirror of
-// clearGithubCopilotDomainConfigPatch; both are provider-owned and live with the
-// plugin rather than the shared SDK.
-function buildGithubCopilotDomainConfigPatch(domain: string): Partial<OpenClawConfig> {
-  const normalized = normalizeGithubCopilotDomain(domain);
+// Undefined removes a previous tenant on merge; runtime derives service URLs from the host.
+function buildGithubCopilotDomainConfigPatch(domain?: string): Partial<OpenClawConfig> {
   return {
     models: {
       providers: {
-        [PROVIDER_ID]: { params: { githubDomain: normalized } },
-      },
-    },
-  } as unknown as Partial<OpenClawConfig>;
-}
-
-// Removes a previously persisted enterprise domain so config falls back to the
-// "no config == github.com" default. Undefined leaves are deleted on merge.
-function clearGithubCopilotDomainConfigPatch(): Partial<OpenClawConfig> {
-  return {
-    models: {
-      providers: {
-        [PROVIDER_ID]: { params: { githubDomain: undefined } },
+        [PROVIDER_ID]: {
+          params: {
+            githubDomain: domain === undefined ? undefined : normalizeGithubCopilotDomain(domain),
+          },
+        },
       },
     },
   } as unknown as Partial<OpenClawConfig>;
@@ -297,7 +275,7 @@ async function runGitHubCopilotNonInteractiveAuth(
   );
 
   let starterModel: string | undefined;
-  if (!resolveCopilotConfiguredPrimary(configWithDomain)) {
+  if (!resolveAgentModelPrimaryValue(configWithDomain.agents?.defaults?.model)) {
     const { resolveCopilotStarterModel } = await loadGithubCopilotRuntime();
     starterModel = await resolveCopilotStarterModel({
       githubToken,
@@ -358,7 +336,7 @@ export default definePluginEntry({
   register(api) {
     const dynamicModels = createGithubCopilotDynamicModelHooks();
 
-    async function promptForEnterpriseDomain(ctx: ProviderAuthContext): Promise<string | null> {
+    async function promptForEnterpriseDomain(ctx: ProviderAuthContext): Promise<string> {
       // COPILOT_GITHUB_DOMAIN is authoritative for every runtime routing path
       // (token refresh, usage, completions). Honor it here too when it is set so
       // the persisted config and freshly minted token can never diverge from the
@@ -398,8 +376,7 @@ export default definePluginEntry({
           return undefined;
         },
       });
-      const domain = normalizeGithubCopilotDomain(value);
-      return domain;
+      return normalizeGithubCopilotDomain(value);
     }
 
     async function runGitHubCopilotDeviceAuth(
@@ -423,7 +400,7 @@ export default definePluginEntry({
       const configPatch = isEnterprise
         ? buildGithubCopilotDomainConfigPatch(normalizedDomain)
         : previousDomain !== PUBLIC_GITHUB_COPILOT_DOMAIN
-          ? clearGithubCopilotDomainConfigPatch()
+          ? buildGithubCopilotDomainConfigPatch()
           : undefined;
 
       const suppliedToken =
@@ -588,10 +565,6 @@ export default definePluginEntry({
 
     async function runGitHubCopilotEnterpriseAuth(ctx: ProviderAuthContext) {
       const domain = await promptForEnterpriseDomain(ctx);
-      if (!domain) {
-        await ctx.prompter.note("Enterprise login cancelled.", "GitHub Copilot");
-        return { profiles: [] };
-      }
       if (domain === PUBLIC_GITHUB_COPILOT_DOMAIN) {
         await ctx.prompter.note(
           "github.com is the default — use the standard GitHub Copilot login instead of the enterprise (data residency) option.",

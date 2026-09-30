@@ -230,7 +230,7 @@ export async function appendStatusAllDiagnosis(params: {
 
   const lastErrClean = normalizeOptionalString(params.lastErr) ?? "";
   // Restart logs sometimes end with a single brace from truncated JSON; suppress that noise.
-  const isTrivialLastErr = lastErrClean.length < 8 || lastErrClean === "}" || lastErrClean === "{";
+  const isTrivialLastErr = lastErrClean.length < 8;
   if (lastErrClean && !isTrivialLastErr) {
     lines.push("");
     lines.push(muted("Gateway last log line:"));

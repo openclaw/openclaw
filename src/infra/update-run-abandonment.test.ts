@@ -15,10 +15,10 @@ import {
   finishUpdateRun,
   getUpdateRun,
   heartbeatUpdateRun,
-  reconcileAbandonedUpdateRuns,
   recordUpdateRunPhase,
   recordUpdateRunStep,
 } from "./update-run-ledger.js";
+import { reconcileUpdateRunsInNativeKernelForTest } from "./update-run-reconciliation.test-support.js";
 import { loadUpdateRecovery } from "./update-run-recovery.js";
 import { ABANDONED_UPDATE_RUN_MS, UPDATE_RUN_HEARTBEAT_MS } from "./update-run-timeouts.js";
 import { runStep } from "./update-runner-command.js";
@@ -85,7 +85,7 @@ describe("abandoned update runs", () => {
       const before = getUpdateRun(run.runId, options);
       vi.advanceTimersByTime((shape === "young" ? 1 : 25) * 60 * 60_000);
       expect(
-        reconcileAbandonedUpdateRuns(
+        reconcileUpdateRunsInNativeKernelForTest(
           { legacyOnly: shape === "legacy-only" },
           { ...options, readOnly: true },
         ),
@@ -100,7 +100,7 @@ describe("abandoned update runs", () => {
       const options = isolatedOptions();
       const run = createUpdateRun({ trigger: "cli", before: { version: "2026.9.2" } }, options);
       vi.advanceTimersByTime(age);
-      const reconciled = reconcileAbandonedUpdateRuns({}, options);
+      const reconciled = reconcileUpdateRunsInNativeKernelForTest({}, options);
       if (age <= 24 * 60 * 60_000) {
         expect(reconciled).toEqual([]);
         expect(getUpdateRun(run.runId, options)).toEqual(run);
@@ -149,7 +149,7 @@ describe("abandoned update runs", () => {
       }
       const before = getUpdateRun(created.runId, options);
       vi.advanceTimersByTime(25 * 60 * 60_000);
-      expect(reconcileAbandonedUpdateRuns({}, options)).toEqual([]);
+      expect(reconcileUpdateRunsInNativeKernelForTest({}, options)).toEqual([]);
       expect(getUpdateRun(created.runId, options)).toEqual(before);
     },
   );
@@ -165,7 +165,7 @@ describe("abandoned update runs", () => {
       vi.advanceTimersByTime(25 * 60 * 60_000);
 
       if (first === "startup reconciliation") {
-        expect(reconcileAbandonedUpdateRuns({}, options)).toMatchObject([
+        expect(reconcileUpdateRunsInNativeKernelForTest({}, options)).toMatchObject([
           { runId: old.runId, status: "failed", reason },
         ]);
       }
@@ -180,7 +180,7 @@ describe("abandoned update runs", () => {
         reason,
         finishedAtMs: Date.now(),
       });
-      expect(reconcileAbandonedUpdateRuns({}, options)).toEqual([]);
+      expect(reconcileUpdateRunsInNativeKernelForTest({}, options)).toEqual([]);
       expect(getUpdateRun(old.runId, options)).toEqual(terminal);
     },
   );
@@ -208,9 +208,9 @@ describe("abandoned update runs", () => {
       if (mode === "supersede") {
         createUpdateRun({ trigger: "cli", supersedeStaleIdentityless: true }, options);
       } else {
-        expect(reconcileAbandonedUpdateRuns({ explicit: mode === "explicit" }, options)).toEqual(
-          [],
-        );
+        expect(
+          reconcileUpdateRunsInNativeKernelForTest({ explicit: mode === "explicit" }, options),
+        ).toEqual([]);
       }
       expect(getUpdateRun(run.runId, options)).toEqual(run);
       expect(loadUpdateRecovery(run.runId, options)).toEqual(recovery);
@@ -232,8 +232,8 @@ describe("abandoned update runs", () => {
       expect.stringContaining("identity recording is unavailable"),
     );
     vi.advanceTimersByTime(ABANDONED_UPDATE_RUN_MS + 10);
-    expect(reconcileAbandonedUpdateRuns({}, options)).toEqual([]);
-    expect(reconcileAbandonedUpdateRuns({ explicit: true }, options)).toMatchObject([
+    expect(reconcileUpdateRunsInNativeKernelForTest({}, options)).toEqual([]);
+    expect(reconcileUpdateRunsInNativeKernelForTest({ explicit: true }, options)).toMatchObject([
       { runId: created.runId, status: "failed", reason: "abandoned" },
     ]);
   });
@@ -253,13 +253,13 @@ describe("abandoned update runs", () => {
       );
     }
     inspection.mockReturnValue(Number(parent.startIdentity) + 1);
-    expect(reconcileAbandonedUpdateRuns({ explicit: true }, options)).toEqual([]);
+    expect(reconcileUpdateRunsInNativeKernelForTest({ explicit: true }, options)).toEqual([]);
     vi.advanceTimersByTime(ABANDONED_UPDATE_RUN_MS + 1_000);
     inspection.mockReturnValue(Number(parent.startIdentity));
-    expect(reconcileAbandonedUpdateRuns({ explicit: true }, options)).toEqual([]);
+    expect(reconcileUpdateRunsInNativeKernelForTest({ explicit: true }, options)).toEqual([]);
     inspection.mockReturnValue(Number(parent.startIdentity) + 1);
-    expect(reconcileAbandonedUpdateRuns({}, options)).toEqual([]);
-    expect(reconcileAbandonedUpdateRuns({ explicit: true }, options)).toMatchObject([
+    expect(reconcileUpdateRunsInNativeKernelForTest({}, options)).toEqual([]);
+    expect(reconcileUpdateRunsInNativeKernelForTest({ explicit: true }, options)).toMatchObject([
       { runId: created.runId, status: "failed", reason: "abandoned" },
     ]);
   });
@@ -312,7 +312,7 @@ describe("abandoned update runs", () => {
 
     expect(inspectUpdateRunAbandonment(run)).toBe("inactive-driver-dead");
     expect(getUpdateRun(run.runId, options)).toEqual(run);
-    expect(reconcileAbandonedUpdateRuns({}, options)).toMatchObject([
+    expect(reconcileUpdateRunsInNativeKernelForTest({}, options)).toMatchObject([
       {
         runId: run.runId,
         status: "failed",
@@ -329,7 +329,7 @@ describe("abandoned update runs", () => {
       },
     ]);
     expect(getUpdateRun(run.runId, options)?.reason).toBe("abandoned");
-    expect(reconcileAbandonedUpdateRuns({}, options)).toEqual([]);
+    expect(reconcileUpdateRunsInNativeKernelForTest({}, options)).toEqual([]);
   });
 
   it("requires explicit recovery for a recent run whose driver exited", () => {
@@ -338,9 +338,9 @@ describe("abandoned update runs", () => {
     vi.advanceTimersByTime(ABANDONED_UPDATE_RUN_MS - 1);
 
     expect(inspectUpdateRunAbandonment(run)).toBeUndefined();
-    expect(reconcileAbandonedUpdateRuns({}, options)).toEqual([]);
+    expect(reconcileUpdateRunsInNativeKernelForTest({}, options)).toEqual([]);
     expect(getUpdateRun(run.runId, options)).toEqual(run);
-    expect(reconcileAbandonedUpdateRuns({ explicit: true }, options)).toMatchObject([
+    expect(reconcileUpdateRunsInNativeKernelForTest({ explicit: true }, options)).toMatchObject([
       { runId: run.runId, phase: "finished", status: "failed", reason: "abandoned" },
     ]);
   });
@@ -355,7 +355,7 @@ describe("abandoned update runs", () => {
     vi.advanceTimersByTime(ABANDONED_UPDATE_RUN_MS + 10);
 
     expect(inspectUpdateRunAbandonment(run, { explicit: true })).toBeUndefined();
-    expect(reconcileAbandonedUpdateRuns({ explicit: true }, options)).toEqual([]);
+    expect(reconcileUpdateRunsInNativeKernelForTest({ explicit: true }, options)).toEqual([]);
     expect(getUpdateRun(run.runId, options)).toEqual(run);
   });
 
@@ -366,7 +366,7 @@ describe("abandoned update runs", () => {
     vi.advanceTimersByTime(ABANDONED_UPDATE_RUN_MS + 1);
 
     expect(inspectUpdateRunAbandonment(run, { explicit: true })).toBeUndefined();
-    expect(reconcileAbandonedUpdateRuns({ explicit: true }, options)).toEqual([]);
+    expect(reconcileUpdateRunsInNativeKernelForTest({ explicit: true }, options)).toEqual([]);
     expect(getUpdateRun(run.runId, options)).toEqual(run);
   });
 
@@ -377,12 +377,12 @@ describe("abandoned update runs", () => {
     vi.advanceTimersByTime(ABANDONED_UPDATE_RUN_MS + 2);
 
     expect(inspectUpdateRunAbandonment(run)).toBeUndefined();
-    expect(reconcileAbandonedUpdateRuns({}, options)).toEqual([]);
+    expect(reconcileUpdateRunsInNativeKernelForTest({}, options)).toEqual([]);
     expect(getUpdateRun(run.runId, options)).toEqual(run);
     expect(inspectUpdateRunAbandonment(run, { explicit: true })).toBe(
       "operator-reconciled-inactive-run",
     );
-    expect(reconcileAbandonedUpdateRuns({ explicit: true }, options)).toMatchObject([
+    expect(reconcileUpdateRunsInNativeKernelForTest({ explicit: true }, options)).toMatchObject([
       { runId: run.runId, status: "failed", phase: "finished", reason: "abandoned" },
     ]);
   });
@@ -458,7 +458,7 @@ describe("abandoned update runs", () => {
     expect(getUpdateRun(old.runId, options)).toEqual(old);
     if (kind === "recent") {
       expect(
-        reconcileAbandonedUpdateRuns({ explicit: true, runIds: [old.runId] }, options),
+        reconcileUpdateRunsInNativeKernelForTest({ explicit: true, runIds: [old.runId] }, options),
       ).toEqual([]);
     }
   });
@@ -473,7 +473,7 @@ describe("abandoned update runs", () => {
     vi.advanceTimersByTime(ABANDONED_UPDATE_RUN_MS + 2);
 
     expect(inspectUpdateRunAbandonment(run, { explicit: true })).toBeUndefined();
-    expect(reconcileAbandonedUpdateRuns({ explicit: true }, options)).toEqual([]);
+    expect(reconcileUpdateRunsInNativeKernelForTest({ explicit: true }, options)).toEqual([]);
     expect(getUpdateRun(run.runId, options)).toEqual(run);
   });
 
@@ -489,9 +489,9 @@ describe("abandoned update runs", () => {
       { step: "build", status: "completed", endedAtMs: Date.now() },
       options,
     );
-    expect(reconcileAbandonedUpdateRuns({ explicit: true, runIds: [run.runId] }, options)).toEqual(
-      [],
-    );
+    expect(
+      reconcileUpdateRunsInNativeKernelForTest({ explicit: true, runIds: [run.runId] }, options),
+    ).toEqual([]);
     expect(getUpdateRun(run.runId, options)).toEqual(advanced);
   });
 
@@ -507,7 +507,7 @@ describe("abandoned update runs", () => {
     );
 
     expect(
-      reconcileAbandonedUpdateRuns(
+      reconcileUpdateRunsInNativeKernelForTest(
         { explicit: true, runIds: [first.runId, second.runId] },
         options,
       ),
@@ -523,7 +523,7 @@ describe("abandoned update runs", () => {
       createUpdateRun({ trigger: "cli" }, options),
     ];
     vi.advanceTimersByTime(ABANDONED_UPDATE_RUN_MS + 10);
-    const reconciled = reconcileAbandonedUpdateRuns(
+    const reconciled = reconcileUpdateRunsInNativeKernelForTest(
       { explicit: true, runIds: runs.map((run) => run.runId), requireAllActive: true },
       options,
     );
@@ -545,7 +545,7 @@ describe("abandoned update runs", () => {
     const legacy = createUpdateRun({ trigger: "cli" }, options);
     vi.advanceTimersByTime(ABANDONED_UPDATE_RUN_MS + 10);
 
-    expect(reconcileAbandonedUpdateRuns({}, options)).toMatchObject([
+    expect(reconcileUpdateRunsInNativeKernelForTest({}, options)).toMatchObject([
       { runId: dead.runId, status: "failed", reason: "abandoned" },
     ]);
     expect(getUpdateRun(live.runId, options)).toEqual(live);
@@ -559,7 +559,7 @@ describe("abandoned update runs", () => {
     const admitted = createUpdateRun({ trigger: "cli" }, options);
 
     expect(
-      reconcileAbandonedUpdateRuns(
+      reconcileUpdateRunsInNativeKernelForTest(
         { explicit: true, runIds: [captured.runId], requireAllActive: true },
         options,
       ),
@@ -591,7 +591,7 @@ describe("abandoned update runs", () => {
     );
     recordUpdateRunPhase(created.runId, "staging", {}, options);
     vi.advanceTimersByTime(ABANDONED_UPDATE_RUN_MS + 10);
-    const [reconciled] = reconcileAbandonedUpdateRuns({}, options);
+    const [reconciled] = reconcileUpdateRunsInNativeKernelForTest({}, options);
     expect(reconciled).toMatchObject({
       runId: created.runId,
       status: "failed",
@@ -618,7 +618,7 @@ describe("abandoned update runs", () => {
     vi.advanceTimersByTime(UPDATE_RUN_HEARTBEAT_MS);
     heartbeatUpdateRun(run.runId, driver, options);
     expect(getUpdateRun(run.runId, options)?.updatedAtMs).toBeGreaterThan(adopted.updatedAtMs);
-    expect(reconcileAbandonedUpdateRuns({ explicit: true }, options)).toEqual([]);
+    expect(reconcileUpdateRunsInNativeKernelForTest({ explicit: true }, options)).toEqual([]);
   });
 
   it.each(["alive", "unknown", "dead"] as const)(
@@ -636,7 +636,7 @@ describe("abandoned update runs", () => {
         options,
       );
       vi.advanceTimersByTime(60_000);
-      const reconciled = reconcileAbandonedUpdateRuns({ explicit: true }, options);
+      const reconciled = reconcileUpdateRunsInNativeKernelForTest({ explicit: true }, options);
       expect(reconciled).toHaveLength(liveness === "dead" ? 1 : 0);
       expect(getUpdateRun(run.runId, options)?.status).toBe(
         liveness === "dead" ? "failed" : "running",
@@ -741,7 +741,7 @@ describe("abandoned update runs", () => {
       expect(active?.steps).toContainEqual(
         expect.objectContaining({ step: "build", status: "in_progress" }),
       );
-      expect(reconcileAbandonedUpdateRuns({ explicit: true }, options)).toEqual([]);
+      expect(reconcileUpdateRunsInNativeKernelForTest({ explicit: true }, options)).toEqual([]);
 
       if (fails) {
         command.reject(new Error("build interrupted"));

@@ -120,6 +120,11 @@ and namespace calls including MCP — are auto-drained inside the same
 `exec`/`wait` call while they resolve within the deadline, so a compact code
 block that awaits several tools runs to completion in one model turn instead of
 forcing one model tool call per await.
+A bridged shell `exec` without `yieldMs` or `background: true` waits for the
+remaining call budget (`tools.codeMode.timeoutMs`, default 10 s) minus a resume
+margin before backgrounding, so commands that finish within that window return
+inline in the same turn. Late sequential calls background sooner and still
+return their process handle so the guest can resume inline.
 
 `exec` returns `completed` only when the guest VM has no pending work and the
 final value is JSON-compatible after OpenClaw's output adapter runs.

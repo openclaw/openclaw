@@ -4,6 +4,7 @@ import { getChildLogger } from "../logging/logger.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { assertStateDatabaseAccessAllowed } from "./gateway-state-owner.js";
+import { runtimeNeedsTypeScriptLoader } from "./runtime-worker-url.js";
 import {
   assertSqliteWorkerActorReusable,
   captureSqliteWorkerOpen,
@@ -126,7 +127,7 @@ export class SqliteWorkerBroker {
       const generation = options.runtimeGeneration;
       generation?.retain(this, async () => {
         await this.inputAdmission.joinOpens();
-        await this.lifecycle.closeGeneration(generation);
+        return await this.lifecycle.settleGeneration(generation);
       });
     } catch (error) {
       this.clients.delete(client);
@@ -235,7 +236,7 @@ export class SqliteWorkerBroker {
           ...(options.existingOnly ? { existingIdentity: key } : {}),
           input,
           ...(options.preparation ? { preparation: options.preparation } : {}),
-          ...(/\.[cm]?ts$/.test(modulePath)
+          ...(runtimeNeedsTypeScriptLoader(modulePath)
             ? { sourceLoaderUrl: import.meta.resolve("tsx/esm/api") }
             : {}),
         },

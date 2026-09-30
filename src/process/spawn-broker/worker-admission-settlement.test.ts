@@ -4,6 +4,7 @@ import { beforeEach, expect, it, vi } from "vitest";
 import type { killProcessTree } from "../kill-tree.js";
 import type { startBrokerExeca } from "./execa-worker.js";
 import type { BrokerRequest, BrokerResponse } from "./protocol.js";
+import type { BrokerBootstrap } from "./resource-protocol.js";
 import type { createWorkerSender } from "./worker-sender.js";
 
 type Sender = ReturnType<typeof createWorkerSender>;
@@ -48,7 +49,8 @@ beforeEach(() => {
 it.each(["spawn", "spawn-execa"] as const)(
   "reports authoritative no-start before the %s capacity refusal",
   async (type) => {
-    let receive: ((message: BrokerRequest) => void) | undefined;
+    let receive: ((message: BrokerBootstrap | BrokerRequest) => void) | undefined;
+    const connected = Object.getOwnPropertyDescriptor(process, "connected");
     const originalOn = process.on.bind(process);
     const originalOnce = process.once.bind(process);
     vi.spyOn(process, "on").mockImplementation((event, listener) => {
@@ -73,11 +75,17 @@ it.each(["spawn", "spawn-execa"] as const)(
     const exit = vi.spyOn(process, "exit").mockImplementation(() => {
       throw new Error("This worker admission fixture cannot exit the test process");
     });
+    // Failed bootstrap must not leave a native shutdown timer after the spies restore.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    Object.defineProperty(process, "connected", { configurable: true, value: true });
     try {
       await import("./worker.js");
       if (!receive) {
         throw new Error("The worker did not register its message entrypoint");
       }
+      receive({ type: "bootstrap" });
+      await setImmediate();
+      expect(boundary.send).toHaveBeenCalledWith({ type: "ready", pid: process.pid }, undefined);
       // Reservations reject on the next microtask. Synchronous delivery fills
       // the real admission count without invoking either native launch path.
       for (let id = 1; id <= 257; id += 1) {
@@ -122,6 +130,7 @@ it.each(["spawn", "spawn-execa"] as const)(
       expect(kill).not.toHaveBeenCalled();
       expect(exit).not.toHaveBeenCalled();
       expect(boundary.close).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
     } finally {
       // All launched continuations retain only these reservation/report promises;
       // the final event-loop turn joins their catch/finally tails before restoring process hooks.
@@ -134,6 +143,13 @@ it.each(["spawn", "spawn-execa"] as const)(
         ),
       ]);
       await setImmediate();
+      vi.clearAllTimers();
+      vi.useRealTimers();
+      if (connected) {
+        Object.defineProperty(process, "connected", connected);
+      } else {
+        Reflect.deleteProperty(process, "connected");
+      }
       vi.restoreAllMocks();
     }
   },

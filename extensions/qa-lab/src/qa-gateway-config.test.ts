@@ -5,12 +5,13 @@ import {
   QA_SESSION_OBSERVER_HEADER,
   registerQaSessionObserver,
 } from "./providers/shared/session-observer-registry.js";
-import {
-  buildQaGatewayConfig,
-  DEFAULT_QA_CONTROL_UI_ALLOWED_ORIGINS,
-  mergeQaControlUiAllowedOrigins,
-} from "./qa-gateway-config.js";
+import { buildQaGatewayConfig } from "./qa-gateway-config.js";
 import type { QaTransportGatewayConfig } from "./qa-transport.js";
+import { readQaScenarioById } from "./scenario-catalog.js";
+import {
+  applyQaSuiteGatewayConfigPatches,
+  collectQaSuiteGatewayConfigPatches,
+} from "./suite-planning.js";
 
 function buildConfig(params: Partial<Parameters<typeof buildQaGatewayConfig>[0]>) {
   return buildQaGatewayConfig({
@@ -74,6 +75,35 @@ function expectQaLabPluginEnabled(cfg: ReturnType<typeof buildQaGatewayConfig>) 
 }
 
 describe("buildQaGatewayConfig", () => {
+  it.each([
+    {
+      scenarioId: "anthropic-thinking-error-recovery-replay-safe-read",
+      providerMode: "mock-openai",
+      primaryModel: "mock-openai/gpt-5.6-luna",
+      allowedRefs: ["anthropic/claude-opus-4-8"],
+    },
+    {
+      scenarioId: "thinking-slash-model-remap",
+      providerMode: "live-frontier",
+      primaryModel: "openai/gpt-5.5",
+      allowedRefs: ["openai/gpt-5.5", "anthropic/claude-sonnet-4-6"],
+    },
+  ] as const)(
+    "composes an exact override policy for $scenarioId",
+    ({ scenarioId, providerMode, primaryModel, allowedRefs }) => {
+      const base = buildConfig({ providerMode, primaryModel });
+      const config = applyQaSuiteGatewayConfigPatches(
+        base,
+        collectQaSuiteGatewayConfigPatches([readQaScenarioById(scenarioId)]),
+      );
+
+      expect(config).toMatchObject({
+        agents: { defaults: { modelPolicy: { allow: [...allowedRefs] } } },
+      });
+      expect(base.agents?.defaults?.modelPolicy?.allow).not.toContain(allowedRefs.at(-1));
+    },
+  );
+
   it("uses only active full-mock observer registrations across endpoint aliases", () => {
     const baseUrl = "http://127.0.0.1:44082";
     const observerUrl = `${baseUrl}/debug/session`;
@@ -444,7 +474,7 @@ describe("buildQaGatewayConfig", () => {
     });
   });
 
-  it("routes forced Codex mock cells through the app-server OpenAI provider", () => {
+  it("keeps forced Codex mock catalogs static and routes through the app server", () => {
     const cfg = buildConfig({
       providerBaseUrl: "http://127.0.0.1:44080/v1",
       providerMode: "mock-openai",
@@ -457,7 +487,7 @@ describe("buildQaGatewayConfig", () => {
 
     expect(getPrimaryModel(cfg.agents?.defaults?.model)).toBe("openai/gpt-5.6-luna");
     expect(getModelFallbacks(cfg.agents?.defaults?.model)).toEqual(["openai/gpt-5.6-luna-alt"]);
-    expect(cfg.models?.mode).toBe("merge");
+    expect(cfg.models?.mode).toBe("replace");
     expect(cfg.models?.providers?.openai?.baseUrl).toBe("https://api.openai.com/v1");
     expect(cfg.models?.providers?.openai?.request).toBeUndefined();
     for (const model of cfg.models?.providers?.openai?.models ?? []) {
@@ -592,21 +622,24 @@ describe("buildQaGatewayConfig", () => {
   });
 
   it("merges dynamic qa-lab origins without dropping the built control ui root", () => {
-    expect(mergeQaControlUiAllowedOrigins(["http://127.0.0.1:60196", "  "])).toEqual([
-      ...DEFAULT_QA_CONTROL_UI_ALLOWED_ORIGINS,
-      "http://127.0.0.1:60196",
-    ]);
-
     const cfg = buildConfig({
       controlUiRoot: "/tmp/openclaw/dist/control-ui",
-      controlUiAllowedOrigins: ["http://127.0.0.1:60196"],
+      controlUiAllowedOrigins: [
+        " http://127.0.0.1:60196 ",
+        "  ",
+        "http://localhost:18789",
+        "http://127.0.0.1:60196",
+      ],
       ...createQaChannelTransportParams(),
     });
 
     expect(cfg.gateway?.controlUi?.enabled).toBe(true);
     expect(cfg.gateway?.controlUi?.root).toBe("/tmp/openclaw/dist/control-ui");
     expect(cfg.gateway?.controlUi?.allowedOrigins).toEqual([
-      ...DEFAULT_QA_CONTROL_UI_ALLOWED_ORIGINS,
+      "http://127.0.0.1:18789",
+      "http://localhost:18789",
+      "http://127.0.0.1:43124",
+      "http://localhost:43124",
       "http://127.0.0.1:60196",
     ]);
   });

@@ -19,11 +19,9 @@ import {
   SESSION_ROUTING_CHANGED_ERROR_REASON,
 } from "../../config/sessions/main-session.js";
 import { prepareQualifiedSessionEntryTarget } from "../../config/sessions/session-accessor.js";
-import type {
-  CapturedSessionEntryReadSource,
-  QualifiedSessionEntryAccessTarget,
-} from "../../config/sessions/session-accessor.types.js";
+import type { QualifiedSessionEntryAccessTarget } from "../../config/sessions/session-accessor.types.js";
 import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
+import type { CapturedSessionEntryReadSource } from "../../config/sessions/session-entry-read-source.types.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { measureDiagnosticsTimelineSpanSync } from "../../infra/diagnostics-timeline.js";

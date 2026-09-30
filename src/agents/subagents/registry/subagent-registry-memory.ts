@@ -129,7 +129,11 @@ type CompletionCustody = {
 class SubagentRunMap extends Map<string, SubagentRunRecord> {
   runIdLookup = new SubagentRunIdLookup();
   private readonly retirementScopes = new Set<SubagentRetirementScope>();
-  private readonly registrationScopes = new Set<{ childSessionKey: string; current: boolean }>();
+  private readonly registrationScopes = new Set<{
+    childSessionKey: string;
+    current: boolean;
+    expectedEntry?: SubagentRunRecord;
+  }>();
   private readonly completionAuthorities = new Map<SubagentRunRecord, CompletionCustody>();
   // A tombstone rejects stale callbacks without retaining closed Gateway/source contexts.
   private readonly operatorCompletionEntries = new WeakSet<SubagentRunRecord>();
@@ -327,8 +331,8 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
   }
 
   /** A committed successor remains superseding even if it retires before preparation finishes. */
-  captureRegistrationOwnership(childSessionKey: string) {
-    const scope = { childSessionKey, current: true };
+  captureRegistrationOwnership(childSessionKey: string, expectedEntry?: SubagentRunRecord) {
+    const scope = { childSessionKey, current: true, expectedEntry };
     this.registrationScopes.add(scope);
     return {
       assertCurrent: () => {
@@ -349,7 +353,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
       return;
     }
     for (const scope of this.registrationScopes) {
-      if (scope.childSessionKey === entry.childSessionKey) {
+      if (scope.childSessionKey === entry.childSessionKey && scope.expectedEntry !== entry) {
         scope.current = false;
       }
     }

@@ -4,9 +4,16 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { discordQaScenarioSupport } from "./discord-live.runtime.js";
-
-const { testing } = discordQaScenarioSupport;
+import { createDiscordQaEndpointFetcher } from "./discord-live.endpoint.js";
+import {
+  buildDiscordWebMessageUrl,
+  collectSeenReactionSequence,
+  normalizeDiscordObservedMessage,
+  normalizeDiscordReactionSnapshot,
+  renderDiscordStatusReactionHtml,
+  renderDiscordThreadReplyAttachmentHtml,
+} from "./discord-live.evidence.js";
+import * as testing from "./discord-live.runtime.js";
 
 describe("discord live qa runtime", () => {
   afterEach(() => {
@@ -38,9 +45,7 @@ describe("discord live qa runtime", () => {
     server.listen(0, "127.0.0.1");
     await once(server, "listening");
     const port = (server.address() as AddressInfo).port;
-    const endpointFetch = testing.createDiscordQaEndpointFetcher(
-      `http://127.0.0.1:${port}/api/v10`,
-    );
+    const endpointFetch = createDiscordQaEndpointFetcher(`http://127.0.0.1:${port}/api/v10`);
 
     try {
       const writeResponse = await endpointFetch(
@@ -329,7 +334,7 @@ describe("discord live qa runtime", () => {
 
   it("normalizes observed Discord messages", () => {
     expect(
-      testing.normalizeDiscordObservedMessage({
+      normalizeDiscordObservedMessage({
         id: "523456789012345678",
         channel_id: "223456789012345678",
         guild_id: "123456789012345678",
@@ -395,7 +400,7 @@ describe("discord live qa runtime", () => {
 
   it("collects the status reaction sequence across timeline snapshots", () => {
     expect(
-      testing.collectSeenReactionSequence(
+      collectSeenReactionSequence(
         [
           {
             elapsedMs: 0,
@@ -423,7 +428,7 @@ describe("discord live qa runtime", () => {
 
   it("normalizes reaction snapshots from Discord messages", () => {
     expect(
-      testing.normalizeDiscordReactionSnapshot({
+      normalizeDiscordReactionSnapshot({
         startedAtMs: new Date("2026-05-03T12:00:00.000Z").getTime(),
         observedAt: new Date("2026-05-03T12:00:01.000Z"),
         message: {
@@ -446,7 +451,7 @@ describe("discord live qa runtime", () => {
   });
 
   it("renders a human-readable status reaction timeline artifact", () => {
-    const html = testing.renderDiscordStatusReactionHtml({
+    const html = renderDiscordStatusReactionHtml({
       scenarioTitle: "Discord's status reactions",
       expectedSequence: ["👀", "🤔", "👍"],
       seenSequence: ["👀", "🤔"],
@@ -465,7 +470,7 @@ describe("discord live qa runtime", () => {
   });
 
   it("renders a human-readable thread attachment artifact", () => {
-    const html = testing.renderDiscordThreadReplyAttachmentHtml({
+    const html = renderDiscordThreadReplyAttachmentHtml({
       attachmentFilenames: [],
       expectedAttachmentFilename: "mantis-thread-report.md",
       messageContent: "Mantis' thread attachment reply",
@@ -482,7 +487,7 @@ describe("discord live qa runtime", () => {
 
   it("builds Discord Web message URLs for logged-in Mantis capture", () => {
     expect(
-      testing.buildDiscordWebMessageUrl({
+      buildDiscordWebMessageUrl({
         guildId: "111111111111111111",
         messageId: "333333333333333333",
         threadId: "222222222222222222",
@@ -553,7 +558,7 @@ describe("discord live qa runtime", () => {
     }
   });
 
-  it("lists Discord application commands through the REST API", async () => {
+  it("verifies Discord application commands through the authenticated REST API", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (_input: string | URL | globalThis.Request, init?: RequestInit) => {
@@ -567,14 +572,13 @@ describe("discord live qa runtime", () => {
     );
 
     await expect(
-      testing.listApplicationCommands({
+      testing.assertDiscordApplicationCommandsRegistered({
         token: "token",
         applicationId: "323456789012345678",
+        expectedCommandNames: ["help", "commands"],
+        timeoutMs: 1_000,
       }),
-    ).resolves.toEqual([
-      { id: "623456789012345678", name: "help" },
-      { id: "623456789012345679", name: "commands" },
-    ]);
+    ).resolves.toEqual({ commandNames: ["commands", "help"] });
   });
 
   it("discovers the first visible Discord voice channel for the voice smoke", async () => {

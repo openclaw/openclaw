@@ -3,11 +3,11 @@ import fs from "node:fs";
 export type MemoryShadowConnection = {
   fileIdentity: { device: string; inode: string };
   extensionPath?: string;
+  // Checkpoint cadence belongs to each connection's WAL maintenance owner, not to publication policy.
   pragmas: {
     busy_timeout: number;
     synchronous: number;
     foreign_keys: number;
-    wal_autocheckpoint: number;
     journal_size_limit: number;
     checkpoint_fullfsync: number;
   };

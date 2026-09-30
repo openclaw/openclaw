@@ -3,11 +3,24 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { publishSystemEventStoreResolver } from "../../../infra/system-event-ownership.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
+import type { createRequesterDescendantReader } from "./subagent-announce.requester-settle-descendants.js";
+
+const readDescendantFacts = vi.hoisted(() =>
+  vi.fn<
+    (
+      params: Parameters<typeof createRequesterDescendantReader>[0],
+    ) => ReturnType<ReturnType<typeof createRequesterDescendantReader>>
+  >(async () => ({ unsettled: false, active: 0 })),
+);
+
+vi.mock("./subagent-announce.requester-settle-descendants.js", () => ({
+  createRequesterDescendantReader:
+    (params: Parameters<typeof createRequesterDescendantReader>[0]) => () =>
+      readDescendantFacts(params),
+}));
 
 const { registryRuntimeMock, deliverSpy } = vi.hoisted(() => ({
   registryRuntimeMock: {
-    countActiveDescendantRuns: vi.fn(() => 0),
-    hasDescendantRunAwaitingSettle: vi.fn(() => false),
     listSubagentRunsForRequester: vi.fn<() => SubagentRunRecord[]>(() => []),
     getLatestSubagentRunByChildSessionKey: vi.fn(() => undefined),
     getLatestLiveSubagentRunByChildSessionKey: vi.fn(() => undefined),
@@ -81,10 +94,17 @@ function wakeParams() {
   if (!settledEntry) {
     throw new Error("The control requires its registered run-b fixture.");
   }
-  return { requesterSessionKey: REQUESTER, settledEntry, transitionBatch, completeBatch };
+  return {
+    requesterSessionKey: REQUESTER,
+    settledEntry,
+    transitionBatch,
+    completeBatch,
+    isSourceCurrent: () => true,
+  };
 }
 
 beforeEach(() => {
+  readDescendantFacts.mockReset().mockResolvedValue({ unsettled: false, active: 0 });
   registryRuntimeMock.listSubagentRunsForRequester.mockReset().mockReturnValue([]);
   deliverSpy.mockReset().mockResolvedValue({ delivered: true, path: "direct" });
 });

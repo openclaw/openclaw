@@ -66,12 +66,22 @@ export function createNodeWorkerWorkspaceActions(params: {
   ownerSignal: AbortSignal;
   isOwnerCurrent: () => boolean;
   restoredWorkspace?: NodeWorkerWorkspaceBinding;
+  supportsNativeQuiescence?: () => Promise<boolean>;
   workspaceTransfer: NodeWorkspaceTransferService;
   runWorkspaceCommand: (
     command: WorkerWorkspaceCommand & { resetWorkspace?: boolean; sessionKey?: string },
   ) => Promise<NodeWorkerWorkspaceExecResult>;
 }): NodeWorkerWorkspaceActions {
   const { restoredWorkspace } = params;
+  // Transfers revalidate this tunnel binding and its durable environment/credential on use.
+  const transferOwner = {
+    environmentId: params.environmentId,
+    ownerEpoch: params.ownerEpoch,
+    sessionId: params.sessionId,
+    generation: params.ownerEpoch,
+    isAuthorized: params.isOwnerCurrent,
+    signal: params.ownerSignal,
+  };
   let workspaceReady = restoredWorkspace !== undefined;
   let sessionKey = restoredWorkspace?.sessionKey;
   const exec = async (command: WorkerWorkspaceCommand & { resetWorkspace?: boolean }) => {
@@ -88,6 +98,7 @@ export function createNodeWorkerWorkspaceActions(params: {
   const quiesceWorkspace = createWorkerWorkspaceQuiescence({
     ownerSignal: params.ownerSignal,
     sharedHost: true,
+    nativeWatchdog: params.supportsNativeQuiescence,
     runWorkspaceCommand: exec,
   });
   const validateRestoredWorkspace = async (authorize?: () => void): Promise<void> => {
@@ -96,30 +107,18 @@ export function createNodeWorkerWorkspaceActions(params: {
     }
     if (restoredWorkspace.source.kind === "repository") {
       await params.workspaceTransfer.prepareRepository({
-        environmentId: params.environmentId,
-        ownerEpoch: params.ownerEpoch,
-        sessionId: params.sessionId,
-        generation: params.ownerEpoch,
+        ...transferOwner,
         authorize,
         baseCommit: restoredWorkspace.source.baseCommit,
         baseManifestRef: restoredWorkspace.source.baseManifestRef,
-        isAuthorized: params.isOwnerCurrent,
-        signal: params.ownerSignal,
       });
       return;
     }
     // Restore transport custody only. The uploaded base is hash-bound to placement;
     // three-way reconciliation owns legitimate changes on either workspace.
     const prepared = await params.workspaceTransfer.prepareSync({
-      environmentId: params.environmentId,
-      ownerEpoch: params.ownerEpoch,
-      sessionId: params.sessionId,
-      generation: params.ownerEpoch,
+      ...transferOwner,
       localPath: restoredWorkspace.source.path,
-      // The transfer service re-reads the durable environment and credential together.
-      // This closure fences the exact in-memory tunnel instance without duplicating that read.
-      isAuthorized: params.isOwnerCurrent,
-      signal: params.ownerSignal,
       authorize,
     });
     await params.workspaceTransfer.revoke(params.environmentId, prepared.token);
@@ -418,15 +417,10 @@ export function createNodeWorkerWorkspaceActions(params: {
       await repository.configureAuthor(remoteWorkspaceDir, request.gitAuthor);
     }
     await params.workspaceTransfer.prepareRepository({
-      environmentId: params.environmentId,
-      ownerEpoch: params.ownerEpoch,
-      sessionId: params.sessionId,
-      generation: params.ownerEpoch,
+      ...transferOwner,
       baseCommit,
       baseManifestRef,
       authorize: request.authorize,
-      isAuthorized: params.isOwnerCurrent,
-      signal: params.ownerSignal,
     });
     let manifestRef = baseline.manifestRef;
     if (source.checkpoint) {
@@ -584,14 +578,8 @@ if (stat?.isFile() && (stat.mode & 0o111)) {
           authorize: request.authorize,
         };
         const prepared = await params.workspaceTransfer.prepareSync({
-          environmentId: params.environmentId,
-          ownerEpoch: params.ownerEpoch,
-          sessionId: params.sessionId,
-          generation: params.ownerEpoch,
+          ...transferOwner,
           localPath: localRequest.localPath,
-          // Durable owner state is revalidated by the transfer service after every awaited I/O.
-          isAuthorized: params.isOwnerCurrent,
-          signal: params.ownerSignal,
           authorize: request.authorize,
         });
         try {

@@ -109,9 +109,10 @@ function validateTypeKeyword(type: unknown, path: string): string | undefined {
     return jsonSchemaTypes.has(type) ? undefined : `${path}.type: unsupported JSON Schema type`;
   }
   if (Array.isArray(type) && type.length > 0) {
-    const invalid = type.find((entry) => typeof entry !== "string" || !jsonSchemaTypes.has(entry));
-    if (invalid !== undefined) {
-      return `${path}.type: unsupported JSON Schema type`;
+    for (const entry of type) {
+      if (typeof entry !== "string" || !jsonSchemaTypes.has(entry)) {
+        return `${path}.type: unsupported JSON Schema type`;
+      }
     }
     return new Set(type).size === type.length
       ? undefined
@@ -566,20 +567,6 @@ export function findJsonSchemaShapeError(schema: JsonSchemaValue): string | unde
   return findJsonSchemaNodeError(schema, "<schema>", schema, schema, undefined);
 }
 
-function cloneDefault<T>(value: T): T {
-  if (value === undefined || value === null) {
-    return value;
-  }
-  return structuredClone(value);
-}
-
-function getDefault(schema: JsonSchemaValue): unknown {
-  if (!isRecord(schema) || !Object.hasOwn(schema, "default")) {
-    return undefined;
-  }
-  return cloneDefault(schema.default);
-}
-
 function schemaWithResourceContext(
   schema: JsonSchemaValue,
   resourceRoot: JsonSchemaValue,
@@ -927,21 +914,17 @@ function applySchemaDefaults(
   resourceRoot = root,
   resourceBaseId?: string,
 ): unknown {
-  let value = valueInput;
-  if (value === undefined) {
-    const defaultValue = getDefault(schema);
-    if (defaultValue !== undefined) {
-      value = defaultValue;
-    }
-  }
+  let nextValue = valueInput;
   if (!isRecord(schema)) {
-    return value;
+    return nextValue;
+  }
+  if (nextValue === undefined && Object.hasOwn(schema, "default")) {
+    nextValue = structuredClone(schema.default);
   }
 
   const currentResourceRoot = typeof schema.$id === "string" ? schema : resourceRoot;
   const currentResourceBaseId =
     typeof schema.$id === "string" ? resolveSchemaId(schema.$id, resourceBaseId) : resourceBaseId;
-  let nextValue = value;
   const refKey =
     typeof schema.$ref === "string"
       ? schemaResourceRefKey(currentResourceRoot, schema.$ref, currentResourceBaseId)

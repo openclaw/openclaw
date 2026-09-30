@@ -1,7 +1,7 @@
 import type { OpenClawPluginNodeHostCommandAvailabilityContext } from "openclaw/plugin-sdk/plugin-entry";
 import type { CommandOptions, SpawnResult } from "openclaw/plugin-sdk/process-runtime";
-import { asFiniteNumber, asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { safeParseJson, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   resolveLinuxNodePluginConfigFromHost,
   type ResolvedLinuxNodePluginConfig,
@@ -10,21 +10,7 @@ import {
 export type RunCommand = (argv: string[], options: CommandOptions) => Promise<SpawnResult>;
 
 export function parseParams(paramsJSON: string | null | undefined): Record<string, unknown> {
-  if (!paramsJSON) {
-    return {};
-  }
-  try {
-    const parsed = JSON.parse(paramsJSON) as unknown;
-    return asNonArrayRecord(parsed);
-  } catch {
-    return {};
-  }
-}
-
-export { asFiniteNumber as readFiniteNumber };
-
-export function clamp(value: number, minimum: number, maximum: number): number {
-  return Math.min(maximum, Math.max(minimum, value));
+  return asNonArrayRecord(safeParseJson(paramsJSON ?? ""));
 }
 
 export function formatToolError(result: SpawnResult): string {

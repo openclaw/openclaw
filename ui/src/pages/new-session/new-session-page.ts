@@ -29,11 +29,16 @@ import type { SidebarContent } from "../chat/components/chat-sidebar-content-typ
 import { renderWelcomeState } from "../chat/components/chat-welcome.ts";
 import * as catalog from "./catalog-target.ts";
 import { NewSessionDictationControl } from "./composer-dictation-control.ts";
-import { ConnectMachineSetupState, renderConnectMachineDialog } from "./connect-machine-dialog.ts";
+import { ConnectMachineSetupState } from "./connect-machine-dialog.ts";
 import { renderNewSessionBody } from "./draft-body.ts";
 import { NewSessionDraftController } from "./draft-controller.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
-import * as drafts from "./draft-navigation-handoff.ts";
+import {
+  activateDraft,
+  restoreDraft,
+  restoreDraftOwner,
+  retainDraft,
+} from "./draft-navigation-handoff.ts";
 import type { DraftPlaceBrowser } from "./draft-place-browser.ts";
 import type { DraftPlaceState } from "./draft-place-state.ts";
 import type { DraftSubmissionFlow } from "./draft-submission-flow.ts";
@@ -46,8 +51,6 @@ import { closeAgentPicker, closeSessionMenus } from "./new-session-runtime.ts";
 import { renderAgentSelect, renderNewSessionPlaceControls } from "./target-controls.ts";
 
 registerNewSessionSetupEnglish();
-
-const { activateDraft, restoreDraft, restoreDraftOwner, retainDraft } = drafts;
 
 const attachmentPanelElement = {
   tagName: "openclaw-chat-detail-panel",
@@ -524,20 +527,9 @@ export class NewSessionPage extends OpenClawLightDomElement {
           renderDraft: () => (completed ? this.renderDraftBlock() : this.renderWelcome()),
           onOpenImage: this.setImageLightbox,
         })}
-        ${renderConnectMachineDialog({
-          open: this.connectMachine.open && this.place.isAdmin(),
-          loading: this.connectMachine.loading,
-          error: this.connectMachine.error,
-          setup: this.connectMachine.setup,
-          onRefresh: () => void this.connectMachine.refresh(),
-          onClose: () => {
-            this.connectMachine.close();
-            this.requestUpdate();
-          },
-          onManageDevices: () => {
-            this.connectMachine.close();
-            this.context?.navigate("devices");
-          },
+        ${this.connectMachine.render(this.place.isAdmin(), () => {
+          this.connectMachine.close();
+          this.context?.navigate("devices");
         })}
         ${renderChatImageLightbox(this.imageLightbox, () => this.setImageLightbox(null))}
       </div>

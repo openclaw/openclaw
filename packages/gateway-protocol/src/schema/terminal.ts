@@ -91,12 +91,7 @@ export type TerminalAttachParams = Static<typeof TerminalAttachParamsSchema>;
 
 /** Result of a successful attach; mirrors open plus the replay buffer. */
 export const TerminalAttachResultSchema = closedObject({
-  sessionId: NonEmptyString,
-  agentId: NonEmptyString,
-  shell: NonEmptyString,
-  cwd: NonEmptyString,
-  confined: Type.Boolean(),
-  title: Type.Optional(NonEmptyString),
+  ...TerminalOpenResultSchema.properties,
   owner: Type.Optional(Type.Union([Type.Literal("conn"), Type.String({ pattern: "^agent:.+" })])),
   // Recent raw output from the server's bounded ring buffer, replayed into
   // the client emulator before live terminal.data resumes. Not a true screen

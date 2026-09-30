@@ -68,18 +68,11 @@ export function collectPluginConfigContractMatches(params: {
     for (const state of states) {
       if (segment === "*") {
         // Wildcards fan out across arrays and records so contracts can cover account maps/lists.
-        if (Array.isArray(state.value)) {
-          for (const [index, value] of state.value.entries()) {
-            nextStates.push({
-              segments: [...state.segments, index],
-              value,
-              parent: state.value,
-            });
-          }
-          continue;
-        }
-        if (isRecord(state.value)) {
-          for (const [key, value] of Object.entries(state.value)) {
+        if (Array.isArray(state.value) || isRecord(state.value)) {
+          const entries = Array.isArray(state.value)
+            ? state.value.entries()
+            : Object.entries(state.value);
+          for (const [key, value] of entries) {
             nextStates.push({
               segments: [...state.segments, key],
               value,

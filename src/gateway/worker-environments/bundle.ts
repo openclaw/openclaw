@@ -259,25 +259,6 @@ async function verifyPublishedNpmRelease(params: {
   }
 }
 
-function manifestsMatch(
-  left: readonly WorkerBundleHashEntry[],
-  right: readonly WorkerBundleHashEntry[],
-): boolean {
-  return (
-    left.length === right.length &&
-    left.every((entry, index) => {
-      const other = right[index];
-      return (
-        other !== undefined &&
-        entry.path === other.path &&
-        entry.mode === other.mode &&
-        entry.size === other.size &&
-        entry.sha256 === other.sha256
-      );
-    })
-  );
-}
-
 async function isCachedTarball(filePath: string): Promise<boolean> {
   try {
     const stats = await fs.lstat(filePath);
@@ -301,9 +282,10 @@ async function cachedTarballMatches(
     return false;
   }
   try {
-    return manifestsMatch(
-      await readWorkerBundleArchiveManifest(tarballPath, DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS),
-      manifest,
+    return (
+      hashWorkerBundleManifest(
+        await readWorkerBundleArchiveManifest(tarballPath, DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS),
+      ) === hashWorkerBundleManifest(manifest)
     );
   } catch {
     return false;

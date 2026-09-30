@@ -212,6 +212,8 @@ describe("Browser dashboard operation ordering", () => {
   it.each([
     { state: "active tab", changed: "caller", cleanupKind: "lifecycle", phase: "board" },
     { state: "Stop intent", changed: "caller", cleanupKind: "lifecycle", phase: "board" },
+    { state: "active tab", changed: "prepared", cleanupKind: "lifecycle", phase: "board" },
+    { state: "Stop intent", changed: "prepared", cleanupKind: "lifecycle", phase: "board" },
     { state: "active tab", changed: "runtime", cleanupKind: "lifecycle", phase: "board" },
     { state: "Stop intent", changed: "runtime", cleanupKind: "sweep", phase: "board" },
     { state: "active tab", changed: "runtime", cleanupKind: "lifecycle", phase: "store" },
@@ -253,20 +255,24 @@ describe("Browser dashboard operation ordering", () => {
       }
       let current = true;
       const closeTab = vi.fn(async () => {});
+      const currency = {
+        isCurrent: () => changed === "prepared" || current,
+        ...(changed === "prepared" ? { prepareCurrent: async () => current } : {}),
+      };
       const cleanup =
         cleanupKind === "lifecycle"
           ? closeTrackedBrowserTabsForSessions({
               sessionKeys: [sessionKey],
-              isCurrent: () => current,
+              ...currency,
               closeTab,
             })
           : cleanupKind === "sweep"
             ? sweepTrackedBrowserTabs({
                 ordinaryCleanup: false,
-                isCurrent: () => current,
+                ...currency,
                 closeTab,
               })
-            : reconcileBrowserDashboards({ isCurrent: () => current });
+            : reconcileBrowserDashboards(currency);
       try {
         await reading.promise;
         if (changed === "runtime") {
@@ -299,10 +305,38 @@ describe("Browser dashboard operation ordering", () => {
     },
   );
 
+  it("retires a claimed dashboard tab after the cleanup caller changes", async () => {
+    await requestBrowserDashboard(request);
+    fixture.widgets = [];
+    const entered = createDeferred<void>();
+    const finish = createDeferred<void>();
+    let current = true;
+    const closeTab = vi.fn(async () => {
+      entered.resolve();
+      await finish.promise;
+    });
+    const cleanup = closeTrackedBrowserTabsForSessions({
+      sessionKeys: [sessionKey],
+      isCurrent: () => current,
+      prepareCurrent: async () => current,
+      closeTab,
+    });
+    try {
+      await Promise.race([entered.promise, cleanup]);
+      expect(closeTab).toHaveBeenCalledOnce();
+      current = false;
+      finish.resolve();
+      await expect(cleanup).resolves.toBe(1);
+      expect(await getBrowserSessionTabStore().entries()).toEqual([]);
+    } finally {
+      finish.resolve();
+      await cleanup;
+    }
+  });
+
   it.each([
     "initiator cancelled",
     "follower cancelled",
-    "backend failed",
     "definition updated",
     "layout updated",
     "stop after cancellation",
@@ -318,9 +352,9 @@ describe("Browser dashboard operation ordering", () => {
     const stopping = failure.startsWith("stop ");
     const cancelInitiator =
       failure === "initiator cancelled" ||
-      ["stop after cancellation", "stop after resume", "stop after cold cancellation"].includes(
-        failure,
-      );
+      failure === "stop after cancellation" ||
+      failure === "stop after resume" ||
+      failure === "stop after cold cancellation";
     const cancelFollower =
       failure === "follower cancelled" || failure === "stop after follower cancellation";
     browser.open.mockImplementation(async () => {
@@ -330,7 +364,7 @@ describe("Browser dashboard operation ordering", () => {
     browser.open.mockImplementationOnce(async () => {
       started.resolve();
       await finish.promise;
-      if (failure === "backend failed" || failure === "layout updated") {
+      if (failure === "layout updated") {
         throw backendError;
       }
       if (failure === "stop after cold cancellation") {

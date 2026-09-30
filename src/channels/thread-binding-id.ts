@@ -14,6 +14,5 @@ export function resolveThreadBindingConversationIdFromBindingId(params: {
   if (!bindingId.startsWith(prefix)) {
     return undefined;
   }
-  const conversationId = normalizeOptionalString(bindingId.slice(prefix.length));
-  return conversationId || undefined;
+  return normalizeOptionalString(bindingId.slice(prefix.length));
 }

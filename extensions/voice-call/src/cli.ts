@@ -36,12 +36,6 @@ import {
   setupTailscaleExposureRoutes,
 } from "./webhook/tailscale.js";
 
-type Logger = {
-  info: (message: string) => void;
-  warn: (message: string) => void;
-  error: (message: string) => void;
-};
-
 type SetupCheck = {
   id: string;
   ok: boolean;
@@ -136,7 +130,6 @@ export function registerVoiceCallCli(params: {
   coreConfig: OpenClawConfig;
   ensureRuntime: () => Promise<VoiceCallRuntime>;
   stateRuntime?: VoiceCallStateRuntime["state"];
-  logger: Logger;
 }) {
   const { program, config, coreConfig, ensureRuntime, stateRuntime } = params;
   const ensureHistoryStateRuntime = (): void => {

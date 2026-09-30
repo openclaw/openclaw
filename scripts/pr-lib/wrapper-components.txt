@@ -33,6 +33,7 @@ packages/gateway-protocol/src/svg-image.ts
 packages/gateway-protocol/src/theme-ids.ts
 packages/gateway-protocol/src/theme.ts
 packages/gateway-protocol/src/update-run-vocabulary.ts
+packages/gateway-protocol/src/worker-capacity.ts
 packages/llm-core/package.json
 packages/llm-core/src/model-data.ts
 packages/media-core/src/constants.ts
@@ -138,6 +139,7 @@ scripts/lib/managed-windows-job-launcher.mts
 scripts/lib/managed-windows-job.mts
 scripts/lib/merge-head-diff-base.mjs
 scripts/lib/native-session-catalogs.json
+scripts/lib/npm-json-output.mts
 scripts/lib/numeric-options.mjs
 scripts/lib/official-external-channel-catalog.json
 scripts/lib/official-external-plugin-catalog.json
@@ -368,11 +370,13 @@ src/config/backup-rotation.ts
 src/config/bundled-channel-config-metadata.generated.ts
 src/config/byte-size.ts
 src/config/channel-config-metadata.ts
+src/config/channel-config-activation.ts
 src/config/channel-configured-shared.ts
 src/config/channel-configured.ts
 src/config/channel-schema-selection.ts
 src/config/cloud-worker-project-profiles.ts
 src/config/codex-plugin-diagnostics.ts
+src/config/config-env-values.ts
 src/config/config-env-vars.ts
 src/config/config-journal-snapshot.kernel.ts
 src/config/config-journal-snapshot.ts
@@ -397,6 +401,7 @@ src/config/includes.ts
 src/config/io.audit.ts
 src/config/io.clobber-snapshot.ts
 src/config/io.context.ts
+src/config/io.effects.ts
 src/config/io.factory.ts
 src/config/io.health-state.kernel.ts
 src/config/io.health-state.ts
@@ -408,7 +413,6 @@ src/config/io.observe-recovery.ts
 src/config/io.observe-state.ts
 src/config/io.observe-suspicious.ts
 src/config/io.observe.ts
-src/config/io.owner-display-secret.ts
 src/config/io.plugin-metadata.ts
 src/config/io.read-helpers.ts
 src/config/io.recovery.ts
@@ -611,6 +615,7 @@ src/infra/cli-root-options.ts
 src/infra/command-carriers.ts
 src/infra/config-dir.ts
 src/infra/container-env-file.ts
+src/infra/container-environment.ts
 src/infra/crypto-digest.ts
 src/infra/dedupe.ts
 src/infra/deep-merge.ts
@@ -669,6 +674,7 @@ src/infra/fs-safe.ts
 src/infra/gateway-lock-process.ts
 src/infra/gateway-owner-lease.ts
 src/infra/gateway-lock-payload.ts
+src/infra/gateway-state-owner-directory.ts
 src/infra/gateway-state-owner.ts
 src/infra/gateway-process-argv.ts
 src/infra/gateway-supervision.ts
@@ -726,6 +732,7 @@ src/infra/node-sqlite.ts
 src/infra/non-fatal-cleanup.ts
 src/infra/npm-registry-spec.ts
 src/infra/openclaw-exec-env.ts
+src/infra/openclaw-process-census.ts
 src/infra/openclaw-root.fs.runtime.ts
 src/infra/openclaw-root.ts
 src/infra/path-case.ts
@@ -734,10 +741,12 @@ src/infra/path-guards.ts
 src/infra/plain-object.ts
 src/infra/ports-lsof.ts
 src/infra/ports-netstat.ts
+src/infra/private-directory-creation.ts
 src/infra/private-mode.ts
 src/infra/process-env.ts
 src/infra/prototype-keys.ts
 src/infra/restart-stale-pids.ts
+src/infra/retained-operation.ts
 src/infra/root-walk.ts
 src/infra/runtime-process-entrypoints.ts
 src/infra/runtime-process-url.ts
@@ -776,6 +785,8 @@ src/infra/sqlite-readonly-auth-transfer.ts
 src/infra/sqlite-readonly-location-cleanup.ts
 src/infra/sqlite-readonly-location.ts
 src/infra/sqlite-readonly-location.worker.ts
+src/infra/sqlite-readonly-native-resource.client.ts
+src/infra/sqlite-readonly-native-resource.types.ts
 src/infra/sqlite-readonly-worker-context.ts
 src/infra/sqlite-readonly-worker-protocol.ts
 src/infra/sqlite-readonly-worker-session.ts
@@ -804,6 +815,7 @@ src/infra/sqlite-terminal-open-latch.ts
 src/infra/sqlite-transaction.ts
 src/infra/sqlite-user-version.ts
 src/infra/sqlite-wal-checkpoint.ts
+src/infra/sqlite-wal-filesystem.ts
 src/infra/sqlite-wal-reclamation.ts
 src/infra/sqlite-wal-split-brain.ts
 src/infra/sqlite-wal-write-admission.ts
@@ -869,11 +881,17 @@ src/infra/windows-encoding.ts
 src/infra/windows-install-roots.ts
 src/infra/windows-port-pids.ts
 src/infra/windows-private-directory.ts
+src/infra/windows-process-census.ts
 src/infra/windows-process-start.ts
 src/infra/worker-cpu.ts
 src/infra/worker-diagnostic-script.ts
 src/infra/worker-idle-gc.ts
 src/infra/worker-memory.ts
+src/infra/worker-native-error.ts
+src/infra/worker-native-handle.ts
+src/infra/worker-native-lifecycle.ts
+src/infra/worker-native-port.ts
+src/infra/worker-native-resource.ts
 src/infra/worker-task-capacity.ts
 src/infra/worker-task-native-sections.ts
 src/infra/worker-task-pool-completion.ts
@@ -881,6 +899,7 @@ src/infra/worker-task-pool-core.ts
 src/infra/worker-task-pool-owned.ts
 src/infra/worker-task-pool-resources.ts
 src/infra/worker-task-pool-retirement.ts
+src/infra/worker-task-pool-worker.ts
 src/infra/worker-task-pool.ts
 src/infra/worker-task-server.ts
 src/infra/worker-transfer-bytes.ts
@@ -1100,6 +1119,7 @@ src/plugins/plugin-native-reference.ts
 src/plugins/plugin-package-metadata-capture.ts
 src/plugins/plugin-peer-link.ts
 src/plugins/plugin-policy-id.ts
+src/plugins/plugin-provider-request-policy.ts
 src/plugins/plugin-registry-comparison.ts
 src/plugins/plugin-registry-contributions.ts
 src/plugins/plugin-registry-id-normalizer.ts
@@ -1190,16 +1210,20 @@ src/process/spawn-broker/host.ts
 src/process/spawn-broker/ipc.ts
 src/process/spawn-broker/pipe.ts
 src/process/spawn-broker/protocol.ts
+src/process/spawn-broker/resource-host.ts
+src/process/spawn-broker/resource-protocol.ts
 src/process/spawn-diagnostics.ts
 src/process/spawn-utils.ts
 src/process/supervisor/cancellation-policy.ts
 src/process/supervisor/darwin-process-command.ts
+src/process/supervisor/service-child-group-ownership.ts
 src/process/supervisor/service-child-windows-job-native.ts
 src/process/windows-command.ts
 src/proxy-capture/env.ts
 src/proxy-capture/header-redaction.ts
 src/proxy-capture/paths.ts
 src/proxy-capture/runtime-cleanup.ts
+src/proxy-capture/runtime-deferral.ts
 src/proxy-capture/runtime-fetch-patch.ts
 src/proxy-capture/runtime-owner.ts
 src/proxy-capture/runtime-response-body.ts
@@ -1363,6 +1387,8 @@ src/state/openclaw-state-lease-worker.ts
 src/state/openclaw-state-lease.ts
 src/state/openclaw-state-ownership.ts
 src/state/openclaw-state-read-error.ts
+src/state/openclaw-state-read-operation.ts
+src/state/openclaw-state-read-request.ts
 src/state/openclaw-state-read-scope.ts
 src/state/openclaw-state-read-worker.ts
 src/state/openclaw-state-schema-compatibility.ts
@@ -1394,6 +1420,8 @@ src/utils/timer-delay.ts
 src/utils/utf8-truncate.ts
 src/utils/zod-parse.ts
 src/version.ts
+src/worker/protocol-record.ts
+src/worker/tool-authority.ts
 test/helpers/temp-dir.ts
 test/test-home-context.mts
 test/test-home-policy.mts

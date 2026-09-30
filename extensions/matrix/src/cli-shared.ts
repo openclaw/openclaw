@@ -14,8 +14,9 @@ import {
 } from "./matrix/account-config.js";
 import { resolveMatrixRoomKeyBackupIssue } from "./matrix/backup-health.js";
 import { resolveMatrixAuthContext } from "./matrix/client.js";
-import { setMatrixSdkConsoleLogging, setMatrixSdkLogMode } from "./matrix/client/logging.js";
+import { setMatrixSdkLogMode } from "./matrix/client/logging.js";
 import type { MatrixOwnDeviceVerificationStatus, MatrixRoomKeyBackupStatus } from "./matrix/sdk.js";
+import { setMatrixConsoleLogging } from "./matrix/sdk/logger.js";
 import type { MatrixVerificationSummary } from "./matrix/sdk/verification-manager.js";
 import { getMatrixRuntime } from "./runtime.js";
 import type { CoreConfig } from "./types.js";
@@ -241,7 +242,7 @@ export async function runMatrixCliCommand<TResult>(
   const verbose = options.verbose === true;
   const json = options.json === true;
   setMatrixSdkLogMode(verbose ? "default" : "quiet");
-  setMatrixSdkConsoleLogging(verbose);
+  setMatrixConsoleLogging(verbose);
   try {
     const result = await config.run();
     if (json) {

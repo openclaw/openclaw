@@ -1,22 +1,26 @@
 import { randomUUID } from "node:crypto";
 import type { WhatsAppQaScenarioImplementation } from "./whatsapp-live.contracts.js";
-import { sendWhatsAppQaMediaAndObserve } from "./whatsapp-live.media.js";
+import { waitForNoWhatsAppReply } from "./whatsapp-live.driver.js";
 import {
+  callWhatsAppGatewaySend,
+  writeWhatsAppQaWorkspaceFixture,
+} from "./whatsapp-live.gateway.js";
+import {
+  sendWhatsAppQaMediaAndObserve,
   WHATSAPP_QA_AUDIO_OGG_OPUS_MIME,
   WHATSAPP_QA_AUDIO_TRANSCRIPT_MARKER,
   WHATSAPP_QA_ONE_PIXEL_PNG,
-  assertWhatsAppMessageFromSutPhone,
-  callWhatsAppGatewaySend,
   createWhatsAppQaAudioOggOpusBuffer,
   createWhatsAppQaAudioWavBuffer,
   createWhatsAppQaPdfBuffer,
+} from "./whatsapp-live.media.js";
+import {
+  assertWhatsAppMessageFromSutPhone,
   matchesWhatsAppSutReactionToTrigger,
   requireWhatsAppTriggerMessageId,
-  waitForNoWhatsAppReply,
   waitForScenarioObservedMessage,
   waitForWhatsAppSutReactionToTrigger,
-  writeWhatsAppQaWorkspaceFixture,
-} from "./whatsapp-live.operations.js";
+} from "./whatsapp-live.observations.js";
 
 function createWhatsAppAgentReactionScenario(
   target: "dm" | "group",

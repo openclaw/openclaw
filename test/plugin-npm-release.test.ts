@@ -205,7 +205,7 @@ describe("collectPublishablePluginPackageErrors", () => {
       "package.json private must not be true.",
       'package.json type must be "module" so built .js runtime entries load as ESM.',
       `package.json repository.url must be "${OPENCLAW_PLUGIN_NPM_REPOSITORY_URL}" so npm provenance can validate GitHub trusted publishing; found "<missing>".`,
-      'package.json version must match YYYY.M.PATCH, YYYY.M.PATCH-N, YYYY.M.PATCH-alpha.N, or YYYY.M.PATCH-beta.N; found "latest".',
+      'package.json version must match YYYY.M.PATCH, YYYY.M.PATCH-N, or YYYY.M.PATCH-beta.N; found "latest".',
       "openclaw.extensions must contain only non-empty strings.",
       "openclaw.install.npmSpec must be a non-empty string for publishable plugins.",
     ]);
@@ -808,24 +808,10 @@ describe("collectPublishablePluginPackages", () => {
     ).toStrictEqual([]);
   });
 
-  it("publishes alpha plugin packages to the alpha dist-tag", () => {
+  it("rejects alpha plugin publication", () => {
     const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-release-");
-    writePublishablePluginFixture(repoDir, {
-      version: "2026.4.10-alpha.1",
-      publishTo: "npm",
-    });
-
-    expect(collectPublishablePluginPackages(repoDir)).toEqual([
-      {
-        extensionId: "demo-plugin",
-        packageDir: "extensions/demo-plugin",
-        installNpmSpec: "@openclaw/demo-plugin",
-        packageName: "@openclaw/demo-plugin",
-        channel: "alpha",
-        publishTag: "alpha",
-        version: "2026.4.10-alpha.1",
-      },
-    ]);
+    writePublishablePluginFixture(repoDir, { version: "2026.4.10-alpha.1", publishTo: "npm" });
+    expect(() => collectPublishablePluginPackages(repoDir)).toThrow("Alpha releases are retired;");
   });
 });
 

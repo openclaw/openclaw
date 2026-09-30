@@ -2180,6 +2180,77 @@ try {
     );
   });
 
+  it("runs no SwiftPM operation before the locked lock-file resolve", () => {
+    // Any earlier resolve on a reused scratch path can float pins before the lock guard snapshots.
+    const root = tempDirs.make("openclaw-swift-first-resolve-");
+    for (const app of ["macos", "macos-mlx-tts"]) {
+      mkdirSync(path.join(root, "apps", app), { recursive: true });
+      writeFileSync(path.join(root, "apps", app, "Package.swift"), "// fixture\n");
+      writeFileSync(path.join(root, "apps", app, "Package.resolved"), "locked\n");
+    }
+    const invocations = path.join(root, "swift-invocations");
+    const result = runHelper(`
+      set -euo pipefail
+      source ${JSON.stringify(swiftScriptPath)}
+      ROOT_DIR=${JSON.stringify(root)}
+      BUILD_ROOT="$ROOT_DIR/apps/macos/.build"
+      SWIFT_WORK_ROOT="$ROOT_DIR/work"
+      PEEKABOO_LOCKED_SOURCE_COMMIT=${JSON.stringify("b".repeat(40))}
+      swift() { printf '%s\\n' "$*" >> ${JSON.stringify(invocations)}; }
+      create_verified_peekaboo_snapshot() { exit 0; }
+      build_swift_architecture arm64
+    `);
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(readFileSync(invocations, "utf8")).toBe(
+      `package --scratch-path ${root}/apps/macos/.build/arm64 resolve --force-resolved-versions\n`,
+    );
+  });
+
+  it("names every pin the edited Peekaboo resolution moved away from the committed lock", () => {
+    const root = tempDirs.make("openclaw-snapshot-swift-lock-");
+    const packageRoot = path.join(root, "package");
+    const baseline = path.join(root, "Package.resolved.committed");
+    mkdirSync(packageRoot);
+    const pin = (identity: string, version: string, revision: string) => ({
+      identity,
+      kind: "remoteSourceControl",
+      location: `https://github.com/example/${identity}.git`,
+      state: { revision, version },
+    });
+    const cmark = pin("swift-cmark", "0.8.0", "c".repeat(40));
+    const markdown = pin("swift-markdown", "0.8.0", "d".repeat(40));
+    writeFileSync(
+      baseline,
+      JSON.stringify({
+        version: 3,
+        pins: [pin("peekaboo", "4.6.0", "b".repeat(40)), cmark, markdown],
+      }),
+    );
+    const verify = (pins: unknown[]) => {
+      writeFileSync(
+        path.join(packageRoot, "Package.resolved"),
+        JSON.stringify({ version: 3, pins }),
+      );
+      return runHelper(`
+        set -euo pipefail
+        SWIFT_PACKAGE_LOCK_BASELINE=${JSON.stringify(baseline)}
+        SWIFT_PACKAGE_ROOT=${JSON.stringify(packageRoot)}
+        ${scriptBlock("verify_snapshot_swift_lock() {", "create_verified_peekaboo_snapshot() {", swiftScriptPath)}
+        verify_snapshot_swift_lock
+      `);
+    };
+
+    const unchanged = verify([cmark, markdown]);
+    expect(unchanged.status, unchanged.stderr).toBe(0);
+
+    const drifted = verify([pin("swift-cmark", "0.9.0", "e".repeat(40)), markdown]);
+    expect(drifted.status).toBe(1);
+    expect(drifted.stderr).toBe(
+      `ERROR: Peekaboo snapshot resolution does not match the committed Package.resolved: swift-cmark: 0.8.0 ${"c".repeat(40)} from https://github.com/example/swift-cmark.git -> 0.9.0 ${"e".repeat(40)} from https://github.com/example/swift-cmark.git\n`,
+    );
+  });
+
   it.each([
     { operation: "create", exitCode: 1, reason: "No such file or directory", mounts: "empty" },
     { operation: "attach", exitCode: 73, reason: "Permission denied", mounts: "empty" },

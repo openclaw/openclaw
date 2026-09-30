@@ -105,8 +105,10 @@ export function clearRecoveredPersistedRuntimeToolSchemaQuarantines(
   }
 }
 
-export function listPersistedRuntimeToolSchemaQuarantines(): RuntimeToolSchemaQuarantine[] {
-  return quarantineStore.list().map((record) => {
+export async function listPersistedRuntimeToolSchemaQuarantines(): Promise<
+  RuntimeToolSchemaQuarantine[]
+> {
+  return (await quarantineStore.list()).map((record) => {
     const quarantine: RuntimeToolSchemaQuarantine = {
       toolName: record.toolName,
       reason: record.reason,

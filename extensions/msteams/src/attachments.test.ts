@@ -1,10 +1,10 @@
 // Msteams tests cover attachments plugin behavior.
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime, SsrFPolicy } from "../runtime-api.js";
 import { readRemoteMediaResponse } from "./attachments.test-helpers.js";
 import { downloadMSTeamsAttachments } from "./attachments/download.js";
-import { resolveRequestUrl } from "./attachments/shared.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 
 const saveResponseMediaMock = vi.hoisted(() =>

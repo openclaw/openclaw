@@ -18,7 +18,6 @@ import { readSessionEntryCache } from "./session-accessor.sqlite-entry-cache.js"
 import type { SessionEntryCacheSnapshot } from "./session-accessor.sqlite-entry-cache.types.js";
 import { validateDeliveryCanonicalSessionEntry } from "./session-accessor.sqlite-entry-read.js";
 import {
-  cloneSessionEntry,
   resolveSqliteScope,
   toDatabaseOptions,
   type ResolvedSqliteScope,
@@ -121,9 +120,9 @@ export function listSqliteSessionEntriesFromDatabase(
   scope: SessionEntryListScope,
   options: { deferParticipants?: true } = {},
 ): SessionEntrySummary[] {
-  if (scope.expiredCronRuns) {
-    const { agentId, updatedBefore } = scope.expiredCronRuns;
-    const requestedOwner = normalizeAgentId(agentId);
+  if (scope.cronRetention || scope.expiredCronRuns) {
+    const expired = scope.expiredCronRuns;
+    const requestedOwner = expired ? normalizeAgentId(expired.agentId) : undefined;
     return withSqlitePostCommitPublications(database.db, () =>
       runSqliteDeferredTransactionSync(database.db, () => {
         const selectedKeys = new Set<string>();
@@ -132,8 +131,10 @@ export function listSqliteSessionEntriesFromDatabase(
           retainFullEntry: (sessionKey, entry) => {
             const selected =
               isCronRunSessionKey(sessionKey) &&
-              normalizeAgentId(parseAgentSessionKey(sessionKey)!.agentId) === requestedOwner &&
-              !((entry.updatedAt ?? 0) >= updatedBefore);
+              (scope.cronRetention ||
+                (expired !== undefined &&
+                  normalizeAgentId(parseAgentSessionKey(sessionKey)!.agentId) === requestedOwner &&
+                  !((entry.updatedAt ?? 0) >= expired.updatedBefore)));
             if (selected) {
               selectedKeys.add(sessionKey);
             }
@@ -141,7 +142,13 @@ export function listSqliteSessionEntriesFromDatabase(
           },
         });
         // Sibling metadata and participants still cross complete listing validation.
-        return Array.from(iterateSessionEntriesForListing(snapshot, false, selectedKeys));
+        return Array.from(
+          iterateSessionEntriesForListing(
+            snapshot,
+            false,
+            scope.cronRetention ? undefined : selectedKeys,
+          ),
+        );
       }),
     );
   }
@@ -192,7 +199,7 @@ function* iterateSessionEntriesForListing(
     // Full snapshots own their nested values; list snapshots may share cached entries.
     yield {
       sessionKey,
-      entry: cloneEntries ? cloneSessionEntry(entry) : entry,
+      entry: cloneEntries ? structuredClone(entry) : entry,
     };
   }
 }

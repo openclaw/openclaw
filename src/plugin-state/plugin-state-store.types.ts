@@ -1,5 +1,6 @@
 import { threadId } from "node:worker_threads";
 import type { Result } from "@openclaw/normalization-core/result";
+import type { SessionEntryCurrentCheck } from "../config/sessions/session-entry-current.types.js";
 import { VERSION } from "../version.js";
 import { capturePluginStateErrorCause } from "./plugin-state-error-cause.js";
 
@@ -98,7 +99,11 @@ export type PluginStateKeyedStore<T, Version extends 1 | 2 = 1> = Version extend
   ? Required<Omit<PluginStateKeyedStoreBase<T>, "update" | "deleteIf">>
   : PluginStateKeyedStoreBase<T> & {
       /** Bind current action authority through read completion and final write admission. */
-      withCurrent?: (authority: { assertCurrent: () => void }) => PluginStateKeyedStore<T, 2>;
+      withCurrent?: (authority: {
+        assertCurrent: () => void;
+        /** Restricts native writes and comparisons; ordinary reads use assertCurrent. */
+        sessionEntryCurrent?: SessionEntryCurrentCheck;
+      }) => PluginStateKeyedStore<T, 2>;
     };
 
 /**

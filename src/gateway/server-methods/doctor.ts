@@ -1,4 +1,3 @@
-// Doctor gateway methods inspect and repair memory dreaming artifacts and managed cron state.
 import { expectDefined } from "@openclaw/normalization-core";
 import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
@@ -287,8 +286,6 @@ function trimDreamingEntries(
       if (selected.length > DREAMING_ENTRY_LIST_LIMIT) {
         selected.pop();
       }
-    } else if (selected.length < DREAMING_ENTRY_LIST_LIMIT) {
-      selected.push(entry);
     }
   }
   return selected;

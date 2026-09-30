@@ -87,7 +87,6 @@ function collectStartupCatchupJobs(
         }
         if (
           !isRunnableJob({
-            state,
             job,
             nowMs,
             skipAtIfAlreadyRan: true,
@@ -311,14 +310,15 @@ async function planStartupCatchup(
   state: CronServiceState,
   opts?: { skipJobIds?: ReadonlySet<string>; deferAgentWork?: boolean },
 ): Promise<StartupCatchupPlan> {
+  const lifecycleGeneration = state.lifecycleGeneration;
   const maxImmediate = Math.max(
     0,
     state.deps.maxMissedJobsPerRestart ?? DEFAULT_MAX_MISSED_JOBS_PER_RESTART,
   );
   return locked(state, async () => {
     await ensureLoaded(state);
-    if (state.stopped || !state.store) {
-      return { candidates: [], deferredJobs: [] };
+    if (state.stopped || state.lifecycleGeneration !== lifecycleGeneration || !state.store) {
+      return { lifecycleGeneration, candidates: [], deferredJobs: [] };
     }
 
     const now = state.deps.nowMs();
@@ -327,8 +327,8 @@ async function planStartupCatchup(
       collectStartupCatchupJobs(state, now, { skipJobIds: opts?.skipJobIds }),
       now,
     );
-    if (missed.length === 0) {
-      return { candidates: [], deferredJobs: [] };
+    if (missed.length === 0 || state.stopped || state.lifecycleGeneration !== lifecycleGeneration) {
+      return { lifecycleGeneration, candidates: [], deferredJobs: [] };
     }
     const sorted = missed.toSorted(
       (a, b) => (a.state.nextRunAtMs ?? 0) - (b.state.nextRunAtMs ?? 0),
@@ -403,11 +403,16 @@ async function planStartupCatchup(
     });
 
     return {
-      candidates: reservedStartupCandidates.map(({ job, runReceipt }) => ({
+      lifecycleGeneration,
+      candidates: reservedStartupCandidates.map(({ job, runReceipt, runReceiptContext }) => ({
         jobId: job.id,
         job,
         reservedAtMs: now,
-        reservationIdentity: reserveQueuedCronRun(state, job.id, now, { runReceipt }),
+        reservationIdentity: reserveQueuedCronRun(state, job.id, now, {
+          runReceipt,
+          runReceiptContext,
+          lifecycleGeneration,
+        }),
       })),
       deferredJobs: deferred,
     };
@@ -422,7 +427,7 @@ async function executeStartupCatchupPlan(
   const outcomes: TimedCronRunOutcome[] = [];
   try {
     for (const candidate of plan.candidates) {
-      if (state.stopped) {
+      if (state.stopped || state.lifecycleGeneration !== plan.lifecycleGeneration) {
         break;
       }
       const execution = await executeQueuedCronRun({
@@ -471,7 +476,11 @@ async function applyStartupCatchupOutcomes(
     const pendingReleases = plan.candidates.filter(
       (candidate) => !startedJobIds.has(candidate.jobId),
     );
-    if (state.stopped || (outcomes.length === 0 && plan.deferredJobs.length === 0)) {
+    if (
+      state.stopped ||
+      state.lifecycleGeneration !== plan.lifecycleGeneration ||
+      (outcomes.length === 0 && plan.deferredJobs.length === 0)
+    ) {
       if (pendingReleases.length > 0) {
         commitStartupCatchupRows({ state, reservations: pendingReleases });
       }

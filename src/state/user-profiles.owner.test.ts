@@ -142,6 +142,14 @@ describe("gateway owner profiles", () => {
       ).toThrow(
         "the shared owner profile cannot be merged; sign in with a personal identity instead",
       );
+      expect(() =>
+        ensureProfileForEmail("old-owner@example.test", {
+          ...options,
+          expectedGitHubAccountId: identity.accountId,
+        }),
+      ).toThrow(
+        "the shared owner profile cannot be merged; sign in with a personal identity instead",
+      );
       expect(profileState(options)).toEqual(before);
     },
   );

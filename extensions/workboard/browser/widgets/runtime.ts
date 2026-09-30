@@ -1,5 +1,5 @@
 import type { ControlUiHost } from "openclaw/plugin-sdk/control-ui";
-import { createWorkboardClient, type GatewayBrowserClient } from "../api/gateway.ts";
+import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { isActiveWorkboardCard, nextWorkboardCardPosition } from "../lib/workboard/card-state.ts";
 import { moveWorkboardCard } from "../lib/workboard/mutations.ts";
@@ -106,7 +106,7 @@ export function acquireWidgetRuntime(host: ControlUiHost, listener: () => void) 
     }
     const current: WorkboardWidgetRuntime = {
       owner: {},
-      client: createWorkboardClient(host),
+      client: host,
       connected: host.connection.connected,
       loading: false,
       listeners: new Set(),
@@ -186,7 +186,7 @@ export class WorkboardWidgetModel {
     return this.runtime.owner;
   }
   get workboardClient() {
-    return this.canMutate && this.runtime.connected ? createWorkboardClient(this.host) : null;
+    return this.canMutate && this.runtime.connected ? this.host : null;
   }
   get cards() {
     return getWorkboardState(this.runtime.owner).cards.filter(isActiveWorkboardCard);

@@ -101,6 +101,8 @@ function readyEnvironment() {
         changed: false,
         verifyStable: async () => {},
         verifyLocalStable: async () => {},
+        publishStagedResult: async () => {},
+        discardPreparedStagedResult: async () => {},
       };
     },
     syncWorkspace: vi.fn(),

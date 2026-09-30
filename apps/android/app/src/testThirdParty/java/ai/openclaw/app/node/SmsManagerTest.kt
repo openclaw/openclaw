@@ -562,19 +562,6 @@ class SmsManagerTest {
   }
 
   @Test
-  fun materializeByPhoneCandidateDedupesBySourceAwareIdentity() {
-    val candidates = linkedMapOf<String, SmsMessage>()
-
-    SmsManager.materializeByPhoneCandidate(candidates, "sms:1", smsMessage(id = 1L, date = 1000L))
-    SmsManager.materializeByPhoneCandidate(candidates, "sms:1", smsMessage(id = 1L, date = 2000L))
-    SmsManager.materializeByPhoneCandidate(candidates, "mms:1", smsMessage(id = 1L, date = 1500L))
-
-    assertEquals(2, candidates.size)
-    assertEquals(2000L, candidates["sms:1"]?.date)
-    assertEquals(1500L, candidates["mms:1"]?.date)
-  }
-
-  @Test
   fun collectMixedByPhoneCandidateUsesBoundedCollectorWhenReviewModeDisabled() {
     val topCandidates = mutableListOf<Pair<String, SmsMessage>>()
     val materializedCandidates = linkedMapOf<String, SmsMessage>()

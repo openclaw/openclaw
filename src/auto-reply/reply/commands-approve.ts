@@ -124,6 +124,16 @@ export async function handleApproveCommandFromContext(
     ctx: params.ctx,
     command: params.command,
   });
+  const approvalCapability = resolveChannelApprovalCapability(
+    getChannelPlugin(params.command.channel),
+  );
+  const pluginReviewerSenderId =
+    approvalCapability?.resolveReviewerSenderId?.({
+      cfg: params.cfg,
+      accountId: effectiveAccountId,
+      senderId: params.command.senderId,
+      spaceId: params.ctx.GroupSpace,
+    }) ?? params.command.senderId;
   // Probe order: legacy exec/plugin resolution reports not-found for other
   // owners; system-agent resolution reads the owner first (see below).
   const approvalKinds = ["exec", "plugin", "system-agent"] as const;
@@ -132,7 +142,7 @@ export async function handleApproveCommandFromContext(
       cfg: params.cfg,
       channel: params.command.channel,
       accountId: effectiveAccountId,
-      senderId: params.command.senderId,
+      senderId: kind === "plugin" ? pluginReviewerSenderId : params.command.senderId,
       kind,
     });
   const authorizations: Record<(typeof approvalKinds)[number], ApprovalCommandAuthorization> = {
@@ -159,9 +169,6 @@ export async function handleApproveCommandFromContext(
     return missingScope;
   }
 
-  const approvalCapability = resolveChannelApprovalCapability(
-    getChannelPlugin(params.command.channel),
-  );
   // Channels with reviewer custody let the Gateway judge the actor; elsewhere an
   // OpenClaw change needs the current configured owner, like the tool that proposed it.
   const systemAgentNeedsOwner = !approvalCapability?.authorizeActorAction;
@@ -201,7 +208,7 @@ export async function handleApproveCommandFromContext(
         ? {
             channel: params.command.channel,
             accountId: effectiveAccountId,
-            senderId: params.command.senderId,
+            senderId: approvalKind === "plugin" ? pluginReviewerSenderId : params.command.senderId,
           }
         : {};
     const clientDisplayName = `Chat approval (${resolvedBy})`;

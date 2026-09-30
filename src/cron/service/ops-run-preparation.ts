@@ -1,13 +1,16 @@
 import type { CommandLaneTaskMarker } from "../../process/command-queue.js";
+import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import type { CronActiveJobMarker } from "../active-jobs.js";
 import { resolveCronCompletionStatus } from "../completion-status.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
+import type { CronRunHistorySource } from "../store/run-history.js";
 import {
   finishCronRunReceiptInDatabase,
   releaseLocalCronRunReceiptOwnership,
 } from "../store/run-receipt-store.js";
 import type { CronRunReceiptHandle } from "../store/run-receipt.types.js";
+import { ownsStreamSource } from "../stream-schedule.js";
 import type {
   CronFailureNotificationDetail,
   CronJob,
@@ -19,7 +22,7 @@ import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
 import { findJobOrThrow, hasActiveCronRun, isJobDue, isJobEnabled } from "./jobs-scheduling.js";
 import { assertSupportedJobSpec } from "./jobs-validation.js";
 import { locked } from "./locked.js";
-import { markManualCronJobActive, ownsStreamSource } from "./ops-shared.js";
+import { markManualCronJobActive } from "./ops-shared.js";
 import {
   activateQueuedCronRun,
   cleanupQueuedCronRunReservations,
@@ -48,26 +51,15 @@ export type PreparedManualRun =
       ran: false;
       reason: "already-running" | "disabled" | "not-due" | "invalid-spec" | "stopped" | "ownerless";
     }
-  | {
+  | (ManualRunOptions & {
       ok: true;
       ran: true;
       jobId: string;
-      runId?: string;
-      terminalTracker?: ManualRunTerminalTracker;
-      owningCronLaneTaskMarker?: CommandLaneTaskMarker;
-      commitGuard?: () => void;
       reservationAt: number;
       scheduleOwnershipAtMs: number;
       reservationIdentity: object;
       wasEnabled: boolean;
-      onExit?: OnExitRunOptions;
-      payload?: CronPayload;
-      evaluateTrigger?: boolean;
-      streamBatch?: string;
-      streamScheduleKey?: string;
-      streamSourceIdentity?: string;
-      onTriggerDisposition?: (disposition: "fired" | "dropped" | "busy" | "error") => void;
-    }
+    })
   | { ok: false };
 
 export type ActivatedManualRun = Extract<PreparedManualRun, { ran: true }> & {
@@ -77,6 +69,7 @@ export type ActivatedManualRun = Extract<PreparedManualRun, { ran: true }> & {
   admittedJob: CronJob;
   executionJob: CronJob;
   runReceipt: CronRunReceiptHandle;
+  runReceiptContext: OpenClawStateWorkerContext;
 };
 
 export type OnExitRunOptions = {
@@ -115,6 +108,7 @@ export async function emitCronRunFinished(
     scriptResult?: { scriptStateChanged?: boolean; scriptState?: unknown };
     errorClassification?: CronRunErrorClassification;
     failureNotificationDetail?: CronFailureNotificationDetail;
+    historySource?: CronRunHistorySource;
   },
 ): Promise<void> {
   const event = {
@@ -127,10 +121,12 @@ export async function emitCronRunFinished(
     taskRunId,
     job: evt.job,
     event,
+    historySource: details?.historySource,
     errorClassification: details?.errorClassification,
     ...(details?.scriptResult ? { scriptResult: details.scriptResult } : {}),
     ...(details?.triggerEval ? { triggerEval: details.triggerEval } : {}),
   });
+  details?.historySource?.assertCurrent();
   emit(state, event, cronFailureNotificationEventContext(details?.failureNotificationDetail));
   if (tracker) {
     tracker.emitted = true;
@@ -339,13 +335,17 @@ export async function prepareManualRun(
   opts?: ManualRunOptions,
 ): Promise<PreparedManualRun> {
   return await locked(state, async () => {
+    const generation = state.lifecycleGeneration;
     const preflight = await inspectManualRunPreflight(state, id, mode, opts);
     if (!preflight.ok || "reason" in preflight) {
       return preflight;
     }
+    if (state.lifecycleGeneration !== generation) {
+      return { ok: true, ran: false, reason: "stopped" as const };
+    }
     const { job } = preflight;
     // Preflight awaited store loading; keep the exact caller live until the
-    // synchronous reservation write transfers ownership to its durable receipt.
+    // reservation worker transfers ownership to its durable receipt.
     opts?.commitGuard?.();
     const reservationAt = state.deps.nowMs();
     if (!isJobDue(job, reservationAt, { forced: isImmediateCronRunMode(mode) })) {
@@ -372,15 +372,17 @@ export async function prepareManualRun(
             ? {
                 onExit: {
                   commitGuard: onExit.commitGuard,
-                  onReserved: (reservedJob: CronJob, runReceipt: CronRunReceiptHandle) => {
+                  onReserved: (reservedJob, runReceipt, runReceiptContext) => {
                     reservationIdentity = reserveQueuedCronRun(
                       state,
                       reservedJob.id,
                       reservationAt,
                       {
                         runReceipt,
+                        runReceiptContext,
                         preserveWhenDisabled: true,
                         onExit: true,
+                        lifecycleGeneration: generation,
                       },
                     );
                     onExit.onReserved();
@@ -400,6 +402,9 @@ export async function prepareManualRun(
       throw error;
     }
     if (!reserved) {
+      if (state.stopped || state.lifecycleGeneration !== generation) {
+        return { ok: true, ran: false, reason: "stopped" as const };
+      }
       if (internalTracker.emitted) {
         return { ok: true, ran: false, reason: "ownerless" as const };
       }
@@ -408,9 +413,11 @@ export async function prepareManualRun(
     const reservedJob = reserved.job;
     reservationIdentity ??= reserveQueuedCronRun(state, reservedJob.id, reservationAt, {
       runReceipt: reserved.runReceipt,
+      runReceiptContext: reserved.runReceiptContext,
       preserveWhenDisabled: mode === "force" && !isJobEnabled(job),
+      lifecycleGeneration: generation,
     });
-    if (state.stopped) {
+    if (state.stopped || state.lifecycleGeneration !== generation) {
       try {
         await releasePreparedManualReservationWithRetry(state, {
           jobId: reservedJob.id,
@@ -576,6 +583,7 @@ export async function activatePreparedManualRun(
       admittedJob,
       executionJob,
       runReceipt: activation.runReceipt,
+      runReceiptContext: activation.runReceiptContext,
     } as const;
   });
 }

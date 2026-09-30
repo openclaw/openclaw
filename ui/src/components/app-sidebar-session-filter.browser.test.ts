@@ -15,6 +15,7 @@ import {
   loadStoredSidebarSessionsShowPreview,
   loadStoredSidebarSessionsShowSystem,
 } from "./app-sidebar-session-types.ts";
+import "@awesome.me/webawesome/dist/styles/themes/default.css";
 import "../test-helpers/load-styles.ts";
 import "../styles/settings-controls.css";
 import "./app-sidebar.ts";
@@ -253,7 +254,10 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
   });
 
   it("presents a bottom sheet with choice pages on phones", async () => {
-    const { sidebar, page } = await mountFilters(390);
+    const { provider, sidebar, page } = await mountFilters(390);
+    // The real mobile drawer is focusable. Unfocusable sheet content must not
+    // send focus back to that ancestor and dismiss the panel before click.
+    provider.tabIndex = -1;
     const trigger = page.getByRole("button", { name: "Filter & sort", exact: true });
     await trigger.click();
     const panel = sidebar.querySelector<HTMLElement>(".sidebar-session-filter-panel")!;
@@ -265,6 +269,10 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
     expect(sheet.left).toBe(0);
     expect(sheet.width).toBe(innerWidth);
     expect(sheet.bottom).toBeCloseTo(innerHeight, 0);
+    await page.getByRole("heading", { name: "Filters", exact: true }).click();
+    const automation = page.getByRole("switch", { name: "Show automation sessions", exact: true });
+    await automation.click();
+    await expect.element(automation).toHaveAttribute("aria-checked", "true");
     // A choice opens as a page covering the sheet, with Back and a title.
     await page.getByRole("button", { name: "Group by: Custom groups", exact: true }).click();
     const choices = sidebar.querySelector<HTMLElement>('[role="listbox"][aria-label="Group by"]')!;
@@ -284,8 +292,10 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
     await expect
       .element(page.getByRole("button", { name: "Group by: Project", exact: true }))
       .toBeVisible();
-    // Tapping the backdrop dismisses the sheet, like the issues sheet.
-    sidebar.querySelector<HTMLElement>(".sidebar-session-filter-panel__backdrop")!.click();
+    // Tapping exposed backdrop space dismisses the sheet, like the issues sheet.
+    await page.getByRole("button", { name: "Close", exact: true }).click({
+      position: { x: 10, y: 10 },
+    });
     await expect.poll(() => sidebar.querySelector(".sidebar-session-sort-menu")).toBeNull();
     await expect.element(trigger).toHaveFocus();
   });
@@ -302,6 +312,13 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
     expect(backdrop.tabIndex).toBe(-1);
     await userEvent.tab({ shift: true });
     await expect.element(sources).toHaveFocus();
+    await userEvent.tab();
+    await expect.element(owners).toHaveFocus();
+    // After touching noninteractive content, Tab must stay inside the sheet.
+    await page.getByRole("heading", { name: "Filters", exact: true }).click();
+    await userEvent.tab({ shift: true });
+    await expect.element(sources).toHaveFocus();
+    await page.getByRole("heading", { name: "Filters", exact: true }).click();
     await userEvent.tab();
     await expect.element(owners).toHaveFocus();
     expect(sidebar.querySelector(".sidebar-session-sort-menu")).not.toBeNull();
@@ -324,12 +341,107 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
     expect(list.hasAttribute("data-fade-end")).toBe(false);
   });
 
-  it("applies every preference instantly and resets only active filters", async () => {
+  it.each([1440, 390])(
+    "resets each Display choice without a filter dot at %i px",
+    async (width) => {
+      const { sidebar, page } = await mountFilters(width);
+      await page.getByRole("button", { name: "Filter & sort", exact: true }).click();
+      const menu = sidebar.querySelector(".sidebar-session-sort-menu");
+      for (const [label, choice, defaultValue] of [
+        ["Group by", "Person", "Custom groups"],
+        ["Sort by", "Last updated", "Created"],
+        ["Hide empty groups", "Always", "When filtering"],
+        ["Show message preview", null, null],
+      ] as const) {
+        if (choice) {
+          await page
+            .getByRole("button", { name: label + ": " + defaultValue, exact: true })
+            .click();
+          await page.getByRole("option", { name: choice, exact: true }).click();
+        } else {
+          await page.getByRole("switch", { name: label, exact: true }).click();
+        }
+        await sidebar.updateComplete;
+        const trigger = sidebar.querySelector(".sidebar-session-sort")!;
+        expect(trigger.classList.contains("sidebar-session-sort--filtered")).toBe(false);
+        expect(trigger.hasAttribute("aria-description")).toBe(false);
+        expect(sidebar.querySelector("#sidebar-sessions-reset"), label).not.toBeNull();
+        await page.getByRole("button", { name: "Reset", exact: true }).click();
+        expect(loadStoredSidebarSessionsGrouping()).toBe("category");
+        expect(loadStoredSidebarSessionSortMode()).toBe("created");
+        expect(loadStoredSidebarSessionsShowPreview()).toBe(false);
+        if (choice) {
+          await expect
+            .element(page.getByRole("button", { name: label + ": " + defaultValue, exact: true }))
+            .toBeVisible();
+        } else {
+          await expect
+            .element(page.getByRole("switch", { name: label, exact: true }))
+            .toHaveAttribute("aria-checked", "false");
+        }
+        expect(sidebar.querySelector("#sidebar-sessions-reset")).toBeNull();
+        expect(sidebar.querySelector(".sidebar-session-sort-menu")).toBe(menu);
+        await expect
+          .element(page.getByRole("radio", { name: "Active", exact: true }))
+          .toHaveFocus();
+      }
+    },
+  );
+
+  it("keeps hidden grouping preferences when resetting the all-agent panel", async () => {
+    const { sidebar, page } = await mountFilters(1440);
+    sidebar.sessionOrganizer.setSessionsGrouping("project");
+    await page.getByRole("button", { name: "Filter & sort", exact: true }).click();
+    await page.getByRole("button", { name: /^Hide empty groups:/ }).click();
+    await page.getByRole("option", { name: "Never", exact: true }).click();
+    sidebar.dismissTransientMenus();
+    sidebar.sidebarAgentsMode = "roster";
+    await sidebar.updateComplete;
+    await page.getByRole("button", { name: "Filter & sort", exact: true }).click();
+    expect(sidebar.querySelector("#sidebar-sessions-group")).toBeNull();
+    expect(sidebar.querySelector("#sidebar-sessions-empty")).toBeNull();
+    expect(sidebar.querySelector("#sidebar-sessions-reset")).toBeNull();
+    await page.getByRole("switch", { name: "Show message preview", exact: true }).click();
+    await page.getByRole("button", { name: "Reset", exact: true }).click();
+    expect(loadStoredSidebarSessionsShowPreview()).toBe(false);
+    expect(loadStoredSidebarSessionsGrouping()).toBe("project");
+    expect(sidebar.querySelector("#sidebar-sessions-reset")).toBeNull();
+    sidebar.sidebarAgentsMode = "chip";
+    await sidebar.updateComplete;
+    await expect
+      .element(page.getByRole("button", { name: "Hide empty groups: Never", exact: true }))
+      .toBeVisible();
+  });
+
+  it("preserves Person grouping while owner data temporarily hides it", async () => {
+    const { sidebar, sessions, page } = await mountFilters(1440);
+    const original = sessions.sessions.state.result!;
+    await page.getByRole("button", { name: "Filter & sort", exact: true }).click();
+    await page.getByRole("button", { name: "Group by: Custom groups", exact: true }).click();
+    await page.getByRole("option", { name: "Person", exact: true }).click();
+    sessions.publish({ result: { ...original, owners: original.owners!.slice(0, 1) } });
+    await expect
+      .element(page.getByRole("button", { name: "Group by: Custom groups", exact: true }))
+      .toBeVisible();
+    expect(loadStoredSidebarSessionsGrouping()).toBe("person");
+    expect(sidebar.querySelector("#sidebar-sessions-reset")).toBeNull();
+    await page.getByRole("switch", { name: "Show message preview", exact: true }).click();
+    await page.getByRole("button", { name: "Reset", exact: true }).click();
+    expect(loadStoredSidebarSessionsShowPreview()).toBe(false);
+    expect(loadStoredSidebarSessionsGrouping()).toBe("person");
+    sessions.publish({ result: original });
+    await expect
+      .element(page.getByRole("button", { name: "Group by: Person", exact: true }))
+      .toBeVisible();
+    expect(sidebar.querySelector("#sidebar-sessions-reset")).not.toBeNull();
+  });
+
+  it("applies every preference instantly and resets filters and display", async () => {
     const { sidebar, sessions, page } = await mountFilters(1440);
     await page.getByRole("button", { name: "Filter & sort", exact: true }).click();
     const menu = sidebar.querySelector<HTMLElement>(".sidebar-session-sort-menu")!;
     // The toolbar dot and its description track Owners and Status only; Reset
-    // also appears for the automation and system toggles.
+    // also appears for automation, system, and Display choices.
     const expectFilterCount = async (count: number, resetVisible = count > 0) => {
       await expect
         .poll(() =>
@@ -348,7 +460,7 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
     await page.getByRole("button", { name: "Group by: Custom groups", exact: true }).click();
     await page.getByRole("option", { name: "Person", exact: true }).click();
     expect(loadStoredSidebarSessionsGrouping()).toBe("person");
-    await expectFilterCount(0);
+    await expectFilterCount(0, true);
     for (const [choice, expected, read] of [
       ["Owners", "people", loadStoredSidebarSessionSortMode],
       ["All", "all", loadStoredSidebarSessionStatusFilter],
@@ -360,7 +472,7 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
         await page.getByRole("radio", { name: choice, exact: true }).click();
       }
       expect(read()).toBe(expected);
-      await expectFilterCount(choice === "All" ? 1 : 0);
+      await expectFilterCount(choice === "All" ? 1 : 0, true);
       expect(sidebar.querySelector(".sidebar-session-sort-menu")).toBe(menu);
     }
     for (const [name, read] of [
@@ -407,11 +519,11 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
     expect(sidebar.sessionOwnerFilterId).toBeNull();
     expect(loadStoredSidebarSessionsShowCron()).toBe(false);
     expect(loadStoredSidebarSessionsShowSystem()).toBe(false);
-    expect(loadStoredSidebarSessionsGrouping()).toBe("person");
-    expect(loadStoredSidebarSessionSortMode()).toBe("people");
-    expect(loadStoredSidebarSessionsShowPreview()).toBe(true);
+    expect(loadStoredSidebarSessionsGrouping()).toBe("category");
+    expect(loadStoredSidebarSessionSortMode()).toBe("created");
+    expect(loadStoredSidebarSessionsShowPreview()).toBe(false);
     await expect
-      .element(page.getByRole("button", { name: "Hide empty groups: Never", exact: true }))
+      .element(page.getByRole("button", { name: "Hide empty groups: When filtering", exact: true }))
       .toBeVisible();
     await expectFilterCount(0);
     await expect.element(page.getByRole("radio", { name: "Active", exact: true })).toHaveFocus();
@@ -421,8 +533,6 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
     await page.getByRole("button", { name: "Reset", exact: true }).click();
     expect(loadStoredSidebarSessionsShowCron()).toBe(false);
     await expectFilterCount(0);
-    await page.getByRole("button", { name: "Group by: Person", exact: true }).click();
-    await page.getByRole("option", { name: "Custom groups", exact: true }).click();
     await page.getByRole("button", { name: /^Hide empty groups:/ }).click();
     await page.getByRole("option", { name: "Always", exact: true }).click();
     expect(sidebar.querySelector('[data-session-section="category:Empty"]')).toBeNull();

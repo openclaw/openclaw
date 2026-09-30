@@ -732,38 +732,27 @@ export function recordToolCallOutcome(
   }
 
   const argsHash = hashToolCall(params.toolName, params.toolParams);
-  let recordedOutcome: ToolCallRecord | undefined;
-  for (let i = state.toolCallHistory.length - 1; i >= 0; i -= 1) {
-    const call = state.toolCallHistory[i];
-    if (!call) {
-      continue;
-    }
-    if (normalizeRunId(call.runId) !== runId) {
-      continue;
-    }
-    if (params.toolCallId && call.toolCallId !== params.toolCallId) {
-      continue;
-    }
-    if (call.toolName !== params.toolName || call.argsHash !== argsHash) {
-      continue;
-    }
-    if (call.resultHash !== undefined || call.outcomeKind !== undefined) {
-      continue;
-    }
-    call.outcomeKind = outcome.outcomeKind;
-    call.resultHash = outcome.resultHash;
-    call.failureIdentityHash = outcome.failureIdentityHash;
+  let recordedOutcome = state.toolCallHistory.findLast(
+    (call) =>
+      call &&
+      normalizeRunId(call.runId) === runId &&
+      (!params.toolCallId || call.toolCallId === params.toolCallId) &&
+      call.toolName === params.toolName &&
+      call.argsHash === argsHash &&
+      call.resultHash === undefined &&
+      call.outcomeKind === undefined,
+  );
+  if (recordedOutcome) {
+    recordedOutcome.outcomeKind = outcome.outcomeKind;
+    recordedOutcome.resultHash = outcome.resultHash;
+    recordedOutcome.failureIdentityHash = outcome.failureIdentityHash;
     if (outcome.noProgress) {
-      call.noProgress = true;
+      recordedOutcome.noProgress = true;
     } else {
-      delete call.noProgress;
+      delete recordedOutcome.noProgress;
     }
-    call.unknownToolName = outcome.unknownToolName;
-    recordedOutcome = call;
-    break;
-  }
-
-  if (!recordedOutcome) {
+    recordedOutcome.unknownToolName = outcome.unknownToolName;
+  } else {
     const record: ToolCallRecord = {
       toolName: params.toolName,
       argsHash,

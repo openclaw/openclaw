@@ -531,6 +531,14 @@ export async function setupWizardCommand(
   if (!validatePreflightOptions(normalizedOpts, runtime)) {
     return;
   }
+  if (normalizedOpts.workspace?.trim()) {
+    const { validateSetupWorkspacePath } = await import("../wizard/setup.workspace.js");
+    const error = validateSetupWorkspacePath(normalizedOpts.workspace.trim());
+    if (error) {
+      rejectOption(normalizedOpts, runtime, `Invalid --workspace: ${error}`);
+      return;
+    }
+  }
   if (
     normalizedOpts.team &&
     (normalizedOpts.mode === "remote" ||

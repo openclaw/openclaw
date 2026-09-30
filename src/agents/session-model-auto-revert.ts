@@ -35,18 +35,16 @@ async function reconcileAgentPatchedSessionModel(params: {
   outcome: SessionModelRunOutcome;
   expectedMarkerTs?: number;
   validatedFallback?: AgentPatchedSessionModelFallback;
-  now?: number;
-}): Promise<"cleared" | "promoted" | "reverted" | "kept" | "none"> {
+}): Promise<void> {
   const reason = params.outcome.success
     ? undefined
     : (params.outcome.reason ?? resolveFailoverReasonFromError(params.outcome.error));
   if (!params.outcome.success && (!reason || !REVERT_REASONS.has(reason))) {
-    return "kept";
+    return;
   }
 
   let note: string | undefined;
   let sessionId: string | undefined;
-  let result: "cleared" | "promoted" | "reverted" | "none" = "none";
   await patchSessionEntryCore(
     {
       agentId: params.agentId,
@@ -65,7 +63,6 @@ async function reconcileAgentPatchedSessionModel(params: {
           marker.ts > params.expectedMarkerTs &&
           params.expectedMarkerTs > (marker.lastValidatedPatchTs ?? -1)
         ) {
-          result = "promoted";
           return {
             modelFallback: {
               ...params.validatedFallback,
@@ -78,11 +75,9 @@ async function reconcileAgentPatchedSessionModel(params: {
       }
       sessionId = entry.sessionId;
       if (params.outcome.success) {
-        result = "cleared";
         return { modelFallback: undefined };
       }
       const failed = resolveSessionModelRef(params.cfg, entry, params.agentId);
-      result = "reverted";
       note = `System note: model ${failed.provider}/${failed.model} failed; reverted to ${marker.prevProvider}/${marker.prevModel}.`;
       return {
         model: marker.prevModel,
@@ -105,7 +100,7 @@ async function reconcileAgentPatchedSessionModel(params: {
   );
   if (note && sessionId) {
     try {
-      const timestamp = params.now ?? Date.now();
+      const timestamp = Date.now();
       await appendTranscriptMessage(
         {
           agentId: params.agentId,
@@ -122,14 +117,12 @@ async function reconcileAgentPatchedSessionModel(params: {
             display: true,
             timestamp,
           },
-          ...(params.now === undefined ? {} : { now: params.now }),
         },
       );
     } catch {
       // Rollback is authoritative; transcript note is best effort.
     }
   }
-  return result;
 }
 
 export function createAgentPatchedSessionModelRunGuard(params: {

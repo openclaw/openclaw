@@ -7,6 +7,11 @@ import { t } from "../../../i18n/index.ts";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import type { ChatSelectionSource } from "../../../lib/chat/chat-types.ts";
 import {
+  clearCompositionEnd,
+  isComposingKeyboardEvent,
+  recordCompositionEnd,
+} from "../../../lib/ime.ts";
+import {
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
 } from "../../../lib/keyboard-shortcut-contract.ts";
@@ -16,7 +21,7 @@ registerChatMessageMetadataEnglish();
 type ChatSelectionPopupActions = {
   paneId: string;
   onAddToChat?: (selection: ChatSelectionSource, anchorRect: DOMRect) => void;
-  onAskSideChat: (selection: string) => void;
+  onAskSideChat: (selection: ChatSelectionSource, anchorRect: DOMRect) => void;
 };
 
 let activeSelectionPopup: {
@@ -179,7 +184,7 @@ function showChatSelectionPopup(
   }
   popup.append(
     button(t("chat.messages.askInSideChat"), () =>
-      activate(() => actions.onAskSideChat(selection.text)),
+      activate(() => actions.onAskSideChat(selection, anchor)),
     ),
   );
   const signal = mountPopup(popup, anchor, actions.paneId);
@@ -259,6 +264,7 @@ export function showChatAnnotationEditor(options: {
   popup.addEventListener("keydown", (event) => {
     if (
       event.target === input &&
+      !isComposingKeyboardEvent(event) &&
       (matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.sendMessage, event) ||
         matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.modifiedEnter, event))
     ) {
@@ -296,6 +302,9 @@ export function showChatAnnotationEditor(options: {
     positionPopup(popup, options.anchorElement?.getBoundingClientRect() ?? options.anchorRect);
   };
   input.addEventListener("input", resizeInput, { signal });
+  input.addEventListener("compositionend", recordCompositionEnd, { signal });
+  input.addEventListener("keyup", clearCompositionEnd, { signal });
+  input.addEventListener("blur", clearCompositionEnd, { signal });
   input.addEventListener("scroll", () => syncScrollState(input), { passive: true, signal });
   window.addEventListener("resize", resizeInput, { signal });
   resizeInput();

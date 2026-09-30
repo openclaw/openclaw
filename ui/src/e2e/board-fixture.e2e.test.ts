@@ -243,19 +243,23 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
       try {
         await page.goto(new URL("/chat", fixtureServer.url).toString());
         await page.getByRole("textbox", { name: "Chat composer", exact: true }).waitFor();
+        const sampledAt = 1_790_598_431_356;
+        await page.clock.setFixedTime(sampledAt);
         const [description] = (await requestPreviewGateway(page, [
           { method: "sessions.describe", params: { key: sessionKey } },
-        ])) as Array<{ session: { sessionId: string } }>;
+        ])) as Array<{ session: { sessionId: string; snapshotAt: number } }>;
         expect(description).toMatchObject({
-          session: { key: sessionKey, sessionId: expect.any(String) },
+          session: { key: sessionKey, sessionId: expect.any(String), snapshotAt: sampledAt },
         });
-        const replies = await requestPreviewGateway(
-          page,
-          ["chat.history", "chat.startup"].map((method) => ({
-            method,
-            params: { sessionKey },
-          })),
-        );
+        // Each projection samples its read clock, not the stored row. Advance
+        // Date without delaying timers so descriptor/history/startup cannot
+        // accidentally pass by sharing one millisecond.
+        const replies: unknown[] = [];
+        for (const [index, method] of ["chat.history", "chat.startup"].entries()) {
+          await page.clock.setFixedTime(sampledAt + index + 1);
+          const [reply] = await requestPreviewGateway(page, [{ method, params: { sessionKey } }]);
+          replies.push(reply);
+        }
         const userMessage = expect.objectContaining({
           role: "user",
           content: [{ type: "text", text: expect.stringContaining(user) }],
@@ -264,10 +268,10 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
           role: "assistant",
           content: [{ type: "text", text: expect.stringContaining(assistant) }],
         });
-        for (const reply of replies) {
+        for (const [index, reply] of replies.entries()) {
           expect(reply).toMatchObject({
             sessionId: description!.session.sessionId,
-            sessionInfo: description!.session,
+            sessionInfo: { ...description!.session, snapshotAt: sampledAt + index + 1 },
             messages: expect.arrayContaining([userMessage, assistantMessage]),
           });
           const messages = asNullableRecord(reply)?.messages;
@@ -280,7 +284,14 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
           );
           expect(userIndex).toBeLessThan(assistantIndex);
         }
-        expect(replies[1]).toMatchObject(replies[0]!);
+        const history = asNullableRecord(replies[0]);
+        expect(replies[1]).toMatchObject({
+          ...history,
+          sessionInfo: {
+            ...asNullableRecord(history?.sessionInfo),
+            snapshotAt: sampledAt + 2,
+          },
+        });
       } finally {
         await page.close();
       }

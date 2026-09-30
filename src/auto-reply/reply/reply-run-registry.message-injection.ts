@@ -217,6 +217,9 @@ export function resolveReplyBackendMessageInjectionRejection(params: {
   const activeFingerprint = normalizeOptionalString(
     backend.toolAuthorityFingerprint ?? params.toolAuthorityFingerprint,
   );
+  const toolAuthorityMatched =
+    activeFingerprint !== undefined &&
+    normalizeOptionalString(params.options?.toolAuthorityFingerprint) === activeFingerprint;
   const pendingInputAuthorityProven =
     activeFingerprint !== undefined &&
     normalizeOptionalString(params.options?.pendingInputAuthorityFingerprint) === activeFingerprint;
@@ -227,8 +230,7 @@ export function resolveReplyBackendMessageInjectionRejection(params: {
     params.options?.isInboundUserMessage === true &&
     backend.messageInjectionV2?.version === 2 &&
     activeFingerprint !== undefined &&
-    (pendingInputAuthorityProven ||
-      normalizeOptionalString(params.options.toolAuthorityFingerprint) === activeFingerprint);
+    (pendingInputAuthorityProven || toolAuthorityMatched);
   if (
     ((mismatch === "tool_authority_mismatch" && pendingInputAuthorityProven) ||
       hiddenPendingInputAuthorized) &&
@@ -244,6 +246,8 @@ export function resolveReplyBackendMessageInjectionRejection(params: {
           if (!(await injection.claimPendingUserInputAnswer?.(text, options))) {
             throw new Error("pending user input was not accepted");
           }
+          options?.onQueueAccepted?.(true);
+          options?.onQueueSettled?.();
         },
       },
     };
@@ -322,6 +326,7 @@ export function beginReplyMessageInjectionTarget(
   const owner = target[replyMessageInjectionTargetOwner];
   const {
     toolAuthorityOverlay,
+    personalToolParticipant,
     assertCurrent,
     allowPendingUserInputAnswer,
     inboundAudio,
@@ -399,6 +404,14 @@ export function beginReplyMessageInjectionTarget(
   // admission check, matching Codex's active-turn lock boundary.
   const acceptance = createDeferredCore<boolean>();
   let acceptanceSettled = false;
+  let participantRecorded = false;
+  const recordParticipant = () => {
+    const participant = toolAuthorityOverlay ?? personalToolParticipant;
+    if (!participantRecorded && queueOptions?.isInboundUserMessage && participant) {
+      participantRecorded = true;
+      owner.acceptParticipant?.(participant);
+    }
+  };
   const settleAcceptance = (accepted: boolean) => {
     if (acceptanceSettled) {
       return;
@@ -416,6 +429,7 @@ export function beginReplyMessageInjectionTarget(
       // Rejection is provisional until the outcome rules out an uncertain question
       // dispatch. Forwarding false early would release the parked input for replay.
       if (accepted) {
+        recordParticipant();
         settleAcceptance(true);
       }
     },
@@ -439,6 +453,7 @@ export function beginReplyMessageInjectionTarget(
     };
   }
   const outcome = queued.then(async (result): Promise<ReplyMessageInjectionOutcome> => {
+    recordParticipant();
     settleAcceptance(true);
     if (
       targetRunId &&
@@ -492,14 +507,15 @@ export async function finalizeReplyMessageInjectionAttempt(params: {
       adoptionError,
     };
   }
-  recordAcceptedReplyMessageInjectionTarget(params.target, {
+  const owner = params.target[replyMessageInjectionTargetOwner];
+  owner.recordAccepted({
     inboundAudio: params.inboundAudio,
   });
   let aborted =
     outcome.result?.transcriptCommit === "unconfirmed" &&
     params.abortOnUnconfirmedTranscript !== false;
   if (aborted) {
-    abortReplyMessageInjectionTarget(params.target);
+    owner.abort();
   }
   let adoptionError: unknown;
   try {
@@ -507,7 +523,7 @@ export async function finalizeReplyMessageInjectionAttempt(params: {
   } catch (error) {
     adoptionError = error;
     if (params.shouldAbortOnAdoptionError?.(error)) {
-      abortReplyMessageInjectionTarget(params.target);
+      owner.abort();
       aborted = true;
     }
   }
@@ -518,17 +534,4 @@ export async function finalizeReplyMessageInjectionAttempt(params: {
     aborted,
     ...(adoptionError === undefined ? {} : { adoptionError }),
   };
-}
-
-/** Abort only the captured owner; never a same-key successor. */
-function abortReplyMessageInjectionTarget(target: ReplyMessageInjectionTarget): boolean {
-  return target[replyMessageInjectionTargetOwner].abort();
-}
-
-/** Record accepted input on the captured owner without rediscovering its session slot. */
-function recordAcceptedReplyMessageInjectionTarget(
-  target: ReplyMessageInjectionTarget,
-  options?: { inboundAudio?: boolean },
-): void {
-  target[replyMessageInjectionTargetOwner].recordAccepted(options);
 }

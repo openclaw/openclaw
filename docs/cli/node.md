@@ -236,8 +236,9 @@ an absent service remains a successful no-op.
 The node host retries Gateway restart and network closes in-process. If the
 Gateway reports a terminal token/password/bootstrap auth pause, the node host
 logs the close detail and exits non-zero so launchd/systemd/Task Scheduler can
-restart it with fresh config and credentials. Pairing-required pauses stay in
-the foreground flow so the pending request can be approved.
+restart it with fresh config and credentials. While device pairing is pending,
+the node keeps reconnecting with exponential backoff capped at 30 seconds and
+connects automatically after approval.
 
 ## Automatic updates
 
@@ -280,17 +281,20 @@ openclaw devices list
 openclaw devices approve <deviceRequestId>
 ```
 
-Device approval admits the connection, not its command surface. Restart an
-installed node with `openclaw node restart`, or stop and rerun the foreground
-`openclaw node run` command. A node paused on `PAIRING_REQUIRED` does not resume
-automatically after manual approval. This reconnect creates a separate
-command-surface request on the Gateway:
+Device approval admits the connection; the command surface needs separate
+approval. The node keeps reconnecting while device approval is pending, with
+exponential backoff capped at 30 seconds. After approval, its next reconnect
+creates a separate command-surface request on the Gateway:
 
 ```bash
 openclaw nodes pending
 openclaw nodes approve <nodeRequestId>
 openclaw nodes describe --node <idOrNameOrIp>
 ```
+
+If an older client already reports that reconnect is paused, restart the
+installed node with `openclaw node restart`, or stop and rerun its foreground
+`openclaw node run` command once.
 
 The device and node request IDs are distinct. An initial unapproved surface has
 no effective commands. SSH-verified and bootstrap enrollment can approve the
@@ -366,9 +370,9 @@ revoke and re-pair a node:
    attempt can request pairing.
 3. On the Gateway, run `openclaw devices list`, then
    `openclaw devices approve <deviceRequestId>`.
-4. Restart or rerun the node again. A client paused for pairing does not resume
-   automatically after approval; this reconnect creates the separate
-   command-surface request.
+4. Wait for the node's automatic reconnect, which creates the separate
+   command-surface request. If an older client already paused for pairing,
+   restart or rerun it once.
 5. On the Gateway, run `openclaw nodes pending`, then
    `openclaw nodes approve <nodeRequestId>`.
 

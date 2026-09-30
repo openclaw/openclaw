@@ -46,7 +46,6 @@ actor VoiceWakeRuntime {
     private var isStarting: Bool = false
     private var triggerOnlyTask: Task<Void, Never>?
 
-    /// Tunables
     /// Silence threshold once we've captured user speech (post-trigger).
     private let silenceWindow: TimeInterval = 2.0
     /// Silence threshold when we only heard the trigger but no post-trigger speech yet.
@@ -214,7 +213,7 @@ actor VoiceWakeRuntime {
                 Task { await self.handleRecognition(update, config: config) }
             }
 
-            let preferred = config.micID?.isEmpty == false ? config.micID! : "system-default"
+            let preferred = config.micID ?? "system-default"
             self.logger.info(
                 "voicewake runtime input preferred=\(preferred, privacy: .public) " +
                     "\(AudioInputDeviceObserver.defaultInputDeviceSummary(), privacy: .public)")
@@ -491,7 +490,7 @@ actor VoiceWakeRuntime {
             config: config)
     }
 
-    private static func isTriggerOnlyText(transcript: String, triggers: [String]) -> Bool {
+    static func isTriggerOnlyText(transcript: String, triggers: [String]) -> Bool {
         VoiceWakeTextUtils.isTriggerOnly(
             transcript: transcript,
             triggers: triggers,
@@ -644,7 +643,6 @@ actor VoiceWakeRuntime {
             await MainActor.run { VoiceSessionCoordinator.shared.updateLevel(token: token, 0) }
         }
 
-        let delay: TimeInterval = 0.0
         let sendChime = finalTranscript.isEmpty ? .none : config.sendChime
         if let token = self.overlayToken {
             await MainActor.run {
@@ -652,7 +650,7 @@ actor VoiceWakeRuntime {
                     token: token,
                     text: finalTranscript,
                     sendChime: sendChime,
-                    autoSendAfter: delay,
+                    autoSendAfter: 0,
                     voiceWakeTrigger: triggerWord)
             }
         } else if !finalTranscript.isEmpty {
@@ -728,15 +726,14 @@ actor VoiceWakeRuntime {
         self.stop(dismissOverlay: false)
     }
 
-    private static func trimmedAfterTrigger(_ text: String, triggers: [String]) -> String {
+    static func trimmedAfterTrigger(_ text: String, triggers: [String]) -> String {
         for trigger in triggers {
             let token = trigger.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !token.isEmpty else { continue }
             guard let range = text.range(
                 of: token,
                 options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive]) else { continue }
-            let trimmed = text[range.upperBound...].trimmingCharacters(in: .whitespacesAndNewlines)
-            return String(trimmed)
+            return text[range.upperBound...].trimmingCharacters(in: .whitespacesAndNewlines)
         }
         return text
     }
@@ -756,23 +753,4 @@ actor VoiceWakeRuntime {
             triggerEndTime: triggerEndTime)
         return trimmed.isEmpty ? self.trimmedAfterTrigger(transcript, triggers: triggers) : trimmed
     }
-
-    #if DEBUG
-    static func _testTrimmedAfterTrigger(_ text: String, triggers: [String]) -> String {
-        self.trimmedAfterTrigger(text, triggers: triggers)
-    }
-
-    static func _testHasContentAfterTrigger(_ text: String, triggers: [String]) -> Bool {
-        !self.trimmedAfterTrigger(text, triggers: triggers).isEmpty
-    }
-
-    static func _testIsTriggerOnly(_ text: String, triggers: [String]) -> Bool {
-        self.isTriggerOnlyText(transcript: text, triggers: triggers)
-    }
-
-    static func _testMatchedTriggerWord(_ text: String, triggers: [String]) -> String? {
-        VoiceWakeTextUtils.matchedTriggerWord(transcript: text, triggers: triggers)
-    }
-
-    #endif
 }

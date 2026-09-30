@@ -30,6 +30,7 @@ import {
 } from "./workspace-finalize.js";
 import { recoverWorkerWorkspaceReconciliation } from "./workspace-reconcile.js";
 import {
+  createWorkspaceResultJournal,
   finalizeWorkspaceResultConflicts,
   settleStagedWorkspaceResult,
 } from "./workspace-result-settlement.js";
@@ -105,12 +106,7 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
           return current;
         }
         const root = sessionWorkspaceRoot(workspace);
-        const journalOwner = {
-          sessionId: current.sessionId,
-          environmentId: current.environmentId,
-          ownerEpoch: current.activeOwnerEpoch,
-          placementGeneration: current.generation,
-        };
+        const journalPlacement = { ...current };
         const reclaimClaimId = `reclaim-${randomUUID()}`;
         const reclaimClaim = placements.claimReclaimWorkspaceResult({
           sessionId: current.sessionId,
@@ -136,26 +132,12 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
               throw new Error("Cloud worker stop workspace changed during preparation");
             }
             const reclaimResultRef = workerWorkspaceResultRef(reclaimClaim.claimId);
-            let manifestAccepted = false;
-            const journal = {
-              load: () => placements.loadWorkspaceReconciliation(journalOwner),
-              begin: (next: Parameters<typeof placements.beginWorkspaceReconciliation>[1]) => {
-                recovery.assertCurrent();
-                return placements.beginWorkspaceReconciliation(journalOwner, next);
-              },
-              commit: (manifestRef: string) => {
-                recovery.assertCurrent();
-                placements.updateWorkspaceBaseManifest({
-                  claim: reclaimClaim,
-                  manifestRef,
-                });
-                manifestAccepted = true;
-              },
-              abort: () => {
-                recovery.assertCurrent();
-                return placements.abortWorkspaceReconciliation(journalOwner);
-              },
-            };
+            const { adapter: journal, wasAccepted } = createWorkspaceResultJournal({
+              placement: journalPlacement,
+              placements,
+              turnClaim: reclaimClaim,
+              assertCurrent: recovery.assertCurrent,
+            });
             const cancelUnstagedFailedReclaim = async (allowCommitted: boolean): Promise<void> => {
               await options.workspaceOperations.run(current.environmentId, async () => {
                 const stillOwnsEmptyResult = (): boolean => {
@@ -163,7 +145,7 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
                   const currentEnvironment = environments.get(current.environmentId);
                   const pendingResult = findPendingWorkerWorkspaceResult(placements, reclaimClaim);
                   return (
-                    (allowCommitted || !manifestAccepted) &&
+                    (allowCommitted || !wasAccepted()) &&
                     owned?.state === "draining" &&
                     owned.turnClaim?.claimId === reclaimClaim.claimId &&
                     reclaimClaim.owner.environmentId === current.environmentId &&
@@ -256,12 +238,13 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
                           ref: reclaimResultRef,
                           record: (ref) => {
                             assertCurrent();
-                            placements.recordStagedWorkspaceResult(
+                            return placements.recordStagedWorkspaceResult(
                               reclaimClaim,
                               ref,
                               workspace.kind === "repository"
                                 ? workspace.repository.workspaceId
                                 : undefined,
+                              assertCurrent,
                             );
                           },
                         },
@@ -272,7 +255,7 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
                       reconciliation,
                       quiescence,
                     );
-                    if (reconciliation.changed && !manifestAccepted) {
+                    if (reconciliation.changed && !wasAccepted()) {
                       throw new Error("Cloud worker stop did not commit its reconciled workspace");
                     }
                     reauthorize?.();

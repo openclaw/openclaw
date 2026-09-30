@@ -35,28 +35,6 @@ type LedgerQueuedSend = {
 
 type LedgerSettleResult = "settled" | "aborted" | "timed-out";
 
-type ReplyTurnLedger = {
-  /** Enqueue on the dispatcher and record the payload's settled visibility. */
-  sendQueued: (kind: ReplyDispatchKind, payload: ReplyPayload) => LedgerQueuedSend;
-  sendPreparedQueued: (kind: ReplyDispatchKind, plan: OutboundPayloadPlan) => LedgerQueuedSend;
-  /** Record a routed transport result; routed sends settle at their call site. */
-  recordRoutedDelivery: (
-    kind: ReplyDispatchKind,
-    payload: ReplyPayload,
-    result: Parameters<typeof resolveRoutedReplyDeliveryOutcome>[0],
-  ) => void;
-  /** Resolve every admitted payload's outcome so the fallback gate decides after
-   * beforeDeliver hooks and transport delivery, not at admission. Only a
-   * "settled" result proves the visibility verdict is complete. */
-  settleQueued: (abortSignal?: AbortSignal) => Promise<LedgerSettleResult>;
-  /** Includes uncertain sends, which cannot safely be retried. */
-  mayHaveDelivered: () => boolean;
-  hasObservedDelivery: () => boolean;
-  canAttemptFallback: () => boolean;
-  hasPendingDelivery: () => boolean;
-  resolveTerminalDelivery: () => ReplyDeliveryState;
-};
-
 export async function requireQueuedReplyDelivery(params: {
   delivery: LedgerQueuedSend;
   dispatcher: Pick<ReplyDispatcher, "supportsSettledReceipt" | "waitForIdle">;
@@ -82,7 +60,7 @@ export async function requireQueuedReplyDelivery(params: {
   }
 }
 
-export function createReplyTurnLedger(dispatcher: ReplyDispatcher): ReplyTurnLedger {
+export function createReplyTurnLedger(dispatcher: ReplyDispatcher) {
   const outcomes = new Set<ReplyDispatchDeliveryOutcome>();
   let pendingDelivery = false;
   let terminalDelivery: ReplyDeliveryState = "missing";
@@ -148,9 +126,15 @@ export function createReplyTurnLedger(dispatcher: ReplyDispatcher): ReplyTurnLed
     return { queued: true, outcome, hasPendingDelivery: capture.hasPendingDelivery };
   };
   return {
-    sendQueued: (kind, payload) => sendOperation(kind, { kind: "raw", payload }),
-    sendPreparedQueued: (kind, plan) => sendOperation(kind, { kind: "prepared", plan }),
-    recordRoutedDelivery(kind, payload, result) {
+    sendQueued: (kind: ReplyDispatchKind, payload: ReplyPayload) =>
+      sendOperation(kind, { kind: "raw", payload }),
+    sendPreparedQueued: (kind: ReplyDispatchKind, plan: OutboundPayloadPlan) =>
+      sendOperation(kind, { kind: "prepared", plan }),
+    recordRoutedDelivery(
+      kind: ReplyDispatchKind,
+      payload: ReplyPayload,
+      result: Parameters<typeof resolveRoutedReplyDeliveryOutcome>[0],
+    ) {
       const outcome = resolveRoutedReplyDeliveryOutcome(result);
       recordDelivery(
         kind,
@@ -159,7 +143,8 @@ export function createReplyTurnLedger(dispatcher: ReplyDispatcher): ReplyTurnLed
         result.queueCustody === "held" || result.ambiguous === true || outcome === "recovery-owned",
       );
     },
-    async settleQueued(abortSignal) {
+    // Only settlement proves visibility after beforeDeliver hooks and transport delivery.
+    async settleQueued(abortSignal?: AbortSignal): Promise<LedgerSettleResult> {
       if (abortSignal?.aborted) {
         return "aborted";
       }

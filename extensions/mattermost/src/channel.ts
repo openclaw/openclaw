@@ -42,7 +42,10 @@ import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   chunkTextForOutbound,
   sanitizeAssistantVisibleText,
@@ -114,17 +117,7 @@ function hasMattermostPresentationNavigation(presentation: MessagePresentation):
 function readMattermostPayloadData(payload: {
   channelData?: Record<string, unknown>;
 }): Record<string, unknown> | undefined {
-  const data = payload.channelData?.mattermost;
-  return data && typeof data === "object" && !Array.isArray(data)
-    ? (data as Record<string, unknown>)
-    : undefined;
-}
-
-function readMattermostPresentationButtons(payload: {
-  channelData?: Record<string, unknown>;
-}): Array<unknown> | undefined {
-  const buttons = readMattermostPayloadData(payload)?.presentationButtons;
-  return Array.isArray(buttons) ? buttons : undefined;
+  return asOptionalRecord(payload.channelData?.mattermost);
 }
 
 type MattermostDirectoryListParams = Parameters<
@@ -597,8 +590,11 @@ const mattermostOutbound: ChannelOutboundAdapter = {
     };
   },
   sendPayload: async (ctx) => {
-    const buttons = readMattermostPresentationButtons(ctx.payload);
-    const rawAttachmentText = readMattermostPayloadData(ctx.payload)?.attachmentText;
+    const mattermostData = readMattermostPayloadData(ctx.payload);
+    const buttons = Array.isArray(mattermostData?.presentationButtons)
+      ? mattermostData.presentationButtons
+      : undefined;
+    const rawAttachmentText = mattermostData?.attachmentText;
     const attachmentText = typeof rawAttachmentText === "string" ? rawAttachmentText : undefined;
     if (buttons?.length || attachmentText !== undefined) {
       const mediaUrl = resolvePayloadMediaUrls({
@@ -813,7 +809,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
           botTokenSource: account.botTokenSource,
         });
         ctx.log?.info(`[${account.accountId}] starting channel`);
-        return (await loadMattermostChannelRuntime()).monitorMattermostProvider({
+        return (await import("./mattermost/monitor.js")).monitorMattermostProvider({
           botToken: account.botToken ?? undefined,
           baseUrl: account.baseUrl ?? undefined,
           accountId: account.accountId,

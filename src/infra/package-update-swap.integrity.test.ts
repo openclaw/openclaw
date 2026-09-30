@@ -930,7 +930,6 @@ describe("retained npm package integrity", () => {
       shape: "sibling dependency link",
       cause: "Package rollback symlink leaves the retained tree",
     },
-    { shape: "oversized file", cause: "Package rollback verification byte limit exceeded" },
     { shape: "unavailable inode", cause: "Package rollback filesystem identity is unavailable" },
     { shape: "timed-out scan", cause: "Package rollback verification timed out" },
   ] as const)(
@@ -949,11 +948,6 @@ describe("retained npm package integrity", () => {
           const link = path.join(packageRoot, "node_modules", "fixture-dependency");
           await fs.symlink("../../fixture-dependency", link);
           expect(await fs.realpath(link)).toBe(await fs.realpath(dependency));
-        }
-        if (shape === "oversized file") {
-          const file = path.join(packageRoot, "oversized.bin");
-          await fs.writeFile(file, "");
-          await fs.truncate(file, 1024 * 1024 * 1024 + 1);
         }
         if (shape === "unavailable inode") {
           const lstat = fs.lstat.bind(fs);

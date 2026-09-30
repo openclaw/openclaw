@@ -15,8 +15,8 @@ const enActivity = {
       started: "started",
       people: "people",
       running: "running now",
-      hour: "{hour} · {count} sessions",
-      description: "{count} sessions today; peak hour {hour}",
+      bucket: "{period} · {count} sessions",
+      description: "{window}: {count} sessions; busiest {period}",
     },
     git: {
       pullRequest: "{repository} pull request #{number}: {title} ({state})",

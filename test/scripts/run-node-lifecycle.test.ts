@@ -315,6 +315,9 @@ it.runIf(process.platform !== "win32").each(["runner", "watch"] as const)(
           isProcessAlive(worker),
           "the fixture must retain the escaped worker until rescue",
         ).toBe(true);
+        expect(result.stderr, formatShimResult(result)).not.toContain(
+          "Native runner fixture received an unexpected spawn:",
+        );
       },
       async () => {
         // This private release is independent of the native cleanup under test.

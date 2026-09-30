@@ -9,6 +9,14 @@ export function prepareReclamationPublication(
   databaseIdentity: string | symbol,
   result?: SqliteSessionReclamationResult,
 ): (() => void) | undefined {
+  if (plan.kind === "lifecycle-projection-commit" && result?.kind === plan.kind) {
+    const removed = new Set(result.value.removedSessionKeys);
+    return prepareCommittedSessionEntryRemovals(
+      plan.agentId,
+      databaseIdentity,
+      plan.input.projected.removals.filter(({ sessionKey }) => removed.has(sessionKey)),
+    );
+  }
   if (plan.kind === "maintenance-finalize" && result?.kind === "maintenance-finalize") {
     return prepareCommittedSessionEntryRemovals(
       plan.agentId,
@@ -27,6 +35,15 @@ export function collectReclamationChangedSessionKeys(
   result: SqliteSessionReclamationResult,
 ): string[] {
   switch (result.kind) {
+    case "lifecycle-projection-commit":
+      return [
+        ...result.value.removedSessionKeys,
+        ...result.value.maintenancePlans.flatMap((maintenance) => maintenance.archivedSessionKeys),
+      ];
+    case "deletion-plan":
+    case "lifecycle-projection-plan":
+    case "lifecycle-projection-count":
+      return [];
     case "maintenance-plan":
       return result.value.archivedSessionKeys;
     case "maintenance-finalize":

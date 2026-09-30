@@ -30,12 +30,13 @@ import * as cronStoreModule from "./store.js";
 import { loadCronStore, saveCronStore } from "./store.js";
 import { cronStoreKey } from "./store/key.js";
 import {
-  claimCronRunReceiptInDatabase,
-  finishCronRunReceipt,
+  finishCronRunReceiptAsync,
   prepareCronRunReceiptClaim,
 } from "./store/run-receipt-store.js";
-import { inspectActiveCronRunReceipt } from "./store/run-receipt-store.test-support.js";
-import { prepareCronRunReceiptWriteSchema } from "./store/run-receipt-write-admission.js";
+import {
+  claimCronRunReceiptInDatabaseForTest,
+  inspectActiveCronRunReceipt,
+} from "./store/run-receipt-store.test-support.js";
 import type { CronRunReceiptHandle } from "./store/run-receipt.types.js";
 import type { CronJob } from "./types.js";
 
@@ -162,15 +163,15 @@ describe("cron service cross-tick admission", () => {
     const pending = dueJob("after-unchanged-conflict", t0);
     const store = await seedJobs([conflicted, pending]);
     const prepared = prepareCronRunReceiptClaim({
+      observed: undefined,
       storePath: store.storePath,
       job: conflicted,
       agentId: conflicted.agentId ?? "main",
       startedAtMs: t0,
     });
     const receipt = runOpenClawStateWriteTransaction(({ db }) =>
-      claimCronRunReceiptInDatabase({
+      claimCronRunReceiptInDatabaseForTest({
         database: db,
-        receiptSchema: prepareCronRunReceiptWriteSchema(db),
         prepared,
         resolveAgentId: (job) => job.agentId ?? "main",
       }),
@@ -207,7 +208,7 @@ describe("cron service cross-tick admission", () => {
       expect(state.timer).not.toBeNull();
       expect(runIsolatedAgentJob).not.toHaveBeenCalled();
 
-      finishCronRunReceipt({ handle: receipt, status: "skipped", finishedAtMs: t0 });
+      await finishCronRunReceiptAsync({ handle: receipt, status: "skipped", finishedAtMs: t0 });
       await onTimer(state);
 
       // The resumed tick rechecks capacity to run the second due job.
@@ -221,7 +222,7 @@ describe("cron service cross-tick admission", () => {
       ).toBe(true);
     } finally {
       unrelated!.release();
-      finishCronRunReceipt({ handle: receipt, status: "skipped", finishedAtMs: t0 });
+      await finishCronRunReceiptAsync({ handle: receipt, status: "skipped", finishedAtMs: t0 });
       stop(state);
     }
   });
@@ -234,6 +235,7 @@ describe("cron service cross-tick admission", () => {
 
     const foreignStartedAtMs = t0 + 1;
     const preparedForeignReceipt = prepareCronRunReceiptClaim({
+      observed: undefined,
       storePath: store.storePath,
       job: conflicted,
       agentId: conflicted.agentId ?? "main",
@@ -254,9 +256,8 @@ describe("cron service cross-tick admission", () => {
         // the durable owner race at that boundary.
         if (nowCalls === 3) {
           foreignReceipt = runOpenClawStateWriteTransaction(({ db }) => {
-            const receipt = claimCronRunReceiptInDatabase({
+            const receipt = claimCronRunReceiptInDatabaseForTest({
               database: db,
-              receiptSchema: prepareCronRunReceiptWriteSchema(db),
               prepared: preparedForeignReceipt,
               resolveAgentId: (job) => job.agentId ?? "main",
             });
@@ -288,7 +289,7 @@ describe("cron service cross-tick admission", () => {
       ).toMatchObject({ lastRunStatus: "ok" });
     } finally {
       if (foreignReceipt) {
-        finishCronRunReceipt({
+        await finishCronRunReceiptAsync({
           handle: foreignReceipt,
           status: "interrupted",
           finishedAtMs: t0 + 2,

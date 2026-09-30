@@ -36,7 +36,7 @@ private final class DashboardFixtureTrust: NSObject, WKNavigationDelegate {
     }
 }
 
-@Suite(.serialized)
+@Suite(.serialized, .timeLimit(.minutes(1)))
 @MainActor
 struct DashboardBrowserCookieBoundaryTests {
     @Test(arguments: [false, true])
@@ -119,9 +119,8 @@ struct DashboardBrowserCookieBoundaryTests {
             "/other-worker",
         ]
         let expected = same + different
-        let deadline = ContinuousClock.now + .seconds(10)
-        while !expected.allSatisfy({ requests[$0] != nil }), ContinuousClock.now < deadline {
-            try await Task.sleep(for: .milliseconds(10))
+        try await DashboardTestWait.state("cookie boundary requests") {
+            expected.allSatisfy { requests[$0] != nil }
         }
         for path in expected {
             try #require(requests[path] != nil, "Missing request: \(path)")

@@ -1,14 +1,14 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { describe, expect, it, vi } from "vitest";
-import { crabboxState } from "./crabbox-state.test-support.js";
+import { crabboxState, openWarmImageStore } from "./crabbox-state.test-support.js";
 import {
+  listCrabboxWarmImages,
   openCrabboxWarmImageStore,
   type WarmProfileRecord,
 } from "./crabbox-worker-warm-image-store.js";
 import {
   createWarmProvider,
-  openWarmImageStore,
   provisionWarmProfile,
   tempDirs,
 } from "./crabbox-worker-warm-image.test-support.js";
@@ -67,6 +67,59 @@ function observeComparisons(before: () => void | Promise<void>, after?: () => vo
 }
 
 describe("Crabbox asynchronous warm-image mutations", () => {
+  it("preserves and projects a native-capture refusal through allocation updates", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("crabbox-capture-unsupported-"));
+    const captureUnsupported = {
+      atMs: 0,
+      provider: "p".repeat(128),
+      message: "m".repeat(1024),
+    };
+    const fixture = openWarmImageStore();
+    fixture.register("profile", { version: 3, allocations: {}, captureUnsupported });
+
+    await recordAllocation();
+
+    expect(fixture.lookup("profile")?.captureUnsupported).toEqual(captureUnsupported);
+    expect(await listCrabboxWarmImages(crabboxState)).toMatchObject([
+      {
+        profileKey: "profile",
+        captureUnsupported,
+        allocations: { new: { choice: { kind: "cold" } } },
+      },
+    ]);
+  });
+
+  it("rejects malformed native-capture refusal markers before reading or updating state", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("crabbox-capture-unsupported-invalid-"));
+    const fixture = openWarmImageStore();
+    const store = openCrabboxWarmImageStore(crabboxState);
+    const valid = { atMs: 1, provider: "hetzner", message: "Native capture is unsupported" };
+    for (const captureUnsupported of [
+      null,
+      { ...valid, atMs: -1 },
+      { ...valid, atMs: 1.5 },
+      { ...valid, atMs: Number.MAX_SAFE_INTEGER + 1 },
+      { ...valid, atMs: "1" },
+      { ...valid, provider: 1 },
+      { ...valid, provider: "" },
+      { ...valid, provider: "p".repeat(129) },
+      { ...valid, message: 1 },
+      { ...valid, message: "" },
+      { ...valid, message: "m".repeat(1025) },
+    ]) {
+      fixture.register("profile", {
+        version: 3,
+        allocations: {},
+        captureUnsupported,
+      } as WarmProfileRecord);
+
+      await expect(store.lookup("profile")).rejects.toThrow("preparation state is invalid");
+      const update = vi.fn(() => undefined);
+      await expect(store.update("profile", update)).rejects.toThrow("preparation state is invalid");
+      expect(update).not.toHaveBeenCalled();
+    }
+  });
+
   it("rechecks retirement and preserves sibling allocations after a comparison conflict", async () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("crabbox-state-conflict-"));
     const fixture = openWarmImageStore();

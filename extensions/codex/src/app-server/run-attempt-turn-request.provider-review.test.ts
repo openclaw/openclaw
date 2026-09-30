@@ -53,7 +53,7 @@ vi.mock("./thread-lifecycle.js", () => ({
   }),
 }));
 vi.mock("./trajectory.js", () => ({ recordCodexTrajectoryContext: vi.fn() }));
-vi.mock("./transcript-mirror.js", () => ({ buildCodexUserPromptMessage: vi.fn() }));
+vi.mock("./user-prompt-message.js", () => ({ buildCodexUserPromptMessage: vi.fn() }));
 vi.mock("./turn-params.js", () => ({ buildCodexParentLocalInstructions: vi.fn() }));
 
 beforeEach(() => {

@@ -1,5 +1,5 @@
-// Slack tests cover send.blocks plugin behavior.
-import { describe, expect, it, vi } from "vitest";
+import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSlackSendTestClient } from "./blocks.test-helpers.js";
 import { SLACK_MESSAGE_TEXT_RECOMMENDED_LIMIT } from "./limits.js";
 import { SLACK_QUESTION_FINALIZATION_BLOCKS } from "./reply-action-ids.js";
@@ -8,36 +8,43 @@ import {
   hasSlackThreadParticipation,
 } from "./sent-thread-cache.js";
 
-const { sendMessageSlack } = await import("./send.js");
+const { sendMessageSlack, setSlackDefaultSendIdentity } = await import("./send.js");
+const { slackPlugin } = await import("./channel.js");
 const SLACK_TEST_CFG = { channels: { slack: { botToken: "xoxb-test" } } };
 const SLACK_TEXT_LIMIT = 8000;
-
-type MockCallSource = { mock: { calls: Array<Array<unknown>> } };
-
-function mockObjectArg(
-  source: MockCallSource,
-  label: string,
-  callIndex = 0,
-  argIndex = 0,
-): Record<string, unknown> {
-  const call = source.mock.calls[callIndex];
-  if (!call) {
-    throw new Error(`Expected ${label} call ${callIndex} to exist`);
-  }
-  const value = call[argIndex];
-  if (!value || typeof value !== "object") {
-    throw new Error(`Expected ${label} call ${callIndex} argument ${argIndex} to be an object`);
-  }
-  return value as Record<string, unknown>;
+let client: ReturnType<typeof createSlackSendTestClient>;
+beforeEach(() => {
+  client = createSlackSendTestClient();
+  clearSlackThreadParticipationCache();
+  setSlackDefaultSendIdentity("default", undefined);
+});
+afterEach(() => setSlackDefaultSendIdentity("default", undefined));
+function send(
+  message: string,
+  options: Partial<Parameters<typeof sendMessageSlack>[2]> = {},
+  to = "channel:C123",
+) {
+  return sendMessageSlack(to, message, { cfg: SLACK_TEST_CFG, client, ...options });
 }
 
-function postedMessage(client: ReturnType<typeof createSlackSendTestClient>, callIndex = 0) {
-  return mockObjectArg(client.chat.postMessage, "chat.postMessage", callIndex);
+function postedMessage(callIndex = 0) {
+  return client.chat.postMessage.mock.calls[callIndex]![0];
 }
 
 function interleavedNativeDataBlocks(): Array<Record<string, unknown>> {
   return [
     { type: "section", text: { type: "mrkdwn", text: "Before" } },
+    {
+      type: "data_visualization",
+      title: "Revenue mix",
+      chart: {
+        type: "pie",
+        segments: [
+          { label: "Product", value: 60 },
+          { label: "Services", value: 40 },
+        ],
+      },
+    },
     {
       type: "data_table",
       caption: "Pipeline report",
@@ -77,6 +84,7 @@ function interleavedNativeDataBlocks(): Array<Record<string, unknown>> {
 const INTERLEAVED_NATIVE_DATA_ACCESSIBILITY = [
   "Outside",
   "Before",
+  "Revenue mix (pie chart)\n- Product: 60\n- Services: 40",
   "Pipeline report (table)\nAccount\tARR\nAcme\t$125k",
   "After",
   "Approve\nChoose owner\nOperations",
@@ -98,95 +106,36 @@ describe("sendMessageSlack NO_REPLY literal", () => {
   // payloads reach outbound; a literal NO_REPLY sent through the message tool
   // must deliver on Slack exactly like every sibling channel.
   it("delivers a literal NO_REPLY text like sibling channels", async () => {
-    const client = createSlackSendTestClient();
-    const result = await sendMessageSlack("channel:C123", "NO_REPLY", {
-      token: "xoxb-test",
-      cfg: SLACK_TEST_CFG,
-      client,
-    });
+    const result = await send("NO_REPLY");
 
     expect(client.chat.postMessage).toHaveBeenCalled();
     expect(result.messageId).toBe("171234.567");
   });
 });
 
-describe("sendMessageSlack thread participation", () => {
-  it("records participation after a successful threaded send", async () => {
-    clearSlackThreadParticipationCache();
-    const client = createSlackSendTestClient();
-
-    const result = await sendMessageSlack("channel:C123", "hello thread", {
-      token: "xoxb-test",
-      cfg: SLACK_TEST_CFG,
-      client,
-      threadTs: "1712345678.123456",
-    });
-
-    expect(result.threadTs).toBe("1712345678.123456");
-    expect(result.receipt.threadId).toBe("1712345678.123456");
-    expect(hasSlackThreadParticipation("default", "C123", "1712345678.123456")).toBe(true);
-  });
-});
-
 describe("sendMessageSlack chunking", () => {
-  it("preserves boundary whitespace for formatting-disabled fallback text", async () => {
-    const client = createSlackSendTestClient();
-
-    await sendMessageSlack("channel:C123", "  literal fallback  ", {
-      cfg: SLACK_TEST_CFG,
-      client,
-      textIsSlackPlainText: true,
-    });
-
-    expect(postedMessage(client, 0)).toMatchObject({
-      text: "  literal fallback  ",
-      mrkdwn: false,
-    });
-  });
-
-  it("keeps 4205-character text in a single Slack post by default", async () => {
-    const client = createSlackSendTestClient();
-    const message = "a".repeat(4205);
-
-    await sendMessageSlack("channel:C123", message, {
-      token: "xoxb-test",
-      cfg: SLACK_TEST_CFG,
-      client,
-    });
-
-    expect(client.chat.postMessage).toHaveBeenCalledTimes(1);
-    expect(postedMessage(client).channel).toBe("C123");
-    expect(postedMessage(client).text).toBe(message);
-  });
-
   it.each([false, true])(
     "keeps emoji whole when plain text mode is %s",
     async (textIsSlackPlainText) => {
-      const client = createSlackSendTestClient();
-      const prefix = "a".repeat(SLACK_TEXT_LIMIT - 2);
+      const boundary = textIsSlackPlainText ? "  " : "";
+      const prefix = boundary + "a".repeat(SLACK_TEXT_LIMIT - 2 - boundary.length);
       const family = "👨‍👩‍👧‍👦";
 
-      await sendMessageSlack("channel:C123", `${prefix}${family}Z`, {
-        cfg: SLACK_TEST_CFG,
-        client,
+      await send(`${prefix}${family}Z${boundary}`, {
         textIsSlackPlainText,
       });
 
       expect(client.chat.postMessage.mock.calls.map((call) => call[0].text)).toEqual([
         prefix,
-        `${family}Z`,
+        `${family}Z${boundary}`,
       ]);
     },
   );
 
   it("keeps Slack mrkdwn code spans closed around protected tokens when chunking", async () => {
-    const client = createSlackSendTestClient();
     const message = `\`${"a".repeat(SLACK_TEXT_LIMIT - 5)}<@U123>${"b".repeat(20)}\``;
 
-    await sendMessageSlack("channel:C123", message, {
-      token: "xoxb-test",
-      cfg: SLACK_TEST_CFG,
-      client,
+    await send(message, {
       textIsSlackMrkdwn: true,
     });
 
@@ -201,21 +150,14 @@ describe("sendMessageSlack chunking", () => {
   });
 
   it("rejects a successful Slack post that returns no message timestamp", async () => {
-    const client = createSlackSendTestClient();
     client.chat.postMessage.mockResolvedValueOnce({ ok: true, channel: "C123" });
 
-    await expect(
-      sendMessageSlack("channel:C123", "hello", {
-        token: "xoxb-test",
-        cfg: SLACK_TEST_CFG,
-        client,
-      }),
-    ).rejects.toThrow("Slack chat.postMessage returned no message timestamp");
+    await expect(send("hello")).rejects.toThrow(
+      "Slack chat.postMessage returned no message timestamp",
+    );
   });
 
   it("preserves the first canonical response thread across chunked sends", async () => {
-    clearSlackThreadParticipationCache();
-    const client = createSlackSendTestClient();
     client.chat.postMessage
       .mockResolvedValueOnce({
         ts: "1781932190.115869",
@@ -231,16 +173,16 @@ describe("sendMessageSlack chunking", () => {
       });
     const message = "a".repeat(8500);
 
-    const result = await sendMessageSlack("channel:C123", message, {
-      token: "xoxb-test",
-      cfg: SLACK_TEST_CFG,
-      client,
+    const result = await send(message, {
       threadTs: "1781932168.648159",
+      replyBroadcast: true,
     });
 
     expect(client.chat.postMessage).toHaveBeenCalledTimes(2);
-    expect(postedMessage(client).thread_ts).toBe("1781932168.648159");
-    expect(postedMessage(client, 1).thread_ts).toBe("1781932168.648159");
+    expect(postedMessage().thread_ts).toBe("1781932168.648159");
+    expect(postedMessage(1).thread_ts).toBe("1781932168.648159");
+    expect(postedMessage().reply_broadcast).toBe(true);
+    expect(postedMessage(1)).not.toHaveProperty("reply_broadcast");
     expect(result.threadTs).toBe("1781803536.235489");
     expect(result.receipt.threadId).toBe("1781803536.235489");
     expect(hasSlackThreadParticipation("default", "C123", "1781803536.235489")).toBe(true);
@@ -249,78 +191,7 @@ describe("sendMessageSlack chunking", () => {
 });
 
 describe("sendMessageSlack blocks", () => {
-  it("posts blocks with fallback text when message is empty", async () => {
-    const client = createSlackSendTestClient();
-    const result = await sendMessageSlack("channel:C123", "", {
-      token: "xoxb-test",
-      cfg: SLACK_TEST_CFG,
-      client,
-      blocks: [{ type: "divider" }],
-    });
-
-    expect(client.conversations.open).not.toHaveBeenCalled();
-    const post = postedMessage(client);
-    expect(post.channel).toBe("C123");
-    expect(post.text).toBe("Shared a Block Kit message");
-    expect(post.blocks).toEqual([{ type: "divider" }]);
-    expect(result.messageId).toBe("171234.567");
-    expect(result.channelId).toBe("C123");
-    expect(result.receipt.primaryPlatformMessageId).toBe("171234.567");
-    expect(result.receipt.platformMessageIds).toEqual(["171234.567"]);
-    const receiptPart = result.receipt.parts[0];
-    expect(receiptPart?.platformMessageId).toBe("171234.567");
-    expect(receiptPart?.kind).toBe("card");
-    expect((receiptPart?.raw as Record<string, unknown> | undefined)?.channel).toBe("slack");
-    expect((receiptPart?.raw as Record<string, unknown> | undefined)?.channelId).toBe("C123");
-  });
-
-  it("records question action identities on the exact delivered Block Kit card", async () => {
-    const client = createSlackSendTestClient();
-    const onDeliveryResult = vi.fn();
-    const questionActionId = "openclaw:question_button:2:1";
-    const result = await sendMessageSlack("channel:C123", "Pick one", {
-      token: "xoxb-test",
-      cfg: SLACK_TEST_CFG,
-      client,
-      onDeliveryResult,
-      blocks: [
-        { type: "section", text: { type: "mrkdwn", text: "Private displayed question" } },
-        {
-          type: "actions",
-          elements: [
-            {
-              type: "button",
-              action_id: "openclaw:reply_button:1:1",
-              text: { type: "plain_text", text: "Reply" },
-            },
-            {
-              type: "button",
-              action_id: questionActionId,
-              text: { type: "plain_text", text: "Answer" },
-            },
-          ],
-        },
-      ],
-    });
-
-    expect(result.meta).toMatchObject({ slackQuestionActionIds: [questionActionId] });
-    expect(result.meta?.[SLACK_QUESTION_FINALIZATION_BLOCKS]).toEqual([
-      { type: "section", text: { type: "mrkdwn", text: "Private displayed question" } },
-    ]);
-    expect(Object.keys(result.meta ?? {})).toEqual(["slackQuestionActionIds"]);
-    expect(JSON.stringify(result.meta)).toBe(
-      JSON.stringify({ slackQuestionActionIds: [questionActionId] }),
-    );
-    expect(onDeliveryResult).toHaveBeenCalledWith(
-      expect.objectContaining({
-        messageId: "171234.567",
-        meta: expect.objectContaining({ slackQuestionActionIds: [questionActionId] }),
-      }),
-    );
-  });
-
   it("marks only the fallback card that actually contains the question controls", async () => {
-    const client = createSlackSendTestClient();
     let messageCount = 0;
     client.chat.postMessage = vi.fn(async () => ({
       ok: true,
@@ -334,16 +205,17 @@ describe("sendMessageSlack blocks", () => {
     blocks.push({ type: "section", text: { type: "mrkdwn", text: "After question" } });
     const onDeliveryResult = vi.fn();
 
-    const aggregateResult = await sendMessageSlack("channel:C123", "Outside", {
-      token: "xoxb-test",
-      cfg: SLACK_TEST_CFG,
-      client,
+    const aggregateResult = await send("Outside", {
       blocks: blocks as never,
       nativeDataFallbackBaseText: "Outside",
       textLimit: 25,
       onDeliveryResult,
     });
 
+    expect(postedMessage().text).toBe(`${INTERLEAVED_NATIVE_DATA_ACCESSIBILITY}\n\nAfter question`);
+    for (const [post] of client.chat.postMessage.mock.calls) {
+      expect(post.text).not.toMatch(/private/u);
+    }
     const delivered = onDeliveryResult.mock.calls.map(([result]) => result);
     expect(delivered.length).toBeGreaterThan(1);
     expect(delivered.filter((result) => result.meta)).toEqual([
@@ -354,13 +226,7 @@ describe("sendMessageSlack blocks", () => {
     expect(
       delivered.some((result) => result.receipt.parts[0]?.kind === "card" && !result.meta),
     ).toBe(true);
-    expect(
-      aggregateResult.receipt.parts.map(({ platformMessageId, kind, index }) => ({
-        platformMessageId,
-        kind,
-        index,
-      })),
-    ).toEqual(
+    expect(aggregateResult.receipt.parts).toMatchObject(
       delivered.map((result, index) => ({
         platformMessageId: result.messageId,
         kind: result.receipt.parts[0]?.kind,
@@ -385,106 +251,7 @@ describe("sendMessageSlack blocks", () => {
     ).toBe(false);
   });
 
-  it("keeps interleaved native data and raw controls ordered in accepted accessibility text", async () => {
-    const client = createSlackSendTestClient();
-    const blocks = interleavedNativeDataBlocks();
-
-    await sendMessageSlack("channel:C123", "Outside", {
-      token: "xoxb-test",
-      cfg: SLACK_TEST_CFG,
-      client,
-      blocks: blocks as never,
-      nativeDataFallbackBaseText: "Outside",
-    });
-
-    expect(client.chat.postMessage).toHaveBeenCalledOnce();
-    expect(postedMessage(client)).toMatchObject({
-      blocks: blocks as never,
-      mrkdwn: false,
-      text: INTERLEAVED_NATIVE_DATA_ACCESSIBILITY,
-    });
-    expect(postedMessage(client).text).not.toMatch(/private/u);
-  });
-
-  it("keeps interleaved native data and raw controls ordered after invalid_blocks", async () => {
-    const client = createSlackSendTestClient();
-    client.chat.postMessage.mockRejectedValueOnce({ data: { error: "invalid_blocks" } });
-    const blocks = interleavedNativeDataBlocks();
-
-    await sendMessageSlack("channel:C123", "Outside", {
-      token: "xoxb-test",
-      cfg: SLACK_TEST_CFG,
-      client,
-      blocks: blocks as never,
-      nativeDataFallbackBaseText: "Outside",
-    });
-
-    expect(client.chat.postMessage).toHaveBeenCalledTimes(2);
-    expect(postedMessage(client, 0).text).toBe(INTERLEAVED_NATIVE_DATA_ACCESSIBILITY);
-    expect(postedMessage(client, 1)).toMatchObject({
-      blocks: [
-        { type: "section", text: { type: "plain_text", text: "Outside" } },
-        blocks[0],
-        {
-          type: "section",
-          text: {
-            type: "plain_text",
-            text: "Pipeline report (table)\nAccount\tARR\nAcme\t$125k",
-          },
-        },
-        blocks[2],
-        blocks[3],
-      ],
-      mrkdwn: false,
-      text: INTERLEAVED_NATIVE_DATA_ACCESSIBILITY,
-    });
-    for (const index of [0, 1]) {
-      expect(postedMessage(client, index).text).not.toMatch(/private/u);
-    }
-  });
-
-  it("retries rejected native charts as accessible text", async () => {
-    const client = createSlackSendTestClient();
-    client.chat.postMessage.mockRejectedValueOnce(
-      Object.assign(new Error("An API error occurred: invalid_blocks"), {
-        data: { error: "invalid_blocks" },
-      }),
-    );
-    const blocks = [
-      {
-        type: "data_visualization",
-        title: "Revenue mix",
-        chart: {
-          type: "pie",
-          segments: [
-            { label: "Product", value: 60 },
-            { label: "Services", value: 40 },
-          ],
-        },
-      },
-    ];
-
-    await sendMessageSlack("channel:C123", "", {
-      token: "xoxb-test",
-      cfg: SLACK_TEST_CFG,
-      client,
-      blocks,
-    });
-
-    expect(client.chat.postMessage).toHaveBeenCalledTimes(2);
-    expect(postedMessage(client, 0).blocks).toEqual(blocks);
-    expect(postedMessage(client, 0).text).toBe(
-      "Revenue mix (pie chart)\n- Product: 60\n- Services: 40",
-    );
-    expect(postedMessage(client, 1).blocks).toBeUndefined();
-    expect(postedMessage(client, 1).text).toBe(
-      "Revenue mix (pie chart)\n- Product: 60\n- Services: 40",
-    );
-    expect(postedMessage(client, 1).mrkdwn).toBe(false);
-  });
-
   it("uses resolved-limit blockless chunks for oversized native data with no survivors", async () => {
-    const client = createSlackSendTestClient();
     const caption = "c".repeat(41_000);
     const blocks = [
       {
@@ -494,17 +261,12 @@ describe("sendMessageSlack blocks", () => {
       },
     ] as never;
 
-    await sendMessageSlack("channel:C123", "", {
-      token: "xoxb-test",
-      cfg: SLACK_TEST_CFG,
-      client,
+    await send("", {
       blocks,
     });
 
     expect(client.chat.postMessage).toHaveBeenCalledTimes(11);
-    const posts = client.chat.postMessage.mock.calls.map((_call, index) =>
-      postedMessage(client, index),
-    );
+    const posts = client.chat.postMessage.mock.calls.map((_call, index) => postedMessage(index));
     expect(posts.every((post) => post.blocks === undefined)).toBe(true);
     expect(posts.every((post) => post.mrkdwn === false)).toBe(true);
     expect(
@@ -514,24 +276,18 @@ describe("sendMessageSlack blocks", () => {
   });
 
   it("splits non-native blocks before their accessibility text exceeds the send limit", async () => {
-    const client = createSlackSendTestClient();
     const blocks = Array.from({ length: 20 }, (_entry, index) => ({
       type: "section",
       text: { type: "plain_text", text: `${String(index)}-${"x".repeat(2_990)}` },
     }));
 
-    await sendMessageSlack("channel:C123", "", {
-      token: "xoxb-test",
-      cfg: SLACK_TEST_CFG,
-      client,
+    await send("", {
       blocks,
       authoredTextPlacement: "none",
     });
 
     expect(client.chat.postMessage).toHaveBeenCalledTimes(20);
-    const posts = client.chat.postMessage.mock.calls.map((_call, index) =>
-      postedMessage(client, index),
-    );
+    const posts = client.chat.postMessage.mock.calls.map((_call, index) => postedMessage(index));
     expect(
       posts.every((post) => String(post.text).length <= SLACK_MESSAGE_TEXT_RECOMMENDED_LIMIT),
     ).toBe(true);
@@ -539,395 +295,7 @@ describe("sendMessageSlack blocks", () => {
     expect(posts.flatMap((post) => post.blocks as unknown[])).toEqual(blocks);
   });
 
-  it("keeps ordered non-native accessibility complete above the normal 8k text limit", async () => {
-    const client = createSlackSendTestClient();
-    const blocks = Array.from({ length: 3 }, (_entry, index) => ({
-      type: "section",
-      text: { type: "plain_text", text: `${String(index)}-${"x".repeat(2_990)}` },
-    }));
-
-    await sendMessageSlack("channel:C123", "", {
-      token: "xoxb-test",
-      cfg: SLACK_TEST_CFG,
-      client,
-      blocks,
-      authoredTextPlacement: "none",
-    });
-
-    expect(client.chat.postMessage).toHaveBeenCalledOnce();
-    expect(String(postedMessage(client, 0).text).length).toBeGreaterThan(8_000);
-    expect(postedMessage(client, 0).blocks).toEqual(blocks);
-  });
-
-  it("preserves controls, delivery semantics, and complete mixed native-data fallback", async () => {
-    const client = createSlackSendTestClient();
-    client.chat.postMessage
-      .mockRejectedValueOnce({ data: { error: "invalid_blocks" } })
-      .mockResolvedValueOnce({
-        ts: "171234.568",
-        channel: "C999",
-        message: { thread_ts: "171111.100" },
-      });
-    const onPlatformSendDispatch = vi.fn(async () => undefined);
-    const onDeliveryResult = vi.fn(async (_result: { messageId: string }) => undefined);
-    const metadata = {
-      event_type: "assistant_thread_context",
-      event_payload: { team_id: "T123" },
-    };
-    const section = { type: "section", text: { type: "mrkdwn", text: "Overview" } };
-    const actions = {
-      type: "actions",
-      elements: [
-        {
-          type: "button",
-          action_id: "approve",
-          text: { type: "plain_text", text: "Approve" },
-          value: "yes",
-        },
-      ],
-    };
-    const blocks = [
-      section,
-      {
-        type: "data_visualization",
-        title: "Revenue mix",
-        chart: {
-          type: "pie",
-          segments: [
-            { label: "Product", value: 60 },
-            { label: "Services", value: 40 },
-          ],
-        },
-      },
-      {
-        type: "data_table",
-        caption: "Pipeline report",
-        rows: [
-          [
-            { type: "raw_text", text: "Account" },
-            { type: "raw_text", text: "ARR" },
-          ],
-          [
-            { type: "raw_text", text: "Acme" },
-            { type: "raw_number", value: 125000, text: "$125k" },
-          ],
-        ],
-      },
-      actions,
-    ] as never;
-
-    const result = await sendMessageSlack("channel:C123", "Overview", {
-      token: "xoxb-test",
-      cfg: SLACK_TEST_CFG,
-      client,
-      blocks,
-      authoredTextPlacement: "blocks",
-      threadTs: "171000.100",
-      replyBroadcast: true,
-      identity: { username: "Claw", iconEmoji: ":crab:" },
-      metadata,
-      deliveryQueueId: "queue-1",
-      onPlatformSendDispatch,
-      onDeliveryResult,
-    });
-
-    expect(client.chat.postMessage).toHaveBeenCalledTimes(2);
-    expect(postedMessage(client, 0).blocks).toEqual(blocks);
-    expect(postedMessage(client, 1)).toMatchObject({
-      blocks: [
-        section,
-        {
-          type: "section",
-          text: {
-            type: "plain_text",
-            text: "Revenue mix (pie chart)\n- Product: 60\n- Services: 40",
-          },
-        },
-        {
-          type: "section",
-          text: {
-            type: "plain_text",
-            text: "Pipeline report (table)\nAccount\tARR\nAcme\t$125k",
-          },
-        },
-        actions,
-      ],
-      thread_ts: "171000.100",
-      reply_broadcast: true,
-      username: "Claw",
-      icon_emoji: ":crab:",
-      metadata: {
-        event_type: "assistant_thread_context",
-        event_payload: {
-          team_id: "T123",
-          openclaw_delivery_part_index: 0,
-          openclaw_delivery_part_count: 1,
-        },
-      },
-      mrkdwn: false,
-    });
-    expect(postedMessage(client, 1).text).toContain(
-      "Revenue mix (pie chart)\n- Product: 60\n- Services: 40",
-    );
-    expect(postedMessage(client, 1).text).toContain(
-      "Pipeline report (table)\nAccount\tARR\nAcme\t$125k",
-    );
-    expect(onPlatformSendDispatch).toHaveBeenCalledOnce();
-    expect(onDeliveryResult.mock.calls.map((call) => call[0]?.messageId)).toEqual(["171234.568"]);
-    expect(result).toMatchObject({
-      messageId: "171234.568",
-      channelId: "C999",
-      threadTs: "171111.100",
-    });
-    expect(result.receipt.platformMessageIds).toEqual(["171234.568"]);
-  });
-
-  it("propagates invalid_blocks when Slack also rejects the retained controls", async () => {
-    const client = createSlackSendTestClient();
-    client.chat.postMessage
-      .mockRejectedValueOnce({ data: { error: "invalid_blocks" } })
-      .mockRejectedValueOnce(
-        Object.assign(new Error("An API error occurred: invalid_blocks"), {
-          data: { error: "invalid_blocks" },
-        }),
-      );
-    const onPlatformSendDispatch = vi.fn(async () => undefined);
-    const onDeliveryResult = vi.fn(async () => undefined);
-    const actions = {
-      type: "actions",
-      elements: [
-        {
-          type: "button",
-          action_id: "approve",
-          text: { type: "plain_text", text: "Approve" },
-          value: "yes",
-        },
-      ],
-    };
-    const blocks = [
-      {
-        type: "data_table",
-        caption: "Pipeline",
-        rows: [[{ type: "raw_text", text: "Account" }], [{ type: "raw_text", text: "Acme" }]],
-      },
-      actions,
-    ] as never;
-
-    await expect(
-      sendMessageSlack("channel:C123", "Pipeline", {
-        token: "xoxb-test",
-        cfg: SLACK_TEST_CFG,
-        client,
-        blocks,
-        onPlatformSendDispatch,
-        onDeliveryResult,
-      }),
-    ).rejects.toThrow("invalid_blocks");
-
-    expect(client.chat.postMessage).toHaveBeenCalledTimes(2);
-    expect(postedMessage(client, 1).blocks).toEqual([
-      { type: "section", text: { type: "plain_text", text: "Pipeline" } },
-      {
-        type: "section",
-        text: { type: "plain_text", text: "Pipeline (table)\nAccount\nAcme" },
-      },
-      actions,
-    ]);
-    expect(postedMessage(client, 1).text).toBe(
-      "Pipeline\n\nPipeline (table)\nAccount\nAcme\n\nApprove",
-    );
-    expect(postedMessage(client, 1).text).not.toContain("yes");
-    expect(onPlatformSendDispatch).toHaveBeenCalledOnce();
-    expect(onDeliveryResult).not.toHaveBeenCalled();
-  });
-
-  it("uses a visible text fallback for a malformed rejected native table", async () => {
-    const client = createSlackSendTestClient();
-    client.chat.postMessage.mockRejectedValueOnce({ data: { error: "invalid_blocks" } });
-    const onPlatformSendDispatch = vi.fn(async () => undefined);
-
-    const result = await sendMessageSlack("channel:C123", "", {
-      token: "xoxb-test",
-      cfg: SLACK_TEST_CFG,
-      client,
-      blocks: [{ type: "data_table" }] as never,
-      onPlatformSendDispatch,
-    });
-
-    expect(client.chat.postMessage).toHaveBeenCalledTimes(2);
-    expect(postedMessage(client, 1).blocks).toBeUndefined();
-    expect(postedMessage(client, 1)).toMatchObject({
-      text: "Slack could not render this chart or table data.",
-      mrkdwn: false,
-    });
-    expect(result.receipt.platformMessageIds).toEqual(["171234.567"]);
-    expect(onPlatformSendDispatch).toHaveBeenCalledOnce();
-  });
-
-  it("posts a valid native table once when its accessibility fallback is overlong", async () => {
-    const client = createSlackSendTestClient();
-    const header = "Account".padEnd(80, "x");
-    const accounts = Array.from({ length: 100 }, (_entry, index) =>
-      (index === 0 ? "<@U123>" : `account-${String(index)}`).padEnd(99, "x"),
-    );
-    const blocks = [
-      {
-        type: "data_table",
-        caption: "Large pipeline",
-        rows: [
-          [{ type: "raw_text", text: header }],
-          ...accounts.map((text) => [{ type: "raw_text", text }]),
-        ],
-      },
-    ] as never;
-
-    await sendMessageSlack("channel:C123", "", {
-      token: "xoxb-test",
-      cfg: SLACK_TEST_CFG,
-      client,
-      blocks,
-    });
-
-    expect(client.chat.postMessage).toHaveBeenCalledOnce();
-    expect(postedMessage(client).blocks).toEqual(blocks);
-    expect(postedMessage(client).text).toBe(
-      ["Large pipeline (table)", header, ...accounts].join("\n"),
-    );
-    expect(String(postedMessage(client).text).length).toBeGreaterThan(SLACK_TEXT_LIMIT);
-    expect(String(postedMessage(client).text).length).toBeLessThanOrEqual(40_000);
-    expect(postedMessage(client).mrkdwn).toBe(false);
-  });
-
-  it("retains every explicit chunk receipt for a rejected 12k native table", async () => {
-    const client = createSlackSendTestClient();
-    client.chat.postMessage
-      .mockRejectedValueOnce({ data: { error: "invalid_blocks" } })
-      .mockResolvedValueOnce({ channel: "C123", ts: "171234.568" })
-      .mockResolvedValueOnce({ channel: "C123", ts: "171234.569" })
-      .mockResolvedValueOnce({ channel: "C123", ts: "171234.570" })
-      .mockResolvedValueOnce({ channel: "C123", ts: "171234.571" });
-    const caption = "c".repeat(12_000);
-    const blocks = [
-      {
-        type: "data_table",
-        caption,
-        rows: [[{ type: "raw_text", text: "Account" }], [{ type: "raw_text", text: "Acme" }]],
-      },
-    ] as never;
-    const expectedText = `${caption} (table)\nAccount\nAcme`;
-    const onDeliveryResult = vi.fn(async (_result: { messageId: string }) => undefined);
-
-    const result = await sendMessageSlack("channel:C123", "", {
-      token: "xoxb-test",
-      cfg: SLACK_TEST_CFG,
-      client,
-      blocks,
-      deliveryQueueId: "queue-12k",
-      onDeliveryResult,
-    });
-
-    expect(client.chat.postMessage).toHaveBeenCalledTimes(5);
-    const fallbackPosts = [
-      postedMessage(client, 1),
-      postedMessage(client, 2),
-      postedMessage(client, 3),
-      postedMessage(client, 4),
-    ];
-    expect(fallbackPosts.every((post) => post.blocks === undefined)).toBe(true);
-    expect(fallbackPosts.every((post) => post.mrkdwn === false)).toBe(true);
-    expect(
-      fallbackPosts.every(
-        (post) => String(post.text).length <= SLACK_MESSAGE_TEXT_RECOMMENDED_LIMIT,
-      ),
-    ).toBe(true);
-    expect(fallbackPosts.map((post) => post.text).join("")).toBe(expectedText);
-    expect(fallbackPosts.map((post) => post.metadata)).toEqual(
-      Array.from({ length: 4 }, (_, index) =>
-        expect.objectContaining({
-          event_payload: expect.objectContaining({
-            openclaw_delivery_part_count: 4,
-            openclaw_delivery_part_index: index,
-          }),
-        }),
-      ),
-    );
-    expect(onDeliveryResult.mock.calls.map((call) => call[0]?.messageId)).toEqual([
-      "171234.568",
-      "171234.569",
-      "171234.570",
-      "171234.571",
-    ]);
-    expect(result.messageId).toBe("171234.571");
-    expect(result.receipt.platformMessageIds).toEqual([
-      "171234.568",
-      "171234.569",
-      "171234.570",
-      "171234.571",
-    ]);
-  });
-
-  it("batches more than 50 ordered fallback blocks across Web API posts", async () => {
-    const client = createSlackSendTestClient();
-    client.chat.postMessage.mockRejectedValueOnce({ data: { error: "invalid_blocks" } });
-    const onPlatformSendDispatch = vi.fn(async () => undefined);
-    const caption = "c".repeat(9_000);
-    const actions = {
-      type: "actions",
-      elements: [
-        {
-          type: "button",
-          action_id: "approve",
-          text: { type: "plain_text", text: "Approve" },
-          value: "yes",
-        },
-      ],
-    };
-    const blocks = [
-      ...Array.from({ length: 48 }, () => ({ type: "divider" })),
-      actions,
-      {
-        type: "data_table",
-        caption,
-        rows: [[{ type: "raw_text", text: "Account" }], [{ type: "raw_text", text: "Acme" }]],
-      },
-    ] as never;
-
-    await sendMessageSlack("channel:C123", "", {
-      token: "xoxb-test",
-      cfg: SLACK_TEST_CFG,
-      client,
-      blocks,
-      onPlatformSendDispatch,
-    });
-
-    expect(client.chat.postMessage).toHaveBeenCalledTimes(4);
-    expect(postedMessage(client, 0).blocks).toEqual(blocks);
-    const fallbackPosts = client.chat.postMessage.mock.calls
-      .slice(1)
-      .map((_call, index) => postedMessage(client, index + 1));
-    expect(fallbackPosts).toHaveLength(3);
-    expect(fallbackPosts.every((post) => (post.blocks as unknown[]).length <= 50)).toBe(true);
-    const firstFallbackBlocks = fallbackPosts[0]?.blocks as Array<{ type?: string }> | undefined;
-    expect(firstFallbackBlocks?.[48]?.type).toBe("actions");
-    expect(fallbackPosts.every((post) => post.mrkdwn === false)).toBe(true);
-    expect(
-      fallbackPosts.every(
-        (post) => String(post.text).length <= SLACK_MESSAGE_TEXT_RECOMMENDED_LIMIT,
-      ),
-    ).toBe(true);
-    const fallbackSectionText = fallbackPosts
-      .flatMap((post) => post.blocks as Array<{ text?: { type?: string; text?: string } }>)
-      .flatMap((block) =>
-        block.text?.type === "plain_text" && block.text.text ? [block.text.text] : [],
-      )
-      .join("");
-    expect(fallbackSectionText).toBe(`${caption} (table)\nAccount\nAcme`);
-    expect(fallbackPosts.map((post) => post.text).join("\n")).not.toContain("yes");
-    expect(onPlatformSendDispatch).toHaveBeenCalledOnce();
-  });
-
   it("does not fall back from non-invalid_blocks native table errors", async () => {
-    const client = createSlackSendTestClient();
     client.chat.postMessage.mockRejectedValueOnce(
       Object.assign(new Error("An API error occurred: ratelimited"), {
         data: { error: "ratelimited" },
@@ -935,10 +303,7 @@ describe("sendMessageSlack blocks", () => {
     );
 
     await expect(
-      sendMessageSlack("channel:C123", "Overview", {
-        token: "xoxb-test",
-        cfg: SLACK_TEST_CFG,
-        client,
+      send("Overview", {
         blocks: [
           {
             type: "data_table",
@@ -951,100 +316,23 @@ describe("sendMessageSlack blocks", () => {
     expect(client.chat.postMessage).toHaveBeenCalledOnce();
   });
 
-  it("does not retry invalid non-data blocks", async () => {
-    const client = createSlackSendTestClient();
-    client.chat.postMessage.mockRejectedValueOnce(
-      Object.assign(new Error("An API error occurred: invalid_blocks"), {
-        data: { error: "invalid_blocks" },
-      }),
-    );
-
-    await expect(
-      sendMessageSlack("channel:C123", "Overview", {
-        token: "xoxb-test",
-        cfg: SLACK_TEST_CFG,
-        client,
-        blocks: [{ type: "divider" }],
-      }),
-    ).rejects.toThrow("invalid_blocks");
-
-    expect(client.chat.postMessage).toHaveBeenCalledOnce();
-  });
-
-  it("includes native chart data in successful mixed-block accessibility text", async () => {
-    const client = createSlackSendTestClient();
-    const blocks = [
-      { type: "section", text: { type: "mrkdwn", text: "Overview" } },
-      {
-        type: "data_visualization",
-        title: "Revenue mix",
-        chart: {
-          type: "pie",
-          segments: [
-            { label: "Product", value: 60 },
-            { label: "Services", value: 40 },
-          ],
-        },
-      },
-    ];
-
-    await sendMessageSlack("channel:C123", "Overview", {
-      token: "xoxb-test",
-      cfg: SLACK_TEST_CFG,
-      client,
-      blocks,
-      authoredTextPlacement: "blocks",
-    });
-
-    expect(postedMessage(client, 0).text).toBe(
-      "Overview\n\nRevenue mix (pie chart)\n- Product: 60\n- Services: 40",
-    );
-    expect(postedMessage(client, 0).blocks).toEqual(blocks);
-  });
-
-  it("uses canonical Slack response thread for block receipts and participation", async () => {
-    clearSlackThreadParticipationCache();
-    const client = createSlackSendTestClient();
-    client.chat.postMessage.mockResolvedValueOnce({
-      ts: "1781932190.115869",
-      channel: "C123",
-      message: {
-        ts: "1781932190.115869",
-        thread_ts: "1781803536.235489",
-      },
-    });
-
-    const result = await sendMessageSlack("channel:C123", "", {
-      token: "xoxb-test",
-      cfg: SLACK_TEST_CFG,
-      client,
-      threadTs: "1781932168.648159",
-      blocks: [{ type: "divider" }],
-    });
-
-    expect(postedMessage(client).thread_ts).toBe("1781932168.648159");
-    expect(result.threadTs).toBe("1781803536.235489");
-    expect(result.receipt.threadId).toBe("1781803536.235489");
-    expect(result.receipt.parts[0]?.kind).toBe("card");
-    expect(hasSlackThreadParticipation("default", "C123", "1781803536.235489")).toBe(true);
-    expect(hasSlackThreadParticipation("default", "C123", "1781932168.648159")).toBe(false);
-  });
-
   it("posts user-target block messages directly without conversations.open", async () => {
-    const client = createSlackSendTestClient();
     client.conversations.open.mockRejectedValueOnce(new Error("missing_scope"));
     client.chat.postMessage.mockResolvedValueOnce({ ts: "171234.567", channel: "D123" });
 
-    const result = await sendMessageSlack("user:U123", "", {
-      token: "xoxb-test",
-      cfg: SLACK_TEST_CFG,
-      client,
-      blocks: [{ type: "divider" }],
-    });
+    const result = await send(
+      "",
+      {
+        blocks: [{ type: "divider" }],
+        replyBroadcast: true,
+      },
+      "user:U123",
+    );
 
+    expect(postedMessage()).not.toHaveProperty("reply_broadcast");
     expect(client.conversations.open).not.toHaveBeenCalled();
-    expect(postedMessage(client).channel).toBe("U123");
-    expect(postedMessage(client).text).toBe("Shared a Block Kit message");
+    expect(postedMessage().channel).toBe("U123");
+    expect(postedMessage().text).toBe("Shared a Block Kit message");
     expect(result.messageId).toBe("171234.567");
     expect(result.channelId).toBe("D123");
     expect(result.receipt.platformMessageIds).toEqual(["171234.567"]);
@@ -1052,16 +340,11 @@ describe("sendMessageSlack blocks", () => {
   });
 
   it("retries Slack postMessage DNS request errors without enabling broad write retries", async () => {
-    const client = createSlackSendTestClient();
     client.chat.postMessage
       .mockRejectedValueOnce(slackDnsRequestError())
       .mockResolvedValueOnce({ ts: "171234.999" });
 
-    const result = await sendMessageSlack("channel:C123", "hello", {
-      token: "xoxb-test",
-      cfg: SLACK_TEST_CFG,
-      client,
-    });
+    const result = await send("hello");
 
     expect(client.chat.postMessage).toHaveBeenCalledTimes(2);
     expect(result.messageId).toBe("171234.999");
@@ -1071,79 +354,21 @@ describe("sendMessageSlack blocks", () => {
   });
 
   it("retries Slack conversations.open DNS request errors for threaded DMs", async () => {
-    const client = createSlackSendTestClient();
     client.conversations.open
       .mockRejectedValueOnce(slackDnsRequestError())
       .mockResolvedValueOnce({ channel: { id: "D123" } });
 
-    const result = await sendMessageSlack("user:U123", "hello", {
-      token: "xoxb-test",
-      cfg: SLACK_TEST_CFG,
-      client,
-      threadTs: "171234.100",
-    });
+    const result = await send("hello", { threadTs: "171234.100" }, "user:U123");
 
     expect(client.conversations.open).toHaveBeenCalledTimes(2);
-    expect(postedMessage(client).channel).toBe("D123");
-    expect(postedMessage(client).thread_ts).toBe("171234.100");
+    expect(postedMessage().channel).toBe("D123");
+    expect(postedMessage().thread_ts).toBe("171234.100");
     expect(result.messageId).toBe("171234.567");
     expect(result.channelId).toBe("D123");
     expect(result.receipt.threadId).toBe("171234.100");
   });
 
-  it("passes reply_broadcast for threaded text sends only on the first chunk", async () => {
-    const client = createSlackSendTestClient();
-
-    await sendMessageSlack("channel:C123", "a".repeat(8500), {
-      token: "xoxb-test",
-      cfg: SLACK_TEST_CFG,
-      client,
-      threadTs: "171234.100",
-      replyBroadcast: true,
-    });
-
-    expect(client.chat.postMessage).toHaveBeenCalledTimes(2);
-    expect(postedMessage(client).thread_ts).toBe("171234.100");
-    expect(postedMessage(client).reply_broadcast).toBe(true);
-    expect(postedMessage(client, 1)).not.toHaveProperty("reply_broadcast");
-  });
-
-  it("does not pass reply_broadcast when no thread is selected", async () => {
-    const client = createSlackSendTestClient();
-
-    await sendMessageSlack("channel:C123", "hello", {
-      token: "xoxb-test",
-      cfg: SLACK_TEST_CFG,
-      client,
-      replyBroadcast: true,
-    });
-
-    expect(postedMessage(client)).not.toHaveProperty("reply_broadcast");
-  });
-
-  it("does not retry Slack platform errors", async () => {
-    const client = createSlackSendTestClient();
-    const platformError = Object.assign(
-      new Error("An API error occurred: message_limit_exceeded"),
-      {
-        data: { ok: false, error: "message_limit_exceeded" },
-      },
-    );
-    client.chat.postMessage.mockRejectedValue(platformError);
-
-    await expect(
-      sendMessageSlack("channel:C123", "hello", {
-        token: "xoxb-test",
-        cfg: SLACK_TEST_CFG,
-        client,
-      }),
-    ).rejects.toThrow("message_limit_exceeded");
-
-    expect(client.chat.postMessage).toHaveBeenCalledTimes(1);
-  });
-
   it("caps long fallback text while preserving blocks", async () => {
-    const client = createSlackSendTestClient();
     const longContextText = "a".repeat(3000);
     const blocks = [
       {
@@ -1156,14 +381,11 @@ describe("sendMessageSlack blocks", () => {
       },
     ];
 
-    await sendMessageSlack("channel:C123", "", {
-      token: "xoxb-test",
-      cfg: SLACK_TEST_CFG,
-      client,
+    await send("", {
       blocks,
     });
 
-    const post = postedMessage(client);
+    const post = postedMessage();
     expect(String(post.text).endsWith("…")).toBe(true);
     expect(post.blocks).toBe(blocks);
     expect(post.text).toHaveLength(SLACK_TEXT_LIMIT);
@@ -1192,16 +414,166 @@ describe("sendMessageSlack blocks", () => {
       error: /replyBroadcast is only supported for text or block thread replies/i,
     },
   ])("$name", async ({ options, error }) => {
-    const client = createSlackSendTestClient();
-    await expect(
-      sendMessageSlack("channel:C123", "hi", {
-        token: "xoxb-test",
-        cfg: SLACK_TEST_CFG,
-        client,
-        ...options,
-      }),
-    ).rejects.toThrow(error);
+    await expect(send("hi", options)).rejects.toThrow(error);
     expect(client.chat.postMessage).not.toHaveBeenCalled();
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+
+function slackPlatformError(code: string): Error {
+  return Object.assign(new Error(`An API error occurred: ${code}`), {
+    code: "slack_webapi_platform_error",
+    data: { ok: false, error: code },
+  });
+}
+
+describe("sendMessageSlack permanent provider rejections", () => {
+  it("marks account_inactive from durable DM resolution as a permanent non-dispatch", async () => {
+    const rejection = slackPlatformError("account_inactive");
+    client.conversations.open.mockRejectedValueOnce(rejection);
+
+    const caught = await send(
+      "hello",
+      {
+        deliveryQueueId: "queue-dm-account-inactive",
+      },
+      "user:U123",
+    ).catch((error: unknown) => error);
+
+    expect(caught).toBeInstanceOf(PlatformMessageNotDispatchedError);
+    expect(caught).toMatchObject({ retryable: false, cause: rejection });
+    expect(client.chat.postMessage).not.toHaveBeenCalled();
+  });
+
+  it("retains earlier Slack delivery evidence when a later chunk is permanently rejected", async () => {
+    const rejection = slackPlatformError("messages_tab_disabled");
+    client.chat.postMessage
+      .mockResolvedValueOnce({ ts: "171234.100", channel: "C123" })
+      .mockRejectedValueOnce(rejection);
+    const delivered: string[] = [];
+
+    const caught = await send("a".repeat(SLACK_TEXT_LIMIT + 1), {
+      onDeliveryResult: (result) => {
+        delivered.push(result.messageId);
+      },
+    }).catch((error: unknown) => error);
+
+    expect(caught).toBeInstanceOf(PlatformMessageNotDispatchedError);
+    expect(caught).toMatchObject({ retryable: false, cause: rejection });
+    expect(delivered).toEqual(["171234.100"]);
+    expect(client.chat.postMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not classify a persistence callback failure as a Slack API rejection", async () => {
+    const callbackError = slackPlatformError("messages_tab_disabled");
+    client.chat.postMessage.mockResolvedValueOnce({ ts: "171234.100", channel: "C123" });
+
+    const caught = await send("hello", {
+      blocks: [{ type: "divider" }],
+      onDeliveryResult: () => {
+        throw callbackError;
+      },
+    }).catch((error: unknown) => error);
+
+    expect(caught).toBe(callbackError);
+    expect(caught).not.toBeInstanceOf(PlatformMessageNotDispatchedError);
+  });
+});
+
+function missingScope(details: {
+  needed?: string;
+  response_metadata?: { scopes?: string[]; acceptedScopes?: string[] };
+}) {
+  return Object.assign(new Error("An API error occurred: missing_scope"), {
+    data: { error: "missing_scope", ...details },
+  });
+}
+const invalidIdentity = () =>
+  Object.assign(new Error("invalid_arguments"), {
+    data: { error: "invalid_arguments" },
+  });
+
+describe("sendMessageSlack identity and target fallback", () => {
+  it("uses the relay identity on a folded session target", async () => {
+    setSlackDefaultSendIdentity("default", {
+      username: "Relay",
+      iconUrl: "https://example.com/bot.png",
+    });
+    const target = slackPlugin.messaging?.resolveSessionTarget?.({
+      kind: "channel",
+      id: "c08gqh53ejm",
+    });
+    expect(target).toBe("channel:c08gqh53ejm");
+    await send("hello", {}, target);
+    expect(postedMessage(0)).toEqual({
+      channel: "C08GQH53EJM",
+      text: "hello",
+      username: "Relay",
+      icon_url: "https://example.com/bot.png",
+      unfurl_links: false,
+    });
+  });
+
+  it.each([
+    { needed: "chat:write.customize" },
+    {
+      response_metadata: { scopes: ["chat:write"], acceptedScopes: ["", " chat:write.customize "] },
+    },
+  ])("drops identity only for the customize scope: %j", async (details) => {
+    client.chat.postMessage.mockRejectedValueOnce(missingScope(details));
+    const result = await send("hello", { identity: { iconEmoji: ":robot_face:" } });
+    expect(client.chat.postMessage).toHaveBeenCalledTimes(2);
+    expect(postedMessage(0)).toMatchObject({ icon_emoji: ":robot_face:" });
+    expect(postedMessage(1)).toEqual({ channel: "C123", text: "hello", unfurl_links: false });
+    expect(result.messageId).toBe("171234.567");
+  });
+
+  it("drops the full identity only after the username-only retry fails", async () => {
+    client.chat.postMessage
+      .mockRejectedValueOnce(invalidIdentity())
+      .mockRejectedValueOnce(invalidIdentity());
+    await send("hello", { identity: { username: "Pulse", iconEmoji: "📟" } });
+    expect(client.chat.postMessage).toHaveBeenCalledTimes(3);
+    expect(postedMessage(1)).toMatchObject({ username: "Pulse" });
+    expect(postedMessage(1)).not.toHaveProperty("icon_emoji");
+    expect(postedMessage(2)).toEqual({ channel: "C123", text: "hello", unfurl_links: false });
+  });
+
+  it("reuses the downgraded explicit identity for later chunks", async () => {
+    setSlackDefaultSendIdentity("default", { username: "Relay" });
+    client.chat.postMessage.mockRejectedValueOnce(invalidIdentity());
+    await send("alpha beta", { identity: { username: "Pulse", iconEmoji: "📟" }, textLimit: 5 });
+    expect(client.chat.postMessage).toHaveBeenCalledTimes(3);
+    expect(postedMessage(0)).toMatchObject({ username: "Pulse", icon_emoji: "📟" });
+    for (const index of [1, 2]) {
+      expect(postedMessage(index)).toMatchObject({ username: "Pulse" });
+      expect(postedMessage(index)).not.toHaveProperty("icon_emoji");
+    }
+  });
+
+  it("preserves other missing-scope details without retrying identity", async () => {
+    client.chat.postMessage.mockRejectedValueOnce(
+      missingScope({
+        needed: "im:write",
+        response_metadata: {
+          scopes: [" chat:write ", "", " users:read "],
+          acceptedScopes: [" im:write ", " mpim:write "],
+        },
+      }),
+    );
+    await expect(send("hello", { identity: { username: "Bot" } })).rejects.toThrow(
+      "An API error occurred: missing_scope (needed: im:write; granted: chat:write, users:read; accepted: im:write, mpim:write)",
+    );
+    expect(client.chat.postMessage).toHaveBeenCalledOnce();
+  });
+
+  it("preserves missing-scope details while opening folded user IDs", async () => {
+    client.conversations.open.mockRejectedValueOnce(
+      missingScope({ needed: "im:write", response_metadata: { scopes: ["chat:write"] } }),
+    );
+    await expect(send("hello", { threadTs: "171234.100" }, "u09g2dj0276")).rejects.toThrow(
+      "An API error occurred: missing_scope (needed: im:write; granted: chat:write)",
+    );
+    expect(client.conversations.open).toHaveBeenCalledWith({ users: "U09G2DJ0276" });
+    expect(client.chat.postMessage).not.toHaveBeenCalled();
+  });
+});

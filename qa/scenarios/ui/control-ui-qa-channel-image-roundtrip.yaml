@@ -63,7 +63,7 @@ flow:
             message: qa-lab bootstrap did not expose controlUiEmbeddedUrl
         - set: uiSessionKey
           value:
-            expr: "buildAgentSessionKey({ agentId: env.cfg.agents?.list?.find((agent) => agent.default)?.id ?? env.cfg.agents?.list?.[0]?.id ?? 'main', channel: 'qa-channel', accountId: 'default', peer: { kind: 'direct', id: config.conversationId }, dmScope: env.cfg.session?.dmScope, identityLinks: env.cfg.session?.identityLinks })"
+            expr: "resolveAgentRoute({ cfg: env.cfg, channel: transport.id, accountId: transport.accountId, peer: { kind: 'direct', id: transport.buildAgentDelivery({ target: `dm:${config.conversationId}` }).replyTo } }).sessionKey"
         - set: controlUiChatUrl
           value:
             expr: "(() => { const url = new URL(`${env.gateway.baseUrl}/`); url.searchParams.set('session', uiSessionKey); url.hash = `token=${encodeURIComponent(env.gateway.token ?? '')}`; return url.toString(); })()"

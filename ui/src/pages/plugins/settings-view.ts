@@ -81,6 +81,10 @@ export type DetailProps = SharedProps &
   PluginSettingsEditorModel & {
     renderCredential?: PluginSettingsEditor["renderCredential"];
     onAskPlugin?: () => void;
+    mcpLoginBusy?: boolean;
+    canMcpLogin?: boolean;
+    onMcpLogin?: (serverName: string) => void;
+    onEditMcp?: () => void;
     installProgress?: PluginInstallProgress;
     onAskSetting?: (field: PluginSettingsField) => void;
     skillsSection?: TemplateResult;
@@ -454,6 +458,51 @@ export function renderPluginSettingsDetail(props: DetailProps): TemplateResult {
           : undefined,
       panel: html`${notices}
       ${!props.inspection && !catalog && !props.inspectionError ? renderSettingsLoadingSkeleton({ rows: 2, carapace: true }) : nothing}
+      ${renderPluginCapabilitySection(
+        t("pluginsPage.auth.accounts"),
+        (props.inspection?.mcpAuth ?? []).map((server) => ({
+          name: server.serverName,
+          trailing: html`${
+              server.state === "authorized"
+                ? html`<span class="plugin-connection-status" role="status">
+                    ${icons.check} ${t("pluginsPage.auth.connected")}
+                  </span>`
+                : nothing
+            }
+            <button
+              type="button"
+              class="btn btn--sm oc-action oc-action-secondary"
+              aria-label=${t(server.state === "authorized" ? "pluginsPage.auth.editAccount" : "pluginsPage.auth.connectAccount", { name: server.serverName })}
+              ?disabled=${server.state === "authorized" ? !props.onEditMcp : !props.canMcpLogin || props.mcpLoginBusy || !props.onMcpLogin}
+              @click=${() => (server.state === "authorized" ? props.onEditMcp?.() : props.onMcpLogin?.(server.serverName))}
+            >
+              ${t(server.state === "authorized" ? "pluginsPage.auth.edit" : "pluginsPage.auth.connect")}
+            </button>`,
+        })),
+        icons.circleUser,
+      )}
+      ${renderPluginCapabilitySection(
+        t("pluginsPage.auth.credentials"),
+        (props.inspection?.credentials ?? []).map((credential) => ({
+          name: credential.envVars.join(" / ") || credential.label,
+          trailing: html`${
+              credential.status === "configured"
+                ? html`<span class="plugin-connection-status" role="status">
+                    ${icons.check} ${t("pluginsPage.auth.configured")}
+                  </span>`
+                : nothing
+            }
+            <button
+              type="button"
+              class="btn btn--sm oc-action oc-action-secondary"
+              aria-label=${t(credential.status === "configured" ? "pluginsPage.auth.editCredential" : "pluginsPage.auth.configureCredential", { name: credential.label })}
+              @click=${() => props.onTabChange("configuration")}
+            >
+              ${t(credential.status === "configured" ? "pluginsPage.auth.edit" : "pluginsPage.auth.configure")}
+            </button>`,
+        })),
+        icons.key,
+      )}
       ${renderPluginDeclaredCapabilities(props.inspection?.overview?.capabilities?.contracts, props.inspection?.overview?.capabilities?.ui)}
       ${props.skillsSection ?? renderPluginCapabilitySection(t("pluginsPage.detailTabs.skills"), skills, icons.bookOpenText)}
       ${renderPluginCapabilitySection(

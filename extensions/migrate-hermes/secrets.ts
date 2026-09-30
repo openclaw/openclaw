@@ -18,7 +18,7 @@ import {
   type HermesAuthProfileConfig,
 } from "./auth-config.js";
 import { collectHermesProviderSecretBindings } from "./config-providers.js";
-import { parseEnv, readText, sanitizeName } from "./helpers.js";
+import { parseEnv, readJsonObject, readText, sanitizeName } from "./helpers.js";
 import {
   createHermesSecretItem,
   HERMES_REASON_AUTH_PROFILE_EXISTS,
@@ -112,26 +112,13 @@ function buildEnvSecretCandidates(params: {
   return [...configured, ...standard];
 }
 
-async function readAuthJson(authPath: string | undefined): Promise<Record<string, unknown>> {
-  const raw = await readText(authPath);
-  if (!raw) {
-    return {};
-  }
-  try {
-    const parsed = JSON.parse(raw);
-    return isRecord(parsed) ? parsed : {};
-  } catch {
-    return {};
-  }
-}
-
 async function buildOpenCodeSecretCandidates(
   authPath: string | undefined,
 ): Promise<SecretCandidate[]> {
   if (!authPath) {
     return [];
   }
-  const auth = await readAuthJson(authPath);
+  const auth = await readJsonObject(authPath);
   const candidates: SecretCandidate[] = [];
   for (const [provider, secretField, mode, profileId] of [
     ["opencode", "key", "api_key", "opencode:hermes-import"],
@@ -167,8 +154,8 @@ async function buildHermesPoolSecretCandidates(
   if (!authPath && !globalAuthPath) {
     return [];
   }
-  const auth = await readAuthJson(authPath);
-  const globalAuth = await readAuthJson(globalAuthPath);
+  const auth = await readJsonObject(authPath);
+  const globalAuth = await readJsonObject(globalAuthPath);
   const pool = isRecord(auth.credential_pool) ? auth.credential_pool : {};
   const globalPool = isRecord(globalAuth.credential_pool) ? globalAuth.credential_pool : {};
   const candidates: SecretCandidate[] = [];
@@ -230,7 +217,7 @@ async function readSecretCandidateValue(
   source: string,
 ): Promise<string | undefined> {
   if (details.sourceKind === "opencode-auth-json") {
-    const auth = await readAuthJson(source);
+    const auth = await readJsonObject(source);
     const sourceProvider = details.sourceProvider;
     const secretField = details.secretField;
     if (!sourceProvider || !secretField) {
@@ -240,7 +227,7 @@ async function readSecretCandidateValue(
     return normalizeOptionalString(provider[secretField]);
   }
   if (details.sourceKind === "hermes-auth-json") {
-    const auth = await readAuthJson(source);
+    const auth = await readJsonObject(source);
     const pool = isRecord(auth.credential_pool) ? auth.credential_pool : {};
     const entries = details.sourceProvider ? pool[details.sourceProvider] : undefined;
     if (!Array.isArray(entries) || !details.sourceCredentialId) {

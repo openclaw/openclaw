@@ -404,44 +404,6 @@ function seedReadyReview(
   writeReviewArtifacts(reviewRoot, review, { prNumber: 123, headSha: fixture.localRevision });
 }
 
-function parseSubcommandClassifications(script: string): Map<string, string> {
-  const start = script.indexOf("# PR_SUBCOMMAND_CLASSIFICATIONS_BEGIN");
-  const end = script.indexOf("# PR_SUBCOMMAND_CLASSIFICATIONS_END");
-  expect(start).toBeGreaterThanOrEqual(0);
-  expect(end).toBeGreaterThan(start);
-  const table = script.slice(start, end);
-  const classifications = new Map<string, string>();
-  const armPattern = /^\s+([^\n)]+)\)\s*\n\s+printf '(landing|advisory)\\n'/gm;
-  for (const match of table.matchAll(armPattern)) {
-    const commandGroup = match[1];
-    const classification = match[2];
-    if (commandGroup === undefined || classification === undefined) {
-      throw new Error("classification regexp returned incomplete captures");
-    }
-    for (const command of commandGroup.split("|").map((value) => value.trim())) {
-      classifications.set(command, classification);
-    }
-  }
-  return classifications;
-}
-
-function parseDispatchedSubcommands(script: string): string[] {
-  const start = script.lastIndexOf('  case "$cmd" in');
-  expect(start).toBeGreaterThanOrEqual(0);
-  const end = script.indexOf("\n  esac", start);
-  expect(end).toBeGreaterThan(start);
-  const commands: string[] = [];
-  const armPattern = /^\s{4}([^\n)]+)\)/gm;
-  for (const match of script.slice(start, end).matchAll(armPattern)) {
-    const commandGroup = match[1];
-    if (commandGroup === undefined) {
-      throw new Error("dispatch regexp returned an incomplete capture");
-    }
-    commands.push(...commandGroup.split("|").map((value) => value.trim()));
-  }
-  return commands.filter((command) => command !== "*");
-}
-
 describe("scripts/pr wrappers", () => {
   it("refreshes wrapper dependencies idempotently", () => {
     const destination = tempDirs.make("openclaw-pr-wrapper-dependencies-");
@@ -470,7 +432,16 @@ describe("scripts/pr wrappers", () => {
   it("packages the dependency-free ClawSweeper review gate with the native wrapper", () => {
     const fixture = makeMismatchedWrapperRepo();
     const helper = join(fixture.canonical, "scripts/pr-lib/clawsweeper-review-gate.mjs");
-    expect(readScript(helper)).not.toMatch(/from ["'](?!node:)/);
+    const standalone = join(fixture.root, "clawsweeper-review-gate.mjs");
+    cpSync(helper, standalone);
+    const result = spawnSync(process.execPath, [standalone, "123", "a".repeat(40)], {
+      cwd: fixture.root,
+      encoding: "utf8",
+      env: fixture.env,
+      input: "[[]]",
+    });
+    expect(result.status, result.stdout + result.stderr).toBe(1);
+    expect(result.stderr).toContain("completed review is missing or expired");
     expect(existsSync(join(fixture.linked, "scripts/pr-lib/clawsweeper-review-gate.mjs"))).toBe(
       true,
     );
@@ -521,32 +492,6 @@ describe("scripts/pr wrappers", () => {
     expect(result.stderr).not.toContain("unexpected PATH Git");
   });
 
-  it("routes cached reads and writer-sensitive operations through their owning gh seams", () => {
-    const script = readScript("scripts/pr");
-    const common = readScript("scripts/pr-lib/common.sh");
-    const worktree = readScript("scripts/pr-lib/worktree.sh");
-    const review = readScript("scripts/pr-lib/review.sh");
-    const push = readScript("scripts/pr-lib/push.sh");
-    const merge = readScript("scripts/pr-lib/merge.sh");
-    const mergeOutcome = readScript("scripts/pr-lib/merge-outcome.sh");
-
-    expect(script).toContain('pr_observe "$pr" || exit 1');
-    expect(script).toContain('base_json="$PR_OBSERVATION"');
-    expect(common).toContain('pr_gh pr view "$pr" --json "$fields"');
-    expect(worktree).toContain(
-      'metadata=$(read_pr_view_json "$pr" "number,title,state,isDraft,author,baseRefName,baseRefOid,baseRepository,',
-    );
-    expect(review).toContain('pr_gh_plain assign-reviewer "$pr" "$reviewer"');
-    expect(push).toContain('pr_gh_plain api graphql --input "$payload_file"');
-    expect(push).not.toContain("pr_gh_plain api graphql --input -");
-    expect(merge).toContain('pr_gh_plain pr merge "$pr"');
-    expect(mergeOutcome).toContain('pr_gh_plain api --hostname "$MERGE_REPO_HOST" --method POST');
-    expect(mergeOutcome).toContain("--jq '.html_url // empty'");
-    expect(merge).toContain(
-      'pr_git push --force-with-lease="refs/heads/$MERGE_HEAD_REF:$PREP_HEAD_SHA"',
-    );
-  });
-
   itPosix("fails loudly at preflight when ripgrep is unavailable", () => {
     const fixture = makeMismatchedWrapperRepo();
     rmSync(join(fixture.bin, "rg"));
@@ -567,21 +512,6 @@ describe("scripts/pr wrappers", () => {
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("Missing required command(s): rg");
     expect(result.stderr).toContain("Install ripgrep and retry:");
-  });
-
-  it("classifies every dispatched subcommand", () => {
-    const script = readScript("scripts/pr");
-    const classifications = parseSubcommandClassifications(script);
-    const dispatched = parseDispatchedSubcommands(script);
-
-    expect([...classifications.keys()].toSorted()).toEqual(
-      [...dispatched, "lock-recover"].toSorted(),
-    );
-    expect(classifications.get("ls")).toBe("advisory");
-    expect(classifications.get("ci-dispatch")).toBe("advisory");
-    for (const command of dispatched.filter((value) => !["ls", "ci-dispatch"].includes(value))) {
-      expect(classifications.get(command), command).toBe("landing");
-    }
   });
 
   itPosix("requires a separate operator confirmation for merge recovery", () => {
@@ -691,23 +621,39 @@ describe("scripts/pr wrappers", () => {
     );
   });
 
-  itPosix("resolves explicit admin evidence from the caller before supervisor cwd changes", () => {
+  itPosix("resolves explicit admin evidence for admission and recovery before cwd changes", () => {
     const fixture = makeMismatchedWrapperRepo();
+    writeFileSync(join(fixture.bin, "gh"), baseBranchGhStub("main"));
     const caller = join(fixture.canonical, "nested");
     mkdirSync(caller);
     writeFileSync(
       join(fixture.canonical, "scripts/pr-lib/merge.sh"),
       `merge_run() { printf '<%s>\\n' "$@"; }\n`,
     );
-    const result = spawnSync(
-      join(fixture.canonical, "scripts/pr"),
-      ["merge-run", "123", "--admin-evidence", "admin proof.json", "--confirmed-operator-admin"],
-      { cwd: caller, encoding: "utf8", env: fixture.env },
-    );
-    expect(result.status, result.stdout + result.stderr).toBe(0);
-    expect(result.stdout).toBe(
-      `<123>\n<false>\n<>\n<>\n<>\n<>\n<false>\n<>\n<${join(caller, "admin proof.json")}>\n<true>\n`,
-    );
+    for (const [command, replacement] of [
+      ["merge-run", ""],
+      ["merge-recover", ""],
+      ["merge-recover", "b".repeat(40)],
+    ] as const) {
+      const outcome = command === "merge-recover" ? "a".repeat(40) : "";
+      const result = spawnSync(
+        join(fixture.canonical, "scripts/pr"),
+        [
+          command,
+          "123",
+          ...(outcome ? [outcome, "--confirmed-operator-recovery"] : []),
+          ...(replacement ? ["--replacement-head", replacement] : []),
+          "--admin-evidence",
+          "admin proof.json",
+          "--confirmed-operator-admin",
+        ],
+        { cwd: caller, encoding: "utf8", env: fixture.env },
+      );
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      expect(result.stdout).toBe(
+        `<123>\n<false>\n<${outcome}>\n<${replacement}>\n<>\n<>\n<false>\n<>\n<${join(caller, "admin proof.json")}>\n<true>\n`,
+      );
+    }
   });
 
   itPosix(
@@ -756,14 +702,34 @@ describe("scripts/pr wrappers", () => {
       ["merge-run", "123", "--body-file", "one", "--body-file", "two"],
       ["merge-run", "123", "--auto-merge", "--auto-merge"],
       ["merge-recover", "123", "a".repeat(40), "--body-file", "one"],
-      ["merge-recover", "123", "a".repeat(40), "--confirmed-operator-recovery", "--auto-merge"],
+      ...[
+        ["--admin-evidence", "proof.json"],
+        ["--confirmed-operator-admin"],
+        [
+          "--admin-evidence",
+          "proof.json",
+          "--confirmed-operator-admin",
+          "--replacement-head",
+          "HEAD",
+        ],
+        ["--admin-evidence", "proof.json", "--confirmed-operator-admin", "--cancel-auto"],
+        [
+          "--admin-evidence",
+          "proof.json",
+          "--confirmed-operator-admin",
+          "--pre-dispatch-refusal",
+          "proof",
+        ],
+      ].map((flags) =>
+        ["merge-recover", "123", "a".repeat(40), "--confirmed-operator-recovery"].concat(flags),
+      ),
     ]) {
       const result = spawnSync(join(fixture.canonical, "scripts/pr"), args, {
         cwd: fixture.canonical,
         encoding: "utf8",
         env: fixture.env,
       });
-      expect(result.status, result.stdout + result.stderr).toBe(2);
+      expect(result.status, `${args.join(" ")}\n${result.stdout}${result.stderr}`).toBe(2);
       expect(result.stdout).toContain("Usage:");
     }
   });
@@ -2123,6 +2089,11 @@ exit 99
     mkdirSync(join(dir, "bin"));
     writeFileSync(join(dir, "bin/gh"), "#!/bin/sh\nexit 99\n");
     chmodSync(join(dir, "bin/gh"), 0o755);
+    // These tests cover wrapper trust routing, not the host command inventory.
+    for (const command of ["pnpm", "rg"]) {
+      writeFileSync(join(dir, "bin", command), "#!/bin/sh\nexit 0\n");
+      chmodSync(join(dir, "bin", command), 0o755);
+    }
     const git = (cwd: string, args: string[]) =>
       spawnSync("git", args, { cwd, env, encoding: "utf8", stdio: "pipe" });
     expect(git(repo, ["init", "-b", "main"]).status).toBe(0);
@@ -2203,6 +2174,11 @@ exit 99
     mkdirSync(join(dir, "bin"));
     writeFileSync(join(dir, "bin/gh"), "#!/bin/sh\nexit 99\n");
     chmodSync(join(dir, "bin/gh"), 0o755);
+    // These tests cover wrapper trust routing, not the host command inventory.
+    for (const command of ["pnpm", "rg"]) {
+      writeFileSync(join(dir, "bin", command), "#!/bin/sh\nexit 0\n");
+      chmodSync(join(dir, "bin", command), 0o755);
+    }
     const git = (cwd: string, args: string[]) =>
       spawnSync("git", args, { cwd, env, encoding: "utf8", stdio: "pipe" });
     expect(git(repo, ["init", "-b", "main"]).status).toBe(0);
@@ -2225,6 +2201,7 @@ exit 99
       env,
     });
 
+    expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stderr).not.toContain("Refusing to silently substitute");
     expect(result.stderr).not.toContain("scripts/pr implementation differs");
     expect(result.stderr).not.toContain("differing wrapper components vs origin/main");
