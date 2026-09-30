@@ -9,6 +9,7 @@ import {
 } from "../infra/sqlite-busy-timeout.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
+import { captureSqliteReaderOwner } from "../infra/sqlite-reader-lifecycle.js";
 import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-snapshot-source.js";
 import {
   assertTransactionUsable,
@@ -484,7 +485,10 @@ export function runOpenClawStateWriteTransaction<T>(
         databaseLabel: acquired.path,
         ...transactionOptions,
         ...(remaining ? { busyTimeoutMs: remaining() } : {}),
-        operationLabel: transactionOptions.operationLabel ?? "state.write",
+        operationLabel:
+          transactionOptions.operationLabel ??
+          captureSqliteReaderOwner()?.operation ??
+          "state.write",
       },
     );
     return { database: acquired, value };

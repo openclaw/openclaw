@@ -18,6 +18,12 @@ candidate main-thread paths from SQL already executing in workers.
 
 ## Keep one store owner
 
+Shared-state transaction diagnostics inherit the executing worker command name
+when the store does not supply a more specific operation label. Slow holds and
+failed lock waits therefore identify the domain operation without logging its
+input. Explicit labels take precedence; native callers outside a command scope
+must supply their own label for the same attribution.
+
 Move an existing domain operation across its worker boundary instead of creating
 a second store, generic SQL service, or cache manager. Read-only operations use the
 existing read-only worker scope and the relevant domain reader. Shared-state
@@ -632,6 +638,11 @@ the shared-state worker. It applies reconciliation and pruning in one transactio
 retaining rows protected by current job or receipt ownership. Reconciled legacy
 rows remain history; they do not recreate a task runtime or linked-flow publication
 owner. This changes no schema, retention policy, or update step.
+
+Recording a cron result selects the matching run ID inside the existing write
+transaction before decoding history. Store partition checks, released-row
+fallbacks, and first-terminal-result protection still apply; unrelated runs are
+not materialized while the writer lock is held.
 
 Cron execution, descendant follow-up, and delivery observations use the existing
 subagent registry worker snapshot. Descendant closure selection and the existing
