@@ -79,7 +79,24 @@ export async function listPendingLegacyCollectionBackupRoots(
       ) {
         continue;
       }
-      const workspaceDirs = new Set(backups.map((backup) => backup.workspaceDir));
+      const agentBackupRoots = listAgentIds(config).map((agentId) =>
+        resolveSkillCollectionBackupRoot(config, agentId, env),
+      );
+      const archivedBackups = await Promise.all(
+        backups.map(async (backup) => {
+          for (const agentBackupRoot of agentBackupRoots) {
+            if (await isHistoryOnlyBackup(backup, path.join(agentBackupRoot, backup.manifest.id))) {
+              return true;
+            }
+          }
+          return false;
+        }),
+      );
+      const pendingBackups = backups.filter((_, index) => !archivedBackups[index]);
+      if (pendingBackups.length === 0) {
+        continue;
+      }
+      const workspaceDirs = new Set(pendingBackups.map((backup) => backup.workspaceDir));
       const workspaceDir = [...workspaceDirs][0];
       const candidateAgentIds = [
         ...new Set(
@@ -94,7 +111,11 @@ export async function listPendingLegacyCollectionBackupRoots(
           : undefined;
       // Keep workspace admission for existing archive and same-pass relocation recovery.
       if (workspaceDirs.size === 1 && candidateAgentIds.length === 0) {
-        const verifiedAgents = await verifyLegacyCollectionBackupOwners(backups, config, env);
+        const verifiedAgents = await verifyLegacyCollectionBackupOwners(
+          pendingBackups,
+          config,
+          env,
+        );
         const candidates = verifiedAgents.filter((agent) => agent.verified);
         if (candidates.length === 1) {
           ownerAgentId = candidates[0]?.agentId;
@@ -125,15 +146,15 @@ export async function listPendingLegacyCollectionBackupRoots(
         continue;
       }
       const alreadyArchived = await Promise.all(
-        backups.map((backup) =>
-          isHistoryOnlyBackup(path.join(destinationRoot, backup.manifest.id)),
+        pendingBackups.map((backup) =>
+          isHistoryOnlyBackup(backup, path.join(destinationRoot, backup.manifest.id)),
         ),
       );
       // History-only archives retain their source. Exclude each completed copy
       // so an interrupted root can resume its remaining backups.
-      const pendingBackups = backups.filter((_, index) => !alreadyArchived[index]);
-      if (pendingBackups.length > 0) {
-        roots.push({ legacyRoot, backups: pendingBackups, ownerAgentId, destinationRoot });
+      const remainingBackups = pendingBackups.filter((_, index) => !alreadyArchived[index]);
+      if (remainingBackups.length > 0) {
+        roots.push({ legacyRoot, backups: remainingBackups, ownerAgentId, destinationRoot });
       }
     } catch (error) {
       roots.push({
@@ -316,16 +337,40 @@ async function hasNewerUnrelatedCollectionBackup(
   return newerBackups.some(Boolean);
 }
 
-async function isHistoryOnlyBackup(backupDir: string): Promise<boolean> {
+async function isHistoryOnlyBackup(
+  backup: LegacyCollectionBackup,
+  backupDir: string,
+): Promise<boolean> {
   try {
     const record = asNullableRecord(
       JSON.parse(await fs.readFile(path.join(backupDir, "manifest.json"), "utf8")),
     );
-    return (
+    if (
       record?.schema === "openclaw.skill-collection-backup.v2" &&
       record.id === path.basename(backupDir) &&
+      record.createdAt === backup.manifest.createdAt &&
       typeof record.restoreUnavailableReason === "string"
-    );
+    ) {
+      const retainedWorkspace = path.join(backup.backupDir, "workspace");
+      const archivedWorkspace = path.join(backupDir, "history", "workspace");
+      const [retainedRoot, archivedRoot] = await Promise.all([
+        fs.lstat(retainedWorkspace),
+        fs.lstat(archivedWorkspace),
+      ]);
+      if (!retainedRoot.isDirectory() || !archivedRoot.isDirectory()) {
+        return false;
+      }
+
+      // History-only archives copy the full saved workspace. Compare those
+      // roots so result-only paths absent from the retained snapshot remain
+      // valid, and unlisted files cannot disappear without detection.
+      const [retainedHash, archivedHash] = await Promise.all([
+        readSkillProposalTargetTreeSha256(retainedWorkspace, { includeRootMetadata: true }),
+        readSkillProposalTargetTreeSha256(archivedWorkspace, { includeRootMetadata: true }),
+      ]);
+      return retainedHash === archivedHash;
+    }
+    return false;
   } catch {
     return false;
   }

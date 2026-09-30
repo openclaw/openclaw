@@ -25,6 +25,9 @@ const REVIEW = {
   written_names_json: "[]",
   dropped_json: "[]",
 };
+const RETAINED_V1_BACKUP_ID = "2026-09-01T00:00:00.000Z-published-upgrade";
+const RETAINED_V1_BACKUP_CREATED_AT = "2026-09-01T00:00:00.000Z";
+const RETAINED_V1_SKILL_DIR = path.join("skills", "published-upgrade-retained");
 
 const readJson = (filename) => JSON.parse(fs.readFileSync(filename, "utf8"));
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
@@ -52,6 +55,147 @@ function installedIdentity(packageRoot) {
     readJson(path.join(packageRoot, "package.json")),
     fs.readFileSync(path.join(packageRoot, "dist", "build-info.json")),
   );
+}
+
+function snapshotWorkspaceTree(root) {
+  const entries = [];
+  const visit = (directory, parent = "") => {
+    for (const name of fs.readdirSync(directory).toSorted()) {
+      const absolutePath = path.join(directory, name);
+      const relativePath = [parent, name].filter(Boolean).join("/");
+      const stat = fs.lstatSync(absolutePath);
+      if (stat.isDirectory()) {
+        entries.push({ path: relativePath, kind: "directory" });
+        visit(absolutePath, relativePath);
+      } else if (stat.isFile()) {
+        entries.push({
+          path: relativePath,
+          kind: "file",
+          sha256: sha256(fs.readFileSync(absolutePath)),
+        });
+      } else if (stat.isSymbolicLink()) {
+        entries.push({
+          path: relativePath,
+          kind: "symlink",
+          target: fs.readlinkSync(absolutePath),
+        });
+      } else {
+        throw new Error(`Unsupported retained Workshop backup entry: ${absolutePath}`);
+      }
+    }
+  };
+  visit(root);
+  return entries;
+}
+
+function retainedV1BackupSnapshot(stateDir, fixture) {
+  const backup = path.join(stateDir, fixture.legacyBackupDir);
+  const archive = path.join(stateDir, fixture.archiveDir);
+  const manifestPath = path.join(backup, "manifest.json");
+  const archivePath = path.join(archive, "manifest.json");
+  const manifest = fs.existsSync(manifestPath) ? readJson(manifestPath) : null;
+  const archiveManifest = fs.existsSync(archivePath) ? readJson(archivePath) : null;
+  const treeHash = (directory) =>
+    fs.existsSync(directory) ? sha256(JSON.stringify(snapshotWorkspaceTree(directory))) : null;
+  const retainedWorkspaceSha256 = treeHash(path.join(stateDir, fixture.retainedWorkspaceDir));
+  const historyWorkspaceSha256 = treeHash(path.join(archive, "history", "workspace"));
+  return {
+    retainedBackupExists: fs.existsSync(backup),
+    legacyManifestSchema: manifest?.schema ?? null,
+    legacyManifestSha256: manifest ? sha256(fs.readFileSync(manifestPath)) : null,
+    retainedWorkspaceSha256,
+    archiveManifestSchema: archiveManifest?.schema ?? null,
+    archiveManifestId: archiveManifest?.id ?? null,
+    archiveManifestCreatedAt: archiveManifest?.createdAt ?? null,
+    archiveRestoreUnavailableReason:
+      typeof archiveManifest?.restoreUnavailableReason === "string"
+        ? archiveManifest.restoreUnavailableReason
+        : null,
+    historyWorkspaceSha256,
+    archiveMatchesRetained:
+      retainedWorkspaceSha256 !== null && retainedWorkspaceSha256 === historyWorkspaceSha256,
+  };
+}
+
+function assertRetainedV1HistoryArchive(stateDir, fixture) {
+  const snapshot = retainedV1BackupSnapshot(stateDir, fixture);
+  assert(
+    snapshot.retainedBackupExists &&
+      snapshot.legacyManifestSchema === "openclaw.skill-collection-backup.v1" &&
+      snapshot.legacyManifestSha256 === fixture.legacyManifestSha256 &&
+      snapshot.retainedWorkspaceSha256 === fixture.workspaceSha256 &&
+      snapshot.archiveManifestSchema === "openclaw.skill-collection-backup.v2" &&
+      snapshot.archiveManifestId === fixture.backupId &&
+      snapshot.archiveManifestCreatedAt === RETAINED_V1_BACKUP_CREATED_AT &&
+      /Legacy collection paths/u.test(snapshot.archiveRestoreUnavailableReason ?? "") &&
+      snapshot.archiveMatchesRetained,
+    "Published updater did not preserve the retained v1 backup in full v2 history",
+  );
+  return snapshot;
+}
+
+function seedRetainedV1CollectionBackup(stateDir, artifactRoot) {
+  const legacyBackupRelativeDir = path.join(
+    "skill-workshop",
+    "collection-backups",
+    "0000000000000000",
+    RETAINED_V1_BACKUP_ID,
+  );
+  const workspaceRelativeDir = path.join(legacyBackupRelativeDir, "workspace");
+  const skillRelativePath = path.join(workspaceRelativeDir, RETAINED_V1_SKILL_DIR, "SKILL.md");
+  const manifestRelativePath = path.join(legacyBackupRelativeDir, "manifest.json");
+  const extraRelativePath = path.join(workspaceRelativeDir, "retained-metadata.txt");
+  const archiveRelativeDir = path.join(
+    "agents",
+    "main",
+    "agent",
+    "skill-workshop",
+    "collection-backups",
+    RETAINED_V1_BACKUP_ID,
+  );
+  const sourceWorkspaceDir = path.join(stateDir, "workspace");
+  const skillFile = path.join(stateDir, skillRelativePath);
+  const manifestFile = path.join(stateDir, manifestRelativePath);
+  const manifest = {
+    schema: "openclaw.skill-collection-backup.v1",
+    id: RETAINED_V1_BACKUP_ID,
+    createdAt: RETAINED_V1_BACKUP_CREATED_AT,
+    workspaceDir: sourceWorkspaceDir,
+    skillDirs: [RETAINED_V1_SKILL_DIR],
+    resultSkillDirs: [],
+    resultSkillHashes: {},
+  };
+  fs.mkdirSync(path.dirname(skillFile), { recursive: true });
+  fs.writeFileSync(
+    skillFile,
+    "---\nname: published-upgrade-retained\ndescription: Published updater compatibility fixture\n---\n\n# Retained v1 source\n",
+    { mode: 0o600 },
+  );
+  fs.writeFileSync(
+    path.join(stateDir, extraRelativePath),
+    "unlisted data copied with the complete v1 workspace\n",
+    { mode: 0o600 },
+  );
+  writeJson(manifestFile, manifest);
+  const retainedWorkspaceDir = path.join(stateDir, workspaceRelativeDir);
+  const fixture = {
+    backupId: RETAINED_V1_BACKUP_ID,
+    legacyBackupDir: legacyBackupRelativeDir,
+    retainedWorkspaceDir: workspaceRelativeDir,
+    archiveDir: archiveRelativeDir,
+    workspaceSha256: sha256(JSON.stringify(snapshotWorkspaceTree(retainedWorkspaceDir))),
+    legacyManifestSha256: sha256(fs.readFileSync(manifestFile)),
+  };
+  writeJson(path.join(artifactRoot, "workshop-retained-v1-backup.json"), fixture);
+
+  const legacyFixturePath = path.join(artifactRoot, "workshop-legacy-seeded.json");
+  const legacyFixture = readJson(legacyFixturePath);
+  for (const relativePath of [manifestRelativePath, skillRelativePath, extraRelativePath]) {
+    legacyFixture.files[relativePath] = sha256(fs.readFileSync(path.join(stateDir, relativePath)));
+  }
+  legacyFixture.before = captureWorkshopLegacyState(stateDir, legacyFixture);
+  writeJson(legacyFixturePath, legacyFixture);
+  return fixture;
 }
 
 export function captureWorkshopBaseline(packageRoot, artifactRoot) {
@@ -652,10 +796,15 @@ export function assertWorkshopDoctorRepair(stateDir, artifactRoot, observations,
   });
   let legacy;
   let legacyWarning;
+  let retainedV1Backup;
   if (
     stage === "candidate" &&
     fs.existsSync(path.join(artifactRoot, "workshop-legacy-seeded.json"))
   ) {
+    retainedV1Backup = assertRetainedV1HistoryArchive(
+      stateDir,
+      readJson(path.join(artifactRoot, "workshop-retained-v1-backup.json")),
+    );
     const seeded = readJson(path.join(artifactRoot, "workshop-legacy-seeded.json"));
     assert.equal(doctor.legacyExitCaptureError, undefined, "Candidate Doctor exit capture failed");
     legacy = assertWorkshopLegacyImported(stateDir, seeded, doctor.legacyAtExit);
@@ -677,6 +826,7 @@ export function assertWorkshopDoctorRepair(stateDir, artifactRoot, observations,
     status: "explicit-doctor-repaired",
     doctor,
     ...(legacy ? { legacy, legacyWarning } : {}),
+    ...(retainedV1Backup ? { retainedV1Backup } : {}),
   };
   writeJson(path.join(artifactRoot, `workshop-${stage}-doctor.json`), repair);
   return repair;
@@ -727,12 +877,38 @@ export function assertWorkshopRecoveredUpgrade(stateDir, artifactRoot, observati
   return upgraded;
 }
 
+function assertRetainedV1DoctorLint(stateDir, artifactRoot, observations, logPath) {
+  const fixture = readJson(path.join(artifactRoot, "workshop-retained-v1-backup.json"));
+  const snapshot = assertRetainedV1HistoryArchive(stateDir, fixture);
+  const log = fs.readFileSync(logPath, "utf8");
+  assert.doesNotMatch(
+    log,
+    /Skill Workshop has .*legacy collection backup root.*preserved for review/u,
+    "Candidate Doctor still reports the completed history-only backup",
+  );
+  const candidate = readJson(path.join(artifactRoot, "workshop-candidate.json"));
+  processWitness(observations, candidate, {
+    role: "doctor",
+    exitCode: 0,
+    malformedAtStart: false,
+    updateInProgress: false,
+  });
+  const result = {
+    status: "published-updater-v1-state-cleared-by-candidate-doctor",
+    retainedV1Backup: snapshot,
+    logPath,
+  };
+  writeJson(path.join(artifactRoot, "workshop-retained-v1-lint.json"), result);
+  return result;
+}
+
 export function completeWorkshopRecovery(stateDir, artifactRoot) {
   assertRepairedState(stateDir);
   const firstAttempt = readJson(path.join(artifactRoot, "workshop-published-refusal.json"));
   const baselineDoctor = readJson(path.join(artifactRoot, "workshop-baseline-doctor.json"));
   const upgrade = readJson(path.join(artifactRoot, "workshop-recovered-upgrade.json"));
   const candidateDoctor = readJson(path.join(artifactRoot, "workshop-candidate-doctor.json"));
+  const retainedV1Lint = readJson(path.join(artifactRoot, "workshop-retained-v1-lint.json"));
   assert.equal(firstAttempt.status, "refused-before-candidate");
   assert.equal(firstAttempt.automaticRepair, false);
   assert.equal(baselineDoctor.status, "explicit-doctor-repaired");
@@ -744,7 +920,9 @@ export function completeWorkshopRecovery(stateDir, artifactRoot) {
     "Missing candidate Doctor idempotence evidence for the imported legacy proposals",
   );
   assert.equal(candidateDoctor.legacyWarning.warning, upgrade.legacy.warning.warning);
-  const result = { firstAttempt, baselineDoctor, upgrade, candidateDoctor };
+  assert.equal(retainedV1Lint.status, "published-updater-v1-state-cleared-by-candidate-doctor");
+  assert.equal(retainedV1Lint.retainedV1Backup.archiveMatchesRetained, true);
+  const result = { firstAttempt, baselineDoctor, upgrade, candidateDoctor, retainedV1Lint };
   writeJson(path.join(artifactRoot, "workshop-doctor-recovery.json"), result);
   return result;
 }
@@ -804,6 +982,7 @@ if (direct) {
     seedWorkshopIndex(stateDir, artifacts, first);
   } else if (mode === "seed-legacy") {
     seedWorkshopLegacyProposals(stateDir, artifacts);
+    seedRetainedV1CollectionBackup(stateDir, artifacts);
   } else if (mode === "refusal") {
     if (fourth === "physical") {
       assertPhysicalUpdateRefusal(stateDir, artifacts, first, second, Number(third));
@@ -814,6 +993,8 @@ if (direct) {
     assertWorkshopDoctorRepair(stateDir, artifacts, first, second);
   } else if (mode === "upgrade") {
     assertWorkshopRecoveredUpgrade(stateDir, artifacts, first, second);
+  } else if (mode === "retained-v1-lint") {
+    assertRetainedV1DoctorLint(stateDir, artifacts, first, second);
   } else if (mode === "complete") {
     completePhysicalRecovery(stateDir, artifacts);
   } else {

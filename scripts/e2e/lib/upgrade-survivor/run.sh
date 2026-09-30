@@ -1667,15 +1667,22 @@ assert_workshop_published_refusal() {
 }
 
 run_workshop_doctor() {
-  local stage="$1" log="$2"
+  local stage="$1" log="$2" mode="${3:-fix}"
   workshop_doctor_observation_root="$(mktemp -d "$ARTIFACT_ROOT/workshop-$stage-doctor.XXXXXX")"
   local doctor_node_options="${NODE_OPTIONS:+$NODE_OPTIONS }--import=$PWD/scripts/e2e/lib/upgrade-survivor/diagnostics.mjs --import=$PWD/scripts/e2e/lib/upgrade-survivor/workshop-doctor-recovery.mjs"
+  local -a doctor_args=(doctor --fix --non-interactive)
+  if [ "$mode" = "lint" ]; then
+    doctor_args=(doctor --lint --only core/doctor/skill-workshop-relocation)
+  elif [ "$mode" != "fix" ]; then
+    echo "Unsupported Workshop Doctor mode: $mode" >&2
+    return 2
+  fi
   openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" env -u OPENCLAW_UPDATE_IN_PROGRESS \
     "OPENCLAW_UPGRADE_SURVIVOR_WORKSHOP_STATE_DIR=$OPENCLAW_STATE_DIR" \
     "OPENCLAW_UPGRADE_SURVIVOR_WORKSHOP_LEGACY_FIXTURE=$ARTIFACT_ROOT/workshop-legacy-seeded.json" \
     "OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT=$workshop_doctor_observation_root" \
     "NODE_OPTIONS=$doctor_node_options" \
-    openclaw doctor --fix --non-interactive >"$log" 2>&1
+    openclaw "${doctor_args[@]}" >"$log" 2>&1
 }
 
 replace_historical_mobile_pairing_candidate() {
@@ -2437,6 +2444,8 @@ if [ "$SCENARIO" = "workshop-doctor-recovery" ]; then
   phase seed-workshop-candidate-index node scripts/e2e/lib/upgrade-survivor/workshop-doctor-recovery.mjs seed candidate
   phase repair-workshop-candidate run_workshop_doctor candidate "$DOCTOR_LOG"
   phase assert-workshop-candidate-repair node scripts/e2e/lib/upgrade-survivor/workshop-doctor-recovery.mjs doctor "$workshop_doctor_observation_root" candidate
+  phase verify-retained-v1-workshop-lint run_workshop_doctor candidate-retained-v1 "$ARTIFACT_ROOT/retained-v1-workshop-lint.log" lint
+  phase assert-retained-v1-workshop-lint node scripts/e2e/lib/upgrade-survivor/workshop-doctor-recovery.mjs retained-v1-lint "$workshop_doctor_observation_root" "$ARTIFACT_ROOT/retained-v1-workshop-lint.log"
   phase assert-workshop-recovery node scripts/e2e/lib/upgrade-survivor/workshop-doctor-recovery.mjs complete
   run_completed="1"
   echo "Workshop Doctor recovery passed: published updater refused unchanged malformed state; explicit baseline Doctor, recovered upgrade, and explicit candidate Doctor succeeded."
