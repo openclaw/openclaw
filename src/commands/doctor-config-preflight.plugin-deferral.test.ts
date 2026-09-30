@@ -124,6 +124,7 @@ async function installStatelessFixture(
     | "setup-only"
     | "setup-invalid-detector"
     | "setup-broken" = "absent",
+  channel = false,
 ) {
   const setup =
     contract === "setup-only" ||
@@ -146,12 +147,16 @@ async function installStatelessFixture(
     path.join(root, "openclaw.plugin.json"),
     JSON.stringify({
       id: pluginId,
-      ...(setup
+      ...(setup || channel
         ? {
             channels: [pluginId],
             channelConfigs: {
               [pluginId]: {
-                schema: { type: "object", properties: {}, additionalProperties: false },
+                schema: {
+                  type: "object",
+                  properties: { enabled: { type: "boolean" } },
+                  additionalProperties: false,
+                },
               },
             },
           }
@@ -427,6 +432,63 @@ describe("configured plugin migration deferral", () => {
           expect(checked.sourceConfig.plugins?.entries?.[pluginId]?.config).toEqual({
             region: "us-en",
           });
+        });
+      });
+    },
+  );
+
+  it.each(["disabled-channel", "unconfigured"] as const)(
+    "confirms an installed stateless plugin with a retained %s obligation",
+    async (selection) => {
+      await withDoctorConfigPreflightHome(async (home) => {
+        const pluginId = "retained-fixture";
+        const pluginRoot = path.join(home, pluginId);
+        const config = createPluginConfig(pluginId, { region: "us-en" });
+        await writeOpenClawConfig(home, config);
+        await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
+          await runDoctorConfigPreflight(doctorOptions);
+          expect(readDeferredPluginMigrations()).toEqual([expect.objectContaining({ pluginId })]);
+          await installStatelessFixture(
+            pluginRoot,
+            pluginId,
+            "absent",
+            selection === "disabled-channel",
+          );
+          const otherId = "configured-fixture";
+          const otherRoot = path.join(home, otherId);
+          await installStatelessFixture(otherRoot, otherId);
+          const installedConfig = {
+            ...config,
+            ...(selection === "disabled-channel"
+              ? { channels: { [pluginId]: { enabled: false } } }
+              : {}),
+            plugins: {
+              ...config.plugins,
+              allow: [pluginId, otherId],
+              load: { paths: [pluginRoot, otherRoot] },
+              entries: {
+                ...(selection === "disabled-channel" ? config.plugins.entries : {}),
+                [otherId]: { enabled: true },
+              },
+            },
+          };
+          await writeOpenClawConfig(home, installedConfig);
+          const result = await runDoctorConfigPreflight(doctorOptions);
+          expect(result.snapshot.valid).toBe(true);
+          expect(readDeferredPluginMigrations()).toEqual([]);
+          const checked = await readConfigFileSnapshot();
+          expect(checked.warnings).toEqual(
+            selection === "disabled-channel"
+              ? [
+                  {
+                    path: `plugins.entries.${pluginId}`,
+                    message: "plugin disabled (channel disabled in config) but config is present",
+                  },
+                ]
+              : [],
+          );
+          expect(checked.sourceConfig.plugins).toEqual(installedConfig.plugins);
+          expect(checked.sourceConfig.channels).toEqual(installedConfig.channels);
         });
       });
     },
