@@ -290,28 +290,23 @@ function assertArchiveSourceUnchanged(database: DatabaseSync, planned: ArchiveRo
   return true;
 }
 
-function writeArchiveRow(
-  database: DatabaseSync,
-  planned: ArchiveRowPlan,
-  publish = false,
-): boolean {
+function rewriteArchiveRow(database: DatabaseSync, planned: ArchiveRowPlan): boolean {
   if (!assertArchiveSourceUnchanged(database, planned)) {
     return false;
+  }
+  if (!planned.changed) {
+    return true;
   }
   const db = getNodeSqliteKysely<TranscriptArchiveMigrationDatabase>(database);
   const result = executeSqliteQuerySync(
     database,
     db
       .updateTable("session_transcript_archives")
-      .set(
-        publish
-          ? { published_at: planned.publishedAt }
-          : {
-              archive_blob: planned.nextBytes,
-              archive_sha256: planned.nextSha256,
-              published_at: null,
-            },
-      )
+      .set({
+        archive_blob: planned.nextBytes,
+        archive_sha256: planned.nextSha256,
+        published_at: null,
+      })
       .where("session_id", "=", planned.sessionId)
       .where("generation", "=", planned.generation)
       .where("archive_sha256", "=", planned.archiveSha256),
@@ -319,9 +314,39 @@ function writeArchiveRow(
   if (result.numAffectedRows !== 1n) {
     throw new Error(`Transcript archive changed before rewrite for ${planned.sessionId}`);
   }
-  planned.bytes = planned.nextBytes;
-  planned.archiveSha256 = planned.nextSha256;
   return true;
+}
+
+function finalizeArchiveRow(database: DatabaseSync, planned: ArchiveRowPlan, fileCurrent: boolean) {
+  const db = getNodeSqliteKysely<TranscriptArchiveMigrationDatabase>(database);
+  const current = executeSqliteQueryTakeFirstSync(
+    database,
+    db
+      .selectFrom("session_transcript_archives")
+      .select(["archive_blob", "archive_sha256"])
+      .where("session_id", "=", planned.sessionId)
+      .where("generation", "=", planned.generation),
+  );
+  if (!current) {
+    return;
+  }
+  if (
+    current.archive_sha256 !== planned.nextSha256 ||
+    !Buffer.from(current.archive_blob).equals(planned.nextBytes)
+  ) {
+    throw new Error(`Transcript archive changed before migration commit for ${planned.sessionId}`);
+  }
+  if (planned.changed && planned.publishedAt !== null && fileCurrent) {
+    executeSqliteQuerySync(
+      database,
+      db
+        .updateTable("session_transcript_archives")
+        .set({ published_at: planned.publishedAt })
+        .where("session_id", "=", planned.sessionId)
+        .where("generation", "=", planned.generation)
+        .where("archive_sha256", "=", planned.nextSha256),
+    );
+  }
 }
 
 function repairPublishedArchiveFile(params: {
@@ -468,43 +493,45 @@ export async function migrateCanonicalTranscriptArchives(
       };
     }
     for (const planned of batch) {
-      cursor = { generation: planned.generation, sessionId: planned.sessionId };
-      if (params.verifyOnly && planned.changed) {
-        continue;
-      }
+      params.onArchive?.(path.resolve(archiveDirectory, planned.archiveName));
+    }
+    const rowsPresent = params.verifyOnly
+      ? batch.map((planned) => !planned.changed && assertArchiveSourceUnchanged(params.database, planned))
+      : write("historical-transcript-archive-directives", () =>
+          batch.map((planned) => rewriteArchiveRow(params.database, planned)),
+        );
+    // Publish reconstructible files outside the SQLite write transaction.
+    const filesCurrent = batch.map((planned, index) => {
       const archivePath = path.resolve(archiveDirectory, planned.archiveName);
-      params.onArchive?.(archivePath);
-      const rowPresent = planned.changed
-        ? write("historical-transcript-archive-directives", () =>
-            writeArchiveRow(params.database, planned),
-          )
-        : assertArchiveSourceUnchanged(params.database, planned);
-      const fileCurrent = rowPresent
+      const fileCurrent = rowsPresent[index]
         ? repairPublishedArchiveFile({ archiveDirectory, planned, verifyOnly: params.verifyOnly })
         : false;
-      if (rowPresent) {
-        assertArchiveSourceUnchanged(params.database, planned);
-      }
-      if (rowPresent && !fileCurrent) {
+      if (rowsPresent[index] && !fileCurrent) {
         missingCopies += 1;
         if (missingCopyExamples.length < MIGRATION_WARNING_EXAMPLE_LIMIT) {
           missingCopyExamples.push(`Missing canonical transcript archive copy: ${archivePath}`);
         }
       }
-      if (rowPresent && planned.changed && fileCurrent && planned.publishedAt !== null) {
-        write("historical-transcript-archive-publication", () =>
-          writeArchiveRow(params.database, planned, true),
-        );
-      }
-      if (rowPresent && planned.fingerprint) {
+      if (rowsPresent[index] && planned.fingerprint) {
         observed.add(planned.fingerprint);
         params.verification?.collect?.add(planned.fingerprint);
       }
-      rewrittenArchives += planned.changed && rowPresent ? 1 : 0;
+      return fileCurrent;
+    });
+    if (!params.verifyOnly) {
+      write("historical-transcript-archive-cursor", () => {
+        for (const [index, planned] of batch.entries()) {
+          finalizeArchiveRow(params.database, planned, filesCurrent[index] === true);
+        }
+        const last = batch.at(-1)!;
+        checkpoint?.({ generation: last.generation, sessionId: last.sessionId });
+      });
     }
-    if (checkpoint) {
-      write("historical-transcript-archive-cursor", () => checkpoint(cursor));
-    }
+    rewrittenArchives += batch.filter(
+      (planned, index) => planned.changed && rowsPresent[index],
+    ).length;
+    const last = batch.at(-1)!;
+    cursor = { generation: last.generation, sessionId: last.sessionId };
     // Archive planning and file publication are synchronous. Give the lease
     // heartbeat a scheduling point before the next bounded batch begins.
     await new Promise<void>((resolve) => {
