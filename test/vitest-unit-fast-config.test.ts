@@ -426,7 +426,7 @@ describe("unit-fast vitest lane", () => {
       "src/agents/agent-tools.deferred-followup-guidance.test.ts",
     );
     expect(testConfig.include).toContain("src/acp/runtime/registry.test.ts");
-    expect(testConfig.include).toContain("src/commands/status-overview-values.test.ts");
+    expect(testConfig.include).toContain("src/commands/text-format.test.ts");
     expect(testConfig.include).toContain("src/plugins/config-policy.test.ts");
     expect(testConfig.include).toContain("src/sessions/session-lifecycle-events.test.ts");
     expect(testConfig.include).toContain("src/plugin-sdk/text-chunking.test.ts");
@@ -443,7 +443,7 @@ describe("unit-fast vitest lane", () => {
 
     const testConfig = requireTestConfig(config);
     expect(testConfig.include).toContain("src/plugin-sdk/text-chunking.test.ts");
-    expect(testConfig.include).toContain("src/commands/status-overview-values.test.ts");
+    expect(testConfig.include).toContain("src/commands/text-format.test.ts");
   });
 
   it("keeps excluded stateful files out of directory-scoped CLI runs", () => {
@@ -491,6 +491,7 @@ describe("unit-fast vitest lane", () => {
       "src/agents/code-mode-quickjs.integration.test.ts",
       "src/agents/prepared-model-runtime.scoped-refresh.test.ts",
       "src/agents/provider-transport-fetch.headers.test.ts",
+      "src/commands/status-overview-values.test.ts",
     ]) {
       expect(isUnitFastTestFile(file), file).toBe(false);
       expect(resolveUnitFastTestIncludePattern(file), file).toBeNull();
@@ -528,8 +529,8 @@ describe("unit-fast vitest lane", () => {
     expect(resolveUnitFastTestIncludePattern("src/plugin-sdk/text-chunking.ts")).toBe(
       "src/plugin-sdk/text-chunking.test.ts",
     );
-    expect(resolveUnitFastTestIncludePattern("src/commands/status-overview-values.ts")).toBe(
-      "src/commands/status-overview-values.test.ts",
+    expect(resolveUnitFastTestIncludePattern("src/commands/text-format.ts")).toBe(
+      "src/commands/text-format.test.ts",
     );
   });
 

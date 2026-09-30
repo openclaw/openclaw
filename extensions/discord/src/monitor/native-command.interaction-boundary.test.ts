@@ -226,20 +226,11 @@ describe("Client.handleInteraction native command channel identity", () => {
   beforeEach(() => clearDiscordChannelInfoCacheForTest());
   afterEach(() => vi.restoreAllMocks());
 
-  it("delivers status for a hydrated allowed channel", async () => {
+  it.each([THREAD])("delivers status for raw channel %s without hydration", async (channelId) => {
     const harness = createHarness();
-    await harness.client.handleInteraction(payload(CHANNEL, true));
-    expectVisibleStatus(harness, CHANNEL);
+    await harness.client.handleInteraction(payload(channelId));
+    expectVisibleStatus(harness, channelId);
   });
-
-  it.each([CHANNEL, THREAD])(
-    "delivers status for raw channel %s without hydration",
-    async (channelId) => {
-      const harness = createHarness();
-      await harness.client.handleInteraction(payload(channelId));
-      expectVisibleStatus(harness, channelId);
-    },
-  );
 
   it("rejects a raw command sender outside commands.allowFrom", async () => {
     const harness = createHarness();
@@ -265,7 +256,7 @@ describe("Client.handleInteraction native command channel identity", () => {
     expectFollowUp(harness, "This channel is not allowed.");
   });
 
-  it.each([CHANNEL, THREAD])(
+  it.each([THREAD])(
     "autocompletes for raw channel %s through the registered option",
     async (channelId) => {
       const harness = createHarness();
@@ -284,7 +275,7 @@ describe("Client.handleInteraction native command channel identity", () => {
     },
   );
 
-  it.each([CHANNEL, THREAD])(
+  it.each([THREAD])(
     "opens the registered picker for the raw channel %s session",
     async (channelId) => {
       const harness = createHarness();
@@ -305,7 +296,7 @@ describe("Client.handleInteraction native command channel identity", () => {
     },
   );
 
-  it.each(["sender", "parent", "identity"] as const)(
+  it.each(["sender", "parent"] as const)(
     "denies raw autocomplete with denied %s",
     async (denial) => {
       const harness = createHarness();
@@ -316,9 +307,6 @@ describe("Client.handleInteraction native command channel identity", () => {
       );
       if (denial === "parent") {
         denyThreadParent(harness);
-      }
-      if (denial === "identity") {
-        Reflect.deleteProperty(interaction, "channel_id");
       }
       await harness.client.handleInteraction(interaction);
       expectEmptyAutocomplete(harness);

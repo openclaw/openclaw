@@ -236,14 +236,25 @@ export function stagePlacementTurnClaimWorkerPublication(
   identity: DatabasePathIdentity,
   facts: WorkerSessionTurnClaimFacts,
 ): { commit: () => void; rollback: () => void; invalidate: () => void } {
-  const owner = ownerFor(identity);
-  const sequence = ++owner.sequence;
-  const change: Extract<ClaimChange, { kind: "claim" }> = {
+  return stagePlacementWorkerPublication(identity, {
     kind: "claim",
     sessionId: facts.sessionId,
     facts: structuredClone(facts),
-    sequence,
-  };
+  });
+}
+
+/** Pending-result changes invalidate read observations without revoking turn authority. */
+export function stagePlacementWorkspaceResultWorkerPublication(
+  identity: DatabasePathIdentity,
+  sessionId: string,
+) {
+  return stagePlacementWorkerPublication(identity, { kind: "workspace-result", sessionId });
+}
+
+function stagePlacementWorkerPublication(identity: DatabasePathIdentity, input: ClaimChange) {
+  const owner = ownerFor(identity);
+  const sequence = ++owner.sequence;
+  const change: ClaimChange = { ...input, sequence };
   owner.pending.add(change);
   let settled = false;
   return {
@@ -270,9 +281,11 @@ export function stagePlacementTurnClaimWorkerPublication(
         return;
       }
       settled = true;
-      // An uncertain dispatch may preserve the predecessor's claim bytes. Revoke
-      // that incarnation without retaining a fence or touching a later sequence.
-      change.facts = undefined;
+      // Uncertain claim writes revoke that incarnation. Workspace-only writes
+      // invalidate read observations while preserving the separate turn authority.
+      if (change.kind === "claim") {
+        change.facts = undefined;
+      }
       commitChange(owner, change, sequence);
       for (const retained of Array.from(owner.claims.get(change.sessionId) ?? [])) {
         notifyRevoked(retained);

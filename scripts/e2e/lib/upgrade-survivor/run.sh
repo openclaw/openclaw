@@ -1122,22 +1122,20 @@ assert.equal(result.status, "skipped", "second update was not a clean no-op");
 assert.equal(result.reason, "already-current", "second update was not already current");
 // The isolated state directory records a service refusal without running the suggested command.
 assert(Array.isArray(result.steps), "second update did not report its steps");
-const expectedSteps = result.steps.length === 0 ? [] : [{
+// Advisory guidance is product prose that releases reword; require one, not its text.
+const steps = result.steps.map(({ advisory, ...step }) => advisory ? {
+  ...step,
+  advisory: { kind: advisory.kind, explained: typeof advisory.message === "string" && advisory.message.trim() !== "" },
+} : step);
+const expectedSteps = steps.length === 0 ? [] : [{
   name: "managed-service-reconciliation",
   command: "openclaw gateway install --force",
   cwd: result.root ?? "",
   durationMs: 0,
   exitCode: 0,
-  advisory: {
-    kind: "recoverable-maintenance",
-    message:
-      "service management skipped: non-default state dir or config path. " +
-      "Rerun with HOME set to the OS account home, without OPENCLAW_HOME, " +
-      "and with OPENCLAW_STATE_DIR and OPENCLAW_CONFIG_PATH either unset or pointing " +
-      "at the canonical paths for that account home and profile to manage the gateway service during update.",
-  },
+  advisory: { kind: "recoverable-maintenance", explained: true },
 }];
-assert.deepEqual(result.steps, expectedSteps, "second update executed mutations or unexpected maintenance");
+assert.deepEqual(steps, expectedSteps, "second update executed mutations or unexpected maintenance");
 assert(!result.nextAction, "second update requested repair");
 console.log("Second update: already-current, no package mutations or repair required.");
 NODE

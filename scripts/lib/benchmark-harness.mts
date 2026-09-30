@@ -197,18 +197,18 @@ export function runBenchmarkJobs<TJob, TResult>(
     const description = options.describe(job);
     writeProgress(`[${options.prefix}] worker ${ordinal}/${jobs.length} start ${description}`);
     const startedAt = now();
+    const finish = (outcome: "complete" | "failed") => {
+      const elapsedMs = Math.max(0, now() - startedAt);
+      writeProgress(
+        `[${options.prefix}] worker ${ordinal}/${jobs.length} ${outcome} ${description} elapsed=${(elapsedMs / 1_000).toFixed(3)}s`,
+      );
+    };
     try {
       const result = options.run(job);
-      const elapsedMs = Math.max(0, now() - startedAt);
-      writeProgress(
-        `[${options.prefix}] worker ${ordinal}/${jobs.length} complete ${description} elapsed=${(elapsedMs / 1_000).toFixed(3)}s`,
-      );
+      finish("complete");
       return result;
     } catch (error) {
-      const elapsedMs = Math.max(0, now() - startedAt);
-      writeProgress(
-        `[${options.prefix}] worker ${ordinal}/${jobs.length} failed ${description} elapsed=${(elapsedMs / 1_000).toFixed(3)}s`,
-      );
+      finish("failed");
       throw error;
     }
   });
