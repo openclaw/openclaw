@@ -95,7 +95,6 @@ function buildAcpTargetFactory(params: {
     });
   const backend = bindingOverrides.backend ?? runtimeDefaults.backend;
   const label = bindingOverrides.label;
-  const acpAgentId = normalizeText(runtimeDefaults.acpAgentId);
 
   return {
     driverId: "acp",
@@ -108,7 +107,7 @@ function buildAcpTargetFactory(params: {
         conversationId: conversation.conversationId,
         parentConversationId: conversation.parentConversationId,
         agentId: params.agentId,
-        acpAgentId,
+        acpAgentId: runtimeDefaults.acpAgentId,
         mode,
         model,
         thinking,
