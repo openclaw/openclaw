@@ -196,17 +196,8 @@ describe("maybeRepairGatewayDaemon", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mockDoctorRuntimeFacts();
+    mockDoctorRuntimeFacts(runExec);
     readPin.mockReset().mockReturnValue({ revision: "empty", stored: false });
-    runExec.mockReset().mockResolvedValue({
-      stdout: JSON.stringify({
-        nodeVersion: "26.8.1",
-        bunVersion: "1.4.2",
-        sqliteVersion: "3.53.4",
-        sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
-      }),
-      stderr: "",
-    });
     formatGatewayClosedDiagnostic.mockReset();
     formatGatewayClosedDiagnostic.mockReturnValue(undefined);
     findInstalledSystemdGatewayScope.mockReset().mockResolvedValue(null);
