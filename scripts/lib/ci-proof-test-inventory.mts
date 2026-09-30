@@ -3422,7 +3422,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/infra/windows-process-start.test.ts",
   "src/infra/windows-task-restart.test.ts",
   "src/infra/worker-task-pool.memory.test.ts",
-  "src/infra/worker-task-pool.source-loader.test.ts",
   "src/library.test.ts",
   "src/llm/openai-compatible-auth.test.ts",
   "src/llm/stream.complete-host.test.ts",
