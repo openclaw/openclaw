@@ -75,6 +75,31 @@ class ChatControllerSidebarCreationTest {
     }
 
   @Test
+  fun independentCreationExplainsOlderGatewayRejectionWithoutRetryingOrNavigating() =
+    runTest {
+      val (controller, requests) =
+        chatControllerTestSetup {
+          respond("chat.history", """{"sessionId":"loaded","messages":[]}""")
+          respond("sessions.list", """{"sessions":[]}""")
+          respond("sessions.create") {
+            throw GatewayRequestRejected(
+              GatewaySession.ErrorShape(
+                code = "INVALID_REQUEST",
+                message = "invalid sessions.create params: unexpected property 'independent'",
+              ),
+            )
+          }
+        }
+      controller.load("main")
+      advanceUntilIdle()
+      assertFalse(controller.startNewChatAwait(creation = ChatSessionCreation.Independent))
+      assertEquals(1, requests.count { it.first == "sessions.create" })
+      assertEquals("main", controller.sessionKey.value)
+      assertEquals("Update your Gateway to create independent sessions.", controller.errorText.value)
+      assertFalse(controller.isCreatingSession.value)
+    }
+
+  @Test
   fun explicitChildRejectsChangedMissingAndLockedParents() =
     runTest {
       for (scenario in listOf("changed", "missing", "locked")) {

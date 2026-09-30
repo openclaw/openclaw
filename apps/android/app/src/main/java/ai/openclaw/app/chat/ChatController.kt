@@ -8118,11 +8118,13 @@ class ChatController internal constructor(
       request(params)
     } catch (err: GatewayRequestRejected) {
       val message = err.gatewayError.message
-      val isOlderGateway =
+      val isInvalidCreateParams =
         err.gatewayError.code == "INVALID_REQUEST" &&
-          message.contains("invalid sessions.create params") &&
-          message.contains("succeedsParent")
-      if (!isOlderGateway || "succeedsParent" !in params) throw err
+          message.contains("invalid sessions.create params")
+      if (isInvalidCreateParams && "independent" in params && message.contains("independent")) {
+        throw GatewayRequestNotEnqueued("Update your Gateway to create independent sessions.")
+      }
+      if (!isInvalidCreateParams || !message.contains("succeedsParent") || "succeedsParent" !in params) throw err
       if (!allowUnlinkedFallback) {
         throw GatewayRequestNotEnqueued("Update your Gateway to create child sessions.")
       }

@@ -16966,6 +16966,7 @@ public struct SessionsCreateParams: Codable, Sendable {
     public let visibility: SessionVisibility?
     public let catalogid: String?
     public let parentsessionkey: String?
+    public let independent: Bool?
     public let spawndepth: Int?
     public let fork: Bool?
     public let forkfrom: String?
@@ -17005,6 +17006,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         visibility: SessionVisibility? = nil,
         catalogid: String? = nil,
         parentsessionkey: String? = nil,
+        independent: Bool? = nil,
         spawndepth: Int? = nil,
         fork: Bool? = nil,
         forkfrom: String? = nil,
@@ -17043,6 +17045,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         self.visibility = visibility
         self.catalogid = catalogid
         self.parentsessionkey = parentsessionkey
+        self.independent = independent
         self.spawndepth = spawndepth
         self.fork = fork
         self.forkfrom = forkfrom
@@ -17083,6 +17086,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         case visibility
         case catalogid = "catalogId"
         case parentsessionkey = "parentSessionKey"
+        case independent
         case spawndepth = "spawnDepth"
         case fork
         case forkfrom = "forkFrom"
