@@ -1,94 +1,62 @@
-import { type FSWatcher, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { renameSync, writeFileSync, unlinkSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import * as observation from "@openclaw/fs-safe/watch";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { DEFAULT_USAGE_BAR_TEMPLATE } from "./default-template.js";
 import { loadUsageBarTemplate } from "./template.js";
 import { clearUsageBarTemplateCacheForTest } from "./template.test-support.js";
 
 const warnSpy = vi.hoisted(() => vi.fn());
-
 vi.mock("../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({ warn: warnSpy }),
 }));
-
-const capturedWatchers = vi.hoisted(() => [] as Array<ReturnType<typeof import("node:fs").watch>>);
-const capturedWatchEvents = vi.hoisted(() => [] as Array<(eventType?: string) => void>);
-const watcherOperations = vi.hoisted(() => [] as Array<["watch", unknown] | ["close", FSWatcher]>);
-const closedWatchers = vi.hoisted(() => new Set<FSWatcher>());
-
-vi.mock("node:fs", async (importOriginal) => {
-  const orig = await importOriginal<typeof import("node:fs")>();
-  const origWatch = orig.watch;
-  return {
-    ...orig,
-    watch: ((path: unknown, opts: unknown, cb: unknown) => {
-      watcherOperations.push(["watch", path]);
-      const w = origWatch(path as never, opts as never, cb as never);
-      const close = w.close.bind(w);
-      w.close = () => {
-        close();
-        watcherOperations.push(["close", w]);
-      };
-      w.once("close", () => {
-        closedWatchers.add(w);
-      });
-      capturedWatchers.push(w);
-      capturedWatchEvents.push((eventType = "change") => {
-        (cb as (eventType: string, filename: null) => void)(eventType, null);
-      });
-      return w;
-    }) as typeof orig.watch,
-  };
+vi.mock("@openclaw/fs-safe/watch", async () => {
+  const { createRequire } = await import("node:module");
+  return { ...createRequire(import.meta.url)("@openclaw/fs-safe/watch") };
 });
-
+const temp = useAutoCleanupTempDirTracker(afterEach);
+const subscriptions: observation.WatchSubscription[] = [];
+const watchedPaths = new Map<string, observation.WatchSubscription>();
+let created = createDeferredCore<observation.WatchSubscription>();
+beforeEach(() => {
+  created = createDeferredCore<observation.WatchSubscription>();
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const original = observation.watch;
+  vi.spyOn(observation, "watch").mockImplementation((authority, options) => {
+    expect(options.persistent).toBe(false);
+    const subscription = original(authority, { ...options, mode: "poll" });
+    subscriptions.push(subscription);
+    watchedPaths.set(join(authority.rootReal, options.scopes[0]!.path), subscription);
+    created.resolve(subscription);
+    created = createDeferredCore<observation.WatchSubscription>();
+    return subscription;
+  });
+});
+afterEach(async () => {
+  await clearUsageBarTemplateCacheForTest();
+  await Promise.all(subscriptions.splice(0).map((subscription) => subscription.close()));
+  watchedPaths.clear();
+  warnSpy.mockClear();
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+});
 const tplA = { segments: [{ text: "A" }] };
 const tplB = { output: { default: [{ text: "B" }] } };
-const tplC = { segments: [{ text: "C" }] };
-
-const cleanups: Array<() => void> = [];
-
-afterEach(async () => {
-  try {
-    clearUsageBarTemplateCacheForTest();
-  } finally {
-    // Also close evicted watchers when a failed assertion exposes missing owner cleanup.
-    for (const watcher of capturedWatchers) {
-      watcher.close();
-    }
-    // Normal close events run on nextTick; settle them before removing watched files.
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-    warnSpy.mockClear();
-    capturedWatchers.splice(0);
-    capturedWatchEvents.splice(0);
-    watcherOperations.splice(0);
-    closedWatchers.clear();
-    for (const fn of cleanups.splice(0)) {
-      fn();
-    }
-  }
-});
-
-function tmpDir(): string {
-  const d = mkdtempSync(join(tmpdir(), "usage-template-"));
-  cleanups.push(() => rmSync(d, { recursive: true, force: true }));
-  return d;
-}
-
+const tmpDir = () => temp.make("usage-template-");
 function tmpFile(name: string, contents: string): string {
-  const d = tmpDir();
-  const path = join(d, name);
-  writeFileSync(path, contents);
-  return path;
+  const file = join(tmpDir(), name);
+  writeFileSync(file, contents);
+  return file;
 }
 
-function atomicSave(path: string, value: unknown): void {
-  const tmp = `${path}.tmp`;
-  writeFileSync(tmp, JSON.stringify(value));
-  renameSync(tmp, path);
+async function loadObservedTemplate(path: string) {
+  const started = created.promise;
+  const template = loadUsageBarTemplate(path);
+  const subscription = await started;
+  await subscription.ready;
+  return { template, subscription };
 }
 
 describe("loadUsageBarTemplate", () => {
@@ -148,14 +116,14 @@ describe("loadUsageBarTemplate", () => {
     expect(loadUsageBarTemplate(path)).toMatchObject(tplB);
   });
 
-  it("serves the cached template without re-reading the file", () => {
+  it("serves the cached template without re-reading the file", async () => {
     const path = tmpFile("t.json", JSON.stringify(tplA));
     expect(loadUsageBarTemplate(path)).toMatchObject(tplA);
 
     writeFileSync(path, JSON.stringify(tplB));
     expect(loadUsageBarTemplate(path)).toMatchObject(tplA);
 
-    clearUsageBarTemplateCacheForTest();
+    await clearUsageBarTemplateCacheForTest();
     expect(loadUsageBarTemplate(path)).toMatchObject(tplB);
   });
 
@@ -189,214 +157,73 @@ describe("loadUsageBarTemplate", () => {
     );
   });
 
-  describe("cache eviction", () => {
-    it("evicts the oldest entry and closes its watcher when inserting a new key over the limit", async () => {
-      const dir = tmpDir();
-      const paths: string[] = [];
-      // Create 65 template files — one more than MAX_CACHED_TEMPLATE_FILES (64).
-      for (let i = 0; i < 65; i++) {
-        const path = join(dir, `tpl-${i}.json`);
-        writeFileSync(path, JSON.stringify({ segments: [{ text: `v1-${i}` }] }));
-        paths.push(path);
-      }
+  it("refreshes atomic replacements and restored files, then rereads after loss of coverage", async () => {
+    const directory = tmpDir();
+    const file = join(directory, "template.json");
+    writeFileSync(file, JSON.stringify(tplA));
+    const { template: first, subscription } = await loadObservedTemplate(file);
+    await subscription.reconcile();
+    expect(loadUsageBarTemplate(file)).toBe(first);
 
-      // Load the first 64 files to fill the cache.
-      for (let i = 0; i < 64; i++) {
-        expect(loadUsageBarTemplate(paths[i])).toMatchObject({
-          segments: [{ text: `v1-${i}` }],
-        });
-      }
-      expect(capturedWatchers).toHaveLength(64);
-      expect(watcherOperations).toHaveLength(64);
-      expect(closedWatchers.size).toBe(0);
-      watcherOperations.splice(0);
+    const staged = join(directory, "staged.json");
+    for (const next of [tplB, tplA]) {
+      writeFileSync(staged, JSON.stringify(next));
+      renameSync(staged, file);
+      await subscription.reconcile();
+      expect(loadUsageBarTemplate(file)).toEqual(next);
+    }
+    unlinkSync(file);
+    await subscription.reconcile();
+    expect(loadUsageBarTemplate(file)).toBe(DEFAULT_USAGE_BAR_TEMPLATE);
+    writeFileSync(file, JSON.stringify(tplA));
+    await subscription.reconcile();
+    expect(loadUsageBarTemplate(file)).toEqual(tplA);
+    writeFileSync(staged, JSON.stringify(tplB));
+    renameSync(staged, file);
+    await subscription.reconcile();
+    expect(loadUsageBarTemplate(file)).toEqual(tplB);
+    expect(warnSpy).not.toHaveBeenCalled();
 
-      // Insert the 65th file — should evict the oldest (paths[0]) and close
-      // its watcher before allocating a watcher for paths[64].
-      expect(loadUsageBarTemplate(paths[64])).toMatchObject({
-        segments: [{ text: "v1-64" }],
-      });
-      expect(capturedWatchers).toHaveLength(65);
-      expect(watcherOperations.map(([kind]) => kind)).toEqual(["close", "watch"]);
-      expect(watcherOperations[0]?.[1]).toBe(capturedWatchers[0]);
-      expect(watcherOperations[1]?.[1]).toBe(paths[64]);
-      watcherOperations.splice(0);
+    renameSync(directory, join(tmpDir(), "retired"));
+    await expect(subscription.reconcile()).rejects.toThrow();
+    mkdirSync(directory);
+    writeFileSync(file, JSON.stringify(tplB));
+    const replacement = await loadObservedTemplate(file);
+    expect(replacement.template).toEqual(tplB);
+    await replacement.subscription.reconcile();
+    expect(subscription.health().state).toBe("closed");
+  });
 
-      // Check every survivor before re-inserting the evicted path causes another eviction.
-      for (let i = 1; i < 64; i++) {
-        expect(loadUsageBarTemplate(paths[i])).toMatchObject({
-          segments: [{ text: `v1-${i}` }],
-        });
-      }
-      expect(capturedWatchers).toHaveLength(65);
-      expect(watcherOperations).toEqual([]);
+  it("evicts the oldest path with its observation, but retains entries when retrying a miss", async () => {
+    const directory = tmpDir();
+    const files = Array.from({ length: 65 }, (_, index) =>
+      join(directory, `template-${index}.json`),
+    );
+    for (const file of files.slice(0, 63)) {
+      writeFileSync(file, JSON.stringify(tplA));
+      expect((await loadObservedTemplate(file)).template).toEqual(tplA);
+    }
+    const miss = files[63]!;
+    expect(loadUsageBarTemplate(miss)).toBe(DEFAULT_USAGE_BAR_TEMPLATE);
+    writeFileSync(miss, JSON.stringify(tplB));
+    expect((await loadObservedTemplate(miss)).template).toEqual(tplB);
+    expect(subscriptions).toHaveLength(64);
+    const oldest = watchedPaths.get(files[0]!)!;
+    writeFileSync(files[0]!, JSON.stringify(tplB));
+    expect(loadUsageBarTemplate(files[0])).toEqual(tplA);
 
-      // Re-reading changed content proves cache eviction; lifecycle assertions prove closure.
-      writeFileSync(
-        expectDefined(paths[0], "paths[0] test invariant"),
-        JSON.stringify({ segments: [{ text: "v2-0" }] }),
-      );
-      expect(loadUsageBarTemplate(paths[0])).toMatchObject({
-        segments: [{ text: "v2-0" }],
-      });
-      expect(capturedWatchers).toHaveLength(66);
-      expect(watcherOperations.map(([kind]) => kind)).toEqual(["close", "watch"]);
-      expect(watcherOperations[0]?.[1]).toBe(capturedWatchers[1]);
-      expect(watcherOperations[1]?.[1]).toBe(paths[0]);
-      watcherOperations.splice(0);
-
-      clearUsageBarTemplateCacheForTest();
-      expect(watcherOperations).toHaveLength(64);
-      for (const watcher of capturedWatchers.slice(2)) {
-        expect(
-          watcherOperations.some(([kind, closed]) => kind === "close" && closed === watcher),
-        ).toBe(true);
-      }
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      expect(closedWatchers.size).toBe(capturedWatchers.length);
-      for (const watcher of capturedWatchers) {
-        expect(closedWatchers.has(watcher)).toBe(true);
-      }
-    });
-
-    it("recovers after watcher error by clearing the dead watcher reference", () => {
-      const path = tmpFile("t.json", JSON.stringify(tplA));
-
-      // Load valid template → creates a watcher in the cache.
-      expect(loadUsageBarTemplate(path)).toMatchObject(tplA);
-      expect(capturedWatchers.length).toBe(1);
-
-      // Write invalid JSON to trigger the change handler, which sets
-      // entry.template = undefined.
-      writeFileSync(path, "{ not json");
-      capturedWatchEvents[0]?.();
-
-      // The template is now invalid — served as DEFAULT.
-      expect(loadUsageBarTemplate(path)).toBe(DEFAULT_USAGE_BAR_TEMPLATE);
-
-      // Simulate a transient watcher error.
-      // Without the fix: entry.watcher stays truthy → permanent DEFAULT.
-      // With the fix: entry.watcher is cleared → recovery on next access.
-      capturedWatchers[0]?.emit("error", new Error("simulated watcher error"));
-
-      // Write valid content to disk.
-      writeFileSync(path, JSON.stringify(tplB));
-
-      expect(loadUsageBarTemplate(path)).toMatchObject(tplB);
-    });
-
-    it("reloads a still-valid template after watcher error", async () => {
-      const path = tmpFile("t.json", JSON.stringify(tplA));
-
-      // Load valid template → creates a watcher in the cache.
-      expect(loadUsageBarTemplate(path)).toMatchObject(tplA);
-      expect(capturedWatchers.length).toBe(1);
-
-      // Simulate a transient watcher error while the template is still valid.
-      capturedWatchers[0]?.emit("error", new Error("simulated watcher error"));
-
-      // Without the fix (entry.template cleared): the stale tplA is still
-      // served from cache because entry.template is truthy.  File edits
-      // are never observed because the dead watcher doesn't fire and
-      // loadUsageBarTemplate never calls cacheTemplateFile() again.
-      // With the fix: entry.template is also cleared, so the next load
-      // re-reads from disk and creates a fresh watcher.
-      writeFileSync(path, JSON.stringify(tplB));
-      expect(loadUsageBarTemplate(path)).toMatchObject(tplB);
-    });
-
-    it("rewatches the path after atomic saves replace the file", () => {
-      const path = tmpFile("t.json", JSON.stringify(tplA));
-      expect(loadUsageBarTemplate(path)).toMatchObject(tplA);
-
-      // The rename invalidates the entry; the next load rereads and rewatches the new inode.
-      atomicSave(path, tplB);
-      expectDefined(capturedWatchEvents[0], "initial watcher")("rename");
-      expect(watcherOperations.map(([kind]) => kind)).toEqual(["watch", "close"]);
-      expect(watcherOperations[1]?.[1]).toBe(capturedWatchers[0]);
-      expect(loadUsageBarTemplate(path)).toMatchObject(tplB);
-      expect(watcherOperations.at(-1)).toEqual(["watch", path]);
-
-      // The replaced inode never reports later saves, so only the fresh watcher can.
-      atomicSave(path, tplC);
-      expectDefined(capturedWatchEvents[1], "replacement watcher")("rename");
-      expect(loadUsageBarTemplate(path)).toMatchObject(tplC);
-      expect(watcherOperations.map(([kind]) => kind)).toEqual([
-        "watch",
-        "close",
-        "watch",
-        "close",
-        "watch",
-      ]);
-      expect(watcherOperations[3]?.[1]).toBe(capturedWatchers[1]);
-    });
-
-    it("rewatches the path after the file is deleted and recreated", () => {
-      const path = tmpFile("t.json", JSON.stringify(tplA));
-      expect(loadUsageBarTemplate(path)).toMatchObject(tplA);
-      const watcherEvents = expectDefined(capturedWatchEvents[0], "initial watcher");
-
-      // Linux reports an unlink as "change" (link count) followed by "rename".
-      rmSync(path);
-      watcherEvents("change");
-      watcherEvents("rename");
-      expect(loadUsageBarTemplate(path)).toBe(DEFAULT_USAGE_BAR_TEMPLATE);
-      expect(watcherOperations.map(([kind]) => kind)).toEqual(["watch", "close"]);
-      expect(warnSpy).not.toHaveBeenCalled();
-
-      writeFileSync(path, JSON.stringify(tplB));
-      expect(loadUsageBarTemplate(path)).toMatchObject(tplB);
-      expect(watcherOperations.at(-1)).toEqual(["watch", path]);
-    });
-
-    it("ignores late events from a watcher that was already invalidated", () => {
-      const path = tmpFile("t.json", JSON.stringify(tplA));
-      expect(loadUsageBarTemplate(path)).toMatchObject(tplA);
-      const watcherEvents = expectDefined(capturedWatchEvents[0], "initial watcher");
-
-      atomicSave(path, tplB);
-      watcherEvents("rename");
-      // Without the guard this repopulates the entry and the next load skips rewatching.
-      watcherEvents("change");
-      expect(loadUsageBarTemplate(path)).toMatchObject(tplB);
-      expect(watcherOperations.map(([kind]) => kind)).toEqual(["watch", "close", "watch"]);
-    });
-
-    it("does not evict when retrying the same key after a prior miss", () => {
-      const dir = tmpDir();
-      // Fill the cache with 63 valid files plus 1 invalid file = 64 entries.
-      const validPaths: string[] = [];
-      for (let i = 0; i < 63; i++) {
-        const path = join(dir, `good-${i}.json`);
-        writeFileSync(path, JSON.stringify({ segments: [{ text: `v1-${i}` }] }));
-        validPaths.push(path);
-      }
-      const invalidPath = join(dir, "bad.json");
-      writeFileSync(invalidPath, "{ not json");
-
-      // Load 63 valid + 1 invalid = 64 entries in cache (cache full).
-      for (const p of validPaths) {
-        expect(loadUsageBarTemplate(p)).toMatchObject({
-          segments: [{ text: expect.any(String) }],
-        });
-      }
-      expect(loadUsageBarTemplate(invalidPath)).toBe(DEFAULT_USAGE_BAR_TEMPLATE);
-
-      // Fix the invalid file and retry. This is the SAME key, so it must NOT
-      // evict the oldest valid entry (validPaths[0]).
-      writeFileSync(invalidPath, JSON.stringify(tplB));
-      expect(loadUsageBarTemplate(invalidPath)).toMatchObject(tplB);
-
-      // validPaths[0] should still be cached — not evicted by the retry.
-      writeFileSync(
-        expectDefined(validPaths[0], "validPaths[0] test invariant"),
-        JSON.stringify({ segments: [{ text: "changed" }] }),
-      );
-      expect(loadUsageBarTemplate(validPaths[0])).toMatchObject({
-        segments: [{ text: `v1-0` }],
-      });
-    });
+    writeFileSync(files[64]!, JSON.stringify(tplA));
+    expect((await loadObservedTemplate(files[64]!)).template).toEqual(tplA);
+    expect(oldest.health().state).toBe("closed");
+    expect(
+      subscriptions
+        .filter((subscription) => subscription !== oldest)
+        .every((subscription) => subscription.health().state === "ready"),
+    ).toBe(true);
+    expect((await loadObservedTemplate(files[0]!)).template).toEqual(tplB);
+    await clearUsageBarTemplateCacheForTest();
+    expect(subscriptions.every((subscription) => subscription.health().state === "closed")).toBe(
+      true,
+    );
   });
 });
