@@ -26,7 +26,9 @@ describe("retained chat work admission", () => {
           throw new Error("pending input write failed");
         }
       });
-      work.setPendingInputCleanup(finishPendingInput);
+      work.addCleanup(finishPendingInput);
+      const releaseSource = vi.fn();
+      work.addCleanup(releaseSource);
       const releaseCollectedTurn = work.retain();
       caller.release();
       work.release();
@@ -36,6 +38,7 @@ describe("retained chat work admission", () => {
       expect(caller.isCurrent()).toBe(true);
       expect(finishPendingInput).not.toHaveBeenCalled();
       expect(releaseAdmission).not.toHaveBeenCalled();
+      expect(releaseSource).not.toHaveBeenCalled();
 
       releaseCollectedTurn();
       releaseCollectedTurn();
@@ -43,6 +46,10 @@ describe("retained chat work admission", () => {
       expect(caller.isCurrent()).toBe(false);
       expect(finishPendingInput).toHaveBeenCalledOnce();
       expect(releaseAdmission).toHaveBeenCalledOnce();
+      expect(releaseSource).toHaveBeenCalledOnce();
+      const lateResource = vi.fn();
+      work.addCleanup(lateResource);
+      expect(lateResource).toHaveBeenCalledOnce();
       expect(warn).toHaveBeenCalledTimes(failCleanup ? 1 : 0);
       expect(() => work.retain()).toThrow("cannot retain a released chat work admission");
     },

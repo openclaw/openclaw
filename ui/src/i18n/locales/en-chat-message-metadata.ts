@@ -37,6 +37,8 @@ const enChatMessageMetadata = {
       replyingToLabel: "Replying to",
       originalUnavailable: "The original message is unavailable.",
       replyOriginalUnavailable: "Original message unavailable",
+      originalLoadFailed: "Could not load the original message. Click the reply to try again.",
+      originalOversized: "The original message is too large to display.",
       message: en.chat.messages.message,
       currentMessage: "current message",
       actions: "Message actions",

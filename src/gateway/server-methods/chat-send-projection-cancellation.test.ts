@@ -50,6 +50,7 @@ it.each(["reply-observation", "commentary-media"] as const)(
       const controller = new AbortController();
       const warn = vi.fn();
       const dispatch = createChatSendReplyDispatch({
+        getSourceSessionId: () => (controller.signal.aborted ? undefined : scope.sessionId),
         accountId: undefined,
         isAgentRunStarted: () => true,
         isRunCurrent: () => true,

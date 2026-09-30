@@ -691,7 +691,13 @@ stay expanded. User messages,
 forwarded inputs, and structural markers remain boundaries for grouping.
 Selecting the author's name on a reply's **Replying to** line scrolls to the
 original message and briefly highlights it, first opening its containing
-**Worked for…** group when the original sits inside one.
+**Worked for…** group when the original sits inside one. If its source lookup
+failed temporarily, selecting the name retries it and reports a retryable load
+error rather than claiming the source is missing. Missing or inaccessible sources
+share the same unavailable notice; an authorized source that exceeds the display
+limit reports that it is too large. Rendering alone does not repeatedly retry a
+failed lookup. Sources without a known author keep the pending row until a new
+connection retries their lookup.
 
 On wide desktop panes, the conversation position rail provides keyboard shortcuts
 to messages. In right-to-left interface languages, the rail uses the right gutter

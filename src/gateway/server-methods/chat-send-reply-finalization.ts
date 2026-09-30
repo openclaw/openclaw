@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { getReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
+import type { ReplyDispatchOperation } from "../../auto-reply/reply/reply-dispatcher.types.js";
 import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
 import { readAssistantDisplayContent } from "../../shared/assistant-display-content.js";
 import { appendChatCanvasBlocksToMessage } from "../chat-display-projection.canvas.js";
@@ -26,12 +27,12 @@ import {
   type WebchatReplyMediaRequesterContext,
 } from "./chat-reply-media.js";
 import {
+  buildTranscriptReplyTextFromInputs,
   readChatSendReplyPayload,
   selectChatSendFinalReplyInputs,
   type DeliveredChatSendReply,
 } from "./chat-send-command-replies.js";
 import { isChatSendReplyDeliveryAuthorized } from "./chat-send-delivery-authority.js";
-import { buildTranscriptReplyTextFromInputs } from "./chat-send-reply-dispatch.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
 import type { GatewayInjectedTtsSupplementMarker } from "./chat-transcript-inject.js";
 import { appendAssistantTranscriptMessage } from "./chat-transcript-persistence.js";
@@ -118,6 +119,7 @@ export async function finalizeChatSendDispatchedReplies(params: {
   accountId: string | undefined;
   context: GatewayRequestContext;
   deliveredReplies: readonly DeliveredChatSendReply[];
+  resolveReplyInputs?: (input: ReplyDispatchOperation) => ReplyDispatchOperation[];
   emitFirstAssistantServerTiming: () => void;
   foldCommandBlocks: boolean;
   persistUserTurnTranscript: GatewayChatUserTurnPersist;
@@ -176,7 +178,7 @@ export async function finalizeChatSendDispatchedReplies(params: {
         metadata.assistantTranscriptOwned !== true
       );
     });
-  const selectedInputs = selectChatSendFinalReplyInputs({
+  let selectedInputs = selectChatSendFinalReplyInputs({
     deliveredReplies,
     foldCommandBlocks,
     suppressReplies,
@@ -199,6 +201,12 @@ export async function finalizeChatSendDispatchedReplies(params: {
   if (!authorizeDelivery("finalization")) {
     return;
   }
+  if (contextFreeCommand) {
+    await persistUserTurnTranscript({ contextFreeCommand: true });
+  } else {
+    await persistUserTurnTranscript();
+  }
+  selectedInputs = selectedInputs.flatMap((input) => params.resolveReplyInputs?.(input) ?? [input]);
   const transcriptMirrorResolution = resolveTranscriptMirrorOwner(rawFinalPayloads);
   const transcriptMirrorOwner =
     transcriptMirrorResolution.kind === "owner" || transcriptMirrorResolution.kind === "blocked"
@@ -320,11 +328,6 @@ export async function finalizeChatSendDispatchedReplies(params: {
     canAppendAssistantTranscript &&
     (transcriptReply || persistedContentForAppend?.length),
   );
-  if (contextFreeCommand) {
-    await persistUserTurnTranscript({ contextFreeCommand: true });
-  } else {
-    await persistUserTurnTranscript();
-  }
   if (!authorizeDelivery("transcript append")) {
     return;
   }

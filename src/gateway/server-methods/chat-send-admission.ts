@@ -690,7 +690,7 @@ export async function admitChatSend(
       originatingRoute,
       rejectSessionRoutingChanged,
       retainGatewayWorkAdmission: retainedWork.retain,
-      setPendingInputCleanup: retainedWork.setPendingInputCleanup,
+      addCleanup: retainedWork.addCleanup,
       assertClientUploadAllowed: uploadAdmission.assertClientUploadAllowed,
       assertWorkAdmissionCurrent: () => {
         const queued = context.chatQueuedTurns.get(clientRunId);

@@ -38,6 +38,7 @@ import { finalizeAcceptedChatSendMessageInjection } from "./chat-send-message-in
 import { applyChatSendReplyContextFields } from "./chat-send-reply-context.js";
 import { createChatSendReplyDispatch } from "./chat-send-reply-dispatch.js";
 import { finalizeChatSendDispatchedReplies } from "./chat-send-reply-finalization.js";
+import { readChatSendReplySourceSessionId } from "./chat-send-reply-source-binding.js";
 import {
   classifyAcceptedChatSendFailure,
   runAcceptedChatSendDispatch,
@@ -143,6 +144,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
     accountId,
     prepareAssistantTranscriptMessage: params.prepareAssistantTranscriptMessage,
     isAgentRunStarted: () => agentRunStarted,
+    getSourceSessionId: () => readChatSendReplySourceSessionId(params),
     isRunCurrent: () =>
       isRunCurrent() ||
       (!activeRunAbort.controller.signal.aborted &&
@@ -182,6 +184,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
     session,
     hasCronCreatorAuthority: cronCreatorAuthority !== undefined,
     suppressReplies: progressRefresh,
+    resolveReplyInputs: (input, runId) => replyDispatch.resolveReplyInputs(input, runId, true),
     retainWorkAdmission: retainGatewayWorkAdmission,
     armOperatorRunCancellation: admission.armOperatorRunCancellation,
     retireOperatorRunCancellation: admission.retireOperatorRunCancellation,
@@ -575,6 +578,8 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
               accountId,
               context,
               deliveredReplies: replyDispatch.deliveredReplies,
+              resolveReplyInputs: (input) =>
+                replyDispatch.resolveReplyInputs(input, undefined, true),
               emitFirstAssistantServerTiming,
               foldCommandBlocks: isInternalTextSlashCommandTurn || replyDispatchRun !== undefined,
               persistUserTurnTranscript: persistGatewayUserTurnTranscriptBestEffort,
@@ -598,6 +603,8 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
               deliveredReplies: replyDispatch.deliveredReplies,
               emitFirstAssistantServerTiming,
               hasReturnedAgentErrorPayloads: hasReturnedAgentError,
+              resolveReplyInputs: (input, runId) =>
+                replyDispatch.resolveReplyInputs(input, runId, true),
               session,
               suppressFinal: runtimeFailed,
             });

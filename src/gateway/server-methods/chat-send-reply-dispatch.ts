@@ -1,7 +1,5 @@
-import { isAudioFileName } from "@openclaw/media-core/mime";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyDeliveryState } from "../../agents/reply-completion.js";
 import type { ReplyDispatchRun } from "../../auto-reply/get-reply-options.types.js";
 import {
@@ -33,11 +31,6 @@ import {
   extractAssistantPhaseText,
   extractAssistantTextForPhase,
 } from "../../shared/chat-message-content.js";
-import {
-  parseInlineDirectives,
-  stripInlineDirectiveTagsForDelivery,
-  sanitizeReplyDirectiveId,
-} from "../../utils/directive-tags.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { isToolHistoryBlockType } from "../chat-display-projection.canvas.js";
 import { projectChatDisplayMessage } from "../chat-display-projection.js";
@@ -62,11 +55,13 @@ import {
   type WebchatReplyMediaRequesterContext,
 } from "./chat-reply-media.js";
 import {
+  buildTranscriptReplyTextFromInputs,
   readChatSendReplyPayload,
   replaceChatSendReplyPayload,
   type DeliveredChatSendReply,
 } from "./chat-send-command-replies.js";
 import { observeChatSendCommentaryMedia } from "./chat-send-commentary-media.js";
+import { createChatSendReplyIdentityResolver } from "./chat-send-reply-identity.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
 import {
   appendAssistantTranscriptMessage,
@@ -81,63 +76,13 @@ import {
 } from "./chat-tts-markers.js";
 import type { GatewayRequestContext } from "./types.js";
 
-export function buildTranscriptReplyTextFromInputs(
-  inputs: readonly ReplyDispatchOperation[],
-): string {
-  const chunks = inputs
-    .map((input) => {
-      const payload = readChatSendReplyPayload(input);
-      if (payload.isReasoning === true) {
-        return "";
-      }
-      const parts =
-        input.kind === "prepared" ? input.plan.parts : resolveSendableOutboundReplyParts(payload);
-      const lines: string[] = [];
-      const parsedText =
-        input.kind === "raw" && payload.text?.includes("[[")
-          ? parseInlineDirectives(payload.text)
-          : undefined;
-      const replyToId =
-        sanitizeReplyDirectiveId(payload.replyToId) ??
-        sanitizeReplyDirectiveId(parsedText?.replyToExplicitId);
-      if (replyToId) {
-        lines.push(`[[reply_to:${replyToId}]]`);
-      } else if (payload.replyToCurrent || parsedText?.replyToCurrent) {
-        lines.push("[[reply_to_current]]");
-      }
-      const text =
-        input.kind === "raw" && payload.text
-          ? stripInlineDirectiveTagsForDelivery(payload.text).text
-          : (payload.text ?? "");
-      if (text.trim() && (input.kind === "prepared" || !isSuppressedControlReplyText(text))) {
-        lines.push(text);
-      }
-      for (const mediaUrl of parts.mediaUrls) {
-        if (payload.sensitiveMedia === true) {
-          continue;
-        }
-        const trimmed = mediaUrl.trim();
-        if (trimmed) {
-          lines.push(`Attachment: ${trimmed}`);
-        }
-      }
-      if (
-        (payload.audioAsVoice || parsedText?.audioAsVoice) &&
-        parts.mediaUrls.some((mediaUrl) => isAudioFileName(mediaUrl))
-      ) {
-        lines.push("[[audio_as_voice]]");
-      }
-      return lines.join("\n");
-    })
-    .filter(Boolean);
-  return combineNonStreamingReplyParts(chunks);
-}
-
 /** Build delivery options and capture state for the core-owned webchat dispatcher. */
 export function createChatSendReplyDispatch(params: {
   accountId: string | undefined;
   requesterContext?: WebchatReplyMediaRequesterContext;
   isAgentRunStarted: () => boolean;
+  /** Current SID from the retained work owner, never a delivery-time store read. */
+  getSourceSessionId: () => string | undefined;
   onCommandBlock?: (text: string) => void;
   isRunCurrent?: () => boolean;
   abortSignal?: AbortSignal;
@@ -148,7 +93,10 @@ export function createChatSendReplyDispatch(params: {
     PreparedChatSendSession,
     "agentId" | "backingSessionId" | "cfg" | "clientRunId" | "sessionKey" | "sessionLoadOptions"
   >;
-  userTurnRecorder: Pick<UserTurnTranscriptRecorder, "markBlocked" | "getAdmissionReceipt">;
+  userTurnRecorder: Pick<
+    UserTurnTranscriptRecorder,
+    "markBlocked" | "getAdmissionReceipt" | "getPersistedMessage"
+  >;
 }) {
   const { accountId, isAgentRunStarted, logGateway, session, userTurnRecorder } = params;
   const { backingSessionId, cfg, clientRunId } = session;
@@ -187,6 +135,12 @@ export function createChatSendReplyDispatch(params: {
     channel: INTERNAL_MESSAGE_CHANNEL,
   });
   const deliveredReplies: DeliveredChatSendReply[] = [];
+  const { resolveReplyInputs, prepareTranscriptIdentity } = createChatSendReplyIdentityResolver({
+    session,
+    userTurnRecorder,
+    getAgentRunId: () => agentRunId,
+    getSourceSessionId: params.getSourceSessionId,
+  });
   const finalizedAgentMediaTranscriptKeys = new Set<string>();
   let preparingTranscript = false;
   const prepareAssistantTranscriptMessage: PrepareAssistantTranscriptMessage = (
@@ -202,7 +156,9 @@ export function createChatSendReplyDispatch(params: {
       message,
       splitMediaFromOutput(sourceText).mediaUrls,
     );
-    return params.prepareAssistantTranscriptMessage?.(prepared, sourceText) ?? prepared;
+    const transformed =
+      params.prepareAssistantTranscriptMessage?.(prepared, sourceText) ?? prepared;
+    return prepareTranscriptIdentity(transformed);
   };
   const resolveReplyDelivery = async (
     minimumAssistantMessageIndex = 0,
@@ -646,8 +602,16 @@ export function createChatSendReplyDispatch(params: {
     onError: (err) => {
       logGateway.warn(`webchat dispatch failed: ${formatForLog(err)}`);
     },
-    deliver: (payload, info) => deliverInput({ kind: "raw", payload }, info),
-    deliverPrepared: (plan, info) => deliverInput({ kind: "prepared", plan }, info),
+    deliver: async (payload, info) => {
+      for (const input of resolveReplyInputs({ kind: "raw", payload })) {
+        await deliverInput(input, info);
+      }
+    },
+    deliverPrepared: async (plan, info) => {
+      for (const input of resolveReplyInputs({ kind: "prepared", plan })) {
+        await deliverInput(input, info);
+      }
+    },
   };
   const finalizeAgentMediaTranscript = async () => {
     const latestPayloadByKey = new Map<string, ReplyDispatchOperation>();
@@ -706,6 +670,7 @@ export function createChatSendReplyDispatch(params: {
     onModelSelected,
     prepareAssistantTranscriptMessage,
     resolveReplyDelivery,
+    resolveReplyInputs,
     runAgentMediaTranscript,
   };
 }

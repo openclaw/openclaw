@@ -1,3 +1,5 @@
+import { ErrorCodes } from "@openclaw/gateway-client/browser";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ChatMessageGetResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { t } from "../../i18n/index.ts";
 import { registerChatMessageMetadataEnglish } from "../../i18n/locales/en-chat-message-metadata.ts";
@@ -11,15 +13,21 @@ import type { ReplyMessageStatus } from "./components/chat-reply-preview.ts";
 
 registerChatMessageMetadataEnglish();
 
+type ReplyMessageLookup = {
+  client: object;
+  generation: number;
+  message?: unknown;
+  unavailableReason?: ChatMessageGetResult["unavailableReason"];
+  failed?: boolean;
+  pending?: Promise<void>;
+};
+
 export abstract class ChatPaneReplyNavigation extends ChatPaneSession {
   private activeReplyNavigation: symbol | null = null;
   private replyNavigationSessionKey: string | null = null;
   protected replyNavigationId: string | null = null;
   protected replyMessageRevision = 0;
-  private readonly replyMessages = new Map<
-    string,
-    { client: object; generation: number; message?: unknown; status?: "missing" | "oversized" }
-  >();
+  private readonly replyMessages = new Map<string, ReplyMessageLookup>();
 
   protected abstract loadOlderMessages(): Promise<boolean>;
 
@@ -41,7 +49,7 @@ export abstract class ChatPaneReplyNavigation extends ChatPaneSession {
    * How the current connection answered a lookup without a message. Unknown is
    * pending from the first paint, including a warm boot rendered before the
    * Gateway connects, and a transport failure stays pending until a new
-   * connection's retry answers.
+   * connection's retry or an explicit navigation attempt answers.
    */
   protected readonly replyMessageStatus = (messageId: string): ReplyMessageStatus | undefined => {
     const state = this.state;
@@ -49,7 +57,13 @@ export abstract class ChatPaneReplyNavigation extends ChatPaneSession {
       return undefined;
     }
     const cached = this.currentReplyMessage(messageId);
-    return cached?.message ? undefined : (cached?.status ?? "pending");
+    return cached?.message
+      ? undefined
+      : cached?.unavailableReason
+        ? cached.unavailableReason === "oversized"
+          ? "oversized"
+          : "missing"
+        : "pending";
   };
 
   protected readonly requestReplyMessage = (messageId: string): void => {
@@ -66,7 +80,7 @@ export abstract class ChatPaneReplyNavigation extends ChatPaneSession {
     return `${sessionKey}\u0000${agentId ?? ""}\u0000${messageId}`;
   }
 
-  private async loadReplyMessage(messageId: string): Promise<void> {
+  private async loadReplyMessage(messageId: string, retry = false): Promise<void> {
     const scope = this.captureConnectionScope();
     if (!scope || parseCatalogSessionKey(scope.state.sessionKey)) {
       return;
@@ -75,50 +89,55 @@ export abstract class ChatPaneReplyNavigation extends ChatPaneSession {
     const agentId = scopedAgentParamsForSession(scope.state, sessionKey).agentId;
     const cacheKey = this.replyMessageCacheKey(sessionKey, messageId);
     const cached = this.replyMessages.get(cacheKey);
-    if (cached?.client === scope.client && cached.generation === scope.generation) {
+    if (
+      cached?.client === scope.client &&
+      cached.generation === scope.generation &&
+      !(retry && cached.failed)
+    ) {
+      await cached.pending;
       return;
     }
     while (this.replyMessages.size >= 256) {
       this.replyMessages.delete(this.replyMessages.keys().next().value!);
     }
-    const attempt = { client: scope.client, generation: scope.generation };
+    const attempt: ReplyMessageLookup = { client: scope.client, generation: scope.generation };
     this.replyMessages.set(cacheKey, attempt);
-    let result: ChatMessageGetResult | undefined;
-    try {
-      result = await scope.client.request<ChatMessageGetResult>("chat.message.get", {
-        sessionKey,
-        ...(agentId ? { agentId } : {}),
-        messageId,
-        maxChars: 500,
-      });
-    } catch {
-      result = undefined;
-    }
-    // A transport failure stays unconfirmed and pending: the retained attempt
-    // stops render retry loops, and a new logical connection owns a fresh
-    // attempt, even with the same client.
-    if (
-      !result ||
-      !this.isConnectionScopeCurrent(scope) ||
-      this.replyMessages.get(cacheKey) !== attempt
-    ) {
-      return;
-    }
-    // A Gateway answer without a message confirms the original is inaccessible,
-    // except an oversized one, which exists.
-    this.replyMessages.set(
-      cacheKey,
-      result.ok && result.message
-        ? { ...attempt, message: result.message }
-        : {
-            ...attempt,
-            status: result.unavailableReason === "oversized" ? "oversized" : "missing",
-          },
-    );
-    this.replyMessageRevision += 1;
-    if (areUiSessionKeysEquivalent(scope.state.sessionKey, sessionKey)) {
-      this.requestUpdate();
-    }
+    attempt.pending = (async () => {
+      let result: ChatMessageGetResult;
+      try {
+        result = await scope.client.request<ChatMessageGetResult>("chat.message.get", {
+          sessionKey,
+          ...(agentId ? { agentId } : {}),
+          messageId,
+          maxChars: 500,
+        });
+      } catch (error) {
+        const code = asNullableRecord(error)?.gatewayCode;
+        if (code === ErrorCodes.INVALID_REQUEST || code === ErrorCodes.FORBIDDEN) {
+          // Sharing denials intentionally use the same response as absent sources.
+          result = { ok: false, unavailableReason: "not_visible" };
+        } else {
+          // Rendering cannot retry in a loop. Only an explicit click or a new
+          // connection retries a transport failure; it is not a missing message.
+          attempt.failed = true;
+          return;
+        }
+      }
+      if (!this.isConnectionScopeCurrent(scope) || this.replyMessages.get(cacheKey) !== attempt) {
+        return;
+      }
+      if (!result.ok || !result.message) {
+        attempt.unavailableReason = result.unavailableReason ?? "not_found";
+      } else {
+        attempt.message = result.message;
+      }
+      this.replyMessageRevision += 1;
+      if (areUiSessionKeysEquivalent(scope.state.sessionKey, sessionKey)) {
+        this.requestUpdate();
+      }
+    })();
+    await attempt.pending;
+    delete attempt.pending;
   }
 
   private replyNavigationIsCurrent(
@@ -176,6 +195,36 @@ export abstract class ChatPaneReplyNavigation extends ChatPaneSession {
     this.replyNavigationId = messageId;
     this.requestUpdate();
     try {
+      const cacheKey = this.replyMessageCacheKey(sessionKey, messageId);
+      if (
+        !state.chatMessages.some((message) => persistedMessageEntryId(message) === messageId) &&
+        this.replyMessages.has(cacheKey)
+      ) {
+        const scope = this.captureConnectionScope();
+        await this.loadReplyMessage(messageId, true);
+        if (!scope || !this.isConnectionScopeCurrent(scope)) {
+          return;
+        }
+        if (!this.replyNavigationIsCurrent(navigation, state, sessionKey, sessionId)) {
+          return;
+        }
+        const lookup = this.replyMessages.get(cacheKey);
+        if (lookup?.client === state.client && lookup.generation === this.connectionGeneration) {
+          if (lookup.failed || lookup.unavailableReason) {
+            state.lastError = lookup.failed
+              ? t("chat.messages.originalLoadFailed")
+              : lookup.unavailableReason === "oversized"
+                ? t("chat.messages.originalOversized")
+                : t("chat.messages.originalUnavailable");
+            state.requestUpdate?.();
+            return;
+          }
+          if (lookup.message && state.lastError === t("chat.messages.originalLoadFailed")) {
+            state.lastError = null;
+            state.requestUpdate?.();
+          }
+        }
+      }
       while (
         !state.chatMessages.some((message) => persistedMessageEntryId(message) === messageId)
       ) {
