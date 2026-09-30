@@ -16,6 +16,9 @@ const FORBIDDEN_CSS_VALUE_PARTS = [
   "paint(",
   "@import",
   "expression(",
+  "/*",
+  "*/",
+  "\\",
 ] as const;
 
 const MODE_TOKEN_ORDER = [
@@ -100,21 +103,9 @@ export function requireSafeCssValue(value: unknown, label: string) {
   if (FORBIDDEN_CSS_VALUE_PARTS.some((part) => lowered.includes(part))) {
     throw new Error(`Unsupported tweakcn token: ${label}`);
   }
-  if (normalized.includes("/*") || normalized.includes("*/") || normalized.includes("\\")) {
-    throw new Error(`Unsupported tweakcn token: ${label}`);
-  }
   for (const char of normalized) {
     const code = char.charCodeAt(0);
-    if (
-      code < 0x20 ||
-      code === 0x7f ||
-      char === "{" ||
-      char === "}" ||
-      char === ";" ||
-      char === "<" ||
-      char === ">" ||
-      char === "`"
-    ) {
+    if (code < 0x20 || code === 0x7f || "{};<>`".includes(char)) {
       throw new Error(`Unsupported tweakcn token: ${label}`);
     }
   }
@@ -147,10 +138,7 @@ function normalizeStoredTokenMap(value: Record<string, unknown> | undefined): Th
 
 export function describeThemeLabel(value: string | undefined) {
   const normalized = normalizeOptionalString(value);
-  if (!normalized) {
-    return "Custom";
-  }
-  return truncateUtf16Safe(normalized, 80);
+  return normalized ? truncateUtf16Safe(normalized, 80) : "Custom";
 }
 
 export function parseImportedCustomTheme(value: unknown): ImportedCustomTheme | null {
