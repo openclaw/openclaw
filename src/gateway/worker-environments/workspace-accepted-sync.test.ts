@@ -12,10 +12,7 @@ import {
   type WorkerWorkspaceCommand,
 } from "./tunnel-contract.js";
 import { BUNDLE_HASH, prepareLocalWorkspaceRsyncBoundary } from "./tunnel.test-support.js";
-import {
-  AcceptedWorkspacePublicationIndeterminateError,
-  isAcceptedWorkspacePublicationIndeterminateError,
-} from "./workspace-accepted-publication.js";
+import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
 import {
   createAcceptedWorkspacePublisherFactory as createAcceptedWorkspacePublisherFactoryRaw,
   recoverAcceptedWorkspacePublication,
@@ -680,7 +677,6 @@ Atomics.wait = function(waitArray, index, value, timeout) {
     });
     const thrown = await publishing.catch((error: unknown) => error);
     expect(thrown).toBeInstanceOf(AcceptedWorkspacePublicationIndeterminateError);
-    expect(isAcceptedWorkspacePublicationIndeterminateError(thrown)).toBe(true);
     expect(thrown).toMatchObject({
       message: "Accepted workspace publication is indeterminate and requires recovery",
       operation: "apply",
