@@ -3,7 +3,7 @@ import { createServer as createHttpsServer } from "node:https";
 import net from "node:net";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { describe, expect, it, vi } from "vitest";
-import { WebSocketServer, type WebSocket } from "ws";
+import { WebSocket, WebSocketServer } from "ws";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
@@ -144,6 +144,25 @@ function installThrowingThenHealthyListeners(connection: ReturnType<typeof creat
 }
 
 describe("worker connection endpoint failures", () => {
+  it("waits for reconnection when the admitted socket is already closing", async () => {
+    const connection = createIdleConnection();
+    Object.assign(connection as unknown as Record<string, unknown>, {
+      stateValue: { kind: "ready", hello: {} },
+      socket: { readyState: WebSocket.CLOSING, close: vi.fn() },
+    });
+    const pending = connection.waitForReady();
+    let settled = false;
+    void pending.then(
+      () => {
+        settled = true;
+      },
+      () => {},
+    );
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    await connection.stop();
+  });
+
   it("rejects a TLS pin mismatch before upgrade without retrying admission", async () => {
     const server = createHttpsServer({ key: TEST_TLS_KEY_PEM, cert: TEST_TLS_CERT_PEM });
     const websocketServer = new WebSocketServer({ server });
