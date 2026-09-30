@@ -1,4 +1,3 @@
-import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
@@ -11,7 +10,6 @@ import { createSubsystemLogger } from "openclaw/plugin-sdk/memory-core-host-engi
 import {
   buildFileEntry,
   buildMultimodalChunkForIndexing,
-  MEMORY_EMBEDDING_CACHE_TABLE,
   MEMORY_SEARCH_DEADLINE_CONTROL,
   runWithConcurrency,
   type MemorySearchDeadlineControl,
@@ -19,10 +17,6 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { MAX_TIMER_TIMEOUT_MS, resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
-import {
-  runSqliteImmediateTransaction,
-  runSqliteImmediateTransactionSync,
-} from "openclaw/plugin-sdk/sqlite-runtime";
 import { chunkItems } from "openclaw/plugin-sdk/text-chunking";
 import { hasMemorySessionTombstone } from "../memory-session-tombstones.js";
 import {
@@ -35,12 +29,9 @@ import type { IndexedMemoryChunk } from "./manager-chunk-writer.js";
 import { prepareMemoryIndexInWorker } from "./manager-cpu-worker-runtime.js";
 import { readMemoryDatabaseRevision } from "./manager-db-kernel.js";
 import {
-  clearMemoryEmbeddingCacheIdentities,
-  collectMemoryCachedEmbeddings,
-  isValidMemoryEmbedding,
-  loadMemoryEmbeddingCache,
-  upsertMemoryEmbeddingCache,
-} from "./manager-embedding-cache.js";
+  MemoryManagerEmbeddingCacheOps,
+  type MemoryEmbeddingCacheCandidate,
+} from "./manager-embedding-cache-ops.js";
 import { createMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
 import {
   buildMemoryEmbeddingBatches,
@@ -55,17 +46,14 @@ import {
   type MemoryIndexProviderIdentity,
 } from "./manager-reindex-state.js";
 import type { MemorySourceIndexReplacement } from "./manager-source-index-kernel.js";
-import {
-  MemoryManagerSyncOps,
-  type MemoryIndexWorkItem,
-  type MemorySemanticProviderGeneration,
-  type MemorySyncProviderGeneration,
+import type {
+  MemoryIndexWorkItem,
+  MemorySemanticProviderGeneration,
+  MemorySyncProviderGeneration,
 } from "./manager-sync-ops.js";
 import { logMemoryVectorDegradedWrite } from "./manager-vector-warning.js";
 import { resolveMemoryPathClassification } from "./memory-path-provenance.js";
 
-const EMBEDDING_CACHE_TABLE = MEMORY_EMBEDDING_CACHE_TABLE;
-const EMBEDDING_CACHE_PRUNE_BATCH_SIZE = 100;
 const EMBEDDING_BATCH_MAX_TOKENS = 8000;
 const EMBEDDING_INDEX_CONCURRENCY = 4;
 const EMBEDDING_TIMEOUTS_MS = {
@@ -95,12 +83,6 @@ type PreparedMemoryIndexEntry = {
   source: MemorySource;
   chunks: IndexedMemoryChunk[];
   structuredInputBytes?: number;
-};
-
-type MemoryEmbeddingCacheCandidate = {
-  chunk: IndexedMemoryChunk;
-  entry: MemoryIndexEntry;
-  source: MemorySource;
 };
 
 // Retry attempts are host control state. Provider-thrown values stay opaque so
@@ -249,7 +231,7 @@ async function runEmbeddingOperationWithTimeout<T>(params: {
   }
 }
 
-export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
+export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCacheOps {
   protected readonly batchFailureLimit = 2;
   protected batchFailure: { count: number; lastError?: string; lastProvider?: string } = {
     count: 0,
@@ -345,35 +327,6 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     this.syncProviderGeneration = null;
     this.syncProviderGenerationRelease?.();
     this.syncProviderGenerationRelease = null;
-  }
-
-  protected async pruneEmbeddingCacheIfNeeded(): Promise<void> {
-    const max = this.cache.maxEntries;
-    if (!this.cache.enabled || !max || max <= 0) {
-      return;
-    }
-    const count = this.db.prepare(`SELECT COUNT(*) as c FROM ${EMBEDDING_CACHE_TABLE}`);
-    const excess = () => Number(count.get()?.c ?? 0) - max;
-    const remove = this.db.prepare(
-      `DELETE FROM ${EMBEDDING_CACHE_TABLE} WHERE rowid IN (
-         SELECT rowid FROM ${EMBEDDING_CACHE_TABLE} ORDER BY updated_at ASC LIMIT ?
-       )`,
-    );
-    while (excess() > 0) {
-      await runSqliteImmediateTransaction(
-        this.db,
-        async () => () => {
-          // Purges can reduce the cache while admission waits; retain the newest cap.
-          const currentExcess = excess();
-          if (currentExcess > 0) {
-            remove.run(Math.min(currentExcess, EMBEDDING_CACHE_PRUNE_BATCH_SIZE));
-          }
-        },
-        undefined,
-        (write) => this.withDatabaseWrite(write),
-      );
-      await yieldToEventLoop();
-    }
   }
 
   private async embedChunksInBatches(
@@ -478,34 +431,6 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     return embeddings;
   }
 
-  private collectCachedEmbeddings(
-    candidates: MemoryEmbeddingCacheCandidate[],
-    generation: MemorySemanticProviderGeneration,
-  ) {
-    const chunks = candidates.map((candidate) => candidate.chunk);
-    const cached = loadMemoryEmbeddingCache({
-      db: generation.database.db,
-      enabled: this.cache.enabled,
-      providerIdentities: generation.identities,
-      hashes: chunks.map((chunk) => chunk.hash),
-    });
-    // Cache hits and new batches must inhabit the same vector space during a sync.
-    for (const [hash, embedding] of cached) {
-      if (!isValidMemoryEmbedding(embedding, generation.embeddingDimensions)) {
-        cached.delete(hash);
-      } else {
-        generation.embeddingDimensions ??= embedding.length;
-      }
-    }
-    const result = collectMemoryCachedEmbeddings({ chunks, cached });
-    return {
-      ...result,
-      missingCandidates: result.missing.map((item) =>
-        expectDefined(candidates[item.index], "missing memory embedding candidate"),
-      ),
-    };
-  }
-
   protected async embedBatchWithRetry(
     inputs: Array<string | EmbeddingInput>,
     generation?: MemorySemanticProviderGeneration,
@@ -599,135 +524,6 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         cause: err,
       });
     }
-  }
-
-  private async withGeneratedEmbeddingCacheWrite(
-    generation: MemorySemanticProviderGeneration,
-    write: () => void,
-  ): Promise<void> {
-    await this.withPublishedDatabase(async () => {
-      if (
-        this.syncProviderGeneration !== generation ||
-        generation.cacheWritesInvalidated ||
-        generation.database.closed ||
-        this.database !== generation.database
-      ) {
-        return;
-      }
-      // Rebuilds use a shadow index, but generated results belong to the exact
-      // published owner captured by the generation, including after admission.
-      await this.withDatabaseWrite(() =>
-        runSqliteImmediateTransactionSync(generation.database.db, () => {
-          if (
-            this.syncProviderGeneration !== generation ||
-            generation.cacheWritesInvalidated ||
-            generation.database.closed
-          ) {
-            return;
-          }
-          if (readMemoryDatabaseRevision(generation.database.db) !== generation.databaseRevision) {
-            generation.cacheWritesInvalidated = true;
-            return;
-          }
-          write();
-        }),
-      );
-    });
-  }
-
-  private async persistGeneratedEmbeddings(
-    candidates: MemoryEmbeddingCacheCandidate[],
-    embeddings: number[][],
-    generation: MemorySemanticProviderGeneration,
-  ): Promise<void> {
-    if (
-      !this.cache.enabled ||
-      candidates.length === 0 ||
-      this.syncProviderGeneration !== generation ||
-      generation.cacheWritesInvalidated ||
-      generation.database.closed
-    ) {
-      return;
-    }
-    // Validate the whole provider response before retaining any vectors. Index
-    // insertion can fail later, but must never leave a reusable malformed batch.
-    const dimensions = generation.embeddingDimensions ?? embeddings[0]?.length;
-    if (
-      embeddings.length !== candidates.length ||
-      !embeddings.every((embedding) => isValidMemoryEmbedding(embedding, dimensions))
-    ) {
-      if (
-        generation.embeddingDimensions !== undefined &&
-        embeddings.some(
-          (embedding) =>
-            isValidMemoryEmbedding(embedding) &&
-            embedding.length !== generation.embeddingDimensions,
-        )
-      ) {
-        // Separate successful batches can disagree. Neither dimension is authoritative;
-        // discard this identity's ambiguous cache so retries can recover after restart.
-        await withMemoryWorkspaceLock(this.workspaceDir, () =>
-          this.withGeneratedEmbeddingCacheWrite(generation, () => {
-            clearMemoryEmbeddingCacheIdentities(generation.database.db, generation.identities);
-            generation.cacheWritesInvalidated = true;
-          }),
-        );
-      }
-      throw new Error(
-        "memory embeddings: malformed vector response (count, dimensions, or coordinates)",
-      );
-    }
-    generation.embeddingDimensions = dimensions;
-    await withMemoryWorkspaceLock(this.workspaceDir, async () => {
-      if (
-        this.syncProviderGeneration !== generation ||
-        generation.cacheWritesInvalidated ||
-        generation.database.closed
-      ) {
-        return;
-      }
-      const entryValidity = new Map<MemoryIndexEntry, boolean>();
-      const accepted: Array<{ hash: string; embedding: number[] }> = [];
-      for (const [index, candidate] of candidates.entries()) {
-        let valid = entryValidity.get(candidate.entry);
-        if (valid === undefined) {
-          if (candidate.source === "memory") {
-            const current = await (this.memoryFiles?.inspectFile ?? buildFileEntry)(
-              candidate.entry.absPath,
-              this.workspaceDir,
-              this.settings.multimodal,
-            );
-            valid = current?.hash === candidate.entry.hash;
-          } else {
-            const sessionId = candidate.entry.sessionId;
-            valid = Boolean(
-              sessionId &&
-              !hasMemorySessionTombstone(generation.database.db, this.agentId, sessionId),
-            );
-          }
-          entryValidity.set(candidate.entry, valid);
-        }
-        if (valid) {
-          accepted.push({
-            hash: candidate.chunk.hash,
-            embedding: embeddings[index] ?? [],
-          });
-        }
-      }
-      if (accepted.length === 0) {
-        return;
-      }
-      await this.withGeneratedEmbeddingCacheWrite(generation, () => {
-        upsertMemoryEmbeddingCache({
-          db: generation.database.db,
-          enabled: true,
-          provider: generation.provider,
-          providerKey: generation.providerKey,
-          entries: accepted,
-          maxEntries: this.cache.maxEntries,
-        });
-      });
-    });
   }
 
   private async waitForEmbeddingRetry(

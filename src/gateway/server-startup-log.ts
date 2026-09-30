@@ -14,7 +14,10 @@ import { resolveConfiguredThinkingDefaultCore } from "../agents/model-thinking-d
 import { resolveThinkingDefault } from "../agents/model-thinking-default.js";
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { ensureSqliteLibrarySelected } from "../infra/bun-sqlite-library.js";
+import {
+  ensureSqliteLibrarySelected,
+  getSqliteRuntimeCapabilities,
+} from "../infra/bun-sqlite-library.js";
 import { getTrackedWorkerLifecycleSnapshot } from "../infra/worker-cpu.js";
 import { getWorkerComputeCapacity } from "../infra/worker-task-capacity.js";
 import { getResolvedLoggerSettings } from "../logging.js";
@@ -67,6 +70,7 @@ export async function logGatewayStartup(params: {
       uv: process.versions.uv,
       openssl: process.versions.openssl,
       sqlite: sqliteLibrary.source === "runtime" ? process.versions.sqlite : sqliteLibrary.version,
+      sqliteClose: getSqliteRuntimeCapabilities(),
     })}`,
   );
   params.log.info(

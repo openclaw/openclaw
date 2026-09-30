@@ -539,9 +539,8 @@ describe.runIf(process.platform === "darwin")("Mac native inventory", () => {
             signs.find(({ args }) => args.at(-1) === filename),
             filename,
           );
-          const keys = Array.from(
-            signed.entitlements.matchAll(/<key>([^<]+)<\/key>/g),
-            (match) => match[1],
+          const keys = Array.from(signed.entitlements.matchAll(/<key>([^<]+)<\/key>/g), (match) =>
+            expectDefined(match[1], "entitlement key"),
           );
           const expectedKeys =
             policy === "plain"

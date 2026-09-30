@@ -612,6 +612,8 @@ src/infra/backoff.ts
 src/infra/backup-scratch.ts
 src/infra/boundary-file-read.ts
 src/infra/boundary-path.ts
+src/infra/bun-sqlite-close-probe.ts
+src/infra/bun-sqlite-close-probe.worker.ts
 src/infra/bun-sqlite-library.ts
 src/infra/clawhub-integrity.ts
 src/infra/clawhub-spec.ts
@@ -629,6 +631,7 @@ src/infra/delivery-queue-sqlite.types.ts
 src/infra/diagnostic-event-listener-presence.ts
 src/infra/diagnostic-event-snapshot.ts
 src/infra/diagnostic-events.ts
+src/infra/diagnostic-flags-env.ts
 src/infra/diagnostic-flags.ts
 src/infra/diagnostic-model-request-provenance.ts
 src/infra/diagnostic-otel-listener-provenance.ts

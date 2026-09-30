@@ -232,6 +232,19 @@ method, when provided, if the runtime or an embedding adapter retires. This clos
 all of that runtime's managers as best-effort cleanup; it cannot identify dependent
 managers or prevent concurrent manager acquisition.
 
+## Browser meeting transport builders
+
+`MeetingPlatformAdapter.createBrowserAdapterOptions` builds the `browser` and
+`parsing` options for `MeetingPlatformAdapter.create` from platform page scripts,
+permission origins, display names, manual-action prefixes, and retry policy.
+`MeetingPlatformAdapter.createPageScripts` assembles status, transcript, audio
+capture, and leave scripts while the plugin supplies identity and control sources.
+
+`createStatusPreludeSource` accepts either source strings or callbacks for
+`lifecycleSource` and `manualActionSource`. Callbacks receive shared fragments for
+guest names, preserved identity, virtual audio input, microphone control, and
+manual actions. Existing string-based callers keep their generated source.
+
 ## Browser meeting status ownership
 
 `MeetingPlatformAdapter.createStatusCallSource` accepts an optional

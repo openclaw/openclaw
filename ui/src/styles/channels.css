@@ -80,16 +80,20 @@
 
 /* ---------- detail overlay ---------- */
 
-.channels-detail {
+.channels-detail,
+.channels-wizard {
   display: flex;
   flex-direction: column;
-  width: min(680px, calc(100vw - 48px));
-  max-height: min(85dvh, 860px);
   overflow-y: auto;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-xl);
   background: var(--popover);
   box-shadow: var(--shadow-xl);
+}
+
+.channels-detail {
+  width: min(680px, calc(100vw - 48px));
+  max-height: min(85dvh, 860px);
 }
 
 .channels-detail__header {
@@ -236,15 +240,8 @@
 /* ---------- setup wizard dialog ---------- */
 
 .channels-wizard {
-  display: flex;
-  flex-direction: column;
   width: min(540px, calc(100vw - 48px));
   max-height: min(85dvh, 760px);
-  overflow-y: auto;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-xl);
-  background: var(--popover);
-  box-shadow: var(--shadow-xl);
 }
 
 .channels-wizard__header {

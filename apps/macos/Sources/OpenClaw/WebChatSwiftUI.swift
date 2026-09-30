@@ -964,7 +964,6 @@ private struct MacChatSurface: View {
                 self.audioInputCatalog.select(deviceID, state: self.appState)
             },
             toggle: { sessionKey in
-                guard self.usesPrimaryAppRuntime else { return }
                 WebChatManager.shared.recordActiveSessionKey(sessionKey)
                 Task {
                     await AppStateStore.shared.setTalkEnabled(!AppStateStore.shared.talkEnabled)

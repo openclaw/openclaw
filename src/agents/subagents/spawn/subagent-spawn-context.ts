@@ -139,8 +139,9 @@ export async function prepareContextEngineSubagentSpawn(params: {
       }
     })());
   try {
-    ensureContextEnginesInitialized();
-    engine = await resolveContextEngine(params.cfg);
+    engine = await resolveContextEngine(params.cfg, {
+      initialize: ensureContextEnginesInitialized,
+    });
     // Resolution may outlive the caller. Returned preparation must still reach
     // the pipeline rollback owner before its next authority check.
     params.assertActive?.();

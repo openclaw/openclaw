@@ -1,6 +1,9 @@
 import { channel } from "node:diagnostics_channel";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
-import { ensureSqliteLibrarySelected } from "../../infra/bun-sqlite-library.js";
+import {
+  ensureSqliteLibrarySelected,
+  getSqliteRuntimeCapabilities,
+} from "../../infra/bun-sqlite-library.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import {
@@ -275,9 +278,12 @@ async function closeDatabaseWorkerResource(
   idle: boolean,
 ): Promise<void> {
   const pool = historyWorkerLanes.find((candidate) => candidate === lane)?.pool;
-  // Active reads and Bun retain native-exit custody. Idle Node readers can
-  // release the exact database while retaining the worker's loaded code.
-  if (!idle || process.versions.bun || !pool) {
+  // Active reads retain native-exit custody even when ordinary close releases handles.
+  if (
+    !idle ||
+    !getSqliteRuntimeCapabilities().explicitSqliteCloseReleasesNativeResources ||
+    !pool
+  ) {
     await rotateDatabaseWorkers(lane);
     return;
   }
@@ -421,8 +427,11 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
       return closing;
     };
     const settleCandidates = async () => {
-      // Bun and failed discovery can retain native handles outside candidate custody.
-      if (discoveryFailed || process.versions.bun) {
+      // Failed discovery can retain native handles outside candidate custody.
+      if (
+        discoveryFailed ||
+        !getSqliteRuntimeCapabilities().explicitSqliteCloseReleasesNativeResources
+      ) {
         await retire();
         return;
       }

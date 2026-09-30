@@ -130,6 +130,61 @@ describe("resolveSettledTurnFinalizationRequest", () => {
     ).toContain(SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION);
   });
 
+  it("preserves optional authored silence after a settled tool failure", () => {
+    const toolAssistant = buildEmbeddedRunnerAssistant({
+      stopReason: "toolUse",
+      content: [{ type: "toolCall", id: "tool-rejected", name: "tool_call", arguments: {} }],
+    });
+    const silentAssistant = buildEmbeddedRunnerAssistant({
+      content: [{ type: "text", text: "NO_REPLY" }],
+    });
+    const attempt = makeEmbeddedRunnerAttempt({
+      assistantTexts: ["NO_REPLY"],
+      lastAssistant: silentAssistant,
+      currentAttemptAssistant: silentAssistant,
+      messagesSnapshot: [
+        toolAssistant,
+        makeTextToolResult("tool-rejected", "tool_call", "Required argument missing", true, 0),
+        silentAssistant,
+      ],
+      toolMetas: [
+        { toolName: "tool_call", toolCallId: "tool-rejected", isError: true, replaySafe: true },
+      ],
+      itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+      lastToolError: { toolName: "tool_call", error: "Required argument missing" },
+    });
+    const request = (terminalReplyExpectation: "required" | "optional") =>
+      resolveSettledTurnFinalizationRequest({
+        runParams: {
+          sessionId: "session:rejected-silent",
+          runId: "run:rejected-silent",
+          workspaceDir: "/tmp/openclaw-test",
+          prompt: "Review the completed work.",
+          timeoutMs: 60_000,
+          terminalReplyExpectation,
+        },
+        attempt,
+        activeErrorContext: { provider: "openai", model: "gpt-5.6-luna" },
+        modelApi: "openai-responses",
+        executionContract: undefined,
+        payloadsWithToolMedia: buildEmbeddedRunPayloads({
+          assistantTexts: attempt.assistantTexts,
+          lastAssistant: silentAssistant,
+          lastToolError: attempt.lastToolError,
+          sessionKey: "session:rejected-silent",
+        }),
+        hasTerminalToolPresentation: false,
+        terminalState: resolveEmbeddedRunAttemptTerminalState({
+          attempt,
+          assistant: silentAssistant,
+        }),
+        settledTurnFinalizationAvailable: true,
+      });
+
+    expect(request("required")).toContain(SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION);
+    expect(request("optional")).toBeNull();
+  });
+
   it("finalizes after successful tools despite pre-tool progress and a stale error (#132762)", () => {
     const failedAssistant = buildEmbeddedRunnerAssistant({
       stopReason: "toolUse",

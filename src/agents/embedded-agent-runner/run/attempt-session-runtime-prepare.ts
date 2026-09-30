@@ -46,7 +46,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
   resolveActiveContextEnginePluginId: () => string | undefined;
   setup: EmbeddedAttemptSetup;
   toolBase: Awaited<ReturnType<typeof prepareEmbeddedAttemptToolBase>>;
-  toolCatalog: ReturnType<typeof prepareEmbeddedAttemptToolCatalog>;
+  toolCatalog: Awaited<ReturnType<typeof prepareEmbeddedAttemptToolCatalog>>;
   bundleTools: Awaited<ReturnType<typeof prepareEmbeddedAttemptBundleTools>>;
   systemPrompt: Awaited<ReturnType<typeof prepareEmbeddedAttemptSystemPrompt>>;
   sessionLock: Awaited<ReturnType<typeof prepareEmbeddedAttemptTranscriptLifecycle>>;

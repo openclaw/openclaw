@@ -124,5 +124,7 @@ export function runWriteTransaction<T>(
   if (!isOpenClawStateDatabaseOpen(resolveOpenClawStateSqlitePath(options.env ?? process.env))) {
     openPluginStateDatabase(operation, options);
   }
-  return runOpenClawStateWriteTransaction(write, options);
+  return runOpenClawStateWriteTransaction(write, options, {
+    operationLabel: `pluginState.${operation}`,
+  });
 }

@@ -18,7 +18,6 @@ describe("retained page render ownership", () => {
         agentId: "main",
         requestedAgentId: "main",
         catalogId: "",
-        model: "",
         catalogLabel: "",
         startTerminal: false,
       };

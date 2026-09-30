@@ -43,6 +43,12 @@ Invalid edits leave the last good runtime active. Restart reads the same config
 files through the normal startup validation and recovery path; source revision
 numbers are local to the running Gateway.
 
+If an external edit leaves the config missing or invalid during a Gateway write's
+final reread, a `config.patch` or `config.apply` waiting for runtime application
+returns `UNAVAILABLE` with the committed config details. It does not wait for
+another file event. Repair the file, run `config.get`, then reapply the intended
+config. The Gateway does not overwrite the external edit.
+
 If you see `config reload skipped (invalid config)` or startup reports `Invalid
 config`, inspect the config, run `openclaw config validate`, then run `openclaw
 doctor --fix` for repair. See [Gateway troubleshooting](/gateway/troubleshooting#gateway-rejected-invalid-config)

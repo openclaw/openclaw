@@ -117,7 +117,6 @@ extensions/memory-core/src/memory/index.test.ts
 extensions/memory-core/src/memory/manager-embedding-ops.ts
 extensions/memory-core/src/rem-evidence.ts
 extensions/memory-core/src/short-term-promotion.test.ts
-extensions/memory-core/src/tools.test.ts
 extensions/memory-lancedb/index.test.ts
 extensions/memory-wiki/src/chatgpt-import.ts
 extensions/memory-wiki/src/cli.ts
@@ -429,7 +428,6 @@ src/commands/models/list.status.test.ts
 src/commands/onboard-channels.e2e.test.ts
 src/commands/onboarding-plugin-install.test.ts
 src/commands/onboarding-plugin-install.ts
-src/config/config-misc.test.ts
 src/config/config.plugin-validation.test.ts
 src/config/io.write-config.test.ts
 src/config/io.write-prepare.ts
@@ -460,7 +458,6 @@ src/flows/doctor-core-checks.runtime.test.ts
 src/flows/doctor-core-checks.ts
 src/flows/doctor-health-contributions.test.ts
 src/flows/model-picker.ts
-src/gateway/auth.test.ts
 src/gateway/call.test.ts
 src/gateway/call.ts
 src/gateway/cli-session-history.test.ts

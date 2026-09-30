@@ -29,8 +29,15 @@ const loadScratch = createLazyRuntimeModule(() => import("./scratch.worker.js"))
 let scratch: typeof import("./scratch.worker.js") | undefined;
 const loadExternalState = createLazyRuntimeModule(() => import("./external-state.worker.js"));
 let externalState: typeof import("./external-state.worker.js") | undefined;
+const loadScheduler = createLazyRuntimeModule(() => import("./scheduler-state.worker.js"));
+let scheduler: typeof import("./scheduler-state.worker.js") | undefined;
 
 export function prepareCronStateWorkerCommand(type: PropertyKey): Promise<void> | undefined {
+  if ((type === "cron.recordSkippedRuns" || type === "cron.planStartup") && !scheduler) {
+    return loadScheduler().then((loaded) => {
+      scheduler = loaded;
+    });
+  }
   if (type === "cron.mutateExternalState" && !externalState) {
     return loadExternalState().then((loaded) => {
       externalState = loaded;
@@ -84,6 +91,8 @@ export function isCronStateWorkerCommand(command: {
   input: unknown;
 }): command is SqliteWorkerCommand<CronStateWorkerOperations> {
   switch (command.type) {
+    case "cron.recordSkippedRuns":
+    case "cron.planStartup":
     case "cron.mutateExternalState":
     case "cron.writeScratch":
     case "cron.mutateJobs":
@@ -114,6 +123,14 @@ export function executeCronStateCommand(
   database: OpenClawStateDatabase,
 ): CronStateWorkerOperations[keyof CronStateWorkerOperations]["output"] {
   switch (command.type) {
+    case "cron.recordSkippedRuns":
+    case "cron.planStartup":
+      if (!scheduler) {
+        throw new Error("Cron scheduler worker is not prepared");
+      }
+      return command.type === "cron.recordSkippedRuns"
+        ? scheduler.recordSkippedCronRunsInWorker(database, command.input)
+        : scheduler.planCronStartupInWorker(database, command.input);
     case "cron.mutateExternalState":
       if (!externalState) {
         throw new Error("Cron external-state worker is not prepared");

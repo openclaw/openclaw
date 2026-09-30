@@ -28,7 +28,7 @@ import { getSandboxBackendFactory } from "./sandbox/backend.js";
 const SANDBOX_PROBE_ID = "scoped-load-probe";
 afterEach(async () => {
   await clearActivePluginRegistry();
-  resetContextEngineRuntimeQuarantineForTests();
+  await resetContextEngineRuntimeQuarantineForTests();
   resetPluginLoaderTestStateForTest();
 });
 

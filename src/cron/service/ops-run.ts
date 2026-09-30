@@ -41,8 +41,7 @@ import {
   recordQuietCronEvaluation,
 } from "./run-history.js";
 import { resolveCronRunReceiptTerminalStatus } from "./run-receipts.js";
-import { publishCronRuntimeRows } from "./runtime-publication.js";
-import { applyCronRuntimeRowsToState } from "./runtime-store.js";
+import { applyCronRuntimeRowsToState, publishCronRuntimeRows } from "./runtime-publication.js";
 import { recomputeUnownedCronSchedules } from "./schedule-maintenance.js";
 import type {
   CronRunMode,

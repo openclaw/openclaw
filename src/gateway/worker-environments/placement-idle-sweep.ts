@@ -51,14 +51,15 @@ export function createWorkerPlacementIdleSweep(options: {
       if (!profiles || !Object.values(profiles).some((profile) => profile.suspendAfter)) {
         return;
       }
-      const journalOwners = await options.placements.listWorkspaceReconciliationOwners();
-      const pendingSessions = new Set([
-        ...options.placements.listPendingWorkspaceResults().map((result) => result.sessionId),
-        ...journalOwners.map((owner) => owner.sessionId),
-      ]);
+      const candidates = await options.placements.readRecoveryCandidates();
+      const projection = await options.placements.readProjection(
+        candidates.map(({ sessionId }) => sessionId),
+        { current: true },
+      );
 
-      for (const placement of options.placements.listForReconcile()) {
-        if (placement.state !== "active" || placement.turnClaim) {
+      for (const { sessionId } of candidates) {
+        const placement = projection.placements.get(sessionId);
+        if (placement?.state !== "active" || placement.turnClaim) {
           continue;
         }
         const environment = options.environments.get(placement.environmentId);
@@ -71,7 +72,7 @@ export function createWorkerPlacementIdleSweep(options: {
           continue;
         }
         if (
-          pendingSessions.has(placement.sessionId) ||
+          projection.workspaceRecoveryPendingSessionIds.has(placement.sessionId) ||
           options.placements.getPlacementMove(placement.sessionId) ||
           options.isPlacementOperationInFlight?.(placement.sessionId)
         ) {

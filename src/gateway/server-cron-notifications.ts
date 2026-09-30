@@ -8,6 +8,7 @@ import { resolveUserTimezone } from "../agents/date-time.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { resolveControlUiAutomationRunUrl } from "../config/control-ui-link-base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { CRON_AGENT_SELECTION_REQUIRED_MESSAGE } from "../cron/agent-id.js";
 import { redactCronCommandSummaryForExternalDelivery } from "../cron/command-output-summary.js";
 import { resolveCronDeliveryPlan, sendCronAnnouncePayloadStrict } from "../cron/delivery.js";
 import { retryTransientDirectCronDelivery } from "../cron/isolated-agent/delivery-dispatch-policy.js";
@@ -384,7 +385,13 @@ async function sendGatewayCronFailureAlertUnderAdmission(
     mayHaveReachedRecipient ||= reachedRecipient;
   };
   try {
-    const { agentId, cfg: runtimeConfig } = params.resolveCronAgent(params.job.agentId);
+    const requestedAgentId =
+      normalizeOptionalString(params.job.agentId) ??
+      normalizeOptionalString(params.routing.defaultAgentId);
+    if (!requestedAgentId) {
+      throw new Error(CRON_AGENT_SELECTION_REQUIRED_MESSAGE);
+    }
+    const { agentId, cfg: runtimeConfig } = params.resolveCronAgent(requestedAgentId);
     if (params.mode === "webhook") {
       if (!params.to) {
         throw new Error("cron failure alert webhook requires a URL");

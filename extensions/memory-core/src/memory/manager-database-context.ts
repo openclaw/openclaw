@@ -27,12 +27,16 @@ import {
   openMemoryDatabaseReadOnlyAtPath,
 } from "./manager-db.js";
 import type {
+  MemoryEmbeddingCacheMutation,
   MemoryPublicationConnection,
   MemoryPublicationOperations,
   MemoryPublicationResult,
   MemoryPublicationState,
 } from "./manager-publication-task.js";
-import { memoryPublicationBatches } from "./manager-publication-transfer.js";
+import {
+  memoryEmbeddingCacheBatches,
+  memoryPublicationBatches,
+} from "./manager-publication-transfer.js";
 import {
   assertMemoryShadowIdentity,
   readMemoryShadowIdentity,
@@ -345,6 +349,64 @@ export class MemoryIndexDatabase {
       await delay(Math.min(25, Math.max(0, deadline - performance.now())));
     }
     return undefined;
+  }
+
+  async mutateEmbeddingCache(
+    mutation: MemoryEmbeddingCacheMutation,
+    assertCurrent: () => void,
+    prepareRevision: () => number | undefined,
+    invalidate: () => void,
+  ): Promise<boolean | undefined> {
+    return this.runPublication(async (scope) => {
+      // This callback owns the original writer turn before inspecting generation facts.
+      const expectedRevision = prepareRevision();
+      if (expectedRevision === undefined) {
+        return undefined;
+      }
+      const prepare = async () => prepareRevision() !== undefined;
+      if (mutation.kind === "clear") {
+        try {
+          return await this.retryPublication(
+            () =>
+              scope.execute({
+                type: "cache.clear",
+                input: { identities: mutation.identities, expectedRevision },
+              }),
+            prepare,
+          );
+        } finally {
+          // The vector-space conflict is already known, even if clearing loses its reply.
+          invalidate();
+        }
+      }
+      const operation = randomUUID();
+      await scope.execute({
+        type: "cache.stage.start",
+        input: { operation, header: mutation.header, rows: mutation.entries.length },
+      });
+      for (const fragments of memoryEmbeddingCacheBatches(mutation.entries)) {
+        await scope.execute({ type: "stage.append", input: { operation, fragments } });
+      }
+      let needsDiscard = true;
+      const current = await this.retryPublication(async () => {
+        const outcome = await scope.execute({
+          type: "cache.write",
+          input: { operation, expectedRevision },
+        });
+        if (outcome.ok || outcome.entered) {
+          needsDiscard = false;
+        }
+        return outcome;
+      }, prepare);
+      if (needsDiscard) {
+        await scope.execute({ type: "stage.discard", input: { operation } });
+      }
+      if (current === false) {
+        // Publish generation invalidation before releasing this writer turn.
+        invalidate();
+      }
+      return current;
+    }, assertCurrent);
   }
 
   async replaceSource(

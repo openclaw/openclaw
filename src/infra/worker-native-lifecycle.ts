@@ -13,6 +13,7 @@ import { createSpawnBrokerHost, type SpawnBrokerHost } from "../process/spawn-br
 import { runInDetachedAsyncContext } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { captureSqliteWorkerEnvironmentData } from "./bun-sqlite-library.js";
 import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
 import {
   captureRuntimeWorkerSource,
@@ -441,6 +442,7 @@ function startNativeWorker(
         type: "create",
         id,
         filename: { kind: filename instanceof URL ? "url" : "path", value: String(filename) },
+        environmentData: captureSqliteWorkerEnvironmentData(),
         options: {
           ...captured,
           environment: { ...(env === SHARE_ENV ? process.env : (env ?? process.env)) },
