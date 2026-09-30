@@ -3,6 +3,8 @@
  * Parses OpenAI-style patch envelopes and applies add/update/delete/move hunks
  * through guarded host or sandbox filesystem operations.
  */
+import type { Stats } from "node:fs";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { PATH_ALIAS_POLICIES, type PathAliasPolicy } from "@openclaw/fs-safe/advanced";
 import { Type } from "typebox";
@@ -18,8 +20,9 @@ import {
   resolvePatchFileOps,
   type SandboxApplyPatchConfig,
 } from "./apply-patch-file-ops.js";
+import { type Hunk, parsePatchText } from "./apply-patch-parse.js";
 import { resolveApplyPatchInputPath, toDisplayPath } from "./apply-patch-paths.js";
-import { applyUpdateHunk, type UpdateFileChunk } from "./apply-patch-update.js";
+import { applyUpdateHunk } from "./apply-patch-update.js";
 import type { MemoryWriteProvenanceObserver } from "./memory-write-provenance.js";
 import {
   preserveAtPrefixedRelativePath,
@@ -31,39 +34,8 @@ import { assertSandboxPath, markHostRootEscape } from "./sandbox-paths.js";
 import { resolveSandboxFileMutationQueueKey } from "./sandbox/file-mutation-identity.js";
 import {
   resolveFileMutationQueueKey,
-  withFileMutationQueueKeyResolution,
   withFileMutationQueueKeysResolution,
 } from "./sessions/tools/file-mutation-queue.js";
-
-const BEGIN_PATCH_MARKER = "*** Begin Patch";
-const END_PATCH_MARKER = "*** End Patch";
-const ADD_FILE_MARKER = "*** Add File: ";
-const DELETE_FILE_MARKER = "*** Delete File: ";
-const UPDATE_FILE_MARKER = "*** Update File: ";
-const MOVE_TO_MARKER = "*** Move to: ";
-const EOF_MARKER = "*** End of File";
-const CHANGE_CONTEXT_MARKER = "@@ ";
-const EMPTY_CHANGE_CONTEXT_MARKER = "@@";
-
-type AddFileHunk = {
-  kind: "add";
-  path: string;
-  contents: string;
-};
-
-type DeleteFileHunk = {
-  kind: "delete";
-  path: string;
-};
-
-type UpdateFileHunk = {
-  kind: "update";
-  path: string;
-  movePath?: string;
-  chunks: UpdateFileChunk[];
-};
-
-type Hunk = AddFileHunk | DeleteFileHunk | UpdateFileHunk;
 
 export type ApplyPatchSummary = {
   added: string[];
@@ -187,7 +159,386 @@ async function applyPatch(input: string, options: ApplyPatchOptions): Promise<Ap
     ...options,
     patchInputPaths: await resolvePatchInputPaths(parsed.hunks, options),
   };
+  // Targets resolve against the patch's initial filesystem snapshot, like its input paths.
+  const resolution = resolvePatchHunks(parsed.hunks, patchOptions);
+  // Hold every path the envelope touches for the whole run, so the preflight
+  // reads the same state the commit pass mutates.
+  return await withFileMutationQueueKeysResolution(
+    resolution.then((hunks) => hunks.flatMap(({ keys }) => keys)),
+    async () => {
+      const hunks = await resolution;
+      // Acquire only after queue admission, before the first read, so root I/O cannot
+      // reorder source calls. Retain the same owner across hunks.
+      const fileOps = await resolvePatchFileOps(patchOptions);
+      await preflightUpdateHunks(hunks, fileOps, patchOptions.signal);
+      return await commitPatchHunks(hunks, fileOps, patchOptions);
+    },
+  );
+}
 
+type PatchTarget = Awaited<ReturnType<typeof resolvePatchPath>>;
+type ResolvedHunk = {
+  hunk: Hunk;
+  target: PatchTarget;
+  moveTarget?: PatchTarget;
+  /** Preflight state keys; see `preflightUpdateHunks`. Commit compares them to detect moves. */
+  stage: string;
+  moveStage?: string;
+  /** Queue identities held for the run, including a path's identity once a link on it is gone. */
+  keys: string[];
+  /** Moving the source removes its contents, not only a final link to them. */
+  removesContents: boolean;
+  /** Snapshot admission refused a path an earlier removal frees; admission repeats in commit order. */
+  readmit?: true;
+  /** The preflight cannot read the source before the commit pass admits it. */
+  unread?: true;
+};
+
+type OrderedTarget = Pick<ResolvedHunk, "target" | "stage" | "keys" | "readmit" | "unread"> & {
+  /** An earlier removal of this path, or of a link above it, that it stages by. */
+  removed?: UnlinkedPath;
+};
+
+/** A path a delete or move removes, and whether it was a symlink rather than the file it names. */
+type UnlinkedPath = {
+  path: string;
+  key: string;
+  stage: string;
+  /** The path was a symlink or lies under a removed path, so later hunks stage it by spelling. */
+  link: boolean;
+  /** Host `dev:ino` of a hardlinked file; strict admission refuses its other names until then. */
+  inode?: string;
+};
+
+async function resolvePatchHunks(
+  hunks: Hunk[],
+  options: ApplyPatchOptions,
+): Promise<ResolvedHunk[]> {
+  const resolved: ResolvedHunk[] = [];
+  const unlinked: UnlinkedPath[] = [];
+  for (const hunk of hunks) {
+    throwIfPatchAborted(options.signal);
+    if (hunk.kind === "delete") {
+      const target = await resolveOrderedPatchPath(
+        hunk.path,
+        options,
+        unlinked,
+        PATH_ALIAS_POLICIES.unlinkTarget,
+      );
+      // A path an earlier hunk already frees keeps that staging; otherwise inspect the entry.
+      const removed =
+        target.removed && (target.removed.link || target.readmit)
+          ? target.removed
+          : await resolveUnlinkedPath(hunk.path, target.target, target.stage, options);
+      unlinked.push(removed);
+      resolved.push({
+        hunk,
+        target: target.target,
+        stage: removed.stage,
+        keys: [...target.keys, removed.key],
+        removesContents: true,
+        ...(target.readmit ? { readmit: true } : {}),
+      });
+      continue;
+    }
+    const target = await resolveOrderedPatchPath(hunk.path, options, unlinked);
+    const moveTarget =
+      hunk.kind === "update" && hunk.movePath
+        ? await resolveOrderedPatchPath(hunk.movePath, options, unlinked)
+        : undefined;
+    let removesContents = true;
+    if (moveTarget && moveTarget.stage !== target.stage) {
+      const source = await resolveUnlinkedPath(hunk.path, target.target, target.stage, options);
+      // Only a snapshot link still names its target; a spelling stage is a regular file by now.
+      removesContents = !source.link || target.stage !== target.target.queueKey;
+      unlinked.push(source);
+      target.keys.push(source.key);
+    }
+    resolved.push({
+      hunk,
+      target: target.target,
+      stage: target.stage,
+      keys: moveTarget ? [...target.keys, ...moveTarget.keys] : target.keys,
+      removesContents,
+      ...(moveTarget ? { moveTarget: moveTarget.target, moveStage: moveTarget.stage } : {}),
+      ...(target.readmit || moveTarget?.readmit ? { readmit: true } : {}),
+      ...(target.unread ? { unread: true } : {}),
+    });
+  }
+  return resolved;
+}
+
+const PATH_STAGE = "\0path\0";
+
+/**
+ * Queue identity follows a final symlink to the file it names, so a link and
+ * its target share one key, but removing the link leaves that file in place.
+ * Such a path stages by its spelling instead, apart from the file it named.
+ */
+async function resolveUnlinkedPath(
+  rawFilePath: string,
+  target: PatchTarget,
+  stage: string,
+  options: ApplyPatchOptions,
+): Promise<UnlinkedPath> {
+  const key = await resolvePathKey(target, options);
+  // The host checks the entry itself; spelling case can differ from the realpath key.
+  const stat = options.sandbox ? undefined : await lstatHostPath(target.resolved);
+  const link = options.sandbox ? key !== target.queueKey : stat?.isSymbolicLink() === true;
+  const lexical = await resolveLexicalPatchPath(rawFilePath, options);
+  const inode = hardlinkInode(stat);
+  return {
+    path: lexical,
+    key,
+    stage: link ? PATH_STAGE + lexical : stage,
+    link,
+    ...(inode ? { inode } : {}),
+  };
+}
+
+/** Queue identity of the directory entry itself, not the file a final link names. */
+async function resolvePathKey(
+  target: Pick<PatchTarget, "resolved">,
+  options: ApplyPatchOptions,
+): Promise<string> {
+  const paths = options.sandbox ? path.posix : path;
+  const parent = paths.dirname(target.resolved);
+  const parentKey = options.sandbox
+    ? await resolveSandboxFileMutationQueueKey({
+        bridge: options.sandbox.bridge,
+        root: options.sandbox.root,
+        filePath: parent,
+        cwd: options.cwd,
+        signal: options.signal,
+      })
+    : await resolveFileMutationQueueKey(parent);
+  return paths.join(parentKey, paths.basename(target.resolved));
+}
+
+async function resolvePatchFilePath(rawFilePath: string, options: ApplyPatchOptions) {
+  return (
+    options.patchInputPaths?.get(rawFilePath) ??
+    (options.sandbox
+      ? await resolveApplyPatchInputPath(rawFilePath, options)
+      : preserveAtPrefixedRelativePath(rawFilePath, options.cwd))
+  );
+}
+
+/** The unadmitted spelling of a patch path, for matching it against earlier removals. */
+async function resolveLexicalPatchPath(
+  rawFilePath: string,
+  options: ApplyPatchOptions,
+): Promise<string> {
+  const filePath = await resolvePatchFilePath(rawFilePath, options);
+  return options.sandbox
+    ? options.sandbox.bridge.resolvePath({ filePath, cwd: options.cwd }).containerPath
+    : resolvePathFromInput(filePath, options.cwd);
+}
+
+/**
+ * Admission sees the snapshot, so a path at or under a link an earlier hunk
+ * unlinks (for example `Delete File: link` then `Add File: link`) still names
+ * the link here; it stages by spelling, apart from the link target. When an
+ * earlier removal changes what admission sees (a link or file replaced by a
+ * directory, the other name of a hardlink), a refused path is admitted again
+ * in commit order instead, so the link target is never used.
+ */
+async function resolveOrderedPatchPath(
+  rawFilePath: string,
+  options: ApplyPatchOptions,
+  unlinked: readonly UnlinkedPath[],
+  aliasPolicy: PathAliasPolicy = PATH_ALIAS_POLICIES.strict,
+): Promise<OrderedTarget> {
+  if (unlinked.length === 0) {
+    const target = await resolvePatchPath(rawFilePath, options, aliasPolicy);
+    return { target, stage: target.queueKey, keys: [target.queueKey] };
+  }
+  const lexical = await resolveLexicalPatchPath(rawFilePath, options);
+  let target: PatchTarget;
+  try {
+    target = await resolvePatchPath(rawFilePath, options, aliasPolicy);
+  } catch (error) {
+    const removed = findUnlinkedPath(unlinked, { lexical }, options);
+    const placeholder = { resolved: lexical, display: rawFilePath };
+    if (removed) {
+      const queueKey = removed.key;
+      return {
+        target: { ...placeholder, queueKey },
+        stage: removed.stage,
+        keys: [queueKey],
+        readmit: true,
+        removed,
+      };
+    }
+    const freed = await resolveFreedHardlink(rawFilePath, options, unlinked);
+    if (!freed) {
+      throw error;
+    }
+    return {
+      target: freed,
+      stage: freed.queueKey,
+      keys: [freed.queueKey],
+      readmit: true,
+      unread: true,
+    };
+  }
+  const removed = findUnlinkedPath(
+    unlinked,
+    {
+      lexical,
+      key: unlinked.some((entry) => entry.link) ? await resolvePathKey(target, options) : undefined,
+    },
+    options,
+  );
+  return removed?.link
+    ? { target, stage: removed.stage, keys: [target.queueKey, removed.key], removed }
+    : { target, stage: target.queueKey, keys: [target.queueKey] };
+}
+
+/** Another name of a host hardlink an earlier hunk removes; admission waits for commit order. */
+async function resolveFreedHardlink(
+  rawFilePath: string,
+  options: ApplyPatchOptions,
+  unlinked: readonly UnlinkedPath[],
+): Promise<PatchTarget | undefined> {
+  if (options.sandbox || !unlinked.some((entry) => entry.inode)) {
+    return undefined;
+  }
+  const target = await resolvePatchPath(
+    rawFilePath,
+    options,
+    PATH_ALIAS_POLICIES.unlinkTarget,
+  ).catch(() => undefined);
+  const stat = target && (await lstatHostPath(target.resolved));
+  const inode = hardlinkInode(stat);
+  const removedNames = unlinked.filter((entry) => inode && entry.inode === inode).length;
+  // Strict admission accepts it only once every other name is gone.
+  return stat && removedNames > 0 && stat.nlink - removedNames === 1 ? target : undefined;
+}
+
+async function lstatHostPath(filePath: string) {
+  return await fs.lstat(filePath).catch(() => undefined);
+}
+
+function hardlinkInode(stat: Stats | undefined): string | undefined {
+  return stat?.isFile() && stat.nlink > 1 ? `${stat.dev}:${stat.ino}` : undefined;
+}
+
+/**
+ * The latest removal of this path itself, matched by spelling or entry
+ * identity, or of a path above it.
+ */
+function findUnlinkedPath(
+  unlinked: readonly UnlinkedPath[],
+  entryPath: { lexical: string; key?: string },
+  options: ApplyPatchOptions,
+): UnlinkedPath | undefined {
+  const paths = options.sandbox ? path.posix : path;
+  for (const entry of unlinked.toReversed()) {
+    const relative = paths.relative(entry.path, entryPath.lexical);
+    if (relative === "" || entry.key === entryPath.key) {
+      return entry;
+    }
+    const outside =
+      relative === ".." || relative.startsWith(`..${paths.sep}`) || paths.isAbsolute(relative);
+    if (!outside) {
+      return {
+        path: entryPath.lexical,
+        key: paths.join(entry.key, relative),
+        stage: PATH_STAGE + entryPath.lexical,
+        link: true,
+      };
+    }
+  }
+  return undefined;
+}
+
+const REMOVED = Symbol("removed");
+
+/**
+ * Reject predictable update failures (missing file, context mismatch, invalid
+ * UTF-8) before any hunk mutates the workspace. Staged contents follow earlier
+ * adds, updates, deletes, and moves by physical identity. A path at a removed
+ * link, or under a removed path, stages by spelling and starts out removed.
+ */
+async function preflightUpdateHunks(
+  hunks: ResolvedHunk[],
+  fileOps: PatchFileOps,
+  signal: AbortSignal | undefined,
+): Promise<void> {
+  // Absent: read the file; null: the commit pass admits and reads it first.
+  const staged = new Map<string, string | null | typeof REMOVED>();
+  for (const { hunk, target, stage, moveStage, removesContents, unread } of hunks) {
+    throwIfPatchAborted(signal);
+    if (hunk.kind !== "update") {
+      staged.set(stage, hunk.kind === "add" ? hunk.contents : REMOVED);
+      continue;
+    }
+    const current = staged.has(stage)
+      ? staged.get(stage)
+      : stage.startsWith(PATH_STAGE)
+        ? REMOVED
+        : unread
+          ? null
+          : undefined;
+    let unreadable = false;
+    const applied =
+      current === null
+        ? null
+        : await applyUpdateHunk(target.resolved, hunk.chunks, {
+            readFile:
+              current === undefined
+                ? (filePath) =>
+                    fileOps.readFile(filePath).catch((error: unknown) => {
+                      unreadable = true;
+                      throw error;
+                    })
+                : async () => readStaged(current),
+          }).catch((error: unknown) => {
+            if (unreadable && hasCaseVariant(staged, stage)) {
+              return null;
+            }
+            throw error;
+          });
+    if (moveStage !== undefined && moveStage !== stage) {
+      if (removesContents) {
+        staged.set(stage, REMOVED);
+      }
+      staged.set(moveStage, applied);
+    } else {
+      staged.set(stage, applied);
+    }
+  }
+}
+
+/**
+ * A missing path keeps its spelling in its identity, so on a case-insensitive
+ * filesystem a file an earlier hunk creates can stage under another spelling.
+ * Leave such an unreadable path to the commit pass.
+ */
+function hasCaseVariant(staged: ReadonlyMap<string, unknown>, stage: string): boolean {
+  const folded = stage.toLowerCase();
+  return [...staged.keys()].some((key) => key.toLowerCase() === folded);
+}
+
+function readStaged(current: string | typeof REMOVED): string {
+  if (current === REMOVED) {
+    throw new Error("an earlier hunk in this patch removes it");
+  }
+  return current;
+}
+
+function throwIfPatchAborted(signal: AbortSignal | undefined) {
+  if (signal?.aborted) {
+    throw createAbortError("Aborted", { cause: signal.reason });
+  }
+}
+
+async function commitPatchHunks(
+  hunks: ResolvedHunk[],
+  fileOps: PatchFileOps,
+  options: ApplyPatchOptions,
+): Promise<ApplyPatchResult> {
   const summary: ApplyPatchSummary = {
     added: [],
     modified: [],
@@ -199,99 +550,55 @@ async function applyPatch(input: string, options: ApplyPatchOptions): Promise<Ap
     deleted: new Set<string>(),
   };
   const noOpPaths = new Set<string>();
-  // Acquire only after queue admission, before the first read, so root I/O cannot
-  // reorder source calls or outlive a no-op. Retain the same owner across hunks.
-  let fileOpsPromise: Promise<PatchFileOps> | undefined;
-  const getFileOps = () => (fileOpsPromise ??= resolvePatchFileOps(patchOptions));
 
-  for (const hunk of parsed.hunks) {
-    if (patchOptions.signal?.aborted) {
-      throw createAbortError("Aborted");
-    }
+  for (const entry of hunks) {
+    throwIfPatchAborted(options.signal);
+    const { hunk } = entry;
+    const { target, moveTarget } = entry.readmit ? await readmitPatchHunk(hunk, options) : entry;
 
     if (hunk.kind === "add") {
-      const targetResolution = resolvePatchPath(hunk.path, patchOptions);
-      await withFileMutationQueueKeyResolution(
-        targetResolution.then((target) => target.queueKey),
-        async () => {
-          const target = await targetResolution;
-          const fileOps = await getFileOps();
-          await ensureDir(target.resolved, fileOps);
-          await createPatchTarget({
-            target,
-            contents: hunk.contents,
-            ops: fileOps,
-            hint: `Use "*** Update File: ${target.display}" to change it, or delete it earlier in the same patch.`,
-          });
-        },
-      );
-      const target = await targetResolution;
+      await ensureDir(target.resolved, fileOps);
+      await createPatchTarget({
+        target,
+        contents: hunk.contents,
+        ops: fileOps,
+        hint: `Use "*** Update File: ${target.display}" to change it, or delete it earlier in the same patch.`,
+      });
       recordSummary(summary, seen, "added", target.display);
       continue;
     }
 
     if (hunk.kind === "delete") {
-      const targetResolution = resolvePatchPath(
-        hunk.path,
-        patchOptions,
-        PATH_ALIAS_POLICIES.unlinkTarget,
-      );
-      await withFileMutationQueueKeyResolution(
-        targetResolution.then((target) => target.queueKey),
-        async () => {
-          const target = await targetResolution;
-          const fileOps = await getFileOps();
-          await fileOps.remove(target.resolved);
-        },
-      );
-      const target = await targetResolution;
+      await fileOps.remove(target.resolved);
       recordSummary(summary, seen, "deleted", target.display);
       continue;
     }
 
-    const targetResolution = resolvePatchPath(hunk.path, patchOptions);
-    const moveTargetResolution = hunk.movePath
-      ? resolvePatchPath(hunk.movePath, patchOptions)
-      : undefined;
-    await withFileMutationQueueKeysResolution(
-      Promise.all([
-        targetResolution.then((target) => target.queueKey),
-        ...(moveTargetResolution
-          ? [moveTargetResolution.then((moveTarget) => moveTarget.queueKey)]
-          : []),
-      ]),
-      async () => {
-        const target = await targetResolution;
-        const moveTarget = moveTargetResolution ? await moveTargetResolution : undefined;
-        const fileOps = await getFileOps();
-        const applied = await applyUpdateHunk(target.resolved, hunk.chunks, fileOps);
-
-        if (hunk.movePath && moveTarget) {
-          await ensureDir(moveTarget.resolved, fileOps);
-        }
-        // Container aliases can name the same file; use the physical queue identity.
-        if (moveTarget && moveTarget.queueKey !== target.queueKey) {
-          noOpPaths.delete(target.display);
-          await createPatchTarget({
-            target: moveTarget,
-            contents: applied,
-            ops: fileOps,
-            hint: "Delete it earlier in the same patch to replace it.",
-          });
-          await fileOps.remove(target.resolved);
-          recordSummary(summary, seen, "modified", moveTarget.display);
-          return;
-        }
-        const existing = await fileOps.readFile(target.resolved);
-        if (normalizeUpdateComparison(existing) === normalizeUpdateComparison(applied)) {
-          noOpPaths.add(target.display);
-        } else {
-          noOpPaths.delete(target.display);
-          await fileOps.writeFile(target.resolved, applied);
-          recordSummary(summary, seen, "modified", target.display);
-        }
-      },
-    );
+    const applied = await applyUpdateHunk(target.resolved, hunk.chunks, fileOps);
+    if (moveTarget) {
+      await ensureDir(moveTarget.resolved, fileOps);
+    }
+    // Container aliases can name the same file; stages follow physical identity.
+    if (moveTarget && entry.moveStage !== entry.stage) {
+      noOpPaths.delete(target.display);
+      await createPatchTarget({
+        target: moveTarget,
+        contents: applied,
+        ops: fileOps,
+        hint: "Delete it earlier in the same patch to replace it.",
+      });
+      await fileOps.remove(target.resolved);
+      recordSummary(summary, seen, "modified", moveTarget.display);
+      continue;
+    }
+    const existing = await fileOps.readFile(target.resolved);
+    if (normalizeUpdateComparison(existing) === normalizeUpdateComparison(applied)) {
+      noOpPaths.add(target.display);
+    } else {
+      noOpPaths.delete(target.display);
+      await fileOps.writeFile(target.resolved, applied);
+      recordSummary(summary, seen, "modified", target.display);
+    }
   }
 
   const noOp = noOpPaths.size > 0 && Object.values(summary).every((paths) => paths.length === 0);
@@ -299,6 +606,22 @@ async function applyPatch(input: string, options: ApplyPatchOptions): Promise<Ap
     summary,
     text: noOp ? `No changes made to ${Array.from(noOpPaths).join(", ")}.` : formatSummary(summary),
     ...(noOp ? { noOp: true } : {}),
+  };
+}
+
+async function readmitPatchHunk(
+  hunk: Hunk,
+  options: ApplyPatchOptions,
+): Promise<{ target: PatchTarget; moveTarget?: PatchTarget }> {
+  return {
+    target: await resolvePatchPath(
+      hunk.path,
+      options,
+      hunk.kind === "delete" ? PATH_ALIAS_POLICIES.unlinkTarget : PATH_ALIAS_POLICIES.strict,
+    ),
+    ...(hunk.kind === "update" && hunk.movePath
+      ? { moveTarget: await resolvePatchPath(hunk.movePath, options) }
+      : {}),
   };
 }
 
@@ -371,10 +694,8 @@ async function resolvePatchPath(
   options: ApplyPatchOptions,
   aliasPolicy: PathAliasPolicy = PATH_ALIAS_POLICIES.strict,
 ): Promise<{ resolved: string; queueKey: string; display: string }> {
+  const filePath = await resolvePatchFilePath(rawFilePath, options);
   if (options.sandbox) {
-    const filePath =
-      options.patchInputPaths?.get(rawFilePath) ??
-      (await resolveApplyPatchInputPath(rawFilePath, options));
     const resolved = options.sandbox.bridge.resolvePath({
       filePath,
       cwd: options.cwd,
@@ -418,9 +739,6 @@ async function resolvePatchPath(
     };
   }
 
-  const filePath =
-    options.patchInputPaths?.get(rawFilePath) ??
-    preserveAtPrefixedRelativePath(rawFilePath, options.cwd);
   const workspaceOnly = options.workspaceOnly !== false;
   const resolved = workspaceOnly
     ? (
@@ -438,247 +756,6 @@ async function resolvePatchPath(
     queueKey: await resolveFileMutationQueueKey(resolved),
     display: toDisplayPath(resolved, options.cwd),
   };
-}
-
-function parsePatchText(input: string): { hunks: Hunk[] } {
-  const trimmed = input.trim();
-  if (!trimmed) {
-    throw new Error("Invalid patch: input is empty.");
-  }
-
-  const lines = trimmed.split(/\r?\n/);
-  const validated = checkPatchBoundariesLenient(lines);
-  const hunks: Hunk[] = [];
-
-  const lastLineIndex = validated.length - 1;
-  let remaining = validated.slice(1, lastLineIndex);
-  let lineNumber = 2;
-
-  while (remaining.length > 0) {
-    const { hunk, consumed } = parseOneHunk(remaining, lineNumber);
-    hunks.push(hunk);
-    lineNumber += consumed;
-    remaining = remaining.slice(consumed);
-  }
-
-  return { hunks };
-}
-
-function checkPatchBoundariesLenient(lines: string[]): string[] {
-  const strictError = checkPatchBoundariesStrict(lines);
-  if (!strictError) {
-    return lines;
-  }
-
-  if (lines.length < 4) {
-    throw new Error(strictError);
-  }
-  const first = lines[0];
-  const last = lines.at(-1);
-  if (
-    last &&
-    (first === "<<EOF" || first === "<<'EOF'" || first === '<<"EOF"') &&
-    last.endsWith("EOF")
-  ) {
-    const inner = lines.slice(1, -1);
-    const innerError = checkPatchBoundariesStrict(inner);
-    if (!innerError) {
-      return inner;
-    }
-    throw new Error(innerError);
-  }
-
-  throw new Error(strictError);
-}
-
-function checkPatchBoundariesStrict(lines: string[]): string | null {
-  const firstLine = lines[0]?.trim();
-  const lastLine = lines[lines.length - 1]?.trim();
-
-  if (firstLine === BEGIN_PATCH_MARKER && lastLine === END_PATCH_MARKER) {
-    return null;
-  }
-  if (firstLine !== BEGIN_PATCH_MARKER) {
-    return "The first line of the patch must be '*** Begin Patch'";
-  }
-  return "The last line of the patch must be '*** End Patch'";
-}
-
-function parseOneHunk(lines: string[], lineNumber: number): { hunk: Hunk; consumed: number } {
-  if (lines.length === 0) {
-    throw new Error(`Invalid patch hunk at line ${lineNumber}: empty hunk`);
-  }
-  const firstLine = lines.at(0)?.trim();
-  if (firstLine === undefined) {
-    throw new Error(`Invalid patch hunk at line ${lineNumber}: empty hunk`);
-  }
-  if (firstLine.startsWith(ADD_FILE_MARKER)) {
-    const targetPath = firstLine.slice(ADD_FILE_MARKER.length);
-    let contents = "";
-    let consumed = 1;
-    for (const addLine of lines.slice(1)) {
-      if (addLine.startsWith("+")) {
-        contents += `${addLine.slice(1)}\n`;
-        consumed += 1;
-      } else {
-        break;
-      }
-    }
-    return {
-      hunk: { kind: "add", path: targetPath, contents },
-      consumed,
-    };
-  }
-
-  if (firstLine.startsWith(DELETE_FILE_MARKER)) {
-    const targetPath = firstLine.slice(DELETE_FILE_MARKER.length);
-    return {
-      hunk: { kind: "delete", path: targetPath },
-      consumed: 1,
-    };
-  }
-
-  if (firstLine.startsWith(UPDATE_FILE_MARKER)) {
-    const targetPath = firstLine.slice(UPDATE_FILE_MARKER.length);
-    let remaining = lines.slice(1);
-    let consumed = 1;
-    let movePath: string | undefined;
-
-    const moveCandidate = remaining[0]?.trim();
-    if (moveCandidate?.startsWith(MOVE_TO_MARKER)) {
-      movePath = moveCandidate.slice(MOVE_TO_MARKER.length);
-      remaining = remaining.slice(1);
-      consumed += 1;
-    }
-
-    const chunks: UpdateFileChunk[] = [];
-    while (remaining.length > 0) {
-      const firstRemaining = remaining.at(0);
-      if (firstRemaining === undefined) {
-        break;
-      }
-      if (firstRemaining.trim() === "") {
-        remaining = remaining.slice(1);
-        consumed += 1;
-        continue;
-      }
-      if (firstRemaining.startsWith("***")) {
-        break;
-      }
-      const { chunk, consumed: chunkLines } = parseUpdateFileChunk(
-        remaining,
-        lineNumber + consumed,
-        chunks.length === 0,
-      );
-      chunks.push(chunk);
-      remaining = remaining.slice(chunkLines);
-      consumed += chunkLines;
-    }
-
-    if (chunks.length === 0) {
-      throw new Error(
-        `Invalid patch hunk at line ${lineNumber}: Update file hunk for path '${targetPath}' is empty`,
-      );
-    }
-
-    return {
-      hunk: {
-        kind: "update",
-        path: targetPath,
-        movePath,
-        chunks,
-      },
-      consumed,
-    };
-  }
-
-  throw new Error(
-    `Invalid patch hunk at line ${lineNumber}: '${lines[0]}' is not a valid hunk header. Valid hunk headers: '*** Add File: {path}', '*** Delete File: {path}', '*** Update File: {path}'`,
-  );
-}
-
-function parseUpdateFileChunk(
-  lines: string[],
-  lineNumber: number,
-  allowMissingContext: boolean,
-): { chunk: UpdateFileChunk; consumed: number } {
-  if (lines.length === 0) {
-    throw new Error(
-      `Invalid patch hunk at line ${lineNumber}: Update hunk does not contain any lines`,
-    );
-  }
-
-  let changeContext: string | undefined;
-  let startIndex = 0;
-  const firstLine = lines.at(0);
-  if (firstLine === EMPTY_CHANGE_CONTEXT_MARKER) {
-    startIndex = 1;
-  } else if (firstLine?.startsWith(CHANGE_CONTEXT_MARKER)) {
-    changeContext = firstLine.slice(CHANGE_CONTEXT_MARKER.length);
-    startIndex = 1;
-  } else if (!allowMissingContext) {
-    throw new Error(
-      `Invalid patch hunk at line ${lineNumber}: Expected update hunk to start with a @@ context marker, got: '${firstLine}'`,
-    );
-  }
-
-  if (startIndex >= lines.length) {
-    throw new Error(
-      `Invalid patch hunk at line ${lineNumber + 1}: Update hunk does not contain any lines`,
-    );
-  }
-
-  const chunk: UpdateFileChunk = {
-    changeContext,
-    oldLines: [],
-    newLines: [],
-    contextOldIndexes: [],
-    isEndOfFile: false,
-  };
-
-  let parsedLines = 0;
-  for (const line of lines.slice(startIndex)) {
-    if (line === EOF_MARKER) {
-      if (parsedLines === 0) {
-        throw new Error(
-          `Invalid patch hunk at line ${lineNumber + 1}: Update hunk does not contain any lines`,
-        );
-      }
-      chunk.isEndOfFile = true;
-      parsedLines += 1;
-      break;
-    }
-
-    const marker = line[0];
-    if (!marker || marker === " ") {
-      const content = line.slice(1);
-      chunk.contextOldIndexes.push(chunk.oldLines.length);
-      chunk.oldLines.push(content);
-      chunk.newLines.push(content);
-      parsedLines += 1;
-      continue;
-    }
-    if (marker === "+") {
-      chunk.contextOldIndexes.push(undefined);
-      chunk.newLines.push(line.slice(1));
-      parsedLines += 1;
-      continue;
-    }
-    if (marker === "-") {
-      chunk.oldLines.push(line.slice(1));
-      parsedLines += 1;
-      continue;
-    }
-
-    if (parsedLines === 0) {
-      throw new Error(
-        `Invalid patch hunk at line ${lineNumber + 1}: Unexpected line found in update hunk: '${line}'. Every line should start with ' ' (context line), '+' (added line), or '-' (removed line)`,
-      );
-    }
-    break;
-  }
-
-  return { chunk, consumed: parsedLines + startIndex };
 }
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
