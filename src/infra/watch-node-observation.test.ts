@@ -121,25 +121,12 @@ describe("developer source observation", () => {
     await fs.writeFile(path.join(cwd, "src", "node_modules", "ignored.ts"), "dependency");
     await repository.reconcile();
     expect(onChange).not.toHaveBeenCalled();
-    // OS overflow can discard detail for excluded output activity. It must not
-    // restart the child unless the selected bytes changed.
-    invalidate!({ reason: "overflow" });
-    invalidate!({ reason: "event" });
-    invalidate!({
-      reason: "event",
-      changes: [
-        { path: "src/node_modules/ignored.ts", type: "content" },
-        { path: "dist/entry.js", type: "content" },
-      ],
-    });
 
     const target = await targetReady.promise;
     await fs.writeFile(path.join(outside, "first", "main.ts"), "linked source");
     await target.reconcile();
     await changed.promise;
     expect(onChange).toHaveBeenCalledExactlyOnceWith(path.join(alias, "main.ts"));
-    expect(reads).toContain(path.join(cwd, "package.json"));
-    expect(reads).toContain(path.join(cwd, "src", "first.ts"));
 
     const replaced = createDeferredCore();
     const setScopes = target.setScopes.bind(target);
@@ -164,12 +151,17 @@ describe("developer source observation", () => {
     expect(onChange).toHaveBeenCalledExactlyOnceWith(path.join(alias, "current.ts"));
     onChange.mockClear();
     changed = createDeferredCore<string | undefined>();
-    await fs.writeFile(path.join(cwd, "src", "first.ts"), "one");
+    reads.length = 0;
+    await fs.writeFile(path.join(cwd, "package.json"), "{}");
+    invalidate!({ reason: "overflow" });
     await repository.reconcile();
+    expect(onChange).not.toHaveBeenCalled();
     await fs.writeFile(path.join(cwd, "package.json"), '{"private":true}');
     invalidate!({ reason: "overflow" });
     await changed.promise;
     expect(onChange).toHaveBeenCalledExactlyOnceWith(path.join(cwd, "package.json"));
+    expect(reads).toContain(path.join(cwd, "package.json"));
+    expect(reads).toContain(path.join(cwd, "src", "first.ts"));
     onChange.mockClear();
     changed = createDeferredCore<string | undefined>();
     await fs.writeFile(path.join(cwd, "src", "new.ts"), "new source");
@@ -226,7 +218,31 @@ function mapped(groups: SourceTargetGroup[], physical: string) {
   );
 }
 
-describe("developer linked-source admission", () => {
+describe("developer source discovery", () => {
+  it("rediscovers a file replaced by a directory between enumeration and hashing", async () => {
+    const cwd = temp.make("source-kind-change-");
+    const source = path.join(cwd, "src", "main.ts");
+    await fs.mkdir(path.dirname(source));
+    await fs.writeFile(source, "original source");
+    const discovery = createSourceTargetDiscovery(cwd, ["src"], ignored);
+    const initial = await discovery.discover(signal());
+    const authority = expectDefined(initial[0], "admitted observation").authority;
+    const open = authority.open.bind(authority);
+    vi.spyOn(authority, "open").mockImplementationOnce(async (relative, settings) => {
+      await fs.unlink(source);
+      await fs.mkdir(source);
+      await fs.writeFile(path.join(source, "child.ts"), "replacement source");
+      const opening = open(relative, settings);
+      await expect(opening).rejects.toMatchObject({ code: "not-file" });
+      return await opening;
+    });
+
+    const current = await discovery.discover(signal());
+    expect(current.flatMap((group) => [...group.files.keys()])).toEqual([
+      path.join(source, "child.ts"),
+    ]);
+  });
+
   it("follows an intermediate package alias, groups shared targets, and filters lexically", async () => {
     const cwd = temp.make("source-repo-");
     const outside = temp.make("source-target-");

@@ -365,7 +365,7 @@ export function createSourceTargetDiscovery(
             !errors.every(
               (failure) =>
                 failure instanceof FsSafeError &&
-                ["not-found", "path-mismatch", "symlink"].includes(failure.code),
+                ["not-found", "not-file", "path-mismatch", "symlink"].includes(failure.code),
             )
           ) {
             throw error;

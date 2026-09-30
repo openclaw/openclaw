@@ -152,10 +152,12 @@ it("discovers a newly created root and keeps observing edits and deletion", asyn
 it("keeps admitted symlink coverage available after unchanged overflow", async () => {
   const root = path.join(fixture.workspaceDir, "skills");
   const target = await fixture.createFixtureDirectory("linked-target");
+  await writeSkill({ dir: path.join(target, "guide"), name: "guide", description: "Unchanged" });
   await fs.rm(root, { recursive: true });
   await fs.symlink(target, root, linkType);
   const config = { skills: { load: { allowSymlinkTargets: [target] } } };
   await ensure(config);
+  expect(read(config)).toEqual(["Unchanged"]);
   const version = getSkillsSnapshotVersion(fixture.workspaceDir);
   const changes = vi.fn();
   const unsubscribe = refresh.registerSkillsChangeListener(changes);
