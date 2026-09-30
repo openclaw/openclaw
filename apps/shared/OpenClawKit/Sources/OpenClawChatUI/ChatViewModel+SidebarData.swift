@@ -1,6 +1,22 @@
 import Foundation
 
 extension OpenClawChatViewModel {
+    public internal(set) var sessions: [OpenClawChatSessionEntry] {
+        get {
+            self.sidebarData?.conversationRows(agentID: self.currentSessionSnapshot().deliveryAgentID) ?? self
+                .legacySessions
+        }
+        set {
+            if let sidebarData {
+                sidebarData.replaceConversationRows(newValue, agentID: self.currentSessionSnapshot().deliveryAgentID)
+            } else {
+                self.legacySessions = newValue
+                self.syncContextUsageFraction()
+                self.syncActiveSessionRunIDsFromCurrentSession()
+            }
+        }
+    }
+
     public func enableSidebarData() {
         guard self.sidebarData == nil else { return }
         let owner = OpenClawChatSessionSidebarData()

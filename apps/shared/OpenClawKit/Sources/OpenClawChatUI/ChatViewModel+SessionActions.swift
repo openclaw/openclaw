@@ -357,14 +357,7 @@ extension OpenClawChatViewModel {
                 }
             }
             var receipt: OpenClawChatSessionPatchReceipt?
-            let token = entries[key].flatMap { row in
-                action == .delete ? nil : owner?.beginMutation(
-                    target: row, field: action == .archive ? .archived : .pinned,
-                    update: {
-                        if action == .archive { $0.archived = true }
-                        else { $0.pinned = action == .pin }
-                    })
-            }
+            let token = entries[key].flatMap { owner?.beginBatchMutation(target: $0, action: action) }
             defer { owner?.finishMutation(token, receipt: receipt) }
             switch action {
             case .pin, .unpin:
@@ -468,7 +461,8 @@ extension OpenClawChatViewModel {
             key: key,
             agentID: target.agentID ?? self.currentSessionSnapshot().deliveryAgentID)
         self.mutateSessionOptimistically(
-            target: target, field: .label,
+            target: target,
+            field: .label,
             update: { $0.label = nextLabel
                 $0.displayName = nextLabel
             },
@@ -526,8 +520,9 @@ extension OpenClawChatViewModel {
                 guard self.isCurrentSession(presentation) else { return }
                 if owner == nil { self.sessions = self.applyingLocalUnreadOverrides(to: previous) }
                 self.errorText = error.localizedDescription
+                let failure = error.localizedDescription
                 chatSessionActionsLogger.error(
-                    "sessions.patch(\(field.rawValue, privacy: .public)) failed \(error.localizedDescription, privacy: .public)")
+                    "sessions.patch(\(field.rawValue, privacy: .public)) failed \(failure, privacy: .public)")
             }
         }
     }
@@ -935,7 +930,8 @@ extension OpenClawChatViewModel {
         let row = self.sidebarData?.row(key: key, agentID: target.agentID ?? self.activeAgentId)
         let pinnedAt = pinned ? Date().timeIntervalSince1970 * 1000 : nil
         self.mutateSessionOptimistically(
-            target: target, field: .pinned,
+            target: target,
+            field: .pinned,
             update: { $0.pinned = pinned
                 $0.pinnedAt = pinnedAt
             },
@@ -964,7 +960,9 @@ extension OpenClawChatViewModel {
             return
         }
         self.mutateSessionOptimistically(
-            target: target, field: .archived, incarnation: session.sessionId,
+            target: target,
+            field: .archived,
+            incarnation: session.sessionId,
             update: { $0.archived = true },
             mutation: { routeLease in
                 let receipt = try await routeLease.patchSession(

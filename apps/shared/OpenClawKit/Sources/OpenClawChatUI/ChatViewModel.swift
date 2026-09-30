@@ -153,21 +153,6 @@ public final class OpenClawChatViewModel {
     public private(set) var toolActivities: [OpenClawChatPendingToolCall] = []
     private(set) var timelineRevision: UInt64 = 0
     var legacySessions: [OpenClawChatSessionEntry] = []
-    public internal(set) var sessions: [OpenClawChatSessionEntry] {
-        get {
-            self.sidebarData?.conversationRows(agentID: self.currentSessionSnapshot().deliveryAgentID) ?? self
-                .legacySessions
-        }
-        set {
-            if let sidebarData {
-                sidebarData.replaceConversationRows(newValue, agentID: self.currentSessionSnapshot().deliveryAgentID)
-            } else {
-                self.legacySessions = newValue
-                self.syncContextUsageFraction()
-                self.syncActiveSessionRunIDsFromCurrentSession()
-            }
-        }
-    }
 
     public internal(set) var sidebarData: OpenClawChatSessionSidebarData?
 

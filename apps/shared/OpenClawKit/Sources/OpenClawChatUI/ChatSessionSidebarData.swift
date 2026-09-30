@@ -208,10 +208,24 @@ public final class OpenClawChatSessionSidebarData {
         return self.revision
     }
 
+    func beginBatchMutation(target: OpenClawChatSessionEntry, action: ChatSessionBatchAction) -> Int? {
+        guard action != .delete else { return nil }
+        return self.beginMutation(target: target, field: action == .archive ? .archived : .pinned) {
+            if action == .archive {
+                $0.archived = true
+            } else {
+                $0.pinned = action == .pin
+            }
+        }
+    }
+
     func finishMutation(_ token: Int?, receipt: OpenClawChatSessionPatchReceipt?) {
         guard let token, let intent = self.pending.removeValue(forKey: token) else { return }
-        if let receipt { self.confirmFields(receipt, target: intent.target, field: intent.field, order: token) }
-        else { self.didChange() }
+        if let receipt {
+            self.confirmFields(receipt, target: intent.target, field: intent.field, order: token)
+        } else {
+            self.didChange()
+        }
     }
 
     func confirmFields(
