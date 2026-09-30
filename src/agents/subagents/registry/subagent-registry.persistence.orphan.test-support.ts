@@ -49,7 +49,7 @@ export function registerSubagentOrphanTaskCases({
     expect(recordGatewayBootStart(process.env, now - 2 * 60 * 60 * 1_000)).toBeDefined();
     // Refresh the process-level boot snapshot after writing the two lifecycle
     // rows so the production sweeper observes this test's persisted state.
-    loadGatewayBootSegmentsForAttribution(Date.now(), { forceRefresh: true });
+    await loadGatewayBootSegmentsForAttribution(Date.now(), { forceRefresh: true });
 
     restartRegistry();
     await flushQueuedRegistryWork();
@@ -64,7 +64,7 @@ export function registerSubagentOrphanTaskCases({
       status: "error",
       // Attribution must name the persisted owning boot on every platform;
       // exact host/process wording depends on authoritative kernel boot IDs.
-      error: expect.stringContaining(`(previous boot ${priorBootId} ended without a clean stop)`),
+      error: expect.stringContaining(`(previous boot ${priorBootId} ended without a clean stop`),
     });
     await vi.waitFor(() => expect(announceSpy).toHaveBeenCalled(), {
       timeout: 1_000,
@@ -93,7 +93,7 @@ export function registerSubagentOrphanTaskCases({
     });
     // The boot snapshot is process-level; drop rows cached by earlier cases so
     // this fresh state dir (no boot history) takes the unattributed path.
-    loadGatewayBootSegmentsForAttribution(Date.now(), { forceRefresh: true });
+    await loadGatewayBootSegmentsForAttribution(Date.now(), { forceRefresh: true });
 
     restartRegistry();
     await testing.sweepOnceForTests();

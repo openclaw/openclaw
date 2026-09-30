@@ -382,6 +382,10 @@ export function createSubagentRegistrySweeper(params: {
               runId,
               entry,
               now,
+              // The same two conditions that selected this run, re-read after
+              // the orphan path's own awaits.
+              isCurrent: () =>
+                runs.get(runId) === entry && typeof entry.execution.endedAt !== "number",
               completeSubagentRunWithRecovery: params.completeSubagentRunWithRecovery,
             });
             continue;

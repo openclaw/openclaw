@@ -13,6 +13,10 @@ const RUN_REAPED_AT = Date.parse("2026-08-26T23:29:51.000Z");
 
 const bootSegments = vi.hoisted(() => ({
   current: [] as GatewayBootLifecycleSegment[],
+  // Lets a test hold the sweeper inside the (now asynchronous) history read
+  // and mutate the registry while it is suspended there.
+  onEnter: undefined as (() => void) | undefined,
+  gate: undefined as Promise<void> | undefined,
 }));
 const orphanReason = vi.hoisted(() => ({
   current: undefined as string | undefined,
@@ -25,7 +29,11 @@ vi.mock("./subagent-orphan-attribution.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./subagent-orphan-attribution.js")>();
   return {
     ...actual,
-    loadGatewayBootSegmentsForAttribution: () => bootSegments.current,
+    loadGatewayBootSegmentsForAttribution: async () => {
+      bootSegments.onEnter?.();
+      await bootSegments.gate;
+      return bootSegments.current;
+    },
   };
 });
 vi.mock("./subagent-session-reconciliation.js", async (importOriginal) => {
@@ -134,6 +142,8 @@ describe("sweeper attribution for runs orphaned by a gateway death", () => {
     vi.useFakeTimers({ now: RUN_REAPED_AT });
     orphanReason.current = "missing-session-entry";
     childSessionEntry.current = undefined;
+    bootSegments.onEnter = undefined;
+    bootSegments.gate = undefined;
     bootSegments.current = [
       segment({ bootId: "boot-minus-5", startedAtMs: RUN_STARTED_AT - 60_000 }),
       segment({
@@ -164,7 +174,7 @@ describe("sweeper attribution for runs orphaned by a gateway death", () => {
     expect(completion.expectedEntry).toBe(entry);
     expect(completion.recoverInterrupted).toBe(true);
     expect(completion.outcome.status).toBe("error");
-    expect(completion.outcome.error).toContain("host rebooted under the gateway");
+    expect(completion.outcome.error).toContain("the host rebooted under it");
     expect(completion.outcome.error).toContain("boot-minus-5 ended without a clean stop");
     expect(completion.outcome.error).toContain("no output recorded in the run registry");
     expect(completion.outcome.error).not.toContain("lost active execution context");
@@ -294,6 +304,57 @@ describe("sweeper attribution for runs orphaned by a gateway death", () => {
       "no output recorded",
     );
     expect(runs.get(entry.runId)?.completion?.resultText).toBe("here is what I found");
+  });
+
+  // Boot history is read off the gateway thread, so the sweeper suspends before
+  // it has written anything. These pin the re-check on the far side of that
+  // await: whatever the registry says now outranks the row we started with.
+  describe("registry changes during the asynchronous history read", () => {
+    function gateHistoryRead() {
+      let release = () => {};
+      let entered = () => {};
+      const suspended = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      bootSegments.onEnter = () => entered();
+      bootSegments.gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return { suspended, release: () => release() };
+    }
+
+    it("abandons the inspected row when a successor takes its runId", async () => {
+      const { entry, completeSubagentRunWithRecovery, runs, sweeper } = createHarness();
+      const { suspended, release } = gateHistoryRead();
+
+      const sweep = sweeper.sweepOnce();
+      await suspended;
+      const successor = { ...entry, generation: 2 } as SubagentRunRecord;
+      runs.set(entry.runId, successor);
+      release();
+      await sweep;
+      sweeper.reset();
+
+      expect(completeSubagentRunWithRecovery).not.toHaveBeenCalled();
+      expect(runs.get(entry.runId)).toBe(successor);
+    });
+
+    it("abandons the inspected row when it settles while the read is in flight", async () => {
+      const { entry, completeSubagentRunWithRecovery, sweeper } = createHarness();
+      const { suspended, release } = gateHistoryRead();
+
+      const sweep = sweeper.sweepOnce();
+      await suspended;
+      // A real completion landed: the row is no longer an unended orphan, and
+      // crash attribution must not overwrite its outcome.
+      entry.execution = { ...entry.execution, endedAt: RUN_DIED_AT };
+      release();
+      await sweep;
+      sweeper.reset();
+
+      expect(completeSubagentRunWithRecovery).not.toHaveBeenCalled();
+      expect(entry.execution.outcome).toBeUndefined();
+    });
   });
 
   it.each([

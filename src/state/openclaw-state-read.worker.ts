@@ -45,6 +45,7 @@ import {
 } from "../gateway/worker-environments/store-row-codec.js";
 import { executeDevicePairingRead } from "../infra/device-pairing-read.kernel.js";
 import { readExecApprovalsConfigRow } from "../infra/exec-approvals-sqlite.js";
+import { readGatewayBootLifecycleSegmentsInDatabase } from "../infra/gateway-boot-lifecycle-read.kernel.js";
 import { inspectCurrentConversationBindingRecordInDatabase } from "../infra/outbound/current-conversation-bindings.kernel.js";
 import { readOutboundDeliveriesInDatabase } from "../infra/outbound/delivery-queue-storage.kernel.js";
 import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
@@ -372,6 +373,15 @@ serveOwnedWorkerTasks(
               return {
                 type: command.type,
                 row: readExecApprovalsConfigRow(db),
+              };
+            }
+            if (command.type === "gatewayBootLifecycle.segments") {
+              return {
+                type: command.type,
+                segments: readGatewayBootLifecycleSegmentsInDatabase(db, {
+                  sinceMs: command.sinceMs,
+                  limit: command.limit,
+                }),
               };
             }
             if (command.type === "workerEnvironments.snapshot") {

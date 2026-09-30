@@ -215,7 +215,7 @@ vi.mock("./subagent-session-reconciliation.js", async (importOriginal) => ({
 const orphanBootSegments = vi.hoisted(() => ({ current: [] as GatewayBootLifecycleSegment[] }));
 vi.mock("./subagent-orphan-attribution.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./subagent-orphan-attribution.js")>()),
-  loadGatewayBootSegmentsForAttribution: () => orphanBootSegments.current,
+  loadGatewayBootSegmentsForAttribution: async () => orphanBootSegments.current,
 }));
 
 vi.mock("../../../runtime.js", () => ({
@@ -4548,6 +4548,7 @@ describe("subagent registry lifecycle hardening", () => {
         runId: entry.runId,
         entry,
         now: 6_000,
+        isCurrent: () => runs.get(entry.runId) === entry,
         completeSubagentRunWithRecovery: runtime.completeSubagentRunWithRecovery,
       });
       try {
@@ -4656,6 +4657,7 @@ describe("subagent registry lifecycle hardening", () => {
         runId: entry.runId,
         entry,
         now: 6_000,
+        isCurrent: () => runs.get(entry.runId) === entry,
         completeSubagentRunWithRecovery: runtime.completeSubagentRunWithRecovery,
       });
       expect(persistOrThrow).toHaveBeenCalledTimes(2);

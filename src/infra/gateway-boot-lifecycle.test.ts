@@ -77,7 +77,9 @@ function insertBootRows(
 }
 
 describe("gateway boot lifecycle history", () => {
-  it("can read every retained row when an attribution caller overrides the diagnostic cap", () => {
+  // Exercised through the async entry point on purpose: the rows come back
+  // over the shared-state read worker, never from a caller-thread open.
+  it("can read every retained row when an attribution caller overrides the diagnostic cap", async () => {
     const db = createLifecycleDb();
     const rows = Array.from({ length: 70 }, (_, index) => ({
       bootId: `boot-${index}`,
@@ -85,8 +87,8 @@ describe("gateway boot lifecycle history", () => {
     }));
     insertBootRows(db, rows);
 
-    expect(readGatewayBootLifecycleSegments({ env: db.env })).toHaveLength(64);
-    const retained = readGatewayBootLifecycleSegments({
+    expect(await readGatewayBootLifecycleSegments({ env: db.env })).toHaveLength(64);
+    const retained = await readGatewayBootLifecycleSegments({
       env: db.env,
       sinceMs: 1_000_000,
       limit: 2_147_483_647,

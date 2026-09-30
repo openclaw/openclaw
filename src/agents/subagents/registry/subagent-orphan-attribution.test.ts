@@ -260,12 +260,17 @@ describe("formatSubagentOrphanErrorMessage", () => {
       ],
     });
     const message = formatSubagentOrphanErrorMessage(attribution!);
-    expect(message).toContain("host rebooted under the gateway");
-    expect(message).toContain("2026-08-26T23:28:30.000Z");
-    expect(message).toContain("previous boot boot-minus-5 ended without a clean stop");
+    // The only recorded instant is the successor boot, so it is named as the
+    // restart. The prior gateway's end carries no timestamp of its own.
+    expect(message).toContain("gateway restarted at 2026-08-26T23:28:30.000Z");
+    expect(message).toContain(
+      "previous boot boot-minus-5 ended without a clean stop at an unrecorded earlier time",
+    );
+    expect(message).toContain("the host rebooted under it");
+    expect(message).not.toContain("host rebooted under it at 2026");
     expect(message).toContain("no output recorded in the run registry");
     expect(message).toContain("at least 5m36s");
-    expect(message).toContain("gateway restarted 33m38s after the run's last recorded activity");
+    expect(message).toContain("the restart came 33m38s after the run's last recorded activity");
     // The misleading 40-minute apparent lifetime must not appear anywhere.
     expect(message).not.toContain("40m");
   });
@@ -279,7 +284,7 @@ describe("formatSubagentOrphanErrorMessage", () => {
       ],
     });
     const message = formatSubagentOrphanErrorMessage(processDeath!);
-    expect(message).toContain("gateway process died while the host stayed up");
+    expect(message).toContain("the gateway process died while the host stayed up");
     expect(message).not.toContain("gateway absent under 1s");
   });
 

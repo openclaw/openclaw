@@ -4,13 +4,17 @@ import { readFileSync } from "node:fs";
 import { uptime as osUptimeSeconds } from "node:os";
 import { formatCliCommand } from "../cli/command-format.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
+import {
+  executeExistingOpenClawStateRead,
+  withExistingOpenClawStateDatabaseReadOnly,
+} from "../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import type { GatewayBootLifecycleSegment } from "./gateway-boot-lifecycle-read.kernel.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -64,6 +68,8 @@ export function formatGatewayCrashLoopManualChannelStartHint(target?: {
 
 const gatewayLifecycleLog = createSubsystemLogger("gateway/lifecycle");
 
+export type { GatewayBootLifecycleSegment };
+
 /**
  * Identifies the host boot the gateway process is running on. Two boot rows
  * carrying different authoritative kernel ids were separated by a host reboot;
@@ -105,45 +111,36 @@ function resolveHostBootId(nowMs = Date.now()): string {
   return cachedHostBootId;
 }
 
-/** One persisted gateway lifetime, as needed to attribute orphaned work. */
-export type GatewayBootLifecycleSegment = {
-  bootId: string;
-  pid: number;
-  startedAtMs: number;
-  completedAtMs: number | null;
-  outcome: string | null;
-  hostBootId: string | null;
-};
-
 /**
  * Reads recent boot segments oldest-first. Callers correlate their own
  * timestamps against these rows; this function makes no judgement about them.
+ *
+ * The query runs on the shared-state read worker: the gateway sweeper calls it
+ * from the main thread, and a cold handle or a busy database must not block
+ * unrelated gateway work while SQLite opens and scans.
  */
-export function readGatewayBootLifecycleSegments(params?: {
+export async function readGatewayBootLifecycleSegments(params?: {
   env?: NodeJS.ProcessEnv;
   sinceMs?: number;
   limit?: number;
-}): GatewayBootLifecycleSegment[] {
+}): Promise<GatewayBootLifecycleSegment[]> {
   try {
-    const { db } = openOpenClawStateDatabase({ env: params?.env ?? process.env });
-    const kysely = getNodeSqliteKysely<GatewayBootLifecycleDatabase>(db);
-    let query = kysely
-      .selectFrom("gateway_boot_lifecycle")
-      .select([
-        "boot_id as bootId",
-        "pid",
-        "started_at_ms as startedAtMs",
-        "completed_at_ms as completedAtMs",
-        "outcome",
-        "host_boot_id as hostBootId",
-      ])
-      .orderBy("started_at_ms", "desc")
-      .limit(params?.limit ?? 64);
-    if (typeof params?.sinceMs === "number") {
-      query = query.where("started_at_ms", ">=", params.sinceMs);
+    const reply = await executeExistingOpenClawStateRead(
+      { env: params?.env ?? process.env },
+      {
+        type: "gatewayBootLifecycle.segments",
+        ...(typeof params?.sinceMs === "number" ? { sinceMs: params.sinceMs } : {}),
+        ...(typeof params?.limit === "number" ? { limit: params.limit } : {}),
+      },
+    );
+    if (!reply) {
+      // No database on disk yet: no boot history to attribute against.
+      return [];
     }
-    const { rows } = executeSqliteQuerySync(db, query);
-    return rows.toSorted((left, right) => left.startedAtMs - right.startedAtMs);
+    if (!reply.ok || reply.type !== "gatewayBootLifecycle.segments") {
+      throw new Error("Unexpected gateway boot lifecycle read result");
+    }
+    return reply.segments;
   } catch (err) {
     gatewayLifecycleLog.warn(`boot lifecycle history unavailable; fail-open: ${String(err)}`);
     return [];

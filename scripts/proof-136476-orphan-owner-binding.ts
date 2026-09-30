@@ -40,6 +40,11 @@ import { randomUUID } from "node:crypto";
  *                 memory AND in SQLite, with no notification and no cleanup.
  *  3. released  — the row is deleted while the completion is queued. Nothing
  *                 may be persisted or delivered.
+ *  4. history-read race — the boot-history read now runs on the shared-state
+ *                 read worker, so the sweeper yields before it has decided
+ *                 anything. A successor takes the runId during that real
+ *                 worker round trip. The inspected row must be abandoned
+ *                 before any completion is attempted.
  *
  * Run: pnpm tsx scripts/proof-136476-orphan-owner-binding.ts
  */
@@ -269,7 +274,7 @@ async function runScenario(ownership: "current" | "replaced" | "released"): Prom
   const liveBootId = recordGatewayBootStart(process.env, liveBootStartedAt, "proof-136476-live");
   check("live boot recorded by the production writer", typeof liveBootId === "string");
 
-  const segments = readGatewayBootLifecycleSegments({ sinceMs: deadBootStartedAt - 1_000 });
+  const segments = await readGatewayBootLifecycleSegments({ sinceMs: deadBootStartedAt - 1_000 });
   check(
     "boot history holds the crashed predecessor and the live successor",
     segments.some(
@@ -278,7 +283,7 @@ async function runScenario(ownership: "current" | "replaced" | "released"): Prom
     { segments: segments.length },
   );
   // The attribution loader caches; force this scenario's rows to be read.
-  loadGatewayBootSegmentsForAttribution(now, { forceRefresh: true });
+  await loadGatewayBootSegmentsForAttribution(now, { forceRefresh: true });
 
   const runId = `proof-136476-${ownership}-${randomUUID().slice(0, 8)}`;
   const entry = createOrphanedRun({
@@ -329,6 +334,7 @@ async function runScenario(ownership: "current" | "replaced" | "released"): Prom
     runId,
     entry,
     now,
+    isCurrent: () => runs.get(runId) === entry && typeof entry.execution.endedAt !== "number",
     completeSubagentRunWithRecovery: runtime.completeSubagentRunWithRecovery,
   });
 
@@ -472,11 +478,108 @@ async function runScenario(ownership: "current" | "replaced" | "released"): Prom
   controller.clearScheduledResumeTimers();
 }
 
+/**
+ * Pins the post-await re-check. Attribution history is read off the gateway
+ * thread, so `reconcileStaleActiveSubagentRun` suspends before it inspects the
+ * run at all. This scenario makes that read a genuine read-worker round trip
+ * (the cache is seeded stale, not warm) and replaces the registry row while it
+ * is in flight. Nothing about the inspected row may be written afterwards.
+ */
+async function runHistoryReadRaceScenario(): Promise<void> {
+  console.log(`\n== scenario: history-read race ==`);
+  const now = Date.now();
+  const deadBootStartedAt = now - 3_600_000;
+  const runStartedAt = deadBootStartedAt + 60_000;
+
+  const deadBootId = insertCrashedPredecessorBoot(deadBootStartedAt);
+  check("crashed predecessor recorded for the race scenario", typeof deadBootId === "string");
+  check(
+    "live boot recorded by the production writer",
+    typeof recordGatewayBootStart(process.env, now - 60_000, "proof-136476-race") === "string",
+  );
+  // Seed the cache with an expired load stamp so the helper's own call misses
+  // it and performs a real read-worker round trip rather than a microtask hop.
+  await loadGatewayBootSegmentsForAttribution(now - 10 * 60_000, { forceRefresh: true });
+
+  const runId = `proof-136476-race-${randomUUID().slice(0, 8)}`;
+  const entry = createOrphanedRun({
+    runId,
+    startedAtMs: runStartedAt,
+    lastActivityAtMs: runStartedAt + 120_000,
+  });
+  const runs = new Map<string, SubagentRunRecord>([[runId, entry]]);
+  const edges: EdgeRecorder = {
+    announce: 0,
+    captureReply: 0,
+    gatewayCalls: 0,
+    browserCleanup: 0,
+    settleWake: 0,
+    contextEngineEnded: 0,
+  };
+  const { controller, runtime, retryTimers } = createController(runs, edges);
+  persistSubagentRunsToDisk(runs);
+  check(
+    "stale active run is durably present before recovery",
+    readDurableRun(runId)?.execution.status === "running",
+  );
+
+  const completion = reconcileStaleActiveSubagentRun({
+    runId,
+    entry,
+    now,
+    isCurrent: () => runs.get(runId) === entry && typeof entry.execution.endedAt !== "number",
+    completeSubagentRunWithRecovery: runtime.completeSubagentRunWithRecovery,
+  });
+  // No completion lock is held here: the helper has not reached completion yet.
+  // It is suspended on the history read, which is the window under test.
+  const successor = createSuccessorRun(runId, now - 10_000);
+  runs.set(runId, successor);
+  persistSubagentRunsToDisk(runs, [runId]);
+  const successorDurableBefore = readDurableRun(runId);
+  check(
+    "successor is durably installed while the history read is in flight",
+    successorDurableBefore?.generation === 2,
+    { generation: successorDurableBefore?.generation },
+  );
+  await completion;
+
+  const durable = readDurableRun(runId);
+  check("race: inspected row was not mutated in memory", entry.execution.status === "running", {
+    status: entry.execution.status,
+    outcome: entry.execution.outcome,
+  });
+  check("race: inspected row has no terminal outcome", entry.execution.outcome === undefined);
+  check("race: inspected row was not cleaned up", entry.cleanupCompletedAt === undefined);
+  check("race: requester was NOT notified", edges.announce === 0, edges);
+  check("race: no completion reply captured", edges.captureReply === 0, edges);
+  check("race: no gateway call dispatched", edges.gatewayCalls === 0, edges);
+  check("race: no browser cleanup dispatched", edges.browserCleanup === 0, edges);
+  check("race: no requester settle wake", edges.settleWake === 0, edges);
+  check("race: no context-engine end notification", edges.contextEngineEnded === 0, edges);
+  check(
+    "race: successor stayed running in memory",
+    successor.execution.status === "running" && successor.execution.outcome === undefined,
+    { status: successor.execution.status, outcome: successor.execution.outcome },
+  );
+  check(
+    "race: durable successor row is byte-identical to its pre-recovery snapshot",
+    JSON.stringify(durable) === JSON.stringify(successorDurableBefore),
+  );
+  check("race: no retry timer was left bound to a foreign row", retryTimers.size === 0, {
+    timers: retryTimers.size,
+  });
+  for (const timer of retryTimers) {
+    clearTimeout(timer);
+  }
+  controller.clearScheduledResumeTimers();
+}
+
 try {
   console.log(`proof-136476 orphan owner binding :: state dir ${stateDir}`);
   await runScenario("current");
   await runScenario("replaced");
   await runScenario("released");
+  await runHistoryReadRaceScenario();
 } finally {
   rmSync(stateDir, { recursive: true, force: true });
 }

@@ -192,14 +192,19 @@ function describeDuration(ms: number): string {
   return formatDurationCompact(ms) ?? "under 1s";
 }
 
+/**
+ * Describes what the boot rows say separated the two gateways. The clause
+ * carries no timestamp: only the successor's start is recorded, and the prior
+ * boot's end is bounded elsewhere in the message rather than pinned here.
+ */
 function describeCause(attribution: SubagentOrphanAttribution): string {
   switch (attribution.cause) {
     case "host_reboot":
-      return "host rebooted under the gateway";
+      return "the host rebooted under it";
     case "gateway_process_death":
-      return "gateway process died while the host stayed up";
+      return "the gateway process died while the host stayed up";
     default:
-      return "gateway restarted";
+      return "host continuity could not be established";
   }
 }
 
@@ -225,9 +230,15 @@ function describeEvidence(attribution: SubagentOrphanAttribution): string {
 
 /**
  * Renders the attribution as the run's recorded error. Every clause is
- * something the database can back: the cause, when the gateway came back, which
- * boot died, the bounded run lifetime, and the interval from its last recorded
- * activity to the restart. Neither message cardinality nor exact downtime is known.
+ * something the database can back: when the successor gateway started, what
+ * separated it from the boot that owned the run, which boot that was, the
+ * bounded run lifetime, and the interval from its last recorded activity to the
+ * restart. Neither message cardinality nor exact downtime is known.
+ *
+ * The only recorded instant here is the restart, so it is the only one named.
+ * The prior gateway's death has no timestamp of its own — an outage of any
+ * length can sit between the two — so the message says the boot ended at an
+ * unrecorded earlier time and leaves the quantitative bound to the run clauses.
  */
 export function formatSubagentOrphanErrorMessage(attribution: SubagentOrphanAttribution): string {
   const restartedAt = new Date(attribution.restartedAtMs).toISOString();
@@ -240,10 +251,11 @@ export function formatSubagentOrphanErrorMessage(attribution: SubagentOrphanAttr
   const restartGap =
     attribution.diedAtEvidence === "successor_boot_start"
       ? ""
-      : `; gateway restarted ${describeDuration(attribution.restartGapMs)} after the run's last recorded activity`;
+      : `; the restart came ${describeDuration(attribution.restartGapMs)} after the run's last recorded activity`;
   return (
-    `${describeCause(attribution)} at ${restartedAt} ` +
-    `(previous boot ${attribution.priorBootId} ended without a clean stop); ` +
+    `gateway restarted at ${restartedAt} ` +
+    `(previous boot ${attribution.priorBootId} ended without a clean stop at an unrecorded earlier time); ` +
+    `${describeCause(attribution)}; ` +
     `run orphaned after ${describeElapsed(attribution)} ${describeEvidence(attribution)}, ` +
     `${output}${restartGap}${inferredNote}`
   );
@@ -259,11 +271,20 @@ const BOOT_SEGMENT_LOOKBACK_MS = 48 * 60 * 60_000;
 // crash/restart sequence.
 const BOOT_SEGMENT_ATTRIBUTION_LIMIT = 2_147_483_647;
 let cachedBootSegments: { loadedAtMs: number; segments: GatewayBootLifecycleSegment[] } | undefined;
+// A sweep can orphan several runs at once. Without this, every one of them
+// would queue its own read worker task for the same rows on a cold cache.
+let inFlightBootSegments: Promise<GatewayBootLifecycleSegment[]> | undefined;
 
-export function loadGatewayBootSegmentsForAttribution(
+/**
+ * Serves the sweeper's boot history. The query runs on the shared-state read
+ * worker, so a cold or expired cache never opens SQLite on the gateway's own
+ * thread; callers must treat the run they are inspecting as stale across the
+ * await and re-check it before writing.
+ */
+export async function loadGatewayBootSegmentsForAttribution(
   nowMs = Date.now(),
   options?: { forceRefresh?: boolean },
-): GatewayBootLifecycleSegment[] {
+): Promise<GatewayBootLifecycleSegment[]> {
   if (
     !options?.forceRefresh &&
     cachedBootSegments &&
@@ -271,12 +292,24 @@ export function loadGatewayBootSegmentsForAttribution(
   ) {
     return cachedBootSegments.segments;
   }
-  const segments = readGatewayBootLifecycleSegments({
+  if (!options?.forceRefresh && inFlightBootSegments) {
+    return inFlightBootSegments;
+  }
+  const load = readGatewayBootLifecycleSegments({
     sinceMs: nowMs - BOOT_SEGMENT_LOOKBACK_MS,
     limit: BOOT_SEGMENT_ATTRIBUTION_LIMIT,
+  }).then((segments) => {
+    cachedBootSegments = { loadedAtMs: nowMs, segments };
+    return segments;
   });
-  cachedBootSegments = { loadedAtMs: nowMs, segments };
-  return segments;
+  inFlightBootSegments = load;
+  try {
+    return await load;
+  } finally {
+    if (inFlightBootSegments === load) {
+      inFlightBootSegments = undefined;
+    }
+  }
 }
 
 /**

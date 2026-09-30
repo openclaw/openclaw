@@ -32,6 +32,12 @@ export async function reconcileStaleActiveSubagentRun(params: {
   runId: string;
   entry: SubagentRunRecord;
   now: number;
+  /**
+   * Re-asserts the caller's selection criteria. Boot history is read off the
+   * gateway thread, so the run can be replaced or settled across that await;
+   * anything learned before it describes a row we may no longer own.
+   */
+  isCurrent: () => boolean;
   completeSubagentRunWithRecovery: (
     completion: SubagentCompletionRequest,
     source: string,
@@ -69,8 +75,13 @@ export async function reconcileStaleActiveSubagentRun(params: {
   // The reap happens arbitrarily long after the death — it includes however
   // long the host stayed down. Correlate against boot history before writing
   // anything about this run: the reap clock is not evidence of its lifetime.
+  const boots = await loadGatewayBootSegmentsForAttribution(now);
+  if (!params.isCurrent()) {
+    // The run was replaced or settled while the history read was in flight.
+    // Whoever owns it now is ahead of us; a later sweep re-evaluates it.
+    return;
+  }
   const hasRecordedOutput = hasRecordedSubagentOutput(entry);
-  const boots = loadGatewayBootSegmentsForAttribution(now);
   const currentBootId = boots
     .toReversed()
     .find(
