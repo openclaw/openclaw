@@ -65,7 +65,7 @@ export class ChatComposerCapabilityHost {
   private readonly patchTokens = new Map<string, symbol>();
   private effectiveTools: { key: string; result: ToolsEffectiveResult } | null = null;
   private effectiveToolsErrorKey: string | null = null;
-  private effectiveToolsRequest: { key: string; owner: symbol } | null = null;
+  private effectiveToolsRequest: { key: string } | null = null;
   private client: GatewayBrowserClient | null = null;
   private connectionEpoch: number | undefined;
   private addDialogOpen = false;
@@ -175,9 +175,9 @@ export class ChatComposerCapabilityHost {
     ) {
       return;
     }
-    const requestOwner = Symbol("composer-effective-tools-request");
+    const request = { key: cacheKey };
     const connectionEpoch = state.connectionEpoch;
-    this.effectiveToolsRequest = { key: cacheKey, owner: requestOwner };
+    this.effectiveToolsRequest = request;
     const loader: Parameters<typeof loadToolsEffective>[0] = {
       chatModelCatalog: state.chatModelCatalog,
       client,
@@ -191,7 +191,7 @@ export class ChatComposerCapabilityHost {
       toolsEffectiveResultKey: null,
     };
     const isCurrent = () =>
-      this.effectiveToolsRequest?.owner === requestOwner &&
+      this.effectiveToolsRequest === request &&
       this.client === client &&
       state.client === client &&
       state.connected &&
@@ -218,7 +218,7 @@ export class ChatComposerCapabilityHost {
         }
       })
       .finally(() => {
-        if (this.effectiveToolsRequest?.owner === requestOwner) {
+        if (this.effectiveToolsRequest === request) {
           this.effectiveToolsRequest = null;
           if (this.client === client && this.connectionEpoch === connectionEpoch) {
             this.notify();

@@ -10,9 +10,7 @@ function draftForAnswer(
 ): QuestionDraft {
   const values = answer ? answer.split(", ") : [];
   const selected =
-    values.length > 0 &&
-    values.every((value) => question.options?.includes(value)) &&
-    values.join(", ") === answer
+    values.length > 0 && values.every((value) => question.options?.includes(value))
       ? new Set(values)
       : new Set<string>();
   return { selected, freeText: selected.size > 0 ? "" : answer };
@@ -23,7 +21,7 @@ export function parseGeneratedAsyncAnswer(
   message: string,
 ): Map<string, QuestionDraft> | null {
   let offset = 0;
-  const answers: string[] = [];
+  const answers = new Map<string, QuestionDraft>();
   for (let index = 0; index < question.questions.length; index += 1) {
     const current = question.questions[index];
     if (!current) {
@@ -34,37 +32,24 @@ export function parseGeneratedAsyncAnswer(
       return null;
     }
     offset += prefix.length;
-    if (index === question.questions.length - 1) {
-      answers.push(message.slice(offset));
-      offset = message.length;
-      break;
-    }
     const next = question.questions[index + 1];
-    if (!next) {
-      return null;
-    }
-    const separator = `\n\n${quoteQuestion(next.title)}\n\n`;
-    const answerEnd = message.indexOf(separator, offset);
+    const separator = next ? `\n\n${quoteQuestion(next.title)}\n\n` : undefined;
+    const answerEnd = separator ? message.indexOf(separator, offset) : message.length;
     // Free text can contain quoted headings. Do not guess a section boundary.
-    if (answerEnd < offset || message.includes(separator, answerEnd + separator.length)) {
+    if (
+      answerEnd < offset ||
+      (separator && message.includes(separator, answerEnd + separator.length))
+    ) {
       return null;
     }
-    answers.push(message.slice(offset, answerEnd));
-    offset = answerEnd + 2;
+    const answer = message.slice(offset, answerEnd);
+    if (!answer.trim()) {
+      return null;
+    }
+    answers.set(String(index), draftForAnswer(current, answer));
+    offset = answerEnd + (separator ? 2 : 0);
   }
-  if (
-    offset !== message.length ||
-    answers.length !== question.questions.length ||
-    answers.some((answer) => !answer.trim())
-  ) {
-    return null;
-  }
-  return new Map(
-    question.questions.map((entry, index) => [
-      String(index),
-      draftForAnswer(entry, answers[index] ?? ""),
-    ]),
-  );
+  return offset === message.length ? answers : null;
 }
 
 export function quoteQuestion(title: string): string {

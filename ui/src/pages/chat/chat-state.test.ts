@@ -3662,7 +3662,7 @@ describe("ChatStateController render lifecycle", () => {
     state.realtimeTalkStatus = "listening";
     state.realtimeTalkDetail = "live";
     state.realtimeTalkInputLevel.set(0.8);
-    state.realtimeTalkConversation = [
+    state.realtimeTalkConversationState.entries = [
       { id: "utterance", role: "user", text: "stale", isStreaming: true },
     ];
     state.realtimeTalkVideoStream = {} as MediaStream;
@@ -3679,7 +3679,7 @@ describe("ChatStateController render lifecycle", () => {
     expect(state.realtimeTalkStatus).toBe("idle");
     expect(state.realtimeTalkDetail).toBeNull();
     expect(state.realtimeTalkInputLevel.value).toBe(0);
-    expect(state.realtimeTalkConversation).toEqual([]);
+    expect(state.realtimeTalkConversationState.entries).toEqual([]);
     expect(state.realtimeTalkVideoStream).toBeNull();
     expect(state.realtimeTalkCameraDevices).toEqual([]);
     expect(state.realtimeTalkVideoCapable).toBe(false);

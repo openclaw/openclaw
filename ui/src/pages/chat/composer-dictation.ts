@@ -639,7 +639,7 @@ export class ComposerDictationController {
     try {
       await session.start();
     } catch (error) {
-      if (this.session !== session || this.disposed || this.isStopping()) {
+      if (this.session !== session || this.disposed || this.finalizing) {
         return;
       }
       this.options.onError(messageFromError(error), { kind: "start", preservesText: false });
@@ -745,10 +745,6 @@ export class ComposerDictationController {
     document.removeEventListener("pointercancel", this.handleSuppressedPointerRelease);
     this.suppressedPointerId = null;
     this.suppressClick = false;
-  }
-
-  private isStopping(): boolean {
-    return this.phase === "stopping";
   }
 
   private setPhase(phase: DictationPhase): void {
