@@ -1,4 +1,5 @@
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { normalizeThinkLevel } from "../../../auto-reply/thinking.shared.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { withGuardedFetchRequestAuthority } from "../../../infra/net/fetch-request-authority.js";
@@ -126,9 +127,16 @@ export async function resolveHookModelSelection(params: {
     log.info(`[hooks] model overridden to ${modelId}`);
   }
 
+  const thinkingOverride = normalizeThinkLevel(
+    typeof modelResolveOverride?.thinkingOverride === "string"
+      ? modelResolveOverride.thinkingOverride
+      : undefined,
+  );
+
   return {
     provider,
     modelId,
+    ...(thinkingOverride !== undefined ? { thinkingOverride } : {}),
   };
 }
 

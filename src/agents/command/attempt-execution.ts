@@ -84,8 +84,10 @@ import { emitAgentAttemptRuntimeStart } from "./attempt-callbacks.js";
 import {
   buildClaudeCliFallbackContextPrelude,
   claudeCliSessionTranscriptHasContent,
+  resolveAttemptRouteParams,
   resolveFallbackRetryPrompt,
   rebaseExecApprovalContinuationPromptRange,
+  shouldSuppressEmbeddedLiveStreamOutput,
 } from "./attempt-execution.helpers.js";
 import {
   consumeCliSessionForkInStore,
@@ -469,9 +471,7 @@ export function runAgentAttempt(params: {
       cwd: params.cwd,
       config: params.cfg,
       modelHasVision: params.modelHasVision,
-      model: params.modelOverride,
-      modelRoutingProvenance: params.modelRoutingProvenance,
-      thinkLevel: params.resolvedThinkLevel,
+      ...resolveAttemptRouteParams(params),
       fastMode: params.fastMode,
       fastModeStartedAtMs: params.fastModeStartedAtMs,
       fastModeAutoOnSeconds: params.fastModeAutoOnSeconds,
@@ -892,9 +892,7 @@ export function runAgentAttempt(params: {
     execSession: params.sessionEntry,
     execApprovalContinuationPromptRange: embeddedExecApprovalContinuationPromptRange,
     execApprovalContinuationTranscriptPromptRange: continuationTranscriptPromptRange,
-    // Hidden internal runs lack an event consumer; visible lanes still feed UI and parent relays.
-    suppressLiveStreamOutput:
-      params.opts.sessionEffects === "internal" && params.opts.deliver !== true,
+    suppressLiveStreamOutput: shouldSuppressEmbeddedLiveStreamOutput(params.opts),
     abortSignal: params.opts.abortSignal,
     bootstrapContextMode: params.opts.bootstrapContextMode,
     bootstrapContextRunKind: params.opts.bootstrapContextRunKind,

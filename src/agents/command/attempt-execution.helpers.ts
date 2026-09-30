@@ -3,6 +3,7 @@ import path from "node:path";
 import readline from "node:readline";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import {
   isSilentReplyPrefixText,
   isSilentReplyText,
@@ -29,9 +30,32 @@ import type { AgentRunTerminalReplySnapshot } from "../agent-run-terminal-reply.
 import type { ExecApprovalContinuationPromptRange } from "../bash-tools.exec-approval-output.js";
 import { isClaudeToolResultBlockType, isClaudeToolUseBlockType } from "../cli-output-records.js";
 import { cliBackendLog } from "../cli-runner/log.js";
+import type { ModelFallbackAttemptProvenance } from "../model-fallback.types.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "./claude-cli-project-dir.js";
 
 const CLAUDE_CLI_TRANSCRIPT_MAX_RECORDS = 500;
+
+export function resolveAttemptRouteParams(params: {
+  modelOverride: string;
+  modelRoutingProvenance: ModelFallbackAttemptProvenance;
+  resolvedThinkLevel: ThinkLevel | undefined;
+  opts: { thinking?: string; thinkingOnce?: string };
+}) {
+  return {
+    model: params.modelOverride,
+    modelRoutingProvenance: params.modelRoutingProvenance,
+    thinkLevel: params.resolvedThinkLevel,
+    thinkLevelExplicit: Boolean(params.opts.thinking || params.opts.thinkingOnce),
+  };
+}
+
+export function shouldSuppressEmbeddedLiveStreamOutput(options: {
+  sessionEffects?: "visible" | "internal";
+  deliver?: boolean;
+}): boolean {
+  // Hidden internal runs lack an event consumer; visible lanes still feed UI and parent relays.
+  return options.sessionEffects === "internal" && options.deliver !== true;
+}
 
 function normalizeClaudeCliSessionId(sessionId: string | undefined): string | undefined {
   const trimmed = sessionId?.trim();

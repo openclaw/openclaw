@@ -138,6 +138,38 @@ describe("buildBeforeModelResolveAttachments", () => {
 });
 
 describe("resolveHookModelSelection", () => {
+  it.each([
+    {
+      override: { providerOverride: "routed-provider" },
+      expected: { provider: "routed-provider", modelId: "default-model" },
+    },
+    {
+      override: { modelOverride: "routed-model" },
+      expected: { provider: "default-provider", modelId: "routed-model" },
+    },
+    {
+      override: { thinkingOverride: "high" as const },
+      expected: {
+        provider: "default-provider",
+        modelId: "default-model",
+        thinkingOverride: "high",
+      },
+    },
+  ])("applies independent hook fields: $override", async ({ override, expected }) => {
+    await expect(
+      resolveHookModelSelection({
+        prompt: "route this turn",
+        provider: "default-provider",
+        modelId: "default-model",
+        hookRunner: {
+          hasHooks: () => true,
+          runBeforeModelResolve: async () => override,
+        },
+        hookContext,
+      }),
+    ).resolves.toMatchObject(expected);
+  });
+
   it("does not expose locked model selection to routing hooks", async () => {
     const hookRunner = {
       hasHooks: vi.fn(() => true),
@@ -168,6 +200,7 @@ describe("resolveHookModelSelection", () => {
       runBeforeModelResolve: vi.fn(async () => ({
         providerOverride: "vision-provider",
         modelOverride: "vision-model",
+        thinkingOverride: "high" as const,
       })),
     };
 
@@ -186,6 +219,24 @@ describe("resolveHookModelSelection", () => {
     );
     expect(result.provider).toBe("vision-provider");
     expect(result.modelId).toBe("vision-model");
+    expect(result.thinkingOverride).toBe("high");
+  });
+
+  it("ignores invalid runtime thinking values from a plugin hook", async () => {
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "before_model_resolve"),
+      runBeforeModelResolve: vi.fn(async () => ({ thinkingOverride: "extreme" as never })),
+    };
+
+    const result = await resolveHookModelSelection({
+      prompt: "text only",
+      provider: "default-provider",
+      modelId: "default-model",
+      hookRunner,
+      hookContext,
+    });
+
+    expect(result).not.toHaveProperty("thinkingOverride");
   });
 
   it("omits the attachments key for text-only before_model_resolve hooks", async () => {

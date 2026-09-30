@@ -8,7 +8,10 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildEmbeddedRunBaseParams } from "./agent-runner-run-params.js";
 import type { FollowupRun } from "./queue.js";
 
-function makeRun(config: OpenClawConfig): FollowupRun["run"] {
+function makeRun(
+  config: OpenClawConfig,
+  thinkLevelOverride?: FollowupRun["run"]["thinkLevelOverride"],
+): FollowupRun["run"] {
   return {
     sessionId: "session-1",
     agentId: "agent-1",
@@ -32,6 +35,7 @@ function makeRun(config: OpenClawConfig): FollowupRun["run"] {
       },
     ],
     thinkLevel: "medium",
+    thinkLevelOverride,
     verboseLevel: "off",
     reasoningLevel: "none",
     execOverrides: {},
@@ -98,5 +102,17 @@ describe("buildEmbeddedRunBaseParams runtime config", () => {
     });
 
     expect(resolved.toolBindings).toEqual(run.toolBindings);
+  });
+
+  it("keeps a current-turn default reset explicit for hook precedence", async () => {
+    const resolved = await buildEmbeddedRunBaseParams({
+      run: makeRun({}, "default"),
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      runId: "run-1",
+      authProfile: {},
+    });
+
+    expect(resolved).toMatchObject({ thinkLevel: "medium", thinkLevelExplicit: true });
   });
 });
