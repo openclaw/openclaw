@@ -41,8 +41,10 @@ duration configured by the Access administrator. No shared Gateway token needs
 to be copied from the website.
 
 Dashboard apps embedded over HTTPS can also sign in when they use the same
-Cloudflare Access team and account as the Gateway. OpenClaw opens the same
-browser sign-in flow for each app; an existing browser session can complete
+Cloudflare Access team and account as the Gateway. Embedded apps must also be
+on the same site as the Gateway (the same parent domain), because WebKit blocks
+other sites' cookies inside frames. OpenClaw opens the same browser sign-in
+flow for each app; an existing browser session can complete
 that round trip automatically. Each app receives its own application cookie.
 Cookies stay limited to the Gateway's exact origin and validated embedded app
 origins on HTTPS port 443. Embedded sessions persist across app restarts until

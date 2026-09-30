@@ -43,7 +43,8 @@ final class CloudflareAccessEmbedLogin {
         guard appURL.scheme == "https", appURL.user == nil, appURL.password == nil,
               appURL.query == nil, appURL.fragment == nil, appURL.port == nil || appURL.port == 443,
               appURL.path.isEmpty || appURL.path == "/", let host = appURL.host?.lowercased(),
-              Self.isDNSHostname(host), host != gateway.origin.host?.lowercased()
+              Self.isDNSHostname(host), host != gateway.origin.host?.lowercased(),
+              Self.isSameSite(host, gatewayHost: gateway.origin.host)
         else { return nil }
         let key = ApplicationKey(principal: gateway.browserDataPrincipal, host: host)
         if let flight = self.flights[key] {
@@ -72,18 +73,14 @@ final class CloudflareAccessEmbedLogin {
             return session
         }
         self.flights[key] = task
-        defer { self.flights[key] = nil }
-        do {
-            let result = try await withTaskCancellationHandler {
-                try await task.value
-            } onCancel: {
-                task.cancel()
-            }
-            self.retryAfter[key] = result == nil ? self.now().addingTimeInterval(120) : nil
-            return result
-        } catch {
+        defer {
+            self.flights[key] = nil
             self.retryAfter[key] = self.now().addingTimeInterval(120)
-            throw error
+        }
+        return try await withTaskCancellationHandler {
+            try await task.value
+        } onCancel: {
+            task.cancel()
         }
     }
 
@@ -101,8 +98,18 @@ final class CloudflareAccessEmbedLogin {
         let prefix = "/cdn-cgi/access/login/"
         guard parts.percentEncodedPath.hasPrefix(prefix) else { return nil }
         let host = String(parts.percentEncodedPath.dropFirst(prefix.count)).lowercased()
-        guard Self.isDNSHostname(host), host != gateway.origin.host?.lowercased() else { return nil }
+        guard Self.isDNSHostname(host), host != gateway.origin.host?.lowercased(),
+              Self.isSameSite(host, gatewayHost: gateway.origin.host) else { return nil }
         return URL(string: "https://\(host)/")
+    }
+
+    private static func isSameSite(_ host: String, gatewayHost: String?) -> Bool {
+        guard let gatewayHost = gatewayHost?.lowercased() else { return false }
+        let parent = host.split(separator: ".").dropFirst().joined(separator: ".")
+        let gatewayParent = gatewayHost.split(separator: ".").dropFirst().joined(separator: ".")
+        // A shared TLD alone is insufficient; WebKit blocks other sites' iframe cookies.
+        return (parent == gatewayParent && parent.contains(".")) ||
+            host == gatewayParent || gatewayHost == parent
     }
 
     private static func sameIssuer(_ lhs: URL, _ rhs: URL) -> Bool {

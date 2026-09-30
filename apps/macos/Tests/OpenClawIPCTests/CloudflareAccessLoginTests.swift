@@ -197,7 +197,45 @@ struct CloudflareAccessLoginTests {
     }
 
     @MainActor
-    @Test func `concurrent embedded requests share one helper and cooldown recovers after success`() async throws {
+    @Test(arguments: [
+        ("app.example.com", "gateway.example.com", true),
+        ("example.com", "gateway.example.com", true),
+        ("app.example.com", "example.com", true),
+        ("app.other.com", "gateway.example.com", false),
+        ("app.example.org", "gateway.example.com", false),
+        ("a.example.co", "b.example.io", false),
+        ("app.com", "gateway.com", false),
+    ])
+    func `embedded sign in admits only the same parent site`(
+        _ embedHost: String, _ gatewayHost: String, _ accepted: Bool) async throws
+    {
+        let gateway = try self.session(host: gatewayHost)
+        let embed = try self.session(host: embedHost)
+        let app = try self.embedApplication(host: embedHost)
+        let loginURL = try #require(URL(
+            string: "https://tenant.cloudflareaccess.com/cdn-cgi/access/login/\(embedHost)"))
+        #expect(CloudflareAccessEmbedLogin.applicationURL(
+            loginURL: loginURL, gateway: gateway, now: self.now) == (accepted ? embed.origin : nil))
+        var discoveries = 0
+        var helpers = 0
+        let owner = CloudflareAccessEmbedLogin(
+            discover: { _ in
+                discoveries += 1
+                return app
+            },
+            signIn: { _, _ in
+                helpers += 1
+                return embed
+            },
+            now: { self.now })
+        #expect(try await owner.signIn(
+            appURL: embed.origin, gateway: gateway, isCurrent: { true }) == (accepted ? embed : nil))
+        #expect(discoveries == (accepted ? 1 : 0))
+        #expect(helpers == (accepted ? 1 : 0))
+    }
+
+    @MainActor
+    @Test func `concurrent embedded requests share one helper and every outcome delays retry`() async throws {
         let gateway = try self.session(host: "gateway.example.net")
         let embed = try self.session(host: "embed.example.net")
         let app = try self.embedApplication()
@@ -234,6 +272,12 @@ struct CloudflareAccessLoginTests {
         #expect(runs == 1)
         clock.addTimeInterval(120)
         #expect(try await owner.signIn(appURL: embed.origin, gateway: gateway, isCurrent: { true }) == embed)
+        #expect(runs == 2)
+        #expect(try await owner.signIn(appURL: embed.origin, gateway: gateway, isCurrent: { true }) == nil)
+        clock.addTimeInterval(119)
+        #expect(try await owner.signIn(appURL: embed.origin, gateway: gateway, isCurrent: { true }) == nil)
+        #expect(runs == 2)
+        clock.addTimeInterval(1)
         #expect(try await owner.signIn(appURL: embed.origin, gateway: gateway, isCurrent: { true }) == embed)
         #expect(runs == 3)
     }
@@ -351,14 +395,15 @@ struct CloudflareAccessLoginTests {
         #expect(try second.get() == embedB)
     }
 
-    private func embedApplication(issuerHost: String = "tenant.cloudflareaccess.com") throws
+    private func embedApplication(
+        host: String = "embed.example.net", issuerHost: String = "tenant.cloudflareaccess.com") throws
         -> CloudflareAccessLogin.Application
     {
         var metadata = self.metadataClaims
-        metadata["hostname"] = "embed.example.net"
+        metadata["hostname"] = host
         metadata["auth_domain"] = issuerHost
         return try CloudflareAccessLogin.application(
-            gatewayURL: #require(URL(string: "https://embed.example.net/")),
+            gatewayURL: #require(URL(string: "https://\(host)/")),
             metadata: self.jwt(metadata),
             now: self.now)
     }
