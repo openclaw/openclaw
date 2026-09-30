@@ -6,7 +6,10 @@ import path from "node:path";
 import { hasErrnoCode } from "../infra/errno.js";
 import type { GatewayScheduler, GatewayScheduledJob } from "../infra/gateway-scheduler.js";
 import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
-import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
+import {
+  createSqliteLifecycleAggregateError,
+  throwSqliteLifecycleErrors,
+} from "../infra/sqlite-lifecycle-errors.js";
 import {
   acquireSqliteStagingToken,
   SQLITE_STAGING_TOKEN_FILES,
@@ -165,6 +168,7 @@ async function reclaimInstance(
   // Reclaim refuses a missing token and never creates a replacement ownership database.
   const release = acquireSqliteStagingToken(directory, "reclaim");
   let released = false;
+  const errors: unknown[] = [];
   ownedRoots.add(directory);
   try {
     if (!unchanged()) {
@@ -210,14 +214,19 @@ async function reclaimInstance(
       nativeMaintenance?.assertCurrent();
       await fsPromises.rm(directory, { recursive: true, force: true });
     }
+  } catch (error) {
+    errors.push(error);
   } finally {
     try {
       if (!released) {
         release();
       }
+    } catch (error) {
+      errors.push(error);
     } finally {
       ownedRoots.delete(directory);
     }
+    throwSqliteLifecycleErrors(errors, "Plugin source reclamation and cleanup failed");
   }
 }
 
