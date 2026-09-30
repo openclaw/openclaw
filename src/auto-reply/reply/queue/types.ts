@@ -160,7 +160,7 @@ export type FollowupRun = {
   };
   /** Internal marker for the one-shot stranded final recovery retry. */
   strandedReplyRetry?: boolean;
-  /** Internal marker for the one-shot recovery run after a stalled interactive turn. */
+  /** This continuation owes last-resort feedback if it also stalls, including claimed input. */
   stalledTurnRecovery?: boolean;
   /** Preserve priority runs when old-item queue overflow eviction runs before drain. */
   protectFromQueueOverflow?: boolean;

@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { appendCurrentInboundContext } from "../../agents/embedded-agent-runner/run/runtime-context-prompt.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { withBeforeAgentReplyObserver } from "../../plugins/before-agent-reply.js";
@@ -11,6 +12,7 @@ import type { ReplyPayload } from "../types.js";
 import {
   resolveReplyRunDeliveryContext,
   resolveSourceReplyPolicy,
+  scheduleFollowupDrainAfterReplyOperationClear,
   type RunReplyAgentParams,
 } from "./agent-runner-core.js";
 import { executeAgentTurn } from "./agent-runner-execution.js";
@@ -26,12 +28,65 @@ import {
   buildRecoverablePendingFinalDeliveryText,
   normalizePendingFinalDeliveryPayloads,
 } from "./pending-final-delivery.js";
+import { claimNextQueuedFollowupRequestFrom, enqueueFollowupRun } from "./queue.js";
 import { isReplyOperationSuperseded } from "./reply-operation-abort.js";
 import { recordReplyOperationAgentTurn } from "./reply-operation-run-state.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import { replyRunRegistry } from "./reply-run-registry.js";
 import { createReplyRestartRecoveryClaimController } from "./restart-recovery-claim.js";
 import { resolveReplySourceTurnId } from "./source-turn-id.js";
+import { buildStalledTurnRecoveryRun, STALLED_TURN_GUIDANCE } from "./stalled-turn-recovery.js";
+
+/** Continues a saved stalled request once, retaining its final-feedback obligation. */
+export function continueStalledReplyTurn({
+  followupRun,
+  queueKey,
+  resolvedQueue,
+  replyOperation,
+  runFollowupTurn,
+}: Pick<RunReplyAgentParams, "followupRun" | "queueKey" | "resolvedQueue"> & {
+  replyOperation: ReplyOperation;
+  runFollowupTurn: FinalizeReplyAgentRunInput["runFollowupTurn"];
+}): boolean {
+  // Preflight can stall before admission persists the request. Transcript-only
+  // recovery cannot answer that input; leave its notice with dispatch.
+  if (followupRun.userTurnTranscriptRecorder?.hasPersisted() !== true) {
+    return false;
+  }
+  try {
+    followupRun.operatorAuthority?.assertCurrent();
+  } catch {
+    return false;
+  }
+  const queuedRequest = claimNextQueuedFollowupRequestFrom(queueKey, followupRun);
+  if (queuedRequest) {
+    // The handoff owns the same last-resort feedback as a dedicated recovery.
+    queuedRequest.stalledTurnRecovery = true;
+    queuedRequest.currentInboundContext = appendCurrentInboundContext(
+      queuedRequest.currentInboundContext,
+      [{ kind: "runtime-instruction", text: STALLED_TURN_GUIDANCE }],
+    );
+    return true;
+  }
+  const enqueued = enqueueFollowupRun(
+    queueKey,
+    buildStalledTurnRecoveryRun(followupRun),
+    resolvedQueue,
+    "none",
+    runFollowupTurn,
+    false,
+    { position: "front" },
+  );
+  if (enqueued) {
+    scheduleFollowupDrainAfterReplyOperationClear({
+      operation: replyOperation,
+      queueKey,
+      runFollowup: runFollowupTurn,
+    });
+  }
+  return enqueued;
+}
+
 type ExecutePreparedReplyAgentRunInput = Omit<
   FinalizeReplyAgentRunInput,
   "activeSessionEntry" | "preflightCompactionApplied" | "execution" | "runId" | "runStartedAt"

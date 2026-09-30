@@ -1,9 +1,15 @@
 // Tests how an admitted interactive run continues a turn the stale watchdog dropped.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   createAdmittedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
 } from "../../agents/admitted-run-context.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import {
+  createSqliteTranscriptTarget,
+  readTranscriptMessages,
+} from "../../sessions/user-turn-transcript.test-support.js";
 import type { TemplateContext } from "../templating.js";
 import type * as AgentRunnerExecution from "./agent-runner-execution.js";
 import { runReplyAgent } from "./agent-runner.js";
@@ -26,13 +32,18 @@ import { createMockTypingController } from "./test-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   executeAgentTurn: vi.fn(),
+  preflight: vi.fn(async (_params: { abortSignal: AbortSignal }) => undefined),
   drainedRuns: vi.fn(async (_run: FollowupRun) => {}),
+  executeFollowups: false,
+  routeReply: vi.fn(async (..._args: unknown[]) => ({ ok: true, delivered: true })),
+  followupSettled: () => {},
 }));
 const executeAgentTurnMock = mocks.executeAgentTurn;
 const drainedRuns = mocks.drainedRuns;
+let executionStarted = createDeferred();
 
 vi.mock("./agent-runner-memory.js", () => ({
-  runSessionCompactionIfNeeded: async () => undefined,
+  runSessionCompactionIfNeeded: (params: { abortSignal: AbortSignal }) => mocks.preflight(params),
   runMemoryFlushIfNeeded: async () => ({ sessionEntry: undefined, outcome: "skipped" }),
 }));
 
@@ -41,14 +52,36 @@ vi.mock("./agent-runner-execution.js", async () => ({
   executeAgentTurn: (...args: unknown[]) => mocks.executeAgentTurn(...args),
 }));
 
-vi.mock("./followup-runner.js", () => ({
-  createFollowupRunner: () => mocks.drainedRuns,
+vi.mock("./followup-runner.js", async (importOriginal) => {
+  const { createFollowupRunner } = await importOriginal<typeof import("./followup-runner.js")>();
+  return {
+    createFollowupRunner: (...args: Parameters<typeof createFollowupRunner>) => {
+      const runFollowup = createFollowupRunner(...args);
+      return async (queued: FollowupRun) => {
+        await mocks.drainedRuns(queued);
+        if (mocks.executeFollowups) {
+          try {
+            await runFollowup(queued);
+          } finally {
+            mocks.followupSettled();
+          }
+        }
+      };
+    },
+  };
+});
+
+vi.mock("./route-reply.js", () => ({
+  isRoutableChannel: (channel: string | undefined) => channel === "telegram",
+  routeReply: (...args: unknown[]) => mocks.routeReply(...args),
 }));
 
 type StalledRun = {
   operation: ReplyOperation;
   run: Promise<unknown>;
   runState: ReplyOperationRunState;
+  recorder: ReturnType<typeof createUserTurnTranscriptRecorder>;
+  transcriptTarget: ReturnType<typeof createSqliteTranscriptTarget>;
 };
 
 const queueKey = "agent:main:telegram:direct:stalled";
@@ -68,6 +101,16 @@ function createStalledRun(
   followupRun.operatorAuthority = options.operatorAuthority;
   followupRun.images = [{ type: "image", data: "aW1n", mimeType: "image/png" }];
   followupRun.transcriptPrompt = "what is good at the hotel restaurant?";
+  const transcriptTarget = createSqliteTranscriptTarget({
+    dir: followupRun.run.workspaceDir,
+    sessionId: "stalled-session",
+    sessionKey: queueKey,
+  });
+  const recorder = createUserTurnTranscriptRecorder({
+    input: { text: followupRun.transcriptPrompt },
+    target: transcriptTarget,
+  });
+  followupRun.userTurnTranscriptRecorder = recorder;
   const operation = createReplyOperation({
     sessionKey: queueKey,
     sessionId: "stalled-session",
@@ -104,11 +147,12 @@ function createStalledRun(
     shouldInjectGroupIntro: false,
     typingMode: "instant",
   });
-  return { operation, run, runState };
+  return { operation, run, runState, recorder, transcriptTarget };
 }
 
 async function stallBeforeOutput(stalled: StalledRun) {
-  await vi.waitFor(() => expect(executeAgentTurnMock).toHaveBeenCalledOnce());
+  await executionStarted.promise;
+  expect(executeAgentTurnMock).toHaveBeenCalledOnce();
   expect(expireStaleReplyOperation(stalled.operation, "stuck_recovery")).toBe(false);
 }
 
@@ -137,9 +181,15 @@ describe("runReplyAgent stalled turn continuation", () => {
     replyRunTesting.resetReplyRunRegistry();
     clearSessionQueues([queueKey]);
     drainedRuns.mockClear();
+    mocks.executeFollowups = false;
+    executionStarted = createDeferred();
+    mocks.preflight.mockReset().mockResolvedValue(undefined);
+    mocks.routeReply.mockClear();
+    mocks.followupSettled = () => {};
     executeAgentTurnMock
       .mockReset()
       .mockImplementation(async (params: { replyOperation: { abortSignal: AbortSignal } }) => {
+        executionStarted.resolve();
         await new Promise<void>((resolve) => {
           params.replyOperation.abortSignal.addEventListener("abort", () => resolve(), {
             once: true,
@@ -174,30 +224,53 @@ describe("runReplyAgent stalled turn continuation", () => {
     expect(recovery?.images).toBeUndefined();
     expect(recovery?.abortSignal).toBeUndefined();
     expect(recovery?.run.sessionKey).toBe(queueKey);
+    expect(stalled.recorder.hasPersisted()).toBe(true);
+    expect(await readTranscriptMessages(stalled.transcriptTarget)).toEqual([
+      expect.objectContaining({ content: "what is good at the hotel restaurant?" }),
+    ]);
     expect(getFollowupQueueDepth(queueKey)).toBe(0);
   });
 
-  it("gives the same sender's already-queued request the interruption guidance instead", async () => {
-    const stalled = createStalledRun();
-    const queued = createQueuedRequest({ senderId: "traveler", to: "12345" });
-    expect(enqueueFollowupRun(queueKey, queued, settings, "message-id", drainedRuns, false)).toBe(
-      true,
-    );
-    await stallBeforeOutput(stalled);
+  it.each(["followup", "collect"] as const)(
+    "sends one last-resort notice when the claimed %s request also stalls",
+    async (mode) => {
+      mocks.executeFollowups = true;
+      const settled = createDeferred();
+      mocks.followupSettled = settled.resolve;
+      const stalled = createStalledRun();
+      const queued = createQueuedRequest({ senderId: "traveler", to: "12345" });
+      queued.messageId = "msg-double-stall-" + mode;
+      expect(
+        enqueueFollowupRun(queueKey, queued, { ...settings, mode }, "message-id", undefined, false),
+      ).toBe(true);
+      await stallBeforeOutput(stalled);
+      executeAgentTurnMock.mockImplementationOnce(async ({ replyOperation }) => {
+        expireStaleReplyOperation(replyOperation, "stuck_recovery");
+        return { runId: "recovery-run", outcome: { kind: "aborted", reason: "user" } };
+      });
 
-    expect(stalled.runState.continueStalledTurn?.()).toBe(true);
-    expect(getFollowupQueueDepth(queueKey)).toBe(1);
-    expect(queued.prompt).toBe("answer already");
-    expect(queued.currentInboundContext?.fragments).toContainEqual({
-      kind: "runtime-instruction",
-      text: expect.stringContaining("previous turn stopped making progress"),
-    });
+      expect(stalled.runState.continueStalledTurn?.()).toBe(true);
+      expect(queued.currentInboundContext?.fragments).toContainEqual({
+        kind: "runtime-instruction",
+        text: expect.stringContaining("previous turn stopped making progress"),
+      });
+      await settleStalledOwner(stalled);
+      await settled.promise;
+      expect(drainedRuns).toHaveBeenCalledExactlyOnceWith(queued);
 
-    await settleStalledOwner(stalled);
-    await vi.waitFor(() => expect(drainedRuns).toHaveBeenCalledOnce());
-    expect(drainedRuns.mock.calls[0]?.[0]).toBe(queued);
-    expect(drainedRuns.mock.calls[0]?.[0].stalledTurnRecovery).toBeUndefined();
-  });
+      expect(mocks.routeReply).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          channel: "telegram",
+          to: "12345",
+          payload: expect.objectContaining({
+            text: "⚠️ This turn was interrupted because it stopped making progress. Please try again.",
+            isError: true,
+          }),
+        }),
+      );
+      expect(executeAgentTurnMock).toHaveBeenCalledTimes(2);
+    },
+  );
 
   // Default DM scope shares one main session across senders.
   it("never hands the stalled request past another sender's earlier queued request", async () => {
@@ -226,6 +299,31 @@ describe("runReplyAgent stalled turn continuation", () => {
     });
     expect(next).toBe(queued);
     expect(last).toBe(sameSenderLater);
+  });
+
+  it("leaves dispatch responsible for a stall before the request reaches the transcript", async () => {
+    const preflightStarted = createDeferred();
+    mocks.preflight.mockImplementationOnce(async ({ abortSignal }) => {
+      preflightStarted.resolve();
+      await new Promise<void>((resolve) => {
+        abortSignal.addEventListener("abort", () => resolve(), { once: true });
+      });
+      abortSignal.throwIfAborted();
+      return undefined;
+    });
+    const stalled = createStalledRun();
+    const settled = stalled.run.catch(() => undefined);
+    await preflightStarted.promise;
+    expireStaleReplyOperation(stalled.operation, "stuck_recovery");
+
+    const continued = stalled.runState.continueStalledTurn?.();
+    await settled;
+    stalled.operation.complete();
+    expect(stalled.recorder.hasPersisted()).toBe(false);
+    expect(continued).toBe(false);
+    expect(getFollowupQueueDepth(queueKey)).toBe(0);
+    expect(executeAgentTurnMock).not.toHaveBeenCalled();
+    expect(await readTranscriptMessages(stalled.transcriptTarget)).toEqual([]);
   });
 
   it("falls back to the notice once the stalled turn's authority is revoked", async () => {

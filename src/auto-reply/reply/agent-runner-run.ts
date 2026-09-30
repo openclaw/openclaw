@@ -1,6 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
-import { appendCurrentInboundContext } from "../../agents/embedded-agent-runner/run/runtime-context-prompt.js";
 import { resolveReplyCompletion } from "../../agents/reply-completion.js";
 import { readChannelContextGatewayContextResolver } from "../../channels/message-access/admission-evidence.js";
 import { settleProgressVisibilityCallbackResult } from "../../channels/progress-visibility.js";
@@ -31,6 +30,7 @@ import {
   scheduleFollowupDrainAfterReplyOperationClear,
 } from "./agent-runner-core.js";
 import {
+  continueStalledReplyTurn,
   createReplyAgentRestartRecoveryController,
   executePreparedReplyAgentRun,
 } from "./agent-runner-execute.js";
@@ -55,11 +55,7 @@ import { createFollowupRunner } from "./followup-runner.js";
 import { REPLY_RUN_STILL_SHUTTING_DOWN_TEXT } from "./get-reply-run-queue.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
-import {
-  claimNextQueuedFollowupRequestFrom,
-  enqueueFollowupRun,
-  scheduleFollowupDrain,
-} from "./queue.js";
+import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
 import { resolveFollowupAbortSignal } from "./queue/types.js";
 import { REPLY_ADMISSION_TICKET } from "./reply-admission-ticket.js";
 import { createReplyMediaContext } from "./reply-media-paths.js";
@@ -76,7 +72,6 @@ import {
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { resolveSourceReplyExpectation } from "./source-reply-delivery-mode.js";
 import { readChannelSourceTurnId } from "./source-turn-id.js";
-import { buildStalledTurnRecoveryRun, STALLED_TURN_GUIDANCE } from "./stalled-turn-recovery.js";
 import { createTypingSignaler } from "./typing-mode.js";
 export async function runReplyAgent(
   input: RunReplyAgentParams,
@@ -602,38 +597,14 @@ export async function runReplyAgent(
     // Dispatch owns the stall notice; this owner holds the queue facts needed to answer
     // instead. The same sender's next queued request inherits the guidance; otherwise one
     // recovery run bound to this turn's route and authority is queued.
-    replyOperationRunState.continueStalledTurn = () => {
-      try {
-        followupRun.operatorAuthority?.assertCurrent();
-      } catch {
-        return false;
-      }
-      const queuedRequest = claimNextQueuedFollowupRequestFrom(queueKey, followupRun);
-      if (queuedRequest) {
-        queuedRequest.currentInboundContext = appendCurrentInboundContext(
-          queuedRequest.currentInboundContext,
-          [{ kind: "runtime-instruction", text: STALLED_TURN_GUIDANCE }],
-        );
-        return true;
-      }
-      const enqueued = enqueueFollowupRun(
+    replyOperationRunState.continueStalledTurn = () =>
+      continueStalledReplyTurn({
+        followupRun,
         queueKey,
-        buildStalledTurnRecoveryRun(followupRun),
         resolvedQueue,
-        "none",
+        replyOperation,
         runFollowupTurn,
-        false,
-        { position: "front" },
-      );
-      if (enqueued) {
-        scheduleFollowupDrainAfterReplyOperationClear({
-          operation: replyOperation,
-          queueKey,
-          runFollowup: runFollowupTurn,
-        });
-      }
-      return enqueued;
-    };
+      });
   }
   const {
     admitUserTurn,
