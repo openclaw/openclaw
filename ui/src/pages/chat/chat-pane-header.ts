@@ -7,6 +7,7 @@ import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
 import type { ApplicationPlacementStartupStatus } from "../../app/session-placement-startup.ts";
 import type { UiSettings } from "../../app/settings.ts";
 import type { BoardWidgetPageMenu } from "../../components/board/board-widget-cell-render.ts";
+import { resolveCloudWorkerStopAction } from "../../components/cloud-worker-stop.ts";
 import { COMMAND_PALETTE_OPEN_EVENT } from "../../components/command-palette-contract.ts";
 import { icons } from "../../components/icons.ts";
 import { personActivityRouting } from "../../components/person-activity-link.ts";
@@ -31,6 +32,7 @@ import {
   canSplitSessionView,
 } from "../../lib/sessions/session-menu-navigation.ts";
 import { resolveSessionWorkspace } from "../../lib/sessions/workspace.ts";
+import { pluginSessionMenuActions } from "../../plugins/control-ui-actions.ts";
 import { displayedChatSessionBranches } from "./chat-history-branches.ts";
 import { ChatPaneDiscussion } from "./chat-pane-discussion.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
@@ -627,6 +629,41 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
               .panelActions=${panelMenuActions}
               .layoutActions=${layoutMenuActions}
               .boardWidgetMenu=${boardWidgetMenu}
+              .sessionActions=${
+                this.context.nativeConversation?.supportsSessionActions
+                  ? [
+                      ...pluginSessionMenuActions(this.context.plugins, row).map((action) => ({
+                        label: action.label,
+                        disabled: action.disabled,
+                        id: `plugin/${action.id}`,
+                        icon: icons.plug,
+                        onActivate: () =>
+                          void this.handleHeaderSessionAction(
+                            { kind: "plugin", id: action.id },
+                            row,
+                          ),
+                      })),
+                      ...(resolveCloudWorkerStopAction(row.placement) &&
+                      isGatewayMethodAdvertised(this.context.gateway.snapshot, "sessions.reclaim")
+                        ? [
+                            {
+                              id: "stop-cloud-worker",
+                              label: t("sessionsView.stopCloudWorker"),
+                              icon: icons.stop,
+                              variant: "danger",
+                              disabled: Boolean(placement.reclaimDisabledReason),
+                              description: placement.reclaimDisabledReason,
+                              onActivate: () =>
+                                void this.handleHeaderSessionAction(
+                                  { kind: "stop-cloud-worker" },
+                                  row,
+                                ),
+                            },
+                          ]
+                        : []),
+                    ]
+                  : []
+              }
               .sharing=${sharing}
               .groups=${knownGroups}
               .currentOwner=${row.owner?.actor ?? null}
