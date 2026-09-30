@@ -1358,10 +1358,11 @@ export async function createContextEngineAttemptRunner(params: {
       },
       ...params.attemptOverrides,
     };
-    if (attempt.admittedRunContext) {
+    const admittedRunContext = params.attemptOverrides?.admittedRunContext;
+    if (admittedRunContext) {
       return await (
         await loadRunEmbeddedAttempt()
-      )(attempt);
+      )({ ...attempt, admittedRunContext });
     }
     const admission = prepareSystemAgentRunAdmission(
       attempt.config ?? {},
