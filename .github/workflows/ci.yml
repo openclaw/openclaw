@@ -743,6 +743,12 @@ jobs:
               evidence_scripts = ("scripts/ios-screenshot-evidence.mjs", "scripts/lib/direct-run.mjs", "scripts/ci-static-step.sh")
               platform_scripts = ("scripts/lib/swift-toolchain.sh",)
               upgrade_scripts = ("scripts/lib/release-upgrade-baseline.mjs", "scripts/lib/release-version.mjs")
+              # The manifest builder runs from the harness and imports these siblings by file-relative paths.
+              preflight_scripts = (
+                  "scripts/ci-build-manifest.mjs",
+                  "scripts/lib/release-context.mjs",
+                  "scripts/lib/release-version.mjs",
+              )
               npm_lock_scripts = (
                   "scripts/ci-npm-lock-admission.mjs",
                   "scripts/generate-npm-package-lock.mjs",
@@ -769,7 +775,7 @@ jobs:
                   if kind in ("platform", "linux-node"):
                       pathspecs += evidence_scripts
                   elif kind == "preflight":
-                      pathspecs += ["scripts/lib/release-context.mjs", "scripts/lib/release-version.mjs"]
+                      pathspecs += preflight_scripts
                   if kind == "platform":
                       pathspecs += platform_scripts
                   if kind == "linux-node":
@@ -782,6 +788,8 @@ jobs:
                   sparse_paths = ["/.github/actions/", *(f"/{path}" for path in node_setup_scripts)]
                   if kind in ("platform", "linux-node"):
                       sparse_paths += [f"/{path}" for path in evidence_scripts]
+                  elif kind == "preflight":
+                      sparse_paths += [f"/{path}" for path in preflight_scripts]
                   if kind == "platform":
                       sparse_paths += [f"/{path}" for path in platform_scripts]
                   if kind == "linux-node":
