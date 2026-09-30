@@ -1263,7 +1263,7 @@ src/acp/server.ts	2
 src/acp/session-mapper.ts	1
 src/acp/tool-status.ts	1
 src/acp/translator.agent-events.ts	11
-src/acp/translator.prompt-stream.ts	9
+src/acp/translator.prompt-stream.ts	7
 src/acp/translator.replay.ts	1
 src/acp/translator.session-lifecycle.ts	1
 src/acp/translator.session-list.ts	1
@@ -2501,7 +2501,7 @@ src/logging/config.ts	2
 src/logging/console.ts	4
 src/logging/diagnostic-run-activity.ts	1
 src/logging/diagnostic-session-recovery-coordinator.ts	1
-src/logging/diagnostic-stability-bundle.ts	6
+src/logging/diagnostic-stability-bundle.ts	3
 src/logging/diagnostic-stability.ts	2
 src/logging/diagnostic-support-redaction.ts	1
 src/logging/diagnostic.ts	1
@@ -2514,7 +2514,7 @@ src/logging/redact-internal-state.ts	1
 src/logging/redact.ts	2
 src/logging/secret-redaction-registry.ts	1
 src/logging/state.ts	6
-src/logging/subsystem.ts	4
+src/logging/subsystem.ts	3
 src/mcp/channel-bridge.ts	4
 src/mcp/channel-shared.ts	2
 src/mcp/codex-supervision-tools-serve.ts	6
@@ -2927,8 +2927,7 @@ src/wizard/setup.ts	1
 src/worker/inference-stream.runtime.ts	4
 src/worker/launch-descriptor.ts	5
 src/worker/node-workspace-protocol.ts	1
-src/worker/worker-connection-admission.ts	2
-src/worker/worker-connection-frames.ts	4
+src/worker/worker-connection-frames.ts	3
 src/worker/worker-process.ts	1
 src/worker/workspace-rsync-receiver.ts	1
 ui/src/app-navigation.ts	1
