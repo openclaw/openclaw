@@ -5,6 +5,7 @@ import { assert, describe, expect, it } from "vitest";
 import { createOpenClawTestInstance } from "../../test/helpers/openclaw-test-instance.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { isLiveTestEnabled, logLiveProgress } from "../agents/live-test-helpers.js";
+import type { AgentWaitResult } from "../agents/run-wait.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { CronRunLogEntry } from "../cron/run-log-types.js";
 import type { CronJob } from "../cron/types.js";
@@ -13,6 +14,10 @@ import { listKnownProviderAuthEnvVarNamesCore } from "../secrets/provider-env-va
 import { extractAssistantPhaseText } from "../shared/chat-message-content.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import type { GatewayClient } from "./client.js";
+import {
+  createCronHookEffectProbe,
+  CRON_HOOK_PROBE_ID,
+} from "./gateway-cron-hook-effect.live.test-support.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
 import { connectGatewayClient } from "./test-helpers.e2e.js";
 
@@ -83,6 +88,7 @@ describeLive("cron placement identity through production Gateway routing", () =>
           OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: undefined,
         },
       });
+      const hookProbe = await createCronHookEffectProbe(instance.state);
       let client: GatewayClient | undefined;
       const agentEvents: Array<{ runId: string; stream: string; data: unknown }> = [];
       await runQaGatewayFixture(
@@ -106,6 +112,12 @@ describeLive("cron placement identity through production Gateway routing", () =>
                 timeoutSeconds: RUN_TIMEOUT_MS / 1000,
               },
               entries: { probe: { workspace: instance.state.workspaceDir } },
+            },
+            plugins: {
+              load: { paths: [hookProbe.pluginPath] },
+              entries: {
+                [CRON_HOOK_PROBE_ID]: { enabled: true, hooks: { allowConversationAccess: true } },
+              },
             },
             cron: { enabled: true },
             tools: { allow: [] },
@@ -284,8 +296,79 @@ describeLive("cron placement identity through production Gateway routing", () =>
           logLiveProgress(
             "cron placement: fresh root admitted to new run; old transcript unchanged",
           );
+
+          // The same real Gateway now pauses a registered reply hook before its final HTTP effect.
+          let hookTarget = second;
+          for (const marker of ["HOOK_ALLOWED", "HOOK_ROTATED"]) {
+            const accepted = await connected.request<{ runId: string; status: string }>("agent", {
+              agentId: "probe",
+              sessionKey: rootKey,
+              expectedExistingSessionId: hookTarget.sessionId,
+              message: marker,
+              deliver: false,
+              idempotencyKey: randomUUID(),
+            });
+            expect(accepted.status).toBe("accepted");
+            const completion = connected.request<AgentWaitResult>(
+              "agent.wait",
+              { runId: accepted.runId, timeoutMs: RUN_TIMEOUT_MS },
+              { timeoutMs: RUN_TIMEOUT_MS + 5_000 },
+            );
+            const gate = hookProbe.gate(marker);
+            await Promise.race([
+              gate.entered.promise,
+              completion.then((result) => {
+                throw new Error(`Hook never paused: ${JSON.stringify(result)}`);
+              }),
+            ]);
+            expect(gate.effects).toBe(0);
+            const oldRun = hookTarget;
+            const before = await historyFor(oldRun);
+            if (marker === "HOOK_ROTATED") {
+              hookTarget = await finishedCronRun(connected, job.id);
+              expect(hookTarget.sessionId).not.toBe(oldRun.sessionId);
+            }
+            const replacementBefore = await historyFor(hookTarget);
+            gate.response?.end("continue");
+            await connected.request("cronHookProof.settled", { marker });
+            const outcome = await completion;
+            if (marker === "HOOK_ALLOWED") {
+              expect(outcome).toMatchObject({
+                status: "ok",
+                terminalReply: { disposition: "visible", text: "HOOK_ALLOWED_REPLY" },
+              });
+              expect(gate.effects).toBe(1);
+            } else {
+              expect(outcome).toMatchObject({ status: "error" });
+              expect(outcome.error).toContain("original session generation no longer accepts");
+              expect(gate.effects).toBe(0);
+              expect(await historyFor(oldRun)).toEqual(before);
+              expect(await historyFor(hookTarget)).toEqual(replacementBefore);
+            }
+            expect(
+              await connected.request("agent.wait", { runId: accepted.runId, timeoutMs: 0 }),
+            ).toEqual(outcome);
+            const counts = await connected.request<{
+              calls: Record<string, { hooks: number; providers: number; error?: string }>;
+              providerStarts: number;
+            }>("cronHookProof.stats", {});
+            expect(counts.providerStarts).toBeGreaterThan(0);
+            expect(counts.calls[marker]).toEqual({
+              hooks: 1,
+              providers: 0,
+              ...(marker === "HOOK_ROTATED"
+                ? {
+                    error: expect.stringContaining("original session generation no longer accepts"),
+                  }
+                : {}),
+            });
+            logLiveProgress(
+              `hook revocation: ${marker}; hooks=1; provider dispatches=0; outbound effects=${gate.effects}; settlement=${outcome.status}; repeated wait unchanged`,
+            );
+          }
         },
         async () => await client?.stopAndWait(),
+        () => hookProbe.close(),
         () => instance.cleanup(),
       );
     },
