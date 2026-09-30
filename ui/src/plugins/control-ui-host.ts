@@ -76,6 +76,10 @@ export function createControlUiPluginHost(
       search: search.size ? `?${search}` : "",
     };
   };
+  const dock = current().assistantDock;
+  if (dock) {
+    retain(() => dock.close(owner.abort));
+  }
   return {
     apiVersion: 1,
     pluginId: owner.descriptor.pluginId,
@@ -128,6 +132,7 @@ export function createControlUiPluginHost(
         context.agentSelection.subscribe(notify),
         context.theme.subscribe(notify),
         i18n.subscribe(notify),
+        ...(dock ? [dock.subscribe(notify)] : []),
       ];
       return retain(() => stops.forEach((stop) => stop()));
     },
@@ -237,6 +242,19 @@ export function createControlUiPluginHost(
           }
         }),
     },
+    dock: dock
+      ? {
+          openSession(params) {
+            current().assistantDock.openSession(params, owner.abort);
+          },
+          close() {
+            current().assistantDock.close();
+          },
+          get openSessionKey() {
+            return current().assistantDock.openSessionKey;
+          },
+        }
+      : undefined,
     navigation: {
       openPage(target, options) {
         const location = pageLocation(target, options);

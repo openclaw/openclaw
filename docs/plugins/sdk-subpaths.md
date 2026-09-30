@@ -59,6 +59,63 @@ host and view types). The contract and Control UI subpaths are browser safe;
 | `plugin-sdk/health`                 | Doctor health-check registration, detection, repair, selection, severity, and finding types for bundled health consumers                                                                                |
 | `plugin-sdk/channel-entry-contract` | Bundled channel entry and setup-entry contracts, feature declarations, and lazy module-loading helpers                                                                                                  |
 
+### Control UI conversation dock
+
+`ControlUiHost` from `openclaw/plugin-sdk/control-ui` has this optional member:
+
+```typescript
+dock?: {
+  /** Dock a conversation beside the current page; replaces a conversation dock already open. */
+  openSession: (params: {
+    sessionKey: string;
+    agentId: string;
+    label: string;
+    context?: { page: string; detail?: Readonly<Record<string, string>> };
+  }) => void;
+  close: () => void;
+  readonly openSessionKey: string | null;
+};
+```
+
+Check `host.dock` before presenting a dock action. Supply both `sessionKey`
+and `agentId` for the intended conversation; `label` is its dock tab title.
+`openSession` reuses the Home chat pane, drafts, attachments, placement and
+size persistence, and close and placement controls. It replaces Home, Ask
+OpenClaw, or a previously docked conversation. `close()` leaves no dock open
+and does not restore the previous conversation.
+
+Navigation keeps the dock open, except that it hides while the same session
+and agent are open as the Chat or Dashboard page. Leaving that page reveals
+the dock again. `openSessionKey` is the visible plugin-opened session key,
+or `null` when there is none, including while hidden or showing Home or Ask
+OpenClaw. `host.subscribe(...)` listeners fire when that value changes.
+
+The plugin activation owns the opened dock. Disposing a mounted view retires
+its host handles but keeps the dock open during navigation. Disposing the
+activation closes the dock only if it still belongs to that activation;
+it does not close a replacement opened by another activation. Retained dock
+operations reject after their view or activation ends.
+
+The normal chat pane enforces the viewer's access. Read-only viewers can open
+the dock and receive the existing read-only composer behavior. A session the
+viewer cannot open displays the pane's normal error state. Docking grants no
+additional session access.
+
+The optional `context` supplies an untrusted ambient hint. `page` can name a
+plugin page; `detail` is a flat record of string fields. The host retains up
+to four detail fields in sorted key order, omits empty or oversized keys,
+and bounds each escaped key to 32 characters and each JSON-encoded value to
+128 characters. These limits include escaping; the value limit includes its
+JSON quotes. The page uses the existing 64-character work-context limit.
+When `context` is omitted, the host builds the current page's reference as it
+does for Home.
+
+The operator can remove the reference before sending. At send time the host
+captures a snapshot and formats it as quoted reference data, never
+instructions or permission to access another session. Sent messages retain
+the **Context attached** presentation; **Technical details** includes the
+plugin fields. Queues and retries keep the captured snapshot.
+
 ### Capability catalog entry
 
 A manifest's `capabilityCatalogEntry` default export satisfies

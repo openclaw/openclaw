@@ -4,7 +4,11 @@ import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
-import { buildHomeWorkContext, subscribeChatWorkContext } from "../pages/chat/chat-work-context.ts";
+import {
+  buildHomeWorkContext,
+  subscribeChatWorkContext,
+  type ChatWorkContext,
+} from "../pages/chat/chat-work-context.ts";
 import {
   custodianSessionStore,
   type CustodianSessionStore,
@@ -16,9 +20,10 @@ import "../styles/assistant-panel-content.css";
 /** Conversation runtimes load inside the already-open dock. */
 export class OpenClawAssistantPanelContent extends OpenClawLightDomElement {
   @property({ type: Boolean }) active = false;
-  @property() destination: "home" | "custodian" = "custodian";
+  @property() destination: "home" | "custodian" | "session" = "custodian";
   @property() sessionKey = "";
   @property() agentId = "";
+  @property({ attribute: false }) sessionContext: ChatWorkContext | undefined;
   @property({ attribute: false }) context: ApplicationContext | undefined;
   @property() pageRouteId: RouteId = "chat";
   @property() pageSessionKey = "";
@@ -77,19 +82,20 @@ export class OpenClawAssistantPanelContent extends OpenClawLightDomElement {
       return nothing;
     }
     const store = this.store ?? custodianSessionStore;
-    return this.destination === "home"
+    return this.destination !== "custodian"
       ? html`<openclaw-home-session
           .sessionKey=${this.sessionKey}
           .agentId=${this.agentId}
           .workContext=${
-            this.context
+            this.sessionContext ??
+            (this.context
               ? buildHomeWorkContext(
                   this.context,
                   this.pageRouteId,
                   this.pageSessionKey,
                   this.pageAgentId,
                 )
-              : undefined
+              : undefined)
           }
         ></openclaw-home-session>`
       : html`<openclaw-custodian-surface

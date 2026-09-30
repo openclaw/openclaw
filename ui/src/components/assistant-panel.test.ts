@@ -2,6 +2,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { RouteId } from "../app-route-paths.ts";
+import { AssistantDock } from "../app/assistant-dock.ts";
 import { chatInputOwnerForContext } from "../app/chat-input-owner.ts";
 import { createAgentCapability } from "../lib/agents/index.ts";
 import { createSessionCapability } from "../lib/sessions/index.ts";
@@ -67,6 +68,7 @@ async function mountPanel(options: { global?: boolean } = {}) {
   );
   const context = {
     ...baseContext,
+    assistantDock: new AssistantDock(),
     sessions: createSessionCapability(baseContext.gateway, baseContext.agentSelection),
   };
   // The app owns this capability; removing its panel does not stop subscription retries.
@@ -182,6 +184,138 @@ describe("assistant panel", () => {
       expect(chatInputOwnerForContext(context).current).toBe("page");
     },
   );
+
+  it.each([HOME_PANEL_TOGGLE_EVENT, CUSTODIAN_PANEL_TOGGLE_EVENT])(
+    "replaces %s with an activation-owned session and follows navigation without restoring closed docks",
+    async (eventName) => {
+      const { context, panel } = await mountPanel();
+      panel.homeAvailable = true;
+      panel.custodianSuppressed = false;
+      panel.pageRouteId = "plugin";
+      await panel.updateComplete;
+      window.dispatchEvent(new CustomEvent(eventName));
+      await vi.dynamicImportSettled();
+      await panel.updateComplete;
+      expect(panel.assistantPanelOpen).toBe(true);
+      const activation = {};
+      const hint = { page: "review:board", detail: { filter: "stuck" } };
+      const keys: (string | null)[] = [];
+      const stop = context.assistantDock.subscribe(() =>
+        keys.push(context.assistantDock.openSessionKey),
+      );
+      onTestFinished(stop);
+      context.assistantDock.openSession(
+        {
+          sessionKey: "agent:research:review",
+          agentId: "research",
+          label: "Review conversation",
+          context: hint,
+        },
+        activation,
+      );
+      hint.detail.filter = "changed after opening";
+      await panel.updateComplete;
+      const home = () =>
+        panel.querySelector<
+          HTMLElement & {
+            sessionKey: string;
+            agentId: string;
+            workContext: ChatWorkContext;
+          }
+        >("openclaw-home-session");
+      expect(home()).toMatchObject({
+        sessionKey: "agent:research:review",
+        agentId: "research",
+        workContext: { page: "review:board", detail: { filter: "stuck" } },
+      });
+      expect(panel.textContent).toContain("Review conversation");
+      expect(panel.querySelector("openclaw-custodian-surface")).toBeNull();
+      expect(context.assistantDock.openSessionKey).toBe("agent:research:review");
+      panel.pageRouteId = "appearance";
+      await panel.updateComplete;
+      expect(home()).not.toBeNull();
+      panel.pageSessionKey = "agent:research:review";
+      panel.pageAgentId = "research";
+      for (const route of ["chat", "dashboard"] as const) {
+        panel.pageRouteId = route;
+        await panel.updateComplete;
+        expect(home(), route).toBeNull();
+        expect(context.assistantDock.openSessionKey).toBeNull();
+        panel.pageRouteId = "plugin";
+        await panel.updateComplete;
+        expect(home()?.sessionKey).toBe("agent:research:review");
+      }
+      context.assistantDock.close({});
+      expect(panel.assistantPanelOpen).toBe(true);
+      context.assistantDock.close(activation);
+      await panel.updateComplete;
+      expect(panel.assistantPanelOpen).toBe(false);
+      panel.pageRouteId = "appearance";
+      await panel.updateComplete;
+      expect(panel.assistantPanelOpen).toBe(false);
+      expect(keys).toEqual([
+        "agent:research:review",
+        null,
+        "agent:research:review",
+        null,
+        "agent:research:review",
+        null,
+      ]);
+    },
+  );
+
+  it("keeps a closed plugin dock closed when automatic Ask help arrived while it was open", async () => {
+    vi.stubGlobal("innerWidth", 1342);
+    const { context, panel } = await mountPanel();
+    panel.custodianSuppressed = false;
+    panel.pageRouteId = "plugin-settings";
+    await panel.updateComplete;
+    context.assistantDock.openSession(
+      { sessionKey: "agent:main:review", agentId: "main", label: "Review" },
+      {},
+    );
+    publishPluginHelpContext(
+      context,
+      {},
+      { id: "example", name: "Example" },
+      { overview: true, installed: true },
+    );
+    await panel.updateComplete;
+    expect(context.assistantDock.openSessionKey).toBe("agent:main:review");
+    panel.querySelector<HTMLButtonElement>(".assistant-panel-actions button:last-child")!.click();
+    await panel.updateComplete;
+    expect(panel.assistantPanelOpen).toBe(false);
+    expect(context.assistantDock.openSessionKey).toBeNull();
+  });
+
+  it("opens for read-only viewers and distinguishes agents sharing a global session key", async () => {
+    const { context, panel, setGatewaySnapshot } = await mountPanel({ global: true });
+    const hello = context.gateway.snapshot.hello!;
+    setGatewaySnapshot({
+      hello: { ...hello, auth: { role: "operator", scopes: ["operator.read"] } },
+    });
+    panel.homeAvailable = false;
+    panel.custodianAvailable = false;
+    panel.pageSessionKey = "global";
+    panel.pageAgentId = "main";
+    await panel.updateComplete;
+    context.assistantDock.openSession(
+      { sessionKey: "global", agentId: "research", label: "Research" },
+      {},
+    );
+    await vi.dynamicImportSettled();
+    await panel.updateComplete;
+    expect(panel.querySelector("openclaw-home-session")).toMatchObject({
+      sessionKey: "global",
+      agentId: "research",
+    });
+    panel.pageAgentId = "research";
+    await panel.updateComplete;
+    expect(panel.assistantPanelOpen).toBe(false);
+    panel.pageAgentId = "main";
+    await panel.updateComplete;
+    expect(panel.assistantPanelOpen).toBe(true);
+  });
 
   it("prepares current route and pane context when Home opens and the visible work changes", async () => {
     const { context, panel, provider, request, setGatewaySnapshot } = await mountPanel({
