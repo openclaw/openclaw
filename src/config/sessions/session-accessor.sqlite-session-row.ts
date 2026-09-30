@@ -3,11 +3,7 @@ import {
   deliveryContextFromSession,
   sessionDeliveryChannel,
 } from "../../utils/delivery-context.read.js";
-import {
-  normalizeSessionRowChatType,
-  normalizeText,
-  resolveSqliteSessionScope,
-} from "./session-accessor.sqlite-normalize.js";
+import { normalizeSessionRowChatType, normalizeText } from "./session-accessor.sqlite-normalize.js";
 import { bindSessionEntryProvenance } from "./session-accessor.sqlite-provenance.js";
 import { normalizeStatus } from "./session-accessor.sqlite-status.js";
 import type { SessionEntry } from "./types.js";
@@ -133,6 +129,21 @@ function normalizeSqliteCreatedVia(value: SessionEntry["createdVia"]) {
 
 function normalizeSqliteCreatedActorType(value: unknown) {
   return value === "human" || value === "agent" || value === "system" ? value : null;
+}
+
+function resolveSqliteSessionScope(
+  entry: Pick<SessionEntry, "chatType">,
+  sessionKey: string,
+): "conversation" | "shared-main" | "group" | "channel" {
+  const chatType = normalizeSessionRowChatType(entry.chatType);
+  const normalizedKey = sessionKey.trim().toLowerCase();
+  if (chatType === "direct" && (normalizedKey === "main" || normalizedKey.endsWith(":main"))) {
+    return "shared-main";
+  }
+  if (chatType === "group" || chatType === "channel") {
+    return chatType;
+  }
+  return "conversation";
 }
 
 function resolveSqliteSessionCreatedAt(entry: SessionEntry, updatedAt: number): number {
