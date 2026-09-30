@@ -199,7 +199,7 @@ describe("OpenAI completions reasoning", () => {
       expected: "medium",
     },
     {
-      id: "prod-spud",
+      id: "custom-azure-deployment",
       name: "GPT-5.5 (Azure)",
       provider: "azure-openai",
       baseUrl: "https://example.services.ai.azure.com/openai/v1",
