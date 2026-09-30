@@ -124,7 +124,7 @@ describe("sessions page lifecycle", () => {
       const context = createContext(mutableGateway.gateway, sessions);
       const page = await createRenderedPage(context, sessionsResult([row], 1));
       await vi.waitFor(() => expect(page.loading).toBe(false));
-      new ContextProvider(page, { context: applicationContext, initialValue: context });
+      new ContextProvider(page, { context: applicationContext }).setValue(context);
       page.openSessionMenu(row, { x: 10, y: 20 }, document.createElement("button"));
       await page.updateComplete;
       const menu = page.querySelector<TestSessionMenu>("openclaw-session-menu");
