@@ -635,7 +635,7 @@ export function createPreparedModelCatalogWorker(
         requestPool &&
         !requestPool.isClosed
       ) {
-        void requestPool.rotate().catch((rotateError) => {
+        void requestPool.rotate().catch((rotateError: unknown) => {
           process.emitWarning(`Catalog worker recycling failed: ${String(rotateError)}`);
         });
       }
