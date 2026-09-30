@@ -13,9 +13,11 @@ import {
 } from "../../../infra/heartbeat-summary.js";
 import type { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { buildInterSessionPromptContext } from "../../../sessions/input-provenance.js";
+import type { PersistedUserTurnMessage } from "../../../sessions/user-turn-transcript.types.js";
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
+import { buildPromptBuildHookEvent } from "../../hook-prompt-build-event.js";
 import {
   buildAgentInternalEventContext,
   resolveInternalEventPromptBody,
@@ -86,6 +88,8 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
   diagnosticTrace: DiagnosticTraceContext;
   isRawModelRun: boolean;
   orphanRepair?: OrphanRepairPlan;
+  /** Recorder-owned admitted request for this turn; absent for internal-only runs. */
+  preparedUserTurnMessage?: PersistedUserTurnMessage;
   sessionAgentId: string;
   runtimeModel: string;
   systemPromptText: string;
@@ -133,13 +137,22 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
   };
   const promptBuildMessages =
     pruneProcessedHistoryImages(input.activeSession.messages) ?? input.activeSession.messages;
-  const promptEvent = { prompt: effectivePrompt, messages: promptBuildMessages };
+  // The recorder owns the admitted request, so its message carries both the
+  // pre-projection text and the stable admission identity. Without one, fall back
+  // to this turn's prompt and let the event stay identity-free (legacy producers).
+  const currentUserMessage = input.preparedUserTurnMessage ?? attempt.prompt;
+  const promptEvent = buildPromptBuildHookEvent({
+    prompt: effectivePrompt,
+    messages: promptBuildMessages,
+    currentUserMessage,
+  });
   const hookResult = preserveExactPrompt
     ? undefined
     : await resolvePromptBuildHookResult({
         config: attempt.config ?? getRuntimeConfig(),
         prompt: effectivePrompt,
         messages: promptBuildMessages,
+        currentUserMessage,
         hookCtx,
         hookRunner: input.hookRunner,
       });

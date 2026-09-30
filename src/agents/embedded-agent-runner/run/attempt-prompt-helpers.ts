@@ -19,6 +19,10 @@ import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
 import { truncateUtf16Safe } from "../../../utils.js";
 import { listActiveProcessSessionReferences } from "../../bash-process-references.js";
 import { resolveProcessToolScopeKey } from "../../bash-process-scope.js";
+import {
+  buildPromptBuildHookEvent,
+  type PromptBuildHookCurrentUserMessage,
+} from "../../hook-prompt-build-event.js";
 import { wrapPluginSystemContextSection } from "../../hook-system-context-boundary.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../../tool-fs-policy.js";
 import { deriveContextPromptTokens, type NormalizedUsage } from "../../usage.js";
@@ -62,6 +66,8 @@ export async function resolvePromptBuildHookResult(params: {
   config: OpenClawConfig;
   prompt: string;
   messages: unknown[];
+  currentUserMessage?: PromptBuildHookCurrentUserMessage;
+  currentUserMessageId?: string;
   hookCtx: PluginHookAgentContext;
   hookRunner?: PromptBuildHookRunner | null;
 }): Promise<PluginHookBeforePromptBuildResult> {
@@ -119,10 +125,12 @@ export async function resolvePromptBuildHookResult(params: {
   const promptBuildResult = params.hookRunner?.hasHooks("before_prompt_build")
     ? await params.hookRunner
         .runBeforePromptBuild(
-          {
+          buildPromptBuildHookEvent({
             prompt: params.prompt,
             messages: params.messages,
-          },
+            currentUserMessage: params.currentUserMessage,
+            currentUserMessageId: params.currentUserMessageId,
+          }),
           params.hookCtx,
         )
         .catch((hookErr: unknown) => {

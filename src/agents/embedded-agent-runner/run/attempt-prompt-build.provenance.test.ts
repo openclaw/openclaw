@@ -1,10 +1,14 @@
 // #143821: prompt-build hook context must carry the turn's typed input provenance so
 // plugins can distinguish inter-session deliveries from human messages.
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import type { PluginHookBeforePromptBuildResult } from "../../../plugins/hook-before-agent-start.types.js";
+import type {
+  PluginHookBeforePromptBuildEvent,
+  PluginHookBeforePromptBuildResult,
+} from "../../../plugins/hook-before-agent-start.types.js";
 import type { PluginHookAgentContext } from "../../../plugins/hook-types.js";
 import { createHookRunner } from "../../../plugins/hooks.js";
 import { matchesTranscriptEvent } from "../../../sessions/transcript-visible-record.js";
+import type { PersistedUserTurnMessage } from "../../../sessions/user-turn-transcript.types.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import { buildAgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
 import {
@@ -66,6 +70,9 @@ async function assembleWithCapturedHookCtx(
       typeof prepareEmbeddedAttemptPromptAssembly
     >[0]["prepareSystemPrompt"];
   } = {},
+  assembly: {
+    preparedUserTurnMessage?: PersistedUserTurnMessage;
+  } = {},
 ) {
   const { session, sessionManager, modelRegistry } = await createTestSession();
   const admission = prepareSystemAgentRunAdmission({}, runId, "main", "provenance-hook-test");
@@ -96,6 +103,7 @@ async function assembleWithCapturedHookCtx(
     ...attemptOverrides,
   };
   const captured: PluginHookAgentContext[] = [];
+  const capturedEvents: PluginHookBeforePromptBuildEvent[] = [];
   const hookRunner = createHookRunner({
     hooks: [],
     plugins: [],
@@ -104,8 +112,9 @@ async function assembleWithCapturedHookCtx(
         pluginId: "provenance-hook-test",
         hookName: "before_prompt_build",
         source: "test",
-        handler: async (_event: unknown, ctx: PluginHookAgentContext) => {
+        handler: async (event: PluginHookBeforePromptBuildEvent, ctx: PluginHookAgentContext) => {
           captured.push(ctx);
+          capturedEvents.push(event);
           return promptPolicy.hookResult;
         },
       },
@@ -123,6 +132,9 @@ async function assembleWithCapturedHookCtx(
     hookAgentId: "main",
     diagnosticTrace: { traceId: "11111111111111111111111111111111" },
     isRawModelRun: false,
+    ...(assembly.preparedUserTurnMessage
+      ? { preparedUserTurnMessage: assembly.preparedUserTurnMessage }
+      : {}),
     sessionAgentId: "main",
     runtimeModel: testModel.id,
     systemPromptText: "Base system prompt",
@@ -132,7 +144,7 @@ async function assembleWithCapturedHookCtx(
     setLeasedSteering,
   });
   expect(session.messages).toEqual(priorMessages);
-  return { captured, prompt, setLeasedSteering, setSystemPrompt };
+  return { captured, capturedEvents, prompt, setLeasedSteering, setSystemPrompt };
 }
 
 describe("prompt-build hook context input provenance", () => {
@@ -199,6 +211,56 @@ describe("prompt-build hook context input provenance", () => {
     expect(captured).toHaveLength(1);
     expect(captured[0]).toMatchObject({ trigger: "user" });
     expect(captured[0]?.inputProvenance).toBeUndefined();
+  });
+});
+
+describe("prompt-build hook current-input identity", () => {
+  it("binds the recorder-owned admitted request to the hook event", async () => {
+    const preparedUserTurnMessage: PersistedUserTurnMessage = {
+      role: "user",
+      content: "Handoff payload",
+      idempotencyKey: "run-admitted:user",
+    };
+    const { capturedEvents } = await assembleWithCapturedHookCtx(
+      "current-input-admitted-request",
+      undefined,
+      {},
+      { preparedUserTurnMessage },
+    );
+
+    expect(capturedEvents).toHaveLength(1);
+    expect(capturedEvents[0]).toMatchObject({
+      currentUserMessage: "Handoff payload",
+      currentUserMessageId: "run-admitted:user",
+    });
+  });
+
+  it("keeps an admitted request without text instead of reusing the projected prompt", async () => {
+    const preparedUserTurnMessage: PersistedUserTurnMessage = {
+      role: "user",
+      content: [{ type: "image", mimeType: "image/png", data: "synthetic-image" }],
+      idempotencyKey: "run-image-only:user",
+    };
+    const { capturedEvents } = await assembleWithCapturedHookCtx(
+      "current-input-text-free-admitted-request",
+      undefined,
+      {},
+      { preparedUserTurnMessage },
+    );
+
+    expect(capturedEvents[0]?.prompt).toBe("Handoff payload");
+    expect(capturedEvents[0]).toMatchObject({
+      currentUserMessage: "",
+      currentUserMessageId: "run-image-only:user",
+    });
+  });
+
+  it("supplies the turn prompt without an admission identity when no request was admitted", async () => {
+    const { capturedEvents } = await assembleWithCapturedHookCtx("current-input-legacy-producer");
+
+    expect(capturedEvents).toHaveLength(1);
+    expect(capturedEvents[0]).toMatchObject({ currentUserMessage: "Handoff payload" });
+    expect(capturedEvents[0]).not.toHaveProperty("currentUserMessageId");
   });
 });
 
