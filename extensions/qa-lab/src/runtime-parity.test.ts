@@ -667,8 +667,13 @@ describe("runtime parity", () => {
     });
 
     expect(cell.toolCalls).toEqual([]);
-    expect(cell.providerPlanToolCalls).toHaveLength(1);
-    expect(cell.providerPlanToolCalls?.[0]?.errorClass).toBeUndefined();
+    expect(cell.providerPlanToolCalls).toEqual([
+      {
+        tool: "read_file",
+        argsHash: stableHash({ path: "README.md" }),
+        resultHash: stableHash({ ok: true }),
+      },
+    ]);
 
     const result = await runRuntimeParityScenario({
       scenarioId: "resolved-tool",

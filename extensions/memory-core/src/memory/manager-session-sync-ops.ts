@@ -85,10 +85,12 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
       }).map((archive) => [archive.archiveName, archive]),
     );
     const forgottenSessions = new Set(
-      listMemorySessionTombstones({
-        agentId: this.agentId,
-        sessionIds: entries.map((entry) => entry.sessionId),
-      }).map((entry) => entry.sessionId),
+      (
+        await listMemorySessionTombstones({
+          agentId: this.agentId,
+          sessionIds: entries.map((entry) => entry.sessionId),
+        })
+      ).map((entry) => entry.sessionId),
     );
     return entries.filter((entry) => {
       const archive = archivedSessions.get(path.basename(entry.sessionFile));

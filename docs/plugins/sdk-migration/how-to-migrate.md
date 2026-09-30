@@ -267,6 +267,15 @@ an existing compatibility window.
     | `generateSecureToken`, `generateSecureUuid` | `openclaw/plugin-sdk/core` |
     | `parseFiniteNumber`, `parseStrictFiniteNumber`, `parseStrictInteger`, `parseStrictNonNegativeInteger`, `parseStrictPositiveInteger` | `openclaw/plugin-sdk/string-coerce-runtime` |
 
+    OpenClaw no longer uses `commandRequiresSecurityAuditSuppressionApproval`
+    internally: suppression reads and writes follow ordinary exec policy. The
+    deprecated SDK export preserves its shipped signature and results, including
+    `true` for suppression writes, until the
+    [infra-runtime compatibility surface is retired](/plugins/sdk-migration/removal-timeline).
+    Existing plugins can retain the call during that window. Plugins adopting
+    ordinary exec policy should remove it; there is no replacement command-text
+    detector.
+
     These are symbol-specific mappings, not replacements for the whole barrel.
     Private-local entries such as `heartbeat-runtime`, `delivery-queue-runtime`,
     `fetch-runtime`, `runtime-fetch`, and `file-lock` are JavaScript-only host

@@ -80,6 +80,28 @@ describe("SessionLinkTitler", () => {
     expect(request).not.toHaveBeenCalled();
   });
 
+  it("decorates disclosure labels without making them navigation targets", async () => {
+    const { host, request, titler } = createTitler([
+      { key: SESSION_KEY, kind: "direct", displayName: "Cached research", updatedAt: Date.now() },
+    ]);
+    const label = document.createElement("span");
+    label.dataset.sessionTitleOnly = "";
+    label.dataset.sessionKey = SESSION_KEY;
+    label.innerHTML = '<span class="session-label"></span>';
+    host.append(label);
+    titler.refresh();
+    expect(label.textContent).toBe("Cached research");
+    expect(label.parentElement).toBe(host);
+    expect(label.matches("a, [href], [tabindex], .markdown-session-link")).toBe(false);
+    expect(request).not.toHaveBeenCalled();
+    titler.context = sessionContext([
+      { key: SESSION_KEY, kind: "direct", displayName: "Current research", updatedAt: Date.now() },
+    ]);
+    await titler.decorate(label);
+    expect(label.textContent).toBe("Current research");
+    expect(label.matches("a, [href], [tabindex], .markdown-session-link")).toBe(false);
+  });
+
   it("loads an unseeded title from the preview RPC and reuses its cache", async () => {
     const request = vi.fn().mockResolvedValue(previewResponse());
     const { titler } = createTitler([], request);

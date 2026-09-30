@@ -1,8 +1,13 @@
 import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import { UpdateRequesterRevokedError } from "../../infra/update-requester-authority.js";
+import type { UpdateRunPhasePatch } from "../../infra/update-run-mutation.types.js";
+import type { UpdateRunPhase } from "../../infra/update-run-record.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
-import type { UpdateRunWriteOptions } from "../../infra/update-run-write.async.js";
+import {
+  recordUpdateRunPhaseAsync,
+  type UpdateRunWriteOptions,
+} from "../../infra/update-run-write.async.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { captureUpdateCommandExecutorAuthority } from "./update-command-executor.js";
@@ -31,40 +36,42 @@ export function createUpdateCommandExecutionGuards(opts: UpdateCommandOptions, r
       throw new UpdateRequesterRevokedError();
     }
   };
+  const captureWriteOptions = () => {
+    const assertAccepting = () => {
+      if (run?.interrupted) {
+        throw new UpdateRequesterRevokedError();
+      }
+    };
+    assertAccepting();
+    const capturedExecutor = executor;
+    const capturedHandoff = stateHandedOff;
+    const env = run?.env;
+    const assertCurrent = () => {
+      if (executor !== capturedExecutor || stateHandedOff !== capturedHandoff || run?.env !== env) {
+        throw new UpdateRequesterRevokedError();
+      }
+      assertInvocation(undefined, false);
+      capturedExecutor?.assertCurrent();
+    };
+    assertCurrent();
+    const capturedEnv = cloneEnvWithPlatformSemantics(env ?? process.env);
+    const context = captureOpenClawStateWorkerContext({ env: capturedEnv });
+    return {
+      env: capturedEnv,
+      context,
+      assertCurrent,
+      assertAccepting,
+      retainSettlement: (completion: Promise<void>) =>
+        retainMutableUpdateSignalWrite(run, completion),
+      ...(!capturedHandoff ? { requireNoRecovery: true as const } : {}),
+    } satisfies UpdateRunWriteOptions;
+  };
   return {
-    captureWriteOptions: () => {
-      const assertAccepting = () => {
-        if (run?.interrupted) {
-          throw new UpdateRequesterRevokedError();
-        }
-      };
-      assertAccepting();
-      const capturedExecutor = executor;
-      const capturedHandoff = stateHandedOff;
-      const env = run?.env;
-      const assertCurrent = () => {
-        if (
-          executor !== capturedExecutor ||
-          stateHandedOff !== capturedHandoff ||
-          run?.env !== env
-        ) {
-          throw new UpdateRequesterRevokedError();
-        }
-        assertInvocation(undefined, false);
-        capturedExecutor?.assertCurrent();
-      };
-      assertCurrent();
-      const capturedEnv = cloneEnvWithPlatformSemantics(env ?? process.env);
-      const context = captureOpenClawStateWorkerContext({ env: capturedEnv });
-      return {
-        env: capturedEnv,
-        context,
-        assertCurrent,
-        assertAccepting,
-        retainSettlement: (completion: Promise<void>) =>
-          retainMutableUpdateSignalWrite(run, completion),
-        ...(!capturedHandoff ? { requireNoRecovery: true as const } : {}),
-      } satisfies UpdateRunWriteOptions;
+    captureWriteOptions,
+    recordPhase: async (phase: UpdateRunPhase, patch?: UpdateRunPhasePatch) => {
+      if (run) {
+        await recordUpdateRunPhaseAsync(run.runId, phase, patch, captureWriteOptions());
+      }
     },
     onStateHandoff: () => {
       stateHandedOff = true;

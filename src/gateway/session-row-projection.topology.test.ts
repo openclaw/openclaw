@@ -2,7 +2,7 @@ import { symlinkSync } from "node:fs";
 import { copyFile, rename } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { withTestTimeout } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
@@ -87,7 +87,9 @@ it("publishes an initially unseen retired-agent event from its default store", a
   });
 });
 
-it("admits a committed update without host SQL while a marker awaits prepared membership", async () => {
+it("admits a committed update without host SQL while a marker awaits prepared membership", async ({
+  signal,
+}) => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const cfg: OpenClawConfig = { agents: { entries: { main: {}, late: {} } } };
     setRuntimeConfigSnapshot(cfg);
@@ -129,7 +131,11 @@ it("admits a committed update without host SQL while a marker awaits prepared me
     const tasks = [marker];
     const settled = Promise.allSettled(tasks);
     try {
-      await withTestTimeout(entered.promise, 2_000, "Marker membership did not prepare");
+      // Bind waits to the test signal so a stall still releases held topology work below.
+      await withinTest(
+        awaitGateBeforeSettlement(entered.promise, marker, "Marker membership did not prepare"),
+        signal,
+      );
       expect(projection.needsMembershipPreparation()).toBe(false);
       sessionChanges.emit({ all: true, scope: "catalog" });
       expect(projection.dirtyRowCount).toBeGreaterThan(0);
@@ -168,7 +174,7 @@ it("admits a committed update without host SQL while a marker awaits prepared me
   });
 });
 
-it.each(
+it.for(
   (["lifecycle", "marker"] as const).flatMap((kind) =>
     (
       [
@@ -188,7 +194,7 @@ it.each(
   ),
 )(
   "keeps an unknown $kind event with its original generation across $change",
-  async ({ kind, change }) => {
+  async ({ kind, change }, { signal }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       let cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
       setRuntimeConfigSnapshot(cfg);
@@ -273,7 +279,14 @@ it.each(
             });
       const settled = Promise.allSettled([pending]);
       try {
-        await withTestTimeout(entered.promise, 2_000, "Event did not await original topology");
+        await withinTest(
+          awaitGateBeforeSettlement(
+            entered.promise,
+            pending,
+            "Event did not await original topology",
+          ),
+          signal,
+        );
         if (change === "replace" || change === "same-id-reset") {
           const next = {
             ...entry,
@@ -349,9 +362,9 @@ it.each(
   },
 );
 
-it.each(["config", "identity scopes", "dispose", "source"] as const)(
+it.for(["config", "identity scopes", "dispose", "source"] as const)(
   "does not publish a topology snapshot after its %s changes while reading",
-  async (change) => {
+  async (change, { signal }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       let cfg: OpenClawConfig = {
         agents: { entries: { main: { identity: { name: "Original" } } } },
@@ -387,7 +400,14 @@ it.each(["config", "identity scopes", "dispose", "source"] as const)(
       const pending = projection.prepareMembership();
       const settled = Promise.allSettled([pending]);
       try {
-        await withTestTimeout(entered.promise, 2_000, "Topology snapshot did not reach its owner");
+        await withinTest(
+          awaitGateBeforeSettlement(
+            entered.promise,
+            pending,
+            "Topology snapshot did not reach its owner",
+          ),
+          signal,
+        );
         expect(projection.capture(query)).toBe(captured);
         if (change === "config") {
           cfg = { agents: { entries: { main: { identity: { name: "Replacement" } } } } };
@@ -443,9 +463,9 @@ it.each(["config", "identity scopes", "dispose", "source"] as const)(
   },
 );
 
-it.each(["chat.startup", "sessions.resolve"] as const)(
+it.for(["chat.startup", "sessions.resolve"] as const)(
   "revalidates request authority after %s topology readiness",
-  async (method) => {
+  async (method, { signal }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const cfg = { agents: { entries: { main: {} } } };
       const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
@@ -495,7 +515,14 @@ it.each(["chat.startup", "sessions.resolve"] as const)(
       );
       const settled = Promise.allSettled([pending]);
       try {
-        await withTestTimeout(entered.promise, 2_000, "Request did not await topology readiness");
+        await withinTest(
+          awaitGateBeforeSettlement(
+            entered.promise,
+            pending,
+            "Request did not await topology readiness",
+          ),
+          signal,
+        );
         active = false;
         release.resolve();
         expect(await settled).toEqual([{ status: "rejected", reason: revoked }]);
@@ -510,7 +537,9 @@ it.each(["chat.startup", "sessions.resolve"] as const)(
   },
 );
 
-it("starts a new topology read after healthy integrity confirmation without reviving its old reply", async () => {
+it("starts a new topology read after healthy integrity confirmation without reviving its old reply", async ({
+  signal,
+}) => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const cfg = { agents: { entries: { main: {} } } };
     const query = { agentId: "main", key: "agent:main:verified-topology" };
@@ -541,7 +570,14 @@ it("starts a new topology read after healthy integrity confirmation without revi
     const pending = projection.prepareMembership();
     const settled = Promise.allSettled([pending]);
     try {
-      await withTestTimeout(entered.promise, 2_000, "Topology snapshot did not reach its owner");
+      await withinTest(
+        awaitGateBeforeSettlement(
+          entered.promise,
+          pending,
+          "Topology snapshot did not reach its owner",
+        ),
+        signal,
+      );
       await applyOpenClawDatabaseVerificationResults({
         env: state.env,
         targets: [{ kind: "state", label: "OpenClaw state database", path: database.path }],

@@ -1135,6 +1135,100 @@ describe("release child attempt composition", () => {
     ]);
   });
 
+  describe("GitHub ghost rerun jobs", () => {
+    // Shape observed on 2026.9.7 FRV-E CI attempt 2: one rerun-failed POST left 17
+    // queued copies with no runner or steps beside the completed job.
+    const ghost = {
+      completed_at: null,
+      conclusion: null,
+      html_url: "https://example.invalid/jobs/ghost",
+      name: "checks-node-core-runtime-infra-process",
+      runner_id: null,
+      runner_name: null,
+      started_at: "2026-09-29T20:38:30Z",
+      status: "queued",
+      steps: [],
+    };
+    const completed = {
+      ...job("checks-node-core-runtime-infra-process", "success"),
+      runner_id: 1,
+      runner_name: "GitHub Actions 1",
+      steps: [{ name: "Run tests" }],
+    };
+    const ghostAttempt = {
+      jobs: [ghost, completed, ghost, job("checks-ui", "failure")],
+      runAttempt: 2,
+    };
+
+    it("ignores never-executed copies beside a completed job in a superseded attempt", () => {
+      const result = composeReleaseAttemptJobs(
+        [
+          {
+            jobs: [
+              job("checks-node-core-runtime-infra-process", "failure"),
+              job("checks-ui", "failure"),
+            ],
+            runAttempt: 1,
+          },
+          ghostAttempt,
+          { jobs: [job("checks-ui", "success")], runAttempt: 3 },
+        ],
+        { effectiveRunAttempt: 3, plannedRunAttempt: 1 },
+      );
+      expect(result.jobs).toEqual([
+        expect.objectContaining({
+          acceptedRunAttempt: 2,
+          conclusion: "success",
+          name: "checks-node-core-runtime-infra-process",
+        }),
+        expect.objectContaining({
+          acceptedRunAttempt: 3,
+          conclusion: "success",
+          name: "checks-ui",
+        }),
+      ]);
+    });
+
+    it.each<{
+      label: string;
+      attempts: Parameters<typeof composeReleaseAttemptJobs>[0];
+      effectiveRunAttempt: number;
+      plannedRunAttempt: number;
+    }>([
+      {
+        label: "in the effective attempt",
+        attempts: [ghostAttempt],
+        effectiveRunAttempt: 2,
+        plannedRunAttempt: 2,
+      },
+      {
+        label: "without a completed sibling",
+        attempts: [
+          { jobs: [ghost, ghost], runAttempt: 1 },
+          { jobs: [job("test", "success")], runAttempt: 2 },
+        ],
+        effectiveRunAttempt: 2,
+        plannedRunAttempt: 1,
+      },
+      {
+        label: "once the copy has a runner",
+        attempts: [
+          { jobs: [{ ...ghost, runner_name: "GitHub Actions 2" }, completed], runAttempt: 1 },
+          { jobs: [job("test", "success")], runAttempt: 2 },
+        ],
+        effectiveRunAttempt: 2,
+        plannedRunAttempt: 1,
+      },
+    ])(
+      "still rejects duplicates $label",
+      ({ attempts, effectiveRunAttempt, plannedRunAttempt }) => {
+        expect(() =>
+          composeReleaseAttemptJobs(attempts, { effectiveRunAttempt, plannedRunAttempt }),
+        ).toThrow("duplicate job identity");
+      },
+    );
+  });
+
   it("rejects duplicate logical jobs and gapped attempts", () => {
     expect(() =>
       composeReleaseAttemptJobs(

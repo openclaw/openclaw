@@ -858,13 +858,13 @@ def release_signing_check!
   sync_app_store_signing!(readonly: true)
 end
 
-def render_ios_release_notes(short_version:, build_number:)
+def render_ios_release_notes(short_version:, build_number:, source_root: repo_root)
   stdout, stderr, status = Open3.capture3(
     "node", "--import", File.join(repo_root, "scripts", "tsx.mjs"),
     File.join(repo_root, "scripts", "mobile-release-notes.ts"), "render",
     "--platform", "ios", "--version", short_version.to_s,
     "--build", build_number.to_s, "--audience", "ios",
-    chdir: repo_root
+    chdir: source_root
   )
   return stdout.delete_suffix("\n") if status.success?
 
@@ -1491,8 +1491,8 @@ def mobile_release_ref_script
   File.join(repo_root, "scripts", "mobile-release-ref.ts")
 end
 
-def release_git_sha
-  stdout, stderr, status = Open3.capture3("git", "rev-parse", "HEAD", chdir: repo_root)
+def release_git_sha(root: repo_root)
+  stdout, stderr, status = Open3.capture3("git", "rev-parse", "HEAD", chdir: root)
   UI.user_error!("Unable to resolve release Git SHA: #{stderr.strip}") unless status.success?
   stdout.strip
 end
@@ -1520,13 +1520,13 @@ def normalize_release_build_timestamp(value)
   normalized
 end
 
-def verify_apple_release_source!(expected_commit)
+def verify_apple_release_source!(expected_commit, root: repo_root)
   script_path = File.join(repo_root, "scripts", "apple-release-source-check.sh")
   sh(shell_join([
     "bash",
     script_path,
     "--root",
-    repo_root,
+    root,
     "--expected-commit",
     expected_commit
   ]))
@@ -1587,7 +1587,7 @@ def record_mobile_release_ref!(platform:, version:, build: nil, version_code: ni
   )
 end
 
-def assert_ios_uploaded_release_source!(short_version:, build_number:)
+def assert_ios_uploaded_release_source!(short_version:, build_number:, source_root: repo_root)
   stdout, stderr, status = Open3.capture3(
     "node", "--import", File.join(repo_root, "scripts", "tsx.mjs"), mobile_release_ref_script,
     "resolve", "--platform", "ios", "--version", short_version,
@@ -1596,10 +1596,10 @@ def assert_ios_uploaded_release_source!(short_version:, build_number:)
   )
   UI.user_error!("Cannot verify uploaded iOS build source: #{stderr.strip}") unless status.success?
   recorded_sha = stdout.split.first
-  unless recorded_sha == release_git_sha
-    UI.user_error!("Uploaded iOS build source #{recorded_sha} does not match this checkout; recover the original release source before staging.")
+  unless recorded_sha == release_git_sha(root: source_root)
+    UI.user_error!("Uploaded iOS build source #{recorded_sha} does not match the release source checkout; recover the original release source before staging.")
   end
-  verify_apple_release_source!(recorded_sha)
+  verify_apple_release_source!(recorded_sha, root: source_root)
 end
 
 def stage_ios_app_store_release!(short_version:, build_number:, notes:)
@@ -2187,11 +2187,15 @@ platform :ios do
       UI.user_error!("Staging requires the saved gateway version, App Store revision, and build number.")
     end
     version = read_ios_version_metadata(release_version: release_version, app_store_revision: app_store_revision)
-    notes = render_ios_release_notes(short_version: version[:short_version], build_number: build_number)
-    assert_ios_uploaded_release_source!(short_version: version[:short_version], build_number: build_number)
+    source_root = ENV.fetch("OPENCLAW_IOS_RELEASE_SOURCE_ROOT", repo_root)
+    notes = render_ios_release_notes(short_version: version[:short_version], build_number: build_number, source_root: source_root)
+    assert_ios_uploaded_release_source!(short_version: version[:short_version], build_number: build_number, source_root: source_root)
     api_key = app_store_connect_api_key_config
     if ios_release_destination(options[:destination]) == "testflight"
-      stage_ios_testflight_release!(api_key: api_key, short_version: version[:short_version], build_number: build_number, notes: notes)
+      stage_ios_testflight_release!(
+        api_key: api_key, short_version: version[:short_version], build_number: build_number,
+        notes: notes, processing_timeout: APP_STORE_BUILD_PROCESSING_TIMEOUT_SECONDS
+      )
     else
       notes_staged = stage_ios_app_store_release!(short_version: version[:short_version], build_number: build_number, notes: notes)
       notes_result = notes_staged ? "saved notes staged" : "first-version notes retained in the artifact"

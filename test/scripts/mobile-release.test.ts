@@ -95,9 +95,10 @@ import { renderMobileReleaseNotes } from "./lib/mobile-release-notes.ts";
 const git = (...args) => execFileSync("git", args, { encoding: "utf8" }).trim();
 const sha = git("rev-parse", "HEAD");
 const stageOnly = process.argv.includes("--stage-only");
+const sourceRoot = process.env.OPENCLAW_IOS_RELEASE_SOURCE_ROOT || process.cwd();
 const plan = JSON.parse(fs.readFileSync(process.env.OPENCLAW_IOS_RELEASE_PLAN, "utf8"));
 const buildNumber = process.argv[process.argv.indexOf("--build-number") + 1];
-const notes = renderMobileReleaseNotes({ rootDir: process.cwd(), platform: "ios", version: plan.appStoreVersion, build: buildNumber, audience: "ios" });
+const notes = renderMobileReleaseNotes({ rootDir: sourceRoot, platform: "ios", version: plan.appStoreVersion, build: buildNumber, audience: "ios" });
 fs.appendFileSync(process.env.FIXTURE_UPLOAD_AUDIT, JSON.stringify({ sha, stageOnly, notes, buildNumber, destination: process.argv.includes("--destination") ? process.argv[process.argv.indexOf("--destination") + 1] : "app-store", stampedSha: process.env.GIT_COMMIT, status: git("status", "--porcelain", "--untracked-files=all"), remoteMain: git("ls-remote", "origin", "refs/heads/main").split(/\\s+/)[0], metadata: fs.readFileSync("apps/ios/CHANGELOG.md", "utf8") }) + "\\n");
 if (process.env.FIXTURE_UPLOAD_FAIL === "1") {
   fs.mkdirSync("apps/ios/fastlane/screenshots/en-US", { recursive: true });
@@ -380,7 +381,7 @@ describe("mobile release CLI", () => {
   });
 
   it.each(["app-store", "testflight"])(
-    "recovers the saved %s destination using frozen notes without uploading twice",
+    "recovers the saved %s destination with corrected tooling and original source without uploading twice",
     (destination) => {
       const f = fixture(
         "ios",
@@ -388,18 +389,56 @@ describe("mobile release CLI", () => {
           ? { groupId: "external-fixture", builds: [], pendingBuild: null }
           : undefined,
       );
-      const result = f.invoke("run", ["--destination", destination], { FIXTURE_STAGE_FAIL: "1" });
+      const result = f.invoke("run", ["--destination", destination], {
+        FIXTURE_STAGE_FAIL: "1",
+        OPENCLAW_IOS_RELEASE_SOURCE_ROOT: "/invalid-inherited-source",
+      });
       expect(result.status).toBe(1);
       expect(result.stderr).toContain("Synthetic metadata stage refused after upload");
       expect(git(f.remote, "rev-parse", uploadRef)).toBe(f.base);
       const notes = fs.readFileSync(path.join(f.recovery, "release-notes.json"), "utf8");
+      const plan = fs.readFileSync(path.join(f.recovery, "ios-plan.json"), "utf8");
+      write(
+        f.root,
+        "scripts/ios-release-upload.sh",
+        'echo "Corrected staging tooling"\nexec node scripts/fixture-upload.mjs "$@"\n',
+      );
+      git(f.root, "add", ".");
+      git(f.root, "commit", "-m", "Fix staging tooling after upload");
+      const toolingSha = git(f.root, "rev-parse", "HEAD");
+      const source = path.join(f.recovery, "source");
+      if (destination === "testflight") {
+        // Downloaded recovery artifacts have no source checkout.
+        git(f.root, "worktree", "remove", "--force", source);
+      } else {
+        write(source, "README.md", "Uncommitted recovery work.\n");
+        const dirty = f.invoke("stage");
+        expect(dirty.status).toBe(1);
+        expect(dirty.stderr).toContain("require a clean checkout");
+        expect(fs.readFileSync(path.join(source, "README.md"), "utf8")).toBe(
+          "Uncommitted recovery work.\n",
+        );
+        git(source, "checkout", "--", "README.md");
+        git(source, "checkout", "--detach", toolingSha);
+        const mismatched = f.invoke("stage");
+        expect(mismatched.status).toBe(1);
+        expect(mismatched.stderr).toContain("Retained source differs from the uploaded build");
+        expect(git(source, "rev-parse", "HEAD")).toBe(toolingSha);
+        git(source, "checkout", "--detach", f.base);
+        expect(f.audit()).toHaveLength(1);
+      }
       const recovery = f.invoke("stage", [], { OPENAI_API_KEY: "" });
       expect(recovery.status, recovery.stderr).toBe(0);
+      expect(recovery.stdout).toContain("Corrected staging tooling");
+      expect(f.audit().map((entry) => entry.sha)).toEqual([f.base, toolingSha]);
+      expect(f.audit().map((entry) => entry.stampedSha)).toEqual([f.base, f.base]);
       expect(f.audit().map((entry) => entry.stageOnly)).toEqual([false, true]);
       expect(f.audit().map((entry) => entry.destination)).toEqual([destination, destination]);
       expect(fs.readFileSync(path.join(f.recovery, "release-notes.json"), "utf8")).toBe(notes);
+      expect(fs.readFileSync(path.join(f.recovery, "ios-plan.json"), "utf8")).toBe(plan);
       expect(fs.existsSync(path.join(f.recovery, "source"))).toBe(false);
       expect(git(f.remote, "rev-parse", "main")).toBe(f.base);
+      expect(git(f.remote, "rev-parse", uploadRef)).toBe(f.base);
     },
   );
 

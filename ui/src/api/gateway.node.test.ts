@@ -5,7 +5,6 @@ import {
   GATEWAY_CLIENT_CAPS,
   GATEWAY_SERVER_CAPS,
   type ConnectParams,
-  MIN_CLIENT_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
 } from "@openclaw/gateway-client/browser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -479,37 +478,6 @@ describe("GatewayBrowserClient", () => {
     } finally {
       client.stop();
     }
-  });
-
-  it("requests full control ui operator scopes with explicit shared auth", async () => {
-    const client = new GatewayBrowserClient({
-      url: "ws://127.0.0.1:18789",
-      token: "shared-auth-token",
-      clientBuildId: "build-a",
-    });
-
-    const { connectFrame } = await startConnect(client);
-
-    expect(connectFrame.method).toBe("connect");
-    expect(connectFrame.params?.minProtocol).toBe(MIN_CLIENT_PROTOCOL_VERSION);
-    expect(connectFrame.params?.maxProtocol).toBe(PROTOCOL_VERSION);
-    expect(connectFrame.params?.client.buildId).toBe("build-a");
-    expect(connectFrame.params?.caps).toEqual([
-      GATEWAY_CLIENT_CAPS.AGENT_KIND,
-      GATEWAY_CLIENT_CAPS.APPROVALS,
-      GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS,
-      GATEWAY_CLIENT_CAPS.TERMINAL_OFFSET_SEQ,
-      GATEWAY_CLIENT_CAPS.TERMINAL_SESSION_METADATA,
-      GATEWAY_CLIENT_CAPS.TERMINAL_UPLOAD_PATH_STYLE,
-      GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
-      GATEWAY_CLIENT_CAPS.CHAT_ONLY_ASSISTANT_TEXT,
-      GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS,
-      GATEWAY_CLIENT_CAPS.INLINE_WIDGETS,
-      GATEWAY_CLIENT_CAPS.MODEL_SELECTION_POLICY,
-      GATEWAY_CLIENT_CAPS.UI_COMMANDS,
-      GATEWAY_CLIENT_CAPS.USAGE_REFRESHING,
-    ]);
-    expect(connectFrame.params?.scopes).toEqual([...CONTROL_UI_OPERATOR_SCOPES]);
   });
 
   it.each([

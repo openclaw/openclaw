@@ -323,6 +323,8 @@ export function projectChatTranscript(
         : null;
     return {
       ...sharedMessageRenderOptions,
+      messageReactions: props.messageReactions,
+      onReact: props.onReact,
       transcriptVisible: props.transcriptVisible,
       latestBrowserTabs,
       showReasoning,
@@ -350,6 +352,7 @@ export function projectChatTranscript(
       agents: props.agents,
       senderAgentAvatars: props.senderAgentAvatars,
       mainKey: props.mainKey,
+      basePath: props.basePath,
       userId: props.userId ?? null,
       userName: props.userName ?? null,
       showOwnSenderName,
@@ -645,6 +648,8 @@ export function projectChatTranscript(
     markdownGitHubAliasSignature(props.githubRepositories, props.githubRepo),
     threadContextWindow,
     Boolean(props.onSetReply),
+    props.messageReactions,
+    Boolean(props.onReact),
     Boolean(props.asyncQuestions?.submit),
     Boolean(props.onRetryQueuedMessage),
     Boolean(props.onDiscardQueuedMessage),

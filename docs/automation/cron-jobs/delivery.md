@@ -102,6 +102,11 @@ Implicit announce delivery uses configured channel allowlists to validate and re
 
 ### Failure notifications
 
+Failure-alert webhooks stay **Unknown** when the request may have reached the
+receiver but its response is lost. An explicit HTTP rejection or a failure proven
+to precede sending records **Not delivered** and allows the in-app fallback
+notification. An unknown outcome does not trigger that fallback.
+
 Execution failures use one scheduler-owned threshold and cooldown policy. A job with an existing failure route is covered by default after 2 consecutive failures with a 1-hour cooldown. The route can be a resolved failure destination or the job's primary announce target. Jobs with no such route stay quiet unless a per-job or global `failureAlert` object explicitly activates the policy.
 
 Repeated failures with the same cause form one incident and do not send repeated alerts, even after the cooldown expires or the Gateway restarts. A changed cause or destination can send a new alert after the cooldown. Once an alerted automation completes successfully, it sends one recovery notice and clears the incident. Skipped runs and unknown delivery outcomes do not establish recovery. A successful quiet trigger check can recover a trigger failure, but cannot establish that a previously failed payload has recovered.

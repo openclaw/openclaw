@@ -349,26 +349,19 @@ export async function resolveEmbeddedModelSelection(params: {
   }
 
   if (hasExplicitRunOverride) {
-    const explicitRef = explicitModelOverride
-      ? explicitProviderOverride
-        ? normalizeAgentCommandModelRef(
-            params.cfg,
-            explicitProviderOverride,
-            explicitModelOverride,
-            params.modelManifestContext,
-          )
-        : parseAgentCommandModelRef(
+    const explicitRef = explicitProviderOverride
+      ? normalizeAgentCommandModelRef(
+          params.cfg,
+          explicitProviderOverride,
+          explicitModelOverride ?? model,
+          params.modelManifestContext,
+        )
+      : explicitModelOverride
+        ? parseAgentCommandModelRef(
             params.cfg,
             params.sessionAgentId,
             explicitModelOverride,
             provider,
-            params.modelManifestContext,
-          )
-      : explicitProviderOverride
-        ? normalizeAgentCommandModelRef(
-            params.cfg,
-            explicitProviderOverride,
-            model,
             params.modelManifestContext,
           )
         : null;

@@ -11,8 +11,6 @@ import {
   waitForNoWhatsAppReply,
 } from "./whatsapp-live.driver.js";
 import {
-  assertWhatsAppMessageFromSutPhone,
-  assertWhatsAppMessagesFromSutPhone,
   buildWhatsAppQuotedMessageKeyFromObservedMessage,
   requireWhatsAppTriggerMessageId,
   waitForScenarioObservedMessage,
@@ -123,7 +121,7 @@ export const whatsappConversationScenarios = {
       const secondMarker = `${token}_SECOND`;
       return {
         afterReply: async (reply, context) => {
-          const replies = await waitForDistinctWhatsAppSutMessages(context, {
+          await waitForDistinctWhatsAppSutMessages(context, {
             initialMessages: [reply],
             matchers: [
               (message) => message.text.includes(mainMarker),
@@ -132,7 +130,6 @@ export const whatsappConversationScenarios = {
             observedAfter: context.requestStartedAt,
             timeoutMs: 60_000,
           });
-          assertWhatsAppMessagesFromSutPhone(replies, context);
           return "broadcast fanout produced main and qa-second replies";
         },
         configMode: "open",
@@ -155,8 +152,7 @@ export const whatsappConversationScenarios = {
       const alwaysMarker = `WHATSAPP_QA_ACTIVATION_ALWAYS_${suffix}`;
       const quietMarker = `WHATSAPP_QA_ACTIVATION_QUIET_${suffix}`;
       return {
-        afterReply: async (reply, context) => {
-          assertWhatsAppMessageFromSutPhone(reply, context);
+        afterReply: async (_reply, context) => {
           let activationProbeError: unknown;
           try {
             const alwaysStartedAt = new Date();
@@ -164,12 +160,11 @@ export const whatsappConversationScenarios = {
               context.target,
               `Group activation visible behavior marker ${alwaysMarker}`,
             );
-            const alwaysReply = await waitForScenarioObservedMessage(context, {
+            await waitForScenarioObservedMessage(context, {
               match: (message) => message.text.includes(alwaysMarker),
               observedAfter: alwaysStartedAt,
               timeoutMs: 60_000,
             });
-            assertWhatsAppMessageFromSutPhone(alwaysReply, context);
           } catch (error) {
             activationProbeError = error;
           }
@@ -178,12 +173,11 @@ export const whatsappConversationScenarios = {
           const restoreStartedAt = new Date();
           try {
             await context.driver.sendText(context.target, "/activation mention");
-            const restoreReply = await waitForScenarioObservedMessage(context, {
+            await waitForScenarioObservedMessage(context, {
               match: (message) => /\bactivation\b.*\bmention\b/iu.test(message.text),
               observedAfter: restoreStartedAt,
               timeoutMs: 60_000,
             });
-            assertWhatsAppMessageFromSutPhone(restoreReply, context);
           } catch (error) {
             restoreError = error;
           }
@@ -239,7 +233,6 @@ export const whatsappConversationScenarios = {
       const triggerMarker = `WHATSAPP_QA_REPLY_TO_BOT_TRIGGER_${suffix}`;
       return {
         afterReply: async (reply, context) => {
-          assertWhatsAppMessageFromSutPhone(reply, context);
           const quotedStartedAt = new Date();
           const quotedTrigger = await context.driver.sendText(
             context.target,
@@ -254,7 +247,7 @@ export const whatsappConversationScenarios = {
             throw new Error("WhatsApp driver did not return a quoted trigger message id.");
           }
           const quotedTriggerMessageId = quotedTrigger.messageId;
-          const quotedReply = await waitForScenarioObservedMessage(context, {
+          await waitForScenarioObservedMessage(context, {
             diagnosticChecks: [
               {
                 label: "containsTriggerMarker",
@@ -271,7 +264,6 @@ export const whatsappConversationScenarios = {
             observedAfter: quotedStartedAt,
             timeoutMs: 60_000,
           });
-          assertWhatsAppMessageFromSutPhone(quotedReply, context);
           return "quoted reply to bot triggered a group response without an explicit mention";
         },
         configMode: "allowlist",

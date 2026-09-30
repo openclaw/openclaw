@@ -227,8 +227,9 @@ These diagnostics produce `native-build`/`built` or `gateway-probe`/`probe-passe
 proofs, respectively. Neither is release qualification. The Gateway probe uses the
 same published-package selection and installation path as full qualification.
 
-The stock gate runs for both upload destinations in **iOS Store Release** after
-native tool setup and before signing assets are accessed. It qualifies the checked-out `main` commit used for release
+The stock gate runs for the `release` operation in **iOS Store Release** after
+native tool setup and before signing assets are accessed. Manual and scheduled
+TestFlight runs skip this gate. The gate qualifies the checked-out `main` commit used for release
 preparation and records the installed Xcode version and build without requiring
 a specific Xcode version. Manual CI also requires the stock gate when
 `validation_tier=full` and its checkout revision equals the workflow run's SHA.

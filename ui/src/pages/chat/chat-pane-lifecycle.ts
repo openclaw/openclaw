@@ -1,8 +1,9 @@
 import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
-import type {
-  SessionSuggestionEvent,
-  SessionTypingEvent,
-  TaskSuggestionEvent,
+import {
+  validateSessionReactionEvent,
+  type SessionSuggestionEvent,
+  type SessionTypingEvent,
+  type TaskSuggestionEvent,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { chatInputOwnerForContext } from "../../app/chat-input-owner.ts";
 import { availableLinkReaders } from "../../app/link-reader-routing.ts";
@@ -471,6 +472,9 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
           if (event.event === "session.suggestion" && event.payload) {
             this.handleSessionSuggestionEvent(event.payload as SessionSuggestionEvent);
           }
+          if (event.event === "session.reaction" && validateSessionReactionEvent(event.payload)) {
+            this.handleSessionReactionEvent(event.payload);
+          }
           if (event.event === "session.typing" && event.payload) {
             this.handleSessionTypingEvent(event.payload as SessionTypingEvent);
           }
@@ -577,6 +581,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     ) {
       this.state.handleChatDraftChange(this.draft, []);
     }
+    this.syncSessionReactions();
   }
 
   override updated(changedProperties: Map<PropertyKey, unknown> = new Map()) {
@@ -674,6 +679,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     this.taskSuggestionBusyIds.clear();
     this.taskSuggestionOperations.clear();
     this.resetSessionSuggestions();
+    this.resetSessionReactions();
     this.clearTypingActors();
     this.resetSessionPullRequests();
     this.resetOlderMessagesViewport();

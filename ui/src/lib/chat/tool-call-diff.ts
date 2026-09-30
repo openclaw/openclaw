@@ -136,19 +136,12 @@ export function splitDiffLines(text: string): string[] {
   return lines;
 }
 
-function compactLineDiff(
-  lines: DiffLine[],
-  inputTruncated: boolean,
-  compactUnchanged: boolean,
-): DiffLine[] {
-  if (!compactUnchanged && lines.length <= MAX_DIFF_RENDER_LINES && !inputTruncated) {
+function compactLineDiff(lines: DiffLine[], inputTruncated: boolean): DiffLine[] {
+  if (lines.length <= MAX_DIFF_RENDER_LINES && !inputTruncated) {
     return lines;
   }
   const hasChange = lines.some((line) => line.kind === "add" || line.kind === "del");
   if (!hasChange) {
-    if (compactUnchanged && !inputTruncated) {
-      return [];
-    }
     return inputTruncated
       ? [{ kind: "skip", text: "" }]
       : [...lines.slice(0, MAX_DIFF_RENDER_LINES), { kind: "skip", text: "" }];
@@ -194,14 +187,8 @@ function compactLineDiff(
 /**
  * Compute a line diff between two snippets (no file line numbers available).
  * Bounded LCS comparison retains deletion-first alignment for equal-length paths.
- *
- * `compactUnchanged` collapses unchanged runs to three lines of context.
  */
-export function computeLineDiff(
-  oldText: string,
-  newText: string,
-  options?: { compactUnchanged?: boolean },
-): LineDiffResult {
+export function computeLineDiff(oldText: string, newText: string): LineDiffResult {
   const allOldLines = splitDiffLines(oldText);
   const allNewLines = splitDiffLines(newText);
   const inputTruncated =
@@ -252,7 +239,7 @@ export function computeLineDiff(
       j++;
     }
   }
-  const preview = compactLineDiff(lines, comparisonTruncated, options?.compactUnchanged === true);
+  const preview = compactLineDiff(lines, comparisonTruncated);
   return comparisonTruncated
     ? { kind: "truncated", lines: preview }
     : { kind: "complete", lines: preview, stat: diffStat(lines) };
@@ -277,9 +264,8 @@ export function buildWriteDiffLines(content: string, maxLines = 80): DiffLine[] 
  */
 export function joinDiffSections(
   sections: ReadonlyArray<LineDiffResult>,
-  options?: { truncated?: boolean; maxLines?: number },
+  options?: { truncated?: boolean },
 ): LineDiffResult {
-  const maxLines = options?.maxLines ?? MAX_DIFF_RENDER_LINES;
   const joined: DiffLine[] = [];
   const comparisonTruncated =
     options?.truncated === true || sections.some((section) => section.kind === "truncated");
@@ -289,13 +275,13 @@ export function joinDiffSections(
       continue;
     }
     if (joined.length > 0) {
-      if (joined.length >= maxLines) {
+      if (joined.length >= MAX_DIFF_RENDER_LINES) {
         previewTruncated = true;
         break;
       }
       joined.push({ kind: "skip", text: "" });
     }
-    const remaining = maxLines - joined.length;
+    const remaining = MAX_DIFF_RENDER_LINES - joined.length;
     if (section.lines.length > remaining) {
       joined.push(...section.lines.slice(0, remaining));
       previewTruncated = true;

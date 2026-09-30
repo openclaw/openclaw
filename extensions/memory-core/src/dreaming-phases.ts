@@ -534,7 +534,7 @@ async function collectSessionIngestionBatches(params: {
   for (const agentId of agentIds) {
     const knownStateKeys = new Set<string>();
     const forgottenSessionIds = new Set(
-      listMemorySessionTombstones({ agentId }).map((tombstone) => tombstone.sessionId),
+      (await listMemorySessionTombstones({ agentId })).map((tombstone) => tombstone.sessionId),
     );
     for (const entry of await listSessionTranscriptCorpusEntriesForAgent(agentId, {
       includeRetainedSqlite: true,

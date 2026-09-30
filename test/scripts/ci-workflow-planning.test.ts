@@ -731,8 +731,8 @@ function runDependencyCheckFixture(options: {
       "fi",
       'printf "%s\\n" "$*" >> "$PNPM_CALLS"',
     ]);
-    const checkShardRun = readCiWorkflow().jobs["check-shard"].steps.find(
-      (step: WorkflowStep) => step.name === "Run check shard",
+    const checkShardRun = readCiWorkflow().jobs["check-additional-shard"].steps.find(
+      (step: WorkflowStep) => step.name === "Run dependency checks",
     ).run;
     const run = spawnSync("bash", ["-c", checkShardRun], {
       cwd: root,
@@ -1266,6 +1266,20 @@ describe("ci workflow guards", () => {
         lintCentralScripts: false,
         graphs: ["extensions", "extensions-test", "test-root"],
       },
+      {
+        path: "src/wizard/i18n/locales/en.ts",
+        nodeDataOnly: true,
+        tasks: ["guards", "prod-types", "lint", "dependencies", "test-types"],
+        fastTasks: [],
+        baselineRatchets: false,
+        contracts: false,
+        channelContracts: false,
+        performance: false,
+        coreStripes: [1, 4],
+        lintCoreStripes: [1, 2],
+        lintExtensionStripes: [],
+        lintCentralScripts: true,
+      },
     ])(
       "emits and wires narrow families for $path",
       ({
@@ -1281,6 +1295,7 @@ describe("ci workflow guards", () => {
         lintExtensionStripes,
         lintCentralScripts,
         graphs,
+        nodeDataOnly = false,
       }) => {
         const paths = [changedPath];
         const lintPlan: NonNullable<Awaited<ReturnType<typeof createChangedCiLintPlan>>> = {
@@ -1319,6 +1334,7 @@ describe("ci workflow guards", () => {
           runnerProfile: "hybrid",
           changedPaths: paths,
           ciTypeGraphNames: graphs,
+          scopeEnv: { OPENCLAW_CI_NODE_TEST_DATA_ONLY: String(nodeDataOnly) },
           ciLintPlan: lintPlan,
           changedPlannerSource: changedPlannerSource(),
         });
@@ -1343,7 +1359,43 @@ describe("ci workflow guards", () => {
             workflow.jobs["check-shard"].strategy.matrix,
             context,
           ).include.map((row: { task: string }) => row.task),
-        ).toEqual(tasks);
+        ).toEqual(nodeDataOnly ? tasks : tasks.filter((task) => task !== "dependencies"));
+        const additional = workflow.jobs["check-additional-shard"];
+        const dependencyRows = evaluateWorkflowExpression(
+          additional.strategy.matrix,
+          context,
+        ).include.filter((row: { group: string }) => row.group === "dependencies");
+        expect(dependencyRows).toEqual(
+          tasks.includes("dependencies") && !nodeDataOnly
+            ? [
+                {
+                  check_name: "check-dependencies",
+                  group: "dependencies",
+                  runner: "blacksmith-16vcpu-ubuntu-2404",
+                },
+              ]
+            : [],
+        );
+        if (nodeDataOnly) {
+          expect(manifest.outputs.run_check).toBe("true");
+          expect(manifest.outputs.run_check_additional).toBe("false");
+        }
+        if (dependencyRows.length) {
+          // The dependency gate must start while the installed compiler planner is pending.
+          expect(additional.needs).toEqual(["preflight"]);
+          expect(
+            evaluateWorkflowExpression(additional.if, {
+              ...context,
+              additionalNeeds: { "check-plan": { outputs: {}, result: "skipped" } },
+            }),
+          ).toBe(true);
+          expect(
+            evaluateWorkflowExpression(additional["runs-on"], {
+              ...context,
+              matrix: dependencyRows[0],
+            }),
+          ).toBe("blacksmith-16vcpu-ubuntu-2404");
+        }
         expect(
           JSON.parse(
             expectDefined(manifest.outputs.checks_fast_core_matrix, "fast check matrix"),

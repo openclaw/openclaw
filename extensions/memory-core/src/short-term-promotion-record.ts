@@ -198,7 +198,7 @@ export async function recordShortTermRecalls(params: {
       forgottenByAgent.set(
         agentId,
         new Set(
-          listMemorySessionTombstones({ agentId, sessionIds: [...sessionIds] }).map(
+          (await listMemorySessionTombstones({ agentId, sessionIds: [...sessionIds] })).map(
             (entry) => entry.sessionId,
           ),
         ),

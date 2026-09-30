@@ -6,7 +6,7 @@ import type {
   PluginDoctorStateMigration,
   PluginDoctorStateMigrationContext,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import {
   createMemoryLanceDbStateMigrations,
   resolveMemoryLanceDbPluginRoot,
@@ -59,6 +59,26 @@ describe("memory-lancedb doctor migration", () => {
       connection.close();
     }
   }
+
+  test.each(["tableNames", "openTable"] as const)(
+    "closes the connection when %s fails before migration starts",
+    async (operation) => {
+      await createLegacyTable();
+      const connection = await lancedb.connect(getDbPath());
+      const failure = new Error(`${operation} failed`);
+      const failedOperation = vi.spyOn(connection, operation).mockRejectedValueOnce(failure);
+      const connect = vi.spyOn(lancedb, "connect").mockResolvedValueOnce(connection);
+      try {
+        const migration = expectDefined(stateMigrations[0], "memory-lancedb state migration");
+        await expect(migration.migrateLegacyState(migrationParams())).rejects.toBe(failure);
+        expect(connection.isOpen()).toBe(false);
+      } finally {
+        connect.mockRestore();
+        failedOperation.mockRestore();
+        connection.close();
+      }
+    },
+  );
 
   test("assigns legacy shared rows to the configured default agent once", async () => {
     await createLegacyTable();

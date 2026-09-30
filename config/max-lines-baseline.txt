@@ -128,7 +128,6 @@ extensions/memory-wiki/src/query.ts
 extensions/microsoft-foundry/index.test.ts
 extensions/migrate-hermes/config.test.ts
 extensions/migrate-hermes/secrets.test.ts
-extensions/msteams/src/channel.actions.test.ts
 extensions/msteams/src/channel.ts
 extensions/mxc/test/mxc-backend.test.ts
 extensions/oc-path/src/oc-path/universal.ts
@@ -159,7 +158,6 @@ extensions/qa-lab/src/live-transports/discord/discord-live.runtime.ts
 extensions/qa-lab/src/live-transports/matrix/scenarios/scenario-runtime-e2ee-destructive.ts
 extensions/qa-lab/src/live-transports/slack/slack-live.runtime.test.ts
 extensions/qa-lab/src/live-transports/whatsapp/whatsapp-live.runtime.test.ts
-extensions/qa-lab/src/mantis/slack-desktop-smoke.runtime.test.ts
 extensions/qa-lab/src/mantis/slack-desktop-smoke.runtime.ts
 extensions/qa-lab/src/providers/mock-openai/server.test.ts
 extensions/qa-lab/src/providers/mock-openai/server.ts
@@ -244,7 +242,6 @@ src/agents/agent-tools.before-tool-call.e2e.test.ts
 src/agents/agent-tools.before-tool-call.integration.e2e.test.ts
 src/agents/agent-tools.create-openclaw-coding-tools.test.ts
 src/agents/agent-tools.read.ts
-src/agents/agent-tools.ts
 src/agents/auth-profiles/oauth-manager.ts
 src/agents/auth-profiles/persisted.ts
 src/agents/auth-profiles/profiles.test.ts
@@ -586,7 +583,6 @@ src/logging/redact.ts
 src/media-understanding/apply.test.ts
 src/media-understanding/runner.entries.ts
 src/media-understanding/runner.ts
-src/media-understanding/runner.vision-skip.test.ts
 src/media/fetch.test.ts
 src/media/web-media.test.ts
 src/media/web-media.ts

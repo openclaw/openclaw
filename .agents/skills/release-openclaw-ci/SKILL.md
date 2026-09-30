@@ -643,6 +643,16 @@ for publication ordering and prepared/direct recovery.
   (`plugin-clawhub-new.yml`) always wait on `clawhub-plugin-bootstrap`. Approve
   them after the secretless pack jobs finish
   ([first package](../release-openclaw-maintainer/references/first-package.md)).
+- A v2 ClawHub child can stage most packages before one failure makes the
+  awaited parent fail, preventing finalization of the staged siblings.
+  Reconcile the original child's `*-publish-json` artifacts before any
+  republish or parent resume. Use
+  `pnpm release:clawhub-recovery -- --version <version> --reason '<parent failure>' --clawhub-source <isolated pinned ClawHub checkout> <package-publish.json>...`
+  to print exact attempt recovery commands; see the publication recovery guide
+  for the pinned source CLI and authorized execution. Public version 404s do
+  not distinguish staged from missing, and attempt status needs publisher
+  authentication. Parent receipts and live-authority revalidation remain
+  required; recovery does not turn a failed parent into successful evidence.
 - Before the first child dispatch the parent sweeps all selected publishers for a failed earlier parent's
   `waiting`/`queued` children of the same release (ClawHub and core by the
   `parent=<run>/<attempt>` run title; plugin npm by the release SHA, only

@@ -2793,6 +2793,7 @@ function createNodeTestShardsForOwners(
   owners: readonly (typeof fullSuiteVitestShards)[number][],
   options: NodeTestPlanOptions,
   toolingOnly = false,
+  preparedChangedTestPlans?: ReturnType<typeof buildVitestRunPlans>,
 ): NodeTestShard[] {
   const includeReleaseOnlyPluginShards = options.includeReleaseOnlyPluginShards ?? true;
   const includeProofTests =
@@ -2805,14 +2806,15 @@ function createNodeTestShardsForOwners(
     isRuntimeTestFileIncluded(file, options);
   const changedTestPlans = includeReleaseOnlyPluginShards
     ? []
-    : (options.changedPaths ?? [])
+    : (preparedChangedTestPlans ??
+      (options.changedPaths ?? [])
         .filter(
           (file) =>
             isTestFileTarget(file) &&
             !file.endsWith(".live.test.ts") &&
             statSync(file, { throwIfNoEntry: false })?.isFile(),
         )
-        .flatMap((file) => buildVitestRunPlans([file]));
+        .flatMap((file) => buildVitestRunPlans([file])));
 
   return owners.flatMap((shard) => {
     if (
@@ -4128,7 +4130,10 @@ export function packNodeTestGroups<Group>(
 export function createSelectedNodeTestShardBundles(
   targets: readonly string[],
   options: Pick<NodeTestPlanOptions, "runnerBackend"> &
-    RuntimeTestSelection & { onFallback?: (reason: string) => void } = {},
+    RuntimeTestSelection & {
+      onFallback?: (reason: string) => void;
+      preparedTestPlans?: ReadonlyMap<string, ReturnType<typeof buildVitestRunPlans>>;
+    } = {},
 ): CompactNodeTestShard[] | null {
   if (options.runnerBackend === "runson") {
     const selected = createSelectedNodeTestShardBundles(targets, {
@@ -4141,8 +4146,9 @@ export function createSelectedNodeTestShardBundles(
     targets.filter((file) => !isCiProofTestFile(file) && isRuntimeTestFileIncluded(file, options)),
   );
   const configs = new Map<string, string>();
+  const changedTestPlans: ReturnType<typeof buildVitestRunPlans> = [];
   for (const target of selected) {
-    const plans = buildVitestRunPlans([target]);
+    const plans = options.preparedTestPlans?.get(target) ?? buildVitestRunPlans([target]);
     const exactFilter =
       plans.length === 1 &&
       plans[0]!.forwardedArgs.length === 1 &&
@@ -4168,6 +4174,9 @@ export function createSelectedNodeTestShardBundles(
       return null;
     }
     configs.set(target, config);
+    if (!target.endsWith(".live.test.ts")) {
+      changedTestPlans.push(...plans);
+    }
   }
   if (selected.size === 0) {
     return targets.length > 0 ? [] : null;
@@ -4183,6 +4192,7 @@ export function createSelectedNodeTestShardBundles(
       includeProofTests: false,
     },
     tooling.size === selected.size,
+    changedTestPlans,
   );
   const owners = new Set<NodeTestShard>();
   for (const target of tooling) {

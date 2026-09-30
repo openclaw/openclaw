@@ -444,7 +444,7 @@ function* projectSessionPatchSteps(
   const fastModeError = applyNormalizedPreference(
     "fastMode",
     normalizeFastMode,
-    'invalid fastMode (use true, false, or "auto")',
+    'invalid fastMode (use true, false, "auto", or "ultrafast")',
   );
   if (fastModeError) {
     return invalid(fastModeError);

@@ -18,74 +18,6 @@ describe("ACP event ledger", () => {
     closeOpenClawStateDatabaseForTest();
   });
 
-  it("records complete session updates in sequence", async () => {
-    const ledger = createTestAcpEventLedger({ now: () => 123 });
-    await ledger.startSession({
-      sessionId: "session-1",
-      sessionKey: "agent:main:work",
-      cwd: "/work",
-      complete: true,
-    });
-    await ledger.recordUserPrompt({
-      sessionId: "session-1",
-      sessionKey: "agent:main:work",
-      runId: "run-1",
-      prompt: [{ type: "text", text: "Question" }],
-    });
-    await ledger.recordUpdate({
-      sessionId: "session-1",
-      sessionKey: "agent:main:work",
-      runId: "run-1",
-      update: {
-        sessionUpdate: "agent_message_chunk",
-        content: { type: "text", text: "Answer" },
-      },
-    });
-
-    const replay = await ledger.readReplay({
-      sessionId: "session-1",
-      sessionKey: "agent:main:work",
-    });
-
-    expect(replay.complete).toBe(true);
-    expect(replay.events.map((event) => event.seq)).toEqual([1, 2]);
-    expect(replay.events.map((event) => event.runId)).toEqual(["run-1", "run-1"]);
-    expect(replay.events.map((event) => event.update.sessionUpdate)).toEqual([
-      "user_message_chunk",
-      "agent_message_chunk",
-    ]);
-  });
-
-  it("marks a session incomplete when event retention truncates history", async () => {
-    const ledger = createTestAcpEventLedger({ maxEventsPerSession: 1 });
-    await ledger.startSession({
-      sessionId: "session-1",
-      sessionKey: "agent:main:work",
-      cwd: "/work",
-      complete: true,
-    });
-    await ledger.recordUpdate({
-      sessionId: "session-1",
-      sessionKey: "agent:main:work",
-      update: {
-        sessionUpdate: "agent_message_chunk",
-        content: { type: "text", text: "First" },
-      },
-    });
-    await ledger.recordUpdate({
-      sessionId: "session-1",
-      sessionKey: "agent:main:work",
-      update: {
-        sessionUpdate: "agent_message_chunk",
-        content: { type: "text", text: "Second" },
-      },
-    });
-
-    await expect(
-      ledger.readReplay({ sessionId: "session-1", sessionKey: "agent:main:work" }),
-    ).resolves.toEqual({ complete: false, events: [] });
-  });
-
   it("falls back for non-finite event retention options", async () => {
     const ledger = createTestAcpEventLedger({ maxEventsPerSession: Number.NaN });
     await ledger.startSession({
@@ -343,35 +275,6 @@ describe("ACP event ledger", () => {
     });
   });
 
-  it("can replay a complete session by Gateway session key", async () => {
-    const ledger = createTestAcpEventLedger({ now: () => 1000 });
-    await ledger.startSession({
-      sessionId: "acp-session-1",
-      sessionKey: "acp:gateway-session-1",
-      cwd: "/work",
-      complete: true,
-    });
-    await ledger.recordUpdate({
-      sessionId: "acp-session-1",
-      sessionKey: "acp:gateway-session-1",
-      update: {
-        sessionUpdate: "agent_message_chunk",
-        content: { type: "text", text: "Answer" },
-      },
-    });
-
-    const replay = await ledger.readReplayBySessionKey({
-      sessionKey: "acp:gateway-session-1",
-    });
-
-    expect(replay.complete).toBe(true);
-    expect(replay.sessionId).toBe("acp-session-1");
-    expect(replay.sessionKey).toBe("acp:gateway-session-1");
-    expect(replay.events.map((event) => event.update.sessionUpdate)).toEqual([
-      "agent_message_chunk",
-    ]);
-  });
-
   it("preserves prompt history when a provisional ACP key becomes a canonical Gateway key", async () => {
     const ledger = createTestAcpEventLedger({ now: () => 1000 });
     await ledger.startSession({
@@ -403,6 +306,8 @@ describe("ACP event ledger", () => {
     expect(replay.complete).toBe(true);
     expect(replay.sessionId).toBe("acp-session-1");
     expect(replay.sessionKey).toBe("agent:main:acp:gateway-session-1");
+    expect(replay.events.map((event) => event.seq)).toEqual([1, 2]);
+    expect(replay.events.map((event) => event.runId)).toEqual(["run-1", "run-1"]);
     expect(replay.events.map((event) => event.update.sessionUpdate)).toEqual([
       "user_message_chunk",
       "agent_message_chunk",

@@ -116,14 +116,6 @@ function readAzureSpeechProviderConfig(config: SpeechProviderConfig): AzureSpeec
   };
 }
 
-function readAzureSpeechOverrides(overrides: SpeechProviderOverrides | undefined) {
-  return {
-    voice: trimToUndefined(overrides?.voice ?? overrides?.voiceId),
-    lang: trimToUndefined(overrides?.lang ?? overrides?.languageCode),
-    outputFormat: trimToUndefined(overrides?.outputFormat),
-  };
-}
-
 function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext): {
   handled: boolean;
   overrides?: SpeechProviderOverrides;
@@ -171,7 +163,10 @@ async function resolveAzureSpeechTtsRequest(
   outputFormatOverride?: string,
 ) {
   const config = readAzureSpeechProviderConfig(req.providerConfig);
-  const overrides = readAzureSpeechOverrides(req.providerOverrides);
+  const overrides = req.providerOverrides;
+  const voice = trimToUndefined(overrides?.voice ?? overrides?.voiceId);
+  const lang = trimToUndefined(overrides?.lang ?? overrides?.languageCode);
+  const outputFormat = trimToUndefined(overrides?.outputFormat);
   const apiKey = resolveApiKey(config.apiKey);
   if (!apiKey) {
     throw new Error("Azure Speech API key missing");
@@ -184,11 +179,11 @@ async function resolveAzureSpeechTtsRequest(
     baseUrl: config.baseUrl,
     endpoint: config.endpoint,
     region: config.region,
-    voice: overrides.voice ?? config.voice,
-    lang: overrides.lang ?? config.lang,
+    voice: voice ?? config.voice,
+    lang: lang ?? config.lang,
     outputFormat:
       outputFormatOverride ??
-      overrides.outputFormat ??
+      outputFormat ??
       (req.target === "voice-note" ? config.voiceNoteOutputFormat : config.outputFormat),
     timeoutMs: config.timeoutMs ?? req.timeoutMs,
     maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "audio"),

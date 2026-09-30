@@ -447,6 +447,10 @@ dispatch so authorization failures have one canonical structured response:
 - `sessions.delete` requires `operator.write` for an archived-only request
   with the supported fields, and `operator.admin` otherwise. Neither session
   scope authorizes deletion.
+- `session.reactions.list` accepts `operator.sessions.read` or broader read
+  access and requires current session visibility. `session.reactions.set` requires `operator.write`, an identified
+  author, and permission to send to or suggest in the session. A view-only
+  operator role cannot react.
 
 Project RPCs use these scopes:
 

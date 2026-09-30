@@ -89,6 +89,7 @@ const FIXTURES = [
   "dashboards",
   "goal",
   "plugins-dense",
+  "reactions",
   "sidebar-roster",
   "swarm",
   "update-available",
@@ -1443,13 +1444,13 @@ async function createChatPickerScenario(
   ] as const;
   const pickerInventory = process.env.MOCK_PICKER_INVENTORY === "1";
   const selfProfile: UserProfile = {
-    id: "presence-riley",
-    displayName: "Riley",
+    id: fixture === "reactions" ? "presence-avery" : "presence-riley",
+    displayName: fixture === "reactions" ? "Avery" : "Riley",
     avatarMime: null,
     mergedInto: null,
     createdAt: baseTime,
     updatedAt: baseTime,
-    emails: ["riley@example.com"],
+    emails: [fixture === "reactions" ? "avery@example.com" : "riley@example.com"],
     githubIdentity: null,
     hasAvatar: false,
   };
@@ -1858,11 +1859,13 @@ async function createChatPickerScenario(
       : []),
     sessionRow("agent:main:main", "Molty", rosterTime - 1_000, {
       agentId: "main",
+      visibility: "shared",
+      sharingRole: "owner",
       isMain: true,
       lastMessagePreview: rosterAgents[0].preview,
-      activeRunIds: [PLAN_DEMO_RUN_ID],
+      activeRunIds: fixture === "reactions" ? [] : [PLAN_DEMO_RUN_ID],
       childSessions: ["agent:main:lisbon-trip", ...swarmChildRows.map((row) => row.key)],
-      hasActiveRun: true,
+      hasActiveRun: fixture !== "reactions",
       ...(fixture === "avatars" ? { kind: "global" as const } : {}),
       status: "running",
       totalTokens: 170_000,
@@ -2139,6 +2142,29 @@ async function createChatPickerScenario(
     attachments: buildChatAttachmentHistory(baseTime),
     avatars: buildAvatarChatHistory(baseTime),
     "code-fences": buildCodeFenceChatHistory(baseTime),
+    reactions: [
+      {
+        ...chatHistoryMessage(
+          "user",
+          "Let's keep the launch checklist short and share the final draft here.",
+          baseTime,
+        ),
+        __openclaw: {
+          id: "mock-reactions-riley",
+          seq: 1,
+          senderName: "Riley",
+          senderId: "profile-riley",
+        },
+      },
+      {
+        ...chatHistoryMessage(
+          "assistant",
+          "I'll keep the checklist focused on the launch decisions, owners, and next steps.",
+          baseTime + 30_000,
+        ),
+        __openclaw: { id: "mock-reactions-assistant", seq: 2 },
+      },
+    ],
     "sidebar-roster": [
       chatHistoryMessage("user", "Help me organize the sample project.", rosterTime - 120_000),
       chatHistoryMessage(
@@ -2151,7 +2177,7 @@ async function createChatPickerScenario(
   };
   const historyMessages = fixture
     ? (fixtureHistories[fixture] ?? summaryHistory)
-    : buildScrollableChatHistory(baseTime);
+    : [...buildScrollableChatHistory(baseTime), ...(fixtureHistories.reactions ?? [])];
   const planInFlightRun = {
     runId: PLAN_DEMO_RUN_ID,
     text: "",
@@ -2265,6 +2291,8 @@ async function createChatPickerScenario(
       "sessions.patch",
       "sessions.patchMany",
       "sessions.search",
+      "session.reactions.list",
+      "session.reactions.set",
       "skills.workshop.read",
       "skills.proposals.apply",
       "skills.proposals.evaluate",
@@ -2324,6 +2352,13 @@ async function createChatPickerScenario(
     // so people-aware UI (People sort, Person grouping) is exercisable here.
     hasMultipleSessionSharingIdentities: true,
     historyMessages,
+    sessionReactions: {
+      "agent:main:main": {
+        "mock-reactions-riley": [
+          { emoji: "👍", count: 1, identities: [{ id: "profile-sam", label: "Sam" }] },
+        ],
+      },
+    },
     sessionGroups: ["Research"],
     sessionTranscripts: {
       "agent:main:main": {
@@ -2379,6 +2414,9 @@ async function createChatPickerScenario(
       {
         self: true,
         id: selfProfile.id,
+        // A resolved viewer identity switches direct threads to gutter avatars;
+        // only the reactions fixture emulates an identity-resolving Gateway.
+        ...(fixture === "reactions" ? { identity: { type: "profile", id: selfProfile.id } } : {}),
         name: selfProfile.displayName ?? undefined,
         email: selfProfile.emails[0],
         avatarUrl: `/api/users/${selfProfile.id}/avatar`,

@@ -15,6 +15,7 @@ import {
   type PreparedModelCatalogAuth,
 } from "./prepared-model-runtime-auth.js";
 import {
+  createPreparedAccountCatalogAccess,
   prepareInitialModelCatalogAuth,
   replacePreparedModelCatalogAuth,
 } from "./prepared-model-runtime.catalog-auth.js";
@@ -629,6 +630,7 @@ export async function createFullModelCatalogAccess(
     return promise;
   };
   return {
+    accountCatalog: createPreparedAccountCatalogAccess(params.isCurrent, params.retirementSignal),
     initialAuth: currentAuth,
     isCurrent: params.isCurrent,
     withRefreshStatus: attempt.withRefreshStatus,

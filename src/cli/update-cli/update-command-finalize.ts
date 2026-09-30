@@ -240,7 +240,10 @@ async function prepareUpdateFinalization(
   await assertOpenClawStateWriteAllowedAtPath({
     databasePath: resolveOpenClawStateSqlitePath(process.env),
   });
-  let configSnapshot = await readConfigFileSnapshot({ skipPluginValidation: true, observe: false });
+  const configSnapshot = await readConfigFileSnapshot({
+    skipPluginValidation: true,
+    observe: false,
+  });
   const preFinalizeConfig =
     (await readPostCorePreUpdateSourceConfig({
       sourceConfigPath: process.env[POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV],
@@ -267,7 +270,7 @@ async function prepareUpdateFinalization(
   );
   const channel = requestedChannel ?? storedChannel ?? effectiveChannel ?? DEFAULT_PACKAGE_CHANNEL;
   if (requestedChannel) {
-    configSnapshot = await withPluginLifecycleLease(phase, async () => {
+    await withPluginLifecycleLease(phase, async () => {
       const snapshot = await readConfigFileSnapshot({ skipPluginValidation: true, observe: false });
       return await persistRequestedUpdateChannel({
         configSnapshot: snapshot,
@@ -279,7 +282,6 @@ async function prepareUpdateFinalization(
   return {
     root,
     installKind,
-    configSnapshot,
     preFinalizeConfig,
     requestedChannel,
     storedChannel,
@@ -305,7 +307,6 @@ async function updateFinalizeCommandInternal(
     effectiveChannel,
     channel,
   } = prepared;
-  let { configSnapshot } = prepared;
   let doctorWarnings: string[] = [];
   const doctorWarningTimes = new Map<string, number>();
   const onDoctorWarnings = (warnings: string[]) => {
@@ -385,7 +386,7 @@ async function updateFinalizeCommandInternal(
                 preUpdateConfig: preFinalizeConfig,
                 assertCurrent: phase.assertCurrent,
               });
-              configSnapshot = preparedConfig.configSnapshot;
+              const { configSnapshot } = preparedConfig;
               const postDoctorStoredChannel = configSnapshot.valid
                 ? normalizeUpdateChannel(configSnapshot.config.update?.channel)
                 : null;
@@ -445,7 +446,7 @@ async function updateFinalizeCommandInternal(
     );
     const pluginUpdate = completedPluginUpdate.pluginUpdate;
     lifecycle.recordWarnings(collectPostCorePluginAdvisories(pluginUpdate), "plugins");
-    configSnapshot = completedPluginUpdate.configSnapshot;
+    const { configSnapshot } = completedPluginUpdate;
     const completionBudget = lifecycle.budget("completionCache");
     // Leave shutdown time inside the phase deadline so optional cache failures can settle.
     const completionTimeout = completionBudget - Math.min(1_000, completionBudget / 2);

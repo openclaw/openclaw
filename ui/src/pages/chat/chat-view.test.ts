@@ -4855,7 +4855,7 @@ describe("chat model controls", () => {
     }
     expect(onThinkingSelect).toHaveBeenCalledWith("low", "main");
 
-    const speedToggle = container.querySelector<HTMLButtonElement>("[data-chat-speed-toggle]");
+    const speedToggle = container.querySelector<HTMLButtonElement>('[data-chat-speed-option="on"]');
     expect(speedToggle).toBeInstanceOf(HTMLButtonElement);
     await waitForFast(() => expect(speedToggle?.disabled).toBe(false));
     speedToggle?.click();
