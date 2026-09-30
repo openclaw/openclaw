@@ -139,12 +139,10 @@ export type ChatProps = Omit<
     workspaceConflict?: WorkspaceResultConflict;
     onDismissWorkspaceConflict?: () => void;
     swarm?: Parameters<typeof renderChatSwarmProgress>[0];
-    focusMode?: boolean;
     chatMessageMaxWidth?: string | null;
     showNewMessages?: boolean;
     onScrollToBottom?: (options?: { smooth?: boolean }) => void;
     onRefresh: () => void;
-    onToggleFocusMode?: () => void;
     onDismissError?: () => void;
     agentsList: {
       agents: Array<{
@@ -155,8 +153,6 @@ export type ChatProps = Omit<
       defaultId?: string;
     } | null;
     onSessionSelect?: (sessionKey: string) => void;
-    onRevealWorkspaceFile?: (path: string) => void;
-    header?: TemplateResult | typeof nothing;
     sessionSuggestions?: readonly SessionSuggestion[];
     sessionSuggestionRole?: SessionSharingRole;
     sessionSuggestionBusyIds?: ReadonlySet<string>;
@@ -622,7 +618,7 @@ export function renderChat(props: ChatProps) {
           <div class="chat-split-container">
             <div class="chat-main">
               <div class="chat-main__conversation-column">
-                ${props.header ?? nothing} ${renderChatTopbarNotices(props)}
+                ${renderChatTopbarNotices(props)}
                 <openclaw-plugin-contributions
                   .kind=${"header"}
                   .sessionKey=${props.sessionKey}

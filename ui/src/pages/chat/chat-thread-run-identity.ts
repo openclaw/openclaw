@@ -66,12 +66,8 @@ export function createToolCallLookup<Value>() {
   };
 }
 
-function isUserChatItem(item: ChatItem): item is Extract<ChatItem, { kind: "message" }> {
-  return item.kind === "message" && chatItemStartsUserTurn(item);
-}
-
 export function findCurrentTurnBounds(items: ChatItem[]): TurnInsertionBounds | null {
-  const item = items.findLast(isUserChatItem);
+  const item = items.findLast((item) => item.kind === "message" && chatItemStartsUserTurn(item));
   return item ? { afterKey: item.key } : null;
 }
 

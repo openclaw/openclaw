@@ -4,18 +4,15 @@ import { repeat } from "lit/directives/repeat.js";
 import type { ThemeBranding } from "../../../../../packages/gateway-protocol/src/theme.ts";
 import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import { icons } from "../../../components/icons.ts";
+import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
-import type { ChatItem, MessageGroup } from "../../../lib/chat/chat-types.ts";
+import type { ChatItem, ChatReplyTarget, MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { describeToolGroup, readPreparedActivity } from "../../../lib/chat/tool-call-grouping.ts";
 import { extractToolCardsCached, resolveToolCardOutcome } from "../../../lib/chat/tool-cards.ts";
 import { formatDurationCompact } from "../../../lib/format-duration.ts";
 import { renderChatAvatar } from "../chat-avatar.ts";
 import { renderGroupedMessage } from "./chat-message-bubble.ts";
-import {
-  prepareChatMessageRender,
-  resolveMessageActionDetails,
-  type MessageReplyTarget,
-} from "./chat-message-markdown.ts";
+import { prepareChatMessageRender, resolveMessageActionDetails } from "./chat-message-markdown.ts";
 import { renderChatTimestamp } from "./chat-message-timestamp.ts";
 import { renderChatQuestionSummary } from "./chat-question-card.ts";
 import {
@@ -70,7 +67,7 @@ export type StreamGroupOptions = StreamMessageOptions & {
   resolveReplyPreview?: ReplyPreviewLookup;
   branding?: ThemeBranding;
   entryRefFor?: (key: string) => ((element?: Element) => void) | undefined;
-  onReply?: (target: MessageReplyTarget) => void;
+  onReply?: (target: ChatReplyTarget) => void;
   onOpenSidebar?: (content: SidebarContent) => void;
   assistant?: Parameters<typeof renderChatAvatar>[1];
   showAssistantAvatar?: boolean;

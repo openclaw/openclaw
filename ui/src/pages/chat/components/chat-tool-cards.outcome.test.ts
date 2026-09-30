@@ -10,8 +10,8 @@ import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
 import { attachHistoryActivity } from "../chat-history-request.ts";
 import { agentEvent, createHost } from "../tool-stream.test-helpers.ts";
 import { handleAgentEvent } from "../tool-stream.ts";
+import { renderActivityGroup } from "./chat-message-group.ts";
 import { createMessageEntry, createToolGroup } from "./chat-message.test-support.ts";
-import { renderActivityGroup } from "./chat-message.ts";
 import { renderToolCard } from "./chat-tool-cards.ts";
 
 // Outcome presentation for tool cards: neutral collapsed rows, the expanded

@@ -3078,7 +3078,7 @@ ui/src/pages/chat/chat-send-composer.ts	1
 ui/src/pages/chat/chat-send-timing.ts	1
 ui/src/pages/chat/chat-state-events.ts	6
 ui/src/pages/chat/chat-state-page.ts	2
-ui/src/pages/chat/chat-thread-items.ts	2
+ui/src/pages/chat/chat-thread-items.ts	1
 ui/src/pages/chat/components/chat-audio-player.ts	1
 ui/src/pages/chat/components/chat-composer-plus-menu.ts	1
 ui/src/pages/chat/components/chat-composer-view.ts	1
@@ -3113,7 +3113,6 @@ ui/src/pages/chat/session-cache.ts	2
 ui/src/pages/chat/stream-reconciliation.ts	3
 ui/src/pages/chat/talk/gateway-relay.ts	1
 ui/src/pages/chat/talk/google-live.ts	1
-ui/src/pages/chat/talk/session.ts	1
 ui/src/pages/chat/talk/shared.ts	3
 ui/src/pages/chat/talk/webrtc.ts	1
 ui/src/pages/chat/workspace-conflict.ts	2

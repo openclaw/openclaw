@@ -2,6 +2,8 @@
 
 import { render } from "lit";
 import { expect, it, vi } from "vitest";
+import { renderActivityGroup, renderMessageGroup } from "./chat-message-group.ts";
+import { renderWorkGroupSummary } from "./chat-message-stream.ts";
 import {
   createAssistantMessage,
   createMessageEntry,
@@ -11,7 +13,6 @@ import {
   createToolResultMessage,
   prepareHistoryGroups,
 } from "./chat-message.test-support.ts";
-import { renderActivityGroup, renderMessageGroup, renderWorkGroupSummary } from "./chat-message.ts";
 
 it.each(["activity", "work"] as const)(
   "keeps parallel tool activity expandable without hover text (%s)",

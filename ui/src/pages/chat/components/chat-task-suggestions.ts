@@ -1,4 +1,3 @@
-// Chat UI cards for model-proposed follow-up tasks.
 import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import { ref } from "lit/directives/ref.js";
@@ -133,24 +132,20 @@ export function renderChatTaskSuggestionTray(props: ChatTaskSuggestionTrayProps)
                 ${
                   multiple
                     ? html`
-                        <button
-                          class="task-suggestion__header-action"
-                          type="button"
-                          aria-label=${t("chat.taskSuggestions.previous")}
-                          data-task-prev
-                          @click=${() => props.onNavigateTaskSuggestion?.(suggestion.id, "previous")}
-                        >
-                          ${icons.chevronLeft}
-                        </button>
-                        <button
-                          class="task-suggestion__header-action"
-                          type="button"
-                          aria-label=${t("chat.taskSuggestions.next")}
-                          data-task-next
-                          @click=${() => props.onNavigateTaskSuggestion?.(suggestion.id, "next")}
-                        >
-                          ${icons.chevronRight}
-                        </button>
+                        ${(["previous", "next"] as const).map(
+                          (direction) => html`
+                            <button
+                              class="task-suggestion__header-action"
+                              type="button"
+                              aria-label=${t(direction === "previous" ? "chat.taskSuggestions.previous" : "chat.taskSuggestions.next")}
+                              ?data-task-prev=${direction === "previous"}
+                              ?data-task-next=${direction === "next"}
+                              @click=${() => props.onNavigateTaskSuggestion?.(suggestion.id, direction)}
+                            >
+                              ${direction === "previous" ? icons.chevronLeft : icons.chevronRight}
+                            </button>
+                          `,
+                        )}
                       `
                     : nothing
                 }
