@@ -261,7 +261,7 @@ describe("refreshSlashCommands", () => {
 
       await refreshSlashCommands({ client, agentId: "main" });
       vi.advanceTimersByTime(60_001);
-      await beginChatMetadataPublication(client, { agentId: "main" }).publish({
+      beginChatMetadataPublication(client, { agentId: "main" }).publish({
         commands: [remoteCommand("metadata-command", "Loaded from chat metadata.")],
       });
 
@@ -284,7 +284,7 @@ describe("refreshSlashCommands", () => {
     const metadata = {
       commands: [remoteCommand("metadata-command", "Loaded from chat metadata.")],
     };
-    await beginChatMetadataPublication(client, { agentId: "main" }).publish(metadata);
+    beginChatMetadataPublication(client, { agentId: "main" }).publish(metadata);
     applyRemoteSlashCommandsResult({ client, agentId: "main", result: metadata });
 
     invalidateChatMetadataStore(client);

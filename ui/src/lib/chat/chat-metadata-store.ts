@@ -244,41 +244,52 @@ function preparePublication(
   const isCurrent = () => entry.writer === writer;
   return {
     isCurrent,
-    publish: (result, settled) => {
+    publish: (result) => {
       // Legacy/startup responses can carry models. The direct catalog is their only UI owner.
       const { models, accountSelection, modelSelectionPolicy, ...metadata } = result;
-      const catalog =
-        isCurrent() && entry.validateCatalog ? peekModelCatalog(client, entry.scope) : undefined;
-      const catalogRevision = entry.catalogRevision;
-      const publish = (validatedCatalog: ModelCatalogResult | undefined) => {
-        settled?.();
-        if (isCurrent()) {
-          const catalogChanged = Boolean(
-            entry.validateCatalog &&
-            (!validatedCatalog ||
-              catalogRevision !== entry.catalogRevision ||
-              catalogProjectionKey({ models, accountSelection, modelSelectionPolicy }) !==
-                catalogProjectionKey(validatedCatalog)),
-          );
+      if (isCurrent()) {
+        let catalogChanged = false;
+        const validateCatalog = entry.validateCatalog;
+        if (validateCatalog) {
           entry.validateCatalog = undefined;
+          const catalogRevision = entry.catalogRevision;
+          const catalog = peekModelCatalog(client, entry.scope);
+          const hasCatalogChanged = (validatedCatalog: ModelCatalogResult | undefined) =>
+            !validatedCatalog ||
+            catalogRevision !== entry.catalogRevision ||
+            catalogProjectionKey({ models, accountSelection, modelSelectionPolicy }) !==
+              catalogProjectionKey(validatedCatalog);
+          const pending = !catalog
+            ? pendingModelCatalogResult(client, entry.scope, validateCatalog)
+            : undefined;
+          if (pending) {
+            // Commands are ready now; only catalog validation waits for its existing producer.
+            void pending.then((validatedCatalog) => {
+              if (isCurrent() && hasCatalogChanged(validatedCatalog)) {
+                invalidateModelCatalogCache(client, entry.scope);
+                notifyChatMetadataListeners(entry, {
+                  type: "result",
+                  result: metadata,
+                  catalogChanged: true,
+                });
+              }
+            });
+          } else {
+            catalogChanged = hasCatalogChanged(catalog);
+          }
           if (catalogChanged) {
             invalidateModelCatalogCache(client, entry.scope);
           }
-          entry.result = metadata;
-          notifyChatMetadataListeners(entry, {
-            type: "result",
-            result: metadata,
-            ...(catalogChanged ? { catalogChanged: true } : {}),
-          });
         }
-        entry.release();
-        return metadata;
-      };
-      const pending =
-        isCurrent() && entry.validateCatalog && !catalog
-          ? pendingModelCatalogResult(client, entry.scope, entry.validateCatalog)
-          : undefined;
-      return pending ? pending.then(publish) : Promise.resolve(publish(catalog));
+        entry.result = metadata;
+        notifyChatMetadataListeners(entry, {
+          type: "result",
+          result: metadata,
+          ...(catalogChanged ? { catalogChanged: true } : {}),
+        });
+      }
+      entry.release();
+      return metadata;
     },
     fail: (error: unknown) => {
       if (isCurrent()) {
@@ -331,6 +342,7 @@ function beginChatMetadataRequest(
           const error = new Error("New-session metadata retry deadline elapsed");
           request.publication.fail(error);
           reject(error);
+          entry.release();
         },
         Math.max(0, retryDeadlineAt - Date.now()),
       );
@@ -340,21 +352,28 @@ function beginChatMetadataRequest(
       clearTimeout(queueDeadlineTimer);
       // Once dispatched, this request cannot regain publication authority after invalidation.
       const activePublication = request.publication;
-      const settled = () => {
-        // Observers may retry synchronously; retire the settled request before notifying them.
-        entry.activeRequest = entry.queuedRequest;
-        entry.queuedRequest = undefined;
-        entry.activeRequest?.start();
-      };
-      void requestChatMetadata(client, entry.scope, retryDeadlineAt)
-        .then((result) => activePublication.publish(result, settled))
-        .then(resolve, (error: unknown) => {
-          if (entry.activeRequest === request) {
-            settled();
-          }
+      void (async () => {
+        try {
+          const result = await requestChatMetadata(client, entry.scope, retryDeadlineAt).finally(
+            () => {
+              // Observers may retry synchronously; retire the settled request before notifying them.
+              entry.activeRequest = undefined;
+              const next = entry.queuedRequest;
+              entry.queuedRequest = undefined;
+              if (next) {
+                entry.activeRequest = next;
+                next.start();
+              }
+            },
+          );
+          resolve(activePublication.publish(result));
+        } catch (error) {
           activePublication.fail(error);
           reject(error);
-        });
+        } finally {
+          entry.release();
+        }
+      })();
     },
   };
   if (entry.activeRequest) {

@@ -696,7 +696,7 @@ export function refreshPageChat(host: ChatPageHost, opts?: ChatRefreshOptions) {
         return;
       }
       if (metadata) {
-        await publication.publish(metadata);
+        publication.publish(metadata);
       } else {
         // Startup can omit its bounded projection. Read the same session scope without history.
         const fallback = loadChatMetadataRefresh(binding.client, binding.scope, {

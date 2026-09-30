@@ -574,7 +574,7 @@ describe("new-session model metadata lifecycle", () => {
     await vi.waitFor(() => expect(control.modelUnavailableReason(agent)).toBe("missing-auth"));
     const scope = { agentId: "main", sessionKey: "agent:main:locked" };
     const release = subscribeChatMetadata(client, scope, () => {});
-    await beginChatMetadataPublication(client, scope).publish({
+    beginChatMetadataPublication(client, scope).publish({
       commands: [],
       models: [{ ...model, available: true, unavailableReason: undefined }],
     });
