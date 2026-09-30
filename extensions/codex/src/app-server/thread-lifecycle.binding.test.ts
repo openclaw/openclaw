@@ -2831,6 +2831,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
         modelProvider: "openai",
         dynamicToolsFingerprint: "[]",
       });
+      const predecessor = await readCodexAppServerBinding(sessionFile);
       const params = createParams(sessionFile, workspaceDir);
       params.toolsAllow = ["openclaw"];
       if (ephemeral) {
@@ -2880,8 +2881,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
         "mcpServerStatus/list",
         ephemeral ? "thread/unsubscribe" : "thread/delete",
       ]);
-      expect(request.mock.calls.some(([method]) => method === "turn/start")).toBe(false);
-      expect(await readCodexAppServerBinding(sessionFile)).toBeUndefined();
+      expect(await readCodexAppServerBinding(sessionFile)).toEqual(predecessor);
     },
   );
 

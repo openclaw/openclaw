@@ -7,7 +7,6 @@ import type {
 import { ensureConfiguredBindingBuiltinsRegistered } from "./configured-binding-builtins.js";
 import { resolveCompiledBindingRegistry } from "./configured-binding-compiler.js";
 import {
-  materializeConfiguredBindingRecord,
   resolveMatchingConfiguredBinding,
   toConfiguredBindingConversationRef,
 } from "./configured-binding-match.js";
@@ -37,8 +36,7 @@ function resolveMaterializedConfiguredBinding(params: {
   return {
     conversation,
     resolved,
-    materializedTarget: materializeConfiguredBindingRecord({
-      rule: resolved.rule,
+    materializedTarget: resolved.rule.targetFactory.materialize({
       accountId: conversation.accountId,
       conversation: resolved.match,
     }),

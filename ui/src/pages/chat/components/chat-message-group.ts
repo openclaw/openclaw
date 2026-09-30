@@ -296,9 +296,7 @@ export function renderActivityGroup(
   const reviewOutcome = resolveToolApprovalReviewOutcome(approvalReviews, recordedReviewOutcomes);
   const reviewer = approvalReviews[0]?.label ?? "Review";
   const reviewAriaLabel = reviewOutcome
-    ? t(`chat.toolCards.review.${reviewOutcome === "reviewing" ? "reviewing" : reviewOutcome}`, {
-        reviewer,
-      })
+    ? t(`chat.toolCards.review.${reviewOutcome}`, { reviewer })
     : "";
   const content = html`
     <div class="chat-activity-group ${activityExpanded ? "is-open" : ""}">
@@ -529,12 +527,8 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
     : group.messages;
   const preparedMessages = actionOwners.map((item) => prepareGroupMessage(group, item, opts));
   const lastMessageIndex = group.messages.length - 1;
-  const footerActionDetails = ownsRunFrame
-    ? (preparedMessages[0]?.actions ?? null)
-    : (preparedMessages[lastMessageIndex]?.actions ?? null);
-  const footerActionMessageKey = ownsRunFrame
-    ? opts.frameActionOwner?.key
-    : group.messages[lastMessageIndex]?.key;
+  const footerActionDetails = preparedMessages.at(-1)?.actions ?? null;
+  const footerActionMessageKey = actionOwners.at(-1)?.key;
   const hasUserFooterActions =
     normalizedRole === "user" &&
     Boolean(

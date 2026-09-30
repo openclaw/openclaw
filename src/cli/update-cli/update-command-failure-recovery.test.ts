@@ -4,7 +4,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as gatewayService from "../../daemon/service.js";
 import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
+import { createRetainedPackageSwap } from "../../infra/package-update-swap.test-support.js";
 import * as ports from "../../infra/ports-inspect.js";
+import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
+import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
+import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
 import * as updateLedger from "../../infra/update-run-ledger.js";
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { CommandProcessCleanupError } from "../../process/exec-result.js";
@@ -44,6 +48,9 @@ beforeEach(async () => {
   vi.clearAllMocks();
   mocks.activePort.mockReset();
   mocks.managedService.mockReset();
+  vi.mocked(verifyUpdatedGateway)
+    .mockReset()
+    .mockResolvedValue({ ok: false, score: 0, summary: "stopped-free" });
   vi.stubEnv("OPENCLAW_STATE_DIR", dirs.make("failure-recovery-state-"));
   root = dirs.make("failure-recovery-package-");
   await fs.writeFile(
@@ -59,6 +66,113 @@ afterEach(() => {
 });
 
 describe("post-update failure recovery observation", () => {
+  it("settles a headless package rollback without waiting for a Gateway", async () => {
+    const { packageRoot, transaction } = await createRetainedPackageSwap(root);
+    const configPath = path.join(process.env.OPENCLAW_STATE_DIR!, "openclaw.json");
+    const declaration = runtimeProcessEntrypoints.updateCandidateState;
+    const worker = path.join(packageRoot, "dist", declaration.distWorkerPath);
+    await fs.mkdir(path.dirname(worker), { recursive: true });
+    await fs.writeFile(
+      worker,
+      `import ${JSON.stringify(resolveRuntimeWorkerUrl(declaration).href)};\n`,
+    );
+    const schemaVersions = await readUpdateStateSchemaVersions({
+      stateDir: process.env.OPENCLAW_STATE_DIR!,
+      config: {},
+      env: process.env,
+    });
+    const readRuntime = vi.fn(async () => ({ status: "stopped", missingUnit: true }));
+    vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue({
+      ...gatewayService.resolveGatewayService(),
+      readRuntime,
+      readCommand: vi.fn(async () => null),
+      isLoaded: vi.fn(async () => false),
+    });
+    const inspect = vi.spyOn(ports, "inspectPortUsage").mockImplementation(async (port) => ({
+      port,
+      status: "free",
+      listeners: [],
+      hints: [],
+    }));
+    const sleep = vi.spyOn(utils, "sleep").mockImplementation(async () => {
+      throw new Error("Headless recovery must not wait for Gateway startup");
+    });
+    const actual = await vi.importActual<typeof import("./update-command-verification.js")>(
+      "./update-command-verification.js",
+    );
+    vi.mocked(verifyUpdatedGateway).mockImplementationOnce(actual.verifyUpdatedGateway);
+    mocks.converge.mockImplementationOnce(async ({ result }) => ({
+      resultWithPostUpdate: { ...result, status: "error", reason: "post-update-plugins" },
+    }));
+    const failure = await finishSuccessfulPackageSwitch(
+      { packageRoot, json: true },
+      {
+        opts: { json: true, restart: false },
+        shouldRestart: false,
+        packageTransaction: transaction,
+        rollbackBlockedReason: undefined,
+        schemaVersions,
+        configSnapshot: {
+          path: configPath,
+          exists: false,
+          raw: null,
+          valid: true,
+          parsed: {},
+          config: {},
+          sourceConfig: {},
+          resolved: {},
+          runtimeConfig: {},
+          warnings: [],
+          issues: [],
+          legacyIssues: [],
+        },
+        preManagedServiceStop: {
+          stopped: false,
+          inspected: true,
+          runtimeInspected: true,
+          running: false,
+          serviceMutationAllowed: false,
+          serviceUpdateVerdict: { kind: "absent" },
+        },
+        result: {
+          status: "ok",
+          mode: "npm",
+          root: packageRoot,
+          before: { version: "1.0.0" },
+          after: { version: "2.0.0" },
+          steps: [],
+          durationMs: 1,
+        },
+      },
+    ).catch((error: unknown) => error);
+    if (!(failure instanceof ReportedUpdateCommandFailure)) {
+      throw failure;
+    }
+    expect(failure).toMatchObject({
+      name: "UpdateCommandFailure",
+      result: {
+        status: "error",
+        reason: "post-update-plugins",
+        rollbackOutcome: { status: "succeeded" },
+        recovery: { packageRollbackVerified: true },
+      },
+    });
+    await expect(fs.readFile(path.join(packageRoot, "package.json"), "utf8")).resolves.toContain(
+      '"version":"1.0.0"',
+    );
+    expect(sleep).not.toHaveBeenCalled();
+    expect(readRuntime).not.toHaveBeenCalled();
+    expect(inspect).not.toHaveBeenCalled();
+    expect(verifyUpdatedGateway).not.toHaveBeenCalled();
+    expect(failure.result.verification).toEqual({});
+    expect(failure.result.steps).toContainEqual(
+      expect.objectContaining({
+        name: "gateway recovery observation",
+        diagnostics: [expect.stringContaining("no Gateway service or listener")],
+      }),
+    );
+  });
+
   it("reports a preactivation Doctor failure after one observation of an unknown foreground setup", async () => {
     const env = { ...process.env };
     const run = { runId: updateLedger.createUpdateRun({ trigger: "cli" }, { env }).runId, env };

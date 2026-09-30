@@ -35,8 +35,6 @@ import {
 
 const FOUNDRY_CONNECTION_TEST_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 
-export { listSubscriptions } from "./cli.js";
-
 function listFoundryResources(subscriptionId?: string): FoundryResourceOption[] {
   try {
     const accounts = JSON.parse(
@@ -321,7 +319,7 @@ async function promptFoundryClaudeModel(
   ).trim();
 }
 
-async function promptEndpointAndModelBase(
+export async function promptEndpointAndModelManually(
   ctx: ProviderAuthContext,
   options?: {
     endpointInitialValue?: string;
@@ -398,16 +396,10 @@ async function promptEndpointAndModelBase(
   };
 }
 
-export async function promptEndpointAndModelManually(
-  ctx: ProviderAuthContext,
-): Promise<FoundrySelection> {
-  return promptEndpointAndModelBase(ctx);
-}
-
 export async function promptApiKeyEndpointAndModel(
   ctx: ProviderAuthContext,
 ): Promise<FoundrySelection> {
-  return promptEndpointAndModelBase(ctx, {
+  return promptEndpointAndModelManually(ctx, {
     endpointInitialValue: process.env.AZURE_OPENAI_ENDPOINT,
     modelInitialValue: "gpt-4o",
     modelFamilyInitialValue: "other-chat",
@@ -582,12 +574,7 @@ export async function testFoundryConnection(params: {
       subscriptionId: params.subscriptionId,
       tenantId: params.tenantId,
     });
-    const testRequest = buildFoundryConnectionTest({
-      endpoint: params.endpoint,
-      modelId: params.modelId,
-      modelNameHint: params.modelNameHint,
-      api: params.api,
-    });
+    const testRequest = buildFoundryConnectionTest(params);
     const { response: res, release } = await fetchWithSsrFGuard({
       url: testRequest.url,
       init: {

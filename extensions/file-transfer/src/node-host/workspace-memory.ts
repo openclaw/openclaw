@@ -32,8 +32,8 @@ export function createWorkspaceCommand(
         throw new Error("Workspace workers require node duplex transport");
       }
       const params = JSON.parse(paramsJSON ?? "{}");
-      const request =
-        kind === "memory" ? readWorkspaceMemoryRequest(params) : readWorkspaceSkillsRequest(params);
+      const skillRequest = kind === "skills" ? readWorkspaceSkillsRequest(params) : undefined;
+      const request = skillRequest ?? readWorkspaceMemoryRequest(params);
       const maxReplyBytes = params.maxReplyBytes;
       if (
         maxReplyBytes !== undefined &&
@@ -95,9 +95,9 @@ export function createWorkspaceCommand(
           process.execPath,
           [
             ...resolveWorkspaceWorkerArgv(kind),
-            ...(kind === "memory"
-              ? [request.watch ? "--watch-files" : "--files", request.workspaceDir]
-              : [request.workspaceDir, os.homedir(), readWorkspaceSkillsRequest(params).operation]),
+            ...(skillRequest
+              ? [request.workspaceDir, os.homedir(), skillRequest.operation]
+              : [request.watch ? "--watch-files" : "--files", request.workspaceDir]),
           ],
           {
             cwd: request.workspaceDir,

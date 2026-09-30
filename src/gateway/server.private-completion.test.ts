@@ -1,7 +1,7 @@
 // Real Gateway admission and SQLite receipts with a controlled agent command.
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { AgentCommandOpts } from "../agents/command/types.js";
 import { resolveAgentRunErrorLifecycleFields } from "../agents/run-termination.js";
@@ -39,6 +39,7 @@ import { waitForChatAbortControllerRemoval } from "./chat-abort-lifecycle-intern
 import { abortChatRunById, type ChatAbortControllerEntry } from "./chat-abort.js";
 import { dispatchGatewayMethodInProcess } from "./server-plugin-in-process-dispatch.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
+import { holdMetadataThroughSubagentStop } from "./server.private-completion.metadata-overlap.test-support.js";
 import * as lifecycleState from "./session-lifecycle-state.js";
 import { loadSessionEntry } from "./session-utils.js";
 import {
@@ -568,6 +569,13 @@ describe("private subagent completion processing receipts", () => {
   it("preserves an operator stop after private input consumption across retry and restart", async ({
     signal,
   }) => {
+    const metadataOverlap = holdMetadataThroughSubagentStop({
+      sessionKey: `agent:main:subagent:private-descendant-${sequence}`,
+      sessionId: `private-descendant-${sequence}-session`,
+      storePath,
+      signal,
+    });
+    onTestFinished(() => metadataOverlap.dispose());
     const consumed = createDeferred();
     const release = createDeferred();
     signal.addEventListener("abort", () => release.resolve(), { once: true });
@@ -608,7 +616,9 @@ describe("private subagent completion processing receipts", () => {
       await command.onExecutionStarted?.();
       await command.userTurnTranscriptRecorder?.persistApproved();
       childStarted.resolve();
-      command.abortSignal!.addEventListener("abort", () => releaseChild.resolve(), { once: true });
+      command.abortSignal!.addEventListener("abort", () => releaseChild.resolve(), {
+        once: true,
+      });
       await releaseChild.promise;
       command.abortSignal!.throwIfAborted();
       throw new Error("operator stop must interrupt the continuation child");
@@ -682,27 +692,40 @@ describe("private subagent completion processing receipts", () => {
         }),
       ).toMatchObject({ aborted: true });
       expect(childAbortSignal?.aborted).toBe(true);
+      await metadataOverlap.assertCompleted();
+      expect(loadSessionEntry(childSessionKey).entry).toMatchObject({
+        sessionId: childSessionId,
+        label: metadataOverlap.label,
+        abortedLastRun: true,
+      });
     } finally {
-      signal.removeEventListener("abort", releaseWaitAdmission);
-      waitObservation.mockRestore();
-      if (kernel.gatewayRequestContext.chatAbortControllers.has(runId)) {
-        await kernel.gatewayInstanceRuntime.recovery.dispatchSessionMethod("chat.abort", {
-          sessionKey,
-          runId,
-        });
+      metadataOverlap.releaseForCleanup();
+      try {
+        signal.removeEventListener("abort", releaseWaitAdmission);
+        waitObservation.mockRestore();
+        if (kernel.gatewayRequestContext.chatAbortControllers.has(runId)) {
+          await kernel.gatewayInstanceRuntime.recovery.dispatchSessionMethod("chat.abort", {
+            sessionKey,
+            runId,
+          });
+        }
+        if (kernel.gatewayRequestContext.chatAbortControllers.has(descendantRunId)) {
+          await kernel.gatewayInstanceRuntime.recovery.dispatchSessionMethod("chat.abort", {
+            sessionKey: childSessionKey,
+            runId: descendantRunId,
+          });
+        }
+        release.resolve();
+        releaseChild.resolve();
+        await Promise.all([observed, observedChild]);
+      } finally {
+        await metadataOverlap.dispose();
       }
-      if (kernel.gatewayRequestContext.chatAbortControllers.has(descendantRunId)) {
-        await kernel.gatewayInstanceRuntime.recovery.dispatchSessionMethod("chat.abort", {
-          sessionKey: childSessionKey,
-          runId: descendantRunId,
-        });
-      }
-      release.resolve();
-      releaseChild.resolve();
-      await Promise.all([observed, observedChild]);
     }
     await settleSubagentRegistryPersistenceWork();
-    expect(await observedChild).toMatchObject({ value: { status: "timeout", stopReason: "rpc" } });
+    expect(await observedChild).toMatchObject({
+      value: { status: "timeout", stopReason: "rpc" },
+    });
     expect(
       loadSubagentRunsForControllerFromSqlite(sessionKey).find(
         (run) => run.runId === descendantRunId,

@@ -1,4 +1,3 @@
-// Public Featherless provider plugin API exports.
 export {
   FEATHERLESS_BASE_URL,
   FEATHERLESS_DEFAULT_CONTEXT_WINDOW,

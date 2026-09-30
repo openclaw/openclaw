@@ -122,10 +122,6 @@ function resolveResolverPolicy(params: {
   };
 }
 
-/**
- * Create a reusable ingress resolver for one channel account and identity
- * descriptor.
- */
 function createChannelIngressResolverForOwner(
   base: CreateChannelIngressResolverParams,
   owner?: ChannelIngressHostOwner,
@@ -205,9 +201,6 @@ export function createHostChannelIngressRuntime(owner: ChannelIngressHostOwner) 
   });
 }
 
-/**
- * Resolve one inbound event using a simple stable subject identity descriptor.
- */
 export async function resolveStableChannelIngressPolicy(
   params: ResolveStableChannelMessageIngressParams,
 ): Promise<ResolvedChannelMessageIngress> {
@@ -324,10 +317,6 @@ function appendAccessGroupMatchedEntry(params: {
     : params.entries;
 }
 
-/**
- * Resolve sender, route, command, event, and activation gates for one inbound
- * channel event.
- */
 export async function resolveChannelIngressPolicy(
   params: ResolveChannelMessageIngressParams,
 ): Promise<ResolvedChannelMessageIngress> {

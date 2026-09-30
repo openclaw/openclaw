@@ -30,12 +30,12 @@ import { normalizeThinkLevel } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import { applySessionHints } from "./body.js";
 import { resolveTurnModelOverride } from "./dispatch-from-config.harness-defaults.js";
+import { resolveReplyPolicyConversationType } from "./get-reply-conversation-type.js";
 import { shouldUseReplyFastTestRuntime } from "./get-reply-fast-path.js";
 import {
   buildExecOverridePromptHint,
   hasInboundHistoryBody,
   hasReplyTargetContext,
-  resolvePromptSilentReplyConversationType,
 } from "./get-reply-run-helpers.js";
 import { resolvePromptSourceReplyMode } from "./get-reply-run-source-mode.js";
 import type { RunPreparedReplyParams } from "./get-reply-run.types.js";
@@ -141,10 +141,10 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
           turnModelOverride: resolveTurnModelOverride(opts),
         })
       : sourceReplyDeliveryMode);
-  const silentReplyConversationType = resolvePromptSilentReplyConversationType({
-    ctx: promptSessionCtx,
-    inboundSessionKey: ctx.SessionKey,
-  });
+  const silentReplyConversationType = resolveReplyPolicyConversationType(
+    promptSessionCtx,
+    ctx.SessionKey,
+  );
   const silentReplySettings = resolveSilentReplySettings({
     cfg,
     sessionKey: runtimePolicySessionKey,

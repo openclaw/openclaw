@@ -1,4 +1,3 @@
-/** Reconciles ACP runtime identity observations back into persisted session metadata. */
 import {
   createIdentityFromHandleEvent,
   createIdentityFromStatus,
@@ -19,7 +18,6 @@ import type {
 } from "./manager.types.js";
 import { assertCurrentAcpActor, hasLegacyAcpIdentityProjection } from "./manager.utils.js";
 
-/** Reconciles runtime-reported session identifiers into persisted ACP session metadata. */
 export async function reconcileManagerRuntimeSessionIdentifiers(
   params: Parameters<ReconcileManagerRuntimeSessionIdentifiers>[0] & {
     setCachedHandle: (target: AcpSessionTarget, handle: AcpRuntimeHandle) => void;
