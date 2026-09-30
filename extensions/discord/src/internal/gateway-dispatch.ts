@@ -22,7 +22,11 @@ export function dispatchVoiceGatewayEvent(client: Client, payload: GatewayDispat
   }
 }
 
-export function mapGatewayDispatchData(client: Client, type: string, data: unknown): unknown {
+export function mapGatewayDispatchData(
+  client: Client,
+  type: GatewayDispatchEvents,
+  data: unknown,
+): unknown {
   if (type === GatewayDispatchEvents.MessageCreate) {
     return createMessageDispatchData(client, data as MessageCreatePayload);
   }

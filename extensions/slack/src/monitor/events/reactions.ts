@@ -92,7 +92,7 @@ export function registerSlackReactionEvents(params: {
 
           const [actorInfo, authorInfo] = await Promise.all(
             [event.user, event.item_user].map((userId) =>
-              userId ? resolveUserName(userId, eventScope) : undefined,
+              userId ? resolveUserName(userId, eventScope) : Promise.resolve(undefined),
             ),
           );
           if (
