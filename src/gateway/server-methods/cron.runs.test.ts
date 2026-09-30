@@ -269,10 +269,18 @@ describe("cron.runs session visibility", () => {
           }
           if (!explicitOwner) {
             expect(
-              await query({ includeDeliveryPreviews: false }, owner, "cron.list"),
+              await query(
+                { includeDisabled: true, includeDeliveryPreviews: false },
+                owner,
+                "cron.list",
+              ),
             ).toHaveBeenCalledWith(true, expect.objectContaining({ jobs: [] }), undefined);
             expect(
-              await query({ includeDeliveryPreviews: false }, viewer, "cron.list"),
+              await query(
+                { includeDisabled: true, includeDeliveryPreviews: false },
+                viewer,
+                "cron.list",
+              ),
             ).toHaveBeenCalledWith(
               true,
               expect.objectContaining({
