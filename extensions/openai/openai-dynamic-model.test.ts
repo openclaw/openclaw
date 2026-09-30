@@ -224,6 +224,45 @@ describe("OpenAI dynamic model capabilities", () => {
   );
 
   it.each([
+    { id: "gpt-5.6-sol", contextWindow: 372_000 },
+    { id: "gpt-5.5", contextWindow: 400_000 },
+  ])(
+    "does not carry a stale 32k registry cap into native Codex model $id",
+    ({ id, contextWindow }) => {
+      const staleRegistryModel: ProviderRuntimeModel = {
+        id,
+        name: id,
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 32_768,
+        contextTokens: 32_768,
+        maxTokens: 8_192,
+      };
+
+      const model = buildOpenAIProvider().resolveDynamicModel?.({
+        provider: "openai",
+        modelId: id,
+        agentRuntimeId: "codex",
+        providerConfig: {
+          api: "openai-chatgpt-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          models: [],
+        },
+        modelRegistry: modelRegistry([staleRegistryModel]),
+      });
+
+      expect(model).toMatchObject({
+        contextWindow,
+        contextTokens: 272_000,
+      });
+    },
+  );
+
+  it.each([
     {
       id: "gpt-6-astra",
       cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },

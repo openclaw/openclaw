@@ -279,10 +279,7 @@ export async function prepareLmstudioModelForInference(
   const contextLengthForLoad =
     advertisedContextLimit === null
       ? (requestedContextLength ?? LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH)
-      : Math.min(
-          requestedContextLength ?? LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH,
-          advertisedContextLimit,
-        );
+      : Math.min(requestedContextLength ?? advertisedContextLimit, advertisedContextLimit);
   if (loadedContextWindow !== null && loadedContextWindow >= contextLengthForLoad) {
     const instances = Array.isArray(matchingModel?.loaded_instances)
       ? matchingModel.loaded_instances

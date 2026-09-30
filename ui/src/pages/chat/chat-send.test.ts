@@ -2,6 +2,7 @@ import { reduceSessionProjection } from "@openclaw/gateway-client/browser";
 /* @vitest-environment jsdom */
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { GatewayProtocolRequestTimeoutError } from "../../../../packages/gateway-client/src/protocol-request.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { AgentsListResult, GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
@@ -75,6 +76,10 @@ import {
 import type { ChatHost } from "./chat-send-contract.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
 import * as chatSendSupport from "./chat-send-support.ts";
+import {
+  DEFAULT_IMAGE_ATTACHMENT_REQUEST_TIMEOUT_MS,
+  resolveImageAttachmentRequestTimeoutMs,
+} from "./chat-send-timeout.ts";
 import { recordChatSendServerTiming } from "./chat-send-timing.ts";
 import { switchChatFastMode, switchChatThinkingLevel } from "./chat-session.ts";
 import { getPendingChatPickerPatch, patchChatSessionSettings } from "./chat-settings-patches.ts";
@@ -923,6 +928,130 @@ function installPairClientPresentationCommand() {
 describe("handleSendChat", () => {
   beforeEach(() => {
     vi.stubGlobal("sessionStorage", createStorageMock());
+  });
+
+  it("gives image attachment preparation and the initial ACK a five-minute local deadline", async () => {
+    const host = makeChatHost({
+      requestHandlers: {
+        "chat.send": { runId: "image-timeout-run", status: "started" },
+      },
+      chatMessage: "Describe this test image",
+      chatAttachments: [
+        registerFileAttachment("image-timeout", "synthetic", "test.png", "image/png"),
+      ],
+    });
+
+    await handleSendChat(host);
+
+    const [method, params, options] = requestCalls(host.request, "chat.send")[0] ?? [];
+    expect(method).toBe("chat.send");
+    expect(params).toMatchObject({
+      attachments: [expect.objectContaining({ type: "image", mimeType: "image/png" })],
+      timeoutMs: DEFAULT_IMAGE_ATTACHMENT_REQUEST_TIMEOUT_MS,
+    });
+    expect(options).toEqual({ timeoutMs: DEFAULT_IMAGE_ATTACHMENT_REQUEST_TIMEOUT_MS });
+  });
+
+  it("preserves an explicit image attachment RPC deadline override", async () => {
+    const host = makeChatHost({
+      requestHandlers: {
+        "chat.send": { runId: "image-timeout-override-run", status: "started" },
+      },
+      chatMessage: "Describe this test image",
+      chatAttachments: [
+        registerFileAttachment("image-timeout-override", "synthetic", "test.png", "image/png"),
+      ],
+      chatAttachmentRequestTimeoutMs: 10 * 60_000,
+    });
+
+    await handleSendChat(host);
+
+    expect(findRequestPayload(host.request, "chat.send", "chat send payload")).toMatchObject({
+      timeoutMs: 10 * 60_000,
+    });
+    expect(requestCalls(host.request, "chat.send")[0]?.[2]).toEqual({
+      timeoutMs: 10 * 60_000,
+    });
+  });
+
+  it("keeps the normal local RPC deadline for non-image sends", async () => {
+    const host = makeChatHost({
+      requestHandlers: {
+        "chat.send": { runId: "text-timeout-run", status: "started" },
+      },
+      chatMessage: "ordinary text turn",
+    });
+
+    await handleSendChat(host);
+
+    const [method, params] = requestCalls(host.request, "chat.send")[0] ?? [];
+    expect(method).toBe("chat.send");
+    expect(params).not.toHaveProperty("timeoutMs");
+  });
+
+  it("keeps a sent image timeout unconfirmed and adopts its late run events once", async () => {
+    const host = makeChatHost({
+      requestHandlers: {
+        "chat.send": () =>
+          Promise.reject(
+            new GatewayProtocolRequestTimeoutError({
+              method: "chat.send",
+              timeoutMs: DEFAULT_IMAGE_ATTACHMENT_REQUEST_TIMEOUT_MS,
+              requestSent: true,
+            }),
+          ),
+      },
+      chatMessage: "Describe this delayed test image",
+      chatAttachments: [
+        registerFileAttachment("image-timeout-late", "synthetic", "test.png", "image/png"),
+      ],
+    });
+
+    await handleSendChat(host);
+
+    const runId = String(
+      findRequestPayload(host.request, "chat.send", "chat send payload").idempotencyKey,
+    );
+    expect(host.chatQueue[0]).toMatchObject({
+      sendRunId: runId,
+      sendState: "unconfirmed",
+      sendError: chatSendSupport.UNCONFIRMED_CHAT_SEND_ERROR,
+    });
+
+    expect(
+      handleChatGatewayEvent(host, {
+        sessionKey: host.sessionKey,
+        runId,
+        state: "status",
+        phase: "preparing_context",
+      }),
+    ).toBe("status");
+    expect(host.chatRunId).toBe(runId);
+
+    const final = {
+      role: "assistant",
+      content: [{ type: "text", text: "The image contains a blue grid." }],
+    };
+    expect(
+      handleChatGatewayEvent(host, {
+        sessionKey: host.sessionKey,
+        runId,
+        state: "final",
+        message: final,
+      }),
+    ).toBe("final");
+    expect(
+      handleChatGatewayEvent(host, {
+        sessionKey: host.sessionKey,
+        runId,
+        state: "final",
+        message: final,
+      }),
+    ).toBe("final");
+    expect(
+      host.chatMessages.filter((message) => JSON.stringify(message).includes("blue grid")),
+    ).toHaveLength(1);
+    expect(host.chatQueue[0]?.sendRunId).toBe(runId);
   });
 
   it("preserves another run's inactive tuple when the accepted run finishes before roster updates", async () => {
@@ -5023,6 +5152,23 @@ describe("handleSendChat", () => {
     expect(document.body.textContent).toContain("Writer global chat");
     expect(document.body.textContent).not.toContain("Main global chat");
     document.body.replaceChildren();
+  });
+});
+
+describe("resolveImageAttachmentRequestTimeoutMs", () => {
+  it.each([undefined, null, 0, -1, Number.NaN, Number.POSITIVE_INFINITY])(
+    "uses the bounded five-minute default for missing or invalid configuration (%s)",
+    (configuredTimeoutMs) => {
+      expect(resolveImageAttachmentRequestTimeoutMs(configuredTimeoutMs)).toBe(
+        DEFAULT_IMAGE_ATTACHMENT_REQUEST_TIMEOUT_MS,
+      );
+    },
+  );
+
+  it("falls back for fractional values that would round down to an immediate timeout", () => {
+    expect(resolveImageAttachmentRequestTimeoutMs(0.5)).toBe(
+      DEFAULT_IMAGE_ATTACHMENT_REQUEST_TIMEOUT_MS,
+    );
   });
 });
 

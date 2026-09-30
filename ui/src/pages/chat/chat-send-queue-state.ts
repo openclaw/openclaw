@@ -1,3 +1,4 @@
+import { GatewayProtocolRequestTimeoutError } from "@openclaw/gateway-client/browser";
 import type { ChatWorkContext } from "../../../../packages/gateway-protocol/src/chat-work-context.js";
 import { GatewayPayloadLimitError, GatewayRequestError } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
@@ -351,6 +352,32 @@ export function settleQueuedChatSendFailure(
     surfaceChatDeliveryFailure(host, sessionKey, prepared.agentId, error);
     recordChatSendTiming(host, prepared, "failed", prepared.sendSubmittedAtMs, { error });
     return "failed";
+  }
+  if (
+    err instanceof GatewayProtocolRequestTimeoutError &&
+    err.method === "chat.send" &&
+    err.requestSent
+  ) {
+    // The server may have accepted this send even though its ACK missed the
+    // local deadline. Keep its idempotency identity and require reconciliation
+    // rather than exposing a fresh-send Retry that could duplicate the turn.
+    const unconfirmed = updateQueuedSendItem(host, storageMode, id, (item) => ({
+      ...item,
+      sendError: UNCONFIRMED_CHAT_SEND_ERROR,
+      sendState: "unconfirmed",
+    }));
+    finishScopedChatSending(host, scope);
+    surfaceChatDeliveryFailure(
+      host,
+      sessionKey,
+      prepared.agentId,
+      unconfirmed ? UNCONFIRMED_CHAT_SEND_ERROR : OFFLINE_QUEUE_STORAGE_ERROR,
+      { inline: storageMode === "durable" },
+    );
+    recordChatSendTiming(host, prepared, "failed", prepared.sendSubmittedAtMs, {
+      error: unconfirmed ? UNCONFIRMED_CHAT_SEND_ERROR : OFFLINE_QUEUE_STORAGE_ERROR,
+    });
+    return "pending";
   }
   const recoverable =
     !activeLeafChanged &&

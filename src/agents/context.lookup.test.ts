@@ -101,13 +101,14 @@ function createContextOverrideConfig(
   provider: string,
   model: string,
   contextWindow: number,
+  contextTokens?: number,
 ): OpenClawConfig {
   return {
     models: {
       providers: {
         [provider]: {
           baseUrl: "https://example.invalid",
-          models: [{ id: model, contextWindow } as never],
+          models: [{ id: model, contextWindow, contextTokens } as never],
         },
       },
     },
@@ -676,6 +677,25 @@ describe("lookupContextTokens", () => {
       authoredContextTokens: 1_000_000,
     });
     expect(resolveContextTokensForModel(params)).toBe(128_000);
+  });
+
+  it("preserves an explicit smaller per-model context cap over larger discovery", async () => {
+    mockDiscoveryDeps([
+      {
+        provider: "openai",
+        id: "gpt-5.6-sol",
+        contextWindow: 272_000,
+        contextTokens: 272_000,
+      },
+    ]);
+    const cfg = createContextOverrideConfig("openai", "gpt-5.6-sol", 272_000, 64_000);
+    const { lookupContextTokens, resolveContextTokensForModel } = await importContextModule();
+    lookupContextTokens("openai/gpt-5.6-sol");
+    await flushAsyncWarmup();
+
+    expect(resolveContextTokensForModel({ cfg, provider: "openai", model: "gpt-5.6-sol" })).toBe(
+      64_000,
+    );
   });
 
   it("resolveContextTokensForModel honors configured overrides when provider keys use mixed case", async () => {

@@ -277,6 +277,23 @@ describe("lmstudio-models", () => {
     });
   });
 
+  it("uses LM Studio's top-level loaded context when instance details are omitted", () => {
+    const model = mapLmstudioWireEntry({
+      type: "llm",
+      key: "top-level-loaded-context",
+      max_context_length: 262_144,
+      loaded_context_length: 262_144,
+    });
+
+    expect(model).toMatchObject({
+      id: "top-level-loaded-context",
+      contextWindow: 262_144,
+      contextTokens: 262_144,
+      maxTokens: SELF_HOSTED_DEFAULT_MAX_TOKENS,
+      loaded: true,
+    });
+  });
+
   it("resolves reasoning capability for supported and unsupported options", () => {
     expect(resolveLmstudioReasoningCapability({ capabilities: undefined })).toBe(false);
     expect(
@@ -426,7 +443,8 @@ describe("lmstudio-models", () => {
         supportsTools: true,
       },
       contextWindow: 262144,
-      contextTokens: LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH,
+      // An already-loaded model must use the instance's actual context.
+      contextTokens: 64000,
       maxTokens: SELF_HOSTED_DEFAULT_MAX_TOKENS,
     });
     expect(models[1]).toEqual({
@@ -535,11 +553,24 @@ describe("lmstudio-models", () => {
 
   it.each([
     {
+      name: "uses the advertised model maximum when no smaller context override is configured",
+      loadedContextLength: 4096,
+      maxContextLength: 262144,
+      expectedContextLength: 262144,
+    },
+    {
       name: "reloads model when requested context length exceeds the loaded window",
       loadedContextLength: 4096,
       maxContextLength: 32768,
       requestedContextLength: 8192,
       expectedContextLength: 8192,
+    },
+    {
+      name: "preserves an explicit smaller context override for a large model",
+      loadedContextLength: 4096,
+      maxContextLength: 262144,
+      requestedContextLength: 65536,
+      expectedContextLength: 65536,
     },
     {
       name: "reloads model to the clamped default target when already loaded below the default window",
