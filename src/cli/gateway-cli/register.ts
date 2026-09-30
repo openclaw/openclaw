@@ -1,6 +1,7 @@
 // Commander registration for gateway status, health, diagnostics, discovery, and run commands.
 import { formatByteSize } from "@openclaw/normalization-core";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { colorize, isRich, theme } from "../../../packages/terminal-core/src/theme.js";
@@ -264,14 +265,7 @@ function normalizeStabilityBundleTarget(raw: unknown): string | null {
   if (raw === undefined || raw === false) {
     return null;
   }
-  if (raw === true) {
-    return "latest";
-  }
-  if (typeof raw !== "string") {
-    return "latest";
-  }
-  const value = raw.trim();
-  return value === "" ? "latest" : value;
+  return normalizeOptionalString(raw) ?? "latest";
 }
 
 function renderStabilityBundleSummary(params: {

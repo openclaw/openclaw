@@ -15,6 +15,7 @@ import {
   truncateSanitizedExternalContent,
 } from "openclaw/plugin-sdk/security-runtime";
 import { DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS } from "openclaw/plugin-sdk/text-utility-runtime";
+import { textResult } from "openclaw/plugin-sdk/tool-results";
 import type { BrowserProxyRequest } from "./browser-node-proxy.js";
 import {
   DEFAULT_AI_SNAPSHOT_MAX_CHARS,
@@ -170,14 +171,11 @@ export function formatBrowserDebugLogResult(
       wrapped = wrap();
     }
   }
-  return {
-    content: [{ type: "text", text: wrapped.wrappedText }],
-    details: {
-      ...wrapped.safeDetails,
-      ...details(),
-      truncated: records.length < total || wrapped.truncated,
-    },
-  };
+  return textResult(wrapped.wrappedText, {
+    ...wrapped.safeDetails,
+    ...details(),
+    truncated: records.length < total || wrapped.truncated,
+  });
 }
 
 function isAriaRefsUnsupportedError(err: unknown): boolean {
@@ -306,7 +304,7 @@ export async function executeSnapshotAction(params: {
         imageSanitization: resolveRuntimeImageSanitization(),
       });
     }
-    return { content: [{ type: "text", text }], details };
+    return textResult(text, details);
   };
   const query = normalizeOptionalString(input.query);
   if (query && !snapshot.blockedByDialog) {
@@ -368,14 +366,11 @@ export async function executeSnapshotAction(params: {
           ...dialogState,
         },
       });
-      return {
-        content: [{ type: "text" as const, text: wrapped.wrappedText }],
-        details: {
-          ...wrapped.safeDetails,
-          ...identity,
-          ...dialogState,
-        },
-      };
+      return textResult(wrapped.wrappedText, {
+        ...wrapped.safeDetails,
+        ...identity,
+        ...dialogState,
+      });
     }
     const boundedSnapshot = wrapBrowserExternalText({
       value: snapshot.snapshot ?? "",
@@ -399,16 +394,13 @@ export async function executeSnapshotAction(params: {
       kind: "snapshot",
       payload: snapshot,
     });
-    return {
-      content: [{ type: "text" as const, text: wrapped.wrappedText }],
-      details: {
-        ...wrapped.safeDetails,
-        ...identity,
-        nodeCount: snapshot.nodes.length,
-        ...dialogState,
-        externalContent,
-      },
-    };
+    return textResult(wrapped.wrappedText, {
+      ...wrapped.safeDetails,
+      ...identity,
+      nodeCount: snapshot.nodes.length,
+      ...dialogState,
+      externalContent,
+    });
   }
 }
 

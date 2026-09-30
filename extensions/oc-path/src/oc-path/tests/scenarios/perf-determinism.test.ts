@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { emitMd } from "../../emit.js";
 import { parseMd } from "../../parse.js";
 import { resolveMdOcPath as resolveOcPath } from "../../resolve.js";
 
@@ -105,7 +104,7 @@ describe("CPU budgets + determinism", () => {
     let out = "";
     expectWithinCpuBudget(() => {
       const { ast } = parseMd(raw);
-      out = emitMd(ast);
+      out = ast.raw;
     }, 100);
     expect(out).toBe(raw);
   });

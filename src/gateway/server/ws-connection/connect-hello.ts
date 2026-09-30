@@ -249,6 +249,7 @@ export async function sendGatewayHello(
           const consumed = await consumeSetupHandoff({
             token: bootstrapTokenCandidate,
             deviceId: device.id,
+            admitsCloudWorkerSetup: context.handler.admitsNodeSetupCompletion,
             pairedDeviceMatches: (paired) => paired?.publicKey === devicePublicKey,
           });
           if (!consumed) {

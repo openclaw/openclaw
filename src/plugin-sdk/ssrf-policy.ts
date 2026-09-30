@@ -218,8 +218,5 @@ export function buildHostnameAllowlistPolicyFromSuffixAllowlist(
     patterns.add(`*.${normalized}`);
   }
 
-  if (patterns.size === 0) {
-    return undefined;
-  }
   return { hostnameAllowlist: Array.from(patterns) };
 }

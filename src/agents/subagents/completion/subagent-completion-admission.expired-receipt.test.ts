@@ -9,13 +9,13 @@ import {
 } from "../../../state/openclaw-state-db.js";
 import { isDeliverySuspended } from "../registry/subagent-delivery-state.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
-import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry.store.sqlite.js";
 import {
   blockSubagentCompletionDelivery,
   settleRequesterCompletionBatch,
 } from "./subagent-completion-admission.store.js";
 import {
   armRequesterWake,
+  reopenCompletionFixtureOwners,
   records,
   requesterWakeDriver,
   admitCompletionFixtureDatabase,
@@ -86,16 +86,6 @@ describe("requester receipts after completion expiry", () => {
     });
   }
 
-  async function reopen() {
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-    subagentRuns.clear();
-    database = openOpenClawStateDatabase();
-    for (const [runId, entry] of loadSubagentRegistryFromSqlite()) {
-      subagentRuns.set(runId, entry);
-    }
-  }
-
   it("retains an admitted cleanup lock while publishing the requester receipt", async () => {
     const input = armRequesterWake(records());
     input.subagent.cleanupCompletedAt = undefined;
@@ -110,7 +100,7 @@ describe("requester receipts after completion expiry", () => {
     expect(input.subagent.cleanupCompletedAt).toBeUndefined();
     expect(input.subagent.requesterSettleWake).toBeUndefined();
     expect(input.subagent.delivery?.status).toBe("delivered");
-    await reopen();
+    database = await reopenCompletionFixtureOwners();
     // Process-local custody cannot survive a restart without durable completion.
     expect(subagentRuns.get(input.subagent.runId)?.cleanupHandled).toBe(false);
     expect(subagentRuns.get(input.subagent.runId)?.delivery?.status).toBe("delivered");
@@ -130,7 +120,7 @@ describe("requester receipts after completion expiry", () => {
         expect(driver.warn).not.toHaveBeenCalled();
         expect(driver.wake).toHaveBeenCalledOnce();
         expect(isDeliverySuspended(input.subagent)).toBe(false);
-        await reopen();
+        database = await reopenCompletionFixtureOwners();
         const stored = subagentRuns.get(input.subagent.runId);
         expect(stored?.delivery?.status).toBe("delivered");
         expect(stored?.delivery?.suspendedAt).toBeUndefined();
@@ -148,7 +138,7 @@ describe("requester receipts after completion expiry", () => {
   it("preserves a missing-deliverable verdict after its delivery is acknowledged", async () => {
     const input = await suspend({ completionTarget: "parent", resultText: null });
     await settle(input, true);
-    await reopen();
+    database = await reopenCompletionFixtureOwners();
     expect(subagentRuns.get(input.subagent.runId)?.delivery?.status).toBe("delivered");
   });
 
@@ -160,7 +150,7 @@ describe("requester receipts after completion expiry", () => {
     async ({ reason, delivered }) => {
       const input = await suspend({ reason });
       await settle(input, delivered);
-      await reopen();
+      database = await reopenCompletionFixtureOwners();
       expect(isDeliverySuspended(subagentRuns.get(input.subagent.runId)!)).toBe(true);
     },
   );
@@ -175,7 +165,7 @@ describe("requester receipts after completion expiry", () => {
       databaseOptions: { database },
     });
     await expect(settle(input, true)).rejects.toThrow("owner changed before settlement");
-    await reopen();
+    database = await reopenCompletionFixtureOwners();
     expect(subagentRuns.get(input.subagent.runId)?.delivery).toMatchObject({
       status: "suspended",
       generation: 2,
@@ -199,7 +189,7 @@ describe("requester receipts after completion expiry", () => {
         databaseOptions: { database },
       });
       await expect(settle(input, true)).rejects.toThrow("owner changed before settlement");
-      await reopen();
+      database = await reopenCompletionFixtureOwners();
       expect(isDeliverySuspended(subagentRuns.get(input.subagent.runId)!)).toBe(true);
       expect(subagentRuns.get(input.subagent.runId)?.requesterSettleWake).toBeDefined();
     },
@@ -217,7 +207,7 @@ describe("requester receipts after completion expiry", () => {
     } finally {
       database.db.exec("DROP TRIGGER reject_ack");
     }
-    await reopen();
+    database = await reopenCompletionFixtureOwners();
     expect(isDeliverySuspended(subagentRuns.get(input.subagent.runId)!)).toBe(true);
     expect(subagentRuns.get(input.subagent.runId)?.requesterSettleWake).toBeDefined();
   });

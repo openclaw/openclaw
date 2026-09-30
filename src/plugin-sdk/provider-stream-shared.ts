@@ -711,10 +711,10 @@ export function createGoogleThinkingStreamWrapper(
 }
 
 export {
+  applyAnthropicEphemeralCacheControlMarkers,
   applyAnthropicPayloadPolicyToParams,
   resolveAnthropicPayloadPolicy,
 } from "@openclaw/ai/transports";
-export { applyAnthropicEphemeralCacheControlMarkers } from "../llm/providers/stream-wrappers/anthropic-cache-control-payload.js";
 export {
   createMoonshotThinkingWrapper,
   resolveMoonshotThinkingKeep,

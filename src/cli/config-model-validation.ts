@@ -1,3 +1,4 @@
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { hasAgentRosterProperty } from "../agents/agent-scope-config.js";
 import {
   listAgentEntries,
@@ -538,7 +539,7 @@ export async function checkTouchedTextModelRefs(params: {
         }) as OpenClawConfig)
       : undefined;
   } catch (cause) {
-    const detail = cause instanceof Error ? cause.message : String(cause);
+    const detail = coerceErrorMessage(cause);
     return {
       refsChecked: 0,
       refsTotal: authoredRefs.length,
@@ -657,9 +658,7 @@ export async function checkTouchedTextModelRefs(params: {
         modelEnvWasExpanded ||
         Boolean(params.redactDependencyValues && refs.some((ref) => ref.dependency))
           ? "model resolver setup failed"
-          : cause instanceof Error
-            ? cause.message
-            : String(cause);
+          : coerceErrorMessage(cause);
       return {
         refsChecked: syntaxFailures.length,
         refsTotal: refs.length,
@@ -677,7 +676,7 @@ export async function checkTouchedTextModelRefs(params: {
       error = await resolveModelRef({ config: validationConfig, ref });
       refsChecked += 1;
     } catch (cause) {
-      const detail = cause instanceof Error ? cause.message : String(cause);
+      const detail = coerceErrorMessage(cause);
       errors.push(formatError(ref, `Unable to validate model reference: ${detail}`));
       continue;
     }

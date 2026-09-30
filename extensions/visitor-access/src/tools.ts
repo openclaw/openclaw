@@ -1,3 +1,4 @@
+import { textResult } from "openclaw/plugin-sdk/tool-results";
 import { Type } from "typebox";
 import type { AnyAgentTool, OpenClawPluginToolContext } from "../api.js";
 import { VisitorAccessError } from "./errors.js";
@@ -89,24 +90,19 @@ export function createVisitorTools(context: OpenClawPluginToolContext<2>): AnyAg
       runtime ??= visitorRuntimeStore.tryGetRuntime();
       if (!runtime) {
         return {
-          content: [
-            {
-              type: "text",
-              text: "Start the Gateway with visitor-access enabled before managing visitors.",
-            },
-          ],
-          details: { error: true },
+          ...textResult("Start the Gateway with visitor-access enabled before managing visitors.", {
+            error: true,
+          }),
           isError: true,
         };
       }
       try {
         assertCurrent();
         const { text, details } = await run(runtime.service, raw);
-        return { content: [{ type: "text", text }], details };
+        return textResult(text, details);
       } catch (error) {
         return {
-          content: [{ type: "text", text: runtime.errorText(error) }],
-          details: { error: true },
+          ...textResult(runtime.errorText(error), { error: true }),
           isError: true,
         };
       }

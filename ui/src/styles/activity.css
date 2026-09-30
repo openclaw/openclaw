@@ -1,7 +1,3 @@
-/* Activity page: live tool-activity feed. Filter chrome uses the settings
-   design language; only the stream (entries, previews) keeps bespoke styles
-   as the in-group escape hatch. */
-
 /* The route host must hand the bounded shell height to the fill-height
    workspace; otherwise a populated stream expands the main page and defeats
    its own scroll/auto-follow owner. */
@@ -120,7 +116,8 @@ a.activity-current-work__row:hover {
   overflow: hidden;
 }
 
-.activity-feed__toolbar {
+.activity-feed__toolbar,
+.activity-live-toolbar {
   display: flex;
   flex: 0 0 auto;
   align-items: center;
@@ -410,23 +407,47 @@ a.activity-current-work__row:hover {
 .activity-pulse__bar {
   flex: 1;
   border-radius: 2px 2px 0 0;
-  background: var(--border);
 }
 
-.activity-pulse__bar[data-hour="past"] {
+.activity-pulse__bar[data-bucket="past"] {
   background: color-mix(in srgb, var(--accent) 45%, transparent);
 }
 
-.activity-pulse__bar[data-hour="current"] {
+.activity-pulse__bar[data-bucket="current"] {
   background: var(--accent);
 }
 
+/* One cell per bar keeps each label under the bucket it names. */
 .activity-pulse__axis {
   display: flex;
-  justify-content: space-between;
+  gap: 3px;
+  height: 16px;
   margin-top: var(--space-1);
   font-size: var(--control-ui-text-xs);
   line-height: 16px;
+}
+
+.activity-pulse__axis > span {
+  position: relative;
+  flex: 1;
+}
+
+.activity-pulse__axis > span > span {
+  position: absolute;
+  left: 50%;
+  translate: -50%;
+  white-space: nowrap;
+}
+
+.activity-pulse__axis > span:first-child > span {
+  left: 0;
+  translate: none;
+}
+
+.activity-pulse__axis > span:last-child > span {
+  right: 0;
+  left: auto;
+  translate: none;
 }
 
 .activity-feed__day + .activity-feed__day {
@@ -917,14 +938,6 @@ a.activity-current-work__row:hover {
   white-space: nowrap;
 }
 
-.activity-live-toolbar {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-3) var(--space-4);
-}
-
 .activity-live-autofollow {
   display: inline-flex;
   align-items: center;
@@ -1159,19 +1172,12 @@ a.activity-current-work__row:hover {
     overflow: visible;
   }
 
-  .activity-feed__toolbar {
-    flex-wrap: wrap;
-  }
-
-  .activity-feed__search {
-    flex-basis: 100%;
-    order: -1;
-  }
-
+  .activity-feed__toolbar,
   .activity-live-toolbar {
     flex-wrap: wrap;
   }
 
+  .activity-feed__search,
   .activity-live-search {
     flex-basis: 100%;
     order: -1;
@@ -1206,11 +1212,6 @@ a.activity-current-work__row:hover {
 
   .activity-entry__summary {
     grid-template-columns: 18px minmax(0, 1fr);
-    gap: var(--space-2);
-  }
-
-  .activity-entry__body {
-    padding-left: 42px;
   }
 
   .activity-stream {

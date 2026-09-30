@@ -83,7 +83,10 @@ const STRUCTURED_JSON_PAYMENT_REDACT_PATTERN = String.raw`"(?:${PAYMENT_CREDENTI
 const AMBIGUOUS_QUOTED_SECRET_FIELD_REDACT_PATTERN = String.raw`(^|[\s,{])["']?(?:api[-_]key|access[-_]token|refresh[-_]token|id[-_]token|authToken|auth[-_]token|clientSecret|client[-_]secret|appSecret|app[-_]secret|private[-_]key|credential|authorization|secret[-_]value|raw[-_]secret|secret[-_]input|key[-_]material)["']?\s*[:=]\s*(["'])([^"'\r\n]+)\2`;
 const AMBIGUOUS_QUOTED_AUTH_FIELD_REDACT_PATTERN = String.raw`(^|[\s,{])["']?(?:authorization|proxy-authorization|cookie|set-cookie|x-api-key|x-auth-token)["']?\s*[:=]\s*(["'])([^"'\r\n]+)\2`;
 // Pure-base64 prefixes require a non-alphanumeric boundary and skip explicit data-URL payloads.
-export const BASE64_SAFE_TOKEN_BOUNDARY = String.raw`(^|[^A-Za-z0-9])(?<!;base64,[A-Za-z0-9+/=]*)`;
+// Match the token first: the lookbehind rescans the whole base64 run, quadratic per `+`/`/`/`=`.
+const BASE64_SAFE_TOKEN_BOUNDARY = String.raw`(^|[^A-Za-z0-9])`;
+const base64SafeToken = (token: string) =>
+  String.raw`${BASE64_SAFE_TOKEN_BOUNDARY}(?=${token})(?<!;base64,[A-Za-z0-9+/=]*)(${token})`;
 export const IDENTIFIER_SAFE_TOKEN_BOUNDARY = String.raw`(^|[^A-Za-z0-9_])`;
 
 function isAwsValueCharacter(char: string): boolean {
@@ -387,16 +390,6 @@ export const SHELL_REFERENCE_PRESERVING_PATTERN_SOURCES = new Set([
   STANDALONE_ASSIGNMENT_QUOTED_REDACT_PATTERN,
   STANDALONE_ASSIGNMENT_REDACT_PATTERN,
 ]);
-export const CHUNK_UNSAFE_PATTERN_SOURCES = new Set([
-  TELEGRAM_BOT_TOKEN_REDACT_PATTERN,
-  TELEGRAM_TOKEN_REDACT_PATTERN,
-  AUTHORIZATION_BEARER_REDACT_PATTERN,
-  AUTHORIZATION_BASIC_REDACT_PATTERN,
-  AUTHORIZATION_BOT_REDACT_PATTERN,
-  STANDALONE_BEARER_REDACT_PATTERN,
-  ...HTTP_AUTH_HEADER_REDACT_PATTERNS,
-]);
-
 const DEFAULT_REDACT_FIELD_PATTERNS: readonly RedactPattern[] = [
   ENV_ASSIGNMENT_REDACT_PATTERN,
   ESCAPED_ENV_ASSIGNMENT_REDACT_PATTERN,
@@ -466,7 +459,7 @@ export const VENDOR_TOKEN_REDACT_PATTERNS: readonly string[] = [
   String.raw`(fal_[A-Za-z0-9_-]{10,})`,
   String.raw`${IDENTIFIER_SAFE_TOKEN_BOUNDARY}(fc-[A-Za-z0-9]{10,})`,
   String.raw`(bb_live_[A-Za-z0-9_-]{10,})`,
-  String.raw`${BASE64_SAFE_TOKEN_BOUNDARY}(gAAAA[A-Za-z0-9_=-]{20,})`,
+  base64SafeToken(String.raw`gAAAA[A-Za-z0-9_=-]{20,}`),
   String.raw`(sk_live_[A-Za-z0-9]{10,})`,
   String.raw`(sk_test_[A-Za-z0-9]{10,})`,
   String.raw`(rk_live_[A-Za-z0-9]{10,})`,
@@ -483,15 +476,15 @@ export const VENDOR_TOKEN_REDACT_PATTERNS: readonly string[] = [
   String.raw`(bkua_[a-z0-9]{40})`,
   String.raw`(CCIPAT_[A-Za-z0-9]{22}_[A-Fa-f0-9]{40})`,
   String.raw`(sbp_[a-z0-9]{40})`,
-  String.raw`${BASE64_SAFE_TOKEN_BOUNDARY}(dapi[0-9a-f]{32}(?:-\d)?)`,
+  base64SafeToken(String.raw`dapi[0-9a-f]{32}(?:-\d)?`),
   String.raw`(dd[pw]_[A-Za-z0-9]{36})`,
   String.raw`(glsa_[A-Za-z0-9_]{41})`,
   String.raw`(glc_eyJ[A-Za-z0-9+/=]{60,160})`,
   String.raw`(nfp_[A-Za-z0-9_]{36})`,
   String.raw`(CFPAT-[A-Za-z0-9_\-]{40,})`,
-  String.raw`${BASE64_SAFE_TOKEN_BOUNDARY}(ATCTT3xFfG[A-Za-z0-9+/=_-]+=[A-Za-z0-9]{8})`,
-  String.raw`${BASE64_SAFE_TOKEN_BOUNDARY}(ATATT[A-Za-z0-9+/=_-]+=[A-Za-z0-9]{8})`,
-  String.raw`${BASE64_SAFE_TOKEN_BOUNDARY}(ATBB[A-Za-z0-9_=.-]{16,})`,
+  base64SafeToken(String.raw`ATCTT3xFfG[A-Za-z0-9+/=_-]+=[A-Za-z0-9]{8}`),
+  base64SafeToken(String.raw`ATATT[A-Za-z0-9+/=_-]+=[A-Za-z0-9]{8}`),
+  base64SafeToken(String.raw`ATBB[A-Za-z0-9_=.-]{16,}`),
   String.raw`(BBDC-[A-Za-z0-9+/@_-]{40,50})`,
   String.raw`(HRKU-AA[A-Za-z0-9_-]{20,})`,
   String.raw`(pat-(?:eu|na)1-[A-Za-z0-9]{8}\-[A-Za-z0-9]{4}\-[A-Za-z0-9]{4}\-[A-Za-z0-9]{4}\-[A-Za-z0-9]{12})`,
@@ -511,8 +504,8 @@ export const VENDOR_TOKEN_REDACT_PATTERNS: readonly string[] = [
   String.raw`${IDENTIFIER_SAFE_TOKEN_BOUNDARY}(fw-[A-Za-z0-9]{30,})`,
   String.raw`${IDENTIFIER_SAFE_TOKEN_BOUNDARY}(fw_[A-Za-z0-9]{30,})`,
   String.raw`${IDENTIFIER_SAFE_TOKEN_BOUNDARY}(fpk_[A-Za-z0-9]{30,})`,
-  String.raw`${BASE64_SAFE_TOKEN_BOUNDARY}(AKIA[A-Z0-9]{16})`,
-  String.raw`${BASE64_SAFE_TOKEN_BOUNDARY}(ASIA[A-Z0-9]{16})`,
+  base64SafeToken(String.raw`AKIA[A-Z0-9]{16}`),
+  base64SafeToken(String.raw`ASIA[A-Z0-9]{16}`),
   String.raw`(AKID[A-Za-z0-9]{10,})`,
   String.raw`(LTAI[A-Za-z0-9]{10,})`,
   String.raw`(hf_[A-Za-z0-9]{10,})`,
@@ -521,6 +514,17 @@ export const VENDOR_TOKEN_REDACT_PATTERNS: readonly string[] = [
   TELEGRAM_BOT_TOKEN_REDACT_PATTERN,
   TELEGRAM_TOKEN_REDACT_PATTERN,
 ];
+
+export const CHUNK_UNSAFE_PATTERN_SOURCES = new Set([
+  TELEGRAM_BOT_TOKEN_REDACT_PATTERN,
+  TELEGRAM_TOKEN_REDACT_PATTERN,
+  AUTHORIZATION_BEARER_REDACT_PATTERN,
+  AUTHORIZATION_BASIC_REDACT_PATTERN,
+  AUTHORIZATION_BOT_REDACT_PATTERN,
+  STANDALONE_BEARER_REDACT_PATTERN,
+  ...HTTP_AUTH_HEADER_REDACT_PATTERNS,
+  ...VENDOR_TOKEN_REDACT_PATTERNS.filter((source) => source.startsWith(BASE64_SAFE_TOKEN_BOUNDARY)),
+]);
 
 export const DEFAULT_REDACT_PATTERNS: readonly RedactPattern[] = [
   ...DEFAULT_REDACT_FIELD_PATTERNS,

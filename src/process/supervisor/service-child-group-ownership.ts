@@ -4,7 +4,7 @@ import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { isPidDefinitelyDead } from "../../shared/pid-alive.js";
 
 export type ProcessCommand =
-  | { argv: string[]; serviceMarker?: string }
+  | { argv: string[]; serviceMarker?: string; uid?: number }
   | { argvUnavailable: true; uid: number };
 
 type GroupMember = {
@@ -26,6 +26,26 @@ export function assertProcessGroupControl(): void {
       "Process-group ownership is unavailable; use a matching Node host and worker with native process ownership. Cleanup cannot fall back to transport-only execution.",
       { cause },
     );
+  }
+}
+
+function readLinuxProcessUid(pid: number): number | undefined {
+  try {
+    const lines = readFileSync(`/proc/${pid}/status`, "utf8")
+      .split("\n")
+      .filter((line) => line.startsWith("Uid:"));
+    const fields =
+      lines.length === 1
+        ? /^Uid:[ \t]+(\d+)[ \t]+(\d+)[ \t]+(\d+)[ \t]+(\d+)[ \t]*$/.exec(lines[0]!)
+        : null;
+    const ids = fields?.slice(1).map(Number);
+    const inspectorUid = process.getuid?.();
+    // Any matching credential UID denotes our account; otherwise retain the real UID.
+    return ids?.every((uid) => Number.isSafeInteger(uid) && uid <= 0xffff_ffff)
+      ? (ids.find((uid) => uid === inspectorUid) ?? ids[0])
+      : undefined;
+  } catch {
+    return undefined;
   }
 }
 
@@ -66,10 +86,25 @@ export function* readProcessGroupMembers(
       const pid = Number(name);
       let stat: string;
       let argv: string[] | undefined;
+      let uid: number | undefined;
+      let opaqueForeignOwner = false;
       try {
         stat = readFileSync(`/proc/${name}/stat`, "utf8");
         if (includeCommand) {
-          argv = readFileSync(`/proc/${name}/cmdline`, "utf8").split("\0").filter(Boolean);
+          uid = readLinuxProcessUid(pid);
+          try {
+            argv = readFileSync(`/proc/${name}/cmdline`, "utf8").split("\0").filter(Boolean);
+          } catch (error) {
+            const inspectorUid = process.getuid?.();
+            opaqueForeignOwner =
+              uid !== undefined &&
+              inspectorUid !== undefined &&
+              uid !== inspectorUid &&
+              ["EACCES", "EPERM"].includes(extractErrorCode(error) ?? "");
+            if (!opaqueForeignOwner) {
+              throw error;
+            }
+          }
         }
       } catch (error) {
         // Foreign processes may disappear between enumeration and their stat read.
@@ -93,16 +128,26 @@ export function* readProcessGroupMembers(
         const flags = Number(stat.slice(stat.lastIndexOf(")") + 2).split(/\s+/)[6]);
         const kernelThread = Number.isInteger(flags) && (flags & 0x0020_0000) !== 0;
         if (!kernelThread && !isPidDefinitelyDead(pid)) {
-          throw new Error(
-            `Could not classify PID ${pid}: live userspace process has no readable arguments.`,
-          );
+          const inspectorUid = process.getuid?.();
+          if (uid !== undefined && inspectorUid !== undefined && uid !== inspectorUid) {
+            opaqueForeignOwner = true;
+            argv = undefined;
+          } else {
+            throw new Error(
+              `Could not classify PID ${pid}: live userspace process has no readable arguments.`,
+            );
+          }
         }
       }
       yield {
         pid,
         pgid: Number(match[4]),
         state: match[2]!,
-        ...(argv ? { command: { ppid: Number(match[3]), argv } } : {}),
+        ...(argv
+          ? { command: { ppid: Number(match[3]), argv, ...(uid === undefined ? {} : { uid }) } }
+          : opaqueForeignOwner && uid !== undefined
+            ? { command: { ppid: Number(match[3]), argvUnavailable: true, uid } }
+            : {}),
       };
     }
     if (Date.now() >= deadline) {
@@ -153,7 +198,9 @@ export function* readProcessGroupMembers(
         pid,
         pgid: Number(match[2]),
         state: match[3]!,
-        ...(command ? { command: { ppid: Number(match[4]), ...command } } : {}),
+        ...(command
+          ? { command: { ppid: Number(match[4]), ...command, uid: Number(match[5]) >>> 0 } }
+          : {}),
       };
     }
   }

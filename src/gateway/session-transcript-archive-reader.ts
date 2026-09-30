@@ -16,10 +16,7 @@ import {
 } from "../sessions/transcript-anchor-page.js";
 import { isVisibleTranscriptRecord } from "../sessions/transcript-visible-record.js";
 import { projectTranscriptEntryMessage } from "./session-transcript-entry-message.js";
-import {
-  resolveSessionTranscriptCandidates,
-  resolveSessionTranscriptResetArchiveCandidatesAsync,
-} from "./session-transcript-files.fs.js";
+import { resolveSessionTranscriptResetArchiveCandidatesAsync } from "./session-transcript-files.fs.js";
 import {
   assertArchiveTranscriptSource,
   readIndexedTranscriptEntries,
@@ -153,19 +150,6 @@ function parseRecentTranscriptTailSnapshot(
     }),
     transcriptEvents: selected.map((entry) => entry.record),
   };
-}
-
-export function findExistingTranscriptPath(
-  sessionId: string,
-  storePath: string | undefined,
-  sessionFile?: string,
-  agentId?: string,
-): string | null {
-  return (
-    resolveSessionTranscriptCandidates(sessionId, storePath, sessionFile, agentId).find((value) =>
-      fs.existsSync(value),
-    ) ?? null
-  );
 }
 
 /** Reads retained reset archives after the caller has selected its SQLite fallback. */

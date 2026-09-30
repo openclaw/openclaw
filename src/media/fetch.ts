@@ -27,32 +27,25 @@ import { withMediaReadScope } from "./fetch.read-scope.js";
 import { saveMediaStream, type SavedMedia } from "./store.js";
 import { SaveMediaSourceError } from "./store.shared.js";
 
-/** Default remote media fetch cap shared by buffer reads and store writes. */
-const DEFAULT_FETCH_MEDIA_MAX_BYTES = MAX_DOCUMENT_BYTES;
-
 // Large media endpoints get a generous header-only deadline. The timer is
 // cleared once headers arrive, so healthy streaming bodies keep their own limits.
 const DEFAULT_MEDIA_RESPONSE_HEADER_TIMEOUT_MS = 15 * 60_000;
 
-/** Remote media bytes plus metadata before they are persisted to the media store. */
 type FetchMediaResult = {
   buffer: Buffer;
   contentType?: string;
   fileName?: string;
 };
 
-/** Saved media record enriched with the best remote filename candidate. */
 export type SavedRemoteMedia = SavedMedia & {
   fileName?: string;
 };
 
-/** Closed error classes callers can use for retry and diagnostic policy. */
 type MediaFetchErrorCode = "max_bytes" | "http_error" | "fetch_failed";
 
 /** Retry policy applied around the complete guarded fetch and body read/save operation. */
 export type MediaFetchRetryOptions = RetryOptions;
 
-/** Structured fetch error used for retry decisions and caller-facing diagnostics. */
 export class MediaFetchError extends Error {
   readonly code: MediaFetchErrorCode;
   readonly status?: number;
@@ -69,7 +62,6 @@ export class MediaFetchError extends Error {
   }
 }
 
-/** Fetch-compatible injection point used by tests and guarded network callers. */
 export type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
 /** Alternate dispatcher/lookup pair tried inside a single guarded fetch attempt. */
@@ -112,7 +104,6 @@ type FetchMediaOptions = {
   trustExplicitProxyDns?: boolean;
 };
 
-/** Options for validating and saving an existing Response body into the media store. */
 type SaveResponseMediaOptions = {
   sourceUrl?: string;
   filePathHint?: string;
@@ -123,7 +114,6 @@ type SaveResponseMediaOptions = {
   originalFilename?: string;
 };
 
-/** Options for guarded URL fetches that are saved directly into the media store. */
 type SaveRemoteMediaOptions = FetchMediaOptions & {
   /** Revalidate caller-owned read authority through transport and file publication. */
   assertCurrent?: () => void;
@@ -138,10 +128,6 @@ type GuardedMediaResponse = {
   release: () => Promise<void>;
   sourceUrl: string;
 };
-
-function stripQuotes(value: string): string {
-  return value.replace(/^["']|["']$/g, "");
-}
 
 function decodeRemoteFileNameComponent(value: string): string {
   try {
@@ -204,7 +190,10 @@ function* parseContentDispositionParameters(header: string): Generator<{
     if (separator > 0) {
       yield {
         name: parameter.slice(0, separator).trim().toLowerCase(),
-        value: stripQuotes(parameter.slice(separator + 1).trim()),
+        value: parameter
+          .slice(separator + 1)
+          .trim()
+          .replace(/^["']|["']$/g, ""),
       };
     }
   }
@@ -259,32 +248,6 @@ function parseContentDispositionFileName(header?: string | null): string | undef
     }
   }
   return fallbackFileName;
-}
-
-function basenameFromUrlPathname(pathname: string): string {
-  const base = basenameFromAnyPath(pathname);
-  if (!base) {
-    return "";
-  }
-  return decodeRemoteFileNameComponent(base);
-}
-
-async function readErrorBodySnippet(
-  res: Response,
-  opts?: {
-    maxChars?: number;
-    chunkTimeoutMs?: number;
-  },
-): Promise<string | undefined> {
-  try {
-    return await readResponseTextSnippet(res, {
-      maxBytes: 8 * 1024,
-      maxChars: opts?.maxChars,
-      chunkTimeoutMs: opts?.chunkTimeoutMs,
-    });
-  } catch {
-    return undefined;
-  }
 }
 
 function createMediaFetchFailure(sourceUrl: string, cause: unknown): MediaFetchError {
@@ -405,7 +368,10 @@ async function assertMediaResponseOk(params: {
   if (res.ok) {
     detail += "; empty response body";
   } else if (res.body) {
-    const snippet = await readErrorBodySnippet(res, { chunkTimeoutMs: readIdleTimeoutMs });
+    const snippet = await readResponseTextSnippet(res, {
+      maxBytes: 8 * 1024,
+      chunkTimeoutMs: readIdleTimeoutMs,
+    }).catch(() => undefined);
     if (snippet) {
       detail += `; body: ${snippet}`;
     }
@@ -459,7 +425,7 @@ function resolveRemoteFileName(params: {
   }
   try {
     const parsed = new URL(params.finalUrl);
-    return basenameFromUrlPathname(parsed.pathname) || undefined;
+    return decodeRemoteFileNameComponent(basenameFromAnyPath(parsed.pathname)) || undefined;
   } catch {
     return undefined;
   }
@@ -532,17 +498,14 @@ async function* responseBodyChunks(
   }
 }
 
-async function saveOkMediaResponse(params: {
-  res: Response;
-  finalUrl: string;
-  sourceUrl: string;
-  filePathHint?: string;
-  maxBytes: number;
-  readIdleTimeoutMs?: number;
-  fallbackContentType?: string;
-  subdir?: string;
-  originalFilename?: string;
-}): Promise<SavedRemoteMedia> {
+async function saveOkMediaResponse(
+  params: SaveResponseMediaOptions & {
+    res: Response;
+    finalUrl: string;
+    sourceUrl: string;
+    maxBytes: number;
+  },
+): Promise<SavedRemoteMedia> {
   assertMediaContentLength({
     res: params.res,
     sourceUrl: params.sourceUrl,
@@ -642,15 +605,11 @@ export async function saveResponseMedia(
     readIdleTimeoutMs: options.readIdleTimeoutMs,
   });
   return await saveOkMediaResponse({
+    ...options,
     res,
     finalUrl,
     sourceUrl,
-    filePathHint: options.filePathHint,
-    maxBytes: options.maxBytes ?? DEFAULT_FETCH_MEDIA_MAX_BYTES,
-    readIdleTimeoutMs: options.readIdleTimeoutMs,
-    fallbackContentType: options.fallbackContentType,
-    subdir: options.subdir,
-    originalFilename: options.originalFilename,
+    maxBytes: options.maxBytes ?? MAX_DOCUMENT_BYTES,
   });
 }
 
@@ -659,15 +618,11 @@ export async function saveRemoteMedia(options: SaveRemoteMediaOptions): Promise<
   return await withMediaReadScope(options, (scopedOptions) =>
     withGuardedMediaResponse(scopedOptions, ({ response: res, finalUrl, sourceUrl }) =>
       saveOkMediaResponse({
+        ...scopedOptions,
         res,
         finalUrl,
         sourceUrl,
-        filePathHint: scopedOptions.filePathHint,
-        maxBytes: scopedOptions.maxBytes ?? DEFAULT_FETCH_MEDIA_MAX_BYTES,
-        readIdleTimeoutMs: scopedOptions.readIdleTimeoutMs,
-        fallbackContentType: scopedOptions.fallbackContentType,
-        subdir: scopedOptions.subdir,
-        originalFilename: scopedOptions.originalFilename,
+        maxBytes: scopedOptions.maxBytes ?? MAX_DOCUMENT_BYTES,
       }),
     ),
   );
@@ -698,7 +653,7 @@ async function withGuardedMediaResponse<T>(
 /** Fetches media through SSRF guards and returns the bounded response body as a buffer. */
 export async function readRemoteMediaBuffer(options: FetchMediaOptions): Promise<FetchMediaResult> {
   return await withGuardedMediaResponse(options, async ({ response: res, finalUrl, sourceUrl }) => {
-    const effectiveMaxBytes = options.maxBytes ?? DEFAULT_FETCH_MEDIA_MAX_BYTES;
+    const effectiveMaxBytes = options.maxBytes ?? MAX_DOCUMENT_BYTES;
     assertMediaContentLength({ res, sourceUrl, maxBytes: effectiveMaxBytes });
     let buffer: Buffer;
     try {

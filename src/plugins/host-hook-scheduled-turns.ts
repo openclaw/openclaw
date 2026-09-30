@@ -3,6 +3,7 @@ import {
   resolveExpiresAtMsFromDurationMs,
   timestampMsToIsoString,
 } from "@openclaw/normalization-core/number-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { CronServiceContract } from "../cron/service-contract.js";
 import {
@@ -142,13 +143,7 @@ function buildPluginSchedulerTagPrefix(params: {
 function isCronRemoveResult(
   value: unknown,
 ): value is Awaited<ReturnType<CronServiceContract["remove"]>> {
-  return (
-    Boolean(value) &&
-    typeof value === "object" &&
-    !Array.isArray(value) &&
-    typeof (value as { ok?: unknown }).ok === "boolean" &&
-    typeof (value as { removed?: unknown }).removed === "boolean"
-  );
+  return isRecord(value) && typeof value.ok === "boolean" && typeof value.removed === "boolean";
 }
 
 async function listAllCronJobsForPluginTagCleanup(

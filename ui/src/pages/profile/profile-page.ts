@@ -63,10 +63,6 @@ type IdentityChange =
   | { kind: "avatar"; file: File }
   | { kind: "git-coauthor"; enabled: boolean };
 
-function toIdentityErrorMessage(error: unknown): string {
-  return formatUiError(error, t("profilePage.identity.profileUnavailable"));
-}
-
 export class ProfilePage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: false })
   private context!: ApplicationContext;
@@ -216,7 +212,7 @@ export class ProfilePage extends OpenClawLightDomElement {
       }
     } catch (error) {
       if (requestId === this.identityRequestId) {
-        this.identityError = toIdentityErrorMessage(error);
+        this.identityError = formatUiError(error, t("profilePage.identity.profileUnavailable"));
       }
     } finally {
       if (requestId === this.identityRequestId) {
@@ -319,7 +315,7 @@ export class ProfilePage extends OpenClawLightDomElement {
                     ? "profilePage.identity.avatarErrors.sourceTooLarge"
                     : "profilePage.identity.avatarErrors.invalid",
               )
-            : toIdentityErrorMessage(error);
+            : formatUiError(error, t("profilePage.identity.profileUnavailable"));
       }
       return;
     } finally {

@@ -133,9 +133,7 @@ export function resolveRestartRecoverySteeringBlockReason(
     ) {
       return "unknown-source-with-terminal-history";
     }
-    return hasRestartRecoveryTerminalRun(entry, normalizedSourceTurnId)
-      ? "already-delivered"
-      : undefined;
+    return undefined;
   }
   return disposition === "already-delivered" || disposition === "delivery-ambiguous"
     ? disposition

@@ -65,6 +65,7 @@ import type { AuthProfileConfig } from "../config/types.auth.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
 import { loadJsonFileThroughSymlink } from "../infra/json-file.js";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { readLegacyMigrationReceipt } from "../infra/state-migrations.receipts.js";
 import { rewritePluginAuthProfileRefs } from "../plugins/auth-profile-config-refs.js";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -165,10 +166,8 @@ type LegacyFlatAuthProfileRepairResult = {
   warnings: string[];
 };
 
-const UNSAFE_LEGACY_AUTH_PROFILE_KEYS = new Set(["__proto__", "constructor", "prototype"]);
-
 function isSafeLegacyProviderKey(key: string): boolean {
-  return key.trim().length > 0 && !UNSAFE_LEGACY_AUTH_PROFILE_KEYS.has(key);
+  return key.trim().length > 0 && !isBlockedObjectKey(key);
 }
 
 function extractProviderFromProfileId(profileId: string): string | undefined {

@@ -2,7 +2,6 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { safeStatSync } from "@openclaw/fs-safe/path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { decodeMountInfoPath } from "@openclaw/normalization-core/mountinfo-path";
 import { asNullableObjectRecord } from "@openclaw/normalization-core/record-coerce";
@@ -56,6 +55,7 @@ import { readDeferredPluginMigrations } from "../infra/deferred-plugin-migration
 import { preserveDeferredPluginSessionSource } from "../infra/deferred-plugin-session-sources.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { resolveEnvironmentValue } from "../infra/process-env.js";
+import { existsDir, migrationFileExists as existsFile } from "../infra/state-migrations.fs.js";
 import {
   loadLegacySessionStore,
   updateLegacySessionStore,
@@ -86,14 +86,6 @@ const STATE_INTEGRITY_CHECK_ID = "core/doctor/state-integrity";
 type DoctorPrompterLike = Pick<DoctorPrompter, "confirmRuntimeRepair"> & {
   note?: typeof note;
 };
-
-function existsDir(dir: string): boolean {
-  return safeStatSync(dir)?.isDirectory() ?? false;
-}
-
-function existsFile(filePath: string): boolean {
-  return safeStatSync(filePath)?.isFile() ?? false;
-}
 
 type RuntimeDirLabel = "Sessions dir" | "Session store dir" | "OAuth dir";
 

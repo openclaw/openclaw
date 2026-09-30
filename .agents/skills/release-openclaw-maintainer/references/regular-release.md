@@ -102,15 +102,16 @@ Record and reuse the full trusted Tooling SHA. Beta-publish uses
 `release_profile=beta`, `run_release_soak=false` (`npm-beta-v1` for a qualifying
 canonical beta target). Stable-publish requires `release_profile=stable` or
 `full`, soak, and blocking performance. Beta-profile evidence cannot qualify
-stable. Every selected validation lane except the policy-owned `windows-node-ci`
-class must pass. See [shared release boundaries](../SKILL.md#shared-release-boundaries),
+stable. Every selected validation lane except policy-owned `windows-node-ci`
+and authenticated `recorded-flake` jobs in `normalCi` must pass.
+See [shared release boundaries](../SKILL.md#shared-release-boundaries),
 [validation](validation.md), and
 [publication recovery](publication-recovery.md). Diagnose
 failures and use the controller's bounded retry for affected required proof.
 Continue eligible parents to seal; a parent that produced its own sealed
 candidate artifacts requires a new parent with verified successful evidence
-reuse. Diagnose selected test failures before rerunning; an untouched test or
-passing replay alone does not prove a flake or a fix. Only a confirmed product
+reuse. Classify each selected test failure as a real blocker or a flake before
+rerunning, per the shared release boundaries. Only a confirmed product
 defect that a required lane blocks on creates a new Code SHA: the
 update/install path (previous stable updates to the candidate, install smoke,
 pack budget, worker bundle), the bytes to publish, or another required gate
@@ -356,7 +357,7 @@ Run [postpublish confidence](validation.md#postpublish-confidence) against the
 exact published package. For a beta-to-latest promotion, retain available
 deferred-lane results, including published-package Telegram, while enforcing
 the shared required publication proofs. All selected tests outside the
-`windows-node-ci` advisory class must pass before publication; retain advisory
+`windows-node-ci` and authenticated `recorded-flake` classes must pass before publication; retain advisory
 failures in the release evidence. Run safe
 independent rosters concurrently while controlling local Docker/VM load.
 Classify failures before admitting a fix to the next beta; do not scan moving

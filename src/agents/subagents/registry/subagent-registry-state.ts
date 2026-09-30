@@ -2,6 +2,7 @@ import {
   emitSessionLifecycleEvent,
   type SessionLifecycleEvent,
 } from "../../../sessions/session-lifecycle-events.js";
+import { notifyListeners } from "../../../shared/listeners.js";
 import { getActiveOpenClawStateDatabaseReadSnapshot } from "../../../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
 import {
@@ -76,7 +77,8 @@ const persistedSubagentMaintenanceRunsReadCache: SubagentRunsCache<SubagentRunMa
   captureAdmission: captureSubagentFactsAdmission,
   load: () => loadSubagentMaintenanceRunsFromSqlite(),
   copy: projectSubagentRunForMaintenance,
-  project: projectSubagentRunForMaintenance,
+  // Maintenance consumes live rows synchronously into keys; only published facts need copies.
+  project: (entry) => entry,
 };
 
 // Read caches deliberately advance on failed best-effort writes. Keep notification facts
@@ -153,13 +155,7 @@ function emitSubagentRegistryPersisted(
   runIds?: readonly string[],
 ): void {
   publishSubagentRunChanges(keys, runIds);
-  for (const listener of SUBAGENT_REGISTRY_PERSIST_LISTENERS) {
-    try {
-      listener(keys);
-    } catch {
-      // Persistence already succeeded; observers are best-effort.
-    }
-  }
+  notifyListeners(SUBAGENT_REGISTRY_PERSIST_LISTENERS, keys);
 }
 
 /** Wake process-local readers after a registry mutation, even if persistence failed. */

@@ -33,6 +33,7 @@ import {
 } from "../../infra/system-run-approval-binding.js";
 import { resolveSystemRunApprovalRequestContext } from "../../infra/system-run-approval-context.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { normalizeCommandSpans } from "../../shared/exec-approval-command-spans.js";
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
 import { InvalidApprovalIdError } from "../exec-approval-registration.js";
 import {
@@ -66,35 +67,6 @@ const RESERVED_PLUGIN_APPROVAL_ID_PREFIX = "plugin:";
 type ExecApprovalIosPushDelivery = NonNullable<
   GatewayRequestContext["execApprovalIosPushDelivery"]
 >;
-
-function normalizeCommandSpans(
-  spans: { startIndex: number; endIndex: number }[] | undefined,
-  commandLength: number,
-): { startIndex: number; endIndex: number }[] | undefined {
-  if (!spans) {
-    return undefined;
-  }
-  const candidates = spans
-    .filter(
-      (span) =>
-        Number.isSafeInteger(span.startIndex) &&
-        Number.isSafeInteger(span.endIndex) &&
-        span.startIndex >= 0 &&
-        span.endIndex > span.startIndex &&
-        span.endIndex <= commandLength,
-    )
-    .toSorted((a, b) => a.startIndex - b.startIndex || b.endIndex - a.endIndex);
-  const accepted: { startIndex: number; endIndex: number }[] = [];
-  let cursor = 0;
-  for (const span of candidates) {
-    if (span.startIndex < cursor) {
-      continue;
-    }
-    accepted.push({ startIndex: span.startIndex, endIndex: span.endIndex });
-    cursor = span.endIndex;
-  }
-  return accepted.length > 0 ? accepted : undefined;
-}
 
 export function createExecApprovalHandlers(
   manager: ExecApprovalManager,

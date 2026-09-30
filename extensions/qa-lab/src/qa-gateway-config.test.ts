@@ -7,6 +7,11 @@ import {
 } from "./providers/shared/session-observer-registry.js";
 import { buildQaGatewayConfig } from "./qa-gateway-config.js";
 import type { QaTransportGatewayConfig } from "./qa-transport.js";
+import { readQaScenarioById } from "./scenario-catalog.js";
+import {
+  applyQaSuiteGatewayConfigPatches,
+  collectQaSuiteGatewayConfigPatches,
+} from "./suite-planning.js";
 
 function buildConfig(params: Partial<Parameters<typeof buildQaGatewayConfig>[0]>) {
   return buildQaGatewayConfig({
@@ -70,6 +75,35 @@ function expectQaLabPluginEnabled(cfg: ReturnType<typeof buildQaGatewayConfig>) 
 }
 
 describe("buildQaGatewayConfig", () => {
+  it.each([
+    {
+      scenarioId: "anthropic-thinking-error-recovery-replay-safe-read",
+      providerMode: "mock-openai",
+      primaryModel: "mock-openai/gpt-5.6-luna",
+      allowedRefs: ["anthropic/claude-opus-4-8"],
+    },
+    {
+      scenarioId: "thinking-slash-model-remap",
+      providerMode: "live-frontier",
+      primaryModel: "openai/gpt-5.5",
+      allowedRefs: ["openai/gpt-5.5", "anthropic/claude-sonnet-4-6"],
+    },
+  ] as const)(
+    "composes an exact override policy for $scenarioId",
+    ({ scenarioId, providerMode, primaryModel, allowedRefs }) => {
+      const base = buildConfig({ providerMode, primaryModel });
+      const config = applyQaSuiteGatewayConfigPatches(
+        base,
+        collectQaSuiteGatewayConfigPatches([readQaScenarioById(scenarioId)]),
+      );
+
+      expect(config).toMatchObject({
+        agents: { defaults: { modelPolicy: { allow: [...allowedRefs] } } },
+      });
+      expect(base.agents?.defaults?.modelPolicy?.allow).not.toContain(allowedRefs.at(-1));
+    },
+  );
+
   it("uses only active full-mock observer registrations across endpoint aliases", () => {
     const baseUrl = "http://127.0.0.1:44082";
     const observerUrl = `${baseUrl}/debug/session`;

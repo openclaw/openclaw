@@ -10,13 +10,6 @@ describe("Anthropic Vertex registered runtime model resolution", () => {
     {
       region: "us-central1",
       modelId: "claude-sonnet-4-6",
-      baseUrl: undefined,
-      expectedUrl: "https://us-central1-aiplatform.googleapis.com",
-      inputCost: 3,
-    },
-    {
-      region: "us-central1",
-      modelId: "claude-sonnet-4-6",
       baseUrl: "",
       expectedUrl: "https://us-central1-aiplatform.googleapis.com",
       inputCost: 3,

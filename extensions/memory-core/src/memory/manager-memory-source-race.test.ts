@@ -266,8 +266,8 @@ describe("memory source changes during indexing", () => {
     const recordOrigins = memoryOrigins.recordMemoryEntryOrigins;
     const originsSpy = vi
       .spyOn(memoryOrigins, "recordMemoryEntryOrigins")
-      .mockImplementation((params) => {
-        const recorded = recordOrigins(params);
+      .mockImplementation(async (params) => {
+        const recorded = await recordOrigins(params);
         events.push("origins");
         return recorded;
       });

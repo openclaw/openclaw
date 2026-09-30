@@ -1,8 +1,6 @@
-import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { groupToolCalls, type ToolCallGroup } from "../../../../../src/chat/tool-call-grouping.js";
-import { resolveLocalUserName } from "../../../app/user-identity.ts";
 import type { BrowserTabSelection } from "../../../components/browser/browser-target.ts";
 import { icons } from "../../../components/icons.ts";
 import {
@@ -28,6 +26,7 @@ import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
 import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import { gatewayClientKind } from "../../../lib/gateway-client-kind.ts";
 import { resolveIdentityHue } from "../../../lib/identity-avatar.ts";
+import { DEFAULT_AGENT_ID } from "../../../lib/sessions/session-key.ts";
 import { resolveAssistantReplyPhase } from "../chat-assistant-reply.ts";
 import { renderChatAvatar, renderForwardedAvatar } from "../chat-avatar.ts";
 import type { AssistantMessageExpansionState } from "../chat-message-recovery.ts";
@@ -51,6 +50,11 @@ import {
 } from "./chat-message-markdown.ts";
 import { renderChatSendStatus, type ChatSendStatusActions } from "./chat-message-send-status.ts";
 import {
+  isOwnSenderGroup,
+  isSourceOnlyUserGroup,
+  resolveMessageGroupSenderLabel,
+} from "./chat-message-sender.ts";
+import {
   emptyGroupFooter,
   renderStreamGroupParts,
   type StreamGroupOptions,
@@ -58,7 +62,15 @@ import {
 } from "./chat-message-stream.ts";
 import type { AssistantMessageDisclosure } from "./chat-message-text.ts";
 import { extractGroupMeta, renderMessageMeta } from "./chat-message-timestamp.ts";
-import { renderChatReplyAttribution } from "./chat-reply-attribution.ts";
+import {
+  NO_REPLY_LINE,
+  renderReplyLine,
+  renderReplyLineConnector,
+  resolveGroupReplyLine,
+  resolveMessageReplyLine,
+  type ReplyLine,
+} from "./chat-reply-attribution.ts";
+import type { ReplyPreviewLookup } from "./chat-reply-preview.types.ts";
 import type { SidebarContent, SidebarFullMessageLoader } from "./chat-sidebar.ts";
 import {
   renderBrowserTabPreviews,
@@ -73,8 +85,6 @@ type ActiveContinuation = {
   options: StreamGroupOptions;
 };
 
-type ReplyPreview = MessageReplyTarget & { sourceMessageId: string };
-
 type GroupedMessageRenderOptions = Parameters<typeof renderGroupedMessage>[2];
 
 type RenderMessageGroupOptions = Omit<
@@ -85,10 +95,12 @@ type RenderMessageGroupOptions = Omit<
   | "messageActions"
   | "entryId"
   | "entryRef"
-  | "resolveReplyPreview"
+  | "replyLine"
 > &
   ChatSendStatusActions &
   Parameters<typeof renderForwardedAvatar>[1] & {
+    /** A run frame's line, from its final answer; other groups resolve their own. */
+    frameReplyLine?: ReplyLine;
     entryRefFor?: (key: string) => ((element?: Element) => void) | undefined;
     latestBrowserTabs?: ReadonlyMap<string, BrowserTabSelection>;
     /** Configured main-session key; an agent's main source labels as the agent. */
@@ -109,7 +121,7 @@ type RenderMessageGroupOptions = Omit<
     showAssistantAvatar?: boolean;
     contextWindow?: number | null;
     onReply?: (target: MessageReplyTarget) => void;
-    resolveReplyPreview?: (replyToId: string) => ReplyPreview | undefined;
+    resolveReplyPreview?: ReplyPreviewLookup;
     onRewind?: () => void;
     rewindDisabled?: boolean;
     activeContinuation?: ActiveContinuation;
@@ -155,7 +167,7 @@ function prepareGroupMessage(
 function renderPreparedGroupMessage(
   group: MessageGroup,
   index: number,
-  opts: RenderMessageGroupOptions,
+  opts: RenderMessageGroupOptions & Pick<GroupedMessageRenderOptions, "replyLine">,
   { item, source, actions: actionDetails }: ReturnType<typeof prepareGroupMessage>,
 ) {
   let assistantMessageDisclosure: AssistantMessageDisclosure | undefined;
@@ -191,14 +203,6 @@ function renderPreparedGroupMessage(
     },
     opts.onOpenSidebar,
   );
-}
-
-function isOwnSenderGroup(
-  group: Pick<MessageGroup, "sender">,
-  userId: string | null | undefined,
-): boolean {
-  const identity = group.sender?.identity;
-  return identity?.type === "profile" && identity.id === userId;
 }
 
 export function renderActivityGroup(
@@ -296,9 +300,7 @@ export function renderActivityGroup(
   const reviewOutcome = resolveToolApprovalReviewOutcome(approvalReviews, recordedReviewOutcomes);
   const reviewer = approvalReviews[0]?.label ?? "Review";
   const reviewAriaLabel = reviewOutcome
-    ? t(`chat.toolCards.review.${reviewOutcome === "reviewing" ? "reviewing" : reviewOutcome}`, {
-        reviewer,
-      })
+    ? t(`chat.toolCards.review.${reviewOutcome}`, { reviewer })
     : "";
   const content = html`
     <div class="chat-activity-group ${activityExpanded ? "is-open" : ""}">
@@ -386,61 +388,6 @@ export function renderActivityGroup(
       `;
 }
 
-function isSourceOnlyUserGroup(
-  group: Pick<MessageGroup, "role" | "sender" | "senderLabel" | "sourceClients">,
-): boolean {
-  return (
-    normalizeRoleForGrouping(group.role) === "user" &&
-    Boolean(group.sourceClients?.length) &&
-    !group.sender &&
-    !group.senderLabel?.trim()
-  );
-}
-
-export function resolveMessageGroupSenderLabel(
-  group: Pick<MessageGroup, "role" | "sender" | "senderLabel" | "sourceClients"> & {
-    messages: ReadonlyArray<{ message: unknown }>;
-  },
-  opts: Pick<RenderMessageGroupOptions, "assistantName" | "userId" | "userName">,
-): string {
-  const normalizedRole = normalizeRoleForGrouping(group.role);
-  if (isSourceOnlyUserGroup(group)) {
-    return messageClientSourcesLabel(group.sourceClients ?? []);
-  }
-  if (normalizedRole === "custom") {
-    const isError = group.messages.every(({ message }) => {
-      const customType = asNullableRecord(message)?.customType;
-      return (
-        customType === "run-failed-before-reply" || customType === "cloud-workspace-recovery-failed"
-      );
-    });
-    if (isError) {
-      const isContention = group.messages.every(({ message }) => {
-        const entry = asNullableRecord(message);
-        return (
-          entry?.customType === "run-failed-before-reply" &&
-          asNullableRecord(entry.details)?.errorKind === "state_contention"
-        );
-      });
-      return t(isContention ? "common.system" : "chat.messages.errorSender");
-    }
-    return group.messages.every(({ message }) => workspaceResultConflictFromTranscript(message))
-      ? t("chat.workspaceConflict.eventSender")
-      : t("common.system");
-  }
-  const resolvedUserName = resolveLocalUserName({ name: opts.userName });
-  const userLabel = group.senderLabel?.trim();
-  return normalizedRole === "user"
-    ? isOwnSenderGroup(group, opts.userId)
-      ? resolvedUserName
-      : (userLabel ?? t("chat.messages.unattributedSender"))
-    : normalizedRole === "assistant"
-      ? (userLabel ?? opts.assistantName ?? "Assistant")
-      : normalizedRole === "tool"
-        ? t("chat.messages.toolSender")
-        : normalizedRole;
-}
-
 function isActivityMessageGroup(group: MessageGroup): boolean {
   if (normalizeRoleForGrouping(group.role) !== "tool") {
     return false;
@@ -485,7 +432,27 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
     normalizedRole === "user" && Boolean(opts.userId && group.sender) && !isOwnGroup;
   const forwardedSource = hasForwardedSource(group);
   const isForwarded = normalizedRole === "assistant" && forwardedSource;
+  const replyLine = opts.frameContent
+    ? (opts.frameReplyLine ?? NO_REPLY_LINE)
+    : resolveGroupReplyLine(group, opts.resolveReplyPreview);
+  // Only a strip naming this same participant replaces the sender label; a
+  // shared display name does not. An assistant group is its agent's identity;
+  // a user group without a typed identity has none to compare, so it keeps its name.
+  const ownIdentity =
+    group.sender?.identity ??
+    (normalizedRole === "assistant"
+      ? {
+          type: "agent" as const,
+          id: group.senderSession?.agentId ?? opts.agentId ?? DEFAULT_AGENT_ID,
+        }
+      : undefined);
+  const replyIdentity = replyLine.sender?.identity;
   const showSenderName =
+    !(
+      ownIdentity &&
+      replyIdentity?.type === ownIdentity.type &&
+      replyIdentity.id === ownIdentity.id
+    ) &&
     !isForwarded &&
     !sourceOnly &&
     (normalizedRole !== "user" || !isOwnGroup || opts.showOwnSenderName !== false);
@@ -529,12 +496,8 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
     : group.messages;
   const preparedMessages = actionOwners.map((item) => prepareGroupMessage(group, item, opts));
   const lastMessageIndex = group.messages.length - 1;
-  const footerActionDetails = ownsRunFrame
-    ? (preparedMessages[0]?.actions ?? null)
-    : (preparedMessages[lastMessageIndex]?.actions ?? null);
-  const footerActionMessageKey = ownsRunFrame
-    ? opts.frameActionOwner?.key
-    : group.messages[lastMessageIndex]?.key;
+  const footerActionDetails = preparedMessages.at(-1)?.actions ?? null;
+  const footerActionMessageKey = actionOwners.at(-1)?.key;
   const hasUserFooterActions =
     normalizedRole === "user" &&
     Boolean(
@@ -576,7 +539,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
   const inlineUserAvatar =
     normalizedRole === "user" &&
     avatarPlacement === "gutter" &&
-    Boolean(preparedMessages[lastMessageIndex]?.source.displayMarkdown);
+    (isPeerGroup || Boolean(preparedMessages[lastMessageIndex]?.source.displayMarkdown));
   const avatar =
     showAvatar &&
     !isTurnBlock &&
@@ -600,6 +563,8 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
           )
       : nothing;
 
+  // A reserved line keeps the resolved layout; its connector waits for the name.
+  const holdsReplyRow = replyLine.state !== "hidden" && avatar !== nothing;
   return html`
     <div
       class="chat-group ${roleClass} chat-group--with-footer${
@@ -608,14 +573,14 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
         opts.latestAssistant ? " chat-group--latest-assistant" : ""
       }${isPeerGroup ? " chat-group--peer" : ""}${
         isForwarded ? " chat-group--forwarded" : ""
-      }${senderHue === null ? "" : " chat-group--sender-tint"}"
+      }${senderHue === null ? "" : " chat-group--sender-tint"}${holdsReplyRow ? " chat-group--reply" : ""}"
       style=${senderHue === null ? nothing : `--chat-sender-hue: ${senderHue}`}
       data-chat-row-key=${group.key}
     >
       ${inlineUserAvatar ? nothing : avatar}
       <div class="chat-group-messages">
         ${forwardedSource ? renderForwardedAttribution(group, opts) : nothing}
-        ${normalizedRole === "assistant" ? renderChatReplyAttribution(group.replyToSender) : nothing}
+        ${renderReplyLine(replyLine, opts)}
         ${
           opts.frameContent ??
           repeat(
@@ -623,17 +588,41 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
             (prepared) => prepared.item.key,
             (prepared, index) => {
               const { item, actions: actionDetails } = prepared;
+              // Assistant groups carry one line; your own replies keep theirs in the
+              // bubble, and a participant's sits above the message beside its avatar.
+              const line =
+                normalizedRole === "assistant"
+                  ? NO_REPLY_LINE
+                  : resolveMessageReplyLine(
+                      prepared.source.normalizedMessage,
+                      opts.resolveReplyPreview,
+                      opts.userId,
+                      isPeerGroup || group.replyShared,
+                    );
+              const peerHoldsRow = isPeerGroup && line.state !== "hidden";
+              const message = renderPreparedGroupMessage(
+                group,
+                index,
+                {
+                  ...opts,
+                  isForwarded: forwardedSource,
+                  replyLine: isPeerGroup ? undefined : line,
+                  avatar:
+                    !peerHoldsRow && inlineUserAvatar && (isPeerGroup || index === lastMessageIndex)
+                      ? avatar
+                      : undefined,
+                },
+                prepared,
+              );
+              const peerLine = isPeerGroup ? renderReplyLine(line, opts) : nothing;
               return html`
-                ${renderPreparedGroupMessage(
-                  group,
-                  index,
-                  {
-                    ...opts,
-                    isForwarded: forwardedSource,
-                    avatar: inlineUserAvatar && index === lastMessageIndex ? avatar : undefined,
-                  },
-                  prepared,
-                )}
+                ${
+                  peerHoldsRow
+                    ? html`<div class="chat-message--reply">
+                        ${peerLine} ${message}${avatar} ${renderReplyLineConnector(line, avatar)}
+                      </div>`
+                    : html`${peerLine}${message}`
+                }
                 ${
                   actionDetails &&
                   (actionDetails.markdown || (actionDetails.replyTarget && opts.onReply)) &&
@@ -727,6 +716,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
                 }
               </div>`
       }
+      ${renderReplyLineConnector(replyLine, avatar)}
     </div>
   `;
 }

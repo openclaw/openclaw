@@ -8,6 +8,7 @@ import {
 } from "../state/openclaw-state-db-async-lifecycle.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { assertDoctorAgentLeaseAdmission } from "./doctor-agent-lease-refusal.js";
 import { acquireDoctorGatewayMaintenanceOwner } from "./doctor-maintenance-foreground.js";
 import type { DoctorMaintenanceParams } from "./doctor-maintenance-types.js";
 import { sanitizeDoctorNote } from "./doctor/emit-notes.js";
@@ -159,25 +160,27 @@ export function createDoctorMaintenanceState(options: {
       const { repairDoctorSqliteNoCow } = await import("./doctor-sqlite-nocow.js");
       const { closeOpenClawAgentDatabasesAsync } =
         await import("../state/openclaw-agent-db-lifecycle.js");
+      const stateDir = resolveStateDir(selectedEnv);
+      const databasePath = resolveOpenClawStateSqlitePath(selectedEnv);
       options.assertCurrent?.();
       owner!.assertCurrent();
       await closeResources();
-      await closeOpenClawAgentDatabasesAsync(resolveStateDir(env));
-      await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath(env));
+      await closeOpenClawAgentDatabasesAsync(stateDir);
+      await closeOpenClawStateDatabaseByPathAsync(databasePath);
       try {
-        return await owner!.run(() =>
-          repairDoctorSqliteNoCow({
+        return await owner!.run(async () => {
+          // Agent admission writes through shared state; retain that owner after drainage.
+          await assertDoctorAgentLeaseAdmission(selectedEnv);
+          return repairDoctorSqliteNoCow({
             paths,
-            stateDir: resolveStateDir(env),
+            stateDir,
             assertCurrent: () => {
               options.assertCurrent?.();
               owner!.assertCurrent();
-              for (const pathname of paths) {
-                owner!.assertDatabaseAccess(pathname);
-              }
+              owner!.assertDatabaseAccess(databasePath);
             },
-          }),
-        );
+          });
+        });
       } finally {
         // Restoration and update receipts use a fresh scope for the new file identity.
         await enterResources(owner!);

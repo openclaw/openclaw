@@ -51,6 +51,7 @@ import {
   openChatRewindConfirmation,
   type MessageReplyTarget,
 } from "./chat-message.ts";
+import type { ReplyMessageStatus } from "./chat-reply-preview.ts";
 import {
   handleChatSelectionPointerUp,
   isChatSelectionPopupFocused,
@@ -98,6 +99,8 @@ type ReplyMessageAccess = {
   revision: number;
   navigationId: string | null;
   read: (messageId: string) => unknown;
+  /** How the Gateway answered a lookup without a message. */
+  status?: (messageId: string) => ReplyMessageStatus | undefined;
   request: (messageId: string) => void;
   open: (messageId: string) => void;
 };

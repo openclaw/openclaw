@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createHarness,
+  createObserverTimerTracker,
   event,
   flushObserver,
   modelMessage,
@@ -109,22 +110,7 @@ describe("session observer digest budget", () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
     const persistDigest = vi.fn(async () => null);
-    // Shared Gateway workers can have unrelated timers; assert this observer's cleanup.
-    const ownedTimers = new Set<ReturnType<typeof setTimeout>>();
-    const setTimeoutFn = Object.assign((callback: () => void, delay?: number) => {
-      const timer = setTimeout(() => {
-        ownedTimers.delete(timer);
-        callback();
-      }, delay);
-      ownedTimers.add(timer);
-      return timer;
-    }, setTimeout);
-    const clearTimeoutFn: typeof clearTimeout = (timer) => {
-      if (timer && typeof timer === "object") {
-        ownedTimers.delete(timer);
-      }
-      clearTimeout(timer);
-    };
+    const { ownedTimers, setTimeoutFn, clearTimeoutFn } = createObserverTimerTracker();
     const unrelated = vi.fn();
     const unrelatedTimer = setTimeout(unrelated, 60_000);
     const harness = createHarness({ persistDigest, setTimeoutFn, clearTimeoutFn });
