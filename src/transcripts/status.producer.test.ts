@@ -25,6 +25,53 @@ import { transcriptSessionSelector, TranscriptsStore } from "./store.js";
 const fixture = useTranscriptStatusFixture();
 
 describe("configured transcript source provenance", () => {
+  it.each([
+    { whenOccupied: false, accepted: false },
+    { whenOccupied: true, accepted: false },
+    { whenOccupied: false, accepted: true },
+  ])(
+    "discards only exhausted empty admissions (occupied=$whenOccupied, accepted=$accepted)",
+    async ({ whenOccupied, accepted }) => {
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      const f = fixture({ transcripts: { autoStart: [{ ...room, whenOccupied }] } });
+      f.provider.watchOccupancy = async (request) => {
+        request.onOccupied();
+        return { ok: true, value: { stop() {} } };
+      };
+      const attempts = accepted ? 3 : 12;
+      const start = vi.fn(async (request: TranscriptStartRequest) =>
+        accepted && start.mock.calls.length === attempts
+          ? { ok: true as const, session: request.session }
+          : { ok: false as const, error: "provider unavailable" },
+      );
+      f.provider.start = start;
+      const service = createTranscriptsAutoStartService(f.ctx);
+      try {
+        await service.start().settled;
+        const original = start.mock.calls[0]![0].session;
+        for (let attempt = 2; attempt <= attempts; attempt++) {
+          expect(await f.store.listSessionEntries()).toHaveLength(1);
+          await vi.advanceTimersByTimeAsync(5_000);
+          await service.start().settled;
+          expect(start).toHaveBeenCalledTimes(attempt);
+        }
+        expect(start.mock.calls.map(([request]) => request.session.sessionId)).toEqual(
+          Array.from({ length: attempts }, () => original.sessionId),
+        );
+        expect((await f.read()).configuredSources[0]).toMatchObject(
+          accepted ? { state: "armed" } : { state: "not-active", startDiagnostic: "start-failed" },
+        );
+        expect(await f.store.listSessionEntries()).toHaveLength(accepted ? 1 : 0);
+        await service.stop();
+        expect(await f.store.listSessionEntries()).toHaveLength(accepted ? 1 : 0);
+        await vi.advanceTimersByTimeAsync(65_000);
+        expect(start).toHaveBeenCalledTimes(attempts);
+      } finally {
+        await service.stop();
+      }
+    },
+  );
+
   it("does not save empty transcription artifacts from a capture provider", async () => {
     const f = fixture();
     f.provider.start = async (request) => {
@@ -435,7 +482,7 @@ describe("configured transcript source provenance", () => {
           if (session.stoppedAt && fault === "session-write" && cleanupFails) {
             throw new Error("final session write unavailable");
           }
-          await originalWrite(session, condition);
+          return originalWrite(session, condition);
         },
       );
       const originalSummary = f.store.writeSummary.bind(f.store);
@@ -575,7 +622,7 @@ describe("configured transcript source provenance", () => {
           expect((await f.read()).configuredSources[0]).not.toHaveProperty("startDiagnostic");
         }
         expect(await f.store.readSession(session.sessionId)).toEqual(stoppedSession);
-        expect(await f.store.listSessionEntries()).toHaveLength(1);
+        expect(await f.store.listSessionEntries()).toHaveLength(mode === "queued" ? 0 : 1);
       } finally {
         gate.resolve();
         await service.stop();

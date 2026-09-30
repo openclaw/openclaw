@@ -79,6 +79,61 @@ function session(
 }
 
 describe("TranscriptsStore", () => {
+  it.each(["empty", "speech", "summary", "export", "pending export", "rewritten"] as const)(
+    "discards only unchanged empty failed admissions (%s)",
+    async (state) => {
+      const { store, stateDir } = createStore();
+      const target = { ...session("abandoned"), stoppedAt: "2026-07-01T10:00:01.000Z" };
+      await store.writeSession(target);
+      const expectedInputRevision = await store.readSummaryInputRevision(target);
+      if (expectedInputRevision === undefined) {
+        throw new Error("Expected admitted transcript");
+      }
+      if (state === "speech") {
+        await store.appendUtteranceForSession(target, { text: "Retained speech", final: true });
+      } else if (state === "summary") {
+        await store.writeSummary(summarizeTranscripts({ session: target, utterances: [] }), target);
+      } else if (state === "export") {
+        await store.materializeSessionArtifacts(target, "all");
+      } else if (state === "pending export") {
+        // Model an interrupted export before it has recorded its final artifact hashes.
+        runOpenClawStateWriteTransaction(
+          ({ db }) => {
+            executeSqliteQuerySync(
+              db,
+              meetingTranscriptDb(db)
+                .updateTable("meeting_transcript_sessions")
+                .set({ export_pending_json: '["metadata.json"]' })
+                .where("session_id", "=", target.sessionId)
+                .where("started_at", "=", target.startedAt),
+            );
+          },
+          { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } },
+          { operationLabel: "test.transcripts.pending-export" },
+        );
+      } else if (state === "rewritten") {
+        await store.writeSession({ ...target, title: "Updated by another owner" });
+      }
+      const saved = await store.readSession(target.sessionId);
+      await store.deleteEmptySessionCandidate(target, {
+        expectedInputRevision,
+        assertCurrent: () => undefined,
+      });
+      expect(await store.readSession(target.sessionId)).toEqual(
+        state === "empty" ? undefined : saved,
+      );
+      if (state === "speech") {
+        expect(await store.readUtterancesForSession(target)).toMatchObject([
+          { text: "Retained speech" },
+        ]);
+      } else if (state === "summary") {
+        expect((await store.readSummary(target)).summary).toBeDefined();
+      } else if (state === "export") {
+        expect(fs.existsSync(path.join(store.sessionDir(target), "metadata.json"))).toBe(true);
+      }
+    },
+  );
+
   it("keeps summary snapshot queries bound to the current session and persisted revision", async () => {
     const { store } = createStore();
     const first = session("summary-first");
@@ -443,7 +498,7 @@ describe("TranscriptsStore", () => {
     const { store } = createStore();
     await store.writeSession(session(".", "2026-07-01T10:00:00.000Z"));
     await store.writeSession(session(".", "2026-07-02T10:00:00.000Z"));
-    await expect(store.writeSession(session(".."))).resolves.toBeUndefined();
+    await expect(store.writeSession(session(".."))).resolves.toBe(true);
   });
 
   it("matches bare selector slugs literally and case-sensitively", async () => {
@@ -511,7 +566,7 @@ describe("TranscriptsStore", () => {
     const lower = session("capital", "2026-07-01T11:00:00.000Z");
     await store.writeSession(lower);
     await store.materializeSessionArtifacts(lower, "metadata");
-    await expect(store.writeSession(upper)).resolves.toBeUndefined();
+    await expect(store.writeSession(upper)).resolves.toBe(true);
 
     if (fs.existsSync(store.sessionDir(upper))) {
       await expect(store.materializeSessionArtifacts(lower, "metadata")).resolves.toMatchObject({
@@ -536,7 +591,7 @@ describe("TranscriptsStore", () => {
     const artifacts = await store.materializeSessionArtifacts(upper, "transcript");
     fs.rmSync(artifacts.metadataPath);
 
-    await expect(store.writeSession(lower)).resolves.toBeUndefined();
+    await expect(store.writeSession(lower)).resolves.toBe(true);
   });
 
   it("does not let a case-distinct SQLite owner mask a legacy directory", async () => {
@@ -570,7 +625,7 @@ describe("TranscriptsStore", () => {
     if (fs.existsSync(path.join(store.sessionDir(lower), "transcript.jsonl"))) {
       await expect(store.writeSession(lower)).rejects.toThrow("run openclaw doctor --fix");
     } else {
-      await expect(store.writeSession(lower)).resolves.toBeUndefined();
+      await expect(store.writeSession(lower)).resolves.toBe(true);
     }
   });
 
@@ -621,7 +676,7 @@ describe("TranscriptsStore", () => {
 
     await expect(
       store.writeSession({ ...target, stoppedAt: "2026-07-01T11:00:00.000Z" }),
-    ).resolves.toBeUndefined();
+    ).resolves.toBe(false);
     await expect(store.readSession(target.sessionId)).resolves.toMatchObject({
       stoppedAt: "2026-07-01T11:00:00.000Z",
     });

@@ -538,10 +538,11 @@ export async function startTranscripts(params: {
   }
   startingSessions.set(session.sessionId, entry);
   let admitted = false;
+  let inserted = false;
   let retry: TranscriptStartError["retry"];
   try {
     try {
-      await params.store.writeSession(session, params.existingSessionCondition);
+      inserted = await params.store.writeSession(session, params.existingSessionCondition);
     } catch (error) {
       if (error instanceof TranscriptsSummaryChangedError) {
         throw new TranscriptStartError("id-conflict", error);
@@ -706,7 +707,7 @@ export async function startTranscripts(params: {
         // original stop time. A failed restoration or revision read grants none.
         const revision = await params.store.readSummaryInputRevision(restored);
         if (revision !== undefined) {
-          retry = { session: restored, revision };
+          retry = { session: restored, revision, discardOnAbandon: inserted };
         }
       }
     } catch (cleanupError) {

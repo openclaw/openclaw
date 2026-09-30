@@ -306,7 +306,7 @@ describe("transcript capture ownership", () => {
               throw new Error("title write unavailable");
             }
           }
-          await originalWrite(session, condition);
+          return originalWrite(session, condition);
         },
       );
       const start = h

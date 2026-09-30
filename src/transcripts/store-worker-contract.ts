@@ -43,7 +43,11 @@ export type TranscriptAppendScheduler = (
 export type TranscriptWriteOperations = {
   "transcripts.writeSession": {
     input: Parameters<typeof writeMeetingTranscriptSessionInDatabase>[1] & { readOnly?: boolean };
-    output: { ok: true } | { ok: false; reason: "changed" | "conflict" };
+    output: { ok: true; inserted: boolean } | { ok: false; reason: "changed" | "conflict" };
+  };
+  "transcripts.deleteEmptySessionCandidate": {
+    input: { session: SessionIdentity; expectedInputRevision: string; readOnly?: boolean };
+    output: void;
   };
   "transcripts.markPendingExports": {
     input: {

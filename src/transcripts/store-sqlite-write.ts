@@ -59,7 +59,7 @@ export function writeMeetingTranscriptSessionInDatabase(
     now: number;
     expectedInputRevision?: string;
   },
-): void {
+): boolean {
   const { session, sessionValues, now, expectedInputRevision } = params;
   if (
     expectedInputRevision !== undefined &&
@@ -102,6 +102,48 @@ export function writeMeetingTranscriptSessionInDatabase(
           ...sessionValues,
           updated_at_ms: now,
         }),
+      ),
+  );
+  return previous === undefined;
+}
+
+export function deleteEmptyMeetingTranscriptCandidateInDatabase(
+  database: DatabaseSync,
+  session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">,
+  expectedInputRevision: string,
+): void {
+  const stored = executeSqliteQueryTakeFirstSync(
+    database,
+    meetingTranscriptSessionQuery(database, session).selectAll(),
+  );
+  // The retry owner may abandon only its unchanged, unaccepted admission.
+  if (
+    !stored ||
+    stored.stopped_at === null ||
+    transcriptSummaryInputRevisionFromRow(stored) !== expectedInputRevision ||
+    stored.next_utterance_seq !== 0 ||
+    stored.export_manifest_json !== "{}" ||
+    stored.export_pending_json !== "[]"
+  ) {
+    return;
+  }
+  const db = meetingTranscriptDb(database);
+  executeSqliteQuerySync(
+    database,
+    db
+      .deleteFrom("meeting_transcript_sessions")
+      .where("session_id", "=", session.sessionId)
+      .where("started_at", "=", session.startedAt)
+      .where((eb) =>
+        eb.not(
+          eb.exists(
+            db
+              .selectFrom("meeting_transcript_summaries")
+              .select("session_id")
+              .where("session_id", "=", session.sessionId)
+              .where("session_started_at", "=", session.startedAt),
+          ),
+        ),
       ),
   );
 }

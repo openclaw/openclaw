@@ -97,7 +97,7 @@ describe("transcript capture accepted append drainage", () => {
         titleFailed.resolve();
         throw new Error("Title write unavailable");
       }
-      await writeSession(...args);
+      return writeSession(...args);
     });
     let first: Promise<void> | undefined;
     let late: Promise<void> | undefined;
@@ -412,6 +412,7 @@ describe("transcript capture accepted append drainage", () => {
     expect(failure.retry).toEqual({
       session: original,
       revision: await f.store.readSummaryInputRevision(original),
+      discardOnAbandon: false,
     });
     expect(failure.cause).toBeInstanceOf(AggregateError);
     expect(failure.cause).toMatchObject({ errors: [providerFailure, appendFailure] });

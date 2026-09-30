@@ -9,6 +9,7 @@ import { ensureMeetingTranscriptsSchema } from "./sqlite-schema.js";
 import { transcriptSessionExportKey } from "./store-artifacts.js";
 import { TranscriptSessionConflictError, TranscriptsSummaryChangedError } from "./store-errors.js";
 import {
+  deleteEmptyMeetingTranscriptCandidateInDatabase,
   markMeetingTranscriptPendingExportsInDatabase,
   updateMeetingTranscriptExportManifestInDatabase,
   writeMeetingTranscriptSessionInDatabase,
@@ -21,6 +22,7 @@ const operationLabels: Record<TranscriptWriteCommand["type"], string> = {
   "transcripts.append": "meeting-transcripts.utterance.append",
   "transcripts.writeSummary": "meeting-transcripts.summary.write",
   "transcripts.writeSession": "meeting-transcripts.session.write",
+  "transcripts.deleteEmptySessionCandidate": "meeting-transcripts.session.discard-empty",
   "transcripts.markPendingExports": "meeting-transcripts.export.pending",
   "transcripts.recordExportManifest": "meeting-transcripts.export.record",
 };
@@ -41,6 +43,7 @@ export function executeTranscriptWrite(
     readOnly: command.input.readOnly,
   };
   ensureMeetingTranscriptsSchema(options);
+  let inserted = false;
   try {
     runOpenClawStateWriteTransaction(
       ({ db }) => {
@@ -76,7 +79,14 @@ export function executeTranscriptWrite(
             break;
           }
           case "transcripts.writeSession":
-            writeMeetingTranscriptSessionInDatabase(db, command.input);
+            inserted = writeMeetingTranscriptSessionInDatabase(db, command.input);
+            break;
+          case "transcripts.deleteEmptySessionCandidate":
+            deleteEmptyMeetingTranscriptCandidateInDatabase(
+              db,
+              command.input.session,
+              command.input.expectedInputRevision,
+            );
             break;
           case "transcripts.markPendingExports":
             markMeetingTranscriptPendingExportsInDatabase(
@@ -103,10 +113,11 @@ export function executeTranscriptWrite(
       options,
       { operationLabel: operationLabels[command.type] },
     );
-    return command.type === "transcripts.writeSummary" ||
-      command.type === "transcripts.writeSession"
-      ? { ok: true }
-      : undefined;
+    return command.type === "transcripts.writeSession"
+      ? { ok: true, inserted }
+      : command.type === "transcripts.writeSummary"
+        ? { ok: true }
+        : undefined;
   } catch (error) {
     if (
       (command.type === "transcripts.writeSummary" ||

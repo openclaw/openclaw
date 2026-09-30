@@ -13,6 +13,101 @@ import { transcriptSessionSelector, TranscriptsStore } from "./store.js";
 const fixture = useTranscriptStatusFixture();
 
 describe("configured transcript shutdown cleanup", () => {
+  it("discards a new empty failed startup when shutdown abandons its retry", async () => {
+    const f = fixture();
+    const start = vi.fn(async () => ({ ok: false as const, error: "provider unavailable" }));
+    f.provider.start = start;
+    const service = createTranscriptsAutoStartService(f.ctx);
+    try {
+      await service.start().settled;
+      expect(start).toHaveBeenCalledOnce();
+      expect((await f.read()).configuredSources[0]?.startDiagnostic).toBe("retrying");
+      expect(await f.store.listSessionEntries()).toHaveLength(1);
+      await service.stop();
+      expect(await f.store.listSessionEntries()).toEqual([]);
+    } finally {
+      await service.stop();
+    }
+  });
+
+  it.each([false, true])(
+    "discards failed late startup after the stop deadline (occupied=%s)",
+    async (whenOccupied) => {
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      const f = fixture({ transcripts: { autoStart: [{ ...room, whenOccupied }] } });
+      const entered = createDeferred<TranscriptStartRequest>();
+      const gate = createDeferred();
+      f.provider.watchOccupancy = async (request) => {
+        request.onOccupied();
+        return { ok: true, value: { stop() {} } };
+      };
+      const start = vi.fn(async (request: TranscriptStartRequest) => {
+        entered.resolve(request);
+        await gate.promise;
+        throw new Error("provider failed after shutdown");
+      });
+      f.provider.start = start;
+      const service = createTranscriptsAutoStartService(f.ctx);
+      const starting = service.start().settled;
+      try {
+        const request = await entered.promise;
+        const stopping = service.stop();
+        await vi.advanceTimersByTimeAsync(5_000);
+        await stopping;
+        expect(request.abortSignal?.aborted).toBe(true);
+        expect(f.ctx.logger.warn).toHaveBeenCalledWith(expect.stringContaining("stop timed out"));
+        gate.resolve();
+        await starting;
+        // The original cleanup owner keeps joining after its caller's deadline.
+        await service.stop();
+        expect(await f.store.listSessionEntries()).toEqual([]);
+        await request.onUtterance({ text: "Retired callback" });
+        await vi.advanceTimersByTimeAsync(65_000);
+        expect(start).toHaveBeenCalledOnce();
+        expect(await f.store.listSessionEntries()).toEqual([]);
+      } finally {
+        gate.resolve();
+        await starting;
+        await service.stop();
+      }
+    },
+  );
+
+  it.each(["operator-stop", "rewritten"] as const)(
+    "preserves a failed candidate after %s takes ownership",
+    async (change) => {
+      const f = fixture();
+      f.provider.start = async () => ({ ok: false, error: "provider unavailable" });
+      const service = createTranscriptsAutoStartService(f.ctx);
+      try {
+        await service.start().settled;
+        const { session } = (await f.store.listSessionEntries())[0]!;
+        if (change === "operator-stop") {
+          // Revoke through the operator entry point without notes or exports masking
+          // the authority check that must preserve this otherwise empty candidate.
+          vi.spyOn(TranscriptsStore.prototype, "writeSummary").mockRejectedValueOnce(
+            new Error("notes temporarily unavailable"),
+          );
+          await expect(
+            f.tool.execute("stop", {
+              action: "stop",
+              selector: transcriptSessionSelector(session),
+            }),
+          ).rejects.toThrow("notes temporarily unavailable");
+          expect(await f.store.readSummary(session)).toEqual({});
+        } else {
+          await f.store.writeSession({ ...session, title: "Operator-owned meeting" });
+        }
+        const preserved = await f.store.readSession(session.sessionId);
+        await service.stop();
+        expect(await f.store.listSessionEntries()).toHaveLength(1);
+        expect(await f.store.readSession(session.sessionId)).toEqual(preserved);
+      } finally {
+        await service.stop();
+      }
+    },
+  );
+
   it.each(
     [false, true].flatMap((whenOccupied) =>
       ["returned-stop", "thrown-stop", "session-write", "summary-write"].map((fault) => ({
@@ -69,7 +164,7 @@ describe("configured transcript shutdown cleanup", () => {
           if (cleanupFails && fault === "session-write" && session.stoppedAt) {
             throw new Error("final session unavailable");
           }
-          await writeSession(session, condition);
+          return writeSession(session, condition);
         },
       );
       const writeSummary = f.store.writeSummary.bind(f.store);
