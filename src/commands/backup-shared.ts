@@ -549,7 +549,7 @@ async function resolveBackupAgentRoot(
 
 /**
  * Resolve the one database an explicit `--agent` snapshot should capture.
- * The Gateway session database always lives under the canonical state root, so
+ * The default Gateway session database lives under the canonical state root, so
  * when `agentDir` points elsewhere its `openclaw-agent.sqlite` may be only a
  * secondary or stray store; prefer the canonical database whenever it exists.
  * Full archive backups are unaffected because their ownership union already
@@ -567,7 +567,12 @@ export async function resolveBackupAgentSnapshotPath(
     await fs
       .realpath(candidate)
       .then(async (real) => ((await fs.stat(real)).isFile() ? real : undefined))
-      .catch(() => undefined);
+      .catch((error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") {
+          return undefined;
+        }
+        throw error;
+      });
   return (
     (await existingFile(canonicalPath)) ?? (await existingFile(configuredPath)) ?? configuredPath
   );

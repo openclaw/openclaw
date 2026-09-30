@@ -135,7 +135,7 @@ describe("Git backup command agent selection", () => {
   );
 
   it("creates a backup for a configured normalized agent", async () => {
-    const agentDir = path.resolve("/tmp/external-agent");
+    const agentDir = path.join(state.root, "external-agent");
     mocks.getRuntimeConfig.mockReturnValue({
       agents: { entries: { "ops-team": { agentDir } } },
     });
@@ -164,7 +164,7 @@ describe("Git backup command agent selection", () => {
   });
 
   it("falls back to a configured-only agent database for an agentDir root", async () => {
-    const agentDir = path.resolve("/tmp/external-configured-only");
+    const agentDir = path.join(state.root, "external-configured-only");
     mocks.getRuntimeConfig.mockReturnValue({
       agents: { entries: { "ops-team": { agentDir } } },
     });

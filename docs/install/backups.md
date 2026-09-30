@@ -15,7 +15,8 @@ per configured agent at `<agentDir>/openclaw-agent.sqlite` for agent-scoped
 stores and at `<stateDir>/agents/<agentId>/agent/openclaw-agent.sqlite` for
 Gateway sessions. Agent directories default to locations under the state
 directory but can be configured outside it, in which case both files may exist
-for one agent; backups cover both. See [Database schemas](/reference/database-schemas) for the exact layout.
+for one agent. Full archive backups cover both; SQLite and Git agent snapshots
+select the canonical database when it exists. See [Database schemas](/reference/database-schemas) for the exact layout.
 This guide covers protecting that state: one-off archives, per-database
 snapshots, scheduling, offsite copies, and continuous replication for installs
 that should not re-upload whole databases on every backup.

@@ -137,10 +137,12 @@ Use `openclaw backup sqlite` when you need a portable artifact for one OpenClaw-
 Snapshot creation accepts exactly one named source. Agent sources prefer the
 canonical Gateway session database at
 `<stateDir>/agents/<agentId>/agent/openclaw-agent.sqlite`, which the Gateway
-always uses regardless of `agentDir`; when that file does not exist, the source
+uses by default independently of `agentDir`; when that file does not exist, the source
 falls back to the configured `<agentDir>/openclaw-agent.sqlite`. Full archive
 backups are unaffected: they snapshot every distinct database an agent owns,
 under both locations.
+Filesystem errors while reading the canonical path fail the backup rather than
+silently selecting the configured database.
 
 | Command                                                         | Database               |
 | --------------------------------------------------------------- | ---------------------- |
