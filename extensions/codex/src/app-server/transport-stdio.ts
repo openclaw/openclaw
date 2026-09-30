@@ -116,6 +116,7 @@ export async function createStdioTransport(
   assertCurrent?: () => void,
   onSpawn?: (child: ChildProcessWithoutNullStreams) => void,
 ): Promise<ChildProcessWithoutNullStreams> {
+  const isHostedGateway = baseEnv.OPENCLAW_GATEWAY_HOST_LIFELINE?.trim() === "stdin";
   const env = resolveCodexAppServerSpawnEnv(options, baseEnv);
   const invocation = resolveCodexAppServerSpawnInvocation(options, env);
   const nativeCommand =
@@ -151,9 +152,8 @@ export async function createStdioTransport(
       // config discovery may depend on the endpoint's process working directory.
       ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
       env,
-      // Hosted children stay inside the Gateway's process-group cleanup boundary.
-      detached:
-        process.platform !== "win32" && env.OPENCLAW_GATEWAY_HOST_LIFELINE?.trim() !== "stdin",
+      // Child environment overrides cannot change the Gateway's containment boundary.
+      detached: process.platform !== "win32" && !isHostedGateway,
       shell: invocation.shell,
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: invocation.windowsHide,

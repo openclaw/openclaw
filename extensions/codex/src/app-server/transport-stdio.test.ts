@@ -93,16 +93,29 @@ describe("createStdioTransport", () => {
     ).rejects.toThrow("owner closed");
     expect(spawnMock).not.toHaveBeenCalled();
   });
-  it.each([
+  it.each<{
+    lifeline?: string;
+    detached: boolean;
+    childOptions?: Pick<CodexAppServerStartOptions, "env" | "clearEnv">;
+  }>([
     { lifeline: undefined, detached: true },
     { lifeline: "stdin", detached: false },
     { lifeline: " stdin ", detached: false },
     { lifeline: "unsupported", detached: true },
+    {
+      lifeline: "stdin",
+      childOptions: { clearEnv: ["OPENCLAW_GATEWAY_HOST_LIFELINE"] },
+      detached: false,
+    },
+    {
+      childOptions: { env: { OPENCLAW_GATEWAY_HOST_LIFELINE: "stdin" } },
+      detached: true,
+    },
   ])(
-    "spawns an endpoint in its working directory with host lifeline $lifeline",
-    async ({ lifeline, detached }) => {
+    "spawns an endpoint with host lifeline $lifeline and child overrides $childOptions",
+    async ({ lifeline, detached, childOptions }) => {
       await createStdioTransport(
-        { ...startOptions("codex"), cwd: "/srv/codex-project" },
+        { ...startOptions("codex"), cwd: "/srv/codex-project", ...childOptions },
         { OPENCLAW_GATEWAY_HOST_LIFELINE: lifeline },
       );
 
